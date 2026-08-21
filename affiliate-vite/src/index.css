@@ -1,0 +1,39 @@
+:root {
+  --font-inter: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, 'Cascadia Mono', monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  min-height: 100%;
+  background: #05060A;
+  color: #fff;
+  font-family: var(--font-inter);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root { min-height: 100vh; display: flex; flex-direction: column; }
+
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; }
+input, select, textarea { font-family: inherit; }
+
+/* Cards do NOT get a colour accent — colour here means state, nothing else.
+   The hover lift is the whole affordance. */
+.card-hover { transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease; }
+.card-hover:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.18); box-shadow: 0 26px 60px rgba(0,0,0,0.32); }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* The one place a stylesheet beats inline styles: placeholder + focus, which
+   cannot be expressed as a React style object. */
+input::placeholder, textarea::placeholder { color: rgba(255,255,255,0.28); }
+input:focus, select:focus, textarea:focus {
+  border-color: rgba(33,158,188,0.5);
+  box-shadow: 0 0 0 3px rgba(33,158,188,0.10);
+}

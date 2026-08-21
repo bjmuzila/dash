@@ -71,7 +71,7 @@ import { cachedJson, HttpError } from "@/lib/sharedCache";
 // (tick-quantized, 1-min cadence) — not by picking a different source.
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { Dock, SegGroup, DockButton, DockGap, DockSlider, DockSpacer } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, DockButton, DockGap, DockSlider, DockCogMenu, DockMenuRow, DockMenuDivider } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
 import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, ES_CANDLE_UP, ES_CANDLE_DOWN, dissolveCardStyle } from "@/components/shared/homeTheme";
 import type { RailRow } from "@/components/dashboard/EsGexRail";
@@ -5447,26 +5447,65 @@ function EsChartCard({
               // esFut-derived and freezes on the expired contract across a roll.
               const basis = effectiveBasis();
               return (
-                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, opacity: 0.75, whiteSpace: "nowrap" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", color: "#ffffff", opacity: 0.85, whiteSpace: "nowrap" }}>
                   ES Basis {basis ? (basis > 0 ? "+" : "") + basis.toFixed(2) : "—"}
                 </span>
               );
             })() : (
               // No basis line off ES: the strikes are already the chart's own
               // prices, so there is nothing to offset and nothing to report.
-              <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, opacity: 0.75, whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", color: "#ffffff", opacity: 0.85, whiteSpace: "nowrap" }}>
                 {sym.gexSymbol} GEX
               </span>
             )}
           </div>
           )}
 
+          {/* Identity + live badges stretch across the bar; the actions and the
+              cog sit on the right edge. Everything else on this toolbar folded
+              into that cog — same shape as /home. The badges read at a glance
+              and are not settings, so they stayed out here. */}
+          <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
+            {!dockCompact && (
+            <span style={{ fontSize: 12, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: status === "live" ? "#30d158" : "#ffffff", whiteSpace: "nowrap", flexShrink: 0 }}>
+              {status.toUpperCase()}
+            </span>
+            )}
+            {!dockCompact && (
+            <span style={{ fontSize: 12, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: "#ffffff", whiteSpace: "nowrap", flexShrink: 0 }}>
+              {`${sym.label} · ${INTERVAL_LABEL[interval]} · ${rows.length} candles`}
+            </span>
+            )}
+            {/* The side panel is on but the card is too narrow for it. Says so,
+                rather than letting a missing rail read as a broken one. */}
+            {panelSuppressed && (
+            <span title="Widen this card (or drop to fewer charts) to show the side panel"
+                  style={{ fontSize: 11, fontWeight: 700, padding: "4px 8px", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, color: "#ffffff", whiteSpace: "nowrap", flexShrink: 0 }}>
+              panel hidden — narrow
+            </span>
+            )}
+          </div>
+
+          {/* The dock itself stays in the capture, so the capture-triggering
+              controls hide themselves — they'd be dead pixels in the PNG. Not
+              direct children of captureRef, so they don't affect hiddenShift.
+              Per-card by design: "snap THIS chart" is the useful gesture when
+              three are on screen, and the label carries the symbol + timeframe
+              so three PNGs are distinguishable. `hideCapture` exists for a host
+              that supplies its own. */}
+          {!hideCapture && (<>
+            <span data-capture-hide><BoxSnapBtn targetRef={captureRef} label={`${sym.label} ${INTERVAL_LABEL[interval]} Candles`} /></span>
+            <span data-capture-hide><BoxDiscordBtn targetRef={captureRef} label={`${sym.label} ${INTERVAL_LABEL[interval]} Candles`} /></span>
+          </>)}
+
+          <DockCogMenu title="Candles" buttonTitle="Chart settings" width={340}>
+
           {/* Charts / Replay / Indicators. Rendered by the PAGE (it owns chart
               count, the replay command and the indicator blob) but living in
-              THIS bar, because two stacked toolbars for one chart is one toolbar
+              THIS cog, because two stacked toolbars for one chart is one toolbar
               too many. Only a dock-rendering card ever shows them, so the
               ticker-only cards in a shared row can't duplicate the set. */}
-          {toolbarExtras}
+          <DockMenuRow label="Page" stack>{toolbarExtras}</DockMenuRow>
 
           {/* Overlays checklist dropdown (was 6 inline tiles — overflowed the dock).
               Sits with the page's Charts / Replay / Indicators / Layout group, NOT
@@ -5476,6 +5515,7 @@ function EsChartCard({
               rather than moving into toolbarExtras because the page cannot own it —
               every toggle below is per-card state persisted into this slot's blob,
               so three cards in a row each carry their own overlay set. */}
+          <DockMenuRow label="Overlays">
           <div ref={ovlBoxRef} style={{ flexShrink: 0 }}>
             <DockButton onClick={openOvl} title="Chart overlays">
               <span>Overlays</span>
@@ -5644,57 +5684,46 @@ function EsChartCard({
             document.body
           )}
 
+          </DockMenuRow>
+
+          <DockMenuDivider />
+
           {/* Symbol picker — ES / SPY / QQQ, favorites persisted per browser.
               Dropped from a SHARED dock: that toolbar drives every chart, and a
               ticker is the one setting that must not. Each card grows its own
               ticker bar instead (see tickerBar below). */}
-          {dockMode === "full" && <SymbolListDropdown active={symbol} onSelect={setSymbol} />}
+          {dockMode === "full" && (
+            <DockMenuRow label="Symbol">
+              <SymbolListDropdown active={symbol} onSelect={setSymbol} />
+            </DockMenuRow>
+          )}
 
           {/* Timeframe. 1m is its own server stream; 5m is the native feed;
-              15m/30m/1h roll up from the 5m bars client-side (see interval.ts).
-              This is the ONE control that never moves into the overflow menu —
-              it's the reason to have three charts in the first place. */}
-          <SegGroup
-            options={CHART_INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
-            active={String(interval)}
-            onChange={(v) => { const n = Number(v); if (isChartInterval(n)) setInterval_(n); }}
-          />
+              15m/30m/1h roll up from the 5m bars client-side (see interval.ts). */}
+          <DockMenuRow label="Timeframe" stack>
+            <SegGroup
+              options={CHART_INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
+              active={String(interval)}
+              onChange={(v) => { const n = Number(v); if (isChartInterval(n)) setInterval_(n); }}
+            />
+          </DockMenuRow>
 
-          {/* Back to the forming candle. Sits with the timeframe rather than
-              with Refresh at the far end: both answer "what part of the tape am
-              I looking at", where Refresh/Snap/Discord are actions ON the chart.
-              Kept out of the overflow menu — a way back from a stray scroll is
-              worthless if you have to open a menu to find it. */}
-          {/* "Latest", not "Now" — the refresh button at the far end of this
-              same bar already reads "↻ Now" (see useRefreshButton), and two
-              buttons on one toolbar saying Now while doing different things is
-              the kind of thing you only notice after clicking the wrong one. */}
-          <DockButton onClick={scrollToNow} title="Jump to the current candle — keeps your zoom (double-click the chart to re-frame the whole session instead)">
-            <span aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>⇥</span>
-            {!dockCompact && <span>Latest</span>}
-          </DockButton>
+          {/* Back to the forming candle.
+              "Latest", not "Now" — the refresh button further down this same
+              menu already reads "↻ Now" (see useRefreshButton), and two controls
+              saying Now while doing different things is the kind of thing you
+              only notice after clicking the wrong one. */}
+          <DockMenuRow label="View">
+            <DockButton onClick={scrollToNow} title="Jump to the current candle — keeps your zoom (double-click the chart to re-frame the whole session instead)">
+              <span aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>⇥</span>
+              <span>Latest</span>
+            </DockButton>
+          </DockMenuRow>
 
-          {/* status + count badges */}
-          {!dockCompact && (
-          <span style={{ fontSize: 12, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: status === "live" ? "#30d158" : "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>
-            {status.toUpperCase()}
-          </span>
-          )}
-          {!dockCompact && (
-          <span style={{ fontSize: 12, fontWeight: 600, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: "rgba(255,255,255,.7)", whiteSpace: "nowrap", flexShrink: 0 }}>
-            {`${rows.length} candles`}
-          </span>
-          )}
-          {/* The side panel is on but the card is too narrow for it. Says so,
-              rather than letting a missing rail read as a broken one. */}
-          {panelSuppressed && (
-          <span title="Widen this card (or drop to fewer charts) to show the side panel"
-                style={{ fontSize: 11, fontWeight: 700, padding: "4px 8px", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, color: HOME_THEME.muted, whiteSpace: "nowrap", flexShrink: 0 }}>
-            panel hidden — narrow
-          </span>
-          )}
+          <DockMenuDivider />
 
           {/* DTE dropdown */}
+          <DockMenuRow label="Heatmap expiry">
           <div ref={dteBoxRef} style={{ flexShrink: 0 }}>
             <DockButton onClick={openDte} title="Heatmap expiry / DTE">
               <span style={{ fontVariantNumeric: "tabular-nums" }}>{selectedExpiry ? dayDateOf(selectedExpiry) : "Front"}</span>
@@ -5738,27 +5767,28 @@ function EsChartCard({
             </div>,
             document.body
           )}
+          </DockMenuRow>
 
-
-          <DockGap />
+          <DockMenuDivider />
 
           {/* GEX metric */}
-          <SegGroup
-            options={[{ label: "Vol+OI", value: "voloi" }, { label: "Vol", value: "vol" }]}
-            active={gexMetric}
-            onChange={(v) => { setGexMetric(v as typeof gexMetric); saveSetting({ metric: v }); }}
-          />
+          <DockMenuRow label="GEX basis" stack>
+            <SegGroup
+              options={[{ label: "Vol+OI", value: "voloi" }, { label: "Vol", value: "vol" }]}
+              active={gexMetric}
+              onChange={(v) => { setGexMetric(v as typeof gexMetric); saveSetting({ metric: v }); }}
+            />
+          </DockMenuRow>
 
           {/* (The heatmap `intensity` slider used to sit here. It moved into
               Overlays → Heatmap brightness — it only does anything while the
-              heatmap is on, so it belongs with the overlay that owns it rather
-              than taking permanent width in a toolbar that is otherwise buttons
-              and segmented pickers.) */}
+              heatmap is on, so it belongs with the overlay that owns it.) */}
 
           {/* The page's CANDLES toolbar hosts this button when there is one, so
               the card drops its own rather than offering two switches for one
               piece of state. The home embed has no page toolbar and keeps it. */}
           {!hostedReplay && (
+            <DockMenuRow label="Replay">
             <DockButton
               onClick={() => {
                 if (replayOn) { exitReplay(); return; }
@@ -5774,23 +5804,15 @@ function EsChartCard({
             >
               <span>Replay</span>
             </DockButton>
+            </DockMenuRow>
           )}
 
-          {/* Refresh / Snap / Discord are ACTIONS, not settings — they belong at
-              the far end, away from the controls you actually tune. */}
-          <DockSpacer />
-          <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
-          {/* The dock itself now stays in the capture, so the capture-triggering
-              controls hide themselves — they'd be dead pixels in the PNG. Not
-              direct children of captureRef, so they don't affect hiddenShift.
-              Per-card by design: "snap THIS chart" is the useful gesture when
-              three are on screen, and the label carries the symbol + timeframe
-              so three PNGs are distinguishable. `hideCapture` exists for a host
-              that supplies its own. */}
-          {!hideCapture && (<>
-            <span data-capture-hide><BoxSnapBtn targetRef={captureRef} label={`${sym.label} ${INTERVAL_LABEL[interval]} Candles`} /></span>
-            <span data-capture-hide><BoxDiscordBtn targetRef={captureRef} label={`${sym.label} ${INTERVAL_LABEL[interval]} Candles`} /></span>
-          </>)}
+          <DockMenuDivider />
+
+          <DockMenuRow label="Data">
+            <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
+          </DockMenuRow>
+          </DockCogMenu>
         </Dock>
         </FitScale>
       </div>

@@ -736,6 +736,23 @@ export function DockCalendar({
   );
 }
 
+/**
+ * Is `el` inside a fixed, high-z floating layer? Used to tell a click on a
+ * portalled popover apart from a click on the page behind it. Deliberately
+ * structural rather than a marker attribute: the popovers this has to recognise
+ * live in four different files and were written years apart, and all of them
+ * share the same shape: `position: fixed` on a raised z-index. The threshold is
+ * low (50) because the ES-candles Charts/Indicators panel sits at 60 while the
+ * portalled dropdowns sit at 9,999-100,000.
+ */
+function inFloatingLayer(el: Element | null): boolean {
+  for (let n = el; n && n !== document.body; n = n.parentElement) {
+    const cs = window.getComputedStyle(n);
+    if (cs.position === "fixed" && Number(cs.zIndex) >= 50) return true;
+  }
+  return false;
+}
+
 /* ---------- Cog menu (portal'd settings dropdown) ---------- */
 /**
  * One cog wheel standing in for a whole toolbar. Everything a bar used to spread
@@ -774,27 +791,55 @@ export function DockCogMenu({
   buttonTitle?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; maxH: number } | null>(null);
   const [mounted, setMounted] = useState(false);
   const anchorRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => setMounted(true), []);
 
+  // Placed against the VIEWPORT, both axes.
+  //
+  // Vertical flip matters: these cogs sit in card headers, and a card pinned to
+  // the bottom of the column (the econ strip when it is minimised) has no room
+  // below its own header — the panel hung off the bottom of the screen and could
+  // not be reached. So when the panel doesn't fit under the trigger it opens
+  // upward instead, and the height it is allowed to take is whatever the taller
+  // side actually has.
   const place = useCallback(() => {
-    const r = anchorRef.current?.getBoundingClientRect();
-    if (!r) return;
-    const raw = align === "right" ? r.right - width : r.left;
-    const maxLeft = (typeof window === "undefined" ? width + 16 : window.innerWidth) - width - 8;
-    setPos({ left: Math.max(8, Math.min(raw, maxLeft)), top: r.bottom + 6 });
+    const a = anchorRef.current?.getBoundingClientRect();
+    if (!a) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const h = menuRef.current?.offsetHeight ?? 0;
+    const rawLeft = align === "right" ? a.right - width : a.left;
+    const left = Math.max(8, Math.min(rawLeft, Math.max(8, vw - width - 8)));
+
+    const gapBelow = vh - a.bottom - 14;
+    const gapAbove = a.top - 14;
+    // Prefer below; flip only when the panel genuinely doesn't fit AND there is
+    // more room the other way, so a short menu near the bottom still drops down.
+    const openUp = h > 0 && h > gapBelow && gapAbove > gapBelow;
+    const top = openUp ? Math.max(8, a.top - 6 - h) : a.bottom + 6;
+    setPos({ left, top, maxH: Math.max(140, Math.floor(openUp ? gapAbove : gapBelow)) });
   }, [align, width]);
 
   useEffect(() => {
     if (!open) return;
+    // Twice on purpose: the first pass runs before the panel has been laid out
+    // at its real height (so it lands below the trigger), the rAF pass measures
+    // it and flips/clamps if that put it off-screen.
     place();
+    const raf = requestAnimationFrame(place);
     const onDoc = (e: MouseEvent) => {
       const t = e.target as Node;
       if (anchorRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      // Controls INSIDE a cog menu can open their own portalled popovers (the
+      // ES overlays checklist, the DTE lists, the ticker dropdowns). Those land
+      // on <body>, so a click in one is "outside" this menu by containment and
+      // would slam the cog shut mid-interaction. Anything sitting in a floating
+      // layer of its own therefore counts as inside.
+      if (inFloatingLayer(e.target as Element | null)) return;
       setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
@@ -803,6 +848,7 @@ export function DockCogMenu({
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => {
+      cancelAnimationFrame(raf);
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", place);
@@ -818,14 +864,17 @@ export function DockCogMenu({
       data-capture-hide=""
       style={{
         ...popoverPanel,
+        // Rendered (and therefore measurable) as soon as it opens, but parked
+        // off-screen for the one frame before `place()` has measured it — the
+        // flip logic needs a real offsetHeight, which display:none never gives.
         left: pos?.left ?? -9999,
         top: pos?.top ?? -9999,
         width,
         padding: 12,
-        display: open && pos ? "flex" : "none",
+        display: open ? "flex" : "none",
         flexDirection: "column",
         gap: 6,
-        maxHeight: "min(72vh, 620px)",
+        maxHeight: Math.min(pos?.maxH ?? 620, 620),
         overflowY: "auto",
         borderTop: `2px solid ${rgba(accent, 0.5)}`,
       }}
@@ -904,7 +953,7 @@ export function DockMenuRow({
             fontWeight: 800,
             letterSpacing: "0.10em",
             textTransform: "uppercase",
-            color: "rgba(255,255,255,0.55)",
+            color: T.text,
             whiteSpace: "nowrap",
             cursor: hint ? "help" : undefined,
           }}

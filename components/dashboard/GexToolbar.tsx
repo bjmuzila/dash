@@ -35,9 +35,14 @@ interface GexToolbarProps {
   showOI:        boolean;
   showDex:       boolean;
   showFlipCurve: boolean;
-  showGhost5:    boolean;
-  showGhost15:   boolean;
-  showGhost30:   boolean;
+  /**
+   * Prior-state ghost overlays. No host renders a control for these any more
+   * (the /home cog dropped them 2026-08-21) — the props stay OPTIONAL so an
+   * existing caller that still passes them keeps compiling.
+   */
+  showGhost5?:    boolean;
+  showGhost15?:   boolean;
+  showGhost30?:   boolean;
   // DTE picker
   expirations:   string[];
   selectedExpiry: string;
@@ -47,9 +52,9 @@ interface GexToolbarProps {
   onToggleOI:    () => void;
   onToggleDex:   () => void;
   onToggleFlip:  () => void;
-  onToggleGhost5:  () => void;
-  onToggleGhost15: () => void;
-  onToggleGhost30: () => void;
+  onToggleGhost5?:  () => void;
+  onToggleGhost15?: () => void;
+  onToggleGhost30?: () => void;
   onRefresh:     () => Promise<void>;
   /**
    * Rendered as the FIRST item inside the dock, before the DTE picker. Exists so
@@ -72,6 +77,14 @@ interface GexToolbarProps {
    * why this is a prop rather than a rewrite.
    */
   compact?: boolean;
+  /**
+   * COMPACT ONLY — the readout cards (Net GEX / Call Wall / Put Wall / Flip / CB
+   * / Max Pain / …) that used to sit on their own strip under this bar. They now
+   * live IN the bar and stretch across it, so the card has one control row
+   * instead of two. Everything after them is right-aligned: snapshot, Discord
+   * (owner-only, it hides itself), then the cog.
+   */
+  stats?: ReactNode;
 }
 
 // Format expiry date → DTE label e.g. "0DTE  Fri 6/13"
@@ -84,23 +97,20 @@ function expiryLabel(expiry: string): { day: string; date: string } {
 
 export default function GexToolbar({
   gexMode, dataMode, showOI, showDex, showFlipCurve,
-  showGhost5, showGhost15, showGhost30,
   expirations, selectedExpiry, onExpiry,
   onGexMode, onDataMode,
   metric = "gex", onMetric,
   ex0dte = false, onToggleEx0dte, ex0dteBusy = false, ex0dteError = null,
   onToggleOI, onToggleDex, onToggleFlip,
-  onToggleGhost5, onToggleGhost15, onToggleGhost30,
   onRefresh,
   leading,
   containerRef, discordMessage, ticker = "SPX",
   compact = false,
+  stats,
 }: GexToolbarProps) {
   // Title baked into the top-left of the screenshot: "SPX GEX • Fri 6/26"
   const { day: exDay, date: exDate } = expiryLabel(selectedExpiry);
   const screenshotTitle = `${ticker} GEX  •  ${exDay} ${exDate}`;
-  // Prior-state ghost overlays are only meaningful in Net-GEX + OI mode.
-  const ghostEnabled = gexMode === "net" && dataMode === "oi-vol";
   const { trigger, label: btnLabel, style: btnStyle } = useRefreshButton(onRefresh);
   // Only show 0DTE and 1DTE
   const visibleExpirations = expirations.slice(0, 2);
@@ -110,17 +120,22 @@ export default function GexToolbar({
     return { value: exp, label: day, sub: day === "ALL" ? undefined : date };
   });
 
-  // ── Compact: one cog + snapshot + Discord ───────────────────────────────────
-  // Same controls, same handlers — only the container changes. Ghost overlays
-  // ride along here (they had no tile on the wide bar, so /home could never
-  // reach them) and are disabled outside Net-GEX + OI, where they mean nothing.
+  // ── Compact: readout cards + snapshot + Discord + cog ───────────────────────
+  // Same controls, same handlers — only the container changes. Layout is fixed:
+  // the `stats` cards take all the slack, then the actions, then the cog last so
+  // it always sits hard against the right edge.
   if (compact) {
     return (
       <div style={{ display: "flex", padding: "6px 8px 2px", flexShrink: 0 }}>
         <Dock className="dock-noscroll" style={{ width: "100%", gap: 8 }} fullWidth flat noScroll>
           {leading}
           {leading && <DockGap />}
-          <DockCogMenu title="GEX chart" buttonTitle="GEX chart settings" align="left" width={330}>
+          {stats
+            ? <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center" }}>{stats}</div>
+            : <DockSpacer />}
+          {containerRef && <BoxSnapBtn targetRef={containerRef} label="GEX Chart" title={screenshotTitle} />}
+          {containerRef && <BoxDiscordBtn targetRef={containerRef} label="GEX Chart" message={discordMessage} title={screenshotTitle} />}
+          <DockCogMenu title="GEX chart" buttonTitle="GEX chart settings" width={330}>
             {dteOptions.length > 0 && (
               <DockMenuRow
                 label="Expiry"
@@ -182,20 +197,6 @@ export default function GexToolbar({
               <ToggleTile label="Flip" on={showFlipCurve} onClick={onToggleFlip} />
             </DockMenuRow>
 
-            <DockMenuRow
-              label="Ghosts"
-              hint={ghostEnabled
-                ? "Draw the bar profile from 5 / 15 / 30 minutes ago behind the live bars."
-                : "Prior-state ghosts only mean anything on Net GEX + OI+Vol."}
-              stack
-            >
-              <span style={{ display: "inline-flex", gap: 6, opacity: ghostEnabled ? 1 : 0.4, pointerEvents: ghostEnabled ? "auto" : "none" }}>
-                <ToggleTile label="5m"  on={showGhost5}  onClick={onToggleGhost5} />
-                <ToggleTile label="15m" on={showGhost15} onClick={onToggleGhost15} />
-                <ToggleTile label="30m" on={showGhost30} onClick={onToggleGhost30} />
-              </span>
-            </DockMenuRow>
-
             <DockMenuDivider />
 
             <DockMenuRow label="Data">
@@ -204,10 +205,6 @@ export default function GexToolbar({
               </DockButton>
             </DockMenuRow>
           </DockCogMenu>
-
-          <DockSpacer />
-          {containerRef && <BoxSnapBtn targetRef={containerRef} label="GEX Chart" title={screenshotTitle} />}
-          {containerRef && <BoxDiscordBtn targetRef={containerRef} label="GEX Chart" message={discordMessage} title={screenshotTitle} />}
         </Dock>
       </div>
     );

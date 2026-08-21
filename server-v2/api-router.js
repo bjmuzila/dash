@@ -167,6 +167,22 @@ async function enforceAuth(level, req, ctx, identify = false) {
     // Edge users.id by anything downstream that logs or compares it.
     return { ok: true, hhUser, userId: `hh:${hhUser.id}` };
   }
+  // 'affiliate' — affiliate.cbedge.net. A THIRD identity system, separate from
+  // both CB Edge customers and the household app: an affiliate is usually not a
+  // subscriber, and a subscriber must not get an affiliate dashboard for free.
+  // Checked BEFORE verifyWsRequest for the same reason 'household' is — an
+  // affiliate carries no cbe_session and would otherwise be rejected as a
+  // signed-out visitor. See server-v2/_lib-affiliate.cjs.
+  if (level === 'affiliate') {
+    let al = null;
+    try { al = require('./_lib-affiliate.cjs'); }
+    catch { return { ok: false, code: 503, reason: 'affiliate-unavailable' }; }
+    const row = await al.affiliateFromRequest(req);
+    if (!row) return { ok: false, code: 401, reason: 'no-affiliate-session' };
+    // Namespaced so an affiliate id can never be mistaken for a users.id by
+    // anything downstream that logs or compares it.
+    return { ok: true, affiliate: row, userId: `aff:${row.id}` };
+  }
   let access;
   try {
     access = await ctx.verifyWsRequest(req); // { ok, userId?, reason }
@@ -9628,6 +9644,26 @@ if (process.env.HOUSEHOLD_ROUTES_IN_DASHBOARD === '1') {
   } catch (e) {
     console.warn('[api-router] household routes not loaded:', e.message);
   }
+}
+
+// ---------------------------------------------------------------------------
+// affiliate.cbedge.net — the affiliate program (/api/aff/*).
+//
+// Same shape as the household escape hatch above, minus the kill switch: these
+// routes are small, DB-only, and share this process because they share the
+// Stripe webhook's container. Two touch points in this file — the
+// `auth: 'affiliate'` branch in enforceAuth() and the call below.
+//
+// Loaded DEFENSIVELY. Without the DB bundle (local dev, or a build that did not
+// produce _lib-db.cjs) nothing registers and /api/aff/* simply 404s through to
+// Next, exactly like every other optional module here.
+// ---------------------------------------------------------------------------
+try {
+  const { registerAffiliateRoutes } = require('./affiliate-routes.cjs');
+  const n = registerAffiliateRoutes({ register, send, readJson });
+  if (n) console.log(`[api-router] affiliate routes registered (${n})`);
+} catch (e) {
+  console.warn('[api-router] affiliate routes not loaded:', e.message);
 }
 
 module.exports = { handleApiRoute, register, _routes: ROUTES };

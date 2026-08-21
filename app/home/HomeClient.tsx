@@ -85,7 +85,6 @@ const CARD_VIEWS_LS_KEY = "cbedge.home.cardViews.v1";
 // ─────────────────────────────────────────────────────────────────────────────
 const HOME_PREFS_LS_KEY = "cbedge.home.toolbars.v1";
 
-type GhostWindow = 0 | 5 | 15 | 30;
 type DeltaWindow = 0 | 1 | 5 | 15 | 30;
 type EconSize = "min" | "half" | "full";
 
@@ -95,7 +94,6 @@ type HomePrefs = {
   showOI: boolean;
   showDex: boolean;
   showFlipCurve: boolean;
-  ghost: GhostWindow;
   intensity: number;
   sideBasis: GexBasis;
   deltaWindow: DeltaWindow;
@@ -110,7 +108,6 @@ const HOME_PREFS_DEFAULTS: HomePrefs = {
   showOI: false,
   showDex: false,
   showFlipCurve: false,
-  ghost: 0,
   intensity: 1.75,
   sideBasis: "oi-vol",
   deltaWindow: 0,
@@ -136,7 +133,6 @@ function readHomePrefs(): HomePrefs {
       showOI: typeof p.showOI === "boolean" ? p.showOI : HOME_PREFS_DEFAULTS.showOI,
       showDex: typeof p.showDex === "boolean" ? p.showDex : HOME_PREFS_DEFAULTS.showDex,
       showFlipCurve: typeof p.showFlipCurve === "boolean" ? p.showFlipCurve : HOME_PREFS_DEFAULTS.showFlipCurve,
-      ghost: oneOf<GhostWindow>(p.ghost, [0, 5, 15, 30], HOME_PREFS_DEFAULTS.ghost),
       intensity: Number.isFinite(intensity) ? Math.min(5, Math.max(0.5, intensity)) : HOME_PREFS_DEFAULTS.intensity,
       sideBasis: oneOf<GexBasis>(p.sideBasis, ["oi-vol", "vol-only"], HOME_PREFS_DEFAULTS.sideBasis),
       deltaWindow: oneOf<DeltaWindow>(p.deltaWindow, [0, 1, 5, 15, 30], HOME_PREFS_DEFAULTS.deltaWindow),
@@ -230,9 +226,9 @@ function metricBg(value: number, maxValue: number, intensity: number, topValues:
   return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
 }
 
-// Soft-white cell value + green/red leading sign — matches the Multi-Greek cell
-// format so the heatmap / option chain / mult-greek all read identically.
-const SOFT_WHITE = "#c3ccda";
+// White cell value + green/red leading sign. Was a soft slate-white (#c3ccda);
+// every muted grey on this page was raised to plain white 2026-08-21.
+const SOFT_WHITE = "#ffffff";
 function SignVal({ text }: { text: string }) {
   if (!text || text === "--" || text === "·") return <>{text}</>;
   const s = text[0] === "+" || text[0] === "-" ? text[0] : "";
@@ -703,12 +699,9 @@ export function HomeClient({
   const [showOI, setShowOI] = useState(HOME_PREFS_DEFAULTS.showOI);
   const [showDex, setShowDex] = useState(HOME_PREFS_DEFAULTS.showDex);
   const [showFlipCurve, setShowFlipCurve] = useState(HOME_PREFS_DEFAULTS.showFlipCurve);
-  // Prior-state ghost overlays (5/15/30 min ago) drawn behind live GEX bars.
-  // Mutually exclusive, so they persist as ONE window rather than three booleans.
-  const [ghost, setGhost] = useState<GhostWindow>(HOME_PREFS_DEFAULTS.ghost);
-  const showGhost5  = ghost === 5;
-  const showGhost15 = ghost === 15;
-  const showGhost30 = ghost === 30;
+  // (Prior-state ghost overlays were dropped from /home 2026-08-21. GexChart
+  // still supports them — its showGhost* props default to false — but nothing on
+  // this page turns them on any more.)
   // Strike-detail popup: selected strike, click anchor, and which popup style to
   // preview (card | drawer | modal — toggled in the toolbar so all 3 can be tested).
   const [selectedStrike, setSelectedStrike] = useState<{ row: ChainRow; pos: { x: number; y: number } } | null>(null);
@@ -840,7 +833,6 @@ export function HomeClient({
     setShowOI(p.showOI);
     setShowDex(p.showDex);
     setShowFlipCurve(p.showFlipCurve);
-    setGhost(p.ghost);
     setIntensity(p.intensity);
     setSideBasis(p.sideBasis);
     setDeltaWindow(p.deltaWindow);
@@ -853,11 +845,11 @@ export function HomeClient({
   useEffect(() => {
     if (!prefsReady) return;
     writeHomePrefs({
-      gexMode, dataMode, showOI, showDex, showFlipCurve, ghost,
+      gexMode, dataMode, showOI, showDex, showFlipCurve,
       intensity, sideBasis, deltaWindow, heatTicker, econSize,
     });
   }, [
-    prefsReady, gexMode, dataMode, showOI, showDex, showFlipCurve, ghost,
+    prefsReady, gexMode, dataMode, showOI, showDex, showFlipCurve,
     intensity, sideBasis, deltaWindow, heatTicker, econSize,
   ]);
 
@@ -1563,10 +1555,10 @@ export function HomeClient({
     return { by, maxPct };
   }, [deltaWindow, heatmapRows, strikeBaselines, strikeRates]);
 
-  // Chart ghost-bar baselines — poll the full chain whenever any prior-state
-  // overlay (5/15/30 min) is enabled.
-  const anyGhost = showGhost5 || showGhost15 || showGhost30;
-  const chartBaselines = useStrikeGexHistory(anyGhost ? selectedExpiry : "", [5, 15, 30], 30_000, true);
+  // Ghost overlays are gone from this page, so the baseline poll they drove is
+  // off — passing "" makes the hook idle. Kept wired (rather than deleting the
+  // GexChart prop) so re-enabling them is a one-line change.
+  const chartBaselines = useStrikeGexHistory("", [5, 15, 30], 30_000, true);
 
   // Strike → full ChainRow lookup so the heatmap rows can open the same popup.
   const chartRowByStrike = useMemo(
@@ -1782,7 +1774,7 @@ export function HomeClient({
               fontWeight: 700,
               textTransform: "uppercase",
               letterSpacing: "0.08em",
-              color: active ? HOME_THEME.cyan : "#5a7a98",
+              color: active ? HOME_THEME.cyan : "#fff",
             }}>
               {v.label}
             </span>
@@ -1790,7 +1782,7 @@ export function HomeClient({
               <span
                 onClick={(e) => { e.stopPropagation(); removeCardView(v.id); }}
                 title={`Remove ${v.label}`}
-                style={{ fontSize: 13, lineHeight: 1, color: "#5a7a98", cursor: "pointer", padding: "0 1px" }}
+                style={{ fontSize: 13, lineHeight: 1, color: "#fff", cursor: "pointer", padding: "0 1px" }}
               >
                 ×
               </span>
@@ -1845,7 +1837,7 @@ export function HomeClient({
             zIndex: 60,
           }}
         >
-          <div style={{ padding: "6px 10px 8px", fontSize: 10, fontWeight: 700, letterSpacing: "0.10em", textTransform: "uppercase", color: "#5a7a98" }}>
+          <div style={{ padding: "6px 10px 8px", fontSize: 10, fontWeight: 700, letterSpacing: "0.10em", textTransform: "uppercase", color: "#fff" }}>
             Add a card
           </div>
           {addableCardViews.map((v) => (
@@ -1931,15 +1923,18 @@ export function HomeClient({
                 along with the card when the econ panel is expanded to full. */}
             {econSize !== "full" && cardTabStrip}
             <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: "0 16px 16px 16px", border: "1px solid rgba(255,255,255,0.10)", display: econSize === "full" ? "none" : "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
-              {/* Full-featured toolbar — scales to fit instead of scrolling.
-                  min is deliberately low: at 0.6 the bar still overflowed on
-                  ~1280px-wide windows and fell back to a hidden scrollbar,
-                  which read as "cut off".
-                  Unmounted in any non-GEX view: every control on it (gex mode,
-                  data mode, OI/DEX/flip, ghosts, expiry, snap target) drives the
-                  bar chart only. Each embedded page brings its own dock. The view
-                  switcher is no longer in this slot — it's the tab strip above
-                  the card. */}
+              {/* ONE bar. The level readouts used to sit on their own strip
+                  underneath this toolbar; they are now the toolbar's `stats`
+                  slot and stretch across it, with snapshot / Discord / cog
+                  pinned to the right. Two rows of chrome above the chart was one
+                  too many.
+
+                  Scales to fit instead of scrolling; min is deliberately low —
+                  at 0.6 the bar still overflowed ~1280px windows and fell back
+                  to a hidden scrollbar, which read as "cut off".
+
+                  Unmounted in any non-GEX view: every control on it drives the
+                  bar chart only, and each embedded page brings its own dock. */}
               {gexView === "gex" && (
               <FitScale min={0.42}>
               <GexToolbar
@@ -1953,46 +1948,40 @@ export function HomeClient({
                 onExpiry={handleExpiry}
                 onGexMode={setGexMode}
                 onDataMode={setDataMode}
-                showGhost5={showGhost5}
-                showGhost15={showGhost15}
-                showGhost30={showGhost30}
                 onToggleOI={() => setShowOI(v => !v)}
                 onToggleDex={() => setShowDex(v => !v)}
                 onToggleFlip={() => setShowFlipCurve(v => !v)}
-                onToggleGhost5={() => setGhost(g => (g === 5 ? 0 : 5))}
-                onToggleGhost15={() => setGhost(g => (g === 15 ? 0 : 15))}
-                onToggleGhost30={() => setGhost(g => (g === 30 ? 0 : 30))}
                 onRefresh={handleRefresh}
                 containerRef={gexChartRef}
                 discordMessage={`NET GEX • ${selectedExpiry}`}
                 compact
+                stats={
+                  /* Same in-scope live values the heatmap stat bar reads, so the
+                     cards can never disagree with the chart beneath them. Each
+                     card flexes so the row fills the bar at any width.
+                     (Pop-up alerts will hook off these tiles later.) */
+                  <div style={{ display: "flex", alignItems: "stretch", gap: 6, width: "100%", minWidth: 0 }}>
+                    {[
+                      { label: "Net GEX",   value: fmtMoneyB(netGex), color: netGex >= 0 ? C.green : C.red },
+                      { label: "Call Wall", value: (callWallOiVol ?? callWall) != null ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—", color: C.green },
+                      { label: "Put Wall",  value: (putWallOiVol ?? putWall) != null ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—", color: C.red },
+                      { label: "Flip",      value: gammaFlip != null ? formatStrikeValue(gammaFlip) : "—", color: C.orange },
+                      { label: "CB",        value: mvcStrike != null ? formatStrikeValue(mvcStrike) : "—", color: C.purple },
+                      { label: "Max Pain",  value: maxPainStrike != null ? formatStrikeValue(maxPainStrike) : "—", color: C.cyan },
+                      { label: "+1σ (EM)",  value: emLevels.up != null ? formatStrikeValue(emLevels.up) : "—", color: C.green },
+                      { label: "−1σ (EM)",  value: emLevels.down != null ? formatStrikeValue(emLevels.down) : "—", color: C.red },
+                      { label: "+GEX %",    value: posGexPct != null ? `${posGexPct.toFixed(0)}%` : "—", color: posGexPct == null ? C.cyan : posGexPct >= 50 ? C.green : C.red },
+                      { label: "Bull/Bear", value: flowBull != null ? `${flowBull} / ${100 - flowBull}` : "—", color: flowBull == null ? C.cyan : flowBull >= 50 ? C.green : C.red },
+                    ].map((t) => (
+                      <div key={t.label} style={{ flex: "1 1 0", minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, background: "rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 8px" }}>
+                        <span style={{ fontSize: 10, color: "#fff", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, whiteSpace: "nowrap" }}>{t.label}</span>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: t.color, whiteSpace: "nowrap" }}>{t.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                }
               />
               </FitScale>
-              )}
-              {/* Levels strip — NET GEX / walls / flip / CB / max pain, in the
-                  empty band above the chart, right-aligned. Same in-scope live
-                  values as the heatmap stat bar so it always agrees with the
-                  chart. (Pop-up alerts will hook off these tiles later.) */}
-              {gexView === "gex" && (
-              <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 6, padding: "0 10px 6px", flexShrink: 0 }}>
-                {[
-                  { label: "Net GEX",   value: fmtMoneyB(netGex), color: netGex >= 0 ? C.green : C.red },
-                  { label: "Call Wall", value: (callWallOiVol ?? callWall) != null ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—", color: C.green },
-                  { label: "Put Wall",  value: (putWallOiVol ?? putWall) != null ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—", color: C.red },
-                  { label: "Flip",      value: gammaFlip != null ? formatStrikeValue(gammaFlip) : "—", color: C.orange },
-                  { label: "CB",        value: mvcStrike != null ? formatStrikeValue(mvcStrike) : "—", color: C.purple },
-                  { label: "Max Pain",  value: maxPainStrike != null ? formatStrikeValue(maxPainStrike) : "—", color: C.cyan },
-                  { label: "+1σ (EM)",  value: emLevels.up != null ? formatStrikeValue(emLevels.up) : "—", color: C.green },
-                  { label: "−1σ (EM)",  value: emLevels.down != null ? formatStrikeValue(emLevels.down) : "—", color: C.red },
-                  { label: "+GEX %",    value: posGexPct != null ? `${posGexPct.toFixed(0)}%` : "—", color: posGexPct == null ? C.cyan : posGexPct >= 50 ? C.green : C.red },
-                  { label: "Bull/Bear", value: flowBull != null ? `${flowBull} / ${100 - flowBull}` : "—", color: flowBull == null ? C.cyan : flowBull >= 50 ? C.green : C.red },
-                ].map((t) => (
-                  <div key={t.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 10px", minWidth: 64 }}>
-                    <span style={{ fontSize: 10, color: "rgba(255,255,255,0.75)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{t.label}</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: t.color }}>{t.value}</span>
-                  </div>
-                ))}
-              </div>
               )}
               {/* Chart canvas — uses fast gex-chain data. Held behind a loader
                   until the server reports OI + greeks are warm, so a half-built
@@ -2019,9 +2008,6 @@ export function HomeClient({
                     showDex={showDex}
                     showFlipCurve={showFlipCurve}
                     baselines={chartBaselines}
-                    showGhost5={showGhost5}
-                    showGhost15={showGhost15}
-                    showGhost30={showGhost30}
                     expiry={selectedExpiry}
                     onStrikeClick={(row, pos) => setSelectedStrike({ row, pos })}
                   />
@@ -2065,6 +2051,8 @@ export function HomeClient({
                     back to rendering its own inline header, which would shove the
                     calendar down every time the cog shut. */}
                 <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 8, flexShrink: 0 }}>
+                  <EconCalendarTemplateCopyBtn />
+                  <EconCalendarDiscordBtn />
                   <DockCogMenu title="Panel" buttonTitle="Panel settings" width={300}>
                     <DockMenuRow label="Height" stack>
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -2106,8 +2094,6 @@ export function HomeClient({
                       <div ref={econControlsSlotRef} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }} />
                     </DockMenuRow>
                   </DockCogMenu>
-                  <EconCalendarTemplateCopyBtn />
-                  <EconCalendarDiscordBtn />
                 </div>
               </div>
               </FitScale>
@@ -2202,11 +2188,11 @@ export function HomeClient({
                     ) : (
                     <>
                       <span>GEX Heatmap</span>
-                      <span style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, letterSpacing: "0.06em", textTransform: "none" }}>
+                      <span style={{ fontSize: 12, color: "#fff", fontWeight: 700, letterSpacing: "0.06em", textTransform: "none" }}>
                         {fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}
                       </span>
                       {sideLoading && (
-                        <span title="Fetching the SPY / QQQ / ticker-of-choice chains" style={{ fontSize: 11, color: "#5a7a98", fontWeight: 700 }}>…</span>
+                        <span title="Fetching the SPY / QQQ / ticker-of-choice chains" style={{ fontSize: 11, color: "#fff", fontWeight: 700 }}>…</span>
                       )}
                     </>
                     )}
@@ -2214,6 +2200,10 @@ export function HomeClient({
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: 12 }}>
                     {heatmapView !== "chain" && (
                     <>
+                    {/* Same order as the GEX toolbar: snapshot, Discord
+                        (owner-only — it hides itself), then the cog hard right. */}
+                    <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
+                    <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     <DockCogMenu title="Heatmap" buttonTitle="Heatmap settings" width={330}>
                       <DockMenuRow label="Intensity" hint="Cell colour opacity — how hard the heat ramps with magnitude.">
                         <DockSlider
@@ -2276,7 +2266,7 @@ export function HomeClient({
                             <button
                               onClick={() => { setHeatTickerInput(""); setHeatTicker(""); }}
                               title="Turn the 5th column off"
-                              style={{ padding: "5px 9px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: "pointer", fontFamily: "inherit", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", color: "#8da8c2" }}
+                              style={{ padding: "5px 9px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: "pointer", fontFamily: "inherit", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", color: "#fff" }}
                             >
                               Clear
                             </button>
@@ -2318,8 +2308,6 @@ export function HomeClient({
                         </DockButton>
                       </DockMenuRow>
                     </DockCogMenu>
-                    <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
-                    <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     </>
                     )}
                     {/* Heatmap|Chain switch removed — the panel is heatmap-only now.
@@ -2458,13 +2446,15 @@ export function HomeClient({
                           : {};
                         // Column peak (SPY/QQQ) — same white box + glow as the SPX NET GEX peak.
                         const isPeak = !isTable && peakStrikeByCol[colKey] != null && row.strikeNum === peakStrikeByCol[colKey];
-                        // Rank 1/2 cells are painted at 0.90 / 0.45 alpha by metricBg, where a
-                        // #5a7a98 strike goes unreadable — brighten it on those two tiers only.
-                        const heatRank = value == null ? 0 : (heatmapColorMeta.top3[colKey] ?? []).indexOf(Math.abs(value)) + 1;
-                        const prefixColor = heatRank === 1 || heatRank === 2 ? "rgba(255,255,255,0.78)" : "#5a7a98";
+                        // The inline ticker strike is plain white. It used to be a
+                        // muted slate that had to be brightened on rank-1/2 cells
+                        // (painted at 0.90 / 0.45 alpha by metricBg) to stay
+                        // readable; white is legible on every tier, so the special
+                        // case is gone.
+                        const prefixColor = "#ffffff";
                         const valEl = <SignVal text={text} />;
                         return (
-                          <td key={colIdx} title={title} className={isPeak ? "mvc-peak-cell" : undefined} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : SOFT_WHITE, ...(isPeak ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
+                          <td key={colIdx} title={title} className={isPeak ? "mvc-peak-cell" : undefined} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: SOFT_WHITE, ...(isPeak ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
                             {isTable
                               ? barEl(value, colKey)
                               : hasPrefix
@@ -2502,7 +2492,7 @@ export function HomeClient({
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
                               </div>
                             </td>
-                            <td key={1} className={heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : SOFT_WHITE, ...(heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
+                            <td key={1} className={heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: SOFT_WHITE, ...(heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
                               {heatmapView === "table" ? (
                                 barEl(row.netGexVal, "netGexVal")
                               ) : (

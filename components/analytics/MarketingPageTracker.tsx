@@ -32,6 +32,13 @@ const MARKETING_ROUTES: RegExp[] = [
   /^\/privacy$/,
   /^\/disclaimer$/,
   /^\/risk-disclosure$/,
+  // Unsubscribe is reached from an email link by someone who is almost never
+  // signed in, so it was invisible in every report: the owner Overview's
+  // non-member page list could show a landing-page arrival but never the
+  // unsubscribe that followed it. It is a public route like the rest, and the
+  // beacon carries no email address — the ?e=/?t= query is dropped by
+  // parseUtm(), which reads only utm_*/click-id keys.
+  /^\/unsubscribe$/,
 ];
 
 /** Stable page_key per marketing route. "/" → "landing", "/docs/x" → "docs". */

@@ -18,6 +18,28 @@ function publicOrigin(req: NextRequest): string {
   return new URL(req.url).origin;
 }
 
+/**
+ * The affiliate attribution cookie, minted by /api/aff/go on
+ * affiliate.cbedge.net with Domain=.cbedge.net so it survives the hop here.
+ * Read server-side only; it is HttpOnly.
+ *
+ * Stamped onto the SUBSCRIPTION metadata (not just the session) because that is
+ * the object every later invoice event carries — the checkout session is gone by
+ * the time a renewal is billed, and a renewal that cannot name its affiliate is
+ * a commission that silently stops after month one.
+ *
+ * A code typed at checkout as a Stripe promotion code still wins over this —
+ * see the webhook, which prefers the redeemed promotion code. Someone who typed
+ * a friend's code should credit that friend, not whoever's link they clicked
+ * three weeks ago.
+ */
+function affiliateCode(req: NextRequest): string | null {
+  const raw = req.cookies.get("cbe_ref")?.value;
+  if (!raw) return null;
+  const code = raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
+  return code.length >= 4 ? code : null;
+}
+
 // POST /api/stripe/checkout → creates a Stripe Checkout session for the signed-in
 // user and returns { url } to redirect to. Our own users.id is the source of
 // truth and is stamped onto the customer + session metadata so the webhook can
@@ -49,13 +71,15 @@ export async function POST(req: NextRequest) {
       await linkStripeCustomer(userId, customerId);
     }
 
+    const affCode = affiliateCode(req);
+
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
       line_items: [{ price: getPriceIdForPlan(plan), quantity: 1 }],
       // clerk_user_id on the session is the webhook's fallback mapping if the
       // customer lookup ever misses.
-      metadata: { clerk_user_id: userId },
+      metadata: { clerk_user_id: userId, ...(affCode ? { affiliate_code: affCode } : {}) },
       // 2-day free trial, MONTHLY ONLY — the landing CTA promises "2-day free
       // trial · no charge up front". It has to be set HERE: Checkout ignores
       // the product-level Trial Offer objects configured in the Stripe
@@ -64,7 +88,7 @@ export async function POST(req: NextRequest) {
       // payment_method_collection stays "always" so the card is still captured
       // up front and the sub converts automatically when the trial ends.
       subscription_data: {
-        metadata: { clerk_user_id: userId },
+        metadata: { clerk_user_id: userId, ...(affCode ? { affiliate_code: affCode } : {}) },
         ...(plan === "monthly" ? { trial_period_days: 2 } : {}),
       },
       payment_method_collection: "always",

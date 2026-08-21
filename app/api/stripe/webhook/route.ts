@@ -41,6 +41,48 @@ function customerIdOf(v: string | { id: string } | null | undefined): string | n
 /** Statuses that mean the subscription is over. */
 const DEAD_STATUSES = new Set(["canceled", "incomplete_expired"]);
 
+// ── Affiliate attribution ────────────────────────────────────────────────────
+// The affiliate ledger lives in server-v2 (_lib-affiliate.cjs), a plain
+// CommonJS module this Next route cannot import. Both run in the SAME
+// container, so we hand the facts over as a loopback POST carrying
+// INTERNAL_API_TOKEN — the same shared secret every other in-process caller
+// uses (see api-router.js enforceAuth, which honours it before any session
+// check). The coupling stays exactly one JSON shape wide.
+//
+// ALWAYS BEST EFFORT. An affiliate ledger write must never make this handler
+// 500, because Stripe would then retry a subscription state change that already
+// succeeded. A missed commission row is fixable by hand; a double-applied
+// subscription event is not.
+async function postAffiliate(payload: Record<string, unknown>): Promise<void> {
+  const token = (process.env.INTERNAL_API_TOKEN || "").trim();
+  if (!token) return; // not configured → affiliate program simply off
+  const port = process.env.PORT || "3001";
+  try {
+    await fetch(`http://127.0.0.1:${port}/api/aff/internal/referral`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-internal-token": token },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.error("[stripe/webhook] affiliate post failed:", err);
+  }
+}
+
+/** YYYY-MM in ET — the accrual period the affiliate ledger buckets by. */
+function etPeriod(unixSeconds?: number | null): string {
+  const d = unixSeconds ? new Date(unixSeconds * 1000) : new Date();
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit",
+  }).format(d).slice(0, 7);
+}
+
+function idOf(v: unknown): string | null {
+  if (!v) return null;
+  if (typeof v === "string") return v;
+  if (typeof v === "object" && v !== null && "id" in v) return String((v as { id: string }).id);
+  return null;
+}
+
 type CancellationDetails = {
   reason?: string | null;
   feedback?: string | null;
@@ -251,6 +293,61 @@ export async function POST(req: NextRequest) {
               : session.subscription.id;
           const sub = await stripe.subscriptions.retrieve(subId);
           await syncSubscription(sub);
+
+          // Write the affiliate LINK row — zero money, it just records which
+          // affiliate owns this subscription and at what rate. Every later
+          // invoice is credited from it, so a cookie that expires next month
+          // can never orphan a recurring commission.
+          //
+          // A promotion code the customer actually typed wins over the cookie:
+          // see the note in app/api/stripe/checkout/route.ts.
+          let promotionCodeId: string | null = null;
+          try {
+            const full = await stripe.checkout.sessions.retrieve(session.id, { expand: ["discounts"] });
+            const d = (full as unknown as { discounts?: Array<{ promotion_code?: unknown }> }).discounts?.[0];
+            promotionCodeId = idOf(d?.promotion_code);
+          } catch { /* no discount on the session — cookie path still applies */ }
+
+          const code = session.metadata?.affiliate_code || sub.metadata?.affiliate_code || null;
+          if (code || promotionCodeId) {
+            await postAffiliate({
+              kind: "link",
+              code,
+              promotion_code_id: promotionCodeId,
+              stripe_subscription_id: sub.id,
+              stripe_customer_id: customerIdOf(sub.customer as string | { id: string }),
+              customer_email: session.customer_details?.email ?? null,
+              plan: sub.items?.data?.[0]?.price?.id ?? null,
+              period: etPeriod(),
+            });
+          }
+        }
+        break;
+      }
+
+      // Every paid invoice — the first one and every renewal after it. This is
+      // where commission is actually earned, and it is keyed on the invoice id,
+      // which _lib-affiliate.cjs stores UNIQUE: a Stripe retry of this event
+      // cannot pay twice.
+      //
+      // amount_paid, not amount_due: a $0 trial invoice earns $0, and a partly
+      // discounted invoice earns on what the customer actually paid, which is
+      // the only number the business actually received.
+      case "invoice.payment_succeeded": {
+        const inv = event.data.object as Stripe.Invoice;
+        const subId = idOf((inv as unknown as { subscription?: unknown }).subscription);
+        const gross = Number(inv.amount_paid || 0);
+        if (subId && gross > 0) {
+          await postAffiliate({
+            kind: inv.billing_reason === "subscription_create" ? "initial" : "renewal",
+            stripe_subscription_id: subId,
+            stripe_customer_id: idOf(inv.customer),
+            invoice_id: inv.id,
+            customer_email: inv.customer_email ?? null,
+            plan: inv.lines?.data?.[0]?.price?.id ?? null,
+            gross_cents: gross,
+            period: etPeriod(inv.created),
+          });
         }
         break;
       }

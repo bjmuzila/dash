@@ -50,6 +50,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Admin", href: "/owner/dev/admin", glyph: "⚿", key: "Admin" },
       { label: "Sales", href: "/owner/dev/sales", glyph: "$", key: "Sales" },
       { label: "Visitors", href: "/owner/visitors", glyph: "◍", key: "Visitors" },
+      { label: "Affiliates", href: "/owner/affiliates", glyph: "⇉", key: "Affiliates" },
       { label: "Emails", href: "/owner/admin/emails", glyph: "✉", key: "Emails" },
       { label: "Newsletter", href: "/owner/newsletter", glyph: "🗞︎", key: "Newsletter" },
       { label: "Bzila Alerts", href: "/owner/dev/bzila-alerts", glyph: "🔔", key: "BzilaAlerts" },

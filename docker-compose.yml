@@ -134,6 +134,48 @@ services:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8082:8082"
 
+  # affiliate.cbedge.net — the affiliate program SPA (affiliate-vite/Dockerfile:
+  # node build stage → nginx), reverse-proxying ONLY /api to the DASHBOARD
+  # container (same compose network → dashboard:3002).
+  #
+  # It talks to the dashboard rather than the household backend because the
+  # affiliate ledger lives in server-v2/_lib-affiliate.cjs, in the same process
+  # as the Stripe webhook that feeds it — the webhook writes a commission row by
+  # posting to 127.0.0.1 inside that container, so putting this app's API
+  # anywhere else would mean a second process reading the same tables for no
+  # reason.
+  #
+  # Narrower than the owners service on purpose: no /ws, no /proxy. This is a
+  # PUBLIC, signed-out surface — the one CB Edge subdomain a stranger is invited
+  # to load — and not proxying the market-data paths means a bug here can never
+  # reach the trading stack. See affiliate-vite/nginx.conf.
+  #
+  # nginx also maps /r/<CODE> onto /api/aff/go, which is the shareable referral
+  # link: it logs the click, sets the domain-wide cbe_ref cookie and 302s to
+  # cbedge.net/pricing. That has to be a redirect, not a React route — a
+  # redirect that waits on a JS bundle is a redirect people bounce out of.
+  #
+  # Reached only via the Cloudflare Tunnel — add to /etc/cloudflared/config.yml
+  # ABOVE the catch-all 404 rule:
+  #     - hostname: affiliate.cbedge.net
+  #       service: http://127.0.0.1:8085
+  # then `cloudflared tunnel route dns <tunnel> affiliate.cbedge.net` and
+  # `systemctl restart cloudflared`.
+  #
+  # Auth is its own system (aff_affiliates / aff_session) — a CB Edge customer
+  # session grants nothing here, and an affiliate session grants nothing there.
+  affiliates:
+    build:
+      context: ./affiliate-vite
+    image: affiliate-web:latest
+    container_name: affiliate-web
+    restart: unless-stopped
+    depends_on:
+      - dashboard
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8085:8085"
+
   # The household backend — /api/hh/* for budget.cbedge.net and
   # recipe.cbedge.net, in its own process (server-v2/household-server.js).
   #

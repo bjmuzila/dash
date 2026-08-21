@@ -1,5 +1,88 @@
 # Changelog
 
+## 2026-08-21 (k) - Cog toolbars for ES Candles, Multi Greek and Options Chain
+
+Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
+`app/mult-greek/MultGreekClient.tsx`, `components/pages/OptionsChain.tsx`,
+`components/shared/DockToolbar.tsx`. Same treatment as /home in (i)/(j).
+
+Every one of these bars now reads: identity on the left (stretching), then the
+capture actions, then the cog hard against the right edge. Nothing was removed -
+each control moved into a labelled `DockMenuRow` inside the cog.
+
+- **ES Candles** (`EsChartCard`'s dock, shared by /es-candles, the home GEX card
+  and the /board tile). Left: CANDLES + ES basis, LIVE/DELAYED, and a single
+  badge that now reads `SPY · 5m · 380 candles` - the symbol and timeframe used
+  to be readable only off the controls that just went into the cog. Cog: the
+  page's Charts / Replay / Indicators / Layout group, Overlays, Symbol,
+  Timeframe, Latest, heatmap expiry (DTE), GEX basis, per-card Replay, Refresh.
+- **Multi Greek**. Left: status dot + message, the four tickers on screen, and
+  the active basis / delta window / replay state. Cog: expiry + GO, contract
+  basis, delta stamps, 4th ticker, intensity, Lookup, Replay, Refresh. The
+  level-snapshot button stays out front with Snap and Discord - it produces an
+  image, so it belongs with them.
+- **Options Chain**. Left: title, ticker, `GEX · OI+Vol · 10%`, and the
+  LIVE/REPLAY dot. Cog: ticker + GO + Recent, strike %, greek tabs, basis,
+  intensity, Δ15m, Replay, Refresh. The TOTAL stat row below the dock was
+  deliberately NOT folded in - the dock is `captureHide` and those figures belong
+  in the screenshot.
+
+**One real bug this exposed.** Controls inside a cog can open their own
+popovers - the ES overlays checklist, the DTE lists, the ticker dropdowns, the
+expiry picker - and every one of them portals to `<body>`. By containment those
+are "outside" the cog, so the first click inside one slammed the cog shut
+mid-interaction. `DockCogMenu`'s outside-click handler now walks up from the
+click target and treats anything sitting in a fixed, raised-z layer as inside.
+Threshold is 50: the ES Charts/Indicators panel sits at 60, the portalled
+dropdowns at 9,999-100,000. Structural rather than a marker attribute because
+these popovers live in four files written years apart and all share that shape.
+
+Greys to white continued: the ES basis / GEX line, the status and candle-count
+badges, the narrow-panel warning.
+
+
+## 2026-08-21 (j) - Home: one toolbar, ghosts gone, cog last, greys to white
+
+Edited: `app/home/HomeClient.tsx`, `components/dashboard/GexToolbar.tsx`,
+`components/shared/DockToolbar.tsx`. Follow-up to (i).
+
+**One bar, not two.** The NET GEX / CALL WALL / PUT WALL / FLIP / CB / MAX PAIN /
++-1σ / +GEX% / BULL-BEAR readouts had their own strip under the GEX toolbar.
+They are now the toolbar's new `stats` slot (compact mode only), each card
+`flex: 1 1 0` so the row fills the bar at any width. Fixed layout for every
+compact bar now:
+
+    cards (stretch) -> snapshot -> Discord (owner-only) -> cog
+
+Cog moved from first to LAST so it sits hard against the right edge. The heatmap
+header and the econ tab strip were reordered to match. Discord needed no gate -
+`BoxDiscordBtn` already returns null for non-owners via `useIsOwner()`.
+
+**Ghosts removed.** The 5/15/30m prior-state overlay row is out of the cog, the
+`ghost` state and its pref are gone, and `chartBaselines` now polls with `""`
+(idle) instead of on a toggle nothing can set. `GexToolbar`'s `showGhost*` /
+`onToggleGhost*` props were made OPTIONAL rather than deleted, so any other
+caller still passing them keeps compiling; `GexChart` already defaults them to
+false.
+
+**Cog menu flips up when it would go off-screen.** Reported: the econ calendar's
+cog, with the panel minimised, opened a dropdown below the fold that could not be
+reached. `DockCogMenu` now measures itself and opens UPWARD when it doesn't fit
+under the trigger and there is more room above, clamping `maxHeight` to whichever
+side it used. Two mechanical notes: the panel renders with `display:flex` the
+moment it opens (parked at -9999 for one frame) because `display:none` reports a
+zero height and the flip needs a real one; and `place()` runs twice - once
+immediately, once on rAF after layout - for the same reason.
+
+**Greys to white.** `SOFT_WHITE` (#c3ccda -> #fff) so every heatmap value is
+white, the inline SPY/QQQ/ticker strike prefix (#5a7a98, plus the rank-1/2
+brightening special case it needed - white is legible on every tier), the ATM
+row's 0.82-alpha white, `DockMenuRow` labels (0.55 alpha), inactive card tabs and
+the "add a card" picker (#5a7a98), the heatmap contract label and its loading
+ellipsis (#8da8c2 / #5a7a98), the 5th-column Clear button, and the stat card
+labels (0.75 alpha).
+
+
 ## 2026-08-21 (i) - Home page: every toolbar folds into a cog, heatmap columns rebuilt
 
 Edited: `app/home/HomeClient.tsx`, `components/dashboard/GexToolbar.tsx`,

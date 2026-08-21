@@ -933,16 +933,33 @@ const MIG_H = 172;
 const MIG_PAD = 10;
 
 /**
- * WALL MIGRATION — the level log drawn: where each level sat, slot by slot,
- * against the price captured with it.
+ * WALL MIGRATION — the level log drawn: where the levels sat, slot by slot,
+ * against the price captured with them.
  *
  * Ported from the post-market recap's chart (components/pages/premarket/
- * PostMarketTab.tsx → WallChart), with one deliberate difference. That version
- * has no recorded level series to read: it reconstructs the walls out of the
- * per-minute strike ladder and labels itself a "net-basis proxy" — and that
- * ladder is SPX-only, which is why the chart could not travel as written. Here
- * the levels ARE recorded, per symbol, by server-v2/walls-recorder.js. So this
- * draws the log's own strikes, no proxy, and works for every ticker on the rail.
+ * PostMarketTab.tsx → WallChart), and it now carries that chart's ROLE model
+ * too:
+ *
+ *   TWO ROLES, NOT THREE LEVELS. Drawing call wall, put wall and CORE as three
+ *   series always drew CORE on top of one of the other two, because CORE IS one
+ *   of them — whichever is carrying more gamma. The chart spent a colour, a
+ *   dashed stroke and a legend entry saying the same thing twice, and the reader
+ *   still had to work out which wall was hiding underneath. So the two series
+ *   are ROLES: CORE is the HEAVIER wall at that slot, OTHER is the lighter one.
+ *   When they swap, the lines swap — the day's dominant level changing sides,
+ *   which is the event worth seeing, and it is legible precisely because there
+ *   are only two lines.
+ *
+ * The difference from the post-market version is the source. That one has no
+ * recorded level series to read: it reconstructs the walls out of the per-minute
+ * strike ladder and labels itself a "net-basis proxy" — and that ladder is
+ * SPX-only, which is why the chart could not travel as written. Here the levels
+ * ARE recorded, per symbol, by server-v2/walls-recorder.js, with the level's own
+ * gamma stored on each row. So the roles come off the recorder's numbers rather
+ * than a proxy, it works for every ticker on the rail, and it needs none of the
+ * post-market version's mode-smoother: a recorded level only moves when the
+ * recorder writes a change, where the ladder's extreme strike alternates from
+ * sample to sample and had to be de-flickered.
  *
  * Two honest consequences of reading the log instead of a ladder:
  *
@@ -960,9 +977,15 @@ const MIG_PAD = 10;
  * and the whole panel disappears rather than render an empty frame.
  *
  * It reads the same view-filtered `log` / `events` as the rail and the timeline,
- * so the WALLS / CORE switch scopes it along with everything else — and it uses
- * railPct() for x, so a mark on the rail above sits directly over its step here.
+ * so the WALLS / CORE switch scopes it along with everything else — the CORE
+ * view has no walls to compare and so still draws the cb level on its own — and
+ * it uses railPct() for x, so a mark on the rail above sits directly over its
+ * step here.
  */
+/** The role colours. CORE keeps the cb blue the rest of the page reads as CORE. */
+const ROLE_CORE_COLOR = LIGHT_BLUE;
+const ROLE_OTHER_COLOR = rgba(HOME_THEME.text, 0.42);
+
 function WallMigrationChart({ log, events, view }: {
   log: WallLogRow[]; events: WallEventRow[]; view: LogView;
 }) {
@@ -979,20 +1002,31 @@ function WallMigrationChart({ log, events, view }: {
     const levels = VIEW_LEVELS[view].filter((lt) => log.some((r) => r.level_type === lt));
     if (!levels.length) return null;
 
-    // Forward-fill: at slot s a level is whatever it was last written as.
+    // Forward-fill: at slot s a level is whatever it was last written as. The
+    // level's gamma rides along on the same fill, because that is what decides
+    // which wall is wearing the CORE role.
     const series = new Map<WallLevel, (number | null)[]>();
+    const gexes = new Map<WallLevel, (number | null)[]>();
     for (const lt of levels) {
       const rows = log
         .filter((r) => r.level_type === lt && inSlot(r.slot) && Number.isFinite(Number(r.strike)))
         .sort((a, b) => a.slot - b.slot);
       const out: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+      const outG: (number | null)[] = new Array(WALL_SLOTS).fill(null);
       let cur: number | null = null;
+      let curG: number | null = null;
       let i = 0;
       for (let s = 0; s <= lastSlot; s++) {
-        while (i < rows.length && rows[i].slot <= s) { cur = Number(rows[i].strike); i++; }
+        while (i < rows.length && rows[i].slot <= s) {
+          cur = Number(rows[i].strike);
+          curG = Number.isFinite(Number(rows[i].level_gex)) ? Number(rows[i].level_gex) : null;
+          i++;
+        }
         out[s] = cur;
+        outG[s] = curG;
       }
       series.set(lt, out);
+      gexes.set(lt, outG);
     }
 
     // Spot, from every capture that carried one. Events are written second so a
@@ -1009,8 +1043,65 @@ function WallMigrationChart({ log, events, view }: {
     }
     const spotPts = spot.map((v, s) => ({ s, v })).filter((p) => p.v != null) as { s: number; v: number }[];
 
+    /**
+     * THE ROLES — only when BOTH walls are on the chart, since a role is a
+     * comparison. CORE is the wall carrying more gamma at that slot. Where the
+     * recorder stored no gamma for one of them, the recorded cb strike breaks
+     * the tie (CORE sits ON a wall by definition, so a strike match names the
+     * side); failing that the previous slot's side carries forward, because
+     * "we can't tell" must not draw as a swap.
+     */
+    const bothWalls = series.has("call_wall") && series.has("put_wall");
+    let roles: {
+      core: (number | null)[]; other: (number | null)[];
+      side: ("call" | "put" | null)[]; callShare: number;
+    } | null = null;
+    if (bothWalls) {
+      const cw = series.get("call_wall") as (number | null)[];
+      const pw = series.get("put_wall") as (number | null)[];
+      const cwG = gexes.get("call_wall") as (number | null)[];
+      const pwG = gexes.get("put_wall") as (number | null)[];
+      const cb = series.get("cb") ?? null;
+      const core: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+      const other: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+      const side: ("call" | "put" | null)[] = new Array(WALL_SLOTS).fill(null);
+      let prev: "call" | "put" = "call";
+      let callN = 0;
+      let n = 0;
+      for (let s = 0; s <= lastSlot; s++) {
+        const a = cw[s];
+        const b = pw[s];
+        if (a == null || b == null) continue;
+        const ga = cwG[s];
+        const gb = pwG[s];
+        let sd: "call" | "put" | null = null;
+        if (ga != null && gb != null && Math.abs(ga) !== Math.abs(gb)) {
+          sd = Math.abs(ga) > Math.abs(gb) ? "call" : "put";
+        }
+        if (sd == null && cb) {
+          const k = cb[s];
+          if (k != null) sd = k === a ? "call" : k === b ? "put" : null;
+        }
+        if (sd == null) sd = prev;
+        side[s] = sd;
+        prev = sd;
+        core[s] = sd === "call" ? a : b;
+        other[s] = sd === "call" ? b : a;
+        n++;
+        if (sd === "call") callN++;
+      }
+      if (n) roles = { core, other, side, callShare: callN / n };
+    }
+
+    // The y range is bounded by what is DRAWN. With roles in play the cb series
+    // is not a third line, so letting its strike stretch the axis would leave
+    // dead space no line ever reaches.
     const vals: number[] = [];
-    for (const arr of series.values()) for (const v of arr) if (v != null) vals.push(v);
+    if (roles) {
+      for (const arr of [roles.core, roles.other]) for (const v of arr) if (v != null) vals.push(v);
+    } else {
+      for (const arr of series.values()) for (const v of arr) if (v != null) vals.push(v);
+    }
     for (const p of spotPts) vals.push(p.v);
     if (vals.length < 2) return null;
 
@@ -1020,11 +1111,11 @@ function WallMigrationChart({ log, events, view }: {
     const padY = (hi - lo) * 0.08;
     lo -= padY; hi += padY;
 
-    return { levels, series, spot, spotPts, lo, hi, lastSlot };
+    return { levels, series, roles, spotPts, lo, hi, lastSlot };
   }, [log, events, view]);
 
   if (!model) return null;
-  const { levels, series, spotPts, lo, hi, lastSlot } = model;
+  const { levels, series, roles, spotPts, lo, hi, lastSlot } = model;
 
   const x = (s: number) => railPct(s);
   const y = (v: number) => MIG_PAD + (1 - (v - lo) / (hi - lo)) * (MIG_H - MIG_PAD * 2);
@@ -1045,27 +1136,37 @@ function WallMigrationChart({ log, events, view }: {
     return out.join(" ");
   };
 
-  // CORE is drawn LAST so it reads on top of a wall it is sitting on — in the
-  // ALL view the two are the same strike more often than not, and the whole
-  // point of that view is seeing which wall is wearing the CORE.
-  const paths = [...levels]
-    .sort((a, b) => (a === "cb" ? 1 : 0) - (b === "cb" ? 1 : 0))
-    .map((lt) => ({ lt, d: step(series.get(lt) ?? []) }))
-    .filter((p) => p.d);
-  // The corridor between the two WALLS — the room price actually had. Keyed off
-  // the level types by name, not off how many lines happen to be drawn: the ALL
-  // view has three, and bounding a band with whichever two came first would
-  // shade the gap between a wall and the CORE, which is not a corridor.
-  const hasWalls = ["call_wall", "put_wall"].every((lt) => paths.some((p) => p.lt === lt));
-  const corridor = hasWalls
-    ? `${step(series.get("call_wall") ?? [])} ${step(series.get("put_wall") ?? [], true)}`
-    : null;
-  const spotLine = spotPts.map((p) => `${x(p.s)},${y(p.v)}`).join(" ");
-  const lastOf = (lt: WallLevel) => {
-    const arr = series.get(lt) ?? [];
+  const lastOf = (arr: (number | null)[]) => {
     for (let s = lastSlot; s >= 0; s--) if (arr[s] != null) return arr[s] as number;
     return null;
   };
+
+  /**
+   * With roles, exactly two strokes: the lighter wall first so the CORE reads on
+   * top of it when the two are sitting on the same strike. Without them (the
+   * CORE-only view, or a day where one wall never recorded) it falls back to the
+   * plain per-level lines — no dashes, because nothing is overlapping.
+   */
+  const paths: { key: string; d: string; color: string; w: number }[] = roles
+    ? [
+        { key: "other", d: step(roles.other), color: ROLE_OTHER_COLOR, w: 1.4 },
+        { key: "core", d: step(roles.core), color: ROLE_CORE_COLOR, w: 2 },
+      ].filter((p) => p.d)
+    : [...levels]
+        .map((lt) => ({ key: lt, d: step(series.get(lt) ?? []), color: LEVEL_COLOR[lt], w: 2 }))
+        .filter((p) => p.d);
+
+  // The corridor between the two roles — the room price actually had. It is the
+  // wall band either way: the roles are the same two walls, relabelled.
+  const corridor = roles && paths.length === 2
+    ? `${step(roles.core)} ${step(roles.other, true)}`
+    : null;
+  const spotLine = spotPts.map((p) => `${x(p.s)},${y(p.v)}`).join(" ");
+
+  /** Which wall is wearing the CORE right now — the legend says so by name. */
+  const coreSideNow = roles
+    ? (() => { for (let s = lastSlot; s >= 0; s--) if (roles.side[s]) return roles.side[s]; return null; })()
+    : null;
 
   const legendChip = (color: string, label: string, value: string) => (
     <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -1085,7 +1186,14 @@ function WallMigrationChart({ log, events, view }: {
           recorded levels · {spotPts.length} spot capture{spotPts.length === 1 ? "" : "s"}
         </span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-          {paths.map((p) => legendChip(LEVEL_COLOR[p.lt], LEVEL_LABEL[p.lt], wallStrike(lastOf(p.lt))))}
+          {roles ? (
+            <>
+              {legendChip(ROLE_CORE_COLOR, `Core · ${coreSideNow === "put" ? "put" : "call"} wall`, wallStrike(lastOf(roles.core)))}
+              {legendChip(ROLE_OTHER_COLOR, coreSideNow === "put" ? "Call wall" : "Put wall", wallStrike(lastOf(roles.other)))}
+            </>
+          ) : (
+            paths.map((p) => legendChip(p.color, LEVEL_LABEL[p.key as WallLevel] ?? p.key, wallStrike(lastOf(series.get(p.key as WallLevel) ?? []))))
+          )}
           {spotPts.length ? legendChip(HOME_THEME.text, "Spot", wallNum(spotPts[spotPts.length - 1].v)) : null}
         </span>
       </div>
@@ -1104,13 +1212,8 @@ function WallMigrationChart({ log, events, view }: {
           ))}
           {corridor ? <polygon points={corridor} fill={rgba(C.cyan, 0.06)} /> : null}
           {paths.map((p) => (
-            <polyline key={p.lt} points={p.d} fill="none" stroke={LEVEL_COLOR[p.lt]} strokeWidth={2}
-              vectorEffect="non-scaling-stroke" strokeLinejoin="miter"
-              /* With the walls also drawn, CORE goes dashed. It sits on ONE of
-                 them by definition, so a solid line on top would simply erase
-                 the wall it is currently riding and the swap would be invisible
-                 — which is the one thing this view exists to show. */
-              strokeDasharray={p.lt === "cb" && hasWalls ? "5 4" : undefined} />
+            <polyline key={p.key} points={p.d} fill="none" stroke={p.color} strokeWidth={p.w}
+              vectorEffect="non-scaling-stroke" strokeLinejoin="miter" />
           ))}
           {/* Spot last, so it reads on top of the levels it is being compared
               with. The ticks mark the captures themselves — vertical only,
@@ -1146,6 +1249,14 @@ function WallMigrationChart({ log, events, view }: {
       </div>
 
       <div style={{ fontSize: FS_META, marginTop: 8, lineHeight: 1.5 }}>
+        {roles ? (
+          <>
+            CORE is whichever wall carries more gamma at that slot, so the two lines SWAP when the dominant
+            side changes — today the call wall held it{" "}
+            <b style={{ color: HOME_THEME.text }}>{Math.round(roles.callShare * 100)}%</b> of the recorded
+            session.{" "}
+          </>
+        ) : null}
         Each level holds its strike until the recorder writes a change, so the steps are the rolls. A level that
         sits while price travels is the one to fade; one that moves with price is dealers chasing. Spot is drawn
         from the {spotPts.length} capture{spotPts.length === 1 ? "" : "s"} stored for this ticker today — the

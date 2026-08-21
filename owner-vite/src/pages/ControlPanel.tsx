@@ -1,6 +1,6 @@
 
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   LiveKpiCard,
@@ -8,6 +8,7 @@ import {
   type LivePoint,
 } from "../components/LiveKpiCard";
 import { HourlyHeatmap } from "../components/HourlyHeatmap";
+import AcquisitionPanel from "../components/AcquisitionPanel";
 import {
   OWNER_THEME as HOME_THEME,
   homeButtonStyle,
@@ -188,6 +189,34 @@ interface PageVisit {
   /** City-centroid coords from Cloudflare — what the map's bubbles plot. */
   lat?: number | null;
   lon?: number | null;
+  /** Identity of the signed-in account behind the row (null when logged out). */
+  userEmail?: string | null;
+  userName?: string | null;
+  /**
+   * PAYING, not merely signed in — 'active' | 'trialing' per libDb.PAID_STATUSES.
+   * This is what splits Members from Non-members in the Top-pages card; a
+   * logged-out visitor and a lapsed account are both "non-member" on purpose,
+   * because both are people the landing page still has to sell to.
+   */
+  isSubscriber?: boolean | null;
+  subStatus?: string | null;
+  isOwner?: boolean | null;
+  // ── Acquisition ──────────────────────────────────────────────────────────
+  // Non-null only on ENTRY rows (the first beacon of a browser session) — see
+  // lib/visitorAttribution.ts. Sessions = rows with isEntry; every other row is
+  // a pageview with null attribution. Never mix the two denominators.
+  isEntry?: boolean | null;
+  referrer?: string | null;
+  referrerHost?: string | null;
+  utmSource?: string | null;
+  utmMedium?: string | null;
+  utmCampaign?: string | null;
+  channel?: string | null;
+  // Device is filled on EVERY row (it comes from the User-Agent header).
+  browser?: string | null;
+  os?: string | null;
+  deviceType?: string | null;
+  isBot?: boolean | null;
   createdAt: string | null;
 }
 
@@ -1161,6 +1190,372 @@ function KpiStrip({
   );
 }
 
+// ─── Top pages ────────────────────────────────────────────────────────────────
+//
+// WHAT CHANGED AND WHY: this card used to be five bars off `page_load_status`
+// lifetime totals. That table keeps ONE row per page key with a running counter,
+// so it could answer "which page has been loaded most since the beginning of
+// time" and nothing else — no window, no idea who loaded it, no idea how they
+// got there. "Which pages are customers actually on this week" was unanswerable.
+//
+// It now aggregates the raw page_visits log instead (the same rows the map and
+// the heatmap read), which carries per-load identity, subscription status and
+// entry attribution. That buys three things the counter could not:
+//
+//   • a real time window (24h / 7d / 30d / all),
+//   • unique VISITORS alongside loads — 400 loads from 3 people is a very
+//     different fact from 400 loads from 300 people,
+//   • the members / non-members split, and with it the answer to "what do
+//     people who haven't bought yet look at" — which is the landing page, the
+//     pricing page and the unsubscribe page, none of which a signed-in member
+//     ever sees.
+//
+// Bots are dropped everywhere (Googlebot and Discord's link unfurler are a big
+// share of a small site's raw loads and would top this list on a quiet day).
+
+type PagesAudience = "all" | "members" | "nonmembers";
+type PagesWindowKey = "24h" | "7d" | "30d" | "all";
+
+const PAGES_WINDOWS: { key: PagesWindowKey; label: string; hours: number | null }[] = [
+  { key: "24h", label: "24h", hours: 24 },
+  { key: "7d", label: "7d", hours: 24 * 7 },
+  { key: "30d", label: "30d", hours: 24 * 30 },
+  { key: "all", label: "All", hours: null },
+];
+
+const PAGES_AUDIENCES: { key: PagesAudience; label: string }[] = [
+  { key: "all", label: "Everyone" },
+  { key: "members", label: "Members" },
+  { key: "nonmembers", label: "Non-members" },
+];
+
+/**
+ * Public (logged-out) routes are beaconed with page_key `public:<slug>` by
+ * components/analytics/MarketingPageTracker. The slug is URL-shaped, so without
+ * this map the non-members list reads "public:whats-new" / "public:sign-up".
+ * Keep in sync with MARKETING_ROUTES in that file.
+ */
+const PUBLIC_PAGE_LABELS: Record<string, string> = {
+  landing: "Landing",
+  pricing: "Pricing",
+  docs: "Docs",
+  explore: "Explore",
+  "whats-new": "What's New",
+  "about-me": "About",
+  "sign-in": "Sign in",
+  "sign-up": "Sign up",
+  checkout: "Checkout",
+  "coming-soon": "Coming soon",
+  terms: "Terms",
+  privacy: "Privacy",
+  disclaimer: "Disclaimer",
+  "risk-disclosure": "Risk disclosure",
+  unsubscribe: "Unsubscribe",
+};
+
+/** Dashboard page key → its sidebar label, via the NAV_GROUPS table above. */
+function navLabelFor(key: string): string | null {
+  const norm = (s: string) => "/" + s.replace(/^\//, "").toLowerCase();
+  const want = norm(key);
+  const hit = NAV_GROUPS.flatMap((g) => g.items).find((it) => norm(it.href) === want);
+  return hit?.label ?? null;
+}
+
+/**
+ * One visit row → { id, name, route, isPublic }. `id` is the grouping key, so a
+ * page that was beaconed under a key AND (on older rows) under a bare path still
+ * collapses to one line wherever we can tell they're the same thing.
+ */
+function describePage(v: PageVisit): { id: string; name: string; route: string; isPublic: boolean } {
+  const key = (v.pageKey || "").trim();
+  const path = (v.path || "").trim();
+
+  if (key.startsWith("public:")) {
+    const slug = key.slice("public:".length) || "landing";
+    return {
+      id: key,
+      name: PUBLIC_PAGE_LABELS[slug] ?? slug.replace(/-/g, " "),
+      route: path || (slug === "landing" ? "/" : `/${slug}`),
+      isPublic: true,
+    };
+  }
+  if (key) {
+    const bare = key.replace(/^\//, "");
+    return {
+      id: `app:${bare.toLowerCase()}`,
+      name: navLabelFor(key) ?? v.pageLabel ?? bare,
+      route: path || `/${bare}`,
+      isPublic: false,
+    };
+  }
+  // Pre-page_key rows, and anything that beaconed a path only.
+  const p = path || "(unknown)";
+  const slug = p.split("/")[1] ?? "";
+  const isPublic = p === "/" || slug in PUBLIC_PAGE_LABELS;
+  return {
+    id: `path:${p.toLowerCase()}`,
+    name: (p === "/" ? "Landing" : PUBLIC_PAGE_LABELS[slug]) ?? navLabelFor(p) ?? p,
+    route: p,
+    isPublic,
+  };
+}
+
+/** Unique-person key: the account when signed in, the IP when not. */
+function visitorKey(v: PageVisit): string {
+  return v.userId ? `u:${v.userId}` : v.ip ? `ip:${v.ip}` : "";
+}
+
+const CHANNEL_LABELS: Record<string, string> = {
+  direct: "Direct",
+  search: "Search",
+  social: "Social",
+  referral: "Referral",
+  email: "Email",
+  paid: "Paid",
+  internal: "Internal",
+};
+
+function TopPagesCard({
+  visits,
+  isMobile,
+  cardStyle,
+  titleStyle,
+  accent,
+}: {
+  visits: PageVisit[];
+  isMobile: boolean;
+  cardStyle: React.CSSProperties;
+  titleStyle: React.CSSProperties;
+  accent: string;
+}) {
+  const [audience, setAudience] = useState<PagesAudience>("all");
+  const [win, setWin] = useState<PagesWindowKey>("7d");
+  const [expanded, setExpanded] = useState(false);
+
+  const view = useMemo(() => {
+    const hours = PAGES_WINDOWS.find((w) => w.key === win)?.hours ?? null;
+    const cutoff = hours == null ? null : Date.now() - hours * 3600_000;
+
+    type Agg = {
+      id: string; name: string; route: string; isPublic: boolean;
+      loads: number; memberLoads: number; guestLoads: number;
+      visitors: Set<string>; members: Set<string>;
+      channels: Map<string, number>;
+      lastSeen: number;
+    };
+    const byPage = new Map<string, Agg>();
+    const allVisitors = new Set<string>();
+    let totalLoads = 0;
+    let botLoads = 0;
+    let scanned = 0;
+
+    for (const v of visits) {
+      const t = v.createdAt ? Date.parse(v.createdAt) : NaN;
+      if (cutoff != null && (!Number.isFinite(t) || t < cutoff)) continue;
+      scanned++;
+      if (v.isBot) { botLoads++; continue; }
+      const isMember = v.isSubscriber === true;
+      if (audience === "members" && !isMember) continue;
+      if (audience === "nonmembers" && isMember) continue;
+
+      const d = describePage(v);
+      let a = byPage.get(d.id);
+      if (!a) {
+        a = {
+          ...d, loads: 0, memberLoads: 0, guestLoads: 0,
+          visitors: new Set(), members: new Set(),
+          channels: new Map(), lastSeen: 0,
+        };
+        byPage.set(d.id, a);
+      }
+      a.loads++;
+      totalLoads++;
+      if (isMember) a.memberLoads++; else a.guestLoads++;
+      const who = visitorKey(v);
+      if (who) {
+        a.visitors.add(who);
+        allVisitors.add(who);
+        if (isMember) a.members.add(who);
+      }
+      // Attribution only exists on entry rows, so this is "how the sessions that
+      // STARTED on this page arrived" — not how everyone who ever saw it did.
+      if (v.isEntry && v.channel) a.channels.set(v.channel, (a.channels.get(v.channel) ?? 0) + 1);
+      if (Number.isFinite(t) && t > a.lastSeen) a.lastSeen = t;
+    }
+
+    const rows = [...byPage.values()]
+      .sort((x, y) => y.loads - x.loads || y.visitors.size - x.visitors.size)
+      .map((a) => {
+        const top = [...a.channels.entries()].sort((x, y) => y[1] - x[1])[0];
+        return {
+          id: a.id, name: a.name, route: a.route, isPublic: a.isPublic,
+          loads: a.loads, memberLoads: a.memberLoads, guestLoads: a.guestLoads,
+          visitors: a.visitors.size, members: a.members.size,
+          topChannel: top ? (CHANNEL_LABELS[top[0]] ?? top[0]) : null,
+          topChannelN: top ? top[1] : 0,
+          lastSeen: a.lastSeen,
+        };
+      });
+
+    return {
+      rows,
+      totalLoads,
+      totalVisitors: allVisitors.size,
+      botLoads,
+      hasRowsInWindow: scanned > 0,
+    };
+  }, [visits, audience, win]);
+
+  const shown = expanded ? view.rows.slice(0, 40) : view.rows.slice(0, 10);
+  const max = view.rows[0]?.loads ?? 0;
+  const num = (n: number) => n.toLocaleString();
+  const dim = { color: HOME_THEME.text, opacity: 0.45 } as React.CSSProperties;
+  const mono: React.CSSProperties = { fontFamily: "monospace", fontVariantNumeric: "tabular-nums" };
+
+  const Pill = ({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) => (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "3px 10px", fontSize: 12, fontWeight: 700, borderRadius: 7, cursor: "pointer",
+        color: on ? HOME_THEME.cyan : HOME_THEME.text,
+        background: on ? `${HOME_THEME.cyan}22` : "rgba(255,255,255,0.04)",
+        border: `1px solid ${on ? `${HOME_THEME.cyan}55` : HOME_THEME.border}`,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  // Grid: page | loads | visitors | split | source | last. Phones drop the
+  // split bar and the source column — six numeric columns at 390px is a smear.
+  const cols = isMobile ? "minmax(0,1fr) 52px 52px" : "minmax(0,1fr) 62px 62px 120px 96px 64px";
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        <div style={{ ...titleStyle, marginBottom: 0, display: "flex", alignItems: "center", gap: 7 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: accent }} />
+          Pages being visited
+        </div>
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+          {PAGES_AUDIENCES.map((a) => (
+            <Pill key={a.key} on={a.key === audience} label={a.label} onClick={() => setAudience(a.key)} />
+          ))}
+          <span style={{ width: 8 }} />
+          {PAGES_WINDOWS.map((w) => (
+            <Pill key={w.key} on={w.key === win} label={w.label} onClick={() => setWin(w.key)} />
+          ))}
+        </div>
+      </div>
+
+      {/* Denominators, stated. Loads and visitors are different counts and the
+          card says so rather than letting the reader assume one number. */}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, marginBottom: 12, ...dim }}>
+        <span><b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{num(view.totalLoads)}</b> loads</span>
+        <span><b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{num(view.totalVisitors)}</b> visitors</span>
+        <span><b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{view.rows.length}</b> pages</span>
+        {view.botLoads > 0 && <span>{num(view.botLoads)} bot loads excluded</span>}
+      </div>
+
+      {view.rows.length === 0 ? (
+        <div style={{ fontSize: 14, ...dim, lineHeight: 1.6 }}>
+          {!view.hasRowsInWindow
+            ? `Nothing logged in the last ${PAGES_WINDOWS.find((w) => w.key === win)?.label}. Try a wider window.`
+            : audience === "members"
+              ? "No subscriber page loads in this window."
+              : audience === "nonmembers"
+                ? "No non-member page loads in this window — every visit came from a paying account."
+                : "No page loads recorded yet."}
+        </div>
+      ) : (
+        <>
+          {/* Header row */}
+          <div style={{ display: "grid", gridTemplateColumns: cols, gap: 8, fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", ...dim, paddingBottom: 6, borderBottom: `1px solid ${HOME_THEME.border}` }}>
+            <span>Page</span>
+            <span style={{ textAlign: "right" }}>Loads</span>
+            <span style={{ textAlign: "right" }}>People</span>
+            {!isMobile && <span>Member / non</span>}
+            {!isMobile && <span>Came from</span>}
+            {!isMobile && <span style={{ textAlign: "right" }}>Last</span>}
+          </div>
+
+          {shown.map((r) => {
+            const memberPct = r.loads > 0 ? (r.memberLoads / r.loads) * 100 : 0;
+            return (
+              <div
+                key={r.id}
+                title={`${r.route} — ${num(r.loads)} loads from ${num(r.visitors)} visitors (${num(r.memberLoads)} member / ${num(r.guestLoads)} non-member)`}
+                style={{ display: "grid", gridTemplateColumns: cols, gap: 8, alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${HOME_THEME.border}` }}
+              >
+                {/* Name + route, with the magnitude bar behind them. */}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", flexShrink: 0,
+                      padding: "1px 5px", borderRadius: 4,
+                      color: r.isPublic ? HOME_THEME.gold : HOME_THEME.cyan,
+                      background: r.isPublic ? `${HOME_THEME.gold}1e` : `${HOME_THEME.cyan}1e`,
+                    }}>
+                      {r.isPublic ? "PUB" : "APP"}
+                    </span>
+                    <span style={{ fontSize: 14, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                    <span style={{ fontSize: 12, ...mono, ...dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.route}</span>
+                  </div>
+                  <div style={{ height: 5, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden", marginTop: 5 }}>
+                    <div style={{ height: "100%", width: `${max > 0 ? Math.max(2, (r.loads / max) * 100) : 0}%`, background: accent, borderRadius: 3 }} />
+                  </div>
+                </div>
+
+                <span style={{ ...mono, fontSize: 14, textAlign: "right", color: HOME_THEME.text }}>{num(r.loads)}</span>
+                <span style={{ ...mono, fontSize: 14, textAlign: "right", color: HOME_THEME.text }}>{num(r.visitors)}</span>
+
+                {/* Member vs non-member share of this page's loads. */}
+                {!isMobile && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                    <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(255,255,255,0.06)" }}>
+                      <div style={{ width: `${memberPct}%`, background: HOME_THEME.green }} />
+                      <div style={{ width: `${100 - memberPct}%`, background: HOME_THEME.orange }} />
+                    </div>
+                    <span style={{ fontSize: 11, ...mono, ...dim }}>
+                      {num(r.memberLoads)} / {num(r.guestLoads)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Where the sessions that STARTED here arrived from. */}
+                {!isMobile && (
+                  <span style={{ fontSize: 12, color: r.topChannel ? HOME_THEME.text : undefined, ...(r.topChannel ? {} : dim), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {r.topChannel ? `${r.topChannel} ×${r.topChannelN}` : "—"}
+                  </span>
+                )}
+
+                {!isMobile && (
+                  <span style={{ fontSize: 12, ...dim, textAlign: "right", whiteSpace: "nowrap" }}>
+                    {r.lastSeen ? fmtAgo(new Date(r.lastSeen).toISOString()) : "—"}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+
+          {view.rows.length > shown.length && (
+            <button
+              onClick={() => setExpanded(true)}
+              style={{ ...homeSecondaryButtonStyle, marginTop: 10, alignSelf: "flex-start", fontSize: 12, padding: "4px 12px" }}
+            >
+              Show all {view.rows.length} pages
+            </button>
+          )}
+          {expanded && view.rows.length > 40 && (
+            <div style={{ fontSize: 11, ...dim, marginTop: 8 }}>Showing the top 40 of {view.rows.length}.</div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function OverviewSection({ metrics, gran }: {
   gran: OverviewGran;
   metrics: {
@@ -1176,7 +1571,6 @@ function OverviewSection({ metrics, gran }: {
     onToday: number;
     uptime: string;
     feed: Array<{ label: string; loads: number; ago: string; active: boolean }>;
-    topPages: Array<{ label: string; loads: number }>;
     rowsToday: Array<{ label: string; rows: number }>;
     visits: PageVisit[];
     signups: Array<{ createdAt: number | null }>;
@@ -1190,7 +1584,7 @@ function OverviewSection({ metrics, gran }: {
     };
   };
 }) {
-  const { totalVisits, activePages, users, subscribers, waitlist, activeSessions, onToday, topPages, rowsToday, visits, signups, infra } = metrics;
+  const { totalVisits, activePages, users, subscribers, waitlist, activeSessions, onToday, rowsToday, visits, signups, infra } = metrics;
   void activePages;
   const isMobile = useIsMobile();
 
@@ -1203,9 +1597,9 @@ function OverviewSection({ metrics, gran }: {
   const titleStyle: React.CSSProperties = { fontSize: 17, fontWeight: 700, color: HOME_THEME.cyan, marginBottom: 11 };
 
   // Traffic / signups / cumulative all moved into MetricsTabSection, which
-  // buckets them at the header's granularity. Only the two bar lists and the
-  // heatmap still need local maxima.
-  const topMax = topPages.length ? Math.max(...topPages.map((p) => p.loads), 1) : 1;
+  // buckets them at the header's granularity. Top pages owns its own window and
+  // scale now (TopPagesCard), so only the rows-written bar list needs a maximum
+  // here.
   const rowsMax = rowsToday.length ? Math.max(...rowsToday.map((r) => r.rows), 1) : 1;
 
   // Mini horizontal-bar list — each row its own color.
@@ -1250,19 +1644,27 @@ function OverviewSection({ metrics, gran }: {
       {/* Traffic · signups · cumulative with tabs */}
       <MetricsTabSection visits={visits} signups={signups} users={users} activeSessions={activeSessions} period={gran} />
 
-      {/* Top pages · rows today */}
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "1fr 1fr", gap: 10 }}>
-        <div style={cardStyle}>
-          <div style={{ ...titleStyle, display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: pc(3) }} />Top pages · by loads</div>
-          {topPages.length === 0
-            ? <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1 }}>No page loads recorded yet.</div>
-            : <BarList rows={topPages.map((p) => ({ label: p.label, n: p.loads }))} max={topMax} mono />}
-        </div>
+      {/* Pages being visited · rows today.
+          Top pages gets ~2/3 of the row: it's a six-column table now, not five
+          bars, and squeezing it into half the width re-wraps every route. */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "1.9fr 1fr", gap: 10 }}>
+        <TopPagesCard
+          visits={visits}
+          isMobile={isMobile}
+          cardStyle={cardStyle}
+          titleStyle={titleStyle}
+          accent={pc(3)}
+        />
         <div style={cardStyle}>
           <div style={{ ...titleStyle, display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: pc(1) }} />Rows written today · by table</div>
           <BarList rows={rowsToday.map((r) => ({ label: r.label, n: r.rows }))} max={rowsMax} mono />
         </div>
       </div>
+
+      {/* Acquisition — where the traffic came from. Channel / referrer / campaign
+          / device, all off the same visit log the card above reads. Sessions
+          (entry rows) are its denominator, never pageviews. */}
+      <AcquisitionPanel rows={visits} />
 
       {/* Visitor choropleth moved to its own /owner/visitors page — the d3
           projection + 177-feature re-render on every hover was dominating this
@@ -1639,9 +2041,15 @@ export default function ControlPanel() {
       } catch { /* non-fatal */ }
 
       // Page-visit log (per-load rows w/ timestamps) — powers the Overview tab's
-      // Daily Activity (last 12 days) + recent-activity agenda from real data.
+      // Daily Activity + recent-activity agenda + the Top-pages and Acquisition
+      // cards, all from real data.
+      //
+      // days=30 (was: the route's 7-day default) because the Top-pages and
+      // Acquisition cards both offer a 30-day window; with only 7 days fetched
+      // those buttons silently returned the same 7 days and read as "traffic
+      // flat for a month". limit is the response cap, not a storage cap.
       try {
-        const pv = await fetch("/api/page-visits?limit=5000", { cache: "no-store" });
+        const pv = await fetch("/api/page-visits?days=30&limit=20000", { cache: "no-store" });
         if (pv.ok) { const j = await pv.json(); setVisits((j?.visits ?? []) as PageVisit[]); }
       } catch { /* non-fatal */ }
 
@@ -1993,11 +2401,9 @@ export default function ControlPanel() {
       }));
     const signups = (authStatus?.stats?.recent ?? []).map((u) => ({ createdAt: u.createdAt }));
 
-    // Top pages by lifetime loads (real, from page_load_status totalLoads).
-    const topPages = [...pageStatuses]
-      .sort((a, b) => (b.totalLoads ?? 0) - (a.totalLoads ?? 0))
-      .slice(0, 5)
-      .map((p) => ({ label: "/" + p.pageKey.replace(/^\//, ""), loads: p.totalLoads ?? 0 }));
+    // Top pages is no longer derived here: page_load_status only holds a
+    // lifetime counter per key, which can't be windowed or split by audience.
+    // TopPagesCard aggregates the raw page_visits log instead.
 
     // Rows written today per tracked table (real, from /api/db counts in dbStats).
     const rowsToday = TABLES.map((t) => ({ label: t.label, rows: dbStats[t.id] ?? 0 }));
@@ -2050,7 +2456,6 @@ export default function ControlPanel() {
       onToday,
       uptime: displayUptime != null ? fmtUptime(displayUptime) : "—",
       feed,
-      topPages,
       rowsToday,
       visits,
       signups,
