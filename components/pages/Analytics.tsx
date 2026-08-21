@@ -2077,19 +2077,10 @@ function TlLevelChip({ name, value, spot, color, note }: {
   );
 }
 
-// LEVEL_COLORS are hex; the row tint needs them at low alpha. Kept local and
-// tiny rather than pulling a colour lib in for one gradient.
-function tlHexA(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
-}
-
 // One pane's ladder. Bars run out from a center rail: +GEX right, −GEX left.
-// Level marks are the level's own colour, said two ways on the same row: a
-// named tag beside the strike (CB / CW / PW) and a faint wash + hairline across
-// the row. The BARS are left alone — outlining or lighting them fought the one
-// thing they exist to say, which is magnitude and sign.
+// A level is said ONCE, by a named tag beside its strike (CB / CW / PW). The
+// row behind it is not tinted and the bars are not outlined — both fought the
+// one thing the bars exist to say, which is magnitude and sign.
 // `changes` (optional) turns on the day-over-day Δ column: strike → ΔGEX vs the
 // previous end-of-day snapshot, already differenced by the backend. Only the
 // right pane passes it — the recorder snapshots the BOARD, so hanging a
@@ -2255,13 +2246,11 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null, anchor =
         const pct = Math.max(2, (Math.abs(r.gex) / maxAbs) * 100);
         const isSpot = spotRow != null && r.strike === spotRow.strike;
         // Which levels land on this strike. A strike can BE more than one (core
-        // and call wall coincide often), so every match gets a tag; the ROW can
-        // only be tinted one colour, so it takes the first by this priority.
+        // and call wall coincide often), so every match gets its own tag.
         const marks: { key: string; label: string; color: string }[] = [];
         if (levels.core === r.strike) marks.push({ key: "cb", label: "CB", color: LEVEL_COLORS.cb });
         if (levels.callWall === r.strike) marks.push({ key: "cw", label: "CW", color: LEVEL_COLORS.cw });
         if (levels.putWall === r.strike) marks.push({ key: "pw", label: "PW", color: LEVEL_COLORS.pw });
-        const lv = marks[0]?.color ?? null;
         return (
           <div
             key={r.strike}
@@ -2269,15 +2258,18 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null, anchor =
             style={{
               display: "grid", gridTemplateColumns: cols, alignItems: "center", gap: 8,
               padding: "2px 6px", borderRadius: 8,
-              // Spot outranks a level on the row chrome — "where price is" is
-              // the one thing that must never be ambiguous. A level strike that
-              // is also spot still gets its tag and its lit bar.
-              border: `1px solid ${isSpot ? T.cyan : lv ? tlHexA(lv, 0.30) : "transparent"}`,
-              background: isSpot
-                ? "rgba(33,158,188,0.08)"
-                : lv
-                  ? `linear-gradient(90deg, transparent, ${tlHexA(lv, 0.10)})`
-                  : "transparent",
+              // A LEVEL STRIKE GETS ITS TAG AND NOTHING ELSE. The row used to
+              // carry a tinted border and a colour wash as well, so three of the
+              // ladder's rungs were painted whether or not their gamma deserved
+              // the attention — and a strike that is two levels at once could
+              // only wear one of the colours, which made the wash a worse copy
+              // of the tags beside it. The bars say magnitude and sign; the tag
+              // says which level; the row stays out of it.
+              //
+              // Spot is the one exception, and it keeps its chrome: "where price
+              // is" must never be ambiguous.
+              border: `1px solid ${isSpot ? T.cyan : "transparent"}`,
+              background: isSpot ? "rgba(33,158,188,0.08)" : "transparent",
             }}
           >
             {/* ONE STRIKE = ONE ROW. Never wrap: the tags are annotations on the
@@ -2310,7 +2302,7 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null, anchor =
             </span>
             {/* The bars are deliberately UNTOUCHED by the level marking — no
                 outline, no glow. A bar's job is magnitude and sign; the level
-                is said by the row it sits in and the tag beside the strike. */}
+                is said by the tag beside the strike and nowhere else. */}
             <span style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
               <span style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
                 {!unrecorded && !pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "4px 0 0 4px", background: T.red }} />}

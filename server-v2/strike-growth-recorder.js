@@ -21,11 +21,33 @@
  * baseline; every later snapshot stores delta_abs = now − open so the page can
  * rank strikes by absolute dollar gamma added since the open.
  *
- * Cadence: whole watchlist swept every SWEEP_MINS (default 5) during RTH. No
+ * Cadence: whole watchlist swept every SWEEP_MINS (default 1) during RTH. No
  * network fetch happens in the sweep itself — getStrikeGrowthSnapshot reads
  * in-memory feed maps (plus a 10-min-cached chain-structure lookup), so the
  * TICKER_DELAY_MS pacing here is just cold-cache-burst insurance, not the
  * heavy per-request pacing a REST/Theta path needed.
+ *
+ * 2026-08-21 — SWEEP_MINS 5 → 1, so /replay draws one frame per MINUTE for
+ * every scanner ticker, not just the MAIN hot lane. Two things had to move with
+ * it, and both are load-bearing:
+ *
+ *   1. TICKER_DELAY_MS 600 → 250. The sweep is sequential and sleeps between
+ *      tickers, so the pacing alone was 169 × 600ms ≈ 101s — longer than the
+ *      1-minute interval it now has to fit inside. `_fullSweeping` would have
+ *      skipped every other fire and the "1-minute" cadence would silently have
+ *      been ~2 minutes. At 250ms the pacing is ~42s, which leaves headroom for
+ *      the writes on a slow DB minute.
+ *   2. The hot lane is suppressed when HOT_MINS >= SWEEP_MINS (see the tick()
+ *      guard). At SWEEP_MINS=1 the full sweep already covers the hot names
+ *      every minute; leaving the 2-minute lane on would write MAIN twice on
+ *      every even minute, at two `ts` values seconds apart, and /frames groups
+ *      by ts — so the replay would show a stutter-frame every other minute.
+ *
+ * COST: ~5x the row volume on strike_growth (~395k/day → ~2.0M/day, ~10M
+ * resident at the nightly retention window). That table is on the retention
+ * sweep in state/retention-cleanup.js; if disk gets tight, cut SWEEP_MINS back
+ * via STRIKE_GROWTH_SWEEP_MINS before touching anything else — every value here
+ * is env-overridable and needs no redeploy.
  *
  * Tables (self-created, like gex-history-writer's ensureVolColumn):
  *   strike_growth_watchlist(symbol PK, active bool, sort_idx int, added_at)
@@ -58,10 +80,23 @@ const volOnlyNet = (r) => Number(r.netVolGEX ?? 0);
 // ── Tunables (env-overridable) ───────────────────────────────────────────────
 
 // Minutes between full watchlist sweeps. Cheap now (no network call per
-// ticker — see header), so this mostly governs DoD-diff resolution.
-const SWEEP_MINS = Number(process.env.STRIKE_GROWTH_SWEEP_MINS || 5);
+// ticker — see header), so this mostly governs DoD-diff resolution AND the
+// frame rate of /replay for every non-MAIN ticker.
+//
+// 1, not 5: at 5 a single name replayed at ~78 frames a session while the MAIN
+// hot lane got ~195, which is the asymmetry that made COIN look half-recorded
+// next to SPX. Raising the resolution is the whole point — see the cost note in
+// the header before raising it further (there is no headroom below 1 anyway;
+// the scheduler polls once a minute).
+const SWEEP_MINS = Number(process.env.STRIKE_GROWTH_SWEEP_MINS || 1);
 // Fast-lane cadence for the small "hot" watchlist — swept far more often than the
 // full roster so a handful of names stay near-live.
+//
+// INERT AT THE CURRENT DEFAULTS. The tick() guard skips the hot lane whenever
+// HOT_MINS >= SWEEP_MINS, because a full sweep that already runs every minute
+// covers the hot names too and a second write at the same minute would put a
+// duplicate frame in /replay. Kept (not deleted) so raising SWEEP_MINS back to
+// 5 restores the fast lane with no other edit.
 const HOT_MINS = Number(process.env.STRIKE_GROWTH_HOT_MINS || 2);
 // REST spot backstop: how often to refresh EVERY roster ticker's live spot via
 // TT /market-data/by-type. The dxLink feed only carries an underlying quote for
@@ -94,7 +129,15 @@ const TOP_N_EACH_SIDE = Number(process.env.STRIKE_GROWTH_TOP_N || 5);
 const EXPIRIES_PER_TICKER = Number(process.env.STRIKE_GROWTH_EXPIRIES || 3);
 // Delay between tickers in a sweep (ms) — insurance against a burst of cold
 // fetchChain() cache misses on startup, not per-request network pacing.
-const TICKER_DELAY_MS = Number(process.env.STRIKE_GROWTH_TICKER_DELAY_MS || 600);
+//
+// MUST SATISFY: roster × TICKER_DELAY_MS < SWEEP_MINS × 60_000, with slack for
+// the DB writes. The sweep is sequential and this sleep is its dominant cost,
+// so at 600ms a 169-name roster spent ~101s sleeping — fine on a 5-minute
+// cadence, fatal on a 1-minute one, where `_fullSweeping` would have dropped
+// every other sweep on the floor. 250ms → ~42s of pacing. If the roster grows
+// past ~200 names, lower this again or raise SWEEP_MINS; do not let the sweep
+// outrun its own interval.
+const TICKER_DELAY_MS = Number(process.env.STRIKE_GROWTH_TICKER_DELAY_MS || 250);
 // Hard cap on active tickers per sweep, belt-and-suspenders vs a runaway roster.
 const MAX_ACTIVE = Number(process.env.STRIKE_GROWTH_MAX_ACTIVE || 600);
 
@@ -707,13 +750,21 @@ function startStrikeGrowthRecorder(_port, proxy) {
   if (!_proxy) {
     console.warn('[strike-growth] started WITHOUT a proxy instance — every sweep will fail until this is wired (see startStrikeGrowthRecorder call site in server-with-proxy.js)');
   }
-  console.log(`[strike-growth] enabled — ${SWEEP_MINS}m full sweeps + ${HOT_MINS}m hot-lane during RTH, top ${TOP_N_EACH_SIDE} each side × ${EXPIRIES_PER_TICKER} expiries/ticker, dxLink-fed (no REST/Theta)`);
+  const hotLaneActive = HOT_MINS < SWEEP_MINS;
+  console.log(`[strike-growth] enabled — ${SWEEP_MINS}m full sweeps ${hotLaneActive ? `+ ${HOT_MINS}m hot-lane ` : '(hot lane OFF — full sweep is at least as fast) '}during RTH, top ${TOP_N_EACH_SIDE} each side × ${EXPIRIES_PER_TICKER} expiries/ticker, ${TICKER_DELAY_MS}ms ticker pacing, dxLink-fed (no REST/Theta)`);
   const tick = async () => {
     if (!isRthWindow()) return;
     const { hour, minute } = etParts();
 
     // Fast lane: hot list every HOT_MINS. Independent of the full sweep.
-    if (minute % HOT_MINS === 0) {
+    //
+    // Only when it is actually FASTER than the full sweep. At SWEEP_MINS=1 the
+    // full roster already includes every hot name every minute, so running this
+    // as well would write MAIN twice per even minute at two timestamps seconds
+    // apart — and /proxy/strike-growth/frames groups by `ts`, so /replay would
+    // render that as a duplicate stutter-frame. Guarding here rather than
+    // deleting the lane keeps `STRIKE_GROWTH_SWEEP_MINS=5` a one-var rollback.
+    if (hotLaneActive && minute % HOT_MINS === 0) {
       const hotKey = `${etDateStr()} ${hour}:${minute}`;
       if (hotKey !== _lastHotKey && !_hotSweeping) {
         _lastHotKey = hotKey;

@@ -1,5 +1,105 @@
 # Changelog
 
+## 2026-08-21 - Strike Growth recorder: 1-minute sweeps for the whole roster
+
+Edited: `server-v2/strike-growth-recorder.js`.
+
+`/replay` draws its frames from `strike_growth`, one frame per snapshot `ts`.
+The full roster was swept every 5 minutes and only the MAIN "hot" list every 2,
+so a single name like COIN replayed at ~53-78 frames a session while SPX had
+~195. Same page, same chart, half the resolution, purely because of which lane
+the ticker sat in.
+
+### Changes
+
+- `SWEEP_MINS` **5 -> 1**. Every scanner ticker now gets a frame per minute
+  during RTH, so /replay resolution no longer depends on hot-lane membership.
+- `TICKER_DELAY_MS` **600 -> 250**. Not cosmetic. The sweep is sequential and
+  sleeps between tickers, so the pacing alone was 169 x 600ms = ~101s — longer
+  than the 1-minute interval it now has to fit inside. The `_fullSweeping`
+  guard would have skipped every other fire and the "1-minute" cadence would
+  silently have been ~2 minutes. 250ms puts pacing at ~42s with headroom for
+  the writes.
+- Hot lane **suppressed when `HOT_MINS >= SWEEP_MINS`** (new `hotLaneActive`
+  guard in `tick()`). At `SWEEP_MINS=1` the full sweep already covers MAIN every
+  minute; leaving the 2-minute lane on would write those names twice per even
+  minute at two `ts` values seconds apart, and `/proxy/strike-growth/frames`
+  groups by `ts` — /replay would have shown a duplicate stutter-frame every
+  other minute. Guarded rather than deleted, so `STRIKE_GROWTH_SWEEP_MINS=5` is
+  a one-variable rollback that restores the fast lane untouched.
+- Startup log now prints the pacing and says explicitly when the hot lane is
+  off, instead of advertising a lane that never fires.
+
+### Cost
+
+~5x the row volume on `strike_growth`: ~395k/day -> ~2.0M/day, ~10M resident at
+the nightly retention window. That table is already on the retention sweep in
+`state/retention-cleanup.js`. If disk gets tight, cut `STRIKE_GROWTH_SWEEP_MINS`
+back first — every value here is env-overridable and needs no redeploy.
+
+### Unchanged
+
+Per-frame coverage is the same: top `TOP_N_EACH_SIDE` (5) strikes each side by
+combined net GEX, across `EXPIRIES_PER_TICKER` (3) front expiries, RTH only.
+Retention, the read routes and the /replay UI were not touched.
+
+## 2026-08-21 - ES Candles bubbles: the close and the overnight book no longer set the size scale
+
+Edited: `components/dashboard/es-candles/slotStore.ts`,
+`components/dashboard/es-candles/EsChartCard.tsx`.
+
+The last hour — and the pre-open trail — drew at maximum size and faded
+everything else on the chart to nothing. Two causes, both in the size
+REFERENCE rather than in the size law:
+
+* **The reference is a running maximum**, so any bucket that sets a new max
+  draws at ratio 1 (the cap) by construction. Into the bell gamma climbs faster
+  than the six-session median profile `gexTodScale` divides out, so minute after
+  minute set a new detrended max and each one printed at full size — an hour of
+  identical maximum marks carrying no information. That inflated max then fed
+  `BUBBLE_REF_FLOOR_FRAC`, which applies to the WHOLE session, so the floor under
+  the divisor rose and the morning faded out from under it.
+* **Out of cash hours the clock lies.** `gexTodScale` is a 09:30–16:00 profile,
+  and the history writer has no market-hours gate — it republishes the last cash
+  book once a minute, frozen. An 03:00 row is a 16:00 book wearing an 03:00
+  stamp, and scaling a closing-auction number by the 0.72 open anchor inflated it
+  ~4.7x, which made the overnight trail the biggest thing on the chart and
+  dragged the reference up with it.
+
+Fixes:
+
+* **Reference window** (`BUBBLE_REF_START_MIN` 09:30 / `BUBBLE_REF_CUTOFF_MIN`
+  15:30). Only cash-session buckets before the closing auction may RAISE the
+  reference — both the expanding running max and the session floor. Everything
+  still draws. Falls back to the whole buffer when nothing is in the window yet
+  (overnight chart, replay cursor parked before 09:30), since the draw is gated
+  on `sessRef > 0`.
+* **Out-of-hours buckets are judged on the CLOSE scale**, not the open scale —
+  the book they actually are.
+
+This is the old `BUBBLE_SCALE_CUTOFF_MIN` back, but without the cliff's mistake:
+the cliff stopped MEASURING the last half hour, so every late wall clamped to one
+size. The detrend is still in force — a 15:50 column is judged against
+`reference x 3.10` and only clamps if it really is running ~3x above the day's
+detrended peak. The window governs the divisor, not the encoding.
+
+
+## 2026-08-20 (b) - GEX levels ladder: level rows no longer painted, just tagged
+
+Edited: `components/pages/Analytics.tsx` (`TlLadder`).
+
+The CB / CW / PW rows carried a tinted 1px border and a left-to-right colour
+wash on top of their tag. Three of the ladder's rungs were painted regardless of
+whether their gamma was worth the attention, and a strike that is two levels at
+once could only wear one of the colours — so the wash was a lossy copy of the
+tags sitting right beside it. Removed both: a level is now said once, by its
+named tag next to the strike.
+
+The spot row keeps its cyan border and wash — "where price is" is the one thing
+on this ladder that must never be ambiguous. `tlHexA()` went with the wash; it
+existed only to take LEVEL_COLORS down to 10% alpha for that gradient.
+
+
 ## 2026-08-20 - Watch This tracked results: scored from ENTRY to HIGH, not from this morning
 
 Edited: `server-v2/far-cb-recorder.js`, `server-v2/server-with-proxy.js`

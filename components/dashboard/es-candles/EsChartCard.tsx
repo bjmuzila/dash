@@ -91,7 +91,8 @@ import {
 import { SymbolListDropdown, symbolDef, isChartSymbol, type ChartSymbol } from "./symbols";
 import { PanelSection, PanelChip, SLIDER_LABEL_W, OVL_PANEL_W, OVL_VIEWPORT_PAD, OVL_MIN_H } from "./panelUi";
 import {
-  BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_LEVELS_RANGE, BUBBLE_INTENSITY_RANGE, BUBBLE_SIZE_RANGE, BUBBLE_CURVE_RANGE,
+  BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_REF_START_MIN, BUBBLE_REF_CUTOFF_MIN,
+  BUBBLE_LEVELS_RANGE, BUBBLE_INTENSITY_RANGE, BUBBLE_SIZE_RANGE, BUBBLE_CURVE_RANGE,
   SHARED_SLOT,
   readSlot, writeSlot, writeSlotQuiet, broadcastSlot, subscribeSlot,
   isBubbleBucket,
@@ -4457,8 +4458,26 @@ function EsChartCard({
             // throwing the last half hour out of the scale entirely — so every
             // closing wall clamped to the same maximum and the most interesting
             // half hour of the day carried no size information at all.
+            //
+            // ── OUT OF CASH HOURS the clock is a LIE ──────────────────────
+            // gexTodScale is a CASH-SESSION profile. Outside 09:30–16:00 the
+            // history writer has no market-hours gate: it republishes the last
+            // cash book once a minute, frozen (same reason isEtWeekend exists).
+            // An 03:00 row is therefore a 16:00 BOOK wearing an 03:00 stamp —
+            // and putting a closing-auction number on the 0.72 open scale
+            // inflated it ~4.7x, which made the pre-open trail the biggest
+            // thing on the chart and dragged the reference up with it.
+            // Judge those on the CLOSE scale, which is the book they actually
+            // are.
+            const todOf = (ts: number) => {
+              const mod = etMinutesOfDay(ts);
+              if (mod < 0) return 1;
+              return (mod < RTH_OPEN_MIN || mod >= RTH_CLOSE_MIN)
+                ? gexTodScale(RTH_CLOSE_MIN)
+                : gexTodScale(mod);
+            };
             const pTodAt = new Map<number, number>();
-            for (const m of pMins) pTodAt.set(m.slotTs, gexTodScale(etMinutesOfDay(m.slotTs)));
+            for (const m of pMins) pTodAt.set(m.slotTs, todOf(m.slotTs));
             const detrendedMaxOf = (m: GexColumn) => {
               let mx = 0;
               for (const c of m.cells) {
@@ -4467,10 +4486,42 @@ function EsChartCard({
               }
               return mx / (pTodAt.get(m.slotTs) || 1);
             };
+            // ── WHO IS ALLOWED TO SET THE REFERENCE ───────────────────────
+            // Only cash-session buckets before the closing-auction cutoff (see
+            // BUBBLE_REF_START_MIN / BUBBLE_REF_CUTOFF_MIN). Everything still
+            // DRAWS; this decides whose gamma defines "full size".
+            //
+            // Necessary because the reference is a RUNNING MAXIMUM: a bucket
+            // that sets a new max draws at ratio 1 — the cap — by construction.
+            // Into the bell gamma climbs faster than the median profile the
+            // detrend divides out, so minute after minute set a new detrended
+            // max and every one printed at full size: an hour of identical
+            // maximum marks, with the inflated max then feeding the session
+            // floor below and fading the whole morning out from under them.
+            //
+            // The detrend still measures the excluded buckets — a 15:50 column
+            // is judged against `reference x 3.10` and only clamps if it really
+            // is running ~3x above the day's detrended peak. The window governs
+            // the DIVISOR, not the encoding.
+            const setsRef = (m: GexColumn) => {
+              const mod = etMinutesOfDay(m.slotTs);
+              return mod >= BUBBLE_REF_START_MIN && mod < BUBBLE_REF_CUTOFF_MIN;
+            };
             let pSessRef = 0;
             for (const m of pMins) {
+              if (!setsRef(m)) continue;
               const d = detrendedMaxOf(m);
               if (d > pSessRef) pSessRef = d;
+            }
+            // Fallback: nothing inside the window yet — an overnight chart, a
+            // replay cursor parked before 09:30, a pre-open reload. Better a
+            // reference from the wrong hour than no bubbles at all (the draw is
+            // gated on `sessRef > 0`).
+            if (pSessRef <= 0) {
+              for (const m of pMins) {
+                const d = detrendedMaxOf(m);
+                if (d > pSessRef) pSessRef = d;
+              }
             }
             // EXPANDING, not session-wide: a bucket is scaled against the
             // reference known up to and including itself, so the divisor can
@@ -4485,8 +4536,10 @@ function EsChartCard({
             {
               let acc = 0;
               for (const m of pMins) {
-                const d = detrendedMaxOf(m);
-                if (d > acc) acc = d;
+                if (setsRef(m)) {
+                  const d = detrendedMaxOf(m);
+                  if (d > acc) acc = d;
+                }
                 pRunRef.set(m.slotTs, Math.max(acc, pSessRef * BUBBLE_REF_FLOOR_FRAC));
               }
             }

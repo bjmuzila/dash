@@ -245,6 +245,37 @@ export const BUBBLE_CURVE_RANGE = { min: 1, max: 3 } as const;
 export const BUBBLE_REF_FLOOR_FRAC = 0.3;
 
 /**
+ * ── The REFERENCE WINDOW (ET minutes) ────────────────────────────────────────
+ * Which buckets are allowed to SET the bubble size reference. Everything still
+ * DRAWS — this only says whose gamma gets to define "full size".
+ *
+ * This is the old `BUBBLE_SCALE_CUTOFF_MIN` brought back, and it is back for a
+ * reason that the time-of-day detrend (gexTodScale, chartMath) does not cover:
+ *
+ *  1. The reference is a RUNNING MAXIMUM, so any bucket that sets a new max
+ *     draws at ratio 1 — full size — BY CONSTRUCTION. Through the closing
+ *     auction gamma routinely climbs faster than the six-session median profile
+ *     the detrend divides out, so every minute after ~15:30 set a new detrended
+ *     max and every one of them printed at the cap: an hour of identical
+ *     maximum-size marks carrying no information.
+ *  2. That inflated max also feeds `BUBBLE_REF_FLOOR_FRAC`, which is applied to
+ *     the WHOLE session — so a runaway close pushed the floor under the divisor
+ *     up and faded the entire morning out from under it.
+ *  3. Out of cash hours the history writer has no market-hours gate: it
+ *     republishes the last cash book once a minute, frozen. Those are real rows
+ *     with real (large) gamma and a 03:00 timestamp, and letting them define the
+ *     scale is the overnight version of the same problem.
+ *
+ * Why this is NOT the old cliff's mistake: the cliff also stopped MEASURING the
+ * last half hour, so every late wall clamped to one size. The detrend is still
+ * in force here — a 15:50 bucket is judged against `reference x 3.10`, so it
+ * varies normally and only clamps if it is genuinely running ~3x above the day's
+ * detrended peak. The window governs the divisor, not the encoding.
+ */
+export const BUBBLE_REF_START_MIN = 9 * 60 + 30;   // 09:30 ET — cash open
+export const BUBBLE_REF_CUTOFF_MIN = 15 * 60 + 30; // 15:30 ET — closing auction
+
+/**
  * Bubble time bucket. Storage is always 1-minute; this aggregates at DRAW time.
  *
  * "bar" is the default now that the card has a timeframe switcher: a fixed 5m
