@@ -1428,26 +1428,94 @@ function TickerPanel({
 // The panel spot came from /api/chains `underlyingPrice`, which only moves when
 // the 15s chain loop runs — and out of cash hours it does not move at all, so
 // the SPX header price and the ATM row froze at the 16:00 print while ES traded
-// all night. This derives SPX from the live ES future with the SAME convention
-// the ES candles chart uses:
+// all night.
 //
-//     basis = ES − SPX   (positive: carry − dividends)   ⇒   SPX = ES − basis
+// THE INVARIANT THIS MUST SATISFY, and the one the first cut got wrong:
 //
-// Basis ladder (same shape as EsChartCard's `effectiveBasis`, minus the chart-
-// only tiers): live ws `basis` while it is plausible, else the roll-corrected
-// daily anchor from /proxy/es-spx-basis. `isPlausibleBasis` / `isCashOpen` are
-// imported from chartMath rather than re-implemented — one definition of what a
-// real basis is.
+//     ES unchanged overnight  ⇒  SPX unchanged overnight.
+//
+// i.e. with ES sitting exactly on its own prior settle, the header must read
+// SPX's own prior close, to the penny. So the primary path is a DIFFERENTIAL
+// off the two prior closes, not a basis subtraction:
+//
+//     SPX = spxPrevClose + (esFut − esFutPrevClose)
+//
+// That cancels the basis entirely. Every basis-subtraction form (`esFut − b`)
+// is only as good as `b`, and every `b` available here is suspect off-hours:
+//
+//   • the ws `basis` frame is CIRCULAR after the close. `marketState.spot` is
+//     set to `_effectiveSpot()` (= esFut + cashBasis out of hours), so
+//     `basis = esFut − spot` collapses to `−cashBasis` — a value last measured
+//     during RTH, carrying no independent information about where ES is now.
+//     It is the LAST rung here, not the first.
+//   • `/proxy/es-spx-basis` is a real simultaneous pair (our 16:00 es_candles
+//     close vs Yahoo ^GSPC close) and is the backup, and the sanity check on
+//     the differential: if the two prior closes imply a basis far from the
+//     anchor they are not the same session, so the pair is refused.
 //
 // While cash is open the feed's own SPX print IS the index, so it wins outright
 // and no conversion happens. Only SPX is touched; SPY/QQQ/the 4th slot keep
-// their chain price.
+// their chain price. `isPlausibleBasis` / `isCashOpen` are imported from
+// chartMath rather than re-implemented — one definition of what a real basis is.
 const MG_SPX_TOPICS = ["spot", "aux"] as const;
+// How far the prior-close pair's implied basis may sit from the daily anchor
+// before the pair is refused as mismatched-session. The anchor moves by only a
+// point or two a day; 25 is loose enough to never fire on a real pair and tight
+// enough to catch a prevClose that is a session behind.
+const MG_PAIR_ANCHOR_TOL = 25;
 // ES ticks far faster than this page can afford to re-render (every change
 // re-runs computeRows in 4 panels), so frames land in refs and one publish tick
 // promotes them to state.
 const MG_SPX_PUBLISH_MS = 2000;
 const MG_BASIS_REFRESH_MS = 30 * 60_000;
+
+// ── Which tier produced the price ────────────────────────────────────────────
+// "the header says 7625, is that right?" is unanswerable without knowing WHICH
+// rung of the ladder fired and what the inputs were, so every publish records
+// it. Two ways to read it, neither of which costs anything when unused:
+//
+//   window.__mgSpx                 — the last decision, always present
+//   ?spxdebug=1  (or localStorage `mg_spx_debug` = "1")  — console.log each
+//                                    time the tier or price changes
+//
+// `spot` here is the feed's SPX cash print (frozen out of hours), `wsBasis` the
+// server's live ES − SPX, `anchorBasis` the /proxy/es-spx-basis daily value.
+type MgSpxTier =
+  | "cash"          // cash open — the feed's SPX print IS the index, no conversion
+  | "prev-close"    // spxPrevClose + (esFut − esFutPrevClose)   ← the good one
+  | "anchor-basis"  // ES − /proxy/es-spx-basis daily anchor
+  | "ws-basis"      // ES − server basis (circular off-hours; last resort)
+  | "spotDisplay"   // no usable basis — server's own ES-derived display SPX
+  | "spot-raw";     // nothing left but the frozen cash print
+
+interface MgSpxDebug {
+  tier: MgSpxTier;
+  spx: number;
+  es: number;
+  spot: number;
+  /** ES move off its own prior settle. 0 ⇒ the header must read spxPrevClose. */
+  esChange: number;
+  esPrevClose: number;
+  spxPrevClose: number;
+  /** What the prior-close PAIR implies the basis is (esPrev − spxPrev). */
+  pairBasis: number;
+  /** Why the pair was refused, when it was. */
+  pairRejected: string;
+  basisUsed: number;
+  wsBasis: number;
+  anchorBasis: number;
+  spotDisplay: number;
+  cashOpen: boolean;
+  at: string;
+}
+
+function mgSpxDebugOn(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (new URLSearchParams(window.location.search).get("spxdebug") === "1") return true;
+    return window.localStorage.getItem("mg_spx_debug") === "1";
+  } catch { return false; }
+}
 
 /** Live SPX index price derived from ES, or 0 when it can't be trusted. */
 function useSpxFromEs(enabled: boolean): number {
@@ -1458,7 +1526,10 @@ function useSpxFromEs(enabled: boolean): number {
   const wsBasisRef = useRef(0);       // server's live ES − SPX (holds last good)
   const spotDisplayRef = useRef(0);   // server's own ES-derived display SPX
   const trustedBasisRef = useRef(0);  // /proxy/es-spx-basis daily anchor
+  const spxPrevRef = useRef(0);       // SPX prior close  (`spot` frame prevClose)
+  const esPrevRef = useRef(0);        // ES prior settle  (`aux` frame esFutPrevClose)
   const publishedRef = useRef(0);
+  const tierRef = useRef<MgSpxTier | null>(null);
 
   // Daily anchor, so a server restart out of hours still has a basis to use.
   useEffect(() => {
@@ -1489,6 +1560,10 @@ function useSpxFromEs(enabled: boolean): number {
       const e = num(d.esFut);          if (e > 0) esFutRef.current = e;
       const sd = num(d.spotDisplay);   if (sd > 0) spotDisplayRef.current = sd;
       const b = num(d.basis);          if (isPlausibleBasis(b)) wsBasisRef.current = b;
+      // The two prior closes the differential rides on. `prevClose` is SPX's
+      // (spot frame), `esFutPrevClose` is the front future's (aux frame).
+      const sp = num(d.prevClose);     if (sp > 0) spxPrevRef.current = sp;
+      const ep = num(d.esFutPrevClose); if (ep > 0) esPrevRef.current = ep;
     };
 
     const off = subscribeGex({
@@ -1503,20 +1578,83 @@ function useSpxFromEs(enabled: boolean): number {
     const publish = () => {
       const spot = spotRef.current;
       const es = esFutRef.current;
+      const cashOpen = isCashOpen();
+
+      const spxPrev = spxPrevRef.current;
+      const esPrev = esPrevRef.current;
+      const anchor = trustedBasisRef.current;
+      const pairBasis = (spxPrev > 0 && esPrev > 0) ? esPrev - spxPrev : 0;
+
+      // Is the prior-close PAIR usable? Both present, the basis they imply is a
+      // real one, and — when the daily anchor is known — close to it. A
+      // `prevClose` that is a session behind its partner shows up here as an
+      // implied basis nowhere near the anchor, which is the whole point of the
+      // check: without it a mismatched pair silently bakes a day's move into
+      // every price.
+      let pairRejected = "";
+      if (!(spxPrev > 0) || !(esPrev > 0)) pairRejected = "missing prev close";
+      else if (!isPlausibleBasis(pairBasis)) pairRejected = `implied basis ${pairBasis.toFixed(2)} out of band`;
+      else if (isPlausibleBasis(anchor) && Math.abs(pairBasis - anchor) > MG_PAIR_ANCHOR_TOL) {
+        pairRejected = `implied basis ${pairBasis.toFixed(2)} vs anchor ${anchor.toFixed(2)}`;
+      }
+      const pairOk = !pairRejected;
 
       let next = 0;
-      if (isCashOpen() && spot > 0) {
+      let tier: MgSpxTier;
+      let basisUsed = 0;
+
+      if (cashOpen && spot > 0) {
         next = spot;                                   // cash open: the print IS SPX
+        tier = "cash";
+      } else if (pairOk && es > 0) {
+        // ES unchanged off its settle ⇒ SPX unchanged off its close. Exactly.
+        next = spxPrev + (es - esPrev);
+        tier = "prev-close";
+        basisUsed = pairBasis;
+      } else if (es > 0 && isPlausibleBasis(anchor)) {
+        next = es - anchor;                            // real simultaneous pair
+        tier = "anchor-basis";
+        basisUsed = anchor;
+      } else if (es > 0 && isPlausibleBasis(wsBasisRef.current)) {
+        // Circular off-hours (see the header) — only better than nothing.
+        next = es - wsBasisRef.current;
+        tier = "ws-basis";
+        basisUsed = wsBasisRef.current;
+      } else if (spotDisplayRef.current > 0) {
+        next = spotDisplayRef.current;
+        tier = "spotDisplay";
       } else {
-        const basis = isPlausibleBasis(wsBasisRef.current)
-          ? wsBasisRef.current
-          : (isPlausibleBasis(trustedBasisRef.current) ? trustedBasisRef.current : 0);
-        if (es > 0 && basis > 0) next = es - basis;    // ES → SPX
-        else if (spotDisplayRef.current > 0) next = spotDisplayRef.current;
-        else next = spot;
+        next = spot;
+        tier = "spot-raw";
       }
       if (!(next > 0)) return;
       next = Math.round(next * 100) / 100;
+
+      // Always park the decision where the console can reach it, even when the
+      // price hasn't moved — "is the basis stale?" needs the inputs, not just
+      // the output.
+      const dbg: MgSpxDebug = {
+        tier, spx: next, es, spot, basisUsed,
+        esChange: esPrev > 0 && es > 0 ? Math.round((es - esPrev) * 100) / 100 : 0,
+        esPrevClose: esPrev,
+        spxPrevClose: spxPrev,
+        pairBasis: Math.round(pairBasis * 100) / 100,
+        pairRejected,
+        wsBasis: wsBasisRef.current,
+        anchorBasis: trustedBasisRef.current,
+        spotDisplay: spotDisplayRef.current,
+        cashOpen,
+        at: new Date().toISOString(),
+      };
+      if (typeof window !== "undefined") {
+        (window as unknown as { __mgSpx?: MgSpxDebug }).__mgSpx = dbg;
+      }
+      const tierChanged = tier !== tierRef.current;
+      if ((tierChanged || next !== publishedRef.current) && mgSpxDebugOn()) {
+        console.log("[MG SPX]", tier, next, dbg);
+      }
+      tierRef.current = tier;
+
       if (next === publishedRef.current) return;
       publishedRef.current = next;
       setSpx(next);

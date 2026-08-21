@@ -4765,7 +4765,16 @@ class TastytradeProxy {
         (a, b) => parseFloat(a['strike-price']) - parseFloat(b['strike-price'])
       ),
     }];
-    return { items, underlyingPrice: this.spot, rootSymbol: root, symbol: root };
+    // Report the SAME spot the strike window above was centered on
+    // (_activeContracts → _effectiveSpot), not the raw `this.spot`. During RTH
+    // the two are identical; off-hours `this.spot` is the frozen last-RTH
+    // broker print while the window — and marketState.spot, and every wall the
+    // GEX math produces — have already moved to the ES-derived level. Reporting
+    // the frozen one made the chain's own `underlyingPrice` disagree with the
+    // ladder it shipped, which is what put the Multi Greek header ~20 pts off
+    // its ATM row overnight.
+    const underlyingPrice = (this._effectiveSpot ? this._effectiveSpot() : this.spot) || this.spot;
+    return { items, underlyingPrice, rootSymbol: root, symbol: root };
   }
 
   /**

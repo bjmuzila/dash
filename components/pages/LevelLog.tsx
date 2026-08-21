@@ -695,6 +695,11 @@ export default function LevelLog() {
 
           <WallCaptureRail log={log} events={events} />
 
+          {/* The same session as a picture. Sits ABOVE the scroll body on
+              purpose: framed capture expands that body without reflowing its
+              siblings, so anything under it gets drawn over in the PNG. */}
+          <WallMigrationChart log={log} events={events} view={view} />
+
           {/* Header + capture rail stay pinned; only the entries scroll. The
               snapshot expands past this (framed mode), so the PNG is the whole
               log rather than the visible slice. */}
@@ -903,6 +908,222 @@ function WallRailChips({ marks }: { marks: RailMark[] }) {
     );
   }
   return <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center", marginTop: 12 }}>{out}</div>;
+}
+
+// ── Wall migration ───────────────────────────────────────────────────────────
+
+/** Chart body height in px. The SVG scales to the card's width, not this. */
+const MIG_H = 172;
+/** Top/bottom breathing room inside the plot, so a line never rides the edge. */
+const MIG_PAD = 10;
+
+/**
+ * WALL MIGRATION — the level log drawn: where each level sat, slot by slot,
+ * against the price captured with it.
+ *
+ * Ported from the post-market recap's chart (components/pages/premarket/
+ * PostMarketTab.tsx → WallChart), with one deliberate difference. That version
+ * has no recorded level series to read: it reconstructs the walls out of the
+ * per-minute strike ladder and labels itself a "net-basis proxy" — and that
+ * ladder is SPX-only, which is why the chart could not travel as written. Here
+ * the levels ARE recorded, per symbol, by server-v2/walls-recorder.js. So this
+ * draws the log's own strikes, no proxy, and works for every ticker on the rail.
+ *
+ * Two honest consequences of reading the log instead of a ladder:
+ *
+ *   1. walls_log is CHANGE-ONLY, so each series is forward-filled from its last
+ *      written row. That is exactly what the level did — a wall holds its strike
+ *      until it rolls — which is why every level is a STEP and never a slope. A
+ *      diagonal between two captures would draw the level at prices it never
+ *      occupied, which is precisely the reading this panel exists for.
+ *   2. Spot is only stored on the slots that wrote a row, plus the touch and
+ *      approach events. The price line is therefore those captures joined up,
+ *      not a tick path, and the caption says how many there were rather than
+ *      implying a continuous tape.
+ *
+ * Nothing is filled in. A level with no rows for the day is simply not drawn,
+ * and the whole panel disappears rather than render an empty frame.
+ *
+ * It reads the same view-filtered `log` / `events` as the rail and the timeline,
+ * so the WALLS / CORE switch scopes it along with everything else — and it uses
+ * railPct() for x, so a mark on the rail above sits directly over its step here.
+ */
+function WallMigrationChart({ log, events, view }: {
+  log: WallLogRow[]; events: WallEventRow[]; view: LogView;
+}) {
+  const model = useMemo(() => {
+    const inSlot = (s: number) => Number.isFinite(s) && s >= 0 && s < WALL_SLOTS;
+
+    // How much session has been captured. Same definition the rail's fill uses,
+    // so the two never disagree about where "now" is.
+    let lastSlot = 0;
+    for (const r of log) if (inSlot(r.slot) && r.slot > lastSlot) lastSlot = r.slot;
+    for (const e of events) if (inSlot(e.hit_slot) && e.hit_slot > lastSlot) lastSlot = e.hit_slot;
+
+    // Only level types this view covers AND that actually have rows today.
+    const levels = VIEW_LEVELS[view].filter((lt) => log.some((r) => r.level_type === lt));
+    if (!levels.length) return null;
+
+    // Forward-fill: at slot s a level is whatever it was last written as.
+    const series = new Map<WallLevel, (number | null)[]>();
+    for (const lt of levels) {
+      const rows = log
+        .filter((r) => r.level_type === lt && inSlot(r.slot) && Number.isFinite(Number(r.strike)))
+        .sort((a, b) => a.slot - b.slot);
+      const out: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+      let cur: number | null = null;
+      let i = 0;
+      for (let s = 0; s <= lastSlot; s++) {
+        while (i < rows.length && rows[i].slot <= s) { cur = Number(rows[i].strike); i++; }
+        out[s] = cur;
+      }
+      series.set(lt, out);
+    }
+
+    // Spot, from every capture that carried one. Events are written second so a
+    // tag's spot_at_hit wins over the level row at the same slot — the tag is
+    // the more precise reading of where price actually was.
+    const spot: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+    for (const r of log) {
+      if (inSlot(r.slot) && Number.isFinite(Number(r.spot)) && Number(r.spot) > 0) spot[r.slot] = Number(r.spot);
+    }
+    for (const e of events) {
+      if (inSlot(e.hit_slot) && Number.isFinite(Number(e.spot_at_hit)) && Number(e.spot_at_hit) > 0) {
+        spot[e.hit_slot] = Number(e.spot_at_hit);
+      }
+    }
+    const spotPts = spot.map((v, s) => ({ s, v })).filter((p) => p.v != null) as { s: number; v: number }[];
+
+    const vals: number[] = [];
+    for (const arr of series.values()) for (const v of arr) if (v != null) vals.push(v);
+    for (const p of spotPts) vals.push(p.v);
+    if (vals.length < 2) return null;
+
+    let lo = Math.min(...vals);
+    let hi = Math.max(...vals);
+    if (!(hi > lo)) { const c = lo || 1; lo = c * 0.999; hi = c * 1.001; }
+    const padY = (hi - lo) * 0.08;
+    lo -= padY; hi += padY;
+
+    return { levels, series, spot, spotPts, lo, hi, lastSlot };
+  }, [log, events, view]);
+
+  if (!model) return null;
+  const { levels, series, spotPts, lo, hi, lastSlot } = model;
+
+  const x = (s: number) => railPct(s);
+  const y = (v: number) => MIG_PAD + (1 - (v - lo) / (hi - lo)) * (MIG_H - MIG_PAD * 2);
+
+  /** Step, not slope — see the header. Walk forward or back over the fill. */
+  const step = (arr: (number | null)[], reverse = false) => {
+    const out: string[] = [];
+    let prev: number | null = null;
+    const push = (s: number) => {
+      const v = arr[s];
+      if (v == null) return;
+      if (prev != null && v !== prev) out.push(`${x(s)},${y(prev)}`);
+      out.push(`${x(s)},${y(v)}`);
+      prev = v;
+    };
+    if (reverse) for (let s = lastSlot; s >= 0; s--) push(s);
+    else for (let s = 0; s <= lastSlot; s++) push(s);
+    return out.join(" ");
+  };
+
+  const paths = levels.map((lt) => ({ lt, d: step(series.get(lt) ?? []) })).filter((p) => p.d);
+  // The corridor between the two walls — the room price actually had. Only in
+  // the WALLS view, where there are two of them to bound it.
+  const corridor = paths.length === 2
+    ? `${paths[0].d} ${step(series.get(paths[1].lt) ?? [], true)}`
+    : null;
+  const spotLine = spotPts.map((p) => `${x(p.s)},${y(p.v)}`).join(" ");
+  const lastOf = (lt: WallLevel) => {
+    const arr = series.get(lt) ?? [];
+    for (let s = lastSlot; s >= 0; s--) if (arr[s] != null) return arr[s] as number;
+    return null;
+  };
+
+  const legendChip = (color: string, label: string, value: string) => (
+    <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span aria-hidden style={{ width: 10, height: 3, borderRadius: 2, background: color, boxShadow: `0 0 8px ${rgba(color, 0.5)}` }} />
+      <span style={{ fontSize: 10, letterSpacing: LS_LABEL, textTransform: "uppercase", color }}>{label}</span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META }}>{value}</span>
+    </span>
+  );
+
+  return (
+    <div style={{ padding: "13px 18px 12px", borderBottom: `1px solid ${C.border}` }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap", marginBottom: 9 }}>
+        <span style={{ fontSize: FS_LABEL, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase" }}>
+          Wall migration
+        </span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META }}>
+          recorded levels · {spotPts.length} spot capture{spotPts.length === 1 ? "" : "s"}
+        </span>
+        <span style={{ marginLeft: "auto", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+          {paths.map((p) => legendChip(LEVEL_COLOR[p.lt], LEVEL_LABEL[p.lt], wallStrike(lastOf(p.lt))))}
+          {spotPts.length ? legendChip(HOME_THEME.text, "Spot", wallNum(spotPts[spotPts.length - 1].v)) : null}
+        </span>
+      </div>
+
+      <div style={{ position: "relative" }}>
+        {/* preserveAspectRatio="none" — the x axis is slots, the y axis is
+            price, and the two have no business sharing a scale. Every stroke
+            carries vectorEffect so the squash never thickens a line, and there
+            is no <text> or <circle> inside for the same reason: they would come
+            out stretched. Labels are HTML, on top. */}
+        <svg viewBox={`0 0 100 ${MIG_H}`} height={MIG_H} preserveAspectRatio="none"
+          style={{ width: "100%", display: "block", overflow: "visible" }}>
+          {RAIL_HOURS.map((h) => (
+            <line key={h.slot} x1={x(h.slot)} x2={x(h.slot)} y1={0} y2={MIG_H}
+              stroke="rgba(255,255,255,0.07)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+          ))}
+          {corridor ? <polygon points={corridor} fill={rgba(C.cyan, 0.06)} /> : null}
+          {paths.map((p) => (
+            <polyline key={p.lt} points={p.d} fill="none" stroke={LEVEL_COLOR[p.lt]} strokeWidth={2}
+              vectorEffect="non-scaling-stroke" strokeLinejoin="miter" />
+          ))}
+          {/* Spot last, so it reads on top of the levels it is being compared
+              with. The ticks mark the captures themselves — vertical only,
+              because a horizontal mark would be stretched by the squash. */}
+          {spotPts.length > 1 ? (
+            <polyline points={spotLine} fill="none" stroke={HOME_THEME.text} strokeWidth={1.4}
+              vectorEffect="non-scaling-stroke" opacity={0.85} />
+          ) : null}
+          {spotPts.map((p) => (
+            <line key={p.s} x1={x(p.s)} x2={x(p.s)} y1={y(p.v) - 2.5} y2={y(p.v) + 2.5}
+              stroke={HOME_THEME.text} strokeWidth={1.4} vectorEffect="non-scaling-stroke" opacity={0.9} />
+          ))}
+        </svg>
+        {/* Price bounds as HTML, right-aligned over the plot. */}
+        <span style={{ position: "absolute", right: 0, top: 0, fontFamily: "var(--font-mono)", fontSize: 10, pointerEvents: "none" }}>
+          {wallStrike(hi)}
+        </span>
+        <span style={{ position: "absolute", right: 0, bottom: 0, fontFamily: "var(--font-mono)", fontSize: 10, pointerEvents: "none" }}>
+          {wallStrike(lo)}
+        </span>
+      </div>
+
+      {/* Same ticks as the rail above, so the two line up column for column. */}
+      <div style={{ position: "relative", height: 12, marginTop: 3 }} aria-hidden>
+        <span style={{ position: "absolute", left: 0, fontFamily: "var(--font-mono)", fontSize: 10 }}>09:29</span>
+        {RAIL_HOURS.map((h) => (
+          <span key={h.slot} style={{
+            position: "absolute", left: `${railPct(h.slot)}%`, transform: "translateX(-50%)",
+            fontFamily: "var(--font-mono)", fontSize: 10,
+          }}>{h.label}</span>
+        ))}
+        <span style={{ position: "absolute", right: 0, fontFamily: "var(--font-mono)", fontSize: 10 }}>16:00</span>
+      </div>
+
+      <div style={{ fontSize: FS_META, marginTop: 8, lineHeight: 1.5 }}>
+        Each level holds its strike until the recorder writes a change, so the steps are the rolls. A level that
+        sits while price travels is the one to fade; one that moves with price is dealers chasing. Spot is drawn
+        from the {spotPts.length} capture{spotPts.length === 1 ? "" : "s"} stored for this ticker today — the
+        level log&apos;s own samples, not a tick path.
+      </div>
+    </div>
+  );
 }
 
 /**

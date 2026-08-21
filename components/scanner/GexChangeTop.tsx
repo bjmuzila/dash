@@ -112,6 +112,97 @@ const fmtClock = (ts: number | null): string => {
 };
 const fmtPct = (v: number | null): string => (v == null || !Number.isFinite(v) ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(0)}%`);
 
+// ── GRADE ────────────────────────────────────────────────────────────────────
+// A letter for what the contract actually DID after it was flagged, so a slot
+// can be read at a glance instead of squinting at three percentages.
+//
+// 100 points, three parts:
+//   Peak  (0-55)  how much gain was ever on offer     — max_pct  (MFE)
+//   Pain  (0-25)  how much heat it took getting there — min_pct  (MAE)
+//   Close (0-20)  where it actually finished          — close_pct
+//
+// HARD RULE: max_pct <= 0 is an F no matter what the other two say. A pick that
+// never traded above its flag mark offered no exit at all, and that is the case
+// this grade exists to name — avg peak hides it, because one +300% runner pays
+// for four that went straight to red. Pain and close credit must not launder a
+// never-green pick up into a D.
+type Grade = "A+" | "A" | "B" | "C" | "D" | "F";
+type GradeInfo = { grade: Grade; pts: number; neverGreen: boolean; why: string };
+
+const GRADE_ORDER: Grade[] = ["A+", "A", "B", "C", "D", "F"];
+
+const GRADE_COLOR: Record<Grade, string> = {
+  "A+": HOME_THEME.green,
+  "A":  HOME_THEME.green,
+  "B":  HOME_THEME.cyan,
+  "C":  HOME_THEME.orange,
+  "D":  HOME_THEME.orange,
+  "F":  HOME_THEME.red,
+};
+
+const GRADE_NOTE: Record<Grade, string> = {
+  "A+": "85-100 pts — a big gain was on offer, it was cheap to hold, and it finished well.",
+  "A":  "72-84 pts — a real move (roughly +50% or better) without punishing heat.",
+  "B":  "58-71 pts — a tradable pop, or a bigger one that took real drawdown first.",
+  "C":  "44-57 pts — small gain on offer, or a decent peak paid for with heat.",
+  "D":  "28-43 pts — barely ticked green before it rolled.",
+  "F":  "Under 28 pts, or never traded green at all — no exit was ever on offer.",
+};
+
+/** 0-100 for a scorecard row. null when nothing was ever snapshotted after entry. */
+const gradePoints = (maxPct: number | null, minPct: number | null, closePct: number | null): number | null => {
+  if (maxPct == null || !Number.isFinite(maxPct)) return null;
+  const peak =
+    maxPct >= 150 ? 55 : maxPct >= 100 ? 50 : maxPct >= 50 ? 42 :
+    maxPct >=  30 ? 33 : maxPct >=  20 ? 26 : maxPct >= 10 ? 18 :
+    maxPct > 0 ? 8 : 0;
+  // No low recorded -> assume it was not free. Half credit, so a pick with no
+  // MAE on file can never outrank one that proved it stayed shallow.
+  const m = minPct == null || !Number.isFinite(minPct) ? -25 : minPct;
+  const pain = m >= -10 ? 25 : m >= -20 ? 20 : m >= -30 ? 15 : m >= -45 ? 9 : m >= -60 ? 4 : 0;
+  const c = closePct == null || !Number.isFinite(closePct) ? null : closePct;
+  const close = c == null ? 8 : c >= 50 ? 20 : c >= 20 ? 16 : c >= 0 ? 11 : c >= -20 ? 6 : c >= -50 ? 2 : 0;
+  return peak + pain + close;
+};
+
+const gradeFor = (
+  r: Pick<ResultRow, "max_pct" | "min_pct" | "close_pct"> | null | undefined,
+): GradeInfo | null => {
+  if (!r) return null;
+  const pts = gradePoints(r.max_pct, r.min_pct, r.close_pct);
+  if (pts == null) return null;
+  const neverGreen = !(Number(r.max_pct) > 0);
+  const grade: Grade = neverGreen
+    ? "F"
+    : pts >= 85 ? "A+" : pts >= 72 ? "A" : pts >= 58 ? "B" : pts >= 44 ? "C" : pts >= 28 ? "D" : "F";
+  const why = neverGreen
+    ? `Never traded green. Peak ${fmtPct(r.max_pct)} · low ${fmtPct(r.min_pct)} · close ${fmtPct(r.close_pct)} — no exit was ever on offer.`
+    : `${pts}/100 · peak ${fmtPct(r.max_pct)} · low ${fmtPct(r.min_pct)} · close ${fmtPct(r.close_pct)}`;
+  return { grade, pts, neverGreen, why };
+};
+
+const gradeChipStyle = (g: Grade): CSSProperties => ({
+  display: "inline-flex", alignItems: "center", gap: 3,
+  fontFamily: MONO, fontSize: 11, fontWeight: 800, lineHeight: 1,
+  padding: "2px 6px", borderRadius: 5, whiteSpace: "nowrap",
+  color: GRADE_COLOR[g], background: tint(GRADE_COLOR[g], 0.14),
+  border: `1px solid ${tint(GRADE_COLOR[g], 0.45)}`,
+});
+
+/** The grade badge. Renders nothing for a pick with no scored history yet. */
+function GradePill({ info, provisional, size = 11 }: { info: GradeInfo | null; provisional?: boolean; size?: number }) {
+  if (!info) return null;
+  return (
+    <span
+      title={`${GRADE_NOTE[info.grade]}\n${info.why}${provisional ? "\nProvisional — the session is still live, so peak/close can still move." : ""}`}
+      style={{ ...gradeChipStyle(info.grade), fontSize: size, padding: size >= 13 ? "3px 8px" : "2px 6px" }}
+    >
+      {info.grade}
+      {provisional && <span style={{ fontWeight: 600, opacity: 0.7 }}>·</span>}
+    </span>
+  );
+}
+
 const isRth = (ts: number): boolean => {
   if (!Number.isFinite(ts)) return false;
   const p = new Intl.DateTimeFormat("en-US", {
@@ -360,6 +451,13 @@ export default function GexChangeTop() {
     return m;
   }, [results]);
 
+  /** Whole scorecard row by watch_id — a card reads its grade straight off this. */
+  const resultById = useMemo(() => {
+    const m = new Map<number, ResultRow>();
+    for (const r of results) m.set(r.watch_id, r);
+    return m;
+  }, [results]);
+
   /** Cards sitting under the floor — legacy slots only, once the recorder ships. */
   const cheapCards = useMemo(() => {
     if (cheapIds.size === 0) return 0;
@@ -601,6 +699,17 @@ export default function GexChangeTop() {
   const avgPeak = withPeak.length ? withPeak.reduce((a, r) => a + (r.max_pct as number), 0) / withPeak.length : null;
   const greenClose = filteredResults.filter((r) => r.close_pct != null && (r.close_pct as number) > 0).length;
 
+  // Grade distribution + the number that never printed a gain at all. "Never
+  // green" is the number avg-peak was hiding: a slot can average +40% while
+  // four of its five picks went straight to red.
+  const graded = filteredResults
+    .map((r) => gradeFor(r))
+    .filter((g): g is GradeInfo => g != null);
+  const gradeCount = (g: Grade) => graded.filter((x) => x.grade === g).length;
+  const neverGreen = graded.filter((g) => g.neverGreen).length;
+  const neverGreenPct = graded.length ? (neverGreen / graded.length) * 100 : null;
+  const gpa = graded.length ? graded.reduce((a, x) => a + x.pts, 0) / graded.length : null;
+
   return (
    <div ref={cardRef}>
     <Card
@@ -705,6 +814,27 @@ export default function GexChangeTop() {
           </button>
         </div>
 
+        {showResults && !resErr && graded.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            <span style={{ fontSize: 12, color: HOME_THEME.text }}>Grades</span>
+            {GRADE_ORDER.map((g) => (
+              <span key={g} title={GRADE_NOTE[g]} style={{ ...gradeChipStyle(g), opacity: gradeCount(g) ? 1 : 0.3 }}>
+                {g}<b style={{ marginLeft: 2 }}>{gradeCount(g)}</b>
+              </span>
+            ))}
+            <span style={{ fontSize: 12, color: HOME_THEME.text, marginLeft: 6 }}>
+              avg <b style={{ color: HOME_THEME.cyan, fontFamily: MONO }}>{gpa == null ? "—" : `${gpa.toFixed(0)}/100`}</b>
+              {" · "}
+              <span title="Picks whose best post-flag mark never printed above the entry — they went straight to red and stayed there.">
+                never green{" "}
+                <b style={{ color: neverGreen ? HOME_THEME.red : HOME_THEME.green, fontFamily: MONO }}>
+                  {neverGreen}{neverGreenPct != null ? ` (${neverGreenPct.toFixed(0)}%)` : ""}
+                </b>
+              </span>
+            </span>
+          </div>
+        )}
+
         {resErr && <div style={{ color: HOME_THEME.red, fontSize: 13, padding: "4px 0" }}>Scorecard error: {resErr}</div>}
 
         {showResults && !resErr && (
@@ -719,6 +849,7 @@ export default function GexChangeTop() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
+                    <th style={{ ...th, textAlign: "left" }}>Grade</th>
                     <th style={{ ...th, textAlign: "left" }}>Symbol</th>
                     <th style={{ ...th, textAlign: "left" }}>Contract</th>
                     <th style={{ ...th, textAlign: "left" }}>Flagged</th>
@@ -733,11 +864,14 @@ export default function GexChangeTop() {
                   </tr>
                 </thead>
                 <tbody>
-                  {results.filter((r) => r.entry != null && r.entry > 0.5).map((r) => {
+                  {filteredResults.map((r) => {
                     const sideC = r.side === "P" ? HOME_THEME.orange : HOME_THEME.green;
                     const peakDollars = r.entry != null && r.max_mark != null ? (r.max_mark - r.entry) * 100 : null;
                     return (
                       <tr key={`${r.watch_id}-${r.first_slot}`}>
+                        <td style={{ ...td, textAlign: "left" }}>
+                          <GradePill info={gradeFor(r)} provisional={!frozen} />
+                        </td>
                         <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>{r.symbol}</td>
                         <td style={{ ...td, textAlign: "left", color: sideC }}>
                           {fmtStrike(r.strike)}{r.side ?? ""} <span style={{ color: HOME_THEME.text }}>{r.expiry}</span>
@@ -838,6 +972,9 @@ export default function GexChangeTop() {
               // badge it rather than removing it: the slot would otherwise show
               // four cards, and the pick genuinely WAS captured.
               const underFloor = wid != null && cheapIds.has(wid);
+              // Grade for THIS pick, off the same scorecard row the entry basis
+              // came from — card and table can never disagree.
+              const grade = gradeFor(wid != null ? resultById.get(wid) : null);
 
               return (
                 <div
@@ -909,7 +1046,10 @@ export default function GexChangeTop() {
                         </span>
                         <span style={{ fontSize: 14, color: HOME_THEME.text }}>{fmtStrike(r.strike)}</span>
                       </div>
-                      <div style={{ fontSize: 20, fontWeight: 800, color: col, lineHeight: 1.2 }}>{fmtBig(r.latest_chg)}</div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <div style={{ fontSize: 20, fontWeight: 800, color: col, lineHeight: 1.2 }}>{fmtBig(r.latest_chg)}</div>
+                        <GradePill info={grade} provisional={!frozen} size={13} />
+                      </div>
                       <div style={{ fontSize: 14, color: HOME_THEME.text, marginTop: 4 }}>
                         {r.expiry} · spot {fmtSpot(r.spot)}
                       </div>
@@ -1002,8 +1142,11 @@ export default function GexChangeTop() {
                       </div>
                       {/* .op-bigrow — the headline move off the entry basis. */}
                       <div style={{ margin: "6px 0 4px" }}>
-                        <div style={{ fontFamily: MONO, fontSize: 18, fontWeight: 800, lineHeight: 1, color: pnlColor }}>
-                          {pnlPct == null ? "—" : `${pnlPct >= 0 ? "▲" : "▼"} ${Math.abs(pnlPct).toFixed(1)}%`}
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                          <div style={{ fontFamily: MONO, fontSize: 18, fontWeight: 800, lineHeight: 1, color: pnlColor }}>
+                            {pnlPct == null ? "—" : `${pnlPct >= 0 ? "▲" : "▼"} ${Math.abs(pnlPct).toFixed(1)}%`}
+                          </div>
+                          <GradePill info={grade} provisional={!frozen} />
                         </div>
                         <div style={{ fontFamily: MONO, fontSize: 11, color: HOME_THEME.text, marginTop: 4, whiteSpace: "nowrap" }}>
                           <span style={lblStyle}>in</span>{fmtPx(entry)}
@@ -1063,6 +1206,11 @@ export default function GexChangeTop() {
         <span>Score = 0.6·|Δ| + 0.4·|% vs open|, normalized 0–100</span>
         <span><span style={{ color: HOME_THEME.orange }}>★ Very strong</span> = |Δ| ≥ $200k AND |% vs open| ≥ 30%</span>
         <span>Every pick is auto-probed at capture — the flip side is its recorded option price since it was flagged</span>
+        <span>
+          Grade = 55 pts peak (best gain offered) + 25 pts pain (worst drawdown) + 20 pts close.{" "}
+          <span style={{ color: HOME_THEME.red }}>F</span> is automatic when a pick never traded green,
+          whatever the rest of the row says.
+        </span>
       </div>
     </Card>
    </div>

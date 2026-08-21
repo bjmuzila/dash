@@ -1,5 +1,190 @@
 # Changelog
 
+## 2026-08-21 (d) - Level Log: wall migration chart, every ticker
+
+Edited: `components/pages/LevelLog.tsx`.
+
+The post-market recap's WALL MIGRATION chart (`components/pages/premarket/
+PostMarketTab.tsx` -> `WallChart`) now also renders on **/level-log**, inside the
+log card between the capture rail and the timeline - so it exists for **every
+ticker on the rail**, not just SPX.
+
+**Why it could not be lifted as-is.** The premarket version has no recorded
+level series to read: it reconstructs the walls out of the per-minute strike
+ladder (`/api/snapshots/option-strike-gex-history`) and labels itself a
+"net-basis proxy" - and that ladder is SPX-only, which is exactly why the chart
+never travelled.
+
+**What this one reads instead.** `/proxy/walls?date&symbol` - the levels the
+walls recorder already stores per symbol. So the lines are the log's own
+`call_wall` / `put_wall` / `cb` strikes. No proxy, no second fetch: it reuses the
+`log` / `events` the page had already loaded.
+
+Two honest consequences, stated on the panel:
+
+- `walls_log` is CHANGE-ONLY, so each level is forward-filled from its last
+  written row and drawn as a **step**, never a slope. A diagonal between two
+  captures would draw the level at prices it never occupied.
+- Spot exists only on slots that wrote a row, plus touch/approach events. The
+  price line is those captures joined up, with a tick at each one, and the
+  caption prints the sample count rather than implying a tick path.
+
+**Details.**
+
+- Scoped by the WALLS / CORE switch like everything else on the page - it reads
+  the same view-filtered rows as the rail, the timeline, the copy text and the
+  PNG, so the export can never disagree with the screen.
+- x is `railPct(slot)`, the same axis the capture rail uses, so a mark on the
+  rail sits directly over its step in the chart. Same hour ticks, same 09:29 ->
+  16:00 gutters.
+- WALLS view fills the corridor between the two walls; CORE view draws the one
+  line. Colors come from the page's existing `LEVEL_COLOR` map.
+- Placed ABOVE the scrolling timeline on purpose: framed snapshot mode expands
+  the scroll body without reflowing its siblings, so anything below it gets
+  drawn over in the PNG (the same reason the reaction legend is
+  `data-capture-hide`).
+- `preserveAspectRatio="none"` with `vectorEffect="non-scaling-stroke"` on every
+  stroke; no `<text>` or `<circle>` inside the SVG (they would come out
+  stretched) - bounds, legend and time labels are HTML on top.
+- Renders nothing at all when the day has no rows for the levels in view. No
+  empty frame, no synthetic values.
+
+## 2026-08-21 (c) - Multi Greek SPX spot: use the prior-close differential, not a basis
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+The (b) build read 7625.44 with SPX's actual close at 7641.16 and ES sitting on
+its own settle at 7662.50 - i.e. ES had not moved overnight, so SPX must not
+have either. Subtracting a basis was the wrong shape of answer.
+
+**The invariant, now enforced directly:**
+
+    ES unchanged overnight  =>  SPX unchanged overnight
+    SPX = spxPrevClose + (esFut - esFutPrevClose)
+
+That cancels the basis instead of trusting one. With ES at 7662.50 the header
+reads 7641.16 to the penny.
+
+**Why the basis forms were all suspect off-hours:**
+
+- The ws `basis` frame is CIRCULAR after the close. `marketState.spot` is set to
+  `_effectiveSpot()` (= `esFut + cashBasis` out of hours), so
+  `basis = esFut - spot` collapses to `-cashBasis` - a number last measured
+  during RTH that carries no information about where ES is now. It was the FIRST
+  rung; it is now the LAST.
+- `/proxy/es-spx-basis` is a genuine simultaneous pair (our 16:00 `es_candles`
+  close vs the Yahoo `^GSPC` close), so it stays as the backup - and doubles as
+  the sanity check on the differential.
+
+**New ladder** (`cash` -> `prev-close` -> `anchor-basis` -> `ws-basis` ->
+`spotDisplay` -> `spot-raw`). Cash hours still short-circuit: the feed's SPX
+print IS the index, no conversion.
+
+**Mismatched-session guard.** The prior-close pair is refused unless the basis
+it implies (`esPrevClose - spxPrevClose`) is plausible AND within
+`MG_PAIR_ANCHOR_TOL` (25 pts) of the daily anchor. A `prevClose` that is a
+session behind its partner would otherwise bake a whole day's move into every
+price silently. The rejection reason is recorded, not swallowed.
+
+**Debug payload extended** - `window.__mgSpx` / `?spxdebug=1` now also carry
+`esChange` (ES off its own settle - 0 means the header must equal
+`spxPrevClose`), `esPrevClose`, `spxPrevClose`, `pairBasis` and `pairRejected`.
+
+### Still open
+
+`_effectiveSpot()` -> `esFut + cashBasis` is the same suspect arithmetic, and it
+centres the strike window, the walls and the flip for the WHOLE app off-hours -
+plus, since (b), the live chain's `underlyingPrice`. If `cashBasis` is the ~37
+the header implied rather than the 21.34 the closes imply, every overnight level
+is off by that difference. Not touched here; server-side change, needs a
+deliberate call.
+
+## 2026-08-21 (b) - Multi Greek SPX spot: basis-tier instrumentation + chain underlyingPrice fix
+
+Edited: `app/mult-greek/MultGreekClient.tsx`, `server-v2/proxy-tastytrade.js`.
+
+Follow-up to the ES-derived SPX spot. Two things: you can now see WHICH rung of
+the basis ladder produced the number, and the live chain stops reporting a spot
+that disagrees with the strikes it just shipped.
+
+### Why the header read ~20 pts under the ATM row
+
+`marketState.spot` has been the CORRECTED spot for a while - `proxy-tastytrade.js`
+calls `marketState.setSpot(this._effectiveSpot())`, which off-hours is
+`esFut + cashBasis`. But `serveChainFromLive()` returned `underlyingPrice:
+this.spot`, the RAW frozen last-RTH broker print. So overnight the chain's own
+`underlyingPrice` sat at the 16:00 close while the strike window it built
+(`_activeContracts` -> `_effectiveSpot`) had already moved to the ES-derived
+level. The page header was reading the frozen one; the ladder was drawn around
+the moving one.
+
+- **`serveChainFromLive()` now reports `_effectiveSpot()`** as `underlyingPrice`
+  (`proxy-tastytrade.js`, end of the method). Identical during RTH - the two
+  values are the same expression there - so only off-hours behaviour changes,
+  and it changes to agree with `marketState.spot`, the GEX math and the walls.
+
+### Basis-tier instrumentation (client)
+
+- `useSpxFromEs` now records which tier fired on every publish: `cash` (cash
+  open, no conversion) | `ws-basis` | `anchor-basis` | `spotDisplay` |
+  `spot-raw`, plus the inputs (`es`, `spot`, `basisUsed`, `wsBasis`,
+  `anchorBasis`, `spotDisplay`, `cashOpen`).
+- **`window.__mgSpx`** always holds the last decision - no flag needed, costs
+  nothing. Read it in the console when a price looks wrong.
+- **`?spxdebug=1`** on the URL (or `localStorage.mg_spx_debug = "1"`) console
+  logs `[MG SPX] <tier> <price> {...}` whenever the tier or the price changes.
+
+### Not this - the empty 1DTE column
+
+Separate, pre-existing, unrelated to any of the above. At 16:15 ET the feed
+auto-rolls `this.expiry` to the next session, so the NEXT-day expiry becomes the
+only one served by `serveChainFromLive` (+-8% window, every leg must have live
+data) while today's and the later ones fall through to REST and get the full
+untouched ladder. Immediately after the roll `chartReady` is false and
+`this.contracts` is not refreshed until the 18:00 ET session roll, so that book
+is only partially in the live map -> a thin band instead of a column. Confirm
+with `context: 'live' | 'rest'` in the `/api/chains` body per expiry, and check
+the log for `[CHAIN-MD] batch failed` / `[OI] batch failed` (a dropped TT batch
+produces the same shape: contiguous strikes with oi/vol/gamma = 0).
+
+## 2026-08-21 - GEX Change Top: pick cards get a letter grade
+
+Edited: `components/scanner/GexChangeTop.tsx`.
+
+The hourly Top-5 cards said how big the GEX move was, never how the pick then
+did. The scorecard below them carried peak / low / close, but you had to read
+three percentages per row to judge one pick, and its headline stat (avg peak)
+actively hid the failure mode: one +300% runner pays for four picks that went
+straight to red and never printed green.
+
+### Changes
+
+- **New grade engine** (`gradePoints` / `gradeFor`, client-side, off the
+  scorecard row that was already loaded). 100 points:
+  peak **0-55** (best gain offered, `max_pct`), pain **0-25** (worst drawdown,
+  `min_pct`), close **0-20** (`close_pct`). Bands:
+  A+ >= 85, A >= 72, B >= 58, C >= 44, D >= 28, F < 28.
+- **Never-green is a hard F.** `max_pct <= 0` grades F regardless of points, so
+  shallow drawdown and a flat close can't launder a pick that never offered an
+  exit up into a D.
+- **`GradePill`** badge, sourcing its colors from `homeTheme` via `tint()` (no
+  hardcoded hex). It renders on the card front beside the headline delta, on the
+  flipped face beside the live P&L, and as a new first column in the scorecard
+  table. Hover gives the band meaning plus the row's own peak/low/close. While
+  the session is live the pill carries a "&middot;" and says provisional in the
+  tooltip - peak and close can still move until the recorder freezes EOD.
+- **Grade distribution strip** under the Scorecard header: A+/A/B/C/D/F counts,
+  average points out of 100, and the number this was really for -
+  **never green N (N%)**.
+- **Fixed:** the scorecard table filtered on its own hardcoded
+  `r.entry > 0.5` while the header counts used `filteredResults`, so the
+  "score <= $0.50 too" toggle changed the summary line and not the rows under
+  it. Table now maps `filteredResults`.
+
+No server change - `/proxy/gex-change-top-results` already returns entry, max,
+min and close. Grading is derived, so re-grading is a front-end edit.
+
+
 ## 2026-08-21 - Strike Growth recorder: 1-minute sweeps for the whole roster
 
 Edited: `server-v2/strike-growth-recorder.js`.
