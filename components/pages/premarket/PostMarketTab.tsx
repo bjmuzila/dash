@@ -217,27 +217,47 @@ export const POSTMARKET_CSS = `
 .pmk .acc .c i{position:absolute;left:0;right:0;bottom:0;border-radius:3px 3px 0 0;
   background:linear-gradient(180deg,var(--pos),var(--posDim))}
 .pmk .movelog{display:grid;gap:0;margin-top:10px}
+/* The log is the WHOLE day, not the last eight rows — a silently truncated list
+   reads as "that is all that happened". It scrolls instead, capped at ~9 rows so
+   it never pushes section 3 off the screen. */
+.pmk .movelog .mvscroll{max-height:212px;overflow-y:auto;overscroll-behavior:contain;
+  padding-right:6px;scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+.pmk .movelog .mvscroll::-webkit-scrollbar{width:7px}
+.pmk .movelog .mvscroll::-webkit-scrollbar-track{background:transparent}
+.pmk .movelog .mvscroll::-webkit-scrollbar-thumb{background:var(--line2);border-radius:4px}
+.pmk .movelog .mvscroll::-webkit-scrollbar-thumb:hover{background:var(--dim2)}
 .pmk .movelog .mv{display:grid;grid-template-columns:52px 74px 1fr auto;gap:10px;align-items:center;
   padding:5px 0;border-bottom:1px dashed var(--line);font-size:11.5px}
 .pmk .movelog .mv:last-child{border-bottom:0}
 .pmk .rx{font-size:9.5px;padding:2px 6px;border-radius:5px;white-space:nowrap;border:1px solid var(--line2)}
-/* 7 — strike paths. auto-fill so the grid uses whatever width the page has
-   rather than a fixed column count that leaves a gutter at 1440 and clips at
-   1100. */
-.pmk .sparkgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px}
-.pmk .spark{border:1px solid var(--card);border-radius:9px;background:var(--panel2);
-  padding:7px 8px 4px;min-width:0}
-.pmk .spark .sh{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
-.pmk .spark .sk{font-size:11px;font-weight:650;letter-spacing:-.01em}
-.pmk .spark .sv{font-size:9.5px;color:var(--dim)}
-.pmk .spark svg{display:block;margin-top:3px}
-.pmk .spark .st{font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;margin-top:1px}
+/* 7 — strike paths. ONE ROW PER STRIKE, stacked in strike order: the ladder
+   reads top-to-bottom like every other price axis on this page, and a line is
+   directly above the line of the strike below it, so shapes are comparable by
+   eye. The old auto-fill card grid wrapped, which put 7,685 and 7,630 on
+   different rows of the page and made that impossible.
+   Lines only — no area fill, no bars. The bar view is section 3; this section
+   answers "what did the SHAPE do", and a filled sparkline reads as magnitude,
+   which is exactly the thing that is NOT comparable here (each line is scaled
+   to its own peak). */
+.pmk .pathlist{display:grid;gap:0;border-top:1px solid var(--line)}
+.pmk .prow{display:grid;grid-template-columns:56px 1fr 94px 76px;gap:10px;align-items:center;
+  height:26px;border-bottom:1px dashed var(--line)}
+.pmk .prow:hover{background:rgba(255,255,255,.025)}
+.pmk .prow .pk{font-size:10.5px;text-align:right;color:var(--dim)}
+.pmk .prow.key .pk{color:var(--txt);font-weight:700}
+.pmk .prow .pv{font-size:9.5px;text-align:right;color:var(--dim);white-space:nowrap}
+.pmk .prow .pt{font-size:9px;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.pmk .prow svg{display:block;width:100%;height:22px}
 
-.pmk .replay{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;margin-top:8px}
-.pmk .replay input[type=range]{width:100%;accent-color:#4da3ff}
-.pmk .readout{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
-.pmk .readout div{font-size:11px;color:var(--dim)}
-.pmk .readout b{color:var(--txt);font-weight:640}
+/* 6c — where premium actually went. Replaced the replay scrubber: a slider that
+   re-derives numbers already printed elsewhere is a toy; this is the one number
+   on the page that is DOLLARS rather than gamma. Shared scale, top row = 100%. */
+.pmk .premlist{display:grid;gap:7px;margin-top:8px}
+.pmk .premrow{display:grid;grid-template-columns:52px 1fr 54px;gap:9px;align-items:center}
+.pmk .premrow .pl{font-size:11px;color:var(--txt);font-weight:600}
+.pmk .premrow .ptrack{height:9px;border-radius:5px;background:#141b26;overflow:hidden}
+.pmk .premrow .ptrack i{display:block;height:100%;border-radius:5px}
+.pmk .premrow .pu{font-size:10.5px;text-align:right;font-weight:640;white-space:nowrap}
 
 @media (max-width:1180px){
   .pmk .snap{grid-template-columns:1fr}
@@ -885,18 +905,40 @@ export default function PostMarketTab(p: PostMarketProps) {
   const todayWidth = callWall != null && putWall != null ? Math.abs(callWall - putWall) : null;
   const nextWidth = next?.callWall != null && next?.putWall != null ? Math.abs(next.callWall - next.putWall) : null;
 
-  // ── replay ─────────────────────────────────────────────────────────────────
-  const [rIdx, setRIdx] = useState<number | null>(null);
-  useEffect(() => { setRIdx(null); }, [cols.length]);
-  const replayIdx = rIdx == null ? Math.max(0, cols.length - 1) : Math.min(rIdx, cols.length - 1);
-  const replay = useMemo(() => {
-    const c = cols[replayIdx];
-    if (!c) return null;
-    const net = c.cells.reduce((s, x) => s + x.net, 0);
-    const cb = c.cells.reduce((b, x) => (Math.abs(x.net) > Math.abs(b.net) ? x : b), c.cells[0]);
-    const f = findGEXFlip(c.cells.map((x) => ({ strike: x.strike, netGEX: x.net } as ChainRow)), c.spot || spot);
-    return { ts: c.ts, spot: c.spot, net, cb: cb?.strike ?? null, flip: f };
-  }, [cols, replayIdx, spot]);
+  /**
+   * WHERE PREMIUM ACTUALLY WENT — the five contracts that took the most DOLLARS
+   * today, per side, not per strike.
+   *
+   * Everything else on this page is gamma: a number that says how big the
+   * dealer's hedge is, not how much money changed hands. This is the money.
+   * premium = today's volume × the contract's mark × 100. Volume, not OI, on
+   * purpose — OI is yesterday's positioning; the question here is what got
+   * PAID for today.
+   *
+   * Calls and puts are ranked separately and against each other, so a strike
+   * can appear twice (7,700C and 7,700P are two different trades). Needs marks:
+   * on a frame without contract prices the panel says so rather than printing a
+   * confident zero.
+   */
+  const premiumRows = useMemo(() => {
+    if (!chain.length) return [];
+    const legs: { key: string; strike: number; side: "C" | "P"; usd: number }[] = [];
+    for (const r of chain) {
+      const cm = r.callMark ?? 0;
+      const pm = r.putMark ?? 0;
+      const cv = r.callVolume ?? 0;
+      const pv = r.putVolume ?? 0;
+      if (cm > 0 && cv > 0) legs.push({ key: `${r.strike}C`, strike: r.strike, side: "C", usd: cm * cv * 100 });
+      if (pm > 0 && pv > 0) legs.push({ key: `${r.strike}P`, strike: r.strike, side: "P", usd: pm * pv * 100 });
+    }
+    return legs.sort((a, b) => b.usd - a.usd).slice(0, 5);
+  }, [chain]);
+
+  const premiumTotal = useMemo(() => {
+    if (!chain.length) return 0;
+    return chain.reduce((s, r) =>
+      s + (r.callMark ?? 0) * (r.callVolume ?? 0) * 100 + (r.putMark ?? 0) * (r.putVolume ?? 0) * 100, 0);
+  }, [chain]);
 
   // ── session journal (per date, local) ──────────────────────────────────────
   const [note, setNote] = useState("");
@@ -1004,7 +1046,7 @@ export default function PostMarketTab(p: PostMarketProps) {
     histState === "ok" ? null
       : histState === "loading" ? "Loading today's recorded ladder…"
         : histState === "empty" ? "No per-minute ladder recorded for today — the build-time bars, the wall path and the written-vs-traded read all need it. Everything else below is live."
-          : "The intraday recorder did not answer, so section 3 and the replay have nothing to read. Everything above and below them is live.";
+          : "The intraday recorder did not answer, so section 3 and the strike paths have nothing to read. Everything above and below them is live.";
 
   return (
     <section className="prep is-post">
@@ -1125,28 +1167,36 @@ export default function PostMarketTab(p: PostMarketProps) {
           ))}
         </div>
 
-        {wallState === "ok" && wallLog.some((r) => r.reason === "change") && (
-          <div className="movelog">
-            <div className="tiny" style={{ marginBottom: 4 }}>Every time a level moved today</div>
-            {wallLog
-              .filter((r) => r.reason === "change")
-              .sort((a, b) => a.slot - b.slot)
-              .slice(-8)
-              .map((r, i) => (
-                <div className="mv" key={`${r.level_type}-${r.slot}-${i}`}>
-                  <span className="mono">{String(r.at ?? "").slice(0, 5) || `slot ${r.slot}`}</span>
-                  <span style={{ color: r.level_type === "call_wall" ? "var(--cw)" : r.level_type === "put_wall" ? "var(--pw)" : "var(--violet)" }}>
-                    {LEVEL_LABEL[r.level_type]}
-                  </span>
-                  <span className="mono">
-                    {r.prev_strike != null ? `${nf(r.prev_strike, 0)} → ` : ""}{nf(r.strike, 0)}
-                    {r.delta != null ? <span className={r.delta >= 0 ? "chg-pos" : "chg-neg"}>{"  "}{fmtPts(r.delta)}</span> : null}
-                  </span>
-                  <span className="tiny">spot {fmtPx(r.spot)}</span>
-                </div>
-              ))}
-          </div>
-        )}
+        {wallState === "ok" && wallLog.some((r) => r.reason === "change") && (() => {
+          // EVERY move, in the order they happened, inside a scroller. The old
+          // .slice(-8) hid the morning — which is exactly the half that explains
+          // where the day's walls came from.
+          const moves = wallLog
+            .filter((r) => r.reason === "change")
+            .sort((a, b) => a.slot - b.slot);
+          return (
+            <div className="movelog">
+              <div className="tiny" style={{ marginBottom: 4 }}>
+                Every time a level moved today · {moves.length} {moves.length === 1 ? "move" : "moves"}
+              </div>
+              <div className="mvscroll">
+                {moves.map((r, i) => (
+                  <div className="mv" key={`${r.level_type}-${r.slot}-${i}`}>
+                    <span className="mono">{String(r.at ?? "").slice(0, 5) || `slot ${r.slot}`}</span>
+                    <span style={{ color: r.level_type === "call_wall" ? "var(--cw)" : r.level_type === "put_wall" ? "var(--pw)" : "var(--violet)" }}>
+                      {LEVEL_LABEL[r.level_type]}
+                    </span>
+                    <span className="mono">
+                      {r.prev_strike != null ? `${nf(r.prev_strike, 0)} → ` : ""}{nf(r.strike, 0)}
+                      {r.delta != null ? <span className={r.delta >= 0 ? "chg-pos" : "chg-neg"}>{"  "}{fmtPts(r.delta)}</span> : null}
+                    </span>
+                    <span className="tiny">spot {fmtPx(r.spot)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
         {wallState === "empty" && (
           <div className="warnbar" style={{ marginTop: 10 }}>
             Nothing recorded in the SPX wall log for {etDate} — the three wall cards above are graded
@@ -1500,7 +1550,7 @@ export default function PostMarketTab(p: PostMarketProps) {
         )}
       </div>
 
-      {/* ── 6. JOURNAL · ACCURACY · REPLAY ───────────────────────────────── */}
+      {/* ── 6. JOURNAL · ACCURACY · PREMIUM ──────────────────────────────── */}
       <div className="sec">
         <div className="body" style={{ gridTemplateColumns: "1.05fr 1fr 1fr" }}>
           <div className="col">
@@ -1547,31 +1597,39 @@ export default function PostMarketTab(p: PostMarketProps) {
           </div>
 
           <div className="col">
-            <div className="colhead"><h3>Replay the day</h3><span className="tiny">{cols.length ? `${cols.length} minutes recorded` : "no recording"}</span></div>
-            {cols.length === 0 ? (
-              <div className="warnbar">No per-minute ladder for today, so there is nothing to scrub.</div>
+            <div className="colhead">
+              <h3>Where premium actually went</h3>
+              <span className="tiny">{premiumTotal > 0 ? `${fmtUsd(premiumTotal, false)} traded` : "volume × mark"}</span>
+            </div>
+            {premiumRows.length === 0 ? (
+              <div className="warnbar">
+                No contract prices on this chain frame, so premium cannot be priced. Everything else on
+                this page is gamma and is unaffected.
+              </div>
             ) : (
               <>
-                <div className="replay">
-                  <span className="tiny mono">{etHm(cols[0].ts)}</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={cols.length - 1}
-                    value={replayIdx}
-                    onChange={(e) => setRIdx(Number(e.target.value))}
-                  />
-                  <span className="tiny mono">{etHm(cols[cols.length - 1].ts)}</span>
-                </div>
-                <div className="readout">
-                  <div>At <b className="mono">{replay ? etHm(replay.ts) : "—"}</b></div>
-                  <div>SPX <b className="mono">{fmtPx(replay?.spot)}</b></div>
-                  <div>Net GEX <b className="mono">{fmtUsd(replay?.net ?? null)}</b></div>
-                  <div>Flip <b className="mono" style={{ color: "var(--amber)" }}>{fmtPx(replay?.flip)}</b></div>
-                  <div>CB <b className="mono" style={{ color: "var(--violet)" }}>{fmtPx(replay?.cb)}</b></div>
+                <div className="premlist">
+                  {premiumRows.map((r) => {
+                    // Bars are shared-scale on purpose: the whole point is which
+                    // contract took the most money, so the top row is the 100%
+                    // reference and every other bar is read against it.
+                    const w = (r.usd / premiumRows[0].usd) * 100;
+                    const color = r.side === "C" ? "var(--cw)" : "var(--pw)";
+                    return (
+                      <div className="premrow" key={r.key}>
+                        <div className="pl mono">{nf(r.strike, 0)}{r.side}</div>
+                        <div className="ptrack">
+                          <i style={{ width: `${Math.max(2, w)}%`, background: color }} />
+                        </div>
+                        <div className="pu mono" style={{ color }}>{fmtUsd(r.usd, false)}</div>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="tiny" style={{ marginTop: 8 }}>
-                  Same frames the ES chart&apos;s bubble trail rides — scrub to see when the book actually moved.
+                  Today&apos;s VOLUME × the contract&apos;s mark — dollars paid, not gamma. OI is deliberately
+                  excluded: this is what got bought and sold today, not what was already on the books.
+                  Green = calls, red = puts, same as the walls above.
                 </div>
               </>
             )}
@@ -1585,37 +1643,47 @@ export default function PostMarketTab(p: PostMarketProps) {
           <div className="sechead">
             <h3><span className="secn">7</span>Strike paths</h3>
             <span className="tiny right">
-              {strikePaths.length} strikes around spot · each line scaled to its own day
+              {strikePaths.length} strikes around spot · 09:30 → close · each line scaled to its own day
             </span>
           </div>
-          <div className="sparkgrid">
+          <div className="pathlist">
             {strikePaths.map((r) => {
               const tag = openTag(r.strike);
               const pos = r.net >= 0;
               const stroke = tag ? tag.color : pos ? "var(--pos)" : "var(--neg)";
-              const W = 108, H = 26;
+              // Fixed viewBox stretched to the row's width: x is the session
+              // clock (09:30 at the left edge, the close at the right), so every
+              // row shares ONE time axis and a 13:16 kink lines up down the
+              // whole stack. y is that strike's own peak — see the memo.
+              const W = 1000, H = 22;
               const max = r.max || 1;
               const pts = r.vals
-                .map((v, i) => `${(i / Math.max(1, r.vals.length - 1)) * W},${H - 2 - (Math.abs(v) / max) * (H - 5)}`)
+                .map((v, i) => `${(i / Math.max(1, r.vals.length - 1)) * W},${H - 2 - (Math.abs(v) / max) * (H - 4)}`)
                 .join(" ");
               return (
-                <div className="spark" key={r.strike}>
-                  <div className="sh">
-                    <span className="sk mono">{nf(r.strike, 0)}</span>
-                    <span className="sv mono">{fmtUsd(r.net, false)}</span>
-                  </div>
-                  <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-                    <polygon points={`0,${H} ${pts} ${W},${H}`} fill={stroke} opacity={.14} />
-                    <polyline points={pts} fill="none" stroke={stroke} strokeWidth={1.3}
+                <div className={`prow${tag ? " key" : ""}`} key={r.strike}>
+                  <div className="pk mono">{nf(r.strike, 0)}</div>
+                  <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+                    <line x1={0} y1={H - 2} x2={W} y2={H - 2} stroke="var(--line)" strokeWidth={1}
                       vectorEffect="non-scaling-stroke" />
+                    <polyline points={pts} fill="none" stroke={stroke} strokeWidth={1.3}
+                      strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
                   </svg>
-                  <div className="st" style={{ color: tag ? tag.color : "transparent" }}>
-                    {tag ? tag.text : "—"}
+                  <div className="pv mono">{fmtUsd(r.net, false)}</div>
+                  <div className="pt" style={{ color: tag ? tag.color : "transparent" }}>
+                    {tag ? tag.text : ""}
                   </div>
                 </div>
               );
             })}
           </div>
+          {cols.length > 1 && (
+            <div className="heatx" style={{ paddingLeft: 66, paddingRight: 180 }}>
+              <span>{etHm(cols[0].ts)}</span>
+              <span>{etHm(cols[Math.floor(cols.length / 2)].ts)}</span>
+              <span>{etHm(cols[cols.length - 1].ts)}</span>
+            </div>
+          )}
         </div>
       )}
 

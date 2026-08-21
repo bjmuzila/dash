@@ -14,7 +14,7 @@ import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 
 /** Tabs that render inline on /scanner. */
 export type ScannerTabId =
-  | "gexlevels" | "gexchangetop" | "strike" | "tpo" | "ibstats" | "watch";
+  | "gexlevels" | "gexchangetop" | "pickstudy" | "strike" | "tpo" | "ibstats" | "watch";
 
 /** What the bar can mark as current: a /scanner tab, or a split-out route. */
 export type ScannerBarActive = ScannerTabId | "strikehistory" | null;
@@ -43,6 +43,10 @@ export type TabDef = {
 export const SCANNER_TABS: TabDef[] = [
   { id: "gexlevels",    label: "GEX Levels",     short: "Levels",     color: HOME_THEME.cyan,   icon: "📏" },
   { id: "gexchangetop", label: "GEX Change Top", short: "GEX Δ Top",  color: HOME_THEME.orange, icon: "📊" },
+  // Sits next to GEX Change Top because it is that tab's feedback loop: the
+  // cards flag picks, the scorecard grades them, this reads the graded history
+  // back and asks what the A/B picks had in common at capture.
+  { id: "pickstudy",    label: "Pick Study",     short: "Study",      color: HOME_THEME.purple, icon: "🔬" },
   { id: "strike",       label: "Strike Query",   short: "Strike",     color: HOME_THEME.cyan,   icon: "🎯" },
   { id: "tpo",          label: "TPO Structures", short: "TPO",        color: LIGHT_BLUE,        icon: "🏛️" },
   { id: "ibstats",      label: "IB Stats",       short: "IB Stats",   color: HOME_THEME.green,  icon: "📐" },
@@ -86,7 +90,7 @@ export const SCANNER_ROUTES: ScannerRouteDef[] = [
  * tabs had nothing left to do. /scanner opens on GEX Levels.
  */
 export const SCANNER_GROUPS: { key: string; tabs: ScannerTabId[]; routes?: string[] }[] = [
-  { key: "gamma",     tabs: ["gexlevels", "gexchangetop", "strike"] },
+  { key: "gamma",     tabs: ["gexlevels", "gexchangetop", "pickstudy", "strike"] },
   { key: "structure", tabs: ["tpo", "ibstats"] },
   { key: "more",      tabs: ["watch"], routes: ["/level-log"] },
 ];

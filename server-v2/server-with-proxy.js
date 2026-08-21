@@ -97,7 +97,7 @@ const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls
 const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
   getWatch, runWatchAlerts, getAlerts, startWallsWatch } = require('./walls-reach');
 const { startForwardScanner, runForwardSweep, getForward } = require('./forward-scanner-recorder');
-const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults } = require('./gex-change-top-recorder');
+const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults, getStudy: getGexChangeTopStudy, getCalibration: getGexChangeTopCalibration } = require('./gex-change-top-recorder');
 const {
   startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
   ALERT_CATALOG: SIGNAL_ALERT_CATALOG, listAlertSettings: listSignalAlertSettings,
@@ -2981,6 +2981,49 @@ async function main() {
           try {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const out = await getGexChangeTopResults({ date: u.searchParams.get('date') || undefined });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // PICK STUDY — what did the A/B picks have in common?
+      //   GET /proxy/gex-change-top-study?days=60&by=<feature>&cohort=selected|shadow|all
+      //     → { ok, by, label, note, overall, cohorts, buckets:[…], features:[…] }
+      //
+      // Read-only aggregate over gex_change_top_results joined back to each
+      // pick's FIRST gex_change_top row (the only capture-time feature source
+      // that cannot leak the outcome). Buckets one feature at a time and reports
+      // the hit rate per bucket, recomputed on each half of the window so a
+      // split can be checked out-of-sample on the spot. `cohort=shadow` reads the
+      // picks the board did NOT take — the control group.
+      if (pathname === '/proxy/gex-change-top-study' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const out = await getGexChangeTopStudy({
+              days: u.searchParams.get('days') || undefined,
+              by: u.searchParams.get('by') || undefined,
+              cohort: u.searchParams.get('cohort') || undefined,
+            });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // CALIBRATION — grading the grader. For each grade the projection rule
+      // predicted AT CAPTURE, what did those picks actually do?
+      //   GET /proxy/gex-change-top-calibration?days=60&cohort=selected
+      //     → { ok, armed, rows:[{ projected, n, pctGood, actual:{…} }], … }
+      // armed=false (the shipping default) means no projection rule is
+      // configured, so there is nothing to calibrate yet.
+      if (pathname === '/proxy/gex-change-top-calibration' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const out = await getGexChangeTopCalibration({
+              days: u.searchParams.get('days') || undefined,
+              cohort: u.searchParams.get('cohort') || undefined,
+            });
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();

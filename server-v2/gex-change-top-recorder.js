@@ -57,6 +57,10 @@
  */
 
 const sg = require('./strike-growth-recorder'); // shared getPool() over the same DB
+// The canonical grade, the capture-time feature vocabulary, and the (inert by
+// default) projection rule. Shared so the recorder, the study endpoint and the
+// client can never disagree about what a "B" is or where a bucket edge sits.
+const PG = require('./_lib-pick-grade.cjs');
 
 // ── Tunables (env-overridable) ────────────────────────────────────────────────
 let INTERVAL_MIN  = Number(process.env.GEX_CHANGE_TOP_INTERVAL_MIN || 30);    // capture cadence (min)
@@ -77,6 +81,26 @@ const ENTRY_FLOOR = Number(process.env.GEX_CHANGE_TOP_ENTRY_FLOOR || 0.5);
 // rejects one. 5 x 4 = 20. The extras cost nothing unless they are needed —
 // probing walks the list only as far as it must.
 const CANDIDATE_MULT = Number(process.env.GEX_CHANGE_TOP_CANDIDATE_MULT || 4);
+// SHADOW CONTROL GROUP — the picks we did NOT take.
+//
+// Without this the recorded history can only ever answer "which of my picks beat
+// my other picks". It cannot answer "are my picks better than the ones I passed
+// on", because ranks 6+ are discarded unprobed and their outcome is never known.
+// That is selection bias, and it is fatal to any study of what makes a pick
+// good: every conclusion would be conditioned on having been chosen.
+//
+// So: after the top N are settled, keep probing down the ranked list and record
+// the next SHADOW_N candidates that clear the entry floor with selected=false.
+// They are written to the same tables, scored by the same EOD pass, and hidden
+// from every existing read — getHistory() and getResults() filter them out, so
+// the cards and the scorecard are byte-identical to before. Only the study sees
+// them.
+//
+// COST is real and worth stating: each shadow is a watch_options row that
+// watch-recorder.js snapshots every 60s until expiry, so SHADOW_N=5 roughly
+// doubles the probe load. Set GEX_CHANGE_TOP_SHADOW_N=0 to turn the control
+// group off entirely (and lose the ability to ever answer the question).
+const SHADOW_N = Math.max(0, Number(process.env.GEX_CHANGE_TOP_SHADOW_N ?? 5));
 const W_ABS = 0.6, W_PCT = 0.4;                                              // score blend weights
 // Auto-probe every captured pick into the /api/watch pipeline (see header).
 const AUTO_PROBE  = String(process.env.GEX_CHANGE_TOP_AUTOPROBE || '1') !== '0';
@@ -177,6 +201,19 @@ async function _ensureSchemaOnce(p) {
     // (and rows captured before auto-probe existed, which keep watch_id NULL)
     // migrate in place.
     await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS watch_id INTEGER');
+    // selected=false marks a SHADOW pick — a candidate that qualified and cleared
+    // the entry floor but ranked below the top N. It is recorded and scored, and
+    // hidden from every existing read, purely so the study has a control group.
+    // Defaulting to TRUE backfills every pre-shadow row correctly: they were all
+    // taken.
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS selected BOOLEAN NOT NULL DEFAULT TRUE');
+    // The projected grade STAMPED AT CAPTURE, so calibration compares what the
+    // rule said in advance against what happened — not a projection recomputed
+    // later against a rule that has since been retuned. NULL whenever no rule was
+    // armed, which is the shipping default.
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS proj_grade TEXT');
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS proj_pts REAL');
+    await p.query(`CREATE INDEX IF NOT EXISTS idx_gct_watch ON gex_change_top(watch_id)`);
     // Frozen end-of-day scorecard — one row per pick per day. Survives the
     // pruning of auto-probed contracts (and their snapshots) at expiry.
     await p.query(`
@@ -207,6 +244,21 @@ async function _ensureSchemaOnce(p) {
       );
       CREATE INDEX IF NOT EXISTS idx_gctr_date ON gex_change_top_results(date);
     `);
+    // min_ts — WHEN the low printed. Without it peak and low are two unordered
+    // numbers, so a pick that ran +80% and then bled out is indistinguishable
+    // from one that went -40% first and recovered. Those are opposite trades.
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS min_ts BIGINT');
+    // SUSTAINED — the best level that held for two consecutive snapshots (~2 min).
+    // max_pct is a single print: optimise anything against it and you select for
+    // contracts that spike for one sample and give it all back. This is the
+    // stricter, more fillable label, and the study defaults to it.
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS sustained_mark REAL');
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS sustained_ts BIGINT');
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS sustained_pct REAL');
+    // The frozen label, so a re-grade never silently rewrites history.
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS grade TEXT');
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS grade_pts REAL');
+    await p.query('ALTER TABLE gex_change_top_results ADD COLUMN IF NOT EXISTS selected BOOLEAN NOT NULL DEFAULT TRUE');
     ensured = true;
     return true;
   } catch (e) {
@@ -480,7 +532,28 @@ async function runOnce({ force = false } = {}) {
     console.warn(`[gex-change-top] only ${picks.length}/${TOP_N} candidate(s) cleared the $${ENTRY_FLOOR.toFixed(2)} floor from ${candidates.length} scanned — raise GEX_CHANGE_TOP_CANDIDATE_MULT if this repeats`);
   }
 
-  const rows = picks.map((x) => x.row);
+  // ── The control group ───────────────────────────────────────────────────────
+  // Keep walking the SAME ranked list for SHADOW_N more that clear the floor.
+  // These are the picks the board did not have room for; recording their outcome
+  // is the only way to ever learn whether the top 5 are actually better than
+  // ranks 6-10, or whether the ranking is decorative.
+  const shadows = [];
+  while (SHADOW_N > 0 && shadows.length < SHADOW_N && scanned < candidates.length) {
+    const batch = candidates.slice(scanned, scanned + (SHADOW_N - shadows.length));
+    scanned += batch.length;
+    const ids = await Promise.all(batch.map((r) => autoProbe(p, r).catch(() => null)));
+    for (let b = 0; b < batch.length; b++) {
+      const id = ids[b];
+      const entry = await probedEntryPrice(p, id);
+      // Same floor as the real board: a nickel contract is not a useful control,
+      // its +300% would be tick size in the comparison exactly as it would on a card.
+      if (entry != null && entry <= ENTRY_FLOOR) { await releaseRejectedProbe(p, id); continue; }
+      shadows.push({ row: batch[b], watchId: id });
+    }
+  }
+
+  // Selected picks only — `probed` below counts what made the board, and the
+  // insert loop builds its own combined list including the shadows.
   const watchIds = picks.map((x) => x.watchId);
 
   // Replace this slot's bucket so a re-fire keeps exactly the latest top-N.
@@ -489,21 +562,40 @@ async function runOnce({ force = false } = {}) {
   try {
     await client.query('BEGIN');
     await client.query('DELETE FROM gex_change_top WHERE date = $1 AND slot = $2', [date, slot]);
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
+    // Selected picks keep ranks 1..N; shadows continue the same numbering so
+    // "rank" stays the candidate's true position in the scan, which is what the
+    // study buckets on.
+    const all = [
+      ...picks.map((x, i) => ({ row: x.row, watchId: x.watchId, rank: i + 1, selected: true })),
+      ...shadows.map((x, i) => ({ row: x.row, watchId: x.watchId, rank: picks.length + i + 1, selected: false })),
+    ];
+    for (const item of all) {
+      const r = item.row;
+      // Stamp the projection now, from capture-time facts only. Null unless a
+      // rule is armed — see _lib-pick-grade.cjs.
+      let proj = null;
+      try {
+        proj = PG.projectPick(PG.pickFeatures(
+          { ...r, date, slot, rank: item.rank },
+          { entry: null },
+        ));
+      } catch (e) { console.warn('[gex-change-top] projection failed:', e.message); }
       await client.query(
         `INSERT INTO gex_change_top
-           (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+           (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, proj_grade, proj_pts)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          ON CONFLICT (date, slot, symbol, expiry, strike) DO UPDATE SET
            rank = EXCLUDED.rank, ts = EXCLUDED.ts, spot = EXCLUDED.spot,
            latest_chg = EXCLUDED.latest_chg, pct_open = EXCLUDED.pct_open,
            z_score = EXCLUDED.z_score, score = EXCLUDED.score,
+           selected = EXCLUDED.selected,
+           proj_grade = EXCLUDED.proj_grade, proj_pts = EXCLUDED.proj_pts,
            watch_id = COALESCE(EXCLUDED.watch_id, gex_change_top.watch_id)`,
-        [date, slot, now, i + 1, r.symbol, r.expiry, r.strike, r.spot,
-         r.latest_chg, r.pct_open, r.z_score, r.score, WINDOW_MIN, watchIds[i] ?? null],
+        [date, slot, now, item.rank, r.symbol, r.expiry, r.strike, r.spot,
+         r.latest_chg, r.pct_open, r.z_score, r.score, WINDOW_MIN, item.watchId ?? null,
+         item.selected, proj ? proj.grade : null, proj ? proj.pts : null],
       );
-      written++;
+      if (item.selected) written++;
     }
     await client.query('COMMIT');
   } catch (e) {
@@ -518,8 +610,9 @@ async function runOnce({ force = false } = {}) {
   await pruneExpiredProbes(p);
 
   console.log(`[gex-change-top] ${date} ${slot}: recorded ${written} very-strong pick(s), ${probed} auto-probed`
+    + `${shadows.length ? `, +${shadows.length} shadow control` : ''}`
     + `${rejected ? `, ${rejected} skipped under $${ENTRY_FLOOR.toFixed(2)}` : ''} @ ${now.toISOString()}`);
-  return { ok: true, date, slot, written, probed, rejected, scanned };
+  return { ok: true, date, slot, written, probed, shadows: shadows.length, rejected, scanned };
 }
 
 // ── Read (feeds /proxy/gex-change-top + the viewer tab) ───────────────────────
@@ -530,8 +623,9 @@ async function getHistory({ date, limitSlots = 20 } = {}) {
   try {
     await ensureSchema(); // best-effort; surface the real error below if it or the read fails
     const { rows } = await p.query(
-      `SELECT date, slot, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, ts, watch_id
-         FROM gex_change_top WHERE date = $1
+      `SELECT date, slot, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, ts, watch_id,
+              proj_grade, proj_pts
+         FROM gex_change_top WHERE date = $1 AND COALESCE(selected, TRUE)
         ORDER BY slot DESC, rank ASC`,
       [d],
     );
@@ -633,7 +727,8 @@ async function computeResults(date) {
             MIN(t.expiry)           AS expiry,
             MIN(t.strike)           AS strike,
             MIN(o.side)             AS side,
-            MIN(o.added_price)      AS added_price
+            MIN(o.added_price)      AS added_price,
+            BOOL_OR(COALESCE(t.selected, TRUE)) AS selected
        FROM gex_change_top t
        JOIN watch_options o ON o.id = t.watch_id
       WHERE t.date = $1 AND t.watch_id IS NOT NULL
@@ -650,22 +745,44 @@ async function computeResults(date) {
     starts.push(bounds.start + ((hh || 0) * 60 + (mm || 0)) * 60_000);
   }
 
+  // `held` is the SUSTAINED series: LEAST(mark, previous mark) per adjacent pair,
+  // so its max is the best level that survived two consecutive snapshots. A
+  // one-sample spike scores its neighbour's (lower) mark and stops flattering
+  // itself — which is the whole reason this label exists alongside max_mark.
   const { rows: aggs } = await p.query(
-    `SELECT b.watch_id,
-            COUNT(*)::int                                   AS samples,
-            (array_agg(s.mark ORDER BY s.ts ASC))[1]        AS entry,
-            (array_agg(s.ts   ORDER BY s.ts ASC))[1]        AS entry_ts,
-            MAX(s.mark)                                     AS max_mark,
-            (array_agg(s.ts ORDER BY s.mark DESC, s.ts ASC))[1] AS max_ts,
-            MIN(s.mark)                                     AS min_mark,
-            (array_agg(s.mark ORDER BY s.ts DESC))[1]       AS close_mark,
-            MAX(s.ts)                                       AS close_ts
-       FROM unnest($1::int[], $2::bigint[]) AS b(watch_id, start_ms)
-       JOIN watch_snapshots s
-         ON s.watch_id = b.watch_id
-        AND s.ts >= b.start_ms AND s.ts < $3
-        AND s.mark IS NOT NULL AND s.mark > 0
-      GROUP BY b.watch_id`,
+    `WITH b AS (SELECT * FROM unnest($1::int[], $2::bigint[]) AS t(watch_id, start_ms)),
+     snaps AS (
+       SELECT s.watch_id, s.ts, s.mark
+         FROM b JOIN watch_snapshots s
+           ON s.watch_id = b.watch_id
+          AND s.ts >= b.start_ms AND s.ts < $3
+          AND s.mark IS NOT NULL AND s.mark > 0
+     ),
+     pairs AS (
+       SELECT watch_id, ts,
+              LEAST(mark, LAG(mark) OVER (PARTITION BY watch_id ORDER BY ts)) AS held
+         FROM snaps
+     ),
+     sustained AS (
+       SELECT watch_id,
+              MAX(held)                                           AS sustained_mark,
+              (array_agg(ts ORDER BY held DESC, ts ASC))[1]       AS sustained_ts
+         FROM pairs WHERE held IS NOT NULL GROUP BY watch_id
+     )
+     SELECT snaps.watch_id,
+            COUNT(*)::int                                          AS samples,
+            (array_agg(snaps.mark ORDER BY snaps.ts ASC))[1]        AS entry,
+            (array_agg(snaps.ts   ORDER BY snaps.ts ASC))[1]        AS entry_ts,
+            MAX(snaps.mark)                                         AS max_mark,
+            (array_agg(snaps.ts ORDER BY snaps.mark DESC, snaps.ts ASC))[1] AS max_ts,
+            MIN(snaps.mark)                                         AS min_mark,
+            (array_agg(snaps.ts ORDER BY snaps.mark ASC, snaps.ts ASC))[1]  AS min_ts,
+            (array_agg(snaps.mark ORDER BY snaps.ts DESC))[1]       AS close_mark,
+            MAX(snaps.ts)                                           AS close_ts,
+            MAX(su.sustained_mark)                                  AS sustained_mark,
+            MAX(su.sustained_ts)                                    AS sustained_ts
+       FROM snaps LEFT JOIN sustained su ON su.watch_id = snaps.watch_id
+      GROUP BY snaps.watch_id`,
     [ids, starts, bounds.end],
   );
   const byId = new Map(aggs.map((a) => [a.watch_id, a]));
@@ -679,9 +796,14 @@ async function computeResults(date) {
     const max = a.max_mark != null ? Number(a.max_mark) : null;
     const min = a.min_mark != null ? Number(a.min_mark) : null;
     const close = a.close_mark != null ? Number(a.close_mark) : null;
+    const sustained = a.sustained_mark != null ? Number(a.sustained_mark) : null;
+    const label = PG.gradeFor({
+      max_pct: pctOf(max, entry), min_pct: pctOf(min, entry), close_pct: pctOf(close, entry),
+    });
     return {
       date: d,
       watch_id: r.watch_id,
+      selected: r.selected !== false,
       symbol: r.symbol,
       expiry: r.expiry,
       strike: Number(r.strike),
@@ -700,11 +822,19 @@ async function computeResults(date) {
       close_mark: close,
       close_ts: a.close_ts == null ? null : Number(a.close_ts),
       close_pct: pctOf(close, entry),
+      min_ts: a.min_ts == null ? null : Number(a.min_ts),
+      sustained_mark: sustained,
+      sustained_pct: pctOf(sustained, entry),
+      sustained_ts: a.sustained_ts == null ? null : Number(a.sustained_ts),
+      grade: label ? label.grade : null,
+      grade_pts: label ? label.pts : null,
       samples: a.samples || 0,
     };
   });
   // Best performer first — the table is a "what was on offer" ranking.
   rows.sort((x, y) => (y.max_pct ?? -1e9) - (x.max_pct ?? -1e9));
+  // NOTE: shadows are included here on purpose — this is the study's source too.
+  // getResults() below drops them so the scorecard UI is unchanged.
   return { ok: true, date: d, frozen: false, rows };
 }
 
@@ -722,8 +852,10 @@ async function runResults({ date } = {}) {
         `INSERT INTO gex_change_top_results
            (date, watch_id, symbol, expiry, strike, side, first_slot, slots, best_rank, score,
             entry, entry_ts, max_mark, max_ts, max_pct, min_mark, min_pct,
-            close_mark, close_ts, close_pct, samples, recorded_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
+            close_mark, close_ts, close_pct, samples, recorded_at,
+            min_ts, sustained_mark, sustained_ts, sustained_pct, grade, grade_pts, selected)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW(),
+                 $22,$23,$24,$25,$26,$27,$28)
          ON CONFLICT (date, watch_id) DO UPDATE SET
            side = EXCLUDED.side, first_slot = EXCLUDED.first_slot, slots = EXCLUDED.slots,
            best_rank = EXCLUDED.best_rank, score = EXCLUDED.score,
@@ -731,10 +863,17 @@ async function runResults({ date } = {}) {
            max_mark = EXCLUDED.max_mark, max_ts = EXCLUDED.max_ts, max_pct = EXCLUDED.max_pct,
            min_mark = EXCLUDED.min_mark, min_pct = EXCLUDED.min_pct,
            close_mark = EXCLUDED.close_mark, close_ts = EXCLUDED.close_ts, close_pct = EXCLUDED.close_pct,
-           samples = EXCLUDED.samples, recorded_at = NOW()`,
+           samples = EXCLUDED.samples, recorded_at = NOW(),
+           min_ts = EXCLUDED.min_ts,
+           sustained_mark = EXCLUDED.sustained_mark, sustained_ts = EXCLUDED.sustained_ts,
+           sustained_pct = EXCLUDED.sustained_pct,
+           grade = EXCLUDED.grade, grade_pts = EXCLUDED.grade_pts,
+           selected = EXCLUDED.selected`,
         [r.date, r.watch_id, r.symbol, r.expiry, r.strike, r.side, r.first_slot, r.slots,
          r.best_rank, r.score, r.entry, r.entry_ts, r.max_mark, r.max_ts, r.max_pct,
-         r.min_mark, r.min_pct, r.close_mark, r.close_ts, r.close_pct, r.samples],
+         r.min_mark, r.min_pct, r.close_mark, r.close_ts, r.close_pct, r.samples,
+         r.min_ts, r.sustained_mark, r.sustained_ts, r.sustained_pct,
+         r.grade, r.grade_pts, r.selected !== false],
       );
       written++;
     } catch (e) {
@@ -756,7 +895,9 @@ async function getResults({ date } = {}) {
   try {
     await ensureSchema();
     const { rows } = await p.query(
-      `SELECT * FROM gex_change_top_results WHERE date = $1 ORDER BY max_pct DESC NULLS LAST`,
+      `SELECT * FROM gex_change_top_results
+         WHERE date = $1 AND COALESCE(selected, TRUE)
+         ORDER BY max_pct DESC NULLS LAST`,
       [d],
     );
     if (rows.length) {
@@ -776,13 +917,206 @@ async function getResults({ date } = {}) {
           close_mark: r.close_mark == null ? null : Number(r.close_mark),
           close_ts: r.close_ts == null ? null : Number(r.close_ts),
           close_pct: r.close_pct == null ? null : Number(r.close_pct),
+          min_ts: r.min_ts == null ? null : Number(r.min_ts),
+          sustained_mark: r.sustained_mark == null ? null : Number(r.sustained_mark),
+          sustained_pct: r.sustained_pct == null ? null : Number(r.sustained_pct),
+          sustained_ts: r.sustained_ts == null ? null : Number(r.sustained_ts),
+          grade_pts: r.grade_pts == null ? null : Number(r.grade_pts),
         })),
       };
     }
-    return await computeResults(d);
+    const live = await computeResults(d);
+    if (live.ok) live.rows = live.rows.filter((r) => r.selected !== false);
+    return live;
   } catch (e) {
     return { ok: false, error: String(e?.message || e), rows: [] };
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  THE STUDY  —  feeds /proxy/gex-change-top-study
+// ══════════════════════════════════════════════════════════════════════════════
+// "What did the A and B cards have in common?", answered by bucketing every
+// labelled pick on ONE capture-time feature at a time and reporting the hit rate
+// per bucket.
+//
+// Single-feature bucketing, not a fitted model, and that is not a limitation to
+// work around — it is the only thing the sample size honestly supports. At
+// roughly 15-30 distinct picks a day, a month is ~500 rows. Eight features
+// against 500 rows will produce beautiful splits that are pure noise, so every
+// bucket carries its own n and anything under MIN_N is flagged `thin` and must be
+// read as "not yet a finding".
+//
+// The train/test split is not optional either. `half` reports the same table
+// computed on the first and second half of the window separately: a split that
+// looks strong in one half and vanishes in the other was never real. Read those
+// two columns before believing anything in the first one.
+
+const STUDY_MIN_N = Number(process.env.GEX_CHANGE_TOP_STUDY_MIN_N || 30);
+
+/** Every labelled pick in the window, with its capture-time feature row attached. */
+async function studyRows({ days = 60, cohort = 'selected' } = {}) {
+  const p = sg.getPool();
+  if (!p) return { ok: false, error: 'no DATABASE_URL in this process', rows: [] };
+  const d = Math.max(1, Math.min(400, Number(days) || 60));
+  await ensureSchema();
+  // Join each result back to the gex_change_top row from the slot it was FIRST
+  // flagged. That row is the only honest feature source: later slots know how the
+  // day went, and using them would leak the outcome into the features.
+  const { rows } = await p.query(
+    `SELECT r.date, r.watch_id, r.symbol, r.expiry, r.strike, r.side, r.first_slot,
+            r.entry, r.max_pct, r.min_pct, r.close_pct, r.sustained_pct,
+            r.grade, r.grade_pts, COALESCE(r.selected, TRUE) AS selected,
+            t.slot, t.rank, t.score, t.spot, t.latest_chg, t.pct_open, t.z_score,
+            t.proj_grade, t.proj_pts
+       FROM gex_change_top_results r
+       JOIN LATERAL (
+         SELECT g.* FROM gex_change_top g
+          WHERE g.date = r.date AND g.watch_id = r.watch_id
+          ORDER BY g.slot ASC LIMIT 1
+       ) t ON TRUE
+      WHERE r.date >= to_char(NOW() AT TIME ZONE 'America/New_York' - ($1 || ' days')::interval, 'YYYY-MM-DD')
+        AND ($2 = 'all' OR ($2 = 'selected') = COALESCE(r.selected, TRUE))
+      ORDER BY r.date ASC, t.slot ASC`,
+    [String(d), cohort === 'all' ? 'all' : cohort === 'shadow' ? 'shadow' : 'selected'],
+  );
+  const out = rows.map((r) => {
+    // Prefer the frozen label; fall back for rows written before grading existed.
+    const label = r.grade ? { grade: r.grade, pts: Number(r.grade_pts) } : PG.gradeFor(r);
+    return {
+      ...r,
+      strike: Number(r.strike),
+      grade: label ? label.grade : null,
+      grade_pts: label ? Number(label.pts) : null,
+      features: PG.pickFeatures(r, r),
+    };
+  }).filter((r) => r.grade != null);
+  return { ok: true, days: d, rows: out };
+}
+
+/** Aggregate one cohort of rows into { n, good, neverGreen, avgPts, medSustained }. */
+function summarize(rows) {
+  const n = rows.length;
+  if (!n) return { n: 0, pctGood: null, pctNeverGreen: null, avgPts: null, medSustained: null };
+  const good = rows.filter((r) => PG.isGood(r.grade)).length;
+  const never = rows.filter((r) => r.grade === 'F' && !(Number(r.max_pct) > 0)).length;
+  const pts = rows.map((r) => Number(r.grade_pts)).filter(Number.isFinite);
+  const sus = rows.map((r) => Number(r.sustained_pct)).filter(Number.isFinite).sort((a, b) => a - b);
+  return {
+    n,
+    pctGood: (good / n) * 100,
+    pctNeverGreen: (never / n) * 100,
+    avgPts: pts.length ? pts.reduce((a, b) => a + b, 0) / pts.length : null,
+    medSustained: sus.length ? sus[Math.floor(sus.length / 2)] : null,
+  };
+}
+
+/**
+ * @param by  a key of PG.BUCKETS
+ * @returns { ok, by, label, note, overall, cohorts, buckets:[…] }
+ *          Each bucket carries n, pctGood, lift (pctGood - overall.pctGood),
+ *          thin (n < STUDY_MIN_N), and the same stats recomputed on each half of
+ *          the window so a split can be checked out-of-sample immediately.
+ */
+async function getStudy({ days = 60, by = 'score', cohort = 'selected' } = {}) {
+  const key = PG.BUCKETS[by] ? by : 'score';
+  const got = await studyRows({ days, cohort });
+  if (!got.ok) return { ok: false, error: got.error, buckets: [] };
+  const rows = got.rows;
+  const spec = PG.BUCKETS[key];
+
+  // Halve by DATE, not by row index — splitting mid-day would put the same
+  // session on both sides and leak.
+  const dates = [...new Set(rows.map((r) => r.date))].sort();
+  const cut = dates[Math.floor(dates.length / 2)] || null;
+  const firstHalf = (r) => cut == null || r.date < cut;
+
+  const groups = new Map();
+  for (const r of rows) {
+    const b = spec.of(r.features);
+    if (b == null) continue;
+    if (!groups.has(b)) groups.set(b, []);
+    groups.get(b).push(r);
+  }
+
+  const overall = summarize(rows);
+  const order = spec.order || [...groups.keys()].sort();
+  const seen = new Set(order);
+  const keys = [...order.filter((k) => groups.has(k)), ...[...groups.keys()].filter((k) => !seen.has(k)).sort()];
+
+  const buckets = keys.map((b) => {
+    const g = groups.get(b) || [];
+    const s = summarize(g);
+    const h1 = summarize(g.filter(firstHalf));
+    const h2 = summarize(g.filter((r) => !firstHalf(r)));
+    return {
+      bucket: b, ...s,
+      thin: s.n < STUDY_MIN_N,
+      lift: s.pctGood == null || overall.pctGood == null ? null : s.pctGood - overall.pctGood,
+      firstHalf: h1, secondHalf: h2,
+      // A split is only interesting if it points the SAME way in both halves.
+      holds: h1.pctGood != null && h2.pctGood != null && overall.pctGood != null
+        ? Math.sign(h1.pctGood - overall.pctGood) === Math.sign(h2.pctGood - overall.pctGood)
+        : null,
+    };
+  });
+
+  // Selected vs shadow — the only comparison that says whether the top-5 cut is
+  // doing any work. Computed over the full window regardless of `cohort`.
+  const all = await studyRows({ days, cohort: 'all' });
+  const cohorts = all.ok ? {
+    selected: summarize(all.rows.filter((r) => r.selected)),
+    shadow:   summarize(all.rows.filter((r) => !r.selected)),
+  } : null;
+
+  return {
+    ok: true, days: got.days, by: key, cohort,
+    label: spec.label, note: spec.note, minN: STUDY_MIN_N,
+    splitDate: cut, overall, cohorts,
+    features: PG.BUCKET_KEYS.map((k) => ({ key: k, label: PG.BUCKETS[k].label })),
+    buckets,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  CALIBRATION  —  feeds /proxy/gex-change-top-calibration
+// ══════════════════════════════════════════════════════════════════════════════
+// Grading the grader. For each grade the projection rule PREDICTED at capture,
+// what did those picks actually do? Without this the projection is unfalsifiable
+// and will drift for months before anyone notices.
+//
+// Returns armed:false when no rule is configured, which is the shipping default —
+// there is nothing to calibrate until a rule has been stamping projections.
+
+async function getCalibration({ days = 60, cohort = 'selected' } = {}) {
+  const rule = PG.projRule({ reload: true });
+  const got = await studyRows({ days, cohort });
+  if (!got.ok) return { ok: false, error: got.error, rows: [] };
+  const withProj = got.rows.filter((r) => r.proj_grade);
+  if (!rule.enabled && !withProj.length) {
+    return {
+      ok: true, armed: false, days: got.days, note: rule.note || 'no projection rule configured',
+      n: got.rows.length, rows: [],
+    };
+  }
+  const byProj = new Map();
+  for (const r of withProj) {
+    if (!byProj.has(r.proj_grade)) byProj.set(r.proj_grade, []);
+    byProj.get(r.proj_grade).push(r);
+  }
+  const rows = PG.GRADE_ORDER.filter((g) => byProj.has(g)).map((g) => {
+    const set = byProj.get(g);
+    const s = summarize(set);
+    const dist = {};
+    for (const x of PG.GRADE_ORDER) dist[x] = set.filter((r) => r.grade === x).length;
+    return { projected: g, ...s, actual: dist, thin: s.n < STUDY_MIN_N };
+  });
+  return {
+    ok: true, armed: !!rule.enabled, days: got.days, note: rule.note || '',
+    terms: rule.terms, base: rule.base, minN: STUDY_MIN_N,
+    unprojected: got.rows.length - withProj.length,
+    overall: summarize(got.rows), rows,
+  };
 }
 
 // ── Scheduler: fire on every INTERVAL_MIN boundary during RTH ─────────────────
@@ -827,6 +1161,7 @@ function startGexChangeTopRecorder(port) {
 }
 
 module.exports = {
+  getStudy, getCalibration,
   startGexChangeTopRecorder, runOnce, getHistory, getPickHistory,
   runResults, getResults, computeResults, ensureSchema,
 };

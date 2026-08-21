@@ -33,6 +33,12 @@ type Row = {
   z_score: number | null; score: number | null; window_min: number;
   /** watch_options.id of the auto-probed contract — null on pre-auto-probe rows. */
   watch_id: number | null;
+  /** Projected grade STAMPED AT CAPTURE by the recorder's projection rule.
+   *  Null whenever no rule is armed, which is the shipping default — see
+   *  server-v2/_lib-pick-grade.cjs. Never recomputed client-side: the whole
+   *  point is that it records what was predicted in advance. */
+  proj_grade?: string | null;
+  proj_pts?: number | null;
 };
 type SlotBucket = { slot: string; ts: string; rows: Row[] };
 
@@ -58,6 +64,14 @@ type ResultRow = {
   min_mark: number | null; min_pct: number | null;
   close_mark: number | null; close_ts: number | null; close_pct: number | null;
   samples: number | null;
+  /** WHEN the low printed — lets peak and low be ordered instead of just compared. */
+  min_ts?: number | null;
+  /** Best level that held for two consecutive snapshots — the fillable move,
+   *  as opposed to max_pct's single print. */
+  sustained_mark?: number | null; sustained_pct?: number | null; sustained_ts?: number | null;
+  /** The label, computed server-side by _lib-pick-grade.cjs. Absent on rows
+   *  frozen before grading existed — gradeFor() falls back for those. */
+  grade?: string | null; grade_pts?: number | null;
 };
 
 // Theme alpha helper — colors still come from homeTheme, never a literal hex.
@@ -166,9 +180,22 @@ const gradePoints = (maxPct: number | null, minPct: number | null, closePct: num
 };
 
 const gradeFor = (
-  r: Pick<ResultRow, "max_pct" | "min_pct" | "close_pct"> | null | undefined,
+  r: Pick<ResultRow, "max_pct" | "min_pct" | "close_pct" | "grade" | "grade_pts"> | null | undefined,
 ): GradeInfo | null => {
   if (!r) return null;
+  // The server is the source of truth (server-v2/_lib-pick-grade.cjs) — this
+  // local ladder exists only for rows frozen before grading shipped, so the two
+  // can never drift into disagreeing about the same pick on the same screen.
+  if (r.grade && GRADE_ORDER.includes(r.grade as Grade)) {
+    const g = r.grade as Grade;
+    const p = Number(r.grade_pts);
+    return {
+      grade: g,
+      pts: Number.isFinite(p) ? p : 0,
+      neverGreen: !(Number(r.max_pct) > 0),
+      why: `${Number.isFinite(p) ? `${p}/100 · ` : ""}peak ${fmtPct(r.max_pct)} · low ${fmtPct(r.min_pct)} · close ${fmtPct(r.close_pct)}`,
+    };
+  }
   const pts = gradePoints(r.max_pct, r.min_pct, r.close_pct);
   if (pts == null) return null;
   const neverGreen = !(Number(r.max_pct) > 0);
@@ -188,6 +215,31 @@ const gradeChipStyle = (g: Grade): CSSProperties => ({
   color: GRADE_COLOR[g], background: tint(GRADE_COLOR[g], 0.14),
   border: `1px solid ${tint(GRADE_COLOR[g], 0.45)}`,
 });
+
+/**
+ * The PROJECTED grade — what the rule predicted at capture, before anything
+ * happened. Deliberately drawn hollow and prefixed, because a prediction and a
+ * result must never read the same at a glance. Renders nothing when no rule is
+ * armed, which is the shipping default.
+ */
+function ProjPill({ grade, pts }: { grade?: string | null; pts?: number | null }) {
+  if (!grade) return null;
+  const g = (GRADE_ORDER.includes(grade as Grade) ? grade : "C") as Grade;
+  return (
+    <span
+      title={`Projected ${grade}${pts == null ? "" : ` (${pts}/100)`} at capture, from the rule in server-v2/config/pick-proj-rule.json. This is a prediction made before the pick did anything — compare it against the solid grade pill, and against the Pick Study tab's calibration table.`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 2,
+        fontFamily: MONO, fontSize: 10, fontWeight: 700, lineHeight: 1,
+        padding: "2px 5px", borderRadius: 5, whiteSpace: "nowrap",
+        color: tint(GRADE_COLOR[g], 0.85), background: "transparent",
+        border: `1px dashed ${tint(GRADE_COLOR[g], 0.5)}`,
+      }}
+    >
+      <span style={{ opacity: 0.7, fontWeight: 600 }}>proj</span>{grade}
+    </span>
+  );
+}
 
 /** The grade badge. Renders nothing for a pick with no scored history yet. */
 function GradePill({ info, provisional, size = 11 }: { info: GradeInfo | null; provisional?: boolean; size?: number }) {
@@ -1062,6 +1114,7 @@ export default function GexChangeTop() {
                           {r.pct_open == null ? "—" : `${r.pct_open >= 0 ? "+" : ""}${r.pct_open.toFixed(0)}% vs open`}
                         </span>
                         <span style={{ color: HOME_THEME.cyan }}>score {r.score == null ? "—" : r.score.toFixed(0)}</span>
+                        <ProjPill grade={r.proj_grade} pts={r.proj_pts} />
                       </div>
                       <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800, color: HOME_THEME.orange, paddingRight: 78 }}>
                         ★ Very strong
@@ -1211,6 +1264,12 @@ export default function GexChangeTop() {
           <span style={{ color: HOME_THEME.red }}>F</span> is automatic when a pick never traded green,
           whatever the rest of the row says.
         </span>
+        {slots.some((hb) => hb.rows.some((r) => r.proj_grade)) && (
+          <span>
+            A dashed <b>proj</b> pill is what the projection rule predicted at capture — see the Pick Study tab
+            for whether those predictions are holding up.
+          </span>
+        )}
       </div>
     </Card>
    </div>

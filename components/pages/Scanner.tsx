@@ -7,6 +7,8 @@
  *   GEX Levels      — SqueezeMetrics-style GEX dashboard (moved here from the
  *                     Test Lab page 2026-08-16; lives in components/scanner/GexLevelsTab)
  *   GEX Change Top  — biggest cross-ticker GEX movers
+ *   Pick Study      — what the graded GEX Change Top picks had in common at
+ *                     capture (components/scanner/PickStudyTab)
  *   Strike Query    — top movers by strike, per-ticker or ALL
  *   TPO Structures  — Market Profile "open business" + AMT read
  *   IB Stats        — initial-balance statistics
@@ -36,6 +38,7 @@ import TpoForecastCard from "@/components/scanner/TpoForecastCard";
 import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
 import GexChangeTop from "@/components/scanner/GexChangeTop";
+import PickStudyTab from "@/components/scanner/PickStudyTab";
 import GexLevelsTab from "@/components/scanner/GexLevelsTab";
 import { fmtB, NEUTRAL, seg, td, th, zColor } from "@/components/scanner/scannerStyles";
 import { readTabFromUrl, SCANNER_TAB_EVENT } from "@/components/scanner/scannerNav";
@@ -43,7 +46,7 @@ import { readTabFromUrl, SCANNER_TAB_EVENT } from "@/components/scanner/scannerN
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "gexlevels" | "gexchangetop" | "strike" | "tpo" | "ibstats" | "watch";
+type MainTab = "gexlevels" | "gexchangetop" | "pickstudy" | "strike" | "tpo" | "ibstats" | "watch";
 
 // Lookback window, in minutes. Declared here rather than in GexScannerTab (which
 // also owns a copy) because GreeksScanner below still uses it and that tab did
@@ -3058,6 +3061,7 @@ export default function ScannerPage() {
     <PageShell>
       {tab === "gexlevels" && <GexLevelsTab />}
       {tab === "gexchangetop" && <GexChangeTop />}
+      {tab === "pickstudy" && <PickStudyTab />}
       {tab === "strike" && <StrikeQueryScanner />}
       {tab === "tpo" && <TpoStructuresScanner />}
       {tab === "ibstats" && <IbStatsTab />}

@@ -1,0 +1,29 @@
+{
+  "_readme": [
+    "Copy to pick-proj-rule.json to ARM the projected grade on GEX Change Top picks.",
+    "While pick-proj-rule.json is absent (the shipping default) no projection is",
+    "made, no proj_grade is stamped, and no Proj pill renders. That is deliberate.",
+    "",
+    "Build `terms` from the Pick Study tab (/scanner?tab=pickstudy): take only",
+    "buckets that are NOT marked thin and that show a green check in the Holds",
+    "column, hit the tiny 'term' button on each row, and paste the results here.",
+    "A bucket that does not hold in both halves of the window is not a finding.",
+    "",
+    "`pts` is added to `base` when a pick falls in that bucket; the total is",
+    "clamped to 0-100 and mapped through the same letter bands as the real grade",
+    "(A+ >= 85, A >= 72, B >= 58, C >= 44, D >= 28, F below), so 'projected B' and",
+    "'actual B' are directly comparable in the calibration table.",
+    "",
+    "Retuning is safe: projections are stamped at capture and never recomputed,",
+    "so old predictions stay as they were and calibration stays a real test.",
+    "Env var GEX_CHANGE_TOP_PROJ_RULE takes the same JSON and wins over this file."
+  ],
+  "enabled": false,
+  "base": 50,
+  "note": "example only - not fitted on anything",
+  "terms": [
+    { "by": "dte",   "bucket": "0",         "pts": -12 },
+    { "by": "slot",  "bucket": "pre-10:00", "pts": 9 },
+    { "by": "entry", "bucket": "0.50-1.00", "pts": -7 }
+  ]
+}
