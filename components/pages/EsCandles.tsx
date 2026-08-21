@@ -70,8 +70,18 @@ const PANEL_OPTIONS: Array<{ label: string; value: SidePanelKind }> = [
   { label: "0DTE", value: "chain" },
 ];
 
-/** Which popover is open. Exactly one at a time — two hovering panels would overlap. */
-type Popover = "charts" | "replay" | "indicators" | null;
+/**
+ * Which popover is open. Exactly one at a time — two hovering panels would overlap.
+ *
+ * "replay" used to be one of these. It isn't any more: the transport is not a
+ * settings menu, it is a mode you work IN, so it now lives in a bar docked to
+ * the bottom of the page for as long as the replay runs (see `replayRunning`
+ * and the dock at the end of the render). It closes on its own ✕ / "● Live",
+ * not on the click-away and Escape rules these two panels follow — scrubbing
+ * the chart is the whole point, and click-away would take the transport with
+ * the first drag.
+ */
+type Popover = "charts" | "indicators" | null;
 
 // ── Popover metrics ──────────────────────────────────────────────────────────
 // Every control in the menu is laid out against these three numbers so the boxes
@@ -88,6 +98,17 @@ const CTRL_H = 30;   // every toggle and input
 const CAP_H = 13;    // the caption line above an input
 const CAP_GAP = 3;
 const ROW_H = CAP_H + CAP_GAP + CTRL_H;
+
+/**
+ * Widest the flyout is allowed to get.
+ *
+ * The Indicators panel's four groups (EMA / Bollinger / Levels / Study) lay out
+ * on one line at ~1100px; below that they wrap, which is fine and was always
+ * the narrow-window behaviour. 820 is the point where EMA+Bollinger sit on the
+ * first line and Levels+Study on the second — two tidy rows rather than a
+ * ragged three — while still leaving the chart visible beside the panel.
+ */
+const PANEL_MAX_W = 820;
 
 /**
  * A labelled group inside a popover. Popovers are dense by nature, so the label
@@ -314,14 +335,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const [chainGreek, setChainGreekState] = useState<ChainGreek>("gex");
   const [indicators, setIndicatorsState] = useState<IndicatorCfg>(INDICATORS_DEFAULT);
   const [popover, setPopover] = useState<Popover>(null);
-  // Mirrored so the []-dep toggleReplay can read the current panel without
-  // doing it from inside a state updater (see there).
-  const popoverRef = useRef<Popover>(null);
-  popoverRef.current = popover;
+  // (There was a `popoverRef` mirror here so toggleReplay could read the open
+  // panel. Replay no longer opens a panel, and nothing else needed it.)
   // The shared dock's mount point. State, not a ref: card 0 renders into it via
   // a portal, and a ref wouldn't re-render the tree once the node exists.
   const [dockTarget, setDockTarget] = useState<HTMLDivElement | null>(null);
-  // Where card 0 portals the replay transport. Lives inside the Replay popover.
+  // Where card 0 portals the replay transport. Lives in the bottom dock.
   const [transportTarget, setTransportTarget] = useState<HTMLDivElement | null>(null);
   // The button row lives inside the CARD's dock (injected as `toolbarExtras`),
   // which on a multi-chart row is itself portaled into this page. So the popover
@@ -334,7 +353,25 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // The hovering panel, so the outside-click test can tell "inside the menu"
   // from "outside": it is `fixed` and not a DOM descendant of the button row.
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const [anchorBottom, setAnchorBottom] = useState(0);
+  /**
+   * Where to draw the hovering panel, in viewport coordinates.
+   *
+   * Two shapes, because the buttons can be in two very different places:
+   *
+   * - `flyout` — the normal case now. The buttons live inside the chart cog's
+   *   340px menu, so the panel hangs off the LEFT edge of that menu, top-
+   *   aligned with it, and reads as the menu expanding sideways. It used to be
+   *   a full-bleed `left:16 / right:16` band pinned under the buttons, which
+   *   from inside a cog looked like an unrelated slab that had appeared across
+   *   the page.
+   * - `under` — the fallback, when no cog menu is an ancestor (the dock is wide
+   *   enough to carry the buttons itself, or a host embeds them). Same
+   *   full-width band under the buttons as before.
+   */
+  const [panelPos, setPanelPos] = useState<
+    | { mode: "flyout"; top: number; right: number; width: number; maxH: number }
+    | { mode: "under"; top: number; maxH: number }
+  >({ mode: "under", top: 0, maxH: 520 });
   // Is replay RUNNING, as distinct from "is its panel open". They come apart the
   // moment you open Indicators while a replay is going, and conflating them made
   // that round trip restart the replay from the open.
@@ -363,16 +400,18 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
   // Keep `replayActiveRef` honest.
   //
-  // A card can end a replay by itself — the transport's own "● Live" button is
-  // portaled into this popover, and pressing it broadcasts {on:false}. Without
-  // listening, this file would still believe a replay was running: the popover
-  // would sit open over an empty transport, and the next press of Replay would
-  // take the "already running, just re-open the panel" branch and turn nothing
-  // back on.
+  // A card can end a replay by itself — the transport's own ✕ / "● Live" buttons
+  // are portaled into the bottom dock, and pressing either broadcasts
+  // {on:false}. Without listening, this file would still believe a replay was
+  // running: the dock would stay mounted around an empty transport, and the
+  // next press of Replay would take the "already running" branch and turn
+  // nothing back on.
+  //
+  // `replayRunning` is also what MOUNTS the dock (and therefore
+  // `transportTarget`), so this subscription is load-bearing, not just cosmetic.
   useEffect(() => subscribeReplayCmd(({ on }) => {
     replayActiveRef.current = on;
     setReplayRunning(on);
-    if (!on) setPopover((prev) => (prev === "replay" ? null : prev));
   }), []);
 
   /**
@@ -434,9 +473,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     return () => window.removeEventListener("keydown", onKey);
   }, [popover, closePopover]);
 
-  // Keep the panel under its buttons. Measured on open and on resize/scroll —
-  // the dock's height changes with the FitScale factor and with the compact
-  // breakpoint, so a hardcoded offset would drift the moment the window moved.
+  // Place the panel. Measured on open and on resize/scroll — the dock's height
+  // moves with the FitScale factor and the compact breakpoint, so a hardcoded
+  // offset would drift the moment the window moved.
+  //
+  // The anchor is the button row. If that row is inside a cog menu
+  // (DockCogMenu renders `role="menu"`), the panel becomes a FLYOUT off that
+  // menu's left edge instead of a band under the buttons — see `panelPos`.
   useEffect(() => {
     if (!popover) return;
     // rAF-throttled, and identity-guarded.
@@ -445,12 +488,47 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // so every scroll ANYWHERE in the document forced a layout
     // (getBoundingClientRect) and then wrote page state — which re-rendered all
     // three chart cards. Coalescing to one measure per frame and bailing when
-    // the number hasn't moved makes an open popover free to scroll past.
+    // nothing has moved makes an open popover free to scroll past.
     let raf = 0;
     const measure = () => {
       raf = 0;
-      const r = anchorRef.current?.getBoundingClientRect();
-      if (r) setAnchorBottom((prev) => (Math.abs(prev - r.bottom) < 0.5 ? prev : r.bottom));
+      const a = anchorRef.current;
+      if (!a) return;
+      const r = a.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      // The cog menu this row was folded into, if any.
+      const menu = a.closest('[role="menu"]') as HTMLElement | null;
+      const m = menu?.getBoundingClientRect();
+      // `m.left > 360`: enough room to the left of the menu to be worth flying
+      // out into. Below that the flyout would be a sliver, so fall back to the
+      // full-width band, which can use the whole viewport.
+      const next = m && m.left > 360
+        ? {
+            mode: "flyout" as const,
+            // Top-aligned with the MENU, not the buttons: the two panels then
+            // read as one surface hinged at the same line.
+            top: Math.max(8, Math.round(m.top)),
+            right: Math.round(Math.max(8, vw - m.left + 8)),
+            width: Math.round(Math.min(PANEL_MAX_W, m.left - 8 - 16)),
+            maxH: Math.round(Math.max(160, vh - Math.max(8, m.top) - 16)),
+          }
+        : {
+            mode: "under" as const,
+            top: Math.round(r.bottom + 8),
+            maxH: Math.round(Math.max(160, vh - r.bottom - 24)),
+          };
+      setPanelPos((prev) => (
+        prev.mode === next.mode
+        && Math.abs(prev.top - next.top) < 0.5
+        && Math.abs(prev.maxH - next.maxH) < 0.5
+        && (next.mode === "under"
+            || (prev.mode === "flyout"
+                && Math.abs(prev.right - next.right) < 0.5
+                && Math.abs(prev.width - next.width) < 0.5))
+          ? prev
+          : next
+      ));
     };
     const schedule = () => {
       if (raf) return;
@@ -512,11 +590,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   }, []);
 
   // Replay is a command, not a stored setting: the button says on/off and the
-  // cards do the rest. Pressing the BUTTON to close exits replay — leaving a
-  // chart frozen mid-session behind a closed panel with no visible way back is
-  // the kind of state that reads as a broken page. (Clicking AWAY only hides
-  // the panel; the button stays lit so the replay is still visible. See the
-  // outside-click effect.)
+  // cards do the rest.
+  //
+  // It no longer opens a popover. The transport is docked to the bottom of the
+  // page for as long as the replay runs, so "is the panel open" and "is a
+  // replay running" are now the SAME fact and there is nothing left to get out
+  // of step — the state that used to leave a chart frozen behind a closed panel
+  // is unrepresentable. On/off is the whole button.
   //
   // The side effects are OUTSIDE the state updater. They used to live inside
   // it, which was already a lie (a setState updater must be pure — React may
@@ -528,29 +608,17 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // it would stop the moment one returned `prev`. Reading the flag first and
   // acting after is the same behaviour with none of that.
   const toggleReplay = useCallback(() => {
-    const closing = popoverRef.current === "replay";
-    if (closing) {
-      replayActiveRef.current = false;
-      setPopover(null);
-      broadcastReplayCmd({ on: false });
-      return;
-    }
-    // Only START a replay that isn't already running. Coming back from the
-    // Indicators panel must re-open the transport where you left it, not
-    // rewind to the open — the command resets the cursor.
-    setPopover("replay");
-    if (!replayActiveRef.current) {
-      replayActiveRef.current = true;
-      broadcastReplayCmd({ on: true });
-    }
+    const on = !replayActiveRef.current;
+    replayActiveRef.current = on;
+    setReplayRunning(on);
+    broadcastReplayCmd({ on });
   }, []);
 
   const togglePopover = useCallback((which: Exclude<Popover, null>) => {
-    setPopover((prev) => {
-      // Moving off Replay to another panel leaves replay running on purpose:
-      // watching a replay while adjusting indicators is the whole point.
-      return prev === which ? null : which;
-    });
+    // A running replay is untouched by this — the transport is its own dock at
+    // the bottom of the page, so adjusting indicators mid-replay (the whole
+    // point) no longer costs you the transport.
+    setPopover((prev) => (prev === which ? null : which));
   }, []);
 
   // The three page-level controls, rendered INTO the chart's own dock. The page
@@ -590,12 +658,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         <span>Charts</span>
         <span style={{ opacity: 0.5, fontSize: 10 }}>{cards}</span>
       </DockButton>
+      {/* No `caret`: this does not open a panel next to itself any more, it
+          turns a mode on and docks the transport to the bottom of the page.
+          A caret here would promise a dropdown that never appears. */}
       <DockButton
         onClick={toggleReplay}
-        title="Replay the session — reveal candles and gamma from the open forward"
-        caret
-        open={popover === "replay"}
-        style={popover === "replay" || replayRunning ? { color: HOME_THEME.cyan, borderColor: HOME_THEME.cyan } : undefined}
+        title={replayRunning
+          ? "Exit replay — back to live"
+          : "Replay the session — reveal candles and gamma from the open forward"}
+        style={replayRunning ? { color: HOME_THEME.cyan, borderColor: HOME_THEME.cyan } : undefined}
       >
         <span>Replay</span>
       </DockButton>
@@ -707,27 +778,62 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         ))}
       </div>
 
+      {/* ── Replay transport ────────────────────────────────────────────────
+          Docked to the BOTTOM of the page, in flow, for as long as the replay
+          runs. It used to be portaled into the Charts/Indicators popover, which
+          put a control surface you drive continuously — scrub, step, play — in
+          a menu that closes when you click away, directly over the chart it is
+          scrubbing. A transport belongs at the edge of the thing it drives.
+
+          In flow rather than `fixed`: the bar must not cover the last inch of
+          the candles, and it mounts/unmounts exactly twice per replay, so the
+          one time-scale rebuild each way is a fair price for never occluding
+          the chart. Card 0 portals the real controls into this node (see
+          `transportTarget`), which is why it is a state ref, not a plain div. */}
+      {replayRunning && (
+        <div
+          className="es-candles-transport-dock"
+          style={{
+            flexShrink: 0,
+            minWidth: 0,
+            borderTop: `1px solid ${HOME_THEME.border}`,
+            background: "rgba(10,14,20,0.92)",
+            backdropFilter: "blur(14px)",
+            WebkitBackdropFilter: "blur(14px)",
+            boxShadow: "0 -10px 30px rgba(0,0,0,0.35)",
+            position: "relative",
+            zIndex: 40,
+          }}
+        >
+          <div ref={setTransportTarget} style={{ width: "100%", minWidth: 0 }} />
+        </div>
+      )}
+
       {/* ── Popover ─────────────────────────────────────────────────────────
           `fixed`, measured off the buttons, for two reasons. It must not reflow
           the chart row — a panel that pushes the charts down resizes them, and
           every resize makes lightweight-charts rebuild its time scale, so three
           charts would flicker each time a menu opened. And its anchor lives
           inside the card's dock, which on a multi-chart row is portaled; there
-          is nothing in this file's own layout to be absolute against. */}
+          is nothing in this file's own layout to be absolute against.
+
+          Where it lands is `panelPos`: a flyout off the left edge of the chart
+          cog when the buttons are inside one, a full-width band under them when
+          they are not. */}
       {popover && (
         <div
           ref={panelRef}
           className="es-candles-popover"
           style={{
             position: "fixed",
-            top: anchorBottom + 8,
-            left: 16,
-            right: 16,
+            top: panelPos.top,
+            ...(panelPos.mode === "flyout"
+              ? { right: panelPos.right, width: panelPos.width }
+              : { left: 16, right: 16 }),
             // ABOVE the chart cog's own menu (DockToolbar's popoverPanel sits at
             // 100000). The buttons that open this panel moved INTO that cog, so
             // at z-60 the panel opened underneath the very menu it was launched
-            // from: Charts/Replay/Indicators looked like they did nothing, or
-            // left a sliver of transport bar peeking out beside the cog.
+            // from: Charts/Indicators looked like they did nothing.
             // (DockCogMenu.inFloatingLayer only needs > 50 to keep treating a
             // click in here as "inside", so the cog still doesn't slam shut.)
             zIndex: 100001,
@@ -746,11 +852,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             columnGap: 22,
             rowGap: 14,
             flexWrap: "wrap",
-            // Third term keeps the panel inside the viewport. `top` is measured
-            // off buttons that now sit in a cog menu, which can be most of the
-            // way down the screen — without the clamp the panel's bottom half
-            // (and its scrollbar) fell off the bottom edge, unreachable.
-            maxHeight: `min(60vh, 520px, calc(100vh - ${Math.round(anchorBottom) + 24}px))`,
+            // `maxH` is already "whatever is left below `top`", measured against
+            // the live viewport — without it the panel's bottom half (and its
+            // scrollbar) fell off the bottom edge, unreachable, because `top`
+            // is taken off buttons that can sit most of the way down the screen.
+            maxHeight: Math.min(panelPos.maxH, 620),
             overflowY: "auto",
           }}
         >
@@ -784,12 +890,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 </Group>
               )}
             </>
-          )}
-
-          {/* Card 0 portals the transport in here. Always mounted while the
-              popover is open, so the ref exists before the card looks for it. */}
-          {popover === "replay" && (
-            <div ref={setTransportTarget} style={{ width: "100%", minWidth: 0 }} />
           )}
 
           {popover === "indicators" && (

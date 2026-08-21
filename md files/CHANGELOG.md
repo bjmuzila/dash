@@ -1,5 +1,162 @@
 # Changelog
 
+## 2026-08-21 (t) - ΔGEX Board: Open Card - the five morning levels on one strip, with an SPX→ES offset
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx`.
+
+The board answered "what changed overnight" well and "where are today's rails"
+not at all - the call wall, the gamma flip, the cushion and the regime were four
+separate tiles inside a collapsible Read panel, three scrolls apart, and nobody
+assembles those at 09:25. **Open Card** is a single strip at the top of the
+detail pane that prints the five numbers you write down before the bell.
+
+**Placement is the point.** It sits ABOVE the big headline number, because that
+headline is a Δ and a Δ is the morning's *second* question. Reading order on the
+pane is now: which symbol → where the levels are → what moved → the evidence.
+
+**The five tiles.** Call wall / gamma flip / put wall, each with its distance
+from spot in both points and percent; cushion (signed points spot→flip, with the
+prior session's for comparison); regime (word plus the net). All of it comes off
+the same `analyzeLadder()` whole-ladder pass the Read panel uses, so the ±3%/±5%
+band cannot move a single figure on the card - same guarantee, same reason: a
+wall is a property of the book, not of the rows on screen.
+
+**Verdict line is a MECHANISM, not a call.** `SPOT IN DAMPEN` / `SPOT IN AMPLIFY`
+plus the sentence about what dealer hedging does there - reusing the exact
+wording of `StructuralRange`'s zone tooltips so the two surfaces cannot drift.
+This follows the rule `regimeCopy()` already sets out in its header comment: the
+page says what the dealer book does, never what to trade. Zone prefers the
+measured flip and falls back to the sign of the book when the cumulative never
+crosses inside the window - flagged as inferred, not presented as a located line.
+
+**SETTLED / PROVISIONAL is the first chip on the strip.** On the `oi` basis the
+open-interest half is re-stamped at 09:25 ET off the settled OCC file; before
+that it is still the provisional 16:05 read, settled through the session BEFORE
+last night. A map built on it is a day stale and *looks right*, which is the
+expensive kind of wrong. On any other basis the card carries an
+`OI ONLY IS THE MORNING BASIS` chip - a provenance nudge, not a trade nudge.
+
+**SPX→ES offset.** The strikes are SPX cash. Drawing a cash strike straight onto
+an ES chart mis-places every level by the spread, silently. A signed points field
+in the card header (`ES = SPX + offset`) prints each landmark's futures-adjusted
+twin under the cash number in gold. Nothing here streams ES so it is entered by
+hand, and it is persisted to `localStorage` - a number you retype every morning
+is a number you eventually stop typing. Kept as the raw string, not parsed on
+each keystroke, so a half-typed `-` or `1.` survives.
+
+**`copy` button** emits the whole card as monospace-aligned plain text (symbol,
+session, basis, freshness, the five numbers, the ES row) for a journal or a chat.
+
+Toggled by a new **Open Card** button beside **Read** in the control row, on by
+default, state persisted. Both `localStorage` helpers are try/catch-wrapped on
+*access* as well as write - hardened profiles throw on `getItem`, and the card
+must never be the reason the page fails to render. Without a recorded spot it
+renders one honest line instead of a grid of dashes.
+
+**Fixed while in there: the footer legend was lying.** It hardcoded
+`OI+Vol basis` on every basis since the migration, putting it in direct
+contradiction with the caveat strip at the top of the same card. It now reads
+`BASIS_COPY[basis].name` (plus the leg when not net). With the Open Card also
+printing its own provenance, a third surface asserting the wrong one was a
+straight defect.
+
+## 2026-08-21 (s) - ES Candles: cog menu fixed, panels fly out of it, replay transport docked to the bottom of the page
+
+Edited: `components/pages/EsCandles.tsx`,
+`components/dashboard/es-candles/EsChartCard.tsx`,
+`components/dashboard/es-candles/LayoutPresetButton.tsx`,
+`components/shared/DockToolbar.tsx`, `app/es-candles/page.tsx`.
+
+> The live ES Candles page is **`components/pages/EsCandles.tsx`** (what
+> `app-vite/src/App.tsx` lazy-imports at `/app/es-candles`), not
+> `app/es-candles/page.tsx`. The two layout fixes went into both so the Next
+> fallback copy does not drift.
+
+Everything below has one root cause: the page's **Charts / Replay / Indicators /
+Layout** buttons were folded into the chart cog's 340px menu, and nothing that
+hangs off those buttons was ever adjusted for being launched from inside a
+popover.
+
+**1. The Page row was cut off.** `toolbarButtons` was an `inline-flex` container
+with `flexShrink: 0` and no wrapping. **Layout**, the last button, hung off the
+menu's right edge as "Lay...", clipped and unclickable. Both the outer row and
+the inner `popBtnsRef` group are now `flexWrap: "wrap"` + `minWidth: 0` /
+`maxWidth: "100%"`, so the row folds to a second line in the cog and still lays
+out on one line anywhere wide enough (the home embed, the /board tile).
+
+**2. Everything opened BEHIND the menu it was opened from.** `DockCogMenu`'s
+portalled panel sits at `zIndex: 100000`. The page's Charts / Indicators panel
+was at 60 and the Layout preset list at 200, so both drew underneath it - the
+buttons looked dead, or you got a sliver hanging off the menu's left edge. Both
+are now `zIndex: 100001`. They still count as "inside" for
+`DockCogMenu.inFloatingLayer` (threshold 50), so using either does not slam the
+cog shut, and only one of the three can be open at a time so they never fight.
+
+**3. Charts / Indicators / Layout now FLY OUT of the cog** instead of appearing
+somewhere else on the page. Each measures its nearest `[role="menu"]` ancestor
+and, when it finds one with room to its left, pins its right edge 8px off the
+menu's left edge and top-aligns with the menu - so the menu reads as expanding
+sideways. Without a cog ancestor (a dock wide enough to carry the buttons, or a
+host that embeds them) both fall back to exactly the old behaviour: a full-width
+band under the buttons. New `PANEL_MAX_W = 820` caps the flyout at the width
+where EMA+Bollinger take the first line and Levels+Study the second.
+
+**4. `maxHeight` is measured, not guessed.** `top` comes off buttons that can
+sit most of the way down the screen; the panel now takes "whatever is left below
+`top`" (capped at 620) instead of a flat `min(60vh, 520px)` that ran off the
+bottom edge with its scrollbar.
+
+**Replay is no longer a popover - it is a dock at the bottom of the page.**
+The transport used to be portaled into the same hovering menu as Charts and
+Indicators: a control surface you drive continuously (scrub, step, play) sitting
+in a panel that closes when you click away, directly on top of the chart it is
+scrubbing. `Popover` lost its `"replay"` member; the transport now mounts in a
+bar at the bottom of the page column for exactly as long as the replay runs,
+keyed off `replayRunning`. Consequences worth stating:
+
+- "Is the panel open" and "is a replay running" are now the same fact, so the
+  frozen-chart-behind-a-closed-panel state the old close-exits-replay rule was
+  written to prevent is unrepresentable. `toggleReplay` is a plain on/off.
+- Opening Indicators mid-replay no longer costs you the transport.
+- The bar is in flow, not `fixed`, so it never covers the last inch of candles.
+  It mounts and unmounts twice per replay, so that is two time-scale rebuilds.
+- The Replay button lost its `caret` - it does not open a panel beside itself
+  any more.
+
+**✕ on the replay bar.** Pinned right, calls the same `exitReplay` as "● Live".
+Deliberately outside the `replayFrames.length === 0` ternary: that branch renders
+one sentence and no controls, so on a day with no RTH prints the transport had
+no exit at all short of stepping to another session first.
+
+Comment in `DockToolbar.tsx` describing the `inFloatingLayer` z-index threshold
+updated - it still claimed the ES-candles panel sits at 60.
+
+## 2026-08-21 (r) - Contracts tab: contract modal restyled to the probe card
+
+Edited: `owner-vite/src/pages/Results.tsx`.
+
+The per-contract modal on the Contracts tab of `/owner/results` now reads the
+same way a `/owner/probe` card does. All of the prose was pulled out.
+
+- Added the probe card's headline: the percent move in big mono type, then the
+  `IN $4.15 -> NOW $10.35 - +$570/ct` line underneath, colored by direction.
+- Stat values are terse, not sentences. `Walk` is the step count (`0`), no
+  longer "0 - the CB itself cleared the floor". `Close` on a held position is
+  `open`, no longer "held - still open". `Entry` on a skip is `not taken`,
+  with the reason left to the Not-taken block. `CB target` -> `CB`,
+  `Closest to CB` -> `Dist`. The dollar figure moved out of `P/L` into the
+  headline so it is stated once.
+- The footnote paragraph about dxLink / probe-rest / TastyTrade history is
+  replaced by the probe card's one-line chart hint:
+  `Option price (mark) - RTH only - entry @ $4.15`.
+- Metric toggle `Dist to CB` -> `Dist`. Header subline drops "0DTE",
+  "checkpoint" and the duplicated date.
+- Same trimming on the last-poll error strip, the Not-taken block, the load
+  states and the contract-cell tooltip.
+
+No data, fetch or chart logic changed - `CbProbeChart` and `/api/cb-trades` are
+untouched.
+
 ## 2026-08-21 (q) - Notes drawer: owner-only "Quick Probe"; bolder probe snapshot
 
 Added: `components/shared/QuickProbe.tsx`.

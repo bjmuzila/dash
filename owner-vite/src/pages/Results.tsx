@@ -1088,12 +1088,11 @@ function TradesView() {
                           type="button"
                           onClick={() => setOpenTrade(t)}
                           title={skipped
-                            ? `${t.skip_reason ?? "not taken"} — click for detail`
+                            ? (t.skip_reason ?? "not taken")
                             : `${t.ticker} ${t.expiration}`
                               + `${t.cb_strike != null ? ` · CB ${Number(t.cb_strike).toFixed(0)}` : ""}`
                               + `${t.cb_price != null ? ` priced $${Number(t.cb_price).toFixed(2)}` : ""}`
-                              + `${t.walk_steps ? ` · walked ${t.walk_steps} strike${t.walk_steps === 1 ? "" : "s"} in` : " · the CB itself cleared the floor"}`
-                              + " · click for the probe chart"}
+                              + `${t.walk_steps ? ` · walk ${t.walk_steps}` : " · walk 0"}`}
                           style={{
                             font: "inherit", fontFamily: "var(--font-mono)", cursor: "pointer",
                             background: "transparent", border: `1px solid ${rgba(skipped ? MUTED : C.cyan, 0.4)}`,
@@ -1209,7 +1208,7 @@ function DiagnoseModal({ data, onClose }: { data: unknown; onClose: () => void }
 const CB_METRICS = [
   { key: "mark", label: "Price", dec: 2, prefix: "$" },
   { key: "spot", label: "SPX", dec: 2, prefix: "" },
-  { key: "dist", label: "Dist to CB", dec: 1, prefix: "" },
+  { key: "dist", label: "Dist", dec: 1, prefix: "" },
 ] as const;
 type CbMetricKey = typeof CB_METRICS[number]["key"];
 
@@ -1361,7 +1360,15 @@ function CbProbeModal({
   const pnl = n(trade.pnl) ?? (entry != null && n(trade.last_price) != null
     ? Math.round((n(trade.last_price)! - entry) * 100) / 100 : null);
 
-  const stat = (label: string, value: string, color: string = C.label) => (
+  // Probe-card headline: the same in → now / percent / dollars line the
+  // /owner/probe cards use, priced off the exit fill once there is one.
+  const effMark = exitV ?? n(trade.last_price);
+  const pct = entry != null && effMark != null && entry !== 0 ? ((effMark - entry) / entry) * 100 : null;
+  const dollars = entry != null && effMark != null ? (effMark - entry) * mult : null;
+  const px = (v: number | null) => (v == null ? "—" : `$${v.toFixed(2)}`);
+  const upDown = (v: number | null) => (v == null ? MUTED : v > 0 ? GREEN : v < 0 ? RED : C.label);
+
+  const stat =(label: string, value: string, color: string = C.label) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       <span style={{ fontSize: 14, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</span>
       <span style={{ fontSize: 14, fontWeight: 800, color, fontFamily: "var(--font-mono)" }}>{value}</span>
@@ -1391,7 +1398,7 @@ function CbProbeModal({
             {trade.ticker} {contractLabel(trade)}
           </span>
           <span style={{ fontSize: 14, color: MUTED, fontFamily: "var(--font-mono)" }}>
-            {trade.expiration} 0DTE · {trade.checkpoint_label ?? trade.checkpoint} checkpoint · {trade.date}
+            {trade.expiration} · {trade.checkpoint_label ?? trade.checkpoint}
           </span>
           <button
             onClick={onClose}
@@ -1402,28 +1409,39 @@ function CbProbeModal({
           </button>
         </div>
 
+        {/* Headline, exactly as the probe card states it: percent, then
+            in → now with the dollars per contract. */}
+        <div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 800, lineHeight: 1, color: upDown(pct) }}>
+            {pct == null ? "—" : `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%`}
+          </div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 14, color: C.label, marginTop: 6 }}>
+            <span style={{ color: MUTED, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 3 }}>in</span>{px(entry)}
+            <span style={{ color: MUTED, margin: "0 6px" }}>→</span>
+            <span style={{ color: MUTED, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 3 }}>{exitV != null ? "sold" : "now"}</span>{px(effMark)}
+            <span style={{ color: upDown(dollars) }}>
+              {dollars == null ? "" : ` · ${dollars >= 0 ? "+" : "−"}$${Math.abs(dollars).toFixed(0)}/ct`}
+            </span>
+          </div>
+        </div>
+
         <div style={{ display: "flex", gap: 26, flexWrap: "wrap", paddingBottom: 14, borderBottom: `1px solid ${C.border}` }}>
-          {stat("CB target", trade.cb_strike != null
+          {stat("CB", trade.cb_strike != null
             ? `${Number(trade.cb_strike).toFixed(0)}${trade.cb_price != null ? ` @ $${Number(trade.cb_price).toFixed(2)}` : ""}`
             : "—", C.cyan)}
-          {stat("Walk", trade.walk_steps == null
-            ? "—"
-            : trade.walk_steps === 0
-              ? "0 — the CB itself cleared the floor"
-              : `${trade.walk_steps} strike${trade.walk_steps === 1 ? "" : "s"} toward the money`)}
-          {stat("Entry", entry != null ? `$${entry.toFixed(2)} · ${etClock(n(trade.entry_ts) ?? 0)}` : `not taken — ${trade.skip_reason ?? "—"}`,
+          {stat("Walk", trade.walk_steps == null ? "—" : String(trade.walk_steps))}
+          {stat("Entry", entry != null ? `$${entry.toFixed(2)} · ${etClock(n(trade.entry_ts) ?? 0)}` : "not taken",
             entry != null ? C.label : MUTED)}
           {stat("Peak", trade.best_price != null
             ? `$${Number(trade.best_price).toFixed(2)}${trade.best_ts ? ` · ${etClock(n(trade.best_ts) ?? 0)}` : ""}`
             : "—", trade.best_price != null ? GREEN : MUTED)}
-          {stat("Close", exitV != null ? `$${exitV.toFixed(2)} · ${trade.exit_reason}`
-            : trade.status === "open" ? "held — still open" : "—",
-          exitV != null ? AMBER : C.cyan)}
-          {stat("P/L", pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)} · ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl * mult).toFixed(0)}` : "—",
-            pnl == null ? MUTED : pnl >= 0 ? GREEN : RED)}
           {stat("Low", trade.worst_price != null
             ? `$${Number(trade.worst_price).toFixed(2)}${trade.worst_ts ? ` · ${etClock(n(trade.worst_ts) ?? 0)}` : ""}` : "—")}
-          {stat("Closest to CB", trade.closest_dist != null ? `${Number(trade.closest_dist).toFixed(1)} pt` : "—")}
+          {stat("Close", exitV != null ? `$${exitV.toFixed(2)}` : trade.status === "open" ? "open" : "—",
+            exitV != null ? AMBER : C.cyan)}
+          {stat("P/L", pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}` : "—",
+            pnl == null ? MUTED : pnl >= 0 ? GREEN : RED)}
+          {stat("Dist", trade.closest_dist != null ? `${Number(trade.closest_dist).toFixed(1)} pt` : "—")}
           {stat("Polls", String(trade.polls ?? 0))}
         </div>
 
@@ -1437,33 +1455,29 @@ function CbProbeModal({
 
         {trade.last_error && (
           <div style={{ color: AMBER, fontSize: 14, fontFamily: "var(--font-mono)", border: `1px solid ${rgba(AMBER, 0.4)}`, background: rgba(AMBER, 0.1), borderRadius: 8, padding: "9px 12px", lineHeight: 1.6 }}>
-            Last poll did not price this contract — <b>{trade.last_error}</b>
-            <div style={{ marginTop: 4, color: MUTED }}>
-              The row stops moving when this happens; the mark shown above is the last one that did price.
-            </div>
+            Last poll unpriced — <b>{trade.last_error}</b>
           </div>
         )}
 
         {err ? (
           <div style={{ color: RED, fontSize: 14, fontFamily: "var(--font-mono)", padding: "24px 0", textAlign: "center" }}>
-            Couldn&apos;t load the poll curve: {err}
+            History failed to load: {err}
           </div>
         ) : trade.status === "skipped" ? (
           // Never a position, so there is no curve and never will be. Say that
           // plainly instead of rendering an empty chart frame.
           <div style={{ padding: "28px 22px", textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10, lineHeight: 1.75 }}>
             <div style={{ fontSize: 14, fontWeight: 800, color: AMBER, marginBottom: 6 }}>Not taken</div>
-            <div style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>{trade.skip_reason ?? "no reason recorded"}</div>
-            <div style={{ marginTop: 8, fontSize: 14, color: MUTED }}>
-              Probed at {etClock(n(trade.probe_ts) ?? 0)}
+            <div style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>{trade.skip_reason ?? "—"}</div>
+            <div style={{ marginTop: 8, fontSize: 14, color: MUTED, fontFamily: "var(--font-mono)" }}>
+              Probed {etClock(n(trade.probe_ts) ?? 0)}
               {trade.cb_price != null
-                ? ` — the CB ${Number(trade.cb_strike ?? 0).toFixed(0)} came back at $${Number(trade.cb_price).toFixed(2)}`
-                : ""}.
-              {" "}No position was opened, so there are no polls and no curve for this checkpoint.
+                ? ` · CB ${Number(trade.cb_strike ?? 0).toFixed(0)} @ $${Number(trade.cb_price).toFixed(2)}`
+                : ""}
             </div>
           </div>
         ) : ticks == null ? (
-          <div style={{ color: C.label, fontSize: 14, padding: "48px 0", textAlign: "center" }}>Loading probe history…</div>
+          <div style={{ color: C.label, fontSize: 14, padding: "48px 0", textAlign: "center" }}>Loading history…</div>
         ) : (
           <CbProbeChart
             ticks={ticks}
@@ -1474,12 +1488,12 @@ function CbProbeModal({
           />
         )}
 
-        <div style={{ fontSize: 14, color: MUTED, fontFamily: "var(--font-mono)", letterSpacing: "0.04em", lineHeight: 1.6 }}>
-          {metric === "mark" ? "Contract mark" : metric === "spot" ? "SPX spot at each poll" : "SPX distance to the CB"}
-          {metric === "mark" ? " · shaded band is the minute's true high/low from the dxLink stream" : ""}
-          {" · "}streamed from <b>dxLink</b> while held, with <b>/proxy/probe-rest</b> as the fallback whenever the
-          subscription goes quiet — the same pipeline /owner/probe uses. TastyTrade has no per-contract history, so this
-          curve is the only record of what the position was worth; minutes the recorder was down are simply absent.
+        {/* One line, same shape as the probe card's chart hint. */}
+        <div style={{ fontSize: 12, color: MUTED, fontFamily: "var(--font-mono)", letterSpacing: "0.04em" }}>
+          {metric === "mark" ? "Option price (mark)" : metric === "spot" ? "SPX spot" : "SPX distance to CB"}
+          {" · RTH only"}
+          {entry != null ? ` · entry @ $${entry.toFixed(2)}` : ""}
+          {exitV != null ? ` · sold @ $${exitV.toFixed(2)}` : ""}
         </div>
       </div>
     </div>

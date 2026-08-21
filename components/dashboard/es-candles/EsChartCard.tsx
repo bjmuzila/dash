@@ -5840,8 +5840,12 @@ function EsChartCard({
   // happened to broadcast again. One transport, one owner, like the dock.
   const replayBar = replayOn ? (
     <div
-      className={`es-candles-replay flex flex-wrap items-center gap-3 pt-2 pb-2${dockMode === "full" ? " px-4" : ""}`}
-      style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}
+      className={`es-candles-replay flex flex-wrap items-center gap-3 pt-2 pb-2${dockMode === "full" || hostedReplay ? " px-4" : ""}`}
+      // Hosted, this bar IS the page's bottom dock and that dock draws its own
+      // top hairline; a second rule under the controls would read as an empty
+      // strip below the page. Un-hosted it still sits above the chart and needs
+      // the line to separate the two.
+      style={hostedReplay ? undefined : { borderBottom: `1px solid ${HOME_THEME.border}` }}
     >
       <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.cyan }}>Replay</span>
       {/* Day picker: step across the ET days in the rolling window so the
@@ -5951,14 +5955,38 @@ function EsChartCard({
               onChange={(v) => setReplaySpeed(Number(v))}
             />
           </div>
-          {/* Must clear replayEngaged as well as replayOn. This is the primary
-              exit on /es-candles (the transport is portaled into the popover, so
-              this button is its last control), and leaving `engaged` true with
-              `on` false makes the live price-line publisher bail forever — the
-              walls and the flip get removed and never come back. */}
+          {/* Must clear replayEngaged as well as replayOn. Leaving `engaged`
+              true with `on` false makes the live price-line publisher bail
+              forever — the walls and the flip get removed and never come back.
+              (Same contract as the ✕ below; both go through `exitReplay`.) */}
           <DockButton onClick={exitReplay} title="Exit replay — back to live" style={{ color: HOME_THEME.cyan }}><span>● Live</span></DockButton>
         </>
       )}
+
+      {/* Close, pinned to the right edge of the bar.
+          OUTSIDE the frames ternary on purpose: the "no bars for this day"
+          branch above renders a sentence and nothing else, so on a day with no
+          RTH prints the transport had no exit at all short of stepping to
+          another session first. A dock you can open and not close is a trap.
+          It is the same `exitReplay` as "● Live" — that one says where you end
+          up, this one says the bar goes away, and people reach for different
+          ones. */}
+      <button
+        onClick={exitReplay}
+        title="Close replay — back to live"
+        aria-label="Close replay"
+        style={{
+          marginLeft: "auto", flexShrink: 0,
+          width: 28, height: 28, borderRadius: 8,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: "rgba(255,255,255,0.04)",
+          border: `1px solid ${HOME_THEME.border}`,
+          color: HOME_THEME.muted, cursor: "pointer", fontFamily: "inherit",
+          fontSize: 15, lineHeight: 1, fontWeight: 700,
+        }}
+      >
+        ✕
+      </button>
     </div>
   ) : null;
 

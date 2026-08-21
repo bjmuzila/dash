@@ -98,8 +98,19 @@ export default function LayoutPresetButton() {
   useEffect(() => {
     if (!open) return;
     const measure = () => {
-      const r = wrapRef.current?.getBoundingClientRect();
-      if (!r) return;
+      const el = wrapRef.current;
+      const r = el?.getBoundingClientRect();
+      if (!el || !r) return;
+      // Folded into a cog menu (DockCogMenu renders `role="menu"`)? Then fly out
+      // from that menu's LEFT edge, top-aligned with it, exactly like the page's
+      // Charts / Indicators panel. Dropping straight down from the button would
+      // land the list on top of the rest of the menu it lives in.
+      const menu = el.closest('[role="menu"]') as HTMLElement | null;
+      const m = menu?.getBoundingClientRect();
+      if (m && m.left > PANEL_W + 24) {
+        setPos({ top: Math.max(8, Math.round(m.top)), right: Math.round(window.innerWidth - m.left + 8) });
+        return;
+      }
       setPos({
         top: r.bottom + 6,
         // Right-aligned to the button, but never past the viewport edge: at the
@@ -166,8 +177,15 @@ export default function LayoutPresetButton() {
           className="es-candles-popover"
           style={{
             // Same treatment as the page's Charts / Indicators panels so the
-            // three read as one control surface.
-            position: "fixed", top: pos.top, right: pos.right, zIndex: 200,
+            // three read as one control surface — including the z-index.
+            //
+            // 200 was not enough once this button moved INTO the chart cog's
+            // menu: DockCogMenu's own portalled panel sits at 100,000, so the
+            // preset list opened *behind* the menu that holds its trigger and
+            // only the sliver hanging off the menu's left edge was visible.
+            // 100,001 matches the page's Charts / Indicators flyout — only one
+            // of the three can be open at a time, so they never fight.
+            position: "fixed", top: pos.top, right: pos.right, zIndex: 100001,
             width: PANEL_W, maxWidth: "calc(100vw - 16px)",
             padding: 12, borderRadius: 14,
             border: `1px solid ${HOME_THEME.border}`,

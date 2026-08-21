@@ -1290,6 +1290,303 @@ function StructuralRange({ a, spot }: { a: Analysis; spot: number | null }) {
   );
 }
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * OPEN CARD — the five numbers, and nothing else.
+ *
+ * Everything else on this page answers "what CHANGED". This answers "where are
+ * the rails", which is a different question asked at a different time of day.
+ * At 09:25 ET the `oi` basis has just been re-stamped off the settled OCC file,
+ * so for the five minutes before the bell this board is the cleanest structural
+ * read it will give all session — and a reader who has to assemble the walls,
+ * the flip and the cushion out of three separate tiles will not do it at 09:25.
+ * This is one glance.
+ *
+ * DELIBERATELY MECHANICAL, on exactly the rule regimeCopy() sets out: it names
+ * the zone spot sits in and says what dealer hedging DOES there. It does not
+ * say what to trade. The verdict line is a mechanism, not a call — the first
+ * morning the regime is right and the tape is not, an advisory line here would
+ * be the thing that cost money.
+ *
+ * THE BAND IS NOT APPLIED AND CANNOT BE. Every figure comes off the same
+ * analyzeLadder() whole-ladder pass the Read panel uses, so narrowing the
+ * ladder underneath never moves these numbers — the same guarantee, for the
+ * same reason: a wall is a property of the book, not of the rows on screen.
+ *
+ * IT NAMES ITS OWN BASIS. The footer legend on this page hardcodes "OI+Vol"
+ * and has been wrong on three of the four bases since the migration. A strip
+ * whose entire purpose is "write these down" cannot repeat that mistake, so
+ * the basis it was computed from is printed on it, and on `oi` the settled /
+ * provisional state of the file rides along.
+ *
+ * ES OFFSET. The strikes are SPX CASH. A reader whose chart is ES is looking at
+ * a different instrument trading at a basis to this one, and drawing a cash
+ * strike straight onto a futures chart mis-places every level by that spread —
+ * silently, and by enough to turn a good level into a bad fill. Nothing on this
+ * page streams ES, so the offset is entered by hand; when it is set, every
+ * landmark prints its futures-adjusted twin underneath. Persisted, because a
+ * number you retype every morning is a number you eventually stop typing.
+ */
+const OPEN_ES_KEY = "gexgrowth.esOffset";
+const OPEN_SHOW_KEY = "gexgrowth.openCard";
+
+/** localStorage, but it must never be the reason the page fails to render.
+    Private windows and hardened profiles throw on ACCESS, not just on write. */
+const lsGet = (k: string): string | null => {
+  try { return window.localStorage.getItem(k); } catch { return null; }
+};
+const lsSet = (k: string, v: string) => {
+  try { window.localStorage.setItem(k, v); } catch { /* the card still works, it just forgets */ }
+};
+
+/** Signed points and percent from spot to a landmark. */
+const away = (v: number, spot: number) => `${pts(v - spot)} · ${pts((v / spot - 1) * 100)}%`;
+
+function OpenTile({ name, color, value, sub, note, es }: {
+  name: string; color: string; value: string; sub?: string; note?: string; es?: string;
+}) {
+  return (
+    <div style={{
+      border: `1px solid ${T.border}`, borderLeft: `3px solid ${color}`,
+      borderRadius: 10, padding: "8px 10px", background: T.panelInset, minWidth: 0,
+    }}>
+      <div style={{ ...label, color, letterSpacing: 0.6 }}>{name}</div>
+      <div style={{ fontFamily: MONO, fontSize: 19, fontWeight: 800, lineHeight: 1.15, marginTop: 2 }}>{value}</div>
+      {/* The ES twin sits directly under the cash number and is dimmer — it is
+          a restatement of the line above, never a second landmark. */}
+      {es ? (
+        <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, color: T.gold, marginTop: 1 }}>
+          ES {es}
+        </div>
+      ) : null}
+      {sub ? <div style={{ fontFamily: MONO, fontSize: 11, color: T.text, marginTop: 3, ...oneLine }}>{sub}</div> : null}
+      {note ? <div style={{ fontSize: 10.5, color: T.textMuted, opacity: 0.75, marginTop: 2, ...oneLine }}>{note}</div> : null}
+    </div>
+  );
+}
+
+function OpenCard({ a, spot, symbol, basis, oiSettled, asOfLine, hasPrior, esRaw, setEsRaw }: {
+  a: Analysis; spot: number | null; symbol: string; basis: Basis;
+  /** `oi` basis only. undefined on every other basis — there is no OCC file to be settled. */
+  oiSettled: boolean | undefined;
+  /** Whatever dates this reading, rendered verbatim so the card can be screenshotted. */
+  asOfLine: string;
+  hasPrior: boolean;
+  esRaw: string; setEsRaw: (v: string) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  // Parsed leniently: a half-typed "-" or "." is not an error, it is a zero
+  // until the next keystroke. Guarded on finiteness so NaN never reaches a
+  // rendered strike.
+  const esOff = useMemo(() => {
+    const n = Number.parseFloat(esRaw);
+    return Number.isFinite(n) ? n : 0;
+  }, [esRaw]);
+  const esOn = esOff !== 0;
+  const esOf = (v: number) => strikeStr(Math.round((v + esOff) * 100) / 100);
+
+  const cw = a.callWall, pw = a.putWall, flip = a.flipNow;
+
+  /**
+   * Which zone spot sits in. Prefers the flip, because that is the measured
+   * boundary; falls back to the sign of the book when the running total never
+   * crosses inside the recorded window — which is the same fallback
+   * StructuralRange makes when it draws one band instead of two, and it is
+   * flagged as inferred rather than presented as a located line.
+   */
+  const zone: "DAMPEN" | "AMPLIFY" = flip != null && spot != null
+    ? (spot > flip ? "DAMPEN" : "AMPLIFY")
+    : a.netTotal >= 0 ? "DAMPEN" : "AMPLIFY";
+  const zoneInferred = flip == null || spot == null;
+  const zoneColor = zone === "DAMPEN" ? RANGE_COLORS.flip : RANGE_COLORS.put;
+  const mechanism = zone === "DAMPEN"
+    ? "Dealers are long gamma here — they buy weakness and sell strength. Moves COMPRESS."
+    : "Dealers are short gamma here — they sell weakness and buy strength. Moves EXTEND.";
+
+  const reg = regimeCopy(a.netTotal, a.prevTotal, hasPrior);
+
+  /**
+   * Freshness, and it is the first thing on the strip on purpose. Before 09:25
+   * the open-interest half is still the provisional 16:05 read — settled
+   * through the session BEFORE last night — so a map built on it is a day
+   * stale. That is a different failure from a wrong number: it looks right.
+   */
+  const fresh: { text: string; tone: "pos" | "neg" | "warn"; title: string } | null =
+    basis !== "oi" || oiSettled == null
+      ? null
+      : oiSettled
+        ? { text: "SETTLED", tone: "pos", title: "Open interest is the settled OCC file, re-stamped at 09:25 ET. These levels describe last night's book." }
+        : { text: "PROVISIONAL", tone: "warn", title: "Still the provisional 16:05 read — its open interest is settled through the session BEFORE this one. Wait for the 09:25 re-stamp before you draw these." };
+
+  /** Plain text, monospace-aligned, sized to paste into a journal or a chat. */
+  const copyText = useMemo(() => {
+    const pad = (s: string) => s.padEnd(11, " ");
+    const L: string[] = [
+      `${symbol} · ${asOfLine}`,
+      `${BASIS_COPY[basis].name}${fresh ? ` · ${fresh.text}` : ""}`,
+      "",
+      spot != null ? `${pad("spot")}${strikeStr(spot)}` : `${pad("spot")}—`,
+      cw && spot != null ? `${pad("call wall")}${strikeStr(cw.strike)}  (${away(cw.strike, spot)})` : `${pad("call wall")}—`,
+      flip != null && spot != null ? `${pad("flip")}${strikeStr(flip)}  (${away(flip, spot)})` : `${pad("flip")}— none in window`,
+      pw && spot != null ? `${pad("put wall")}${strikeStr(pw.strike)}  (${away(pw.strike, spot)})` : `${pad("put wall")}—`,
+      a.cushionNow != null
+        ? `${pad("cushion")}${pts(a.cushionNow)}${a.cushionPrev != null ? `  (was ${pts(a.cushionPrev)})` : ""}`
+        : `${pad("cushion")}—`,
+      `${pad("regime")}${reg.word}`,
+      `${pad("zone")}${zone}${zoneInferred ? " (inferred — no flip in window)" : ""}`,
+    ];
+    if (esOn) {
+      L.push("", `ES offset ${pts(esOff)} →  call ${cw ? esOf(cw.strike) : "—"} · flip ${flip != null ? esOf(flip) : "—"} · put ${pw ? esOf(pw.strike) : "—"}`);
+    }
+    return L.join("\n");
+  }, [symbol, asOfLine, basis, fresh, spot, cw, pw, flip, a.cushionNow, a.cushionPrev, reg.word, zone, zoneInferred, esOn, esOff]);
+
+  const copy = () => {
+    try {
+      void navigator.clipboard.writeText(copyText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch { /* no clipboard permission — the numbers are on screen anyway */ }
+  };
+
+  // Without a spot there is no "away from price" and no zone, which is most of
+  // what this strip is. Say so rather than drawing tiles full of dashes.
+  if (spot == null) {
+    return (
+      <div style={{ ...classicCardStyle, padding: "8px 12px", margin: "0 0 10px", fontSize: 11.5, color: T.text }}>
+        Open Card needs a recorded spot for this session — every level on it is a distance from price.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      ...classicCardStyle,
+      padding: "10px 12px 11px", margin: "0 0 12px",
+      borderLeft: `3px solid ${LIGHT_BLUE}`,
+    }}>
+      {/* header — what this is, how fresh it is, what it is made of */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 9 }}>
+        <span style={{ ...label, color: LIGHT_BLUE, letterSpacing: 0.8, fontWeight: 800 }}>OPEN CARD</span>
+        {fresh ? <span style={{ ...toneChip(fresh.tone), fontSize: 9.5 }} title={fresh.title}>{fresh.text}</span> : null}
+        <span
+          style={{ ...label, opacity: 0.85 }}
+          title={`${BASIS_COPY[basis].unit}. ${BASIS_COPY[basis].caveat}`}
+        >
+          {BASIS_COPY[basis].name}
+        </span>
+        {/* The one nudge this strip makes, and it is about PROVENANCE, not a
+            trade: only `oi` differences honestly, and only `oi` is re-stamped
+            settled before the bell. Everything else draws a map off a number
+            that was built for a different question. */}
+        {basis !== "oi" ? (
+          <span
+            style={{ ...toneChip("warn"), fontSize: 9.5 }}
+            title="These walls are real, but OI only is the basis that is re-stamped off the settled OCC file at 09:25 ET — it is the one to build a morning map on."
+          >
+            OI ONLY IS THE MORNING BASIS
+          </span>
+        ) : null}
+
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          <label
+            style={{ ...label, cursor: "help" }}
+            title="Signed points to ADD to an SPX cash strike to place it on an ES chart (ES = SPX + offset). Read the current spread off your platform once at the open. Saved between sessions."
+            htmlFor="opencard-es"
+          >
+            ES offset
+          </label>
+          <input
+            id="opencard-es"
+            value={esRaw}
+            onChange={(e) => setEsRaw(e.target.value)}
+            placeholder="0.00"
+            inputMode="decimal"
+            aria-label="ES offset in points, added to each SPX cash strike"
+            style={{
+              background: T.panelInset, border: `1px solid ${esOn ? `${T.gold}73` : T.border}`,
+              borderRadius: 8, padding: "4px 8px", color: esOn ? T.gold : T.text,
+              fontFamily: MONO, fontSize: 12, fontWeight: 700, width: 74, textAlign: "right",
+            }}
+          />
+          <button
+            onClick={copy}
+            title="Copy the card as plain text"
+            style={{ ...homeSecondaryButtonStyle, borderRadius: 999, padding: "4px 11px", fontSize: 11 }}
+          >
+            {copied ? "copied" : "copy"}
+          </button>
+        </span>
+      </div>
+
+      {/* THE FIVE NUMBERS. Ordered high → low so the row reads like the chart
+          does, with the cushion and the regime after them as the two readings
+          that are not prices. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))", gap: 8 }}>
+        <OpenTile
+          name="CALL WALL"
+          color={RANGE_COLORS.wall}
+          value={cw ? strikeStr(cw.strike) : "—"}
+          es={cw && esOn ? esOf(cw.strike) : undefined}
+          sub={cw ? away(cw.strike, spot) : undefined}
+          note={cw ? "heaviest +γ above spot" : "no positive gamma above spot in the window"}
+        />
+        <OpenTile
+          name="GAMMA FLIP"
+          color={RANGE_COLORS.flip}
+          value={flip != null ? strikeStr(Math.round(flip * 100) / 100) : "—"}
+          es={flip != null && esOn ? esOf(flip) : undefined}
+          sub={flip != null ? away(flip, spot) : undefined}
+          note={flip != null ? "regime boundary" : "cumulative never crosses zero in ±40 strikes"}
+        />
+        <OpenTile
+          name="PUT WALL"
+          color={RANGE_COLORS.put}
+          value={pw ? strikeStr(pw.strike) : "—"}
+          es={pw && esOn ? esOf(pw.strike) : undefined}
+          sub={pw ? away(pw.strike, spot) : undefined}
+          note={pw ? "heaviest −γ below spot" : "no negative gamma below spot in the window"}
+        />
+        <OpenTile
+          name="CUSHION"
+          color={T.gold}
+          value={a.cushionNow != null ? pts(a.cushionNow) : "—"}
+          sub={a.cushionNow != null && a.cushionPrev != null ? `was ${pts(a.cushionPrev)}` : undefined}
+          note="points from spot to the flip"
+        />
+        <OpenTile
+          name="REGIME"
+          color={a.netTotal > 0 ? POS : a.netTotal < 0 ? NEG : T.textMuted}
+          value={reg.word.split(" · ")[0]}
+          sub={reg.word.includes(" · ") ? reg.word.split(" · ").slice(1).join(" · ") : sgn(a.netTotal)}
+          note={sgn(a.netTotal)}
+        />
+      </div>
+
+      {/* The verdict, and it is a MECHANISM. Same sentences the structural
+          range's zone tooltips use, so the two surfaces cannot drift apart. */}
+      <div style={{
+        display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap",
+        marginTop: 9, paddingTop: 8, borderTop: `1px solid ${T.border}`,
+      }}>
+        <span style={{ ...toneChip("warn"), fontSize: 10, color: zoneColor, borderColor: `${zoneColor}61`, background: `${zoneColor}1c` }}>
+          SPOT IN {zone}
+        </span>
+        <span style={{ fontSize: 11.5, color: T.text, lineHeight: 1.45, flex: 1, minWidth: 200 }}>
+          {mechanism}
+          {zoneInferred ? (
+            <span style={{ color: T.gold }}> Inferred from the sign of the book — there is no flip inside the recorded window to locate it.</span>
+          ) : null}
+        </span>
+        {esOn ? (
+          <span style={{ ...label, color: T.gold, fontFamily: MONO }}>
+            cash {pts(esOff)} → ES
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function ReadPanel({ a, mode, hasPrior, live, symbol, zeroDte, legsMissing, spot }: {
   a: Analysis; mode: Mode; hasPrior: boolean; live: boolean;
   symbol: string; zeroDte: ZeroDte | null; legsMissing: boolean;
@@ -1765,6 +2062,16 @@ export default function GexGrowth() {
   // The Read panel. On by default: it is the reason to open a symbol, and a
   // reader who wants only bars can collapse it once.
   const [showRead, setShowRead] = useState(true);
+  // The Open Card — the five levels, read once before the bell. Persisted (and
+  // ON by default) because it is the first thing the page should say, and a
+  // reader who wants only the Δ workflow turns it off once.
+  const [showOpen, setShowOpen] = useState(() => lsGet(OPEN_SHOW_KEY) !== "0");
+  // Kept as the RAW STRING, not a number: a half-typed "-" or "-1." has to
+  // survive the keystroke that produced it, and parsing on every change would
+  // fight the reader's cursor.
+  const [esRaw, setEsRaw] = useState(() => lsGet(OPEN_ES_KEY) ?? "");
+  useEffect(() => { lsSet(OPEN_SHOW_KEY, showOpen ? "1" : "0"); }, [showOpen]);
+  useEffect(() => { lsSet(OPEN_ES_KEY, esRaw); }, [esRaw]);
   // Near-the-money band. Filters the LADDER and the mover ranking; never the
   // regime totals, the walls or the flip — see analyzeLadder.
   const [band, setBand] = useState<Band>(0);
@@ -2015,6 +2322,16 @@ export default function GexGrowth() {
       : null),
     [detail, detailSpot, band, hasPrior],
   );
+  /**
+   * What dates the Open Card, in a form that can stand alone. The header's
+   * version is a suffix fragment (" · close 2026-08-20") glued to the spot
+   * string; this one is copied and screenshotted on its own, so it has to be a
+   * whole statement — a level with no session on it is a level you will still
+   * be trading off on Thursday.
+   */
+  const openAsOf = showLive
+    ? (detail?.prevDate ? `live ${fmtEtTime(detail.asOf)} ET · vs close ${detail.prevDate}` : "live · no recorded close yet")
+    : detail?.date ? `close ${detail.date}` : "no session";
   // Legs exist on today's side but not on the baseline's — the pre-migration
   // case. Distinct from "no legs at all", which is just an older payload shape.
   const legsMissing = !!detail?.rows?.length && (!detail.hasLegs || (hasPrior && !detail.hasPrevLegs));
@@ -2251,6 +2568,15 @@ export default function GexGrowth() {
           </span>
 
           <button
+            onClick={() => setShowOpen((v) => !v)}
+            aria-pressed={showOpen}
+            title="The five levels to write down before the bell — call wall, gamma flip, put wall, cushion, regime — with an optional SPX→ES offset"
+            style={{ ...(showOpen ? homeButtonStyle : homeSecondaryButtonStyle), borderRadius: 999, padding: "5px 12px" }}
+          >
+            Open Card
+          </button>
+
+          <button
             onClick={() => setShowRead((v) => !v)}
             aria-pressed={showRead}
             title="Regime, walls, gamma flip and the ranked movers — all computed from the ladder below"
@@ -2471,6 +2797,25 @@ export default function GexGrowth() {
                     </span>
                   </div>
 
+                  {/* THE OPEN CARD, above the headline on purpose. The big
+                      number below is a Δ, and a Δ is the second question of the
+                      morning — the first is "where are today's rails". Reading
+                      order on this pane is now: what symbol → where the levels
+                      are → what moved → the evidence. */}
+                  {showOpen && analysis ? (
+                    <OpenCard
+                      a={analysis}
+                      spot={detailSpot}
+                      symbol={sel}
+                      basis={basis}
+                      oiSettled={basis === "oi" ? detail?.oiSettled : undefined}
+                      asOfLine={openAsOf}
+                      hasPrior={hasPrior}
+                      esRaw={esRaw}
+                      setEsRaw={setEsRaw}
+                    />
+                  ) : null}
+
                   <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "3px 0 6px", flexWrap: "wrap" }}>
                     <span style={{ fontFamily: MONO, fontSize: 24, fontWeight: 800, color: headlineVal != null ? col(headlineVal) : T.text }}>
                       {headlineVal != null ? sgn(headlineVal) : "—"}
@@ -2685,8 +3030,13 @@ export default function GexGrowth() {
           </div>
         )}
 
+        {/* The basis is READ, not hardcoded. This line said "OI+Vol basis" on
+            every basis since the migration, which put it in direct
+            contradiction with the caveat strip at the top of the same card —
+            and the Open Card now prints its own provenance too, so a third
+            surface asserting the wrong one is a straight defect. */}
         <div style={{ ...label, marginTop: 12 }}>
-          OI+Vol basis · whole board excl. 0DTE · ±40 strikes around the close ·
+          {BASIS_COPY[basis].name} basis{effLeg !== "net" ? ` · ${LEG_COPY[effLeg].name}` : ""} · whole board excl. 0DTE · ±40 strikes around the close ·
           {mode === "levels"
             ? " net GEX as each symbol's session closed"
             : mode === "compare"
