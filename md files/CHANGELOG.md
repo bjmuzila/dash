@@ -1,5 +1,127 @@
 # Changelog
 
+## 2026-08-21 (m) - Owner nav regrouped; member split now means REGISTERED, not paying
+
+Edited: `owner-vite/src/lib/nav.ts`, `owner-vite/src/pages/registry.ts`,
+`owner-vite/src/pages/ControlPanel.tsx`.
+
+### Sidebar
+
+Business straddled two unrelated jobs — READING numbers (who's paying, who
+visited) and SENDING things to people (emails, newsletter, alerts). Those never
+get opened in the same sitting, and the second half is the same job as Content.
+So:
+
+- **New `Info` group** — Admin, Visitors, Overview, Sales. Overview moved out of
+  System: it's the traffic/signups/pages report, and the only reason it ever sat
+  next to Dev is that its URL happens to be `/owner/dev/owner`.
+- **Affiliates, Emails, Newsletter, Bzila Alerts → Content.** Making something
+  public and sending it to someone are one job.
+- **Business + System merged.** With the broadcast pages gone to Content and the
+  reporting pages gone to Info, Business had nothing left; System is Dev +
+  Database. One group instead of two half-empty ones.
+- **Tree removed.** Dropped from the nav AND from `pages/registry.ts`, so
+  `Tree.tsx` + `pages/tree/*` stop being bundled rather than shipping an
+  unreachable lazy chunk. The files are still on disk, now unreferenced.
+
+`href` strings are untouched, so no bookmark breaks. Hub pins are keyed by href
+(`lib/hubPrefs.ts`) and re-resolve against the nav on every read, so favourites
+survive the regroup and pick up their new group's accent. `OwnerShell` already
+filters empty groups, so nothing needed changing there.
+
+### The member / non-member split was measuring the wrong thing
+
+The first cut used `isSubscriber` (paying: `active`/`trialing`). That made a
+signed-in free or lapsed account count as a NON-member, so the non-members list
+filled with `/es-candles` and `/traders-dashboard` — pages middleware will not
+serve to a logged-out visitor at all. **Non-member traffic on a gated page is a
+contradiction**, and seeing one is the tell that the split is wrong.
+
+A member is now someone who **registered**: the visit row carries a `user_id`,
+which `/api/page-status` fills from the session cookie (`access.userId`). No
+`user_id` = logged out, which is the only thing "non-member" can honestly mean.
+Non-members now resolve to what they can actually reach — Landing, Pricing,
+Sign-up, Unsubscribe.
+
+Paying is kept as a **subset**, not a third bucket: each row reports
+`members (paying) / guests`, and the split bar draws the paid slice inside the
+member half rather than as a third segment (three segments would imply three
+disjoint groups). The gap between registered and paying is the trial funnel and
+is worth being able to see.
+
+Also:
+
+- **Owner visits excluded.** Brandon reloading a page he is building is not a
+  customer visiting it. Counted and reported in the header strip ("N owner loads
+  excluded"), not silently dropped — same treatment bots already got.
+- **Leak warning.** If any gated page logs a load with no account attached, the
+  card says so in an amber banner naming the routes, instead of printing an
+  impossible number as fact. Usual cause is a beacon firing before the session
+  cookie resolves, not real anonymous traffic.
+- Header strip gained "N with accounts" (unique people, not loads) so the two
+  denominators stay visibly separate.
+
+## 2026-08-21 (d) - Multi Greek: THRESHOLD coloring mode
+
+New: `lib/calculations/gexThreshold.ts`.
+Edited: `app/mult-greek/MultGreekClient.tsx`, `components/shared/homeTheme.ts`.
+Tuned in: `generated/2026-08-21-mg-color-modes.html`.
+
+A second coloring scheme for the ladder, off by default. Cog menu -> **Coloring**
+-> HEAT | %, persisted per browser (`mg_color_mode`). An existing user's ladder
+does not change appearance because this shipped.
+
+**The rule.** Heat paints every cell on a ramp keyed to the column's largest
+strike - it answers "how does this compare to the biggest one", for forty rows at
+once, which is why a full ladder reads as a wash. Threshold answers "does this
+strike matter at all", with a hard yes/no:
+
+    share = |GEX| / SUM|GEX| over the column     colored <=> share >= cutoff
+
+Denominator is GROSS gamma, so + and - strikes compete for the same 100% and a
+put-dominated column cannot also light up its calls. Below the cutoff a cell is
+dimmed (alpha .035), not erased - a cell with a value still has to look different
+from a cell with none.
+
+**One slider, not two.** The Intensity slider drives the cutoff in this mode
+rather than sitting dead, and reads out as a % instead of a multiplier. Right =
+lower cutoff = more of the ladder lit; its minimum stop keeps its existing
+levels-only meaning, so the two modes share the bottom of the track. Mapped so
+the default (1.75, dead centre of the 0.5-3 track) lands on exactly 2.00%.
+`MG_INTENSITY_MAX` is now named - the slider and `thresholdPct()` both read it,
+and hardcoding it in one would stop the right-hand end meaning 0%.
+
+**Levels.** CB / CW / PW paint over the share fill, which throws the sign away -
+so the colors put it back. CB is gold (`LEVEL_COLORS.cb`); it is sign-blind by
+definition, just the biggest |GEX|. CW takes the +GEX color and PW the -GEX
+color, since those two already carry their sign in their own definitions - a
+third and fourth hue would say nothing the label doesn't.
+
+**Why a wall needs more than a brighter fill.** A louder version of the same hue,
+on a panel already full of that hue, reads as "a bit more" rather than "this one"
+- there is no headroom left inside the hue. So a wall gets three things nothing
+else on the grid has:
+
+- **boost** - saturation and luminance pushed to the hue's vivid limit. Luminance
+  targets mid-bright, not white: a washed-out pink stops reading as a put wall.
+- **near-white rim** (2px) - headroom OUTSIDE the hue. This is the piece that
+  actually does the work; the fill alone had nowhere to go.
+- **outer glow** - the walls are the only cells that emit past their own box.
+
+Plus full opacity and 900-weight numerals. CB deliberately stays quieter (53%,
+1px, no glow) so the two walls own the panel. Cell and badge ink flip dark/white
+off the fill's own luminance, cut at 0.55 - a mid-tone red sits just under half
+and still wants white on it.
+
+**New colors** in `homeTheme`: `GEX_THRESHOLD_COLORS` (`pos` #2186c4, `neg` =
+`HOME_THEME.red`, `cb` = `LEVEL_COLORS.cb`). Its own pair rather than the heat
+scale's literals, which are tuned to read at 2-18% alpha as a wash behind text
+while this mode paints at 53% and 100%.
+
+**Untouched:** heat mode, levels-only mode, replay, the rank-1 ring and the gold
+peak star (both suppressed in threshold mode - a second emphasis would compete
+with the walls), Delta stamps, the snapshot renderer.
+
 ## 2026-08-21 (l) - Landing: Tradeify card is now a link
 
 Edited: `components/landing/LandingClient.tsx`.

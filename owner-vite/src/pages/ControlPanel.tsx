@@ -189,17 +189,24 @@ interface PageVisit {
   /** City-centroid coords from Cloudflare — what the map's bubbles plot. */
   lat?: number | null;
   lon?: number | null;
-  /** Identity of the signed-in account behind the row (null when logged out). */
+  /**
+   * The registered account behind the row. `userId` non-null = REGISTERED, and
+   * that — not isSubscriber — is what splits Members from Non-members in the
+   * Top-pages card. /api/page-status fills it from the session cookie, so a
+   * logged-out visitor is the only thing that lands on the non-member side,
+   * which is the only honest reading: every gated page is unreachable without
+   * a session, so "non-member traffic on /es-candles" is a contradiction.
+   */
   userEmail?: string | null;
   userName?: string | null;
   /**
-   * PAYING, not merely signed in — 'active' | 'trialing' per libDb.PAID_STATUSES.
-   * This is what splits Members from Non-members in the Top-pages card; a
-   * logged-out visitor and a lapsed account are both "non-member" on purpose,
-   * because both are people the landing page still has to sell to.
+   * PAYING — 'active' | 'trialing' per libDb.PAID_STATUSES. Tracked as a SUBSET
+   * of registered, never as the member test itself: registered-but-not-paying
+   * is the trial funnel and is worth being able to see.
    */
   isSubscriber?: boolean | null;
   subStatus?: string | null;
+  /** Brandon's own visits. Excluded from the Top-pages card, and counted so it can say so. */
   isOwner?: boolean | null;
   // ── Acquisition ──────────────────────────────────────────────────────────
   // Non-null only on ENTRY rows (the first beacon of a browser session) — see
@@ -1205,13 +1212,29 @@ function KpiStrip({
 //   • a real time window (24h / 7d / 30d / all),
 //   • unique VISITORS alongside loads — 400 loads from 3 people is a very
 //     different fact from 400 loads from 300 people,
-//   • the members / non-members split, and with it the answer to "what do
-//     people who haven't bought yet look at" — which is the landing page, the
-//     pricing page and the unsubscribe page, none of which a signed-in member
-//     ever sees.
+//   • the member / non-member split, and with it the answer to "what do people
+//     who haven't signed up look at" — the landing page, pricing, sign-up and
+//     unsubscribe, which is all a logged-out visitor CAN look at.
 //
-// Bots are dropped everywhere (Googlebot and Discord's link unfurler are a big
-// share of a small site's raw loads and would top this list on a quiet day).
+// WHAT "MEMBER" MEANS HERE — this is the one definition that has to be right.
+// A member is someone who REGISTERED: the visit row carries a user_id, which
+// /api/page-status fills from the session cookie. It is deliberately NOT
+// "is_subscriber", which the first cut of this card used and which was wrong in
+// a way that showed: a signed-in free or lapsed account browsing the dashboard
+// counted as a NON-member, so the non-members list filled up with /es-candles
+// and /traders-dashboard — pages middleware will not serve to a logged-out
+// visitor at all. Non-member traffic on a gated page is a contradiction, and
+// seeing one means the split is measuring the wrong thing.
+//
+// Paying is still tracked, as a subset: each row reports how many of its member
+// loads came from an active/trialing subscription. Registered-but-not-paying is
+// a real and interesting group — it is the trial funnel — and collapsing it into
+// either side loses that.
+//
+// Two more exclusions, both stated in the card rather than applied silently:
+// bots (Googlebot and Discord's link unfurler would top the list on a quiet
+// day), and the owner's own visits (Brandon reloading a page he is building is
+// not a customer visiting it).
 
 type PagesAudience = "all" | "members" | "nonmembers";
 type PagesWindowKey = "24h" | "7d" | "30d" | "all";
@@ -1223,10 +1246,10 @@ const PAGES_WINDOWS: { key: PagesWindowKey; label: string; hours: number | null 
   { key: "all", label: "All", hours: null },
 ];
 
-const PAGES_AUDIENCES: { key: PagesAudience; label: string }[] = [
-  { key: "all", label: "Everyone" },
-  { key: "members", label: "Members" },
-  { key: "nonmembers", label: "Non-members" },
+const PAGES_AUDIENCES: { key: PagesAudience; label: string; hint: string }[] = [
+  { key: "all", label: "Everyone", hint: "every non-bot visit, owner excluded" },
+  { key: "members", label: "Members", hint: "signed in with a registered account" },
+  { key: "nonmembers", label: "Non-members", hint: "no account — logged-out visitors only" },
 ];
 
 /**
@@ -1338,15 +1361,19 @@ function TopPagesCard({
 
     type Agg = {
       id: string; name: string; route: string; isPublic: boolean;
-      loads: number; memberLoads: number; guestLoads: number;
-      visitors: Set<string>; members: Set<string>;
+      loads: number; memberLoads: number; guestLoads: number; paidLoads: number;
+      visitors: Set<string>;
       channels: Map<string, number>;
       lastSeen: number;
     };
     const byPage = new Map<string, Agg>();
     const allVisitors = new Set<string>();
+    const allMembers = new Set<string>();
     let totalLoads = 0;
+    let memberLoadsTotal = 0;
+    let paidLoadsTotal = 0;
     let botLoads = 0;
+    let ownerLoads = 0;
     let scanned = 0;
 
     for (const v of visits) {
@@ -1354,7 +1381,14 @@ function TopPagesCard({
       if (cutoff != null && (!Number.isFinite(t) || t < cutoff)) continue;
       scanned++;
       if (v.isBot) { botLoads++; continue; }
-      const isMember = v.isSubscriber === true;
+      // Owner traffic is not customer traffic. Counted and reported, not hidden.
+      if (v.isOwner) { ownerLoads++; continue; }
+
+      // REGISTERED, not paying — see the block comment above this component.
+      // A user_id means an account; no user_id means a logged-out visitor, and
+      // a logged-out visitor is the only thing "non-member" can honestly mean,
+      // because every gated page is unreachable without a session.
+      const isMember = Boolean(v.userId);
       if (audience === "members" && !isMember) continue;
       if (audience === "nonmembers" && isMember) continue;
 
@@ -1362,20 +1396,28 @@ function TopPagesCard({
       let a = byPage.get(d.id);
       if (!a) {
         a = {
-          ...d, loads: 0, memberLoads: 0, guestLoads: 0,
-          visitors: new Set(), members: new Set(),
+          ...d, loads: 0, memberLoads: 0, guestLoads: 0, paidLoads: 0,
+          visitors: new Set(),
           channels: new Map(), lastSeen: 0,
         };
         byPage.set(d.id, a);
       }
       a.loads++;
       totalLoads++;
-      if (isMember) a.memberLoads++; else a.guestLoads++;
+      if (isMember) {
+        a.memberLoads++;
+        memberLoadsTotal++;
+        // Paying is a SUBSET of registered, never a third bucket — the gap
+        // between the two is the trial/free funnel and is worth seeing.
+        if (v.isSubscriber === true) { a.paidLoads++; paidLoadsTotal++; }
+      } else {
+        a.guestLoads++;
+      }
       const who = visitorKey(v);
       if (who) {
         a.visitors.add(who);
         allVisitors.add(who);
-        if (isMember) a.members.add(who);
+        if (isMember) allMembers.add(who);
       }
       // Attribution only exists on entry rows, so this is "how the sessions that
       // STARTED on this page arrived" — not how everyone who ever saw it did.
@@ -1390,18 +1432,29 @@ function TopPagesCard({
         return {
           id: a.id, name: a.name, route: a.route, isPublic: a.isPublic,
           loads: a.loads, memberLoads: a.memberLoads, guestLoads: a.guestLoads,
-          visitors: a.visitors.size, members: a.members.size,
+          paidLoads: a.paidLoads,
+          visitors: a.visitors.size,
           topChannel: top ? (CHANNEL_LABELS[top[0]] ?? top[0]) : null,
           topChannelN: top ? top[1] : 0,
           lastSeen: a.lastSeen,
         };
       });
 
+    // A gated page reached by someone with no account should be impossible.
+    // If it happens the split is lying (or middleware is), so say so loudly
+    // rather than letting a wrong number sit in a table looking like a fact.
+    const leaks = rows.filter((r) => !r.isPublic && r.guestLoads > 0);
+
     return {
       rows,
+      leaks,
       totalLoads,
       totalVisitors: allVisitors.size,
+      memberVisitors: allMembers.size,
+      memberLoadsTotal,
+      paidLoadsTotal,
       botLoads,
+      ownerLoads,
       hasRowsInWindow: scanned > 0,
     };
   }, [visits, audience, win]);
@@ -1412,9 +1465,10 @@ function TopPagesCard({
   const dim = { color: HOME_THEME.text, opacity: 0.45 } as React.CSSProperties;
   const mono: React.CSSProperties = { fontFamily: "monospace", fontVariantNumeric: "tabular-nums" };
 
-  const Pill = ({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) => (
+  const Pill = ({ on, label, title, onClick }: { on: boolean; label: string; title?: string; onClick: () => void }) => (
     <button
       onClick={onClick}
+      title={title}
       style={{
         padding: "3px 10px", fontSize: 12, fontWeight: 700, borderRadius: 7, cursor: "pointer",
         color: on ? HOME_THEME.cyan : HOME_THEME.text,
@@ -1440,7 +1494,7 @@ function TopPagesCard({
         </div>
         <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
           {PAGES_AUDIENCES.map((a) => (
-            <Pill key={a.key} on={a.key === audience} label={a.label} onClick={() => setAudience(a.key)} />
+            <Pill key={a.key} on={a.key === audience} label={a.label} title={a.hint} onClick={() => setAudience(a.key)} />
           ))}
           <span style={{ width: 8 }} />
           {PAGES_WINDOWS.map((w) => (
@@ -1449,23 +1503,54 @@ function TopPagesCard({
         </div>
       </div>
 
-      {/* Denominators, stated. Loads and visitors are different counts and the
-          card says so rather than letting the reader assume one number. */}
+      {/* Denominators, stated. Loads and visitors are different counts, and
+          "member" is registered-not-paying, so both get said out loud rather
+          than left for the reader to assume. */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, marginBottom: 12, ...dim }}>
         <span><b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{num(view.totalLoads)}</b> loads</span>
-        <span><b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{num(view.totalVisitors)}</b> visitors</span>
+        <span><b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{num(view.totalVisitors)}</b> people</span>
+        {audience === "all" && view.memberVisitors > 0 && (
+          <span title="How many of those people had an account. The rest were logged out.">
+            <b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{num(view.memberVisitors)}</b> with accounts
+          </span>
+        )}
         <span><b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{view.rows.length}</b> pages</span>
+        {audience !== "nonmembers" && view.memberLoadsTotal > 0 && (
+          <span title="Registered accounts. Paying is the subset in parentheses — the gap is your trial / free funnel.">
+            <b style={{ color: HOME_THEME.text, opacity: 1, ...mono }}>{num(view.memberLoadsTotal)}</b> member loads
+            {" "}({num(view.paidLoadsTotal)} paying)
+          </span>
+        )}
         {view.botLoads > 0 && <span>{num(view.botLoads)} bot loads excluded</span>}
+        {view.ownerLoads > 0 && <span>{num(view.ownerLoads)} owner loads excluded</span>}
       </div>
+
+      {/* Impossible-by-design check. A gated page cannot be served to someone
+          without a session, so a non-member load on one means the split (or
+          middleware) is wrong — surface it instead of printing it as fact. */}
+      {audience !== "members" && view.leaks.length > 0 && (
+        <div style={{
+          fontSize: 12, lineHeight: 1.55, marginBottom: 12, padding: "8px 10px", borderRadius: 8,
+          color: HOME_THEME.text, background: `${HOME_THEME.orange}14`, border: `1px solid ${HOME_THEME.orange}44`,
+        }}>
+          <b style={{ color: HOME_THEME.orange }}>Check this:</b>{" "}
+          {view.leaks.length} gated page{view.leaks.length > 1 ? "s" : ""} logged loads with no account attached
+          {" — "}
+          <span style={mono}>{view.leaks.slice(0, 3).map((r) => r.route).join(", ")}</span>
+          {view.leaks.length > 3 ? ` +${view.leaks.length - 3} more` : ""}.
+          {" "}A logged-out visitor can't reach those, so it's usually a beacon firing before the session
+          cookie resolves — not real anonymous traffic.
+        </div>
+      )}
 
       {view.rows.length === 0 ? (
         <div style={{ fontSize: 14, ...dim, lineHeight: 1.6 }}>
           {!view.hasRowsInWindow
             ? `Nothing logged in the last ${PAGES_WINDOWS.find((w) => w.key === win)?.label}. Try a wider window.`
             : audience === "members"
-              ? "No subscriber page loads in this window."
+              ? "No signed-in page loads in this window."
               : audience === "nonmembers"
-                ? "No non-member page loads in this window — every visit came from a paying account."
+                ? "No logged-out page loads in this window — every visit came from a registered account."
                 : "No page loads recorded yet."}
         </div>
       ) : (
@@ -1475,17 +1560,18 @@ function TopPagesCard({
             <span>Page</span>
             <span style={{ textAlign: "right" }}>Loads</span>
             <span style={{ textAlign: "right" }}>People</span>
-            {!isMobile && <span>Member / non</span>}
+            {!isMobile && <span title="Loads from registered accounts vs logged-out visitors. Paying is the subset shown in parentheses.">Member / guest</span>}
             {!isMobile && <span>Came from</span>}
             {!isMobile && <span style={{ textAlign: "right" }}>Last</span>}
           </div>
 
           {shown.map((r) => {
             const memberPct = r.loads > 0 ? (r.memberLoads / r.loads) * 100 : 0;
+            const paidPct = r.loads > 0 ? (r.paidLoads / r.loads) * 100 : 0;
             return (
               <div
                 key={r.id}
-                title={`${r.route} — ${num(r.loads)} loads from ${num(r.visitors)} visitors (${num(r.memberLoads)} member / ${num(r.guestLoads)} non-member)`}
+                title={`${r.route} — ${num(r.loads)} loads from ${num(r.visitors)} people\n${num(r.memberLoads)} from registered accounts (${num(r.paidLoads)} paying), ${num(r.guestLoads)} logged out`}
                 style={{ display: "grid", gridTemplateColumns: cols, gap: 8, alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${HOME_THEME.border}` }}
               >
                 {/* Name + route, with the magnitude bar behind them. */}
@@ -1510,15 +1596,19 @@ function TopPagesCard({
                 <span style={{ ...mono, fontSize: 14, textAlign: "right", color: HOME_THEME.text }}>{num(r.loads)}</span>
                 <span style={{ ...mono, fontSize: 14, textAlign: "right", color: HOME_THEME.text }}>{num(r.visitors)}</span>
 
-                {/* Member vs non-member share of this page's loads. */}
+                {/* Registered vs logged-out share of this page's loads, with the
+                    paying slice drawn INSIDE the member half rather than as a
+                    third segment — paying is a subset of registered, and a
+                    three-segment bar would imply three disjoint groups. */}
                 {!isMobile && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                     <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(255,255,255,0.06)" }}>
-                      <div style={{ width: `${memberPct}%`, background: HOME_THEME.green }} />
+                      <div style={{ width: `${paidPct}%`, background: HOME_THEME.green }} />
+                      <div style={{ width: `${memberPct - paidPct}%`, background: `${HOME_THEME.green}66` }} />
                       <div style={{ width: `${100 - memberPct}%`, background: HOME_THEME.orange }} />
                     </div>
                     <span style={{ fontSize: 11, ...mono, ...dim }}>
-                      {num(r.memberLoads)} / {num(r.guestLoads)}
+                      {num(r.memberLoads)} <span style={{ opacity: 0.7 }}>({num(r.paidLoads)})</span> / {num(r.guestLoads)}
                     </span>
                   </div>
                 )}

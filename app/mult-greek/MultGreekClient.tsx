@@ -8,9 +8,12 @@ import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { isCashOpen, isPlausibleBasis } from "@/components/dashboard/es-candles/chartMath";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS, classicCardAccentStyle, DOCK_THEME } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS, GEX_THRESHOLD_COLORS, classicCardAccentStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls } from "@/lib/calculations/heatLevels";
 import { rankBg } from "@/lib/calculations/optionChain";
+import {
+  thresholdBg, thresholdPct, levelPaint, MG_COLOR_MODE_KEY, type MgColorMode,
+} from "@/lib/calculations/gexThreshold";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockSlider, DockExpiryPicker, DockCogMenu, DockMenuRow, DockMenuDivider } from "@/components/shared/DockToolbar";
 import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/MultiGreekLevelSnapshot";
@@ -42,6 +45,12 @@ const CUSTOM_TICKER_KEY = "mg_custom_ticker";
 // SHOWN column is not the 4th expiry itself — it's the synthetic ex-0DTE TOTAL
 // (see EX0_KEY / withEx0Column) that the 4th expiry's data feeds into.
 const MAX_EXP_COLS = 4;
+
+// Top of the Intensity slider's track. Named because TWO things read it now: the
+// slider itself, and thresholdPct() — which maps the same slider to the % of a
+// column's gross gamma a strike needs to be colored in THRESHOLD mode. Hardcode
+// it in one of the two and the slider's right-hand end stops meaning "0%".
+const MG_INTENSITY_MAX = 3;
 
 // ── Replay mode ───────────────────────────────────────────────────────────────
 // Rewinds ALL FOUR PANELS AT ONCE off one shared clock: every cell renders from
@@ -651,7 +660,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
 }
 
 function TickerPanel({
-  ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
+  ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, colorMode, emLevels, showEm, captureWindow,
   showCB, showCW, showPW, onToggleWall, getGexChange, deltaWindow, onExpandChain,
   replayFrame = null, replayStrikes = null, dteBase = null,
 }: {
@@ -664,6 +673,10 @@ function TickerPanel({
   spot: number;
   contractMode: ContractMode;
   intensity: number;
+  /** "heat" = the ramp this page has always used; "threshold" = color only the
+   *  strikes carrying at least N% of the column's gross gamma. See
+   *  lib/calculations/gexThreshold. */
+  colorMode: MgColorMode;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
   /** Toolbar toggles: show the CB (1st) / CW (2nd) / PW (3rd) top-|GEX| level
@@ -816,6 +829,11 @@ function TickerPanel({
   // Built off the untrimmed rows for the same reason `walls` is: the capture
   // window must not change which strike is a wall.
   const levelsOnly = atMinIntensity(intensity, INTENSITY_MIN.chain);
+  // THRESHOLD mode: the Intensity slider drives the share a strike must carry to
+  // be colored instead of sitting dead. Its minimum stop keeps its existing
+  // meaning (levels-only), which is why that branch is tested first everywhere
+  // below — the two modes share the bottom of the slider.
+  const thPct = thresholdPct(intensity, INTENSITY_MIN.chain, MG_INTENSITY_MAX);
   const wallsByCol: Record<string, ColumnWalls> = {};
   if (levelsOnly && computedAug) {
     for (const e of computedAug.cols) {
@@ -944,7 +962,10 @@ function TickerPanel({
         let pos = 0, neg = 0;
         computed.rows.forEach(r => { const v = r.gex[e] || 0; if (v > 0) pos += v; else neg += -v; });
         const gross = pos + neg;
-        return [e, { net: pos - neg, posPct: gross > 0 ? (pos / gross) * 100 : null }] as const;
+        // `gross` also feeds the THRESHOLD coloring mode — it is the denominator
+        // every cell's share is taken against, so it is computed once here
+        // rather than re-summed per cell.
+        return [e, { net: pos - neg, gross, posPct: gross > 0 ? (pos / gross) * 100 : null }] as const;
       }))
     : null;
 
@@ -1240,6 +1261,13 @@ function TickerPanel({
                     : { t: "PW", c: LEVEL_COLORS.pw, title: "PW — most −GEX level" })
                   : null;
                 const isCB = lvl?.t === "CB";
+                // THRESHOLD mode. Levels-only owns the bottom of the slider in
+                // both modes, so it is excluded here rather than special-cased
+                // inside the paint helpers.
+                const useThreshold = colorMode === "threshold" && !levelsOnly;
+                const paint = (useThreshold && lvl && lvlKind && val != null)
+                  ? levelPaint(lvlKind, GEX_THRESHOLD_COLORS.cb, GEX_THRESHOLD_COLORS.pos, GEX_THRESHOLD_COLORS.neg)
+                  : null;
                 const isSel = clickCell != null && clickCell.strike === r.strike && clickCell.expiry === e;
                 // Δ stamp — only on the top 5 strikes each side of this column.
                 // Everything about the GEX value and its heat is unchanged; the
@@ -1265,7 +1293,7 @@ function TickerPanel({
                     // The click card reads LIVE 15m/30m/open baselines, which
                     // say nothing about a rewound clock — so replay cells are
                     // not clickable rather than opening a card about now.
-                    textAlign: "center", color: SOFT_WHITE, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
+                    textAlign: "center", color: paint ? paint.ink : SOFT_WHITE, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
                     // Δ mode only switches the cell to a flex row so the chip can
                     // sit beside the value. No minHeight, no padding change, no
                     // width change — the cell box is byte-identical to Δ-off.
@@ -1276,15 +1304,29 @@ function TickerPanel({
                     // badge, not the fill, is what names the level.
                     background: levelsOnly
                       ? (lvlShown && lvlKind && val != null ? rankBg(val, WALL_RANK[lvlKind]) : "transparent")
-                      : (val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity)),
-                    fontWeight: weight,
+                      : useThreshold
+                        // A level paints over its own share fill: CB gold, CW the
+                        // +GEX color, PW the −GEX color. Everything else is in or
+                        // out by share of the column's gross gamma.
+                        ? (paint ? paint.bg : thresholdBg(val, totals?.[e]?.gross ?? 0, thPct, GEX_THRESHOLD_COLORS.pos, GEX_THRESHOLD_COLORS.neg))
+                        : (val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity)),
+                    // Walls carry the emphasis in threshold mode, so their number
+                    // goes heaviest whatever the heat rank says.
+                    fontWeight: paint && !isCB ? 900 : weight,
                     position: "relative",
-                    // The rank-1 ring is part of the heat field, so it goes with
+                    // The rank-1 ring is part of the HEAT field, so it goes with
                     // it — otherwise "only the levels" still leaves a ring on
-                    // every column's top strike.
-                    ...(!levelsOnly && topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
-                    ...(lvl ? { outline: `2px solid ${lvl.c}`, outlineOffset: "-2px", zIndex: 2 } : {}),
-                    ...(isSel ? { outline: "2px solid #ffffff", outlineOffset: "-2px", zIndex: 3 } : {}),
+                    // every column's top strike, and threshold mode gets a second
+                    // emphasis competing with the walls.
+                    ...(!levelsOnly && !useThreshold && topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
+                    // The near-white rim + outer glow are what separate a wall
+                    // from a merely large cell — see lib/calculations/gexThreshold.
+                    ...(lvl
+                      ? (paint
+                          ? { outline: `${paint.outlineW}px solid ${paint.outline}`, outlineOffset: `-${paint.outlineW}px`, zIndex: 4, ...(paint.glow ? { boxShadow: paint.glow } : {}) }
+                          : { outline: `2px solid ${lvl.c}`, outlineOffset: "-2px", zIndex: 2 })
+                      : {}),
+                    ...(isSel ? { outline: "2px solid #ffffff", outlineOffset: "-2px", zIndex: 5 } : {}),
                   }}>
                     {/* Non-front columns keep the plain gold peak star — but not
                         in levels-only mode, where the CB badge already names
@@ -1299,7 +1341,7 @@ function TickerPanel({
                       <span title={lvl.title} style={{
                         position: "absolute", top: 0, right: 1, fontSize: 8, fontWeight: 900,
                         lineHeight: 1.2, letterSpacing: "0.02em",
-                        color: "#04121a", background: lvl.c, borderRadius: 2, padding: "0 2px",
+                        color: paint ? paint.badgeInk : "#04121a", background: paint ? paint.badge : lvl.c, borderRadius: 2, padding: "0 2px",
                         pointerEvents: "none",
                       }}>{lvl.t}</span>
                     )}
@@ -1315,7 +1357,9 @@ function TickerPanel({
                       ? <DeltaStamp d={dEntry.d} pct={dEntry.pct} rank={dEntry.rank} />
                       : null}
                     <span style={dMode ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>
-                      <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
+                      {/* On a near-solid level fill the green/red sign glyph
+                          muddies, so those cells take the fill's own ink. */}
+                      <span style={{ color: paint ? paint.ink : signColor }}>{formatted.sign}</span>{formatted.value}
                     </span>
                   </div>
                 );
@@ -1708,6 +1752,21 @@ export function MultGreekClient({
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const [contractMode, setContractMode] = useState<ContractMode>("oivol");
   const [intensity, setIntensity] = useState(1.75);
+  // Coloring scheme, persisted per browser. Defaults to the heat ramp the page
+  // has always used — an existing user's ladder must not change appearance
+  // because a new mode shipped.
+  const [colorMode, setColorMode] = useState<MgColorMode>("heat");
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = window.localStorage.getItem(MG_COLOR_MODE_KEY);
+      if (saved === "heat" || saved === "threshold") setColorMode(saved);
+    } catch { /* ignore */ }
+  }, []);
+  const commitColorMode = useCallback((m: MgColorMode) => {
+    setColorMode(m);
+    try { window.localStorage.setItem(MG_COLOR_MODE_KEY, m); } catch { /* ignore */ }
+  }, []);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>(
     isStatic ? { state: "idle", msg: "DELAYED" } : { state: "idle", msg: "READY" }
   );
@@ -2587,17 +2646,41 @@ export function MultGreekClient({
 
           <DockMenuDivider />
 
-          <DockMenuRow label="Intensity">
+          {/* Coloring scheme. HEAT paints every cell on a ramp keyed to the
+              column's largest strike; % paints only the strikes carrying at
+              least N% of the column's GROSS gamma and dims the rest, with
+              CB/CW/PW lit on top. Persisted per browser. */}
+          <DockMenuRow label="Coloring" stack>
+            <SegGroup
+              options={[
+                { label: "HEAT", value: "heat" },
+                { label: "%", value: "threshold" },
+              ]}
+              active={colorMode}
+              onChange={(v) => commitColorMode(v as MgColorMode)}
+            />
+          </DockMenuRow>
+
+          <DockMenuRow label={colorMode === "threshold" ? "Cutoff" : "Intensity"}>
             <DockSlider
               value={intensity}
               min={0.5}
-              max={3}
+              max={MG_INTENSITY_MAX}
               step={0.01}
               onChange={setIntensity}
               width={110}
-              format={(v) => (v <= 0.5 ? "LEVELS" : `${v.toFixed(2)}x`)}
+              // One slider, two readouts — in % mode it is the share of the
+              // column's gross gamma a strike needs, so the number it shows has
+              // to be that share, not a multiplier.
+              format={(v) => v <= 0.5
+                ? "LEVELS"
+                : colorMode === "threshold"
+                  ? `${thresholdPct(v, INTENSITY_MIN.chain, MG_INTENSITY_MAX).toFixed(2)}%`
+                  : `${v.toFixed(2)}x`}
               valueWidth={52}
-              title="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."
+              title={colorMode === "threshold"
+                ? "Share of the column's gross GEX a strike must carry to be colored. Right = lower cutoff, more of the ladder lit. At the minimum stop the fill switches off and only CB / CW / PW stay marked."
+                : "Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."}
             />
           </DockMenuRow>
 
@@ -2794,6 +2877,7 @@ export function MultGreekClient({
             spot={replayOn ? (replayFrameByTicker[ticker]?.spot ?? 0) : (effectiveSpots[ticker] ?? 0)}
             contractMode={contractMode}
             intensity={intensity}
+            colorMode={colorMode}
             emLevels={emByTicker[ticker] ?? null}
             // EM bands are THIS week's expected move; drawing them on a past
             // session would be a level that didn't exist yet. Δ stamps come

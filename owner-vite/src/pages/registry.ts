@@ -16,7 +16,8 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   Probe: lazy(() => import("./Probe")),
   Results: lazy(() => import("./Results")),
   Backtests: lazy(() => import("./Backtests")),
-  Tree: lazy(() => import("./Tree")),
+  // Tree removed from the nav — dropping the lazy() keeps Tree.tsx and
+  // pages/tree/* out of the build instead of shipping an unreachable chunk.
   Greeks: lazy(() => import("./Greeks")),
   Dev: lazy(() => import("./Dev")),
   BzilaAlerts: lazy(() => import("./BzilaAlerts")),

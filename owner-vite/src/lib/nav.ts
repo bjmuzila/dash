@@ -5,27 +5,32 @@ import { OWNER_THEME, OWNER_LIGHT_BLUE } from "./theme";
  * router in App.jsx both read this file. Add a page here and it shows up in both.
  * `key` names the page module under src/pages.
  *
- * GROUPS ARE NAMED AFTER THE JOB, NOT THE LAYER. The old grouping was
+ * GROUPS ARE NAMED AFTER THE JOB, NOT THE LAYER. The first pass at this was
  * Owner / Backend / Personal, and two of those three had no membership test:
  * every page here is owner-only, and every page has a backend — so "Owner"
- * meant "unsorted", and "Backend" had collected Social Media, Newsletter,
- * Emails, Post Studio, Watchlists and the ΔGEX Board. New pages landed
- * wherever, and finding one meant scanning 22 links across two buckets.
+ * meant "unsorted". The second pass split by job, but left Business straddling
+ * two unrelated jobs: READING numbers (who's paying, who visited) and SENDING
+ * things to people (emails, the newsletter, alerts). Those never get opened in
+ * the same sitting, and the second half is the same job as Content.
  *
- * The test for a new page is now "what am I DOING when I open this?", and it
- * has exactly one answer:
+ * So the test for a new page is "what am I DOING when I open this?", and it has
+ * exactly one answer:
  *
- *   Business  — who's paying, who signed up, and talking to them
- *   Content   — making something public
+ *   Info      — reading the numbers: who's paying, who signed up, who visited
+ *   Content   — making something public, or sending it to someone
  *   Market    — market research and the trading tools behind the dashboard
  *   System    — the machine itself: infra, data, code
  *   Personal  — not CB Edge at all
  *
  * If a page seems to fit two, it belongs in the one matching why you'd go
  * looking for it, not what it's built on. Bzila Alerts is the worked example:
- * it's a broadcast to customers, so it sits with Emails and Newsletter under
- * Business — it spent a long while under "Backend", two groups away from its
- * siblings, which is exactly the mix-up this layout is meant to end.
+ * it's a broadcast, so it sits with Emails and Newsletter under Content — not
+ * under System because it happens to be a cron job, and not under Info because
+ * it happens to know who the customers are.
+ *
+ * Business and System merged: with the broadcast pages gone to Content and the
+ * reporting pages gone to Info, "Business" had nothing left, and Dev + Database
+ * are the whole of System. One group instead of two half-empty ones.
  *
  * `href` strings are UNCHANGED from the old grouping on purpose — they're also
  * the route table, and every bookmark and deep link in existence. So the URL
@@ -44,25 +49,30 @@ export const OWNER_PINNED_LINKS: OwnerLink[] = [
 
 export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
   {
-    label: "Business",
+    // Reading the numbers. Overview lives here rather than under System: it is
+    // the traffic/signups/pages report, and the only reason it ever sat with
+    // Dev is that its URL is /owner/dev/owner.
+    label: "Info",
     accent: OWNER_THEME.cyan,
     links: [
       { label: "Admin", href: "/owner/dev/admin", glyph: "⚿", key: "Admin" },
-      { label: "Sales", href: "/owner/dev/sales", glyph: "$", key: "Sales" },
       { label: "Visitors", href: "/owner/visitors", glyph: "◍", key: "Visitors" },
-      { label: "Affiliates", href: "/owner/affiliates", glyph: "⇉", key: "Affiliates" },
-      { label: "Emails", href: "/owner/admin/emails", glyph: "✉", key: "Emails" },
-      { label: "Newsletter", href: "/owner/newsletter", glyph: "🗞︎", key: "Newsletter" },
-      { label: "Bzila Alerts", href: "/owner/dev/bzila-alerts", glyph: "🔔", key: "BzilaAlerts" },
+      { label: "Overview", href: "/owner/dev/owner?tab=overview", glyph: "⊞", key: "ControlPanel" },
+      { label: "Sales", href: "/owner/dev/sales", glyph: "$", key: "Sales" },
     ],
   },
   {
+    // Making something public OR sending it to someone — one job, one group.
     label: "Content",
     accent: OWNER_THEME.orange,
     links: [
       { label: "Social Media", href: "/social-media", glyph: "🗨︎", key: "SocialMedia" },
       { label: "Post Studio", href: "/owner/post-studio", glyph: "✎", key: "PostStudio" },
       { label: "Changelog", href: "/changelog", glyph: "↻", key: "Changelog" },
+      { label: "Affiliates", href: "/owner/affiliates", glyph: "⇉", key: "Affiliates" },
+      { label: "Emails", href: "/owner/admin/emails", glyph: "✉", key: "Emails" },
+      { label: "Newsletter", href: "/owner/newsletter", glyph: "🗞︎", key: "Newsletter" },
+      { label: "Bzila Alerts", href: "/owner/dev/bzila-alerts", glyph: "🔔", key: "BzilaAlerts" },
     ],
   },
   {
@@ -80,13 +90,15 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     ],
   },
   {
+    // The old Business group folded in here; everything it held moved to Info
+    // or Content, so this is the merged group and it is just the machine.
+    // Tree (/owner/dev/tree) was removed — the page module and pages/tree/* are
+    // now unreferenced by the router.
     label: "System",
     accent: OWNER_LIGHT_BLUE,
     links: [
       { label: "Dev", href: "/owner/dev", glyph: "⚙", key: "Dev" },
-      { label: "Overview", href: "/owner/dev/owner?tab=overview", glyph: "⊞", key: "ControlPanel" },
       { label: "Database", href: "/database", glyph: "⛁", key: "Database" },
-      { label: "Tree", href: "/owner/dev/tree", glyph: "⌥", key: "Tree" },
     ],
   },
   {

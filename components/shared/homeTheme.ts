@@ -139,6 +139,27 @@ export const LEVEL_COLORS = {
 } as const;
 
 /**
+ * GEX_THRESHOLD_COLORS — the +/− fills for Multi Greek's THRESHOLD coloring
+ * mode (the alternative to the heat ramp; see lib/calculations/gexThreshold).
+ *
+ * Deliberately its own pair rather than reusing the heat scale's
+ * rgba(41,182,246) / rgba(255,71,87): those are tuned to read at 2–18% alpha as
+ * a wash BEHIND text, and this mode paints at 53% and 100%. `neg` is
+ * HOME_THEME.red because the two agreed anyway; `pos` is a deeper blue than
+ * HOME_THEME.cyan, which is a UI accent and reads as chrome when it fills a
+ * data cell.
+ *
+ * CW and PW take `pos` / `neg` directly — a wall's name already states its sign,
+ * so a third and fourth hue would say nothing the label doesn't. Only CB needs a
+ * color of its own (LEVEL_COLORS.cb), because CB is sign-blind.
+ */
+export const GEX_THRESHOLD_COLORS = {
+  pos: "#2186c4",
+  neg: HOME_THEME.red,
+  cb: LEVEL_COLORS.cb,
+} as const;
+
+/**
  * RETA_PALETTE — the four accents used by the /owner/reta tracker, kept here so
  * the page never hardcodes hex. Brandon = blue, Heather = rose; peach marks
  * reconstitution figures (mg/mL) and green marks progress (weight lost, the
