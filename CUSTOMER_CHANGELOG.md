@@ -4,6 +4,16 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Friday 8/21/2026
 
+* **Fixed the "How the book was built" chart.** Bars no longer max out at the same length, they all read left to right, and each strike shows whether its gamma is positive or negative.
+
+* **It now tells you when the morning wasn't recorded** instead of drawing an empty blue bar as if nothing happened.
+
+* **The level move log shows the whole day.** It scrolls instead of hiding everything but the last eight moves.
+
+* **New "Where premium actually went" panel** on the Post-Market recap — the five contracts that took the most dollars today. Replaces the replay slider.
+
+* **Removed the Strike Paths section.** Twenty-five near-identical squiggles that said less than the charts above them.
+
 * **GEX Change Top picks are graded now.** Each card carries an A+ to F letter for how it actually did, and a pick that never traded green is always an F.
 
 * **New Pick Study tab.** See what the A and B picks had in common when they were flagged — and whether the picks that made the board beat the ones that didn't.

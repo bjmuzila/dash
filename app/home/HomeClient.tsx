@@ -32,6 +32,14 @@ import { useDualTickerGex, type GexBasis, type OffsetGexMap } from "@/hooks/useD
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import {
+  DockCogMenu,
+  DockMenuRow,
+  DockMenuDivider,
+  DockButton,
+  DockSlider,
+  SegGroup,
+} from "@/components/shared/DockToolbar";
 import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { type ChainRow, type CalcMode, computeGEXProfile, findGEXFlip, netGEXOf } from "@/lib/calculations/calculations";
@@ -61,6 +69,88 @@ const CARD_VIEW_LIBRARY: CardView[] = [
 ];
 
 const CARD_VIEWS_LS_KEY = "cbedge.home.cardViews.v1";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Toolbar preferences — one localStorage blob for every control that now lives
+// behind a cog.
+//
+// The cogs hide their controls, so a setting that reset on every reload would be
+// invisible AND unsticky: you'd open the menu, change a thing, reload, and find
+// it back at the default with no bar on screen to tell you. Everything the three
+// home cogs expose is therefore written here and restored on mount.
+//
+// Browser-local by design ("saved per chrome cache") — this is not synced to the
+// account, so a different browser or a cleared cache starts from the defaults
+// below.
+// ─────────────────────────────────────────────────────────────────────────────
+const HOME_PREFS_LS_KEY = "cbedge.home.toolbars.v1";
+
+type GhostWindow = 0 | 5 | 15 | 30;
+type DeltaWindow = 0 | 1 | 5 | 15 | 30;
+type EconSize = "min" | "half" | "full";
+
+type HomePrefs = {
+  gexMode: GexMode;
+  dataMode: DataMode;
+  showOI: boolean;
+  showDex: boolean;
+  showFlipCurve: boolean;
+  ghost: GhostWindow;
+  intensity: number;
+  sideBasis: GexBasis;
+  deltaWindow: DeltaWindow;
+  /** The user-typed 5th heatmap column ("" = column hidden). */
+  heatTicker: string;
+  econSize: EconSize;
+};
+
+const HOME_PREFS_DEFAULTS: HomePrefs = {
+  gexMode: "net",
+  dataMode: "oi-vol",
+  showOI: false,
+  showDex: false,
+  showFlipCurve: false,
+  ghost: 0,
+  intensity: 1.75,
+  sideBasis: "oi-vol",
+  deltaWindow: 0,
+  heatTicker: "IWM",
+  econSize: "half",
+};
+
+const oneOf = <T,>(v: unknown, allowed: readonly T[], fallback: T): T =>
+  (allowed as readonly unknown[]).includes(v) ? (v as T) : fallback;
+
+/** Never throws: private mode, a corrupt blob, or an older shape all fall back. */
+function readHomePrefs(): HomePrefs {
+  if (typeof window === "undefined") return HOME_PREFS_DEFAULTS;
+  try {
+    const raw = window.localStorage.getItem(HOME_PREFS_LS_KEY);
+    if (!raw) return HOME_PREFS_DEFAULTS;
+    const p = JSON.parse(raw) as Partial<HomePrefs>;
+    if (!p || typeof p !== "object") return HOME_PREFS_DEFAULTS;
+    const intensity = Number(p.intensity);
+    return {
+      gexMode: oneOf<GexMode>(p.gexMode, ["net", "call-put"], HOME_PREFS_DEFAULTS.gexMode),
+      dataMode: oneOf<DataMode>(p.dataMode, ["oi-vol", "vol-only"], HOME_PREFS_DEFAULTS.dataMode),
+      showOI: typeof p.showOI === "boolean" ? p.showOI : HOME_PREFS_DEFAULTS.showOI,
+      showDex: typeof p.showDex === "boolean" ? p.showDex : HOME_PREFS_DEFAULTS.showDex,
+      showFlipCurve: typeof p.showFlipCurve === "boolean" ? p.showFlipCurve : HOME_PREFS_DEFAULTS.showFlipCurve,
+      ghost: oneOf<GhostWindow>(p.ghost, [0, 5, 15, 30], HOME_PREFS_DEFAULTS.ghost),
+      intensity: Number.isFinite(intensity) ? Math.min(5, Math.max(0.5, intensity)) : HOME_PREFS_DEFAULTS.intensity,
+      sideBasis: oneOf<GexBasis>(p.sideBasis, ["oi-vol", "vol-only"], HOME_PREFS_DEFAULTS.sideBasis),
+      deltaWindow: oneOf<DeltaWindow>(p.deltaWindow, [0, 1, 5, 15, 30], HOME_PREFS_DEFAULTS.deltaWindow),
+      heatTicker: typeof p.heatTicker === "string" ? p.heatTicker.trim().toUpperCase().slice(0, 6) : HOME_PREFS_DEFAULTS.heatTicker,
+      econSize: oneOf<EconSize>(p.econSize, ["min", "half", "full"], HOME_PREFS_DEFAULTS.econSize),
+    };
+  } catch {
+    return HOME_PREFS_DEFAULTS;
+  }
+}
+
+function writeHomePrefs(p: HomePrefs) {
+  try { window.localStorage.setItem(HOME_PREFS_LS_KEY, JSON.stringify(p)); } catch { /* private mode */ }
+}
 
 /**
  * Initial GEX snapshot read on the server from the hot feed and passed in as a
@@ -115,6 +205,9 @@ type HeatmapRow = {
   // actually came from, surfaced in the cell tooltip.
   spyGexVal: number | null; spyGex: string; spyStrike: number | null;
   qqqGexVal: number | null; qqqGex: string; qqqStrike: number | null;
+  // The user-typed 5th column (ticker of choice), joined by the same moneyness
+  // offset as SPY/QQQ. All three come out of the one useDualTickerGex call.
+  cusGexVal: number | null; cusGex: string; cusStrike: number | null;
   type: "pos-top" | "pos-strong" | "neg-top" | "neg-red" | "neg" | "neutral" | "atm";
   rank?: number;
   rankColor?: string;
@@ -404,6 +497,8 @@ function toHeatmapRows(
   rollingByStrike?: Map<number, number>,
   spyGex?: OffsetGexMap,
   qqqGex?: OffsetGexMap,
+  /** Ticker-of-choice column. Undefined = no ticker set, or its chain failed. */
+  cusGex?: OffsetGexMap,
   // Which strikes are VISIBLE is centered on centerSpot (a coarse, 5-strike-quantized
   // spot) so the row set doesn't add/drop a strike on every tick. Which row is ATM
   // still uses the live spot, so the highlight tracks price continuously.
@@ -432,6 +527,7 @@ function toHeatmapRows(
     const offset = atmIdx < 0 ? null : atmIdx - idx;
     const spyCell = offset == null ? undefined : spyGex?.[offset];
     const qqqCell = offset == null ? undefined : qqqGex?.[offset];
+    const cusCell = offset == null ? undefined : cusGex?.[offset];
     // NET GEX column = OI+Vol basis. Server rows carry netGEX (OI-only) and
     // netVolGEX (vol-only); their sum is the true OI+Vol net (gamma·(OI+vol)·S²,
     // calls +, puts −). The chart bars use the same basis, so they now agree.
@@ -462,6 +558,9 @@ function toHeatmapRows(
       qqqGexVal: qqqCell ? qqqCell.netGEX : null,
       qqqGex: qqqCell ? fmtCellM(qqqCell.netGEX) : "—",
       qqqStrike: qqqCell ? qqqCell.strike : null,
+      cusGexVal: cusCell ? cusCell.netGEX : null,
+      cusGex: cusCell ? fmtCellM(cusCell.netGEX) : "—",
+      cusStrike: cusCell ? cusCell.strike : null,
       type,
       rank: rankMap.get(row.strike)?.rank,
       rankColor: rankMap.get(row.strike)?.rankColor,
@@ -595,19 +694,21 @@ export function HomeClient({
   // Left-column econ/tabs section height: "min" = tab bar only, "half" = shares
   // the column with the GEX chart above it, "full" = fills the whole left column
   // (chart hidden). Replaces the old econCollapsed boolean.
-  const [econSize, setEconSize] = useState<"min" | "half" | "full">("half");
-  const [gexMode, setGexMode] = useState<GexMode>("net");
+  const [econSize, setEconSize] = useState<EconSize>(HOME_PREFS_DEFAULTS.econSize);
+  const [gexMode, setGexMode] = useState<GexMode>(HOME_PREFS_DEFAULTS.gexMode);
 
   // (Ticker auto-fit removed: the right-column stat box it scaled was replaced by
   //  the horizontal <SignalsFeed/>, which scrolls instead of scaling to fit.)
-  const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
-  const [showOI, setShowOI] = useState(false);
-  const [showDex, setShowDex] = useState(false);
-  const [showFlipCurve, setShowFlipCurve] = useState(false);
+  const [dataMode, setDataMode] = useState<DataMode>(HOME_PREFS_DEFAULTS.dataMode);
+  const [showOI, setShowOI] = useState(HOME_PREFS_DEFAULTS.showOI);
+  const [showDex, setShowDex] = useState(HOME_PREFS_DEFAULTS.showDex);
+  const [showFlipCurve, setShowFlipCurve] = useState(HOME_PREFS_DEFAULTS.showFlipCurve);
   // Prior-state ghost overlays (5/15/30 min ago) drawn behind live GEX bars.
-  const [showGhost5, setShowGhost5]   = useState(false);
-  const [showGhost15, setShowGhost15] = useState(false);
-  const [showGhost30, setShowGhost30] = useState(false);
+  // Mutually exclusive, so they persist as ONE window rather than three booleans.
+  const [ghost, setGhost] = useState<GhostWindow>(HOME_PREFS_DEFAULTS.ghost);
+  const showGhost5  = ghost === 5;
+  const showGhost15 = ghost === 15;
+  const showGhost30 = ghost === 30;
   // Strike-detail popup: selected strike, click anchor, and which popup style to
   // preview (card | drawer | modal — toggled in the toolbar so all 3 can be tested).
   const [selectedStrike, setSelectedStrike] = useState<{ row: ChainRow; pos: { x: number; y: number } } | null>(null);
@@ -674,11 +775,18 @@ export function HomeClient({
   const [flowOrders, setFlowOrders] = useState<FlowOrder[]>([]);
   // Full server flow bucket (vols/premium) for the Snapshot panel.
   const [flowBucket, setFlowBucket] = useState<Record<string, unknown> | null>(null);
-  // Heatmap intensity slider (0.5–3, default 1.75) — controls cell color opacity.
-  const [intensity, setIntensity] = useState(1.75);
-  // Basis for the SPY 0DTE / QQQ 0DTE net GEX columns. Independent of the SPX
-  // columns beside them, which always render OI+Vol and Vol-only side by side.
-  const [sideBasis, setSideBasis] = useState<GexBasis>("oi-vol");
+  // Heatmap intensity slider (0.5–5, default 1.75) — controls cell color opacity.
+  const [intensity, setIntensity] = useState(HOME_PREFS_DEFAULTS.intensity);
+  // Basis for the SPY / QQQ / ticker-of-choice net GEX columns. Independent of
+  // the SPX columns beside them, which are always OI+Vol.
+  const [sideBasis, setSideBasis] = useState<GexBasis>(HOME_PREFS_DEFAULTS.sideBasis);
+  // ── Ticker of choice — the heatmap's 5th column ────────────────────────────
+  // Typed in free-form exactly like the 4th ticker on the Multi Greek page, and
+  // persisted per browser. `heatTicker` drives the fetch; `heatTickerInput` is
+  // the raw field, committed on Enter/blur so every keystroke doesn't kick off a
+  // chain request. Blank = the column renders as "—" and nothing extra is polled.
+  const [heatTicker, setHeatTicker] = useState(HOME_PREFS_DEFAULTS.heatTicker);
+  const [heatTickerInput, setHeatTickerInput] = useState(HOME_PREFS_DEFAULTS.heatTicker);
   // Heatmap panel view: "heatmap" = colored cell backgrounds; "chain" = embedded
   // option chain. ("table" divergent-bars view retired from the switcher; kept in
   // the union so its now-unreachable render branch stays valid without a refactor.)
@@ -690,7 +798,7 @@ export function HomeClient({
   // rows). 5/15/30 = cumulative change vs a stored baseline. They are different
   // questions — "how fast is this wall moving" vs "how far has it moved" — so
   // the 1m case is sourced separately below.
-  const [deltaWindow, setDeltaWindow] = useState<0 | 1 | 5 | 15 | 30>(0);
+  const [deltaWindow, setDeltaWindow] = useState<DeltaWindow>(HOME_PREFS_DEFAULTS.deltaWindow);
   // GEX chart card view: which tab in the strip ABOVE the card is showing. Always
   // one of BASE_CARD_VIEWS or an added CARD_VIEW_LIBRARY id.
   const [gexView, setGexView] = useState<string>("gex");
@@ -713,6 +821,52 @@ export function HomeClient({
     setChainTicker("SPX");
     setChainTickerInput("SPX");
   }, [heatmapView, activeTab]);
+
+  // ── Toolbar prefs: hydrate on mount, then mirror every change ──────────────
+  // Restored in an effect (not a lazy initialiser) so the server HTML and the
+  // first client render agree — reading localStorage during render is a
+  // guaranteed hydration mismatch.
+  //
+  // `prefsReady` is STATE, not a ref: the writer below must not run until the
+  // restored values have actually landed in state. With a ref, the hydrate
+  // effect would flip the flag and the writer — which runs in the same commit,
+  // still holding the pre-restore values — would immediately overwrite the saved
+  // blob with the defaults.
+  const [prefsReady, setPrefsReady] = useState(false);
+  useEffect(() => {
+    const p = readHomePrefs();
+    setGexMode(p.gexMode);
+    setDataMode(p.dataMode);
+    setShowOI(p.showOI);
+    setShowDex(p.showDex);
+    setShowFlipCurve(p.showFlipCurve);
+    setGhost(p.ghost);
+    setIntensity(p.intensity);
+    setSideBasis(p.sideBasis);
+    setDeltaWindow(p.deltaWindow);
+    setHeatTicker(p.heatTicker);
+    setHeatTickerInput(p.heatTicker);
+    setEconSize(p.econSize);
+    setPrefsReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!prefsReady) return;
+    writeHomePrefs({
+      gexMode, dataMode, showOI, showDex, showFlipCurve, ghost,
+      intensity, sideBasis, deltaWindow, heatTicker, econSize,
+    });
+  }, [
+    prefsReady, gexMode, dataMode, showOI, showDex, showFlipCurve, ghost,
+    intensity, sideBasis, deltaWindow, heatTicker, econSize,
+  ]);
+
+  /** Commit the typed ticker-of-choice: normalise, then fetch if it changed. */
+  const commitHeatTicker = useCallback(() => {
+    const t = heatTickerInput.trim().toUpperCase().slice(0, 6);
+    setHeatTickerInput(t);
+    if (t !== heatTicker) setHeatTicker(t);
+  }, [heatTickerInput, heatTicker]);
 
   // ── Card tab strip: persistence + picker plumbing ─────────────────────────
   // Hydrate the added tabs once on mount. Unknown ids (a library entry that was
@@ -1137,7 +1291,15 @@ export function HomeClient({
   // SPY / QQQ 0DTE per-strike net GEX for the two right-hand columns. Only
   // fetched in heatmap view — the chain embed doesn't render these columns, so
   // there's no reason to poll two extra chains behind it.
-  const SIDE_TICKERS = useMemo(() => ["SPY", "QQQ"] as const, []);
+  // The ticker of choice rides the SAME hook — it takes an arbitrary list — so
+  // the 5th column costs one more chain fetch and no new machinery. Deduped:
+  // typing "SPY" must not poll SPY twice.
+  const SIDE_TICKERS = useMemo(() => {
+    const base = ["SPY", "QQQ"];
+    const t = heatTicker.trim().toUpperCase();
+    if (t && !base.includes(t)) base.push(t);
+    return base;
+  }, [heatTicker]);
   // Pinned to selectedExpiry — these columns flip contract exactly when the SPX
   // heatmap does, instead of resolving their own 0DTE and drifting onto a
   // different date than the rows beside them.
@@ -1180,22 +1342,24 @@ export function HomeClient({
       centerSpotRef.current = Math.round(useSpot / bucket) * bucket;
     }
 
+    const cusKey = heatTicker.trim().toUpperCase();
     return toHeatmapRows(
       chainRows,
       useSpot,
       rollingByStrike,
       sideGex.SPY?.map,
       sideGex.QQQ?.map,
+      cusKey ? sideGex[cusKey]?.map : undefined,
       centerSpotRef.current
     );
-  }, [chainRows, chartSpot, spot, rollingByStrike, sideGex]);
+  }, [chainRows, chartSpot, spot, rollingByStrike, sideGex, heatTicker]);
 
   // Column maxes + top-3 magnitudes for intensity coloring (per visible column).
   // spyGexVal / qqqGexVal each get their OWN scale — SPY and QQQ notional gamma
   // is orders of magnitude below SPX's, so sharing netGexVal's max would leave
   // both columns colorless.
   const heatmapColorMeta = useMemo(() => {
-    const cols = ["netGexVal", "volOnlyVal", "dexVal", "spyGexVal", "qqqGexVal"] as const;
+    const cols = ["netGexVal", "dexVal", "spyGexVal", "qqqGexVal", "cusGexVal"] as const;
     const max: Record<string, number> = {};
     const top3: Record<string, number[]> = {};
     for (const c of cols) {
@@ -1221,11 +1385,12 @@ export function HomeClient({
     return best;
   }, [heatmapRows]);
 
-  // Peak |net GEX| strike for the SPY / QQQ columns — each gets the same white
-  // box + glow the SPX NET GEX peak (mvcStrikeHeatmap) gets. Own column, own peak.
+  // Peak |net GEX| strike for the SPY / QQQ / ticker-of-choice columns — each
+  // gets the same white box + glow the SPX NET GEX peak (mvcStrikeHeatmap) gets.
+  // Own column, own peak.
   const peakStrikeByCol = useMemo(() => {
     const out: Record<string, number | null> = {};
-    for (const c of ["spyGexVal", "qqqGexVal"] as const) {
+    for (const c of ["spyGexVal", "qqqGexVal", "cusGexVal"] as const) {
       let best: number | null = null;
       let bestAbs = 0;
       for (const r of heatmapRows) {
@@ -1794,12 +1959,13 @@ export function HomeClient({
                 onToggleOI={() => setShowOI(v => !v)}
                 onToggleDex={() => setShowDex(v => !v)}
                 onToggleFlip={() => setShowFlipCurve(v => !v)}
-                onToggleGhost5={() => { setShowGhost5(v => !v); setShowGhost15(false); setShowGhost30(false); }}
-                onToggleGhost15={() => { setShowGhost15(v => !v); setShowGhost5(false); setShowGhost30(false); }}
-                onToggleGhost30={() => { setShowGhost30(v => !v); setShowGhost5(false); setShowGhost15(false); }}
+                onToggleGhost5={() => setGhost(g => (g === 5 ? 0 : 5))}
+                onToggleGhost15={() => setGhost(g => (g === 15 ? 0 : 15))}
+                onToggleGhost30={() => setGhost(g => (g === 30 ? 0 : 30))}
                 onRefresh={handleRefresh}
                 containerRef={gexChartRef}
                 discordMessage={`NET GEX • ${selectedExpiry}`}
+                compact
               />
               </FitScale>
               )}
@@ -1888,35 +2054,60 @@ export function HomeClient({
                     {tab.icon}{tab.label}
                   </button>
                 ))}
-                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 4, flexShrink: 0 }}>
-                  <div ref={econControlsSlotRef} style={{ display: "flex", alignItems: "center", gap: 6 }} />
+                {/* Right side of the tab strip: ONE cog, then copy + Discord.
+                    The panel-size buttons and the econ calendar's own filter row
+                    both live inside the cog now.
+
+                    The filter row arrives here by PORTAL from EconCalendarPanel
+                    (econControlsSlotRef is its target). DockCogMenu keeps its
+                    children mounted while closed for exactly this reason — if the
+                    slot unmounted, the panel would see a null target and fall
+                    back to rendering its own inline header, which would shove the
+                    calendar down every time the cog shut. */}
+                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 8, flexShrink: 0 }}>
+                  <DockCogMenu title="Panel" buttonTitle="Panel settings" width={300}>
+                    <DockMenuRow label="Height" stack>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        {([
+                          { id: "min", title: "Minimize (tabs only)", label: "Min" },
+                          { id: "half", title: "Half height", label: "Half" },
+                          { id: "full", title: "Full height", label: "Full" },
+                        ] as const).map((o) => {
+                          const on = econSize === o.id;
+                          // Filled bar grows min→half→full so the glyph reads as a size.
+                          const fillY = o.id === "min" ? 11 : o.id === "half" ? 7 : 3;
+                          return (
+                            <button
+                              key={o.id}
+                              onClick={() => setEconSize(o.id)}
+                              aria-label={o.title}
+                              title={o.title}
+                              style={{
+                                display: "flex", alignItems: "center", gap: 6,
+                                padding: "6px 10px", borderRadius: 8, cursor: "pointer",
+                                fontFamily: "inherit", fontSize: 11, fontWeight: 700,
+                                background: on ? "rgba(33,158,188,0.16)" : "rgba(255,255,255,0.04)",
+                                border: on ? `1px solid ${C.cyan}55` : "1px solid rgba(255,255,255,0.06)",
+                                color: on ? C.cyan : "#fff",
+                              }}
+                            >
+                              <svg width="13" height="13" viewBox="0 0 16 16">
+                                <rect x="2" y="2" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.4" opacity={on ? 0.55 : 0.4} />
+                                <rect x="2" y={fillY} width="12" height={14 - fillY} rx="1.5" fill="currentColor" />
+                              </svg>
+                              {o.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </DockMenuRow>
+                    <DockMenuDivider />
+                    <DockMenuRow label="Tab controls" stack>
+                      <div ref={econControlsSlotRef} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }} />
+                    </DockMenuRow>
+                  </DockCogMenu>
                   <EconCalendarTemplateCopyBtn />
                   <EconCalendarDiscordBtn />
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 2, paddingLeft: 4, paddingRight: 8, flexShrink: 0 }}>
-                  {([
-                    { id: "min", title: "Minimize (tabs only)" },
-                    { id: "half", title: "Half height" },
-                    { id: "full", title: "Full height" },
-                  ] as const).map((o) => {
-                    const on = econSize === o.id;
-                    // Filled bar grows min→half→full so the glyph reads as a size.
-                    const fillY = o.id === "min" ? 11 : o.id === "half" ? 7 : 3;
-                    return (
-                      <button
-                        key={o.id}
-                        onClick={() => setEconSize(o.id)}
-                        aria-label={o.title}
-                        title={o.title}
-                        style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "6px 7px", background: on ? "rgba(33,158,188,0.16)" : "none", border: "none", borderRadius: 6, cursor: "pointer", color: on ? C.cyan : "#fff" }}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 16 16">
-                          <rect x="2" y="2" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.4" opacity={on ? 0.55 : 0.4} />
-                          <rect x="2" y={fillY} width="12" height={14 - fillY} rx="1.5" fill="currentColor" />
-                        </svg>
-                      </button>
-                    );
-                  })}
                 </div>
               </div>
               </FitScale>
@@ -1981,14 +2172,16 @@ export function HomeClient({
 
             <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
               <div className="grad-divider-b" style={{ paddingBottom: 10, display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
-                {/* Header row scales to fit — title + intensity/speed controls on
-                    the left and refresh/snap/discord/view-switch on the right
-                    otherwise overflow the card and get clipped on a narrow window. */}
+                {/* Header row scales to fit. Identity (icon + title + contract) on
+                    the left; ONE cog plus snapshot / Discord on the right. Every
+                    control that used to sit out here — intensity, side basis, Δ
+                    window, the ticker-of-choice field, refresh — is inside the
+                    cog now and persisted per browser. */}
                 <FitScale min={0.42}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", whiteSpace: "nowrap" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, color: "#fff", fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
-                    {heatmapView === "chain" && (
+                    {heatmapView === "chain" ? (
                     <>
                       <input
                         value={chainTickerInput}
@@ -2006,95 +2199,128 @@ export function HomeClient({
                         {["SPX", "SPY", "QQQ", "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "AMD", "NDX"].map((t) => <option key={t} value={t} />)}
                       </datalist>
                     </>
-                    )}
-                    {heatmapView !== "chain" && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
-                      <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
-                      <input
-                        type="range" min={0.5} max={5} step={0.01}
-                        value={intensity}
-                        onChange={(e) => setIntensity(Number(e.target.value))}
-                        style={{ width: 80, height: 3, accentColor: "#219EBC" }}
-                      />
-                      <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>{intensity.toFixed(2)}x</span>
-                      {/* Basis for the SPY 0DTE / QQQ 0DTE columns only. The SPX
-                          NET GEX / VOL ONLY GEX columns are unaffected — they
-                          already show both bases side by side. */}
-                      <span
-                        title="Basis for the SPY 0DTE / QQQ 0DTE columns. OI+Vol = open interest + volume (full positioning). Vol Only = today's volume (intraday flow)."
-                        style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginLeft: 6, cursor: "help" }}
-                      >
-                        SPY/QQQ{sideLoading ? " …" : ""}
+                    ) : (
+                    <>
+                      <span>GEX Heatmap</span>
+                      <span style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, letterSpacing: "0.06em", textTransform: "none" }}>
+                        {fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}
                       </span>
-                      <div style={{ display: "flex", gap: 2, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
-                        {([
-                          { key: "oi-vol" as GexBasis, label: "OI+Vol", tip: "Open interest + volume — full dealer positioning." },
-                          { key: "vol-only" as GexBasis, label: "Vol Only", tip: "Today's volume only — intraday flow, resets daily." },
-                        ]).map((b) => (
-                          <button
-                            key={b.key}
-                            onClick={() => setSideBasis(b.key)}
-                            title={b.tip}
-                            style={{
-                              padding: "2px 7px",
-                              fontSize: 10,
-                              fontWeight: 700,
-                              cursor: "pointer",
-                              border: "none",
-                              fontFamily: "inherit",
-                              background: sideBasis === b.key ? "rgba(33,158,188,0.14)" : "transparent",
-                              color: sideBasis === b.key ? "#219EBC" : "#5a7a98",
-                            }}
-                          >
-                            {b.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                      {sideLoading && (
+                        <span title="Fetching the SPY / QQQ / ticker-of-choice chains" style={{ fontSize: 11, color: "#5a7a98", fontWeight: 700 }}>…</span>
+                      )}
+                    </>
                     )}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: 12 }}>
                     {heatmapView !== "chain" && (
                     <>
-                    <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4, whiteSpace: "nowrap" }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
-                    <button onClick={heatmapRefresh} title="Refresh heatmap"
-                      style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: (heatmapRefreshStyle.color as string) ?? C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, transition: "color .2s" }}>{heatmapRefreshLabel.startsWith("✓") ? "✓" : heatmapRefreshLabel.startsWith("✗") ? "✗" : heatmapRefreshLabel.startsWith("↻ Refresh") ? "⟳" : "↻"}</button>
+                    <DockCogMenu title="Heatmap" buttonTitle="Heatmap settings" width={330}>
+                      <DockMenuRow label="Intensity" hint="Cell colour opacity — how hard the heat ramps with magnitude.">
+                        <DockSlider
+                          value={intensity}
+                          min={0.5}
+                          max={5}
+                          step={0.01}
+                          onChange={setIntensity}
+                          format={(v) => `${v.toFixed(2)}x`}
+                          width={110}
+                        />
+                      </DockMenuRow>
+
+                      <DockMenuDivider />
+
+                      <DockMenuRow
+                        label="Side basis"
+                        hint="Basis for the SPY / QQQ / ticker-of-choice columns. OI+Vol = open interest + volume (full positioning). Vol Only = today's volume (intraday flow). The SPX columns are always OI+Vol."
+                        stack
+                      >
+                        <SegGroup
+                          options={[{ label: "OI+Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }]}
+                          active={sideBasis}
+                          onChange={(v) => setSideBasis(v as GexBasis)}
+                        />
+                      </DockMenuRow>
+
+                      {/* Ticker of choice — the 5th column. Same free-text field
+                          as the Multi Greek page's 4th ticker: typed, committed on
+                          Enter or blur, remembered per browser. Blank hides the
+                          column's numbers and stops the extra chain poll. */}
+                      <DockMenuRow
+                        label="5th column"
+                        hint="Any listed ticker. Its chain is joined to the SPX rows by moneyness offset (ATM±N), not by strike. Leave blank to switch the column off."
+                        stack
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input
+                            value={heatTickerInput}
+                            onChange={(e) => setHeatTickerInput(e.target.value.toUpperCase())}
+                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitHeatTicker(); (e.target as HTMLInputElement).blur(); } }}
+                            onBlur={commitHeatTicker}
+                            list="home-heat-tickers"
+                            autoComplete="off"
+                            spellCheck={false}
+                            maxLength={6}
+                            placeholder="TICKER"
+                            style={{
+                              width: 90, padding: "5px 8px", fontSize: 11, fontWeight: 800,
+                              letterSpacing: "0.08em", textTransform: "uppercase", textAlign: "center",
+                              background: "rgba(13,17,25,0.72)", color: C.cyan,
+                              border: "1px solid rgba(255,255,255,0.10)", borderRadius: 6, outline: "none",
+                              fontFamily: "inherit",
+                            }}
+                          />
+                          <datalist id="home-heat-tickers">
+                            {["IWM", "NDX", "SPY", "QQQ", "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "AMD"].map((t) => <option key={t} value={t} />)}
+                          </datalist>
+                          {heatTicker && (
+                            <button
+                              onClick={() => { setHeatTickerInput(""); setHeatTicker(""); }}
+                              title="Turn the 5th column off"
+                              style={{ padding: "5px 9px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: "pointer", fontFamily: "inherit", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", color: "#8da8c2" }}
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                      </DockMenuRow>
+
+                      <DockMenuDivider />
+
+                      {/* Δ stamps — adds the change to the left of the SPX NET GEX
+                          value on the top 5 strikes each side. */}
+                      <DockMenuRow
+                        label="Δ stamps"
+                        hint="Change chips on the top-5 ranked strikes each side of the SPX NET GEX column. 'rate' = per-minute speed from the live rows; 5/15/30m = cumulative move vs a stored baseline."
+                        stack
+                      >
+                        <SegGroup
+                          options={[
+                            { label: "Off", value: "0" },
+                            { label: "Rate", value: "1" },
+                            { label: "5m", value: "5" },
+                            { label: "15m", value: "15" },
+                            { label: "30m", value: "30" },
+                          ]}
+                          active={String(deltaWindow)}
+                          onChange={(v) => setDeltaWindow(Number(v) as DeltaWindow)}
+                        />
+                      </DockMenuRow>
+
+                      <DockMenuDivider />
+
+                      <DockMenuRow label="Data">
+                        <DockButton
+                          onClick={heatmapRefresh}
+                          title="Refresh the SPX chain and every side column"
+                          style={{ color: (heatmapRefreshStyle.color as string) ?? C.cyan }}
+                        >
+                          {heatmapRefreshLabel}
+                        </DockButton>
+                      </DockMenuRow>
+                    </DockCogMenu>
                     <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     </>
-                    )}
-                    {/* Δ stamps — adds the change to the left of the NET GEX value on
-                        the top 5 strikes each side. Heatmap view only. */}
-                    {heatmapView === "heatmap" && (
-                      <div style={{
-                        display: "flex", gap: 2, marginLeft: 4,
-                        border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden",
-                        // Own layer with an opaque backing so the panel gradient
-                        // behind can't bleed through and muddy the active state.
-                        position: "relative", zIndex: 3, isolation: "isolate",
-                        background: "#0D1119", boxShadow: "0 1px 6px rgba(0,0,0,0.45)",
-                      }}>
-                        {([0, 1, 5, 15, 30] as const).map((v) => (
-                          <button
-                            key={v}
-                            onClick={() => setDeltaWindow(v)}
-                            title={
-                              v === 0
-                                ? "Hide change stamps"
-                                : v === 1
-                                ? "Show each ranked strike's net GEX RATE — how fast it is building (▲) or decaying (▼) per minute, from the live rows"
-                                : `Show each ranked strike's net GEX change over the last ${v} minutes`
-                            }
-                            style={{
-                              padding: "2px 8px", fontSize: 10, fontWeight: 700,
-                              textTransform: "uppercase", letterSpacing: "0.08em",
-                              cursor: "pointer", border: "none", fontFamily: "inherit",
-                              background: deltaWindow === v ? "rgba(33,158,188,0.14)" : "transparent",
-                              color: deltaWindow === v ? "#219EBC" : "#5a7a98",
-                            }}
-                          >{v === 0 ? "Δ off" : v === 1 ? "rate" : `${v}m`}</button>
-                        ))}
-                      </div>
                     )}
                     {/* Heatmap|Chain switch removed — the panel is heatmap-only now.
                         heatmapView state stays (default "heatmap") so the chain-view
@@ -2124,16 +2350,18 @@ export function HomeClient({
                         { label: "Strike", tip: undefined as string | undefined },
                         {
                           label: deltaWindow === 0 || heatmapView !== "heatmap"
-                            ? "Net GEX"
-                            : deltaWindow === 1 ? "Net GEX +Δ/MIN" : `Net GEX +Δ${deltaWindow}M`,
+                            ? "SPX Net GEX"
+                            : deltaWindow === 1 ? "SPX Net GEX +Δ/MIN" : `SPX Net GEX +Δ${deltaWindow}M`,
                           tip: deltaWindow !== 0 && heatmapView === "heatmap"
                             ? deltaWindow === 1
                               ? `Each ranked strike (top 5 each side) carries a stamp with its net GEX RATE — how fast that wall is building (▲ green) or decaying (▼ red) per minute, measured off the live rows rather than a stored baseline. The brightest stamp is the fastest mover on the board; slower ones fade back. Hover for the exact figure.`
                               : `Each ranked strike (top 5 each side) carries a stamp with its net GEX change over the last ${deltaWindow} minutes. ▲ green = building, ▼ red = unwinding. The brightest stamp is the biggest % move on the board; smaller moves fade back. Hover for the exact figure.`
                             : undefined,
                         },
-                        { label: "Vol Only GEX", tip: undefined },
-                        { label: "DEX", tip: undefined },
+                        {
+                          label: "SPX Net DEX",
+                          tip: "SPX net delta exposure per strike, OI+Vol basis (calls +, puts −) — the same composite the DEX readouts elsewhere on this page use.",
+                        },
                         {
                           label: `SPY ${sideDteTag} Net GEX`,
                           tip: `SPY's net GEX on ${sideGex.SPY?.expiration ?? selectedExpiry} — the same contract the SPX heatmap is on — at the SAME distance from ATM as this SPX row (SPY doesn't share SPX's strike ladder, so rows align by moneyness offset, not strike). Basis: ${sideBasis === "vol-only" ? "volume only" : "OI + volume"}. Hover a cell for the SPY strike.`,
@@ -2141,6 +2369,15 @@ export function HomeClient({
                         {
                           label: `QQQ ${sideDteTag} Net GEX`,
                           tip: `QQQ's net GEX on ${sideGex.QQQ?.expiration ?? selectedExpiry} — the same contract the SPX heatmap is on — at the SAME distance from ATM as this SPX row (QQQ tracks NDX, so rows align by moneyness offset, not strike). Basis: ${sideBasis === "vol-only" ? "volume only" : "OI + volume"}. Hover a cell for the QQQ strike.`,
+                        },
+                        // Ticker of choice. The header still renders with no ticker
+                        // set so the grid keeps six columns and the rows don't
+                        // reflow the moment the field is cleared.
+                        {
+                          label: heatTicker ? `${heatTicker} ${sideDteTag} Net GEX` : "Ticker Net GEX",
+                          tip: heatTicker
+                            ? `${heatTicker}'s net GEX on ${sideGex[heatTicker]?.expiration ?? selectedExpiry}, joined to this SPX row by moneyness offset (ATM±N), not by strike. Basis: ${sideBasis === "vol-only" ? "volume only" : "OI + volume"}. Hover a cell for the ${heatTicker} strike. Change the ticker in the heatmap cog.`
+                            : "No ticker set — pick one in the heatmap cog to fill this column.",
                         },
                       ].map((header, index) => (
                         <th
@@ -2289,19 +2526,19 @@ export function HomeClient({
                                 </div>
                               )}
                             </td>
-                            {dataCell(row.volOnly, row.volOnlyVal, "volOnlyVal", 2)}
-                            {dataCell(row.dex, row.dexVal, "dexVal", 3)}
-                            {/* SPY / QQQ 0DTE net GEX — same moneyness offset as this SPX row,
-                                NOT the same strike. Rendered through the shared dataCell so they
-                                use the identical heatmap palette as every other column; each has
-                                its own color scale (see heatmapColorMeta). Each cell carries its
-                                ticker's own strike inline on the left, so the offset join reads
-                                without hovering; the tooltip still names the full contract. */}
+                            {dataCell(row.dex, row.dexVal, "dexVal", 2)}
+                            {/* SPY / QQQ / ticker-of-choice net GEX — same moneyness offset as
+                                this SPX row, NOT the same strike. Rendered through the shared
+                                dataCell so they use the identical heatmap palette as every other
+                                column; each has its own color scale (see heatmapColorMeta). Each
+                                cell carries its ticker's own strike inline on the left, so the
+                                offset join reads without hovering; the tooltip names the full
+                                contract. */}
                             {dataCell(
                               row.spyGex,
                               row.spyGexVal,
                               "spyGexVal",
-                              4,
+                              3,
                               row.spyStrike == null ? "No SPY strike at this offset" : `SPY ${row.spyStrike} • ${sideBasis === "vol-only" ? "vol only" : "OI+Vol"}`,
                               row.spyStrike
                             )}
@@ -2309,9 +2546,21 @@ export function HomeClient({
                               row.qqqGex,
                               row.qqqGexVal,
                               "qqqGexVal",
-                              5,
+                              4,
                               row.qqqStrike == null ? "No QQQ strike at this offset" : `QQQ ${row.qqqStrike} • ${sideBasis === "vol-only" ? "vol only" : "OI+Vol"}`,
                               row.qqqStrike
+                            )}
+                            {dataCell(
+                              heatTicker ? row.cusGex : "—",
+                              heatTicker ? row.cusGexVal : null,
+                              "cusGexVal",
+                              5,
+                              !heatTicker
+                                ? "Set a ticker in the heatmap cog to fill this column"
+                                : row.cusStrike == null
+                                  ? `No ${heatTicker} strike at this offset`
+                                  : `${heatTicker} ${row.cusStrike} • ${sideBasis === "vol-only" ? "vol only" : "OI+Vol"}`,
+                              heatTicker ? row.cusStrike : null
                             )}
                           </tr>
                         </React.Fragment>

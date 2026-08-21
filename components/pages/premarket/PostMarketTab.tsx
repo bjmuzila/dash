@@ -249,28 +249,6 @@ export const POSTMARKET_CSS = `
   padding:5px 0;border-bottom:1px dashed var(--line);font-size:11.5px}
 .pmk .movelog .mv:last-child{border-bottom:0}
 .pmk .rx{font-size:9.5px;padding:2px 6px;border-radius:5px;white-space:nowrap;border:1px solid var(--line2)}
-/* 7 — strike paths. ONE ROW PER STRIKE, stacked in strike order: the ladder
-   reads top-to-bottom like every other price axis on this page, and a line is
-   directly above the line of the strike below it, so shapes are comparable by
-   eye. The old auto-fill card grid wrapped, which put 7,685 and 7,630 on
-   different rows of the page and made that impossible.
-   Lines only — no area fill, no bars. The bar view is section 3; this section
-   answers "what did the SHAPE do", and a filled sparkline reads as magnitude,
-   which is exactly the thing that is NOT comparable here (each line is scaled
-   to its own peak). */
-.pmk .pathlist{display:grid;gap:0;border-top:1px solid var(--line)}
-.pmk .prow{display:grid;grid-template-columns:56px 1fr 94px 76px;gap:10px;align-items:center;
-  height:26px;border-bottom:1px dashed var(--line)}
-.pmk .prow:hover{background:rgba(255,255,255,.025)}
-.pmk .prow .pk{font-size:10.5px;text-align:right;color:var(--dim)}
-.pmk .prow.key .pk{color:var(--txt);font-weight:700}
-.pmk .prow .pv{font-size:9.5px;text-align:right;color:var(--dim);white-space:nowrap}
-.pmk .prow .pt{font-size:9px;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
-.pmk .prow svg{display:block;width:100%;height:22px}
-
-/* 6c — where premium actually went. Replaced the replay scrubber: a slider that
-   re-derives numbers already printed elsewhere is a toy; this is the one number
-   on the page that is DOLLARS rather than gamma. Shared scale, top row = 100%. */
 .pmk .premlist{display:grid;gap:7px;margin-top:8px}
 .pmk .premrow{display:grid;grid-template-columns:52px 1fr 54px;gap:9px;align-items:center}
 .pmk .premrow .pl{font-size:11px;color:var(--txt);font-weight:600}
@@ -565,29 +543,6 @@ export default function PostMarketTab(p: PostMarketProps) {
       };
     });
   }, [evBars, series, idxAtMin, activeBuckets, evCover]);
-
-  /**
-   * STRIKE PATHS — one sparkline per strike, the literal "how did this strike
-   * change" answer, kept as its own section because it is a different question
-   * from the profile: the profile ranks strikes against each other, this ranks
-   * each strike against ITS OWN day.
-   *
-   * Each line is therefore normalised to that strike's own peak. A shared scale
-   * would flatten every strike outside the two or three biggest into a straight
-   * line at zero, which is precisely the strikes whose SHAPE is interesting —
-   * the one that built at 10:00 and was gone by noon reads identically to a
-   * strike that never traded. The magnitude is not lost: it is printed next to
-   * the line, and the profile above is the ranked view.
-   */
-  const strikePaths = useMemo(() => {
-    if (!cols.length || !evNear.length) return [];
-    return evNear.map((b) => {
-      const e = series.get(b.strike);
-      if (!e) return { strike: b.strike, net: b.net, vals: [] as number[], max: 0 };
-      const max = e.vals.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
-      return { strike: b.strike, net: b.net, vals: e.vals, max };
-    }).filter((r) => r.vals.length > 2);
-  }, [cols, evNear, series]);
 
   /**
    * WALL MIGRATION — where the levels sat, minute by minute, against spot.
@@ -1122,7 +1077,7 @@ export default function PostMarketTab(p: PostMarketProps) {
     histState === "ok" ? null
       : histState === "loading" ? "Loading today's recorded ladder…"
         : histState === "empty" ? "No per-minute ladder recorded for today — the build-time bars, the wall path and the written-vs-traded read all need it. Everything else below is live."
-          : "The intraday recorder did not answer, so section 3 and the strike paths have nothing to read. Everything above and below them is live.";
+          : "The intraday recorder did not answer, so section 3 and the wall path have nothing to read. Everything above and below them is live.";
 
   return (
     <section className="prep is-post">
@@ -1733,56 +1688,6 @@ export default function PostMarketTab(p: PostMarketProps) {
           </div>
         </div>
       </div>
-
-      {/* ── 7. STRIKE PATHS ──────────────────────────────────────────────── */}
-      {strikePaths.length > 0 && (
-        <div className="sec">
-          <div className="sechead">
-            <h3><span className="secn">7</span>Strike paths</h3>
-            <span className="tiny right">
-              {strikePaths.length} strikes around spot · 09:30 → close · each line scaled to its own day
-            </span>
-          </div>
-          <div className="pathlist">
-            {strikePaths.map((r) => {
-              const tag = openTag(r.strike);
-              const pos = r.net >= 0;
-              const stroke = tag ? tag.color : pos ? "var(--pos)" : "var(--neg)";
-              // Fixed viewBox stretched to the row's width: x is the session
-              // clock (09:30 at the left edge, the close at the right), so every
-              // row shares ONE time axis and a 13:16 kink lines up down the
-              // whole stack. y is that strike's own peak — see the memo.
-              const W = 1000, H = 22;
-              const max = r.max || 1;
-              const pts = r.vals
-                .map((v, i) => `${(i / Math.max(1, r.vals.length - 1)) * W},${H - 2 - (Math.abs(v) / max) * (H - 4)}`)
-                .join(" ");
-              return (
-                <div className={`prow${tag ? " key" : ""}`} key={r.strike}>
-                  <div className="pk mono">{nf(r.strike, 0)}</div>
-                  <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-                    <line x1={0} y1={H - 2} x2={W} y2={H - 2} stroke="var(--line)" strokeWidth={1}
-                      vectorEffect="non-scaling-stroke" />
-                    <polyline points={pts} fill="none" stroke={stroke} strokeWidth={1.3}
-                      strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-                  </svg>
-                  <div className="pv mono">{fmtUsd(r.net, false)}</div>
-                  <div className="pt" style={{ color: tag ? tag.color : "transparent" }}>
-                    {tag ? tag.text : ""}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {cols.length > 1 && (
-            <div className="heatx" style={{ paddingLeft: 66, paddingRight: 180 }}>
-              <span>{etHm(cols[0].ts)}</span>
-              <span>{etHm(cols[Math.floor(cols.length / 2)].ts)}</span>
-              <span>{etHm(cols[cols.length - 1].ts)}</span>
-            </div>
-          )}
-        </div>
-      )}
 
       <div className="footbar">
         <span className="l">

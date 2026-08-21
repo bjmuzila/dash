@@ -3,7 +3,7 @@
 import { type RefObject, type ReactNode } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
-import { Dock, SegGroup, ToggleTile, DockButton, DockSpacer, DockSep, DockGap, type SegOption } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, ToggleTile, DockButton, DockSpacer, DockSep, DockGap, DockCogMenu, DockMenuRow, DockMenuDivider, type SegOption } from "@/components/shared/DockToolbar";
 import type { GexMode, DataMode, GexMetric } from "./GexChart";
 
 interface GexToolbarProps {
@@ -63,6 +63,15 @@ interface GexToolbarProps {
   discordMessage?: string;
   /** Underlying ticker for the screenshot title, e.g. "SPX" */
   ticker?: string;
+  /**
+   * COMPACT (cog) LAYOUT — opt-in, off by default.
+   *
+   * Every control on this bar folds into a single cog dropdown, leaving the bar
+   * itself with nothing but that cog and the snapshot / Discord buttons. /home
+   * runs this way; every other host keeps the wide bar it already had, which is
+   * why this is a prop rather than a rewrite.
+   */
+  compact?: boolean;
 }
 
 // Format expiry date → DTE label e.g. "0DTE  Fri 6/13"
@@ -85,6 +94,7 @@ export default function GexToolbar({
   onRefresh,
   leading,
   containerRef, discordMessage, ticker = "SPX",
+  compact = false,
 }: GexToolbarProps) {
   // Title baked into the top-left of the screenshot: "SPX GEX • Fri 6/26"
   const { day: exDay, date: exDate } = expiryLabel(selectedExpiry);
@@ -99,6 +109,109 @@ export default function GexToolbar({
     const { day, date } = expiryLabel(exp);
     return { value: exp, label: day, sub: day === "ALL" ? undefined : date };
   });
+
+  // ── Compact: one cog + snapshot + Discord ───────────────────────────────────
+  // Same controls, same handlers — only the container changes. Ghost overlays
+  // ride along here (they had no tile on the wide bar, so /home could never
+  // reach them) and are disabled outside Net-GEX + OI, where they mean nothing.
+  if (compact) {
+    return (
+      <div style={{ display: "flex", padding: "6px 8px 2px", flexShrink: 0 }}>
+        <Dock className="dock-noscroll" style={{ width: "100%", gap: 8 }} fullWidth flat noScroll>
+          {leading}
+          {leading && <DockGap />}
+          <DockCogMenu title="GEX chart" buttonTitle="GEX chart settings" align="left" width={330}>
+            {dteOptions.length > 0 && (
+              <DockMenuRow
+                label="Expiry"
+                hint={ex0dte ? "Showing every expiry except 0DTE — this picker still sets the live feed's expiry for the rest of the page" : undefined}
+                stack
+              >
+                <span style={{ display: "inline-flex", opacity: ex0dte ? 0.45 : 1 }}>
+                  <SegGroup options={dteOptions} active={selectedExpiry} onChange={onExpiry} />
+                </span>
+              </DockMenuRow>
+            )}
+
+            {onMetric && (
+              <DockMenuRow label="Series">
+                <SegGroup
+                  options={[{ label: "GEX", value: "gex" }, { label: "DEX", value: "dex" }]}
+                  active={metric}
+                  onChange={(v) => onMetric(v as GexMetric)}
+                />
+              </DockMenuRow>
+            )}
+
+            {onToggleEx0dte && (
+              <DockMenuRow label="Board">
+                <ToggleTile
+                  label={ex0dteBusy ? "EX-0DTE…" : "EX-0DTE"}
+                  on={ex0dte}
+                  onClick={onToggleEx0dte}
+                  title={ex0dteError
+                    ? `Ex-0DTE board unavailable: ${ex0dteError}`
+                    : "Every listed expiration EXCEPT today's, summed per strike."}
+                />
+              </DockMenuRow>
+            )}
+
+            <DockMenuDivider />
+
+            <DockMenuRow label="Mode" stack>
+              <SegGroup
+                options={[{ label: "Net GEX", value: "net" }, { label: "Call−Put", value: "call-put" }]}
+                active={gexMode}
+                onChange={(v) => onGexMode(v as GexMode)}
+              />
+            </DockMenuRow>
+
+            <DockMenuRow label="Basis" stack>
+              <SegGroup
+                options={[{ label: "OI+Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }, { label: "Flow GEX", value: "flow" }]}
+                active={dataMode}
+                onChange={(v) => onDataMode(v as DataMode)}
+              />
+            </DockMenuRow>
+
+            <DockMenuDivider />
+
+            <DockMenuRow label="Overlays" stack>
+              <ToggleTile label="OI"   on={showOI}        onClick={onToggleOI} />
+              <ToggleTile label="DEX"  on={showDex}       onClick={onToggleDex} />
+              <ToggleTile label="Flip" on={showFlipCurve} onClick={onToggleFlip} />
+            </DockMenuRow>
+
+            <DockMenuRow
+              label="Ghosts"
+              hint={ghostEnabled
+                ? "Draw the bar profile from 5 / 15 / 30 minutes ago behind the live bars."
+                : "Prior-state ghosts only mean anything on Net GEX + OI+Vol."}
+              stack
+            >
+              <span style={{ display: "inline-flex", gap: 6, opacity: ghostEnabled ? 1 : 0.4, pointerEvents: ghostEnabled ? "auto" : "none" }}>
+                <ToggleTile label="5m"  on={showGhost5}  onClick={onToggleGhost5} />
+                <ToggleTile label="15m" on={showGhost15} onClick={onToggleGhost15} />
+                <ToggleTile label="30m" on={showGhost30} onClick={onToggleGhost30} />
+              </span>
+            </DockMenuRow>
+
+            <DockMenuDivider />
+
+            <DockMenuRow label="Data">
+              <DockButton onClick={trigger} title="Refresh the chain" style={{ color: btnStyle.color as string }}>
+                {btnLabel}
+              </DockButton>
+            </DockMenuRow>
+          </DockCogMenu>
+
+          <DockSpacer />
+          {containerRef && <BoxSnapBtn targetRef={containerRef} label="GEX Chart" title={screenshotTitle} />}
+          {containerRef && <BoxDiscordBtn targetRef={containerRef} label="GEX Chart" message={discordMessage} title={screenshotTitle} />}
+        </Dock>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", padding: "6px 8px 2px", flexShrink: 0 }}>

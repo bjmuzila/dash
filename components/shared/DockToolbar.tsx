@@ -12,12 +12,14 @@
  *   <ToggleTile>    on/off pill with status dot
  *   <DockButton>    action button (refresh / icon / etc.)
  *   <DockSep>       subtle vertical divider
+ *   <DockCogMenu>   cog wheel that folds a whole toolbar into one dropdown
+ *   <DockMenuRow>   labelled row inside a <DockCogMenu>
  *
  * Designed in /toolbar-preview.
  */
 
 import type { CSSProperties, ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 const ACCENT = "#219EBC";
@@ -731,5 +733,221 @@ export function DockCalendar({
         document.body
       )}
     </div>
+  );
+}
+
+/* ---------- Cog menu (portal'd settings dropdown) ---------- */
+/**
+ * One cog wheel standing in for a whole toolbar. Everything a bar used to spread
+ * across its width goes inside; the bar itself keeps only this trigger plus the
+ * snapshot / Discord actions.
+ *
+ * Two deliberate choices:
+ *
+ * 1. PORTALED to <body>. Every card on /home is `overflow: hidden`, and the
+ *    header rows sit inside <FitScale> (a CSS transform). An absolutely
+ *    positioned panel would be clipped by the card and mis-scaled by the
+ *    transform; a fixed-position portal is immune to both.
+ *
+ * 2. KEPT MOUNTED while closed (hidden with display:none rather than
+ *    unmounted). Hosts portal their OWN controls into this panel — the econ
+ *    calendar's filter row does exactly that — and unmounting the target node
+ *    every time the menu shut would tear those down and bounce the panel back
+ *    to rendering its own inline header.
+ */
+export function DockCogMenu({
+  children,
+  title = "Settings",
+  width = 320,
+  align = "right",
+  accent = ACCENT,
+  buttonTitle = "Settings",
+}: {
+  children: ReactNode;
+  /** Heading inside the panel. */
+  title?: string;
+  width?: number;
+  /** Which edge of the trigger the panel hangs from. */
+  align?: "left" | "right";
+  accent?: string;
+  /** Native tooltip on the cog itself. */
+  buttonTitle?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => setMounted(true), []);
+
+  const place = useCallback(() => {
+    const r = anchorRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const raw = align === "right" ? r.right - width : r.left;
+    const maxLeft = (typeof window === "undefined" ? width + 16 : window.innerWidth) - width - 8;
+    setPos({ left: Math.max(8, Math.min(raw, maxLeft)), top: r.bottom + 6 });
+  }, [align, width]);
+
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (anchorRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
+
+  const panel = (
+    <div
+      ref={menuRef}
+      role="menu"
+      aria-label={title}
+      data-capture-hide=""
+      style={{
+        ...popoverPanel,
+        left: pos?.left ?? -9999,
+        top: pos?.top ?? -9999,
+        width,
+        padding: 12,
+        display: open && pos ? "flex" : "none",
+        flexDirection: "column",
+        gap: 6,
+        maxHeight: "min(72vh, 620px)",
+        overflowY: "auto",
+        borderTop: `2px solid ${rgba(accent, 0.5)}`,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: "0.14em",
+          textTransform: "uppercase",
+          color: rgba(accent, 0.95),
+          paddingBottom: 6,
+          marginBottom: 2,
+          borderBottom: `1px solid ${T.border}`,
+        }}
+      >
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+
+  return (
+    <div ref={anchorRef} style={{ flexShrink: 0, display: "inline-flex" }}>
+      <button
+        onClick={(e) => { e.currentTarget.blur(); setOpen((v) => !v); }}
+        title={buttonTitle}
+        aria-label={buttonTitle}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          ...triggerBtn(open),
+          justifyContent: "center",
+          gap: 4,
+          padding: "6px 8px",
+          color: open ? accent : T.text,
+        }}
+      >
+        <CogIcon spin={open} />
+        <Chevron open={open} />
+      </button>
+      {mounted && createPortal(panel, document.body)}
+    </div>
+  );
+}
+
+/** Labelled row inside a <DockCogMenu>. `stack` puts the control under the label. */
+export function DockMenuRow({
+  label,
+  hint,
+  children,
+  stack = false,
+}: {
+  label?: string;
+  /** Native tooltip on the label. */
+  hint?: string;
+  children: ReactNode;
+  stack?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: stack ? "column" : "row",
+        alignItems: stack ? "stretch" : "center",
+        justifyContent: "space-between",
+        gap: stack ? 5 : 10,
+        padding: "3px 0",
+      }}
+    >
+      {label && (
+        <span
+          title={hint}
+          style={{
+            fontSize: 10,
+            fontWeight: 800,
+            letterSpacing: "0.10em",
+            textTransform: "uppercase",
+            color: "rgba(255,255,255,0.55)",
+            whiteSpace: "nowrap",
+            cursor: hint ? "help" : undefined,
+          }}
+        >
+          {label}
+        </span>
+      )}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          flexWrap: "wrap",
+          justifyContent: stack ? "flex-start" : "flex-end",
+          minWidth: 0,
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Hairline between groups of rows inside a <DockCogMenu>. */
+export function DockMenuDivider() {
+  return <span style={{ height: 1, background: T.border, margin: "5px 0" }} />;
+}
+
+function CogIcon({ spin = false }: { spin?: boolean }) {
+  return (
+    <svg
+      width={15}
+      height={15}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ transition: "transform .25s ease", transform: spin ? "rotate(45deg)" : "none", flexShrink: 0 }}
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
   );
 }
