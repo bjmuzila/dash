@@ -742,8 +742,10 @@ export function DockCalendar({
  * structural rather than a marker attribute: the popovers this has to recognise
  * live in four different files and were written years apart, and all of them
  * share the same shape: `position: fixed` on a raised z-index. The threshold is
- * low (50) because the ES-candles Charts/Indicators panel sits at 60 while the
- * portalled dropdowns sit at 9,999-100,000.
+ * low (50) because in-page panels sit as low as 60, while the portalled
+ * dropdowns sit at 9,999-100,000. (The ES-candles Charts/Replay/Indicators
+ * panel is one of the high ones — 100,001 — because its trigger buttons live
+ * inside THIS menu, so it has to draw over the menu rather than under it.)
  */
 function inFloatingLayer(el: Element | null): boolean {
   for (let n = el; n && n !== document.body; n = n.parentElement) {

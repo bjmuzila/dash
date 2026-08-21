@@ -31,11 +31,35 @@
  * DEX / vanna totals, the playbook) is derived client-side from that one chain
  * through lib/calculations, so this page can never disagree with the GEX chart.
  *
- * THE ONE THING THAT NEEDS TIME TO WORK: "vs prior close" comparisons. Nothing
- * in the app persists an end-of-day GEX snapshot, so this page takes its own —
- * once per session, between 15:40 and 16:10 ET, into localStorage (EOD_KEY).
- * Until a snapshot from a PREVIOUS date exists, the net-GEX change, the strike
- * deltas and "yesterday's flip" render as "—" rather than as a made-up number.
+ *   /api/premarket-baseline
+ *                       PRIOR-CLOSE BASELINE — the prior trading session's
+ *                       settled per-strike GEX for the SAME expiry this page is
+ *                       showing. Feeds the Net GEX "vs prior close" chip and the
+ *                       "Biggest GEX Changes" card.
+ *
+ * ── ABOUT THAT BASELINE (2026-08-21) ────────────────────────────────────────
+ * It used to be local. This page wrote its own end-of-day snapshot into
+ * localStorage ("cb-premarket-eod-v1"), once per session, but ONLY while it was
+ * mounted between 15:40 and 16:10 ET — and nobody has the PREMARKET page open
+ * at 3:40pm. The only writer was the one page that never ran in the write
+ * window, so the snapshot was never written and the card showed "no prior-close
+ * snapshot yet" permanently. It was a deadlock, not a warm-up. (It was also
+ * per-browser, and it required a snapshot from a STRICTLY EARLIER date, so even
+ * a fixed version had a two-session cold start.)
+ *
+ * server-v2/premarket-baseline.js now computes it from settled ThetaData
+ * history for the prior session — no window to miss, no cold start, one answer
+ * every device shares.
+ *
+ * THE BASIS MATTERS. The baseline is read on the OI basis, and the live side of
+ * every comparison below is the OI leg too (`oiLeg()`), not the OI+Vol number
+ * printed in the KPI. On OI+Vol, a premarket comparison drags yesterday's whole
+ * session volume into the baseline against a live side that has ~none yet, so
+ * every strike prints a large negative Δ that is pure artifact. On OI both
+ * sides carry the same settled OI and the difference is what actually changed
+ * overnight: how each strike's gamma re-priced as spot moved. The card says
+ * "OI basis" out loud so the two numbers are never silently mismatched.
+ * The full argument is in premarket-baseline.js's header.
  *
  * Styling: the approved mockup's CSS, scoped under `.pmk` (custom properties on
  * `.pmk`, not `:root`) so its generic class names cannot leak into the app.
@@ -292,7 +316,12 @@ const CSS = `
 
 const RTH_OPEN_MIN = 9 * 60 + 30;
 const RTH_CLOSE_MIN = 16 * 60;
-const EOD_KEY = "cb-premarket-eod-v1";
+/**
+ * Dead key. The page used to write its own EOD snapshot here; the baseline is a
+ * server read now (see the header). Kept only to evict the stale copy from
+ * browsers that ran the old build — remove once a few weeks have passed.
+ */
+const LEGACY_EOD_KEY = "cb-premarket-eod-v1";
 /** Which tab the user last chose, for this browser session only. */
 const TAB_KEY = "cb-premarket-tab-v1";
 /** Which SYMBOL the user last chose, same session-only scope. */
@@ -366,22 +395,31 @@ function computeMaxPain(chain: ChainRow[]): number | null {
   return best;
 }
 
-type EodSnap = {
+/**
+ * /api/premarket-baseline's payload. `date` is the session the snapshot
+ * DESCRIBES (the prior close), not the day it was computed. `netGex` and the
+ * `byStrike` values are on the requested basis — `oi` here.
+ */
+type Baseline = {
   date: string;
+  expiry: string;
+  basis: string;
+  spot: number | null;
   netGex: number | null;
   flip: number | null;
   callWall: number | null;
   putWall: number | null;
+  strikes: number;
   byStrike: Record<string, number>;
 };
 
-function readEod(): EodSnap | null {
-  try {
-    const raw = localStorage.getItem(EOD_KEY);
-    if (!raw) return null;
-    const j = JSON.parse(raw) as EodSnap;
-    return j && typeof j.date === "string" ? j : null;
-  } catch { return null; }
+/**
+ * The OI leg of a chain row: γ × OI × S², i.e. the OI+Vol number the app prints
+ * minus the volume leg. This is the live side of every baseline comparison —
+ * see the header for why the printed OI+Vol number is the wrong one to diff.
+ */
+function oiLeg(row: ChainRow, spot: number): number {
+  return netGEXOf(row, "net", spot) - netGEXOf(row, "vol", spot);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -454,32 +492,62 @@ export default function Premarket() {
     return () => { clearInterval(a); clearInterval(b); };
   }, [loadQuotes, loadMq]);
 
-  // ── EOD baseline (this page's own 15:40–16:10 ET snapshot) ─────────────────
-  const [eod, setEod] = useState<EodSnap | null>(null);
-  useEffect(() => { setEod(readEod()); }, []);
+  // ── prior-close baseline (server) ──────────────────────────────────────────
+  //
+  // Keyed on the expiry the page is showing: the server returns the PRIOR
+  // SESSION's settled snapshot OF THAT EXPIRY, which is the only thing the live
+  // chain can honestly be diffed against. Nothing is written from the browser
+  // any more — see the header.
+  const [baseline, setBaseline] = useState<Baseline | null>(null);
+  const [baselineState, setBaselineState] = useState<"idle" | "loading" | "ok" | "empty">("idle");
 
-  const wroteEodRef = useRef(false);
+  // One-time eviction of the snapshot the old build left behind.
   useEffect(() => {
-    if (wroteEodRef.current || !chain.length) return;
-    const { date, minutes } = etWall();
-    if (minutes < RTH_CLOSE_MIN - 20 || minutes >= RTH_CLOSE_MIN + 10) return;
-    const existing = readEod();
-    if (existing?.date === date) { wroteEodRef.current = true; return; }
-    const byStrike: Record<string, number> = {};
-    for (const r of chain) byStrike[String(r.strike)] = netGEXOf(r, "net", spot);
-    const snap: EodSnap = {
-      date, netGex: totalNetGex ?? null, flip: flip ?? null,
-      callWall: callWall ?? null, putWall: putWall ?? null, byStrike,
-    };
-    try { localStorage.setItem(EOD_KEY, JSON.stringify(snap)); } catch { /* quota */ }
-    wroteEodRef.current = true;
-  }, [chain, spot, totalNetGex, flip, callWall, putWall]);
+    try { localStorage.removeItem(LEGACY_EOD_KEY); } catch { /* private mode */ }
+  }, []);
 
-  /** Only a snapshot from a PREVIOUS session is a valid baseline. */
-  const baseline = useMemo(() => {
-    const today = etWall(clock).date;
-    return eod && eod.date < today ? eod : null;
-  }, [eod, clock]);
+  /**
+   * Generation guard. `expiry` changes at least twice on a cold mount —
+   * useMobileGex takes the SHARED socket's current expiry first and only pins
+   * today's 0DTE on a later commit — so two fetches are always in flight, and
+   * the second one is usually the WARM one (already in the baseline table)
+   * while the first needs a full settled-chain sweep. Without this the slow,
+   * wrong-expiry response lands last and wins, and the card silently diffs
+   * today's chain against another expiry's board — same symbol, overlapping
+   * strikes, every number plausible, nothing on screen naming the expiry.
+   */
+  const baselineGen = useRef(0);
+
+  const loadBaseline = useCallback(async (exp: string) => {
+    const gen = ++baselineGen.current;
+    setBaselineState("loading");
+    try {
+      const r = await fetch(`/api/premarket-baseline?expiry=${encodeURIComponent(exp)}&basis=oi`,
+        { cache: "no-store" });
+      if (gen !== baselineGen.current) return;
+      if (!r.ok) { setBaseline(null); setBaselineState("empty"); return; }
+      const j = await r.json();
+      if (gen !== baselineGen.current) return;
+      // Belt and braces: the server echoes what it answered for.
+      if (!j?.ok || !j?.byStrike || j?.expiry !== exp) {
+        setBaseline(null); setBaselineState("empty"); return;
+      }
+      setBaseline(j as Baseline);
+      setBaselineState("ok");
+    } catch {
+      if (gen !== baselineGen.current) return;
+      setBaseline(null);
+      setBaselineState("empty");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!expiry) return;
+    // Clear first: a stale baseline for the PREVIOUS expiry would silently
+    // diff today's chain against the wrong session's board.
+    setBaseline(null);
+    void loadBaseline(expiry);
+  }, [expiry, loadBaseline]);
 
   // ── derived from the chain ─────────────────────────────────────────────────
   const perStrike = useMemo(() => {
@@ -559,14 +627,48 @@ export default function Premarket() {
     return null;
   }, [chain, spot]);
 
+  /** Live per-strike OI leg — the side of the baseline comparison, not the bars. */
+  const perStrikeOi = useMemo(() => {
+    if (!chain.length || !(spot > 0)) return [];
+    return chain
+      .map((r) => ({ strike: r.strike, oi: oiLeg(r, spot) }))
+      .filter((r) => Number.isFinite(r.oi));
+  }, [chain, spot]);
+
+  /**
+   * Live vs baseline totals summed over the SAME strikes — the intersection,
+   * not each side's own universe. They are not the same universe: the live
+   * chain is a ±8% band around live spot, the settled baseline a ±500-point
+   * band around yesterday's settle, and the deep-OTM strikes at either edge
+   * carry the biggest OI on the board. Summing each side whole injects a large
+   * one-sided term and the KPI chip prints an arbitrary ▲/▼ — the same class of
+   * artifact the OI basis was chosen to avoid.
+   */
+  const oiVsBaseline = useMemo(() => {
+    if (!baseline || !perStrikeOi.length) return null;
+    let live = 0, base = 0, n = 0;
+    for (const r of perStrikeOi) {
+      const b = baseline.byStrike[String(r.strike)];
+      if (b == null) continue;
+      live += r.oi; base += b; n++;
+    }
+    return n ? { live, base, n } : null;
+  }, [baseline, perStrikeOi]);
+
+  /**
+   * Biggest movers vs the prior close, OI basis. A strike the baseline never
+   * listed is SKIPPED rather than treated as zero — a new strike would
+   * otherwise print its whole gamma as "change", which it isn't.
+   */
   const strikeDeltas = useMemo(() => {
-    if (!baseline || !perStrike.length) return [];
-    return perStrike
-      .map((r) => ({ strike: r.strike, delta: r.net - (baseline.byStrike[String(r.strike)] ?? 0) }))
+    if (!baseline || !perStrikeOi.length) return [];
+    return perStrikeOi
+      .filter((r) => baseline.byStrike[String(r.strike)] != null)
+      .map((r) => ({ strike: r.strike, delta: r.oi - baseline.byStrike[String(r.strike)] }))
       .filter((r) => Number.isFinite(r.delta) && r.delta !== 0)
       .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
       .slice(0, 4);
-  }, [baseline, perStrike]);
+  }, [baseline, perStrikeOi]);
 
   // ── overnight window off the ES bars ───────────────────────────────────────
   const overnight = useMemo(() => {
@@ -706,9 +808,13 @@ export default function Premarket() {
   const distFlip = spot > 0 && flip ? spot - flip : null;
   const distCall = spot > 0 && callWall ? callWall - spot : null;
   const distPut = spot > 0 && putWall ? putWall - spot : null;
+  // OI leg on BOTH sides, over the shared strikes only. The KPI prints the
+  // OI+Vol total next to this chip, so the chip is labelled "OI" — mixing the
+  // bases silently is how you get a permanent premarket ▼ that is really just
+  // yesterday's volume falling off.
   const netGexChangePct =
-    baseline?.netGex && totalNetGex != null && baseline.netGex !== 0
-      ? ((totalNetGex - baseline.netGex) / Math.abs(baseline.netGex)) * 100
+    oiVsBaseline && oiVsBaseline.base !== 0
+      ? ((oiVsBaseline.live - oiVsBaseline.base) / Math.abs(oiVsBaseline.base)) * 100
       : null;
 
   const { date: etDate, minutes: etMin } = etWall(clock);
@@ -994,8 +1100,9 @@ export default function Premarket() {
               <div className="v mono">
                 {fmtUsd(totalNetGex)}{" "}
                 {netGexChangePct != null && (
-                  <span className={netGexChangePct >= 0 ? "chg-pos" : "chg-neg"} style={{ fontSize: 11 }}>
-                    {netGexChangePct >= 0 ? "▲" : "▼"} {Math.abs(netGexChangePct).toFixed(0)}%
+                  <span className={netGexChangePct >= 0 ? "chg-pos" : "chg-neg"} style={{ fontSize: 11 }}
+                    title={`OI-basis change vs the ${baseline?.date ?? "prior"} close`}>
+                    {netGexChangePct >= 0 ? "▲" : "▼"} {Math.abs(netGexChangePct).toFixed(0)}% <small>OI</small>
                   </span>
                 )}
                 {netGexChangePct == null && <small>vs prior close —</small>}
@@ -1361,7 +1468,10 @@ export default function Premarket() {
               </span></div>
 
               <div className="colhead" style={{ margin: "16px 0 6px" }}>
-                <h3>Biggest GEX Changes</h3><span className="tiny">vs prior close</span>
+                <h3>Biggest GEX Changes</h3>
+                <span className="tiny">
+                  {baseline ? `vs ${baseline.date} close · OI basis` : "vs prior close"}
+                </span>
               </div>
               {strikeDeltas.length ? (
                 <div className="deltas">
@@ -1384,7 +1494,11 @@ export default function Premarket() {
                 </div>
               ) : (
                 <div style={{ fontSize: 11, color: "var(--dim)" }}>
-                  No prior-close snapshot yet — this page captures one automatically between 15:40 and 16:10 ET.
+                  {baselineState === "loading" || baselineState === "idle"
+                    ? "Loading the prior-close board…"
+                    : baselineState === "empty"
+                      ? `No settled prior-session board for ${expiry || "this expiry"} yet — it is published overnight and backfills on its own.`
+                      : "No strike moved against the prior close."}
                 </div>
               )}
 
@@ -1547,7 +1661,9 @@ export default function Premarket() {
             </span>
             <div className="chips">
               <span className="chip on">{isZeroDte ? "0DTE" : "FRONT"} {expiry || ""}</span>
-              {baseline ? <span className="chip">baseline {baseline.date}</span> : <span className="chip">no baseline yet</span>}
+              {baseline
+                ? <span className="chip">baseline {baseline.date} · {baseline.strikes} strikes · OI</span>
+                : <span className="chip">{baselineState === "empty" ? "no baseline" : "baseline loading…"}</span>}
             </div>
           </div>
         </section>

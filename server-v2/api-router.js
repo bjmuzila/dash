@@ -83,6 +83,18 @@ catch (e) { console.warn('[api-router] _lib-confidence-route.cjs not loaded:', e
 let cbTrack = null;
 try { cbTrack = require('./cb-contract-track'); }
 catch (e) { console.warn('[api-router] cb-contract-track not loaded — contract tracking off:', e.message); }
+// Premarket Prep's server-side "prior close" GEX baseline — the thing that
+// makes the page's "Biggest GEX Changes" card and the Net GEX "vs prior close"
+// chip work. Replaces a localStorage snapshot the page took of ITSELF between
+// 15:40 and 16:10 ET, which could never be written because nobody has the
+// PREMARKET page open at 3:40pm. Computes from settled ThetaData history
+// instead, so there is no window to miss and no cold start. Owns its own tables
+// via its own pool (no libDb dependency). Loaded defensively: without it
+// /api/premarket-baseline is simply never registered and the page falls back to
+// "no baseline" exactly as it does today.
+let premarketBaseline = null;
+try { premarketBaseline = require('./premarket-baseline'); }
+catch (e) { console.warn('[api-router] premarket-baseline not loaded:', e.message); }
 // Pure broker-CSV parser/matcher (lib/journal/csv.ts — zero imports):
 //   esbuild lib/journal/csv.ts --bundle --platform=node --format=cjs --outfile=server-v2/_lib-journal-csv.cjs
 let libJournalCsv = null;
@@ -3919,6 +3931,48 @@ register('/api/quotes-batch', {
       }, { 'Cache-Control': NO_STORE });
     },
   });
+}
+
+// ── Premarket Prep prior-close baseline ─────────────────────────────────────
+// GET /api/premarket-baseline?expiry=YYYY-MM-DD[&symbol=$SPX][&basis=oi|oivol]
+//                            [&today=YYYY-MM-DD][&build=0]
+//
+// `expiry` is the expiry the PAGE is showing (its live 0DTE / front), NOT the
+// baseline's date — the answer is the prior trading session's settled snapshot
+// OF THAT EXPIRY, which is the only thing the live chain can honestly be
+// diffed against. Response carries `date` (the session it describes) and
+// `tried` (every session probed, so a walk-back past a Theta gap is visible).
+//
+// basis=oi (default) is the clean overnight read: both sides carry the same
+// settled OI, so the delta is the gamma/spot revaluation. basis=oivol matches
+// the number printed elsewhere in the app but drags yesterday's whole-session
+// volume into a premarket comparison — see premarket-baseline.js's header.
+//
+// build=0 makes it cache-only (no ThetaData sweep) for cheap polling.
+if (premarketBaseline) {
+  register('/api/premarket-baseline', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const out = await premarketBaseline.getBaseline({
+          symbol: sp.get('symbol') || undefined,
+          expiry: sp.get('expiry') || '',
+          today: sp.get('today') || undefined,
+          basis: sp.get('basis') || undefined,
+          build: sp.get('build') !== '0',
+        });
+        // A missing baseline is a legitimate state the card renders, not a
+        // server fault — 200 with ok:false, matching how the page's other
+        // reads fail soft.
+        send(res, 200, out, { 'Cache-Control': NO_STORE });
+      } catch (err) {
+        send(res, 200, { ok: false, error: String(err?.message || err) },
+          { 'Cache-Control': NO_STORE });
+      }
+    },
+  });
+  premarketBaseline.startPremarketBaseline();
 }
 
 // ── REAL-DB routes (batch 2) — only registered when the bundle loaded ────────
