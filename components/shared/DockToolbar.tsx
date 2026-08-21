@@ -13,9 +13,10 @@
  *   <DockButton>    action button (refresh / icon / etc.)
  *   <DockSep>       subtle vertical divider
  *   <DockCogMenu>   cog wheel that folds a whole toolbar into one panel —
- *                   a scrolling column (`children`) or a section rail with a
- *                   detail pane (`sections`)
+ *                   a flat scrolling column (`children`) or an accordion of
+ *                   labelled, unfolding sections (`sections`)
  *   <DockMenuRow>   labelled row inside a column-mode <DockCogMenu>
+ *   <DockField>     label-above-control field inside a <DockCogMenu> section
  *
  * Designed in /toolbar-preview.
  */
@@ -763,12 +764,18 @@ function inFloatingLayer(el: Element | null): boolean {
  * rail when this section is picked — the controls themselves, unwrapped.
  */
 export type DockCogSection = {
-  /** Stable key. Also what the menu remembers between opens. */
+  /** Stable key. Also what the menu remembers unfolded between opens. */
   id: string;
   label: string;
-  /** Small number beside the label — how many of this section's toggles are on. */
+  /**
+   * What this section currently says, shown in the header while it is SHUT —
+   * "1m", "Front · Vol+OI", "3 charts". Keep it to a few characters: it is the
+   * answer to the question the label asks, not a description of the controls.
+   */
+  summary?: ReactNode;
+  /** Rendered as "N on". For sections that are a pile of toggles. */
   count?: number | null;
-  /** Native tooltip on the rail button. */
+  /** Native tooltip on the header. */
   hint?: string;
   body: ReactNode;
 };
@@ -791,13 +798,12 @@ export type DockCogSection = {
  *    to rendering its own inline header.
  *
  * TWO LAYOUTS. Pass `children` for the original single scrolling column. Pass
- * `sections` for MASTER–DETAIL: a nav rail down the left, one section's controls
- * in the pane on the right, swapped IN PLACE. See the note on `sections`.
+ * `sections` for the ACCORDION: labelled rows that unfold in place, inside the
+ * same one column. See the note on `sections`.
  */
 export function DockCogMenu({
   children,
   sections,
-  railWidth = 138,
   title = "Settings",
   width = 320,
   align = "right",
@@ -806,29 +812,34 @@ export function DockCogMenu({
 }: {
   children?: ReactNode;
   /**
-   * Master–detail mode. Given sections, the panel renders a rail of their
-   * labels and the ACTIVE section's `body` beside it; `children` is ignored.
+   * Accordion mode. Given sections, the panel renders each one as a labelled
+   * disclosure row that unfolds IN PLACE; `children` is ignored.
    *
    * This exists to kill a whole class of bug rather than one instance of it.
    * Once a toolbar folds into a cog, the controls inside it start growing their
-   * own dropdowns — overlay checklists, expiry lists, preset menus — and a
-   * floating panel opened from inside a floating panel has no idea where its
-   * parent is: it lands on top of it, behind it, or half off-screen, the
-   * parent's click-away has to be taught to ignore each child by hand, and
-   * every layer's z-index has to be tuned against every other. A section is not
-   * a layer. It cannot be mispositioned, it cannot be occluded, and it cannot
-   * be orphaned, because there is nothing to position.
+   * own dropdowns — overlay checklists, expiry lists, preset menus, indicator
+   * sheets — and a floating panel opened from inside a floating panel has no
+   * idea where its parent is: it lands on top of it, behind it, or half
+   * off-screen, the parent's click-away has to be taught to ignore each child
+   * by hand, and every layer's z-index has to be tuned against every other. A
+   * section is not a layer. It cannot be mispositioned, it cannot be occluded,
+   * and it cannot be orphaned, because there is nothing to position. The rule
+   * that falls out of it: ONE floating layer per page, and this is it.
    *
-   * Only the active body is mounted. The `children` path stays mounted-while-
-   * closed for the hosts that portal into it (see above); sections have no such
-   * contract, and mounting seven bodies' worth of sliders to show one is waste.
+   * A shut row still has to answer its own question, or you open all of them
+   * looking for the one you want — hence `summary` ("1m", "Front · Vol+OI") and
+   * `count` ("3 on") in the header.
+   *
+   * More than one row may be open at once, and which rows are open is sticky
+   * across open/close: you shut the menu to look at the chart and come back to
+   * the same place. Only OPEN bodies are mounted — the `children` path stays
+   * mounted-while-closed for the hosts that portal into it (see above), but
+   * sections have no such contract and mounting seven bodies' worth of sliders
+   * to show one is waste.
    */
   sections?: DockCogSection[];
-  /** Width of the section rail. Only used in master–detail mode. */
-  railWidth?: number;
-  /** Heading inside the panel. In master–detail mode it captions the rail. */
+  /** Heading inside the panel. */
   title?: string;
-  /** TOTAL panel width, rail included. */
   width?: number;
   /** Which edge of the trigger the panel hangs from. */
   align?: "left" | "right";
@@ -838,14 +849,20 @@ export function DockCogMenu({
 }) {
   const [open, setOpen] = useState(false);
   /**
-   * Which section the pane is showing. Sticky across open/close on purpose —
-   * you adjust a slider, shut the menu to look at the chart, and come back to
-   * the same place rather than to the top of the list.
+   * Which rows are unfolded. `null` until the first interaction, which is what
+   * lets the DEFAULT be "the first section" without hardcoding an id the
+   * caller may not have — sections are data, and the first one is whatever the
+   * caller decided to lead with.
    */
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const activeSection = sections?.length
-    ? (sections.find((s) => s.id === activeId) ?? sections[0])
-    : null;
+  const [openIds, setOpenIds] = useState<string[] | null>(null);
+  const hasSections = !!sections?.length;
+  const expanded = openIds ?? (sections?.length ? [sections[0].id] : []);
+  const toggleSection = useCallback((id: string) => {
+    setOpenIds((prev) => {
+      const cur = prev ?? (sections?.length ? [sections[0].id] : []);
+      return cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+    });
+  }, [sections]);
   const [pos, setPos] = useState<{ left: number; top: number; maxH: number } | null>(null);
   const [mounted, setMounted] = useState(false);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -932,66 +949,60 @@ export function DockCogMenu({
     borderTop: `2px solid ${rgba(accent, 0.5)}`,
   };
 
-  const panel = activeSection ? (
+  const panel = hasSections ? (
     <div
       ref={menuRef}
       role="menu"
       aria-label={title}
       data-capture-hide=""
-      // padding 0 and overflow hidden: the rail and the pane scroll
-      // INDEPENDENTLY, so neither may be clipped by a scroller wrapped around
-      // both. A long overlay pane must not push the rail out of reach.
-      style={{ ...shell, padding: 0, flexDirection: "row", overflow: "hidden" }}
+      style={{ ...shell, padding: 0, flexDirection: "column", overflowY: "auto" }}
     >
-      <div
-        style={{
-          width: railWidth,
-          flexShrink: 0,
-          borderRight: `1px solid ${T.border}`,
-          background: "rgba(0,0,0,0.22)",
-          padding: "10px 6px 8px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 2,
-          overflowY: "auto",
-        }}
-      >
-        <div style={{ ...capStyle, padding: "0 7px 8px" }}>{title}</div>
-        {sections!.map((s) => {
-          const on = s.id === activeSection.id;
-          return (
-            <button
-              key={s.id}
-              role="menuitemradio"
-              aria-checked={on}
-              title={s.hint}
-              onClick={(e) => { e.currentTarget.blur(); setActiveId(s.id); }}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-                width: "100%", padding: "7px 9px", borderRadius: 8, cursor: "pointer",
-                fontFamily: "inherit", fontSize: 12, fontWeight: 700, textAlign: "left",
-                background: on ? rgba(accent, 0.16) : "transparent",
-                border: on ? `1px solid ${rgba(accent, 0.35)}` : "1px solid transparent",
-                color: on ? accent : T.text,
-              }}
-            >
-              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.label}</span>
-              {/* How many of this section's toggles are ON, so a section you are
-                  not looking at still answers "is anything doing something?" */}
-              {s.count ? <span style={{ opacity: 0.55, fontSize: 10, fontWeight: 800 }}>{s.count}</span> : null}
-            </button>
-          );
-        })}
+      <div style={{ ...capStyle, padding: "11px 12px 9px", borderBottom: `1px solid ${T.border}`, position: "sticky", top: 0, background: T.panelBgStrong, backdropFilter: "blur(18px)", zIndex: 1 }}>
+        {title}
       </div>
 
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ ...capStyle, padding: "10px 12px 8px", borderBottom: `1px solid ${T.border}`, color: T.text, opacity: 0.75 }}>
-          {activeSection.label}
-        </div>
-        <div style={{ padding: "10px 12px 12px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-          {activeSection.body}
-        </div>
-      </div>
+      {sections!.map((s, i) => {
+        const on = expanded.includes(s.id);
+        return (
+          <div key={s.id} style={{ borderTop: i ? `1px solid ${T.border}` : undefined, background: on ? rgba(accent, 0.035) : undefined }}>
+            <button
+              onClick={(e) => { e.currentTarget.blur(); toggleSection(s.id); }}
+              title={s.hint}
+              aria-expanded={on}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                width: "100%", padding: "9px 12px", background: "transparent", border: "none",
+                cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase",
+                  color: on ? accent : T.text, opacity: on ? 1 : 0.72,
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0,
+                }}
+              >
+                {s.label}
+              </span>
+              {/* A SHUT row still has to answer its own question. Without the
+                  summary the only way to find "which timeframe am I on" is to
+                  open every row in turn, which is the accordion's one failure
+                  mode and the whole reason this span exists. */}
+              <span style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0, fontSize: 11, fontWeight: 700, color: T.text, opacity: 0.55 }}>
+                {s.summary ? <span style={{ whiteSpace: "nowrap" }}>{s.summary}</span> : null}
+                {s.count ? <span style={{ fontWeight: 800 }}>{s.count} on</span> : null}
+                <span aria-hidden style={{ fontSize: 9, opacity: 0.8, transition: "transform .16s", transform: on ? "rotate(180deg)" : "none" }}>▾</span>
+              </span>
+            </button>
+            {/* Mounted only while unfolded — see the note on `sections`. */}
+            {on && (
+              <div style={{ padding: "2px 12px 12px", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+                {s.body}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   ) : (
     <div
@@ -1028,6 +1039,44 @@ export function DockCogMenu({
         <Chevron open={open} />
       </button>
       {mounted && createPortal(panel, document.body)}
+    </div>
+  );
+}
+
+/**
+ * Label-above-control field, for use INSIDE a <DockCogMenu> section.
+ *
+ * Not <DockMenuRow>: that puts the label and the control on one line, which
+ * works for a flat column of single buttons and fails immediately for a
+ * segmented picker, a slider or a list in a ~330px panel. Sections are dense
+ * and vertical, so the label goes above and the control gets the full width.
+ */
+export function DockField({
+  label,
+  hint,
+  children,
+}: {
+  label?: string;
+  /** Native tooltip on the label. */
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 0 }}>
+      {label && (
+        <span
+          title={hint}
+          style={{
+            fontSize: 10, fontWeight: 800, letterSpacing: "0.10em", textTransform: "uppercase",
+            color: "rgba(255,255,255,0.62)", whiteSpace: "nowrap", cursor: hint ? "help" : undefined,
+          }}
+        >
+          {label}
+        </span>
+      )}
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, minWidth: 0 }}>
+        {children}
+      </div>
     </div>
   );
 }

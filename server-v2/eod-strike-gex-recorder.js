@@ -1912,13 +1912,14 @@ async function getStrikeGexLive(symbol, { force = false, basis = 'oivol', leg = 
  * opening 169 names is the thing this page exists to avoid.
  *
  * ── WHY THIS IS NODE AND NOT SQL ────────────────────────────────────────────
- * The flip is a zero crossing of a RUNNING TOTAL with linear interpolation
- * between the straddling strikes. That is expressible in Postgres — a SUM()
- * OVER (PARTITION BY symbol ORDER BY strike) plus LAG and some arithmetic —
- * but it would be a second, subtly different implementation of the same
- * definition the client already uses, and the two would drift the first time
- * either changed. Instead this pulls the per-strike rows ONE time and reduces
- * them here, so there is exactly one definition of "flip" on the server.
+ * The flip is a zero crossing of the LOCAL (kernel-weighted) net gamma profile
+ * — an O(strikes x grid) scan, not a window function. It was expressible in
+ * Postgres under the old running-total rule; under this one it is not worth
+ * trying, and it never should have been two implementations anyway: the client
+ * carries the same definition in GexGrowth.tsx and the two must agree exactly
+ * or the rail badge contradicts the tile it opens. This pulls the per-strike
+ * rows ONE time and reduces them here, so there is one definition per side and
+ * they are line-for-line the same.
  *
  * The wire cost is what matters and it is unchanged: ~169 symbols × ~81 strikes
  * × 2 dates is a few tens of thousands of rows over a local socket, reduced to
@@ -1937,10 +1938,10 @@ async function getStrikeGexBadges(pairs, bas = 'oivol') {
   // BASIS-aware, deliberately NOT leg-aware — always the NET column.
   //
   // Every figure this function produces (gamma flip, call wall, put wall, sign
-  // flips) is a property of the two legs TOGETHER. The flip is a zero crossing
-  // of the running total, and on the three unsigned bases the call leg is >= 0
-  // and the put leg <= 0 at every strike by construction — so a single-leg
-  // running total is monotonic and can never cross zero. Computing a "flip" on
+  // flips) is a property of the two legs TOGETHER. The flip is a sign change in
+  // net gamma, and on the three unsigned bases the call leg is >= 0 and the put
+  // leg <= 0 at every strike by construction — so a single-leg profile is
+  // one-signed everywhere and can never change sign. Computing a "flip" on
   // it would return null for every symbol on the board, or worse, a number from
   // a curve that has no crossing to find. Walls have the same problem: the call
   // wall is the largest POSITIVE rung above spot, and on a put-leg ladder there
@@ -1967,18 +1968,63 @@ async function getStrikeGexBadges(pairs, bas = 'oivol') {
     [syms, curDates, prevDates],
   );
 
-  /** Interpolated zero crossings of the running total. Same rule as the client. */
-  const crossings = (ladder) => {
+  /**
+   * GAMMA FLIP — zero crossings of the LOCAL net gamma profile. Line-for-line
+   * the same rule as flipCrossings() in owner-vite/src/pages/GexGrowth.tsx; if
+   * you change one, change both, or the rail badge will disagree with the tile
+   * it opens.
+   *
+   * REPLACED THE RUNNING-TOTAL RULE ON 2026-08-21. The cumulative starts at 0
+   * and ends at the book's net, so on a put-dominant chain it falls through the
+   * put side and never climbs back — no crossing, no badge, for most SPX
+   * sessions. And where it did print, the level was set by how much far-OTM put
+   * gamma sat at the bottom of the recorded window rather than by anything
+   * dealers hedge at spot. Dealer gamma at a price is dominated by the strikes
+   * NEAR that price, so the exposure with price at S is the book weighted by a
+   * bell centred on S, and the flip is where that profile changes sign.
+   *
+   * The kernel width is SMOOTHING, not a volatility claim: 1% of spot blends
+   * the weekly and quarterly gamma the ladder stacks together, floored at two
+   * strike spacings so a wide-strike name does not collapse onto one rung.
+   */
+  const FLIP_KERNEL_PCT = 0.01;
+  const FLIP_GRID_STEPS = 240;
+  const spacing = (ks) => {
+    if (ks.length < 2) return 1;
+    const gaps = [];
+    for (let i = 1; i < ks.length; i++) { const g = ks[i] - ks[i - 1]; if (g > 0) gaps.push(g); }
+    if (!gaps.length) return 1;
+    gaps.sort((a, b) => a - b);
+    return gaps[Math.floor(gaps.length / 2)];
+  };
+  const localGamma = (ks, vs, S, w) => {
+    let g = 0;
+    for (let i = 0; i < ks.length; i++) {
+      const z = (ks[i] - S) / w;
+      if (z > 4 || z < -4) continue;
+      g += vs[i] * Math.exp(-0.5 * z * z);
+    }
+    return g;
+  };
+  const crossings = (ladder, spotRef) => {
+    if (!ladder || ladder.length < 3) return [];
+    const asc = [...ladder].sort((a, b) => a.strike - b.strike);
+    const ks = asc.map((r) => r.strike);
+    const vs = asc.map((r) => r.gex);
+    const lo = ks[0], hi = ks[ks.length - 1];
+    if (!(hi > lo)) return [];
+    const ref = spotRef > 0 ? spotRef : ks[Math.floor(ks.length / 2)];
+    const w = Math.max(ref * FLIP_KERNEL_PCT, spacing(ks) * 2);
     const res = [];
-    let cum = 0, prevStrike = null;
-    for (const r of ladder) {
-      const before = cum;
-      cum += r.gex;
-      if (prevStrike != null && ((before < 0 && cum >= 0) || (before > 0 && cum <= 0))) {
-        const t = cum === before ? 0 : (0 - before) / (cum - before);
-        res.push(prevStrike + t * (r.strike - prevStrike));
+    let pS = lo, pG = localGamma(ks, vs, lo, w);
+    for (let i = 1; i <= FLIP_GRID_STEPS; i++) {
+      const S = lo + ((hi - lo) * i) / FLIP_GRID_STEPS;
+      const G = localGamma(ks, vs, S, w);
+      if ((pG < 0 && G >= 0) || (pG > 0 && G <= 0)) {
+        const t = G === pG ? 0 : (0 - pG) / (G - pG);
+        res.push(pS + t * (S - pS));
       }
-      prevStrike = r.strike;
+      pS = S; pG = G;
     }
     return res;
   };
@@ -2003,8 +2049,8 @@ async function getStrikeGexBadges(pairs, bas = 'oivol') {
     if (!cur.length) continue;
     const spot = cur.find((r) => r.spot > 0)?.spot || cur[Math.floor(cur.length / 2)].strike;
 
-    const flipNow = nearest(crossings(cur), spot);
-    const flipPrev = prev.length ? nearest(crossings(prev), spot) : null;
+    const flipNow = nearest(crossings(cur, spot), spot);
+    const flipPrev = prev.length ? nearest(crossings(prev, spot), spot) : null;
 
     // Strikes that crossed zero overnight — a change of KIND, which is why it
     // gets its own count instead of folding into the |Δ| ranking.

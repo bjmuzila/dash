@@ -36,6 +36,7 @@ import {
   DockCogMenu,
   DockMenuRow,
   DockMenuDivider,
+  DockField,
   DockButton,
   DockSlider,
   SegGroup,
@@ -2211,99 +2212,112 @@ export function HomeClient({
                     </DockButton>
                     <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
-                    <DockCogMenu title="Heatmap" buttonTitle="Heatmap settings" width={330}>
-                      <DockMenuRow label="Intensity" hint="Cell colour opacity — how hard the heat ramps with magnitude.">
-                        <DockSlider
-                          value={intensity}
-                          min={0.5}
-                          max={5}
-                          step={0.01}
-                          onChange={setIntensity}
-                          format={(v) => `${v.toFixed(2)}x`}
-                          width={110}
-                        />
-                      </DockMenuRow>
-
-                      <DockMenuDivider />
-
-                      <DockMenuRow
-                        label="Side basis"
-                        hint="Basis for the SPY / QQQ / ticker-of-choice columns. OI+Vol = open interest + volume (full positioning). Vol Only = today's volume (intraday flow). The SPX columns are always OI+Vol."
-                        stack
-                      >
-                        <SegGroup
-                          options={[{ label: "OI+Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }]}
-                          active={sideBasis}
-                          onChange={(v) => setSideBasis(v as GexBasis)}
-                        />
-                      </DockMenuRow>
-
-                      {/* Ticker of choice — the 5th column. Same free-text field
-                          as the Multi Greek page's 4th ticker: typed, committed on
-                          Enter or blur, remembered per browser. Blank hides the
-                          column's numbers and stops the extra chain poll. */}
-                      <DockMenuRow
-                        label="5th column"
-                        hint="Any listed ticker. Its chain is joined to the SPX rows by moneyness offset (ATM±N), not by strike. Leave blank to switch the column off."
-                        stack
-                      >
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <input
-                            value={heatTickerInput}
-                            onChange={(e) => setHeatTickerInput(e.target.value.toUpperCase())}
-                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitHeatTicker(); (e.target as HTMLInputElement).blur(); } }}
-                            onBlur={commitHeatTicker}
-                            list="home-heat-tickers"
-                            autoComplete="off"
-                            spellCheck={false}
-                            maxLength={6}
-                            placeholder="TICKER"
-                            style={{
-                              width: 90, padding: "5px 8px", fontSize: 11, fontWeight: 800,
-                              letterSpacing: "0.08em", textTransform: "uppercase", textAlign: "center",
-                              background: "rgba(13,17,25,0.72)", color: C.cyan,
-                              border: "1px solid rgba(255,255,255,0.10)", borderRadius: 6, outline: "none",
-                              fontFamily: "inherit",
-                            }}
-                          />
-                          <datalist id="home-heat-tickers">
-                            {["IWM", "NDX", "SPY", "QQQ", "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "AMD"].map((t) => <option key={t} value={t} />)}
-                          </datalist>
-                          {heatTicker && (
-                            <button
-                              onClick={() => { setHeatTickerInput(""); setHeatTicker(""); }}
-                              title="Turn the 5th column off"
-                              style={{ padding: "5px 9px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: "pointer", fontFamily: "inherit", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", color: "#fff" }}
-                            >
-                              Clear
-                            </button>
-                          )}
-                        </div>
-                      </DockMenuRow>
-
-                      <DockMenuDivider />
-
-                      {/* Δ stamps — adds the change to the left of the SPX NET GEX
-                          value on the top 5 strikes each side. */}
-                      <DockMenuRow
-                        label="Δ stamps"
-                        hint="Change chips on the top-5 ranked strikes each side of the SPX NET GEX column. 'rate' = per-minute speed from the live rows; 5/15/30m = cumulative move vs a stored baseline."
-                        stack
-                      >
-                        <SegGroup
-                          options={[
-                            { label: "Off", value: "0" },
-                            { label: "Rate", value: "1" },
-                            { label: "5m", value: "5" },
-                            { label: "15m", value: "15" },
-                            { label: "30m", value: "30" },
-                          ]}
-                          active={String(deltaWindow)}
-                          onChange={(v) => setDeltaWindow(Number(v) as DeltaWindow)}
-                        />
-                      </DockMenuRow>
-
-                    </DockCogMenu>
+                    {/* ACCORDION — labelled sections that unfold in place, each
+                        header answering its own question so a shut row still
+                        says what the heatmap is set to. See DockCogMenu's
+                        `sections`. */}
+                    <DockCogMenu
+                      title="Heatmap"
+                      buttonTitle="Heatmap settings"
+                      width={330}
+                      sections={[
+                        {
+                          id: "heat",
+                          label: "Heat",
+                          summary: `${intensity.toFixed(2)}x · ${sideBasis === "oi-vol" ? "OI+Vol" : "Vol"}`,
+                          body: (
+                            <>
+                              <DockField label="Intensity" hint="Cell colour opacity — how hard the heat ramps with magnitude.">
+                                <DockSlider
+                                  value={intensity}
+                                  min={0.5}
+                                  max={5}
+                                  step={0.01}
+                                  onChange={setIntensity}
+                                  format={(v) => `${v.toFixed(2)}x`}
+                                  width="auto"
+                                />
+                              </DockField>
+                              <DockField
+                                label="Side basis"
+                                hint="Basis for the SPY / QQQ / ticker-of-choice columns. OI+Vol = open interest + volume (full positioning). Vol Only = today's volume (intraday flow). The SPX columns are always OI+Vol."
+                              >
+                                <SegGroup
+                                  options={[{ label: "OI+Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }]}
+                                  active={sideBasis}
+                                  onChange={(v) => setSideBasis(v as GexBasis)}
+                                />
+                              </DockField>
+                            </>
+                          ),
+                        },
+                        {
+                          // Ticker of choice — the 5th column. Same free-text field
+                          // as the Multi Greek page's 4th ticker: typed, committed
+                          // on Enter or blur, remembered per browser. Blank hides
+                          // the column's numbers and stops the extra chain poll.
+                          id: "col5",
+                          label: "5th column",
+                          summary: heatTicker || "off",
+                          hint: "Any listed ticker. Its chain is joined to the SPX rows by moneyness offset (ATM±N), not by strike. Leave blank to switch the column off.",
+                          body: (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <input
+                                value={heatTickerInput}
+                                onChange={(e) => setHeatTickerInput(e.target.value.toUpperCase())}
+                                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitHeatTicker(); (e.target as HTMLInputElement).blur(); } }}
+                                onBlur={commitHeatTicker}
+                                list="home-heat-tickers"
+                                autoComplete="off"
+                                spellCheck={false}
+                                maxLength={6}
+                                placeholder="TICKER"
+                                style={{
+                                  width: 90, padding: "5px 8px", fontSize: 11, fontWeight: 800,
+                                  letterSpacing: "0.08em", textTransform: "uppercase", textAlign: "center",
+                                  background: "rgba(13,17,25,0.72)", color: C.cyan,
+                                  border: "1px solid rgba(255,255,255,0.10)", borderRadius: 6, outline: "none",
+                                  fontFamily: "inherit",
+                                }}
+                              />
+                              <datalist id="home-heat-tickers">
+                                {["IWM", "NDX", "SPY", "QQQ", "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "AMD"].map((t) => <option key={t} value={t} />)}
+                              </datalist>
+                              {heatTicker && (
+                                <button
+                                  onClick={() => { setHeatTickerInput(""); setHeatTicker(""); }}
+                                  title="Turn the 5th column off"
+                                  style={{ padding: "5px 9px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: "pointer", fontFamily: "inherit", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", color: "#fff" }}
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                          ),
+                        },
+                        {
+                          // Δ stamps — adds the change to the left of the SPX NET
+                          // GEX value on the top 5 strikes each side.
+                          id: "delta",
+                          label: "Δ stamps",
+                          summary: deltaWindow === 0 ? "off" : deltaWindow === 1 ? "rate" : `${deltaWindow}m`,
+                          hint: "Change chips on the top-5 ranked strikes each side of the SPX NET GEX column. 'rate' = per-minute speed from the live rows; 5/15/30m = cumulative move vs a stored baseline.",
+                          body: (
+                            <SegGroup
+                              options={[
+                                { label: "Off", value: "0" },
+                                { label: "Rate", value: "1" },
+                                { label: "5m", value: "5" },
+                                { label: "15m", value: "15" },
+                                { label: "30m", value: "30" },
+                              ]}
+                              active={String(deltaWindow)}
+                              onChange={(v) => setDeltaWindow(Number(v) as DeltaWindow)}
+                            />
+                          ),
+                        },
+                      ]}
+                    />
                     </>
                     )}
                     {/* Heatmap|Chain switch removed — the panel is heatmap-only now.

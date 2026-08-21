@@ -3,7 +3,7 @@
 import { type RefObject, type ReactNode } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
-import { Dock, SegGroup, ToggleTile, DockButton, DockSpacer, DockSep, DockGap, DockCogMenu, DockMenuRow, DockMenuDivider, type SegOption } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, ToggleTile, DockButton, DockSpacer, DockSep, DockGap, DockCogMenu, DockField, type SegOption } from "@/components/shared/DockToolbar";
 import type { GexMode, DataMode, GexMetric } from "./GexChart";
 
 interface GexToolbarProps {
@@ -140,69 +140,89 @@ export default function GexToolbar({
           </DockButton>
           {containerRef && <BoxSnapBtn targetRef={containerRef} label="GEX Chart" title={screenshotTitle} />}
           {containerRef && <BoxDiscordBtn targetRef={containerRef} label="GEX Chart" message={discordMessage} title={screenshotTitle} />}
-          <DockCogMenu title="GEX chart" buttonTitle="GEX chart settings" width={330}>
-            {dteOptions.length > 0 && (
-              <DockMenuRow
-                label="Expiry"
-                hint={ex0dte ? "Showing every expiry except 0DTE — this picker still sets the live feed's expiry for the rest of the page" : undefined}
-                stack
-              >
-                <span style={{ display: "inline-flex", opacity: ex0dte ? 0.45 : 1 }}>
-                  <SegGroup options={dteOptions} active={selectedExpiry} onChange={onExpiry} />
-                </span>
-              </DockMenuRow>
-            )}
-
-            {onMetric && (
-              <DockMenuRow label="Series">
-                <SegGroup
-                  options={[{ label: "GEX", value: "gex" }, { label: "DEX", value: "dex" }]}
-                  active={metric}
-                  onChange={(v) => onMetric(v as GexMetric)}
-                />
-              </DockMenuRow>
-            )}
-
-            {onToggleEx0dte && (
-              <DockMenuRow label="Board">
-                <ToggleTile
-                  label={ex0dteBusy ? "EX-0DTE…" : "EX-0DTE"}
-                  on={ex0dte}
-                  onClick={onToggleEx0dte}
-                  title={ex0dteError
-                    ? `Ex-0DTE board unavailable: ${ex0dteError}`
-                    : "Every listed expiration EXCEPT today's, summed per strike."}
-                />
-              </DockMenuRow>
-            )}
-
-            <DockMenuDivider />
-
-            <DockMenuRow label="Mode" stack>
-              <SegGroup
-                options={[{ label: "Net GEX", value: "net" }, { label: "Call−Put", value: "call-put" }]}
-                active={gexMode}
-                onChange={(v) => onGexMode(v as GexMode)}
-              />
-            </DockMenuRow>
-
-            <DockMenuRow label="Basis" stack>
-              <SegGroup
-                options={[{ label: "OI+Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }, { label: "Flow GEX", value: "flow" }]}
-                active={dataMode}
-                onChange={(v) => onDataMode(v as DataMode)}
-              />
-            </DockMenuRow>
-
-            <DockMenuDivider />
-
-            <DockMenuRow label="Overlays" stack>
-              <ToggleTile label="OI"   on={showOI}        onClick={onToggleOI} />
-              <ToggleTile label="DEX"  on={showDex}       onClick={onToggleDex} />
-              <ToggleTile label="Flip" on={showFlipCurve} onClick={onToggleFlip} />
-            </DockMenuRow>
-
-          </DockCogMenu>
+          {/* ACCORDION, not a stack of rows: labelled sections that unfold in
+              place, each header carrying the answer to its own question so a
+              shut row still tells you what the chart is set to. Same shape as
+              every other cog in the app — see DockCogMenu's `sections`. */}
+          <DockCogMenu
+            title="GEX chart"
+            buttonTitle="GEX chart settings"
+            width={330}
+            sections={[
+              ...(dteOptions.length > 0 ? [{
+                id: "expiry",
+                label: "Expiry",
+                summary: `${exDay} ${exDate}`,
+                hint: ex0dte ? "Showing every expiry except 0DTE — this picker still sets the live feed's expiry for the rest of the page" : undefined,
+                body: (
+                  <span style={{ display: "inline-flex", opacity: ex0dte ? 0.45 : 1 }}>
+                    <SegGroup options={dteOptions} active={selectedExpiry} onChange={onExpiry} />
+                  </span>
+                ),
+              }] : []),
+              {
+                id: "chart",
+                // Mode + Basis + Series answer one question between them — WHAT
+                // the bars are — so they are one section rather than three rows
+                // you have to open one at a time.
+                label: "What the bars are",
+                summary: `${gexMode === "net" ? "Net" : "C−P"} · ${dataMode === "oi-vol" ? "OI+Vol" : dataMode === "vol-only" ? "Vol" : "Flow"}`,
+                body: (
+                  <>
+                    {onMetric && (
+                      <DockField label="Series">
+                        <SegGroup
+                          options={[{ label: "GEX", value: "gex" }, { label: "DEX", value: "dex" }]}
+                          active={metric}
+                          onChange={(v) => onMetric(v as GexMetric)}
+                        />
+                      </DockField>
+                    )}
+                    <DockField label="Mode">
+                      <SegGroup
+                        options={[{ label: "Net GEX", value: "net" }, { label: "Call−Put", value: "call-put" }]}
+                        active={gexMode}
+                        onChange={(v) => onGexMode(v as GexMode)}
+                      />
+                    </DockField>
+                    <DockField label="Basis">
+                      <SegGroup
+                        options={[{ label: "OI+Vol", value: "oi-vol" }, { label: "Vol Only", value: "vol-only" }, { label: "Flow GEX", value: "flow" }]}
+                        active={dataMode}
+                        onChange={(v) => onDataMode(v as DataMode)}
+                      />
+                    </DockField>
+                    {onToggleEx0dte && (
+                      <DockField label="Board">
+                        <div style={{ display: "flex" }}>
+                          <ToggleTile
+                            label={ex0dteBusy ? "EX-0DTE…" : "EX-0DTE"}
+                            on={ex0dte}
+                            onClick={onToggleEx0dte}
+                            title={ex0dteError
+                              ? `Ex-0DTE board unavailable: ${ex0dteError}`
+                              : "Every listed expiration EXCEPT today's, summed per strike."}
+                          />
+                        </div>
+                      </DockField>
+                    )}
+                  </>
+                ),
+              },
+              {
+                id: "overlays",
+                label: "Overlays",
+                count: [showOI, showDex, showFlipCurve].filter(Boolean).length,
+                body: (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    <ToggleTile label="OI"   on={showOI}        onClick={onToggleOI} />
+                    <ToggleTile label="DEX"  on={showDex}       onClick={onToggleDex} />
+                    <ToggleTile label="Flip" on={showFlipCurve} onClick={onToggleFlip} />
+                  </div>
+                ),
+              },
+            ]}
+          />
         </Dock>
       </div>
     );

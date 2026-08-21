@@ -164,23 +164,77 @@ function isRthNow() {
   return mins >= 570 && mins < 960; // 9:30 (570) – 16:00 (960)
 }
 
+// ── permessage-deflate switch (WS_DEFLATE) ───────────────────────────────────
+// 2026-08-21: the tuned deflate config below silently killed EVERY browser
+// client. Symptom: the upgrade succeeded (101), the server accounted the
+// snapshot bytes, then the socket died in ~2ms with close code 1006 and ZERO
+// frames delivered — so every page sat on "waiting for the feed" while
+// reconnecting ~1x/second, burning ~22MB/min of undelivered connect snapshots.
+// It was invisible in the logs because ws reports this on the socket's 'error'
+// event and the connection handler's handler was an empty function.
+//
+// Proven with a paired probe against the live server, inside the container, on
+// loopback (so Cloudflare and the tunnel were not involved):
+//     deflate-OFF -> openAt 5ms, msgs: 1   (snapshot delivered)
+//     deflate-ON  -> openAt 2ms, msgs: 0   (dead at 2ms)
+// A raw TCP socket sending NO Sec-WebSocket-Extensions header streamed fine and
+// held open. Browsers always negotiate permessage-deflate, hence: all browsers
+// dead, internal non-deflate clients fine.
+//
+// Why this is a switch and not a deletion: compression is worth ~80-90% on
+// these payloads (pure JSON, repeated keys, numeric arrays) and /ws/gex egress
+// is uncacheable and counts 100% as Cloudflare "bandwidth served" — it is the
+// single biggest lever on that bill. So the tuned config is preserved verbatim
+// under WS_DEFLATE=on, and can be re-enabled from .env.local with a restart, no
+// rebuild. Default is off: a dark dashboard costs more than bandwidth does.
+//
+//   WS_DEFLATE=off       (default) no compression — every client works
+//   WS_DEFLATE=on        the tuned config that caused this outage — verify with
+//                        the paired probe above before trusting it
+//   WS_DEFLATE=default   permessage-deflate with ws's own defaults (no custom
+//                        zlibDeflateOptions, no *NoContextTakeover) — the next
+//                        thing to try if you want the bandwidth back
+function resolveDeflateOption(log = console) {
+  const mode = (process.env.WS_DEFLATE || 'off').trim().toLowerCase();
+  if (mode === 'on') {
+    log.log?.('[WS] permessage-deflate: ON (tuned) — WS_DEFLATE=on');
+    return {
+      threshold: 1024,
+      zlibDeflateOptions: { level: 6, memLevel: 7 },
+      serverNoContextTakeover: true,
+      clientNoContextTakeover: true,
+    };
+  }
+  if (mode === 'default') {
+    log.log?.('[WS] permessage-deflate: ON (ws defaults) — WS_DEFLATE=default');
+    return true;
+  }
+  log.log?.('[WS] permessage-deflate: OFF (default) — set WS_DEFLATE=on|default to enable');
+  return false;
+}
+
+// Rate-limited socket-error logger. Collapses repeats of the same message to
+// one line per minute (with a count) so a transport that fails on EVERY
+// connection can't flood the log while clients reconnect ~1x/second.
+const _wsErrSeen = new Map(); // message -> { at, suppressed }
+function logWsError(err, log = console) {
+  const message = String(err?.message || err || 'unknown');
+  const now = Date.now();
+  const prev = _wsErrSeen.get(message);
+  if (prev && now - prev.at < 60000) {
+    prev.suppressed += 1;
+    return;
+  }
+  const extra = prev?.suppressed ? ` (+${prev.suppressed} suppressed in the last 60s)` : '';
+  _wsErrSeen.set(message, { at: now, suppressed: 0 });
+  log.error?.(`[WS] socket error: ${message}${extra}`);
+  if (_wsErrSeen.size > 50) _wsErrSeen.clear(); // bound the map
+}
+
 function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   const wss = new WebSocket.Server({
     noServer: true,
-    // Compress WS frames. Payloads are pure JSON (repeated keys, numeric arrays)
-    // and deflate cuts them ~80-90% — the single biggest lever on /ws/gex egress,
-    // which is uncacheable and 100% counts as Cloudflare "bandwidth served".
-    // threshold:1024 skips tiny frames (spot/aux) so we only pay CPU on the big
-    // gex/flow/snapshot frames; level 6 balances ratio vs CPU given the box's
-    // prior heap/OOM sensitivity. Browsers negotiate permessage-deflate for free.
-    perMessageDeflate: {
-      threshold: 1024,
-      zlibDeflateOptions: { level: 6, memLevel: 7 },
-      // Don't hold a compression context open per idle socket — reclaim memory
-      // between bursts (matters with many concurrent subscribers).
-      serverNoContextTakeover: true,
-      clientNoContextTakeover: true,
-    },
+    perMessageDeflate: resolveDeflateOption(log),
   });
   // GEX broadcast throttle state.
   let lastGexSentAt = 0;
@@ -309,7 +363,13 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       }
     });
 
-    ws.on('error', () => {});
+    // Do NOT swallow this. An empty handler here is what hid the 2026-08-21
+    // deflate outage: ws destroys the socket on a send/compress failure and
+    // reports the reason ONLY on this event, so every browser died silently
+    // with a bare 1006 and the logs said nothing for hours. Rate-limited
+    // because a broken transport fails once per connection and clients
+    // reconnect ~1x/second — unthrottled this would be the outage's second act.
+    ws.on('error', (err) => logWsError(err, log));
   });
 
   // Broadcast on state changes.

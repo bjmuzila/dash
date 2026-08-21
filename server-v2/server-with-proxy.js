@@ -97,7 +97,7 @@ const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls
 const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
   getWatch, runWatchAlerts, getAlerts, startWallsWatch } = require('./walls-reach');
 const { startForwardScanner, runForwardSweep, getForward } = require('./forward-scanner-recorder');
-const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults, getStudy: getGexChangeTopStudy, getCalibration: getGexChangeTopCalibration } = require('./gex-change-top-recorder');
+const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults, getStudy: getGexChangeTopStudy, getCalibration: getGexChangeTopCalibration, fitProjRule: fitGexChangeTopRule, getRuleState: getGexChangeTopRuleState, storeRule: storeGexChangeTopRule } = require('./gex-change-top-recorder');
 const {
   startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
   ALERT_CATALOG: SIGNAL_ALERT_CATALOG, listAlertSettings: listSignalAlertSettings,
@@ -3025,6 +3025,59 @@ async function main() {
               cohort: u.searchParams.get('cohort') || undefined,
             });
             sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // PROJECTION RULE — the thing calibration is calibrating.
+      //
+      //   GET  /proxy/gex-change-top-rule
+      //     → { ok, armed, source, terms, pinnedBy, auto, thresholds, lastFit }
+      //   POST /proxy/gex-change-top-rule-fit?days=90&cohort=selected&apply=1
+      //     → runs the auto-fit over the study's own bucket tables. Without
+      //       apply it is a DRY RUN: the terms it would arm, plus every bucket
+      //       it rejected and why. With apply=1 it stores the rule (unless a
+      //       hand-written config file is pinning it).
+      //   POST /proxy/gex-change-top-rule    body { rule } | { clear: true }
+      //     → pin a rule by hand, or clear the stored one and go inert again.
+      //
+      // Writes are owner-only: proxy-auth gates every non-GET on /proxy/*.
+      if (pathname === '/proxy/gex-change-top-rule' && req.method === 'GET') {
+        (async () => {
+          try { sendJson(res, 200, await getGexChangeTopRuleState()); }
+          catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      if (pathname === '/proxy/gex-change-top-rule-fit' && req.method === 'POST') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const apply = ['1', 'true', 'yes'].includes(String(u.searchParams.get('apply') || '').toLowerCase());
+            const out = await fitGexChangeTopRule({
+              days: u.searchParams.get('days') ? Number(u.searchParams.get('days')) : undefined,
+              cohort: u.searchParams.get('cohort') || undefined,
+              apply,
+              by: 'manual',
+            });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      if (pathname === '/proxy/gex-change-top-rule' && req.method === 'POST') {
+        (async () => {
+          try {
+            const body = await readJsonBody(req);
+            if (body && body.clear) {
+              await storeGexChangeTopRule(null);
+            } else if (body && body.rule) {
+              await storeGexChangeTopRule(body.rule, { by: 'manual' });
+            } else {
+              sendJson(res, 400, { ok: false, error: 'body must be { rule } or { clear: true }' });
+              return;
+            }
+            sendJson(res, 200, await getGexChangeTopRuleState());
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;

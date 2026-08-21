@@ -1018,19 +1018,21 @@ function summarize(rows) {
  *          thin (n < STUDY_MIN_N), and the same stats recomputed on each half of
  *          the window so a split can be checked out-of-sample immediately.
  */
-async function getStudy({ days = 60, by = 'score', cohort = 'selected' } = {}) {
-  const key = PG.BUCKETS[by] ? by : 'score';
-  const got = await studyRows({ days, cohort });
-  if (!got.ok) return { ok: false, error: got.error, buckets: [] };
-  const rows = got.rows;
-  const spec = PG.BUCKETS[key];
-
-  // Halve by DATE, not by row index — splitting mid-day would put the same
-  // session on both sides and leak.
+/** Where to halve the window, by DATE — splitting on row index would put the
+ *  same session on both sides and leak. */
+function splitDateOf(rows) {
   const dates = [...new Set(rows.map((r) => r.date))].sort();
-  const cut = dates[Math.floor(dates.length / 2)] || null;
-  const firstHalf = (r) => cut == null || r.date < cut;
+  return dates[Math.floor(dates.length / 2)] || null;
+}
 
+/**
+ * The bucket table for ONE feature. Pulled out of getStudy() so the auto-fit
+ * reads byte-identical numbers to the ones on screen — if these ever diverged,
+ * the fit would be quietly encoding a different table than the one you audited.
+ */
+function bucketsFor(rows, key, overall, cut) {
+  const spec = PG.BUCKETS[key];
+  const firstHalf = (r) => cut == null || r.date < cut;
   const groups = new Map();
   for (const r of rows) {
     const b = spec.of(r.features);
@@ -1038,13 +1040,10 @@ async function getStudy({ days = 60, by = 'score', cohort = 'selected' } = {}) {
     if (!groups.has(b)) groups.set(b, []);
     groups.get(b).push(r);
   }
-
-  const overall = summarize(rows);
   const order = spec.order || [...groups.keys()].sort();
   const seen = new Set(order);
   const keys = [...order.filter((k) => groups.has(k)), ...[...groups.keys()].filter((k) => !seen.has(k)).sort()];
-
-  const buckets = keys.map((b) => {
+  return keys.map((b) => {
     const g = groups.get(b) || [];
     const s = summarize(g);
     const h1 = summarize(g.filter(firstHalf));
@@ -1060,6 +1059,18 @@ async function getStudy({ days = 60, by = 'score', cohort = 'selected' } = {}) {
         : null,
     };
   });
+}
+
+async function getStudy({ days = 60, by = 'score', cohort = 'selected' } = {}) {
+  const key = PG.BUCKETS[by] ? by : 'score';
+  const got = await studyRows({ days, cohort });
+  if (!got.ok) return { ok: false, error: got.error, buckets: [] };
+  const rows = got.rows;
+  const spec = PG.BUCKETS[key];
+
+  const cut = splitDateOf(rows);
+  const overall = summarize(rows);
+  const buckets = bucketsFor(rows, key, overall, cut);
 
   // Selected vs shadow — the only comparison that says whether the top-5 cut is
   // doing any work. Computed over the full window regardless of `cohort`.
@@ -1085,8 +1096,10 @@ async function getStudy({ days = 60, by = 'score', cohort = 'selected' } = {}) {
 // what did those picks actually do? Without this the projection is unfalsifiable
 // and will drift for months before anyone notices.
 //
-// Returns armed:false when no rule is configured, which is the shipping default —
-// there is nothing to calibrate until a rule has been stamping projections.
+// Returns armed:false when no rule is in force. That is no longer a dead end:
+// the payload carries the auto-fit's own status (how many graded picks exist,
+// how many it needs, what it would arm today), so the UI can say WHEN this will
+// start working instead of only that it does not.
 
 async function getCalibration({ days = 60, cohort = 'selected' } = {}) {
   const rule = PG.projRule({ reload: true });
@@ -1095,8 +1108,11 @@ async function getCalibration({ days = 60, cohort = 'selected' } = {}) {
   const withProj = got.rows.filter((r) => r.proj_grade);
   if (!rule.enabled && !withProj.length) {
     return {
-      ok: true, armed: false, days: got.days, note: rule.note || 'no projection rule configured',
+      ok: true, armed: false, days: got.days, note: rule.note || 'no projection rule in force',
       n: got.rows.length, rows: [],
+      auto: AUTO_FIT, source: rule.source, pinnedBy: PG.rulePinned(),
+      need: PG.FIT.MIN_PICKS, have: got.rows.length,
+      lastFit: _lastFit,
     };
   }
   const byProj = new Map();
@@ -1116,6 +1132,153 @@ async function getCalibration({ days = 60, cohort = 'selected' } = {}) {
     terms: rule.terms, base: rule.base, minN: STUDY_MIN_N,
     unprojected: got.rows.length - withProj.length,
     overall: summarize(got.rows), rows,
+    auto: AUTO_FIT, source: rule.source, pinnedBy: PG.rulePinned(),
+    fittedAt: rule.fittedAt || null, need: PG.FIT.MIN_PICKS, have: got.rows.length,
+    lastFit: _lastFit,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  THE AUTO-FIT  —  feeds /proxy/gex-change-top-rule*
+// ══════════════════════════════════════════════════════════════════════════════
+// Closing the loop. The study measures, PG.fitRule() decides, this stores the
+// answer and re-runs itself after every EOD freeze.
+//
+// WHY POSTGRES AND NOT THE CONFIG FILE: the deploy rebuilds the container from
+// GitHub, so anything the server writes to server-v2/config/ is gone at the next
+// `docker compose build`. A rule that evaporates on deploy is worse than no
+// rule — projections would stop mid-window and the calibration table would be a
+// mix of two regimes with nothing marking the seam. The DB is the only writable
+// surface that survives, and it is already where the picks live.
+//
+// A hand-written pick-proj-rule.json still wins and PINS the rule: if you have
+// deliberately pinned terms, a nightly job must not quietly replace them.
+
+/** Auto-fit after each EOD freeze. GEX_CHANGE_TOP_AUTOFIT=0 turns it off. */
+const AUTO_FIT = String(process.env.GEX_CHANGE_TOP_AUTOFIT || '1') !== '0';
+/** Window the nightly fit measures over. Long enough for a real half-split. */
+const FIT_DAYS = Number(process.env.GEX_CHANGE_TOP_FIT_DAYS || 90);
+/** Last fit attempt, for the UI: { at, armed, reason, terms, changed }. */
+let _lastFit = null;
+
+async function ensureRuleSchema() {
+  const p = sg.getPool();
+  if (!p) return null;
+  // Single row (id = 1). A table rather than a settings blob because the rule
+  // carries its own provenance — when it was fitted, on what, and by whom —
+  // and losing that turns "why is this term here" into archaeology.
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS pick_proj_rule (
+      id          SMALLINT     PRIMARY KEY DEFAULT 1,
+      rule        JSONB        NOT NULL,
+      fitted_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      fitted_by   TEXT,                       -- 'auto' | 'manual'
+      evidence    JSONB,                      -- the buckets it was built from
+      CONSTRAINT pick_proj_rule_singleton CHECK (id = 1)
+    );
+  `);
+  return p;
+}
+
+/** Read the stored rule out of Postgres and install it. Called at boot. */
+async function loadStoredRule() {
+  try {
+    const p = await ensureRuleSchema();
+    if (!p) return null;
+    const { rows } = await p.query('SELECT rule, fitted_at, fitted_by FROM pick_proj_rule WHERE id = 1');
+    if (!rows.length) { PG.applyStoredRule(null); return null; }
+    const r = PG.applyStoredRule(rows[0].rule);
+    return { rule: r, fittedAt: rows[0].fitted_at, fittedBy: rows[0].fitted_by };
+  } catch (e) {
+    console.warn('[gex-change-top] could not load stored projection rule:', e.message);
+    return null;
+  }
+}
+
+/** Write a rule (or null to clear) and install it immediately. */
+async function storeRule(rule, { by = 'auto', evidence = null } = {}) {
+  const p = await ensureRuleSchema();
+  if (!p) throw new Error('no DATABASE_URL in this process');
+  if (rule == null) {
+    await p.query('DELETE FROM pick_proj_rule WHERE id = 1');
+    PG.applyStoredRule(null);
+    return { ok: true, cleared: true };
+  }
+  await p.query(
+    `INSERT INTO pick_proj_rule (id, rule, fitted_at, fitted_by, evidence)
+     VALUES (1, $1, NOW(), $2, $3)
+     ON CONFLICT (id) DO UPDATE SET
+       rule = EXCLUDED.rule, fitted_at = EXCLUDED.fitted_at,
+       fitted_by = EXCLUDED.fitted_by, evidence = EXCLUDED.evidence`,
+    [JSON.stringify(rule), by, evidence ? JSON.stringify(evidence) : null],
+  );
+  PG.applyStoredRule(rule);
+  return { ok: true, rule };
+}
+
+/**
+ * Run the fit. ONE pass over the study rows, bucketed on every feature, handed
+ * to PG.fitRule().
+ *
+ * @param apply  write the result. Without it this is a dry run — which is what
+ *               the UI's "preview" does, so you can see the terms before they
+ *               start stamping picks.
+ * @returns { ok, armed, reason, rule, terms, rejected, applied, changed, … }
+ */
+async function fitProjRule({ days = FIT_DAYS, cohort = 'selected', apply = false, by = 'auto', opts = {} } = {}) {
+  const got = await studyRows({ days, cohort });
+  if (!got.ok) return { ok: false, error: got.error };
+  const rows = got.rows;
+  const overall = summarize(rows);
+  const cut = splitDateOf(rows);
+  const features = PG.BUCKET_KEYS
+    .filter((k) => !PG.FIT_EXCLUDE.has(k))
+    .map((k) => ({ by: k, label: PG.BUCKETS[k].label, buckets: bucketsFor(rows, k, overall, cut) }));
+
+  const fit = PG.fitRule({ features, overall, days: got.days, cohort, today: etDateStr(), opts });
+  const pinnedBy = PG.rulePinned();
+  const current = PG.projRule({ reload: true });
+  const changed = !PG.sameRule(current, fit.rule);
+
+  let applied = false;
+  let note = null;
+  if (apply) {
+    if (pinnedBy) {
+      note = `a ${pinnedBy === 'env' ? 'GEX_CHANGE_TOP_PROJ_RULE env var' : 'hand-written config/pick-proj-rule.json'} is pinning the rule — the fit ran but was not stored.`;
+    } else if (!fit.armed) {
+      note = 'nothing cleared the filters, so nothing was stored — the rule stays as it was.';
+    } else if (!changed) {
+      note = 'the fit matches the rule already in force; left alone.';
+    } else {
+      await storeRule(fit.rule, { by, evidence: { overall, chosen: fit.evidence || [], days: got.days, cohort } });
+      applied = true;
+    }
+  }
+  _lastFit = {
+    at: new Date().toISOString(), armed: fit.armed, reason: fit.reason,
+    terms: fit.terms, applied, changed, note, days: got.days, cohort, by,
+  };
+  return { ok: true, ...fit, applied, changed, note, pinnedBy, days: got.days, cohort, splitDate: cut };
+}
+
+/** Everything the UI needs to render the rule's state in one call. */
+async function getRuleState() {
+  const rule = PG.projRule({ reload: true });
+  let stored = null;
+  try {
+    const p = await ensureRuleSchema();
+    if (p) {
+      const { rows } = await p.query('SELECT rule, fitted_at, fitted_by, evidence FROM pick_proj_rule WHERE id = 1');
+      if (rows.length) stored = { rule: rows[0].rule, fittedAt: rows[0].fitted_at, fittedBy: rows[0].fitted_by, evidence: rows[0].evidence };
+    }
+  } catch { /* the in-memory rule is still the truth; provenance is a nicety */ }
+  return {
+    ok: true,
+    armed: !!rule.enabled, source: rule.source, base: rule.base,
+    note: rule.note, terms: rule.terms, fittedAt: rule.fittedAt || null,
+    pinnedBy: PG.rulePinned(), auto: AUTO_FIT, fitDays: FIT_DAYS,
+    thresholds: { minPicks: PG.FIT.MIN_PICKS, minLift: PG.FIT.MIN_LIFT, maxTerms: PG.FIT.MAX_TERMS, maxPts: PG.FIT.MAX_PTS },
+    stored, lastFit: _lastFit,
   };
 }
 
@@ -1150,18 +1313,32 @@ function startGexChangeTopRecorder(port) {
     if (hour * 60 + minute < 16 * 60 + 5) return;
     if (_lastEodDate === today) return;
     _lastEodDate = today;
-    runResults({ date: today }).catch((e) => {
-      _lastEodDate = null; // let the next tick retry
-      console.warn('[gex-change-top] EOD scorecard error:', e.message);
-    });
+    runResults({ date: today })
+      // Re-fit AFTER the freeze, never before: the day's labels have to be on
+      // file or the fit is measuring a window that is one session short.
+      .then(() => (AUTO_FIT ? fitProjRule({ apply: true, by: 'auto' }) : null))
+      .then((f) => {
+        if (!f || !f.ok) return;
+        if (f.applied) console.log(`[gex-change-top] projection rule re-fit and stored: ${f.terms.length} term(s) — ${f.reason}`);
+        else console.log(`[gex-change-top] projection rule unchanged — ${f.note || f.reason}`);
+      })
+      .catch((e) => {
+        _lastEodDate = null; // let the next tick retry
+        console.warn('[gex-change-top] EOD scorecard error:', e.message);
+      });
   }, 5 * 60 * 1000);
   if (_eodTimer.unref) _eodTimer.unref();
 
-  console.log(`[gex-change-top] recorder started — every ${INTERVAL_MIN}m, ${WINDOW_MIN}m window, top ${TOP_N} very-strong (>= $${MIN_DOLLAR.toLocaleString()} & >= ${MIN_PCT}%), auto-probe ${AUTO_PROBE ? 'ON' : 'OFF'}, EOD scorecard 16:05 ET, first fire in ${Math.round(msToBoundary / 60000)}m`);
+  // Install whatever the last fit stored, so projections resume on the first
+  // capture after a restart instead of waiting for the next EOD.
+  loadStoredRule().catch(() => {});
+
+  console.log(`[gex-change-top] recorder started — every ${INTERVAL_MIN}m, ${WINDOW_MIN}m window, top ${TOP_N} very-strong (>= $${MIN_DOLLAR.toLocaleString()} & >= ${MIN_PCT}%), auto-probe ${AUTO_PROBE ? 'ON' : 'OFF'}, EOD scorecard 16:05 ET, projection auto-fit ${AUTO_FIT ? `ON (${FIT_DAYS}d, needs ${PG.FIT.MIN_PICKS} graded picks)` : 'OFF'}, first fire in ${Math.round(msToBoundary / 60000)}m`);
 }
 
 module.exports = {
   getStudy, getCalibration,
+  fitProjRule, getRuleState, storeRule, loadStoredRule,
   startGexChangeTopRecorder, runOnce, getHistory, getPickHistory,
   runResults, getResults, computeResults, ensureSchema,
 };

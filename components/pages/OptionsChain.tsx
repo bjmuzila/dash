@@ -8,7 +8,7 @@ import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 import { atMinIntensity, columnWalls, wallAt, INTENSITY_MIN, WALL_RANK } from "@/lib/calculations/heatLevels";
-import { Dock, SegGroup, DockCogMenu, DockMenuRow, DockMenuDivider } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, DockCogMenu, DockField } from "@/components/shared/DockToolbar";
 import { ChainReplay } from "@/components/shared/ChainReplay";
 import { useScannerTickers } from "@/lib/useScannerTickers";
 import { dedupeFetch } from "@/lib/dedupeFetch";
@@ -3093,99 +3093,123 @@ export default function OptionsChainPage({
             : `📊 Options Chain — ${activeTicker} ${selectedExpiry}`}
         />
 
-        <DockCogMenu title="Options chain" buttonTitle="Options chain settings" width={340}>
-          {/* Ticker moved OUT of this menu and onto the toolbar itself. */}
-
-          <DockMenuRow label="Strikes">
-            <CustomDropdown
-              value={displayPercent}
-              options={DISPLAY_PERCENTS}
-              onChange={setDisplayPercent}
-              formatLabel={v => `${v}% strikes`}
-            />
-          </DockMenuRow>
-
-          <DockMenuDivider />
-
-          {/* Pinned to GEX while replaying — see the replay-pin effect. Rendered
-              inert rather than hidden so the tabs don't vanish and reappear. */}
-          <DockMenuRow label="Greek" stack>
-            <div
-              style={{ opacity: replayOn ? 0.4 : 1, pointerEvents: replayOn ? "none" : undefined }}
-              title={replayOn ? "GEX only in replay — DEX/CHEX/VEX/OI/VOL are not recorded" : undefined}
-            >
-              <SegGroup
-                options={GREEK_MODES.map(m => ({ label: m.toUpperCase(), value: m }))}
-                active={greekMode}
-                onChange={(v) => setGreekMode(v as GreekMode)}
-              />
-            </div>
-          </DockMenuRow>
-
-          {/* OI+Vol / Vol Only stays live in replay — strike_growth records BOTH
-              bases (gex_now+gex_open vs gex_now), so the toggle means the same
-              thing rewound as it does live. */}
-          <DockMenuRow label="Basis" stack>
-            <SegGroup
-              options={DATA_MODES.filter(m => m !== "flow").map(m => ({ label: DATA_MODE_LABEL[m], value: m }))}
-              active={dataMode}
-              onChange={(v) => setDataMode(v as DataMode)}
-            />
-          </DockMenuRow>
-
-          <DockMenuRow label="Intensity" hint="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked.">
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <input
-                type="range" min={0.5} max={5} step={0.01}
-                value={intensity}
-                onChange={(event) => setIntensity(Number(event.target.value))}
-                style={{ width: 110, height: 3, accentColor: "#219EBC" }}
-              />
-              <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 44, fontFamily: "var(--font-mono)" }}>
-                {intensity <= INTENSITY_MIN.chain ? "LEVELS" : `${intensity.toFixed(2)}x`}
-              </span>
-            </div>
-          </DockMenuRow>
-
-          <DockMenuDivider />
-
-          <DockMenuRow label="Stamps">
-            {/* Front-expiry (0DTE / nearest) 15-minute NET GEX stickers. Inert while
-                replaying and off the GEX tab — the recorder's baselines are live
-                net-GEX only, so there is nothing for it to diff there. */}
-            <button
-              onClick={() => setShowDelta15(v => !v)}
-              disabled={replayOn || greekMode !== "gex"}
-              style={{
-                ...segBtnStyle(showDelta15 && !replayOn && greekMode === "gex"),
-                opacity: replayOn || greekMode !== "gex" ? 0.4 : 1,
-                cursor: replayOn || greekMode !== "gex" ? "default" : "pointer",
-              }}
-              title={
-                replayOn ? "Δ15m stickers are live-only — not available in replay"
-                : greekMode !== "gex" ? "Δ15m stickers are GEX-only"
-                : "Stamp each front-expiry cell with its 15-minute net-GEX change (top 5 strikes per side of ATM)"
-              }
-            >
-              Δ15m
-            </button>
-          </DockMenuRow>
-
-          {/* Standalone only. An embedded chain (the /new-home tile) is a live
-              glance at a fixed ticker — handing it a session scrubber would let a
-              tile on a live dashboard quietly show yesterday. */}
-          {isStandalone && (
-            <DockMenuRow label="Replay">
-              <button
-                onClick={() => setReplayOn((v) => !v)}
-                style={segBtnStyle(replayOn)}
-                title="Rewind the grid itself through the session's recorded net-GEX snapshots"
-              >
-                {replayOn ? "■ Exit Replay" : "▶ Replay"}
-              </button>
-            </DockMenuRow>
-          )}
-        </DockCogMenu>
+        {/* ACCORDION — labelled sections that unfold in place, each header
+            answering its own question so a shut row still says what the grid is
+            set to. Ticker is NOT in here; it moved onto the toolbar itself.
+            See DockCogMenu's `sections`. */}
+        <DockCogMenu
+          title="Options chain"
+          buttonTitle="Options chain settings"
+          width={340}
+          sections={[
+            {
+              id: "grid",
+              label: "Grid",
+              summary: `${displayPercent}% · ${greekMode.toUpperCase()}`,
+              body: (
+                <>
+                  <DockField label="Strikes">
+                    <CustomDropdown
+                      value={displayPercent}
+                      options={DISPLAY_PERCENTS}
+                      onChange={setDisplayPercent}
+                      formatLabel={v => `${v}% strikes`}
+                    />
+                  </DockField>
+                  {/* Pinned to GEX while replaying — see the replay-pin effect.
+                      Rendered inert rather than hidden so the tabs don't vanish
+                      and reappear. */}
+                  <DockField label="Greek">
+                    <div
+                      style={{ opacity: replayOn ? 0.4 : 1, pointerEvents: replayOn ? "none" : undefined }}
+                      title={replayOn ? "GEX only in replay — DEX/CHEX/VEX/OI/VOL are not recorded" : undefined}
+                    >
+                      <SegGroup
+                        options={GREEK_MODES.map(m => ({ label: m.toUpperCase(), value: m }))}
+                        active={greekMode}
+                        onChange={(v) => setGreekMode(v as GreekMode)}
+                      />
+                    </div>
+                  </DockField>
+                  {/* OI+Vol / Vol Only stays live in replay — strike_growth
+                      records BOTH bases (gex_now+gex_open vs gex_now), so the
+                      toggle means the same thing rewound as it does live. */}
+                  <DockField label="Basis">
+                    <SegGroup
+                      options={DATA_MODES.filter(m => m !== "flow").map(m => ({ label: DATA_MODE_LABEL[m], value: m }))}
+                      active={dataMode}
+                      onChange={(v) => setDataMode(v as DataMode)}
+                    />
+                  </DockField>
+                </>
+              ),
+            },
+            {
+              id: "heat",
+              label: "Heat",
+              summary: intensity <= INTENSITY_MIN.chain ? "levels" : `${intensity.toFixed(2)}x`,
+              body: (
+                <DockField label="Intensity" hint="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked.">
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input
+                      type="range" min={0.5} max={5} step={0.01}
+                      value={intensity}
+                      onChange={(event) => setIntensity(Number(event.target.value))}
+                      style={{ width: 110, height: 3, accentColor: "#219EBC" }}
+                    />
+                    <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 44, fontFamily: "var(--font-mono)" }}>
+                      {intensity <= INTENSITY_MIN.chain ? "LEVELS" : `${intensity.toFixed(2)}x`}
+                    </span>
+                  </div>
+                </DockField>
+              ),
+            },
+            {
+              id: "stamps",
+              label: "Stamps",
+              summary: showDelta15 && !replayOn && greekMode === "gex" ? "Δ15m" : "off",
+              body: (
+                /* Front-expiry (0DTE / nearest) 15-minute NET GEX stickers.
+                   Inert while replaying and off the GEX tab — the recorder's
+                   baselines are live net-GEX only, so there is nothing for it
+                   to diff there. */
+                <button
+                  onClick={() => setShowDelta15(v => !v)}
+                  disabled={replayOn || greekMode !== "gex"}
+                  style={{
+                    ...segBtnStyle(showDelta15 && !replayOn && greekMode === "gex"),
+                    opacity: replayOn || greekMode !== "gex" ? 0.4 : 1,
+                    cursor: replayOn || greekMode !== "gex" ? "default" : "pointer",
+                  }}
+                  title={
+                    replayOn ? "Δ15m stickers are live-only — not available in replay"
+                    : greekMode !== "gex" ? "Δ15m stickers are GEX-only"
+                    : "Stamp each front-expiry cell with its 15-minute net-GEX change (top 5 strikes per side of ATM)"
+                  }
+                >
+                  Δ15m
+                </button>
+              ),
+            },
+            /* Standalone only. An embedded chain (the /new-home tile) is a live
+               glance at a fixed ticker — handing it a session scrubber would let
+               a tile on a live dashboard quietly show yesterday. */
+            ...(isStandalone ? [{
+              id: "replay",
+              label: "Replay",
+              summary: replayOn ? "running" : undefined,
+              body: (
+                <button
+                  onClick={() => setReplayOn((v) => !v)}
+                  style={segBtnStyle(replayOn)}
+                  title="Rewind the grid itself through the session's recorded net-GEX snapshots"
+                >
+                  {replayOn ? "■ Exit Replay" : "▶ Replay"}
+                </button>
+              ),
+            }] : []),
+          ]}
+        />
       </Dock>
       {/* ── Row 2 — the TOTAL row, now a stat bar ─────────────────────────────
           Spot · Total Net {greek} · the same total ex-0DTE · the weekly EM

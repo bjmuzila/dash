@@ -18,7 +18,7 @@
  *      dock has a compact density for when the card is a third of the screen.
  */
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData, LineData, HistogramData } from "lightweight-charts";
@@ -71,7 +71,7 @@ import { cachedJson, HttpError } from "@/lib/sharedCache";
 // (tick-quantized, 1-min cadence) — not by picking a different source.
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { Dock, SegGroup, DockButton, DockGap, DockSlider, DockCogMenu, type DockCogSection } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, DockButton, DockGap, DockSlider, DockCogMenu, DockField, type DockCogSection } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
 import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, ES_CANDLE_UP, ES_CANDLE_DOWN, dissolveCardStyle } from "@/components/shared/homeTheme";
 import type { RailRow } from "@/components/dashboard/EsGexRail";
@@ -147,22 +147,6 @@ const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : use
  * row collapses to one line. Measured from the CARD, not from the card count:
  * one chart on a 1280 laptop is just as cramped as three on a 1920.
  */
-/**
- * Caption above a control inside a cog SECTION pane.
- *
- * The pane is a plain column, not a stack of <DockMenuRow>s: those put the
- * label and the control on one line, which works for a 340px menu of single
- * buttons and fails immediately for a segmented picker or a list. Labels go
- * above their control here and this is the one style they share.
- */
-const SECTION_LABEL: CSSProperties = {
-  fontSize: 10,
-  fontWeight: 800,
-  letterSpacing: "0.10em",
-  textTransform: "uppercase",
-  color: "rgba(255,255,255,0.62)",
-};
-
 const COMPACT_CARD_WIDTH = 760;
 
 /**
@@ -5394,11 +5378,15 @@ function EsChartCard({
    * off-screen, the parent's click-away had to be taught to ignore each child by
    * hand, and every layer's z-index had to be tuned against every other. A
    * section cannot be mispositioned, occluded or orphaned, because there is
-   * nothing to position — the pane swaps IN PLACE inside the one panel.
+   * nothing to position — it unfolds IN PLACE inside the one panel.
    *
-   * Order matters: `page` first because that is what most visits are for, the
-   * two "what is drawn" sections next, then the chart's own axes, then gamma,
-   * then the rarely-touched preset store. `pageSections` come from the route
+   * Every section carries a `summary` or a `count`, so a shut row still answers
+   * its own question and you are not opening all six to find the timeframe.
+   *
+   * Order matters — this is a top-to-bottom list, so it is reading order.
+   * `page` first because that is what most visits are for, the two "what is
+   * drawn" sections next, then the chart's own axes, then gamma, then the
+   * rarely-touched preset store. `pageSections` come from the route
    * (it owns chart count, the replay command, the indicator blob and the preset
    * store); everything else is per-card state living in this slot's blob.
    */
@@ -5555,31 +5543,30 @@ function EsChartCard({
       id: "chart",
       label: "Chart",
       hint: "Timeframe and where the view sits",
+      summary: INTERVAL_LABEL[interval],
       body: (
         <>
           {/* 1m is its own server stream; 5m is the native feed; 15m/30m/1h
               roll up from the 5m bars client-side (see interval.ts). */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            <span style={SECTION_LABEL}>Timeframe</span>
+          <DockField label="Timeframe">
             <SegGroup
               options={CHART_INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
               active={String(interval)}
               onChange={(v) => { const n = Number(v); if (isChartInterval(n)) setInterval_(n); }}
             />
-          </div>
+          </DockField>
           {/* "Latest", not "Now" — the refresh button on the bar reads "↻ Now"
               (see useRefreshButton), and two controls saying Now while doing
               different things is the kind of thing you only notice after
               clicking the wrong one. */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            <span style={SECTION_LABEL}>View</span>
+          <DockField label="View">
             <div style={{ display: "flex" }}>
               <DockButton onClick={scrollToNow} title="Jump to the current candle — keeps your zoom (double-click the chart to re-frame the whole session instead)">
                 <span aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>⇥</span>
                 <span>Latest</span>
               </DockButton>
             </div>
-          </div>
+          </DockField>
         </>
       ),
     });
@@ -5588,12 +5575,12 @@ function EsChartCard({
       id: "gamma",
       label: "Gamma",
       hint: "Which expiry the heatmap reads, and what it counts",
+      summary: `${selectedExpiry ? dayDateOf(selectedExpiry) : "Front"} · ${gexMetric === "vol" ? "Vol" : "Vol+OI"}`,
       body: (
         <>
           {/* The expiry list, INLINE. It was a portalled dropdown hanging off a
               button in this menu — the exact nesting this rail exists to end. */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 0 }}>
-            <span style={SECTION_LABEL}>Heatmap expiry</span>
+          <DockField label="Heatmap expiry">
             <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 216, overflowY: "auto", minWidth: 0 }}>
         {/* Already-traded expirations are filtered out. The feed's list can
             still carry them for a while after the roll, and an entry
@@ -5624,16 +5611,15 @@ function EsChartCard({
           );
         })}
             </div>
-          </div>
+          </DockField>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 4 }}>
-            <span style={SECTION_LABEL}>GEX basis</span>
+          <DockField label="GEX basis">
             <SegGroup
               options={[{ label: "Vol+OI", value: "voloi" }, { label: "Vol", value: "vol" }]}
               active={gexMetric}
               onChange={(v) => { setGexMetric(v as typeof gexMetric); saveSetting({ metric: v }); }}
             />
-          </div>
+          </DockField>
         </>
       ),
     });
@@ -5646,6 +5632,7 @@ function EsChartCard({
         id: "replay",
         label: "Replay",
         hint: "Step through the session from the open",
+        summary: replayOn ? "running" : undefined,
         body: (
           <div style={{ display: "flex" }}>
             <DockButton
@@ -5789,7 +5776,7 @@ function EsChartCard({
             title="Candles"
             buttonTitle="Chart settings"
             sections={cogSections}
-            width={560}
+            width={360}
           />
         </Dock>
         </FitScale>

@@ -14,10 +14,11 @@
  * expiry, indicators, presets, and per card a whole replay transport) added up
  * to more chrome than chart.
  *
- * The cog is a MASTER–DETAIL panel, not a menu: a rail of sections down the
- * left, one section's controls in the pane beside it, swapped in place. This
- * file contributes three of those sections through `pageSections` (Page,
- * Indicators, Layout); the card contributes the rest. See DockCogMenu.
+ * The cog is an ACCORDION, not a menu: labelled sections that unfold in place
+ * inside one column, each header carrying the answer to its own question so a
+ * shut row stays useful. This file contributes three of those sections through
+ * `pageSections` (Page, Indicators, Layout); the card contributes the rest.
+ * See DockCogMenu.
  *
  * It got that way because the previous shape did not survive contact. Folding
  * the toolbar into a cog left the things INSIDE the cog still needing panels of
@@ -99,9 +100,9 @@ const CAP_GAP = 3;
 const ROW_H = CAP_H + CAP_GAP + CTRL_H;
 
 /**
- * A labelled group inside a cog section pane. The pane is dense by nature, so
- * the label is small, uppercase and quiet, and the controls sit right under it.
- * The row WRAPS — a pane is a few hundred pixels wide, not a full-bleed band.
+ * A labelled group inside a cog section. The panel is dense by nature, so the
+ * label is small, uppercase and quiet, and the controls sit right under it.
+ * The row WRAPS — a cog section is ~330px wide, not a full-bleed band.
  *
  * The row is a FIXED height and bottom-aligned — see the note above. A group
  * with no captioned fields still reserves the caption line, which is what keeps
@@ -378,13 +379,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // panel-placement effect all lived here. They existed to manage ONE hovering
   // panel that opened from inside another hovering panel. There is no such
   // panel now: DockCogMenu owns the only floating layer on this page, and the
-  // controls that used to fly out of it are panes inside it.
+  // controls that used to fly out of it are sections inside it.
   //
   // The `closePopover` blur dance went with them. It existed because React
   // unmounted a NumField before the browser delivered its blur, so clearing the
   // Bollinger length box and clicking the chart persisted `bbPeriod: 0` for the
-  // session. A section pane unmounts only when you pick another section — by
-  // clicking a rail button, which delivers the blur first.)
+  // session. A section's body unmounts only when you fold it — by clicking its
+  // header, which delivers the blur first.)
   const setCardCount = useCallback((n: number) => {
     const clamped = Math.min(MAX_CARDS, Math.max(1, n));
     setCards(clamped);
@@ -496,7 +497,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
    *
    * These three are page state, not card state — one chart count, one indicator
    * blob and one preset store for the whole row — so the route owns them and
-   * hands them down as panes. The card merges them with its own (Overlays,
+   * hands them down as sections. The card merges them with its own (Overlays,
    * Chart, Gamma) and decides the order; see `cogSections` in EsChartCard.
    *
    * Each of these used to be a floating panel that opened from INSIDE the cog:
@@ -504,7 +505,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
    * launched from inside a panel has no idea where its parent is — it landed on
    * top of it, behind it, or half off-screen, and each one needed the parent's
    * click-away taught to ignore it and its z-index tuned against every other
-   * layer. As panes there is nothing to position and nothing to occlude.
+   * layer. As sections there is nothing to position and nothing to occlude.
    */
   const pageSections = useMemo<DockCogSection[]>(() => {
     const indicatorCount = indicators.emas.filter((e) => e.on).length
@@ -514,6 +515,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         id: "page",
         label: "Page",
         hint: "How many charts, and what rides their right edge",
+        summary: `${cards} chart${cards > 1 ? "s" : ""}`,
         body: (
           <>
             <Group label="Charts">

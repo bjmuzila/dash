@@ -1,5 +1,381 @@
 # Changelog
 
+## 2026-08-21 (w) - Fix: permessage-deflate silently killed every browser WebSocket (site-wide outage)
+
+Edited: `server-v2/websocket-server.js`.
+
+Every dashboard page was stuck on "LOADING SPX CHAIN…", "waiting for the feed…",
+"waiting for gex rows…", "waiting for levels…", and CANDLES showed OFFLINE. The
+gauges still had numbers because those come from REST, which was never broken —
+`/api/chains`, `/api/expirations`, `/api/levels`, `/proxy/health` and
+`/proxy/snapshot` were all 200 and fast throughout.
+
+**Symptom.** Every `wss://.../ws/gex` connection completed the handshake (101),
+then died in ~2ms with close code 1006 and **zero frames delivered**. The client
+reconnected, and repeated, roughly once per second, forever. `/proxy/self-metrics`
+showed ~22MB/min of connect-snapshot bytes accounted while `clients` sat at 1 or
+2 — the server was building and "sending" a snapshot for every one of those dead
+connections. That churn is what drove RSS to 1.29GB and forced an OOM restart.
+
+**Cause.** The `perMessageDeflate` config on the `WebSocket.Server`. Every
+browser negotiates permessage-deflate, so every browser client hit it; internal
+clients that don't negotiate it were fine. Proven with a paired probe run inside
+the container against loopback, so Cloudflare and the tunnel were not involved:
+
+```
+deflate-OFF -> openAt 5ms, msgs: 1   (snapshot delivered)
+deflate-ON  -> openAt 2ms, msgs: 0   (dead at 2ms)
+```
+
+A raw TCP socket sending no `Sec-WebSocket-Extensions` header streamed the
+snapshot and held open for a full 6s.
+
+**Why it took hours to find.** `ws.on('error', () => {})` in the connection
+handler. `ws` destroys the socket on a send/compress failure and reports the
+reason *only* on that event, so the one line that named the cause was thrown
+away on every connection. The logs said nothing. Ruled out along the way, each
+costing a round trip: Cloudflare (restarted cloudflared), the tunnel (loopback
+repro), double-attach (`GEX broadcaster attached` is logged once per boot, one
+container in `docker compose ps`), WS auth (`WS_AUTH_REQUIRED` is unset), and
+snapshot size (374KB, well under any limit).
+
+**Fix.** The deflate config is now behind `WS_DEFLATE`, defaulting to **off**:
+
+- `WS_DEFLATE=off` (default) — no compression, every client works
+- `WS_DEFLATE=on` — the previous tuned config (`threshold: 1024`,
+  `zlibDeflateOptions: { level: 6, memLevel: 7 }`, `serverNoContextTakeover`,
+  `clientNoContextTakeover`), preserved verbatim
+- `WS_DEFLATE=default` — permessage-deflate with `ws`'s own defaults
+
+It is a switch rather than a deletion because the compression was load-bearing:
+these payloads are pure JSON and deflate cuts them ~80-90%, and `/ws/gex` egress
+is uncacheable and counts 100% as Cloudflare "bandwidth served". **Turning it off
+raises that egress roughly 5-10x.** Getting it back is the open follow-up — try
+`WS_DEFLATE=default` first, since the custom zlib options are the likeliest
+culprit, and verify with the paired probe before trusting it.
+
+Worth noting: all three modes pass a local harness against a stubbed
+market-state, including `on`. The failure is specific to the production process,
+so it is environmental (zlib/memory) rather than a plain misconfiguration — which
+is exactly why this is an env switch and not a rewrite.
+
+Also changed: `ws.on('error')` now logs through a rate-limited `logWsError()`
+(one line per distinct message per 60s, with a suppressed-count) instead of
+swallowing. Unthrottled it would have been the outage's second act, at ~1
+failing connection per second.
+
+**Open thread, not addressed here:** with deflate off, the `ws` client probe
+still closed at 9ms after receiving its snapshot, while the raw socket held for
+6s. Re-measure once this is deployed.
+
+## 2026-08-21 (v) - Fix: short campaign links redirected to localhost:3000
+
+Edited: `app/[source]/[action]/route.ts`.
+
+`cbedge.net/x/click` produced the right tags and then sent the visitor to
+`https://localhost:3000/?utm_source=x&utm_medium=social&utm_campaign=post`.
+
+The redirect was built with `new URL(to, req.nextUrl.origin)`. In production
+Next sits behind the VPS proxy, so the origin it sees is the internal one it was
+dialled on — `localhost:3000`. The public hostname exists only in the forwarded
+headers, and the `https` in the broken URL is the giveaway: proto came from
+`x-forwarded-proto` (Cloudflare) while the host came from the socket, so the two
+halves were assembled from different places and neither was checked.
+
+Now the route emits a **relative** `Location` (`/?utm_source=…`) and lets the
+browser resolve it against the URL in the address bar. RFC 7231 allows a
+relative reference, every browser resolves it that way, nginx passes it through
+untouched (`proxy_redirect` only rewrites absolute ones), and it is correct in
+local dev with no configuration — no header to trust, no protocol to guess, no
+env var to keep in sync.
+
+The `?to=` guard is unchanged and still rejects `//evil.com` and
+`https://evil.com`, both of which fall back to `/`.
+
+## 2026-08-21 (p) - Pick Study calibration arms itself: the projection rule is fitted from the study, not hand-written
+
+Edited: `server-v2/_lib-pick-grade.cjs`,
+`server-v2/gex-change-top-recorder.js`, `server-v2/server-with-proxy.js`,
+`components/scanner/PickStudyTab.tsx`,
+`server-v2/config/pick-proj-rule.example.json`.
+
+**The complaint.** Calibration on the Pick Study tab has always read "no
+projection rule is armed... to arm it, hit the term button on each row and drop
+them into server-v2/config/pick-proj-rule.json". That is a code edit and a
+redeploy to turn on a feature that is otherwise entirely data-driven, so it
+never got turned on, so nothing was ever projected, so the calibration table has
+been empty since the day it shipped. Shipping inert was the right call. Staying
+inert forever was not a design, it was an unfinished loop.
+
+**What changed.** The two filters the page tells you to read by eye - a bucket
+must be **not thin** and must **hold** in both halves of the window - are now
+code. `PG.fitRule()` runs them over every bucket of every feature and returns
+the rule the study already implies. The recorder runs it after each EOD freeze
+and arms it the moment the evidence clears the bar.
+
+**The discipline did not move, it just stopped needing a human to enforce it:**
+
+- Nothing arms under `GEX_CHANGE_TOP_FIT_MIN_PICKS` (150) graded picks, however
+  good the splits look.
+- A bucket that is thin, or that failed the half-split, is never used. Those are
+  the two filters that kill most findings; automating past them would have been
+  automating the mistake.
+- Never fits on `symbol` - see the note on `BUCKETS.symbol` about tickers being
+  the first thing to stop working.
+- Never triple-counts the score blend: `score` is 0.6*|d| + 0.4*|%|, so when a
+  score term lands, `chg` and `pctopen` are dropped. Stacking all three turns a
+  6pt edge into an 18pt one that was never there.
+- A term's points ARE its measured lift, clamped to +/-20. The rule can only
+  claim what the table showed.
+- Everything rejected comes back with a reason, and the UI lists it. A rule you
+  cannot audit is a fitted model with extra steps.
+
+**Stored in Postgres, not in the config file.** The deploy rebuilds the
+container from GitHub, so a rule written to `server-v2/config/` evaporates at
+the next `docker compose build` - projections would stop mid-window and the
+calibration table would silently mix two regimes. New singleton table
+`pick_proj_rule` (rule JSONB + `fitted_at` + `fitted_by` + the evidence it was
+built from), reloaded into memory at boot so projections resume on the first
+capture after a restart.
+
+**Three tiers, highest wins:** `GEX_CHANGE_TOP_PROJ_RULE` env >
+`config/pick-proj-rule.json` > the stored rule. The config file's presence also
+**pins**: the auto-fit still runs and still reports, but will not overwrite a
+rule you wrote by hand. Delete the file to hand control back.
+
+**New endpoints** (writes owner-only, as proxy-auth gates every non-GET on
+`/proxy/*`):
+
+- `GET /proxy/gex-change-top-rule` - what is armed, from where, with what terms,
+  the thresholds, and the last fit.
+- `POST /proxy/gex-change-top-rule-fit?days=90&cohort=selected[&apply=1]` -
+  without `apply` it is a **dry run**: the terms it would arm plus every bucket
+  it rejected and why. With `apply=1` it stores.
+- `POST /proxy/gex-change-top-rule` - `{ rule }` to pin by hand, `{ clear:true }`
+  to go inert again.
+
+**On the tab.** The calibration block leads with a status bar: armed (source,
+terms as signed chips, fit date) or a progress bar reading "88/150 graded
+picks". "Not armed" was a dead end; "needs 62 more picks, re-checked after every
+close" is a wait with an end. Buttons: **Fit now** (preview, changes nothing),
+**Fit & arm**, **Disarm**. The rejected list is collapsible and is the half
+worth reading - the buckets that almost made it are where a bad rule would come
+from.
+
+**Not touched:** projections already stamped on past picks. They are stamped at
+capture and never recomputed, which is the only reason calibration is a real
+out-of-sample test rather than a restatement. Re-fitting changes what happens
+from the next capture on; history stays as it was predicted.
+
+**Refactor:** `getStudy()`'s bucket math moved into `bucketsFor()`, shared with
+the fit, so the numbers the rule is built from are byte-identical to the ones on
+screen. Had those drifted, the fit would have been quietly encoding a different
+table than the one you audited.
+
+**Knobs:** `GEX_CHANGE_TOP_AUTOFIT=0` (off), `..._FIT_DAYS` (90),
+`..._FIT_MIN_PICKS` (150), `..._FIT_MIN_LIFT` (6), `..._FIT_MAX_TERMS` (8),
+`..._FIT_MAX_PTS` (20).
+
+Also fixed: `config/pick-proj-rule.example.json` was truncated mid-array and was
+not valid JSON, so copying it as instructed produced a parse error and a silently
+inert rule.
+
+## 2026-08-21 (u) - Gamma flip was structurally unable to print on a put-dominant book; Open Card accents removed
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx`, `server-v2/eod-strike-gex-recorder.js`.
+
+### The flip never showed, and it was not a data problem
+
+The gamma flip was defined - on BOTH sides, client and server, identically - as
+the zero crossing of the CUMULATIVE net GEX, walking the ladder from the lowest
+strike up. That quantity is not the flip, and the failure mode is structural:
+
+> The running total starts at 0 and ends at the book's net. On a normal chain -
+> puts heavy below spot, calls heavy above - it falls through the put side,
+> bottoms out, then climbs back through the call side. **It can therefore only
+> return to zero if the whole book is net positive.** On any put-dominant
+> session the curve is negative from the second strike to the last, there is no
+> crossing to find, and the tile prints "-".
+
+For SPX that is most days. Hence: never shows. Same root cause silently killed
+the rail's `FLIP GONE` / `FLIP NEW` / `FLIP ±x` badges and most of `structScore`,
+which is the `Most structural` sort - so the one sort that finds a name whose
+structure moved was ranking on a term that was usually zero.
+
+It was also **wrong when it did print**. Because the curve has to claw all the
+way back from the bottom of the recorded window, where it crosses is driven by
+how much far-OTM put gamma happens to sit at the low end of the ±40 strikes -
+strikes nobody hedges at spot. On a long-gamma test book the old rule put the
+flip at 7826, *above* the call wall.
+
+### What it is now
+
+Dealer gamma at a given price is dominated by the strikes NEAR that price. So
+net exposure with price at `S` is the book weighted by a bell centred on `S`,
+and the flip is where that local profile changes sign. Scan `S` across the
+ladder, interpolate the crossings, take the one nearest spot.
+
+Verified against synthetic books matching the reported SPX screenshot
+(spot 7,641 / put wall 7,500 / call wall 7,800 / net -37B):
+
+| book | old rule | new rule |
+|---|---|---|
+| put-dominant (the live case) | *(none)* | **7,717.6** - between spot and the call wall |
+| call-dominant | 7,826 (above the call wall) | 7,640.3 (+ a second at 7,343, so the `2x crossing` chip fires) |
+| same book on 5pt vs 10pt strikes | - | identical - the kernel is in price space, not rungs |
+| SPY-like $1 strikes | - | 618.06 |
+| one-signed rungs / <3 rows / all zero | - | null, no crash |
+
+Kernel width is **smoothing, not a volatility claim**: 1% of spot, blending the
+weekly and quarterly gamma this ex-0DTE ladder stacks together, floored at two
+strike spacings so a wide-strike name cannot collapse onto one rung. Weights
+past 4 sigma are skipped. The honest limit is in the header comment: the
+textbook flip reprices every contract at candidate spots, which needs IV and
+DTE; the recorder stores `|gamma| x OI` per strike and nothing else, so this is
+a proxy that gets the shape and the sign right and cannot model the surface.
+
+**The two implementations are line-for-line identical by intent** and both say
+so - a rail badge that disagrees with the tile it opens is worse than neither.
+
+### Better empty states
+
+"No flip" now distinguishes three cases instead of one: every rung one-signed;
+dealers short gamma at *every* price in the window (flip is outside it, below);
+dealers long gamma at every price (outside it, above). New `gammaAtSpot` on
+`Analysis` carries the sign - documented as sign-only, its magnitude is a
+weighted sum with no unit and must never be printed. Every copy string that
+described the old cumulative rule was rewritten to match, including the rail
+badge tooltip, the structural-range zone tips and the Open Card note.
+
+### Open Card: accent edges removed
+
+Dropped the 3px left stripe from the five tiles and from the card itself. Five
+coloured stripes in a row read as a status bar - five things going wrong -
+rather than five neutral readings; the tile label already carries the colour.
+
+## 2026-08-21 (t) - ΔGEX Board: Open Card - the five morning levels on one strip, with an SPX→ES offset
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx`.
+
+The board answered "what changed overnight" well and "where are today's rails"
+not at all - the call wall, the gamma flip, the cushion and the regime were four
+separate tiles inside a collapsible Read panel, three scrolls apart, and nobody
+assembles those at 09:25. **Open Card** is a single strip at the top of the
+detail pane that prints the five numbers you write down before the bell.
+
+**Placement is the point.** It sits ABOVE the big headline number, because that
+headline is a Δ and a Δ is the morning's *second* question. Reading order on the
+pane is now: which symbol → where the levels are → what moved → the evidence.
+
+**The five tiles.** Call wall / gamma flip / put wall, each with its distance
+from spot in both points and percent; cushion (signed points spot→flip, with the
+prior session's for comparison); regime (word plus the net). All of it comes off
+the same `analyzeLadder()` whole-ladder pass the Read panel uses, so the ±3%/±5%
+band cannot move a single figure on the card - same guarantee, same reason: a
+wall is a property of the book, not of the rows on screen.
+
+**Verdict line is a MECHANISM, not a call.** `SPOT IN DAMPEN` / `SPOT IN AMPLIFY`
+plus the sentence about what dealer hedging does there - reusing the exact
+wording of `StructuralRange`'s zone tooltips so the two surfaces cannot drift.
+This follows the rule `regimeCopy()` already sets out in its header comment: the
+page says what the dealer book does, never what to trade. Zone prefers the
+measured flip and falls back to the sign of the book when the cumulative never
+crosses inside the window - flagged as inferred, not presented as a located line.
+
+**SETTLED / PROVISIONAL is the first chip on the strip.** On the `oi` basis the
+open-interest half is re-stamped at 09:25 ET off the settled OCC file; before
+that it is still the provisional 16:05 read, settled through the session BEFORE
+last night. A map built on it is a day stale and *looks right*, which is the
+expensive kind of wrong. On any other basis the card carries an
+`OI ONLY IS THE MORNING BASIS` chip - a provenance nudge, not a trade nudge.
+
+**SPX→ES offset.** The strikes are SPX cash. Drawing a cash strike straight onto
+an ES chart mis-places every level by the spread, silently. A signed points field
+in the card header (`ES = SPX + offset`) prints each landmark's futures-adjusted
+twin under the cash number in gold. Nothing here streams ES so it is entered by
+hand, and it is persisted to `localStorage` - a number you retype every morning
+is a number you eventually stop typing. Kept as the raw string, not parsed on
+each keystroke, so a half-typed `-` or `1.` survives.
+
+**`copy` button** emits the whole card as monospace-aligned plain text (symbol,
+session, basis, freshness, the five numbers, the ES row) for a journal or a chat.
+
+Toggled by a new **Open Card** button beside **Read** in the control row, on by
+default, state persisted. Both `localStorage` helpers are try/catch-wrapped on
+*access* as well as write - hardened profiles throw on `getItem`, and the card
+must never be the reason the page fails to render. Without a recorded spot it
+renders one honest line instead of a grid of dashes.
+
+**Fixed while in there: the footer legend was lying.** It hardcoded
+`OI+Vol basis` on every basis since the migration, putting it in direct
+contradiction with the caveat strip at the top of the same card. It now reads
+`BASIS_COPY[basis].name` (plus the leg when not net). With the Open Card also
+printing its own provenance, a third surface asserting the wrong one was a
+straight defect.
+
+## 2026-08-21 (o) - One accordion cog for every toolbar: home GEX chart, home heatmap, ES Candles, Options Chain, Multi Greek
+
+Edited: `components/shared/DockToolbar.tsx`,
+`components/dashboard/GexToolbar.tsx`, `app/home/HomeClient.tsx`,
+`components/pages/EsCandles.tsx`,
+`components/dashboard/es-candles/EsChartCard.tsx`,
+`components/pages/OptionsChain.tsx`, `app/mult-greek/MultGreekClient.tsx`.
+
+Every cog on the app now opens the SAME thing: labelled sections that unfold in
+place inside one column, each header carrying the answer to its own question.
+
+**Why.** Folding a toolbar into a cog does not remove its dropdowns, it just
+moves them inside a popover - and a floating panel opened from inside a floating
+panel has no idea where its parent is. It lands on top of it, behind it, or half
+off-screen; the parent's click-away has to be taught to ignore each child by
+hand; and every layer's z-index has to be tuned against every other. We had that
+bug on ES Candles four separate times. The accordion removes the whole class:
+a section is not a layer, so it cannot be mispositioned, occluded or orphaned.
+**One floating layer per page, and it is the cog panel.**
+
+**`DockCogMenu` — two layouts, no breaking change.** `children` still renders
+the original flat scrolling column, so any caller not listed above is untouched
+(notably /home's econ **Panel** cog, which portals the calendar's filter row
+into itself and depends on the mounted-while-closed contract; that contract
+stays on the `children` path). Pass `sections?: DockCogSection[]` for the
+accordion. New exports:
+
+- `DockCogSection` - `{ id, label, summary?, count?, hint?, body }`.
+  `summary` is what the section says while SHUT ("1m", "Front · Vol+OI",
+  "2 charts", "off"); `count` renders as "3 on". Without them the only way to
+  find which timeframe you are on is to open every row, which is the accordion's
+  one failure mode - so every section added below carries one or the other.
+- `DockField` - label-above-control field for use inside a section.
+  `DockMenuRow` puts the label and the control on ONE line, which works for a
+  flat column of buttons and fails immediately for a segmented picker or a
+  slider in a 330px panel.
+
+More than one row may be open at once, and which rows are open is sticky across
+open/close - shut the menu to look at the chart, come back to the same place.
+Only OPEN bodies are mounted. The default open row is `sections[0]`, resolved
+lazily so no caller has to name an id.
+
+**Converted, with the sections each one grew:**
+
+| Toolbar | Sections |
+|---|---|
+| Home GEX chart (`GexToolbar`, compact) | Expiry · What the bars are (Series + Mode + Basis + EX-0DTE) · Overlays |
+| Home heatmap (`HomeClient`) | Heat (intensity + side basis) · 5th column · Δ stamps |
+| ES Candles | Page · Indicators · Overlays · Chart · Gamma · Layout · Replay (embed) |
+| Options Chain | Grid (strikes + greek + basis) · Heat · Stamps · Replay |
+| Multi Greek | Expiry · Board (basis + Δ stamps) · Heat · Tools |
+
+Rows that answered one question between them were merged rather than carried
+over one-for-one - GexToolbar's Series / Mode / Basis are three fields of "what
+the bars are", not three sections you open in turn.
+
+**ES Candles moves from the rail to the accordion.** Entry (u) gave it a
+master-detail panel (nav rail + detail pane); this replaces the rendering with
+the accordion and keeps the section data as-is, so `pageSections`,
+`cogSections`, the merge order and `LayoutPresetButton inline` are all unchanged.
+Panel width 560 → 360. Its local `SECTION_LABEL` const is gone, replaced by the
+shared `DockField`.
+
 ## 2026-08-21 (n) - Campaign tracking: short links, self-tagging emails, outcome-ranked campaign table
 
 New: `app/[source]/[action]/route.ts`, `lib/emails/utm.ts`,

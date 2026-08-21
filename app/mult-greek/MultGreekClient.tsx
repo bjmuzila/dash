@@ -12,7 +12,7 @@ import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS, classicCardAccentStyle,
 import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls } from "@/lib/calculations/heatLevels";
 import { rankBg } from "@/lib/calculations/optionChain";
 import { Card } from "@/components/shared/PageCard";
-import { Dock, SegGroup, DockButton, DockSlider, DockExpiryPicker, DockCogMenu, DockMenuRow, DockMenuDivider } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, DockButton, DockSlider, DockExpiryPicker, DockCogMenu, DockField } from "@/components/shared/DockToolbar";
 import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/MultiGreekLevelSnapshot";
 
 // Double-clicking a panel header blows that ticker's chain up full screen. The
@@ -2564,104 +2564,129 @@ export function MultGreekClient({
         <BoxSnapBtn targetRef={pageRef} label="📷" fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} />
         <BoxDiscordBtn targetRef={pageRef} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek GEX by Expiry — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
 
-        <DockCogMenu title="Multi Greek" buttonTitle="Multi Greek settings" width={340}>
-          {/* Front-expiry picker — the shown columns are this + the next 3 closest */}
-          <DockMenuRow label="Expiry" stack>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <DockExpiryPicker
-                expirations={expirations.map((e) => e.date)}
-                value={selectedExpiry}
-                onChange={isStatic ? () => {} : setSelectedExpiry}
-                includeFront
-                frontLabel="— Expiry —"
-              />
-              <DockButton onClick={doGo} title="Load expiry" style={{ opacity: (!isStatic && selectedExpiry) ? 1 : 0.45, color: HT.cyan }}>GO</DockButton>
-            </div>
-          </DockMenuRow>
+        {/* ACCORDION — labelled sections that unfold in place, each header
+            answering its own question so a shut row still says what the board
+            is set to. See DockCogMenu's `sections`. */}
+        <DockCogMenu
+          title="Multi Greek"
+          buttonTitle="Multi Greek settings"
+          width={340}
+          sections={[
+            {
+              // Front-expiry picker — the shown columns are this + the next 3 closest.
+              id: "expiry",
+              label: "Expiry",
+              summary: selectedExpiry || "front",
+              body: (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <DockExpiryPicker
+                    expirations={expirations.map((e) => e.date)}
+                    value={selectedExpiry}
+                    onChange={isStatic ? () => {} : setSelectedExpiry}
+                    includeFront
+                    frontLabel="— Expiry —"
+                  />
+                  <DockButton onClick={doGo} title="Load expiry" style={{ opacity: (!isStatic && selectedExpiry) ? 1 : 0.45, color: HT.cyan }}>GO</DockButton>
+                </div>
+              ),
+            },
+            {
+              id: "board",
+              label: "Board",
+              summary: `${contractMode === "oivol" ? "OI+VOL" : contractMode === "vol" ? "VOL" : "OI"}${deltaWindow ? ` · Δ${deltaWindow}m` : ""}`,
+              body: (
+                <>
+                  {/* Contract basis toggle. OI is the apples-to-apples basis for
+                      comparing against other GEX vendors — see ContractMode. */}
+                  <DockField label="Basis">
+                    <SegGroup
+                      options={[
+                        { label: "OI+VOL", value: "oivol" },
+                        { label: "VOL", value: "vol" },
+                        { label: "OI", value: "oi" },
+                      ]}
+                      active={contractMode}
+                      onChange={(v) => setContractMode(v as ContractMode)}
+                    />
+                  </DockField>
+                  {/* Δ stamps — OFF is today's view; 5M/15M/30M adds a change
+                      stamp to the left of the value on the top 5 strikes each
+                      side of every column. */}
+                  <DockField label="Δ stamps">
+                    <SegGroup
+                      options={[
+                        { label: "Δ OFF", value: "0" },
+                        { label: "5M", value: "5" },
+                        { label: "15M", value: "15" },
+                        { label: "30M", value: "30" },
+                      ]}
+                      active={String(deltaWindow)}
+                      onChange={(v) => setDeltaWindow(Number(v) as DeltaWindow)}
+                    />
+                  </DockField>
+                  {/* The 4th-ticker input used to live here. It is now ON the 4th
+                      panel's header, next to the symbol (see TickerPanel
+                      `editableTicker`). */}
+                </>
+              ),
+            },
+            {
+              id: "heat",
+              label: "Heat",
+              summary: intensity <= 0.5 ? "levels" : `${intensity.toFixed(2)}x`,
+              body: (
+                <DockField label="Intensity">
+                  <DockSlider
+                    value={intensity}
+                    min={0.5}
+                    max={3}
+                    step={0.01}
+                    onChange={setIntensity}
+                    width="auto"
+                    format={(v) => (v <= 0.5 ? "LEVELS" : `${v.toFixed(2)}x`)}
+                    valueWidth={52}
+                    title="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."
+                  />
+                </DockField>
+              ),
+            },
+            {
+              id: "tools",
+              label: "Tools",
+              summary: replayOn ? "replay" : undefined,
+              body: (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  {/* Ticker Lookup — ONE page-level 🔍. The lookup card has its own
+                      symbol picker, so it opens on SPX and any ticker can be
+                      entered inside it. */}
+                  <DockButton
+                    onClick={() => setLookupTicker("SPX")}
+                    title="Ticker Lookup — enter any ticker for its GEX ladder, walls and gamma regime"
+                    style={{ color: HT.cyan }}
+                  >🔍 Lookup</DockButton>
 
-          <DockMenuDivider />
-
-          {/* Contract basis toggle. OI is the apples-to-apples basis for comparing
-              against other GEX vendors — see ContractMode's comment. */}
-          <DockMenuRow label="Basis" stack>
-            <SegGroup
-              options={[
-                { label: "OI+VOL", value: "oivol" },
-                { label: "VOL", value: "vol" },
-                { label: "OI", value: "oi" },
-              ]}
-              active={contractMode}
-              onChange={(v) => setContractMode(v as ContractMode)}
-            />
-          </DockMenuRow>
-
-          {/* Δ stamps — OFF is today's view; 5M/15M/30M adds a change stamp to the
-              left of the value on the top 5 strikes each side of every column. */}
-          <DockMenuRow label="Δ stamps" stack>
-            <SegGroup
-              options={[
-                { label: "Δ OFF", value: "0" },
-                { label: "5M", value: "5" },
-                { label: "15M", value: "15" },
-                { label: "30M", value: "30" },
-              ]}
-              active={String(deltaWindow)}
-              onChange={(v) => setDeltaWindow(Number(v) as DeltaWindow)}
-            />
-          </DockMenuRow>
-
-          {/* The 4th-ticker input used to live here. It is now ON the 4th panel's
-              header, next to the symbol (see TickerPanel `editableTicker`). */}
-
-          <DockMenuDivider />
-
-          <DockMenuRow label="Intensity">
-            <DockSlider
-              value={intensity}
-              min={0.5}
-              max={3}
-              step={0.01}
-              onChange={setIntensity}
-              width={110}
-              format={(v) => (v <= 0.5 ? "LEVELS" : `${v.toFixed(2)}x`)}
-              valueWidth={52}
-              title="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."
-            />
-          </DockMenuRow>
-
-          <DockMenuDivider />
-
-          <DockMenuRow label="Tools" stack>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              {/* Ticker Lookup — ONE page-level 🔍. The lookup card has its own
-                  symbol picker, so it opens on SPX and any ticker can be entered
-                  inside it. */}
-              <DockButton
-                onClick={() => setLookupTicker("SPX")}
-                title="Ticker Lookup — enter any ticker for its GEX ladder, walls and gamma regime"
-                style={{ color: HT.cyan }}
-              >🔍 Lookup</DockButton>
-
-              {/* Replay — rewinds all four panels off one shared clock. Live only:
-                  the delayed snapshot is a single frozen expiry with no history. */}
-              {!isStatic && (
-                <DockButton
-                  onClick={() => setReplayOn(v => !v)}
-                  title="Replay — scrub all four panels back through a recorded session (recorded walls only, ~5 trading days)"
-                  style={{
-                    color: replayOn ? "#0b0f1a" : HT.orange,
-                    fontWeight: 900,
-                    // Spread the ON styles rather than a ternary to `undefined`: an
-                    // explicit `background: undefined` still wins the object merge
-                    // and would strip the dock button's own gradient when OFF.
-                    ...(replayOn ? { background: HT.orange, border: `1px solid ${HT.orange}` } : {}),
-                  }}
-                >⏱ REPLAY</DockButton>
-              )}
-
-            </div>
-          </DockMenuRow>
-        </DockCogMenu>
+                  {/* Replay — rewinds all four panels off one shared clock. Live
+                      only: the delayed snapshot is a single frozen expiry with no
+                      history. */}
+                  {!isStatic && (
+                    <DockButton
+                      onClick={() => setReplayOn(v => !v)}
+                      title="Replay — scrub all four panels back through a recorded session (recorded walls only, ~5 trading days)"
+                      style={{
+                        color: replayOn ? "#0b0f1a" : HT.orange,
+                        fontWeight: 900,
+                        // Spread the ON styles rather than a ternary to `undefined`: an
+                        // explicit `background: undefined` still wins the object merge
+                        // and would strip the dock button's own gradient when OFF.
+                        ...(replayOn ? { background: HT.orange, border: `1px solid ${HT.orange}` } : {}),
+                      }}
+                    >⏱ REPLAY</DockButton>
+                  )}
+                </div>
+              ),
+            },
+          ]}
+        />
       </Dock>
       </div>
 

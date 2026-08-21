@@ -516,36 +516,125 @@ const MOVER_COPY: Record<MoverTag, { label: string; tone: "pos" | "neg" | "warn"
 };
 
 /**
- * Where cumulative net GEX crosses zero, walking the ladder from the low strike
- * up, linearly interpolated between the two strikes that straddle the crossing.
+ * GAMMA FLIP — the price at which aggregate dealer gamma changes sign.
+ *
+ * WHAT THIS REPLACED, AND WHY. Until 2026-08-21 the flip was the zero crossing
+ * of the CUMULATIVE net GEX, walking the ladder from the lowest strike up. That
+ * quantity is not the flip, and the difference is not academic:
+ *
+ *   The running total starts at 0 and ends at the book's net. On a normal
+ *   chain — puts heavy below spot, calls heavy above — it falls through the put
+ *   side, bottoms out, then climbs through the call side. It can therefore only
+ *   return to zero if the WHOLE BOOK is net positive. On any put-dominant
+ *   session the curve is negative from the second strike to the last and there
+ *   is no crossing to find, so the tile printed "—" and the rail printed no
+ *   flip badge. For SPX that is most days, which is exactly the symptom: the
+ *   gamma flip never showed on this page.
+ *
+ *   It was also wrong when it DID print. Because the curve has to claw all the
+ *   way back from the bottom of the window, where the crossing lands is driven
+ *   by how much far-OTM put gamma happens to sit at the low end of the recorded
+ *   ±40 strikes — strikes with no bearing on what dealers hedge at spot. On a
+ *   long-gamma test book the old rule put the flip ABOVE the call wall; the
+ *   rule below puts it just under spot, which is where a long-gamma book's flip
+ *   actually is.
+ *
+ * WHAT IT IS NOW. Dealer gamma at a given price is dominated by the strikes
+ * NEAR that price — an option 8% away contributes almost nothing to the hedge
+ * at spot. So the exposure with price at S is the net GEX of the book weighted
+ * by how close each strike is to S, and the flip is where that local profile
+ * crosses zero. Scan S across the ladder, weight each rung by a bell centred on
+ * S, and interpolate the crossings. On the put-dominant book above this finds
+ * the level between spot and the call wall that price would have to reach for
+ * dealers to be long gamma — a real, tradeable answer where the old rule was
+ * silent.
+ *
+ * THE HONEST LIMIT. The textbook flip is found by REPRICING every contract's
+ * gamma at candidate spots, which needs IV and time to expiry. The recorder
+ * stores |gamma| x open interest per strike and nothing else, so that is not
+ * available here and this is a proxy, not a reconstruction. What it gets right
+ * is the shape and the sign; what it cannot do is account for the vol surface.
+ *
+ * KERNEL WIDTH is a smoothing choice, NOT a claim about volatility. 1% of spot
+ * is a blend: ATM gamma on a weekly is tighter than that, on a quarterly it is
+ * wider, and this ladder is every expiry ex-0DTE stacked together. Floored at
+ * two strike spacings so a wide-strike name does not collapse onto one rung.
  *
  * Returns EVERY crossing, not just one. A real book can cross more than once,
  * and silently reporting the first would be a confident wrong answer — the
  * caller picks the crossing nearest spot and the panel says when there was more
  * than one.
- *
- * The first row can never produce a crossing: the running total starts at zero,
- * so "0 → first value" would register as a sign change at the bottom of every
- * ladder. That is what the `prev == null` guard is for.
  */
-function zeroCrossings(rows: ChangeRow[], pick: (r: ChangeRow) => number): number[] {
+const FLIP_KERNEL_PCT = 0.01;
+const FLIP_GRID_STEPS = 240;
+
+/** Median gap between adjacent strikes — the ladder's own scale, so the kernel
+    floor works on SPX (5s and 10s) and on a $1-strike name alike. */
+function strikeSpacing(asc: number[]): number {
+  if (asc.length < 2) return 1;
+  const gaps: number[] = [];
+  for (let i = 1; i < asc.length; i++) {
+    const g = asc[i] - asc[i - 1];
+    if (g > 0) gaps.push(g);
+  }
+  if (!gaps.length) return 1;
+  gaps.sort((a, b) => a - b);
+  return gaps[Math.floor(gaps.length / 2)];
+}
+
+/**
+ * Net dealer gamma with price at `S`, as a share-weighted sum of the rungs
+ * around it. Not in dollars of anything real — only its SIGN and its crossings
+ * are read, which is all the flip needs.
+ */
+function localGamma(strikes: number[], vals: number[], S: number, w: number): number {
+  let g = 0;
+  for (let i = 0; i < strikes.length; i++) {
+    const z = (strikes[i] - S) / w;
+    // Beyond ~4 sigma the weight is under 3e-4 — skipped so a long ladder does
+    // not pay for rungs that cannot move the sign.
+    if (z > 4 || z < -4) continue;
+    g += vals[i] * Math.exp(-0.5 * z * z);
+  }
+  return g;
+}
+
+function flipCrossings(rows: ChangeRow[], spot: number | null, pick: (r: ChangeRow) => number): number[] {
   const asc = [...rows].sort((a, b) => a.strike - b.strike);
+  if (asc.length < 3) return [];
+  const strikes = asc.map((r) => r.strike);
+  const vals = asc.map(pick);
+  const lo = strikes[0], hi = strikes[strikes.length - 1];
+  if (!(hi > lo)) return [];
+
+  const ref = spot && spot > 0 ? spot : strikes[Math.floor(strikes.length / 2)];
+  const w = Math.max(ref * FLIP_KERNEL_PCT, strikeSpacing(strikes) * 2);
+
   const out: number[] = [];
-  let cum = 0;
-  let prevStrike: number | null = null;
-  for (const r of asc) {
-    const before = cum;
-    cum += pick(r);
-    if (prevStrike != null && ((before < 0 && cum >= 0) || (before > 0 && cum <= 0))) {
-      // Linear interpolation on the cumulative curve. before === cum cannot
-      // reach here (it would mean a zero-width crossing of a flat line), but
-      // the guard keeps a divide-by-zero out of the arithmetic regardless.
-      const t = cum === before ? 0 : (0 - before) / (cum - before);
-      out.push(prevStrike + t * (r.strike - prevStrike));
+  let pS = lo;
+  let pG = localGamma(strikes, vals, lo, w);
+  for (let i = 1; i <= FLIP_GRID_STEPS; i++) {
+    const S = lo + ((hi - lo) * i) / FLIP_GRID_STEPS;
+    const G = localGamma(strikes, vals, S, w);
+    if ((pG < 0 && G >= 0) || (pG > 0 && G <= 0)) {
+      const t = G === pG ? 0 : (0 - pG) / (G - pG);
+      out.push(pS + t * (S - pS));
     }
-    prevStrike = r.strike;
+    pS = S;
+    pG = G;
   }
   return out;
+}
+
+/** Sign of the local profile AT SPOT. Used only to say which way the book leans
+    when there is no crossing inside the window — "short gamma everywhere here"
+    is a different statement from "no answer". */
+function localGammaAtSpot(rows: ChangeRow[], spot: number | null): number | null {
+  if (spot == null || rows.length < 3) return null;
+  const asc = [...rows].sort((a, b) => a.strike - b.strike);
+  const strikes = asc.map((r) => r.strike);
+  const w = Math.max(spot * FLIP_KERNEL_PCT, strikeSpacing(strikes) * 2);
+  return localGamma(strikes, asc.map((r) => r.netGex), spot, w);
 }
 
 /** The crossing a reader cares about is the one price is standing next to. */
@@ -601,6 +690,12 @@ type Analysis = {
   crossingsNow: number;
   /** Every strike the same sign. NOT the same claim as "no zero crossing". */
   oneSided: boolean;
+  /**
+   * Sign of the local gamma profile at spot — see flipCrossings. Read ONLY when
+   * there is no crossing, to say which side of zero the window sits on. Its
+   * magnitude is a weighted sum with no unit and must never be printed.
+   */
+  gammaAtSpot: number | null;
   /** Signed points from spot to the flip. Positive = spot is above it. */
   cushionNow: number | null; cushionPrev: number | null;
   /** Ranked by |Δ|, already band-filtered. */
@@ -666,17 +761,17 @@ function analyzeLadder(
   }
   const deltaNet = netTotal - prevTotal;
 
-  // A ladder can be mixed-sign at every rung and still never have its RUNNING
-  // TOTAL reach zero — a deeply short book with fat call strikes does exactly
-  // that. Tracked separately because the flip tile has to explain which of the
-  // two situations it is in, and conflating them prints a claim the movers list
-  // three inches below visibly contradicts.
+  // Every rung the same sign — then the local profile is one-signed too and
+  // there is genuinely nothing to cross, which is a different empty state from
+  // "mixed rungs, but the profile stays on one side of zero across the window".
   const signs = new Set(rows.filter((r) => r.netGex !== 0).map((r) => Math.sign(r.netGex)));
-  const crossNow = zeroCrossings(rows, (r) => r.netGex);
-  const crossPrev = hasPrior ? zeroCrossings(rows, (r) => r.prevNetGex) : [];
+  const crossNow = flipCrossings(rows, spot, (r) => r.netGex);
+  const crossPrev = hasPrior ? flipCrossings(rows, spot, (r) => r.prevNetGex) : [];
   const anchor = spot ?? (rows.length ? rows[Math.floor(rows.length / 2)].strike : 0);
   const flipNow = nearestTo(crossNow, anchor);
   const flipPrev = nearestTo(crossPrev, anchor);
+  // Which way the book leans AT SPOT, for the no-crossing case only.
+  const gammaAtSpot = localGammaAtSpot(rows, spot);
 
   const inBand = (r: ChangeRow) =>
     band === 0 || spot == null || Math.abs(r.strike / spot - 1) * 100 <= band;
@@ -744,6 +839,7 @@ function analyzeLadder(
     flipNow, flipPrev,
     crossingsNow: crossNow.length,
     oneSided: signs.size <= 1,
+    gammaAtSpot,
     cushionNow: flipNow == null || spot == null ? null : spot - flipNow,
     cushionPrev: flipPrev == null || spot == null ? null : spot - flipPrev,
     movers,
@@ -893,7 +989,7 @@ const linkStyle: CSSProperties = {
 function railBadge(b: Badge, spot: number | null): { text: string; tone: "pos" | "neg" | "warn"; title: string } | null {
   if (!b) return null;
   if (b.flipState === "vanished") {
-    return { text: "FLIP GONE", tone: "warn", title: "The gamma flip was inside the recorded window at the prior close and is not now — the running total no longer crosses zero here." };
+    return { text: "FLIP GONE", tone: "warn", title: "The gamma flip was inside the recorded window at the prior close and is not now — dealer gamma no longer changes sign anywhere in it." };
   }
   if (b.flipState === "appeared") {
     return { text: "FLIP NEW", tone: "warn", title: "A gamma flip has appeared inside the window that was not there at the prior close." };
@@ -1028,7 +1124,7 @@ function WallTile({ side, wall, hasPrior, symbol }: {
  * ── THE ONLY ORDERING THIS CODE MAY ASSUME ──────────────────────────────────
  * `findWall` filters by side before picking, so putWall < spot < callWall is
  * guaranteed. NOTHING ELSE IS. In particular:
- *   • the flip is a zero crossing of the running total and can land anywhere,
+ *   • the flip is where dealer gamma changes sign and can land anywhere,
  *     including outside both walls on a one-sided book;
  *   • the heaviest rung on the board can be below spot (a fat put wall), so it
  *     cannot be used as a zone boundary either.
@@ -1091,7 +1187,7 @@ function StructuralRange({ a, spot }: { a: Analysis; spot: number | null }) {
       a: lo, b: hi,
       lab: a.netTotal >= 0 ? "DAMPEN" : "AMPLIFY",
       c: a.netTotal >= 0 ? RANGE_COLORS.flip : RANGE_COLORS.put,
-      tip: "No gamma flip inside this range — the running total never crosses zero between the walls, so the whole span is one regime.",
+      tip: "No gamma flip inside this range — dealer gamma keeps one sign at every price between the walls, so the whole span is one regime.",
     }];
   const inZone = zones.find((z) => spot >= z.a && spot < z.b) ?? zones[zones.length - 1];
 
@@ -1130,7 +1226,7 @@ function StructuralRange({ a, spot }: { a: Analysis; spot: number | null }) {
       { v: putWall.strike, color: RANGE_COLORS.put, cap: "PUT SUPP", ring: ringPut,
         tip: `Largest negative rung below spot${ringPut ? " — and the heaviest gamma on the whole board" : ""}. Where dealer hedging buys into weakness.` },
       ...(flipIn ? [{ v: flipNow as number, color: RANGE_COLORS.flip, cap: "FLIP", ring: false,
-        tip: "Zero crossing of the cumulative ladder. Above it dealers dampen; below, they amplify." }] : []),
+        tip: "Where dealer gamma changes sign. Above it dealers dampen; below, they amplify." }] : []),
       ...(heavyLoose ? [{ v: heavyLoose.strike, color: T.gold, cap: "HEAVIEST", ring: true,
         tip: "The largest |gamma| rung on the board — and it is neither wall, so it is pinning weight the walls do not name." }] : []),
       { v: callWall.strike, color: RANGE_COLORS.wall, cap: "CALL WALL", ring: ringCall,
@@ -1344,9 +1440,12 @@ const away = (v: number, spot: number) => `${pts(v - spot)} · ${pts((v / spot -
 function OpenTile({ name, color, value, sub, note, es }: {
   name: string; color: string; value: string; sub?: string; note?: string; es?: string;
 }) {
+  // No accent edge. The tile label is already the colour, and five stripes in a
+  // row read as a status bar — five things going wrong — rather than as five
+  // neutral readings.
   return (
     <div style={{
-      border: `1px solid ${T.border}`, borderLeft: `3px solid ${color}`,
+      border: `1px solid ${T.border}`,
       borderRadius: 10, padding: "8px 10px", background: T.panelInset, minWidth: 0,
     }}>
       <div style={{ ...label, color, letterSpacing: 0.6 }}>{name}</div>
@@ -1388,8 +1487,8 @@ function OpenCard({ a, spot, symbol, basis, oiSettled, asOfLine, hasPrior, esRaw
 
   /**
    * Which zone spot sits in. Prefers the flip, because that is the measured
-   * boundary; falls back to the sign of the book when the running total never
-   * crosses inside the recorded window — which is the same fallback
+   * boundary; falls back to the sign of the book when dealer gamma keeps one
+   * sign across the whole recorded window — which is the same fallback
    * StructuralRange makes when it draws one band instead of two, and it is
    * flagged as inferred rather than presented as a located line.
    */
@@ -1462,7 +1561,6 @@ function OpenCard({ a, spot, symbol, basis, oiSettled, asOfLine, hasPrior, esRaw
     <div style={{
       ...classicCardStyle,
       padding: "10px 12px 11px", margin: "0 0 12px",
-      borderLeft: `3px solid ${LIGHT_BLUE}`,
     }}>
       {/* header — what this is, how fresh it is, what it is made of */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 9 }}>
@@ -1536,7 +1634,7 @@ function OpenCard({ a, spot, symbol, basis, oiSettled, asOfLine, hasPrior, esRaw
           value={flip != null ? strikeStr(Math.round(flip * 100) / 100) : "—"}
           es={flip != null && esOn ? esOf(flip) : undefined}
           sub={flip != null ? away(flip, spot) : undefined}
-          note={flip != null ? "regime boundary" : "cumulative never crosses zero in ±40 strikes"}
+          note={flip != null ? "regime boundary" : "no sign change inside ±40 strikes"}
         />
         <OpenTile
           name="PUT WALL"
@@ -1636,17 +1734,25 @@ function ReadPanel({ a, mode, hasPrior, live, symbol, zeroDte, legsMissing, spot
             {a.crossingsNow > 1 ? (
               <span
                 style={{ ...chipBase, color: T.gold, borderColor: `${T.gold}61`, background: `${T.gold}1c` }}
-                title={`Cumulative net GEX crosses zero ${a.crossingsNow} times in this window. The one shown is the crossing nearest spot.`}
+                title={`Dealer gamma changes sign ${a.crossingsNow} times across this window — the book has more than one regime boundary in it. The one shown is the crossing nearest spot.`}
               >{a.crossingsNow}× crossing</span>
             ) : null}
           </div>
           {a.flipNow == null ? (
             <>
               <div style={{ fontFamily: MONO, fontSize: 19, fontWeight: 800, marginTop: 2 }}>—</div>
+              {/* Three genuinely different reasons there is no number, and they
+                  are not interchangeable: one-signed rungs, or a profile that
+                  stays on one side of zero across every price in the window —
+                  in which case saying WHICH side is most of the answer. */}
               <div style={{ fontSize: 11, marginTop: 2 }}>
                 {a.oneSided
                   ? "Every strike in this window carries gamma of one sign, so there is nothing to cross."
-                  : "Running total never reaches zero inside the recorded ±40-strike window — individual strikes do change sign, but the cumulative does not. The flip, if there is one, sits outside the window."}
+                  : a.gammaAtSpot != null && a.gammaAtSpot < 0
+                    ? "Dealers are short gamma at every price in the recorded ±40-strike window — there is no level inside it where hedging stops amplifying. The flip sits outside the window."
+                    : a.gammaAtSpot != null && a.gammaAtSpot > 0
+                      ? "Dealers are long gamma at every price in the recorded ±40-strike window — hedging dampens across the whole range. The flip sits outside the window."
+                      : "No sign change inside the recorded ±40-strike window. The flip, if there is one, sits outside it."}
               </div>
             </>
           ) : (

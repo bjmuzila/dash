@@ -23,8 +23,18 @@
 //      inside the taken set will tell you that.
 //
 // The calibration block at the bottom grades the grader: for each letter the
-// projection rule predicted AT CAPTURE, what did those picks actually do. It
-// reads "not armed" until a rule exists in server-v2/config/pick-proj-rule.json.
+// projection rule predicted AT CAPTURE, what did those picks actually do.
+//
+// THE RULE ARMS ITSELF. It used to read "not armed" until someone hand-wrote
+// server-v2/config/pick-proj-rule.json and redeployed — a procedure nobody runs
+// on a schedule, so the projection stayed inert and this table stayed empty.
+// Now the server applies the same two filters this page tells you to read by eye
+// (not thin, holds in both halves) to every bucket and arms the rule the moment
+// the evidence clears the bar, re-checking after each EOD freeze. The buttons
+// here do it on the spot and show exactly what it would arm — and what it threw
+// away, and why. None of the discipline changed: nothing arms on a sample too
+// small to support it, and a term's points can only ever be the lift the table
+// actually measured.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -67,12 +77,33 @@ type StudyResp = {
   buckets: Bucket[];
 };
 
+type Term = { by: string; bucket: string; pts: number };
+
 type CalRow = Summary & { projected: string; actual: Record<string, number>; thin: boolean };
 type CalResp = {
   ok: boolean; error?: string; armed: boolean; days: number; note?: string;
-  terms?: { by: string; bucket: string; pts: number }[];
+  terms?: Term[];
   base?: number; minN?: number; unprojected?: number;
   overall?: Summary; rows?: CalRow[]; n?: number;
+  /** Auto-fit status, so "not armed" can say WHEN it will arm, not just that it isn't. */
+  auto?: boolean; source?: string; pinnedBy?: string | null;
+  need?: number; have?: number; fittedAt?: string | null;
+};
+
+type RuleState = {
+  ok: boolean; armed: boolean; source: string; base: number; note: string;
+  terms: Term[]; fittedAt: string | null; pinnedBy: string | null;
+  auto: boolean; fitDays: number;
+  thresholds: { minPicks: number; minLift: number; maxTerms: number; maxPts: number };
+  lastFit?: { at: string; armed: boolean; reason: string; applied: boolean; note?: string | null } | null;
+};
+
+type Rejected = { by: string; bucket: string; n: number; lift: number | null; why: string };
+type FitResp = {
+  ok: boolean; error?: string; armed?: boolean; reason?: string;
+  terms?: Term[]; rejected?: Rejected[];
+  applied?: boolean; changed?: boolean; note?: string | null; pinnedBy?: string | null;
+  have?: number; need?: number; days?: number;
 };
 
 const tint = (hex: string, a: number): string => {
@@ -112,6 +143,171 @@ function RateBar({ v }: { v: number | null }) {
       </span>
       <span style={{ fontFamily: MONO, fontWeight: 700 }}>{pct(v)}</span>
     </span>
+  );
+}
+
+/** A rule term, rendered so the sign is readable at a glance. */
+function TermChip({ t }: { t: Term }) {
+  const c = t.pts >= 0 ? HOME_THEME.green : HOME_THEME.red;
+  return (
+    <span style={{
+      display: "inline-flex", gap: 6, alignItems: "baseline", fontFamily: MONO, fontSize: 11,
+      padding: "3px 8px", borderRadius: 6, background: tint(c, 0.10), border: `1px solid ${tint(c, 0.28)}`,
+    }}>
+      <span style={{ color: HOME_THEME.text }}>{t.by}</span>
+      <b style={{ color: HOME_THEME.text }}>{t.bucket}</b>
+      <b style={{ color: c }}>{signed(t.pts)}</b>
+    </span>
+  );
+}
+
+/**
+ * The rule's state, and the two buttons that change it.
+ *
+ * This bar is the answer to "why is there no calibration": it either shows the
+ * rule in force and where it came from, or it shows how far the evidence still
+ * has to go before one can be fitted — with a progress bar, because "needs 150
+ * picks, has 88" is a wait with an end, and "not armed" was not.
+ */
+function RuleBar({
+  rule, cal, fitting, onFit, onArm, onDisarm,
+}: {
+  rule: RuleState | null;
+  cal: CalResp | null;
+  fitting: "" | "preview" | "arm" | "disarm";
+  onFit: () => void; onArm: () => void; onDisarm: () => void;
+}) {
+  const armed = !!rule?.armed;
+  const need = rule?.thresholds.minPicks ?? cal?.need ?? 150;
+  const have = cal?.have ?? cal?.n ?? 0;
+  const ready = have >= need;
+  const tone = armed ? HOME_THEME.green : ready ? HOME_THEME.cyan : HOME_THEME.orange;
+  const busy = fitting !== "";
+  const SOURCE: Record<string, string> = {
+    env: "pinned by the GEX_CHANGE_TOP_PROJ_RULE env var",
+    file: "pinned by config/pick-proj-rule.json",
+    stored: "fitted from the study",
+    none: "none",
+  };
+
+  return (
+    <div style={{
+      padding: "10px 12px", borderRadius: 8, marginBottom: 4,
+      background: tint(tone, 0.07), border: `1px solid ${tint(tone, 0.28)}`,
+    }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+        <span style={{ fontSize: 12, fontWeight: 800, color: tone }}>
+          {armed ? "Armed" : ready ? "Ready to arm" : "Collecting evidence"}
+        </span>
+        <span style={{ fontSize: 11, color: HOME_THEME.text }}>
+          {armed
+            ? `${rule?.terms.length ?? 0} term(s) · base ${rule?.base ?? 50} · ${SOURCE[rule?.source ?? "none"] ?? rule?.source}${rule?.fittedAt ? ` · ${rule.fittedAt}` : ""}`
+            : `${have}/${need} graded picks${rule?.auto ? " · re-checked automatically after every EOD freeze" : " · auto-fit is OFF (GEX_CHANGE_TOP_AUTOFIT=0)"}`}
+        </span>
+        <span style={{ flex: 1 }} />
+        <button onClick={onFit} disabled={busy}
+          title="Dry run. Shows the terms the fit would arm and every bucket it rejected, without changing anything."
+          style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 12, opacity: busy ? 0.5 : 1 }}>
+          {fitting === "preview" ? "fitting…" : armed ? "Re-fit (preview)" : "Fit now"}
+        </button>
+        <button onClick={onArm} disabled={busy}
+          title="Run the fit and store the result. From the next capture on, every pick is stamped with a projected grade."
+          style={{
+            ...homeButtonStyle, padding: "4px 10px", fontSize: 12, opacity: busy ? 0.5 : 1,
+            color: HOME_THEME.green, borderColor: tint(HOME_THEME.green, 0.45),
+          }}>
+          {fitting === "arm" ? "arming…" : armed ? "Re-fit & store" : "Fit & arm"}
+        </button>
+        {armed && rule?.source === "stored" && (
+          <button onClick={onDisarm} disabled={busy}
+            title="Clear the stored rule and stop projecting. Projections already stamped on past picks are left alone — they are the calibration."
+            style={{
+              ...homeButtonStyle, padding: "4px 10px", fontSize: 12, opacity: busy ? 0.5 : 1,
+              color: HOME_THEME.red, borderColor: tint(HOME_THEME.red, 0.4),
+            }}>
+            {fitting === "disarm" ? "…" : "Disarm"}
+          </button>
+        )}
+      </div>
+
+      {!armed && (
+        <div style={{ marginTop: 8, height: 5, borderRadius: 3, background: tint(HOME_THEME.text, 0.10) }}>
+          <div style={{
+            height: "100%", borderRadius: 3, background: tone,
+            width: `${Math.max(2, Math.min(100, (have / Math.max(1, need)) * 100))}%`,
+          }} />
+        </div>
+      )}
+
+      {armed && (rule?.terms.length ?? 0) > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+          {rule!.terms.map((t) => <TermChip key={`${t.by}:${t.bucket}`} t={t} />)}
+        </div>
+      )}
+
+      {rule?.pinnedBy && (
+        <div style={{ marginTop: 8, fontSize: 11, color: HOME_THEME.orange, lineHeight: 1.5 }}>
+          A hand-written rule is pinning this ({rule.pinnedBy === "env" ? "env var" : "config/pick-proj-rule.json"}).
+          The auto-fit will still run and report, but it will not overwrite what you pinned.
+        </div>
+      )}
+      {rule?.note && armed && (
+        <div style={{ marginTop: 6, fontSize: 11, color: HOME_THEME.text }}>{rule.note}</div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What the fit decided, including everything it threw away.
+ *
+ * The rejected list is the important half. A rule you cannot audit is a fitted
+ * model with extra steps, and the buckets that ALMOST made it are exactly where
+ * a bad rule would come from.
+ */
+function FitPreview({ fit, onDismiss }: { fit: FitResp; onDismiss: () => void }) {
+  const armed = !!fit.armed;
+  const tone = armed ? HOME_THEME.green : HOME_THEME.orange;
+  return (
+    <div style={{
+      marginTop: 10, padding: "10px 12px", borderRadius: 8,
+      background: tint(HOME_THEME.text, 0.04), border: `1px solid ${tint(tone, 0.25)}`,
+    }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+        <b style={{ fontSize: 12, color: tone }}>
+          {fit.applied ? "Fit stored" : armed ? "Fit result (not stored)" : "Nothing to arm"}
+        </b>
+        <span style={{ flex: 1, fontSize: 11, color: HOME_THEME.text, lineHeight: 1.5 }}>{fit.reason}</span>
+        <button onClick={onDismiss} style={{ ...homeButtonStyle, padding: "2px 8px", fontSize: 11 }}>✕</button>
+      </div>
+      {fit.note && <div style={{ marginTop: 6, fontSize: 11, color: HOME_THEME.orange }}>{fit.note}</div>}
+      {!!fit.terms?.length && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+          {fit.terms.map((t) => <TermChip key={`${t.by}:${t.bucket}`} t={t} />)}
+        </div>
+      )}
+      {!!fit.rejected?.length && (
+        <details style={{ marginTop: 10 }}>
+          <summary style={{ fontSize: 11, color: HOME_THEME.text, cursor: "pointer" }}>
+            {fit.rejected.length} bucket(s) rejected — why
+          </summary>
+          <div style={{ marginTop: 6, maxHeight: 220, overflowY: "auto" }}>
+            {fit.rejected.map((r, i) => (
+              <div key={`${r.by}:${r.bucket}:${i}`} style={{
+                display: "flex", gap: 8, fontSize: 11, fontFamily: MONO, padding: "2px 0",
+                color: HOME_THEME.text, borderTop: i ? `1px solid ${tint(HOME_THEME.text, 0.06)}` : undefined,
+              }}>
+                <span style={{ minWidth: 70 }}>{r.by}</span>
+                <b style={{ minWidth: 90 }}>{r.bucket}</b>
+                <span style={{ minWidth: 50 }}>n={r.n}</span>
+                <span style={{ minWidth: 60, color: liftColor(r.lift) }}>{r.lift == null ? "—" : `${signed(r.lift)}pt`}</span>
+                <span style={{ opacity: 0.8 }}>{r.why}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
   );
 }
 
@@ -156,6 +352,10 @@ export default function PickStudyTab() {
   const [cohort, setCohort] = useState("selected");
   const [data, setData] = useState<StudyResp | null>(null);
   const [cal, setCal] = useState<CalResp | null>(null);
+  const [rule, setRule] = useState<RuleState | null>(null);
+  const [fit, setFit] = useState<FitResp | null>(null);
+  const [fitting, setFitting] = useState<"" | "preview" | "arm" | "disarm">("");
+  const [fitErr, setFitErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -189,8 +389,60 @@ export default function PickStudyTab() {
       .catch(() => setCal(null));
   }, [days, cohort]);
 
+  const loadRule = useCallback(() => {
+    fetch("/proxy/gex-change-top-rule", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j: RuleState) => setRule(j?.ok ? j : null))
+      .catch(() => setRule(null));
+  }, []);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadCal(); }, [loadCal]);
+  useEffect(() => { loadRule(); }, [loadRule]);
+
+  /**
+   * Run the auto-fit. `apply` false is a dry run — it reports the terms it would
+   * arm and every bucket it rejected, so the rule is never a black box you are
+   * asked to trust. Owner-only on the server; a viewer gets a clean message
+   * rather than a silent no-op.
+   */
+  const runFit = useCallback((apply: boolean) => {
+    setFitting(apply ? "arm" : "preview"); setFitErr(null);
+    const u = new URL("/proxy/gex-change-top-rule-fit", window.location.origin);
+    u.searchParams.set("days", String(Math.max(days, 90)));
+    u.searchParams.set("cohort", cohort);
+    if (apply) u.searchParams.set("apply", "1");
+    fetch(u.toString(), { method: "POST" })
+      .then(async (r) => {
+        if (r.status === 401 || r.status === 403) throw new Error("owner-only — sign in as the owner to change the rule");
+        return r.json();
+      })
+      .then((j: FitResp) => {
+        setFit(j);
+        if (!j?.ok) setFitErr(j?.error || "fit failed");
+        if (apply) { loadRule(); loadCal(); }
+      })
+      .catch((e) => setFitErr(String(e?.message || e)))
+      .finally(() => setFitting(""));
+  }, [days, cohort, loadRule, loadCal]);
+
+  /** Clear the stored rule and go inert. Stamped projections are NOT touched —
+   *  they are history, and rewriting them would destroy the calibration. */
+  const disarm = useCallback(() => {
+    setFitting("disarm"); setFitErr(null);
+    fetch("/proxy/gex-change-top-rule", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clear: true }),
+    })
+      .then(async (r) => {
+        if (r.status === 401 || r.status === 403) throw new Error("owner-only — sign in as the owner to change the rule");
+        return r.json();
+      })
+      .then(() => { setFit(null); loadRule(); loadCal(); })
+      .catch((e) => setFitErr(String(e?.message || e)))
+      .finally(() => setFitting(""));
+  }, [loadRule, loadCal]);
 
   const features = data?.features ?? [{ key: "score", label: "Score" }];
   const overall = data?.overall;
@@ -366,22 +618,39 @@ export default function PickStudyTab() {
         <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.orange, marginBottom: 6 }}>
           Calibration · grading the grader
         </div>
+        <RuleBar
+          rule={rule}
+          cal={cal}
+          fitting={fitting}
+          onFit={() => runFit(false)}
+          onArm={() => runFit(true)}
+          onDisarm={disarm}
+        />
+        {fitErr && <div style={{ color: HOME_THEME.red, fontSize: 12, margin: "8px 0" }}>{fitErr}</div>}
+        {fit && <FitPreview fit={fit} onDismiss={() => setFit(null)} />}
+
         {!cal || !cal.armed ? (
-          <div style={{ fontSize: 12, color: HOME_THEME.text, lineHeight: 1.6, maxWidth: 820 }}>
-            No projection rule is armed, so nothing is being predicted yet and there is nothing to calibrate.
-            That is the shipping default and it is deliberate — a projection seeded with plausible-looking guesses
-            is indistinguishable on screen from one backed by evidence.
+          <div style={{ fontSize: 12, color: HOME_THEME.text, lineHeight: 1.6, maxWidth: 860, marginTop: 12 }}>
+            Nothing is being predicted yet, so there is nothing to calibrate. That is deliberate and it is not
+            permanent: a projection seeded with plausible-looking guesses is indistinguishable on screen from one
+            backed by evidence, so the rule stays inert until the study can support one — and then arms itself.
             <br /><br />
-            To arm it: find buckets above that are <b>not thin</b> and <b>hold</b> in both halves, hit <b>⧉ term</b> on each,
-            and drop them into <code style={{ fontFamily: MONO, color: HOME_THEME.cyan }}>server-v2/config/pick-proj-rule.json</code> as{" "}
-            <code style={{ fontFamily: MONO }}>{'{ "enabled": true, "base": 50, "terms": [ … ] }'}</code>.
-            From the next capture on, every pick is stamped with a projected grade and this table starts filling.
+            The fit uses the same two filters this page tells you to read by eye: a bucket must be <b>not thin</b> and
+            must <b>hold</b> in both halves of the window. Each surviving bucket becomes one term whose points are its
+            measured lift, clamped. It refuses to fit on ticker, and drops the |Δ GEX| and |% vs open| terms when the
+            blended Score already covers them, so one edge is never counted three times. Hit{" "}
+            <b>Fit now</b> to see exactly what it would arm and everything it rejected.
+            <br /><br />
+            Hand-pinning still works and still wins: drop{" "}
+            <code style={{ fontFamily: MONO, color: HOME_THEME.cyan }}>server-v2/config/pick-proj-rule.json</code> and the
+            auto-fit stands down rather than overwrite it.
           </div>
         ) : (
           <>
-            <div style={{ fontSize: 12, color: HOME_THEME.text, marginBottom: 10 }}>
-              Rule: base {cal.base} · {cal.terms?.length ?? 0} term(s){cal.note ? ` · ${cal.note}` : ""}
-              {cal.unprojected ? ` · ${cal.unprojected} pick(s) captured before the rule was armed are excluded` : ""}
+            <div style={{ fontSize: 12, color: HOME_THEME.text, margin: "12px 0 10px" }}>
+              {cal.unprojected
+                ? `${cal.unprojected} pick(s) were captured before the rule was armed and carry no projection — they are excluded from this table, not counted as misses.`
+                : "Every pick in the window carries a projection."}
             </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>

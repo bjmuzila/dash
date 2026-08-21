@@ -135,16 +135,33 @@ export async function GET(
   const campaign = slug(sp.get("c") ?? "") || placement.campaign;
   const to = safePath(sp.get("to"));
 
-  const target = new URL(to, req.nextUrl.origin);
-  target.searchParams.set("utm_source", placement.source);
-  target.searchParams.set("utm_medium", placement.medium);
-  target.searchParams.set("utm_campaign", campaign);
+  const qs = new URLSearchParams({
+    utm_source: placement.source,
+    utm_medium: placement.medium,
+    utm_campaign: campaign,
+  });
 
-  // 302, not 301: a permanent redirect gets cached by the browser AND by every
-  // proxy in between, so a later change to where /x/click points would never
-  // reach anyone who has clicked it once. no-store for the same reason.
-  return NextResponse.redirect(target, {
+  // ── RELATIVE Location, deliberately ──────────────────────────────────────
+  // The obvious version of this line was
+  // `NextResponse.redirect(new URL(to, req.nextUrl.origin))`, and it sent every
+  // click to https://localhost:3000. In production Next sits behind the VPS
+  // proxy, so the origin it sees is the internal one it was dialled on — the
+  // public hostname is only in the forwarded headers, and reconstructing it
+  // from those means trusting a header and getting the protocol right.
+  //
+  // A relative Location needs none of that. RFC 7231 allows it, every browser
+  // resolves it against the URL in the address bar (`cbedge.net/x/click`), and
+  // nginx passes it through untouched — proxy_redirect only rewrites absolute
+  // ones. It is also correct in local dev with no configuration at all.
+  //
+  // 302, not 301: a permanent redirect is cached by the browser AND every proxy
+  // in between, so re-pointing /x/click later would never reach anyone who had
+  // clicked it once. no-store for the same reason.
+  return new NextResponse(null, {
     status: 302,
-    headers: { "Cache-Control": "no-store, max-age=0" },
+    headers: {
+      Location: `${to}?${qs.toString()}`,
+      "Cache-Control": "no-store, max-age=0",
+    },
   });
 }
