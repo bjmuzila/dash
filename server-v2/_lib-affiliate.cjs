@@ -64,13 +64,29 @@ const LOCKOUT_MS = 15 * 60 * 1000;
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 
-/** Commission tiers. tier_pct is stored per-affiliate; these are the presets. */
-const TIERS = [
-  { pct: 10, label: 'Starter' },
-  { pct: 15, label: 'Partner' },
-  { pct: 20, label: 'Elite' },
-];
-const MAX_TIER_PCT = 20;
+/**
+ * THE RATE. A flat 20% of collected revenue, the same for everybody.
+ *
+ * There are no tiers. A tier ladder only earns its complexity when the top rung
+ * is worth chasing, and when the whole ladder is one number there is nothing to
+ * chase — it just gives every applicant a reason to ask why they are not on the
+ * good rate yet, and gives the owner a per-affiliate decision to make on every
+ * approval that has no right answer.
+ *
+ * `tier_pct` on aff_affiliates is kept as the COLUMN NAME (renaming it would
+ * churn every query and the payout rows already written for no gain), but it
+ * now means "this affiliate's rate", and it is 20 unless someone deliberately
+ * overrode it in the approve dialog.
+ */
+const RATE_PCT = Math.max(0, Math.min(100, Number(process.env.AFFILIATE_RATE_PCT || 20)));
+
+/**
+ * Typo guard, not a policy. The rate only ever arrives from the owner's own
+ * input, so this exists so a fat-fingered "200" cannot quietly commit the
+ * business to paying twice what it collects. Anything at or under this is
+ * accepted verbatim.
+ */
+const MAX_RATE_PCT = 50;
 
 /** Payout rails. Stripe + PayPal + Zelle — nothing else is wired. */
 const PAYOUT_METHODS = ['stripe', 'paypal', 'zelle'];
@@ -111,7 +127,7 @@ async function ensureSchema() {
         status            TEXT NOT NULL DEFAULT 'pending',
         code              TEXT UNIQUE,
         requested_code    TEXT NOT NULL,
-        tier_pct          INTEGER NOT NULL DEFAULT 10,
+        tier_pct          INTEGER NOT NULL DEFAULT ${RATE_PCT},
         cookie_days       INTEGER NOT NULL DEFAULT ${DEFAULT_COOKIE_DAYS},
         channels          JSONB,
         primary_link      TEXT,
@@ -135,6 +151,16 @@ async function ensureSchema() {
     // CREATE above) so an existing deployment picks it up.
     await pool.query(`ALTER TABLE aff_affiliates ADD COLUMN IF NOT EXISTS prev_code TEXT`);
     await pool.query(`ALTER TABLE aff_affiliates ADD COLUMN IF NOT EXISTS prev_code_until TIMESTAMPTZ`);
+    // The program launched briefly with a 10/15/20 tier ladder and a default of
+    // 10. It is a flat 20 now (see RATE_PCT). Move the column default, and lift
+    // anyone still sitting on the old starter rate who has NOT been approved yet
+    // — nobody has been promised anything until they are, and nothing they have
+    // earned can move, because an approved affiliate's rate is frozen onto their
+    // link rows in recordReferral().
+    await pool.query(`ALTER TABLE aff_affiliates ALTER COLUMN tier_pct SET DEFAULT ${RATE_PCT}`);
+    await pool.query(
+      `UPDATE aff_affiliates SET tier_pct = $1 WHERE approved_at IS NULL AND tier_pct <> $1`,
+      [RATE_PCT]);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS aff_sessions (
@@ -270,7 +296,7 @@ function currentPeriod(d = new Date()) {
  */
 function commissionCents(grossCents, ratePct) {
   const g = Math.max(0, Math.round(Number(grossCents) || 0));
-  const r = Math.min(MAX_TIER_PCT, Math.max(0, Math.round(Number(ratePct) || 0)));
+  const r = Math.min(MAX_RATE_PCT, Math.max(0, Math.round(Number(ratePct) || 0)));
   return Math.round((g * r) / 100);
 }
 
@@ -534,8 +560,9 @@ function publicAffiliate(row) {
     requested_code: row.requested_code,
     prev_code: row.prev_code,
     prev_code_until: row.prev_code_until,
+    // Named tier_pct for the column, but there are no tiers — it is this
+    // affiliate's rate, 20 unless the owner overrode it at approval.
     tier_pct: row.tier_pct,
-    tier_label: (TIERS.find((t) => t.pct === row.tier_pct) || {}).label || `${row.tier_pct}%`,
     cookie_days: row.cookie_days,
     channels: row.channels || [],
     primary_link: row.primary_link,
@@ -826,7 +853,7 @@ async function buildPayouts(period) {
 
 module.exports = {
   // constants
-  COOKIE_NAME, REF_COOKIE, SESSION_DAYS, TIERS, MAX_TIER_PCT, PAYOUT_METHODS,
+  COOKIE_NAME, REF_COOKIE, SESSION_DAYS, RATE_PCT, MAX_RATE_PCT, PAYOUT_METHODS,
   RESERVED_CODES, DEFAULT_COOKIE_DAYS, HOLD_DAYS,
   // plumbing
   ensureSchema, parseCookies, clientIp, sha256, currentPeriod, commissionCents,

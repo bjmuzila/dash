@@ -94,7 +94,7 @@ export default function CodePage() {
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <CodePill code={affiliate.code} size={20} />
             <span style={{ fontSize: 11.5, color: THEME.dim2 }}>
-              Issued {shortDate(affiliate.approved_at)} · {affiliate.tier_pct}% {affiliate.tier_label}
+              Issued {shortDate(affiliate.approved_at)} · {affiliate.tier_pct}% commission
             </span>
           </div>
 

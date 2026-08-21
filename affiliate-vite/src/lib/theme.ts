@@ -22,6 +22,13 @@ export const THEME = {
   lightBlue: "#7dd3fc",
   green: "#1FD98A",
   softRed: "#f4948e",
+  // Content hues — used to give a feature or a data mark its own identity.
+  // NEVER for card chrome; see the rule at the top of this file.
+  gold: "#FFB703",
+  call: "#29b6f6",
+  put: "#ff4757",
+  up: "#30d158",
+  down: "#ff5b5b",
   text: "#FFFFFF",
   dim: "rgba(255,255,255,0.55)",
   dim2: "rgba(255,255,255,0.38)",
@@ -128,11 +135,13 @@ export const toolbarAccentBar: CSSProperties = {
   boxShadow: `0 0 8px ${rgba(THEME.cyan, 0.35)}`,
 };
 
-/** Commission tiers, mirrored from server-v2/_lib-affiliate.cjs for the public
- *  landing page — which has no session and therefore no API to ask. The server
- *  stays authoritative for anything that pays money. */
-export const PUBLIC_TIERS = [
-  { pct: 10, label: "Starter", blurb: "Where everyone begins. Any approved affiliate, no volume floor." },
-  { pct: 15, label: "Partner", blurb: "10+ active referred members, or a channel we know converts." },
-  { pct: 20, label: "Elite", blurb: "30+ active members or a dedicated content partnership." },
-] as const;
+/**
+ * THE rate, mirrored from server-v2/_lib-affiliate.cjs so the PUBLIC landing
+ * page can state it without a session or an API call — that page has to render
+ * for a cold visitor even if the backend is down. The server stays
+ * authoritative for anything that actually pays money; this constant is copy.
+ *
+ * There are no tiers. If this ever stops being one number, it belongs on an
+ * endpoint, not here.
+ */
+export const RATE_PCT = 20;

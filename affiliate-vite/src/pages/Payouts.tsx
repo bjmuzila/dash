@@ -55,7 +55,7 @@ export default function Payouts() {
         <Stat tone="green" label="Unpaid earnings" value={money(stats?.unpaid_cents)} sub="Holding + cleared" />
         <Stat tone="blue" label="Paid to date" value={money(stats?.paid_cents)} sub={`${paidCount} payouts`} />
         <Stat tone="cyan" label="This period" value={money(stats?.mtd_cents)} sub={stats?.period ?? "—"} />
-        <Stat tone="orange" label="Rate" value={`${affiliate.tier_pct}%`} sub={affiliate.tier_label} />
+        <Stat tone="orange" label="Rate" value={`${affiliate.tier_pct}%`} sub="Flat, every payment" />
       </div>
 
       <TableCard title="By period">

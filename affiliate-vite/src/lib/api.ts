@@ -21,8 +21,9 @@ export type Affiliate = {
   requested_code: string;
   prev_code: string | null;
   prev_code_until: string | null;
+  // Named tier_pct on the server for column continuity, but there are no
+  // tiers — it is this affiliate's commission rate, 20 unless overridden.
   tier_pct: number;
-  tier_label: string;
   cookie_days: number;
   channels: string[];
   primary_link: string | null;

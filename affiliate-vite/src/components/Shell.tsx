@@ -78,7 +78,7 @@ export default function Shell({ children, wide }: { children: ReactNode; wide?: 
           {affiliate ? (
             <>
               {affiliate.status === "active" && affiliate.code
-                ? <><Pill tone="green">{affiliate.tier_label} · {affiliate.tier_pct}%</Pill><CodePill code={affiliate.code} /></>
+                ? <><Pill tone="green">{affiliate.tier_pct}% commission</Pill><CodePill code={affiliate.code} /></>
                 : affiliate.status === "pending" ? <Pill tone="orange">Pending review</Pill>
                 : affiliate.status === "paused" ? <Pill tone="grey">Paused</Pill>
                 : <Pill tone="red">Not approved</Pill>}

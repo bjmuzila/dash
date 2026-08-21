@@ -31,7 +31,10 @@ import {
  */
 
 // ── types ────────────────────────────────────────────────────────────────────
-type Tier = { pct: number; label: string };
+// No Tier type: the program is a flat rate (see RATE_PCT in
+// server-v2/_lib-affiliate.cjs). `tier_pct` is a column name that now means
+// "this affiliate's rate", overridable per person but 20 for everybody by
+// default.
 
 type Affiliate = {
   id: number;
@@ -179,7 +182,7 @@ const btn = (kind: "primary" | "ghost" | "good" | "bad"): CSSProperties => {
 export default function Affiliates() {
   const [tab, setTab] = useState<"onboarding" | "active" | "payouts">("onboarding");
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [tiers, setTiers] = useState<Tier[]>([{ pct: 10, label: "Starter" }, { pct: 15, label: "Partner" }, { pct: 20, label: "Elite" }]);
+  const [ratePct, setRatePct] = useState(20);
   const [roster, setRoster] = useState<Affiliate[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -189,7 +192,7 @@ export default function Affiliates() {
     try {
       const [s, r] = await Promise.all([api("/api/aff/owner/summary"), api("/api/aff/owner/roster")]);
       setSummary(s.summary);
-      if (Array.isArray(s.tiers)) setTiers(s.tiers);
+      if (Number.isFinite(s.rate_pct)) setRatePct(Number(s.rate_pct));
       setRoster(r.affiliates || []);
     } catch (e) { setErr(String((e as Error).message || e)); }
   }, []);
@@ -240,13 +243,14 @@ export default function Affiliates() {
           <StatTile label="Active affiliates" value={<span style={{ color: LIGHT_BLUE }}>{summary.active}</span>} sub={`${summary.referred_members} referred members`} />
           <StatTile label="Commission owed" value={<span style={{ color: OWNER_THEME.orange }}>{money(summary.owed_cents)}</span>} sub="Accrued, not yet paid" />
           <StatTile label="Paid to date" value={<span style={{ color: "#1FD98A" }}>{money(summary.paid_cents)}</span>} sub={`${money(summary.mtd_gross_cents)} affiliate gross MTD`} />
+          <StatTile label="Commission rate" value={<span style={{ color: LIGHT_BLUE }}>{ratePct}%</span>} sub="Flat, everyone" />
         </div>
       )}
 
       {tab === "onboarding" && (
-        <OnboardingTab pending={pending} codeReqs={codeReqs} tiers={tiers} run={run} busy={busy} />
+        <OnboardingTab pending={pending} codeReqs={codeReqs} ratePct={ratePct} run={run} busy={busy} />
       )}
-      {tab === "active" && <ActiveTab rows={live} tiers={tiers} run={run} busy={busy} />}
+      {tab === "active" && <ActiveTab rows={live} ratePct={ratePct} run={run} busy={busy} />}
       {tab === "payouts" && <PayoutsTab run={run} busy={busy} />}
     </PageShell>
   );
@@ -266,9 +270,9 @@ function TabBtn({ on, onClick, children }: { on: boolean; onClick: () => void; c
 
 // ── ONBOARDING ───────────────────────────────────────────────────────────────
 function OnboardingTab({
-  pending, codeReqs, tiers, run, busy,
+  pending, codeReqs, ratePct, run, busy,
 }: {
-  pending: Affiliate[]; codeReqs: Affiliate[]; tiers: Tier[];
+  pending: Affiliate[]; codeReqs: Affiliate[]; ratePct: number;
   run: (fn: () => Promise<unknown>) => Promise<void>; busy: boolean;
 }) {
   const [open, setOpen] = useState<number | null>(null);
@@ -313,7 +317,7 @@ function OnboardingTab({
                     {open === a.id && (
                       <tr>
                         <td colSpan={7} style={{ padding: 0, borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                          <DecisionPanel a={a} tiers={tiers} busy={busy} run={run} onDone={() => setOpen(null)} />
+                          <DecisionPanel a={a} ratePct={ratePct} busy={busy} run={run} onDone={() => setOpen(null)} />
                         </td>
                       </tr>
                     )}
@@ -342,13 +346,16 @@ function OnboardingTab({
 }
 
 function DecisionPanel({
-  a, tiers, run, busy, onDone,
+  a, ratePct, run, busy, onDone,
 }: {
-  a: Affiliate; tiers: Tier[]; busy: boolean;
+  a: Affiliate; ratePct: number; busy: boolean;
   run: (fn: () => Promise<unknown>) => Promise<void>; onDone: () => void;
 }) {
   const [code, setCode] = useState(a.requested_code);
-  const [tier, setTier] = useState(a.tier_pct || 10);
+  // Pre-filled with the standard rate. It is an input rather than a fixed label
+  // ONLY so a one-off deal is possible without a code change — the default is
+  // the answer in every normal case, and leaving it alone is the fast path.
+  const [tier, setTier] = useState(a.tier_pct || ratePct);
   const [cookieDays, setCookieDays] = useState(60);
   const [note, setNote] = useState("");
   const [reason, setReason] = useState("");
@@ -400,10 +407,12 @@ function DecisionPanel({
           )}
         </Field>
         <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" }}>
-          <Field label="Commission">
-            <select value={tier} onChange={(e) => setTier(Number(e.target.value))} style={{ ...homeInputStyle, width: "100%" }}>
-              {tiers.map((t) => <option key={t.pct} value={t.pct}>{t.pct}% {t.label}</option>)}
-            </select>
+          <Field label="Commission %">
+            <input
+              type="number" min={0} max={50} value={tier}
+              onChange={(e) => setTier(Number(e.target.value))}
+              style={{ ...homeInputStyle, width: "100%" }}
+            />
           </Field>
           <Field label="Cookie">
             <select value={cookieDays} onChange={(e) => setCookieDays(Number(e.target.value))} style={{ ...homeInputStyle, width: "100%" }}>
@@ -477,9 +486,9 @@ function CodeRequestRow({ a, run, busy }: { a: Affiliate; run: (fn: () => Promis
 
 // ── ACTIVE ───────────────────────────────────────────────────────────────────
 function ActiveTab({
-  rows, tiers, run, busy,
+  rows, ratePct, run, busy,
 }: {
-  rows: Affiliate[]; tiers: Tier[];
+  rows: Affiliate[]; ratePct: number;
   run: (fn: () => Promise<unknown>) => Promise<void>; busy: boolean;
 }) {
   const [q, setQ] = useState("");
@@ -507,7 +516,7 @@ function ActiveTab({
             <thead>
               <tr>
                 <th style={th}>Affiliate</th><th style={th}>Code</th>
-                <th style={{ ...th, ...num }}>Tier</th><th style={{ ...th, ...num }}>Clicks</th>
+                <th style={{ ...th, ...num }}>Rate</th><th style={{ ...th, ...num }}>Clicks</th>
                 <th style={{ ...th, ...num }}>Members</th><th style={{ ...th, ...num }}>Gross MTD</th>
                 <th style={{ ...th, ...num }}>Owed</th><th style={th}>Payout</th>
                 <th style={th}>Status</th><th style={{ ...th, textAlign: "right" }}>Actions</th>
@@ -518,14 +527,27 @@ function ActiveTab({
                 <tr key={a.id}>
                   <td style={td}><Who name={a.name} sub={a.primary_link || a.email} /></td>
                   <td style={td}><CodePill code={a.code} dim={a.status === "paused"} /></td>
+                  {/* Plain text at the standard rate, an editable box only when
+                      someone has been put on a one-off. Rendering a control for
+                      a number that is the same on every row just invites it to
+                      be changed by accident. */}
                   <td style={{ ...td, ...num }}>
-                    <select
-                      value={a.tier_pct} disabled={busy}
-                      onChange={(e) => run(() => post("/api/aff/owner/affiliate", { id: a.id, action: "tier", tier_pct: Number(e.target.value) }))}
-                      style={{ ...homeInputStyle, padding: "4px 8px", fontSize: TYPE.label, width: "auto" }}
-                    >
-                      {tiers.map((t) => <option key={t.pct} value={t.pct}>{t.pct}%</option>)}
-                    </select>
+                    {a.tier_pct === ratePct ? (
+                      <span style={{ color: LIGHT_BLUE, fontWeight: 700 }}>{a.tier_pct}%</span>
+                    ) : (
+                      <span style={{ color: OWNER_THEME.orange, fontWeight: 700 }} title="Overridden — not the standard rate">
+                        {a.tier_pct}%
+                      </span>
+                    )}
+                    <input
+                      type="number" min={0} max={50} defaultValue={a.tier_pct} disabled={busy}
+                      title="Override this affiliate's rate"
+                      onBlur={(e) => {
+                        const v = Number(e.target.value);
+                        if (v !== a.tier_pct) void run(() => post("/api/aff/owner/affiliate", { id: a.id, action: "tier", tier_pct: v }));
+                      }}
+                      style={{ ...homeInputStyle, padding: "3px 6px", fontSize: TYPE.micro, width: 58, marginLeft: 8, opacity: 0.6 }}
+                    />
                   </td>
                   <td style={{ ...td, ...num }}>{a.clicks.toLocaleString()}</td>
                   <td style={{ ...td, ...num }}>{a.members}</td>

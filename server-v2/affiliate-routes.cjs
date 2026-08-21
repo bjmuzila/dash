@@ -357,7 +357,7 @@ function registerAffiliateRoutes({ register, send, readJson }) {
             (SELECT COALESCE(SUM(gross_cents),0) FROM aff_referrals
               WHERE period = to_char(now() AT TIME ZONE 'America/New_York','YYYY-MM'))::int AS mtd_gross_cents,
             (SELECT COUNT(*) FROM aff_referrals WHERE kind='link')::int            AS referred_members`);
-        send(res, 200, { summary: rows[0], period: aff.currentPeriod(), tiers: aff.TIERS }, nostore);
+        send(res, 200, { summary: rows[0], period: aff.currentPeriod(), rate_pct: aff.RATE_PCT }, nostore);
       } catch (err) { fail(res, 500, String(err?.message || err)); }
     },
   });
@@ -369,7 +369,7 @@ function registerAffiliateRoutes({ register, send, readJson }) {
         const rows = await aff.ownerRoster();
         send(res, 200, {
           affiliates: rows,
-          tiers: aff.TIERS,
+          rate_pct: aff.RATE_PCT,
           reserved: Array.from(aff.RESERVED_CODES),
         }, nostore);
       } catch (err) { fail(res, 500, String(err?.message || err)); }
@@ -405,7 +405,7 @@ function registerAffiliateRoutes({ register, send, readJson }) {
         if (c.error) { fail(res, 400, c.error); return; }
         if (!(await aff.codeAvailable(c.code, id))) { fail(res, 409, `"${c.code}" is already taken.`); return; }
 
-        const tier = Math.min(aff.MAX_TIER_PCT, Math.max(0, Number(body?.tier_pct) || row.tier_pct || 10));
+        const tier = Math.min(aff.MAX_RATE_PCT, Math.max(0, Number(body?.tier_pct) || row.tier_pct || aff.RATE_PCT));
         const cookieDays = Math.min(365, Math.max(1, Number(body?.cookie_days) || row.cookie_days || aff.DEFAULT_COOKIE_DAYS));
         const promoId = await ensurePromotionCode(c.code);
 
@@ -438,11 +438,11 @@ function registerAffiliateRoutes({ register, send, readJson }) {
         } else if (action === 'activate') {
           await aff.pool.query(`UPDATE aff_affiliates SET status='active' WHERE id=$1 AND code IS NOT NULL`, [id]);
         } else if (action === 'tier') {
-          const tier = Math.min(aff.MAX_TIER_PCT, Math.max(0, Number(body?.tier_pct) || 0));
-          // NOTE this changes the rate for FUTURE invoices only. Existing
-          // subscriptions keep the rate frozen on their link row — see
-          // recordReferral(). That is deliberate: a tier bump is a raise, not a
-          // retroactive re-price of money already accrued.
+          const tier = Math.min(aff.MAX_RATE_PCT, Math.max(0, Number(body?.tier_pct) || 0));
+          // A per-affiliate override of the flat rate. NOTE it changes FUTURE
+          // invoices only — existing subscriptions keep the rate frozen on their
+          // link row (see recordReferral()). Deliberate: a raise is a raise, not
+          // a retroactive re-price of money already accrued.
           await aff.pool.query(`UPDATE aff_affiliates SET tier_pct=$2 WHERE id=$1`, [id, tier]);
         } else if (action === 'note') {
           await aff.pool.query(`UPDATE aff_affiliates SET internal_note=$2 WHERE id=$1`,

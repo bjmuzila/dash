@@ -1,293 +1,263 @@
 # Changelog
 
-## 2026-08-21 (m) - Owner nav regrouped; member split now means REGISTERED, not paying
+## 2026-08-21 (l) - Affiliates: flat 20%, tiers deleted; landing page given colour
 
-Edited: `owner-vite/src/lib/nav.ts`, `owner-vite/src/pages/registry.ts`,
-`owner-vite/src/pages/ControlPanel.tsx`.
+Edited: `server-v2/_lib-affiliate.cjs`, `server-v2/affiliate-routes.cjs`,
+`owner-vite/src/pages/Affiliates.tsx`, `affiliate-vite/src/lib/theme.ts`,
+`affiliate-vite/src/lib/api.ts`, `affiliate-vite/src/components/Shell.tsx`,
+`affiliate-vite/src/pages/{Landing,Dashboard,CodePage,Payouts}.tsx`.
 
-### Sidebar
+**ONE RATE. 20%, for everybody.** The 10/15/20 Starter/Partner/Elite ladder is
+gone. A tier ladder only earns its complexity when the top rung is worth
+chasing; with one product and a handful of affiliates it just gave every
+applicant a reason to ask why they weren't on the good rate yet, and gave the
+owner a per-approval judgement call with no right answer.
 
-Business straddled two unrelated jobs — READING numbers (who's paying, who
-visited) and SENDING things to people (emails, newsletter, alerts). Those never
-get opened in the same sitting, and the second half is the same job as Content.
-So:
+`TIERS` / `MAX_TIER_PCT` -> `RATE_PCT` (env `AFFILIATE_RATE_PCT`, default 20)
+and `MAX_RATE_PCT` (50 - a typo guard so a fat-fingered "200" can't commit to
+paying twice what we collect, NOT a policy). `tier_label` is off the API
+payload entirely.
 
-- **New `Info` group** — Admin, Visitors, Overview, Sales. Overview moved out of
-  System: it's the traffic/signups/pages report, and the only reason it ever sat
-  next to Dev is that its URL happens to be `/owner/dev/owner`.
-- **Affiliates, Emails, Newsletter, Bzila Alerts → Content.** Making something
-  public and sending it to someone are one job.
-- **Business + System merged.** With the broadcast pages gone to Content and the
-  reporting pages gone to Info, Business had nothing left; System is Dev +
-  Database. One group instead of two half-empty ones.
-- **Tree removed.** Dropped from the nav AND from `pages/registry.ts`, so
-  `Tree.tsx` + `pages/tree/*` stop being bundled rather than shipping an
-  unreachable lazy chunk. The files are still on disk, now unreferenced.
+**The column keeps its name.** `aff_affiliates.tier_pct` still exists and now
+means "this affiliate's rate". Renaming it would churn every query and the
+payout rows already written, for nothing. Its DEFAULT moved 10 -> 20, and
+`ensureSchema` lifts anyone still on the old starter rate who has NOT been
+approved yet — nobody is promised anything until they are, and nothing earned
+can move, because an approved affiliate's rate is frozen onto their link row in
+`recordReferral()`.
 
-`href` strings are untouched, so no bookmark breaks. Hub pins are keyed by href
-(`lib/hubPrefs.ts`) and re-resolve against the nav on every read, so favourites
-survive the regroup and pick up their new group's accent. `OwnerShell` already
-filters empty groups, so nothing needed changing there.
+**Override still possible, just not encouraged.** The approve dialog's tier
+dropdown is now a plain number input pre-filled with 20. The Active table shows
+the rate as TEXT (orange when it isn't the standard rate) with a small box
+beside it — rendering a dropdown for a number that is identical on every row
+only invites it to be changed by accident.
 
-### The member / non-member split was measuring the wrong thing
+**Landing page: colour where it belongs.** It read as a wall of grey. Cards
+still carry NO accent — the rule hasn't changed — but the CONTENT now does:
 
-The first cut used `isSubscriber` (paying: `active`/`trialing`). That made a
-signed-in free or lapsed account count as a NON-member, so the non-members list
-filled with `/es-candles` and `/traders-dashboard` — pages middleware will not
-serve to a logged-out visitor at all. **Non-member traffic on a gated page is a
-contradiction**, and seeing one is the tell that the split is wrong.
+- Three tier cards -> ONE commission panel. A gradient 20% at display size with
+  the four facts that actually decide the deal (recurring / 60-day cookie / no
+  cap / monthly), each with its own hue and dot.
+- "What you're actually promoting" was one tall card of four paragraphs sitting
+  beside a much taller FAQ, leaving a third of the row empty. It is now four
+  tiles across, each with a small inline SVG mark drawn in its own colour — a
+  dealer-wall ladder, candles against an EM band, a chain, a phone. A picture of
+  the ladder says more to a trader than the sentence beside it.
+- The four how-it-works step numbers each take a hue instead of four identical
+  cyan chips.
+- FAQ went full width, two columns, and grew four entries.
 
-A member is now someone who **registered**: the visit row carries a `user_id`,
-which `/api/page-status` fills from the session cookie (`access.userId`). No
-`user_id` = logged out, which is the only thing "non-member" can honestly mean.
-Non-members now resolve to what they can actually reach — Landing, Pricing,
-Sign-up, Unsubscribe.
+**Two grid traps fixed while there.** `minmax(320px,1fr)` made the FAQ FOUR
+columns at 1360, which put the `i % 2` divider rules down the middle of
+nowhere; it is `minmax(min(100%,560px),1fr)` now, which is exactly two on any
+desktop and one on a phone. The commission facts got the same treatment at
+240px so they sit 2x2 instead of wrapping every label onto three lines.
 
-Paying is kept as a **subset**, not a third bucket: each row reports
-`members (paying) / guests`, and the split bar draws the paid slice inside the
-member half rather than as a third segment (three segments would imply three
-disjoint groups). The gap between registered and paying is the trial funnel and
-is worth being able to see.
+## 2026-08-21 (k) - Affiliate program: affiliate.cbedge.net + owner back office
 
-Also:
+New: `affiliate-vite/` (whole app), `server-v2/_lib-affiliate.cjs`,
+`server-v2/affiliate-routes.cjs`, `owner-vite/src/pages/Affiliates.tsx`.
+Edited: `server-v2/api-router.js`, `app/api/stripe/checkout/route.ts`,
+`app/api/stripe/webhook/route.ts`, `owner-vite/src/lib/nav.ts`,
+`owner-vite/src/pages/registry.ts`, `docker-compose.yml`.
 
-- **Owner visits excluded.** Brandon reloading a page he is building is not a
-  customer visiting it. Counted and reported in the header strip ("N owner loads
-  excluded"), not silently dropped — same treatment bots already got.
-- **Leak warning.** If any gated page logs a load with no account attached, the
-  card says so in an amber banner naming the routes, instead of printing an
-  impossible number as fact. Usual cause is a beacon firing before the session
-  cookie resolves, not real anonymous traffic.
-- Header strip gained "N with accounts" (unique people, not loads) so the two
-  denominators stay visibly separate.
+**What it is.** A referral program paying up to 20% of collected revenue,
+recurring for the life of the member. Affiliates get their own subdomain; the
+owner gets three tabs under Business -> Affiliates.
 
-## 2026-08-21 (d) - Multi Greek: THRESHOLD coloring mode
+**A THIRD identity system, deliberately.** `aff_affiliates` / `aff_session`,
+scrypt passwords, host-only cookie with NO `Domain=`. An affiliate is usually
+not a subscriber, and a subscriber must not get an affiliate dashboard for
+free - so a `cbe_session` grants nothing here and an `aff_session` grants
+nothing on cbedge.net. Same posture as the household app. One `auth:'affiliate'`
+branch was added to `enforceAuth()` in api-router.js, checked before
+`verifyWsRequest` for the same reason `'household'` is.
 
-New: `lib/calculations/gexThreshold.ts`.
-Edited: `app/mult-greek/MultGreekClient.tsx`, `components/shared/homeTheme.ts`.
-Tuned in: `generated/2026-08-21-mg-color-modes.html`.
+**Attribution, two paths, code wins.** `/r/<CODE>` (an nginx rewrite onto
+`/api/aff/go`) logs the click, sets a domain-wide `cbe_ref` cookie and 302s to
+cbedge.net - a redirect, not a React route, because a redirect that waits on a
+JS bundle is a redirect people bounce out of. Checkout reads that cookie and
+stamps `affiliate_code` onto the SUBSCRIPTION metadata, not just the session:
+the session is gone by the time a renewal is billed. If the customer typed a
+Stripe promotion code instead, that wins - someone using a friend's code should
+credit the friend, not whoever's link they clicked three weeks ago.
 
-A second coloring scheme for the ladder, off by default. Cog menu -> **Coloring**
--> HEAT | %, persisted per browser (`mg_color_mode`). An existing user's ladder
-does not change appearance because this shipped.
+**Recurring, without depending on a cookie that expires.**
+`checkout.session.completed` writes a zero-money `kind='link'` row recording
+which affiliate owns the subscription and at what rate.
+`invoice.payment_succeeded` then credits every invoice off that row -
+`amount_paid`, so a $0 trial earns $0. `invoice_id` is UNIQUE, so a Stripe
+webhook retry cannot pay twice. The rate is FROZEN on the link row: a tier bump
+is a raise, not a retroactive re-price of money already accrued.
 
-**The rule.** Heat paints every cell on a ramp keyed to the column's largest
-strike - it answers "how does this compare to the biggest one", for forty rows at
-once, which is why a full ladder reads as a wash. Threshold answers "does this
-strike matter at all", with a hard yes/no:
+**Nothing an affiliate does takes effect on its own.** Applying creates a
+`pending` row with NO code. Approval issues it. A code edit does not change
+`aff_affiliates.code` - it files an `aff_code_requests` row, and approving it
+keeps the OLD code live for 30 days (`prev_code` / `prev_code_until`) so links
+already posted keep attributing. Payouts accrue automatically but are only ever
+`paid` because the owner said so, with a required reference.
 
-    share = |GEX| / SUM|GEX| over the column     colored <=> share >= cutoff
+**Money is integer cents everywhere, rounded in exactly one function**
+(`commissionCents`). `Math.round`, not floor - floor systematically underpays.
 
-Denominator is GROSS gamma, so + and - strikes compete for the same 100% and a
-put-dominated column cannot also light up its calls. Below the cutoff a cell is
-dimmed (alpha .035), not erased - a cell with a value still has to look different
-from a cell with none.
+**Payout rails: Stripe, PayPal, Zelle.** Method is editable by the affiliate
+(it changes where money goes, not who is owed it); everything else waits on
+approval.
 
-**One slider, not two.** The Intensity slider drives the cutoff in this mode
-rather than sitting dead, and reads out as a % instead of a multiplier. Right =
-lower cutoff = more of the ladder lit; its minimum stop keeps its existing
-levels-only meaning, so the two modes share the bottom of the track. Mapped so
-the default (1.75, dead centre of the 0.5-3 track) lands on exactly 2.00%.
-`MG_INTENSITY_MAX` is now named - the slider and `thresholdPct()` both read it,
-and hardcoding it in one would stop the right-hand end meaning 0%.
+**Creatives are inline SVG, not screenshots.** Four 1200x675 posts, each
+stamped with the affiliate's own code, downloadable as PNG via
+XMLSerializer -> canvas -> toBlob. No html2canvas, no headless browser, no
+dependency. The numbers on them are labelled illustrative - this public app is
+firewalled from the market-data stack by nginx and could not draw live levels
+even if it should.
 
-**Levels.** CB / CW / PW paint over the share fill, which throws the sign away -
-so the colors put it back. CB is gold (`LEVEL_COLORS.cb`); it is sign-blind by
-definition, just the biggest |GEX|. CW takes the +GEX color and PW the -GEX
-color, since those two already carry their sign in their own definitions - a
-third and fourth hue would say nothing the label doesn't.
+**The Stripe hop is HTTP, not an import.** The webhook is a Next route; the
+ledger is CommonJS in server-v2. Same container, so it is a loopback POST
+carrying `INTERNAL_API_TOKEN`. Always best-effort - a ledger write must never
+500 the webhook and have Stripe retry a subscription change that already
+succeeded.
 
-**Why a wall needs more than a brighter fill.** A louder version of the same hue,
-on a panel already full of that hue, reads as "a bit more" rather than "this one"
-- there is no headroom left inside the hue. So a wall gets three things nothing
-else on the grid has:
+**Cards carry no colour accent** on either surface. Colour means state
+(pending / active / owed / paid) and nothing else.
 
-- **boost** - saturation and luminance pushed to the hue's vivid limit. Luminance
-  targets mid-bright, not white: a washed-out pink stops reading as a put wall.
-- **near-white rim** (2px) - headroom OUTSIDE the hue. This is the piece that
-  actually does the work; the fill alone had nowhere to go.
-- **outer glow** - the walls are the only cells that emit past their own box.
+**Deploy.** New compose service `affiliates` on 127.0.0.1:8085. Add to
+`/etc/cloudflared/config.yml` above the catch-all:
 
-Plus full opacity and 900-weight numerals. CB deliberately stays quieter (53%,
-1px, no glow) so the two walls own the panel. Cell and badge ink flip dark/white
-off the fill's own luminance, cut at 0.55 - a mid-tone red sits just under half
-and still wants white on it.
+    - hostname: affiliate.cbedge.net
+      service: http://127.0.0.1:8085
 
-**New colors** in `homeTheme`: `GEX_THRESHOLD_COLORS` (`pos` #2186c4, `neg` =
-`HOME_THEME.red`, `cb` = `LEVEL_COLORS.cb`). Its own pair rather than the heat
-scale's literals, which are tuned to read at 2-18% alpha as a wash behind text
-while this mode paints at 53% and 100%.
+then `cloudflared tunnel route dns <tunnel> affiliate.cbedge.net` and
+`systemctl restart cloudflared`. Optional env: `STRIPE_AFFILIATE_COUPON_ID`
+(lets an approved code be typed at checkout as a real Stripe promotion code -
+without it the link + cookie path still attributes every sale),
+`AFFILIATE_HOLD_DAYS` (default 30), `AFFILIATE_APP_URL`,
+`AFFILIATE_COOKIE_DOMAIN` (default `.cbedge.net`). Tables self-bootstrap on
+first request; there is no migration to run.
 
-**Untouched:** heat mode, levels-only mode, replay, the rank-1 ring and the gold
-peak star (both suppressed in threshold mode - a second emphasis would compete
-with the walls), Delta stamps, the snapshot renderer.
+## 2026-08-21 (j) - Home: one toolbar, ghosts gone, cog last, greys to white
 
-## 2026-08-21 (l) - Landing: Tradeify card is now a link
+Edited: `app/home/HomeClient.tsx`, `components/dashboard/GexToolbar.tsx`,
+`components/shared/DockToolbar.tsx`. Follow-up to (i).
 
-Edited: `components/landing/LandingClient.tsx`.
+**One bar, not two.** The NET GEX / CALL WALL / PUT WALL / FLIP / CB / MAX PAIN /
++-1σ / +GEX% / BULL-BEAR readouts had their own strip under the GEX toolbar.
+They are now the toolbar's new `stats` slot (compact mode only), each card
+`flex: 1 1 0` so the row fills the bar at any width. Fixed layout for every
+compact bar now:
 
-The Tradeify partner block was a badge with nothing to click. It now links to
-`https://tradeify.co/?ref=Bzila` — new tab, `rel="noopener noreferrer sponsored"`
-(it is an affiliate link and should be declared as one).
+    cards (stretch) -> snapshot -> Discord (owner-only) -> cog
 
-This is only safe because of where the card sits. In the OLD landing it was in
-the visual centre above the fold, where a clickable version would have been a
-second exit competing with the trial CTA. It now lives below the close CTA, so
-the visitor has already been given our own ask before they are offered a way off
-the page. If the card ever moves back up, the link comes off with it.
+Cog moved from first to LAST so it sits hard against the right edge. The heatmap
+header and the econ tab strip were reordered to match. Discord needed no gate -
+`BoxDiscordBtn` already returns null for non-owners via `useIsOwner()`.
 
-Hover state is orange, not cyan: this is the one link on the page that leaves the
-site, and the colour has to keep saying so.
+**Ghosts removed.** The 5/15/30m prior-state overlay row is out of the cog, the
+`ghost` state and its pref are gone, and `chartBaselines` now polls with `""`
+(idle) instead of on a toggle nothing can set. `GexToolbar`'s `showGhost*` /
+`onToggleGhost*` props were made OPTIONAL rather than deleted, so any other
+caller still passing them keeps compiling; `GexChart` already defaults them to
+false.
 
+**Cog menu flips up when it would go off-screen.** Reported: the econ calendar's
+cog, with the panel minimised, opened a dropdown below the fold that could not be
+reached. `DockCogMenu` now measures itself and opens UPWARD when it doesn't fit
+under the trigger and there is more room above, clamping `maxHeight` to whichever
+side it used. Two mechanical notes: the panel renders with `display:flex` the
+moment it opens (parked at -9999 for one frame) because `display:none` reports a
+zero height and the flip needs a real one; and `place()` runs twice - once
+immediately, once on rAF after layout - for the same reason.
 
-## 2026-08-21 (k) - Landing: X follow badge removed from the hero
-
-Edited: `components/landing/LandingClient.tsx`.
-
-The floating @bzilatrades X badge in the top-right of the hero card is gone. It
-was the only outbound link above the fold on a page whose one job is to move the
-visitor into the product — a click on it leaves the funnel entirely, and it sat
-within a few hundred pixels of the primary CTA. Social belongs somewhere that
-costs nothing: a footer link or the /explore pages.
-
-Removed with it: the `xHover` state, the `xFollow` / `xFollowHover` styles, and
-the now-unused `useState` import (the component is stateless again).
-
-
-## 2026-08-21 (j) - Sign-up: confirm password field
-
-Edited: `components/auth/AuthForm.tsx`.
-
-Create-your-account now asks for the password twice. There is no "show password"
-toggle on this form, so a typo was silent right up until the first sign-in failed
-— and by then the account exists, which makes the recovery a reset email instead
-of a retry.
-
-- Second `type="password"` box, **sign-up only**. Sign-in is untouched.
-- Mismatch shows a red border + inline message, but only once the confirm box has
-  something in it. Flagging an empty field the moment the first box gets a
-  character is the form telling you off for not being finished.
-- Submit is disabled while the two differ **or while confirm is still empty** —
-  without the second half a user who never touches the box sails through and the
-  field is decoration.
-- The match check runs BEFORE the captcha check, so a typo never consumes a
-  Turnstile token (a burnt token means a fresh challenge on retry, which reads
-  like the site broke rather than like a mistyped password).
-- On a failed sign-up the confirm box is cleared but the password is not:
-  whatever they retype has to be confirmed again.
-- While here: `autoComplete` added to all three inputs — `email`,
-  `new-password` on sign-up (both boxes, which is what stops password managers
-  treating the confirm field as a second separate credential) and
-  `current-password` on sign-in. The password placeholder now states the 8-char
-  minimum the input already enforced silently.
-
-No server change — `/api/auth/signup` still receives one `password`.
+**Greys to white.** `SOFT_WHITE` (#c3ccda -> #fff) so every heatmap value is
+white, the inline SPY/QQQ/ticker strike prefix (#5a7a98, plus the rank-1/2
+brightening special case it needed - white is legible on every tier), the ATM
+row's 0.82-alpha white, `DockMenuRow` labels (0.55 alpha), inactive card tabs and
+the "add a card" picker (#5a7a98), the heatmap contract label and its loading
+ellipsis (#8da8c2 / #5a7a98), the 5th-column Clear button, and the stat card
+labels (0.75 alpha).
 
 
-## 2026-08-21 (i) - Landing page rebuilt: free live level + the graded ledger
+## 2026-08-21 (i) - Home page: every toolbar folds into a cog, heatmap columns rebuilt
 
-The landing page was getting ~300 views a day and converting nothing. It wasn't
-under-optimised — it wasn't making an argument. Rebuilt around the two things
-that are actually differentiated, and both of them now read LIVE data instead of
-being described in prose.
+Edited: `app/home/HomeClient.tsx`, `components/dashboard/GexToolbar.tsx`,
+`components/shared/DockToolbar.tsx`.
 
-Edited: `components/landing/LandingClient.tsx`, `server-v2/api-router.js`,
-`app/api/public-stats/route.ts`, `middleware.ts`.
-New: `components/landing/LiveLevelPanel.tsx`, `components/landing/GradedLedger.tsx`.
+**Toolbars.** All three bars on /home now carry nothing but a cog wheel plus the
+snapshot / Discord buttons. Everything else moved inside the cog:
 
-**The fold is now the product, not the brand.** The 210px logo is gone (the logo
-lives in PublicNav, where a logo belongs) and the right half of the hero is a
-live SPX gamma flip — real number, off the real chain, refreshed every 15s, with
-no account, no card and no email. The pitch line under it says so out loud. The
-free tile stays free forever; the trial unlocks history, rate of change, flow and
-alerts.
+- GEX card (`GexToolbar`): expiry, Net GEX vs Call-Put, OI+Vol / Vol Only / Flow,
+  the OI / DEX / Flip overlays, refresh - and the 5/15/30m prior-state ghosts,
+  which /home has been passing handlers for since forever with no tile to reach
+  them. Behind a new opt-in `compact` prop, so every OTHER host of `GexToolbar`
+  keeps the wide bar it already had.
+- Heatmap card: intensity, side basis, the delta-stamp window, refresh, and the
+  new ticker-of-choice field. Identity moved to the left of the header instead -
+  "GEX HEATMAP" + the contract - so the panel still says what it is showing.
+- Econ / tabs card: panel height (min/half/full) and the calendar's own filter
+  row, which arrives by portal from `EconCalendarPanel`.
 
-**`/api/public-levels`** (new, `auth: 'public'`) — SPX only, front expiry,
-oi+vol, four scalars plus spot. No ladder, no rate of change, no history, no
-ticker/dte/basis params, because that is the product. A 15s module cache doubles
-as the rate limit: anonymous traffic can hammer it and `/proxy/gex` still sees at
-most four reads a minute. Never 500s — the panel renders whole or renders an
-honest "resumes at the next session" state, never a level with a dash next to it.
+New primitives in `DockToolbar.tsx`: `<DockCogMenu>`, `<DockMenuRow>`,
+`<DockMenuDivider>`. Two things about the cog menu are load-bearing. It PORTALS
+to `<body>` - every home card is `overflow: hidden` and the header rows sit
+inside `<FitScale>` (a CSS transform), so an absolutely positioned panel would be
+clipped and mis-scaled. And it keeps its children MOUNTED while closed (hidden
+with `display:none`): the econ calendar portals its controls into the panel, and
+unmounting the target would make it fall back to rendering its own inline header
+every time the cog shut.
 
-**`/api/public-ledger`** (new, `auth: 'public'`) — the ROWS behind the
-percentages: the last 8 graded Core Bullseye calls in date order, hits and misses
-together, read from `confidence_log`, the same table `cbReach()` aggregates. Only
-`graded_at IS NOT NULL` rows are eligible, so there is no mechanism by which a
-bad day can sit unpublished while a good one ships. The "what happened" sentence
-is generated from the graded booleans, never hand-written. 1h cache.
+**Persistence.** One localStorage blob, `cbedge.home.toolbars.v1`, holds every
+setting the three cogs expose: gex mode, data mode, OI/DEX/Flip, ghost window,
+intensity, side basis, delta window, ticker of choice, econ panel height.
+Browser-local, per the ask - not synced to the account. Restored in a mount
+effect (not a lazy initialiser) so SSR and the first client render agree, and the
+writer is gated on a `prefsReady` STATE flag rather than a ref: with a ref, the
+hydrate effect would flip the flag and the writer - running in the same commit,
+still holding pre-restore values - would immediately stomp the saved blob with
+the defaults.
 
-**IB break bias is now a published stat.** `ibBias()` added to `/api/public-stats`
-(and the Next fallback route for parity): `bias` (set at 10:30 from the IB close
-vs its midpoint) graded against `first_touch_side` — Rule 1 of the 14-rule
-scoreboard. ES only; NQ writes its own row per date and the two correlate hard,
-so pooling would near-double n without adding evidence. It sits alongside — not
-instead of — the existing `IB_METRIC` retest stat: retest describes what breaks
-do, bias is a call made before the outcome. Both honest, different claims.
+Ghosts collapsed from three booleans to one `ghost: 0 | 5 | 15 | 30` window. They
+were already mutually exclusive; three booleans just made that fact unstorable.
 
-**Page order is the fix, and it's documented in the file header.** Hero ("is this
-real?") → receipts + ledger ("is he full of it?") → capture + features ("what is
-it?") → close ("what do I do?"). The receipts moved from four small tiles below
-six feature cards to section two — publishing misses is the whole moat and it was
-carrying a footnote's weight.
+**Heatmap columns.** Now: STRIKE | SPX NET GEX | SPX NET DEX | SPY NET GEX |
+QQQ NET GEX | <TICKER> NET GEX. VOL ONLY GEX is out; the SPX columns are labelled
+SPX so the six headers read as one set.
 
-**Tradeify demoted.** It was the second-loudest thing on the page, in contrasting
-orange, in the visual centre, monetising someone else's product against our own
-offer. Now a quiet strip below the close CTA. Still orange (third-party offers
-are not cyan), still not a link.
-
-**Trial stays at 2 days**, deliberately. It works because the free panel exists:
-the visitor evaluates the tool before signing up, so the two days get spent using
-it rather than deciding about it. Every CTA carries "No charge up front · Cancel
-anytime" so the shortness never reads alone.
-
-`middleware.ts` gains `/^\/api\/public-[a-z-]+$/` so all three public endpoints
-stay reachable signed-out if the API_ROUTER kill-switch is ever flipped off —
-without it a signed-out visitor 307s to `/` and the hero renders empty.
-
-**Not built:** the nightly "yesterday's tape" replay section from the mock. It
-needs a job that snapshots the session's levels + OHLC and writes the beats.
-Shipping it with hand-written example numbers would make this page a liar about
-the one thing it claims, so it stays out until that job exists.
-
-**No proxy files were touched.** `/api/public-levels` reads `/proxy/gex` through
-`ctx.internalFetch`, exactly as `/api/insights/gex` and
-`/api/social-media/daily-input` already do. `proxy-tastytrade.js`,
-`proxy-thetadata.js` and `server-with-proxy.js` are unchanged.
+The 5th column is a ticker you type, exactly like the Multi Greek page's 4th
+ticker - committed on Enter or blur, remembered per browser, default IWM, blank
+switches the column off and stops the extra poll. It rides the SAME
+`useDualTickerGex` call as SPY/QQQ (that hook always took an arbitrary list), so
+it costs one more chain fetch and no new machinery, joins to the SPX rows by
+moneyness offset rather than strike for the same reason SPY/QQQ do, and gets its
+own colour scale and its own peak box.
 
 
-## 2026-08-21 (h) - Level Log: an ALL view, walls + CORE on one timeline
+## 2026-08-21 (h) - Post-market recap: section 7 STRIKE PATHS removed
 
-Edited: `components/pages/LevelLog.tsx`.
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
 
-Third pill beside WALLS / CORE: **ALL**. It is not "no filter" for its own sake -
-it is the reading neither of the other two can give. CORE is frequently ALSO one
-of the walls (whichever is carrying more gamma), so a call-wall tag and the CORE
-tag at the same strike are one event told twice, and split across two views
-nothing says so. Interleaved, the relationship is the story: the CORE rolling
-ONTO a wall, or off it, is the day's dominant level changing sides.
+Section 7 is gone. It never worked visually and no restyle fixed it: 25 rows,
+each ~2.5h of session wide and ~22px tall, every line normalised to its own peak.
+A strike that doubled and one that flatlined drew the same shape, so the panel
+was 25 near-identical squiggles that answered nothing you could not get from
+section 3.
 
-**Same-strike marker.** In ALL view an entry whose slot and strike match another
-level type gets a `= CALL WALL` / `= CORE` chip in its badge row, so a duplicate
-reads as one level in two roles instead of two separate events. The pass only
-runs in ALL - the other views have nothing to collide with.
+Four re-designs were mocked before pulling it (all four in `generated/`:
+`2026-08-21-strike-paths-4-ideas.*`, `2026-08-21-strike-paths-move-visible.*`,
+`2026-08-21-strike-paths-scrolling-window.*` - direction-coded lines, a growth
+heat ladder, momentum sort, indexed-to-open, two-column, step chart, event-time
+axis, and a scrollable 60-minute window with a pinned strike column). Keeping
+them for reference; none earned the vertical space.
 
-**Ticker rail is now column-driven.** `LEVEL_COL_ORDER` (put, call, CORE) filtered
-by the view, rather than a `view === "core" ? ... : ...` ternary in four places.
-Price order, so switching to ALL ADDS the CORE column instead of reshuffling the
-two already there; `colSpan` follows the count.
+Removed:
 
-**Wall migration chart, in ALL view.**
+- the whole section 7 JSX block (header, `.pathlist`, the per-row SVG, the
+  `.heatx` time strip under it)
+- the `strikePaths` memo and its doc comment
+- CSS `.pathlist`, `.prow`, `.pk`, `.pv`, `.pt` and the `.prow svg` rule
 
-- CORE draws LAST and **dashed** when the walls are drawn with it. It sits on one
-  of them by definition, so a solid line on top would erase whichever wall it is
-  riding - and that swap is the one thing this view exists to show.
-- The corridor fill is keyed off the level types **by name**, not off how many
-  lines happen to be drawn. Three paths with "shade between the first two" would
-  have banded the gap between a wall and the CORE, which is not a corridor.
+`evNear` stays - `writtenVsTraded` still reads it. The `histState === "error"`
+note now points at the wall path instead of a section that no longer exists.
+File is down to 1,775 lines.
 
-**Scope strings centralised** in `VIEW_SCOPE` - the card header, the copied text
-header and the PNG filename all read "wall" / "core" / "level" from one map
-instead of three separate ternaries that could drift.
 
 ## 2026-08-21 (g) - Section 3 was lying about bar length, and the AM bucket could not exist
 

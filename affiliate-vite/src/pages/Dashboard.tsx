@@ -131,7 +131,7 @@ export default function Dashboard() {
       </div>
 
       <div style={{ display: "grid", gap: 14, gridTemplateColumns: "minmax(0,1.55fr) minmax(280px,1fr)" }}>
-        <Card title="Earnings · last 30 days" right={<Pill tone="cyan">{affiliate.tier_pct}% tier</Pill>}>
+        <Card title="Earnings · last 30 days" right={<Pill tone="cyan">{affiliate.tier_pct}% of every payment</Pill>}>
           <Spark values={(stats?.series ?? []).map((s) => s.cents)} />
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 9.5, color: THEME.dim2, letterSpacing: "0.06em" }}>
             <span>{stats?.series?.[0]?.d ?? ""}</span>
@@ -214,12 +214,12 @@ export default function Dashboard() {
             <Row label="Clicks today" value={(stats?.clicks_today ?? 0).toLocaleString()} />
             <Row label="Members referred" value={String(stats?.members ?? 0)} />
             <Row label="Earned this period" value={money2(stats?.mtd_cents)} />
-            <Row label="Commission rate" value={`${affiliate.tier_pct}% · ${affiliate.tier_label}`} />
+            <Row label="Commission rate" value={`${affiliate.tier_pct}% flat`} />
           </div>
           <div style={{ height: 1, background: THEME.border, margin: "18px 0" }} />
           <div style={{ fontSize: 11.5, color: THEME.dim2, lineHeight: 1.6 }}>
-            Tiers move with volume. If your channel is converting and you're still on the starter rate,
-            say so — the rate is set by hand and it can be raised by hand.
+            One flat rate, no ladder to climb: {affiliate.tier_pct}% of every payment a member on your code
+            makes, the first one and every renewal, for as long as they stay.
           </div>
         </Card>
       </div>
