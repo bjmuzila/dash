@@ -81,7 +81,7 @@ export default function NotesDock() {
             Capped + scrollable so an open probe can't push the notes list out
             of the dock on a short window. */}
         <div style={{ flexShrink: 0, maxHeight: "62%", overflowY: "auto", scrollbarWidth: "thin" }}>
-          <QuickProbe addNote={addNote} />
+          <QuickProbe />
         </div>
 
         {/* notes body — top region, scrolls within its own space */}

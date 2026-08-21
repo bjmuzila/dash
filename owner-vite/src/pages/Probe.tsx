@@ -587,6 +587,51 @@ export default function Probe() {
     if (p.atPrice != null) setFill(String(p.atPrice));
   }, []);
 
+  /**
+   * Prefill from the query string.
+   *
+   * The Quick Probe card in the customer app's Notes drawer
+   * (components/shared/QuickProbe.tsx) hands a contract off to this page as
+   * `?ticker=SPX&exp=2026-08-21&strike=6400&side=C` (`fill` and `note` are
+   * accepted too, for anything else that wants to link here). We fill the
+   * structured inputs AND the shorthand box — the shorthand box is what the
+   * eye lands on, and leaving it blank while the fields below are populated
+   * reads like the handoff half-failed.
+   *
+   * Runs once on mount and then strips the query with replaceState, so a
+   * refresh doesn't silently re-arm a contract the owner already dealt with.
+   * Nothing is submitted — the fields are staged and Add is still a click.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search);
+    const sym = (q.get("ticker") || "").trim().toUpperCase();
+    const exp = (q.get("exp") || q.get("expiration") || "").trim().slice(0, 10);
+    const k = parseFloat(q.get("strike") || "");
+    const rawSide = (q.get("side") || "").trim().toUpperCase();
+    const sd: "C" | "P" | null = rawSide.startsWith("C") ? "C" : rawSide.startsWith("P") ? "P" : null;
+    if (!sym && !exp && !Number.isFinite(k)) return;
+
+    if (sym) setTicker(sym);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(exp)) setExpiry(exp);
+    if (Number.isFinite(k) && k > 0) setStrike(String(k));
+    if (sd) setSide(sd);
+
+    const f = parseFloat(q.get("fill") || "");
+    if (Number.isFinite(f) && f > 0) setFill(String(f));
+    const n = (q.get("note") || "").trim();
+    if (n) setNote(n);
+
+    if (sym && /^\d{4}-\d{2}-\d{2}$/.test(exp) && Number.isFinite(k) && k > 0 && sd) {
+      const [, mo, da] = exp.split("-");
+      setShorthand(`${sym} ${k}${sd.toLowerCase()} ${parseInt(mo, 10)}/${parseInt(da, 10)}/${exp.slice(2, 4)}`);
+    }
+
+    try {
+      window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+    } catch { /* non-browser / blocked history */ }
+  }, []);
+
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/watch", { cache: "no-store" });

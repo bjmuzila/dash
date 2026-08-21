@@ -1,192 +1,40 @@
 # Changelog
 
-## 2026-08-21 (s) - ES Candles: chart cog menu clipped its own Page row, and the panels it opened drew underneath it
+## 2026-08-21 (q) - Notes drawer: owner-only "Quick Probe" launcher
 
-Edited: `app/es-candles/page.tsx`, `components/shared/DockToolbar.tsx`.
-
-Two bugs, one cause: the page's **Charts / Replay / Indicators** buttons were
-moved into the chart's cog menu (`<DockMenuRow label="Page">` in
-`EsChartCard`), but neither the button row nor the panel it opens was ever
-adjusted for living inside a 340px popover.
-
-**1. The row was cut off.** `toolbarButtons` was an `inline-flex` container with
-`flexShrink: 0` and no wrapping - fine on a 1200px dock, wider than the cog
-panel it now sits in. The last button hung off the panel's right edge, clipped
-and unclickable. It now uses `display: flex` + `flexWrap: "wrap"` +
-`minWidth: 0` / `maxWidth: "100%"`, so it folds to a second line in the cog and
-still lays out on one line anywhere wide enough (the home embed, a wide dock).
-
-**2. The panel opened behind the menu that opened it.** The Charts / Replay /
-Indicators popover is `position: fixed` at `zIndex: 60`. `DockCogMenu`'s own
-portalled panel is at `zIndex: 100000`. So clicking Replay inside the cog drew
-the transport bar *under* the cog panel - it looked like the button did nothing,
-or you got a sliver of a bar peeking out beside the menu. The popover is now at
-`zIndex: 100001`. It still counts as "inside" for
-`DockCogMenu.inFloatingLayer` (threshold 50), so interacting with it does not
-slam the cog shut.
-
-**3. Bottom-clamped while there.** `top` is measured off the buttons, which now
-sit wherever the cog menu put them - potentially most of the way down the
-screen. `maxHeight` gained a `calc(100vh - top - 24px)` term so the panel and
-its scrollbar stay on screen instead of running off the bottom edge.
-
-Comment in `DockToolbar.tsx` describing the `inFloatingLayer` z-index threshold
-updated - it still claimed the ES-candles panel sits at 60.
-
-
-## 2026-08-21 (r) - Premarket: "vs prior close" now works (server baseline)
-
-Added: `server-v2/premarket-baseline.js`. Edited: `server-v2/api-router.js`,
-`components/pages/Premarket.tsx`.
-
-The Premarket Prep page's **Biggest GEX Changes** card had only ever rendered
-its empty state - "No prior-close snapshot yet - this page captures one
-automatically between 15:40 and 16:10 ET" - and always would have. The baseline
-it needed was a localStorage snapshot (`cb-premarket-eod-v1`) that the page took
-of ITSELF, once per session, only while mounted between 15:40 and 16:10 ET. The
-only writer was the one page nobody has open at 3:40pm, so the snapshot was
-never written, `baseline` was permanently null, and the same dead copy showed
-forever. A bootstrapping deadlock, not a warm-up. It also killed the Net GEX
-"vs prior close" chip, which read the same `baseline`. (Two lesser problems on
-top: localStorage is per-browser-per-device, and `baseline` required a snapshot
-from a STRICTLY EARLIER date, making the cold start two sessions.)
-
-The baseline is now a server read that every device shares.
-
-**Why a new module and not one of the three EOD tables that look right.**
-`eod_gex` is scalars only, no strikes. `eod_strike_gex` is per-strike but the
-whole board MINUS 0DTE collapsed across expirations, and the premarket page
-renders ONE expiry - so it is apples-to-oranges at every strike.
-`option_strike_gex_history` is the right shape (per-strike AND per-expiry, 30s,
-with ~16:00 ET rows) but `state/retention-cleanup.js` deletes every row whose
-expiry is not `MIN(expiry)` for its `(date, symbol)` at 00:05-00:40 ET - so
-Thursday's snapshot of FRIDAY's expiry, exactly the baseline Friday premarket
-needs, is gone before anyone opens the page.
-
-So `premarket-baseline.js` computes it the way `eod-dte-gamma-recorder.js`
-computes its DTE breakdown: off `eod-gex-recorder.computeHistoricalGexRows()`,
-whose `flatRows` carry `expiration` - the axis the other tables threw away.
-Filter to the one expiry, run the same `computeGexRowsMultiExpiry` as everywhere
-else, write it down. Because the source is SETTLED history for a past date it
-can be built on demand at any hour: no window to miss, no cold start, works on
-day one. Two tables keyed `(date, symbol, expiry)`: `premarket_baseline`
-(strikes) and `premarket_baseline_meta` (spot, totals, flip, walls). `date` is
-the session the snapshot DESCRIBES, not the day it was computed. 45-day prune.
-
-**The basis changed, deliberately - read this before "fixing" it.** Both legs
-are stored separately (`oi_gex` = gamma x OI x S2, `vol_gex` = gamma x Volume x
-S2, `net_gex` their sum) and the read defaults to **`oi`**, not the OI+Vol
-number the app prints everywhere. On OI+Vol a premarket comparison is
-`gamma_now x (OI + ~0)` against `gamma_prev x (OI + Vol_yesterday)`: yesterday's
-whole session volume sits in the baseline and in nothing on the live side, so
-before the open EVERY strike prints a large negative delta that is pure artifact
-- and it would have been the headline number on the card. The old localStorage
-design had this bug too; it just never got far enough to show it. On `oi` both
-sides carry the same settled OI (OCC publishes overnight), so the delta is
-`gamma_now x OI x S_now2 - gamma_prev x OI x S_prev2` - how each strike's dealer
-gamma re-priced as spot moved overnight, which is the premarket question.
-`basis=oivol` is still served for callers that want the printed number.
-
-Read path: `GET /api/premarket-baseline?expiry=YYYY-MM-DD[&symbol][&basis][&build=0]`,
-auth `subscriber`, registered in `api-router.js` ahead of the `libDb` batch and
-loaded defensively (absent module -> route never registers, page falls back to
-"no baseline" exactly as before). `expiry` is the expiry the PAGE is showing,
-not the baseline's date. The response carries `date` (session described) and
-`tried` (every session probed, so a walk-back past a Theta gap is visible - it
-retries up to 3 sessions back). A missing baseline is 200 + `ok:false`, not a
-500, because the card renders it as a state. `build=0` is cache-only.
-
-**No proxy change.** Nothing in `server-with-proxy.js` or `proxy-tastytrade.js`
-was touched; the module is required directly by the in-process api-router. Note
-the route only serves while `API_ROUTER=1` (the existing kill-switch) - with it
-unset, `/api/*` falls through to Next, where this path does not exist.
-
-A 5-minute warm-up timer (unref'd, 06:00-09:35 ET on trading days, latches only
-on success, `PREMARKET_BASELINE_WARMUP=0` to disable) pre-builds the day's
-baseline so the first visitor of the morning does not pay the settled-chain
-sweep. Purely an optimisation - `getBaseline()` builds on demand regardless.
-
-On the page: `EOD_KEY` / `readEod` / the write effect / the `wroteEodRef` guard
-are gone, replaced by a fetch keyed on `expiry` (cleared first, so a stale
-baseline can never be diffed against a new expiry's chain). A one-shot
-`removeItem` evicts the dead key from browsers that ran the old build. The live
-side of both comparisons is now the OI leg via a new `oiLeg()` helper
-(`netGEXOf(r,"net") - netGEXOf(r,"vol")`), the KPI chip is labelled `OI` with
-the baseline date in its title, the card sub-caption reads
-`vs <date> close - OI basis`, and a strike the baseline never listed is SKIPPED
-rather than treated as zero (a newly listed strike would otherwise print its
-whole gamma as "change"). Empty state now distinguishes loading / no settled
-board / nothing moved. Footer chip shows the baseline date, strike count and
-basis.
-
-Hardening found in review, all of which had a concrete failure:
-
-- **Stale-response race.** `expiry` changes at least twice on a cold mount -
-  `useMobileGex` takes the SHARED socket's current expiry first and pins today's
-  0DTE on a later commit - so two fetches are always in flight and the second is
-  usually the warm one. The slow, wrong-expiry response landed last and won, and
-  the card diffed today's chain against another expiry's board: same symbol,
-  overlapping strikes, every number plausible, nothing on screen naming the
-  expiry. Fixed with a generation ref plus an echo check on the response's own
-  `expiry`.
-- **KPI chip summed two different strike universes.** The live chain is a +/-8%
-  band around live spot; the settled baseline is a +/-500-point band around
-  yesterday's settle. Deep-OTM strikes at either edge carry the biggest OI on
-  the board, so summing each side whole injected a large one-sided term. Both
-  sides are now summed over the intersection only (`oiVsBaseline`), the way
-  `strikeDeltas` already did.
-- **`persist()` was not fail-soft** despite its comment: `ensureSchema()` and
-  `pool.connect()` sat outside the try. A DB blip therefore rejected
-  `buildBaseline`, which is indistinguishable from a Theta gap, so `getBaseline`
-  walked back and re-swept three more sessions before returning "no
-  prior-session board" - a wrong diagnosis at 4x the cost of the most expensive
-  operation in the module. Now nothing in the cache path can throw into a build.
-- **Negative cache** (5 min) on `(symbol, session, expiry)`. The one-entry sweep
-  cache is evicted by each walk-back step, so a genuinely missing expiry cost
-  four full settled-chain sweeps on *every* page load.
-- **`ensureSchema` de-dupe.** `CREATE TABLE/INDEX IF NOT EXISTS` is not race-free
-  in Postgres; two concurrent cold-start builds hit
-  `duplicate key ... pg_type_typname_nsp_index`.
-- **Upsert instead of DELETE-then-INSERT** for the strike rows, plus a delete of
-  strikes this build no longer lists - two processes building the same key both
-  saw an empty table after their DELETE and the loser threw its work away.
-- **`symbol` allowlist** (`$SPX`/`SPY`/`QQQ`) and a +/-7-day bound on `today`.
-  The miss path starts a ThetaData sweep and each distinct value is a distinct
-  de-dupe key, so an unvalidated pair was unbounded upstream work per request on
-  a `subscriber` route.
-- The `idle` state no longer renders as "No strike moved against the prior
-  close" before anything has loaded.
-
-## 2026-08-21 (q) - Notes drawer: owner-only "Quick Probe" section
-
-Added: `components/shared/QuickProbe.tsx`. Edited: `components/shared/NotesDock.tsx`.
+Added: `components/shared/QuickProbe.tsx`.
+Edited: `components/shared/NotesDock.tsx`, `owner-vite/src/pages/Probe.tsx`.
 
 The Notes drawer (right-side dock on the universal toolbar) now opens with a
-collapsed **QUICK PROBE** card above the note list. It is owner chrome only -
-gated on `useIsOwner()`, so it renders nothing and fetches nothing for a
-customer.
+**QUICK PROBE** card above the note list, expanded by default and collapsible
+when the note list needs the room. It is owner chrome only - gated on
+`useIsOwner()`, so it renders nothing and fetches nothing for a customer.
 
 Four fields: **ticker**, **expiration**, **strike**, **call / put**. Ticker is a
 free-text symbol box; committing it (blur or Enter) loads that symbol's expiry
 list from `/api/expirations` into the expiration dropdown (falls back to a plain
 date input if the symbol lists none). Strike is numeric; the side is a two-button
-Call/Put toggle.
+Call/Put toggle. That one route is the card's only request - the same one the
+customer chain surfaces already call.
 
-Probe pulls the one contract out of `/api/chains?ticker=&expiration=&range=all`
-and shows mark, bid/ask, last, volume, open interest, IV and delta/gamma/theta/
-vega, plus underlying spot. Values are read exactly the way
-`lib/calculations/optionChain.parseExpiration` reads them (group.strikes[] ->
-`strike-price` / `call` / `put`, same mark bid-ask-mid -> last -> close
-fallback), so a number here cannot disagree with the chain page. An unlisted
-strike snaps to the nearest listed one and says so.
+**Probe hands the contract to the owner site.** It opens
 
-A "Save to notes" button drops the probe into the notes list as a normal note
-tagged `Quick Probe`, so it persists and syncs like any other note.
+    https://owner.cbedge.net/owner/probe?ticker=SPX&exp=2026-08-21&strike=6400&side=C
 
-Read-only. No new endpoint, no proxy change, no recording - it calls the same
-two routes the customer chain surfaces already call. In `NotesDock` the section
-is capped at 62% height and scrolls, so an open probe can't push the note list
-out of the dock on a short window.
+in a named tab (`noopener,noreferrer`), so the real probe page does the work -
+the `/proxy/probe-rest` resolve, the `/api/watch` record, the tracking. The card
+records nothing and adds nothing; it is a launcher. Host is overridable with
+`NEXT_PUBLIC_OWNER_SITE_URL` for a staging host or a local owner-vite run.
+
+`owner-vite/src/pages/Probe.tsx` gained the receiving half: a mount effect that
+reads `ticker` / `exp` / `strike` / `side` (plus optional `fill` and `note`),
+fills the structured inputs AND the shorthand box - a populated field set under
+an empty shorthand box reads like the handoff half-failed - then strips the
+query with `replaceState` so a refresh doesn't re-arm a contract already dealt
+with. Nothing is submitted: the fields are staged, Add is still a click.
+
+In `NotesDock` the section is capped at 62% height and scrolls, so an open card
+can't push the note list out of the dock on a short window.
 
 ## 2026-08-21 (p) - 0DTE chain: AM-settled monthly no longer poisons GEX/DEX
 

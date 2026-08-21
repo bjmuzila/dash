@@ -497,6 +497,9 @@ export default function LevelLog() {
     return () => { alive = false; };
   }, [sel, date, nonce]);
 
+  /** The real tape for the selected ticker/date — best-effort, see the hook. */
+  const price = useIntradaySpot(sel, date, nonce);
+
   // ── the view switch, applied once ──────────────────────────────────────────
   // Everything downstream (rail, timeline, copy text, PNG) reads these, so the
   // WALLS / CORE pills can never disagree with what gets exported.
@@ -713,7 +716,7 @@ export default function LevelLog() {
           {/* The same session as a picture. Sits ABOVE the scroll body on
               purpose: framed capture expands that body without reflowing its
               siblings, so anything under it gets drawn over in the PNG. */}
-          <WallMigrationChart log={log} events={events} view={view} />
+          <WallMigrationChart log={log} events={events} view={view} price={price} />
 
           {/* Header + capture rail stay pinned; only the entries scroll. The
               snapshot expands past this (framed mode), so the PNG is the whole
@@ -935,11 +938,101 @@ function WallRailChips({ marks }: { marks: RailMark[] }) {
 const MIG_H = 190;
 const MIG_PAD = 8;
 
+/** ET minutes-since-midnight of the two anchors the slot grid is built on. */
+const OPEN_SLOT_MINS = 9 * 60 + 29;   // slot 0 — the open baseline capture
+const GRID_START_MINS = 9 * 60 + 45;  // slot 1, then every 15m to 16:00 (slot 26)
+
 /** Slot → wall-clock ET. Slot 0 is the 09:29 baseline, then every 15m to 16:00. */
 function slotClock(slot: number): string {
   if (slot <= 0) return "09:29";
-  const m = 9 * 60 + 45 + (slot - 1) * 15;
+  const m = GRID_START_MINS + (slot - 1) * 15;
   return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
+/**
+ * ET minutes → FRACTIONAL slot. The inverse of the recorder's slotMins(), so a
+ * 1-minute price sample lands on the same x as the 15-minute level step it
+ * happened under. Slot 0 sits 16 minutes before slot 1, not 15, because the
+ * open capture is at 09:29 — that first gap is its own scale.
+ */
+function slotAtMins(m: number): number {
+  if (m <= OPEN_SLOT_MINS) return 0;
+  if (m <= GRID_START_MINS) return (m - OPEN_SLOT_MINS) / (GRID_START_MINS - OPEN_SLOT_MINS);
+  return 1 + (m - GRID_START_MINS) / 15;
+}
+
+/** Minutes east of UTC for New York at that instant (handles EST/EDT). */
+function etOffsetMinutes(d: Date): number {
+  const s = d.toLocaleString("en-US", { timeZone: "America/New_York", timeZoneName: "shortOffset" });
+  const m = s.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+  if (!m) return -300;
+  const h = parseInt(m[1], 10);
+  const mm = m[2] ? parseInt(m[2], 10) : 0;
+  return h * 60 + (h < 0 ? -mm : mm);
+}
+
+/** Epoch ms for HH:MM ET on a "YYYY-MM-DD" date. */
+function etMsOn(date: string, hh: number, mm: number): number {
+  const naive = Date.parse(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00Z`);
+  if (!Number.isFinite(naive)) return NaN;
+  return naive - etOffsetMinutes(new Date(naive)) * 60_000;
+}
+
+/** One sample of the real tape: ET minutes-since-midnight and the price. */
+type SpotSample = { mins: number; px: number };
+
+/**
+ * THE PRICE LINE — the real tape, not the log's own spot column.
+ *
+ * walls_log is CHANGE-ONLY: a row exists when a level sets or rolls, and spot
+ * rides along on it. So the log's spot is a dozen-odd points a day, which drawn
+ * as a line reads as price moving in half-hour steps — the chart's whole job is
+ * comparing a level that holds against price that travels, and a stepped price
+ * line makes that comparison unreadable.
+ *
+ * /proxy/candles-intraday (server-with-proxy.js → candle-history.js) already
+ * serves 1-minute OHLC for any dxLink symbol out of a short-lived isolated
+ * connection, so this is a read of something that exists, not a recorder change.
+ * One request per symbol/date; the proxy caches ~60s.
+ *
+ * It is best-effort by design: an index dxLink will not serve 1m bars for, a
+ * date outside dxFeed's ~7-day 1m window, or a dead request all resolve to [],
+ * and the chart falls back to the recorded captures and says so. Nothing is
+ * interpolated to cover a gap.
+ */
+function useIntradaySpot(symbol: string | null, date: string, nonce: number): SpotSample[] {
+  const [rows, setRows] = useState<SpotSample[]>([]);
+  useEffect(() => {
+    if (!symbol) { setRows([]); return; }
+    let alive = true;
+    (async () => {
+      const from = etMsOn(date, 9, 30);
+      const to = etMsOn(date, 16, 0);
+      if (!Number.isFinite(from) || !Number.isFinite(to)) { if (alive) setRows([]); return; }
+      try {
+        const r = await fetch(
+          `/proxy/candles-intraday?symbol=${encodeURIComponent(symbol)}&interval=1m&fromMs=${Math.round(from)}`,
+          { cache: "no-store" },
+        );
+        const j = await r.json();
+        const cs: unknown[] = Array.isArray(j?.candles) ? j.candles : [];
+        const out: SpotSample[] = [];
+        for (const c of cs) {
+          const row = c as { time?: unknown; close?: unknown };
+          const t = Number(row?.time);
+          const px = Number(row?.close);
+          if (!Number.isFinite(t) || !(px > 0)) continue;
+          if (t < from || t > to) continue;
+          // No DST change lands inside a session, so minutes off the open is exact.
+          out.push({ mins: 570 + (t - from) / 60_000, px });
+        }
+        out.sort((a, b) => a.mins - b.mins);
+        if (alive) setRows(out);
+      } catch { if (alive) setRows([]); }
+    })();
+    return () => { alive = false; };
+  }, [symbol, date, nonce]);
+  return rows;
 }
 
 /**
@@ -1001,8 +1094,10 @@ function slotClock(slot: number): string {
 const ROLE_CORE_COLOR = LIGHT_BLUE;
 const ROLE_OTHER_COLOR = rgba(HOME_THEME.text, 0.42);
 
-function WallMigrationChart({ log, events, view }: {
+function WallMigrationChart({ log, events, view, price }: {
   log: WallLogRow[]; events: WallEventRow[]; view: LogView;
+  /** The 1-minute tape, when there is one. Empty falls back to the captures. */
+  price: SpotSample[];
 }) {
   const model = useMemo(() => {
     const inSlot = (s: number) => Number.isFinite(s) && s >= 0 && s < WALL_SLOTS;
@@ -1108,6 +1203,22 @@ function WallMigrationChart({ log, events, view }: {
       if (n) roles = { core, other, side, callShare: callN / n };
     }
 
+    /**
+     * WHICH PRICE GETS DRAWN. The 1-minute tape when it arrived, the log's own
+     * captures when it did not — never the two spliced together, which would
+     * put a smooth stretch next to a stepped one and read as the tape going
+     * quiet rather than the data running out.
+     *
+     * Clipped to `lastSlot` so mid-session the price line ends where the levels
+     * do; the x scale is the recorded span, and a tape running past it would be
+     * drawn off the right edge.
+     */
+    const tape = price
+      .map((p) => ({ s: slotAtMins(p.mins), v: p.px }))
+      .filter((p) => p.s >= 0 && p.s <= lastSlot);
+    const dense = tape.length >= 20;
+    const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }));
+
     // The y range is bounded by what is DRAWN. With roles in play the cb series
     // is not a third line, so letting its strike stretch the axis would leave
     // dead space no line ever reaches.
@@ -1117,7 +1228,7 @@ function WallMigrationChart({ log, events, view }: {
     } else {
       for (const arr of series.values()) for (const v of arr) if (v != null) vals.push(v);
     }
-    for (const p of spotPts) vals.push(p.v);
+    for (const p of spotDrawn) vals.push(p.v);
     if (vals.length < 2) return null;
 
     let lo = Math.min(...vals);
@@ -1126,11 +1237,11 @@ function WallMigrationChart({ log, events, view }: {
     const padY = (hi - lo) * 0.08;
     lo -= padY; hi += padY;
 
-    return { levels, series, roles, spotPts, lo, hi, lastSlot };
-  }, [log, events, view]);
+    return { levels, series, roles, spotPts, spotDrawn, dense, lo, hi, lastSlot };
+  }, [log, events, view, price]);
 
   if (!model) return null;
-  const { levels, series, roles, spotPts, lo, hi, lastSlot } = model;
+  const { levels, series, roles, spotPts, spotDrawn, dense, lo, hi, lastSlot } = model;
 
   /** Index across what was recorded, edge to edge — the post-market geometry. */
   const x = (s: number) => (s / Math.max(1, lastSlot)) * 100;
@@ -1177,7 +1288,7 @@ function WallMigrationChart({ log, events, view }: {
   const corridor = roles && paths.length === 2
     ? `${step(roles.core)} ${step(roles.other, true)}`
     : null;
-  const spotLine = spotPts.map((p) => `${x(p.s)},${y(p.v)}`).join(" ");
+  const spotLine = spotDrawn.map((p) => `${x(p.s)},${y(p.v)}`).join(" ");
 
   /** Which wall is wearing the CORE right now — the legend says so by name. */
   const coreSideNow = roles
@@ -1204,7 +1315,9 @@ function WallMigrationChart({ log, events, view }: {
           Wall migration
         </span>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, color: MUTED }}>
-          recorded levels · {spotPts.length} spot capture{spotPts.length === 1 ? "" : "s"}
+          recorded levels · {dense
+            ? `${spotDrawn.length} min of price`
+            : `${spotPts.length} spot capture${spotPts.length === 1 ? "" : "s"}`}
         </span>
       </div>
 
@@ -1220,7 +1333,7 @@ function WallMigrationChart({ log, events, view }: {
         ) : (
           paths.map((p) => legendChip(p.color, LEVEL_LABEL[p.key as WallLevel] ?? p.key, wallStrike(lastOf(series.get(p.key as WallLevel) ?? []))))
         )}
-        {spotPts.length ? legendChip(HOME_THEME.text, "spot", wallNum(spotPts[spotPts.length - 1].v)) : null}
+        {spotDrawn.length ? legendChip(HOME_THEME.text, "spot", wallNum(spotDrawn[spotDrawn.length - 1].v)) : null}
       </div>
 
       {/* preserveAspectRatio="none" — the x axis is slots, the y axis is price,
@@ -1261,9 +1374,14 @@ function WallMigrationChart({ log, events, view }: {
           </>
         ) : null}
         Each level holds its strike until the recorder writes a change, so the steps are the rolls. A level that
-        sits while price travels is the one to fade; one that moves with price is dealers chasing. Spot is drawn
-        from the {spotPts.length} capture{spotPts.length === 1 ? "" : "s"} stored for this ticker today — the
-        level log&apos;s own samples, not a tick path.
+        sits while price travels is the one to fade; one that moves with price is dealers chasing.{" "}
+        {dense ? (
+          <>Spot is the 1-minute tape; the level log&apos;s own {spotPts.length} spot capture
+            {spotPts.length === 1 ? "" : "s"} sit under it at the slots that wrote a row.</>
+        ) : (
+          <>No 1-minute tape for this ticker or date, so spot is the {spotPts.length} capture
+            {spotPts.length === 1 ? "" : "s"} the log stored — its own samples, not a price path.</>
+        )}
       </div>
     </div>
   );

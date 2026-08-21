@@ -1,53 +1,37 @@
 "use client";
 
 /**
- * QuickProbe — owner-only single-contract lookup, docked in the Notes drawer.
+ * QuickProbe — owner-only contract launcher, docked in the Notes drawer.
  *
- * Fill in ticker / expiration / strike / call-or-put and it pulls that one
- * contract out of the live chain: mark, bid/ask, volume, OI, IV and the four
- * greeks. It is a READ — no orders, no writes, nothing recorded.
+ * Fill in ticker / expiration / strike / call-or-put and Probe hands the
+ * contract off to the real probe page on the owner site:
  *
- * Data path is the one every chain surface already uses:
- *   /api/expirations?ticker=…            → the expiry list
- *   /api/chains?ticker=…&expiration=…    → { data: { items, underlyingPrice } }
- * The per-strike payload is read the same way lib/calculations/optionChain
- * reads it (group.strikes[] → { "strike-price", call, put }), so a number here
- * cannot disagree with the chain page. No new endpoint, no proxy change.
+ *   https://owner.cbedge.net/owner/probe?ticker=&exp=&strike=&side=
+ *
+ * That page (owner-vite/src/pages/Probe.tsx) reads those params on mount, fills
+ * its structured inputs and its shorthand box, then strips the query from the
+ * URL. All the actual work — /proxy/probe-rest resolve, the /api/watch record,
+ * the tracking — stays there. This is a launcher, nothing more: it records
+ * nothing and adds nothing.
+ *
+ * The one request it makes on its own is /api/expirations, to populate the
+ * expiration dropdown for whatever symbol is typed — the same route the
+ * customer chain surfaces already call. No new endpoint, no proxy change.
  *
  * Gating is CHROME ONLY (useIsOwner) — same rule as the rest of the owner
- * chrome. Nothing sensitive is exposed by the panel itself; the endpoints it
- * calls are the ones the customer chain pages already call.
+ * chrome. The owner site behind the link has its own AuthGate.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HOME_THEME, homeInputStyle, LIGHT_BLUE, SOFT_RED } from "./homeTheme";
 import { useIsOwner } from "./useIsOwner";
-import type { NoteExtra } from "./notes";
 
-type Side = "call" | "put";
+type Side = "C" | "P";
 
-type Probe = {
-  ticker: string;
-  expiration: string;
-  strike: number;
-  side: Side;
-  /** Strike actually found (snapped to the nearest listed one when needed). */
-  matchedStrike: number;
-  snapped: boolean;
-  underlying: number;
-  bid: number;
-  ask: number;
-  mark: number;
-  last: number;
-  volume: number;
-  oi: number;
-  iv: number;
-  delta: number;
-  gamma: number;
-  theta: number;
-  vega: number;
-  ts: number;
-};
+/** Owner site root. Overridable for a staging host / local owner-vite dev run. */
+const OWNER_SITE =
+  (process.env.NEXT_PUBLIC_OWNER_SITE_URL || "https://owner.cbedge.net").replace(/\/+$/, "");
+const PROBE_PATH = "/owner/probe";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -57,56 +41,21 @@ function expiryLabel(ymd: string): string {
   return `${DAY_NAMES[dt.getDay()]} ${String(dt.getMonth() + 1).padStart(2, "0")}/${String(dt.getDate()).padStart(2, "0")}`;
 }
 
-const num = (o: Record<string, unknown> | undefined, k: string) =>
-  o ? parseFloat(String(o[k])) || 0 : 0;
-
-/** Mark falls back bid/ask mid → last → close, exactly like optionChain.ts. */
-function markOf(o: Record<string, unknown> | undefined): number {
-  if (!o) return 0;
-  const m = num(o, "mark") || num(o, "mark-price");
-  if (m > 0) return m;
-  const b = num(o, "bid") || num(o, "bid-price");
-  const a = num(o, "ask") || num(o, "ask-price");
-  if (b > 0 || a > 0) return (b + a) / 2;
-  return num(o, "last") || num(o, "last-price") || num(o, "close") || num(o, "price") || num(o, "mid");
-}
-
-/** IV is quoted as a fraction upstream; a few feeds send whole percent. */
-function ivOf(o: Record<string, unknown> | undefined): number {
-  const raw =
-    num(o, "implied-volatility") ||
-    num(o, "impliedVolatility") ||
-    num(o, "iv") ||
-    num(o, "volatility");
-  if (!raw) return 0;
-  return raw > 5 ? raw / 100 : raw;
-}
-
-const fmtPrice = (n: number) => (n > 0 ? n.toFixed(2) : "—");
-const fmtInt = (n: number) => (n ? n.toLocaleString() : "0");
-const fmtGreek = (n: number) => (n ? n.toFixed(4) : "—");
-const fmtPct = (n: number) => (n > 0 ? `${(n * 100).toFixed(1)}%` : "—");
-
-export default function QuickProbe({
-  addNote,
-}: {
-  addNote?: (text: string, extra?: NoteExtra) => void;
-}) {
+export default function QuickProbe() {
   const { isOwner } = useIsOwner();
 
-  const [open, setOpen] = useState(false);
+  // Open by default — this is owner chrome in the owner's own drawer, so the
+  // fields are there the moment Notes opens. Collapsible for when the note list
+  // needs the room.
+  const [open, setOpen] = useState(true);
   const [ticker, setTicker] = useState("SPX");
   const [expiries, setExpiries] = useState<string[]>([]);
   const [expiration, setExpiration] = useState("");
   const [strike, setStrike] = useState("");
-  const [side, setSide] = useState<Side>("call");
-
-  const [busy, setBusy] = useState(false);
+  const [side, setSide] = useState<Side>("C");
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<Probe | null>(null);
-  const [saved, setSaved] = useState(false);
 
-  // Symbol the expiry list belongs to, so a stale response can't overwrite it.
+  // Guards a stale expiry response from overwriting a newer symbol's list.
   const expiryReqRef = useRef(0);
 
   // ── expirations for the typed symbol ───────────────────────────────────────
@@ -132,94 +81,36 @@ export default function QuickProbe({
     }
   }, []);
 
-  // Load once when the section is first opened, and on every symbol commit.
   useEffect(() => {
     if (!open || !isOwner) return;
     void loadExpiries(ticker);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, isOwner]);
 
-  // ── the probe ──────────────────────────────────────────────────────────────
-  const runProbe = useCallback(async () => {
+  // ── hand off to the owner probe page ───────────────────────────────────────
+  const launch = useCallback(() => {
     const sym = ticker.trim().toUpperCase();
     const exp = expiration.trim().slice(0, 10);
     const k = parseFloat(strike);
     if (!sym) { setError("Enter a ticker."); return; }
-    if (!exp) { setError("Pick an expiration."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(exp)) { setError("Pick an expiration."); return; }
     if (!Number.isFinite(k) || k <= 0) { setError("Enter a strike."); return; }
-
-    setBusy(true);
     setError(null);
-    setSaved(false);
+
+    const qs = new URLSearchParams({
+      ticker: sym,
+      exp,
+      strike: String(k),
+      side,
+    });
+    const url = `${OWNER_SITE}${PROBE_PATH}?${qs.toString()}`;
+    // New tab, and never let the opened page reach back through window.opener.
     try {
-      const res = await fetch(
-        `/api/chains?ticker=${encodeURIComponent(sym)}&expiration=${encodeURIComponent(exp)}&range=all`,
-        { cache: "no-store" },
-      );
-      const json = await res.json().catch(() => null);
-      const data = (json?.data as Record<string, unknown> | undefined) ?? undefined;
-      const items = (data?.items as unknown[]) ?? [];
-      const underlying = parseFloat(String(data?.underlyingPrice ?? 0)) || 0;
-
-      // Groups are per-expiration; keep the one asked for when it's labeled.
-      const groups = (items as { "expiration-date"?: string; strikes?: unknown[] }[]);
-      const target = groups.filter((g) => String(g["expiration-date"] ?? "").slice(0, 10) === exp);
-      const rows = (target.length ? target : groups).flatMap((g) => (g.strikes ?? []) as unknown[]);
-      if (!rows.length) { setError("No strikes returned for that expiry."); setResult(null); return; }
-
-      let best: Record<string, unknown> | null = null;
-      let bestK = 0;
-      for (const row of rows) {
-        const it = row as Record<string, unknown>;
-        const s = parseFloat(String(it["strike-price"] ?? 0));
-        if (!s) continue;
-        if (!best || Math.abs(s - k) < Math.abs(bestK - k)) { best = it; bestK = s; }
-      }
-      if (!best) { setError("No strikes returned for that expiry."); setResult(null); return; }
-
-      const leg = best[side] as Record<string, unknown> | undefined;
-      if (!leg) { setError(`No ${side} leg listed at ${bestK}.`); setResult(null); return; }
-
-      setResult({
-        ticker: sym,
-        expiration: exp,
-        strike: k,
-        side,
-        matchedStrike: bestK,
-        snapped: Math.abs(bestK - k) > 0.0001,
-        underlying,
-        bid: num(leg, "bid") || num(leg, "bid-price"),
-        ask: num(leg, "ask") || num(leg, "ask-price"),
-        mark: markOf(leg),
-        last: num(leg, "last") || num(leg, "last-price") || num(leg, "close"),
-        volume: parseInt(String(leg.volume ?? 0), 10) || 0,
-        oi: parseInt(String(leg["open-interest"] ?? leg.openInterest ?? 0), 10) || 0,
-        iv: ivOf(leg),
-        delta: num(leg, "delta"),
-        gamma: num(leg, "gamma"),
-        theta: num(leg, "theta"),
-        vega: num(leg, "vega"),
-        ts: Date.now(),
-      });
+      window.open(url, "cb-owner-probe", "noopener,noreferrer");
     } catch {
-      setError("Probe failed — chain request didn't come back.");
-      setResult(null);
-    } finally {
-      setBusy(false);
+      window.location.href = url;
     }
   }, [ticker, expiration, strike, side]);
-
-  const noteText = useMemo(() => {
-    if (!result) return "";
-    const tag = `${result.ticker} ${expiryLabel(result.expiration)} ${result.matchedStrike}${result.side === "call" ? "C" : "P"}`;
-    return [
-      tag,
-      `mark ${fmtPrice(result.mark)} · bid ${fmtPrice(result.bid)} / ask ${fmtPrice(result.ask)}`,
-      `vol ${fmtInt(result.volume)} · OI ${fmtInt(result.oi)} · IV ${fmtPct(result.iv)}`,
-      `Δ ${fmtGreek(result.delta)} · Γ ${fmtGreek(result.gamma)} · Θ ${fmtGreek(result.theta)} · V ${fmtGreek(result.vega)}`,
-      result.underlying > 0 ? `spot ${result.underlying.toFixed(2)}` : "",
-    ].filter(Boolean).join("\n");
-  }, [result]);
 
   // Owner chrome only — renders nothing (and fetches nothing) for anyone else.
   if (!isOwner) return null;
@@ -245,12 +136,12 @@ export default function QuickProbe({
 
   const sideBtn = (s: Side) => {
     const on = side === s;
-    const tone = s === "call" ? LIGHT_BLUE : SOFT_RED;
+    const tone = s === "C" ? LIGHT_BLUE : SOFT_RED;
     return (
       <button
         key={s}
         type="button"
-        onClick={() => { setSide(s); setSaved(false); }}
+        onClick={() => setSide(s)}
         style={{
           flex: 1,
           padding: "6px 0",
@@ -267,17 +158,10 @@ export default function QuickProbe({
           transition: "background 0.15s, border-color 0.15s, opacity 0.15s",
         }}
       >
-        {s === "call" ? "Call" : "Put"}
+        {s === "C" ? "Call" : "Put"}
       </button>
     );
   };
-
-  const statRow = (k: string, v: string, tone?: string) => (
-    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.55 }}>{k}</span>
-      <span style={{ fontSize: 13, fontWeight: 600, color: tone || HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{v}</span>
-    </div>
-  );
 
   return (
     <div
@@ -354,7 +238,7 @@ export default function QuickProbe({
               <select
                 id="qp-exp"
                 value={expiration}
-                onChange={(e) => { setExpiration(e.target.value); setSaved(false); }}
+                onChange={(e) => setExpiration(e.target.value)}
                 style={{ ...fieldStyle, cursor: "pointer" }}
               >
                 {expiries.map((d) => (
@@ -366,7 +250,7 @@ export default function QuickProbe({
                 id="qp-exp"
                 type="date"
                 value={expiration}
-                onChange={(e) => { setExpiration(e.target.value); setSaved(false); }}
+                onChange={(e) => setExpiration(e.target.value)}
                 style={{ ...fieldStyle, cursor: "text" }}
               />
             )}
@@ -379,8 +263,8 @@ export default function QuickProbe({
               <input
                 id="qp-strike"
                 value={strike}
-                onChange={(e) => { setStrike(e.target.value.replace(/[^0-9.]/g, "")); setSaved(false); }}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void runProbe(); } }}
+                onChange={(e) => setStrike(e.target.value.replace(/[^0-9.]/g, ""))}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); launch(); } }}
                 inputMode="decimal"
                 placeholder="6400"
                 autoComplete="off"
@@ -389,16 +273,19 @@ export default function QuickProbe({
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <span style={labelStyle}>Side</span>
-              <div style={{ display: "flex", gap: 6 }}>{sideBtn("call")}{sideBtn("put")}</div>
+              <div style={{ display: "flex", gap: 6 }}>{sideBtn("C")}{sideBtn("P")}</div>
             </div>
           </div>
 
           <button
             type="button"
-            onClick={() => void runProbe()}
-            disabled={busy}
+            onClick={launch}
             style={{
               marginTop: 2,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 7,
               padding: "8px 0",
               borderRadius: 9,
               border: `1px solid ${HOME_THEME.cyan}55`,
@@ -408,93 +295,23 @@ export default function QuickProbe({
               fontWeight: 700,
               letterSpacing: "0.12em",
               textTransform: "uppercase",
-              cursor: busy ? "default" : "pointer",
-              opacity: busy ? 0.55 : 1,
+              cursor: "pointer",
             }}
           >
-            {busy ? "Probing…" : "Probe"}
+            Probe
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
           </button>
+
+          <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.45, letterSpacing: "0.04em", textAlign: "center" }}>
+            Opens the probe page on the owner site
+          </div>
 
           {error && (
             <div style={{ fontSize: 12, color: SOFT_RED, lineHeight: 1.4 }}>{error}</div>
-          )}
-
-          {result && !error && (
-            <div
-              style={{
-                marginTop: 2,
-                padding: "10px 11px",
-                borderRadius: 11,
-                background: "rgba(13,17,25,0.45)",
-                border: `1px solid ${HOME_THEME.border}`,
-                display: "flex",
-                flexDirection: "column",
-                gap: 5,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text, letterSpacing: "0.02em" }}>
-                  {result.ticker} {result.matchedStrike}
-                  <span style={{ color: result.side === "call" ? LIGHT_BLUE : SOFT_RED }}>
-                    {result.side === "call" ? "C" : "P"}
-                  </span>
-                </span>
-                <span style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.6 }}>{expiryLabel(result.expiration)}</span>
-                {result.underlying > 0 && (
-                  <span style={{ marginLeft: "auto", fontSize: 11, color: HOME_THEME.muted, opacity: 0.6, fontVariantNumeric: "tabular-nums" }}>
-                    spot {result.underlying.toFixed(2)}
-                  </span>
-                )}
-              </div>
-
-              {result.snapped && (
-                <div style={{ fontSize: 11, color: HOME_THEME.orange, opacity: 0.85, lineHeight: 1.35 }}>
-                  {result.strike} isn&apos;t listed — snapped to {result.matchedStrike}.
-                </div>
-              )}
-
-              <div style={{ height: 1, background: HOME_THEME.border, margin: "2px 0" }} />
-
-              {statRow("Mark", fmtPrice(result.mark), HOME_THEME.text)}
-              {statRow("Bid / Ask", `${fmtPrice(result.bid)} / ${fmtPrice(result.ask)}`)}
-              {statRow("Last", fmtPrice(result.last))}
-              {statRow("Volume", fmtInt(result.volume))}
-              {statRow("Open Int", fmtInt(result.oi))}
-              {statRow("IV", fmtPct(result.iv))}
-
-              <div style={{ height: 1, background: HOME_THEME.border, margin: "2px 0" }} />
-
-              {statRow("Delta", fmtGreek(result.delta))}
-              {statRow("Gamma", fmtGreek(result.gamma))}
-              {statRow("Theta", fmtGreek(result.theta))}
-              {statRow("Vega", fmtGreek(result.vega))}
-
-              {addNote && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    addNote(noteText, { src: "Quick Probe" });
-                    setSaved(true);
-                  }}
-                  style={{
-                    marginTop: 4,
-                    padding: "6px 0",
-                    borderRadius: 8,
-                    border: `1px solid ${HOME_THEME.border}`,
-                    background: "rgba(255,255,255,0.05)",
-                    color: saved ? HOME_THEME.cyan : HOME_THEME.muted,
-                    opacity: saved ? 1 : 0.75,
-                    fontSize: 10,
-                    fontWeight: 700,
-                    letterSpacing: "0.1em",
-                    textTransform: "uppercase",
-                    cursor: "pointer",
-                  }}
-                >
-                  {saved ? "Saved to notes" : "Save to notes"}
-                </button>
-              )}
-            </div>
           )}
         </div>
       )}
