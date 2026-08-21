@@ -1436,6 +1436,43 @@ function TerrainField({ m, L, TP, FWD, FHT, snap = false }: {
     // terrain you had just been reading was gone. A given gamma now paints the
     // same colour at every magnification.
 
+    // ── RELIEF SHADING ───────────────────────────────────────────────────────
+    // The tint answers "how much". It does not answer "is this a wall or a
+    // slope", and on a flat-lit map a 0.9 plateau and a 0.9 spike are the same
+    // colour. So the field is LIT like a surface before it is tinted.
+    //
+    // Height is |v|, NOT the signed value. A signed surface makes the put side
+    // a trench, which lights correctly and reads wrong: the tint already says
+    // "bright = strong" on both sides, so a bright pit fights itself. Both signs
+    // rise instead — call walls and put walls are both mountains, the colour
+    // says which — and the one rule the map has stays true everywhere: taller
+    // is stronger. The height curve is the same `** 0.55` the hypsometric ramp
+    // uses, so one band step and one facet of the surface describe the same
+    // rise, and the terraces light coherently with the tint.
+    const HGT: number[][] = F.map((r) => r.map((v) => Math.pow(Math.min(1, Math.abs(v)), 0.55)));
+    // Sun: upper-left, ~29° above the horizon (the vector is already unit).
+    // Low sun on purpose — it is what makes small steps throw a visible face.
+    const LX = -0.62, LY = -0.62, LZ = 0.48;
+    // Vertical exaggeration. Gradients are taken PER GRID CELL, and a cell is a
+    // couple of minutes by a fraction of a strike, so the raw slope of even a
+    // big wall is a few hundredths per cell — at 1× the whole map lights flat.
+    // ~22 is where a real node throws a face and the chop still does not.
+    const EXAG = 22;
+    // Gradient of the height field, one pair per grid node. The lighting itself
+    // is done PER PIXEL from these (bilinear), because the terrace pass below
+    // needs the slope direction at the same place it needs the band fraction.
+    const GX: number[][] = [], GY: number[][] = [];
+    for (let j = 0; j < NY; j++) {
+      const rx: number[] = [], ry: number[] = [];
+      for (let i = 0; i < NX; i++) {
+        const i0 = i > 0 ? i - 1 : i, i1 = i < NX - 1 ? i + 1 : i;
+        const j0 = j > 0 ? j - 1 : j, j1 = j < NY - 1 ? j + 1 : j;
+        rx.push(((HGT[j][i1] - HGT[j][i0]) / (i1 - i0 || 1)) * EXAG);
+        ry.push(((HGT[j1][i] - HGT[j0][i]) / (j1 - j0 || 1)) * EXAG);
+      }
+      GX.push(rx); GY.push(ry);
+    }
+
     const img = ctx.createImageData(cv.width, cv.height);
     for (let y = 0; y < cv.height; y++) {
       for (let x = 0; x < cv.width; x++) {
@@ -1443,7 +1480,19 @@ function TerrainField({ m, L, TP, FWD, FHT, snap = false }: {
         const x0 = Math.floor(fx), y0 = Math.floor(fy);
         const x1 = Math.min(NX - 1, x0 + 1), y1 = Math.min(NY - 1, y0 + 1);
         const ax = fx - x0, ay = fy - y0;
-        const v = F[y0][x0] * (1 - ax) * (1 - ay) + F[y0][x1] * ax * (1 - ay) + F[y1][x0] * (1 - ax) * ay + F[y1][x1] * ax * ay;
+        const w00 = (1 - ax) * (1 - ay), w10 = ax * (1 - ay), w01 = (1 - ax) * ay, w11 = ax * ay;
+        const v = F[y0][x0] * w00 + F[y0][x1] * w10 + F[y1][x0] * w01 + F[y1][x1] * w11;
+        // Same four corners, same weights — the slope is interpolated with the
+        // field so the shading cannot slide off the shape it belongs to.
+        const gx = GX[y0][x0] * w00 + GX[y0][x1] * w10 + GX[y1][x0] * w01 + GX[y1][x1] * w11;
+        const gy = GY[y0][x0] * w00 + GY[y0][x1] * w10 + GY[y1][x0] * w01 + GY[y1][x1] * w11;
+        // n = normalize(-dz/dx, -dz/dy, 1) in screen space (y points down).
+        const q = gx * gx + gy * gy;
+        const ginv = 1 / Math.sqrt(q + 1);
+        const shd = clamp01((-gx * LX - gy * LY + LZ) * ginv);
+        // shd ** 16 by squaring — this runs a few million times per paint and
+        // Math.pow with a non-integer-friendly exponent is not free.
+        const s2 = shd * shd, s4 = s2 * s2, s8 = s4 * s4, spc = s8 * s8;
         // Hypsometric banding: quantized elevation reads as a contour map,
         // a continuous ramp reads as a blurry heatmap.
         //
@@ -1470,15 +1519,50 @@ function TerrainField({ m, L, TP, FWD, FHT, snap = false }: {
         // of one saturated plateau with contour lines drawn on it.
         const av = Math.min(1, Math.abs(v));
         const lift = Math.pow(av, 0.55);
-        const band = Math.min(1, Math.floor(lift * 18) / 18 + 0.04);
+        const step = lift * 18;
+        const frac = step - Math.floor(step);   // where in the band this pixel sits
+        const band = Math.min(1, Math.floor(step) / 18 + 0.04);
         const hot = clamp01((av - 0.35) / 0.65);
         const t2 = Math.min(1, band + 0.22 * hot);
         const white = band * 0.18 + hot * hot * 0.45;
         const c = v >= 0
           ? mix([5, 12, 20], mix(GEX_POS, WHITE, white), t2)
           : mix([22, 8, 11], mix(GEX_NEG, WHITE, white), t2);
+        // Apply the light. `shd` is 0.48 on dead-flat ground, so the multiplier
+        // is centred to land on ~1.0 there — flat tape keeps the exact colour
+        // the hypsometric ramp assigned it, and only SLOPE moves it. Lit faces
+        // go up to ~1.8×, shadowed faces down to 0.28×, which is the whole point:
+        // the eye reads the pair as one solid rising out of the plane.
+        //
+        // Relief is scaled by `relief` so the noise floor of the quiet tape is
+        // not lit into fake mountains — near zero elevation the surface stays
+        // almost flat-lit, and the shading earns its strength as gamma does.
+        const relief = 0.35 + 0.65 * clamp01(av / 0.25);
+        // TERRACING. The bands are not a colour scheme, they are the physical
+        // model this map is imitating: stacked plates, each with a riser up to
+        // the next. Diffuse light alone rounds them off again, so the riser is
+        // lit on its own — the strip just below a band edge is a near-vertical
+        // face pointing DOWNHILL, bright when downhill faces the sun and dark
+        // when it faces away. That pair of edges per step is what the eye reads
+        // as height; without it 18 flat plates read as 18 shades of blue.
+        //
+        // `gmag` gates it: on flat tape the slope direction is noise, and
+        // embossing noise would invent structure that is not in the gamma.
+        const gmag = Math.sqrt(q);
+        const gate = clamp01(gmag / 0.55) * clamp01(av / 0.10);
+        const face = gmag > 1e-4 ? -(gx * LX + gy * LY) / gmag : 0;  // downhill · sun
+        const riser = frac * frac * frac;                            // hugs the edge
+        const terrace = 1 + 0.42 * riser * face * gate;
+        const lightMul = terrace * (1 + relief * (Math.max(0.28, Math.min(1.85, 0.30 + 1.46 * shd)) - 1));
+        // Specular: a thin white crest on faces square to the sun, gated on
+        // elevation so only real ridges catch it. This is the "obvious when it
+        // is high" term — big walls glint, chop does not.
+        const glint = spc * 46 * av * av;
         const o = (y * cv.width + x) * 4;
-        img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+        img.data[o] = Math.min(255, c[0] * lightMul + glint);
+        img.data[o + 1] = Math.min(255, c[1] * lightMul + glint);
+        img.data[o + 2] = Math.min(255, c[2] * lightMul + glint);
+        img.data[o + 3] = 255;
       }
     }
     ctx.putImageData(img, 0, 0);

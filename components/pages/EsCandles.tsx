@@ -193,18 +193,22 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * On/off control with an explicit CHECKBOX.
+ * On/off CHIP.
  *
- * The first cut was a pill that went from muted to blue. That is a fine state
- * indicator once you already know it is a toggle, and useless before — with
- * every indicator off, a row of dim pills reads as a row of buttons you press to
- * do something, and there is nothing on screen to compare an "on" one against.
- * A box that is either ticked or empty says which it is with nothing to compare
- * to, which is the whole job.
+ * There is no checkbox. An earlier version had one, on the argument that a pill
+ * going from muted to blue is a fine state indicator once you know it is a
+ * toggle and useless before — with every indicator off, a row of dim pills
+ * reads as buttons you press to do something. That argument lost to what it
+ * looked like in the shipped panel: a 14px filled square beside every label
+ * meant four indicators on rendered as a field of blue squares with words next
+ * to them, and it put a second visual system inside a menu whose other half is
+ * <SegGroup> pickers that show state by lighting up. One language wins; the
+ * chip IS the state. The section header carries a live "N on" count, which is
+ * the thing the checkbox was really being asked to answer.
  *
- * `swatch` draws the line's own colour next to the label, so with three EMAs
- * running you can tell which row is which line without turning them off one at
- * a time to find out.
+ * `swatch` survives, and matters more now: it draws the line's own colour next
+ * to the label, so with three EMAs running you can tell which chip is which
+ * line without turning them off one at a time to find out.
  */
 function Toggle({
   on, onClick, children, title, swatch,
@@ -217,40 +221,27 @@ function Toggle({
       style={{
         height: CTRL_H,
         boxSizing: "border-box",
-        padding: "0 10px 0 7px",
-        borderRadius: 8,
-        border: `1px solid ${on ? LIGHT_BLUE : HOME_THEME.border}`,
-        background: on ? "rgba(41,182,246,0.16)" : "rgba(255,255,255,0.03)",
-        color: on ? HOME_THEME.text : HOME_THEME.muted,
+        padding: "0 11px",
+        borderRadius: 999,
+        border: `1px solid ${on ? "rgba(41,182,246,0.5)" : "rgba(255,255,255,0.07)"}`,
+        background: on
+          ? "linear-gradient(180deg, rgba(41,182,246,0.22), rgba(41,182,246,0.07))"
+          : "rgba(255,255,255,0.035)",
+        color: on ? LIGHT_BLUE : HOME_THEME.muted,
+        boxShadow: on ? "0 0 10px rgba(41,182,246,0.14)" : "none",
         fontSize: 12,
-        fontWeight: 800,
+        fontWeight: 700,
         cursor: "pointer",
         fontFamily: "inherit",
         whiteSpace: "nowrap",
         display: "inline-flex",
         alignItems: "center",
         gap: 7,
+        transition: "background .12s, color .12s, border-color .12s",
       }}
     >
-      <span
-        aria-hidden
-        style={{
-          width: 14, height: 14, borderRadius: 4, flexShrink: 0,
-          border: `1.5px solid ${on ? LIGHT_BLUE : "rgba(255,255,255,0.28)"}`,
-          background: on ? LIGHT_BLUE : "transparent",
-          color: "#001018",
-          fontSize: 10,
-          lineHeight: "11px",
-          fontWeight: 900,
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {on ? "\u2713" : ""}
-      </span>
       {swatch && (
-        <span aria-hidden style={{ width: 14, height: 3, borderRadius: 2, background: swatch, flexShrink: 0, opacity: on ? 1 : 0.45 }} />
+        <span aria-hidden style={{ width: 14, height: 3, borderRadius: 2, background: swatch, flexShrink: 0, opacity: on ? 1 : 0.4 }} />
       )}
       {children}
     </button>

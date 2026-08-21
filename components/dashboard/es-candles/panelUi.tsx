@@ -44,29 +44,40 @@ export function PanelSection({ title, first, children }: { title: string; first?
   );
 }
 
-/** Compact on/off chip — one visual language for every toggle in the panel. */
+/**
+ * Compact on/off CHIP — one visual language for every toggle in the panel, and
+ * the same one the toolbar's <SegGroup> pickers already speak.
+ *
+ * No checkbox. The earlier version drew a 12px filled square beside every
+ * label, which had two problems in a 330px panel: with four overlays on it read
+ * as a field of blue squares with words next to them rather than as a list of
+ * things that are on, and it put a second visual system inside a menu whose
+ * other half is segmented pickers that indicate state by lighting up. The chip
+ * IS the state — lit, bordered and cyan when on; flat and grey when off.
+ *
+ * Hugs its own label rather than filling a grid cell, so a set of these wraps
+ * into as few lines as the labels allow instead of leaving half-empty columns.
+ */
 export function PanelChip({ label, on, onClick, title }: { label: string; on: boolean; onClick: () => void; title?: string }) {
   return (
     <button
       onClick={onClick}
       title={title}
-      className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs"
+      aria-pressed={on}
       style={{
-        borderRadius: 7, minWidth: 0, fontWeight: 600,
-        border: on ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent",
-        background: on ? DOCK_THEME.activeTile : "transparent",
-        color: on ? HOME_THEME.cyan : HOME_THEME.text,
+        height: 25, padding: "0 10px", borderRadius: 999, flexShrink: 0,
+        display: "inline-flex", alignItems: "center", cursor: "pointer",
+        fontFamily: "inherit", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
+        border: on ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid rgba(255,255,255,0.07)",
+        background: on ? DOCK_THEME.activeTile : "rgba(255,255,255,0.035)",
+        color: on ? HOME_THEME.cyan : HOME_THEME.muted,
+        boxShadow: on ? DOCK_THEME.activeGlow : "none",
+        transition: "background .12s, color .12s, border-color .12s",
       }}
-      onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
-      onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = "transparent"; }}
+      onMouseEnter={(e) => { if (!on) { e.currentTarget.style.borderColor = DOCK_THEME.activeBorder; e.currentTarget.style.color = HOME_THEME.text; } }}
+      onMouseLeave={(e) => { if (!on) { e.currentTarget.style.borderColor = "rgba(255,255,255,0.07)"; e.currentTarget.style.color = HOME_THEME.muted; } }}
     >
-      <span style={{
-        width: 12, height: 12, flexShrink: 0, borderRadius: 3,
-        border: `1px solid ${on ? HOME_THEME.cyan : HOME_THEME.border}`,
-        background: on ? HOME_THEME.cyan : "transparent",
-        color: DOCK_THEME.bg, fontSize: 9, lineHeight: "10px", textAlign: "center", fontWeight: 900,
-      }}>{on ? "✓" : ""}</span>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{label}</span>
+      {label}
     </button>
   );
 }

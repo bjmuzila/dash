@@ -1,5 +1,88 @@
 # Changelog
 
+## 2026-08-21 (x) - ES Candles panels: the toggles are chips now, the checkboxes are gone
+
+Edited: `components/dashboard/es-candles/panelUi.tsx`,
+`components/pages/EsCandles.tsx`,
+`components/dashboard/es-candles/EsChartCard.tsx`.
+
+Every on/off control inside the chart cog - the seven overlays, the EMAs, the
+studies, the CB-line marker - was a pill with a 12-14px filled square in front
+of the label. Two things were wrong with it in a 330px panel:
+
+- **It read as squares, not as a list.** With four things on, the Draw section
+  rendered as a field of saturated blue blocks with words beside them. The eye
+  went to the blocks; the labels were the afterthought.
+- **It was a second visual language inside one menu.** The other half of that
+  panel is `SegGroup` pickers, which indicate state by lighting up. A checkbox
+  next to a segmented control is two grammars for the same idea.
+
+Both `PanelChip` (overlays, markers) and `EsCandles`' local `Toggle` (indicators)
+are now **chips**: rounded pill, flat and grey when off, lit + cyan-bordered with
+a soft glow when on - the same treatment `SegGroup` already uses, so the panel
+speaks one language throughout. The checkbox's real job - "is anything on in
+here?" - is already done better by the section header's live "N on" count, which
+landed with the accordion.
+
+`swatch` survives on the indicator chips and matters more without the box: it is
+what tells three running EMAs apart without toggling them off one at a time.
+
+**Two layout fixes that follow from chips hugging their labels:**
+
+- The overlays container went from a fixed `minmax(0,1fr) minmax(0,1fr)` grid to
+  a wrapping flex row. A two-track grid sized every cell to the widest chip, so
+  "TPO" sat in a box built for "PDH/ON+EM" and short labels left a ragged empty
+  column. Flowing packs seven overlays into three lines instead of four and
+  stops the labels truncating.
+- The CB-line chip inside `PanelSection` got a flex wrapper. That section is a
+  grid whose cells stretch (the sliders want that), and a chip stretched to the
+  full panel width stops reading as a chip.
+
+## 2026-08-21 - Test Labs GEX Map: terrain is lit, not just tinted
+
+Edited: `app/test/GexMapTab.tsx` (`TerrainField`).
+
+The Terrain tab was a flat hypsometric tint: 18 quantized bands plus contour
+lines. Colour said *how much*, but nothing said *how steep* — a 0.9 plateau and
+a 0.9 spike painted identically, and the strongest walls read as one bright
+smear rather than as structure standing off the plane.
+
+The field is now **lit like a surface** before it is tinted.
+
+- **Height = |gamma|**, on the same `** 0.55` curve the tint already uses, so a
+  band step and a facet of the surface describe the same rise. Height is the
+  magnitude, NOT the signed value: a signed surface turns the put side into a
+  trench, which lights correctly but reads wrong against a ramp that says
+  "bright = strong" on both sides. Call walls and put walls are both mountains;
+  the colour says which. One rule holds everywhere — taller is stronger.
+- **Hillshade.** Sun at upper-left, ~29° above the horizon (low on purpose — it
+  is what makes a small step throw a visible face). Gradients are precomputed
+  per grid node (`GX`/`GY`) at `EXAG = 22`; a grid cell is a couple of minutes
+  by a fraction of a strike, so raw slope is hundredths per cell and anything
+  under ~5× lights flat. Lighting itself is per pixel, bilinear from the same
+  four corners and weights the field value uses, so the shading cannot slide
+  off the shape it belongs to.
+- **Flat ground keeps its colour.** `shd` is 0.48 on dead-flat terrain and the
+  multiplier is centred to land on ~1.0 there, so only SLOPE moves a pixel:
+  lit faces up to ~1.8×, shadowed faces down to 0.28×.
+- **Relief earns its strength.** The shade is scaled by elevation (`relief`),
+  so the noise floor of the quiet tape is not lit into fake mountains.
+- **Terracing.** The bands are the physical model — stacked plates with a riser
+  up to the next — and diffuse light alone rounds them off. The strip just
+  below each band edge is now lit as its own near-vertical face (bright where
+  downhill faces the sun, dark where it faces away). That pair of edges per
+  step is what the eye reads as height. Gated on slope magnitude and elevation
+  so flat chop is never embossed into structure that is not in the gamma.
+- **Specular crest.** `shd ** 16` (by squaring — this runs millions of times per
+  paint), gated on `|v|²`, so big walls glint and chop does not. This is the
+  "obvious when it is high" term.
+
+Nothing about the DATA changed: no renormalization, the same session-scaled
+`signed` field, the same 18 bands, the same contour levels and zero coastline.
+The marching-squares pass draws over the lit fill unchanged.
+
+Preview of the shading model: `generated/2026-08-21-gex-terrain-relief.png`.
+
 ## 2026-08-21 (w) - Fix: permessage-deflate silently killed every browser WebSocket (site-wide outage)
 
 Edited: `server-v2/websocket-server.js`.

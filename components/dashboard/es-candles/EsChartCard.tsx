@@ -5400,16 +5400,12 @@ function EsChartCard({
       count: [showHeatmap, showProfile, showTpo, showLevels, showSessions, showGexBubbles, showFlipCross].filter(Boolean).length,
       body: (
         <>
-        {/* Two columns. Eight one-per-row toggles left the top half of this
-            menu mostly whitespace and pushed the sub-controls off-screen on
-            short viewports; the labels are all short enough to pair up. */}
-        <div style={{
-          // minmax(0,·) NOT 1fr: a plain `1fr` track carries an implicit
-          // min-width:auto, so it refuses to shrink below the widest chip's
-          // min-content and the grid overflows the panel instead. Renaming
-          // PDH/ON -> PDH/ON+EM is what pushed it over on a laptop.
-          display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 3, minWidth: 0,
-        }}>
+        {/* A WRAPPING row, not a two-column grid. The chips hug their own
+            labels now (see PanelChip), so a fixed two-track grid would leave a
+            ragged half-empty column beside every short one — "TPO" in a cell
+            sized for "PDH/ON+EM". Letting them flow packs seven overlays into
+            three lines instead of four and stops the labels truncating. */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, minWidth: 0 }}>
         {/* Each toggle persists into THIS card's slot blob, so three cards
             can carry three different overlay sets across a reload. The
             `!on` is computed here rather than inside a state updater so the
@@ -5526,12 +5522,17 @@ function EsChartCard({
                 already marking the MVC strike, so the CB step line is the
                 same read in line form; it belongs beside the bubbles. */}
             <PanelSection title="Marker">
-              <PanelChip
-                label="CB line"
-                on={showCb}
-                onClick={() => updateShowCb(!showCb)}
-                title="Central Band (MVC) as a white step line. Same strike the top bubble marks — turn it off if the bubble is enough."
-              />
+              {/* Flex wrapper so the chip hugs its label. PanelSection's grid
+                  cell stretches its child (the sliders want that), and a chip
+                  stretched to the full panel width stops reading as a chip. */}
+              <div style={{ display: "flex" }}>
+                <PanelChip
+                  label="CB line"
+                  on={showCb}
+                  onClick={() => updateShowCb(!showCb)}
+                  title="Central Band (MVC) as a white step line. Same strike the top bubble marks — turn it off if the bubble is enough."
+                />
+              </div>
             </PanelSection>
           </div>
         )}
