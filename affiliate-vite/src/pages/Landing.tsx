@@ -307,9 +307,12 @@ export default function Landing() {
         <p style={{ margin: "12px 0 0", fontSize: TYPE.body, color: THEME.dim }}>
           Two minutes to apply. Manual review, usually the same day.
         </p>
-        <div style={{ marginTop: 22 }}>
+        <div style={{ marginTop: 22, display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
           <Link to="/apply" style={{ ...buttonStyle, display: "inline-block", padding: "12px 22px", fontSize: 11, borderRadius: 8 }}>
             Start application →
+          </Link>
+          <Link to="/terms" style={{ ...secondaryButtonStyle, display: "inline-block", padding: "12px 22px", fontSize: 11, borderRadius: 8 }}>
+            Read the terms
           </Link>
         </div>
       </div>

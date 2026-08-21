@@ -45,6 +45,15 @@ export interface AcquisitionRow {
   deviceType?: string | null;
   isBot?: boolean | null;
   createdAt?: string | null;
+  // ── Outcome fields, read only by the campaign table ──────────────────────
+  // A campaign's session count says a link was clicked. These say whether the
+  // click became anything: who the visitor turned out to be, when that account
+  // was created, and whether it pays.
+  userId?: string | null;
+  ip?: string | null;
+  userCreatedAt?: string | null;
+  isSubscriber?: boolean | null;
+  isOwner?: boolean | null;
 }
 
 type WindowKey = "24h" | "7d" | "30d" | "all";
@@ -204,18 +213,70 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
     // space or a dash — campaign names contain both, and splitting on either
     // would shred them back into the wrong columns.
     const SEP = "\u0000";
-    const campaignCounts = new Map<string, number>();
+
+    // ── Who each visitor turned out to be ────────────────────────────────────
+    // Built over ALL rows, not just the window: someone can arrive from a
+    // campaign on Monday and register on Thursday, and a window-scoped index
+    // would report that campaign as having produced nothing.
+    //
+    // The key is the account when we have one and the IP when we don't, which
+    // is the only join available — the arrival is anonymous by definition, so
+    // there is no user id on it to match. That makes these numbers ATTRIBUTED,
+    // not audited: a shared office IP can credit a campaign with a signup that
+    // came from the desk next door, and a phone that changes networks between
+    // arriving and registering breaks the link the other way. Directionally
+    // right, not billable. The footnote under the table says so.
+    const identity = new Map<string, { registeredAt: number | null; paid: boolean }>();
+    for (const r of rows) {
+      if (r.isBot) continue;
+      const key = r.userId ? `u:${r.userId}` : r.ip ? `ip:${r.ip}` : "";
+      if (!key) continue;
+      const prev = identity.get(key) ?? { registeredAt: null, paid: false };
+      const created = r.userCreatedAt ? Date.parse(r.userCreatedAt) : NaN;
+      if (r.userId && Number.isFinite(created)) {
+        prev.registeredAt = prev.registeredAt == null ? created : Math.min(prev.registeredAt, created);
+      }
+      if (r.isSubscriber) prev.paid = true;
+      identity.set(key, prev);
+    }
+
+    // Per campaign: unique arrivals, and the earliest arrival time of each, so
+    // "registered AFTER clicking" can be told from "was already a customer".
+    type CampAgg = { arrivals: Map<string, number> };
+    const campAgg = new Map<string, CampAgg>();
     for (const r of sessions) {
       if (!r.utmSource) continue;
+      // Owner clicking his own link is not a campaign result.
+      if (r.isOwner) continue;
       const k = [r.utmSource, r.utmMedium ?? "", r.utmCampaign ?? ""].join(SEP);
-      campaignCounts.set(k, (campaignCounts.get(k) ?? 0) + 1);
+      let agg = campAgg.get(k);
+      if (!agg) { agg = { arrivals: new Map() }; campAgg.set(k, agg); }
+      const who = r.userId ? `u:${r.userId}` : r.ip ? `ip:${r.ip}` : `anon:${r.createdAt ?? Math.random()}`;
+      const t = r.createdAt ? Date.parse(r.createdAt) : NaN;
+      const at = Number.isFinite(t) ? t : 0;
+      const cur = agg.arrivals.get(who);
+      if (cur == null || at < cur) agg.arrivals.set(who, at);
     }
-    const campaigns = [...campaignCounts.entries()]
-      .map(([k, v]) => {
+
+    // A minute of slack: the beacon, the sign-up POST and the row's clock are
+    // three different moments, and an account created 900ms "before" the
+    // arrival that produced it is a rounding artefact, not a pre-existing user.
+    const GRACE_MS = 60_000;
+    const campaigns = [...campAgg.entries()]
+      .map(([k, agg]) => {
         const [source, medium, campaign] = k.split(SEP);
-        return { source, medium, campaign, sessions: v };
+        let signups = 0;
+        let paid = 0;
+        for (const [who, arrivedAt] of agg.arrivals) {
+          const id = identity.get(who);
+          if (!id || id.registeredAt == null) continue;
+          if (id.registeredAt < arrivedAt - GRACE_MS) continue; // already had an account
+          signups++;
+          if (id.paid) paid++;
+        }
+        return { source, medium, campaign, sessions: agg.arrivals.size, signups, paid };
       })
-      .sort((a, b) => b.sessions - a.sessions)
+      .sort((a, b) => b.paid - a.paid || b.signups - a.signups || b.sessions - a.sessions)
       .slice(0, 12);
 
     return {
@@ -321,8 +382,14 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
         </Section>
       </div>
 
-      {/* Campaigns — a table, because three dimensions can't be a bar. */}
-      <Section title="Campaigns" subtitle="tagged links (utm_*) and inferred ad clicks">
+      {/* Campaigns — a table, because five dimensions can't be a bar. Sorted by
+          PAID, then signups, then sessions: the ranking answers "which push
+          earned customers", not "which push got clicks", and those two orders
+          are routinely different. */}
+      <Section
+        title="Campaigns"
+        subtitle="tagged links (utm_*) and inferred ad clicks — ranked by what they earned"
+      >
         {view.campaigns.length === 0 ? (
           <Empty>
             No tagged traffic in this window. Add <code style={{ color: T.cyan }}>?utm_source=…&amp;utm_medium=…&amp;utm_campaign=…</code>{" "}
@@ -337,7 +404,10 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
                   <th style={{ padding: "6px 10px 6px 0", fontWeight: 600 }}>Source</th>
                   <th style={{ padding: "6px 10px", fontWeight: 600 }}>Medium</th>
                   <th style={{ padding: "6px 10px", fontWeight: 600 }}>Campaign</th>
-                  <th style={{ padding: "6px 0 6px 10px", fontWeight: 600, textAlign: "right" }}>Sessions</th>
+                  <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }} title="Unique arrivals from this campaign — one per person, not per click.">Sessions</th>
+                  <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }} title="Arrivals whose account was created at or after the click.">Signups</th>
+                  <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }} title="Of those signups, the ones now on an active or trialing subscription.">Paid</th>
+                  <th style={{ padding: "6px 0 6px 10px", fontWeight: 600, textAlign: "right" }} title="Signups ÷ sessions.">Conv.</th>
                 </tr>
               </thead>
               <tbody>
@@ -346,8 +416,17 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
                     <td style={{ padding: "8px 10px 8px 0", color: T.text }}>{c.source}</td>
                     <td style={{ padding: "8px 10px", color: T.textSecondary, opacity: 0.7 }}>{c.medium || "—"}</td>
                     <td style={{ padding: "8px 10px", color: T.textSecondary, opacity: 0.7 }}>{c.campaign || "—"}</td>
-                    <td style={{ ...monoStyle, padding: "8px 0 8px 10px", textAlign: "right", color: T.text }}>
+                    <td style={{ ...monoStyle, padding: "8px 10px", textAlign: "right", color: T.text }}>
                       {num(c.sessions)}
+                    </td>
+                    <td style={{ ...monoStyle, padding: "8px 10px", textAlign: "right", color: c.signups ? T.text : T.textSecondary, opacity: c.signups ? 1 : 0.35 }}>
+                      {num(c.signups)}
+                    </td>
+                    <td style={{ ...monoStyle, padding: "8px 10px", textAlign: "right", color: c.paid ? T.gold : T.textSecondary, opacity: c.paid ? 1 : 0.35, fontWeight: c.paid ? 700 : 400 }}>
+                      {num(c.paid)}
+                    </td>
+                    <td style={{ ...monoStyle, padding: "8px 0 8px 10px", textAlign: "right", color: T.textSecondary, opacity: 0.6 }}>
+                      {pct(c.signups, c.sessions)}
                     </td>
                   </tr>
                 ))}
@@ -380,9 +459,15 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
       <div style={{ fontSize: 12, color: T.textSecondary, opacity: 0.45, lineHeight: 1.6 }}>
         Sessions are entry rows — one per browser session, the only rows carrying a referrer, so a
         visitor who reads six pages counts once here and six times under pageviews. Bots are excluded
-        everywhere except the bot counter. The visit log is capped (PAGE_VISITS_KEEP, default 5,000
-        rows) and the oldest rows are pruned on insert, so the widest window can only reach as far
-        back as that cap allows.
+        everywhere except the bot counter.
+        <br />
+        <b style={{ color: T.text, opacity: 0.7 }}>Signups and Paid are attributed, not audited.</b>{" "}
+        An arrival is anonymous by definition, so the only way to connect it to the account that
+        appears later is the account id where we have one and the IP where we don't. A shared office
+        or campus IP can credit the wrong campaign; a phone that switches networks between clicking
+        and registering loses the link entirely. Read them as direction, not as billing. Both are
+        also bounded by how far back the fetched visit log reaches — a signup whose click has been
+        pruned counts for nobody.
       </div>
     </div>
   );

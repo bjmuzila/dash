@@ -79,6 +79,9 @@ export default function Apply() {
         requested_code: code,
         payout_method: payout,
         payout_detail: payoutDetail,
+        // Recorded server-side with a timestamp and the terms version — the
+        // checkbox alone is not a record of anything.
+        accept_terms: agree,
       });
       setAffiliate(j.affiliate);
       navigate("/dashboard", { replace: true });
@@ -211,15 +214,20 @@ export default function Apply() {
             <Banner tone="cyan">
               <Pill tone="cyan">Terms</Pill>
               <span>
-                No paid search on CB Edge brand terms, no guaranteed-return or performance claims, no
-                impersonating CB Edge. Commission is paid on collected revenue after the 30-day refund window.
+                The short version: no paid search on CB Edge brand terms, no guaranteed-return or performance
+                claims, no impersonating CB Edge, and you disclose that you earn a commission. Commission is paid
+                on collected revenue after the 30-day holding window.{" "}
+                <Link to="/terms" style={{ color: THEME.cyan, textDecoration: "underline" }}>Read the full terms →</Link>
               </span>
             </Banner>
           </div>
 
           <label style={{ display: "flex", gap: 9, alignItems: "flex-start", fontSize: 12.5, color: THEME.dim, cursor: "pointer", marginBottom: 18 }}>
             <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} style={{ accentColor: THEME.cyan, marginTop: 2 }} />
-            <span>I've read and accept the affiliate terms.</span>
+            <span>
+              I've read and accept the{" "}
+              <Link to="/terms" style={{ color: THEME.cyan, textDecoration: "underline" }}>affiliate program terms</Link>.
+            </span>
           </label>
 
           {err && <div style={{ marginBottom: 14 }}><ErrorNote>{err}</ErrorNote></div>}

@@ -9,6 +9,7 @@ import {
 } from "../components/LiveKpiCard";
 import { HourlyHeatmap } from "../components/HourlyHeatmap";
 import AcquisitionPanel from "../components/AcquisitionPanel";
+import CampaignLinkBuilder from "../components/CampaignLinkBuilder";
 import {
   OWNER_THEME as HOME_THEME,
   homeButtonStyle,
@@ -199,6 +200,8 @@ interface PageVisit {
    */
   userEmail?: string | null;
   userName?: string | null;
+  /** When that account was created — how a campaign click is tied to a signup. */
+  userCreatedAt?: string | null;
   /**
    * PAYING — 'active' | 'trialing' per libDb.PAID_STATUSES. Tracked as a SUBSET
    * of registered, never as the member test itself: registered-but-not-paying
@@ -1755,6 +1758,13 @@ function OverviewSection({ metrics, gran }: {
           / device, all off the same visit log the card above reads. Sessions
           (entry rows) are its denominator, never pageviews. */}
       <AcquisitionPanel rows={visits} />
+
+      {/* …and the other half of the loop: the builder that MAKES the tagged
+          links whose results the panel above reports. It sits directly under
+          the campaign table on purpose — the sources and campaign names it
+          offers as chips are read out of that same log, so reusing a spelling
+          you can see performing is one click. */}
+      <CampaignLinkBuilder rows={visits} />
 
       {/* Visitor choropleth moved to its own /owner/visitors page — the d3
           projection + 177-feature re-render on every hover was dominating this

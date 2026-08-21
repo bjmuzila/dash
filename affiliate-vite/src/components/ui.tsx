@@ -104,7 +104,7 @@ export function Banner({ tone = "cyan", children }: { tone?: "cyan" | "orange" |
     <div style={{
       display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 16px", borderRadius: 12,
       border: `1px solid ${rgba(c, 0.28)}`, background: rgba(c, 0.07),
-      fontSize: 12.5, color: "rgba(255,255,255,0.85)", lineHeight: 1.55,
+      fontSize: 12.5, color: THEME.text, lineHeight: 1.55,
     }}>{children}</div>
   );
 }

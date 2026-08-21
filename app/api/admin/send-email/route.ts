@@ -4,6 +4,7 @@ import { listAllUsersForBroadcast, listWaitlist, addEmailSend, listEmailSends, g
 import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
 import { applyPromoCodesHtml, applyPromoCodesText, hasPromoCodePlaceholder } from "@/lib/promoCodes";
 import { loadLegacyEmails } from "@/lib/emails/legacyEmails";
+import { campaignSlug, tagEmailLinksHtml, tagEmailLinksText } from "@/lib/emails/utm";
 
 // Owner-only email sender. POST composes + sends a broadcast via Resend; GET
 // returns the resolvable recipient lists (all signed-up users / paid subscribers
@@ -159,6 +160,25 @@ export async function POST(req: NextRequest) {
     if (!subject) return NextResponse.json({ error: "Subject is required" }, { status: 400 });
     if (!html && !text) return NextResponse.json({ error: "Message body is required" }, { status: 400 });
 
+    // ── Campaign tagging ──────────────────────────────────────────────────────
+    // Every cbedge.net link in the body gets utm_source/medium/campaign so the
+    // clicks land on the owner Acquisition panel as this send rather than as
+    // "Direct". Defaults are chosen so a send with no campaign fields at all
+    // (an old client, a curl) is still attributed: source "email", campaign
+    // slugged from the subject line.
+    //
+    // Done ONCE here, before the per-recipient loop, because the tags are the
+    // same for everyone — and critically BEFORE applyUnsubscribeHtml/-Text and
+    // the promo-code swap, so `{{UNSUBSCRIBE_URL}}` and `{{PROMO_CODE}}` are
+    // still placeholders and cannot be mangled. See lib/emails/utm.ts.
+    const utm = {
+      source: campaignSlug(String(body?.utmSource ?? "email"), "email"),
+      medium: "email",
+      campaign: campaignSlug(String(body?.utmCampaign ?? "") || subject, "broadcast"),
+    };
+    const taggedHtml = html ? tagEmailLinksHtml(html, utm) : "";
+    const taggedText = text ? tagEmailLinksText(text, utm) : "";
+
     // Resolve recipients.
     let to: string[] = [];
     if (audience === "all") {
@@ -205,19 +225,19 @@ export async function POST(req: NextRequest) {
     // private. Fine for current list sizes.
     const sent: string[] = [];
     const failed: Array<{ batch: string[]; error: string }> = [];
-    const needsPromoCode = hasPromoCodePlaceholder(html) || hasPromoCodePlaceholder(text);
+    const needsPromoCode = hasPromoCodePlaceholder(taggedHtml) || hasPromoCodePlaceholder(taggedText);
     for (const recipient of to) {
       // Mint (or reuse) this recipient's own single-use Stripe promo code if
       // the template references one. Each person gets a code that only works
       // once — never a shared code the whole list races to redeem. A mint
       // failure (e.g. missing coupon env var) fails just this recipient
       // rather than the whole batch.
-      let recipientHtml = html;
-      let recipientText = text;
+      let recipientHtml = taggedHtml;
+      let recipientText = taggedText;
       if (needsPromoCode) {
         try {
-          if (html) recipientHtml = await applyPromoCodesHtml(html, recipient);
-          if (text) recipientText = await applyPromoCodesText(text, recipient);
+          if (taggedHtml) recipientHtml = await applyPromoCodesHtml(taggedHtml, recipient);
+          if (taggedText) recipientText = await applyPromoCodesText(taggedText, recipient);
         } catch (e) {
           failed.push({ batch: [recipient], error: `promo code: ${String(e)}` });
           continue;
@@ -275,6 +295,9 @@ export async function POST(req: NextRequest) {
       failedCount: to.length - sent.length,
       suppressedCount,
       failed: failed.length ? failed : undefined,
+      // Echoed so the compose page can confirm what the clicks will report as,
+      // rather than the owner having to guess at what the subject slugged to.
+      campaign: `${utm.source} / ${utm.medium} / ${utm.campaign}`,
     });
   } catch (err) {
     return NextResponse.json({ error: "Send failed", detail: String(err) }, { status: 500 });

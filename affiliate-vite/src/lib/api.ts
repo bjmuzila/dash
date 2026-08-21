@@ -56,7 +56,7 @@ export type Stats = {
   }[];
 };
 
-export type Creative = { id: string; label: string; render: string; text: string };
+export type Creative = { id: string; label: string; image: string; text: string };
 
 export type CodeRequest = {
   id: number; from_code: string | null; to_code: string; reason: string | null;

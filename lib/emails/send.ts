@@ -6,6 +6,7 @@
 // new-paid-signup welcome) rather than an owner-triggered broadcast.
 
 import { unsubscribeApiUrl, applyUnsubscribeHtml, applyUnsubscribeText } from "@/lib/unsubscribe";
+import { campaignSlug, tagEmailLinksHtml, tagEmailLinksText } from "@/lib/emails/utm";
 import { getUserById } from "@/lib/db";
 
 const RESEND_API_KEY = (process.env.RESEND_API_KEY || "").trim();
@@ -49,23 +50,43 @@ export async function sendTransactional(opts: {
   subject: string;
   html: string;
   text?: string;
+  /**
+   * Campaign tag for the links in this email. Defaults to the template's own
+   * name if the caller passes one, otherwise a slug of the subject — an
+   * untagged automatic email is one whose clicks report as "Direct", which is
+   * indistinguishable from someone typing the URL. See lib/emails/utm.ts.
+   */
+  campaign?: string;
+  /** utm_source. "email" unless a caller has a reason to distinguish itself. */
+  source?: string;
 }): Promise<SendResult> {
   const to = opts.to.trim().toLowerCase();
   if (!RESEND_API_KEY) return { ok: false, skipped: true, reason: "RESEND_API_KEY not set" };
   if (!EMAIL_RE.test(to)) return { ok: false, skipped: true, reason: "invalid recipient" };
+
+  // Tag BEFORE the unsubscribe swap so the {{UNSUBSCRIBE_URL}} placeholder is
+  // still a placeholder and cannot be rewritten. utm.ts refuses to touch it
+  // either way; the ordering is the belt to that pair of braces.
+  const utm = {
+    source: campaignSlug(opts.source ?? "email", "email"),
+    medium: "email",
+    campaign: campaignSlug(opts.campaign ?? "", "") || campaignSlug(opts.subject, "transactional"),
+  };
+  const html = tagEmailLinksHtml(opts.html, utm);
+  const text = opts.text ? tagEmailLinksText(opts.text, utm) : undefined;
 
   const unsubUrl = unsubscribeApiUrl(to);
   const payload: Record<string, unknown> = {
     from: FROM_EMAIL,
     to: [to],
     subject: opts.subject,
-    html: applyUnsubscribeHtml(opts.html, to),
+    html: applyUnsubscribeHtml(html, to),
     headers: {
       "List-Unsubscribe": `<${unsubUrl}>`,
       "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     },
   };
-  if (opts.text) payload.text = applyUnsubscribeText(opts.text, to);
+  if (text) payload.text = applyUnsubscribeText(text, to);
 
   try {
     const r = await fetch("https://api.resend.com/emails", {

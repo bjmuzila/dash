@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Shell from "../components/Shell";
 import { Banner, Card, ErrorNote, Pill } from "../components/ui";
-import { RENDERS, downloadSvgPng } from "../components/renders";
+import { CreativeImage, CREATIVE_W, CREATIVE_H, downloadCreative } from "../components/renders";
 import { useSession } from "../App";
 import { api, type Creative } from "../lib/api";
 import { THEME, TYPE, buttonStyle, cardStyle, secondaryButtonStyle } from "../lib/theme";
@@ -18,14 +18,17 @@ import { THEME, TYPE, buttonStyle, cardStyle, secondaryButtonStyle } from "../li
  * across every affiliate reads as a press release and converts like one; the
  * template is a starting point, not a script.
  *
- * Images are generated client-side from inline SVG (see components/renders.tsx)
- * — no screenshot service, no headless browser, no dependency.
+ * The images are real screenshots served from /creatives/. A slot with no file
+ * yet renders as a labelled empty frame and its buttons stay DISABLED — see
+ * components/renders.tsx. Sharing a card with no picture is worse than not
+ * having the card, so the UI simply won't do it.
  */
 export default function Creatives() {
   const { affiliate } = useSession();
   const [creatives, setCreatives] = useState<Creative[]>([]);
   const [link, setLink] = useState("");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [ready, setReady] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -42,6 +45,7 @@ export default function Creatives() {
 
   if (!affiliate) return null;
   const code = affiliate.code || "";
+  const pending = creatives.filter((c) => ready[c.id] === false).length;
 
   const copy = (id: string) => {
     void navigator.clipboard?.writeText(drafts[id] ?? "");
@@ -58,27 +62,38 @@ export default function Creatives() {
     <Shell wide>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <h1 style={{ margin: 0, fontSize: 20, letterSpacing: "-0.02em" }}>Creatives</h1>
-        <span style={{ fontSize: TYPE.label, color: THEME.dim2 }}>Stamped with {code}</span>
+        <span style={{ fontSize: TYPE.label, color: THEME.dim }}>Stamped with {code}</span>
       </div>
 
       {err && <ErrorNote>{err}</ErrorNote>}
 
+      {pending > 0 && (
+        <Banner tone="orange">
+          <Pill tone="orange">Coming soon</Pill>
+          <span>
+            {pending === creatives.length ? "These images are" : `${pending} of these images are`} still being put
+            together. The copy is ready to use now — grab it, take your own screenshot of the terminal, and post.
+            The finished graphics land here shortly.
+          </span>
+        </Banner>
+      )}
+
       <Banner tone="cyan">
-        <Pill tone="cyan">Read this first</Pill>
+        <Pill tone="cyan">How these work</Pill>
         <span>
-          Every image is generated in your browser and watermarked with <b style={{ fontFamily: "var(--font-mono)" }}>{code}</b>,
-          so a screenshot of your post still credits you. The numbers on them are illustrative examples of the
-          layout — never present them as today's live levels. Edit the copy into your own voice before you send it.
+          Every image is watermarked with <b style={{ fontFamily: "var(--font-mono)" }}>{code}</b> as you download
+          it, so a screenshot of your post still credits you. Edit the copy into your own voice before you send
+          it — identical wording across every affiliate reads like a press release.
         </span>
       </Banner>
 
       {creatives.length === 0 ? (
-        <Card><div style={{ color: THEME.dim2 }}>Creatives unlock once your code is issued.</div></Card>
+        <Card><div style={{ color: THEME.dim }}>Creatives unlock once your code is issued.</div></Card>
       ) : (
         <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit,minmax(420px,1fr))" }}>
           {creatives.map((c) => {
-            const Render = RENDERS[c.render] || RENDERS.heatmap;
-            const svgId = `render-${c.id}`;
+            const imgId = `creative-${c.id}`;
+            const hasImage = ready[c.id] === true;
             return (
               <div key={c.id} className="card-hover" style={{ ...cardStyle, overflow: "hidden" }}>
                 <div style={{
@@ -88,11 +103,18 @@ export default function Creatives() {
                   <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: THEME.dim }}>
                     {c.label}
                   </div>
-                  <div style={{ marginLeft: "auto" }}><Pill tone="grey">1200 × 675</Pill></div>
+                  <div style={{ marginLeft: "auto" }}>
+                    {hasImage ? <Pill tone="grey">{CREATIVE_W} × {CREATIVE_H}</Pill> : <Pill tone="orange">No image yet</Pill>}
+                  </div>
                 </div>
 
-                <div style={{ background: "#05060A", borderBottom: `1px solid ${THEME.border}` }}>
-                  <Render code={code} id={svgId} />
+                <div style={{ borderBottom: `1px solid ${THEME.border}` }}>
+                  <CreativeImage
+                    src={c.image}
+                    code={code}
+                    id={imgId}
+                    onLoaded={(ok) => setReady((r) => (r[c.id] === ok ? r : { ...r, [c.id]: ok }))}
+                  />
                 </div>
 
                 <div style={{ padding: 14 }}>
@@ -107,16 +129,26 @@ export default function Creatives() {
                     }}
                   />
                   <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-                    <button style={buttonStyle} onClick={() => postToX(c.id)}>Post to X</button>
+                    <button
+                      style={{ ...buttonStyle, opacity: hasImage ? 1 : 0.45, cursor: hasImage ? "pointer" : "not-allowed" }}
+                      disabled={!hasImage}
+                      onClick={() => postToX(c.id)}
+                    >Post to X</button>
+                    {/* Copy stays live for an empty slot — the words are usable
+                        with a screenshot the affiliate takes themselves. */}
                     <button style={secondaryButtonStyle} onClick={() => copy(c.id)}>
                       {copied === c.id ? "Copied" : "Copy text"}
                     </button>
-                    <button style={secondaryButtonStyle} onClick={() => downloadSvgPng(svgId, `cbedge-${c.id}-${code}.png`)}>
-                      Download PNG
-                    </button>
+                    <button
+                      style={{ ...secondaryButtonStyle, opacity: hasImage ? 1 : 0.45, cursor: hasImage ? "pointer" : "not-allowed" }}
+                      disabled={!hasImage}
+                      onClick={() => downloadCreative(imgId, code, `cbedge-${c.id}-${code}.png`)}
+                    >Download PNG</button>
                   </div>
-                  <div style={{ fontSize: 11, color: THEME.dim2, marginTop: 10, lineHeight: 1.5 }}>
-                    X won't attach the image for you — download it, then drop it into the composer.
+                  <div style={{ fontSize: 11, color: THEME.dim, marginTop: 10, lineHeight: 1.5 }}>
+                    {hasImage
+                      ? "X won't attach the image for you — download it, then drop it into the composer."
+                      : "Copy the text now and pair it with your own screenshot; the finished graphic is on its way."}
                   </div>
                 </div>
               </div>
@@ -130,7 +162,7 @@ export default function Creatives() {
           <div><b style={{ color: "#fff" }}>Do</b> — show the product, share your own read of the levels, say plainly that you earn a commission.</div>
           <div><b style={{ color: "#fff" }}>Don't</b> — promise returns, post a P&amp;L as if it came from CB Edge, or bid on “CB Edge” in paid search.</div>
           <div><b style={{ color: "#fff" }}>Never</b> — imply you are CB Edge, or run an account that could be mistaken for it.</div>
-          <div style={{ color: THEME.dim2 }}>
+          <div style={{ color: THEME.dim }}>
             Your referral link, for anything you write yourself:{" "}
             <span style={{ color: THEME.cyan, fontFamily: "var(--font-mono)" }}>{link}</span>
           </div>

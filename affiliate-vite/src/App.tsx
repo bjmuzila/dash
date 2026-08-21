@@ -5,6 +5,7 @@ import { shellStyle } from "./lib/theme";
 import Landing from "./pages/Landing";
 import Apply from "./pages/Apply";
 import Login from "./pages/Login";
+import Terms from "./pages/Terms";
 import Dashboard from "./pages/Dashboard";
 import Creatives from "./pages/Creatives";
 import CodePage from "./pages/CodePage";
@@ -93,6 +94,10 @@ export default function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/apply" element={<Apply />} />
             <Route path="/login" element={<Login />} />
+            {/* Public and unauthenticated on purpose — the apply form asks
+                people to accept these, so they have to be readable BEFORE
+                anyone has an account. */}
+            <Route path="/terms" element={<Terms />} />
             <Route path="/dashboard" element={<RequireSession><Dashboard /></RequireSession>} />
             <Route path="/dashboard/creatives" element={<RequireSession><Creatives /></RequireSession>} />
             <Route path="/dashboard/code" element={<RequireSession><CodePage /></RequireSession>} />

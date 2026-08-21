@@ -1,5 +1,198 @@
 # Changelog
 
+## 2026-08-21 (o) - Campaigns: emails tag themselves, a link builder for everything else, and a campaign table that reports outcomes
+
+New: `lib/emails/utm.ts`, `owner-vite/src/components/CampaignLinkBuilder.tsx`.
+Edited: `app/api/admin/send-email/route.ts`, `lib/emails/send.ts`,
+`owner-vite/src/pages/Emails.tsx`, `owner-vite/src/components/AcquisitionPanel.tsx`,
+`owner-vite/src/pages/ControlPanel.tsx`.
+
+An untagged link in an outbound email is indistinguishable from someone typing
+the URL — it lands in "Direct", or under `mail.google.com` if the client leaks a
+referrer. Neither tells you the newsletter worked. Three pieces close that:
+
+### 1. Outbound email tags itself (`lib/emails/utm.ts`)
+
+Both send paths — `/api/admin/send-email` (owner broadcast) and
+`sendTransactional()` — now rewrite every `<a href>` pointing at our own host to
+carry `utm_source` / `utm_medium=email` / `utm_campaign`. Nobody has to remember
+per send.
+
+Five things it deliberately will not touch, each one a way to break a live
+email:
+
+1. **Anything containing `{{`.** `{{UNSUBSCRIBE_URL}}` and `{{PROMO_CODE}}` are
+   swapped per recipient AFTER this runs. A real URL parser percent-encodes the
+   braces, which would ship a dead `%7BPROMO_CODE%7D` to the list.
+2. **Unsubscribe links, by path** — belt-and-braces with (1). A tagged
+   unsubscribe URL is a broken HMAC and a CAN-SPAM problem.
+3. **Anything already carrying `utm_source`** — a hand-tagged template link wins;
+   two campaigns never stack on one URL.
+4. **Foreign hosts.**
+5. **`src=` attributes** — only `<a href>` is rewritten, so the logo image and any
+   tracking pixel are untouched.
+
+The rewrite is string surgery, not `new URL().toString()`. Round-tripping
+normalises case, default ports and percent-encoding, and every one of those is a
+chance to break a signed link; appending a query string cannot. Tagging also runs
+BEFORE the unsubscribe and promo-code swaps, so the placeholders are still
+placeholders when it happens.
+
+Verified against: bare `/`, a path with an existing query, both unsubscribe
+routes, both placeholder shapes, a foreign host, a `mailto:`, an already-tagged
+URL, a URL with a `#hash`, single- and double-quoted `href`, and `img src`.
+
+### 2. Campaign picker in the composer (`Emails.tsx`)
+
+A **Broadcast / Newsletter** toggle (that's `utm_source`, so the letter stops
+being lumped in with one-off blasts) plus a campaign name field, with a live
+preview of the exact query string the links will carry. Loading a template
+prefills the campaign with the template id — stable across re-sends and already
+the name you call it by. Blank is meaningful: the server slugs the subject line,
+so a send is never untagged. The send response echoes the final tag back
+("· tagged newsletter / email / weekly-edge-aug-21").
+
+### 3. Campaign link builder (owner Overview)
+
+For X, YouTube, Discord — links typed by hand, which is where campaign reporting
+usually dies: `youtube` one week, `YouTube` the next, `yt` after that, and now
+one push is three rows that can't be compared. The builder shows the sources and
+campaign names **already in the visit log** as clickable chips, so reusing an
+existing spelling is one click and inventing a fourth takes deliberate typing.
+Platform presets set source and medium together, because the pairing is the part
+that's easy to get wrong.
+
+### 4. The campaign table now reports outcomes, not clicks
+
+`AcquisitionPanel`'s Campaigns section gained **Signups**, **Paid** and a
+conversion column, and is sorted by paid → signups → sessions. The ranking
+answers "which push earned customers" rather than "which push got clicks", and
+those two orders are routinely different.
+
+How the join works: an arrival is anonymous by definition, so there is no user id
+on it to match. The index is built over ALL fetched rows (not the selected
+window — someone can arrive Monday and register Thursday) keyed on the account
+where we have one and the IP where we don't, and a signup counts only if the
+account's `created_at` is at or after the click, with 60s of slack for clock
+skew between the beacon and the sign-up POST. Owner clicks are excluded.
+
+**These numbers are attributed, not audited**, and the footnote under the table
+says so: a shared office IP can credit the wrong campaign, and a phone that
+switches networks between clicking and registering loses the link entirely.
+Direction, not billing.
+
+### Naming convention that keeps the table readable
+
+`utm_source` = where you posted it · `utm_medium` = the bucket it rolls into
+(`social` / `email` / `cpc` / `referral`) · `utm_campaign` = which push it was.
+Reuse the same campaign string across every platform for one push or it splits
+into rows that can't be compared. Everything is slugged lowercase-hyphenated on
+both sides — `campaignSlug()` in `lib/emails/utm.ts` is mirrored by `slug()` in
+the builder and `slugPreview()` in the composer; the three must stay identical.
+
+## 2026-08-21 (n) - Affiliate creatives: real screenshots, empty until they exist
+
+New: `affiliate-vite/CREATIVES.md`, `affiliate-vite/public/creatives/.gitkeep`.
+Edited: `affiliate-vite/src/components/renders.tsx` (rewritten),
+`affiliate-vite/src/pages/Creatives.tsx`, `affiliate-vite/src/lib/api.ts`,
+`server-v2/affiliate-routes.cjs`.
+
+**The hand-drawn SVG mock-ups are gone.** They were four inline SVGs — a fake
+GEX ladder, fake candles, a fake chain — that looked like the product without
+being it. An affiliate posting a mock-up is worse than posting nothing: the
+first person who opens CB Edge sees something that does not match, and the post
+has quietly misrepresented the thing it was selling.
+
+Creatives now render REAL SCREENSHOTS from `/creatives/<id>.png`. The four
+filenames are set server-side in `creativeTemplates()`, so the roster and the
+copy still change without a SPA deploy.
+
+**An empty slot names the file it wants.** Until a PNG is dropped in, the card
+shows a dashed frame reading "Image not added yet", the exact path, and the
+required 1200x675 — a to-do list rather than a bug report. Post to X and
+Download PNG DISABLE themselves for that slot; **Copy text stays live**, because
+the wording is perfectly usable with a screenshot the affiliate takes
+themselves. A banner at the top of the page says how many are still coming and
+tells them exactly that.
+
+**The code stamp is composited, not baked in.** One generic screenshot serves
+every affiliate; the `CODE XXXX` badge is CSS in the preview and painted onto a
+canvas at download time, sized off the image height so it lands the same on a
+1200px file or a 2400px one. Still dependency-free — drawImage + fillText +
+toBlob. The image is same-origin so the canvas never taints.
+
+**`CREATIVES.md` is at the app root, NOT in `public/`.** Anything under
+`public/` is copied to the web root at build, so a README beside the images
+would have been served at `affiliate.cbedge.net/creatives/README.md` — a public
+page listing internal paths and build commands. It documents the four
+filenames, the 1200x675 / 16:9 requirement (what X renders inline without
+cropping), "no live account data", and to leave the bottom-right corner clear
+for the badge.
+
+## 2026-08-21 (m) - Affiliates: no faded grey text anywhere, and real terms
+
+New: `affiliate-vite/src/pages/Terms.tsx`.
+Edited: `server-v2/_lib-affiliate.cjs`, `owner-vite/src/pages/Affiliates.tsx`,
+`affiliate-vite/src/{App.tsx,index.css}`,
+`affiliate-vite/src/components/{Shell,ui,renders}.tsx`,
+`affiliate-vite/src/lib/theme.ts`, `affiliate-vite/src/pages/{Apply,Landing}.tsx`.
+
+**ALL TEXT IS WHITE.** Both surfaces. This was already the house rule —
+`OWNER_THEME.textMuted` has been `#FFFFFF` for months — and the new affiliate
+files broke it with ~40 hardcoded `rgba(255,255,255,0.38)` / `.55` / `.35`
+literals. Every one is now `OWNER_THEME.text` on the owner page, and
+`THEME.dim` / `dim2` in affiliate-vite resolve to `#FFFFFF`.
+
+The two names are KEPT, deliberately: they mark the two secondary text roles
+(supporting copy, micro-labels) and the call sites read better for it. They just
+do not fade any more. Hierarchy comes from size and weight. Do not "restore" an
+alpha there.
+
+Borders and backgrounds were left alone — the sweep was a regex on `color:`
+only, because `border: rgba(255,255,255,0.10)` is a hairline, not text.
+
+Three faded-by-opacity spots went with them:
+- Locked dashboard tabs were greyed to 0.25 before approval. They are HIDDEN
+  now — a tab you cannot click is not information, and a washed-out one is the
+  exact thing being removed.
+- A paused affiliate's code was dimmed to 50%. The Paused pill beside it
+  already says so; fading the code just made it hard to read.
+- The rate-override box on the Active tab was at 0.6.
+
+ONE exception, and it is deliberate: `input::placeholder`. At full white a
+placeholder is indistinguishable from a value the user typed. Lifted 0.28 ->
+0.62 — legible, still obviously a hint.
+
+**Affiliate terms now exist.** The apply form has always shown "I accept the
+affiliate terms" pointing at nothing, which is worse than no checkbox: it is
+agreement to an empty set, and the first argument about a reversed commission
+has nothing to point at.
+
+`/terms` is public and unauthenticated (people accept it BEFORE they have an
+account), linked from the checkbox, the summary banner, the footer and the
+landing CTA. Twelve sections: attribution, what you earn, holding and reversals,
+getting paid, promotion rules, and a hard one on trading claims — no promised
+returns, no P&L presented as a CB Edge outcome, and FTC-style disclosure
+required near the link.
+
+EVERY CLAUSE MATCHES WHAT THE CODE DOES, and that is the rule for editing it.
+The 60-day cookie, the 30-day hold, monthly periods and the 30-day code-change
+grace are all stated with the numbers `_lib-affiliate.cjs` actually uses. There
+is deliberately NO minimum payout threshold in the text, because the payout
+builder has no such rule.
+
+**Acceptance is recorded, not just ticked.** New `terms_accepted_at` /
+`terms_version` columns; `apply()` rejects an application without
+`accept_terms: true` server-side and stamps `TERMS_VERSION` ('2026-08-21').
+Bump that constant in the same commit that edits Terms.tsx — an acceptance you
+cannot tie to a wording is not much of an acceptance. The owner review panel
+shows the date and version, or a red "Not recorded" for the rows that predate
+this.
+
+NOT LEGAL ADVICE — it is a plain-English draft written to match the system.
+Worth a lawyer's eye before it is leaned on, the trading-claims clauses most of
+all.
+
 ## 2026-08-21 (l) - Affiliates: flat 20%, tiers deleted; landing page given colour
 
 Edited: `server-v2/_lib-affiliate.cjs`, `server-v2/affiliate-routes.cjs`,

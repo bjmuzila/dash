@@ -43,6 +43,7 @@ type Affiliate = {
   tier_pct: number; payout_method: string; payout_detail: string | null;
   primary_link: string | null; channels: string[] | null; audience_size: string | null;
   applied_at: string; approved_at: string | null;
+  terms_accepted_at: string | null; terms_version: string | null;
   promo_plan: string | null; other_products: string | null; internal_note: string | null;
   clicks: number; members: number;
   unpaid_cents: number; paid_cents: number; mtd_gross_cents: number;
@@ -97,7 +98,7 @@ function Pill({ tone, children }: { tone: "pending" | "active" | "paused" | "dec
   const map = {
     pending: OWNER_THEME.orange,
     active: "#1FD98A",
-    paused: "rgba(255,255,255,0.45)",
+    paused: OWNER_THEME.text,
     declined: SOFT_RED,
     info: LIGHT_BLUE,
     money: "#1FD98A",
@@ -107,8 +108,10 @@ function Pill({ tone, children }: { tone: "pending" | "active" | "paused" | "dec
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px", borderRadius: 999,
       fontSize: TYPE.micro, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase",
-      color: c, border: `1px solid ${c === "rgba(255,255,255,0.45)" ? OWNER_THEME.border : rgba(String(c), 0.35)}`,
-      background: c === "rgba(255,255,255,0.45)" ? "transparent" : rgba(String(c), 0.10), whiteSpace: "nowrap",
+      // A white pill is the "no state" pill: hairline border, no fill. Every
+      // other tone tints both from its own hue.
+      color: c, border: `1px solid ${c === OWNER_THEME.text ? OWNER_THEME.border : rgba(String(c), 0.35)}`,
+      background: c === OWNER_THEME.text ? "transparent" : rgba(String(c), 0.10), whiteSpace: "nowrap",
     }}>{children}</span>
   );
 }
@@ -121,14 +124,14 @@ function StatusPill({ status }: { status: string }) {
   return <Pill tone="info">{status}</Pill>;
 }
 
-function CodePill({ code, dim }: { code: string | null; dim?: boolean }) {
-  if (!code) return <span style={{ color: "rgba(255,255,255,0.35)" }}>—</span>;
+function CodePill({ code }: { code: string | null; dim?: boolean }) {
+  if (!code) return <span style={{ color: OWNER_THEME.text }}>—</span>;
   return (
     <span style={{
       display: "inline-block", padding: "3px 9px", borderRadius: 6,
       border: `1px dashed ${rgba(OWNER_THEME.cyan, 0.4)}`, background: rgba(OWNER_THEME.cyan, 0.08),
       color: OWNER_THEME.cyan, fontWeight: 700, letterSpacing: "0.06em", fontSize: TYPE.label,
-      fontFamily: "ui-monospace, Menlo, Consolas, monospace", opacity: dim ? 0.5 : 1,
+      fontFamily: "ui-monospace, Menlo, Consolas, monospace",
     }}>{code}</span>
   );
 }
@@ -136,16 +139,16 @@ function CodePill({ code, dim }: { code: string | null; dim?: boolean }) {
 function StatTile({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
   return (
     <div style={{ ...statTileStyle, border: `1px solid ${OWNER_THEME.border}`, padding: "15px 16px" }}>
-      <div style={{ fontSize: 9.5, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(255,255,255,0.38)", fontWeight: 700 }}>{label}</div>
+      <div style={{ fontSize: 9.5, letterSpacing: "0.14em", textTransform: "uppercase", color: OWNER_THEME.text, fontWeight: 700 }}>{label}</div>
       <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", marginTop: 7, lineHeight: 1 }}>{value}</div>
-      {sub != null && <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)", marginTop: 7 }}>{sub}</div>}
+      {sub != null && <div style={{ fontSize: 11, color: OWNER_THEME.text, marginTop: 7 }}>{sub}</div>}
     </div>
   );
 }
 
 const th: CSSProperties = {
   textAlign: "left", fontSize: 9.5, letterSpacing: "0.13em", textTransform: "uppercase",
-  color: "rgba(255,255,255,0.38)", fontWeight: 700, padding: "10px 14px",
+  color: OWNER_THEME.text, fontWeight: 700, padding: "10px 14px",
   borderBottom: `1px solid ${OWNER_THEME.border}`, whiteSpace: "nowrap",
 };
 const td: CSSProperties = {
@@ -165,7 +168,7 @@ function Who({ name, sub }: { name: string; sub?: string | null }) {
       }}>{initials}</span>
       <div>
         <div style={{ fontWeight: 600, fontSize: TYPE.body, lineHeight: 1.25 }}>{name}</div>
-        {sub && <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)" }}>{sub}</div>}
+        {sub && <div style={{ fontSize: 11, color: OWNER_THEME.text }}>{sub}</div>}
       </div>
     </div>
   );
@@ -214,7 +217,7 @@ export default function Affiliates() {
     <PageShell>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <h1 style={{ margin: 0, fontSize: TYPE.title, fontWeight: 700, letterSpacing: "0.01em" }}>Affiliates</h1>
-        <span style={{ fontSize: TYPE.label, color: "rgba(255,255,255,0.38)" }}>affiliate.cbedge.net</span>
+        <span style={{ fontSize: TYPE.label, color: OWNER_THEME.text }}>affiliate.cbedge.net</span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
           <TabBtn on={tab === "onboarding"} onClick={() => setTab("onboarding")}>
             Onboarding{summary && summary.pending + summary.code_requests > 0 ? ` · ${summary.pending + summary.code_requests}` : ""}
@@ -304,10 +307,10 @@ function OnboardingTab({
                           {(a.channels || []).slice(0, 3).map((c) => <Pill key={c} tone="info">{c}</Pill>)}
                         </div>
                       </td>
-                      <td style={{ ...td, ...num, color: "rgba(255,255,255,0.55)" }}>{a.audience_size || "—"}</td>
+                      <td style={{ ...td, ...num, color: OWNER_THEME.text }}>{a.audience_size || "—"}</td>
                       <td style={td}><CodePill code={a.requested_code} /></td>
-                      <td style={{ ...td, color: "rgba(255,255,255,0.55)" }}>{PAYOUT_LABEL[a.payout_method] || a.payout_method}</td>
-                      <td style={{ ...td, color: "rgba(255,255,255,0.38)" }}>{when(a.applied_at)}</td>
+                      <td style={{ ...td, color: OWNER_THEME.text }}>{PAYOUT_LABEL[a.payout_method] || a.payout_method}</td>
+                      <td style={{ ...td, color: OWNER_THEME.text }}>{when(a.applied_at)}</td>
                       <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
                         <button style={btn("ghost")} onClick={() => setOpen(open === a.id ? null : a.id)}>
                           {open === a.id ? "Close" : "Review"}
@@ -376,7 +379,7 @@ function DecisionPanel({
     <div style={{ padding: 20, display: "grid", gap: 18, gridTemplateColumns: "1.4fr 1fr", background: "rgba(255,255,255,0.015)" }}>
       <div>
         <Label>How they plan to promote it</Label>
-        <p style={{ margin: "8px 0 0", fontSize: TYPE.body, lineHeight: 1.6, color: "rgba(255,255,255,0.72)", whiteSpace: "pre-wrap" }}>
+        <p style={{ margin: "8px 0 0", fontSize: TYPE.body, lineHeight: 1.6, color: OWNER_THEME.text, whiteSpace: "pre-wrap" }}>
           {a.promo_plan || "— not answered —"}
         </p>
         <div style={{ height: 1, background: OWNER_THEME.border, margin: "16px 0" }} />
@@ -387,13 +390,21 @@ function DecisionPanel({
             <Label>Payout</Label>
             <div style={{ marginTop: 6, fontSize: TYPE.body }}>
               {PAYOUT_LABEL[a.payout_method] || a.payout_method}
-              {a.payout_detail ? <span style={{ color: "rgba(255,255,255,0.45)" }}> · {a.payout_detail}</span> : null}
+              {a.payout_detail ? <span style={{ color: OWNER_THEME.text }}> · {a.payout_detail}</span> : null}
+            </div>
+          </div>
+          <div>
+            <Label>Terms accepted</Label>
+            <div style={{ marginTop: 6, fontSize: TYPE.body }}>
+              {a.terms_accepted_at
+                ? <>{when(a.terms_accepted_at)} <span style={{ color: OWNER_THEME.text }}>· v{a.terms_version}</span></>
+                : <Pill tone="declined">Not recorded</Pill>}
             </div>
           </div>
         </div>
         <div style={{ height: 1, background: OWNER_THEME.border, margin: "16px 0" }} />
         <Label>Other products promoted</Label>
-        <p style={{ margin: "8px 0 0", fontSize: TYPE.body, color: "rgba(255,255,255,0.55)" }}>{a.other_products || "None declared."}</p>
+        <p style={{ margin: "8px 0 0", fontSize: TYPE.body, color: OWNER_THEME.text }}>{a.other_products || "None declared."}</p>
       </div>
 
       <div>
@@ -445,7 +456,7 @@ function DecisionPanel({
             onDone();
           })}
         >Decline</button>
-        <div style={{ marginTop: 10, fontSize: 11, color: "rgba(255,255,255,0.38)", lineHeight: 1.5 }}>
+        <div style={{ marginTop: 10, fontSize: 11, color: OWNER_THEME.text, lineHeight: 1.5 }}>
           Approving issues the code, unlocks their dashboard and starts tracking immediately.
         </div>
       </div>
@@ -463,15 +474,15 @@ function CodeRequestRow({ a, run, busy }: { a: Affiliate; run: (fn: () => Promis
       <div style={{ minWidth: 200 }}><Who name={a.name} sub={a.email} /></div>
       <div style={{ flex: 1, minWidth: 260 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <CodePill code={a.code} dim /> <span style={{ color: "rgba(255,255,255,0.38)" }}>→</span> <CodePill code={a.pending_to_code} />
-          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.38)" }}>requested {when(a.pending_requested_at)}</span>
+          <CodePill code={a.code} dim /> <span style={{ color: OWNER_THEME.text }}>→</span> <CodePill code={a.pending_to_code} />
+          <span style={{ fontSize: 11, color: OWNER_THEME.text }}>requested {when(a.pending_requested_at)}</span>
         </div>
         {a.pending_reason && (
-          <div style={{ marginTop: 7, fontSize: TYPE.label, color: "rgba(255,255,255,0.55)" }}>&ldquo;{a.pending_reason}&rdquo;</div>
+          <div style={{ marginTop: 7, fontSize: TYPE.label, color: OWNER_THEME.text }}>&ldquo;{a.pending_reason}&rdquo;</div>
         )}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <label style={{ fontSize: 11, color: "rgba(255,255,255,0.55)", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+        <label style={{ fontSize: 11, color: OWNER_THEME.text, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
           <input type="checkbox" checked={keepOld} onChange={(e) => setKeepOld(e.target.checked)} style={{ accentColor: OWNER_THEME.cyan }} />
           Keep old code live 30d
         </label>
@@ -546,16 +557,16 @@ function ActiveTab({
                         const v = Number(e.target.value);
                         if (v !== a.tier_pct) void run(() => post("/api/aff/owner/affiliate", { id: a.id, action: "tier", tier_pct: v }));
                       }}
-                      style={{ ...homeInputStyle, padding: "3px 6px", fontSize: TYPE.micro, width: 58, marginLeft: 8, opacity: 0.6 }}
+                      style={{ ...homeInputStyle, padding: "3px 6px", fontSize: TYPE.micro, width: 58, marginLeft: 8 }}
                     />
                   </td>
                   <td style={{ ...td, ...num }}>{a.clicks.toLocaleString()}</td>
                   <td style={{ ...td, ...num }}>{a.members}</td>
                   <td style={{ ...td, ...num }}>{money(a.mtd_gross_cents)}</td>
-                  <td style={{ ...td, ...num, color: a.unpaid_cents > 0 ? "#1FD98A" : "rgba(255,255,255,0.38)" }}>{money(a.unpaid_cents)}</td>
-                  <td style={{ ...td, color: "rgba(255,255,255,0.55)", fontSize: TYPE.label }}>
+                  <td style={{ ...td, ...num, color: a.unpaid_cents > 0 ? "#1FD98A" : OWNER_THEME.text }}>{money(a.unpaid_cents)}</td>
+                  <td style={{ ...td, color: OWNER_THEME.text, fontSize: TYPE.label }}>
                     {PAYOUT_LABEL[a.payout_method] || a.payout_method}
-                    {a.payout_detail ? <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10 }}>{a.payout_detail}</div> : null}
+                    {a.payout_detail ? <div style={{ color: OWNER_THEME.text, fontSize: 10 }}>{a.payout_detail}</div> : null}
                   </td>
                   <td style={td}>
                     {a.pending_request_id ? <Pill tone="info">Edit requested</Pill> : <StatusPill status={a.status} />}
@@ -655,21 +666,21 @@ function PayoutsTab({ run, busy }: { run: (fn: () => Promise<unknown>) => Promis
                     <td style={td}><CodePill code={p.code} /></td>
                     <td style={{ ...td, ...num }}>{p.sales}</td>
                     <td style={{ ...td, ...num }}>{money(p.gross_cents)}</td>
-                    <td style={{ ...td, ...num, color: p.refunds_cents ? SOFT_RED : "rgba(255,255,255,0.38)" }}>
+                    <td style={{ ...td, ...num, color: p.refunds_cents ? SOFT_RED : OWNER_THEME.text }}>
                       {p.refunds_cents ? `−${money(p.refunds_cents)}` : "$0"}
                     </td>
                     <td style={{ ...td, ...num, color: LIGHT_BLUE }}>{p.tier_pct}%</td>
                     <td style={{ ...td, ...num, fontWeight: 700, color: "#1FD98A" }}>{money2(p.commission_cents)}</td>
-                    <td style={{ ...td, color: "rgba(255,255,255,0.55)", fontSize: TYPE.label }}>
+                    <td style={{ ...td, color: OWNER_THEME.text, fontSize: TYPE.label }}>
                       {PAYOUT_LABEL[p.method || ""] || p.method || "—"}
-                      {p.payout_detail ? <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10 }}>{p.payout_detail}</div> : null}
+                      {p.payout_detail ? <div style={{ color: OWNER_THEME.text, fontSize: 10 }}>{p.payout_detail}</div> : null}
                     </td>
                     <td style={td}>
                       {p.status === "paid" ? <Pill tone="active">Paid</Pill>
                         : p.status === "approved" ? <Pill tone="money">Approved</Pill>
                         : p.status === "held" ? <Pill tone="declined">Held</Pill>
                         : <Pill tone="pending">Needs approval</Pill>}
-                      {p.reference && <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 4, fontFamily: "ui-monospace, Menlo, monospace" }}>{p.reference}</div>}
+                      {p.reference && <div style={{ fontSize: 10, color: OWNER_THEME.text, marginTop: 4, fontFamily: "ui-monospace, Menlo, monospace" }}>{p.reference}</div>}
                     </td>
                     <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
                       {p.status === "pending" && (
@@ -687,7 +698,7 @@ function PayoutsTab({ run, busy }: { run: (fn: () => Promise<unknown>) => Promis
                         <button disabled={busy} style={{ ...btn("ghost"), marginLeft: 6 }}
                           onClick={() => run(async () => { await post("/api/aff/owner/payout", { id: p.id, action: "hold" }); await load(period); })}>Hold</button>
                       )}
-                      {p.status === "paid" && <span style={{ color: "rgba(255,255,255,0.35)", fontSize: TYPE.label }}>{when(p.paid_at)}</span>}
+                      {p.status === "paid" && <span style={{ color: OWNER_THEME.text, fontSize: TYPE.label }}>{when(p.paid_at)}</span>}
                     </td>
                   </tr>
                 ))}
@@ -719,13 +730,13 @@ function PayoutsTab({ run, busy }: { run: (fn: () => Promise<unknown>) => Promis
               <tbody>
                 {history.map((h, i) => (
                   <tr key={`${h.period}-${h.name}-${i}`}>
-                    <td style={{ ...td, color: "rgba(255,255,255,0.38)" }}>{when(h.paid_at)}</td>
+                    <td style={{ ...td, color: OWNER_THEME.text }}>{when(h.paid_at)}</td>
                     <td style={td}>{h.name}</td>
                     <td style={td}><CodePill code={h.code} /></td>
-                    <td style={{ ...td, color: "rgba(255,255,255,0.38)" }}>{h.period}</td>
+                    <td style={{ ...td, color: OWNER_THEME.text }}>{h.period}</td>
                     <td style={{ ...td, ...num }}>{money2(h.commission_cents)}</td>
-                    <td style={{ ...td, color: "rgba(255,255,255,0.55)" }}>{PAYOUT_LABEL[h.method || ""] || h.method || "—"}</td>
-                    <td style={{ ...td, color: "rgba(255,255,255,0.38)", fontFamily: "ui-monospace, Menlo, monospace", fontSize: TYPE.label }}>{h.reference || "—"}</td>
+                    <td style={{ ...td, color: OWNER_THEME.text }}>{PAYOUT_LABEL[h.method || ""] || h.method || "—"}</td>
+                    <td style={{ ...td, color: OWNER_THEME.text, fontFamily: "ui-monospace, Menlo, monospace", fontSize: TYPE.label }}>{h.reference || "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -750,7 +761,7 @@ function MarkPaid({
   return (
     <div>
       <div style={{ fontSize: TYPE.title, fontWeight: 700, marginBottom: 4 }}>Mark paid — {p.name}</div>
-      <div style={{ fontSize: TYPE.label, color: "rgba(255,255,255,0.45)", marginBottom: 18 }}>
+      <div style={{ fontSize: TYPE.label, color: OWNER_THEME.text, marginBottom: 18 }}>
         {money2(p.commission_cents)} for {p.period}
         {p.payout_detail ? ` · ${p.payout_detail}` : ""}
       </div>
@@ -782,7 +793,7 @@ function MarkPaid({
         >Confirm paid</button>
         <button style={btn("ghost")} onClick={onCancel}>Cancel</button>
       </div>
-      <div style={{ marginTop: 10, fontSize: 11, color: "rgba(255,255,255,0.38)" }}>
+      <div style={{ marginTop: 10, fontSize: 11, color: OWNER_THEME.text }}>
         Confirming flips every cleared ledger row for {p.period} to paid, so it stops counting as owed. A reference is required — that is the only record of the actual transfer.
       </div>
     </div>
@@ -793,16 +804,16 @@ function MarkPaid({
 function SectionHead({ title, right }: { title: string; right?: ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 18px", borderBottom: `1px solid ${OWNER_THEME.border}` }}>
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(255,255,255,0.55)" }}>{title}</div>
-      <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", fontSize: TYPE.label, color: "rgba(255,255,255,0.38)" }}>{right}</div>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: OWNER_THEME.text }}>{title}</div>
+      <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", fontSize: TYPE.label, color: OWNER_THEME.text }}>{right}</div>
     </div>
   );
 }
 function Empty({ children }: { children: ReactNode }) {
-  return <div style={{ padding: "28px 18px", fontSize: TYPE.body, color: "rgba(255,255,255,0.38)", lineHeight: 1.6 }}>{children}</div>;
+  return <div style={{ padding: "28px 18px", fontSize: TYPE.body, color: OWNER_THEME.text, lineHeight: 1.6 }}>{children}</div>;
 }
 function Label({ children }: { children: ReactNode }) {
-  return <div style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(255,255,255,0.38)", fontWeight: 700 }}>{children}</div>;
+  return <div style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: OWNER_THEME.text, fontWeight: 700 }}>{children}</div>;
 }
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (

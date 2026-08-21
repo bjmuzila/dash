@@ -103,33 +103,42 @@ async function ensurePromotionCode(code) {
   }
 }
 
-/** The post templates the affiliate dashboard renders. Copy lives here (server
- *  side) so it can be edited without a front-end deploy. */
+/**
+ * The post templates the affiliate dashboard renders. Copy lives here (server
+ * side) so it can be edited without a front-end deploy.
+ *
+ * `image` is a path into affiliate-vite/public/. The files are REAL SCREENSHOTS
+ * of the terminal, not generated art — see the header of
+ * affiliate-vite/src/components/renders.tsx for why. A slot whose file is not
+ * on disk renders as a labelled empty frame naming the path it wants, and its
+ * Post/Download buttons stay disabled, so an affiliate can never share a blank
+ * card. Adding one is: drop the PNG, rebuild the affiliates image.
+ */
 function creativeTemplates(code) {
   const link = `${AFFILIATE_URL}/r/${code}`;
   return [
     {
       id: 'gex-walls',
       label: 'GEX heatmap',
-      render: 'heatmap',
+      image: '/creatives/gex-walls.png',
       text: `Dealer walls for today are set. Call Wall, Put Wall, Bullseye — all live.\n\nThis is the CB Edge GEX map, updating all session.\n${link}`,
     },
     {
       id: 'es-em',
       label: 'ES candles + EM band',
-      render: 'candles',
+      image: '/creatives/es-em.png',
       text: `ES against the estimated-move band overnight. Full session context on CB Edge.\n\nCode ${code}\n${link}`,
     },
     {
       id: 'phone',
       label: 'Phone build',
-      render: 'phone',
+      image: '/creatives/phone.png',
       text: `The part nobody else does: a phone build actually built for the phone. Heatmap, chain, EM, econ calendar — all live.\n${link}`,
     },
     {
       id: 'chain',
       label: 'Options chain',
-      render: 'chain',
+      image: '/creatives/chain.png',
       text: `Full SPX chain with greeks, whale prints and a 0DTE scanner in one place.\n\n${link}`,
     },
   ];

@@ -51,22 +51,23 @@ export default function Shell({ children, wide }: { children: ReactNode; wide?: 
 
         {inDashboard && (
           <div style={{ display: "flex", gap: 3, marginLeft: 8, flexWrap: "wrap" }}>
-            {TABS.map((t) => {
-              // Only the overview tab is reachable before approval — the other
-              // three describe a code that does not exist yet.
-              const locked = !active && t.to !== "/dashboard";
+            {/* Before approval only the overview tab exists — the other three
+                describe a code that has not been issued yet. They are HIDDEN
+                rather than greyed: a tab you cannot click is not information,
+                and a washed-out one is exactly the faded text this palette
+                exists to avoid. */}
+            {TABS.filter((t) => active || t.to === "/dashboard").map((t) => {
               const on = pathname === t.to;
               return (
                 <Link
                   key={t.to}
-                  to={locked ? pathname : t.to}
+                  to={t.to}
                   style={{
                     padding: "6px 11px", borderRadius: 7, fontSize: TYPE.label,
-                    color: on ? THEME.cyan : locked ? "rgba(255,255,255,0.25)" : THEME.dim,
+                    color: on ? THEME.cyan : THEME.text,
                     background: on ? `linear-gradient(180deg,${rgba(THEME.cyan, 0.16)},${rgba(THEME.cyan, 0.04)})` : "transparent",
                     border: on ? `1px solid ${rgba(THEME.cyan, 0.30)}` : "1px solid transparent",
                     boxShadow: on ? `0 0 14px ${rgba(THEME.cyan, 0.22)}` : "none",
-                    cursor: locked ? "not-allowed" : "pointer",
                   }}
                 >{t.label}</Link>
               );
@@ -105,7 +106,9 @@ export default function Shell({ children, wide }: { children: ReactNode; wide?: 
         maxWidth: 1360, width: "100%", marginInline: "auto",
       }}>
         <span>© CB Edge</span>
-        <a href="https://cbedge.net/terms" style={{ color: THEME.dim }}>Terms</a>
+        <Link to="/terms" style={{ color: THEME.dim }}>Affiliate terms</Link>
+        <a href="https://cbedge.net/terms" style={{ color: THEME.dim }}>Site terms</a>
+        <a href="https://cbedge.net/risk-disclosure" style={{ color: THEME.dim }}>Risk disclosure</a>
         <a href="https://cbedge.net/privacy" style={{ color: THEME.dim }}>Privacy</a>
         <a href="https://cbedge.net" style={{ color: THEME.dim }}>cbedge.net</a>
         <span style={{ marginLeft: "auto" }}>Commission is paid on collected revenue, after the refund window.</span>

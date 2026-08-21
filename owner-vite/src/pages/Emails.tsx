@@ -21,6 +21,20 @@ const AUDIENCE_OPTIONS: SegOption[] = [
   { value: "custom", label: "✏️ Custom" },
 ];
 
+/**
+ * Preview-only mirror of campaignSlug() in lib/emails/utm.ts. The SERVER slug is
+ * the one that ships — this exists so the composer can show what the link will
+ * say before you press send, and the two must be kept identical.
+ */
+function slugPreview(input: string): string {
+  return (input || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    .replace(/-+$/g, "");
+}
+
 interface Counts { all: number; subscribers: number; notPaying: number; waitlist: number; oldEmails: number; oldEmails2: number }
 interface Lists { all: string[]; subscribers: string[]; notPaying: string[]; waitlist: string[]; oldEmails: string[]; oldEmails2: string[] }
 interface SendRecord {
@@ -37,6 +51,10 @@ export default function Emails() {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [customTo, setCustomTo] = useState("");
+  // Campaign tagging. `campaign` blank = the server slugs the subject line, so
+  // a send is never untagged; typing here overrides it. See lib/emails/utm.ts.
+  const [utmSource, setUtmSource] = useState<"email" | "newsletter">("email");
+  const [campaign, setCampaign] = useState("");
 
   const [counts, setCounts] = useState<Counts | null>(null);
   const [lists, setLists] = useState<Lists | null>(null);
@@ -74,6 +92,9 @@ export default function Emails() {
       if (!res.ok) throw new Error(j?.error || `Failed to load template (${res.status})`);
       setSubject(j.template?.subject ?? "");
       setBody(j.template?.html ?? "");
+      // The template id is a better campaign name than its subject line —
+      // stable across re-sends and already the name you call it by.
+      setCampaign(id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Template load failed");
     } finally {
@@ -158,7 +179,12 @@ export default function Emails() {
     setError(null);
     setResult(null);
     try {
-      const payload: Record<string, unknown> = { subject: subj, html, audience };
+      const payload: Record<string, unknown> = {
+        subject: subj, html, audience,
+        utmSource,
+        // Blank is meaningful: the server falls back to a slug of the subject.
+        utmCampaign: campaign.trim(),
+      };
       if (audience === "custom") {
         payload.to = customTo.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
       }
@@ -173,7 +199,8 @@ export default function Emails() {
       const failDetail = Array.isArray(j.failed) && j.failed.length
         ? " — " + j.failed.slice(0, 3).map((f: { error?: string }) => f.error || "unknown error").join("; ")
         : "";
-      setResult(`Sent to ${j.sentCount} recipient${j.sentCount === 1 ? "" : "s"}${failNote}.${failDetail}`);
+      const camp = j.campaign ? ` · tagged ${j.campaign}` : "";
+      setResult(`Sent to ${j.sentCount} recipient${j.sentCount === 1 ? "" : "s"}${failNote}${camp}.${failDetail}`);
       setSubject("");
       setBody("");
       loadHistory();
@@ -357,6 +384,46 @@ export default function Emails() {
               maxLength={200}
               style={{ ...homeInputStyle, fontSize: 14, width: "100%", fontFamily: "inherit" }}
             />
+          </div>
+
+          {/* Campaign — what the clicks report as on the owner Acquisition
+              panel. Every cbedge.net link in the body is tagged at send time
+              (lib/emails/utm.ts); the unsubscribe link never is. */}
+          <div>
+            {label("Campaign")}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {(["email", "newsletter"] as const).map((s) => {
+                const on = s === utmSource;
+                return (
+                  <button
+                    key={s}
+                    onClick={() => setUtmSource(s)}
+                    title={s === "newsletter"
+                      ? "Reports as utm_source=newsletter — keeps the letter separate from one-off blasts."
+                      : "Reports as utm_source=email — one-off broadcasts."}
+                    style={{
+                      padding: "6px 14px", fontSize: 13, fontWeight: 700, borderRadius: 8, cursor: "pointer",
+                      color: on ? HOME_THEME.cyan : HOME_THEME.text,
+                      background: on ? `${HOME_THEME.cyan}22` : "rgba(255,255,255,0.04)",
+                      border: `1px solid ${on ? `${HOME_THEME.cyan}55` : HOME_THEME.border}`,
+                    }}
+                  >
+                    {s === "email" ? "Broadcast" : "Newsletter"}
+                  </button>
+                );
+              })}
+              <input
+                value={campaign}
+                onChange={(e) => setCampaign(e.target.value)}
+                placeholder="campaign name (blank = from subject)"
+                maxLength={60}
+                style={{ ...homeInputStyle, fontSize: 14, flex: 1, minWidth: 200, fontFamily: "inherit" }}
+              />
+            </div>
+            <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.5, marginTop: 6, fontFamily: "monospace", wordBreak: "break-all" }}>
+              ?utm_source={utmSource}&amp;utm_medium=email&amp;utm_campaign=
+              {slugPreview(campaign.trim() || subject) || "broadcast"}
+            </div>
           </div>
 
           <div>

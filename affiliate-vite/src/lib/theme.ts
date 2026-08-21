@@ -30,8 +30,14 @@ export const THEME = {
   up: "#30d158",
   down: "#ff5b5b",
   text: "#FFFFFF",
-  dim: "rgba(255,255,255,0.55)",
-  dim2: "rgba(255,255,255,0.38)",
+  // NOT faded. `dim` and `dim2` are kept as NAMES because they mark the two
+  // secondary text roles (supporting copy, and micro-labels) and the call sites
+  // read better for it — but both resolve to pure white. Hierarchy on this
+  // surface comes from SIZE and WEIGHT, never from washing text out. Do not
+  // "restore" an alpha here; low-opacity body text is the thing this palette
+  // exists to avoid.
+  dim: "#FFFFFF",
+  dim2: "#FFFFFF",
   border: "rgba(255,255,255,0.10)",
   panelBg: "rgba(13,17,25,0.45)",
   panelBgStrong: "rgba(13,17,25,0.72)",

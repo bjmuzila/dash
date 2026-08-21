@@ -32,7 +32,10 @@ input, select, textarea { font-family: inherit; }
 
 /* The one place a stylesheet beats inline styles: placeholder + focus, which
    cannot be expressed as a React style object. */
-input::placeholder, textarea::placeholder { color: rgba(255,255,255,0.28); }
+/* The ONE place text is not solid white, and it has to be: a placeholder at
+   full strength is indistinguishable from a value the user actually typed.
+   Lifted well clear of the old 0.28 wash — legible, still obviously a hint. */
+input::placeholder, textarea::placeholder { color: rgba(255,255,255,0.62); }
 input:focus, select:focus, textarea:focus {
   border-color: rgba(33,158,188,0.5);
   box-shadow: 0 0 0 3px rgba(33,158,188,0.10);

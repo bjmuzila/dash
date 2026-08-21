@@ -88,6 +88,15 @@ const RATE_PCT = Math.max(0, Math.min(100, Number(process.env.AFFILIATE_RATE_PCT
  */
 const MAX_RATE_PCT = 50;
 
+/**
+ * The version of the affiliate terms in force, stamped onto every application.
+ * It is a DATE because that is what the terms page shows ("Last updated ..."),
+ * and an acceptance you cannot tie to a specific wording is not much of an
+ * acceptance. Bump this in the SAME commit that edits
+ * affiliate-vite/src/pages/Terms.tsx, and keep the two strings identical.
+ */
+const TERMS_VERSION = '2026-08-21';
+
 /** Payout rails. Stripe + PayPal + Zelle — nothing else is wired. */
 const PAYOUT_METHODS = ['stripe', 'paypal', 'zelle'];
 
@@ -149,6 +158,12 @@ async function ensureSchema() {
     // Older code kept the previous code live for a grace window after a swap so
     // links already in the wild keep attributing. Added separately (not in the
     // CREATE above) so an existing deployment picks it up.
+    // Proof of acceptance. The apply form has always shown a terms checkbox;
+    // until these columns existed, ticking it left no record anywhere, which
+    // makes it decorative. Now the application stores WHEN it was accepted and
+    // WHICH version — the two things any dispute actually turns on.
+    await pool.query(`ALTER TABLE aff_affiliates ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE aff_affiliates ADD COLUMN IF NOT EXISTS terms_version TEXT`);
     await pool.query(`ALTER TABLE aff_affiliates ADD COLUMN IF NOT EXISTS prev_code TEXT`);
     await pool.query(`ALTER TABLE aff_affiliates ADD COLUMN IF NOT EXISTS prev_code_until TIMESTAMPTZ`);
     // The program launched briefly with a 10/15/20 tier ladder and a default of
@@ -497,6 +512,13 @@ async function apply(input, req) {
   if (c.error) return { ok: false, code: 400, error: c.error };
   if (!(await codeAvailable(c.code))) return { ok: false, code: 409, error: `"${c.code}" is already taken.` };
 
+  // Server-side, not just the checkbox. A client that skips the box is a client
+  // that never agreed to anything, and the whole point of storing the version
+  // below is that it is a record we made, not one they told us to make.
+  if (input?.accept_terms !== true) {
+    return { ok: false, code: 400, error: 'You need to accept the affiliate terms.' };
+  }
+
   const method = PAYOUT_METHODS.includes(String(input?.payout_method)) ? String(input.payout_method) : 'stripe';
   const channels = Array.isArray(input?.channels) ? input.channels.slice(0, 12).map((s) => String(s).slice(0, 40)) : [];
 
@@ -508,8 +530,9 @@ async function apply(input, req) {
   const { rows } = await libDb.getPool().query(
     `INSERT INTO aff_affiliates
        (email, password_hash, name, requested_code, channels, primary_link,
-        audience_size, promo_plan, other_products, payout_method, payout_detail)
-     VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)
+        audience_size, promo_plan, other_products, payout_method, payout_detail,
+        terms_accepted_at, terms_version)
+     VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11, now(), $12)
      RETURNING *`,
     [email, hashPassword(input.password), name, c.code, JSON.stringify(channels),
      String(input?.primary_link || '').slice(0, 300) || null,
@@ -517,7 +540,8 @@ async function apply(input, req) {
      String(input?.promo_plan || '').slice(0, 4000) || null,
      String(input?.other_products || '').slice(0, 2000) || null,
      method,
-     String(input?.payout_detail || '').slice(0, 200) || null]);
+     String(input?.payout_detail || '').slice(0, 200) || null,
+     TERMS_VERSION]);
 
   const row = rows[0];
   const { token } = await createSession(row.id, req);
@@ -570,6 +594,8 @@ function publicAffiliate(row) {
     payout_detail: row.payout_detail,
     applied_at: row.applied_at,
     approved_at: row.approved_at,
+    terms_accepted_at: row.terms_accepted_at,
+    terms_version: row.terms_version,
     decline_reason: row.status === 'declined' ? row.decline_reason : null,
   };
 }
@@ -777,6 +803,7 @@ async function ownerRoster() {
     SELECT a.id, a.name, a.email, a.status, a.code, a.requested_code, a.tier_pct,
            a.payout_method, a.primary_link, a.channels, a.audience_size,
            a.applied_at, a.approved_at, a.promo_plan, a.other_products,
+           a.terms_accepted_at, a.terms_version,
            a.internal_note, a.payout_detail,
            COALESCE(cl.n, 0)::int                       AS clicks,
            COALESCE(rf.members, 0)::int                 AS members,
@@ -854,6 +881,7 @@ async function buildPayouts(period) {
 module.exports = {
   // constants
   COOKIE_NAME, REF_COOKIE, SESSION_DAYS, RATE_PCT, MAX_RATE_PCT, PAYOUT_METHODS,
+  TERMS_VERSION,
   RESERVED_CODES, DEFAULT_COOKIE_DAYS, HOLD_DAYS,
   // plumbing
   ensureSchema, parseCookies, clientIp, sha256, currentPeriod, commissionCents,
