@@ -156,16 +156,35 @@ export const POSTMARKET_CSS = `
 .pmk .taps i.b{background:var(--neg);height:16px}
 .pmk .taps i.c{background:var(--amber);height:10px}
 
-/* 3 — evolution. ONE bar (now) + a caret where 09:30 was + a hatch for the
-   change between them. Drawing both profiles as filled shapes was unreadable. */
-.pmk .evrow{display:grid;grid-template-columns:54px 1fr 132px 84px;align-items:center;height:21px;gap:8px}
-/* Build-time segments: the bar keeps the profile's shape and its COLOUR
-   composition is the change — blue morning, violet midday, amber power hour.
-   Laid from the centre outwards in time order, so a bar reads left to right the
-   way the day ran. Shares are normalised over the ABSOLUTE moves, so a strike
-   that built and then gave some back reads as its two moves, not as >100%. */
+/* 3 — evolution. ONE bar (now) + the day's peak tick + a hatch for what was
+   given back between them.
+   ALL BARS GROW RIGHT off a shared left edge. The mirrored layout this replaced
+   put negative strikes on the left of a centre axis, which meant bar LENGTH read
+   in two different directions and the two halves could not be compared at all.
+   Sign now lives in its own two columns — a +/− chip and the signed dollar
+   value — so length always means the same thing. */
+.pmk .evrow{display:grid;grid-template-columns:54px 13px 60px 1fr 124px 76px;
+  align-items:center;height:21px;gap:7px}
+.pmk .evrow .sgn{font-size:11px;font-weight:800;text-align:center;line-height:1}
+.pmk .evrow .sgn.p{color:var(--pos)}
+.pmk .evrow .sgn.n{color:var(--neg)}
+.pmk .evrow .netcol{font-size:9.5px;text-align:right;white-space:nowrap;font-weight:600}
+/* Left-anchored rail. Overrides the centre-axis .track the premarket profile
+   uses (higher specificity, so it wins regardless of sheet order) — that
+   gradient draws a zero line down the middle, which is meaningless here. */
+.pmk .evrow .track{position:relative;height:13px;border-radius:3px;background:#141b26;
+  box-shadow:inset 1px 0 0 var(--line2)}
+.pmk .evrow .track.neg{background:#1a1520}
+/* Build-time segments: the bar keeps the profile's magnitude and its COLOUR
+   composition is WHEN that gamma arrived — blue morning, violet midday, amber
+   power hour. Laid left→right in time order, so a bar reads the way the day ran.
+   Shares are normalised over the ABSOLUTE moves, so a strike that built and then
+   gave some back reads as its two moves, not as >100%. */
 .pmk .evrow .seg{position:absolute;top:3px;bottom:3px}
 .pmk .evrow .seg:first-of-type{border-radius:2px 0 0 2px}
+.pmk .evrow .bar{position:absolute;left:0;top:3px;bottom:3px;border-radius:2px}
+.pmk .evrow .bar.p{background:var(--pos)}
+.pmk .evrow .bar.n{background:var(--neg)}
 .pmk .builtcol{font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
 .pmk .builtcol .sep{color:var(--dim2)}
 .pmk .evrow .k{font-size:10.5px;text-align:right;color:var(--dim)}
@@ -311,6 +330,10 @@ const fmtPx = (v: number | null | undefined, dp = 0) =>
 
 const fmtPts = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) ? "—" : `${v >= 0 ? "+" : "−"}${nf(Math.abs(v), 0)} pts`;
+
+/** Minute-of-day (ET) → "13:16". The bucket boundaries are minutes, not stamps. */
+const etMinOfDay = (mins: number) =>
+  `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(Math.round(mins % 60)).padStart(2, "0")}`;
 
 const fmtPct = (v: number | null | undefined, dp = 2) =>
   v == null || !Number.isFinite(v) ? "—" : `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(dp)}%`;
@@ -470,31 +493,65 @@ export default function PostMarketTab(p: PostMarketProps) {
     dominant: { share: number; color: string; label: string } | null;
   };
 
-  const BUCKET_DEFS = [
-    { until: 12 * 60, color: "var(--blue)", label: "AM" },
-    { until: 15 * 60, color: "var(--violet)", label: "MID" },
-    { until: RTH_CLOSE_MIN, color: "var(--amber)", label: "PM" },
-  ];
+  const BUCKET_DEFS = useMemo(() => [
+    { from: RTH_OPEN_MIN, until: 12 * 60, color: "var(--blue)", label: "AM" },
+    { from: 12 * 60, until: 15 * 60, color: "var(--violet)", label: "MID" },
+    { from: 15 * 60, until: RTH_CLOSE_MIN, color: "var(--amber)", label: "PM" },
+  ], []);
+
+  /**
+   * WHICH BUCKETS THE RECORDING CAN ACTUALLY SUPPORT.
+   *
+   * This was a real bug, not a cosmetic one: the buckets used to be hard-wired
+   * to [0, noon, 15:00, end] with `idxAtMin` snapping to the NEAREST column. On
+   * a day the recorder started after noon — which happens whenever the ladder
+   * job restarts intraday — `idxAtMin(12:00)` returned index 0, so the AM move
+   * was |vals[0] − vals[0]| = 0 for EVERY strike and the blue segment silently
+   * did not exist. "I don't see any blue" was the chart being honest about a
+   * gap while looking like a chart with no morning activity.
+   *
+   * Now the bucket list is derived from the recording's real coverage, and a
+   * bucket that was never recorded is dropped AND named in the legend.
+   */
+  const evCover = useMemo(() => {
+    if (!cols.length) return null;
+    return { from: etMinutes(cols[0].ts), to: etMinutes(cols[cols.length - 1].ts) };
+  }, [cols]);
+
+  const activeBuckets = useMemo(() => {
+    if (!evCover) return [];
+    // A bucket survives only if the recording covers a real slice of it — 5+
+    // minutes, so a ladder that starts at 11:58 does not claim a morning.
+    return BUCKET_DEFS.filter((b) => Math.min(b.until, evCover.to) - Math.max(b.from, evCover.from) >= 5);
+  }, [BUCKET_DEFS, evCover]);
+
+  const missingBuckets = useMemo(
+    () => BUCKET_DEFS.filter((b) => !activeBuckets.includes(b)),
+    [BUCKET_DEFS, activeBuckets],
+  );
 
   const evRows = useMemo<EvRow[]>(() => {
-    const noonI = idxAtMin(12 * 60);
-    const threeI = idxAtMin(15 * 60);
+    // Boundary column for each active bucket's END, clamped into range. Built
+    // from the ACTIVE list, so the segments always describe recorded time.
+    const bounds = activeBuckets.map((b) => idxAtMin(Math.min(b.until, evCover?.to ?? b.until)));
     return evBars.map((b) => {
       const e = series.get(b.strike);
       const base: EvRow = {
         strike: b.strike, net: b.net, peak: null, peakTs: null,
         offPeakPct: null, segs: [], dominant: null,
       };
-      if (!e || e.vals.length < 3 || noonI < 0 || threeI < 0) return base;
+      if (!e || e.vals.length < 3 || !activeBuckets.length || bounds.some((i) => i < 0)) return base;
 
       let peak = e.vals[0], peakI = 0;
       e.vals.forEach((v, i) => { if (Math.abs(v) > Math.abs(peak)) { peak = v; peakI = i; } });
 
-      const cuts = [0, noonI, threeI, e.vals.length - 1];
-      const moves = [0, 1, 2].map((i) => Math.abs(e.vals[cuts[i + 1]] - e.vals[cuts[i]]));
+      const last = e.vals.length - 1;
+      const cuts = [0, ...bounds.map((i) => Math.min(i, last))];
+      cuts[cuts.length - 1] = last;                       // the final bucket always ends at the close
+      const moves = activeBuckets.map((_, i) => Math.abs(e.vals[cuts[i + 1]] - e.vals[cuts[i]]));
       const total = moves.reduce((a, c) => a + c, 0);
       const segs = total > 0
-        ? moves.map((mv, i) => ({ share: mv / total, color: BUCKET_DEFS[i].color, label: BUCKET_DEFS[i].label }))
+        ? moves.map((mv, i) => ({ share: mv / total, color: activeBuckets[i].color, label: activeBuckets[i].label }))
         : [];
       const dominant = segs.length ? segs.reduce((bb, x) => (x.share > bb.share ? x : bb), segs[0]) : null;
 
@@ -507,7 +564,7 @@ export default function PostMarketTab(p: PostMarketProps) {
         dominant,
       };
     });
-  }, [evBars, series, idxAtMin]);
+  }, [evBars, series, idxAtMin, activeBuckets, evCover]);
 
   /**
    * STRIKE PATHS — one sparkline per strike, the literal "how did this strike
@@ -993,7 +1050,26 @@ export default function PostMarketTab(p: PostMarketProps) {
     accRows.length ? `${accRows.filter(pick).length} / ${accRows.length}` : "—";
 
   // ── render helpers ─────────────────────────────────────────────────────────
-  const maxAbsBar = Math.max(1, ...evNear.map((b) => Math.abs(b.net)));
+  /**
+   * BAR SCALE for section 3 — over every RENDERED row, and over each row's PEAK,
+   * not over the ±12 near window.
+   *
+   * The old scale was `max |net|` across evNear (±12 strikes) while the panel
+   * renders evBars (±60). Every strike outside the near window whose gamma beat
+   * the near-window max therefore drew past 100% of the track, and its peak
+   * ghost was explicitly `Math.min(46, …)` — so the hatch clamped to exactly the
+   * same length on every one of them. That is the "all the bars are maxed out,
+   * they can't all have peaked at the same number" artefact: they had not, the
+   * chart was clipping them to a common ceiling and saying nothing about it.
+   *
+   * Scaling over the rendered rows costs a little resolution near the money when
+   * one far strike is enormous, and buys the thing a bar chart is for: two bars
+   * of the same length mean the same number.
+   */
+  const maxAbsBar = Math.max(
+    1,
+    ...evRows.map((r) => Math.max(Math.abs(r.net), Math.abs(r.peak ?? 0))),
+  );
   const openTag = (strike: number): { text: string; color: string } | null => {
     if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--cw)" };
     if (putWall != null && strike === putWall) return { text: "PUT WALL", color: "var(--pw)" };
@@ -1209,16 +1285,32 @@ export default function PostMarketTab(p: PostMarketProps) {
       <div className="sec">
         <div className="sechead">
           <h3><span className="secn">3</span>How the book was built</h3>
+          {/* Only the buckets the recording can actually support are listed. A
+              legend entry for a window that was never recorded is a promise the
+              bars cannot keep — that is how "there is no blue" reads as a
+              missing colour instead of a missing morning. */}
           <div className="evlegend">
-            <span><i style={{ background: "var(--blue)" }} />09:30–12:00</span>
-            <span><i style={{ background: "var(--violet)" }} />12:00–15:00</span>
-            <span><i style={{ background: "var(--amber)" }} />15:00–close</span>
+            {activeBuckets.map((b) => (
+              <span key={b.label}>
+                <i style={{ background: b.color }} />
+                {`${etMinOfDay(b.from)}–${b.until >= RTH_CLOSE_MIN ? "close" : etMinOfDay(b.until)}`}
+              </span>
+            ))}
             <span><i style={{ background: "#fff", width: 3 }} />day&apos;s peak</span>
             <span><i style={{ background: "repeating-linear-gradient(45deg,rgba(255,255,255,.5) 0 2px,rgba(255,255,255,.12) 2px 4px)" }} />given back</span>
           </div>
         </div>
 
         {histNote && <div className="warnbar" style={{ marginBottom: 11 }}>{histNote}</div>}
+        {!histNote && missingBuckets.length > 0 && evCover && (
+          <div className="warnbar" style={{ marginBottom: 11 }}>
+            The ladder recorder only covers <b>{etMinOfDay(evCover.from)}–{etMinOfDay(evCover.to)}</b> today, so
+            the {missingBuckets.map((b) => b.label).join(" and ")} bucket
+            {missingBuckets.length > 1 ? "s are" : " is"} not drawn — those bars would be
+            an unrecorded window painted as &quot;no activity&quot;. Everything shown is inside the recorded
+            window.
+          </div>
+        )}
 
         <div className="body" style={{ gridTemplateColumns: "1.35fr 1fr" }}>
           <div className="col" style={{ position: "relative" }}>
@@ -1230,33 +1322,34 @@ export default function PostMarketTab(p: PostMarketProps) {
               )}
               {evRows.map((r) => {
                 const pos = r.net >= 0;
-                const w = (Math.abs(r.net) / maxAbsBar) * 46;
-                const wp = r.peak == null ? null : Math.min(46, (Math.abs(r.peak) / maxAbsBar) * 46);
-                const side: "left" | "right" = pos ? "left" : "right";
                 const tag = openTag(r.strike);
+                // ALL BARS GROW RIGHT from a common left edge. The old layout
+                // mirrored negative strikes leftwards, which made LENGTH mean
+                // two different things depending on which half of the track you
+                // were reading, and made the two halves impossible to compare.
+                // Sign is now carried where it belongs: the signed dollar value
+                // in its own column, plus the +/− chip and the bar's tint.
+                const w = Math.min(100, (Math.abs(r.net) / maxAbsBar) * 100);
+                const wp = r.peak == null ? null : Math.min(100, (Math.abs(r.peak) / maxAbsBar) * 100);
 
-                // Segments are laid from the centre outwards in time order, so a
-                // bar reads left-to-right as the day did.
+                // Segments run left→right in time order, so a bar reads the way
+                // the day ran.
                 let acc = 0;
                 const segs = r.segs.map((sg, i) => {
                   const startPct = acc;
                   acc += sg.share * w;
-                  const st: CSSProperties = side === "left"
-                    ? { left: `${50 + startPct}%`, width: `${sg.share * w}%` }
-                    : { right: `${50 + startPct}%`, width: `${sg.share * w}%` };
-                  return <div className="seg" key={i} style={{ ...st, background: sg.color, opacity: pos ? .95 : .82 }} />;
+                  return (
+                    <div className="seg" key={i}
+                      style={{ left: `${startPct}%`, width: `${sg.share * w}%`, background: sg.color, opacity: pos ? .95 : .82 }} />
+                  );
                 });
 
                 const ghost: CSSProperties | null = wp == null || wp <= w
                   ? null
-                  : side === "left"
-                    ? { left: `${50 + w}%`, width: `${wp - w}%` }
-                    : { right: `${50 + w}%`, width: `${wp - w}%` };
+                  : { left: `${w}%`, width: `${wp - w}%` };
                 const peakStyle: CSSProperties | null = wp == null
                   ? null
-                  : side === "left"
-                    ? { left: `calc(${50 + wp}% - 1px)` }
-                    : { right: `calc(${50 + wp}% - 1px)` };
+                  : { left: `calc(${wp}% - 1px)` };
 
                 // A strike carrying under 2% of the window's biggest bar is
                 // noise — "−100% 09:32" on a line that never held anything is
@@ -1266,7 +1359,11 @@ export default function PostMarketTab(p: PostMarketProps) {
                 return (
                   <div className={`evrow${tag ? " key" : ""}`} key={r.strike}>
                     <div className="k mono">{nf(r.strike, 0)}</div>
-                    <div className="track">
+                    <div className={`sgn ${pos ? "p" : "n"}`}>{pos ? "+" : "−"}</div>
+                    <div className="netcol mono" style={{ color: pos ? "var(--pos)" : "var(--neg)" }}>
+                      {fmtUsd(r.net, false)}
+                    </div>
+                    <div className={`track${pos ? "" : " neg"}`}>
                       {segs.length ? segs : <div className={`bar ${pos ? "p" : "n"}`} style={{ width: `${w}%` }} />}
                       {ghost && <div className="chg" style={ghost} />}
                       {peakStyle && <div className="openmk" style={peakStyle} />}

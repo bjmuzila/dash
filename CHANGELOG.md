@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-08-21 — GEX Change Top: letter grades, shadow control group, Pick Study tab (`components/scanner/GexChangeTop.tsx`, `components/scanner/PickStudyTab.tsx` NEW, `components/scanner/scannerNav.ts`, `components/pages/Scanner.tsx`, `server-v2/_lib-pick-grade.cjs` NEW, `server-v2/gex-change-top-recorder.js`, `server-v2/server-with-proxy.js`, `server-v2/config/pick-proj-rule.example.json` NEW)
+
+Every GEX Change Top pick now carries an A+..F grade (peak/pain/close, with never-green a hard F) frozen server-side by `_lib-pick-grade.cjs`, and the recorder additionally probes and records the next 5 candidates it passed on as a `selected = false` control group so the new **Pick Study** tab (`/scanner?tab=pickstudy`, fed by two read-only GETs added to `server-with-proxy.js`) can bucket capture-time features against outcome with thin-sample and out-of-sample guards. The projected-grade rule ships inert — no `config/pick-proj-rule.json`, no projection — because the control group starts empty at deploy; full write-up in `md files/CHANGELOG.md`.
+
+
 ## 2026-08-20 (b) — Trade journal opens on a Calendar pane, built as a heat grid (`components/pages/Trading.tsx`, `generated/2026-08-20-journal-calendar-options.html` NEW)
 
 `/app/trading` now opens on a new **Calendar** pane (first in `PANES`, the default `pane` state) instead of Leaks, with the Session Calendar lifted out of the bottom of the Journal pane into that pane on its own. The grid is Option A from the four-design mockup in `generated/`: cells tinted by |P&L| against the month's own biggest day (`calMaxAbs`), day number + trade dots on top, P&L and `{n}T · {win}%` beneath, a selected-day strip under the grid, and `calCells` extended with trade-weighted `winRate`. Clicking a day still sets `selectedDay`, which filters every other pane. Full write-up in `md files/CHANGELOG.md`.

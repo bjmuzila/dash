@@ -2,6 +2,13 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Friday 8/21/2026
+
+* **GEX Change Top picks are graded now.** Each card carries an A+ to F letter for how it actually did, and a pick that never traded green is always an F.
+
+* **New Pick Study tab.** See what the A and B picks had in common when they were flagged — and whether the picks that made the board beat the ones that didn't.
+
+
 
 ## Thursday 8/20/2026
 

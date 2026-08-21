@@ -102,17 +102,31 @@ type WallEventRow = {
 };
 
 // ── the view switch ──────────────────────────────────────────────────────────
-/** WALLS = call wall + put wall. CORE = the CORE (cb) level on its own. */
-type LogView = "walls" | "core";
+/**
+ * WALLS = call wall + put wall. CORE = the CORE (cb) level on its own. ALL =
+ * the three of them in one log.
+ *
+ * ALL is not "no filter" by accident — it is the reading the other two cannot
+ * give. CORE is frequently ALSO one of the walls (whichever is carrying more
+ * gamma), so a tag scored on the call wall and the CORE tag at the same strike
+ * are the same event told twice, and split across two views neither tells you
+ * that. Interleaved on one timeline the relationship is the story: the CORE
+ * rolling ONTO a wall, or off it, is the day's dominant level changing sides.
+ */
+type LogView = "walls" | "core" | "all";
 
 const VIEW_LEVELS: Record<LogView, WallLevel[]> = {
   walls: ["call_wall", "put_wall"],
   core: ["cb"],
+  all: ["call_wall", "put_wall", "cb"],
 };
 const VIEW_META: { id: LogView; label: string; color: string; blurb: string }[] = [
   { id: "walls", label: "Walls", color: AMBER, blurb: "Call wall + put wall only" },
   { id: "core", label: "Core", color: LIGHT_BLUE, blurb: "CORE level only" },
+  { id: "all", label: "All", color: C.cyan, blurb: "Walls + CORE on one timeline" },
 ];
+/** Short scope word for headers, filenames and the copied text. */
+const VIEW_SCOPE: Record<LogView, string> = { walls: "wall", core: "core", all: "level" };
 const inView = (v: LogView, lt: WallLevel) => VIEW_LEVELS[v].includes(lt);
 
 /**
@@ -151,7 +165,11 @@ const ROW_LEAD_H = 20;
 const RAIL_CHIP_H = 24;
 
 const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
+/** Column-head width version of the same three. */
+const LEVEL_SHORT: Record<WallLevel, string> = { call_wall: "Call", put_wall: "Put", cb: "CORE" };
 const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: AMBER, put_wall: GREEN, cb: LIGHT_BLUE };
+/** Ticker-rail column order — price order, so ALL adds a column, not a reshuffle. */
+const LEVEL_COL_ORDER: WallLevel[] = ["put_wall", "call_wall", "cb"];
 
 const REACTION_LABEL: Record<WallReaction, string> = {
   reject: "Reject", break_lt5: "Break <5", break_5: "Break +5",
@@ -276,7 +294,7 @@ function buildLogText(
 ): string {
   const L = (lt: WallLevel) => LEVEL_LABEL[lt];
   const out: string[] = [];
-  const scope = view === "core" ? "CORE LOG" : "WALL LOG";
+  const scope = `${VIEW_SCOPE[view].toUpperCase()} LOG`;
   out.push(`${symbol} — ${scope} · ${date}${spot != null ? ` · spot ${wallNum(spot)}` : ""}`);
 
   const opens = log.filter((r) => r.reason === "open");
@@ -526,7 +544,7 @@ export default function LevelLog() {
     () => buildLogText(sel ?? "—", spot, date, view, log, events),
     [sel, spot, date, view, log, events],
   );
-  const snapTitle = `${sel ?? "—"} — ${view === "core" ? "CORE" : "Wall"} log · ${date}`;
+  const snapTitle = `${sel ?? "—"} — ${view === "core" ? "CORE" : view === "all" ? "Level" : "Wall"} log · ${date}`;
   const snapFile = `${(sel ?? "walls").toLowerCase()}-${view}-log-${date}.png`;
 
   const chipStyle = (on: boolean, color: string = C.cyan): CSSProperties => ({
@@ -548,6 +566,7 @@ export default function LevelLog() {
   };
 
   const viewMeta = VIEW_META.find((v) => v.id === view)!;
+  const railCols = LEVEL_COL_ORDER.filter((lt) => inView(view, lt));
 
   return (
     <PageShell className="wall-scroll">
@@ -634,14 +653,13 @@ export default function LevelLog() {
                 <tr>
                   <th style={{ ...th, textAlign: "left" }}>Ticker</th>
                   <th style={th}>Spot</th>
-                  {view === "core" ? (
-                    <th style={{ ...th, color: LEVEL_COLOR.cb }}>CORE</th>
-                  ) : (
-                    <>
-                      <th style={{ ...th, color: LEVEL_COLOR.put_wall }}>Put</th>
-                      <th style={{ ...th, color: LEVEL_COLOR.call_wall }}>Call</th>
-                    </>
-                  )}
+                  {/* Columns follow the view, in price order (put under call,
+                      CORE last) rather than in VIEW_LEVELS order — so switching
+                      to ALL adds a column instead of reshuffling the two that
+                      were already there. */}
+                  {railCols.map((lt) => (
+                    <th key={lt} style={{ ...th, color: LEVEL_COLOR[lt] }}>{LEVEL_SHORT[lt]}</th>
+                  ))}
                   <th style={th}>Chg</th>
                 </tr>
               </thead>
@@ -658,19 +676,16 @@ export default function LevelLog() {
                   >
                     <td style={{ ...td, textAlign: "left", fontWeight: 800, letterSpacing: "0.03em" }}>{t.symbol}</td>
                     <td style={td}>{wallNum(t.spot)}</td>
-                    {view === "core" ? (
-                      <td style={{ ...td, color: LEVEL_COLOR.cb }}>{wallStrike(t.cb)}<WallDelta now={t.cb} open={t.open?.cb} /></td>
-                    ) : (
-                      <>
-                        <td style={{ ...td, color: LEVEL_COLOR.put_wall }}>{wallStrike(t.put_wall)}<WallDelta now={t.put_wall} open={t.open?.put_wall} /></td>
-                        <td style={{ ...td, color: LEVEL_COLOR.call_wall }}>{wallStrike(t.call_wall)}<WallDelta now={t.call_wall} open={t.open?.call_wall} /></td>
-                      </>
-                    )}
+                    {railCols.map((lt) => (
+                      <td key={lt} style={{ ...td, color: LEVEL_COLOR[lt] }}>
+                        {wallStrike(t[lt])}<WallDelta now={t[lt]} open={t.open?.[lt]} />
+                      </td>
+                    ))}
                     <td style={td}>{t.changes}</td>
                   </tr>
                 ))}
                 {loaded && !shown.length ? (
-                  <tr><td colSpan={view === "core" ? 4 : 5} style={{ ...td, textAlign: "center", padding: "34px 0", fontFamily: "inherit" }}>
+                  <tr><td colSpan={railCols.length + 3} style={{ ...td, textAlign: "center", padding: "34px 0", fontFamily: "inherit" }}>
                     No rows for {date}. The recorder writes from 09:29 ET on trading days.
                   </td></tr>
                 ) : null}
@@ -683,7 +698,7 @@ export default function LevelLog() {
         <div ref={logCardRef} style={{ ...CARD, overflow: "hidden" }}>
           <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
             <span style={{ fontSize: FS_LABEL, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase" }}>
-              {sel ?? "—"} — {view === "core" ? "core log" : "wall log"}
+              {sel ?? "—"} — {VIEW_SCOPE[view]} log
             </span>
             <span style={{ fontSize: FS_META, fontFamily: "var(--font-mono)" }}>{wallNum(spot)}</span>
             {/* data-capture-hide: live-page chrome, dropped from the screenshot. */}
@@ -1030,11 +1045,20 @@ function WallMigrationChart({ log, events, view }: {
     return out.join(" ");
   };
 
-  const paths = levels.map((lt) => ({ lt, d: step(series.get(lt) ?? []) })).filter((p) => p.d);
-  // The corridor between the two walls — the room price actually had. Only in
-  // the WALLS view, where there are two of them to bound it.
-  const corridor = paths.length === 2
-    ? `${paths[0].d} ${step(series.get(paths[1].lt) ?? [], true)}`
+  // CORE is drawn LAST so it reads on top of a wall it is sitting on — in the
+  // ALL view the two are the same strike more often than not, and the whole
+  // point of that view is seeing which wall is wearing the CORE.
+  const paths = [...levels]
+    .sort((a, b) => (a === "cb" ? 1 : 0) - (b === "cb" ? 1 : 0))
+    .map((lt) => ({ lt, d: step(series.get(lt) ?? []) }))
+    .filter((p) => p.d);
+  // The corridor between the two WALLS — the room price actually had. Keyed off
+  // the level types by name, not off how many lines happen to be drawn: the ALL
+  // view has three, and bounding a band with whichever two came first would
+  // shade the gap between a wall and the CORE, which is not a corridor.
+  const hasWalls = ["call_wall", "put_wall"].every((lt) => paths.some((p) => p.lt === lt));
+  const corridor = hasWalls
+    ? `${step(series.get("call_wall") ?? [])} ${step(series.get("put_wall") ?? [], true)}`
     : null;
   const spotLine = spotPts.map((p) => `${x(p.s)},${y(p.v)}`).join(" ");
   const lastOf = (lt: WallLevel) => {
@@ -1081,7 +1105,12 @@ function WallMigrationChart({ log, events, view }: {
           {corridor ? <polygon points={corridor} fill={rgba(C.cyan, 0.06)} /> : null}
           {paths.map((p) => (
             <polyline key={p.lt} points={p.d} fill="none" stroke={LEVEL_COLOR[p.lt]} strokeWidth={2}
-              vectorEffect="non-scaling-stroke" strokeLinejoin="miter" />
+              vectorEffect="non-scaling-stroke" strokeLinejoin="miter"
+              /* With the walls also drawn, CORE goes dashed. It sits on ONE of
+                 them by definition, so a solid line on top would simply erase
+                 the wall it is currently riding and the swap would be invisible
+                 — which is the one thing this view exists to show. */
+              strokeDasharray={p.lt === "cb" && hasWalls ? "5 4" : undefined} />
           ))}
           {/* Spot last, so it reads on top of the levels it is being compared
               with. The ticks mark the captures themselves — vertical only,
@@ -1147,13 +1176,15 @@ function approachSide(e: { level_type: WallLevel; strike: number; spot_at_hit: n
 function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEventRow[]; view: LogView }) {
   type Entry = {
     slot: number; at: string; kind: "open" | "change" | "hit"; lt: WallLevel;
+    /** Carried so the ALL view can spot the same strike wearing two hats. */
+    strike: number;
     body: ReactNode; meta?: string; side?: "below" | "above";
   };
   const entries: Entry[] = [];
 
   for (const r of log) {
     entries.push({
-      slot: r.slot, at: r.at, kind: r.reason, lt: r.level_type,
+      slot: r.slot, at: r.at, kind: r.reason, lt: r.level_type, strike: Number(r.strike),
       body: r.reason === "open"
         ? <>Open baseline — <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(r.strike)}</b>. Spot <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(r.spot)}</b>.</>
         : <>Rolled {Number(r.delta) > 0 ? "up" : "down"} <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(r.prev_strike)} → {wallStrike(r.strike)}</b>.</>,
@@ -1170,7 +1201,7 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
     // One direction word, then the distance stated outright.
     const miss = missPts(e.strike, e.spot_at_hit);
     entries.push({
-      slot: e.hit_slot, at: e.at, kind: "hit", lt: e.level_type, side,
+      slot: e.hit_slot, at: e.at, kind: "hit", lt: e.level_type, strike: Number(e.strike), side,
       body: approach
         ? <>Came {side === "below" ? "up" : "down"} to <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b>
             {miss != null
@@ -1206,11 +1237,26 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
 
   const evByKey = new Map(events.map((e) => [`${e.hit_slot}|${e.level_type}`, e]));
 
+  /**
+   * ALL view only: CORE is frequently ALSO one of the walls — whichever is
+   * carrying more gamma — so the same strike can produce two entries in the same
+   * slot and read as two separate events. Say so on the row instead. Outside the
+   * ALL view there is nothing to collide with, so the pass does not run.
+   */
+  const twinsOf = (e: Entry): WallLevel[] =>
+    view !== "all" ? [] : entries
+      .filter((o) => o !== e && o.slot === e.slot && o.lt !== e.lt
+        && Number.isFinite(o.strike) && o.strike === e.strike)
+      .map((o) => o.lt)
+      .filter((lt, i, a) => a.indexOf(lt) === i);
+
   if (!entries.length) {
     return (
       <div style={{ padding: "34px 18px", textAlign: "center", fontSize: FS_BODY }}>
         {view === "core"
           ? "Nothing recorded on the CORE for this ticker — no baseline, no level changes, no touches."
+          : view === "all"
+          ? "Nothing recorded for this ticker — no baseline, no level changes, no touches on either wall or the CORE."
           : "Nothing recorded on the walls for this ticker — no baseline, no level changes, no touches."}
       </div>
     );
@@ -1252,6 +1298,16 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
                     {e.side === "below" ? "↑ from below" : "↓ from above"}
                   </span>
                 ) : null}
+                {/* Same strike, second hat — the ALL view's whole point. */}
+                {twinsOf(e).map((lt) => (
+                  <span key={lt} title={`This strike is also the ${LEVEL_LABEL[lt].toLowerCase()} at this slot — one level, two roles`}
+                    style={{
+                      fontSize: 10, lineHeight: `${ROW_LEAD_H}px`, letterSpacing: LS_LABEL,
+                      textTransform: "uppercase", color: LEVEL_COLOR[lt],
+                    }}>
+                    = {LEVEL_LABEL[lt]}
+                  </span>
+                ))}
               </div>
               <div style={{ fontSize: FS_BODY, marginTop: 4, lineHeight: 1.5 }}>{e.body}</div>
               {e.meta ? <div style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, marginTop: 6, lineHeight: 1.5 }}>{e.meta}</div> : null}
