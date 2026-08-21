@@ -102,10 +102,10 @@ const OP_CSS = `
   .op-badge.p { color: var(--amber); background: rgba(251,133,1,0.12); border: 1px solid rgba(251,133,1,0.4); }
   .op-badge.exp { color: var(--sm-red); background: rgba(239,71,111,0.12); border: 1px solid rgba(239,71,111,0.4); text-transform: uppercase; letter-spacing: 0.06em; }
   .op-tcard.expired { opacity: 0.62; }
-  .op-rowsub { font-size: 12px; color: var(--sm-muted); margin-top: 3px; font-family: var(--sm-mono); }
-  .op-px { font-family: var(--sm-mono); font-size: 14px; color: var(--text1); }
+  .op-rowsub { font-size: 12px; font-weight: 700; color: var(--text1); opacity: 0.82; margin-top: 3px; font-family: var(--sm-mono); }
+  .op-px { font-family: var(--sm-mono); font-size: 14px; font-weight: 700; color: var(--text1); }
   .op-px .arrow { color: var(--sm-muted); margin: 0 6px; }
-  .op-px .lbl { color: var(--sm-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 4px; }
+  .op-px .lbl { color: var(--sm-muted); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 4px; }
   .op-pnl { font-family: var(--sm-mono); font-size: 14px; font-weight: 800; text-align: right; }
   .op-pnl .d { font-size: 12px; font-weight: 600; display: block; margin-top: 2px; }
   .op-x { background: none; border: none; color: var(--sm-muted); cursor: pointer; font-size: 17px; line-height: 1; padding: 0 2px; justify-self: end; }
@@ -330,7 +330,7 @@ function ProbeChart({ history, entry, sell, chartId }: { history: ProbeHistSnap[
       {[hi, (hi + lo) / 2, lo].map((v, i) => (
         <g key={i}>
           <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
-          <text x={W - PADR + 10} y={sy(v) + 4} fontSize={12} fill="#ffffff" fontFamily={MONO}>{v.toFixed(2)}</text>
+          <text x={W - PADR + 10} y={sy(v) + 4} fontSize={12} fontWeight={700} fill="#ffffff" fontFamily={MONO}>{v.toFixed(2)}</text>
         </g>
       ))}
 
@@ -339,7 +339,7 @@ function ProbeChart({ history, entry, sell, chartId }: { history: ProbeHistSnap[
       {entry != null && Number.isFinite(entry) && (
         <>
           <line x1={PADL} y1={sy(entry)} x2={W - PADR} y2={sy(entry)} stroke="rgba(255,255,255,0.40)" strokeWidth={1} strokeDasharray="3 5" />
-          <text x={PADL + 4} y={sy(entry) - 7} fontSize={11} fill="#ffffff" fontFamily={MONO} letterSpacing="1">ENTRY {entry.toFixed(2)}</text>
+          <text x={PADL + 4} y={sy(entry) - 7} fontSize={12} fontWeight={700} fill="#ffffff" fontFamily={MONO} letterSpacing="1">ENTRY {entry.toFixed(2)}</text>
         </>
       )}
 
@@ -349,18 +349,18 @@ function ProbeChart({ history, entry, sell, chartId }: { history: ProbeHistSnap[
         <>
           <line x1={PADL} y1={sy(sell)} x2={W - PADR} y2={sy(sell)} strokeWidth={1.4}
                 stroke={entry != null && sell < entry ? RED : GRN} strokeDasharray="6 4" />
-          <text x={PADL + 4} y={sy(sell) - 7} fontSize={11} fontFamily={MONO} letterSpacing="1"
+          <text x={PADL + 4} y={sy(sell) - 7} fontSize={12} fontWeight={700} fontFamily={MONO} letterSpacing="1"
                 fill={entry != null && sell < entry ? RED : GRN}>EXIT {sell.toFixed(2)}</text>
         </>
       )}
 
       <circle cx={sx(hiI)} cy={sy(hi)} r={3.4} fill="none" stroke={GRN} strokeWidth={1.6} />
-      <text x={sx(hiI)} y={sy(hi) - 11} fontSize={12} fill={GRN} fontFamily={MONO} textAnchor="middle">H {hi.toFixed(2)}</text>
+      <text x={sx(hiI)} y={sy(hi) - 11} fontSize={12} fontWeight={700} fill={GRN} fontFamily={MONO} textAnchor="middle">H {hi.toFixed(2)}</text>
       <circle cx={sx(loI)} cy={sy(lo)} r={3.4} fill="none" stroke={RED} strokeWidth={1.6} />
-      <text x={sx(loI)} y={sy(lo) + 18} fontSize={12} fill={RED} fontFamily={MONO} textAnchor="middle">L {lo.toFixed(2)}</text>
+      <text x={sx(loI)} y={sy(lo) + 18} fontSize={12} fontWeight={700} fill={RED} fontFamily={MONO} textAnchor="middle">L {lo.toFixed(2)}</text>
 
-      <text x={PADL} y={H - 8} fontSize={12} fill="#ffffff" fontFamily={MONO}>{fmtT(minX)}</text>
-      <text x={W - PADR} y={H - 8} fontSize={12} fill="#ffffff" fontFamily={MONO} textAnchor="end">{fmtT(maxX)}</text>
+      <text x={PADL} y={H - 8} fontSize={12} fontWeight={700} fill="#ffffff" fontFamily={MONO}>{fmtT(minX)}</text>
+      <text x={W - PADR} y={H - 8} fontSize={12} fontWeight={700} fill="#ffffff" fontFamily={MONO} textAnchor="end">{fmtT(maxX)}</text>
 
       <circle cx={sx(n - 1)} cy={sy(last)} r={3.6} fill={pillFill} />
       <rect x={W - PADR + 4} y={sy(last) - 11} width={62} height={22} rx={5} fill={pillFill} />
@@ -372,7 +372,7 @@ function ProbeChart({ history, entry, sell, chartId }: { history: ProbeHistSnap[
           <circle cx={hx} cy={sy(hp.v)} r={4} fill="#05060a" stroke={ICE} strokeWidth={2} />
           <g transform={`translate(${tipFlip ? hx - 12 - tipW : hx + 12},${Math.max(PADT, sy(hp.v) - 46)})`}>
             <rect width={tipW} height={44} rx={7} fill="rgba(10,13,20,0.96)" stroke="rgba(48,209,88,0.45)" strokeWidth={1} />
-            <text x={12} y={18} fontSize={11} fill="#ffffff" fontFamily={MONO} letterSpacing="1">{fmtT(hp.ts)}</text>
+            <text x={12} y={18} fontSize={11} fontWeight={700} fill="#ffffff" fontFamily={MONO} letterSpacing="1">{fmtT(hp.ts)}</text>
             <text x={12} y={35} fontSize={15} fontWeight={700} fill="#ffffff" fontFamily={MONO}>${hp.v.toFixed(2)}</text>
             {hpl != null && (
               <text x={92} y={35} fontSize={13} fontWeight={700} fill={hpl >= 0 ? GRN : RED} fontFamily={MONO}>
@@ -439,14 +439,14 @@ async function captureProbeCard(chartId: string, meta: {
 
     ctx.textBaseline = "alphabetic";
     ctx.fillStyle = "#ffffff";
-    ctx.font = `800 26px ${MONO}`;
+    ctx.font = `800 28px ${MONO}`;
     ctx.fillText(meta.ticker, 26, 44);
     const tw = ctx.measureText(meta.ticker).width;
-    ctx.font = `700 15px ${MONO}`;
+    ctx.font = `800 17px ${MONO}`;
     ctx.fillStyle = "#8ECAE6";
     ctx.fillText(meta.badge, 26 + tw + 12, 43);
 
-    ctx.font = `13px ${MONO}`;
+    ctx.font = `700 15px ${MONO}`;
     ctx.fillStyle = "#ffffff";
     ctx.fillText(meta.exp, 26, 68);
 
@@ -454,20 +454,20 @@ async function captureProbeCard(chartId: string, meta: {
     ctx.fillStyle = tone(meta.pct);
     ctx.fillText(meta.pct == null ? "—" : `${meta.pct >= 0 ? "▲" : "▼"} ${Math.abs(meta.pct).toFixed(1)}%`, 26, 110);
 
-    ctx.font = `15px ${MONO}`;
+    ctx.font = `700 16px ${MONO}`;
     ctx.fillStyle = "#ffffff";
     const line = `IN ${px(meta.entry)} → ${meta.closed ? "SOLD" : "NOW"} ${px(meta.mark)}`;
     ctx.fillText(line, 210, 108);
     if (meta.dollars != null) {
       ctx.fillStyle = tone(meta.dollars);
-      ctx.font = `700 15px ${MONO}`;
+      ctx.font = `800 16px ${MONO}`;
       ctx.fillText(` ${meta.dollars >= 0 ? "+" : "−"}$${Math.abs(meta.dollars).toFixed(0)}/ct`, 210 + ctx.measureText(line).width + 14, 108);
     }
 
     ctx.drawImage(img, 20, HEAD - 8, 960, 340);
 
-    ctx.font = `12px ${MONO}`;
-    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.font = `700 13px ${MONO}`;
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
     ctx.fillText(meta.hint, 26, CH - 14);
 
     const png: Blob | null = await new Promise((res) => cv.toBlob(res, "image/png"));
@@ -585,51 +585,6 @@ export default function Probe() {
     setSide(p.side);
     setExpiry(p.expiry);
     if (p.atPrice != null) setFill(String(p.atPrice));
-  }, []);
-
-  /**
-   * Prefill from the query string.
-   *
-   * The Quick Probe card in the customer app's Notes drawer
-   * (components/shared/QuickProbe.tsx) hands a contract off to this page as
-   * `?ticker=SPX&exp=2026-08-21&strike=6400&side=C` (`fill` and `note` are
-   * accepted too, for anything else that wants to link here). We fill the
-   * structured inputs AND the shorthand box — the shorthand box is what the
-   * eye lands on, and leaving it blank while the fields below are populated
-   * reads like the handoff half-failed.
-   *
-   * Runs once on mount and then strips the query with replaceState, so a
-   * refresh doesn't silently re-arm a contract the owner already dealt with.
-   * Nothing is submitted — the fields are staged and Add is still a click.
-   */
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const q = new URLSearchParams(window.location.search);
-    const sym = (q.get("ticker") || "").trim().toUpperCase();
-    const exp = (q.get("exp") || q.get("expiration") || "").trim().slice(0, 10);
-    const k = parseFloat(q.get("strike") || "");
-    const rawSide = (q.get("side") || "").trim().toUpperCase();
-    const sd: "C" | "P" | null = rawSide.startsWith("C") ? "C" : rawSide.startsWith("P") ? "P" : null;
-    if (!sym && !exp && !Number.isFinite(k)) return;
-
-    if (sym) setTicker(sym);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(exp)) setExpiry(exp);
-    if (Number.isFinite(k) && k > 0) setStrike(String(k));
-    if (sd) setSide(sd);
-
-    const f = parseFloat(q.get("fill") || "");
-    if (Number.isFinite(f) && f > 0) setFill(String(f));
-    const n = (q.get("note") || "").trim();
-    if (n) setNote(n);
-
-    if (sym && /^\d{4}-\d{2}-\d{2}$/.test(exp) && Number.isFinite(k) && k > 0 && sd) {
-      const [, mo, da] = exp.split("-");
-      setShorthand(`${sym} ${k}${sd.toLowerCase()} ${parseInt(mo, 10)}/${parseInt(da, 10)}/${exp.slice(2, 4)}`);
-    }
-
-    try {
-      window.history.replaceState({}, "", window.location.pathname + window.location.hash);
-    } catch { /* non-browser / blocked history */ }
   }, []);
 
   const load = useCallback(async () => {

@@ -3040,7 +3040,9 @@ const OWNER_ONLY_TABS = new Set<MainTab>(
 );
 
 export default function ScannerPage() {
-  const [tab, setTab] = useState<MainTab>("gexlevels");
+  // /scanner opens on GEX Change Top (2026-08-21). Any ?tab= in the URL still
+  // wins — the deep-link effect below overrides this on mount.
+  const [tab, setTab] = useState<MainTab>("gexchangetop");
   // The sub-strip already hides owner-only pills; this is the other half, so a
   // pasted /scanner?tab=pickstudy URL doesn't open one. `loaded` matters: auth
   // resolves a tick after mount, and bouncing before it does would kick the
@@ -3050,7 +3052,7 @@ export default function ScannerPage() {
   // While auth is still resolving, an owner-gated tab renders NOTHING rather
   // than falling back — a flash of the wrong tab that then swaps is worse than
   // an empty beat, and it would also fire that tab's fetches.
-  const visibleTab: MainTab | null = ownerGated ? (authLoaded ? "gexlevels" : null) : tab;
+  const visibleTab: MainTab | null = ownerGated ? (authLoaded ? "gexchangetop" : null) : tab;
 
   // Deep link support: /scanner?tab=ibstats opens straight on that tab. Read in
   // an effect (not useSearchParams) so the page stays prerenderable and there's

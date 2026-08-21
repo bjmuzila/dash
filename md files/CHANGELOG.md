@@ -1,9 +1,11 @@
 # Changelog
 
-## 2026-08-21 (q) - Notes drawer: owner-only "Quick Probe" launcher
+## 2026-08-21 (q) - Notes drawer: owner-only "Quick Probe"; bolder probe snapshot
 
 Added: `components/shared/QuickProbe.tsx`.
 Edited: `components/shared/NotesDock.tsx`, `owner-vite/src/pages/Probe.tsx`.
+
+### Quick Probe in the Notes drawer
 
 The Notes drawer (right-side dock on the universal toolbar) now opens with a
 **QUICK PROBE** card above the note list, expanded by default and collapsible
@@ -14,27 +16,41 @@ Four fields: **ticker**, **expiration**, **strike**, **call / put**. Ticker is a
 free-text symbol box; committing it (blur or Enter) loads that symbol's expiry
 list from `/api/expirations` into the expiration dropdown (falls back to a plain
 date input if the symbol lists none). Strike is numeric; the side is a two-button
-Call/Put toggle. That one route is the card's only request - the same one the
-customer chain surfaces already call.
+Call/Put toggle.
 
-**Probe hands the contract to the owner site.** It opens
+**Probe writes the contract onto the owner probe list** - it does NOT navigate
+anywhere. It posts the identical payload `/owner/probe`'s own Add button posts:
 
-    https://owner.cbedge.net/owner/probe?ticker=SPX&exp=2026-08-21&strike=6400&side=C
+    POST /api/watch { action: "add", ticker, expiry, strike, side }
 
-in a named tab (`noopener,noreferrer`), so the real probe page does the work -
-the `/proxy/probe-rest` resolve, the `/api/watch` record, the tracking. The card
-records nothing and adds nothing; it is a launcher. Host is overridable with
-`NEXT_PUBLIC_OWNER_SITE_URL` for a staging host or a local owner-vite run.
+No `addedPrice` is sent, so the route captures the live mark as the entry basis
+(`/proxy/probe-rest`), and the server-side recorder starts filling that row's
+price history during RTH exactly as if it had been typed on the probe page. The
+row is simply there next time /owner/probe is opened. Strike clears on success
+so the next probe on the same symbol/expiry is one number and Enter.
 
-`owner-vite/src/pages/Probe.tsx` gained the receiving half: a mount effect that
-reads `ticker` / `exp` / `strike` / `side` (plus optional `fill` and `note`),
-fills the structured inputs AND the shorthand box - a populated field set under
-an empty shorthand box reads like the handoff half-failed - then strips the
-query with `replaceState` so a refresh doesn't re-arm a contract already dealt
-with. Nothing is submitted: the fields are staged, Add is still a click.
+That route is registered `auth: 'owner'` in `api-router.js`, so the write is
+gated server-side, not merely hidden: `useIsOwner` decides whether the card is
+DRAWN, `/api/watch` decides whether the write is allowed. `/api/expirations` is
+the card's only other request - the same route the customer chain surfaces
+already call. No new endpoint, no proxy change.
 
 In `NotesDock` the section is capped at 62% height and scrolls, so an open card
 can't push the note list out of the dock on a short window.
+
+### Probe page: heavier type
+
+The copied PNG (`captureProbeCard`) was thin where it matters on a Discord-sized
+image - the expiration, the IN -> NOW line and the footer hint were all
+unweighted mono. Ticker 26->28px, side badge 700/15->800/17, expiration
+13->700/15, the IN/NOW line 15->700/16, the $/ct 700->800/16, the footer hint
+12->700/13 at 0.92 alpha instead of 0.75.
+
+Same pass over the chart SVG (which is what gets rasterized into that PNG):
+every label - gridline prices, ENTRY / EXIT tags, the H/L markers, both time-axis
+ends, the hover tooltip's timestamp - is now `fontWeight={700}`, with ENTRY/EXIT
+up 11->12px. On the page itself the row subtitle went muted-400 -> 700 at 0.82
+text color, and the price column 400 -> 700 with 800 on its little labels.
 
 ## 2026-08-21 (p) - 0DTE chain: AM-settled monthly no longer poisons GEX/DEX
 

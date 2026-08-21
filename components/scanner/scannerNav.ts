@@ -97,7 +97,8 @@ export const SCANNER_ROUTES: ScannerRouteDef[] = [
  *
  * There is no "overview" tab any more: the sub-strip is always on screen inside
  * the Scanner section, so a landing page whose only job was linking to the other
- * tabs had nothing left to do. /scanner opens on GEX Levels.
+ * tabs had nothing left to do. /scanner opens on GEX Change Top (2026-08-21;
+ * was GEX Levels) — the default lives in ScannerPage's `tab` state.
  */
 export const SCANNER_GROUPS: { key: string; tabs: ScannerTabId[]; routes?: string[] }[] = [
   { key: "gamma",     tabs: ["gexlevels", "gexchangetop", "pickstudy", "strike"] },

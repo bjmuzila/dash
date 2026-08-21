@@ -5486,6 +5486,23 @@ function EsChartCard({
             )}
           </div>
 
+          {/* Symbol picker — ES / SPY / QQQ, favorites persisted per browser.
+              ON THE BAR, not in the cog. It is the single most-changed control
+              on this page and the one that renames everything else on it, so
+              burying it two clicks deep behind a gear made the toolbar read as
+              a chart that could only ever be one ticker. Everything else in the
+              cog is set-and-forget; this isn't.
+
+              `dockMode === "full"` only. A SHARED dock drives every chart in a
+              2–3 up row, and the ticker is the one setting that must stay
+              per-card — those cards grow their own ticker bar instead (see
+              `tickerBar` below). */}
+          {dockMode === "full" && (
+            <span style={{ flexShrink: 0 }}>
+              <SymbolListDropdown active={symbol} onSelect={setSymbol} />
+            </span>
+          )}
+
           {/* Refresh is an ACTION, not a setting — it rides with the capture
               buttons rather than hiding a click deep in the cog. */}
           <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
@@ -5692,15 +5709,10 @@ function EsChartCard({
 
           <DockMenuDivider />
 
-          {/* Symbol picker — ES / SPY / QQQ, favorites persisted per browser.
-              Dropped from a SHARED dock: that toolbar drives every chart, and a
-              ticker is the one setting that must not. Each card grows its own
-              ticker bar instead (see tickerBar below). */}
-          {dockMode === "full" && (
-            <DockMenuRow label="Symbol">
-              <SymbolListDropdown active={symbol} onSelect={setSymbol} />
-            </DockMenuRow>
-          )}
+          {/* Symbol picker is NOT here — it moved out onto the bar itself, next
+              to Refresh. See the note at that call site. Deliberately not
+              duplicated into the cog: two controls for one ticker means the
+              closed one goes stale-looking the moment you use the other. */}
 
           {/* Timeframe. 1m is its own server stream; 5m is the native feed;
               15m/30m/1h roll up from the 5m bars client-side (see interval.ts). */}

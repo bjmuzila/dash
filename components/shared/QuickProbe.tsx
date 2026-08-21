@@ -1,25 +1,30 @@
 "use client";
 
 /**
- * QuickProbe — owner-only contract launcher, docked in the Notes drawer.
+ * QuickProbe — owner-only "add a contract to the probe list", docked in the
+ * Notes drawer.
  *
- * Fill in ticker / expiration / strike / call-or-put and Probe hands the
- * contract off to the real probe page on the owner site:
+ * Fill in ticker / expiration / strike / call-or-put, hit Probe, and the
+ * contract is written straight onto the owner probe list — the same list
+ * /owner/probe renders. No navigation, no new tab: the row is there the next
+ * time that page is opened, and the server-side recorder starts filling its
+ * price history during RTH exactly as if it had been typed there.
  *
- *   https://owner.cbedge.net/owner/probe?ticker=&exp=&strike=&side=
+ * It posts the identical payload the probe page's own Add button posts:
  *
- * That page (owner-vite/src/pages/Probe.tsx) reads those params on mount, fills
- * its structured inputs and its shorthand box, then strips the query from the
- * URL. All the actual work — /proxy/probe-rest resolve, the /api/watch record,
- * the tracking — stays there. This is a launcher, nothing more: it records
- * nothing and adds nothing.
+ *   POST /api/watch { action: "add", ticker, expiry, strike, side }
  *
- * The one request it makes on its own is /api/expirations, to populate the
- * expiration dropdown for whatever symbol is typed — the same route the
- * customer chain surfaces already call. No new endpoint, no proxy change.
+ * No `addedPrice` is sent, so the route captures the live mark as the entry
+ * basis (`app/api/watch/route.ts` / `api-router.js` -> `/proxy/probe-rest`).
+ * That route is registered `auth: 'owner'` server-side, so this is genuinely
+ * gated, not just hidden.
  *
- * Gating is CHROME ONLY (useIsOwner) — same rule as the rest of the owner
- * chrome. The owner site behind the link has its own AuthGate.
+ * The one other request it makes is /api/expirations, to fill the expiration
+ * dropdown for whatever symbol is typed — the same route the customer chain
+ * surfaces already call. No new endpoint, no proxy change.
+ *
+ * `useIsOwner` decides whether the card is DRAWN; /api/watch decides whether
+ * the write is allowed.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -27,11 +32,6 @@ import { HOME_THEME, homeInputStyle, LIGHT_BLUE, SOFT_RED } from "./homeTheme";
 import { useIsOwner } from "./useIsOwner";
 
 type Side = "C" | "P";
-
-/** Owner site root. Overridable for a staging host / local owner-vite dev run. */
-const OWNER_SITE =
-  (process.env.NEXT_PUBLIC_OWNER_SITE_URL || "https://owner.cbedge.net").replace(/\/+$/, "");
-const PROBE_PATH = "/owner/probe";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -53,7 +53,11 @@ export default function QuickProbe() {
   const [expiration, setExpiration] = useState("");
   const [strike, setStrike] = useState("");
   const [side, setSide] = useState<Side>("C");
+
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Last contract successfully added, for the confirmation line. */
+  const [added, setAdded] = useState<string | null>(null);
 
   // Guards a stale expiry response from overwriting a newer symbol's list.
   const expiryReqRef = useRef(0);
@@ -87,28 +91,37 @@ export default function QuickProbe() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, isOwner]);
 
-  // ── hand off to the owner probe page ───────────────────────────────────────
-  const launch = useCallback(() => {
+  // ── add the contract to the probe list ─────────────────────────────────────
+  const probe = useCallback(async () => {
     const sym = ticker.trim().toUpperCase();
     const exp = expiration.trim().slice(0, 10);
     const k = parseFloat(strike);
     if (!sym) { setError("Enter a ticker."); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(exp)) { setError("Pick an expiration."); return; }
     if (!Number.isFinite(k) || k <= 0) { setError("Enter a strike."); return; }
-    setError(null);
 
-    const qs = new URLSearchParams({
-      ticker: sym,
-      exp,
-      strike: String(k),
-      side,
-    });
-    const url = `${OWNER_SITE}${PROBE_PATH}?${qs.toString()}`;
-    // New tab, and never let the opened page reach back through window.opener.
+    setBusy(true);
+    setError(null);
+    setAdded(null);
     try {
-      window.open(url, "cb-owner-probe", "noopener,noreferrer");
+      const res = await fetch("/api/watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "add", ticker: sym, expiry: exp, strike: k, side }),
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok || j?.error) {
+        setError(String(j?.error || `Probe failed (${res.status}).`));
+        return;
+      }
+      setAdded(`${sym} ${k}${side} · ${expiryLabel(exp)}`);
+      // Strike is the one field that changes contract to contract; clear it so
+      // the next probe on the same symbol/expiry is one number and Enter.
+      setStrike("");
     } catch {
-      window.location.href = url;
+      setError("Probe failed — couldn't reach the watch service.");
+    } finally {
+      setBusy(false);
     }
   }, [ticker, expiration, strike, side]);
 
@@ -141,7 +154,7 @@ export default function QuickProbe() {
       <button
         key={s}
         type="button"
-        onClick={() => setSide(s)}
+        onClick={() => { setSide(s); setAdded(null); }}
         style={{
           flex: 1,
           padding: "6px 0",
@@ -221,7 +234,7 @@ export default function QuickProbe() {
             <input
               id="qp-ticker"
               value={ticker}
-              onChange={(e) => setTicker(e.target.value.toUpperCase())}
+              onChange={(e) => { setTicker(e.target.value.toUpperCase()); setAdded(null); }}
               onBlur={() => void loadExpiries(ticker)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void loadExpiries(ticker); } }}
               placeholder="SPX"
@@ -238,7 +251,7 @@ export default function QuickProbe() {
               <select
                 id="qp-exp"
                 value={expiration}
-                onChange={(e) => setExpiration(e.target.value)}
+                onChange={(e) => { setExpiration(e.target.value); setAdded(null); }}
                 style={{ ...fieldStyle, cursor: "pointer" }}
               >
                 {expiries.map((d) => (
@@ -250,7 +263,7 @@ export default function QuickProbe() {
                 id="qp-exp"
                 type="date"
                 value={expiration}
-                onChange={(e) => setExpiration(e.target.value)}
+                onChange={(e) => { setExpiration(e.target.value); setAdded(null); }}
                 style={{ ...fieldStyle, cursor: "text" }}
               />
             )}
@@ -263,8 +276,8 @@ export default function QuickProbe() {
               <input
                 id="qp-strike"
                 value={strike}
-                onChange={(e) => setStrike(e.target.value.replace(/[^0-9.]/g, ""))}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); launch(); } }}
+                onChange={(e) => { setStrike(e.target.value.replace(/[^0-9.]/g, "")); setAdded(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void probe(); } }}
                 inputMode="decimal"
                 placeholder="6400"
                 autoComplete="off"
@@ -279,13 +292,10 @@ export default function QuickProbe() {
 
           <button
             type="button"
-            onClick={launch}
+            onClick={() => void probe()}
+            disabled={busy}
             style={{
               marginTop: 2,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 7,
               padding: "8px 0",
               borderRadius: 9,
               border: `1px solid ${HOME_THEME.cyan}55`,
@@ -295,23 +305,27 @@ export default function QuickProbe() {
               fontWeight: 700,
               letterSpacing: "0.12em",
               textTransform: "uppercase",
-              cursor: "pointer",
+              cursor: busy ? "default" : "pointer",
+              opacity: busy ? 0.55 : 1,
             }}
           >
-            Probe
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-              <polyline points="15 3 21 3 21 9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
-            </svg>
+            {busy ? "Adding…" : "Probe"}
           </button>
-
-          <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.45, letterSpacing: "0.04em", textAlign: "center" }}>
-            Opens the probe page on the owner site
-          </div>
 
           {error && (
             <div style={{ fontSize: 12, color: SOFT_RED, lineHeight: 1.4 }}>{error}</div>
+          )}
+
+          {added && !error && (
+            <div style={{ fontSize: 11, color: HOME_THEME.cyan, lineHeight: 1.45 }}>
+              Added <strong style={{ fontWeight: 700 }}>{added}</strong> to the probe list.
+            </div>
+          )}
+
+          {!added && !error && (
+            <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.45, letterSpacing: "0.04em", textAlign: "center" }}>
+              Adds the contract to the owner probe list
+            </div>
           )}
         </div>
       )}

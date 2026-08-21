@@ -564,12 +564,22 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // live one here: the home GEX card renders this component with `embedded`, and
   // flipping that prop on the same element would change the hook count between
   // renders.
+  // WRAPS, and is allowed to shrink. This row does not live on a wide dock any
+  // more — it is rendered into the chart cog's 340px menu (`<DockMenuRow
+  // label="Page">` in EsChartCard). As an unshrinkable nowrap `inline-flex` it
+  // was wider than that panel, so Layout (the last button) was clipped off the
+  // panel's right edge with no way to reach it. `flexWrap` + `minWidth: 0` lets
+  // it fold onto a second line; it still lays out on one line anywhere wide
+  // enough (the home embed, a wide dock).
   const toolbarButtons = useMemo(() => (
-    <div ref={anchorRef} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+    <div
+      ref={anchorRef}
+      style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, minWidth: 0, maxWidth: "100%" }}
+    >
       {/* anchorRef measures the whole row for panel placement; popBtnsRef is
           only the three buttons that OWN the panel, so pressing Layout (a
           sibling, with its own menu) counts as an outside click. */}
-      <div ref={popBtnsRef} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, minWidth: 0 }} ref={popBtnsRef}>
       <DockButton
         onClick={() => togglePopover("charts")}
         title="Chart count and side panel"
@@ -713,7 +723,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             top: anchorBottom + 8,
             left: 16,
             right: 16,
-            zIndex: 60,
+            // ABOVE the chart cog's own menu (DockToolbar's popoverPanel sits at
+            // 100000). The buttons that open this panel moved INTO that cog, so
+            // at z-60 the panel opened underneath the very menu it was launched
+            // from: Charts/Replay/Indicators looked like they did nothing, or
+            // left a sliver of transport bar peeking out beside the cog.
+            // (DockCogMenu.inFloatingLayer only needs > 50 to keep treating a
+            // click in here as "inside", so the cog still doesn't slam shut.)
+            zIndex: 100001,
             padding: "12px 14px",
             borderRadius: 14,
             border: `1px solid ${HOME_THEME.border}`,
@@ -729,7 +746,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             columnGap: 22,
             rowGap: 14,
             flexWrap: "wrap",
-            maxHeight: "min(60vh, 520px)",
+            // Third term keeps the panel inside the viewport. `top` is measured
+            // off buttons that now sit in a cog menu, which can be most of the
+            // way down the screen — without the clamp the panel's bottom half
+            // (and its scrollbar) fell off the bottom edge, unreachable.
+            maxHeight: `min(60vh, 520px, calc(100vh - ${Math.round(anchorBottom) + 24}px))`,
             overflowY: "auto",
           }}
         >
