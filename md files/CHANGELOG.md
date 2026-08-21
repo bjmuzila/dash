@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-08-20 - Watch This tracked results: scored from ENTRY to HIGH, not from this morning
+
+Edited: `server-v2/far-cb-recorder.js`, `server-v2/server-with-proxy.js`
+(`/proxy/far-cb-outcomes`), `components/pages/Scanner.tsx` (`WatchThisScanner`).
+
+The tracked-results table reported the flagged contract's live NBBO mid and its
+move off TODAY'S open. Both measure this morning, not the flag. A contract that
+tripled since it was flagged and is now a little off its intraday high printed
+red, and every number reset overnight — the one thing the column could not tell
+you was whether the flag was any good.
+
+It now reads from the flag date forward, off our own `far_cb_contract_daily`
+series:
+
+* **Entry** — the first price recorded on or after `first_flagged` (the session
+  `open` where there is one, else that day's close). Carries the C/P letter.
+* **High** — the highest `high` on or after `first_flagged`, with the live mid
+  folded in so a contract printing its best right now shows it rather than a
+  high from fifteen minutes ago (the probe only samples every `PROBE_MINS`).
+* **Max %** — the move between the two.
+
+Bars BEFORE the flag date are excluded on purpose: the backfill pulls a
+contract's whole life, and a high printed a week before anyone was told about it
+was never on offer. New `computeEntryHighs()` does it in one grouped query
+joined to `far_cb_outcomes`; `enrichOutcomesWithQuotes()` now runs the quote
+fetch and the series lookup independently, so a Theta outage empties one column
+instead of all three. `opt_price` is still on the payload for the row popup —
+the table just no longer shows it.
+
+Client: `opt_open` / `opt_pct_open` replaced by `opt_entry` / `opt_entry_date` /
+`opt_high` / `opt_pct_high`, three sortable columns in place of two, colSpan
+11→12, and the caption rewritten to say what the columns now mean.
+
+
+## 2026-08-20 (o) - No accent stripes on any card, anywhere
+
+Edited: `components/pages/premarket/PostMarketTab.tsx`,
+`components/pages/premarket/TickerBoard.tsx`,
+`components/mobile/pages/MobilePrep.tsx`.
+
+Every coloured card edge is gone — scorecard cards, positioning and tomorrow
+tiles, the strike-path sparkline cards, and the phone's level-grade rows. Left
+and top both.
+
+A card's meaning lives in its label colour and its pill; a page of striped cards
+reads as a page of warnings. The stripe went through three shapes (a ::before
+painted by tone classes, an absolutely-positioned child, an inline border) before
+the answer turned out to be none of them, and the CSS now says so where the next
+person would otherwise add a fourth.
+
 ## 2026-08-20 (n) - Premarket crashed on a BACKTICK IN A CSS COMMENT
 
 Edited: `components/pages/premarket/PostMarketTab.tsx`.

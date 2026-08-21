@@ -3154,8 +3154,10 @@ async function main() {
               touched_date: farCbToYmd(r.touched_date),
               last_checked: farCbToYmd(r.last_checked),
             }));
-            // Attach the flagged contract's live price + % since today's open so
-            // the Tracked-results table shows it without opening the row popup.
+            // Attach the flagged contract's ENTRY (its price the day it was
+            // flagged), the HIGH it has printed since, and the move between the
+            // two, so the Tracked-results table scores each flag from the flag
+            // date instead of from this morning's open.
             const quoted = await farCbEnrichOutcomes(fmtRows);
             sendJson(res, 200, { ok: true, rows: quoted, asOf: new Date().toISOString() });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }

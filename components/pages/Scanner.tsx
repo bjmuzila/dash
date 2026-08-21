@@ -929,12 +929,17 @@ type OutcomeRow = {
   touched: boolean;
   touched_date: string | null;
   status: "open" | "touched" | "expired";
-  // The flagged OTM contract itself — live mid + % vs today's open, so the
-  // table carries the stats the row popup used to hide. Null once expired.
+  // The flagged OTM contract itself, measured FROM THE FLAG — what it cost the
+  // day it was flagged and the best it has printed since. Not the live mid and
+  // not its move off this morning's open: the flag is a thesis with a date on
+  // it, so the only honest scoreboard runs from that date. `opt_price` is the
+  // live mid, still carried for the popup; the table does not show it.
   opt_type?: "C" | "P" | null;
   opt_price?: number | null;
-  opt_open?: number | null;
-  opt_pct_open?: number | null;
+  opt_entry?: number | null;
+  opt_entry_date?: string | null;
+  opt_high?: number | null;
+  opt_pct_high?: number | null;
 };
 
 /**
@@ -950,7 +955,7 @@ type OutcomeView = "all" | "open" | "touched" | "expired" | "results";
 // limit is applied there, so this re-orders the fetched page, it does not go
 // back for more rows.
 type OutcomeSortKey =
-  | "symbol" | "strike" | "expiry" | "first_flagged" | "opt_price" | "opt_pct_open"
+  | "symbol" | "strike" | "expiry" | "first_flagged" | "opt_entry" | "opt_high" | "opt_pct_high"
   | "spot_at_flag" | "otm_pct_at_flag" | "closest_pct" | "touched_date" | "status";
 
 type OutcomeSort = { key: OutcomeSortKey; dir: "asc" | "desc" };
@@ -963,8 +968,9 @@ const OUTCOME_SORT_VALUE: Record<OutcomeSortKey, (r: OutcomeRow) => string | num
   strike:          (r) => Number(r.strike),
   expiry:          (r) => ymd(r.expiry) ?? r.expiry ?? null,
   first_flagged:   (r) => ymd(r.first_flagged) ?? null,
-  opt_price:       (r) => r.opt_price ?? null,
-  opt_pct_open:    (r) => r.opt_pct_open ?? null,
+  opt_entry:       (r) => r.opt_entry ?? null,
+  opt_high:        (r) => r.opt_high ?? null,
+  opt_pct_high:    (r) => r.opt_pct_high ?? null,
   spot_at_flag:    (r) => Number(r.spot_at_flag),
   otm_pct_at_flag: (r) => Number(r.otm_pct_at_flag),
   closest_pct:     (r) => r.closest_pct ?? null,
@@ -1751,8 +1757,8 @@ function WatchThisScanner() {
 
   // Results needs every row regardless of status so the per-day counts are
   // complete; 300 is the endpoint's ceiling. quotes=0 because ResultsByDay only
-  // renders per-day counts and the flag fields — it never touches opt_price, so
-  // there is no reason to make the server price 300 contracts for it.
+  // renders per-day counts and the flag fields — it never touches the contract
+  // columns, so there is no reason to make the server price 300 contracts for it.
   const loadResults = useCallback(async () => {
     setResultsLoading(true); setResultsErr(null);
     try {
@@ -1903,7 +1909,7 @@ function WatchThisScanner() {
           <span style={{ fontSize: 14, color: HOME_THEME.text }}>
             {outcomeStatus === "results"
               ? "One row per date · how many flags opened, were touched, and expired that day · click a date to expand"
-              : "Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike · Opt Price = flagged contract's NBBO mid, % since its own open (live rows only) · click any column to sort"}
+              : "Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike · Entry = the flagged contract's price the day it was flagged, High = the best it has printed since, Max % = the move between them · click any column to sort"}
           </span>
         </div>
 
@@ -1927,8 +1933,9 @@ function WatchThisScanner() {
                 <OutcomeTh label="Strike"       sortKey="strike"          sort={sort} onSort={onSort} />
                 <OutcomeTh label="Expiry"       sortKey="expiry"          sort={sort} onSort={onSort} align="left" />
                 <OutcomeTh label="Flagged"      sortKey="first_flagged"   sort={sort} onSort={onSort} align="left" />
-                <OutcomeTh label="Opt Price"    sortKey="opt_price"       sort={sort} onSort={onSort} />
-                <OutcomeTh label="% Since Open" sortKey="opt_pct_open"    sort={sort} onSort={onSort} />
+                <OutcomeTh label="Entry"        sortKey="opt_entry"       sort={sort} onSort={onSort} />
+                <OutcomeTh label="High"         sortKey="opt_high"        sort={sort} onSort={onSort} />
+                <OutcomeTh label="Max %"        sortKey="opt_pct_high"    sort={sort} onSort={onSort} />
                 <OutcomeTh label="Flagged Spot" sortKey="spot_at_flag"    sort={sort} onSort={onSort} />
                 <OutcomeTh label="OTM at flag"  sortKey="otm_pct_at_flag" sort={sort} onSort={onSort} />
                 <OutcomeTh label="Closest"      sortKey="closest_pct"     sort={sort} onSort={onSort} />
@@ -1954,18 +1961,30 @@ function WatchThisScanner() {
                   <td style={{ ...td, fontWeight: 700, color: o.side === "above" ? HOME_THEME.green : HOME_THEME.red }}>${o.strike}</td>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 14 }}>{o.expiry}</td>
                   <td style={{ ...td, textAlign: "left", color: HOME_THEME.text, fontSize: 14 }}>{o.first_flagged}</td>
-                  <td style={{ ...td, fontWeight: 700, color: o.opt_price != null ? LIGHT_BLUE : HOME_THEME.text }}>
-                    {o.opt_price != null
-                      ? `$${o.opt_price.toFixed(2)}${o.opt_type ? ` ${o.opt_type}` : ""}`
+                  {/* Entry carries the C/P letter — it is the first cell that
+                      names the contract, and repeating it on High would say the
+                      same thing twice on one row. */}
+                  <td
+                    style={{ ...td, fontWeight: 700 }}
+                    title={o.opt_entry_date ? `First price recorded ${o.opt_entry_date}` : undefined}
+                  >
+                    {o.opt_entry != null
+                      ? `$${o.opt_entry.toFixed(2)}${o.opt_type ? ` ${o.opt_type}` : ""}`
                       : "—"}
                   </td>
+                  <td style={{ ...td, fontWeight: 700, color: o.opt_high != null ? LIGHT_BLUE : HOME_THEME.text }}>
+                    {o.opt_high != null ? `$${o.opt_high.toFixed(2)}` : "—"}
+                  </td>
+                  {/* Max % can only be negative if the contract never traded
+                      above its entry — the high is taken from the flag date on,
+                      so it includes the entry bar itself. */}
                   <td style={{
                     ...td, fontWeight: 700,
-                    color: o.opt_pct_open == null ? HOME_THEME.text : o.opt_pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red,
+                    color: o.opt_pct_high == null ? HOME_THEME.text : o.opt_pct_high >= 0 ? HOME_THEME.green : HOME_THEME.red,
                   }}>
-                    {o.opt_pct_open == null
+                    {o.opt_pct_high == null
                       ? "—"
-                      : `${o.opt_pct_open >= 0 ? "▲" : "▼"} ${Math.abs(o.opt_pct_open).toFixed(1)}%`}
+                      : `${o.opt_pct_high >= 0 ? "▲" : "▼"} ${Math.abs(o.opt_pct_high).toFixed(1)}%`}
                   </td>
                   <td style={td}>${o.spot_at_flag.toFixed(2)}</td>
                   <td style={td}>{o.otm_pct_at_flag.toFixed(0)}%</td>
@@ -1988,7 +2007,7 @@ function WatchThisScanner() {
                 </tr>
                 {isOpen && (
                   <tr>
-                    <td colSpan={11} style={{ padding: "0 0 0 10px", background: "rgba(0,0,0,0.20)" }}>
+                    <td colSpan={12} style={{ padding: "0 0 0 10px", background: "rgba(0,0,0,0.20)" }}>
                       {detailPanel}
                     </td>
                   </tr>
@@ -1997,7 +2016,7 @@ function WatchThisScanner() {
                 );
               })}
               {!outcomes.length && (
-                <tr><td colSpan={11} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
+                <tr><td colSpan={12} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
                   No tracked flags yet.
                 </td></tr>
               )}

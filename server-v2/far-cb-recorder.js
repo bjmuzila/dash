@@ -1134,25 +1134,99 @@ async function computeOutcomeQuotes(rows) {
   return cachedQuotes(live);
 }
 
-/** Attach opt_price / opt_open / opt_pct_open to outcome rows in place. */
-async function enrichOutcomesWithQuotes(rows) {
-  let quotes;
-  try { quotes = await computeOutcomeQuotes(rows); }
-  catch (e) {
-    console.warn('[far-cb] outcome quote enrich failed:', e.message);
-    return rows.map((r) => ({ ...r, opt_price: null, opt_open: null, opt_pct_open: null }));
+/**
+ * Entry and running high for every tracked contract, from OUR OWN recorded
+ * daily series.
+ *
+ * This is the pair the scanner reports, and neither of them is "now". The flag
+ * is a thesis with a date on it — this contract, from the day it was flagged —
+ * so what it is worth is what it did SINCE that day: what you would have paid
+ * (entry) and the best it ever offered (high). The old columns were the live
+ * mid and its move off TODAY'S open, which measures this morning rather than
+ * the flag, resets every session, and reads as a loss on a contract that has
+ * doubled since it was flagged and is merely off its intraday high.
+ *
+ *   entry = the first price recorded on or after first_flagged — the session
+ *           `open` where there is one, else that day's close.
+ *   high  = the highest `high` on or after first_flagged.
+ *
+ * Bars BEFORE first_flagged are excluded on purpose: the backfill pulls a
+ * contract's whole life, and a high printed a week before the flag was never
+ * on offer to anyone reading this table.
+ *
+ * Returns `${symbol}|${expiry}|${strike}|${type}` -> { entry, high, entryDate }.
+ */
+async function computeEntryHighs() {
+  const p = getPool();
+  if (!p) return new Map();
+  try {
+    const { rows } = await p.query(
+      `SELECT d.symbol, d.strike, d.expiry, d.opt_type,
+              MAX(d.high) AS high,
+              MIN(d.date) AS entry_date,
+              (ARRAY_AGG(COALESCE(d.open, d.close) ORDER BY d.date))[1] AS entry
+         FROM far_cb_contract_daily d
+         JOIN far_cb_outcomes o
+           ON o.symbol = d.symbol AND o.strike = d.strike AND o.expiry = d.expiry
+        WHERE d.date >= o.first_flagged
+        GROUP BY d.symbol, d.strike, d.expiry, d.opt_type`
+    );
+    const out = new Map();
+    for (const r of rows) {
+      const entry = Number(r.entry);
+      const high = Number(r.high);
+      out.set(`${r.symbol}|${r.expiry}|${Number(r.strike)}|${r.opt_type}`, {
+        entry: Number.isFinite(entry) && entry > 0 ? entry : null,
+        high: Number.isFinite(high) && high > 0 ? high : null,
+        entryDate: toYmd(r.entry_date),
+      });
+    }
+    return out;
+  } catch (e) {
+    console.warn('[far-cb] entry/high lookup failed:', e.message);
+    return new Map();
   }
+}
+
+/**
+ * Attach the contract columns to outcome rows: opt_entry / opt_high /
+ * opt_pct_high, plus opt_price (the live mid) which is still carried for the
+ * popup and for folding into the high below.
+ *
+ * The live mid is folded into the high because the probe only samples every
+ * PROBE_MINS: a contract printing its best bid of the week right now would
+ * otherwise show a high from fifteen minutes ago. Entry is never touched by it.
+ *
+ * The two halves fail independently. Entry and high come from our own table and
+ * survive a dead vendor; only opt_price needs Theta, so a quote outage empties
+ * one column instead of all three.
+ */
+async function enrichOutcomesWithQuotes(rows) {
+  const [quotes, series] = await Promise.all([
+    computeOutcomeQuotes(rows).catch((e) => {
+      console.warn('[far-cb] outcome quote enrich failed:', e.message);
+      return new Map();
+    }),
+    computeEntryHighs(),
+  ]);
   return rows.map((r) => {
     const type = optTypeOf(r);
-    const q = quotes.get(`${r.symbol}|${r.expiry}|${Number(r.strike)}|${type}`);
-    const price = q?.price ?? null;
-    const open = q?.open ?? null;
+    const ck = `${r.symbol}|${r.expiry}|${Number(r.strike)}|${type}`;
+    const price = quotes.get(ck)?.price ?? null;
+    const s = series.get(ck);
+    const entry = s?.entry ?? null;
+    const high = price != null && s?.high != null ? Math.max(s.high, price)
+      : (s?.high ?? price ?? null);
     return {
       ...r,
       opt_type: type,
       opt_price: price,
-      opt_open: open,
-      opt_pct_open: price != null && open != null && open > 0 ? ((price - open) / open) * 100 : null,
+      opt_entry: entry,
+      opt_entry_date: s?.entryDate ?? null,
+      opt_high: high,
+      opt_pct_high: entry != null && high != null && entry > 0
+        ? ((high - entry) / entry) * 100
+        : null,
     };
   });
 }
@@ -1264,6 +1338,7 @@ module.exports = {
   getPool,
   scanTicker,
   computeOutcomeDetail,
+  computeEntryHighs,
   enrichOutcomesWithQuotes,
   toYmd,
   OTM_THRESHOLD_PCT,

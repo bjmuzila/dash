@@ -138,13 +138,12 @@ export const POSTMARKET_CSS = `
 
 /* 2 — scorecard */
 .pmk .scorecard{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
-/* The accent is the card's own LEFT BORDER, set inline from the level's colour.
-   It started as a ::before painted by tone classes (invisible until a verdict
-   resolved), then as an absolutely-positioned <i> (one stacking-context or
-   overflow rule away from vanishing). A border cannot be lost: it is part of the
-   box. The colour says WHICH level — call wall red, put wall green, CORE violet
-   — and the pill says what the level did, which is the part that changes. */
-.pmk .sc{position:relative;border:1px solid var(--card);border-left-width:4px;
+/* NO ACCENT STRIPES. Cards carry their meaning in the label colour and the
+   pill, not in a coloured edge — a page of striped cards reads as a page of
+   warnings. This went through three shapes (a ::before painted by tone classes,
+   an absolutely-positioned child, an inline border) before the answer turned out
+   to be "none of them". Do not add a fourth. */
+.pmk .sc{position:relative;border:1px solid var(--card);
   border-radius:var(--r);background:var(--panel2);padding:10px 11px 11px}
 .pmk .sc .src{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2);margin-top:6px}
 .pmk .sc .nm{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);
@@ -200,12 +199,8 @@ export const POSTMARKET_CSS = `
 
 /* 4/5/6 */
 .pmk .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-/* Tiles carry the same left accent the scorecard cards do — a card with a bare
-   edge reads as a different kind of thing, and they are all the same thing. */
 .pmk .tile{position:relative;border:1px solid var(--card);border-radius:9px;background:var(--panel2);
-  padding:9px 10px 9px 13px;overflow:hidden}
-.pmk .tile::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
-  background:var(--tile-accent,var(--line2));border-radius:0 2px 2px 0}
+  padding:9px 10px;overflow:hidden}
 .pmk .tile .n2{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
 .pmk .tile .v2{font-size:16px;font-weight:640;margin-top:2px;letter-spacing:-.02em}
 .pmk .tile .m2{font-size:10px;color:var(--dim)}
@@ -230,7 +225,7 @@ export const POSTMARKET_CSS = `
    rather than a fixed column count that leaves a gutter at 1440 and clips at
    1100. */
 .pmk .sparkgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px}
-.pmk .spark{border:1px solid var(--card);border-left-width:3px;border-radius:9px;background:var(--panel2);
+.pmk .spark{border:1px solid var(--card);border-radius:9px;background:var(--panel2);
   padding:7px 8px 4px;min-width:0}
 .pmk .spark .sh{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
 .pmk .spark .sk{font-size:11px;font-weight:650;letter-spacing:-.01em}
@@ -1109,7 +1104,7 @@ export default function PostMarketTab(p: PostMarketProps) {
         </div>
         <div className="scorecard">
           {grades.map((g) => (
-            <div className="sc" key={g.key} style={{ borderLeft: `4px solid ${g.color}` }}>
+            <div className="sc" key={g.key}>
               <div className="nm">
                 <span style={{ color: g.color }}>{g.name}</span>
                 <span className={`pill${g.tone === "ok" ? " cool" : g.tone === "bad" ? " hot" : g.tone === "warn" ? " warn" : ""}`}
@@ -1330,22 +1325,22 @@ export default function PostMarketTab(p: PostMarketProps) {
           <span className="tiny right">same chain, same formulas as the GEX chart</span>
         </div>
         <div className="tiles">
-          <div className="tile" style={{ ["--tile-accent" as string]: totals.dex >= 0 ? "var(--pos)" : "var(--neg)" } as CSSProperties}>
+          <div className="tile">
             <div className="n2">Net DEX</div>
             <div className="v2 mono">{fmtUsd(totals.dex)}</div>
             <div className="m2">{totals.dex >= 0 ? "dealers long delta" : "dealers short delta"}</div>
           </div>
-          <div className="tile" style={{ ["--tile-accent" as string]: "var(--blue)" } as CSSProperties}>
+          <div className="tile">
             <div className="n2">Net Vanna</div>
             <div className="v2 mono">{fmtUsd(totals.vanna)}</div>
             <div className="m2">{totals.vanna >= 0 ? "vol down helps the tape" : "vol down pressures the tape"}</div>
           </div>
-          <div className="tile" style={{ ["--tile-accent" as string]: (netGexChg ?? 0) >= 0 ? "var(--pos)" : "var(--neg)" } as CSSProperties}>
+          <div className="tile">
             <div className="n2">Net GEX on the day</div>
             <div className="v2 mono">{netGexChg == null ? "—" : fmtUsd(netGexChg)}</div>
             <div className="m2">{netGexChg == null ? "no 09:30 ladder" : netGexChg >= 0 ? "gamma built through the session" : "gamma bled out of the book"}</div>
           </div>
-          <div className="tile" style={{ ["--tile-accent" as string]: "var(--violet)" } as CSSProperties}>
+          <div className="tile">
             <div className="n2">Call vs Put gamma</div>
             <div className="v2 mono">
               {(() => {
@@ -1455,7 +1450,7 @@ export default function PostMarketTab(p: PostMarketProps) {
             </div>
 
             <div className="tiles" style={{ marginTop: 6 }}>
-              <div className="tile" style={{ ["--tile-accent" as string]: "var(--blue)" } as CSSProperties}>
+              <div className="tile">
                 <div className="n2">Wall band</div>
                 <div className="v2 mono">
                   {todayWidth != null && nextWidth != null ? `${nf(todayWidth, 0)} → ${nf(nextWidth, 0)} pts` : nextWidth != null ? `${nf(nextWidth, 0)} pts` : "—"}
@@ -1466,12 +1461,12 @@ export default function PostMarketTab(p: PostMarketProps) {
                     : "structure after the roll"}
                 </div>
               </div>
-              <div className="tile" style={{ ["--tile-accent" as string]: "var(--amber)" } as CSSProperties}>
+              <div className="tile">
                 <div className="n2">Flip moves to</div>
                 <div className="v2 mono">{fmtPx(next?.flip)}</div>
                 <div className="m2">{next?.flip != null && closePx > 0 ? `${fmtPts(next.flip - closePx)} from the close` : "—"}</div>
               </div>
-              <div className="tile" style={{ ["--tile-accent" as string]: (next?.netGex ?? 0) >= 0 ? "var(--pos)" : "var(--neg)" } as CSSProperties}>
+              <div className="tile">
                 <div className="n2">Net GEX rolls to</div>
                 <div className="v2 mono">{fmtUsd(next?.netGex ?? null)}</div>
                 <div className="m2">
@@ -1480,7 +1475,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                     : "next expiry only"}
                 </div>
               </div>
-              <div className="tile" style={{ ["--tile-accent" as string]: "#ffffff" } as CSSProperties}>
+              <div className="tile">
                 <div className="n2">Overnight watch</div>
                 <div className="v2 mono">{fmtPx(rthHi)} / {fmtPx(rthLo)}</div>
                 <div className="m2">today&apos;s RTH high / low{basis != null ? ` · ES basis ${fmtPts(basis)}` : ""}</div>
@@ -1604,7 +1599,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                 .map((v, i) => `${(i / Math.max(1, r.vals.length - 1)) * W},${H - 2 - (Math.abs(v) / max) * (H - 5)}`)
                 .join(" ");
               return (
-                <div className="spark" key={r.strike} style={{ borderLeftColor: stroke }}>
+                <div className="spark" key={r.strike}>
                   <div className="sh">
                     <span className="sk mono">{nf(r.strike, 0)}</span>
                     <span className="sv mono">{fmtUsd(r.net, false)}</span>

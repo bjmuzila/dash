@@ -500,7 +500,7 @@ function PostView({
               const status = rx ? REACTION_LABEL[rx] : rec ? "UNTESTED" : "—";
               const tone_c = tone ? TONE_COLOR[tone] : M_COLOR.faint;
               return (
-                <div key={lvl} style={{ ...mTile, padding: "9px 10px", borderLeft: `3px solid ${color}` }}>
+                <div key={lvl} style={{ ...mTile, padding: "9px 10px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.08em", color, textTransform: "uppercase" }}>
                       {label}
