@@ -3050,6 +3050,38 @@ export default function OptionsChainPage({
           </div>
         </div>
 
+        {/* Ticker selection is its OWN toolbar control, not a cog setting.
+            Which ticker the chain is showing is the single most-changed thing
+            on this page — burying it a click deep in the settings menu made
+            every switch a two-click trip. GO + Recent ride with it so the whole
+            ticker act stays in one place on the bar. Hidden when the chain is
+            embedded with a fixed ticker (externalTicker). */}
+        {externalTicker == null && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            <TickerListDropdown activeTicker={activeTicker} onSelect={selectTicker} />
+            <button
+              onClick={doGo}
+              disabled={!tickerInput}
+              style={{ ...segBtnStyle(false), opacity: tickerInput ? 1 : 0.45, cursor: tickerInput ? "pointer" : "not-allowed" }}
+            >
+              GO
+            </button>
+            {recentTickers.length > 0 && (
+              <CustomDropdown
+                value={activeTicker}
+                options={recentTickers as string[]}
+                onChange={(t) => selectTicker(t as string)}
+                triggerLabel="Recent"
+                accentCyan={false}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Refresh is an ACTION, not a setting — it stands on its own next to
+            the ticker control rather than hiding a click deep in the cog. */}
+        <button onClick={trigger} style={{ ...homeButtonStyle, flexShrink: 0 }}>{refreshLabel}</button>
+
         {/* A rewound grid shared without a timestamp is just a wrong chain, so
             the replay clock goes in the title and the Discord message too. */}
         <BoxSnapBtn targetRef={pageRef} title={replayTitle} />
@@ -3062,29 +3094,7 @@ export default function OptionsChainPage({
         />
 
         <DockCogMenu title="Options chain" buttonTitle="Options chain settings" width={340}>
-          {externalTicker == null && (
-            <DockMenuRow label="Ticker" stack>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                <TickerListDropdown activeTicker={activeTicker} onSelect={selectTicker} />
-                <button
-                  onClick={doGo}
-                  disabled={!tickerInput}
-                  style={{ ...segBtnStyle(false), opacity: tickerInput ? 1 : 0.45, cursor: tickerInput ? "pointer" : "not-allowed" }}
-                >
-                  GO
-                </button>
-                {recentTickers.length > 0 && (
-                  <CustomDropdown
-                    value={activeTicker}
-                    options={recentTickers as string[]}
-                    onChange={(t) => selectTicker(t as string)}
-                    triggerLabel="Recent"
-                    accentCyan={false}
-                  />
-                )}
-              </div>
-            </DockMenuRow>
-          )}
+          {/* Ticker moved OUT of this menu and onto the toolbar itself. */}
 
           <DockMenuRow label="Strikes">
             <CustomDropdown
@@ -3161,23 +3171,20 @@ export default function OptionsChainPage({
             </button>
           </DockMenuRow>
 
-          <DockMenuRow label="Data" stack>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              {/* Standalone only. An embedded chain (the /new-home tile) is a live
-                  glance at a fixed ticker — handing it a session scrubber would let a
-                  tile on a live dashboard quietly show yesterday. */}
-              {isStandalone && (
-                <button
-                  onClick={() => setReplayOn((v) => !v)}
-                  style={segBtnStyle(replayOn)}
-                  title="Rewind the grid itself through the session's recorded net-GEX snapshots"
-                >
-                  {replayOn ? "■ Exit Replay" : "▶ Replay"}
-                </button>
-              )}
-              <button onClick={trigger} style={{ ...homeButtonStyle }}>{refreshLabel}</button>
-            </div>
-          </DockMenuRow>
+          {/* Standalone only. An embedded chain (the /new-home tile) is a live
+              glance at a fixed ticker — handing it a session scrubber would let a
+              tile on a live dashboard quietly show yesterday. */}
+          {isStandalone && (
+            <DockMenuRow label="Replay">
+              <button
+                onClick={() => setReplayOn((v) => !v)}
+                style={segBtnStyle(replayOn)}
+                title="Rewind the grid itself through the session's recorded net-GEX snapshots"
+              >
+                {replayOn ? "■ Exit Replay" : "▶ Replay"}
+              </button>
+            </DockMenuRow>
+          )}
         </DockCogMenu>
       </Dock>
       {/* ── Row 2 — the TOTAL row, now a stat bar ─────────────────────────────

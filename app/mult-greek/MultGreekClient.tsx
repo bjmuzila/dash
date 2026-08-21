@@ -8,12 +8,9 @@ import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { isCashOpen, isPlausibleBasis } from "@/components/dashboard/es-candles/chartMath";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS, GEX_THRESHOLD_COLORS, classicCardAccentStyle, DOCK_THEME } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS, classicCardAccentStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls } from "@/lib/calculations/heatLevels";
 import { rankBg } from "@/lib/calculations/optionChain";
-import {
-  thresholdBg, thresholdPct, levelPaint, MG_COLOR_MODE_KEY, type MgColorMode,
-} from "@/lib/calculations/gexThreshold";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockSlider, DockExpiryPicker, DockCogMenu, DockMenuRow, DockMenuDivider } from "@/components/shared/DockToolbar";
 import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/MultiGreekLevelSnapshot";
@@ -45,12 +42,6 @@ const CUSTOM_TICKER_KEY = "mg_custom_ticker";
 // SHOWN column is not the 4th expiry itself — it's the synthetic ex-0DTE TOTAL
 // (see EX0_KEY / withEx0Column) that the 4th expiry's data feeds into.
 const MAX_EXP_COLS = 4;
-
-// Top of the Intensity slider's track. Named because TWO things read it now: the
-// slider itself, and thresholdPct() — which maps the same slider to the % of a
-// column's gross gamma a strike needs to be colored in THRESHOLD mode. Hardcode
-// it in one of the two and the slider's right-hand end stops meaning "0%".
-const MG_INTENSITY_MAX = 3;
 
 // ── Replay mode ───────────────────────────────────────────────────────────────
 // Rewinds ALL FOUR PANELS AT ONCE off one shared clock: every cell renders from
@@ -660,9 +651,10 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
 }
 
 function TickerPanel({
-  ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, colorMode, emLevels, showEm, captureWindow,
+  ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
   showCB, showCW, showPW, onToggleWall, getGexChange, deltaWindow, onExpandChain,
   replayFrame = null, replayStrikes = null, dteBase = null,
+  editableTicker = false, tickerInput = "", onTickerInputChange, onCommitTicker,
 }: {
   ticker: Ticker;
   /** Per-expiry strike rows for this ticker. */
@@ -673,10 +665,6 @@ function TickerPanel({
   spot: number;
   contractMode: ContractMode;
   intensity: number;
-  /** "heat" = the ramp this page has always used; "threshold" = color only the
-   *  strikes carrying at least N% of the column's gross gamma. See
-   *  lib/calculations/gexThreshold. */
-  colorMode: MgColorMode;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
   /** Toolbar toggles: show the CB (1st) / CW (2nd) / PW (3rd) top-|GEX| level
@@ -704,6 +692,14 @@ function TickerPanel({
   replayStrikes?: number[] | null;
   /** Replay: the session date the column DTE labels count from (see colLabel). */
   dteBase?: string | null;
+  /** 4th slot only: the ticker is user-editable, so the header renders the
+   *  symbol as an input instead of a label. The cog menu no longer carries it. */
+  editableTicker?: boolean;
+  /** Controlled value of that header input (uncommitted text). */
+  tickerInput?: string;
+  onTickerInputChange?: (v: string) => void;
+  /** Commit on Enter / blur — the page swaps the slot's ticker. */
+  onCommitTicker?: () => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
@@ -829,11 +825,6 @@ function TickerPanel({
   // Built off the untrimmed rows for the same reason `walls` is: the capture
   // window must not change which strike is a wall.
   const levelsOnly = atMinIntensity(intensity, INTENSITY_MIN.chain);
-  // THRESHOLD mode: the Intensity slider drives the share a strike must carry to
-  // be colored instead of sitting dead. Its minimum stop keeps its existing
-  // meaning (levels-only), which is why that branch is tested first everywhere
-  // below — the two modes share the bottom of the slider.
-  const thPct = thresholdPct(intensity, INTENSITY_MIN.chain, MG_INTENSITY_MAX);
   const wallsByCol: Record<string, ColumnWalls> = {};
   if (levelsOnly && computedAug) {
     for (const e of computedAug.cols) {
@@ -962,10 +953,7 @@ function TickerPanel({
         let pos = 0, neg = 0;
         computed.rows.forEach(r => { const v = r.gex[e] || 0; if (v > 0) pos += v; else neg += -v; });
         const gross = pos + neg;
-        // `gross` also feeds the THRESHOLD coloring mode — it is the denominator
-        // every cell's share is taken against, so it is computed once here
-        // rather than re-summed per cell.
-        return [e, { net: pos - neg, gross, posPct: gross > 0 ? (pos / gross) * 100 : null }] as const;
+        return [e, { net: pos - neg, posPct: gross > 0 ? (pos / gross) * 100 : null }] as const;
       }))
     : null;
 
@@ -1128,8 +1116,43 @@ function TickerPanel({
         style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0, cursor: "zoom-in", userSelect: "none" }}
       >
         {/* Ticker Lookup 🔍 moved to the page toolbar — one button for the
-            whole page instead of one per panel. */}
-        <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
+            whole page instead of one per panel.
+            The 4th slot is user-configurable, so its symbol IS the input — it
+            sits right here on the card rather than behind the cog. */}
+        {editableTicker ? (
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}
+            // The header's double-click opens the chain; typing in the box must
+            // not trigger it, and the input needs its own text selection back.
+            onDoubleClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
+            <input
+              value={tickerInput}
+              onChange={(e) => onTickerInputChange?.(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") { e.preventDefault(); onCommitTicker?.(); (e.target as HTMLInputElement).blur(); }
+              }}
+              onBlur={() => onCommitTicker?.()}
+              placeholder="TICKER"
+              title="Change this panel's ticker — Enter to load"
+              maxLength={6}
+              spellCheck={false}
+              autoCapitalize="characters"
+              style={{
+                width: 74, padding: "2px 6px", fontSize: 11, fontWeight: 800,
+                letterSpacing: "0.08em", textTransform: "uppercase", textAlign: "center",
+                background: HT.panelBgStrong, color: HT.cyan,
+                border: `1px solid ${HT.border}`, borderRadius: 6, outline: "none",
+                fontFamily: "inherit", cursor: "text", userSelect: "text",
+              }}
+            />
+          </div>
+        ) : (
+          <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
+        )}
         {/* The CB/CW/PW readout moved OUT of this header — it is now the row of
             three cards directly above this panel (see wallCards). */}
         <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: HT.text, flexShrink: 0 }}>
@@ -1261,13 +1284,6 @@ function TickerPanel({
                     : { t: "PW", c: LEVEL_COLORS.pw, title: "PW — most −GEX level" })
                   : null;
                 const isCB = lvl?.t === "CB";
-                // THRESHOLD mode. Levels-only owns the bottom of the slider in
-                // both modes, so it is excluded here rather than special-cased
-                // inside the paint helpers.
-                const useThreshold = colorMode === "threshold" && !levelsOnly;
-                const paint = (useThreshold && lvl && lvlKind && val != null)
-                  ? levelPaint(lvlKind, GEX_THRESHOLD_COLORS.cb, GEX_THRESHOLD_COLORS.pos, GEX_THRESHOLD_COLORS.neg)
-                  : null;
                 const isSel = clickCell != null && clickCell.strike === r.strike && clickCell.expiry === e;
                 // Δ stamp — only on the top 5 strikes each side of this column.
                 // Everything about the GEX value and its heat is unchanged; the
@@ -1293,7 +1309,7 @@ function TickerPanel({
                     // The click card reads LIVE 15m/30m/open baselines, which
                     // say nothing about a rewound clock — so replay cells are
                     // not clickable rather than opening a card about now.
-                    textAlign: "center", color: paint ? paint.ink : SOFT_WHITE, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
+                    textAlign: "center", color: SOFT_WHITE, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
                     // Δ mode only switches the cell to a flex row so the chip can
                     // sit beside the value. No minHeight, no padding change, no
                     // width change — the cell box is byte-identical to Δ-off.
@@ -1304,29 +1320,15 @@ function TickerPanel({
                     // badge, not the fill, is what names the level.
                     background: levelsOnly
                       ? (lvlShown && lvlKind && val != null ? rankBg(val, WALL_RANK[lvlKind]) : "transparent")
-                      : useThreshold
-                        // A level paints over its own share fill: CB gold, CW the
-                        // +GEX color, PW the −GEX color. Everything else is in or
-                        // out by share of the column's gross gamma.
-                        ? (paint ? paint.bg : thresholdBg(val, totals?.[e]?.gross ?? 0, thPct, GEX_THRESHOLD_COLORS.pos, GEX_THRESHOLD_COLORS.neg))
-                        : (val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity)),
-                    // Walls carry the emphasis in threshold mode, so their number
-                    // goes heaviest whatever the heat rank says.
-                    fontWeight: paint && !isCB ? 900 : weight,
+                      : (val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity)),
+                    fontWeight: weight,
                     position: "relative",
-                    // The rank-1 ring is part of the HEAT field, so it goes with
+                    // The rank-1 ring is part of the heat field, so it goes with
                     // it — otherwise "only the levels" still leaves a ring on
-                    // every column's top strike, and threshold mode gets a second
-                    // emphasis competing with the walls.
-                    ...(!levelsOnly && !useThreshold && topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
-                    // The near-white rim + outer glow are what separate a wall
-                    // from a merely large cell — see lib/calculations/gexThreshold.
-                    ...(lvl
-                      ? (paint
-                          ? { outline: `${paint.outlineW}px solid ${paint.outline}`, outlineOffset: `-${paint.outlineW}px`, zIndex: 4, ...(paint.glow ? { boxShadow: paint.glow } : {}) }
-                          : { outline: `2px solid ${lvl.c}`, outlineOffset: "-2px", zIndex: 2 })
-                      : {}),
-                    ...(isSel ? { outline: "2px solid #ffffff", outlineOffset: "-2px", zIndex: 5 } : {}),
+                    // every column's top strike.
+                    ...(!levelsOnly && topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
+                    ...(lvl ? { outline: `2px solid ${lvl.c}`, outlineOffset: "-2px", zIndex: 2 } : {}),
+                    ...(isSel ? { outline: "2px solid #ffffff", outlineOffset: "-2px", zIndex: 3 } : {}),
                   }}>
                     {/* Non-front columns keep the plain gold peak star — but not
                         in levels-only mode, where the CB badge already names
@@ -1341,7 +1343,7 @@ function TickerPanel({
                       <span title={lvl.title} style={{
                         position: "absolute", top: 0, right: 1, fontSize: 8, fontWeight: 900,
                         lineHeight: 1.2, letterSpacing: "0.02em",
-                        color: paint ? paint.badgeInk : "#04121a", background: paint ? paint.badge : lvl.c, borderRadius: 2, padding: "0 2px",
+                        color: "#04121a", background: lvl.c, borderRadius: 2, padding: "0 2px",
                         pointerEvents: "none",
                       }}>{lvl.t}</span>
                     )}
@@ -1357,9 +1359,7 @@ function TickerPanel({
                       ? <DeltaStamp d={dEntry.d} pct={dEntry.pct} rank={dEntry.rank} />
                       : null}
                     <span style={dMode ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>
-                      {/* On a near-solid level fill the green/red sign glyph
-                          muddies, so those cells take the fill's own ink. */}
-                      <span style={{ color: paint ? paint.ink : signColor }}>{formatted.sign}</span>{formatted.value}
+                      <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                     </span>
                   </div>
                 );
@@ -1752,21 +1752,6 @@ export function MultGreekClient({
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const [contractMode, setContractMode] = useState<ContractMode>("oivol");
   const [intensity, setIntensity] = useState(1.75);
-  // Coloring scheme, persisted per browser. Defaults to the heat ramp the page
-  // has always used — an existing user's ladder must not change appearance
-  // because a new mode shipped.
-  const [colorMode, setColorMode] = useState<MgColorMode>("heat");
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      const saved = window.localStorage.getItem(MG_COLOR_MODE_KEY);
-      if (saved === "heat" || saved === "threshold") setColorMode(saved);
-    } catch { /* ignore */ }
-  }, []);
-  const commitColorMode = useCallback((m: MgColorMode) => {
-    setColorMode(m);
-    try { window.localStorage.setItem(MG_COLOR_MODE_KEY, m); } catch { /* ignore */ }
-  }, []);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>(
     isStatic ? { state: "idle", msg: "DELAYED" } : { state: "idle", msg: "READY" }
   );
@@ -2566,6 +2551,12 @@ export function MultGreekClient({
           </span>
         </div>
 
+        {/* Refresh is an ACTION, not a setting — it rides with the capture
+            buttons on the bar rather than hiding a click deep in the cog. */}
+        {!isStatic && (
+          <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
+        )}
+
         {/* Level snapshot — TABLE / LADDERS toggle + copy-to-clipboard. Renders
             the four tickers' CB/CW/PW to a canvas; unrelated to BoxSnapBtn,
             which rasterizes the whole page. */}
@@ -2619,68 +2610,22 @@ export function MultGreekClient({
             />
           </DockMenuRow>
 
-          {/* 4th ticker input — persisted per browser (localStorage). Live only,
-              and hidden when the caller pinned the line-up (`tickers`), where it
-              would edit a slot that isn't on screen. */}
-          {!isStatic && !tickerOverrideKey && (
-            <DockMenuRow label="4th ticker" stack>
-              <input
-                value={tickerInput}
-                onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitTicker(); (e.target as HTMLInputElement).blur(); } }}
-                onBlur={commitTicker}
-                placeholder="TICKER"
-                maxLength={6}
-                spellCheck={false}
-                autoCapitalize="characters"
-                style={{
-                  width: 90, padding: "5px 8px", fontSize: 11, fontWeight: 800,
-                  letterSpacing: "0.08em", textTransform: "uppercase", textAlign: "center",
-                  background: HT.panelBgStrong, color: HT.cyan,
-                  border: `1px solid ${HT.border}`, borderRadius: 6, outline: "none",
-                  fontFamily: "inherit",
-                }}
-              />
-            </DockMenuRow>
-          )}
+          {/* The 4th-ticker input used to live here. It is now ON the 4th panel's
+              header, next to the symbol (see TickerPanel `editableTicker`). */}
 
           <DockMenuDivider />
 
-          {/* Coloring scheme. HEAT paints every cell on a ramp keyed to the
-              column's largest strike; % paints only the strikes carrying at
-              least N% of the column's GROSS gamma and dims the rest, with
-              CB/CW/PW lit on top. Persisted per browser. */}
-          <DockMenuRow label="Coloring" stack>
-            <SegGroup
-              options={[
-                { label: "HEAT", value: "heat" },
-                { label: "%", value: "threshold" },
-              ]}
-              active={colorMode}
-              onChange={(v) => commitColorMode(v as MgColorMode)}
-            />
-          </DockMenuRow>
-
-          <DockMenuRow label={colorMode === "threshold" ? "Cutoff" : "Intensity"}>
+          <DockMenuRow label="Intensity">
             <DockSlider
               value={intensity}
               min={0.5}
-              max={MG_INTENSITY_MAX}
+              max={3}
               step={0.01}
               onChange={setIntensity}
               width={110}
-              // One slider, two readouts — in % mode it is the share of the
-              // column's gross gamma a strike needs, so the number it shows has
-              // to be that share, not a multiplier.
-              format={(v) => v <= 0.5
-                ? "LEVELS"
-                : colorMode === "threshold"
-                  ? `${thresholdPct(v, INTENSITY_MIN.chain, MG_INTENSITY_MAX).toFixed(2)}%`
-                  : `${v.toFixed(2)}x`}
+              format={(v) => (v <= 0.5 ? "LEVELS" : `${v.toFixed(2)}x`)}
               valueWidth={52}
-              title={colorMode === "threshold"
-                ? "Share of the column's gross GEX a strike must carry to be colored. Right = lower cutoff, more of the ladder lit. At the minimum stop the fill switches off and only CB / CW / PW stay marked."
-                : "Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."}
+              title="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."
             />
           </DockMenuRow>
 
@@ -2714,9 +2659,6 @@ export function MultGreekClient({
                 >⏱ REPLAY</DockButton>
               )}
 
-              {!isStatic && (
-                <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
-              )}
             </div>
           </DockMenuRow>
         </DockCogMenu>
@@ -2865,10 +2807,16 @@ export function MultGreekClient({
           this box — the 4 cards and nothing else. The page toolbar above stays
           live and visible while the chain is open. */}
       <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ position: "relative", flex: isCapturing ? "0 0 auto" : 1, display: "flex", alignItems: isCapturing ? "flex-start" : "stretch", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: 0 }}>
-        {TICKERS.map(ticker => (
+        {TICKERS.map((ticker, ti) => (
           <TickerPanel
             key={ticker}
             ticker={ticker}
+            // Only the 4th slot is user-configurable, and only when the caller
+            // hasn't pinned the line-up (`tickers`) and we're on live data.
+            editableTicker={!isStatic && !tickerOverrideKey && ti === 3}
+            tickerInput={tickerInput}
+            onTickerInputChange={setTickerInput}
+            onCommitTicker={commitTicker}
             strikesByExp={strikes[ticker] ?? {}}
             cols={replayOn ? (replayColsByTicker[ticker] ?? []) : (colsByTicker[ticker] ?? [])}
             liveData={liveDataRef.current}
@@ -2877,7 +2825,6 @@ export function MultGreekClient({
             spot={replayOn ? (replayFrameByTicker[ticker]?.spot ?? 0) : (effectiveSpots[ticker] ?? 0)}
             contractMode={contractMode}
             intensity={intensity}
-            colorMode={colorMode}
             emLevels={emByTicker[ticker] ?? null}
             // EM bands are THIS week's expected move; drawing them on a past
             // session would be a level that didn't exist yet. Δ stamps come

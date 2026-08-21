@@ -133,6 +133,11 @@ export default function GexToolbar({
           {stats
             ? <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center" }}>{stats}</div>
             : <DockSpacer />}
+          {/* Refresh is an ACTION, not a setting — it rides with snapshot and
+              Discord on the bar rather than hiding a click deep in the cog. */}
+          <DockButton onClick={trigger} title="Refresh the chain" style={{ color: btnStyle.color as string }}>
+            {btnLabel}
+          </DockButton>
           {containerRef && <BoxSnapBtn targetRef={containerRef} label="GEX Chart" title={screenshotTitle} />}
           {containerRef && <BoxDiscordBtn targetRef={containerRef} label="GEX Chart" message={discordMessage} title={screenshotTitle} />}
           <DockCogMenu title="GEX chart" buttonTitle="GEX chart settings" width={330}>
@@ -197,13 +202,6 @@ export default function GexToolbar({
               <ToggleTile label="Flip" on={showFlipCurve} onClick={onToggleFlip} />
             </DockMenuRow>
 
-            <DockMenuDivider />
-
-            <DockMenuRow label="Data">
-              <DockButton onClick={trigger} title="Refresh the chain" style={{ color: btnStyle.color as string }}>
-                {btnLabel}
-              </DockButton>
-            </DockMenuRow>
           </DockCogMenu>
         </Dock>
       </div>

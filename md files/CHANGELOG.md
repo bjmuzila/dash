@@ -1,331 +1,94 @@
 # Changelog
 
-## 2026-08-21 (o) - Campaigns: emails tag themselves, a link builder for everything else, and a campaign table that reports outcomes
+## 2026-08-21 (n) - Options Chain: ticker picker out of the cog, onto the bar
 
-New: `lib/emails/utm.ts`, `owner-vite/src/components/CampaignLinkBuilder.tsx`.
-Edited: `app/api/admin/send-email/route.ts`, `lib/emails/send.ts`,
-`owner-vite/src/pages/Emails.tsx`, `owner-vite/src/components/AcquisitionPanel.tsx`,
-`owner-vite/src/pages/ControlPanel.tsx`.
+Edited: `components/pages/OptionsChain.tsx`.
 
-An untagged link in an outbound email is indistinguishable from someone typing
-the URL — it lands in "Direct", or under `mail.google.com` if the client leaks a
-referrer. Neither tells you the newsletter worked. Three pieces close that:
+Ticker selection is the most-changed control on the chain, and it was sitting a
+click deep in the settings cog. The `Tickers` dropdown, `GO` and `Recent` now
+stand as their own group on the toolbar itself, immediately left of Refresh,
+which likewise stands alone as an action rather than a setting. Bar order:
 
-### 1. Outbound email tags itself (`lib/emails/utm.ts`)
+    identity (stretch) -> ticker / GO / Recent -> refresh -> snapshot -> Discord -> cog
 
-Both send paths — `/api/admin/send-email` (owner broadcast) and
-`sendTransactional()` — now rewrite every `<a href>` pointing at our own host to
-carry `utm_source` / `utm_medium=email` / `utm_campaign`. Nobody has to remember
-per send.
+The cog's "Ticker" row is removed; everything else in it is unchanged. The group
+is still hidden when the chain is embedded with a fixed `externalTicker`.
 
-Five things it deliberately will not touch, each one a way to break a live
-email:
+## 2026-08-21 (m) - Multi Greek: 4th ticker input moved onto the card
 
-1. **Anything containing `{{`.** `{{UNSUBSCRIBE_URL}}` and `{{PROMO_CODE}}` are
-   swapped per recipient AFTER this runs. A real URL parser percent-encodes the
-   braces, which would ship a dead `%7BPROMO_CODE%7D` to the list.
-2. **Unsubscribe links, by path** — belt-and-braces with (1). A tagged
-   unsubscribe URL is a broken HMAC and a CAN-SPAM problem.
-3. **Anything already carrying `utm_source`** — a hand-tagged template link wins;
-   two campaigns never stack on one URL.
-4. **Foreign hosts.**
-5. **`src=` attributes** — only `<a href>` is rewritten, so the logo image and any
-   tracking pixel are untouched.
+Edited: `app/mult-greek/MultGreekClient.tsx`.
 
-The rewrite is string surgery, not `new URL().toString()`. Round-tripping
-normalises case, default ports and percent-encoding, and every one of those is a
-chance to break a signed link; appending a query string cannot. Tagging also runs
-BEFORE the unsubscribe and promo-code swaps, so the placeholders are still
-placeholders when it happens.
+The 4th panel's ticker box was behind the cog ("4th ticker" row). It is now on
+the panel itself — in that card's header, immediately right of the symbol — so
+swapping the slot is one click on the thing you are changing instead of a trip
+through the menu.
 
-Verified against: bare `/`, a path with an existing query, both unsubscribe
-routes, both placeholder shapes, a foreign host, a `mailto:`, an already-tagged
-URL, a URL with a `#hash`, single- and double-quoted `href`, and `img src`.
+`TickerPanel` takes `editableTicker` / `tickerInput` / `onTickerInputChange` /
+`onCommitTicker`; only index 3 gets them, and only on live data with no pinned
+`tickers` line-up (same conditions the cog row had). The input stops mousedown /
+dblclick / keydown propagation so the header's double-click-to-expand-chain
+gesture and the replay Space shortcut don't fire while typing. Commit is still
+Enter or blur, still persisted to `mg_custom_ticker`.
 
-### 2. Campaign picker in the composer (`Emails.tsx`)
 
-A **Broadcast / Newsletter** toggle (that's `utm_source`, so the letter stops
-being lumped in with one-off blasts) plus a campaign name field, with a live
-preview of the exact query string the links will carry. Loading a template
-prefills the campaign with the template id — stable across re-sends and already
-the name you call it by. Blank is meaningful: the server slugs the subject line,
-so a send is never untagged. The send response echoes the final tag back
-("· tagged newsletter / email / weekly-edge-aug-21").
+## 2026-08-21 (l) - Refresh comes back out of the cogs onto the bar
 
-### 3. Campaign link builder (owner Overview)
+Edited: `components/dashboard/GexToolbar.tsx`, `app/home/HomeClient.tsx`,
+`app/mult-greek/MultGreekClient.tsx`, `components/pages/OptionsChain.tsx`,
+`components/dashboard/es-candles/EsChartCard.tsx`.
 
-For X, YouTube, Discord — links typed by hand, which is where campaign reporting
-usually dies: `youtube` one week, `YouTube` the next, `yt` after that, and now
-one push is three rows that can't be compared. The builder shows the sources and
-campaign names **already in the visit log** as clickable chips, so reusing an
-existing spelling is one click and inventing a fourth takes deliberate typing.
-Platform presets set source and medium together, because the pairing is the part
-that's easy to get wrong.
+Refresh is an ACTION, not a setting — folding it into the cog in (i)-(k) buried a
+one-click job behind a menu. It now rides with the other actions on every
+converted bar. Final order everywhere:
 
-### 4. The campaign table now reports outcomes, not clicks
+    identity / cards (stretch) -> refresh -> snapshot -> Discord -> cog
 
-`AcquisitionPanel`'s Campaigns section gained **Signups**, **Paid** and a
-conversion column, and is sorted by paid → signups → sessions. The ranking
-answers "which push earned customers" rather than "which push got clicks", and
-those two orders are routinely different.
+Five bars changed: the GEX chart toolbar (compact mode), the home heatmap header,
+Multi Greek, Options Chain and the ES Candles dock. The "Data" row each cog had
+been given is gone; Options Chain's Replay kept its own row rather than sitting
+alone in an empty one.
 
-How the join works: an arrival is anonymous by definition, so there is no user id
-on it to match. The index is built over ALL fetched rows (not the selected
-window — someone can arrive Monday and register Thursday) keyed on the account
-where we have one and the IP where we don't, and a signup counts only if the
-account's `created_at` is at or after the click, with 60s of slack for clock
-skew between the beacon and the sign-up POST. Owner clicks are excluded.
 
-**These numbers are attributed, not audited**, and the footnote under the table
-says so: a shared office IP can credit the wrong campaign, and a phone that
-switches networks between clicking and registering loses the link entirely.
-Direction, not billing.
+## 2026-08-21 (k) - Cog toolbars for ES Candles, Multi Greek and Options Chain
 
-### Naming convention that keeps the table readable
+Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
+`app/mult-greek/MultGreekClient.tsx`, `components/pages/OptionsChain.tsx`,
+`components/shared/DockToolbar.tsx`. Same treatment as /home in (i)/(j).
 
-`utm_source` = where you posted it · `utm_medium` = the bucket it rolls into
-(`social` / `email` / `cpc` / `referral`) · `utm_campaign` = which push it was.
-Reuse the same campaign string across every platform for one push or it splits
-into rows that can't be compared. Everything is slugged lowercase-hyphenated on
-both sides — `campaignSlug()` in `lib/emails/utm.ts` is mirrored by `slug()` in
-the builder and `slugPreview()` in the composer; the three must stay identical.
+Every one of these bars now reads: identity on the left (stretching), then the
+capture actions, then the cog hard against the right edge. Nothing was removed -
+each control moved into a labelled `DockMenuRow` inside the cog.
 
-## 2026-08-21 (n) - Affiliate creatives: real screenshots, empty until they exist
+- **ES Candles** (`EsChartCard`'s dock, shared by /es-candles, the home GEX card
+  and the /board tile). Left: CANDLES + ES basis, LIVE/DELAYED, and a single
+  badge that now reads `SPY · 5m · 380 candles` - the symbol and timeframe used
+  to be readable only off the controls that just went into the cog. Cog: the
+  page's Charts / Replay / Indicators / Layout group, Overlays, Symbol,
+  Timeframe, Latest, heatmap expiry (DTE), GEX basis, per-card Replay, Refresh.
+- **Multi Greek**. Left: status dot + message, the four tickers on screen, and
+  the active basis / delta window / replay state. Cog: expiry + GO, contract
+  basis, delta stamps, 4th ticker, intensity, Lookup, Replay, Refresh. The
+  level-snapshot button stays out front with Snap and Discord - it produces an
+  image, so it belongs with them.
+- **Options Chain**. Left: title, ticker, `GEX · OI+Vol · 10%`, and the
+  LIVE/REPLAY dot. Cog: ticker + GO + Recent, strike %, greek tabs, basis,
+  intensity, Δ15m, Replay, Refresh. The TOTAL stat row below the dock was
+  deliberately NOT folded in - the dock is `captureHide` and those figures belong
+  in the screenshot.
 
-New: `affiliate-vite/CREATIVES.md`, `affiliate-vite/public/creatives/.gitkeep`.
-Edited: `affiliate-vite/src/components/renders.tsx` (rewritten),
-`affiliate-vite/src/pages/Creatives.tsx`, `affiliate-vite/src/lib/api.ts`,
-`server-v2/affiliate-routes.cjs`.
+**One real bug this exposed.** Controls inside a cog can open their own
+popovers - the ES overlays checklist, the DTE lists, the ticker dropdowns, the
+expiry picker - and every one of them portals to `<body>`. By containment those
+are "outside" the cog, so the first click inside one slammed the cog shut
+mid-interaction. `DockCogMenu`'s outside-click handler now walks up from the
+click target and treats anything sitting in a fixed, raised-z layer as inside.
+Threshold is 50: the ES Charts/Indicators panel sits at 60, the portalled
+dropdowns at 9,999-100,000. Structural rather than a marker attribute because
+these popovers live in four files written years apart and all share that shape.
 
-**The hand-drawn SVG mock-ups are gone.** They were four inline SVGs — a fake
-GEX ladder, fake candles, a fake chain — that looked like the product without
-being it. An affiliate posting a mock-up is worse than posting nothing: the
-first person who opens CB Edge sees something that does not match, and the post
-has quietly misrepresented the thing it was selling.
+Greys to white continued: the ES basis / GEX line, the status and candle-count
+badges, the narrow-panel warning.
 
-Creatives now render REAL SCREENSHOTS from `/creatives/<id>.png`. The four
-filenames are set server-side in `creativeTemplates()`, so the roster and the
-copy still change without a SPA deploy.
-
-**An empty slot names the file it wants.** Until a PNG is dropped in, the card
-shows a dashed frame reading "Image not added yet", the exact path, and the
-required 1200x675 — a to-do list rather than a bug report. Post to X and
-Download PNG DISABLE themselves for that slot; **Copy text stays live**, because
-the wording is perfectly usable with a screenshot the affiliate takes
-themselves. A banner at the top of the page says how many are still coming and
-tells them exactly that.
-
-**The code stamp is composited, not baked in.** One generic screenshot serves
-every affiliate; the `CODE XXXX` badge is CSS in the preview and painted onto a
-canvas at download time, sized off the image height so it lands the same on a
-1200px file or a 2400px one. Still dependency-free — drawImage + fillText +
-toBlob. The image is same-origin so the canvas never taints.
-
-**`CREATIVES.md` is at the app root, NOT in `public/`.** Anything under
-`public/` is copied to the web root at build, so a README beside the images
-would have been served at `affiliate.cbedge.net/creatives/README.md` — a public
-page listing internal paths and build commands. It documents the four
-filenames, the 1200x675 / 16:9 requirement (what X renders inline without
-cropping), "no live account data", and to leave the bottom-right corner clear
-for the badge.
-
-## 2026-08-21 (m) - Affiliates: no faded grey text anywhere, and real terms
-
-New: `affiliate-vite/src/pages/Terms.tsx`.
-Edited: `server-v2/_lib-affiliate.cjs`, `owner-vite/src/pages/Affiliates.tsx`,
-`affiliate-vite/src/{App.tsx,index.css}`,
-`affiliate-vite/src/components/{Shell,ui,renders}.tsx`,
-`affiliate-vite/src/lib/theme.ts`, `affiliate-vite/src/pages/{Apply,Landing}.tsx`.
-
-**ALL TEXT IS WHITE.** Both surfaces. This was already the house rule —
-`OWNER_THEME.textMuted` has been `#FFFFFF` for months — and the new affiliate
-files broke it with ~40 hardcoded `rgba(255,255,255,0.38)` / `.55` / `.35`
-literals. Every one is now `OWNER_THEME.text` on the owner page, and
-`THEME.dim` / `dim2` in affiliate-vite resolve to `#FFFFFF`.
-
-The two names are KEPT, deliberately: they mark the two secondary text roles
-(supporting copy, micro-labels) and the call sites read better for it. They just
-do not fade any more. Hierarchy comes from size and weight. Do not "restore" an
-alpha there.
-
-Borders and backgrounds were left alone — the sweep was a regex on `color:`
-only, because `border: rgba(255,255,255,0.10)` is a hairline, not text.
-
-Three faded-by-opacity spots went with them:
-- Locked dashboard tabs were greyed to 0.25 before approval. They are HIDDEN
-  now — a tab you cannot click is not information, and a washed-out one is the
-  exact thing being removed.
-- A paused affiliate's code was dimmed to 50%. The Paused pill beside it
-  already says so; fading the code just made it hard to read.
-- The rate-override box on the Active tab was at 0.6.
-
-ONE exception, and it is deliberate: `input::placeholder`. At full white a
-placeholder is indistinguishable from a value the user typed. Lifted 0.28 ->
-0.62 — legible, still obviously a hint.
-
-**Affiliate terms now exist.** The apply form has always shown "I accept the
-affiliate terms" pointing at nothing, which is worse than no checkbox: it is
-agreement to an empty set, and the first argument about a reversed commission
-has nothing to point at.
-
-`/terms` is public and unauthenticated (people accept it BEFORE they have an
-account), linked from the checkbox, the summary banner, the footer and the
-landing CTA. Twelve sections: attribution, what you earn, holding and reversals,
-getting paid, promotion rules, and a hard one on trading claims — no promised
-returns, no P&L presented as a CB Edge outcome, and FTC-style disclosure
-required near the link.
-
-EVERY CLAUSE MATCHES WHAT THE CODE DOES, and that is the rule for editing it.
-The 60-day cookie, the 30-day hold, monthly periods and the 30-day code-change
-grace are all stated with the numbers `_lib-affiliate.cjs` actually uses. There
-is deliberately NO minimum payout threshold in the text, because the payout
-builder has no such rule.
-
-**Acceptance is recorded, not just ticked.** New `terms_accepted_at` /
-`terms_version` columns; `apply()` rejects an application without
-`accept_terms: true` server-side and stamps `TERMS_VERSION` ('2026-08-21').
-Bump that constant in the same commit that edits Terms.tsx — an acceptance you
-cannot tie to a wording is not much of an acceptance. The owner review panel
-shows the date and version, or a red "Not recorded" for the rows that predate
-this.
-
-NOT LEGAL ADVICE — it is a plain-English draft written to match the system.
-Worth a lawyer's eye before it is leaned on, the trading-claims clauses most of
-all.
-
-## 2026-08-21 (l) - Affiliates: flat 20%, tiers deleted; landing page given colour
-
-Edited: `server-v2/_lib-affiliate.cjs`, `server-v2/affiliate-routes.cjs`,
-`owner-vite/src/pages/Affiliates.tsx`, `affiliate-vite/src/lib/theme.ts`,
-`affiliate-vite/src/lib/api.ts`, `affiliate-vite/src/components/Shell.tsx`,
-`affiliate-vite/src/pages/{Landing,Dashboard,CodePage,Payouts}.tsx`.
-
-**ONE RATE. 20%, for everybody.** The 10/15/20 Starter/Partner/Elite ladder is
-gone. A tier ladder only earns its complexity when the top rung is worth
-chasing; with one product and a handful of affiliates it just gave every
-applicant a reason to ask why they weren't on the good rate yet, and gave the
-owner a per-approval judgement call with no right answer.
-
-`TIERS` / `MAX_TIER_PCT` -> `RATE_PCT` (env `AFFILIATE_RATE_PCT`, default 20)
-and `MAX_RATE_PCT` (50 - a typo guard so a fat-fingered "200" can't commit to
-paying twice what we collect, NOT a policy). `tier_label` is off the API
-payload entirely.
-
-**The column keeps its name.** `aff_affiliates.tier_pct` still exists and now
-means "this affiliate's rate". Renaming it would churn every query and the
-payout rows already written, for nothing. Its DEFAULT moved 10 -> 20, and
-`ensureSchema` lifts anyone still on the old starter rate who has NOT been
-approved yet — nobody is promised anything until they are, and nothing earned
-can move, because an approved affiliate's rate is frozen onto their link row in
-`recordReferral()`.
-
-**Override still possible, just not encouraged.** The approve dialog's tier
-dropdown is now a plain number input pre-filled with 20. The Active table shows
-the rate as TEXT (orange when it isn't the standard rate) with a small box
-beside it — rendering a dropdown for a number that is identical on every row
-only invites it to be changed by accident.
-
-**Landing page: colour where it belongs.** It read as a wall of grey. Cards
-still carry NO accent — the rule hasn't changed — but the CONTENT now does:
-
-- Three tier cards -> ONE commission panel. A gradient 20% at display size with
-  the four facts that actually decide the deal (recurring / 60-day cookie / no
-  cap / monthly), each with its own hue and dot.
-- "What you're actually promoting" was one tall card of four paragraphs sitting
-  beside a much taller FAQ, leaving a third of the row empty. It is now four
-  tiles across, each with a small inline SVG mark drawn in its own colour — a
-  dealer-wall ladder, candles against an EM band, a chain, a phone. A picture of
-  the ladder says more to a trader than the sentence beside it.
-- The four how-it-works step numbers each take a hue instead of four identical
-  cyan chips.
-- FAQ went full width, two columns, and grew four entries.
-
-**Two grid traps fixed while there.** `minmax(320px,1fr)` made the FAQ FOUR
-columns at 1360, which put the `i % 2` divider rules down the middle of
-nowhere; it is `minmax(min(100%,560px),1fr)` now, which is exactly two on any
-desktop and one on a phone. The commission facts got the same treatment at
-240px so they sit 2x2 instead of wrapping every label onto three lines.
-
-## 2026-08-21 (k) - Affiliate program: affiliate.cbedge.net + owner back office
-
-New: `affiliate-vite/` (whole app), `server-v2/_lib-affiliate.cjs`,
-`server-v2/affiliate-routes.cjs`, `owner-vite/src/pages/Affiliates.tsx`.
-Edited: `server-v2/api-router.js`, `app/api/stripe/checkout/route.ts`,
-`app/api/stripe/webhook/route.ts`, `owner-vite/src/lib/nav.ts`,
-`owner-vite/src/pages/registry.ts`, `docker-compose.yml`.
-
-**What it is.** A referral program paying up to 20% of collected revenue,
-recurring for the life of the member. Affiliates get their own subdomain; the
-owner gets three tabs under Business -> Affiliates.
-
-**A THIRD identity system, deliberately.** `aff_affiliates` / `aff_session`,
-scrypt passwords, host-only cookie with NO `Domain=`. An affiliate is usually
-not a subscriber, and a subscriber must not get an affiliate dashboard for
-free - so a `cbe_session` grants nothing here and an `aff_session` grants
-nothing on cbedge.net. Same posture as the household app. One `auth:'affiliate'`
-branch was added to `enforceAuth()` in api-router.js, checked before
-`verifyWsRequest` for the same reason `'household'` is.
-
-**Attribution, two paths, code wins.** `/r/<CODE>` (an nginx rewrite onto
-`/api/aff/go`) logs the click, sets a domain-wide `cbe_ref` cookie and 302s to
-cbedge.net - a redirect, not a React route, because a redirect that waits on a
-JS bundle is a redirect people bounce out of. Checkout reads that cookie and
-stamps `affiliate_code` onto the SUBSCRIPTION metadata, not just the session:
-the session is gone by the time a renewal is billed. If the customer typed a
-Stripe promotion code instead, that wins - someone using a friend's code should
-credit the friend, not whoever's link they clicked three weeks ago.
-
-**Recurring, without depending on a cookie that expires.**
-`checkout.session.completed` writes a zero-money `kind='link'` row recording
-which affiliate owns the subscription and at what rate.
-`invoice.payment_succeeded` then credits every invoice off that row -
-`amount_paid`, so a $0 trial earns $0. `invoice_id` is UNIQUE, so a Stripe
-webhook retry cannot pay twice. The rate is FROZEN on the link row: a tier bump
-is a raise, not a retroactive re-price of money already accrued.
-
-**Nothing an affiliate does takes effect on its own.** Applying creates a
-`pending` row with NO code. Approval issues it. A code edit does not change
-`aff_affiliates.code` - it files an `aff_code_requests` row, and approving it
-keeps the OLD code live for 30 days (`prev_code` / `prev_code_until`) so links
-already posted keep attributing. Payouts accrue automatically but are only ever
-`paid` because the owner said so, with a required reference.
-
-**Money is integer cents everywhere, rounded in exactly one function**
-(`commissionCents`). `Math.round`, not floor - floor systematically underpays.
-
-**Payout rails: Stripe, PayPal, Zelle.** Method is editable by the affiliate
-(it changes where money goes, not who is owed it); everything else waits on
-approval.
-
-**Creatives are inline SVG, not screenshots.** Four 1200x675 posts, each
-stamped with the affiliate's own code, downloadable as PNG via
-XMLSerializer -> canvas -> toBlob. No html2canvas, no headless browser, no
-dependency. The numbers on them are labelled illustrative - this public app is
-firewalled from the market-data stack by nginx and could not draw live levels
-even if it should.
-
-**The Stripe hop is HTTP, not an import.** The webhook is a Next route; the
-ledger is CommonJS in server-v2. Same container, so it is a loopback POST
-carrying `INTERNAL_API_TOKEN`. Always best-effort - a ledger write must never
-500 the webhook and have Stripe retry a subscription change that already
-succeeded.
-
-**Cards carry no colour accent** on either surface. Colour means state
-(pending / active / owed / paid) and nothing else.
-
-**Deploy.** New compose service `affiliates` on 127.0.0.1:8085. Add to
-`/etc/cloudflared/config.yml` above the catch-all:
-
-    - hostname: affiliate.cbedge.net
-      service: http://127.0.0.1:8085
-
-then `cloudflared tunnel route dns <tunnel> affiliate.cbedge.net` and
-`systemctl restart cloudflared`. Optional env: `STRIPE_AFFILIATE_COUPON_ID`
-(lets an approved code be typed at checkout as a real Stripe promotion code -
-without it the link + cookie path still attributes every sale),
-`AFFILIATE_HOLD_DAYS` (default 30), `AFFILIATE_APP_URL`,
-`AFFILIATE_COOKIE_DOMAIN` (default `.cbedge.net`). Tables self-bootstrap on
-first request; there is no migration to run.
 
 ## 2026-08-21 (j) - Home: one toolbar, ghosts gone, cog last, greys to white
 

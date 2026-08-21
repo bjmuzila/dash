@@ -2200,8 +2200,15 @@ export function HomeClient({
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: 12 }}>
                     {heatmapView !== "chain" && (
                     <>
-                    {/* Same order as the GEX toolbar: snapshot, Discord
+                    {/* Same order as the GEX toolbar: refresh, snapshot, Discord
                         (owner-only — it hides itself), then the cog hard right. */}
+                    <DockButton
+                      onClick={heatmapRefresh}
+                      title="Refresh the SPX chain and every side column"
+                      style={{ color: (heatmapRefreshStyle.color as string) ?? C.cyan }}
+                    >
+                      {heatmapRefreshLabel}
+                    </DockButton>
                     <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     <DockCogMenu title="Heatmap" buttonTitle="Heatmap settings" width={330}>
@@ -2296,17 +2303,6 @@ export function HomeClient({
                         />
                       </DockMenuRow>
 
-                      <DockMenuDivider />
-
-                      <DockMenuRow label="Data">
-                        <DockButton
-                          onClick={heatmapRefresh}
-                          title="Refresh the SPX chain and every side column"
-                          style={{ color: (heatmapRefreshStyle.color as string) ?? C.cyan }}
-                        >
-                          {heatmapRefreshLabel}
-                        </DockButton>
-                      </DockMenuRow>
                     </DockCogMenu>
                     </>
                     )}

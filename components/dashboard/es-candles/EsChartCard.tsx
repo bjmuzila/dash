@@ -5486,6 +5486,10 @@ function EsChartCard({
             )}
           </div>
 
+          {/* Refresh is an ACTION, not a setting — it rides with the capture
+              buttons rather than hiding a click deep in the cog. */}
+          <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
+
           {/* The dock itself stays in the capture, so the capture-triggering
               controls hide themselves — they'd be dead pixels in the PNG. Not
               direct children of captureRef, so they don't affect hiddenShift.
@@ -5807,11 +5811,6 @@ function EsChartCard({
             </DockMenuRow>
           )}
 
-          <DockMenuDivider />
-
-          <DockMenuRow label="Data">
-            <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
-          </DockMenuRow>
           </DockCogMenu>
         </Dock>
         </FitScale>
