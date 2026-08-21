@@ -32,6 +32,7 @@ import type { CSSProperties } from "react";
 import { HOME_THEME, homeButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { seg, th, td } from "@/components/scanner/scannerStyles";
+import { SortTh, useTableSort } from "@/components/shared/useTableSort";
 
 type Summary = {
   n: number;
@@ -114,6 +115,41 @@ function RateBar({ v }: { v: number | null }) {
   );
 }
 
+/** Sortable columns of the bucket table. */
+type BucketSortKey =
+  | "bucket" | "n" | "pctGood" | "lift" | "holds" | "neverGreen" | "avgPts" | "medSustained";
+
+/** Sortable columns of the calibration table (grades are `g:<letter>`). */
+type CalSortKey = "projected" | "n" | "pctGood" | "neverGreen" | "avgPts" | `g:${string}`;
+
+const bucketSortValue = (b: Bucket, k: BucketSortKey) => {
+  switch (k) {
+    case "bucket": return b.bucket;
+    case "n": return b.n;
+    case "pctGood": return b.pctGood;
+    case "lift": return b.lift;
+    // Sorts ✓ above ✗ above —, which is the order you actually scan for.
+    case "holds": return b.holds == null ? null : b.holds ? 1 : 0;
+    case "neverGreen": return b.pctNeverGreen;
+    case "avgPts": return b.avgPts;
+    case "medSustained": return b.medSustained;
+    default: return null;
+  }
+};
+
+const calSortValue = (r: CalRow, k: CalSortKey) => {
+  if (k.startsWith("g:")) return r.actual?.[k.slice(2)] ?? 0;
+  switch (k) {
+    // By grade rank, not alphabetically — "A+" must not land between "A" and "B".
+    case "projected": return GRADES.indexOf(r.projected) < 0 ? 99 : GRADES.indexOf(r.projected);
+    case "n": return r.n;
+    case "pctGood": return r.pctGood;
+    case "neverGreen": return r.pctNeverGreen;
+    case "avgPts": return r.avgPts;
+    default: return null;
+  }
+};
+
 export default function PickStudyTab() {
   const [by, setBy] = useState("score");
   const [days, setDays] = useState(60);
@@ -123,6 +159,12 @@ export default function PickStudyTab() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+
+  // Click a column title to sort; click again to flip; a third click puts the
+  // rows back in the order the server sent them (which is meaningful here — the
+  // buckets arrive in the feature's own order, and grades arrive ranked).
+  const bucketSort = useTableSort<BucketSortKey>();
+  const calSort = useTableSort<CalSortKey>();
 
   const load = useCallback(() => {
     setLoading(true); setErr(null);
@@ -246,14 +288,14 @@ export default function PickStudyTab() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ color: HOME_THEME.green, textTransform: "uppercase", fontSize: 11 }}>
-                  <th style={{ ...th, textAlign: "left" }}>Bucket</th>
-                  <th style={th}>n</th>
-                  <th style={{ ...th, textAlign: "left" }}>A/B rate</th>
-                  <th style={th} title="Hit rate minus the window's overall hit rate. This is the number that matters.">Lift</th>
-                  <th style={th} title="Does the split point the same way in BOTH halves of the window? A ✗ means it did not survive out of sample.">Holds</th>
-                  <th style={th}>Never green</th>
-                  <th style={th}>Avg pts</th>
-                  <th style={th} title="Median best gain that held for two consecutive snapshots — a fillable move, not a one-print spike.">Med. sustained</th>
+                  <SortTh sort={bucketSort} sortKey="bucket" style={{ ...th, textAlign: "left" }}>Bucket</SortTh>
+                  <SortTh sort={bucketSort} sortKey="n" style={th}>n</SortTh>
+                  <SortTh sort={bucketSort} sortKey="pctGood" style={{ ...th, textAlign: "left" }}>A/B rate</SortTh>
+                  <SortTh sort={bucketSort} sortKey="lift" style={th} title="Hit rate minus the window's overall hit rate. This is the number that matters.">Lift</SortTh>
+                  <SortTh sort={bucketSort} sortKey="holds" style={th} title="Does the split point the same way in BOTH halves of the window? A ✗ means it did not survive out of sample.">Holds</SortTh>
+                  <SortTh sort={bucketSort} sortKey="neverGreen" style={th}>Never green</SortTh>
+                  <SortTh sort={bucketSort} sortKey="avgPts" style={th}>Avg pts</SortTh>
+                  <SortTh sort={bucketSort} sortKey="medSustained" style={th} title="Median best gain that held for two consecutive snapshots — a fillable move, not a one-print spike.">Med. sustained</SortTh>
                   <th style={th} />
                 </tr>
               </thead>
@@ -263,7 +305,7 @@ export default function PickStudyTab() {
                     No graded picks in this window yet.
                   </td></tr>
                 )}
-                {data.buckets.map((b) => (
+                {bucketSort.apply(data.buckets, bucketSortValue).map((b) => (
                   <tr key={b.bucket} style={{
                     borderTop: `1px solid ${tint(HOME_THEME.text, 0.06)}`,
                     opacity: b.thin ? 0.45 : 1,
@@ -345,16 +387,19 @@ export default function PickStudyTab() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ color: HOME_THEME.green, textTransform: "uppercase", fontSize: 11 }}>
-                    <th style={{ ...th, textAlign: "left" }}>Predicted</th>
-                    <th style={th}>n</th>
-                    <th style={{ ...th, textAlign: "left" }}>Actual A/B</th>
-                    <th style={th}>Never green</th>
-                    <th style={th}>Avg pts</th>
-                    {GRADES.map((g) => <th key={g} style={th}>{g}</th>)}
+                    <SortTh sort={calSort} sortKey="projected" style={{ ...th, textAlign: "left" }}>Predicted</SortTh>
+                    <SortTh sort={calSort} sortKey="n" style={th}>n</SortTh>
+                    <SortTh sort={calSort} sortKey="pctGood" style={{ ...th, textAlign: "left" }}>Actual A/B</SortTh>
+                    <SortTh sort={calSort} sortKey="neverGreen" style={th}>Never green</SortTh>
+                    <SortTh sort={calSort} sortKey="avgPts" style={th}>Avg pts</SortTh>
+                    {GRADES.map((g) => (
+                      <SortTh key={g} sort={calSort} sortKey={`g:${g}`} style={th}
+                        title={`How many of these picks actually graded ${g}.`}>{g}</SortTh>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {(cal.rows ?? []).map((r) => (
+                  {calSort.apply(cal.rows ?? [], calSortValue).map((r) => (
                     <tr key={r.projected} style={{ borderTop: `1px solid ${tint(HOME_THEME.text, 0.06)}`, opacity: r.thin ? 0.45 : 1 }}>
                       <td style={{ ...td, textAlign: "left", fontWeight: 800, fontFamily: MONO }}>{r.projected}</td>
                       <td style={{ ...td, fontFamily: MONO }}>{r.n}</td>

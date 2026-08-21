@@ -1,170 +1,171 @@
 # Changelog
 
-## 2026-08-21 (k) - Cog toolbars for ES Candles, Multi Greek and Options Chain
+## 2026-08-21 (l) - Landing: Tradeify card is now a link
 
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`app/mult-greek/MultGreekClient.tsx`, `components/pages/OptionsChain.tsx`,
-`components/shared/DockToolbar.tsx`. Same treatment as /home in (i)/(j).
+Edited: `components/landing/LandingClient.tsx`.
 
-Every one of these bars now reads: identity on the left (stretching), then the
-capture actions, then the cog hard against the right edge. Nothing was removed -
-each control moved into a labelled `DockMenuRow` inside the cog.
+The Tradeify partner block was a badge with nothing to click. It now links to
+`https://tradeify.co/?ref=Bzila` — new tab, `rel="noopener noreferrer sponsored"`
+(it is an affiliate link and should be declared as one).
 
-- **ES Candles** (`EsChartCard`'s dock, shared by /es-candles, the home GEX card
-  and the /board tile). Left: CANDLES + ES basis, LIVE/DELAYED, and a single
-  badge that now reads `SPY · 5m · 380 candles` - the symbol and timeframe used
-  to be readable only off the controls that just went into the cog. Cog: the
-  page's Charts / Replay / Indicators / Layout group, Overlays, Symbol,
-  Timeframe, Latest, heatmap expiry (DTE), GEX basis, per-card Replay, Refresh.
-- **Multi Greek**. Left: status dot + message, the four tickers on screen, and
-  the active basis / delta window / replay state. Cog: expiry + GO, contract
-  basis, delta stamps, 4th ticker, intensity, Lookup, Replay, Refresh. The
-  level-snapshot button stays out front with Snap and Discord - it produces an
-  image, so it belongs with them.
-- **Options Chain**. Left: title, ticker, `GEX · OI+Vol · 10%`, and the
-  LIVE/REPLAY dot. Cog: ticker + GO + Recent, strike %, greek tabs, basis,
-  intensity, Δ15m, Replay, Refresh. The TOTAL stat row below the dock was
-  deliberately NOT folded in - the dock is `captureHide` and those figures belong
-  in the screenshot.
+This is only safe because of where the card sits. In the OLD landing it was in
+the visual centre above the fold, where a clickable version would have been a
+second exit competing with the trial CTA. It now lives below the close CTA, so
+the visitor has already been given our own ask before they are offered a way off
+the page. If the card ever moves back up, the link comes off with it.
 
-**One real bug this exposed.** Controls inside a cog can open their own
-popovers - the ES overlays checklist, the DTE lists, the ticker dropdowns, the
-expiry picker - and every one of them portals to `<body>`. By containment those
-are "outside" the cog, so the first click inside one slammed the cog shut
-mid-interaction. `DockCogMenu`'s outside-click handler now walks up from the
-click target and treats anything sitting in a fixed, raised-z layer as inside.
-Threshold is 50: the ES Charts/Indicators panel sits at 60, the portalled
-dropdowns at 9,999-100,000. Structural rather than a marker attribute because
-these popovers live in four files written years apart and all share that shape.
-
-Greys to white continued: the ES basis / GEX line, the status and candle-count
-badges, the narrow-panel warning.
+Hover state is orange, not cyan: this is the one link on the page that leaves the
+site, and the colour has to keep saying so.
 
 
-## 2026-08-21 (j) - Home: one toolbar, ghosts gone, cog last, greys to white
+## 2026-08-21 (k) - Landing: X follow badge removed from the hero
 
-Edited: `app/home/HomeClient.tsx`, `components/dashboard/GexToolbar.tsx`,
-`components/shared/DockToolbar.tsx`. Follow-up to (i).
+Edited: `components/landing/LandingClient.tsx`.
 
-**One bar, not two.** The NET GEX / CALL WALL / PUT WALL / FLIP / CB / MAX PAIN /
-+-1σ / +GEX% / BULL-BEAR readouts had their own strip under the GEX toolbar.
-They are now the toolbar's new `stats` slot (compact mode only), each card
-`flex: 1 1 0` so the row fills the bar at any width. Fixed layout for every
-compact bar now:
+The floating @bzilatrades X badge in the top-right of the hero card is gone. It
+was the only outbound link above the fold on a page whose one job is to move the
+visitor into the product — a click on it leaves the funnel entirely, and it sat
+within a few hundred pixels of the primary CTA. Social belongs somewhere that
+costs nothing: a footer link or the /explore pages.
 
-    cards (stretch) -> snapshot -> Discord (owner-only) -> cog
-
-Cog moved from first to LAST so it sits hard against the right edge. The heatmap
-header and the econ tab strip were reordered to match. Discord needed no gate -
-`BoxDiscordBtn` already returns null for non-owners via `useIsOwner()`.
-
-**Ghosts removed.** The 5/15/30m prior-state overlay row is out of the cog, the
-`ghost` state and its pref are gone, and `chartBaselines` now polls with `""`
-(idle) instead of on a toggle nothing can set. `GexToolbar`'s `showGhost*` /
-`onToggleGhost*` props were made OPTIONAL rather than deleted, so any other
-caller still passing them keeps compiling; `GexChart` already defaults them to
-false.
-
-**Cog menu flips up when it would go off-screen.** Reported: the econ calendar's
-cog, with the panel minimised, opened a dropdown below the fold that could not be
-reached. `DockCogMenu` now measures itself and opens UPWARD when it doesn't fit
-under the trigger and there is more room above, clamping `maxHeight` to whichever
-side it used. Two mechanical notes: the panel renders with `display:flex` the
-moment it opens (parked at -9999 for one frame) because `display:none` reports a
-zero height and the flip needs a real one; and `place()` runs twice - once
-immediately, once on rAF after layout - for the same reason.
-
-**Greys to white.** `SOFT_WHITE` (#c3ccda -> #fff) so every heatmap value is
-white, the inline SPY/QQQ/ticker strike prefix (#5a7a98, plus the rank-1/2
-brightening special case it needed - white is legible on every tier), the ATM
-row's 0.82-alpha white, `DockMenuRow` labels (0.55 alpha), inactive card tabs and
-the "add a card" picker (#5a7a98), the heatmap contract label and its loading
-ellipsis (#8da8c2 / #5a7a98), the 5th-column Clear button, and the stat card
-labels (0.75 alpha).
+Removed with it: the `xHover` state, the `xFollow` / `xFollowHover` styles, and
+the now-unused `useState` import (the component is stateless again).
 
 
-## 2026-08-21 (i) - Home page: every toolbar folds into a cog, heatmap columns rebuilt
+## 2026-08-21 (j) - Sign-up: confirm password field
 
-Edited: `app/home/HomeClient.tsx`, `components/dashboard/GexToolbar.tsx`,
-`components/shared/DockToolbar.tsx`.
+Edited: `components/auth/AuthForm.tsx`.
 
-**Toolbars.** All three bars on /home now carry nothing but a cog wheel plus the
-snapshot / Discord buttons. Everything else moved inside the cog:
+Create-your-account now asks for the password twice. There is no "show password"
+toggle on this form, so a typo was silent right up until the first sign-in failed
+— and by then the account exists, which makes the recovery a reset email instead
+of a retry.
 
-- GEX card (`GexToolbar`): expiry, Net GEX vs Call-Put, OI+Vol / Vol Only / Flow,
-  the OI / DEX / Flip overlays, refresh - and the 5/15/30m prior-state ghosts,
-  which /home has been passing handlers for since forever with no tile to reach
-  them. Behind a new opt-in `compact` prop, so every OTHER host of `GexToolbar`
-  keeps the wide bar it already had.
-- Heatmap card: intensity, side basis, the delta-stamp window, refresh, and the
-  new ticker-of-choice field. Identity moved to the left of the header instead -
-  "GEX HEATMAP" + the contract - so the panel still says what it is showing.
-- Econ / tabs card: panel height (min/half/full) and the calendar's own filter
-  row, which arrives by portal from `EconCalendarPanel`.
+- Second `type="password"` box, **sign-up only**. Sign-in is untouched.
+- Mismatch shows a red border + inline message, but only once the confirm box has
+  something in it. Flagging an empty field the moment the first box gets a
+  character is the form telling you off for not being finished.
+- Submit is disabled while the two differ **or while confirm is still empty** —
+  without the second half a user who never touches the box sails through and the
+  field is decoration.
+- The match check runs BEFORE the captcha check, so a typo never consumes a
+  Turnstile token (a burnt token means a fresh challenge on retry, which reads
+  like the site broke rather than like a mistyped password).
+- On a failed sign-up the confirm box is cleared but the password is not:
+  whatever they retype has to be confirmed again.
+- While here: `autoComplete` added to all three inputs — `email`,
+  `new-password` on sign-up (both boxes, which is what stops password managers
+  treating the confirm field as a second separate credential) and
+  `current-password` on sign-in. The password placeholder now states the 8-char
+  minimum the input already enforced silently.
 
-New primitives in `DockToolbar.tsx`: `<DockCogMenu>`, `<DockMenuRow>`,
-`<DockMenuDivider>`. Two things about the cog menu are load-bearing. It PORTALS
-to `<body>` - every home card is `overflow: hidden` and the header rows sit
-inside `<FitScale>` (a CSS transform), so an absolutely positioned panel would be
-clipped and mis-scaled. And it keeps its children MOUNTED while closed (hidden
-with `display:none`): the econ calendar portals its controls into the panel, and
-unmounting the target would make it fall back to rendering its own inline header
-every time the cog shut.
-
-**Persistence.** One localStorage blob, `cbedge.home.toolbars.v1`, holds every
-setting the three cogs expose: gex mode, data mode, OI/DEX/Flip, ghost window,
-intensity, side basis, delta window, ticker of choice, econ panel height.
-Browser-local, per the ask - not synced to the account. Restored in a mount
-effect (not a lazy initialiser) so SSR and the first client render agree, and the
-writer is gated on a `prefsReady` STATE flag rather than a ref: with a ref, the
-hydrate effect would flip the flag and the writer - running in the same commit,
-still holding pre-restore values - would immediately stomp the saved blob with
-the defaults.
-
-Ghosts collapsed from three booleans to one `ghost: 0 | 5 | 15 | 30` window. They
-were already mutually exclusive; three booleans just made that fact unstorable.
-
-**Heatmap columns.** Now: STRIKE | SPX NET GEX | SPX NET DEX | SPY NET GEX |
-QQQ NET GEX | <TICKER> NET GEX. VOL ONLY GEX is out; the SPX columns are labelled
-SPX so the six headers read as one set.
-
-The 5th column is a ticker you type, exactly like the Multi Greek page's 4th
-ticker - committed on Enter or blur, remembered per browser, default IWM, blank
-switches the column off and stops the extra poll. It rides the SAME
-`useDualTickerGex` call as SPY/QQQ (that hook always took an arbitrary list), so
-it costs one more chain fetch and no new machinery, joins to the SPX rows by
-moneyness offset rather than strike for the same reason SPY/QQQ do, and gets its
-own colour scale and its own peak box.
+No server change — `/api/auth/signup` still receives one `password`.
 
 
-## 2026-08-21 (h) - Post-market recap: section 7 STRIKE PATHS removed
+## 2026-08-21 (i) - Landing page rebuilt: free live level + the graded ledger
 
-Edited: `components/pages/premarket/PostMarketTab.tsx`.
+The landing page was getting ~300 views a day and converting nothing. It wasn't
+under-optimised — it wasn't making an argument. Rebuilt around the two things
+that are actually differentiated, and both of them now read LIVE data instead of
+being described in prose.
 
-Section 7 is gone. It never worked visually and no restyle fixed it: 25 rows,
-each ~2.5h of session wide and ~22px tall, every line normalised to its own peak.
-A strike that doubled and one that flatlined drew the same shape, so the panel
-was 25 near-identical squiggles that answered nothing you could not get from
-section 3.
+Edited: `components/landing/LandingClient.tsx`, `server-v2/api-router.js`,
+`app/api/public-stats/route.ts`, `middleware.ts`.
+New: `components/landing/LiveLevelPanel.tsx`, `components/landing/GradedLedger.tsx`.
 
-Four re-designs were mocked before pulling it (all four in `generated/`:
-`2026-08-21-strike-paths-4-ideas.*`, `2026-08-21-strike-paths-move-visible.*`,
-`2026-08-21-strike-paths-scrolling-window.*` - direction-coded lines, a growth
-heat ladder, momentum sort, indexed-to-open, two-column, step chart, event-time
-axis, and a scrollable 60-minute window with a pinned strike column). Keeping
-them for reference; none earned the vertical space.
+**The fold is now the product, not the brand.** The 210px logo is gone (the logo
+lives in PublicNav, where a logo belongs) and the right half of the hero is a
+live SPX gamma flip — real number, off the real chain, refreshed every 15s, with
+no account, no card and no email. The pitch line under it says so out loud. The
+free tile stays free forever; the trial unlocks history, rate of change, flow and
+alerts.
 
-Removed:
+**`/api/public-levels`** (new, `auth: 'public'`) — SPX only, front expiry,
+oi+vol, four scalars plus spot. No ladder, no rate of change, no history, no
+ticker/dte/basis params, because that is the product. A 15s module cache doubles
+as the rate limit: anonymous traffic can hammer it and `/proxy/gex` still sees at
+most four reads a minute. Never 500s — the panel renders whole or renders an
+honest "resumes at the next session" state, never a level with a dash next to it.
 
-- the whole section 7 JSX block (header, `.pathlist`, the per-row SVG, the
-  `.heatx` time strip under it)
-- the `strikePaths` memo and its doc comment
-- CSS `.pathlist`, `.prow`, `.pk`, `.pv`, `.pt` and the `.prow svg` rule
+**`/api/public-ledger`** (new, `auth: 'public'`) — the ROWS behind the
+percentages: the last 8 graded Core Bullseye calls in date order, hits and misses
+together, read from `confidence_log`, the same table `cbReach()` aggregates. Only
+`graded_at IS NOT NULL` rows are eligible, so there is no mechanism by which a
+bad day can sit unpublished while a good one ships. The "what happened" sentence
+is generated from the graded booleans, never hand-written. 1h cache.
 
-`evNear` stays - `writtenVsTraded` still reads it. The `histState === "error"`
-note now points at the wall path instead of a section that no longer exists.
-File is down to 1,775 lines.
+**IB break bias is now a published stat.** `ibBias()` added to `/api/public-stats`
+(and the Next fallback route for parity): `bias` (set at 10:30 from the IB close
+vs its midpoint) graded against `first_touch_side` — Rule 1 of the 14-rule
+scoreboard. ES only; NQ writes its own row per date and the two correlate hard,
+so pooling would near-double n without adding evidence. It sits alongside — not
+instead of — the existing `IB_METRIC` retest stat: retest describes what breaks
+do, bias is a call made before the outcome. Both honest, different claims.
 
+**Page order is the fix, and it's documented in the file header.** Hero ("is this
+real?") → receipts + ledger ("is he full of it?") → capture + features ("what is
+it?") → close ("what do I do?"). The receipts moved from four small tiles below
+six feature cards to section two — publishing misses is the whole moat and it was
+carrying a footnote's weight.
+
+**Tradeify demoted.** It was the second-loudest thing on the page, in contrasting
+orange, in the visual centre, monetising someone else's product against our own
+offer. Now a quiet strip below the close CTA. Still orange (third-party offers
+are not cyan), still not a link.
+
+**Trial stays at 2 days**, deliberately. It works because the free panel exists:
+the visitor evaluates the tool before signing up, so the two days get spent using
+it rather than deciding about it. Every CTA carries "No charge up front · Cancel
+anytime" so the shortness never reads alone.
+
+`middleware.ts` gains `/^\/api\/public-[a-z-]+$/` so all three public endpoints
+stay reachable signed-out if the API_ROUTER kill-switch is ever flipped off —
+without it a signed-out visitor 307s to `/` and the hero renders empty.
+
+**Not built:** the nightly "yesterday's tape" replay section from the mock. It
+needs a job that snapshots the session's levels + OHLC and writes the beats.
+Shipping it with hand-written example numbers would make this page a liar about
+the one thing it claims, so it stays out until that job exists.
+
+**No proxy files were touched.** `/api/public-levels` reads `/proxy/gex` through
+`ctx.internalFetch`, exactly as `/api/insights/gex` and
+`/api/social-media/daily-input` already do. `proxy-tastytrade.js`,
+`proxy-thetadata.js` and `server-with-proxy.js` are unchanged.
+
+
+## 2026-08-21 (h) - Level Log: an ALL view, walls + CORE on one timeline
+
+Edited: `components/pages/LevelLog.tsx`.
+
+Third pill beside WALLS / CORE: **ALL**. It is not "no filter" for its own sake -
+it is the reading neither of the other two can give. CORE is frequently ALSO one
+of the walls (whichever is carrying more gamma), so a call-wall tag and the CORE
+tag at the same strike are one event told twice, and split across two views
+nothing says so. Interleaved, the relationship is the story: the CORE rolling
+ONTO a wall, or off it, is the day's dominant level changing sides.
+
+**Same-strike marker.** In ALL view an entry whose slot and strike match another
+level type gets a `= CALL WALL` / `= CORE` chip in its badge row, so a duplicate
+reads as one level in two roles instead of two separate events. The pass only
+runs in ALL - the other views have nothing to collide with.
+
+**Ticker rail is now column-driven.** `LEVEL_COL_ORDER` (put, call, CORE) filtered
+by the view, rather than a `view === "core" ? ... : ...` ternary in four places.
+Price order, so switching to ALL ADDS the CORE column instead of reshuffling the
+two already there; `colSpan` follows the count.
+
+**Wall migration chart, in ALL view.**
+
+- CORE draws LAST and **dashed** when the walls are drawn with it. It sits on one
+  of them by definition, so a solid line on top would erase whichever wall it is
+  riding - and that swap is the one thing this view exists to show.
+- The corridor fill is keyed off the level types **by name**, not off how many
+  lines happen to be drawn. Three paths with "shade between the first two" would
+  have banded the gap between a wall and the CORE, which is not a corridor.
+
+**Scope strings centralised** in `VIEW_SCOPE` - the card header, the copied text
+header and the PNG filename all read "wall" / "core" / "level" from one map
+instead of three separate ternaries that could drift.
 
 ## 2026-08-21 (g) - Section 3 was lying about bar length, and the AM bucket could not exist
 

@@ -12,6 +12,7 @@ import {
   sectionTabHref,
   type SectionNav,
 } from "./sectionNav";
+import { useIsOwner } from "./useIsOwner";
 
 /**
  * SectionSubStrip — a section's tab bar, promoted into the app chrome.
@@ -294,6 +295,10 @@ function DropMarker() {
 
 export default function SectionSubStrip({ open }: { open: boolean }) {
   const pathname = usePathname();
+  // Owner-only pills are skipped for everyone else. They keep their slot in the
+  // saved order (reconcile() still knows the key), so nothing reshuffles for the
+  // owner and turning a tab public again puts it back where it was.
+  const { isOwner } = useIsOwner();
   const section: SectionNav | null = sectionForPath(pathname);
   const sectionKey = section?.key ?? null;
   const rowRef = useRef<HTMLDivElement | null>(null);
@@ -447,6 +452,7 @@ export default function SectionSubStrip({ open }: { open: boolean }) {
     if (key.startsWith("t:")) {
       const t = tabById(key.slice(2));
       if (!t) return null;
+      if (t.ownerOnly && !isOwner) return null;
       return (
         <Pill
           href={sectionTabHref(section, t.id)}

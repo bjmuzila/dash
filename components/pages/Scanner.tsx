@@ -41,7 +41,8 @@ import GexChangeTop from "@/components/scanner/GexChangeTop";
 import PickStudyTab from "@/components/scanner/PickStudyTab";
 import GexLevelsTab from "@/components/scanner/GexLevelsTab";
 import { fmtB, NEUTRAL, seg, td, th, zColor } from "@/components/scanner/scannerStyles";
-import { readTabFromUrl, SCANNER_TAB_EVENT } from "@/components/scanner/scannerNav";
+import { readTabFromUrl, SCANNER_TABS, SCANNER_TAB_EVENT } from "@/components/scanner/scannerNav";
+import { useIsOwner } from "@/components/shared/useIsOwner";
 
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
@@ -3033,8 +3034,23 @@ function TpoStructuresScanner() {
 //  PAGE SHELL — tab switcher
 // ══════════════════════════════════════════════════════════════════════════════
 
+/** Tabs scannerNav marks ownerOnly — never rendered for anyone else. */
+const OWNER_ONLY_TABS = new Set<MainTab>(
+  SCANNER_TABS.filter((t) => t.ownerOnly).map((t) => t.id as MainTab),
+);
+
 export default function ScannerPage() {
   const [tab, setTab] = useState<MainTab>("gexlevels");
+  // The sub-strip already hides owner-only pills; this is the other half, so a
+  // pasted /scanner?tab=pickstudy URL doesn't open one. `loaded` matters: auth
+  // resolves a tick after mount, and bouncing before it does would kick the
+  // owner off their own tab on every hard refresh.
+  const { isOwner, loaded: authLoaded } = useIsOwner();
+  const ownerGated = OWNER_ONLY_TABS.has(tab) && !isOwner;
+  // While auth is still resolving, an owner-gated tab renders NOTHING rather
+  // than falling back — a flash of the wrong tab that then swaps is worse than
+  // an empty beat, and it would also fire that tab's fetches.
+  const visibleTab: MainTab | null = ownerGated ? (authLoaded ? "gexlevels" : null) : tab;
 
   // Deep link support: /scanner?tab=ibstats opens straight on that tab. Read in
   // an effect (not useSearchParams) so the page stays prerenderable and there's
@@ -3059,13 +3075,13 @@ export default function ScannerPage() {
 
   return (
     <PageShell>
-      {tab === "gexlevels" && <GexLevelsTab />}
-      {tab === "gexchangetop" && <GexChangeTop />}
-      {tab === "pickstudy" && <PickStudyTab />}
-      {tab === "strike" && <StrikeQueryScanner />}
-      {tab === "tpo" && <TpoStructuresScanner />}
-      {tab === "ibstats" && <IbStatsTab />}
-      {tab === "watch" && <WatchThisScanner />}
+      {visibleTab === "gexlevels" && <GexLevelsTab />}
+      {visibleTab === "gexchangetop" && <GexChangeTop />}
+      {visibleTab === "pickstudy" && <PickStudyTab />}
+      {visibleTab === "strike" && <StrikeQueryScanner />}
+      {visibleTab === "tpo" && <TpoStructuresScanner />}
+      {visibleTab === "ibstats" && <IbStatsTab />}
+      {visibleTab === "watch" && <WatchThisScanner />}
     </PageShell>
   );
 }

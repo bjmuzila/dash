@@ -32,6 +32,12 @@ export type SectionTab = {
   short?: string;
   color: string;
   icon: string;
+  /**
+   * Pill is drawn for the owner only (SectionSubStrip skips it for everyone
+   * else, and the owning page must refuse to render the tab as well). Chrome,
+   * not security — see components/shared/useIsOwner.ts.
+   */
+  ownerOnly?: boolean;
 };
 
 /** A view the section owns that is its own route rather than an inline tab. */

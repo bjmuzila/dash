@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { HOME_THEME as T, REFRESH_GREEN } from "@/components/shared/homeTheme";
 import PublicNav from "@/components/landing/PublicNav";
@@ -73,8 +72,6 @@ const STRIP = [
 ];
 
 export default function LandingClient() {
-  const [xHover, setXHover] = useState(false);
-
   return (
     <div className="explore-root" style={root}>
       <style>{`
@@ -92,6 +89,10 @@ export default function LandingClient() {
         .landing-feature:hover { border-color: rgba(33,158,188,0.45) !important; box-shadow: 0 0 18px rgba(33,158,188,0.25); transform: translateY(-2px); }
         .landing-cta { transition: transform .14s, box-shadow .14s; }
         .landing-cta:hover { transform: translateY(-1px); box-shadow: 0 10px 30px -6px rgba(33,158,188,0.6); }
+        /* Orange, not cyan — this is the one link on the page that leaves the
+           site, and the hover has to keep saying so. */
+        .tradeify-card { transition: border-color .18s, box-shadow .18s; }
+        .tradeify-card:hover { border-color: rgba(251,133,1,0.55) !important; box-shadow: 0 0 18px rgba(251,133,1,0.22); }
 
         @media (max-width: 900px) {
           .landing-hero { grid-template-columns: 1fr !important; }
@@ -126,20 +127,11 @@ export default function LandingClient() {
         <section style={card}>
           <div style={cardGlow} aria-hidden />
 
-          <a
-            href="https://x.com/bzilatrades"
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="Follow @bzilatrades on X"
-            title="Follow @bzilatrades on X"
-            onMouseEnter={() => setXHover(true)}
-            onMouseLeave={() => setXHover(false)}
-            style={{ ...xFollow, ...(xHover ? xFollowHover : {}) }}
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-            </svg>
-          </a>
+          {/* The @bzilatrades X badge used to float in this corner. Removed
+              2026-08-21: it was the only outbound link above the fold, sitting
+              in the hero of a page whose one job is to get the visitor into the
+              product. Social proof belongs where it costs nothing — a footer
+              link or the /explore pages — not next to the primary CTA. */}
 
           <div style={{ ...pad, ...heroGrid }} className="landing-hero">
             <div>
@@ -265,10 +257,19 @@ export default function LandingClient() {
 
         {/* Tradeify partner code. Demoted out of the fold on purpose — see the
             header comment. It is a third-party offer, so it keeps the orange
-            accent (the cyan family is reserved for things that click through to
-            our product) and stays a badge with nothing to click, so it cannot
-            compete with the trial CTA above it. */}
-        <div style={tradeifyCard}>
+            accent: the cyan family is reserved for things that click through to
+            OUR product, and this one leaves the site.
+            It became clickable on 2026-08-21. That is safe HERE and would not
+            be above the fold — it now sits below the close CTA, so the visitor
+            has already been given our own ask before they are offered a way
+            off the page. rel="sponsored" because it is an affiliate link. */}
+        <a
+          href="https://tradeify.co/?ref=Bzila"
+          target="_blank"
+          rel="noopener noreferrer sponsored"
+          style={tradeifyCard}
+          className="tradeify-card"
+        >
           <div style={{ minWidth: 0 }}>
             <div style={tradeifyLabel}>Tradeify partner code</div>
             <div style={{ color: T.muted, opacity: 0.7, fontSize: 12, lineHeight: 1.35 }}>
@@ -276,7 +277,7 @@ export default function LandingClient() {
             </div>
           </div>
           <span style={tradeifyCode}>BZILA</span>
-        </div>
+        </a>
       </div>
 
       {/* Legal footer — visible pre-auth so visitors (and app stores / payment
@@ -559,6 +560,8 @@ const signInLink: React.CSSProperties = {
 
 const tradeifyCard: React.CSSProperties = {
   width: "min(1140px, 100%)",
+  textDecoration: "none",
+  color: T.text,
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
@@ -611,28 +614,3 @@ const legalLink: React.CSSProperties = {
 };
 
 const legalDot: React.CSSProperties = { color: "rgba(139,148,167,0.5)" };
-
-const xFollow: React.CSSProperties = {
-  position: "absolute",
-  top: "clamp(20px, 3vw, 30px)",
-  right: "clamp(20px, 3vw, 30px)",
-  zIndex: 3,
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 44,
-  height: 44,
-  borderRadius: 12,
-  border: `1px solid ${T.border}`,
-  background: "rgba(13,17,25,0.7)",
-  backdropFilter: "blur(10px)",
-  color: T.text,
-  textDecoration: "none",
-  transition: "color 0.2s, border-color 0.2s, box-shadow 0.2s",
-};
-
-const xFollowHover: React.CSSProperties = {
-  color: T.cyan,
-  borderColor: cyanA(0.5),
-  boxShadow: `0 0 14px ${cyanA(0.45)}`,
-};

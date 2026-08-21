@@ -28,6 +28,12 @@ export type TabDef = {
   color: string;
   /** Glyph shown in the sub-strip. Matches the toolbar's emoji icon language. */
   icon: string;
+  /**
+   * Draw the pill for the owner only. Chrome-level: the sub-strip skips it and
+   * ScannerPage refuses to render the tab, but this is NOT a security boundary —
+   * anything that must not leak needs a server-side gate on its data route too.
+   */
+  ownerOnly?: boolean;
 };
 
 /**
@@ -46,7 +52,11 @@ export const SCANNER_TABS: TabDef[] = [
   // Sits next to GEX Change Top because it is that tab's feedback loop: the
   // cards flag picks, the scorecard grades them, this reads the graded history
   // back and asks what the A/B picks had in common at capture.
-  { id: "pickstudy",    label: "Pick Study",     short: "Study",      color: HOME_THEME.purple, icon: "🔬" },
+  //
+  // OWNER ONLY (2026-08-21): this is the tuning bench for the pick ranking —
+  // half-formed splits, thin buckets and a calibration block that reads "not
+  // armed" most of the time. It is research in progress, not a customer view.
+  { id: "pickstudy",    label: "Pick Study",     short: "Study",      color: HOME_THEME.purple, icon: "🔬", ownerOnly: true },
   { id: "strike",       label: "Strike Query",   short: "Strike",     color: HOME_THEME.cyan,   icon: "🎯" },
   { id: "tpo",          label: "TPO Structures", short: "TPO",        color: LIGHT_BLUE,        icon: "🏛️" },
   { id: "ibstats",      label: "IB Stats",       short: "IB Stats",   color: HOME_THEME.green,  icon: "📐" },
