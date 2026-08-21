@@ -1,5 +1,102 @@
 # Changelog
 
+## 2026-08-21 (q) - Notes drawer: owner-only "Quick Probe" section
+
+Added: `components/shared/QuickProbe.tsx`. Edited: `components/shared/NotesDock.tsx`.
+
+The Notes drawer (right-side dock on the universal toolbar) now opens with a
+collapsed **QUICK PROBE** card above the note list. It is owner chrome only -
+gated on `useIsOwner()`, so it renders nothing and fetches nothing for a
+customer.
+
+Four fields: **ticker**, **expiration**, **strike**, **call / put**. Ticker is a
+free-text symbol box; committing it (blur or Enter) loads that symbol's expiry
+list from `/api/expirations` into the expiration dropdown (falls back to a plain
+date input if the symbol lists none). Strike is numeric; the side is a two-button
+Call/Put toggle.
+
+Probe pulls the one contract out of `/api/chains?ticker=&expiration=&range=all`
+and shows mark, bid/ask, last, volume, open interest, IV and delta/gamma/theta/
+vega, plus underlying spot. Values are read exactly the way
+`lib/calculations/optionChain.parseExpiration` reads them (group.strikes[] ->
+`strike-price` / `call` / `put`, same mark bid-ask-mid -> last -> close
+fallback), so a number here cannot disagree with the chain page. An unlisted
+strike snaps to the nearest listed one and says so.
+
+A "Save to notes" button drops the probe into the notes list as a normal note
+tagged `Quick Probe`, so it persists and syncs like any other note.
+
+Read-only. No new endpoint, no proxy change, no recording - it calls the same
+two routes the customer chain surfaces already call. In `NotesDock` the section
+is capped at 62% height and scrolls, so an open probe can't push the note list
+out of the dock on a short window.
+
+## 2026-08-21 (p) - 0DTE chain: AM-settled monthly no longer poisons GEX/DEX
+
+Edited: `server-v2/proxy-tastytrade.js`.
+
+On a monthly-expiration Friday TastyTrade returns the AM-settled monthly (root
+`SPX`) and the PM-settled weekly (root `SPXW`) under ONE `/option-chains` query,
+on the SAME expiration date, at the SAME strikes. Nothing downstream separated
+them:
+
+- `GexFeed._activeContracts()` filters on expiration only -> BOTH roots were
+  subscribed to dxLink.
+- `computeGexRows()` groups by strike alone (`byStrike.get(strike)[side] = row`)
+  -> last write wins, so whichever root TT happened to return last silently
+  owned every colliding strike.
+- `fetchChainFull()` keys its nested strike map by `String(strike)` -> same race.
+
+The AM contract settles at the OPEN, so from 09:30 ET its OI is frozen and its
+greeks are dead - but monthly OI is huge, so a strike it won was reporting
+GEX/DEX off a settled contract.
+
+`fetchChain()` now runs a new `preferPmSettlement()` over its contract list:
+for each `(expiration, strike, type)` key with more than one contract, the PM
+leg wins (explicit `PM` > unlabelled > explicit `AM`), order-independent. Keys
+with a single contract are untouched, and when nothing collides the original
+array is returned by reference - every non-index ticker and every non-monthly
+SPX date is byte-for-byte unchanged. A one-line `[CHAIN] ... dropped N
+AM-settled duplicate legs` log fires only when it actually drops something.
+
+The two places that had grown their own collision workarounds - `probeRestTT()`
+(prefer the root the user typed) and `_statsFromTT()` (keep whichever root
+actually traded) - are kept as safety nets, with comments updated to say they
+are no longer the primary defence. Typing `SPX` on a monthly Friday now resolves
+to the live SPXW leg, which is intended.
+
+Not changed: the home page DEX tile still sums the whole subscribed chain
+(+/-8% of spot) while the heatmap column renders only +/-20 strikes around ATM,
+so the tile legitimately reads far more positive than the visible column -
+deep-ITM call delta below the window dominates. That is a scope/labelling
+question, not this bug.
+
+## 2026-08-21 (o) - Level Log: wall migration chart rebuilt to match the post-market one
+
+Edited: `components/pages/LevelLog.tsx`.
+
+The Level Log's Wall migration chart had drifted into its own thing — a squat
+172px body on the fixed 09:29->16:00 rail, hour gridlines behind it, a
+per-capture tick on every spot sample, hi/lo price labels floated over the plot
+and an uppercase legend pill row crowding the title. Full width, that read as a
+band of blocks, nothing like the same chart on Premarket -> Post-Market.
+
+It is now the post-market `WallChart`'s drawing, point for point:
+
+- 190px body, 8px pad (post-market's numbers).
+- X spans the recorded samples edge to edge instead of the fixed session rail,
+  so a half-recorded day fills the card rather than drawing half a chart beside
+  dead space. New `slotClock()` turns a slot back into ET wall-clock.
+- Gridlines, per-capture spot ticks and the hi/lo overlay labels are gone. Spot
+  is one continuous 1.5px stroke on top.
+- Legend moved under the head as swatch chips ("CORE - the heavier wall", "the
+  other wall", "spot"), each still carrying its current strike.
+- Three timestamps under the plot (start / mid / end) replace the full hour rail.
+
+Unchanged: the role model (CORE = the heavier wall, OTHER = the lighter one,
+they swap when the dominant side changes), the forward-fill, step-not-slope
+geometry, the corridor fill, the theme tokens (no hardcoded hex) and the caption.
+
 ## 2026-08-21 (n) - Options Chain: ticker picker out of the cog, onto the bar
 
 Edited: `components/pages/OptionsChain.tsx`.

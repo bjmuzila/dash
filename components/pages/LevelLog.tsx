@@ -927,10 +927,20 @@ function WallRailChips({ marks }: { marks: RailMark[] }) {
 
 // ── Wall migration ───────────────────────────────────────────────────────────
 
-/** Chart body height in px. The SVG scales to the card's width, not this. */
-const MIG_H = 172;
-/** Top/bottom breathing room inside the plot, so a line never rides the edge. */
-const MIG_PAD = 10;
+/**
+ * Chart body height in px, and the breathing room inside it. Both are the
+ * post-market recap's numbers (PostMarketTab → WallChart), so the two charts
+ * sit at the same proportions rather than one reading squatter than the other.
+ */
+const MIG_H = 190;
+const MIG_PAD = 8;
+
+/** Slot → wall-clock ET. Slot 0 is the 09:29 baseline, then every 15m to 16:00. */
+function slotClock(slot: number): string {
+  if (slot <= 0) return "09:29";
+  const m = 9 * 60 + 45 + (slot - 1) * 15;
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
 
 /**
  * WALL MIGRATION — the level log drawn: where the levels sat, slot by slot,
@@ -978,9 +988,14 @@ const MIG_PAD = 10;
  *
  * It reads the same view-filtered `log` / `events` as the rail and the timeline,
  * so the WALLS / CORE switch scopes it along with everything else — the CORE
- * view has no walls to compare and so still draws the cb level on its own — and
- * it uses railPct() for x, so a mark on the rail above sits directly over its
- * step here.
+ * view has no walls to compare and so still draws the cb level on its own.
+ *
+ * The DRAWING is the post-market chart's, deliberately: same 190px body, same
+ * 8px pad, x spanning the recorded samples edge to edge (not the fixed
+ * 09:29→16:00 rail, which left a half-recorded day drawing half a chart beside
+ * a wall of dead space), no gridlines, no per-capture ticks, spot as one
+ * continuous stroke, and the legend as swatch chips under the head. Three
+ * stamps under the plot say what span you are looking at.
  */
 /** The role colours. CORE keeps the cb blue the rest of the page reads as CORE. */
 const ROLE_CORE_COLOR = LIGHT_BLUE;
@@ -1117,7 +1132,8 @@ function WallMigrationChart({ log, events, view }: {
   if (!model) return null;
   const { levels, series, roles, spotPts, lo, hi, lastSlot } = model;
 
-  const x = (s: number) => railPct(s);
+  /** Index across what was recorded, edge to edge — the post-market geometry. */
+  const x = (s: number) => (s / Math.max(1, lastSlot)) * 100;
   const y = (v: number) => MIG_PAD + (1 - (v - lo) / (hi - lo)) * (MIG_H - MIG_PAD * 2);
 
   /** Step, not slope — see the header. Walk forward or back over the fill. */
@@ -1168,87 +1184,74 @@ function WallMigrationChart({ log, events, view }: {
     ? (() => { for (let s = lastSlot; s >= 0; s--) if (roles.side[s]) return roles.side[s]; return null; })()
     : null;
 
+  /**
+   * The post-market legend: a small square swatch, the role in sentence case,
+   * and the strike it currently sits on. Not the old uppercase pill row — that
+   * was a second title bar fighting the head above it.
+   */
   const legendChip = (color: string, label: string, value: string) => (
-    <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      <span aria-hidden style={{ width: 10, height: 3, borderRadius: 2, background: color, boxShadow: `0 0 8px ${rgba(color, 0.5)}` }} />
-      <span style={{ fontSize: 10, letterSpacing: LS_LABEL, textTransform: "uppercase", color }}>{label}</span>
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META }}>{value}</span>
+    <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: MUTED }}>
+      <span aria-hidden style={{ width: 9, height: 9, borderRadius: 2, background: color, flex: "0 0 auto" }} />
+      <span>{label}</span>
+      <span style={{ fontFamily: "var(--font-mono)", color: HOME_THEME.text }}>{value}</span>
     </span>
   );
 
   return (
     <div style={{ padding: "13px 18px 12px", borderBottom: `1px solid ${C.border}` }}>
-      <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap", marginBottom: 9 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap", marginBottom: 6 }}>
         <span style={{ fontSize: FS_LABEL, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase" }}>
           Wall migration
         </span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, color: MUTED }}>
           recorded levels · {spotPts.length} spot capture{spotPts.length === 1 ? "" : "s"}
         </span>
-        <span style={{ marginLeft: "auto", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-          {roles ? (
-            <>
-              {legendChip(ROLE_CORE_COLOR, `Core · ${coreSideNow === "put" ? "put" : "call"} wall`, wallStrike(lastOf(roles.core)))}
-              {legendChip(ROLE_OTHER_COLOR, coreSideNow === "put" ? "Call wall" : "Put wall", wallStrike(lastOf(roles.other)))}
-            </>
-          ) : (
-            paths.map((p) => legendChip(p.color, LEVEL_LABEL[p.key as WallLevel] ?? p.key, wallStrike(lastOf(series.get(p.key as WallLevel) ?? []))))
-          )}
-          {spotPts.length ? legendChip(HOME_THEME.text, "Spot", wallNum(spotPts[spotPts.length - 1].v)) : null}
-        </span>
       </div>
 
-      <div style={{ position: "relative" }}>
-        {/* preserveAspectRatio="none" — the x axis is slots, the y axis is
-            price, and the two have no business sharing a scale. Every stroke
-            carries vectorEffect so the squash never thickens a line, and there
-            is no <text> or <circle> inside for the same reason: they would come
-            out stretched. Labels are HTML, on top. */}
-        <svg viewBox={`0 0 100 ${MIG_H}`} height={MIG_H} preserveAspectRatio="none"
-          style={{ width: "100%", display: "block", overflow: "visible" }}>
-          {RAIL_HOURS.map((h) => (
-            <line key={h.slot} x1={x(h.slot)} x2={x(h.slot)} y1={0} y2={MIG_H}
-              stroke="rgba(255,255,255,0.07)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-          ))}
-          {corridor ? <polygon points={corridor} fill={rgba(C.cyan, 0.06)} /> : null}
-          {paths.map((p) => (
-            <polyline key={p.key} points={p.d} fill="none" stroke={p.color} strokeWidth={p.w}
-              vectorEffect="non-scaling-stroke" strokeLinejoin="miter" />
-          ))}
-          {/* Spot last, so it reads on top of the levels it is being compared
-              with. The ticks mark the captures themselves — vertical only,
-              because a horizontal mark would be stretched by the squash. */}
-          {spotPts.length > 1 ? (
-            <polyline points={spotLine} fill="none" stroke={HOME_THEME.text} strokeWidth={1.4}
-              vectorEffect="non-scaling-stroke" opacity={0.85} />
-          ) : null}
-          {spotPts.map((p) => (
-            <line key={p.s} x1={x(p.s)} x2={x(p.s)} y1={y(p.v) - 2.5} y2={y(p.v) + 2.5}
-              stroke={HOME_THEME.text} strokeWidth={1.4} vectorEffect="non-scaling-stroke" opacity={0.9} />
-          ))}
-        </svg>
-        {/* Price bounds as HTML, right-aligned over the plot. */}
-        <span style={{ position: "absolute", right: 0, top: 0, fontFamily: "var(--font-mono)", fontSize: 10, pointerEvents: "none" }}>
-          {wallStrike(hi)}
-        </span>
-        <span style={{ position: "absolute", right: 0, bottom: 0, fontFamily: "var(--font-mono)", fontSize: 10, pointerEvents: "none" }}>
-          {wallStrike(lo)}
-        </span>
+      {/* Its own legend, under the head and above the plot. The section head
+          says nothing about these series — which is exactly how a CORE line
+          reads as an unexplained squiggle. */}
+      <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+        {roles ? (
+          <>
+            {legendChip(ROLE_CORE_COLOR, `CORE — the heavier wall (${coreSideNow === "put" ? "put" : "call"})`, wallStrike(lastOf(roles.core)))}
+            {legendChip(ROLE_OTHER_COLOR, "the other wall", wallStrike(lastOf(roles.other)))}
+          </>
+        ) : (
+          paths.map((p) => legendChip(p.color, LEVEL_LABEL[p.key as WallLevel] ?? p.key, wallStrike(lastOf(series.get(p.key as WallLevel) ?? []))))
+        )}
+        {spotPts.length ? legendChip(HOME_THEME.text, "spot", wallNum(spotPts[spotPts.length - 1].v)) : null}
       </div>
 
-      {/* Same ticks as the rail above, so the two line up column for column. */}
-      <div style={{ position: "relative", height: 12, marginTop: 3 }} aria-hidden>
-        <span style={{ position: "absolute", left: 0, fontFamily: "var(--font-mono)", fontSize: 10 }}>09:29</span>
-        {RAIL_HOURS.map((h) => (
-          <span key={h.slot} style={{
-            position: "absolute", left: `${railPct(h.slot)}%`, transform: "translateX(-50%)",
-            fontFamily: "var(--font-mono)", fontSize: 10,
-          }}>{h.label}</span>
+      {/* preserveAspectRatio="none" — the x axis is slots, the y axis is price,
+          and the two have no business sharing a scale. Every stroke carries
+          vectorEffect so the squash never thickens a line, and there is no
+          <text> or <circle> inside for the same reason. */}
+      <svg viewBox={`0 0 100 ${MIG_H}`} height={MIG_H} preserveAspectRatio="none"
+        style={{ width: "100%", display: "block" }}>
+        {/* The corridor between the two, so the room price actually had is readable. */}
+        {corridor ? <polygon points={corridor} fill={rgba(C.cyan, 0.06)} /> : null}
+        {paths.map((p) => (
+          <polyline key={p.key} points={p.d} fill="none" stroke={p.color} strokeWidth={p.w}
+            vectorEffect="non-scaling-stroke" strokeLinejoin="miter" />
         ))}
-        <span style={{ position: "absolute", right: 0, fontFamily: "var(--font-mono)", fontSize: 10 }}>16:00</span>
+        {/* Spot last, so it reads on top of the levels it is being compared with. */}
+        {spotLine ? (
+          <polyline points={spotLine} fill="none" stroke={HOME_THEME.text} strokeWidth={1.5}
+            vectorEffect="non-scaling-stroke" />
+        ) : null}
+      </svg>
+
+      <div style={{
+        display: "flex", justifyContent: "space-between", marginTop: 5,
+        fontFamily: "var(--font-mono)", fontSize: 10, color: MUTED,
+      }} aria-hidden>
+        <span>{slotClock(0)}</span>
+        <span>{slotClock(Math.round(lastSlot / 2))}</span>
+        <span>{slotClock(lastSlot)}</span>
       </div>
 
-      <div style={{ fontSize: FS_META, marginTop: 8, lineHeight: 1.5 }}>
+      <div style={{ fontSize: FS_META, marginTop: 6, lineHeight: 1.5, color: MUTED }}>
         {roles ? (
           <>
             CORE is whichever wall carries more gamma at that slot, so the two lines SWAP when the dominant

@@ -329,6 +329,47 @@ async function ttGet(path) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Collapse AM/PM settlement collisions to the PM (tradeable) contract.
+ *
+ * On a monthly-expiration Friday TT returns the AM-settled monthly (root
+ * "SPX") and the PM-settled weekly (root "SPXW") under ONE /option-chains
+ * query, on the SAME expiration date, at the SAME strikes. Every downstream
+ * consumer keys on (expiration, strike, type) alone:
+ *
+ *   - GexFeed._activeContracts() filters on expiration only, so BOTH roots get
+ *     subscribed;
+ *   - computeGexRows() groups by strike alone and does
+ *     `byStrike.get(strike)[side] = row` — last write wins, so whichever root
+ *     TT happened to return last silently owned every colliding strike;
+ *   - fetchChainFull() keys its nested strike map by String(strike), same race.
+ *
+ * The AM contract settles at the OPEN, so from 09:30 ET onward its OI is frozen
+ * and its greeks are dead — but its monthly OI is huge, so letting it win a
+ * strike poisons that strike's GEX/DEX. The PM contract is the one still
+ * trading, and it is the one the dashboard means by "0DTE".
+ *
+ * Only keys with MORE THAN ONE contract are touched; single-root chains
+ * (every non-index ticker, and SPX on a non-monthly date) pass through byte
+ * for byte.
+ *
+ * @param {Array} contracts from fetchChain()
+ * @returns {{contracts:Array, dropped:number}}
+ */
+function preferPmSettlement(contracts) {
+  const byKey = new Map();
+  for (const c of contracts) {
+    const key = `${c.expiration}|${c.strike}|${c.type}`;
+    const prev = byKey.get(key);
+    if (!prev) { byKey.set(key, c); continue; }
+    // Rank: explicit PM wins, then anything not explicitly AM, then incumbent.
+    const rank = (x) => (x.settlementType === 'PM' ? 2 : x.settlementType === 'AM' ? 0 : 1);
+    if (rank(c) > rank(prev)) byKey.set(key, c);
+  }
+  const dropped = contracts.length - byKey.size;
+  return { contracts: dropped > 0 ? [...byKey.values()] : contracts, dropped };
+}
+
+/**
  * Fetch a nested option chain for any underlying (defaults to the feed SYMBOL).
  * @param {string} [underlying] e.g. "SPX", "AAPL"
  * @returns {Promise<{expirations:string[], contracts:Array}>}
@@ -387,7 +428,13 @@ async function fetchChain(underlying = SYMBOL) {
   }
 
   const expirations = [...expSet].sort();
-  return { expirations, contracts };
+  // Monthly Fridays: drop the AM-settled duplicate so exactly ONE contract owns
+  // each (expiration, strike, type). See preferPmSettlement() above.
+  const { contracts: deduped, dropped } = preferPmSettlement(contracts);
+  if (dropped > 0) {
+    console.log(`[CHAIN] ${String(underlying).toUpperCase()}: dropped ${dropped} AM-settled duplicate legs (PM contract kept)`);
+  }
+  return { expirations, contracts: deduped };
 }
 
 /**
@@ -711,8 +758,12 @@ async function probeRestTT({ ticker, expiry, type, strike }) {
 
   const ttChain = await getChainCached(ticker).catch(() => ({ expirations: [], contracts: [] }));
   const cands = (ttChain.contracts || []).filter((c) => c.expiration === expiry && c.type === type);
-  // On monthly Fridays TT returns both SPX (AM) and SPXW (PM) under one query —
-  // prefer the root the user actually typed, else fall back to any match.
+  // fetchChain() already collapses the monthly-Friday AM/PM collision to the PM
+  // contract, so there is normally exactly one candidate per strike. This kept
+  // preference is belt-and-braces for any future root that legitimately shares a
+  // (expiration, strike, type) key: prefer the root the user typed, else any
+  // match. Typing "SPX" on a monthly Friday now resolves to the live SPXW leg,
+  // which is intended — the AM monthly is settled and dead by then.
   const pool = cands.some((c) => c.rootSymbol === wantRoot)
     ? cands.filter((c) => c.rootSymbol === wantRoot)
     : cands;
@@ -927,8 +978,9 @@ async function _statsFromTT(root, expiry) {
       iv: Number.isFinite(m.iv) && m.iv > 0 ? m.iv : null,
       mark: Number.isFinite(m.mark) && m.mark > 0 ? m.mark : null,
     };
-    // On monthly Fridays TT returns SPX (AM) and SPXW (PM) under ONE chain
-    // query and both fold to the same strike|type key. Keep whichever root
+    // fetchChain() now drops the AM-settled duplicate on monthly Fridays, so
+    // this key collision should no longer happen. Kept as a safety net: if two
+    // roots ever fold to the same strike|type key again, keep whichever one
     // actually traded instead of letting row order decide.
     const prev = byKey[k];
     if (prev && (prev.vol ?? 0) + (prev.oi ?? 0) >= (row.vol ?? 0) + (row.oi ?? 0)) continue;

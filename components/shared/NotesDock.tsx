@@ -3,6 +3,7 @@
 import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME } from "./homeTheme";
 import { useNotes, NotesBody } from "./notes";
+import QuickProbe from "./QuickProbe";
 import { useNotesPanel } from "./NotesPanelContext";
 import { useMobileNav } from "./MobileNavContext";
 // TEMP: chat disabled site-wide — see app/api/chat/messages/route.ts
@@ -74,6 +75,13 @@ export default function NotesDock() {
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
           </button>
+        </div>
+
+        {/* quick probe — owner only; renders nothing for everyone else.
+            Capped + scrollable so an open probe can't push the notes list out
+            of the dock on a short window. */}
+        <div style={{ flexShrink: 0, maxHeight: "62%", overflowY: "auto", scrollbarWidth: "thin" }}>
+          <QuickProbe addNote={addNote} />
         </div>
 
         {/* notes body — top region, scrolls within its own space */}
