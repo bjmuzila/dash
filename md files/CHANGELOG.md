@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-08-21 (j) - Sign-up: confirm password field
+
+Edited: `components/auth/AuthForm.tsx`.
+
+Create-your-account now asks for the password twice. There is no "show password"
+toggle on this form, so a typo was silent right up until the first sign-in failed
+— and by then the account exists, which makes the recovery a reset email instead
+of a retry.
+
+- Second `type="password"` box, **sign-up only**. Sign-in is untouched.
+- Mismatch shows a red border + inline message, but only once the confirm box has
+  something in it. Flagging an empty field the moment the first box gets a
+  character is the form telling you off for not being finished.
+- Submit is disabled while the two differ **or while confirm is still empty** —
+  without the second half a user who never touches the box sails through and the
+  field is decoration.
+- The match check runs BEFORE the captcha check, so a typo never consumes a
+  Turnstile token (a burnt token means a fresh challenge on retry, which reads
+  like the site broke rather than like a mistyped password).
+- On a failed sign-up the confirm box is cleared but the password is not:
+  whatever they retype has to be confirmed again.
+- While here: `autoComplete` added to all three inputs — `email`,
+  `new-password` on sign-up (both boxes, which is what stops password managers
+  treating the confirm field as a second separate credential) and
+  `current-password` on sign-in. The password placeholder now states the 8-char
+  minimum the input already enforced silently.
+
+No server change — `/api/auth/signup` still receives one `password`.
+
+
 ## 2026-08-21 (i) - Landing page rebuilt: free live level + the graded ledger
 
 The landing page was getting ~300 views a day and converting nothing. It wasn't

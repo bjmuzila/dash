@@ -49,6 +49,11 @@ export default function AuthForm({
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // Sign-up only. A typo'd password on a form with no "show password" toggle is
+  // silent until the user tries to sign in and can't — and by then the account
+  // exists, so the recovery is a password reset email rather than a retry.
+  // Confirming here turns that into a caught mistake on the same screen.
+  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -62,6 +67,15 @@ export default function AuthForm({
 
   const isSignup = mode === "signup";
   const captchaRequired = !!TURNSTILE_SITE_KEY;
+
+  // Live mismatch feedback, but only once the user has actually typed something
+  // in the confirm box — flagging an empty field the moment the first box gets a
+  // character is the form telling you off for not having finished yet.
+  const confirmMismatch = isSignup && confirm.length > 0 && confirm !== password;
+  // Submit is blocked while the two differ OR while confirm is still empty on a
+  // sign-up. The second half matters: without it, a user who never touches the
+  // confirm box sails through and the field is decoration.
+  const confirmBlocked = isSignup && (confirm.length === 0 || confirm !== password);
 
   // Load the Turnstile script once and render the widget into our container.
   // If Cloudflare's script fails to load (network block, 503, outage) or never
@@ -167,6 +181,14 @@ export default function AuthForm({
     setError(null);
     setNotice(null);
 
+    // Checked BEFORE the captcha so a simple typo never burns a Turnstile token
+    // (a consumed token means a fresh challenge on the retry, which reads like
+    // the site broke rather than like a mistyped password).
+    if (isSignup && password !== confirm) {
+      setError("Those passwords don't match.");
+      return;
+    }
+
     if (captchaRequired && !captchaToken) {
       setError("Please complete the captcha.");
       return;
@@ -188,6 +210,10 @@ export default function AuthForm({
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           setError(data?.error || "Sign-up failed.");
+          // Wipe the confirm box, not the password: whatever they retype has to
+          // be confirmed again. Keeping a stale match through a failed attempt
+          // is how a half-corrected password gets submitted.
+          setConfirm("");
           resetCaptcha();
           return;
         }
@@ -195,6 +221,7 @@ export default function AuthForm({
           window.location.assign(next);
         } else {
           setNotice("Check your email to confirm your account, then sign in.");
+          setConfirm("");
           resetCaptcha();
         }
       } else {
@@ -253,6 +280,7 @@ export default function AuthForm({
         <input
           type="email"
           required
+          autoComplete="email"
           placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -262,11 +290,45 @@ export default function AuthForm({
           type="password"
           required
           minLength={8}
-          placeholder="Password"
+          // Tells the password manager to OFFER a generated password on sign-up
+          // and to autofill the saved one on sign-in. Same attribute on the
+          // confirm box below is what stops managers treating it as a second,
+          // separate credential.
+          autoComplete={isSignup ? "new-password" : "current-password"}
+          placeholder={isSignup ? "Password (8+ characters)" : "Password"}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           style={inputStyle}
         />
+
+        {isSignup && (
+          <>
+            <input
+              type="password"
+              required
+              minLength={8}
+              autoComplete="new-password"
+              placeholder="Confirm password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              aria-invalid={confirmMismatch}
+              aria-describedby={confirmMismatch ? "confirm-mismatch" : undefined}
+              style={{
+                ...inputStyle,
+                // The only visual state this field carries. Deliberately no
+                // green "match" tick: a matching pair is the expected case and
+                // does not need celebrating, and the red border has to stay the
+                // one thing that draws the eye.
+                borderColor: confirmMismatch ? T.red : T.border,
+              }}
+            />
+            {confirmMismatch && (
+              <div id="confirm-mismatch" style={{ fontSize: 12, color: T.red, marginTop: -4 }}>
+                Those passwords don&apos;t match.
+              </div>
+            )}
+          </>
+        )}
 
         {captchaRequired && !captchaFailed && <div ref={widgetRef} style={{ minHeight: 65 }} />}
 
@@ -308,7 +370,7 @@ export default function AuthForm({
 
         <button
           type="submit"
-          disabled={busy || (captchaRequired && !captchaToken)}
+          disabled={busy || confirmBlocked || (captchaRequired && !captchaToken)}
           style={{
             width: "100%",
             padding: "11px",
@@ -318,8 +380,8 @@ export default function AuthForm({
             color: T.text,
             fontSize: 14,
             fontWeight: 700,
-            cursor: busy ? "default" : "pointer",
-            opacity: captchaRequired && !captchaToken ? 0.6 : 1,
+            cursor: busy || confirmBlocked ? "default" : "pointer",
+            opacity: confirmBlocked || (captchaRequired && !captchaToken) ? 0.6 : 1,
           }}
         >
           {busy ? "…" : isSignup ? "Create account" : "Sign in"}
