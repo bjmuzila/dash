@@ -36,6 +36,12 @@ const PUBLIC_PATTERNS: RegExp[] = [
 
   /^\/api\/unsubscribe(\/.*)?$/,
   /^\/unsubscribe$/,
+  // Short campaign links — /x/click, /youtube/video, /hackernews/click. They
+  // are 302 redirectors handled by app/[source]/[action]/route.ts and are
+  // linked from public posts, so they must resolve signed OUT; the destination
+  // they forward to is gated on its own terms. The verb suffix is what keeps
+  // this pattern from accidentally opening a real two-segment route.
+  /^\/[a-z0-9-]+\/(click|profile|bio|post|video|link)$/,
   /^\/api\/stripe\/webhook$/,
   // Page-load beacon. Public because it fires on EVERY load including guests
   // and unpaid users — gating it silently drops visit logging for exactly the

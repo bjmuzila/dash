@@ -322,10 +322,13 @@ type NavItem = { href: string; label: string; emoji: string; ownerOnly?: boolean
 const NAV_ITEMS: NavItem[] = [
   { href: "/home",              label: "Home",          emoji: "🏠" },
   { href: "/mult-greek",        label: "Multi Greek",   emoji: "🧮" },
-  // Levels — the whole scanner universe's CB / call wall / put wall on one
-  // page. Sits next to Multi Greek because it is the same three numbers,
-  // read across 169 tickers instead of four.
-  { href: "/levels",            label: "Levels",        emoji: "🧱" },
+  // Levels (/levels) left the toolbar on 2026-08-21 — the whole scanner
+  // universe's CB / call wall / put wall on one page is a bench view, not a
+  // daily destination, and it was spending a top-level slot. The ROUTE is
+  // unchanged; it is listed in TESTLAB_SECTION.routes now (sectionNav.ts), so
+  // it shows as a "Levels ↗" pill in the Test Lab sub-strip, and it is still in
+  // the hamburger (NavMenu). Anyone with it in their saved toolbar order loses
+  // it silently — GexGroupNav drops hrefs it can't resolve.
   { href: "/traders-dashboard", label: "Traders Dash",  emoji: "📊" },
   // Premarket — the pre-open prep board (regime, walls, flip, overnight
   // context, expected range, playbook). Sits next to Traders Dash because it

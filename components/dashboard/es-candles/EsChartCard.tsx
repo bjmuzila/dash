@@ -18,7 +18,7 @@
  *      dock has a compact density for when the card is a third of the screen.
  */
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData, LineData, HistogramData } from "lightweight-charts";
@@ -71,7 +71,7 @@ import { cachedJson, HttpError } from "@/lib/sharedCache";
 // (tick-quantized, 1-min cadence) — not by picking a different source.
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { Dock, SegGroup, DockButton, DockGap, DockSlider, DockCogMenu, DockMenuRow, DockMenuDivider } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, DockButton, DockGap, DockSlider, DockCogMenu, type DockCogSection } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
 import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, ES_CANDLE_UP, ES_CANDLE_DOWN, dissolveCardStyle } from "@/components/shared/homeTheme";
 import type { RailRow } from "@/components/dashboard/EsGexRail";
@@ -89,7 +89,7 @@ import {
   type ChartInterval,
 } from "./interval";
 import { SymbolListDropdown, symbolDef, isChartSymbol, type ChartSymbol } from "./symbols";
-import { PanelSection, PanelChip, SLIDER_LABEL_W, OVL_PANEL_W, OVL_VIEWPORT_PAD, OVL_MIN_H } from "./panelUi";
+import { PanelSection, PanelChip, SLIDER_LABEL_W } from "./panelUi";
 import {
   BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_REF_START_MIN, BUBBLE_REF_CUTOFF_MIN,
   BUBBLE_LEVELS_RANGE, BUBBLE_INTENSITY_RANGE, BUBBLE_SIZE_RANGE, BUBBLE_CURVE_RANGE,
@@ -147,6 +147,22 @@ const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : use
  * row collapses to one line. Measured from the CARD, not from the card count:
  * one chart on a 1280 laptop is just as cramped as three on a 1920.
  */
+/**
+ * Caption above a control inside a cog SECTION pane.
+ *
+ * The pane is a plain column, not a stack of <DockMenuRow>s: those put the
+ * label and the control on one line, which works for a 340px menu of single
+ * buttons and fails immediately for a segmented picker or a list. Labels go
+ * above their control here and this is the one style they share.
+ */
+const SECTION_LABEL: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: "0.10em",
+  textTransform: "uppercase",
+  color: "rgba(255,255,255,0.62)",
+};
+
 const COMPACT_CARD_WIDTH = 760;
 
 /**
@@ -271,6 +287,17 @@ export interface EsChartCardProps {
    * someone else's buttons would put half of each control in each file.
    */
   toolbarExtras?: ReactNode;
+  /**
+   * Route-owned SECTIONS of the cog menu, merged with this card's own.
+   *
+   * `toolbarExtras` puts a row of the page's buttons in one place; this puts
+   * whole panes of the page's controls in the rail — the Indicators sheet and
+   * the Layout preset store, which the route owns because they are page state
+   * (one indicator blob for the whole row, one preset store for the whole
+   * page) and the card has no business re-deriving either. Order is decided by
+   * the merge below, not by the caller.
+   */
+  pageSections?: DockCogSection[];
 }
 
 /**
@@ -306,6 +333,7 @@ function EsChartCard({
   hostedReplay = false,
   indicators = INDICATORS_DEFAULT,
   toolbarExtras,
+  pageSections,
 }: EsChartCardProps = {}) {
   // Everything but the symbol lives here. Same as `slot` for a lone chart.
   const cfgSlot: SlotId = settingsSlot ?? slot;
@@ -929,26 +957,9 @@ function EsChartCard({
   // (only when showing the front expiry — a non-front pick is history-only).
   const selectedExpiryRef = useRef("");
   useEffect(() => { selectedExpiryRef.current = selectedExpiry; }, [selectedExpiry]);
-  const [dteOpen, setDteOpen] = useState(false);
-  const [dteRect, setDteRect] = useState<{ left: number; top: number } | null>(null);
-  const dteBoxRef = useRef<HTMLDivElement>(null);
-  const dteMenuRef = useRef<HTMLDivElement>(null);
-  const openDte = useCallback(() => {
-    const r = dteBoxRef.current?.getBoundingClientRect();
-    if (r) setDteRect({ left: r.left, top: r.bottom + 4 });
-    setDteOpen((v) => !v);
-  }, []);
-  useEffect(() => {
-    if (!dteOpen) return;
-    const onDoc = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (dteBoxRef.current?.contains(t)) return;
-      if (dteMenuRef.current?.contains(t)) return;
-      setDteOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [dteOpen]);
+  // (The DTE dropdown's open/rect/outside-click state used to live here. The
+  // expiry list is a pane in the cog's Gamma section now — no portal, no
+  // placement maths, nothing to position.)
 
   // ── IB switcher tab ────────────────────────────────────────────────────────
   // Toggles the Initial Balance lines; hovering the tab previews the IB page.
@@ -970,59 +981,8 @@ function EsChartCard({
     ibCloseTimer.current = setTimeout(() => setIbPop(false), 120);
   }, []);
 
-  // Overlays dropdown. The six overlay toggles used to sit inline in the dock
-  // and overflowed it (FitScale shrank everything to unreadable); they live in
-  // a checklist menu now.
-  const [ovlOpen, setOvlOpen] = useState(false);
-  const [ovlRect, setOvlRect] = useState<{ left: number; top: number; maxH: number } | null>(null);
-  const ovlBoxRef = useRef<HTMLDivElement>(null);
-  const ovlMenuRef = useRef<HTMLDivElement>(null);
-  /**
-   * Position the menu, CLAMPED to the viewport.
-   *
-   * It renders through a portal at `position: fixed`, so it is measured against
-   * the window and nothing upstream can contain it. Anchoring naively to the
-   * button's left/bottom broke on a laptop two ways:
-   *   • the toolbar sits right-of-center, so `left = button.left` put the panel's
-   *     right edge past the window and the slider values + steppers painted
-   *     outside the panel's own border;
-   *   • with no max-height the panel ran off the bottom on a short viewport and
-   *     Save default / Reset became unreachable.
-   * Clamp x into the window, and cap the height at the space actually left below
-   * the button so the body scrolls instead of overflowing.
-   */
-  const placeOvl = useCallback(() => {
-    const r = ovlBoxRef.current?.getBoundingClientRect();
-    if (!r) return;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const w = Math.min(OVL_PANEL_W, vw - OVL_VIEWPORT_PAD * 2);
-    const left = Math.max(OVL_VIEWPORT_PAD, Math.min(r.left, vw - w - OVL_VIEWPORT_PAD));
-    const top = r.bottom + 4;
-    setOvlRect({ left, top, maxH: Math.max(OVL_MIN_H, vh - top - OVL_VIEWPORT_PAD) });
-  }, []);
-  const openOvl = useCallback(() => {
-    placeOvl();
-    setOvlOpen((v) => !v);
-  }, [placeOvl]);
-  useEffect(() => {
-    if (!ovlOpen) return;
-    const onDoc = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (ovlBoxRef.current?.contains(t)) return;
-      if (ovlMenuRef.current?.contains(t)) return;
-      setOvlOpen(false);
-    };
-    // Re-clamp while open: resizing (or rotating a laptop into a docked monitor)
-    // would otherwise leave the panel pinned to a position that no longer exists.
-    const onResize = () => placeOvl();
-    document.addEventListener("mousedown", onDoc);
-    window.addEventListener("resize", onResize);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      window.removeEventListener("resize", onResize);
-    };
-  }, [ovlOpen, placeOvl]);
+  // (The overlays checklist dropdown's open/rect/placement state used to live
+  // here. The checklist is a pane in the cog's Overlays section now.)
 
   // DTE relative to today ET (today's expiry = 0DTE, not −1).
   const dteOf = (exp: string): number => {
@@ -5417,7 +5377,305 @@ function EsChartCard({
   // unconditionally on every render of every card and then thrown away, taking
   // FitScale, Dock, five DockButtons, two SegGroups, SymbolListDropdown and the
   // two capture buttons with it.
+
+  // Only a card that actually RENDERS a dock builds one. `dockMode === "symbol"`
+  // cards (every card but the first on a 2–3 up row) draw the ticker bar
+  // instead, and used to construct this whole tree on every render and throw it
+  // away.
   const dockWanted = dockMode === "full" || dockMode === "shared";
+
+  /**
+   * The cog's contents, as SECTIONS rather than a scrolling column.
+   *
+   * This is the fix for dropdowns-inside-dropdowns. Overlays, the expiry list,
+   * the Layout presets and the page's Charts / Indicators panels were each a
+   * floating layer opened from inside another floating layer, and a child panel
+   * has no idea where its parent is: it landed on top of it, behind it, or half
+   * off-screen, the parent's click-away had to be taught to ignore each child by
+   * hand, and every layer's z-index had to be tuned against every other. A
+   * section cannot be mispositioned, occluded or orphaned, because there is
+   * nothing to position — the pane swaps IN PLACE inside the one panel.
+   *
+   * Order matters: `page` first because that is what most visits are for, the
+   * two "what is drawn" sections next, then the chart's own axes, then gamma,
+   * then the rarely-touched preset store. `pageSections` come from the route
+   * (it owns chart count, the replay command, the indicator blob and the preset
+   * store); everything else is per-card state living in this slot's blob.
+   */
+  const cogSections: DockCogSection[] = !dockWanted ? [] : (() => {
+    const own: DockCogSection[] = [];
+
+    own.push({
+      id: "overlays",
+      label: "Overlays",
+      hint: "What is drawn on top of the candles",
+      count: [showHeatmap, showProfile, showTpo, showLevels, showSessions, showGexBubbles, showFlipCross].filter(Boolean).length,
+      body: (
+        <>
+        {/* Two columns. Eight one-per-row toggles left the top half of this
+            menu mostly whitespace and pushed the sub-controls off-screen on
+            short viewports; the labels are all short enough to pair up. */}
+        <div style={{
+          // minmax(0,·) NOT 1fr: a plain `1fr` track carries an implicit
+          // min-width:auto, so it refuses to shrink below the widest chip's
+          // min-content and the grid overflows the panel instead. Renaming
+          // PDH/ON -> PDH/ON+EM is what pushed it over on a laptop.
+          display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 3, minWidth: 0,
+        }}>
+        {/* Each toggle persists into THIS card's slot blob, so three cards
+            can carry three different overlay sets across a reload. The
+            `!on` is computed here rather than inside a state updater so the
+            write happens once, not once per StrictMode double-invoke. */}
+        {([
+          { label: "Heatmap", on: showHeatmap, toggle: () => { setShowHeatmap(!showHeatmap); saveSetting({ ovHeatmap: !showHeatmap }); } },
+          { label: "Profile", on: showProfile, toggle: () => { setShowProfile(!showProfile); saveSetting({ ovProfile: !showProfile }); } },
+          { label: "TPO", on: showTpo, toggle: () => { setShowTpo(!showTpo); saveSetting({ ovTpo: !showTpo }); } },
+          { label: "Levels", on: showLevels, toggle: () => { setShowLevels(!showLevels); saveSetting({ ovLevels: !showLevels }); } },
+          { label: "PDH/ON+EM", on: showSessions, toggle: () => { setShowSessions(!showSessions); saveSetting({ ovSessions: !showSessions }); } },
+          { label: "Bubbles", on: showGexBubbles, toggle: () => updateShowBubbles(!showGexBubbles) },
+          { label: "Flip X", on: showFlipCross, toggle: () => { setShowFlipCross(!showFlipCross); saveSetting({ ovFlipCross: !showFlipCross }); } },
+        ] as const).map((o) => (
+          <PanelChip key={o.label} label={o.label} on={o.on} onClick={o.toggle} />
+        ))}
+        </div>
+
+        {/* Sub-controls only make sense when their overlay is on.
+            SLIDER_LABEL_W is shared by every slider below so the labels,
+            tracks, values and steppers line up as real columns across the
+            sections instead of each row sizing itself to its own label. */}
+        {showHeatmap && (
+          <div style={{ marginTop: 7, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
+            <PanelSection title="Heatmap range" first>
+              <SegGroup
+                options={[{ label: "1D", value: "1" }, { label: "2D", value: "2" }]}
+                active={String(heatmapDays)}
+                onChange={(v) => { const d = Number(v) === 2 ? 2 : 1; setHeatmapDays(d); saveSetting({ heatmapDays: d }); }}
+              />
+            </PanelSection>
+            {/* Moved out of the dock. It is a heatmap setting, it only does
+                anything while the heatmap is on, and it was the last lonely
+                slider sitting in a toolbar otherwise made of buttons and
+                segmented pickers — so it now lives with the overlay it
+                belongs to, and disappears with it. */}
+            <PanelSection title="Heatmap brightness">
+              <DockSlider
+                label="intensity" labelWidth={SLIDER_LABEL_W} width="auto"
+                value={intensity} min={0.1} max={1} step={0.05}
+                format={(v) => `${Math.round(v * 100)}%`}
+                onChange={(v) => { setIntensity(v); saveSetting({ intensity: v }); }}
+                title="How hot the gamma cells burn against the candles"
+              />
+            </PanelSection>
+          </div>
+        )}
+        {showGexBubbles && (
+          <div style={{ marginTop: 7, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
+            {/* Four sliders, not seven. Contrast / Max / Brightness are
+                gone: they were CORRECTIONS, moved because the chart was
+                coming out wrong, and the scale they were correcting is
+                absolute now (see slotStore's size law). These four are
+                QUESTIONS — how much of the board do you want on screen,
+                how loud should it sit against the candles, how much room
+                may the marks take, and how hard should the top pull away
+                — and questions have no correct answer to hardcode.
+
+                `size` scales the whole ladder at once, so the ratio
+                between the wall and the fifth strike is identical at 0.4x
+                and at 4x. `top` is the one control that changes that
+                ratio, and it does it by steepening the curve rather than
+                by handing ranked strikes a bonus — so the mark still means
+                |net GEX| and nothing else, and the ladder stays rankable
+                by eye. At its default ("flat") the law is exactly the
+                straight-proportional one it has always been. */}
+            <PanelSection title="Bubbles" first>
+              <DockSlider
+                label="levels" labelWidth={SLIDER_LABEL_W} width="auto"
+                value={bubbleLevels}
+                min={BUBBLE_LEVELS_RANGE.min} max={BUBBLE_LEVELS_RANGE.max} step={1}
+                format={(v) => v.toFixed(0)}
+                onChange={(v) => updateBubbleLevels(v)}
+                title="How many strikes draw per column, ranked by their peak |GEX| across the whole session — so a level keeps its trail even after it drops out of the current top N"
+              />
+              <DockSlider
+                label="size" labelWidth={SLIDER_LABEL_W} width="auto"
+                value={bubbleSize}
+                min={BUBBLE_SIZE_RANGE.min} max={BUBBLE_SIZE_RANGE.max} step={0.05}
+                format={(v) => `${v.toFixed(2)}×`}
+                onChange={(v) => updateBubbleSize(v)}
+                title="Scales the whole ladder at once — the ratio between the wall and the smallest strike is identical at every setting. At or below 1.00× marks are guaranteed never to touch; above it they may overlap, which is the trade for bigger marks on a tight chart"
+              />
+              <DockSlider
+                label="top" labelWidth={SLIDER_LABEL_W} width="auto"
+                value={bubbleCurve}
+                min={BUBBLE_CURVE_RANGE.min} max={BUBBLE_CURVE_RANGE.max} step={0.05}
+                format={(v) => (v <= 1.001 ? "flat" : `${v.toFixed(2)}`)}
+                onChange={(v) => updateBubbleCurve(v)}
+                title="How hard the biggest levels pull away from the rest. At 'flat' the radius is straight proportional to |net GEX|. Turning it up steepens the scale — the top strikes keep the full size budget while the wings shrink under them — so the dominant levels dominate without everything growing together. Monotonic at every setting: more gamma is always a bigger mark"
+              />
+              <DockSlider
+                label="intensity" labelWidth={SLIDER_LABEL_W} width="auto"
+                value={bubbleIntensity}
+                min={BUBBLE_INTENSITY_RANGE.min} max={BUBBLE_INTENSITY_RANGE.max} step={0.05}
+                format={(v) => `${Math.round(v * 100)}%`}
+                onChange={(v) => updateBubbleIntensity(v)}
+                title="Overall opacity of the bubble layer. The magnitude gradient runs underneath it, so turning this down dims the wings and the wall together rather than flattening one into the other"
+              />
+            </PanelSection>
+
+            {/* "Bar" = one bubble column per candle, and it's the default:
+                a fixed 5m bucket stacks twelve columns inside a 1h candle
+                and merges them back into the solid rail the bucket exists
+                to prevent. 1m/5m stay for sub-bar detail on a 15m+ chart. */}
+            <PanelSection title="Bucket">
+              <SegGroup
+                options={[{ label: "Bar", value: "bar" }, { label: "1m", value: "1" }, { label: "5m", value: "5" }]}
+                active={String(bubbleMins)}
+                onChange={(v) => updateBubbleMins(v === "bar" ? "bar" : Number(v) === 1 ? 1 : 5)}
+              />
+            </PanelSection>
+
+            {/* CB (MVC) lives HERE, not under Levels. The top bubble is
+                already marking the MVC strike, so the CB step line is the
+                same read in line form; it belongs beside the bubbles. */}
+            <PanelSection title="Marker">
+              <PanelChip
+                label="CB line"
+                on={showCb}
+                onClick={() => updateShowCb(!showCb)}
+                title="Central Band (MVC) as a white step line. Same strike the top bubble marks — turn it off if the bubble is enough."
+              />
+            </PanelSection>
+          </div>
+        )}
+        </>
+      ),
+    });
+
+    own.push({
+      id: "chart",
+      label: "Chart",
+      hint: "Timeframe and where the view sits",
+      body: (
+        <>
+          {/* 1m is its own server stream; 5m is the native feed; 15m/30m/1h
+              roll up from the 5m bars client-side (see interval.ts). */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span style={SECTION_LABEL}>Timeframe</span>
+            <SegGroup
+              options={CHART_INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
+              active={String(interval)}
+              onChange={(v) => { const n = Number(v); if (isChartInterval(n)) setInterval_(n); }}
+            />
+          </div>
+          {/* "Latest", not "Now" — the refresh button on the bar reads "↻ Now"
+              (see useRefreshButton), and two controls saying Now while doing
+              different things is the kind of thing you only notice after
+              clicking the wrong one. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span style={SECTION_LABEL}>View</span>
+            <div style={{ display: "flex" }}>
+              <DockButton onClick={scrollToNow} title="Jump to the current candle — keeps your zoom (double-click the chart to re-frame the whole session instead)">
+                <span aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>⇥</span>
+                <span>Latest</span>
+              </DockButton>
+            </div>
+          </div>
+        </>
+      ),
+    });
+
+    own.push({
+      id: "gamma",
+      label: "Gamma",
+      hint: "Which expiry the heatmap reads, and what it counts",
+      body: (
+        <>
+          {/* The expiry list, INLINE. It was a portalled dropdown hanging off a
+              button in this menu — the exact nesting this rail exists to end. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 0 }}>
+            <span style={SECTION_LABEL}>Heatmap expiry</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 216, overflowY: "auto", minWidth: 0 }}>
+        {/* Already-traded expirations are filtered out. The feed's list can
+            still carry them for a while after the roll, and an entry
+            reading "-1DTE" is not a thing anyone wants to pick — it just
+            loads an empty ladder. Sorted ascending so the first row under
+            "Front (live)" is genuinely the next book. */}
+        {[{ value: "", label: `Front${frontExpiry ? ` · ${dayDateOf(frontExpiry)}` : " (live)"}`, sub: frontExpiry ? `${dteOf(frontExpiry)}DTE` : "" },
+          ...expirations
+            .filter((exp) => exp && dteOf(exp) >= 0)
+            .slice()
+            .sort()
+            .map((exp) => ({
+              value: exp, label: dayDateOf(exp), sub: `${dteOf(exp)}DTE`,
+            }))].map((opt) => {
+          const active = selectedExpiry === opt.value;
+          return (
+            <button
+              key={opt.value || "front"}
+              onClick={() => { setSelectedExpiry(opt.value); saveSetting({ expiry: opt.value }); }}
+              className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs"
+              style={{ borderRadius: 8, border: active ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent", background: active ? DOCK_THEME.activeTile : "transparent", color: active ? HOME_THEME.cyan : HOME_THEME.text }}
+              onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
+              onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
+            >
+              <span className="font-mono font-semibold">{opt.label}</span>
+              <span style={{ color: HOME_THEME.muted, opacity: 0.5 }}>{opt.sub}</span>
+            </button>
+          );
+        })}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 4 }}>
+            <span style={SECTION_LABEL}>GEX basis</span>
+            <SegGroup
+              options={[{ label: "Vol+OI", value: "voloi" }, { label: "Vol", value: "vol" }]}
+              active={gexMetric}
+              onChange={(v) => { setGexMetric(v as typeof gexMetric); saveSetting({ metric: v }); }}
+            />
+          </div>
+        </>
+      ),
+    });
+
+    // The page's CANDLES toolbar owns Replay when there is one, so the card
+    // drops its own rather than offering two switches for one piece of state.
+    // The home embed has no page toolbar and keeps it.
+    if (!hostedReplay) {
+      own.push({
+        id: "replay",
+        label: "Replay",
+        hint: "Step through the session from the open",
+        body: (
+          <div style={{ display: "flex" }}>
+            <DockButton
+              onClick={() => {
+                if (replayOn) { exitReplay(); return; }
+                // Inert entry — see replayEngaged. Opening the transport leaves
+                // the chart live and refetches nothing.
+                setReplayOn(true);
+                setReplayPlaying(false);
+                setReplayEngaged(false);
+                setReplayIdx(0);
+              }}
+              title="Replay this session — reveal candles + gamma from the open forward"
+              style={{ color: replayOn ? HOME_THEME.cyan : undefined }}
+            >
+              <span>Replay</span>
+            </DockButton>
+          </div>
+        ),
+      });
+    }
+
+    // Merge the route's sections with this card's and put them in reading
+    // order. Sorting by a declared order rather than by concatenation means
+    // neither side has to know what the other contributed.
+    const ORDER = ["page", "indicators", "overlays", "chart", "gamma", "layout", "replay"];
+    return [...(pageSections ?? []), ...own]
+      .sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
+  })();
+
   const dock = !dockWanted ? null : (
       // pt-2, and the page's mount point contributes NO padding of its own —
       // the two were stacking into ~24px of empty bar above the toolbar.
@@ -5486,6 +5744,14 @@ function EsChartCard({
             )}
           </div>
 
+          {/* Page-owned buttons ride ON the bar, not in the cog.
+              Everything the route hands down here is a MODE or an ACTION — the
+              Replay toggle on /es-candles, the GEX-rail toggle in the /home and
+              /board embeds — and those are the two things that should never be
+              two clicks deep. The route's SETTINGS come down as `pageSections`
+              and live in the cog's rail with everything else. */}
+          {toolbarExtras}
+
           {/* Symbol picker — ES / SPY / QQQ, favorites persisted per browser.
               ON THE BAR, not in the cog. It is the single most-changed control
               on this page and the one that renames everything else on it, so
@@ -5519,311 +5785,12 @@ function EsChartCard({
             <span data-capture-hide><BoxDiscordBtn targetRef={captureRef} label={`${sym.label} ${INTERVAL_LABEL[interval]} Candles`} /></span>
           </>)}
 
-          <DockCogMenu title="Candles" buttonTitle="Chart settings" width={340}>
-
-          {/* Charts / Replay / Indicators. Rendered by the PAGE (it owns chart
-              count, the replay command and the indicator blob) but living in
-              THIS cog, because two stacked toolbars for one chart is one toolbar
-              too many. Only a dock-rendering card ever shows them, so the
-              ticker-only cards in a shared row can't duplicate the set. */}
-          <DockMenuRow label="Page" stack>{toolbarExtras}</DockMenuRow>
-
-          {/* Overlays checklist dropdown (was 6 inline tiles — overflowed the dock).
-              Sits with the page's Charts / Replay / Indicators / Layout group, NOT
-              down by the DTE picker where it used to live: it answers "what is
-              drawn on this chart", same as Indicators, so it reads as part of that
-              cluster rather than as another gamma setting. It stays a CARD control
-              rather than moving into toolbarExtras because the page cannot own it —
-              every toggle below is per-card state persisted into this slot's blob,
-              so three cards in a row each carry their own overlay set. */}
-          <DockMenuRow label="Overlays">
-          <div ref={ovlBoxRef} style={{ flexShrink: 0 }}>
-            <DockButton onClick={openOvl} title="Chart overlays">
-              <span>Overlays</span>
-              {(() => {
-                const n = [showHeatmap, showProfile, showTpo, showLevels, showSessions, showGexBubbles, showFlipCross].filter(Boolean).length;
-                return n ? (
-                  <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 6px", borderRadius: 999, background: DOCK_THEME.activeTile, border: `1px solid ${DOCK_THEME.activeBorder}`, color: HOME_THEME.cyan }}>{n}</span>
-                ) : null;
-              })()}
-              <span style={{ opacity: 0.5, transform: ovlOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
-            </DockButton>
-          </div>
-          {ovlOpen && ovlRect && createPortal(
-            <div
-              ref={ovlMenuRef}
-              style={{
-                position: "fixed", left: ovlRect.left, top: ovlRect.top,
-                // Explicit width + border-box: `w-56` set a CONTENT width, so the
-                // 6px padding pushed the real box to 236px while children sized
-                // themselves to 224 — part of why content sat past the border.
-                width: OVL_PANEL_W, maxWidth: `calc(100vw - ${OVL_VIEWPORT_PAD * 2}px)`,
-                boxSizing: "border-box",
-                // Scroll the body rather than overflow it on a short screen.
-                maxHeight: ovlRect.maxH, overflowY: "auto", overflowX: "hidden",
-                borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`,
-                background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)",
-                boxShadow: DOCK_THEME.shadow, zIndex: 100000, padding: 6,
-              }}
-            >
-              {/* Two columns. Eight one-per-row toggles left the top half of this
-                  menu mostly whitespace and pushed the sub-controls off-screen on
-                  short viewports; the labels are all short enough to pair up. */}
-              <div style={{
-                // minmax(0,·) NOT 1fr: a plain `1fr` track carries an implicit
-                // min-width:auto, so it refuses to shrink below the widest chip's
-                // min-content and the grid overflows the panel instead. Renaming
-                // PDH/ON -> PDH/ON+EM is what pushed it over on a laptop.
-                display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 3, minWidth: 0,
-              }}>
-              {/* Each toggle persists into THIS card's slot blob, so three cards
-                  can carry three different overlay sets across a reload. The
-                  `!on` is computed here rather than inside a state updater so the
-                  write happens once, not once per StrictMode double-invoke. */}
-              {([
-                { label: "Heatmap", on: showHeatmap, toggle: () => { setShowHeatmap(!showHeatmap); saveSetting({ ovHeatmap: !showHeatmap }); } },
-                { label: "Profile", on: showProfile, toggle: () => { setShowProfile(!showProfile); saveSetting({ ovProfile: !showProfile }); } },
-                { label: "TPO", on: showTpo, toggle: () => { setShowTpo(!showTpo); saveSetting({ ovTpo: !showTpo }); } },
-                { label: "Levels", on: showLevels, toggle: () => { setShowLevels(!showLevels); saveSetting({ ovLevels: !showLevels }); } },
-                { label: "PDH/ON+EM", on: showSessions, toggle: () => { setShowSessions(!showSessions); saveSetting({ ovSessions: !showSessions }); } },
-                { label: "Bubbles", on: showGexBubbles, toggle: () => updateShowBubbles(!showGexBubbles) },
-                { label: "Flip X", on: showFlipCross, toggle: () => { setShowFlipCross(!showFlipCross); saveSetting({ ovFlipCross: !showFlipCross }); } },
-              ] as const).map((o) => (
-                <PanelChip key={o.label} label={o.label} on={o.on} onClick={o.toggle} />
-              ))}
-              </div>
-
-              {/* Sub-controls only make sense when their overlay is on.
-                  SLIDER_LABEL_W is shared by every slider below so the labels,
-                  tracks, values and steppers line up as real columns across the
-                  sections instead of each row sizing itself to its own label. */}
-              {showHeatmap && (
-                <div style={{ marginTop: 7, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  <PanelSection title="Heatmap range" first>
-                    <SegGroup
-                      options={[{ label: "1D", value: "1" }, { label: "2D", value: "2" }]}
-                      active={String(heatmapDays)}
-                      onChange={(v) => { const d = Number(v) === 2 ? 2 : 1; setHeatmapDays(d); saveSetting({ heatmapDays: d }); }}
-                    />
-                  </PanelSection>
-                  {/* Moved out of the dock. It is a heatmap setting, it only does
-                      anything while the heatmap is on, and it was the last lonely
-                      slider sitting in a toolbar otherwise made of buttons and
-                      segmented pickers — so it now lives with the overlay it
-                      belongs to, and disappears with it. */}
-                  <PanelSection title="Heatmap brightness">
-                    <DockSlider
-                      label="intensity" labelWidth={SLIDER_LABEL_W} width="auto"
-                      value={intensity} min={0.1} max={1} step={0.05}
-                      format={(v) => `${Math.round(v * 100)}%`}
-                      onChange={(v) => { setIntensity(v); saveSetting({ intensity: v }); }}
-                      title="How hot the gamma cells burn against the candles"
-                    />
-                  </PanelSection>
-                </div>
-              )}
-              {showGexBubbles && (
-                <div style={{ marginTop: 7, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  {/* Four sliders, not seven. Contrast / Max / Brightness are
-                      gone: they were CORRECTIONS, moved because the chart was
-                      coming out wrong, and the scale they were correcting is
-                      absolute now (see slotStore's size law). These four are
-                      QUESTIONS — how much of the board do you want on screen,
-                      how loud should it sit against the candles, how much room
-                      may the marks take, and how hard should the top pull away
-                      — and questions have no correct answer to hardcode.
-
-                      `size` scales the whole ladder at once, so the ratio
-                      between the wall and the fifth strike is identical at 0.4x
-                      and at 4x. `top` is the one control that changes that
-                      ratio, and it does it by steepening the curve rather than
-                      by handing ranked strikes a bonus — so the mark still means
-                      |net GEX| and nothing else, and the ladder stays rankable
-                      by eye. At its default ("flat") the law is exactly the
-                      straight-proportional one it has always been. */}
-                  <PanelSection title="Bubbles" first>
-                    <DockSlider
-                      label="levels" labelWidth={SLIDER_LABEL_W} width="auto"
-                      value={bubbleLevels}
-                      min={BUBBLE_LEVELS_RANGE.min} max={BUBBLE_LEVELS_RANGE.max} step={1}
-                      format={(v) => v.toFixed(0)}
-                      onChange={(v) => updateBubbleLevels(v)}
-                      title="How many strikes draw per column, ranked by their peak |GEX| across the whole session — so a level keeps its trail even after it drops out of the current top N"
-                    />
-                    <DockSlider
-                      label="size" labelWidth={SLIDER_LABEL_W} width="auto"
-                      value={bubbleSize}
-                      min={BUBBLE_SIZE_RANGE.min} max={BUBBLE_SIZE_RANGE.max} step={0.05}
-                      format={(v) => `${v.toFixed(2)}×`}
-                      onChange={(v) => updateBubbleSize(v)}
-                      title="Scales the whole ladder at once — the ratio between the wall and the smallest strike is identical at every setting. At or below 1.00× marks are guaranteed never to touch; above it they may overlap, which is the trade for bigger marks on a tight chart"
-                    />
-                    <DockSlider
-                      label="top" labelWidth={SLIDER_LABEL_W} width="auto"
-                      value={bubbleCurve}
-                      min={BUBBLE_CURVE_RANGE.min} max={BUBBLE_CURVE_RANGE.max} step={0.05}
-                      format={(v) => (v <= 1.001 ? "flat" : `${v.toFixed(2)}`)}
-                      onChange={(v) => updateBubbleCurve(v)}
-                      title="How hard the biggest levels pull away from the rest. At 'flat' the radius is straight proportional to |net GEX|. Turning it up steepens the scale — the top strikes keep the full size budget while the wings shrink under them — so the dominant levels dominate without everything growing together. Monotonic at every setting: more gamma is always a bigger mark"
-                    />
-                    <DockSlider
-                      label="intensity" labelWidth={SLIDER_LABEL_W} width="auto"
-                      value={bubbleIntensity}
-                      min={BUBBLE_INTENSITY_RANGE.min} max={BUBBLE_INTENSITY_RANGE.max} step={0.05}
-                      format={(v) => `${Math.round(v * 100)}%`}
-                      onChange={(v) => updateBubbleIntensity(v)}
-                      title="Overall opacity of the bubble layer. The magnitude gradient runs underneath it, so turning this down dims the wings and the wall together rather than flattening one into the other"
-                    />
-                  </PanelSection>
-
-                  {/* "Bar" = one bubble column per candle, and it's the default:
-                      a fixed 5m bucket stacks twelve columns inside a 1h candle
-                      and merges them back into the solid rail the bucket exists
-                      to prevent. 1m/5m stay for sub-bar detail on a 15m+ chart. */}
-                  <PanelSection title="Bucket">
-                    <SegGroup
-                      options={[{ label: "Bar", value: "bar" }, { label: "1m", value: "1" }, { label: "5m", value: "5" }]}
-                      active={String(bubbleMins)}
-                      onChange={(v) => updateBubbleMins(v === "bar" ? "bar" : Number(v) === 1 ? 1 : 5)}
-                    />
-                  </PanelSection>
-
-                  {/* CB (MVC) lives HERE, not under Levels. The top bubble is
-                      already marking the MVC strike, so the CB step line is the
-                      same read in line form; it belongs beside the bubbles. */}
-                  <PanelSection title="Marker">
-                    <PanelChip
-                      label="CB line"
-                      on={showCb}
-                      onClick={() => updateShowCb(!showCb)}
-                      title="Central Band (MVC) as a white step line. Same strike the top bubble marks — turn it off if the bubble is enough."
-                    />
-                  </PanelSection>
-                </div>
-              )}
-            </div>,
-            document.body
-          )}
-
-          </DockMenuRow>
-
-          <DockMenuDivider />
-
-          {/* Symbol picker is NOT here — it moved out onto the bar itself, next
-              to Refresh. See the note at that call site. Deliberately not
-              duplicated into the cog: two controls for one ticker means the
-              closed one goes stale-looking the moment you use the other. */}
-
-          {/* Timeframe. 1m is its own server stream; 5m is the native feed;
-              15m/30m/1h roll up from the 5m bars client-side (see interval.ts). */}
-          <DockMenuRow label="Timeframe" stack>
-            <SegGroup
-              options={CHART_INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
-              active={String(interval)}
-              onChange={(v) => { const n = Number(v); if (isChartInterval(n)) setInterval_(n); }}
-            />
-          </DockMenuRow>
-
-          {/* Back to the forming candle.
-              "Latest", not "Now" — the refresh button further down this same
-              menu already reads "↻ Now" (see useRefreshButton), and two controls
-              saying Now while doing different things is the kind of thing you
-              only notice after clicking the wrong one. */}
-          <DockMenuRow label="View">
-            <DockButton onClick={scrollToNow} title="Jump to the current candle — keeps your zoom (double-click the chart to re-frame the whole session instead)">
-              <span aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>⇥</span>
-              <span>Latest</span>
-            </DockButton>
-          </DockMenuRow>
-
-          <DockMenuDivider />
-
-          {/* DTE dropdown */}
-          <DockMenuRow label="Heatmap expiry">
-          <div ref={dteBoxRef} style={{ flexShrink: 0 }}>
-            <DockButton onClick={openDte} title="Heatmap expiry / DTE">
-              <span style={{ fontVariantNumeric: "tabular-nums" }}>{selectedExpiry ? dayDateOf(selectedExpiry) : "Front"}</span>
-              <span style={{ opacity: 0.5, transform: dteOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
-            </DockButton>
-          </div>
-          {dteOpen && dteRect && createPortal(
-            <div
-              ref={dteMenuRef}
-              className="max-h-72 w-48 overflow-y-auto py-1"
-              style={{ position: "fixed", left: dteRect.left, top: dteRect.top, borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", boxShadow: DOCK_THEME.shadow, zIndex: 100000, padding: 6 }}
-            >
-              {/* Already-traded expirations are filtered out. The feed's list can
-                  still carry them for a while after the roll, and an entry
-                  reading "-1DTE" is not a thing anyone wants to pick — it just
-                  loads an empty ladder. Sorted ascending so the first row under
-                  "Front (live)" is genuinely the next book. */}
-              {[{ value: "", label: `Front${frontExpiry ? ` · ${dayDateOf(frontExpiry)}` : " (live)"}`, sub: frontExpiry ? `${dteOf(frontExpiry)}DTE` : "" },
-                ...expirations
-                  .filter((exp) => exp && dteOf(exp) >= 0)
-                  .slice()
-                  .sort()
-                  .map((exp) => ({
-                    value: exp, label: dayDateOf(exp), sub: `${dteOf(exp)}DTE`,
-                  }))].map((opt) => {
-                const active = selectedExpiry === opt.value;
-                return (
-                  <button
-                    key={opt.value || "front"}
-                    onClick={() => { setSelectedExpiry(opt.value); saveSetting({ expiry: opt.value }); setDteOpen(false); }}
-                    className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs"
-                    style={{ borderRadius: 8, border: active ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent", background: active ? DOCK_THEME.activeTile : "transparent", color: active ? HOME_THEME.cyan : HOME_THEME.text }}
-                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
-                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
-                  >
-                    <span className="font-mono font-semibold">{opt.label}</span>
-                    <span style={{ color: HOME_THEME.muted, opacity: 0.5 }}>{opt.sub}</span>
-                  </button>
-                );
-              })}
-            </div>,
-            document.body
-          )}
-          </DockMenuRow>
-
-          <DockMenuDivider />
-
-          {/* GEX metric */}
-          <DockMenuRow label="GEX basis" stack>
-            <SegGroup
-              options={[{ label: "Vol+OI", value: "voloi" }, { label: "Vol", value: "vol" }]}
-              active={gexMetric}
-              onChange={(v) => { setGexMetric(v as typeof gexMetric); saveSetting({ metric: v }); }}
-            />
-          </DockMenuRow>
-
-          {/* (The heatmap `intensity` slider used to sit here. It moved into
-              Overlays → Heatmap brightness — it only does anything while the
-              heatmap is on, so it belongs with the overlay that owns it.) */}
-
-          {/* The page's CANDLES toolbar hosts this button when there is one, so
-              the card drops its own rather than offering two switches for one
-              piece of state. The home embed has no page toolbar and keeps it. */}
-          {!hostedReplay && (
-            <DockMenuRow label="Replay">
-            <DockButton
-              onClick={() => {
-                if (replayOn) { exitReplay(); return; }
-                // Inert entry — see replayEngaged. Opening the transport leaves
-                // the chart live and refetches nothing.
-                setReplayOn(true);
-                setReplayPlaying(false);
-                setReplayEngaged(false);
-                setReplayIdx(0);
-              }}
-              title="Replay this session — reveal candles + gamma from the open forward"
-              style={{ color: replayOn ? HOME_THEME.cyan : undefined }}
-            >
-              <span>Replay</span>
-            </DockButton>
-            </DockMenuRow>
-          )}
-
-          </DockCogMenu>
+          <DockCogMenu
+            title="Candles"
+            buttonTitle="Chart settings"
+            sections={cogSections}
+            width={560}
+          />
         </Dock>
         </FitScale>
       </div>

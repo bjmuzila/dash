@@ -1759,11 +1759,10 @@ function OverviewSection({ metrics, gran }: {
           (entry rows) are its denominator, never pageviews. */}
       <AcquisitionPanel rows={visits} />
 
-      {/* …and the other half of the loop: the builder that MAKES the tagged
-          links whose results the panel above reports. It sits directly under
-          the campaign table on purpose — the sources and campaign names it
-          offers as chips are read out of that same log, so reusing a spelling
-          you can see performing is one click. */}
+      {/* …and the other half of the loop: the short links that FEED the campaign
+          table above. It sits directly under that table on purpose — the push
+          names it offers as chips are read out of the same log, so reusing a
+          name you can see performing is one click. */}
       <CampaignLinkBuilder rows={visits} />
 
       {/* Visitor choropleth moved to its own /owner/visitors page — the d3

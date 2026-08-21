@@ -1,328 +1,179 @@
 # Changelog
 
-## 2026-08-21 (t) - ΔGEX Board: Open Card - the five morning levels on one strip, with an SPX→ES offset
-
-Edited: `owner-vite/src/pages/GexGrowth.tsx`.
-
-The board answered "what changed overnight" well and "where are today's rails"
-not at all - the call wall, the gamma flip, the cushion and the regime were four
-separate tiles inside a collapsible Read panel, three scrolls apart, and nobody
-assembles those at 09:25. **Open Card** is a single strip at the top of the
-detail pane that prints the five numbers you write down before the bell.
-
-**Placement is the point.** It sits ABOVE the big headline number, because that
-headline is a Δ and a Δ is the morning's *second* question. Reading order on the
-pane is now: which symbol → where the levels are → what moved → the evidence.
-
-**The five tiles.** Call wall / gamma flip / put wall, each with its distance
-from spot in both points and percent; cushion (signed points spot→flip, with the
-prior session's for comparison); regime (word plus the net). All of it comes off
-the same `analyzeLadder()` whole-ladder pass the Read panel uses, so the ±3%/±5%
-band cannot move a single figure on the card - same guarantee, same reason: a
-wall is a property of the book, not of the rows on screen.
-
-**Verdict line is a MECHANISM, not a call.** `SPOT IN DAMPEN` / `SPOT IN AMPLIFY`
-plus the sentence about what dealer hedging does there - reusing the exact
-wording of `StructuralRange`'s zone tooltips so the two surfaces cannot drift.
-This follows the rule `regimeCopy()` already sets out in its header comment: the
-page says what the dealer book does, never what to trade. Zone prefers the
-measured flip and falls back to the sign of the book when the cumulative never
-crosses inside the window - flagged as inferred, not presented as a located line.
-
-**SETTLED / PROVISIONAL is the first chip on the strip.** On the `oi` basis the
-open-interest half is re-stamped at 09:25 ET off the settled OCC file; before
-that it is still the provisional 16:05 read, settled through the session BEFORE
-last night. A map built on it is a day stale and *looks right*, which is the
-expensive kind of wrong. On any other basis the card carries an
-`OI ONLY IS THE MORNING BASIS` chip - a provenance nudge, not a trade nudge.
-
-**SPX→ES offset.** The strikes are SPX cash. Drawing a cash strike straight onto
-an ES chart mis-places every level by the spread, silently. A signed points field
-in the card header (`ES = SPX + offset`) prints each landmark's futures-adjusted
-twin under the cash number in gold. Nothing here streams ES so it is entered by
-hand, and it is persisted to `localStorage` - a number you retype every morning
-is a number you eventually stop typing. Kept as the raw string, not parsed on
-each keystroke, so a half-typed `-` or `1.` survives.
-
-**`copy` button** emits the whole card as monospace-aligned plain text (symbol,
-session, basis, freshness, the five numbers, the ES row) for a journal or a chat.
-
-Toggled by a new **Open Card** button beside **Read** in the control row, on by
-default, state persisted. Both `localStorage` helpers are try/catch-wrapped on
-*access* as well as write - hardened profiles throw on `getItem`, and the card
-must never be the reason the page fails to render. Without a recorded spot it
-renders one honest line instead of a grid of dashes.
-
-**Fixed while in there: the footer legend was lying.** It hardcoded
-`OI+Vol basis` on every basis since the migration, putting it in direct
-contradiction with the caveat strip at the top of the same card. It now reads
-`BASIS_COPY[basis].name` (plus the leg when not net). With the Open Card also
-printing its own provenance, a third surface asserting the wrong one was a
-straight defect.
-
-## 2026-08-21 (s) - ES Candles: cog menu fixed, panels fly out of it, replay transport docked to the bottom of the page
-
-Edited: `components/pages/EsCandles.tsx`,
-`components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/LayoutPresetButton.tsx`,
-`components/shared/DockToolbar.tsx`, `app/es-candles/page.tsx`.
-
-> The live ES Candles page is **`components/pages/EsCandles.tsx`** (what
-> `app-vite/src/App.tsx` lazy-imports at `/app/es-candles`), not
-> `app/es-candles/page.tsx`. The two layout fixes went into both so the Next
-> fallback copy does not drift.
-
-Everything below has one root cause: the page's **Charts / Replay / Indicators /
-Layout** buttons were folded into the chart cog's 340px menu, and nothing that
-hangs off those buttons was ever adjusted for being launched from inside a
-popover.
-
-**1. The Page row was cut off.** `toolbarButtons` was an `inline-flex` container
-with `flexShrink: 0` and no wrapping. **Layout**, the last button, hung off the
-menu's right edge as "Lay...", clipped and unclickable. Both the outer row and
-the inner `popBtnsRef` group are now `flexWrap: "wrap"` + `minWidth: 0` /
-`maxWidth: "100%"`, so the row folds to a second line in the cog and still lays
-out on one line anywhere wide enough (the home embed, the /board tile).
-
-**2. Everything opened BEHIND the menu it was opened from.** `DockCogMenu`'s
-portalled panel sits at `zIndex: 100000`. The page's Charts / Indicators panel
-was at 60 and the Layout preset list at 200, so both drew underneath it - the
-buttons looked dead, or you got a sliver hanging off the menu's left edge. Both
-are now `zIndex: 100001`. They still count as "inside" for
-`DockCogMenu.inFloatingLayer` (threshold 50), so using either does not slam the
-cog shut, and only one of the three can be open at a time so they never fight.
-
-**3. Charts / Indicators / Layout now FLY OUT of the cog** instead of appearing
-somewhere else on the page. Each measures its nearest `[role="menu"]` ancestor
-and, when it finds one with room to its left, pins its right edge 8px off the
-menu's left edge and top-aligns with the menu - so the menu reads as expanding
-sideways. Without a cog ancestor (a dock wide enough to carry the buttons, or a
-host that embeds them) both fall back to exactly the old behaviour: a full-width
-band under the buttons. New `PANEL_MAX_W = 820` caps the flyout at the width
-where EMA+Bollinger take the first line and Levels+Study the second.
-
-**4. `maxHeight` is measured, not guessed.** `top` comes off buttons that can
-sit most of the way down the screen; the panel now takes "whatever is left below
-`top`" (capped at 620) instead of a flat `min(60vh, 520px)` that ran off the
-bottom edge with its scrollbar.
-
-**Replay is no longer a popover - it is a dock at the bottom of the page.**
-The transport used to be portaled into the same hovering menu as Charts and
-Indicators: a control surface you drive continuously (scrub, step, play) sitting
-in a panel that closes when you click away, directly on top of the chart it is
-scrubbing. `Popover` lost its `"replay"` member; the transport now mounts in a
-bar at the bottom of the page column for exactly as long as the replay runs,
-keyed off `replayRunning`. Consequences worth stating:
-
-- "Is the panel open" and "is a replay running" are now the same fact, so the
-  frozen-chart-behind-a-closed-panel state the old close-exits-replay rule was
-  written to prevent is unrepresentable. `toggleReplay` is a plain on/off.
-- Opening Indicators mid-replay no longer costs you the transport.
-- The bar is in flow, not `fixed`, so it never covers the last inch of candles.
-  It mounts and unmounts twice per replay, so that is two time-scale rebuilds.
-- The Replay button lost its `caret` - it does not open a panel beside itself
-  any more.
-
-**✕ on the replay bar.** Pinned right, calls the same `exitReplay` as "● Live".
-Deliberately outside the `replayFrames.length === 0` ternary: that branch renders
-one sentence and no controls, so on a day with no RTH prints the transport had
-no exit at all short of stepping to another session first.
-
-Comment in `DockToolbar.tsx` describing the `inFloatingLayer` z-index threshold
-updated - it still claimed the ES-candles panel sits at 60.
-
-## 2026-08-21 (r) - Contracts tab: contract modal restyled to the probe card
-
-Edited: `owner-vite/src/pages/Results.tsx`.
-
-The per-contract modal on the Contracts tab of `/owner/results` now reads the
-same way a `/owner/probe` card does. All of the prose was pulled out.
-
-- Added the probe card's headline: the percent move in big mono type, then the
-  `IN $4.15 -> NOW $10.35 - +$570/ct` line underneath, colored by direction.
-- Stat values are terse, not sentences. `Walk` is the step count (`0`), no
-  longer "0 - the CB itself cleared the floor". `Close` on a held position is
-  `open`, no longer "held - still open". `Entry` on a skip is `not taken`,
-  with the reason left to the Not-taken block. `CB target` -> `CB`,
-  `Closest to CB` -> `Dist`. The dollar figure moved out of `P/L` into the
-  headline so it is stated once.
-- The footnote paragraph about dxLink / probe-rest / TastyTrade history is
-  replaced by the probe card's one-line chart hint:
-  `Option price (mark) - RTH only - entry @ $4.15`.
-- Metric toggle `Dist to CB` -> `Dist`. Header subline drops "0DTE",
-  "checkpoint" and the duplicated date.
-- Same trimming on the last-poll error strip, the Not-taken block, the load
-  states and the contract-cell tooltip.
-
-No data, fetch or chart logic changed - `CbProbeChart` and `/api/cb-trades` are
-untouched.
-
-## 2026-08-21 (q) - Notes drawer: owner-only "Quick Probe"; bolder probe snapshot
-
-Added: `components/shared/QuickProbe.tsx`.
-Edited: `components/shared/NotesDock.tsx`, `owner-vite/src/pages/Probe.tsx`.
-
-### Quick Probe in the Notes drawer
-
-The Notes drawer (right-side dock on the universal toolbar) now opens with a
-**QUICK PROBE** card above the note list, expanded by default and collapsible
-when the note list needs the room. It is owner chrome only - gated on
-`useIsOwner()`, so it renders nothing and fetches nothing for a customer.
-
-Four fields: **ticker**, **expiration**, **strike**, **call / put**. Ticker is a
-free-text symbol box; committing it (blur or Enter) loads that symbol's expiry
-list from `/api/expirations` into the expiration dropdown (falls back to a plain
-date input if the symbol lists none). Strike is numeric; the side is a two-button
-Call/Put toggle.
-
-**Probe writes the contract onto the owner probe list** - it does NOT navigate
-anywhere. It posts the identical payload `/owner/probe`'s own Add button posts:
-
-    POST /api/watch { action: "add", ticker, expiry, strike, side }
-
-No `addedPrice` is sent, so the route captures the live mark as the entry basis
-(`/proxy/probe-rest`), and the server-side recorder starts filling that row's
-price history during RTH exactly as if it had been typed on the probe page. The
-row is simply there next time /owner/probe is opened. Strike clears on success
-so the next probe on the same symbol/expiry is one number and Enter.
-
-That route is registered `auth: 'owner'` in `api-router.js`, so the write is
-gated server-side, not merely hidden: `useIsOwner` decides whether the card is
-DRAWN, `/api/watch` decides whether the write is allowed. `/api/expirations` is
-the card's only other request - the same route the customer chain surfaces
-already call. No new endpoint, no proxy change.
-
-In `NotesDock` the section is capped at 62% height and scrolls, so an open card
-can't push the note list out of the dock on a short window.
-
-### Probe page: heavier type
-
-The copied PNG (`captureProbeCard`) was thin where it matters on a Discord-sized
-image - the expiration, the IN -> NOW line and the footer hint were all
-unweighted mono. Ticker 26->28px, side badge 700/15->800/17, expiration
-13->700/15, the IN/NOW line 15->700/16, the $/ct 700->800/16, the footer hint
-12->700/13 at 0.92 alpha instead of 0.75.
-
-Same pass over the chart SVG (which is what gets rasterized into that PNG):
-every label - gridline prices, ENTRY / EXIT tags, the H/L markers, both time-axis
-ends, the hover tooltip's timestamp - is now `fontWeight={700}`, with ENTRY/EXIT
-up 11->12px. On the page itself the row subtitle went muted-400 -> 700 at 0.82
-text color, and the price column 400 -> 700 with 800 on its little labels.
-
-## 2026-08-21 (p) - 0DTE chain: AM-settled monthly no longer poisons GEX/DEX
-
-Edited: `server-v2/proxy-tastytrade.js`.
-
-On a monthly-expiration Friday TastyTrade returns the AM-settled monthly (root
-`SPX`) and the PM-settled weekly (root `SPXW`) under ONE `/option-chains` query,
-on the SAME expiration date, at the SAME strikes. Nothing downstream separated
-them:
-
-- `GexFeed._activeContracts()` filters on expiration only -> BOTH roots were
-  subscribed to dxLink.
-- `computeGexRows()` groups by strike alone (`byStrike.get(strike)[side] = row`)
-  -> last write wins, so whichever root TT happened to return last silently
-  owned every colliding strike.
-- `fetchChainFull()` keys its nested strike map by `String(strike)` -> same race.
-
-The AM contract settles at the OPEN, so from 09:30 ET its OI is frozen and its
-greeks are dead - but monthly OI is huge, so a strike it won was reporting
-GEX/DEX off a settled contract.
-
-`fetchChain()` now runs a new `preferPmSettlement()` over its contract list:
-for each `(expiration, strike, type)` key with more than one contract, the PM
-leg wins (explicit `PM` > unlabelled > explicit `AM`), order-independent. Keys
-with a single contract are untouched, and when nothing collides the original
-array is returned by reference - every non-index ticker and every non-monthly
-SPX date is byte-for-byte unchanged. A one-line `[CHAIN] ... dropped N
-AM-settled duplicate legs` log fires only when it actually drops something.
-
-The two places that had grown their own collision workarounds - `probeRestTT()`
-(prefer the root the user typed) and `_statsFromTT()` (keep whichever root
-actually traded) - are kept as safety nets, with comments updated to say they
-are no longer the primary defence. Typing `SPX` on a monthly Friday now resolves
-to the live SPXW leg, which is intended.
-
-Not changed: the home page DEX tile still sums the whole subscribed chain
-(+/-8% of spot) while the heatmap column renders only +/-20 strikes around ATM,
-so the tile legitimately reads far more positive than the visible column -
-deep-ITM call delta below the window dominates. That is a scope/labelling
-question, not this bug.
-
-## 2026-08-21 (o) - Level Log: wall migration chart rebuilt to match the post-market one
-
-Edited: `components/pages/LevelLog.tsx`.
-
-The Level Log's Wall migration chart had drifted into its own thing — a squat
-172px body on the fixed 09:29->16:00 rail, hour gridlines behind it, a
-per-capture tick on every spot sample, hi/lo price labels floated over the plot
-and an uppercase legend pill row crowding the title. Full width, that read as a
-band of blocks, nothing like the same chart on Premarket -> Post-Market.
-
-It is now the post-market `WallChart`'s drawing, point for point:
-
-- 190px body, 8px pad (post-market's numbers).
-- X spans the recorded samples edge to edge instead of the fixed session rail,
-  so a half-recorded day fills the card rather than drawing half a chart beside
-  dead space. New `slotClock()` turns a slot back into ET wall-clock.
-- Gridlines, per-capture spot ticks and the hi/lo overlay labels are gone. Spot
-  is one continuous 1.5px stroke on top.
-- Legend moved under the head as swatch chips ("CORE - the heavier wall", "the
-  other wall", "spot"), each still carrying its current strike.
-- Three timestamps under the plot (start / mid / end) replace the full hour rail.
-
-Unchanged: the role model (CORE = the heavier wall, OTHER = the lighter one,
-they swap when the dominant side changes), the forward-fill, step-not-slope
-geometry, the corridor fill, the theme tokens (no hardcoded hex) and the caption.
-
-## 2026-08-21 (n) - Options Chain: ticker picker out of the cog, onto the bar
-
-Edited: `components/pages/OptionsChain.tsx`.
-
-Ticker selection is the most-changed control on the chain, and it was sitting a
-click deep in the settings cog. The `Tickers` dropdown, `GO` and `Recent` now
-stand as their own group on the toolbar itself, immediately left of Refresh,
-which likewise stands alone as an action rather than a setting. Bar order:
-
-    identity (stretch) -> ticker / GO / Recent -> refresh -> snapshot -> Discord -> cog
-
-The cog's "Ticker" row is removed; everything else in it is unchanged. The group
-is still hidden when the chain is embedded with a fixed `externalTicker`.
-
-## 2026-08-21 (m) - Multi Greek: 4th ticker input moved onto the card
-
-Edited: `app/mult-greek/MultGreekClient.tsx`.
-
-The 4th panel's ticker box was behind the cog ("4th ticker" row). It is now on
-the panel itself — in that card's header, immediately right of the symbol — so
-swapping the slot is one click on the thing you are changing instead of a trip
-through the menu.
-
-`TickerPanel` takes `editableTicker` / `tickerInput` / `onTickerInputChange` /
-`onCommitTicker`; only index 3 gets them, and only on live data with no pinned
-`tickers` line-up (same conditions the cog row had). The input stops mousedown /
-dblclick / keydown propagation so the header's double-click-to-expand-chain
-gesture and the replay Space shortcut don't fire while typing. Commit is still
-Enter or blur, still persisted to `mg_custom_ticker`.
-
-
-## 2026-08-21 (l) - Refresh comes back out of the cogs onto the bar
-
-Edited: `components/dashboard/GexToolbar.tsx`, `app/home/HomeClient.tsx`,
-`app/mult-greek/MultGreekClient.tsx`, `components/pages/OptionsChain.tsx`,
-`components/dashboard/es-candles/EsChartCard.tsx`.
-
-Refresh is an ACTION, not a setting — folding it into the cog in (i)-(k) buried a
-one-click job behind a menu. It now rides with the other actions on every
-converted bar. Final order everywhere:
-
-    identity / cards (stretch) -> refresh -> snapshot -> Discord -> cog
-
-Five bars changed: the GEX chart toolbar (compact mode), the home heatmap header,
-Multi Greek, Options Chain and the ES Candles dock. The "Data" row each cog had
-been given is gone; Options Chain's Replay kept its own row rather than sitting
-alone in an empty one.
-
+## 2026-08-21 (n) - Campaign tracking: short links, self-tagging emails, outcome-ranked campaign table
+
+New: `app/[source]/[action]/route.ts`, `lib/emails/utm.ts`,
+`owner-vite/src/components/CampaignLinkBuilder.tsx`.
+Edited: `middleware.ts`, `app/api/admin/send-email/route.ts`, `lib/emails/send.ts`,
+`owner-vite/src/pages/Emails.tsx`, `owner-vite/src/components/AcquisitionPanel.tsx`,
+`owner-vite/src/pages/ControlPanel.tsx`.
+
+An untagged link is indistinguishable from someone typing the URL — it lands in
+"Direct". Four pieces close that, and the shape of each is chosen so nobody has
+to remember anything at post time.
+
+### 1. Short links — `cbedge.net/x/click`
+
+A tagged URL is 90 characters of query string. Fine inside an email where nobody
+sees it, wrong everywhere a human reads the link: an X post, a YouTube
+description, a bio. An ugly link gets shortened by someone else's service or
+retyped without the tags, and either way the attribution is gone.
+
+So the tags live server-side now. `/x/click` 302s to
+`/?utm_source=x&utm_medium=social&utm_campaign=post`; the landing page's beacon
+reads the query exactly as if it had been typed, and nothing downstream knows
+the difference.
+
+Standard placements: `x/click` · `x/profile` · `youtube/click` · `tiktok/click`
+· `email/click` · `newsletter/click`, plus `/post`, `/video`, `/bio` aliases.
+A platform is split into post-vs-profile on purpose: a post drives a spike you
+can tie to what you wrote, a bio link trickles forever from people who looked
+you up, and averaging them hides both.
+
+Two optional params keep the common case bare: `?c=gex-thread` names a specific
+push, `?to=/pricing` changes the destination.
+
+**Route shape.** `app/[source]/[action]/route.ts` — a root-level dynamic pair,
+which sounds alarming and isn't. Next resolves static segments first, so every
+real route (`/docs/x`, `/app/m/gex`, `/api/…`) matches its own folder; and
+`action` is checked against a six-verb allowlist, so a near-miss 404s exactly as
+it would have anyway. `?to=` is validated as a same-site path — `//evil` and
+`https://evil` both rejected, because a redirector that forwards anywhere is an
+open redirect and this one is linked from public posts. 302 not 301: a permanent
+redirect is cached by the browser and every proxy between, so re-pointing
+`/x/click` later would never reach anyone who had clicked it once.
+
+**Adding a placement usually needs no code.** An unknown source falls through to
+`utm_medium=referral` under whatever name is typed, so `/hackernews/click` works
+the day it's needed. The table exists only to give regular platforms the right
+medium and a better campaign name than "link".
+
+`middleware.ts` gained one public pattern for these. The verb suffix is what
+keeps it from accidentally opening a real two-segment route — verified against
+`/es-candles`, `/traders-dashboard`, `/app/m/gex`, `/api/chains`, `/owner/dev`.
+
+### 2. Outbound email tags itself (`lib/emails/utm.ts`)
+
+Both send paths rewrite every `<a href>` pointing at our own host to carry
+`utm_source` / `utm_medium=email` / `utm_campaign`.
+
+Five things it will not touch, each a way to break a live email: anything
+containing `{{` (the unsubscribe and promo-code placeholders are swapped AFTER
+this runs — a real URL parser percent-encodes the braces and would ship a dead
+`%7BPROMO_CODE%7D` to the list); unsubscribe links by path, belt-and-braces with
+that; anything already carrying `utm_source`; foreign hosts; and `src=`
+attributes, so the logo and any pixel are untouched.
+
+The rewrite is string surgery, not `new URL().toString()` — round-tripping
+normalises case, ports and percent-encoding, and each of those is a chance to
+break a signed link. Verified against bare `/`, an existing query, both
+unsubscribe routes, both placeholder shapes, a foreign host, a `mailto:`, an
+already-tagged URL, a `#hash`, both quote styles, and `img src`.
+
+### 3. Campaign picker in the composer
+
+A **Broadcast / Newsletter** toggle (that's `utm_source`, so the letter stops
+being lumped in with one-off blasts) plus a campaign field with a live preview of
+the query string the links will carry. Loading a template prefills the campaign
+with the template id — stable across re-sends. Blank is meaningful: the server
+slugs the subject, so a send is never untagged. The response echoes the final
+tag back.
+
+### 4. The campaign table reports outcomes, not clicks
+
+`AcquisitionPanel`'s Campaigns section gained **Signups**, **Paid** and a
+conversion column, sorted by paid → signups → sessions. That ranking answers
+"which push earned customers" rather than "which got clicks", and the two orders
+are routinely different.
+
+The join: an arrival is anonymous by definition, so there is no user id on it to
+match. The index is built over ALL fetched rows — not the selected window, since
+someone can arrive Monday and register Thursday — keyed on the account where we
+have one and the IP where we don't, and a signup counts only if the account's
+`created_at` is at or after the click, with 60s of slack for clock skew. Owner
+clicks excluded. **Attributed, not audited**, and the footnote says so: a shared
+office IP can credit the wrong campaign, a phone switching networks loses the
+link entirely.
+
+### Naming convention
+
+`utm_source` = where you posted it · `utm_medium` = the bucket (`social` /
+`email` / `referral` / `cpc`) · `utm_campaign` = which push. Reuse the same push
+name across platforms or one campaign becomes several rows that can't be
+compared. Everything is slugged lowercase-hyphenated in four places that must
+stay identical: `campaignSlug()` in `lib/emails/utm.ts`, `slug()` in the redirect
+route, `slug()` in the link builder, `slugPreview()` in the composer.
+
+## 2026-08-21 (m) - Levels off the toolbar, onto the Test Lab strip
+
+Edited: `components/shared/GlobalToolbar.tsx`, `components/shared/sectionNav.ts`.
+
+`/levels` (the whole scanner universe's CB / call wall / put wall on one page)
+was holding a top-level toolbar slot for a bench view. It is out of
+`NAV_ITEMS` and into `TESTLAB_SECTION` instead - same arrangement
+`/strike-history` already has:
+
+- `routes` gains `{ href: "/levels", short: "Levels", icon: "🧱" }`, placed in
+  the `scanner` cluster next to Strike History, so it draws as a "Levels ↗"
+  pill in the Test Lab sub-strip. That strip IS the Test Lab page's nav (the
+  page has no header links of its own), so this is the link on the page.
+- `paths` gains `/levels`, which is what makes the Test Lab strip stay on
+  screen once you are on the page - otherwise it would be a one-way trip.
+- The ROUTE is untouched: same `app/levels/page.tsx`, same `<Route>` in
+  `app-vite/src/App.tsx`, still listed in the hamburger (`NavMenu`).
+  `check-routes.mjs` only asserts that toolbar nav items HAVE routes, so
+  dropping one is not something it can fail on.
+- Existing users with `/levels` in their saved toolbar drag order lose it
+  silently - `GexGroupNav` resolves saved hrefs against `NAV_ITEMS` and drops
+  what it cannot find. Saved Test Lab sub-strip orders pick the new pill up the
+  other way, via `reconcile()`.
+
+## 2026-08-21 (l) - Pick Study is owner-only, and its tables sort on click
+
+Edited: `components/scanner/scannerNav.ts`, `components/shared/sectionNav.ts`,
+`components/shared/SectionSubStrip.tsx`, `components/pages/Scanner.tsx`,
+`components/scanner/PickStudyTab.tsx`. Added:
+`components/shared/useIsOwner.ts`, `components/shared/useTableSort.tsx`.
+
+**Pick Study (Scanner -> Study) is hidden from customers.** It is the tuning
+bench for the GEX Change Top ranking - thin buckets, in-sample splits and a
+calibration block that reads "not armed" most of the time - so it is research in
+progress rather than a customer view.
+
+- `TabDef` / `SectionTab` gained an optional `ownerOnly` flag; `pickstudy` sets
+  it. Nothing else in either nav registry changed, so the pill keeps its slot in
+  a saved sub-strip order and flipping the flag back puts it exactly where it
+  was.
+- `SectionSubStrip` skips owner-only pills for everyone else (same `return null`
+  path an unknown id already took, so the fit pass and the drag layout need no
+  changes).
+- `ScannerPage` refuses to render an owner-only tab as well, so a pasted
+  `/scanner?tab=pickstudy` lands on GEX Levels instead. While `/api/auth/me` is
+  still in flight it renders NOTHING rather than falling back - a flash of the
+  wrong tab would also fire that tab's fetches.
+- New `useIsOwner()` collapses the check GlobalToolbar, UserMenu and GexDock
+  each spelled out inline (the `is_owner` claim OR a match against
+  `NEXT_PUBLIC_OWNER_USER_ID`). This is CHROME ONLY - `/proxy/gex-change-top-study`
+  and `/proxy/gex-change-top-calibration` are unchanged and still answer anyone
+  who calls them directly. Gate them server-side if the data itself must not
+  leak.
+
+**Click any column title to sort.** New `useTableSort()` + `<SortTh>` in
+`components/shared/useTableSort.tsx`, wired into both Pick Study tables (bucket
+table and the calibration table, grade-count columns included).
+
+- Cycle is desc -> asc -> off. The third click matters: these tables arrive in a
+  meaningful order (buckets in the feature's own order, grades ranked A+ to F)
+  and that has to be reachable without a reload.
+- Nulls always sink to the bottom in both directions - a missing number is not a
+  small one, and letting "-" win the top of a descending sort is the fastest way
+  to misread one of these tables.
+- Sorting is stable and never mutates the source array. `Holds` sorts as
+  check > cross > blank; `Predicted` sorts by grade rank, not alphabetically, so
+  "A+" cannot land between "A" and "B".
+- The helper is generic and drop-in for the app's other hand-rolled tables: pass
+  the same `th` style the table already uses and it keeps the look, adding the
+  pointer cursor and the direction caret.
 
 ## 2026-08-21 (k) - Cog toolbars for ES Candles, Multi Greek and Options Chain
 

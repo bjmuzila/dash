@@ -1360,9 +1360,11 @@ function CbProbeModal({
   const pnl = n(trade.pnl) ?? (entry != null && n(trade.last_price) != null
     ? Math.round((n(trade.last_price)! - entry) * 100) / 100 : null);
 
-  // Probe-card headline: the same in → now / percent / dollars line the
-  // /owner/probe cards use, priced off the exit fill once there is one.
+  // Headline is the high of day against the entry — what was there to take.
+  // The live/exit mark sits under it on the in → now line.
   const effMark = exitV ?? n(trade.last_price);
+  const peakV = n(trade.best_price);
+  const peakPct = entry != null && peakV != null && entry !== 0 ? ((peakV - entry) / entry) * 100 : null;
   const pct = entry != null && effMark != null && entry !== 0 ? ((effMark - entry) / entry) * 100 : null;
   const dollars = entry != null && effMark != null ? (effMark - entry) * mult : null;
   const px = (v: number | null) => (v == null ? "—" : `$${v.toFixed(2)}`);
@@ -1409,16 +1411,19 @@ function CbProbeModal({
           </button>
         </div>
 
-        {/* Headline, exactly as the probe card states it: percent, then
-            in → now with the dollars per contract. */}
+        {/* Headline is entry → high of day. The in → now line under it is the
+            current (or exited) mark and its own percent. */}
         <div>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 800, lineHeight: 1, color: upDown(pct) }}>
-            {pct == null ? "—" : `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%`}
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 24, fontWeight: 800, lineHeight: 1, color: upDown(peakPct) }}>
+            {peakPct == null ? "—" : `${peakPct >= 0 ? "▲" : "▼"} ${Math.abs(peakPct).toFixed(1)}%`}
           </div>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 14, color: C.label, marginTop: 6 }}>
             <span style={{ color: MUTED, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 3 }}>in</span>{px(entry)}
             <span style={{ color: MUTED, margin: "0 6px" }}>→</span>
             <span style={{ color: MUTED, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 3 }}>{exitV != null ? "sold" : "now"}</span>{px(effMark)}
+            <span style={{ color: upDown(pct) }}>
+              {pct == null ? "" : ` · ${pct >= 0 ? "+" : "−"}${Math.abs(pct).toFixed(1)}%`}
+            </span>
             <span style={{ color: upDown(dollars) }}>
               {dollars == null ? "" : ` · ${dollars >= 0 ? "+" : "−"}$${Math.abs(dollars).toFixed(0)}/ct`}
             </span>
@@ -1429,7 +1434,6 @@ function CbProbeModal({
           {stat("CB", trade.cb_strike != null
             ? `${Number(trade.cb_strike).toFixed(0)}${trade.cb_price != null ? ` @ $${Number(trade.cb_price).toFixed(2)}` : ""}`
             : "—", C.cyan)}
-          {stat("Walk", trade.walk_steps == null ? "—" : String(trade.walk_steps))}
           {stat("Entry", entry != null ? `$${entry.toFixed(2)} · ${etClock(n(trade.entry_ts) ?? 0)}` : "not taken",
             entry != null ? C.label : MUTED)}
           {stat("Peak", trade.best_price != null
@@ -1441,8 +1445,6 @@ function CbProbeModal({
             exitV != null ? AMBER : C.cyan)}
           {stat("P/L", pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}` : "—",
             pnl == null ? MUTED : pnl >= 0 ? GREEN : RED)}
-          {stat("Dist", trade.closest_dist != null ? `${Number(trade.closest_dist).toFixed(1)} pt` : "—")}
-          {stat("Polls", String(trade.polls ?? 0))}
         </div>
 
         {trade.status !== "skipped" && (

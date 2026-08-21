@@ -4,64 +4,56 @@ import { OWNER_THEME as T, ownerRgba, homePanelStyle } from "../lib/theme";
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
- * CAMPAIGN LINK BUILDER — the paste-a-link-somewhere half of attribution.
+ * CAMPAIGN LINKS — the short kind.
  *
- * Email is tagged automatically at send time (lib/emails/utm.ts). Everything
- * else — an X post, a YouTube description, a Discord announcement — is a link
- * typed by hand, and hand-typed UTM strings are where campaign reporting
- * usually dies: `youtube` one week, `YouTube` the next, `yt` the week after,
- * and now one push is three rows that can't be compared.
+ * This used to be a four-field UTM builder that emitted 90-character URLs. That
+ * was the wrong shape for the job: nobody wants to paste
+ * `?utm_source=x&utm_medium=social&utm_campaign=post` into an X post or a
+ * YouTube description. An ugly link gets shortened by someone else's service or
+ * retyped without the tags, and either way the attribution is gone.
  *
- * So this does two things. It builds the URL, and it shows what has ALREADY
- * been used — sources and campaigns pulled live out of the visit log — as
- * clickable chips. Reusing an existing string is one click; inventing a fourth
- * spelling takes deliberate typing. That asymmetry is the whole point of the
- * component.
+ * So the tags moved server-side (app/[source]/[action]/route.ts) and this became
+ * a list of ready-made links to copy: `cbedge.net/x/click`. The redirect adds
+ * the tags on the way through, so the arrival looks identical to a hand-tagged
+ * one on the Acquisition panel.
  *
- * Nothing here is stored. The URL is derived from the fields on every render;
- * the only side effect in the file is the clipboard write.
+ * The panel is a LIST, not a form, because the standard placements are the
+ * answer nine times out of ten and a form makes you re-derive them every time.
+ * The one-off row at the bottom covers the tenth — and it needs no server
+ * change, because an unrecognised source falls through to utm_medium=referral.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-/** One row of /api/page-visits — only the fields this panel reads. */
+/** One row of /api/page-visits — only what the "already used" hints read. */
 export interface CampaignSeedRow {
   utmSource?: string | null;
   utmCampaign?: string | null;
   isEntry?: boolean | null;
 }
 
-const SITE = "https://cbedge.net";
+const SITE = "cbedge.net";
 
-/**
- * Presets are the platforms actually posted to, each carrying the medium that
- * platform's traffic should bucket into. Medium is what the Acquisition panel
- * groups by, so getting it wrong (say `social` on a paid ad) silently moves a
- * campaign into the wrong column — pairing it with the source removes the
- * chance to mismatch them by hand.
- */
-const SOURCE_PRESETS: { source: string; medium: string; label: string }[] = [
-  { source: "x", medium: "social", label: "X" },
-  { source: "youtube", medium: "social", label: "YouTube" },
-  { source: "discord", medium: "social", label: "Discord" },
-  { source: "reddit", medium: "social", label: "Reddit" },
-  { source: "stocktwits", medium: "social", label: "StockTwits" },
-  { source: "newsletter", medium: "email", label: "Newsletter" },
-  { source: "email", medium: "email", label: "Email" },
+/** The placements worth having a permanent link for. Mirrors PLACEMENTS in
+ *  app/[source]/[action]/route.ts — a link here with no row there still works,
+ *  it just reports as a referral instead of social/email. */
+const STANDARD: { path: string; label: string; note: string; tags: string }[] = [
+  { path: "x/click", label: "X post", note: "in a tweet", tags: "x · social · post" },
+  { path: "x/profile", label: "X profile", note: "the link in your bio", tags: "x · social · profile" },
+  { path: "youtube/click", label: "YouTube", note: "video description", tags: "youtube · social · video" },
+  { path: "tiktok/click", label: "TikTok", note: "bio or caption", tags: "tiktok · social · video" },
+  { path: "email/click", label: "Email", note: "pasted into a message by hand", tags: "email · email · link" },
+  { path: "newsletter/click", label: "Newsletter", note: "pasted into the letter by hand", tags: "newsletter · email · link" },
 ];
 
-const MEDIUMS = ["social", "email", "referral", "cpc"];
-
-/** Where the link points. Public pages only — a gated path bounces to /pricing. */
+/** Where the link lands. "/" needs no ?to=, which is what keeps it short. */
 const DESTINATIONS: { path: string; label: string }[] = [
   { path: "/", label: "Landing" },
   { path: "/pricing", label: "Pricing" },
   { path: "/sign-up", label: "Sign up" },
-  { path: "/docs", label: "Docs" },
   { path: "/whats-new", label: "What's New" },
-  { path: "/about-me", label: "About" },
 ];
 
-/** Same rules as campaignSlug() in lib/emails/utm.ts — keep the two identical. */
+/** Same rules as campaignSlug() in lib/emails/utm.ts — keep the three identical. */
 function slug(input: string): string {
   return (input || "")
     .toLowerCase()
@@ -78,8 +70,9 @@ const labelStyle: CSSProperties = {
   textTransform: "uppercase",
   color: T.text,
   opacity: 0.5,
-  marginBottom: 6,
 };
+
+const monoStyle: CSSProperties = { fontFamily: "var(--font-mono), monospace" };
 
 const inputStyle: CSSProperties = {
   background: ownerRgba(T.text, 0.04),
@@ -89,13 +82,11 @@ const inputStyle: CSSProperties = {
   fontSize: 14,
   padding: "7px 10px",
   fontFamily: "inherit",
-  width: "100%",
   minWidth: 0,
+  width: "100%",
 };
 
-function Chip({
-  on, label, title, onClick,
-}: { on?: boolean; label: string; title?: string; onClick: () => void }) {
+function Chip({ on, label, title, onClick }: { on?: boolean; label: string; title?: string; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -114,171 +105,187 @@ function Chip({
 }
 
 export default function CampaignLinkBuilder({ rows }: { rows: CampaignSeedRow[] }) {
-  const [path, setPath] = useState("/");
-  const [source, setSource] = useState("x");
-  const [medium, setMedium] = useState("social");
+  const [dest, setDest] = useState("/");
   const [campaign, setCampaign] = useState("");
+  const [oneOffSource, setOneOffSource] = useState("");
+  const [oneOffCampaign, setOneOffCampaign] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
 
-  // What's already live. Ranked by use so the string you reach for most is
-  // leftmost; capped because this is a memory aid, not a report.
-  const seen = useMemo(() => {
-    const sources = new Map<string, number>();
-    const campaigns = new Map<string, number>();
-    for (const r of rows) {
-      if (!r.isEntry) continue; // attribution only exists on entry rows
-      if (r.utmSource) sources.set(r.utmSource, (sources.get(r.utmSource) ?? 0) + 1);
-      if (r.utmCampaign) campaigns.set(r.utmCampaign, (campaigns.get(r.utmCampaign) ?? 0) + 1);
-    }
-    const rank = (m: Map<string, number>, n: number) =>
-      [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k);
-    return { sources: rank(sources, 8), campaigns: rank(campaigns, 8) };
-  }, [rows]);
+  /**
+   * Build one short link. Query params are added ONLY when they differ from the
+   * redirect's own defaults, which is the whole reason these links stay short:
+   * the common case — landing page, standard campaign — is a bare path.
+   */
+  const build = (path: string, camp: string, to: string): string => {
+    const qs: string[] = [];
+    const c = slug(camp);
+    if (c) qs.push(`c=${encodeURIComponent(c)}`);
+    if (to && to !== "/") qs.push(`to=${encodeURIComponent(to)}`);
+    return `${SITE}/${path}${qs.length ? `?${qs.join("&")}` : ""}`;
+  };
 
-  const campaignSlugged = slug(campaign);
-  const url = useMemo(() => {
-    const p = path.startsWith("/") ? path : `/${path}`;
-    const qs = [
-      `utm_source=${encodeURIComponent(slug(source) || "direct")}`,
-      `utm_medium=${encodeURIComponent(slug(medium) || "referral")}`,
-      campaignSlugged ? `utm_campaign=${encodeURIComponent(campaignSlugged)}` : "",
-    ].filter(Boolean).join("&");
-    return `${SITE}${p === "/" ? "/" : p}?${qs}`;
-  }, [path, source, medium, campaignSlugged]);
-
-  const copy = () => {
+  const copy = (url: string) => {
     try {
-      void navigator.clipboard.writeText(url);
+      void navigator.clipboard.writeText(`https://${url}`);
       setCopied(url);
       setTimeout(() => setCopied(null), 1600);
     } catch {
-      /* clipboard blocked — the URL is on screen and selectable anyway */
+      /* clipboard blocked — the text is on screen and selectable */
     }
   };
 
-  const ready = campaignSlugged.length > 0;
+  // Campaign names already in the log, so a second platform for the same push
+  // reuses the exact string instead of inventing a near-miss spelling.
+  const seenCampaigns = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rows) {
+      if (!r.isEntry || !r.utmCampaign) continue;
+      m.set(r.utmCampaign, (m.get(r.utmCampaign) ?? 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k]) => k);
+  }, [rows]);
+
+  const Row = ({ url, label, note, tags }: { url: string; label: string; note: string; tags: string }) => (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(120px, 1fr) minmax(0, 2fr) auto",
+        gap: 10,
+        alignItems: "center",
+        padding: "9px 0",
+        borderTop: `1px solid ${T.border}`,
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 14, color: T.text }}>{label}</div>
+        <div style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4 }}>{note}</div>
+      </div>
+      <div
+        title={`arrives tagged: ${tags}`}
+        style={{
+          ...monoStyle, fontSize: 13, color: T.cyan,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}
+      >
+        {url}
+      </div>
+      <button
+        onClick={() => copy(url)}
+        style={{
+          padding: "5px 14px", fontSize: 12, fontWeight: 700, borderRadius: 7, cursor: "pointer",
+          whiteSpace: "nowrap",
+          color: copied === url ? T.green : T.text,
+          background: ownerRgba(copied === url ? T.green : T.text, 0.08),
+          border: `1px solid ${copied === url ? ownerRgba(T.green, 0.4) : T.border}`,
+        }}
+      >
+        {copied === url ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+
+  const oneOffPath = `${slug(oneOffSource) || "somewhere"}/click`;
+  const oneOffUrl = build(oneOffPath, oneOffCampaign || campaign, dest);
 
   return (
     <div style={{ ...homePanelStyle, padding: 18, display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <span style={{ ...labelStyle, marginBottom: 0, opacity: 0.75 }}>Campaign link builder</span>
+        <span style={{ ...labelStyle, opacity: 0.75 }}>Campaign links</span>
         <span style={{ fontSize: 11, color: T.textSecondary, opacity: 0.45 }}>
-          For links you paste by hand. Emails tag themselves at send time.
+          Copy and paste. The redirect adds the tracking tags. Broadcast emails tag themselves at send time.
         </span>
       </div>
 
-      {/* Destination */}
-      <div>
-        <div style={labelStyle}>Send them to</div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-          {DESTINATIONS.map((d) => (
-            <Chip key={d.path} on={d.path === path} label={d.label} title={d.path} onClick={() => setPath(d.path)} />
-          ))}
-        </div>
-        <input
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          placeholder="/"
-          style={inputStyle}
-        />
-      </div>
-
-      {/* Source + medium. Picking a preset sets both, because the pairing is
-          the part that's easy to get wrong. */}
-      <div>
-        <div style={labelStyle}>Where you're posting it</div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-          {SOURCE_PRESETS.map((s) => (
-            <Chip
-              key={s.source}
-              on={s.source === source}
-              label={s.label}
-              title={`utm_source=${s.source} · utm_medium=${s.medium}`}
-              onClick={() => { setSource(s.source); setMedium(s.medium); }}
-            />
-          ))}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="utm_source" style={inputStyle} />
-          <select
-            value={MEDIUMS.includes(medium) ? medium : "referral"}
-            onChange={(e) => setMedium(e.target.value)}
-            style={{ ...inputStyle, cursor: "pointer" }}
-          >
-            {MEDIUMS.map((m) => <option key={m} value={m} style={{ background: T.panel }}>{m}</option>)}
-          </select>
-        </div>
-        {seen.sources.length > 0 && (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4 }}>already used:</span>
-            {seen.sources.map((s) => (
-              <Chip key={s} label={s} onClick={() => setSource(s)} title="Reuse this exact spelling" />
+      {/* Two controls, shared by every row below. Both are optional — leaving
+          them alone is what produces the shortest possible link. */}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 12 }}>
+        <div>
+          <div style={{ ...labelStyle, marginBottom: 6 }}>Lands on</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {DESTINATIONS.map((d) => (
+              <Chip key={d.path} on={d.path === dest} label={d.label} title={d.path} onClick={() => setDest(d.path)} />
             ))}
           </div>
-        )}
-      </div>
-
-      {/* Campaign */}
-      <div>
-        <div style={labelStyle}>Which push this is</div>
-        <input
-          value={campaign}
-          onChange={(e) => setCampaign(e.target.value)}
-          placeholder="e.g. gex-thread, annual-promo, aug-launch"
-          maxLength={60}
-          style={inputStyle}
-        />
-        {campaign.trim() && campaignSlugged !== campaign.trim() && (
-          <div style={{ fontSize: 11, color: T.textSecondary, opacity: 0.45, marginTop: 5 }}>
-            sent as <b style={{ color: T.cyan }}>{campaignSlugged}</b> — lowercase and hyphenated so it can't
-            split into two rows.
+        </div>
+        <div>
+          <div style={{ ...labelStyle, marginBottom: 6 }}>
+            Name this push <span style={{ opacity: 0.6, textTransform: "none", letterSpacing: 0 }}>— optional</span>
           </div>
-        )}
-        {seen.campaigns.length > 0 && (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4 }}>already used:</span>
-            {seen.campaigns.map((c) => (
-              <Chip key={c} label={c} onClick={() => setCampaign(c)} title="Same push, another platform — reuse it" />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Result */}
-      <div>
-        <div style={labelStyle}>Link</div>
-        <div style={{ display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
           <input
-            readOnly
-            value={url}
-            onFocus={(e) => e.currentTarget.select()}
-            style={{
-              ...inputStyle,
-              flex: 1,
-              fontFamily: "var(--font-mono), monospace",
-              fontSize: 12,
-              opacity: ready ? 1 : 0.55,
-            }}
+            value={campaign}
+            onChange={(e) => setCampaign(e.target.value)}
+            placeholder="e.g. gex-thread — leave blank for the default"
+            maxLength={60}
+            style={inputStyle}
+          />
+          {seenCampaigns.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7, alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4 }}>reuse:</span>
+              {seenCampaigns.map((c) => (
+                <Chip key={c} label={c} onClick={() => setCampaign(c)} title="Same push on another platform — reuse the exact name" />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div>
+        {STANDARD.map((s) => (
+          <Row
+            key={s.path}
+            url={build(s.path, campaign, dest)}
+            label={s.label}
+            note={s.note}
+            tags={s.tags}
+          />
+        ))}
+      </div>
+
+      {/* One-off. No server change needed: an unknown source is accepted and
+          reported as a referral under whatever name you type. */}
+      <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14 }}>
+        <div style={{ ...labelStyle, marginBottom: 6 }}>Somewhere else</div>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr) auto", gap: 10, alignItems: "center" }}>
+          <input
+            value={oneOffSource}
+            onChange={(e) => setOneOffSource(e.target.value)}
+            placeholder="where — e.g. hackernews, podcast"
+            maxLength={40}
+            style={inputStyle}
+          />
+          <input
+            value={oneOffCampaign}
+            onChange={(e) => setOneOffCampaign(e.target.value)}
+            placeholder="name — optional"
+            maxLength={60}
+            style={inputStyle}
           />
           <button
-            onClick={copy}
+            onClick={() => copy(oneOffUrl)}
+            disabled={!slug(oneOffSource)}
             style={{
-              padding: "7px 16px", fontSize: 13, fontWeight: 700, borderRadius: 8, cursor: "pointer",
+              padding: "7px 16px", fontSize: 12, fontWeight: 700, borderRadius: 7,
+              cursor: slug(oneOffSource) ? "pointer" : "default",
               whiteSpace: "nowrap",
-              color: T.cyan,
-              background: ownerRgba(T.cyan, 0.13),
-              border: `1px solid ${ownerRgba(T.cyan, 0.35)}`,
+              opacity: slug(oneOffSource) ? 1 : 0.4,
+              color: copied === oneOffUrl ? T.green : T.cyan,
+              background: ownerRgba(copied === oneOffUrl ? T.green : T.cyan, 0.13),
+              border: `1px solid ${ownerRgba(copied === oneOffUrl ? T.green : T.cyan, 0.35)}`,
             }}
           >
-            {copied === url ? "Copied" : "Copy"}
+            {copied === oneOffUrl ? "Copied" : "Copy"}
           </button>
         </div>
-        {!ready && (
-          <div style={{ fontSize: 11, color: T.orange, opacity: 0.8, marginTop: 6 }}>
-            Name the push above — without utm_campaign the click still counts as {slug(source) || "this source"},
-            but it can't be told apart from every other link you've posted there.
-          </div>
-        )}
+        <div style={{ ...monoStyle, fontSize: 12, color: T.cyan, opacity: slug(oneOffSource) ? 0.9 : 0.35, marginTop: 8, wordBreak: "break-all" }}>
+          {oneOffUrl}
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4, lineHeight: 1.6 }}>
+        Every link 302s through <span style={monoStyle}>app/[source]/[action]/route.ts</span>, which
+        attaches <span style={monoStyle}>utm_source</span> / <span style={monoStyle}>utm_medium</span> /
+        {" "}<span style={monoStyle}>utm_campaign</span> and forwards. Reuse the same push name across
+        platforms or one campaign becomes several rows that can't be compared.
       </div>
     </div>
   );

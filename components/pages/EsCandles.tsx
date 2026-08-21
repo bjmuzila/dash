@@ -7,17 +7,34 @@
  * file is the workspace around it: how many charts, what rides their right
  * edge, what's drawn on all of them, and where the controls go.
  *
- * ── The CANDLES toolbar ─────────────────────────────────────────────────────
- * One bar across the top. It holds almost nothing itself — a title and three
- * buttons — because everything it used to hold at once (chart count, panel
- * choice, greek picker, and, per card, a whole replay transport) added up to
- * more chrome than chart.
+ * ── Where the controls live ─────────────────────────────────────────────────
+ * One bar across the top, and it holds almost nothing: a title, the ticker, the
+ * Replay toggle, refresh, the capture buttons, and a cog. Everything it used to
+ * hold at once (chart count, panel choice, greek picker, timeframe, overlays,
+ * expiry, indicators, presets, and per card a whole replay transport) added up
+ * to more chrome than chart.
  *
- * Each button opens a POPOVER: a panel that hovers below the bar, over the
- * charts, and closes when you press the button again. Hovering rather than
- * pushing the row down matters — a panel that reflows the layout resizes every
- * chart underneath it, and lightweight-charts rebuilds its whole time scale on
- * a resize, so opening a menu would make three charts flicker.
+ * The cog is a MASTER–DETAIL panel, not a menu: a rail of sections down the
+ * left, one section's controls in the pane beside it, swapped in place. This
+ * file contributes three of those sections through `pageSections` (Page,
+ * Indicators, Layout); the card contributes the rest. See DockCogMenu.
+ *
+ * It got that way because the previous shape did not survive contact. Folding
+ * the toolbar into a cog left the things INSIDE the cog still needing panels of
+ * their own — an overlay checklist, an expiry list, a preset store, this file's
+ * Charts and Indicators sheets — and a floating panel opened from inside a
+ * floating panel has no idea where its parent is. Each one landed on top of its
+ * parent, behind it, or half off-screen; each needed the parent's click-away
+ * taught to ignore it by hand; and each z-index had to be tuned against every
+ * other layer. Sections have none of those problems because there is nothing to
+ * position. The rule this page now keeps: ONE floating layer, ever.
+ *
+ * Replay is the exception that proves it. It is a mode, not a setting, so its
+ * button stays on the bar and its transport docks to the BOTTOM of the page for
+ * as long as the replay runs — in flow, so it never covers the candles it is
+ * scrubbing, with a ✕ of its own. The card still owns replay STATE (only it
+ * knows how many bars the session has); this file only says on or off, over
+ * slotStore's replay command channel.
  *
  * ── One chart vs several ────────────────────────────────────────────────────
  * At ONE chart the card owns its own dock (symbol, timeframe, overlays).
@@ -34,11 +51,6 @@
  * state — the expirations list, the replay frames, the connection status — and
  * its writes broadcast to the other cards through slotStore. Lifting those
  * controls into this file would mean this file owning the websocket.
- *
- * Replay is the one control that ISN'T card 0's dock: the button lives up here,
- * and the transport it opens is portaled into the popover. The card still owns
- * replay STATE (only it knows how many bars the session has); this file only
- * says on or off, over slotStore's replay command channel.
  *
  * The home dashboard still imports THIS file (app/home/HomeClient.tsx renders
  * `<EsCandlesPage embedded leading={gexViewSwitch} />`), so the `{ leading,
@@ -59,7 +71,7 @@ import {
 } from "@/components/dashboard/es-candles/slotStore";
 import { EMA_COLORS } from "@/components/dashboard/es-candles/indicators";
 import { CHAIN_GREEKS, GREEK_LABEL, isChainGreek, type ChainGreek } from "@/components/dashboard/es-candles/ChainRail";
-import { DockButton, SegGroup } from "@/components/shared/DockToolbar";
+import { DockButton, SegGroup, type DockCogSection } from "@/components/shared/DockToolbar";
 import { Card } from "@/components/shared/PageCard";
 import LayoutPresetButton from "@/components/dashboard/es-candles/LayoutPresetButton";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
@@ -69,19 +81,6 @@ const PANEL_OPTIONS: Array<{ label: string; value: SidePanelKind }> = [
   { label: "Rail", value: "rail" },
   { label: "0DTE", value: "chain" },
 ];
-
-/**
- * Which popover is open. Exactly one at a time — two hovering panels would overlap.
- *
- * "replay" used to be one of these. It isn't any more: the transport is not a
- * settings menu, it is a mode you work IN, so it now lives in a bar docked to
- * the bottom of the page for as long as the replay runs (see `replayRunning`
- * and the dock at the end of the render). It closes on its own ✕ / "● Live",
- * not on the click-away and Escape rules these two panels follow — scrubbing
- * the chart is the whole point, and click-away would take the transport with
- * the first drag.
- */
-type Popover = "charts" | "indicators" | null;
 
 // ── Popover metrics ──────────────────────────────────────────────────────────
 // Every control in the menu is laid out against these three numbers so the boxes
@@ -100,19 +99,9 @@ const CAP_GAP = 3;
 const ROW_H = CAP_H + CAP_GAP + CTRL_H;
 
 /**
- * Widest the flyout is allowed to get.
- *
- * The Indicators panel's four groups (EMA / Bollinger / Levels / Study) lay out
- * on one line at ~1100px; below that they wrap, which is fine and was always
- * the narrow-window behaviour. 820 is the point where EMA+Bollinger sit on the
- * first line and Levels+Study on the second — two tidy rows rather than a
- * ragged three — while still leaving the chart visible beside the panel.
- */
-const PANEL_MAX_W = 820;
-
-/**
- * A labelled group inside a popover. Popovers are dense by nature, so the label
- * is small, uppercase and quiet, and the controls sit right under it.
+ * A labelled group inside a cog section pane. The pane is dense by nature, so
+ * the label is small, uppercase and quiet, and the controls sit right under it.
+ * The row WRAPS — a pane is a few hundred pixels wide, not a full-bleed band.
  *
  * The row is a FIXED height and bottom-aligned — see the note above. A group
  * with no captioned fields still reserves the caption line, which is what keeps
@@ -130,7 +119,7 @@ function Group({ label, children }: { label: string; children: ReactNode }) {
       }}>
         {label}
       </span>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 8, minHeight: ROW_H }}>
+      <div style={{ display: "flex", alignItems: "flex-end", flexWrap: "wrap", columnGap: 8, rowGap: 8, minHeight: ROW_H, minWidth: 0 }}>
         {children}
       </div>
     </div>
@@ -334,44 +323,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const embedPanelRef = useRef<SidePanelKind>("rail");
   const [chainGreek, setChainGreekState] = useState<ChainGreek>("gex");
   const [indicators, setIndicatorsState] = useState<IndicatorCfg>(INDICATORS_DEFAULT);
-  const [popover, setPopover] = useState<Popover>(null);
-  // (There was a `popoverRef` mirror here so toggleReplay could read the open
-  // panel. Replay no longer opens a panel, and nothing else needed it.)
+  // (No `popover` state any more. Charts / Indicators / Layout are SECTIONS of
+  // the chart cog's rail — see `pageSections` below — so there is no floating
+  // panel of this page's own to open, position, close on click-away, or keep
+  // above the menu it was launched from.)
   // The shared dock's mount point. State, not a ref: card 0 renders into it via
   // a portal, and a ref wouldn't re-render the tree once the node exists.
   const [dockTarget, setDockTarget] = useState<HTMLDivElement | null>(null);
   // Where card 0 portals the replay transport. Lives in the bottom dock.
   const [transportTarget, setTransportTarget] = useState<HTMLDivElement | null>(null);
-  // The button row lives inside the CARD's dock (injected as `toolbarExtras`),
-  // which on a multi-chart row is itself portaled into this page. So the popover
-  // can't be positioned relative to anything in this file's own layout — it is
-  // measured off the buttons and drawn `fixed`. A ref works across the portal.
-  const anchorRef = useRef<HTMLDivElement | null>(null);
-  // Just the three popover buttons — NOT the whole row, which also holds the
-  // Layout button. See the outside-click effect.
-  const popBtnsRef = useRef<HTMLDivElement | null>(null);
-  // The hovering panel, so the outside-click test can tell "inside the menu"
-  // from "outside": it is `fixed` and not a DOM descendant of the button row.
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  /**
-   * Where to draw the hovering panel, in viewport coordinates.
-   *
-   * Two shapes, because the buttons can be in two very different places:
-   *
-   * - `flyout` — the normal case now. The buttons live inside the chart cog's
-   *   340px menu, so the panel hangs off the LEFT edge of that menu, top-
-   *   aligned with it, and reads as the menu expanding sideways. It used to be
-   *   a full-bleed `left:16 / right:16` band pinned under the buttons, which
-   *   from inside a cog looked like an unrelated slab that had appeared across
-   *   the page.
-   * - `under` — the fallback, when no cog menu is an ancestor (the dock is wide
-   *   enough to carry the buttons itself, or a host embeds them). Same
-   *   full-width band under the buttons as before.
-   */
-  const [panelPos, setPanelPos] = useState<
-    | { mode: "flyout"; top: number; right: number; width: number; maxH: number }
-    | { mode: "under"; top: number; maxH: number }
-  >({ mode: "under", top: 0, maxH: 520 });
   // Is replay RUNNING, as distinct from "is its panel open". They come apart the
   // moment you open Indicators while a replay is going, and conflating them made
   // that round trip restart the replay from the open.
@@ -414,136 +374,17 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     setReplayRunning(on);
   }), []);
 
-  /**
-   * Close the panel, letting whatever is focused inside it commit first.
-   *
-   * NumField deliberately clamps on BLUR rather than on change — clamping as
-   * you type makes "2" unreachable on the way to "20" when the minimum is 5.
-   * But React flushes `setPopover(null)` before the browser runs mousedown's
-   * default focus change, so the input is already unmounted and never receives
-   * a blur: clearing the Bollinger length box and then clicking the chart used
-   * to persist `bbPeriod: 0` for the session, silently killing the cloud.
-   * Blurring first turns the dismiss gesture back into an ordinary commit.
-   */
-  const closePopover = useCallback(() => {
-    const ae = typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null;
-    if (ae && panelRef.current?.contains(ae)) ae.blur();
-    setPopover(null);
-  }, []);
-
-  // Click anywhere outside the panel or its own three buttons closes it.
+  // (`closePopover`, the outside-click handler, the Escape handler and the
+  // panel-placement effect all lived here. They existed to manage ONE hovering
+  // panel that opened from inside another hovering panel. There is no such
+  // panel now: DockCogMenu owns the only floating layer on this page, and the
+  // controls that used to fly out of it are panes inside it.
   //
-  // This was deliberately absent, on the reasoning that the panels hover OVER
-  // the charts and click-away would shut the indicator menu the instant you
-  // reached for the chart to see what you had just turned on. In practice the
-  // opposite complaint won: a menu you have to go back and un-press is a menu
-  // that will not go away, and every OTHER dropdown on this page (Overlays,
-  // DTE, ticker, Layout) already closes this way — so the three that did not
-  // just read as broken.
-  //
-  // `mousedown`, not `click`, matching those other menus: a `click` handler
-  // fires after the target has already been re-rendered, so a click on a row
-  // that removes itself lands on nothing and reads as outside.
-  //
-  // Excluded: the panel itself, and the three buttons that own it (which
-  // toggle themselves — letting this handler close first would make the button
-  // re-open it on the same press). NOT excluded: the Layout button, which sits
-  // in the same row but owns its own menu — pressing it should close this one.
-  //
-  // Note it does NOT broadcast replay off. Closing the panel by clicking away
-  // leaves a running replay running; only the Replay button and "● Live" end
-  // it. See replayRunning for how that stays visible.
-  useEffect(() => {
-    if (!popover) return;
-    const onDoc = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (popBtnsRef.current?.contains(t)) return;
-      if (panelRef.current?.contains(t)) return;
-      closePopover();
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [popover, closePopover]);
-
-  // Close a popover on Escape.
-  useEffect(() => {
-    if (!popover) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closePopover(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [popover, closePopover]);
-
-  // Place the panel. Measured on open and on resize/scroll — the dock's height
-  // moves with the FitScale factor and the compact breakpoint, so a hardcoded
-  // offset would drift the moment the window moved.
-  //
-  // The anchor is the button row. If that row is inside a cog menu
-  // (DockCogMenu renders `role="menu"`), the panel becomes a FLYOUT off that
-  // menu's left edge instead of a band under the buttons — see `panelPos`.
-  useEffect(() => {
-    if (!popover) return;
-    // rAF-throttled, and identity-guarded.
-    //
-    // `measure` was called synchronously from a capture-phase scroll listener,
-    // so every scroll ANYWHERE in the document forced a layout
-    // (getBoundingClientRect) and then wrote page state — which re-rendered all
-    // three chart cards. Coalescing to one measure per frame and bailing when
-    // nothing has moved makes an open popover free to scroll past.
-    let raf = 0;
-    const measure = () => {
-      raf = 0;
-      const a = anchorRef.current;
-      if (!a) return;
-      const r = a.getBoundingClientRect();
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      // The cog menu this row was folded into, if any.
-      const menu = a.closest('[role="menu"]') as HTMLElement | null;
-      const m = menu?.getBoundingClientRect();
-      // `m.left > 360`: enough room to the left of the menu to be worth flying
-      // out into. Below that the flyout would be a sliver, so fall back to the
-      // full-width band, which can use the whole viewport.
-      const next = m && m.left > 360
-        ? {
-            mode: "flyout" as const,
-            // Top-aligned with the MENU, not the buttons: the two panels then
-            // read as one surface hinged at the same line.
-            top: Math.max(8, Math.round(m.top)),
-            right: Math.round(Math.max(8, vw - m.left + 8)),
-            width: Math.round(Math.min(PANEL_MAX_W, m.left - 8 - 16)),
-            maxH: Math.round(Math.max(160, vh - Math.max(8, m.top) - 16)),
-          }
-        : {
-            mode: "under" as const,
-            top: Math.round(r.bottom + 8),
-            maxH: Math.round(Math.max(160, vh - r.bottom - 24)),
-          };
-      setPanelPos((prev) => (
-        prev.mode === next.mode
-        && Math.abs(prev.top - next.top) < 0.5
-        && Math.abs(prev.maxH - next.maxH) < 0.5
-        && (next.mode === "under"
-            || (prev.mode === "flyout"
-                && Math.abs(prev.right - next.right) < 0.5
-                && Math.abs(prev.width - next.width) < 0.5))
-          ? prev
-          : next
-      ));
-    };
-    const schedule = () => {
-      if (raf) return;
-      raf = requestAnimationFrame(measure);
-    };
-    measure();
-    window.addEventListener("resize", schedule);
-    window.addEventListener("scroll", schedule, true);
-    return () => {
-      if (raf) cancelAnimationFrame(raf);
-      window.removeEventListener("resize", schedule);
-      window.removeEventListener("scroll", schedule, true);
-    };
-  }, [popover, cards]);
-
+  // The `closePopover` blur dance went with them. It existed because React
+  // unmounted a NumField before the browser delivered its blur, so clearing the
+  // Bollinger length box and clicking the chart persisted `bbPeriod: 0` for the
+  // session. A section pane unmounts only when you pick another section — by
+  // clicking a rail button, which delivers the blur first.)
   const setCardCount = useCallback((n: number) => {
     const clamped = Math.min(MAX_CARDS, Math.max(1, n));
     setCards(clamped);
@@ -614,53 +455,30 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     broadcastReplayCmd({ on });
   }, []);
 
-  const togglePopover = useCallback((which: Exclude<Popover, null>) => {
-    // A running replay is untouched by this — the transport is its own dock at
-    // the bottom of the page, so adjusting indicators mid-replay (the whole
-    // point) no longer costs you the transport.
-    setPopover((prev) => (prev === which ? null : which));
-  }, []);
-
-  // The three page-level controls, rendered INTO the chart's own dock. The page
-  // still owns every piece of state behind them; only the pixels move.
-  //
-  // Memoised: this node is handed to the (now memo()'d) card as `toolbarExtras`,
-  // so rebuilding it every render would defeat that memo on every parent render.
-  //
-  // Declared ABOVE the `embedded` early-return below, not next to its use site.
-  // A hook after a conditional return is a rules-of-hooks violation, and it is a
-  // live one here: the home GEX card renders this component with `embedded`, and
-  // flipping that prop on the same element would change the hook count between
-  // renders.
-  // WRAPS, and is allowed to shrink. This row does not live on a wide dock any
-  // more — it is rendered into the chart cog's 340px menu (`<DockMenuRow
-  // label="Page">` in EsChartCard). As an unshrinkable nowrap `inline-flex` it
-  // was wider than that panel, so Layout (the last button) was clipped off the
-  // panel's right edge with no way to reach it. `flexWrap` + `minWidth: 0` lets
-  // it fold onto a second line; it still lays out on one line anywhere wide
-  // enough (the home embed, a wide dock).
+  /**
+   * The one page-owned control that rides ON the bar: Replay.
+   *
+   * Everything else this file used to put there — Charts, Indicators, Layout —
+   * is a SECTION of the chart cog now (see `pageSections`). Replay stays out
+   * because it is not a setting, it is a mode: one press starts it, the press
+   * says whether it is running, and the transport it opens docks to the bottom
+   * of the page. Two clicks deep behind a gear is the wrong depth for that, and
+   * a lit gear could not say WHICH of seven sections is lit.
+   *
+   * Memoised: this node is handed to the (memo()'d) card as `toolbarExtras`, so
+   * rebuilding it every render would defeat that memo on every parent render.
+   *
+   * Declared ABOVE the `embedded` early-return below, not next to its use site.
+   * A hook after a conditional return is a rules-of-hooks violation, and it is a
+   * live one here: the home GEX card renders this component with `embedded`, and
+   * flipping that prop on the same element would change the hook count between
+   * renders.
+   */
   const toolbarButtons = useMemo(() => (
-    <div
-      ref={anchorRef}
-      style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, minWidth: 0, maxWidth: "100%" }}
-    >
-      {/* anchorRef measures the whole row for panel placement; popBtnsRef is
-          only the three buttons that OWN the panel, so pressing Layout (a
-          sibling, with its own menu) counts as an outside click. */}
-      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, minWidth: 0 }} ref={popBtnsRef}>
-      <DockButton
-        onClick={() => togglePopover("charts")}
-        title="Chart count and side panel"
-        caret
-        open={popover === "charts"}
-        style={popover === "charts" ? { color: LIGHT_BLUE, borderColor: LIGHT_BLUE } : undefined}
-      >
-        <span>Charts</span>
-        <span style={{ opacity: 0.5, fontSize: 10 }}>{cards}</span>
-      </DockButton>
-      {/* No `caret`: this does not open a panel next to itself any more, it
-          turns a mode on and docks the transport to the bottom of the page.
-          A caret here would promise a dropdown that never appears. */}
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      {/* No `caret`: this does not open a panel next to itself, it turns a mode
+          on and docks the transport to the bottom of the page. A caret would
+          promise a dropdown that never appears. */}
       <DockButton
         onClick={toggleReplay}
         title={replayRunning
@@ -670,26 +488,155 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       >
         <span>Replay</span>
       </DockButton>
-      <DockButton
-        onClick={() => togglePopover("indicators")}
-        title="Indicators — applied to every chart in the row"
-        caret
-        open={popover === "indicators"}
-        style={popover === "indicators" ? { color: LIGHT_BLUE, borderColor: LIGHT_BLUE } : undefined}
-      >
-        <span>Indicators</span>
-        {/* How many are ON, so a shut menu still answers "is anything drawing?" */}
-        {(() => {
-          const n = indicators.emas.filter((e) => e.on).length
-            + [indicators.bb, indicators.weeklyEm, indicators.volume, indicators.rsi, indicators.countdown].filter(Boolean).length;
-          return n ? <span style={{ opacity: 0.5, fontSize: 10 }}>{n}</span> : null;
-        })()}
-      </DockButton>
-      </div>
-      {/* Owns all of its own state — see LayoutPresetButton. */}
-      <LayoutPresetButton />
     </div>
-  ), [popover, replayRunning, cards, indicators, togglePopover, toggleReplay]);
+  ), [replayRunning, toggleReplay]);
+
+  /**
+   * This page's contribution to the chart cog's section rail.
+   *
+   * These three are page state, not card state — one chart count, one indicator
+   * blob and one preset store for the whole row — so the route owns them and
+   * hands them down as panes. The card merges them with its own (Overlays,
+   * Chart, Gamma) and decides the order; see `cogSections` in EsChartCard.
+   *
+   * Each of these used to be a floating panel that opened from INSIDE the cog:
+   * Charts and Indicators from this file, Layout from its own portal. A panel
+   * launched from inside a panel has no idea where its parent is — it landed on
+   * top of it, behind it, or half off-screen, and each one needed the parent's
+   * click-away taught to ignore it and its z-index tuned against every other
+   * layer. As panes there is nothing to position and nothing to occlude.
+   */
+  const pageSections = useMemo<DockCogSection[]>(() => {
+    const indicatorCount = indicators.emas.filter((e) => e.on).length
+      + [indicators.bb, indicators.weeklyEm, indicators.volume, indicators.rsi, indicators.countdown].filter(Boolean).length;
+    return [
+      {
+        id: "page",
+        label: "Page",
+        hint: "How many charts, and what rides their right edge",
+        body: (
+          <>
+            <Group label="Charts">
+              <SegGroup
+                options={Array.from({ length: MAX_CARDS }, (_, i) => ({ label: String(i + 1), value: String(i + 1) }))}
+                active={String(cards)}
+                onChange={(v) => setCardCount(Number(v))}
+              />
+            </Group>
+            <Group label="Panel">
+              <SegGroup
+                options={PANEL_OPTIONS.map((o) => ({ label: o.label, value: o.value }))}
+                active={sidePanel}
+                onChange={(v) => setSidePanel(v as SidePanelKind)}
+              />
+            </Group>
+            {/* The chain's greek lives up here rather than in the panel itself for
+                a structural reason, not a cosmetic one: ChainRail's box has to be
+                exactly the chart container's box or its rows stop matching the
+                chart's prices, so nothing may sit above its canvas. */}
+            {sidePanel === "chain" && (
+              <Group label="Greek">
+                <SegGroup
+                  options={CHAIN_GREEKS.map((g) => ({ label: GREEK_LABEL[g], value: g }))}
+                  active={chainGreek}
+                  onChange={(v) => setChainGreek(v as ChainGreek)}
+                />
+              </Group>
+            )}
+          </>
+        ),
+      },
+      {
+        id: "indicators",
+        label: "Indicators",
+        hint: "Drawn on every chart in the row",
+        count: indicatorCount,
+        body: (
+          <>
+            {/* Each row is CHECKBOX + what it draws + its inputs, in that order.
+                The first version put a pill showing the EMA's length next to a
+                number field holding the same length — two identical numbers,
+                and no way to tell which one was the switch. */}
+            <Group label="EMA">
+              {indicators.emas.slice(0, MAX_EMAS).map((e, i) => (
+                <span key={i} style={{ display: "inline-flex", alignItems: "flex-end", gap: 5 }}>
+                  <Toggle
+                    on={e.on}
+                    onClick={() => patchEma(i, { on: !e.on })}
+                    swatch={EMA_COLORS[i]}
+                    title={`Show the ${e.len}-bar EMA`}
+                  >
+                    EMA
+                  </Toggle>
+                  <NumField
+                    value={e.len}
+                    min={1}
+                    max={400}
+                    width={56}
+                    title="Length, in bars"
+                    onChange={(v) => patchEma(i, { len: Math.round(v) })}
+                  />
+                </span>
+              ))}
+            </Group>
+
+            <Group label="Bollinger">
+              <Toggle on={indicators.bb} onClick={() => patchIndicators({ bb: !indicators.bb })}
+                      title="Cloud between the inner and outer band">
+                Cloud
+              </Toggle>
+              <Field label="len">
+                <NumField value={indicators.bbPeriod} min={2} max={400} width={56} title="SMA period — the basis the bands are measured from"
+                          onChange={(v) => patchIndicators({ bbPeriod: Math.round(v) })} />
+              </Field>
+              <Field label="inner σ">
+                <NumField value={indicators.bbInner} min={0.1} max={10} step={0.1} width={56} title="Inner cloud edge, in standard deviations"
+                          onChange={(v) => patchIndicators({ bbInner: v })} />
+              </Field>
+              <Field label="outer σ">
+                <NumField value={indicators.bbOuter} min={0.1} max={10} step={0.1} width={56} title="Outer cloud edge, in standard deviations"
+                          onChange={(v) => patchIndicators({ bbOuter: v })} />
+              </Field>
+            </Group>
+
+            <Group label="Levels">
+              <Toggle on={indicators.weeklyEm} onClick={() => patchIndicators({ weeklyEm: !indicators.weeklyEm })}
+                      title="This week's published expected-move band">
+                Weekly EM
+              </Toggle>
+            </Group>
+
+            <Group label="Study">
+              <Toggle on={indicators.volume} onClick={() => patchIndicators({ volume: !indicators.volume })}
+                      title="Volume histogram along the bottom of the chart">
+                Volume
+              </Toggle>
+              <Toggle on={indicators.rsi} onClick={() => patchIndicators({ rsi: !indicators.rsi })}
+                      title="RSI, as a number in the chart's top right">
+                RSI
+              </Toggle>
+              <Field label="period">
+                <NumField value={indicators.rsiPeriod} min={2} max={100} width={56} title="RSI period"
+                          onChange={(v) => patchIndicators({ rsiPeriod: Math.round(v) })} />
+              </Field>
+              <Toggle on={indicators.countdown} onClick={() => patchIndicators({ countdown: !indicators.countdown })}
+                      title="Time left in the forming bar">
+                Bar countdown
+              </Toggle>
+            </Group>
+          </>
+        ),
+      },
+      {
+        // Owns all of its own state — see LayoutPresetButton. `inline` drops its
+        // trigger and its portal and hands back just the panel's contents.
+        id: "layout",
+        label: "Layout",
+        hint: "Save and switch page layouts",
+        body: <LayoutPresetButton inline />,
+      },
+    ];
+  }, [cards, sidePanel, chainGreek, indicators, setCardCount, setSidePanel, setChainGreek, patchIndicators, patchEma]);
 
   // The GEX rail toggle, injected into the embedded card's own dock. Declared
   // with the other hooks, above the early return — a useMemo after a conditional
@@ -770,6 +717,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               // render a dock) but it is a duplicate set waiting for the first
               // layout change that gives those cards one.
               toolbarExtras={i === 0 ? toolbarButtons : undefined}
+              pageSections={i === 0 ? pageSections : undefined}
               sidePanel={sidePanel}
               chainGreek={chainGreek}
               indicators={indicators}
@@ -809,166 +757,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         </div>
       )}
 
-      {/* ── Popover ─────────────────────────────────────────────────────────
-          `fixed`, measured off the buttons, for two reasons. It must not reflow
-          the chart row — a panel that pushes the charts down resizes them, and
-          every resize makes lightweight-charts rebuild its time scale, so three
-          charts would flicker each time a menu opened. And its anchor lives
-          inside the card's dock, which on a multi-chart row is portaled; there
-          is nothing in this file's own layout to be absolute against.
-
-          Where it lands is `panelPos`: a flyout off the left edge of the chart
-          cog when the buttons are inside one, a full-width band under them when
-          they are not. */}
-      {popover && (
-        <div
-          ref={panelRef}
-          className="es-candles-popover"
-          style={{
-            position: "fixed",
-            top: panelPos.top,
-            ...(panelPos.mode === "flyout"
-              ? { right: panelPos.right, width: panelPos.width }
-              : { left: 16, right: 16 }),
-            // ABOVE the chart cog's own menu (DockToolbar's popoverPanel sits at
-            // 100000). The buttons that open this panel moved INTO that cog, so
-            // at z-60 the panel opened underneath the very menu it was launched
-            // from: Charts/Indicators looked like they did nothing.
-            // (DockCogMenu.inFloatingLayer only needs > 50 to keep treating a
-            // click in here as "inside", so the cog still doesn't slam shut.)
-            zIndex: 100001,
-            padding: "12px 14px",
-            borderRadius: 14,
-            border: `1px solid ${HOME_THEME.border}`,
-            background: "rgba(10,14,20,0.97)",
-            backdropFilter: "blur(14px)",
-            WebkitBackdropFilter: "blur(14px)",
-            boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
-            display: "flex",
-            alignItems: "flex-start",
-            // Column gap wide enough to read as separate groups, row gap for the
-            // narrow-window wrap. Groups are fixed-height, so a wrapped second
-            // line stays as straight as the first.
-            columnGap: 22,
-            rowGap: 14,
-            flexWrap: "wrap",
-            // `maxH` is already "whatever is left below `top`", measured against
-            // the live viewport — without it the panel's bottom half (and its
-            // scrollbar) fell off the bottom edge, unreachable, because `top`
-            // is taken off buttons that can sit most of the way down the screen.
-            maxHeight: Math.min(panelPos.maxH, 620),
-            overflowY: "auto",
-          }}
-        >
-          {popover === "charts" && (
-            <>
-              <Group label="Charts">
-                <SegGroup
-                  options={Array.from({ length: MAX_CARDS }, (_, i) => ({ label: String(i + 1), value: String(i + 1) }))}
-                  active={String(cards)}
-                  onChange={(v) => setCardCount(Number(v))}
-                />
-              </Group>
-              <Group label="Panel">
-                <SegGroup
-                  options={PANEL_OPTIONS.map((o) => ({ label: o.label, value: o.value }))}
-                  active={sidePanel}
-                  onChange={(v) => setSidePanel(v as SidePanelKind)}
-                />
-              </Group>
-              {/* The chain's greek lives up here rather than in the panel itself for
-                  a structural reason, not a cosmetic one: ChainRail's box has to be
-                  exactly the chart container's box or its rows stop matching the
-                  chart's prices, so nothing may sit above its canvas. */}
-              {sidePanel === "chain" && (
-                <Group label="Greek">
-                  <SegGroup
-                    options={CHAIN_GREEKS.map((g) => ({ label: GREEK_LABEL[g], value: g }))}
-                    active={chainGreek}
-                    onChange={(v) => setChainGreek(v as ChainGreek)}
-                  />
-                </Group>
-              )}
-            </>
-          )}
-
-          {popover === "indicators" && (
-            <>
-              {/* Each row is CHECKBOX + what it draws + its inputs, in that order.
-                  The first version put a pill showing the EMA's length next to a
-                  number field holding the same length — two identical numbers,
-                  and no way to tell which one was the switch. */}
-              <Group label="EMA">
-                {indicators.emas.slice(0, MAX_EMAS).map((e, i) => (
-                  <span key={i} style={{ display: "inline-flex", alignItems: "flex-end", gap: 5 }}>
-                    <Toggle
-                      on={e.on}
-                      onClick={() => patchEma(i, { on: !e.on })}
-                      swatch={EMA_COLORS[i]}
-                      title={`Show the ${e.len}-bar EMA`}
-                    >
-                      EMA
-                    </Toggle>
-                    <NumField
-                      value={e.len}
-                      min={1}
-                      max={400}
-                      width={56}
-                      title="Length, in bars"
-                      onChange={(v) => patchEma(i, { len: Math.round(v) })}
-                    />
-                  </span>
-                ))}
-              </Group>
-
-              <Group label="Bollinger">
-                <Toggle on={indicators.bb} onClick={() => patchIndicators({ bb: !indicators.bb })}
-                        title="Cloud between the inner and outer band">
-                  Cloud
-                </Toggle>
-                <Field label="len">
-                  <NumField value={indicators.bbPeriod} min={2} max={400} width={56} title="SMA period — the basis the bands are measured from"
-                            onChange={(v) => patchIndicators({ bbPeriod: Math.round(v) })} />
-                </Field>
-                <Field label="inner σ">
-                  <NumField value={indicators.bbInner} min={0.1} max={10} step={0.1} width={56} title="Inner cloud edge, in standard deviations"
-                            onChange={(v) => patchIndicators({ bbInner: v })} />
-                </Field>
-                <Field label="outer σ">
-                  <NumField value={indicators.bbOuter} min={0.1} max={10} step={0.1} width={56} title="Outer cloud edge, in standard deviations"
-                            onChange={(v) => patchIndicators({ bbOuter: v })} />
-                </Field>
-              </Group>
-
-              <Group label="Levels">
-                <Toggle on={indicators.weeklyEm} onClick={() => patchIndicators({ weeklyEm: !indicators.weeklyEm })}
-                        title="This week's published expected-move band">
-                  Weekly EM
-                </Toggle>
-              </Group>
-
-              <Group label="Study">
-                <Toggle on={indicators.volume} onClick={() => patchIndicators({ volume: !indicators.volume })}
-                        title="Volume histogram along the bottom of the chart">
-                  Volume
-                </Toggle>
-                <Toggle on={indicators.rsi} onClick={() => patchIndicators({ rsi: !indicators.rsi })}
-                        title="RSI, as a number in the chart's top right">
-                  RSI
-                </Toggle>
-                <Field label="period">
-                  <NumField value={indicators.rsiPeriod} min={2} max={100} width={56} title="RSI period"
-                            onChange={(v) => patchIndicators({ rsiPeriod: Math.round(v) })} />
-                </Field>
-                <Toggle on={indicators.countdown} onClick={() => patchIndicators({ countdown: !indicators.countdown })}
-                        title="Time left in the forming bar">
-                  Bar countdown
-                </Toggle>
-              </Group>
-            </>
-          )}
-        </div>
-      )}
     </div>
   );
 }

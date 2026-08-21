@@ -93,10 +93,17 @@ export const TESTLAB_SECTION: SectionNav = {
   // /strike-history moved under Test Lab on 2026-08-16. Listing it here is what
   // makes the Test Lab strip show on that route (and what stops the Scanner one
   // showing); the route itself is unchanged.
-  paths: ["/test", "/strike-history"],
+  // /levels joined on 2026-08-21, same arrangement: listing it here is what
+  // makes the Test Lab strip show on /levels, which is now the only chrome that
+  // links to it (it came out of GlobalToolbar's NAV_ITEMS) besides the
+  // hamburger.
+  paths: ["/test", "/strike-history", "/levels"],
   defaultTab: "squeeze",
   routes: [
     { href: "/strike-history", label: "Strike History", short: "History", color: LIGHT_BLUE, icon: "🕘" },
+    // The whole scanner universe's CB / call wall / put wall on one page —
+    // 169 tickers of the three numbers Multi Greek shows for four.
+    { href: "/levels",         label: "Levels",         short: "Levels",  color: HOME_THEME.cyan, icon: "🧱" },
   ],
   tabs: [
     { id: "squeeze",     label: "Squeeze",         short: "Squeeze",  color: HOME_THEME.orange, icon: "🌀" },
@@ -127,7 +134,7 @@ export const TESTLAB_SECTION: SectionNav = {
   ],
   groups: [
     { key: "gamma",   tabs: ["squeeze", "dealergamma", "gexmap"] },
-    { key: "scanner", tabs: ["gex", "gexpct", "marketquality", "statprompter"], routes: ["/strike-history"] },
+    { key: "scanner", tabs: ["gex", "gexpct", "marketquality", "statprompter"], routes: ["/strike-history", "/levels"] },
     { key: "flow",    tabs: ["flow", "premdiff"] },
     { key: "season",  tabs: ["seasonality"] },
   ],
