@@ -149,8 +149,13 @@ function registerAffiliateRoutes({ register, send, readJson }) {
   // The only non-JSON route in this file. Order matters: the cookie is set on
   // the SAME response as the 302, so a visitor who never comes back still
   // carries the attribution when they eventually buy.
+  // HEAD is listed alongside GET deliberately. X, Discord, Slack and iMessage
+  // all send HEAD when they unfurl a pasted link, and the dispatcher 405s any
+  // method not named here — which would break the preview on every post an
+  // affiliate makes. res.end() with no body is the correct HEAD response, and
+  // the click still logs, which is what we want from a real unfurl anyway.
   add('/api/aff/go', {
-    auth: 'public', methods: ['GET'],
+    auth: 'public', methods: ['GET', 'HEAD'],
     async handler(req, res) {
       let code = '', to = '/pricing';
       try {
