@@ -1102,11 +1102,40 @@ function WallMigrationChart({ log, events, view, price }: {
   const model = useMemo(() => {
     const inSlot = (s: number) => Number.isFinite(s) && s >= 0 && s < WALL_SLOTS;
 
-    // How much session has been captured. Same definition the rail's fill uses,
-    // so the two never disagree about where "now" is.
-    let lastSlot = 0;
-    for (const r of log) if (inSlot(r.slot) && r.slot > lastSlot) lastSlot = r.slot;
-    for (const e of events) if (inSlot(e.hit_slot) && e.hit_slot > lastSlot) lastSlot = e.hit_slot;
+    // How much session the LOG wrote. Same definition the rail's fill uses, so
+    // the two never disagree about where the last capture was.
+    let lastWrite = 0;
+    for (const r of log) if (inSlot(r.slot) && r.slot > lastWrite) lastWrite = r.slot;
+    for (const e of events) if (inSlot(e.hit_slot) && e.hit_slot > lastWrite) lastWrite = e.hit_slot;
+
+    /**
+     * HOW FAR THE CHART DRAWS — the session, not the log.
+     *
+     * The x axis used to end at the last row `walls_log` wrote, and walls_log is
+     * change-only. So a ticker whose walls stopped rolling at 10:00 drew a
+     * half-hour chart and threw away the six hours of tape that were already in
+     * hand — and that is precisely backwards, because "the level sat while price
+     * travelled all day" is the single most tradeable thing this panel can show.
+     * A day with no rolls after the open was the day it drew the least.
+     *
+     * So the extent is the TAPE, which useIntradaySpot already pulls for the
+     * whole 09:30→16:00 window off /proxy/candles-intraday. No new fetch, no new
+     * recorder write, no clock read: mid-session the tape ends at the last
+     * closed minute, so the chart ends at now; on a past date it ends at 16:00.
+     * When there is no tape (index with no 1m bars, or a date outside dxFeed's
+     * window) `tapeEnd` is 0 and the extent falls back to the log exactly as
+     * before.
+     *
+     * Past `lastWrite` the levels are the forward fill — which is not an
+     * invention, it is what a level with no rows MEANS: it held. The render
+     * marks that boundary so the held stretch is never mistaken for captures.
+     */
+    const tapeAll = price
+      .map((p) => ({ s: slotAtMins(p.mins), v: p.px }))
+      .filter((p) => Number.isFinite(p.s) && p.s >= 0 && p.s <= WALL_SLOTS - 1 && p.v > 0);
+    let tapeEnd = 0;
+    for (const p of tapeAll) if (p.s > tapeEnd) tapeEnd = p.s;
+    const lastSlot = Math.min(WALL_SLOTS - 1, Math.max(lastWrite, Math.ceil(tapeEnd)));
 
     // Only level types this view covers AND that actually have rows today.
     const levels = VIEW_LEVELS[view].filter((lt) => log.some((r) => r.level_type === lt));
@@ -1209,13 +1238,10 @@ function WallMigrationChart({ log, events, view, price }: {
      * put a smooth stretch next to a stepped one and read as the tape going
      * quiet rather than the data running out.
      *
-     * Clipped to `lastSlot` so mid-session the price line ends where the levels
-     * do; the x scale is the recorded span, and a tape running past it would be
-     * drawn off the right edge.
+     * Clipped to `lastSlot` — which the tape itself now sets, so this only ever
+     * trims a stray bar past 16:00 or a sample beyond the slot grid.
      */
-    const tape = price
-      .map((p) => ({ s: slotAtMins(p.mins), v: p.px }))
-      .filter((p) => p.s >= 0 && p.s <= lastSlot);
+    const tape = tapeAll.filter((p) => p.s <= lastSlot);
     const dense = tape.length >= 20;
     const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }));
 
@@ -1237,11 +1263,11 @@ function WallMigrationChart({ log, events, view, price }: {
     const padY = (hi - lo) * 0.08;
     lo -= padY; hi += padY;
 
-    return { levels, series, roles, spotPts, spotDrawn, dense, lo, hi, lastSlot };
+    return { levels, series, roles, spotPts, spotDrawn, dense, lo, hi, lastSlot, lastWrite };
   }, [log, events, view, price]);
 
   if (!model) return null;
-  const { levels, series, roles, spotPts, spotDrawn, dense, lo, hi, lastSlot } = model;
+  const { levels, series, roles, spotPts, spotDrawn, dense, lo, hi, lastSlot, lastWrite } = model;
 
   /** Index across what was recorded, edge to edge — the post-market geometry. */
   const x = (s: number) => (s / Math.max(1, lastSlot)) * 100;
@@ -1289,6 +1315,9 @@ function WallMigrationChart({ log, events, view, price }: {
     ? `${step(roles.core)} ${step(roles.other, true)}`
     : null;
   const spotLine = spotDrawn.map((p) => `${x(p.s)},${y(p.v)}`).join(" ");
+
+  /** x of the last written slot, only when the chart runs past it. */
+  const heldFrom = lastWrite < lastSlot ? x(lastWrite) : null;
 
   /** Which wall is wearing the CORE right now — the legend says so by name. */
   const coreSideNow = roles
@@ -1344,6 +1373,14 @@ function WallMigrationChart({ log, events, view, price }: {
         style={{ width: "100%", display: "block" }}>
         {/* The corridor between the two, so the room price actually had is readable. */}
         {corridor ? <polygon points={corridor} fill={rgba(C.cyan, 0.06)} /> : null}
+        {/* Where the log stopped writing. Everything right of it is the forward
+            fill — the levels held, which is why there are no rows — and the
+            reader is entitled to see which half is captures and which is hold. */}
+        {heldFrom != null ? (
+          <line x1={heldFrom} x2={heldFrom} y1={0} y2={MIG_H}
+            stroke={rgba(HOME_THEME.text, 0.16)} strokeWidth={1} strokeDasharray="3 3"
+            vectorEffect="non-scaling-stroke" />
+        ) : null}
         {paths.map((p) => (
           <polyline key={p.key} points={p.d} fill="none" stroke={p.color} strokeWidth={p.w}
             vectorEffect="non-scaling-stroke" strokeLinejoin="miter" />
@@ -1369,7 +1406,7 @@ function WallMigrationChart({ log, events, view, price }: {
           <>
             CORE is whichever wall carries more gamma at that slot, so the two lines SWAP when the dominant
             side changes — today the call wall held it{" "}
-            <b style={{ color: HOME_THEME.text }}>{Math.round(roles.callShare * 100)}%</b> of the recorded
+            <b style={{ color: HOME_THEME.text }}>{Math.round(roles.callShare * 100)}%</b> of the
             session.{" "}
           </>
         ) : null}
@@ -1382,6 +1419,11 @@ function WallMigrationChart({ log, events, view, price }: {
           <>No 1-minute tape for this ticker or date, so spot is the {spotPts.length} capture
             {spotPts.length === 1 ? "" : "s"} the log stored — its own samples, not a price path.</>
         )}
+        {heldFrom != null ? (
+          <>{" "}The log&apos;s last write was <b style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{slotClock(lastWrite)}</b>{" "}
+            (dashed mark) — right of it the levels held, which is why nothing was written, and the
+            flat stretch against the tape is the read.</>
+        ) : null}
       </div>
     </div>
   );

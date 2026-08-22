@@ -1,123 +1,77 @@
 # Changelog
 
-## 2026-08-21 (z) - The last cog: home's econ Panel is tabbed too, and every live cog in the app now is
+## 2026-08-22 - Level Log wall migration: the chart ended where the log stopped, not where the day did
 
-Edited: `components/shared/DockToolbar.tsx`, `app/home/HomeClient.tsx`.
+Edited: `components/pages/LevelLog.tsx` (`WallMigrationChart`).
 
-Swept the repo for `DockCogMenu`. Live callers, all of them now on the tabbed
-`sections` API:
+AMZN's walls set at the open and last rolled at 10:00. The migration chart drew
+09:29 → 10:00 and captioned itself "31 min of price" — six hours of session
+missing, on the exact kind of day the panel exists to show.
 
-| Toolbar | File |
-|---|---|
-| Home GEX chart | `components/dashboard/GexToolbar.tsx` |
-| Home heatmap | `app/home/HomeClient.tsx` |
-| **Home econ Panel** | `app/home/HomeClient.tsx` — **this entry** |
-| ES Candles | `components/dashboard/es-candles/EsChartCard.tsx` |
-| Options Chain | `components/pages/OptionsChain.tsx` |
-| Multi Greek | `app/mult-greek/MultGreekClient.tsx` |
+**Cause.** `walls_log` is change-only (`walls-recorder.js` writes on
+`isOpen || changed`), and the chart's x extent was the highest slot present in
+the log/events. No rolls after 10:00 meant no rows after 10:00, so `lastSlot`
+stopped there — and the 1-minute tape, already fetched for the whole
+09:30 → 16:00 window by `useIntradaySpot`, was then clipped to that same
+`lastSlot` and thrown away. A level that held all day drew the shortest chart.
 
-Nothing else in `components/**` or `app/**` opens one. The universal
-`GlobalToolbar` is untouched by design — it has no cog and is not a settings
-surface. `app/es-candles/page.tsx` (the Next fallback copy the SPA does not
-serve) still carries the old popover; it goes when that file does.
+**Fix — the extent is the tape, not the log.**
 
-**New `DockCogSection.keepMounted`.** The econ Panel cog was the one caller
-still on the `children` path, and it had a real reason: `EconCalendarPanel`
-PORTALS its filter row into a node inside that menu, and `children` mode keeps
-its subtree mounted while closed. Tab mode renders only the active body, so a
-naive conversion would have handed the calendar a null target on every tab
-switch — it falls back to rendering its own inline header, which shoves the
-calendar down the page. `keepMounted` renders that section's body always,
-hidden with `display: none` when its tab is not showing. Costs a mounted
-subtree; use it only where a ref has to survive.
+- `lastWrite` (the log's last slot) and `lastSlot` (how far the chart draws) are
+  now separate. `lastSlot = min(26, max(lastWrite, ceil(last tape slot)))`.
+- No new fetch, no recorder change, no clock read: the tape ends at the last
+  closed minute mid-session and at 16:00 on a past date, so the chart follows it
+  either way. With no tape (no 1m bars for the symbol/date) the extent falls
+  back to the log exactly as before.
+- Levels forward-fill past `lastWrite` — which is what a level with no rows
+  MEANS: it held. Still steps, never slopes.
+- The boundary is marked: a dashed hairline at `lastWrite`, and a caption line
+  naming that time and saying the stretch right of it is the hold. Nothing is
+  passed off as a capture.
+- Caption reads "% of the session" rather than "of the recorded session", since
+  the roles now span the drawn day.
 
-Panel cog sections: **Height** (min / half / full, with the current one in the
-cap state line) · **Tab controls** (`keepMounted`, the calendar's portal
-target). `paneHeight` 132 — both tabs are one row.
+The read the panel was built for — flat level, travelling price — is now the one
+it draws biggest.
 
-## 2026-08-21 (y) - Cog panels are TABBED now: one fixed-height pane, and the box never moves
+## 2026-08-21 (b) - Test Labs GEX Map: terrain relief was melting — light the data, not the noise
 
-Edited: `components/shared/DockToolbar.tsx`,
-`components/dashboard/es-candles/EsChartCard.tsx`,
-`components/pages/EsCandles.tsx`, `components/dashboard/GexToolbar.tsx`,
-`app/home/HomeClient.tsx`, `components/pages/OptionsChain.tsx`,
-`app/mult-greek/MultGreekClient.tsx`.
+Edited: `app/test/GexMapTab.tsx` (`TerrainField`).
 
-`DockCogMenu`'s `sections` mode renders **tabs over one fixed-height pane**
-instead of an accordion. Same `DockCogSection[]` API, same callers, no
-signature change beyond a new optional `paneHeight`.
+The relief pass shipped earlier today ran vertical curtains down the map — full
+height, black on one side and blown out on the other, roughly one per recorded
+slot. It looked like the terrain was melting.
 
-**Why tabs and not the accordion.** The accordion's problem was never the
-sections, it was what unfolding one did to the BOX: the panel grew, everything
-below the row jumped, `place()` re-ran, and near the bottom of the screen the
-whole panel flipped above the trigger while the cursor was already moving toward
-a control. Open two rows and it grew a scrollbar, and a scrollbar inside a
-popover steals the trackpad. A fixed pane cannot do any of that — the panel is
-the same box on every open and for as long as it is open. The cost is honest and
-accepted: a two-control tab pads with empty space.
+**Cause.** The light was computed from the raw height field, and the two axes of
+that field do not have the same resolution. Strike is gaussian-smoothed on the
+way in; time is only interpolated linearly between recorded slots. A slot where
+a node jumped is therefore a ONE-CELL cliff in x — and a one-cell cliff has an
+effectively vertical normal, so it lit as a wall the full height of the map.
+Per-cell gradients made it worse: a grid cell is ~3px wide and ~1.4px tall, so
+the same bump in x came out about twice as steep as in y.
 
-- `activeId` replaces `openIds`; still sticky across open/close, still defaults
-  to `sections[0]` without the caller naming an id.
-- **The cap carries a state line** — every section's `summary` joined
-  ("1 chart · 1m · Front · Vol+OI"), ellipsised to one row. That is how a tab
-  you are not looking at still answers its own question, which is the job the
-  accordion's per-row summary was doing. `count` rides on the tab itself.
-- The tab row scrolls horizontally rather than wrapping; a second row of tabs
-  would change the panel's height, which is the one thing this layout exists to
-  prevent.
-- `paneHeight` defaults to 262 and is clamped down only by what `place()` says
-  the viewport has (`maxH - 84`, floor 150) — so the height changes when the
-  WINDOW does and never mid-edit.
+**Fixes.**
 
-**ES Candles: Overlays + Indicators merged into one "Draw" tab.** They are the
-card's state and the route's state respectively, but that is plumbing — to
-anyone reading the chart they are the same question, and two adjacent tabs
-called Overlays and Indicators is a distinction the toolbar should not be asking
-about. `cogSections` now splices the route's `indicators` section into the Draw
-body under a rule (gamma layer above, price layer below) and drops it from the
-tab order. Tabs are **Page · Draw · Chart · Gamma · Layout** (+ Replay on the
-embed), panel width 360 → 400.
+- **Light is blurred to the resolution the data actually has.** A box blur of
+  radius `1.1 * NX / nC` — one recorded slot — applied twice (≈ gaussian) across
+  time, plus a single-cell pass across strike. Nothing finer than a slot gets
+  lit, because nothing finer than a slot was measured. Both radii derive from
+  the sample grid, so it holds at every zoom. Only the LIGHT is smoothed: the
+  tint and the marching-squares contours still read the unblurred field, so no
+  node moves and no level shifts.
+- **Slope is per CSS pixel, not per grid cell** (`SLOPE_PX = 55`, divided by the
+  cell's own pixel size on each axis). The surface is now isotropic on screen —
+  a bump lights the same whichever way it runs.
+- **Cliffs clamp** at `GCAP = 2.5`. Past that the normal is already almost
+  horizontal and extra steepness buys nothing but a black edge.
+- **Toned down** now that the relief is real: shade range 0.45–1.55 (was
+  0.28–1.85), terrace riser 0.28 (was 0.42) on a tighter slope gate, specular
+  20 (was 46).
 
-Per-toolbar `paneHeight`, sized to each one's tallest tab: GEX chart 218 ·
-home heatmap 150 · Options Chain 196 · Multi Greek 158.
+A real single-slot spike still shows — as a soft, narrow feature, which is what
+it is — instead of a curtain.
 
-## 2026-08-21 (x) - ES Candles panels: the toggles are chips now, the checkboxes are gone
-
-Edited: `components/dashboard/es-candles/panelUi.tsx`,
-`components/pages/EsCandles.tsx`,
-`components/dashboard/es-candles/EsChartCard.tsx`.
-
-Every on/off control inside the chart cog - the seven overlays, the EMAs, the
-studies, the CB-line marker - was a pill with a 12-14px filled square in front
-of the label. Two things were wrong with it in a 330px panel:
-
-- **It read as squares, not as a list.** With four things on, the Draw section
-  rendered as a field of saturated blue blocks with words beside them. The eye
-  went to the blocks; the labels were the afterthought.
-- **It was a second visual language inside one menu.** The other half of that
-  panel is `SegGroup` pickers, which indicate state by lighting up. A checkbox
-  next to a segmented control is two grammars for the same idea.
-
-Both `PanelChip` (overlays, markers) and `EsCandles`' local `Toggle` (indicators)
-are now **chips**: rounded pill, flat and grey when off, lit + cyan-bordered with
-a soft glow when on - the same treatment `SegGroup` already uses, so the panel
-speaks one language throughout. The checkbox's real job - "is anything on in
-here?" - is already done better by the section header's live "N on" count, which
-landed with the accordion.
-
-`swatch` survives on the indicator chips and matters more without the box: it is
-what tells three running EMAs apart without toggling them off one at a time.
-
-**Two layout fixes that follow from chips hugging their labels:**
-
-- The overlays container went from a fixed `minmax(0,1fr) minmax(0,1fr)` grid to
-  a wrapping flex row. A two-track grid sized every cell to the widest chip, so
-  "TPO" sat in a box built for "PDH/ON+EM" and short labels left a ragged empty
-  column. Flowing packs seven overlays into three lines instead of four and
-  stops the labels truncating.
-- The CB-line chip inside `PanelSection` got a flex wrapper. That section is a
-  grid whose cells stretch (the sliders want that), and a chip stretched to the
-  full panel width stops reading as a chip.
+Preview of the corrected shading model: `generated/2026-08-21-gex-terrain-relief.png`.
 
 ## 2026-08-21 - Test Labs GEX Map: terrain is lit, not just tinted
 

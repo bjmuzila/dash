@@ -72,7 +72,9 @@ import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEconCalendar } from "@/hooks/useEconCalendar";
 import { isStale } from "@/lib/econCalendar";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
+import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import TickerBoard from "@/components/pages/premarket/TickerBoard";
+import { recentSessions, sessionLabel } from "@/components/pages/premarket/postMarketData";
 import {
   netGEXOf,
   callGEXOf,
@@ -116,6 +118,28 @@ const CSS = `
 .pmk .pagehead{display:flex;align-items:baseline;gap:14px;margin-bottom:14px;flex-wrap:wrap}
 .pmk .pagehead h1{font-size:17px;margin:0;font-weight:650;letter-spacing:-.01em}
 .pmk .badge-concept{font-size:10px;padding:3px 8px;border:1px solid var(--line2);border-radius:999px;color:var(--dim);letter-spacing:.06em}
+
+/* SESSION PICKER — the same shell as .tabs so the head reads as one control
+   strip: 1px var(--line2) border, 9px radius, 11.5px type. A native select is
+   used (it is a one-of-many choice and the OS list is the right affordance on
+   a phone) but its chrome is stripped and the caret is redrawn from theme
+   tokens, because the platform caret is the one part that cannot be themed.
+   The caret is on the WRAPPER, so it stays put whatever the label's width. */
+.pmk .dsel{position:relative;display:inline-flex;align-items:center;align-self:center}
+.pmk .dsel::after{content:"";position:absolute;right:11px;top:50%;width:5px;height:5px;
+  border-right:1.5px solid var(--dim);border-bottom:1.5px solid var(--dim);
+  transform:translateY(-70%) rotate(45deg);pointer-events:none}
+.pmk .dsel select{appearance:none;-webkit-appearance:none;-moz-appearance:none;
+  background:transparent;color:var(--txt);border:1px solid var(--line2);border-radius:9px;
+  font:inherit;font-size:11.5px;letter-spacing:.04em;padding:5px 27px 5px 12px;cursor:pointer;
+  font-variant-numeric:tabular-nums}
+.pmk .dsel select:hover{background:#1e2836}
+.pmk .dsel select:focus{outline:none;border-color:var(--dim2)}
+/* The popup list is drawn by the OS and inherits nothing — these two are the
+   only properties it honours, and without them a dark page opens a white menu. */
+.pmk .dsel option{background:var(--panel2);color:var(--txt)}
+.pmk .dsel.past select{border-color:rgba(245,185,66,.45);color:var(--amber)}
+.pmk .dsel.past::after{border-color:var(--amber)}
 
 .pmk .prep{
   border:1px solid var(--card);border-radius:14px;overflow:hidden;
@@ -326,6 +350,17 @@ const LEGACY_EOD_KEY = "cb-premarket-eod-v1";
 const TAB_KEY = "cb-premarket-tab-v1";
 /** Which SYMBOL the user last chose, same session-only scope. */
 const SYM_KEY = "cb-premarket-sym-v1";
+/**
+ * Which SESSION the user last chose. Session-only like the other two, and
+ * deliberately NOT localStorage: a date is a look-up, not a setting, and a page
+ * that reopens tomorrow still stuck on last Tuesday reads as broken data rather
+ * than as a remembered choice. A stored date that is no longer in the picker's
+ * window (it aged out, or the tab was left open across a session boundary) is
+ * dropped on read and the page falls back to today.
+ */
+const DATE_KEY = "cb-premarket-date-v1";
+/** How many sessions back the picker offers. */
+const SESSION_COUNT = 15;
 
 /**
  * SPX is the live board — it owns the socket, the ES basis, the overnight
@@ -1026,33 +1061,99 @@ export default function Premarket() {
     try { sessionStorage.setItem(SYM_KEY, v); } catch { /* nothing to do */ }
   }, []);
 
+  // ── SESSION DATE ───────────────────────────────────────────────────────────
+  // Today is the live page and the default; any earlier entry is a look-up of
+  // what was RECORDED that day, which is a different surface entirely — see
+  // HistoricalRecap's header for why a past date does not just get piped into
+  // PostMarketTab. `etDate` recomputes as the ET clock rolls over midnight, so
+  // the option list follows it without a reload.
+  const sessions = useMemo(() => recentSessions(etDate, SESSION_COUNT), [etDate]);
+  const [sessionDate, setSessionDate] = useState(etDate);
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(DATE_KEY);
+      if (saved && sessions.includes(saved)) setSessionDate(saved);
+    } catch { /* private mode — today it is */ }
+    // Deliberately once, on mount. Re-running it whenever `sessions` changes
+    // would drag the user back to a stored date every time the clock ticked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // A selection that has aged out of the window (the tab was left open across a
+  // session boundary) snaps back to today rather than querying a date the
+  // picker no longer shows.
+  useEffect(() => {
+    if (!sessions.includes(sessionDate)) setSessionDate(etDate);
+  }, [sessions, sessionDate, etDate]);
+  const pickDate = useCallback((v: string) => {
+    setSessionDate(v);
+    try { sessionStorage.setItem(DATE_KEY, v); } catch { /* nothing to do */ }
+  }, []);
+  const isHistorical = sessionDate !== etDate;
+
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
-      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS }} />
       <div className="wrap">
 
         <div className="pagehead">
-          <h1>{tab === "post" ? "Post-Market Recap" : "Premarket Prep"}</h1>
+          <h1>
+            {isHistorical ? "Session Recap" : tab === "post" ? "Post-Market Recap" : "Premarket Prep"}
+          </h1>
           <div className="tabs">
             {SYMBOLS.map((s2) => (
               <button key={s2} className={sym === s2 ? "on" : ""} onClick={() => pickSym(s2)}>{s2}</button>
             ))}
           </div>
           <span className="badge-concept">
-            {sym === "SPX"
-              ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · ${feedLabel} · ${openLabel}`
-              : `${sym} · CHAIN POLL · ${openLabel}`}
+            {isHistorical
+              ? `${sym} · RECORDED · ${sessionLabel(sessionDate)}`
+              : sym === "SPX"
+                ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · ${feedLabel} · ${openLabel}`
+                : `${sym} · CHAIN POLL · ${openLabel}`}
           </span>
-          <div className="tabs" style={{ marginLeft: "auto" }}>
-            <button className={tab === "pre" ? "on" : ""} onClick={() => pickTab("pre")}>Premarket</button>
-            <button className={tab === "post" ? "on" : ""} onClick={() => pickTab("post")}>
+          <span className={`dsel${isHistorical ? " past" : ""}`} style={{ marginLeft: "auto" }}>
+            <select
+              value={sessionDate}
+              onChange={(e) => pickDate(e.target.value)}
+              title="Which session to show. Today is the live page; earlier dates show what was recorded that day."
+              aria-label="Session date"
+            >
+              {sessions.map((d) => (
+                <option key={d} value={d}>
+                  {d === etDate ? `Today · ${sessionLabel(d)}` : sessionLabel(d)}
+                </option>
+              ))}
+            </select>
+          </span>
+          <div className="tabs">
+            <button
+              className={!isHistorical && tab === "pre" ? "on" : ""}
+              disabled={isHistorical}
+              title={isHistorical ? "A premarket map only exists for the live session" : undefined}
+              style={isHistorical ? { opacity: .4, cursor: "not-allowed" } : undefined}
+              onClick={() => pickTab("pre")}
+            >
+              Premarket
+            </button>
+            <button
+              className={!isHistorical && tab === "post" ? "on" : ""}
+              disabled={isHistorical}
+              title={isHistorical ? "Showing the recorded recap for the chosen session" : undefined}
+              style={isHistorical ? { opacity: .4, cursor: "not-allowed" } : undefined}
+              onClick={() => pickTab("post")}
+            >
               <span className="tdot" style={{ background: afterClose ? "var(--blue)" : "#55606e" }} />
               Post-Market
             </button>
           </div>
         </div>
 
-        {sym !== "SPX" ? (
+        {isHistorical ? (
+          /* A past session is recorded history, not a live board — TickerBoard
+             and PostMarketTab both read the CURRENT chain, so neither can be
+             pointed at it. HistoricalRecap renders only the per-date stores. */
+          <HistoricalRecap date={sessionDate} symbol={sym} />
+        ) : sym !== "SPX" ? (
           <TickerBoard ticker={sym} view={tab} etDate={etDate} />
         ) : tab === "post" ? (
           <PostMarketTab

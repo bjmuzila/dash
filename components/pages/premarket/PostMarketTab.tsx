@@ -69,6 +69,7 @@ import {
   useIntradayLadder,
   useNextExpiryStructure,
   useRecordedWalls,
+  NOTES_KEY,
   LEVEL_LABEL,
   REACTION_LABEL,
   REACTION_TONE,
@@ -297,7 +298,8 @@ export type PostMarketProps = {
   hasData: boolean;
 };
 
-const NOTES_KEY = "cb-postmarket-notes-v1";
+// NOTES_KEY now lives in ./postMarketData so the historical recap writes the
+// same per-date journal this tab does.
 const LOG_KEY = "cb-postmarket-log-v1";
 
 const nf = (v: number, dp = 0) =>

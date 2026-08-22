@@ -48,6 +48,49 @@ export const isEtWeekend = (ts: number) => {
 
 export const RTH_OPEN_MIN = 9 * 60 + 30;
 export const RTH_CLOSE_MIN = 16 * 60;
+
+/**
+ * The session journal's storage key. Lives here rather than in PostMarketTab
+ * because the historical recap writes the SAME per-date notes: two keys would
+ * mean a note typed on the live tab vanished the moment you looked the day up
+ * again tomorrow.
+ */
+export const NOTES_KEY = "cb-postmarket-notes-v1";
+
+/**
+ * The last `n` trading sessions ending at `today` (ET, "YYYY-MM-DD"), newest
+ * first, for the session picker.
+ *
+ * Weekends only — there is no market-holiday calendar in the client, and
+ * inventing one would be worse than listing a holiday: a wrong holiday HIDES a
+ * session that has data. A listed holiday just answers "nothing recorded", which
+ * is the truth. `today` is always the first entry even on a weekend, because it
+ * is the live option and the picker must be able to get back to it.
+ *
+ * Dates are walked at 12:00Z so a DST shift can never roll the arithmetic onto
+ * the wrong calendar day.
+ */
+export function recentSessions(today: string, n = 15): string[] {
+  const out: string[] = [today];
+  let t = Date.parse(`${today}T12:00:00Z`);
+  if (!Number.isFinite(t)) return out;
+  while (out.length < n) {
+    t -= 86_400_000;
+    const d = new Date(t);
+    if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+/** "Fri Aug 21" for a session date — the picker's label. Parsed at 12:00Z. */
+export function sessionLabel(date: string): string {
+  const t = Date.parse(`${date}T12:00:00Z`);
+  if (!Number.isFinite(t)) return date;
+  return new Date(t).toLocaleDateString("en-US", {
+    timeZone: "UTC", weekday: "short", month: "short", day: "numeric",
+  });
+}
 // ─────────────────────────────────────────────────────────────────────────────
 //  intraday ladder history — the thing that makes a real recap possible
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,8 +116,25 @@ export type HistState = "loading" | "ok" | "empty" | "error";
  *
  * `top` is not a parameter this route understands (the bubble hook passes one
  * anyway) — heatmap mode always returns the full ladder. It is not sent here.
+ *
+ * ── `date` (optional) — READING A PAST SESSION ──────────────────────────────
+ * Omitted, everything above holds: a rolling 480-minute window, resolved to the
+ * newest non-weekend day in it, polled while the tab is open. That is the live
+ * path and it is untouched.
+ *
+ * Passed, the hook asks for ONE named session instead. `minutes=0` is the
+ * route's own switch from "window" to "this exact day" — it drops the
+ * wall-clock window and calls getOptionStrikeGexSlots(date, expiry, symbol) —
+ * and the newest-non-weekend-day heuristic is skipped, because the caller has
+ * already said which day it wants. It is also not polled: a settled session
+ * does not change.
+ *
+ * NOTE the retention floor. pruneOptionStrikeGexHistory keeps ~2 SESSIONS of
+ * the per-minute ladder, so a date older than that legitimately answers empty.
+ * That is a real "not recorded", not a failure, and the caller renders it as
+ * one rather than filling the gap in.
  */
-export function useIntradayLadder(enabled: boolean, expiry: string) {
+export function useIntradayLadder(enabled: boolean, expiry: string, date?: string) {
   const [cols, setCols] = useState<Col[]>([]);
   const [state, setState] = useState<HistState>("loading");
 
@@ -85,8 +145,11 @@ export function useIntradayLadder(enabled: boolean, expiry: string) {
     const load = async () => {
       try {
         const res = await dedupeFetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=480` +
-            `&expiry=${encodeURIComponent(expiry)}`,
+          date
+            ? `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=0` +
+                `&date=${encodeURIComponent(date)}&expiry=${encodeURIComponent(expiry)}`
+            : `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=480` +
+                `&expiry=${encodeURIComponent(expiry)}`,
           { cache: "no-store" },
           20_000,
         );
@@ -101,11 +164,16 @@ export function useIntradayLadder(enabled: boolean, expiry: string) {
         // Newest NON-WEEKEND day present. The recorder has no market-hours gate,
         // so on a Saturday "today" is empty and the newest day is a frozen copy
         // of Friday stamped Saturday.
-        let target = "";
-        for (const c of [...raw].sort((a, b) => b.slotTs - a.slotTs)) {
-          if (isEtWeekend(c.slotTs)) continue;
-          target = etDay(c.slotTs);
-          break;
+        //
+        // An explicit `date` short-circuits it: the caller named the session, so
+        // guessing one from the payload could only disagree with them.
+        let target = date ?? "";
+        if (!target) {
+          for (const c of [...raw].sort((a, b) => b.slotTs - a.slotTs)) {
+            if (isEtWeekend(c.slotTs)) continue;
+            target = etDay(c.slotTs);
+            break;
+          }
         }
         if (!target) { if (!cancelled) { setCols([]); setState("empty"); } return; }
 
@@ -142,9 +210,11 @@ export function useIntradayLadder(enabled: boolean, expiry: string) {
     };
 
     void load();
+    // A settled session is settled — only the live path polls.
+    if (date) return () => { cancelled = true; };
     const id = setInterval(load, 120_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [enabled, expiry]);
+  }, [enabled, expiry, date]);
 
   return { cols, state };
 }

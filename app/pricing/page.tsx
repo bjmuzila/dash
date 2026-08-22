@@ -162,15 +162,54 @@ export default async function PricingPage({
           <section style={{ ...homeGlossPanelStyle(T.cyan), padding: "clamp(20px,3vw,28px)" }} className="card-hover">
             <div style={{ ...sectionLabel, color: T.cyan }}>Membership</div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, margin: "4px 0 14px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, margin: "4px 0 14px" }}>
               <PlanPrice label="Monthly" original={120} price={45} period="/mo" />
-              <PlanPrice label="Yearly" original={1000} price={500} period="/yr" />
+
+              {/* Yearly is the plan we want people on — it gets the loud treatment:
+                  accent border, "best value" ribbon, bigger figure and the savings
+                  math spelled out against 12x the monthly price. */}
+              <div
+                style={{
+                  position: "relative",
+                  padding: "16px 16px 14px",
+                  borderRadius: 12,
+                  border: `2px solid ${T.cyan}`,
+                  background:
+                    "linear-gradient(180deg, rgba(33,158,188,0.20) 0%, rgba(33,158,188,0.07) 100%)",
+                  boxShadow: "0 0 0 4px rgba(33,158,188,0.10), 0 10px 28px rgba(33,158,188,0.22)",
+                }}
+              >
+                <div
+                  style={{
+                    position: "absolute",
+                    top: -11,
+                    left: 14,
+                    fontSize: 11,
+                    fontWeight: 900,
+                    letterSpacing: "0.12em",
+                    textTransform: "uppercase",
+                    color: "#04121a",
+                    background: T.cyan,
+                    borderRadius: 999,
+                    padding: "3px 10px",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Best value · Save $140
+                </div>
+
+                <PlanPrice label="Yearly" original={1000} price={400} period="/yr" highlight />
+
+                <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: T.cyan, lineHeight: 1.45 }}>
+                  60% off · works out to $33/mo — under 12 months of monthly billing.
+                </div>
+              </div>
             </div>
 
             <div
               style={{
                 marginBottom: 18,
-                padding: "8px 14px",
+                padding: "10px 14px",
                 borderRadius: 10,
                 background: "rgba(33,158,188,0.08)",
                 border: "1px solid rgba(33,158,188,0.25)",
@@ -180,8 +219,11 @@ export default async function PricingPage({
               <span style={{ fontSize: 14, color: DIM }}>Enter code </span>
               <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>MONTH</span>
               <span style={{ fontSize: 14, color: DIM }}> or </span>
-              <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>YEAR</span>
+              <span style={{ fontSize: 15, fontWeight: 900, color: T.cyan, letterSpacing: "0.06em" }}>EDGE3</span>
               <span style={{ fontSize: 14, color: DIM }}> at checkout to lock in this price</span>
+              <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: T.cyan, letterSpacing: "0.04em" }}>
+                EDGE3 = $400 for the year
+              </div>
             </div>
 
             <p style={{ color: DIM, fontSize: 14, margin: "0 0 22px", lineHeight: 1.5 }}>
@@ -193,7 +235,7 @@ export default async function PricingPage({
                 hasAccess={access.ok}
                 hasBilling={hasBilling}
                 monthlyLabel="Subscribe monthly — $45/mo"
-                yearlyLabel="Subscribe yearly — $500/yr"
+                yearlyLabel="Subscribe yearly — $400/yr · best value"
               />
             ) : (
               <BetaGate />
@@ -213,26 +255,54 @@ export default async function PricingPage({
   );
 }
 
+// `highlight` is the promoted plan: white bold label, larger figure and a solid
+// accent so the yearly row reads as the obvious pick next to monthly.
 function PlanPrice({
   label,
   original,
   price,
   period,
+  highlight = false,
 }: {
   label: string;
   original: number;
   price: number;
   period: string;
+  highlight?: boolean;
 }) {
   return (
-    <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-      <span style={{ fontSize: 14, fontWeight: 700, color: DIM, minWidth: 58 }}>{label}</span>
-      <span style={{ fontSize: 14, color: "rgba(255,255,255,0.4)", textDecoration: "line-through" }}>
+    <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+      <span
+        style={{
+          fontSize: highlight ? 15 : 14,
+          fontWeight: highlight ? 900 : 700,
+          color: highlight ? T.text : DIM,
+          letterSpacing: highlight ? "0.04em" : undefined,
+          minWidth: 58,
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          fontSize: 14,
+          color: highlight ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.4)",
+          textDecoration: "line-through",
+        }}
+      >
         ${original}
       </span>
-      <span style={{ fontSize: 24, fontWeight: 800, color: T.cyan }}>
+      <span
+        style={{
+          fontSize: highlight ? 38 : 24,
+          fontWeight: 900,
+          color: T.cyan,
+          lineHeight: 1,
+          textShadow: highlight ? "0 0 22px rgba(33,158,188,0.55)" : undefined,
+        }}
+      >
         ${price}
-        <span style={{ fontSize: 14, fontWeight: 700, color: DIM }}>{period}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: highlight ? T.text : DIM }}>{period}</span>
       </span>
     </div>
   );

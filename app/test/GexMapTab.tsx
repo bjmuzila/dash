@@ -1450,25 +1450,77 @@ function TerrainField({ m, L, TP, FWD, FHT, snap = false }: {
     // uses, so one band step and one facet of the surface describe the same
     // rise, and the terraces light coherently with the tint.
     const HGT: number[][] = F.map((r) => r.map((v) => Math.pow(Math.min(1, Math.abs(v)), 0.55)));
+
+    // The lighting is computed from a SMOOTHED copy of that height, never the
+    // raw one — and this is the difference between relief and melting curtains.
+    //
+    // The two axes are not comparable. Strike is gaussian-smoothed on the way
+    // in; time is only linear between recorded slots, so a slot where a node
+    // jumped is a ONE-CELL cliff in x. Lighting that raw field turns every one
+    // of them into a full-height vertical bar, black down one side and blown
+    // out down the other, and the map runs like wet paint.
+    //
+    // So the light is blurred to the resolution the DATA actually has: the
+    // radius is one recorded slot wide (NX/nC samples per slot), applied twice
+    // ≈ a gaussian. Nothing finer than a slot gets lit, because nothing finer
+    // than a slot was measured. Strike gets a single-cell pass — it arrived
+    // smooth already. Both scale with the sample grid, so this holds at every
+    // zoom level.
+    //
+    // Only the LIGHT is smoothed. The tint and the contours still read the
+    // unblurred field, so no node moves and no level shifts.
+    const BR = Math.max(1, Math.round((1.1 * NX) / Math.max(1, nC)));
+    const boxX = (src: number[][], r: number) => src.map((row) => {
+      const out = new Array<number>(NX);
+      const at = (i: number) => row[i < 0 ? 0 : i > NX - 1 ? NX - 1 : i];
+      let acc = 0;
+      for (let i = -r; i <= r; i++) acc += at(i);
+      for (let i = 0; i < NX; i++) { out[i] = acc / (2 * r + 1); acc -= at(i - r); acc += at(i + r + 1); }
+      return out;
+    });
+    const boxY = (src: number[][], r: number) => {
+      const out: number[][] = [];
+      for (let j = 0; j < NY; j++) {
+        const row = new Array<number>(NX);
+        for (let i = 0; i < NX; i++) {
+          let a = 0;
+          for (let k = -r; k <= r; k++) a += src[Math.max(0, Math.min(NY - 1, j + k))][i];
+          row[i] = a / (2 * r + 1);
+        }
+        out.push(row);
+      }
+      return out;
+    };
+    const LIT = boxY(boxX(boxX(HGT, BR), BR), 1);
+
     // Sun: upper-left, ~29° above the horizon (the vector is already unit).
     // Low sun on purpose — it is what makes small steps throw a visible face.
     const LX = -0.62, LY = -0.62, LZ = 0.48;
-    // Vertical exaggeration. Gradients are taken PER GRID CELL, and a cell is a
-    // couple of minutes by a fraction of a strike, so the raw slope of even a
-    // big wall is a few hundredths per cell — at 1× the whole map lights flat.
-    // ~22 is where a real node throws a face and the chop still does not.
-    const EXAG = 22;
-    // Gradient of the height field, one pair per grid node. The lighting itself
-    // is done PER PIXEL from these (bilinear), because the terrace pass below
-    // needs the slope direction at the same place it needs the band fraction.
+    // Slope is measured PER CSS PIXEL, not per grid cell. A cell is ~3px wide
+    // and ~1.5px tall (NX columns of minutes vs NY rows of strikes), so a
+    // per-cell gradient lights the two axes at different strengths — which is
+    // the other half of the curtain problem: x-noise came out roughly twice as
+    // steep as the same bump in y. Dividing by the cell's pixel size makes the
+    // surface isotropic on screen, and SLOPE_PX then means one thing: a rise of
+    // the full height over ~55px stands as a 45° face.
+    const SLOPE_PX = 55;
+    const pxX = Math.max(0.35, FWD / NX), pxY = Math.max(0.35, FHT / NY);
+    // Cliffs are clamped. Past ~2.5 the normal is already almost horizontal and
+    // the extra steepness buys nothing but a black or blown-out edge.
+    const GCAP = 2.5;
+    const cap = (g: number) => (g > GCAP ? GCAP : g < -GCAP ? -GCAP : g);
+    // Gradient of the lit height field, one pair per grid node. The lighting
+    // itself is done PER PIXEL from these (bilinear), because the terrace pass
+    // below needs the slope direction at the same place it needs the band
+    // fraction.
     const GX: number[][] = [], GY: number[][] = [];
     for (let j = 0; j < NY; j++) {
       const rx: number[] = [], ry: number[] = [];
       for (let i = 0; i < NX; i++) {
         const i0 = i > 0 ? i - 1 : i, i1 = i < NX - 1 ? i + 1 : i;
         const j0 = j > 0 ? j - 1 : j, j1 = j < NY - 1 ? j + 1 : j;
-        rx.push(((HGT[j][i1] - HGT[j][i0]) / (i1 - i0 || 1)) * EXAG);
-        ry.push(((HGT[j1][i] - HGT[j0][i]) / (j1 - j0 || 1)) * EXAG);
+        rx.push(cap(((LIT[j][i1] - LIT[j][i0]) / (i1 - i0 || 1)) / pxX * SLOPE_PX));
+        ry.push(cap(((LIT[j1][i] - LIT[j0][i]) / (j1 - j0 || 1)) / pxY * SLOPE_PX));
       }
       GX.push(rx); GY.push(ry);
     }
@@ -1531,8 +1583,9 @@ function TerrainField({ m, L, TP, FWD, FHT, snap = false }: {
         // Apply the light. `shd` is 0.48 on dead-flat ground, so the multiplier
         // is centred to land on ~1.0 there — flat tape keeps the exact colour
         // the hypsometric ramp assigned it, and only SLOPE moves it. Lit faces
-        // go up to ~1.8×, shadowed faces down to 0.28×, which is the whole point:
-        // the eye reads the pair as one solid rising out of the plane.
+        // reach ~1.5×, shadowed faces ~0.5×: enough that the eye reads the pair
+        // as one solid rising out of the plane, not so much that a broad slope
+        // (which is most of this map) washes out to white or blacks in.
         //
         // Relief is scaled by `relief` so the noise floor of the quiet tape is
         // not lit into fake mountains — near zero elevation the surface stays
@@ -1549,15 +1602,16 @@ function TerrainField({ m, L, TP, FWD, FHT, snap = false }: {
         // `gmag` gates it: on flat tape the slope direction is noise, and
         // embossing noise would invent structure that is not in the gamma.
         const gmag = Math.sqrt(q);
-        const gate = clamp01(gmag / 0.55) * clamp01(av / 0.10);
+        const gate = clamp01(gmag / 0.9) * clamp01(av / 0.10);
         const face = gmag > 1e-4 ? -(gx * LX + gy * LY) / gmag : 0;  // downhill · sun
         const riser = frac * frac * frac;                            // hugs the edge
-        const terrace = 1 + 0.42 * riser * face * gate;
-        const lightMul = terrace * (1 + relief * (Math.max(0.28, Math.min(1.85, 0.30 + 1.46 * shd)) - 1));
+        const terrace = 1 + 0.28 * riser * face * gate;
+        const lightMul = terrace * (1 + relief * (Math.max(0.45, Math.min(1.55, 0.52 + 1.00 * shd)) - 1));
         // Specular: a thin white crest on faces square to the sun, gated on
         // elevation so only real ridges catch it. This is the "obvious when it
-        // is high" term — big walls glint, chop does not.
-        const glint = spc * 46 * av * av;
+        // is high" term — big walls glint, chop does not. Kept small: it is a
+        // crest highlight, not a light source.
+        const glint = spc * 20 * av * av;
         const o = (y * cv.width + x) * 4;
         img.data[o] = Math.min(255, c[0] * lightMul + glint);
         img.data[o + 1] = Math.min(255, c[1] * lightMul + glint);
