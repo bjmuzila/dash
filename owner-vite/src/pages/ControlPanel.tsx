@@ -1649,7 +1649,12 @@ function TopPagesCard({
   );
 }
 
-function OverviewSection({ metrics, gran }: {
+// React.memo, paired with the useMemo on `metrics` below. Without BOTH, the
+// sidebar's 1s clock re-renders every chart, bar list and table on this tab once
+// a second — memoising the data alone still hands down a new object, and
+// memoising the component alone still gets one. Together, a tick that changes
+// nothing on this tab costs nothing on this tab.
+const OverviewSection = React.memo(function OverviewSection({ metrics, gran }: {
   gran: OverviewGran;
   metrics: {
     daily: { counts: number[]; labels: string[] };
@@ -1662,7 +1667,6 @@ function OverviewSection({ metrics, gran }: {
     waitlist: number | null;
     activeSessions: number | null;
     onToday: number;
-    uptime: string;
     feed: Array<{ label: string; loads: number; ago: string; active: boolean }>;
     rowsToday: Array<{ label: string; rows: number }>;
     visits: PageVisit[];
@@ -1776,7 +1780,7 @@ function OverviewSection({ metrics, gran }: {
 
     </div>
   );
-}
+});
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -1905,6 +1909,9 @@ export default function ControlPanel() {
 
   // Visit log (page loads w/ IP). Collapsed state persisted in localStorage.
   const [visits, setVisits] = useState<PageVisit[]>([]);
+  // When the visit log was last pulled. Only advanced on a SUCCESSFUL fetch, so
+  // a failed attempt retries on the next refresh instead of waiting 5 minutes.
+  const visitsFetchedAtRef = useRef(0);
   const [visitLogCollapsed, setVisitLogCollapsed] = useState(true);
   useEffect(() => {
     try {
@@ -2147,10 +2154,26 @@ export default function ControlPanel() {
       // Acquisition cards both offer a 30-day window; with only 7 days fetched
       // those buttons silently returned the same 7 days and read as "traffic
       // flat for a month". limit is the response cap, not a storage cap.
-      try {
-        const pv = await fetch("/api/page-visits?days=30&limit=20000", { cache: "no-store" });
-        if (pv.ok) { const j = await pv.json(); setVisits((j?.visits ?? []) as PageVisit[]); }
-      } catch { /* non-fatal */ }
+      //
+      // THROTTLED to once every 5 minutes, unlike everything else in refresh().
+      // This is the one payload here measured in thousands of rows, and every
+      // arrival replaces the array — which invalidates the memos in four
+      // consumers (metrics, Top pages, Acquisition, the link builder) and makes
+      // all of them re-derive from scratch. At refresh()'s 60s cadence that was
+      // a visible hitch every minute, buying a fresher view of a log that is
+      // read in 24h/7d/30d windows. Five minutes is well inside the resolution
+      // anything on this tab actually displays.
+      const VISITS_MAX_AGE_MS = 5 * 60_000;
+      if (Date.now() - visitsFetchedAtRef.current > VISITS_MAX_AGE_MS) {
+        try {
+          const pv = await fetch("/api/page-visits?days=30&limit=20000", { cache: "no-store" });
+          if (pv.ok) {
+            const j = await pv.json();
+            setVisits((j?.visits ?? []) as PageVisit[]);
+            visitsFetchedAtRef.current = Date.now();
+          }
+        } catch { /* non-fatal */ }
+      }
 
       // Auth status (masked — never includes any secret value).
       try {
@@ -2479,7 +2502,19 @@ export default function ControlPanel() {
   const cpuAccent = cpuPct > 80 ? HOME_THEME.red : cpuPct > 40 ? HOME_THEME.orange : HOME_THEME.green;
 
   // ── Overview tab metrics (all from real front-end data) ─────────────────────
-  const overviewMetrics = (() => {
+  //
+  // MEMOISED, and that is load-bearing rather than tidiness. A 1s interval bumps
+  // uptimeTick/setTick to keep the sidebar clock moving, which re-renders this
+  // component every second. As a bare IIFE this block re-ran on every one of
+  // those ticks: a full pass over `visits` for onToday, three more for the daily
+  // /weekly series, a sort of pageStatuses — a few thousand rows of work per
+  // second, for a clock. It also returned a fresh object each time, so
+  // OverviewSection and every chart under it re-rendered at 1Hz as well.
+  //
+  // Deps are the things the numbers actually come from. displayUptime is NOT
+  // among them (see above) — including a per-second value would defeat the memo
+  // completely, which is exactly what the removed `uptime` field did.
+  const overviewMetrics = useMemo(() => {
     const labelFor = (key: string): string => {
       const hit = NAV_GROUPS.flatMap((g) => g.items).find(
         (it) => it.href.replace(/^\//, "") === key || it.href === key
@@ -2553,7 +2588,6 @@ export default function ControlPanel() {
       waitlist: waitlistCount,
       activeSessions: authStatus?.stats?.activeSessions ?? null,
       onToday,
-      uptime: displayUptime != null ? fmtUptime(displayUptime) : "—",
       feed,
       rowsToday,
       visits,
@@ -2561,7 +2595,9 @@ export default function ControlPanel() {
       infra,
 
     };
-  })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageStatuses, visits, authStatus, subscriberCount, waitlistCount, dbStats,
+      renderMetrics, cfMetrics, wsBw, cpuPct, memMb]);
 
   // ── Sidebar nav items ──────────────────────────────────────────────────────
   const NAV_ITEMS: { id: OwnerTab; label: string; badge?: string | number; badgeRed?: boolean }[] = [
@@ -2588,6 +2624,13 @@ export default function ControlPanel() {
 
   // Sidebar content extracted so it can render both in the fixed panel (desktop)
   // and the slide-in drawer (mobile).
+  //
+  // CALLED as a function below — `{SidebarContent()}`, not `<SidebarContent />`.
+  // Declaring a component inside render gives it a NEW identity on every render,
+  // and React tears down and rebuilds a subtree whose type changed. With the 1s
+  // clock tick driving renders, that was the entire mobile drawer unmounting and
+  // remounting once a second (losing any focus or scroll inside it). Calling it
+  // inlines the JSX into this component's own tree, where it reconciles normally.
   const SidebarContent = () => (
     <>
       {/* Logo row */}
@@ -2736,7 +2779,7 @@ export default function ControlPanel() {
           transition: "transform 0.22s cubic-bezier(0.4,0,0.2,1)",
           overflowY: "auto",
         }}>
-          <SidebarContent />
+          {SidebarContent()}
         </div>
       )}
 

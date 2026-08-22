@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-08-22 (b) - Owner Overview: fix the 1Hz re-render that made the page crawl
+
+Edited: `owner-vite/src/pages/ControlPanel.tsx`.
+
+The page had become very laggy. Four causes, all of them the same shape: a
+one-second interval that exists to move a clock was driving work that has
+nothing to do with a clock. The visit-log cards added yesterday didn't create
+any of this — they made an existing problem expensive enough to feel.
+
+**1. `overviewMetrics` was a bare IIFE.** A `setInterval` bumps
+`uptimeTick`/`setTick` every second so the sidebar's uptime and "Ns ago" stay
+live. That re-renders ControlPanel, and the metrics block re-ran on every tick:
+a full pass over `visits` for the unique-visitors-today set, three more for the
+daily/weekly series, a sort of `pageStatuses` — thousands of rows of work per
+second, to redraw a clock. It also returned a **fresh object** each time, so
+`OverviewSection` and every chart, bar list and table under it re-rendered at
+1Hz too. Now `useMemo`, keyed on the state the numbers actually come from.
+
+**2. The metrics object carried a per-second field.** `uptime: fmtUptime(…)`
+recomputed every tick and was the one thing in the object that could never be
+stable — so it alone would have defeated the memo. Nothing read it: the
+destructure in `OverviewSection` never included it. Removed from the object and
+the type.
+
+**3. `OverviewSection` is now `React.memo`.** Paired with (1), and both are
+needed: memoising the data alone still hands down a new object, memoising the
+component alone still receives one. Together a tick that changes nothing on the
+tab costs nothing on the tab.
+
+**4. `SidebarContent` was a component declared inside render.** A new function
+identity every render means React tears down and rebuilds the subtree whose type
+changed — so the mobile drawer was unmounting and remounting once per second,
+losing any focus or scroll inside it. Called as `{SidebarContent()}` now, which
+inlines the JSX into the parent's own tree where it reconciles normally.
+
+**Plus: the visit log no longer re-downloads every 60s.** `refresh()` runs on a
+one-minute timer and was re-pulling `/api/page-visits?days=30&limit=20000` with
+it. Every arrival replaces the array, which invalidates the memos in four
+consumers (metrics, Top pages, Acquisition, the link builder) and makes all of
+them re-derive from scratch — a visible hitch every minute, buying a fresher
+view of a log that is read in 24h/7d/30d windows. Throttled to 5 minutes via a
+ref that only advances on a SUCCESSFUL fetch, so a failed attempt retries on the
+next refresh instead of waiting out the window.
+
+The 1s interval itself is left alone — it is correct for what it was for, and
+the fix is that it can no longer reach anything else.
 ## 2026-08-22 - Session picker: wire it to the history that actually exists
 
 Edited: `components/pages/premarket/postMarketData.ts`,
