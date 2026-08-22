@@ -499,6 +499,8 @@ export default function LevelLog() {
 
   /** The real tape for the selected ticker/date — best-effort, see the hook. */
   const price = useIntradaySpot(sel, date, nonce);
+  /** The 5m wall/gamma history the change-only log was distilled from. */
+  const snaps = useWallSeries(sel, date, nonce);
 
   // ── the view switch, applied once ──────────────────────────────────────────
   // Everything downstream (rail, timeline, copy text, PNG) reads these, so the
@@ -716,7 +718,7 @@ export default function LevelLog() {
           {/* The same session as a picture. Sits ABOVE the scroll body on
               purpose: framed capture expands that body without reflowing its
               siblings, so anything under it gets drawn over in the PNG. */}
-          <WallMigrationChart log={log} events={events} view={view} price={price} />
+          <WallMigrationChart log={log} events={events} view={view} price={price} snaps={snaps} />
 
           {/* Header + capture rail stay pinned; only the entries scroll. The
               snapshot expands past this (framed mode), so the PNG is the whole
@@ -1035,6 +1037,83 @@ function useIntradaySpot(symbol: string | null, date: string, nonce: number): Sp
   return rows;
 }
 
+/** One 5-minute scanner_snapshots row, reduced to what the chart reads. */
+type SnapSample = {
+  /** Fractional slot, so a 5m sample lands under the 15m step it happened in. */
+  s: number;
+  callWall: number | null; putWall: number | null;
+  callG: number | null; putG: number | null;
+};
+
+/** Finite number or null — the series columns are nullable all the way down. */
+function fin(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** ET minutes-since-midnight for a timestamptz string. */
+function etMinsOfTs(ts: string): number {
+  const d = new Date(ts);
+  if (!Number.isFinite(d.getTime())) return NaN;
+  const s = d.toLocaleString("en-US", {
+    timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit",
+  });
+  const m = s.match(/(\d{1,2}):(\d{2})/);
+  if (!m) return NaN;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+/**
+ * THE GAMMA BEHIND THE LOG — /proxy/walls?…&series=1.
+ *
+ * walls_log is change-only, and `level_gex` only exists on the rows it wrote.
+ * Between two rolls the chart therefore had no gamma, and gamma is the whole
+ * basis of the CORE role: the heavier wall. A session where both walls hold
+ * their strikes while dominance flips call→put is a real and tradeable event
+ * that the log physically cannot express — no strike moved, so no row exists.
+ *
+ * scanner-recorder.js has always written `call_wall_gex` / `put_wall_gex` into
+ * scanner_snapshots every 5 minutes; nothing served it per symbol until the
+ * `series=1` branch. So this is a read of data already recorded — not a new
+ * recorder, not a new sweep.
+ *
+ * Best-effort, exactly like the tape: a failure, a date with no snapshots, or a
+ * symbol outside the scanner universe all resolve to [], and the chart falls
+ * back to the log's own change-row gamma — which is what it used before.
+ */
+function useWallSeries(symbol: string | null, date: string, nonce: number): SnapSample[] {
+  const [rows, setRows] = useState<SnapSample[]>([]);
+  useEffect(() => {
+    if (!symbol) { setRows([]); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/proxy/walls?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(symbol)}&series=1`,
+          { cache: "no-store" },
+        );
+        const j = await r.json();
+        const src: unknown[] = Array.isArray(j?.series) ? j.series : [];
+        const out: SnapSample[] = [];
+        for (const row of src) {
+          const rec = row as Record<string, unknown>;
+          const mins = etMinsOfTs(String(rec?.ts ?? ""));
+          if (!Number.isFinite(mins)) continue;
+          out.push({
+            s: slotAtMins(mins),
+            callWall: fin(rec.call_wall), putWall: fin(rec.put_wall),
+            callG: fin(rec.call_wall_gex), putG: fin(rec.put_wall_gex),
+          });
+        }
+        out.sort((a, b) => a.s - b.s);
+        if (alive) setRows(out);
+      } catch { if (alive) setRows([]); }
+    })();
+    return () => { alive = false; };
+  }, [symbol, date, nonce]);
+  return rows;
+}
+
 /**
  * WALL MIGRATION — the level log drawn: where the levels sat, slot by slot,
  * against the price captured with them.
@@ -1094,10 +1173,12 @@ function useIntradaySpot(symbol: string | null, date: string, nonce: number): Sp
 const ROLE_CORE_COLOR = LIGHT_BLUE;
 const ROLE_OTHER_COLOR = rgba(HOME_THEME.text, 0.42);
 
-function WallMigrationChart({ log, events, view, price }: {
+function WallMigrationChart({ log, events, view, price, snaps }: {
   log: WallLogRow[]; events: WallEventRow[]; view: LogView;
   /** The 1-minute tape, when there is one. Empty falls back to the captures. */
   price: SpotSample[];
+  /** The 5m wall/gamma series. Empty falls back to the log's change-row gamma. */
+  snaps: SnapSample[];
 }) {
   const model = useMemo(() => {
     const inSlot = (s: number) => Number.isFinite(s) && s >= 0 && s < WALL_SLOTS;
@@ -1190,10 +1271,43 @@ function WallMigrationChart({ log, events, view, price }: {
      * side); failing that the previous slot's side carries forward, because
      * "we can't tell" must not draw as a swap.
      */
+    /**
+     * PER-SLOT GAMMA FROM THE 5m SERIES, forward-filled onto the slot grid the
+     * same way the levels are. `snaps` carries the wall STRIKE it measured that
+     * gamma on, which is the guard below: a gamma is only used when its strike
+     * matches the wall actually drawn at that slot, so a mid-slot roll the log
+     * did not record can never attach its gamma to the wrong level.
+     */
+    const snapCallG: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+    const snapPutG: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+    const snapCallK: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+    const snapPutK: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+    if (snaps.length) {
+      let i = 0;
+      let cg: number | null = null, pg: number | null = null;
+      let ck: number | null = null, pk: number | null = null;
+      for (let s = 0; s <= lastSlot; s++) {
+        while (i < snaps.length && snaps[i].s <= s + 1e-6) {
+          const r = snaps[i];
+          if (r.callG != null) cg = r.callG;
+          if (r.putG != null) pg = r.putG;
+          if (r.callWall != null) ck = r.callWall;
+          if (r.putWall != null) pk = r.putWall;
+          i++;
+        }
+        snapCallG[s] = cg; snapPutG[s] = pg;
+        snapCallK[s] = ck; snapPutK[s] = pk;
+      }
+    }
+
     const bothWalls = series.has("call_wall") && series.has("put_wall");
     let roles: {
       core: (number | null)[]; other: (number | null)[];
       side: ("call" | "put" | null)[]; callShare: number;
+      /** How many times the two lines changed places over the drawn day. */
+      swaps: number;
+      /** True when at least one slot's side came off the 5m gamma. */
+      fine: boolean;
     } | null = null;
     if (bothWalls) {
       const cw = series.get("call_wall") as (number | null)[];
@@ -1204,15 +1318,37 @@ function WallMigrationChart({ log, events, view, price }: {
       const core: (number | null)[] = new Array(WALL_SLOTS).fill(null);
       const other: (number | null)[] = new Array(WALL_SLOTS).fill(null);
       const side: ("call" | "put" | null)[] = new Array(WALL_SLOTS).fill(null);
+      /**
+       * The gamma to judge slot `s` by: the 5m series when it measured the same
+       * strike that is drawn here, the log's own change-row value otherwise.
+       * Never a blend — a gamma read off a different strike is not this level's.
+       */
+      const gAt = (s: number, sideName: "call" | "put", strike: number): { g: number | null; fine: boolean } => {
+        const k = sideName === "call" ? snapCallK[s] : snapPutK[s];
+        const g = sideName === "call" ? snapCallG[s] : snapPutG[s];
+        if (g != null && k != null && k === strike) return { g, fine: true };
+        return { g: (sideName === "call" ? cwG : pwG)[s], fine: false };
+      };
+
       let prev: "call" | "put" = "call";
       let callN = 0;
       let n = 0;
+      let swaps = 0;
+      let fine = false;
+      let prevSeen: "call" | "put" | null = null;
       for (let s = 0; s <= lastSlot; s++) {
         const a = cw[s];
         const b = pw[s];
         if (a == null || b == null) continue;
-        const ga = cwG[s];
-        const gb = pwG[s];
+        // BOTH sides or neither. Comparing a fresh 5m gamma against the other
+        // wall's stale change-row value is not a comparison — it would invent
+        // swaps out of the two numbers being from different clocks.
+        const A = gAt(s, "call", a);
+        const B = gAt(s, "put", b);
+        const bothFine = A.fine && B.fine;
+        const ga = bothFine ? A.g : cwG[s];
+        const gb = bothFine ? B.g : pwG[s];
+        if (bothFine) fine = true;
         let sd: "call" | "put" | null = null;
         if (ga != null && gb != null && Math.abs(ga) !== Math.abs(gb)) {
           sd = Math.abs(ga) > Math.abs(gb) ? "call" : "put";
@@ -1224,12 +1360,14 @@ function WallMigrationChart({ log, events, view, price }: {
         if (sd == null) sd = prev;
         side[s] = sd;
         prev = sd;
+        if (prevSeen != null && sd !== prevSeen) swaps++;
+        prevSeen = sd;
         core[s] = sd === "call" ? a : b;
         other[s] = sd === "call" ? b : a;
         n++;
         if (sd === "call") callN++;
       }
-      if (n) roles = { core, other, side, callShare: callN / n };
+      if (n) roles = { core, other, side, callShare: callN / n, swaps, fine };
     }
 
     /**
@@ -1264,7 +1402,7 @@ function WallMigrationChart({ log, events, view, price }: {
     lo -= padY; hi += padY;
 
     return { levels, series, roles, spotPts, spotDrawn, dense, lo, hi, lastSlot, lastWrite };
-  }, [log, events, view, price]);
+  }, [log, events, view, price, snaps]);
 
   if (!model) return null;
   const { levels, series, roles, spotPts, spotDrawn, dense, lo, hi, lastSlot, lastWrite } = model;
@@ -1407,7 +1545,13 @@ function WallMigrationChart({ log, events, view, price }: {
             CORE is whichever wall carries more gamma at that slot, so the two lines SWAP when the dominant
             side changes — today the call wall held it{" "}
             <b style={{ color: HOME_THEME.text }}>{Math.round(roles.callShare * 100)}%</b> of the
-            session.{" "}
+            session{roles.swaps
+              ? <>, changing hands <b style={{ color: HOME_THEME.text }}>{roles.swaps}×</b></>
+              : null}.{" "}
+            {roles.fine ? (
+              <>Dominance is read off the 5-minute scanner gamma, so the CORE can change sides on a
+                gamma build alone — no strike has to move.{" "}</>
+            ) : null}
           </>
         ) : null}
         Each level holds its strike until the recorder writes a change, so the steps are the rolls. A level that

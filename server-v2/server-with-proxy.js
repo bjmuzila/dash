@@ -2774,11 +2774,48 @@ async function main() {
       // adds ATR distance / bucket / out-of-sample reach score per level plus
       // the `rank` block the page's ladder and ranked list draw from. It never
       // throws: if the calibration snapshot is missing the walls still render.
+      //
+      // GET /proxy/walls?date=…&symbol=SPX&series=1
+      //   The 5-MINUTE HISTORY the change-only log was distilled from — the raw
+      //   scanner_snapshots rows for one symbol and day, ascending by ts.
+      //
+      //   Why it exists: walls_log holds only the slots where a strike MOVED,
+      //   and the level's gamma is stored on those same change rows. So between
+      //   two rolls the reader has no gamma at all — and gamma is what decides
+      //   which wall is the CORE. A day where both walls hold their strikes
+      //   while dominance flips call→put is invisible in the log and plainly
+      //   visible here, because scanner-recorder.js writes call_wall_gex /
+      //   put_wall_gex / cb_gex every 5 minutes for the whole universe.
+      //
+      //   Read-only, one symbol at a time, no ranking, no decoration. The
+      //   universe-wide shape of this table is already served by /proxy/scanner
+      //   (latest row per ticker); returning every symbol's full day here would
+      //   be a several-thousand-row response nothing asked for.
       if (pathname === '/proxy/walls' && req.method === 'GET') {
         (async () => {
           try {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const symbol = u.searchParams.get('symbol') || undefined;
+
+            if (symbol && u.searchParams.get('series') === '1') {
+              if (!(await scannerEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+              const p = scannerGetPool();
+              const seriesDate = u.searchParams.get('date')
+                || new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+              const { rows } = await p.query(
+                `SELECT ts, spot, call_wall, put_wall, cb, gex_flip, total_net_gex,
+                        call_wall_gex, put_wall_gex, cb_gex
+                   FROM scanner_snapshots
+                  WHERE date = $1 AND symbol = $2
+                  ORDER BY ts ASC`,
+                [seriesDate, String(symbol).toUpperCase()],
+              );
+              sendJson(res, 200, {
+                ok: true, date: seriesDate, symbol: String(symbol).toUpperCase(), series: rows,
+              });
+              return;
+            }
+
             const out = await getWalls({
               date: u.searchParams.get('date') || undefined,
               symbol,

@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-08-22 (b) - Level Log: the CORE could only swap where a strike moved — give it the 5-minute gamma
+
+Edited: `server-v2/server-with-proxy.js` (`/proxy/walls`), `components/pages/LevelLog.tsx`.
+
+**The gap.** `walls_log` is change-only, and `level_gex` is stored on those same
+change rows. Between two rolls the migration chart therefore had NO gamma — and
+gamma is the entire basis of the CORE role ("the heavier wall"). A day where both
+walls hold their strikes while dominance flips call→put is a real event the log
+physically cannot express: no strike moved, so no row exists, so the two lines
+could never change places.
+
+The data was never missing. `scanner-recorder.js` writes `call_wall_gex`,
+`put_wall_gex` and `cb_gex` into `scanner_snapshots` **every 5 minutes** for the
+whole universe. Nothing served it per symbol — `/proxy/scanner` is
+`DISTINCT ON (symbol) … ORDER BY ts DESC`, latest row only.
+
+**Server — additive read, `/proxy/walls?date=…&symbol=…&series=1`.**
+
+- Returns that symbol's `scanner_snapshots` rows for the day, ascending by ts:
+  `ts, spot, call_wall, put_wall, cb, gex_flip, total_net_gex, call_wall_gex,
+  put_wall_gex, cb_gex`.
+- New branch inside the existing `/proxy/walls` handler, taken only when
+  `series=1` AND a symbol is given. Every existing response shape is untouched;
+  no recorder, no sweep, no write path changed.
+- One symbol at a time on purpose — the universe-wide view of this table is
+  already `/proxy/scanner`, and a full day for 168 tickers is a several-thousand
+  row response nothing asked for.
+
+**Client — `useWallSeries()` feeding the role model.**
+
+- Per-slot gamma is forward-filled off the 5m series the same way the levels
+  are, and the CORE/other decision now reads it instead of the change-row value.
+- **Guarded on strike identity:** a series gamma is used only when the strike it
+  was measured on equals the wall drawn at that slot, and only when BOTH walls
+  resolve that way. Otherwise both fall back to the log's own gamma — comparing
+  a fresh 5m number against the other wall's stale one would invent swaps out of
+  two different clocks.
+- Caption now reports how many times the lines changed hands, and says outright
+  when dominance is being read off the 5m gamma rather than the rolls.
+- Best-effort like the tape: no snapshots for the symbol/date → `[]` → identical
+  behavior to before.
+
 ## 2026-08-22 - Level Log wall migration: the chart ended where the log stopped, not where the day did
 
 Edited: `components/pages/LevelLog.tsx` (`WallMigrationChart`).
