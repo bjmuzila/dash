@@ -74,7 +74,12 @@ import { isStale } from "@/lib/econCalendar";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import TickerBoard from "@/components/pages/premarket/TickerBoard";
-import { recentSessions, sessionLabel } from "@/components/pages/premarket/postMarketData";
+import {
+  GEX_HISTORY_LIMIT,
+  recentSessions,
+  sessionLabel,
+  useGexLevelsHistory,
+} from "@/components/pages/premarket/postMarketData";
 import {
   netGEXOf,
   callGEXOf,
@@ -359,8 +364,12 @@ const SYM_KEY = "cb-premarket-sym-v1";
  * dropped on read and the page falls back to today.
  */
 const DATE_KEY = "cb-premarket-date-v1";
-/** How many sessions back the picker offers. */
-const SESSION_COUNT = 15;
+/**
+ * How many sessions back the picker offers. It is the settled-history request's
+ * row limit, defined once in postMarketData so the picker and the recap issue
+ * the SAME URL and dedupeFetch collapses them into one request.
+ */
+const SESSION_COUNT = GEX_HISTORY_LIMIT;
 
 /**
  * SPX is the live board — it owns the socket, the ES basis, the overnight
@@ -1065,25 +1074,46 @@ export default function Premarket() {
   // Today is the live page and the default; any earlier entry is a look-up of
   // what was RECORDED that day, which is a different surface entirely — see
   // HistoricalRecap's header for why a past date does not just get piped into
-  // PostMarketTab. `etDate` recomputes as the ET clock rolls over midnight, so
-  // the option list follows it without a reload.
-  const sessions = useMemo(() => recentSessions(etDate, SESSION_COUNT), [etDate]);
+  // PostMarketTab.
+  //
+  // The list is the sessions that ACTUALLY HAVE a settled row, straight off
+  // /proxy/gex-levels-history (one row per session, kept indefinitely, gaps
+  // back-filled from settled OI). Offering the recorded dates rather than a
+  // computed run of weekdays is the difference between a picker that always
+  // lands on data and one that offers Thanksgiving. The weekday walk stays as
+  // the fallback for the moment before that request lands, and for the case
+  // where it fails — a picker with only "Today" in it would read as breakage.
+  //
+  // This is the SAME request HistoricalRecap makes; dedupeFetch collapses the
+  // two into one, so the picker costs nothing extra once the recap mounts.
+  const { dates: recordedDates, state: recordedState } = useGexLevelsHistory(SESSION_COUNT);
+  const sessions = useMemo(() => {
+    const fallback = recentSessions(etDate, SESSION_COUNT);
+    if (recordedState !== "ok" || !recordedDates.length) return fallback;
+    // Today is always first even before it has a settled row of its own — it is
+    // the live option and the picker must be able to get back to it.
+    const past = recordedDates.filter((d) => d < etDate).slice(0, SESSION_COUNT - 1);
+    return [etDate, ...past];
+  }, [etDate, recordedDates, recordedState]);
+
   const [sessionDate, setSessionDate] = useState(etDate);
   useEffect(() => {
     try {
       const saved = sessionStorage.getItem(DATE_KEY);
-      if (saved && sessions.includes(saved)) setSessionDate(saved);
+      if (saved && /^\d{4}-\d{2}-\d{2}$/.test(saved) && saved <= etDate) setSessionDate(saved);
     } catch { /* private mode — today it is */ }
     // Deliberately once, on mount. Re-running it whenever `sessions` changes
     // would drag the user back to a stored date every time the clock ticked.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // A selection that has aged out of the window (the tab was left open across a
-  // session boundary) snaps back to today rather than querying a date the
-  // picker no longer shows.
+  // A selection outside the offered window snaps back to today rather than
+  // querying a date the picker no longer shows. Waits for the recorded list to
+  // settle: while it is still loading `sessions` is the weekday fallback, and
+  // bouncing a valid stored date off that would undo the restore above.
   useEffect(() => {
+    if (recordedState === "loading") return;
     if (!sessions.includes(sessionDate)) setSessionDate(etDate);
-  }, [sessions, sessionDate, etDate]);
+  }, [sessions, sessionDate, etDate, recordedState]);
   const pickDate = useCallback((v: string) => {
     setSessionDate(v);
     try { sessionStorage.setItem(DATE_KEY, v); } catch { /* nothing to do */ }

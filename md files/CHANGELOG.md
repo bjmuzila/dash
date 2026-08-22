@@ -1,119 +1,264 @@
 # Changelog
 
-## 2026-08-22 (b) - Level Log: the CORE could only swap where a strike moved — give it the 5-minute gamma
+## 2026-08-22 - Session picker: wire it to the history that actually exists
 
-Edited: `server-v2/server-with-proxy.js` (`/proxy/walls`), `components/pages/LevelLog.tsx`.
+Edited: `components/pages/premarket/postMarketData.ts`,
+`components/pages/premarket/HistoricalRecap.tsx`,
+`components/pages/Premarket.tsx`.
 
-**The gap.** `walls_log` is change-only, and `level_gex` is stored on those same
-change rows. Between two rolls the migration chart therefore had NO gamma — and
-gamma is the entire basis of the CORE role ("the heavier wall"). A day where both
-walls hold their strikes while dominance flips call→put is a real event the log
-physically cannot express: no strike moved, so no row exists, so the two lines
-could never change places.
+The first cut of the picker only read the two stores the post-market tab already
+used — `/proxy/walls` and the per-minute strike ladder — so anything older than
+about two sessions rendered as "not retained". That was wrong about the repo:
+there are per-day stores here that go back indefinitely. Three of them are now
+wired in.
 
-The data was never missing. `scanner-recorder.js` writes `call_wall_gex`,
-`put_wall_gex` and `cb_gex` into `scanner_snapshots` **every 5 minutes** for the
-whole universe. Nothing served it per symbol — `/proxy/scanner` is
-`DISTINCT ON (symbol) … ORDER BY ts DESC`, latest row only.
+**`/proxy/gex-levels-history` is the spine.** `gex-levels-history-recorder.js`
+writes ONE row per (date, SPX), upserted all session, and **keeps it forever** —
+and back-fills its own gaps from settled ThetaData OI on boot, so a session the
+live recorder missed still has a row. Per date it carries spot, call wall
+(`resistance`), put wall (`support`), gamma flip (`neutral`), dollar gamma, the
+call/put gamma ratio, R2/S2 and a 48-point cumulative GEX curve. New hook
+`useGexLevelsHistory`.
 
-**Server — additive read, `/proxy/walls?date=…&symbol=…&series=1`.**
+**`/api/eod-gex`** adds what that store does not have: the 0DTE / ex-0DTE split
+and the recorder's own pin (strike + share of board gamma). New hook `useEodGex`.
+Note the symbol keys differ between the two tables — `SPX` in the levels store,
+`$SPX` in `eod_gex` — so the date is queried without a symbol and the SPX row
+picked out of the answer.
 
-- Returns that symbol's `scanner_snapshots` rows for the day, ascending by ts:
-  `ts, spot, call_wall, put_wall, cb, gex_flip, total_net_gex, call_wall_gex,
-  put_wall_gex, cb_gex`.
-- New branch inside the existing `/proxy/walls` handler, taken only when
-  `series=1` AND a symbol is given. Every existing response shape is untouched;
-  no recorder, no sweep, no write path changed.
-- One symbol at a time on purpose — the universe-wide view of this table is
-  already `/proxy/scanner`, and a full day for 168 tickers is a several-thousand
-  row response nothing asked for.
+**`/api/snapshots/candles?date=&lite=1`** gives the session its real price path
+(ES 5m bars, RTH). Deliberately **not** converted to SPX: a past session's basis
+is not knowable from a live quote, and shifting a whole day by today's basis is
+the kind of plausible-but-wrong number this page refuses to print. The range is
+labelled ES and the SPX side comes from the levels store.
 
-**Client — `useWallSeries()` feeding the role model.**
+The recap is now five sections: settled close (four tiles + the five levels + the
+cumulative gamma curve), ES session range, how the levels behaved (the wall log
+grade, unchanged), where the gamma sat (the per-minute ladder — still a bonus on
+recent dates, and the only panel with a retention floor), and the journal. Where
+the SPX intraday path IS on file, the recap also grades whether the day held
+inside the walls; where it is not, it says nothing rather than grading an SPX
+wall against an ES range.
 
-- Per-slot gamma is forward-filled off the 5m series the same way the levels
-  are, and the CORE/other decision now reads it instead of the change-row value.
-- **Guarded on strike identity:** a series gamma is used only when the strike it
-  was measured on equals the wall drawn at that slot, and only when BOTH walls
-  resolve that way. Otherwise both fall back to the log's own gamma — comparing
-  a fresh 5m number against the other wall's stale one would invent swaps out of
-  two different clocks.
-- Caption now reports how many times the lines changed hands, and says outright
-  when dominance is being read off the 5m gamma rather than the rolls.
-- Best-effort like the tape: no snapshots for the symbol/date → `[]` → identical
-  behavior to before.
+**The dropdown now lists the sessions that actually have a settled row**, newest
+first, instead of a computed run of weekdays — the difference between a picker
+that always lands on data and one that offers Thanksgiving. The weekday walk
+stays as the fallback while the request is in flight and if it fails. The picker
+and the recap issue the same URL so `dedupeFetch` collapses them into one
+request; `GEX_HISTORY_LIMIT` (40 sessions, ~35KB with the curves) is defined once
+in `postMarketData.ts` to keep it that way.
 
-## 2026-08-22 - Level Log wall migration: the chart ended where the log stopped, not where the day did
+The curve chart is inline SVG, no library. It stretches to fill its card
+(`preserveAspectRatio="none"`), so it carries no `<text>` — glyphs would smear on
+a narrow screen — and every stroke uses `vectorEffect="non-scaling-stroke"`. The
+level labels are ordinary HTML in the legend row under it.
 
-Edited: `components/pages/LevelLog.tsx` (`WallMigrationChart`).
+Still not shown for a past date, and still on purpose: written-vs-traded, the
+positioned/written split, premium, next-expiry structure. Each needs that day's
+own chain with its marks, volumes and open interest, and nothing stores that per
+strike per past day.
 
-AMZN's walls set at the open and last rolled at 10:00. The migration chart drew
-09:29 → 10:00 and captioned itself "31 min of price" — six hours of session
-missing, on the exact kind of day the panel exists to show.
 
-**Cause.** `walls_log` is change-only (`walls-recorder.js` writes on
-`isOpen || changed`), and the chart's x extent was the highest slot present in
-the log/events. No rolls after 10:00 meant no rows after 10:00, so `lastSlot`
-stopped there — and the 1-minute tape, already fetched for the whole
-09:30 → 16:00 window by `useIntradaySpot`, was then clipped to that same
-`lastSlot` and thrown away. A level that held all day drew the shortest chart.
+## 2026-08-22 - Premarket / Post-Market: session date picker
 
-**Fix — the extent is the tape, not the log.**
+Edited: `components/pages/Premarket.tsx`,
+`components/pages/premarket/postMarketData.ts`,
+`components/pages/premarket/PostMarketTab.tsx`.
+Added: `components/pages/premarket/HistoricalRecap.tsx`.
 
-- `lastWrite` (the log's last slot) and `lastSlot` (how far the chart draws) are
-  now separate. `lastSlot = min(26, max(lastWrite, ceil(last tape slot)))`.
-- No new fetch, no recorder change, no clock read: the tape ends at the last
-  closed minute mid-session and at 16:00 on a past date, so the chart follows it
-  either way. With no tape (no 1m bars for the symbol/date) the extent falls
-  back to the log exactly as before.
-- Levels forward-fill past `lastWrite` — which is what a level with no rows
-  MEANS: it held. Still steps, never slopes.
-- The boundary is marked: a dashed hairline at `lastWrite`, and a caption line
-  naming that time and saying the stretch right of it is the hold. Nothing is
-  passed off as a capture.
-- Caption reads "% of the session" rather than "of the recorded session", since
-  the roles now span the drawn day.
+The page head gained a **session date dropdown** (right of the concept badge,
+left of the Premarket / Post-Market toggle). It lists the last 15 trading
+sessions, newest first, "Today" first. The choice is kept in `sessionStorage`
+(`cb-premarket-date-v1`) for the session only — a date is a look-up, not a
+setting — and a stored date that has aged out of the window snaps back to today.
 
-The read the panel was built for — flat level, travelling price — is now the one
-it draws biggest.
+Styling is the page's own `.pmk` theme, not a raw browser control: `.dsel` strips
+the native chrome and redraws the caret from theme tokens, matching the `.tabs`
+shell exactly (1px `--line2`, 9px radius, 11.5px type). `option` is repainted too
+or a dark page opens a white OS menu. On a past date the control turns amber, so
+"you are not looking at today" is visible without reading the label.
 
-## 2026-08-21 (b) - Test Labs GEX Map: terrain relief was melting — light the data, not the noise
+**Today is unchanged** — same live Premarket and Post-Market tabs, same feed,
+same panels.
 
-Edited: `app/test/GexMapTab.tsx` (`TerrainField`).
+**A past date gets its own view** (`HistoricalRecap`), not PostMarketTab pointed
+backwards. PostMarketTab reads the CURRENT chain for spot, walls, net GEX,
+premium and the build-time bars; feeding it a past date would have printed
+today's numbers under yesterday's headline, which is exactly what that tab's
+"nothing here is synthetic" rule exists to prevent. The Pre/Post toggle is
+disabled while a past date is selected and the title reads "Session Recap".
 
-The relief pass shipped earlier today ran vertical curtains down the map — full
-height, black on one side and blown out on the other, roughly one per recorded
-slot. It looked like the terrain was melting.
+The recap renders only what is genuinely stored per date:
 
-**Cause.** The light was computed from the raw height field, and the two axes of
-that field do not have the same resolution. Strike is gaussian-smoothed on the
-way in; time is only interpolated linearly between recorded slots. A slot where
-a node jumped is therefore a ONE-CELL cliff in x — and a one-cell cliff has an
-effectively vertical normal, so it lit as a wall the full height of the map.
-Per-cell gradients made it worse: a grid cell is ~3px wide and ~1.4px tall, so
-the same bump in x came out about twice as steep as in y.
+- **Recorded levels** — `/proxy/walls?date&symbol` (server-v2/walls-recorder.js):
+  the 09:29 capture, every subsequent move of call wall / put wall / CORE, and
+  every classified touch (reject / break / pin / new wall / …), plus the full
+  move log. Same verdicts `/level-log` shows.
+- **How the session closed** — the per-minute strike ladder for that exact day,
+  via a new optional `date` argument on `useIntradayLadder`. It switches the
+  route to `minutes=0&date=` (the route's own "this named day" path) and skips
+  the newest-non-weekend-day heuristic, since the caller named the session.
+  Retention keeps ~2 sessions, so older dates answer empty and say so rather
+  than being back-filled.
+- **Session journal** — the same per-date note the live tab writes. `NOTES_KEY`
+  moved into `postMarketData.ts` and PostMarketTab now imports it, so one note
+  per day exists across both surfaces instead of two.
 
-**Fixes.**
+A closing panel names what a past date deliberately cannot show (snapshot row,
+build-time bars, written-vs-traded, positioned/written split, premium,
+next-expiry structure) and why: each needs that session's own chain with its
+marks, volumes and open interest, and nothing stores that per strike per past
+day.
 
-- **Light is blurred to the resolution the data actually has.** A box blur of
-  radius `1.1 * NX / nC` — one recorded slot — applied twice (≈ gaussian) across
-  time, plus a single-cell pass across strike. Nothing finer than a slot gets
-  lit, because nothing finer than a slot was measured. Both radii derive from
-  the sample grid, so it holds at every zoom. Only the LIGHT is smoothed: the
-  tint and the marching-squares contours still read the unblurred field, so no
-  node moves and no level shifts.
-- **Slope is per CSS pixel, not per grid cell** (`SLOPE_PX = 55`, divided by the
-  cell's own pixel size on each axis). The surface is now isotropic on screen —
-  a bump lights the same whichever way it runs.
-- **Cliffs clamp** at `GCAP = 2.5`. Past that the normal is already almost
-  horizontal and extra steepness buys nothing but a black edge.
-- **Toned down** now that the relief is real: shade range 0.45–1.55 (was
-  0.28–1.85), terrace riser 0.28 (was 0.42) on a tighter slope gate, specular
-  20 (was 46).
+No hardcoded hex added — every colour is a `.pmk` custom property.
 
-A real single-slot spike still shows — as a soft, narrow feature, which is what
-it is — instead of a curtain.
 
-Preview of the corrected shading model: `generated/2026-08-21-gex-terrain-relief.png`.
+## 2026-08-22 - Pricing page: yearly is $400 via EDGE3, and it now shouts
+
+Edited: `app/pricing/page.tsx`.
+
+Yearly moves from $500 to **$400** and the promo code changes from `YEAR` to
+**`EDGE3`**. The point of the change is conversion, so the yearly row stopped
+being a peer of monthly and became the promoted plan:
+
+- The yearly `PlanPrice` is wrapped in its own accent panel — 2px cyan border,
+  cyan gradient fill, outer glow — with a **"Best value · Save $140"** ribbon
+  notched over the top-left corner.
+- `PlanPrice` gained a `highlight` prop: white bold label, 38px figure (vs 24px)
+  and a cyan text-shadow. Monthly is unchanged and now reads as the quieter
+  option next to it.
+- Savings math spelled out under the figure: *60% off · works out to $33/mo —
+  under 12 months of monthly billing.* ($45 × 12 = $540 vs $400.)
+- The code box promotes `EDGE3` at heavier weight than `MONTH` and adds a second
+  line, **"EDGE3 = $400 for the year"**, so the number and the code are never
+  read apart.
+- Checkout button label: `Subscribe yearly — $400/yr · best value`.
+
+All color comes from `HOME_THEME` (`T.cyan`, `T.text`) — no new hardcoded hex.
+
+Not touched: `app/api/stripe/checkout/route.ts`. It resolves plans through
+`getPriceIdForPlan()` / Stripe price IDs and hardcodes no dollar amounts, so the
+$400 has to exist as the `EDGE3` coupon in Stripe — the page only advertises it.
+
+
+## 2026-08-21 (z) - The last cog: home's econ Panel is tabbed too, and every live cog in the app now is
+
+Edited: `components/shared/DockToolbar.tsx`, `app/home/HomeClient.tsx`.
+
+Swept the repo for `DockCogMenu`. Live callers, all of them now on the tabbed
+`sections` API:
+
+| Toolbar | File |
+|---|---|
+| Home GEX chart | `components/dashboard/GexToolbar.tsx` |
+| Home heatmap | `app/home/HomeClient.tsx` |
+| **Home econ Panel** | `app/home/HomeClient.tsx` — **this entry** |
+| ES Candles | `components/dashboard/es-candles/EsChartCard.tsx` |
+| Options Chain | `components/pages/OptionsChain.tsx` |
+| Multi Greek | `app/mult-greek/MultGreekClient.tsx` |
+
+Nothing else in `components/**` or `app/**` opens one. The universal
+`GlobalToolbar` is untouched by design — it has no cog and is not a settings
+surface. `app/es-candles/page.tsx` (the Next fallback copy the SPA does not
+serve) still carries the old popover; it goes when that file does.
+
+**New `DockCogSection.keepMounted`.** The econ Panel cog was the one caller
+still on the `children` path, and it had a real reason: `EconCalendarPanel`
+PORTALS its filter row into a node inside that menu, and `children` mode keeps
+its subtree mounted while closed. Tab mode renders only the active body, so a
+naive conversion would have handed the calendar a null target on every tab
+switch — it falls back to rendering its own inline header, which shoves the
+calendar down the page. `keepMounted` renders that section's body always,
+hidden with `display: none` when its tab is not showing. Costs a mounted
+subtree; use it only where a ref has to survive.
+
+Panel cog sections: **Height** (min / half / full, with the current one in the
+cap state line) · **Tab controls** (`keepMounted`, the calendar's portal
+target). `paneHeight` 132 — both tabs are one row.
+
+## 2026-08-21 (y) - Cog panels are TABBED now: one fixed-height pane, and the box never moves
+
+Edited: `components/shared/DockToolbar.tsx`,
+`components/dashboard/es-candles/EsChartCard.tsx`,
+`components/pages/EsCandles.tsx`, `components/dashboard/GexToolbar.tsx`,
+`app/home/HomeClient.tsx`, `components/pages/OptionsChain.tsx`,
+`app/mult-greek/MultGreekClient.tsx`.
+
+`DockCogMenu`'s `sections` mode renders **tabs over one fixed-height pane**
+instead of an accordion. Same `DockCogSection[]` API, same callers, no
+signature change beyond a new optional `paneHeight`.
+
+**Why tabs and not the accordion.** The accordion's problem was never the
+sections, it was what unfolding one did to the BOX: the panel grew, everything
+below the row jumped, `place()` re-ran, and near the bottom of the screen the
+whole panel flipped above the trigger while the cursor was already moving toward
+a control. Open two rows and it grew a scrollbar, and a scrollbar inside a
+popover steals the trackpad. A fixed pane cannot do any of that — the panel is
+the same box on every open and for as long as it is open. The cost is honest and
+accepted: a two-control tab pads with empty space.
+
+- `activeId` replaces `openIds`; still sticky across open/close, still defaults
+  to `sections[0]` without the caller naming an id.
+- **The cap carries a state line** — every section's `summary` joined
+  ("1 chart · 1m · Front · Vol+OI"), ellipsised to one row. That is how a tab
+  you are not looking at still answers its own question, which is the job the
+  accordion's per-row summary was doing. `count` rides on the tab itself.
+- The tab row scrolls horizontally rather than wrapping; a second row of tabs
+  would change the panel's height, which is the one thing this layout exists to
+  prevent.
+- `paneHeight` defaults to 262 and is clamped down only by what `place()` says
+  the viewport has (`maxH - 84`, floor 150) — so the height changes when the
+  WINDOW does and never mid-edit.
+
+**ES Candles: Overlays + Indicators merged into one "Draw" tab.** They are the
+card's state and the route's state respectively, but that is plumbing — to
+anyone reading the chart they are the same question, and two adjacent tabs
+called Overlays and Indicators is a distinction the toolbar should not be asking
+about. `cogSections` now splices the route's `indicators` section into the Draw
+body under a rule (gamma layer above, price layer below) and drops it from the
+tab order. Tabs are **Page · Draw · Chart · Gamma · Layout** (+ Replay on the
+embed), panel width 360 → 400.
+
+Per-toolbar `paneHeight`, sized to each one's tallest tab: GEX chart 218 ·
+home heatmap 150 · Options Chain 196 · Multi Greek 158.
+
+## 2026-08-21 (x) - ES Candles panels: the toggles are chips now, the checkboxes are gone
+
+Edited: `components/dashboard/es-candles/panelUi.tsx`,
+`components/pages/EsCandles.tsx`,
+`components/dashboard/es-candles/EsChartCard.tsx`.
+
+Every on/off control inside the chart cog - the seven overlays, the EMAs, the
+studies, the CB-line marker - was a pill with a 12-14px filled square in front
+of the label. Two things were wrong with it in a 330px panel:
+
+- **It read as squares, not as a list.** With four things on, the Draw section
+  rendered as a field of saturated blue blocks with words beside them. The eye
+  went to the blocks; the labels were the afterthought.
+- **It was a second visual language inside one menu.** The other half of that
+  panel is `SegGroup` pickers, which indicate state by lighting up. A checkbox
+  next to a segmented control is two grammars for the same idea.
+
+Both `PanelChip` (overlays, markers) and `EsCandles`' local `Toggle` (indicators)
+are now **chips**: rounded pill, flat and grey when off, lit + cyan-bordered with
+a soft glow when on - the same treatment `SegGroup` already uses, so the panel
+speaks one language throughout. The checkbox's real job - "is anything on in
+here?" - is already done better by the section header's live "N on" count, which
+landed with the accordion.
+
+`swatch` survives on the indicator chips and matters more without the box: it is
+what tells three running EMAs apart without toggling them off one at a time.
+
+**Two layout fixes that follow from chips hugging their labels:**
+
+- The overlays container went from a fixed `minmax(0,1fr) minmax(0,1fr)` grid to
+  a wrapping flex row. A two-track grid sized every cell to the widest chip, so
+  "TPO" sat in a box built for "PDH/ON+EM" and short labels left a ragged empty
+  column. Flowing packs seven overlays into three lines instead of four and
+  stops the labels truncating.
+- The CB-line chip inside `PanelSection` got a flex wrapper. That section is a
+  grid whose cells stretch (the sliders want that), and a chip stretched to the
+  full panel width stops reading as a chip.
 
 ## 2026-08-21 - Test Labs GEX Map: terrain is lit, not just tinted
 

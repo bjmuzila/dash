@@ -99,6 +99,256 @@ export type Col = { ts: number; spot: number; cells: { strike: number; net: numb
 export type RawCol = { slotTs: number; spot?: number; cells: Array<{ strike: number; net: number }> };
 export type HistState = "loading" | "ok" | "empty" | "error";
 
+const num = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+const numOrNull = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  THE DEEP HISTORY — one settled row per session, kept forever
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * server-v2/gex-levels-history-recorder.js writes ONE row per (date, SPX) and
+ * upserts it all session, so after the close it holds that day's settled
+ * picture: spot, the call wall (`resistance`), the put wall (`support`), the
+ * gamma flip (`neutral`), total dollar gamma, the call/put gamma ratio, the
+ * second wall each side, total OI, and a 48-point cumulative GEX curve.
+ *
+ * It is the ONLY per-day store here that is not on a retention clock, and it
+ * back-fills its own gaps from settled ThetaData OI on boot (source='theta'),
+ * so a session the live recorder missed still has a row. That is what makes a
+ * recap of an ARBITRARY past date possible at all — the per-minute ladder below
+ * is pruned to about two sessions, and /proxy/walls only starts at 09:29 on
+ * days the recorder was up.
+ *
+ * Read: GET /proxy/gex-levels-history?symbol=SPX&limit=N (subscriber).
+ *
+ * NOTE the symbol key is 'SPX', not '$SPX'. The recorder stores under whatever
+ * /proxy/gex reports (no dollar sign) and only its Theta back-fill uses '$SPX'
+ * — see STORE_SYMBOL / THETA_SYMBOL in its header. eod_gex, below, is keyed the
+ * OTHER way; that asymmetry is real and neither should be "tidied".
+ */
+export type CurvePt = { k: number; c: number };
+export type GexLevelDay = {
+  date: string;
+  spot: number;
+  /** Call wall. */
+  resistance: number | null;
+  /** Put wall. */
+  support: number | null;
+  /** Gamma flip. */
+  neutral: number | null;
+  dollarGamma: number;
+  cpgRatio: number;
+  r2: number | null;
+  s2: number | null;
+  openInt: number;
+  curve: CurvePt[] | null;
+  source: string;
+};
+
+/**
+ * How many settled sessions to pull. It bounds BOTH the picker's window and the
+ * payload — each row carries a 48-point curve, so this is not a "just ask for
+ * everything" endpoint. 40 sessions is about two months and lands around 35KB.
+ *
+ * ONE constant, because the picker (Premarket.tsx) and the recap
+ * (HistoricalRecap.tsx) both call the hook and dedupeFetch only collapses them
+ * into a single request if the URL matches — a different limit on either side
+ * silently doubles the fetch.
+ */
+export const GEX_HISTORY_LIMIT = 40;
+
+export function useGexLevelsHistory(limit = GEX_HISTORY_LIMIT, symbol = "SPX") {
+  const [rows, setRows] = useState<GexLevelDay[]>([]);
+  const [state, setState] = useState<HistState>("loading");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await dedupeFetch(
+          `/proxy/gex-levels-history?symbol=${encodeURIComponent(symbol)}&limit=${limit}`,
+          { cache: "no-store" },
+          20_000,
+        );
+        const j = await r.json();
+        if (!alive) return;
+        if (!j?.ok || !Array.isArray(j.rows)) { setState("error"); return; }
+        const out: GexLevelDay[] = (j.rows as Record<string, unknown>[])
+          .map((x) => ({
+            date: String(x.date ?? "").slice(0, 10),
+            spot: num(x.spot),
+            resistance: numOrNull(x.resistance),
+            support: numOrNull(x.support),
+            neutral: numOrNull(x.neutral),
+            dollarGamma: num(x.dollar_gamma),
+            cpgRatio: num(x.cpg_ratio),
+            r2: numOrNull(x.r2),
+            s2: numOrNull(x.s2),
+            openInt: num(x.open_int),
+            curve: Array.isArray(x.curve)
+              ? (x.curve as Record<string, unknown>[])
+                .map((p) => ({ k: num(p.k), c: num(p.c) }))
+                .filter((p) => p.k > 0)
+              : null,
+            source: String(x.source ?? ""),
+          }))
+          .filter((x) => x.date && x.spot > 0)
+          .sort((a, b) => (a.date < b.date ? 1 : -1));   // newest first
+        setRows(out);
+        setState(out.length ? "ok" : "empty");
+      } catch {
+        if (alive) setState("error");
+      }
+    })();
+    return () => { alive = false; };
+  }, [limit, symbol]);
+
+  const byDate = useMemo(() => new Map(rows.map((r) => [r.date, r])), [rows]);
+  const dates = useMemo(() => rows.map((r) => r.date), [rows]);
+
+  return { rows, byDate, dates, state };
+}
+
+/**
+ * eod_gex — the OTHER settled per-day row, from server-v2/eod-gex-recorder.js.
+ * Overlaps gex_levels_history on total gamma and spot but carries three things
+ * that store does not: the 0DTE / ex-0DTE split, and the recorder's own pin
+ * (strike, and what share of the board's gamma sat on it).
+ *
+ * Keyed '$SPX' here (Theta's index key) where the levels store uses 'SPX'. The
+ * date is queried WITHOUT a symbol and the SPX row picked out of the answer, so
+ * a future key change cannot silently return nothing.
+ */
+export type EodGexDay = {
+  date: string;
+  totalGex: number;
+  spot: number;
+  gex0dte: number | null;
+  gexEx0dte: number | null;
+  pinStrike: number | null;
+  pinShare: number | null;
+  source: string;
+};
+
+export function useEodGex(date: string) {
+  const [row, setRow] = useState<EodGexDay | null>(null);
+  const [state, setState] = useState<HistState>("loading");
+
+  useEffect(() => {
+    if (!date) return;
+    let alive = true;
+    setState("loading");
+    setRow(null);
+    (async () => {
+      try {
+        const r = await dedupeFetch(
+          `/api/eod-gex?date=${encodeURIComponent(date)}&limit=50`,
+          { cache: "no-store" },
+          15_000,
+        );
+        const j = await r.json();
+        if (!alive) return;
+        const all = (Array.isArray(j?.rows) ? j.rows : []) as Record<string, unknown>[];
+        const hit = all.find((x) => {
+          const s = String(x.symbol ?? "").toUpperCase();
+          return s === "$SPX" || s === "SPX";
+        });
+        if (!hit) { setState("empty"); return; }
+        setRow({
+          date: String(hit.date ?? date).slice(0, 10),
+          totalGex: num(hit.total_gex),
+          spot: num(hit.spot),
+          gex0dte: numOrNull(hit.total_gex_0dte),
+          gexEx0dte: numOrNull(hit.total_gex_ex0dte),
+          pinStrike: numOrNull(hit.pin_strike),
+          pinShare: numOrNull(hit.pin_share),
+          source: String(hit.source ?? ""),
+        });
+        setState("ok");
+      } catch {
+        if (alive) setState("error");
+      }
+    })();
+    return () => { alive = false; };
+  }, [date]);
+
+  return { row, state };
+}
+
+/**
+ * The session's ES 5-minute bars, straight out of es_candles for ONE date.
+ *
+ * `?lite=1` is the columnar encoding — same rows, numbers as numbers instead of
+ * pg's quoted strings, roughly a tenth of the bytes. The verbose form is left
+ * untouched for its other callers.
+ *
+ * These are ES, not SPX. Nothing here converts them: the basis on a past
+ * session is not knowable from a live quote, and shifting a whole day by
+ * today's basis is exactly the kind of plausible-but-wrong number this page
+ * refuses to print. The recap labels the range ES and lets the SPX side come
+ * from the SPX stores above.
+ */
+export type SessionBar = { ts: number; open: number; high: number; low: number; close: number };
+
+export function useSessionEsBars(date: string) {
+  const [bars, setBars] = useState<SessionBar[]>([]);
+  const [state, setState] = useState<HistState>("loading");
+
+  useEffect(() => {
+    if (!date) return;
+    let alive = true;
+    setState("loading");
+    setBars([]);
+    (async () => {
+      try {
+        const r = await dedupeFetch(
+          `/api/snapshots/candles?date=${encodeURIComponent(date)}&interval=5&limit=600&lite=1`,
+          { cache: "no-store" },
+          20_000,
+        );
+        const j = await r.json();
+        if (!alive) return;
+        const cols: string[] = Array.isArray(j?.cols) ? j.cols : [];
+        const raw: unknown[][] = Array.isArray(j?.rows) ? j.rows : [];
+        if (!cols.length || !raw.length) { setState("empty"); return; }
+        const ix = (name: string) => cols.indexOf(name);
+        const iT = ix("timestamp"), iO = ix("open"), iH = ix("high"), iL = ix("low"), iC = ix("close");
+        if (iT < 0 || iC < 0) { setState("error"); return; }
+        const out = raw
+          .map((t) => ({
+            ts: num(t[iT]), open: num(t[iO]), high: num(t[iH]), low: num(t[iL]), close: num(t[iC]),
+          }))
+          .filter((b) => b.ts > 0 && b.close > 0)
+          .sort((a, b) => a.ts - b.ts);
+        setBars(out);
+        setState(out.length ? "ok" : "empty");
+      } catch {
+        if (alive) setState("error");
+      }
+    })();
+    return () => { alive = false; };
+  }, [date]);
+
+  /** RTH only — the overnight session is a different question. */
+  const rth = useMemo(
+    () => bars.filter((b) => {
+      const m = etMinutes(b.ts);
+      return m >= RTH_OPEN_MIN && m <= RTH_CLOSE_MIN;
+    }),
+    [bars],
+  );
+
+  return { bars, rth, state };
+}
+
 /**
  * Today's per-minute ladder, RTH only. Mirrors hooks/useGexBubbleHistory's two
  * hard-won guards — the route answers 200 even when it threw, and "today" is the
