@@ -13,8 +13,8 @@
  *   <DockButton>    action button (refresh / icon / etc.)
  *   <DockSep>       subtle vertical divider
  *   <DockCogMenu>   cog wheel that folds a whole toolbar into one panel —
- *                   a flat scrolling column (`children`) or an accordion of
- *                   labelled, unfolding sections (`sections`)
+ *                   a flat scrolling column (`children`) or a tab row over one
+ *                   fixed-height pane (`sections`)
  *   <DockMenuRow>   labelled row inside a column-mode <DockCogMenu>
  *   <DockField>     label-above-control field inside a <DockCogMenu> section
  *
@@ -777,6 +777,17 @@ export type DockCogSection = {
   count?: number | null;
   /** Native tooltip on the header. */
   hint?: string;
+  /**
+   * Keep this section's body MOUNTED when its tab is not showing (hidden with
+   * display:none instead of unmounted).
+   *
+   * For a section that is somebody else's portal TARGET. The econ calendar
+   * portals its filter row into the home Panel cog; if that node unmounted
+   * when you switched tabs, the calendar would see a null target and fall back
+   * to rendering its own inline header, shoving the calendar down. Costs a
+   * mounted subtree, so use it only where a ref has to survive.
+   */
+  keepMounted?: boolean;
   body: ReactNode;
 };
 /**
@@ -798,12 +809,13 @@ export type DockCogSection = {
  *    to rendering its own inline header.
  *
  * TWO LAYOUTS. Pass `children` for the original single scrolling column. Pass
- * `sections` for the ACCORDION: labelled rows that unfold in place, inside the
- * same one column. See the note on `sections`.
+ * `sections` for TABS: a row of section names over one fixed-height pane. See
+ * the note on `sections`.
  */
 export function DockCogMenu({
   children,
   sections,
+  paneHeight = 262,
   title = "Settings",
   width = 320,
   align = "right",
@@ -812,8 +824,8 @@ export function DockCogMenu({
 }: {
   children?: ReactNode;
   /**
-   * Accordion mode. Given sections, the panel renders each one as a labelled
-   * disclosure row that unfolds IN PLACE; `children` is ignored.
+   * Tab mode. Given sections, the panel renders their labels as a tab row over
+   * one fixed-height pane; `children` is ignored.
    *
    * This exists to kill a whole class of bug rather than one instance of it.
    * Once a toolbar folds into a cog, the controls inside it start growing their
@@ -826,21 +838,31 @@ export function DockCogMenu({
    * and it cannot be orphaned, because there is nothing to position. The rule
    * that falls out of it: ONE floating layer per page, and this is it.
    *
-   * A shut row still has to answer its own question, or you open all of them
-   * looking for the one you want — hence `summary` ("1m", "Front · Vol+OI") and
-   * `count` ("3 on") in the header.
+   * Tabs rather than an accordion because of what an accordion does to the
+   * BOX: unfold a section and the panel grows, everything below it jumps, the
+   * placement effect re-runs, and near the bottom of the screen it flips above
+   * the trigger while your cursor is still moving toward a control. A fixed
+   * pane cannot do any of that. The cost is honest — a two-control tab pads
+   * with empty space — and it buys a panel that never moves.
    *
-   * More than one row may be open at once, and which rows are open is sticky
-   * across open/close: you shut the menu to look at the chart and come back to
-   * the same place. Only OPEN bodies are mounted — the `children` path stays
-   * mounted-while-closed for the hosts that portal into it (see above), but
-   * sections have no such contract and mounting seven bodies' worth of sliders
-   * to show one is waste.
+   * `summary` still matters: the tab row has no room for it, so every
+   * section's summary is joined into a state line in the cap ("1m · Front ·
+   * Vol+OI"). `count` rides on the tab itself. Only the ACTIVE body is
+   * mounted — the `children` path stays mounted-while-closed for the hosts
+   * that portal into it (see above), but sections have no such contract and
+   * mounting seven bodies' worth of sliders to show one is waste.
    */
   sections?: DockCogSection[];
   /** Heading inside the panel. */
   title?: string;
   width?: number;
+  /**
+   * Height of the tab pane, in px. Fixed on purpose (see the panel render):
+   * the whole point of tabs here is that the box never changes size, so a
+   * short tab pads rather than shrinking. Raise it for a menu whose longest
+   * tab is genuinely taller than this.
+   */
+  paneHeight?: number;
   /** Which edge of the trigger the panel hangs from. */
   align?: "left" | "right";
   accent?: string;
@@ -849,20 +871,21 @@ export function DockCogMenu({
 }) {
   const [open, setOpen] = useState(false);
   /**
-   * Which rows are unfolded. `null` until the first interaction, which is what
-   * lets the DEFAULT be "the first section" without hardcoding an id the
-   * caller may not have — sections are data, and the first one is whatever the
-   * caller decided to lead with.
+   * Which tab is showing. `null` until the first pick, which is what lets the
+   * DEFAULT be "the first section" without hardcoding an id the caller may not
+   * have — sections are data, and the first one is whatever the caller decided
+   * to lead with. Sticky across open/close: shut the menu to look at the chart,
+   * come back to the tab you were on.
    */
-  const [openIds, setOpenIds] = useState<string[] | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const hasSections = !!sections?.length;
-  const expanded = openIds ?? (sections?.length ? [sections[0].id] : []);
-  const toggleSection = useCallback((id: string) => {
-    setOpenIds((prev) => {
-      const cur = prev ?? (sections?.length ? [sections[0].id] : []);
-      return cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-    });
-  }, [sections]);
+  const activeSection = hasSections
+    ? (sections!.find((x) => x.id === activeId) ?? sections![0])
+    : null;
+  /** Every section's summary, joined — see the cap. */
+  const stateLine = hasSections
+    ? sections!.map((x) => x.summary).filter(Boolean).join(" · ")
+    : "";
   const [pos, setPos] = useState<{ left: number; top: number; maxH: number } | null>(null);
   const [mounted, setMounted] = useState(false);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -955,54 +978,110 @@ export function DockCogMenu({
       role="menu"
       aria-label={title}
       data-capture-hide=""
-      style={{ ...shell, padding: 0, flexDirection: "column", overflowY: "auto" }}
+      // FIXED SIZE. Not `maxHeight` + `auto`: the panel must be the same box on
+      // every open and while you work in it. A menu that re-measures itself
+      // mid-edit is the thing that made the accordion annoying — unfold
+      // Overlays and everything below jumped, the placement effect re-ran, and
+      // near the bottom of the screen it flipped above the trigger under the
+      // cursor. Tabs cannot do that, and `place()` never has to run twice.
+      style={{ ...shell, padding: 0, flexDirection: "column", overflow: "hidden", height: undefined, maxHeight: undefined }}
     >
-      <div style={{ ...capStyle, padding: "11px 12px 9px", borderBottom: `1px solid ${T.border}`, position: "sticky", top: 0, background: T.panelBgStrong, backdropFilter: "blur(18px)", zIndex: 1 }}>
-        {title}
+      <div
+        style={{
+          ...capStyle, padding: "11px 12px 9px", borderBottom: `1px solid ${T.border}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+        }}
+      >
+        <span style={{ flexShrink: 0 }}>{title}</span>
+        {/* Every section's `summary` on one line. The tab row has no room for
+            them, and they are the reason a folded section was still useful —
+            "which timeframe am I on" has to be answerable without hunting
+            through tabs. Ellipsised rather than wrapped so the cap stays one
+            row tall whatever the caller puts in it. */}
+        {stateLine && (
+          <span
+            title={stateLine}
+            style={{
+              minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              fontFamily: "var(--font-mono)", fontSize: 10.5, fontWeight: 700,
+              letterSpacing: "0.02em", textTransform: "none", color: T.text, opacity: 0.5,
+            }}
+          >
+            {stateLine}
+          </span>
+        )}
       </div>
 
-      {sections!.map((s, i) => {
-        const on = expanded.includes(s.id);
-        return (
-          <div key={s.id} style={{ borderTop: i ? `1px solid ${T.border}` : undefined, background: on ? rgba(accent, 0.035) : undefined }}>
+      {/* Tab row. Scrolls horizontally rather than wrapping: a wrapped second
+          row of tabs would change the panel's height, which is the one thing
+          this layout exists to prevent. */}
+      <div
+        className="dock-noscroll"
+        role="tablist"
+        style={{
+          display: "flex", gap: 2, padding: "8px 8px 0", flexShrink: 0,
+          borderBottom: `1px solid ${T.border}`, overflowX: "auto", overflowY: "hidden",
+          scrollbarWidth: "none", msOverflowStyle: "none" as const,
+        }}
+      >
+        {sections!.map((s) => {
+          const on = s.id === activeSection!.id;
+          return (
             <button
-              onClick={(e) => { e.currentTarget.blur(); toggleSection(s.id); }}
+              key={s.id}
+              role="tab"
+              aria-selected={on}
               title={s.hint}
-              aria-expanded={on}
+              onClick={(e) => { e.currentTarget.blur(); setActiveId(s.id); }}
               style={{
-                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
-                width: "100%", padding: "9px 12px", background: "transparent", border: "none",
-                cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+                display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
+                padding: "7px 11px 8px", borderRadius: "8px 8px 0 0",
+                border: on ? `1px solid ${T.border}` : "1px solid transparent", borderBottom: "none",
+                background: on ? rgba(accent, 0.10) : "transparent",
+                color: on ? accent : T.text, opacity: on ? 1 : 0.6,
+                cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                fontSize: 10, fontWeight: 800, letterSpacing: "0.10em", textTransform: "uppercase",
+                transition: "background .12s, color .12s, opacity .12s",
               }}
             >
-              <span
-                style={{
-                  fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase",
-                  color: on ? accent : T.text, opacity: on ? 1 : 0.72,
-                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0,
-                }}
-              >
-                {s.label}
-              </span>
-              {/* A SHUT row still has to answer its own question. Without the
-                  summary the only way to find "which timeframe am I on" is to
-                  open every row in turn, which is the accordion's one failure
-                  mode and the whole reason this span exists. */}
-              <span style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0, fontSize: 11, fontWeight: 700, color: T.text, opacity: 0.55 }}>
-                {s.summary ? <span style={{ whiteSpace: "nowrap" }}>{s.summary}</span> : null}
-                {s.count ? <span style={{ fontWeight: 800 }}>{s.count} on</span> : null}
-                <span aria-hidden style={{ fontSize: 9, opacity: 0.8, transition: "transform .16s", transform: on ? "rotate(180deg)" : "none" }}>▾</span>
-              </span>
+              <span>{s.label}</span>
+              {s.count ? <span style={{ fontSize: 9, opacity: 0.65, fontWeight: 800 }}>{s.count}</span> : null}
             </button>
-            {/* Mounted only while unfolded — see the note on `sections`. */}
-            {on && (
-              <div style={{ padding: "2px 12px 12px", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
-                {s.body}
-              </div>
-            )}
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
+
+      {/* The pane. `height`, not `minHeight` — a short tab pads with empty
+          space rather than shrinking the box, which is the trade this layout
+          makes on purpose. Only the pane scrolls, and only the tab that needs
+          it (the tuning sliders) ever does. */}
+      <div
+        role="tabpanel"
+        style={{
+          // `paneHeight` unless the viewport genuinely cannot give it. CAP + tab
+          // row are ~76px; the rest of the space measured by place() is the
+          // pane's. This is the only thing that changes the panel's height, and
+          // it only changes when the WINDOW does — never mid-edit.
+          height: Math.max(150, Math.min(paneHeight, (pos?.maxH ?? 620) - 84)),
+          overflowY: "auto", overflowX: "hidden",
+          padding: "12px 12px 14px", display: "flex", flexDirection: "column", gap: 12, minWidth: 0,
+        }}
+      >
+        {sections!.map((s) => {
+          const on = s.id === activeSection!.id;
+          // Only the active body renders, EXCEPT where a section asked to stay
+          // mounted because something portals into it — see `keepMounted`.
+          if (!on && !s.keepMounted) return null;
+          return (
+            <div
+              key={s.id}
+              style={{ display: on ? "flex" : "none", flexDirection: "column", gap: 12, minWidth: 0 }}
+            >
+              {s.body}
+            </div>
+          );
+        })}
+      </div>
     </div>
   ) : (
     <div

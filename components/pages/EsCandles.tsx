@@ -14,11 +14,13 @@
  * expiry, indicators, presets, and per card a whole replay transport) added up
  * to more chrome than chart.
  *
- * The cog is an ACCORDION, not a menu: labelled sections that unfold in place
- * inside one column, each header carrying the answer to its own question so a
- * shut row stays useful. This file contributes three of those sections through
- * `pageSections` (Page, Indicators, Layout); the card contributes the rest.
- * See DockCogMenu.
+ * The cog is a TABBED sheet, not a menu: a row of section names over one
+ * fixed-height pane, so the panel is the same box on every open and never
+ * resizes under the cursor. The cap carries every section's summary on one
+ * line, which is how a tab you are not looking at still answers its own
+ * question. This file contributes three sections through `pageSections`
+ * (Page, Indicators, Layout); the card contributes the rest and folds
+ * Indicators into its Draw tab. See DockCogMenu.
  *
  * It got that way because the previous shape did not survive contact. Folding
  * the toolbar into a cog left the things INSIDE the cog still needing panels of
@@ -102,7 +104,7 @@ const ROW_H = CAP_H + CAP_GAP + CTRL_H;
 /**
  * A labelled group inside a cog section. The panel is dense by nature, so the
  * label is small, uppercase and quiet, and the controls sit right under it.
- * The row WRAPS — a cog section is ~330px wide, not a full-bleed band.
+ * The row WRAPS — a cog tab pane is ~375px wide, not a full-bleed band.
  *
  * The row is a FIXED height and bottom-aligned — see the note above. A group
  * with no captioned fields still reserves the caption line, which is what keeps
@@ -375,8 +377,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // The `closePopover` blur dance went with them. It existed because React
   // unmounted a NumField before the browser delivered its blur, so clearing the
   // Bollinger length box and clicking the chart persisted `bbPeriod: 0` for the
-  // session. A section's body unmounts only when you fold it — by clicking its
-  // header, which delivers the blur first.)
+  // session. A tab's body unmounts only when you leave it — by clicking another
+  // tab, which delivers the blur first.)
   const setCardCount = useCallback((n: number) => {
     const clamped = Math.min(MAX_CARDS, Math.max(1, n));
     setCards(clamped);
@@ -488,7 +490,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
    *
    * These three are page state, not card state — one chart count, one indicator
    * blob and one preset store for the whole row — so the route owns them and
-   * hands them down as sections. The card merges them with its own (Overlays,
+   * hands them down as sections. The card merges them with its own (Draw,
    * Chart, Gamma) and decides the order; see `cogSections` in EsChartCard.
    *
    * Each of these used to be a floating panel that opened from INSIDE the cog:
@@ -540,6 +542,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         ),
       },
       {
+        // Consumed by EsChartCard's "Draw" tab rather than becoming a tab of
+        // its own — overlays and indicators are the same question to the person
+        // reading the chart. Still declared here because the route owns the
+        // blob; see the splice in `cogSections`.
         id: "indicators",
         label: "Indicators",
         hint: "Drawn on every chart in the row",

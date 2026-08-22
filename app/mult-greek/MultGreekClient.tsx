@@ -2571,6 +2571,7 @@ export function MultGreekClient({
           title="Multi Greek"
           buttonTitle="Multi Greek settings"
           width={340}
+          paneHeight={158}
           sections={[
             {
               // Front-expiry picker — the shown columns are this + the next 3 closest.

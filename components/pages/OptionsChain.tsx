@@ -3101,6 +3101,7 @@ export default function OptionsChainPage({
           title="Options chain"
           buttonTitle="Options chain settings"
           width={340}
+          paneHeight={196}
           sections={[
             {
               id: "grid",

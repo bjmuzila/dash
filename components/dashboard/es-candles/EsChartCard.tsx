@@ -5392,14 +5392,27 @@ function EsChartCard({
    */
   const cogSections: DockCogSection[] = !dockWanted ? [] : (() => {
     const own: DockCogSection[] = [];
+    // The route's indicator sheet, folded into this card's Draw tab.
+    const indicatorSection = (pageSections ?? []).find((x) => x.id === "indicators");
 
     own.push({
-      id: "overlays",
-      label: "Overlays",
-      hint: "What is drawn on top of the candles",
-      count: [showHeatmap, showProfile, showTpo, showLevels, showSessions, showGexBubbles, showFlipCross].filter(Boolean).length,
+      // ONE tab for everything drawn on the chart. The overlays are the card's
+      // (per-slot state) and the indicators are the route's (one blob for the
+      // whole row), but that is a plumbing detail — to the person reading the
+      // chart they are the same question, and two adjacent tabs called
+      // "Overlays" and "Indicators" is a distinction the toolbar should not be
+      // asking anyone to make. The route's `indicators` section is spliced in
+      // below rather than listed as a tab of its own.
+      id: "draw",
+      label: "Draw",
+      hint: "Everything drawn on top of the candles",
+      count: [showHeatmap, showProfile, showTpo, showLevels, showSessions, showGexBubbles, showFlipCross].filter(Boolean).length
+        + (indicatorSection?.count ?? 0),
       body: (
         <>
+        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.10em", textTransform: "uppercase", color: "rgba(255,255,255,0.62)" }}>
+          Overlays
+        </span>
         {/* A WRAPPING row, not a two-column grid. The chips hug their own
             labels now (see PanelChip), so a fixed two-track grid would leave a
             ragged half-empty column beside every short one — "TPO" in a cell
@@ -5536,6 +5549,20 @@ function EsChartCard({
             </PanelSection>
           </div>
         )}
+
+        {/* The route's indicator sheet. Rendered LAST in this tab, under a rule,
+            because overlays are the gamma layer (what the board is doing) and
+            indicators are the price layer (what the tape is doing) — same
+            question, different half of the answer. */}
+        {indicatorSection && (
+          <>
+            <span style={{ height: 1, background: HOME_THEME.border, margin: "2px 0" }} />
+            <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.10em", textTransform: "uppercase", color: "rgba(255,255,255,0.62)" }}>
+              Indicators
+            </span>
+            {indicatorSection.body}
+          </>
+        )}
         </>
       ),
     });
@@ -5658,9 +5685,10 @@ function EsChartCard({
 
     // Merge the route's sections with this card's and put them in reading
     // order. Sorting by a declared order rather than by concatenation means
-    // neither side has to know what the other contributed.
-    const ORDER = ["page", "indicators", "overlays", "chart", "gamma", "layout", "replay"];
-    return [...(pageSections ?? []), ...own]
+    // neither side has to know what the other contributed. `indicators` is
+    // absent from the list: it was consumed into `draw` above.
+    const ORDER = ["page", "draw", "chart", "gamma", "layout", "replay"];
+    return [...(pageSections ?? []).filter((x) => x.id !== "indicators"), ...own]
       .sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
   })();
 
@@ -5777,7 +5805,7 @@ function EsChartCard({
             title="Candles"
             buttonTitle="Chart settings"
             sections={cogSections}
-            width={360}
+            width={400}
           />
         </Dock>
         </FitScale>

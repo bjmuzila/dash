@@ -34,8 +34,6 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import {
   DockCogMenu,
-  DockMenuRow,
-  DockMenuDivider,
   DockField,
   DockButton,
   DockSlider,
@@ -2054,47 +2052,68 @@ export function HomeClient({
                 <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 8, flexShrink: 0 }}>
                   <EconCalendarTemplateCopyBtn />
                   <EconCalendarDiscordBtn />
-                  <DockCogMenu title="Panel" buttonTitle="Panel settings" width={300}>
-                    <DockMenuRow label="Height" stack>
-                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        {([
-                          { id: "min", title: "Minimize (tabs only)", label: "Min" },
-                          { id: "half", title: "Half height", label: "Half" },
-                          { id: "full", title: "Full height", label: "Full" },
-                        ] as const).map((o) => {
-                          const on = econSize === o.id;
-                          // Filled bar grows min→half→full so the glyph reads as a size.
-                          const fillY = o.id === "min" ? 11 : o.id === "half" ? 7 : 3;
-                          return (
-                            <button
-                              key={o.id}
-                              onClick={() => setEconSize(o.id)}
-                              aria-label={o.title}
-                              title={o.title}
-                              style={{
-                                display: "flex", alignItems: "center", gap: 6,
-                                padding: "6px 10px", borderRadius: 8, cursor: "pointer",
-                                fontFamily: "inherit", fontSize: 11, fontWeight: 700,
-                                background: on ? "rgba(33,158,188,0.16)" : "rgba(255,255,255,0.04)",
-                                border: on ? `1px solid ${C.cyan}55` : "1px solid rgba(255,255,255,0.06)",
-                                color: on ? C.cyan : "#fff",
-                              }}
-                            >
-                              <svg width="13" height="13" viewBox="0 0 16 16">
-                                <rect x="2" y="2" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.4" opacity={on ? 0.55 : 0.4} />
-                                <rect x="2" y={fillY} width="12" height={14 - fillY} rx="1.5" fill="currentColor" />
-                              </svg>
-                              {o.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </DockMenuRow>
-                    <DockMenuDivider />
-                    <DockMenuRow label="Tab controls" stack>
-                      <div ref={econControlsSlotRef} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }} />
-                    </DockMenuRow>
-                  </DockCogMenu>
+                  <DockCogMenu
+                    title="Panel"
+                    buttonTitle="Panel settings"
+                    width={300}
+                    paneHeight={132}
+                    sections={[
+                      {
+                        id: "height",
+                        label: "Height",
+                        summary: econSize === "min" ? "min" : econSize === "half" ? "half" : "full",
+                        body: (
+                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            {([
+                              { id: "min", title: "Minimize (tabs only)", label: "Min" },
+                              { id: "half", title: "Half height", label: "Half" },
+                              { id: "full", title: "Full height", label: "Full" },
+                            ] as const).map((o) => {
+                              const on = econSize === o.id;
+                              // Filled bar grows min→half→full so the glyph reads as a size.
+                              const fillY = o.id === "min" ? 11 : o.id === "half" ? 7 : 3;
+                              return (
+                                <button
+                                  key={o.id}
+                                  onClick={() => setEconSize(o.id)}
+                                  aria-label={o.title}
+                                  title={o.title}
+                                  style={{
+                                    display: "flex", alignItems: "center", gap: 6,
+                                    padding: "6px 10px", borderRadius: 8, cursor: "pointer",
+                                    fontFamily: "inherit", fontSize: 11, fontWeight: 700,
+                                    background: on ? "rgba(33,158,188,0.16)" : "rgba(255,255,255,0.04)",
+                                    border: on ? `1px solid ${C.cyan}55` : "1px solid rgba(255,255,255,0.06)",
+                                    color: on ? C.cyan : "#fff",
+                                  }}
+                                >
+                                  <svg width="13" height="13" viewBox="0 0 16 16">
+                                    <rect x="2" y="2" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.4" opacity={on ? 0.55 : 0.4} />
+                                    <rect x="2" y={fillY} width="12" height={14 - fillY} rx="1.5" fill="currentColor" />
+                                  </svg>
+                                  {o.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ),
+                      },
+                      {
+                        // `keepMounted` is load-bearing, not a nicety: the econ
+                        // calendar PORTALS its filter row into this node (see
+                        // `controlsPortalEl` below). A tab that unmounted its body
+                        // on switch would hand the calendar a null target, and it
+                        // falls back to rendering its own inline header — which
+                        // shoves the calendar down every time you changed tab.
+                        id: "tabctl",
+                        label: "Tab controls",
+                        keepMounted: true,
+                        body: (
+                          <div ref={econControlsSlotRef} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }} />
+                        ),
+                      },
+                    ]}
+                  />
                 </div>
               </div>
               </FitScale>
@@ -2220,6 +2239,7 @@ export function HomeClient({
                       title="Heatmap"
                       buttonTitle="Heatmap settings"
                       width={330}
+                      paneHeight={150}
                       sections={[
                         {
                           id: "heat",

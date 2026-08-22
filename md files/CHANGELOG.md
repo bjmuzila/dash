@@ -1,5 +1,86 @@
 # Changelog
 
+## 2026-08-21 (z) - The last cog: home's econ Panel is tabbed too, and every live cog in the app now is
+
+Edited: `components/shared/DockToolbar.tsx`, `app/home/HomeClient.tsx`.
+
+Swept the repo for `DockCogMenu`. Live callers, all of them now on the tabbed
+`sections` API:
+
+| Toolbar | File |
+|---|---|
+| Home GEX chart | `components/dashboard/GexToolbar.tsx` |
+| Home heatmap | `app/home/HomeClient.tsx` |
+| **Home econ Panel** | `app/home/HomeClient.tsx` — **this entry** |
+| ES Candles | `components/dashboard/es-candles/EsChartCard.tsx` |
+| Options Chain | `components/pages/OptionsChain.tsx` |
+| Multi Greek | `app/mult-greek/MultGreekClient.tsx` |
+
+Nothing else in `components/**` or `app/**` opens one. The universal
+`GlobalToolbar` is untouched by design — it has no cog and is not a settings
+surface. `app/es-candles/page.tsx` (the Next fallback copy the SPA does not
+serve) still carries the old popover; it goes when that file does.
+
+**New `DockCogSection.keepMounted`.** The econ Panel cog was the one caller
+still on the `children` path, and it had a real reason: `EconCalendarPanel`
+PORTALS its filter row into a node inside that menu, and `children` mode keeps
+its subtree mounted while closed. Tab mode renders only the active body, so a
+naive conversion would have handed the calendar a null target on every tab
+switch — it falls back to rendering its own inline header, which shoves the
+calendar down the page. `keepMounted` renders that section's body always,
+hidden with `display: none` when its tab is not showing. Costs a mounted
+subtree; use it only where a ref has to survive.
+
+Panel cog sections: **Height** (min / half / full, with the current one in the
+cap state line) · **Tab controls** (`keepMounted`, the calendar's portal
+target). `paneHeight` 132 — both tabs are one row.
+
+## 2026-08-21 (y) - Cog panels are TABBED now: one fixed-height pane, and the box never moves
+
+Edited: `components/shared/DockToolbar.tsx`,
+`components/dashboard/es-candles/EsChartCard.tsx`,
+`components/pages/EsCandles.tsx`, `components/dashboard/GexToolbar.tsx`,
+`app/home/HomeClient.tsx`, `components/pages/OptionsChain.tsx`,
+`app/mult-greek/MultGreekClient.tsx`.
+
+`DockCogMenu`'s `sections` mode renders **tabs over one fixed-height pane**
+instead of an accordion. Same `DockCogSection[]` API, same callers, no
+signature change beyond a new optional `paneHeight`.
+
+**Why tabs and not the accordion.** The accordion's problem was never the
+sections, it was what unfolding one did to the BOX: the panel grew, everything
+below the row jumped, `place()` re-ran, and near the bottom of the screen the
+whole panel flipped above the trigger while the cursor was already moving toward
+a control. Open two rows and it grew a scrollbar, and a scrollbar inside a
+popover steals the trackpad. A fixed pane cannot do any of that — the panel is
+the same box on every open and for as long as it is open. The cost is honest and
+accepted: a two-control tab pads with empty space.
+
+- `activeId` replaces `openIds`; still sticky across open/close, still defaults
+  to `sections[0]` without the caller naming an id.
+- **The cap carries a state line** — every section's `summary` joined
+  ("1 chart · 1m · Front · Vol+OI"), ellipsised to one row. That is how a tab
+  you are not looking at still answers its own question, which is the job the
+  accordion's per-row summary was doing. `count` rides on the tab itself.
+- The tab row scrolls horizontally rather than wrapping; a second row of tabs
+  would change the panel's height, which is the one thing this layout exists to
+  prevent.
+- `paneHeight` defaults to 262 and is clamped down only by what `place()` says
+  the viewport has (`maxH - 84`, floor 150) — so the height changes when the
+  WINDOW does and never mid-edit.
+
+**ES Candles: Overlays + Indicators merged into one "Draw" tab.** They are the
+card's state and the route's state respectively, but that is plumbing — to
+anyone reading the chart they are the same question, and two adjacent tabs
+called Overlays and Indicators is a distinction the toolbar should not be asking
+about. `cogSections` now splices the route's `indicators` section into the Draw
+body under a rule (gamma layer above, price layer below) and drops it from the
+tab order. Tabs are **Page · Draw · Chart · Gamma · Layout** (+ Replay on the
+embed), panel width 360 → 400.
+
+Per-toolbar `paneHeight`, sized to each one's tallest tab: GEX chart 218 ·
+home heatmap 150 · Options Chain 196 · Multi Greek 158.
+
 ## 2026-08-21 (x) - ES Candles panels: the toggles are chips now, the checkboxes are gone
 
 Edited: `components/dashboard/es-candles/panelUi.tsx`,

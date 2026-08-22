@@ -148,6 +148,7 @@ export default function GexToolbar({
             title="GEX chart"
             buttonTitle="GEX chart settings"
             width={330}
+            paneHeight={218}
             sections={[
               ...(dteOptions.length > 0 ? [{
                 id: "expiry",
