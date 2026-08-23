@@ -7,7 +7,6 @@ import {
   useLiveSeries,
   type LivePoint,
 } from "../components/LiveKpiCard";
-import { HourlyHeatmap } from "../components/HourlyHeatmap";
 import AcquisitionPanel from "../components/AcquisitionPanel";
 import CampaignLinkBuilder from "../components/CampaignLinkBuilder";
 import {
@@ -466,14 +465,87 @@ function TickerVisitsCard({ source, icon, label }: { source: string; icon: strin
 
 const ET_TZ = "America/New_York";
 
+// ── Fast ET bucket keys ──────────────────────────────────────────────────────
+//
+// WHY THIS EXISTS: every bucketing pass below runs over the whole page_visits
+// log (tens of thousands of rows). The obvious way to write them —
+// `d.toLocaleDateString("en-CA", { timeZone: ET_TZ })` per row — builds a fresh
+// Intl.DateTimeFormat on EVERY call, and that construction, not the formatting,
+// is what costs. At ~20k rows × half a dozen passes (KPI strip, metrics tabs,
+// "on today", the daily series) that was hundreds of thousands of Intl
+// constructions per render: whole seconds of blocked main thread, felt as the
+// Overview tab hanging when the traffic / pages-visited cards come in.
+//
+// The offset of America/New_York from UTC only changes at DST boundaries, and
+// those land on an hour mark. So ONE Intl lookup per UTC hour answers for every
+// row inside that hour — 30 days of visits touch ~720 buckets instead of 20,000
+// formats — and every key after that is integer arithmetic on a shifted
+// timestamp. Identical strings out, orders of magnitude less work.
+
+const ET_PARTS_FMT = new Intl.DateTimeFormat("en-US", {
+  timeZone: ET_TZ,
+  year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", second: "2-digit",
+  hourCycle: "h23",
+});
+const ET_DAY_LABEL_FMT = new Intl.DateTimeFormat("en-US", { timeZone: ET_TZ, weekday: "short", day: "numeric" });
+const ET_HOUR_LABEL_FMT = new Intl.DateTimeFormat("en-US", { timeZone: ET_TZ, hour: "numeric", hour12: true });
+
+const ET_OFFSET_CACHE = new Map<number, number>();
+
+/** ET's UTC offset (ms) at an instant, cached per UTC hour. */
+function etOffsetMs(ms: number): number {
+  const bucket = Math.floor(ms / 3_600_000);
+  const hit = ET_OFFSET_CACHE.get(bucket);
+  if (hit !== undefined) return hit;
+  const parts = ET_PARTS_FMT.formatToParts(new Date(ms));
+  let y = 0, mo = 1, d = 1, h = 0, mi = 0, s = 0;
+  for (const p of parts) {
+    const n = Number(p.value);
+    if (p.type === "year") y = n;
+    else if (p.type === "month") mo = n;
+    else if (p.type === "day") d = n;
+    else if (p.type === "hour") h = n % 24;
+    else if (p.type === "minute") mi = n;
+    else if (p.type === "second") s = n;
+  }
+  const off = Date.UTC(y, mo - 1, d, h, mi, s) - Math.floor(ms / 1000) * 1000;
+  ET_OFFSET_CACHE.set(bucket, off);
+  return off;
+}
+
+/** Epoch ms shifted so the UTC getters of `new Date(x)` read as ET wall clock. */
+function etShift(ms: number): number {
+  return ms + etOffsetMs(ms);
+}
+
+const pad2 = (n: number): string => (n < 10 ? "0" + n : "" + n);
+
+/** YYYY-MM-DD in ET, from epoch ms. */
+function etDayKeyMs(ms: number): string {
+  const d = new Date(etShift(ms));
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
+/** YYYY-MM-DD HH in ET, from epoch ms. */
+function etHourKeyMs(ms: number): string {
+  const d = new Date(etShift(ms));
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}`;
+}
+
+/** Calendar year in ET, from epoch ms. */
+function etYearMs(ms: number): number {
+  return new Date(etShift(ms)).getUTCFullYear();
+}
+
 /** YYYY-MM-DD in ET for a Date (so day buckets line up with the trading day). */
 function etDayKey(d: Date): string {
-  return d.toLocaleDateString("en-CA", { timeZone: ET_TZ }); // en-CA → ISO-ish YYYY-MM-DD
+  return etDayKeyMs(d.getTime());
 }
 
 /** "Mon 23" style short label for a day-bucket axis tick. */
 function etDayLabel(d: Date): string {
-  return d.toLocaleDateString("en-US", { timeZone: ET_TZ, weekday: "short", day: "numeric" });
+  return ET_DAY_LABEL_FMT.format(d);
 }
 
 /**
@@ -485,9 +557,9 @@ function dailyVisitSeries(visits: PageVisit[], days = 12): { counts: number[]; l
   const byDay = new Map<string, number>();
   for (const v of visits) {
     if (!v.createdAt) continue;
-    const t = new Date(v.createdAt);
-    if (isNaN(t.getTime())) continue;
-    const k = etDayKey(t);
+    const t = Date.parse(v.createdAt);
+    if (!Number.isFinite(t)) continue;
+    const k = etDayKeyMs(t);
     byDay.set(k, (byDay.get(k) ?? 0) + 1);
   }
   const counts: number[] = [];
@@ -501,8 +573,8 @@ function dailyVisitSeries(visits: PageVisit[], days = 12): { counts: number[]; l
   return { counts, labels };
 }
 
-// hourlyHeatmap and its ET formatter moved into components/HourlyHeatmap.tsx,
-// which owns the once-a-day fetch and the localStorage snapshot.
+// The hourly load heatmap was dropped from this tab on 2026-08-23.
+// components/HourlyHeatmap.tsx is no longer mounted anywhere.
 
 /**
  * Bucket signups (Clerk recent users, by createdAt ms) into the last `days`
@@ -513,9 +585,9 @@ function dailySignupSeries(signups: Array<{ createdAt: number | null }>, days = 
   const byDay = new Map<string, number>();
   for (const s of signups) {
     if (s.createdAt == null) continue;
-    const t = new Date(s.createdAt);
-    if (isNaN(t.getTime())) continue;
-    const k = etDayKey(t);
+    const t = new Date(s.createdAt).getTime();
+    if (!Number.isFinite(t)) continue;
+    const k = etDayKeyMs(t);
     byDay.set(k, (byDay.get(k) ?? 0) + 1);
   }
   const counts: number[] = [];
@@ -578,11 +650,12 @@ function weeklyVisitSeries(visits: PageVisit[], weeks = 12): { counts: number[];
   monday.setDate(monday.getDate() - dow);
 
   const byWeek = new Map<number, number>();
+  const weekStart = new Date(); // reused across rows — no per-row allocation
   for (const v of visits) {
     if (!v.createdAt) continue;
-    const t = new Date(v.createdAt);
-    if (isNaN(t.getTime())) continue;
-    const weekStart = new Date(t);
+    const t = Date.parse(v.createdAt);
+    if (!Number.isFinite(t)) continue;
+    weekStart.setTime(t);
     weekStart.setHours(0, 0, 0, 0);
     const d = (weekStart.getDay() + 6) % 7;
     weekStart.setDate(weekStart.getDate() - d);
@@ -610,9 +683,9 @@ function monthlyVisitSeries(visits: PageVisit[], months = 12): { counts: number[
 
   for (const v of visits) {
     if (!v.createdAt) continue;
-    const t = new Date(v.createdAt);
-    if (isNaN(t.getTime())) continue;
-    const k = etDayKey(t).slice(0, 7); // YYYY-MM
+    const t = Date.parse(v.createdAt);
+    if (!Number.isFinite(t)) continue;
+    const k = etDayKeyMs(t).slice(0, 7); // YYYY-MM
     byMonth.set(k, (byMonth.get(k) ?? 0) + 1);
   }
 
@@ -710,21 +783,23 @@ function hourlySignupSeries(signups: Array<{ createdAt: number | null }>, hours 
 }
 
 function hourBuckets(stamps: Array<string | number | null | undefined>, hours: number): { counts: number[]; labels: string[] } {
-  const hourKey = (d: Date) => d.toLocaleString("en-US", { timeZone: ET_TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false });
   const byHour = new Map<string, number>();
   for (const raw of stamps) {
     if (raw == null) continue;
-    const t = new Date(raw);
-    if (isNaN(t.getTime())) continue;
-    byHour.set(hourKey(t), (byHour.get(hourKey(t)) ?? 0) + 1);
+    const t = typeof raw === "number" ? raw : Date.parse(raw);
+    if (!Number.isFinite(t)) continue;
+    // Keyed ONCE per row. The old version formatted the same timestamp twice
+    // (map read + map write), doubling the cost of the hottest loop on the tab.
+    const k = etHourKeyMs(t);
+    byHour.set(k, (byHour.get(k) ?? 0) + 1);
   }
   const counts: number[] = [];
   const labels: string[] = [];
   const now = Date.now();
   for (let i = hours - 1; i >= 0; i--) {
-    const d = new Date(now - i * 3_600_000);
-    counts.push(byHour.get(hourKey(d)) ?? 0);
-    labels.push(d.toLocaleTimeString("en-US", { timeZone: ET_TZ, hour: "numeric", hour12: true }).replace(" ", ""));
+    const at = now - i * 3_600_000;
+    counts.push(byHour.get(etHourKeyMs(at)) ?? 0);
+    labels.push(ET_HOUR_LABEL_FMT.format(new Date(at)).replace(" ", ""));
   }
   return { counts, labels };
 }
@@ -736,9 +811,10 @@ function yearlyVisitSeries(visits: PageVisit[]): { counts: number[]; labels: str
   const byYear = new Map<number, number>();
   for (const v of visits) {
     if (v.createdAt == null) continue;
-    const t = new Date(v.createdAt);
-    if (isNaN(t.getTime())) continue;
-    byYear.set(t.getFullYear(), (byYear.get(t.getFullYear()) ?? 0) + 1);
+    const t = Date.parse(v.createdAt);
+    if (!Number.isFinite(t)) continue;
+    const y = etYearMs(t);
+    byYear.set(y, (byYear.get(y) ?? 0) + 1);
   }
   return yearBuckets(byYear);
 }
@@ -801,7 +877,13 @@ function MetricsTabSection({
 }) {
   const isMobile = useIsMobile();
 
-  const { traffic, signups: signupsSeries, caption } = seriesFor(period, visits, signups);
+  // MEMOISED: this buckets the entire visit log. Without the memo it re-ran on
+  // every render of this section — including the ones caused by a hosting-metrics
+  // poll that changes nothing here — and each run walked ~20k rows.
+  const { traffic, signups: signupsSeries, caption } = useMemo(
+    () => seriesFor(period, visits, signups),
+    [period, visits, signups],
+  );
 
   const cumulativeSeries = (() => {
     const cum: number[] = [];
@@ -1139,7 +1221,15 @@ function KpiStrip({
 
   // Bucketed at the header's granularity, so the strip re-scales with the rest
   // of the page.
-  const { traffic, signups: signupBuckets } = seriesFor(gran, visits, signups);
+  //
+  // MEMOISED, and here it matters most: the five useLiveSeries hooks above
+  // append a point on every poll, so this component re-renders on a timer. A
+  // bare call re-bucketed the whole visit log each time — the same work the
+  // metrics section below was already doing, twice per poll.
+  const { traffic, signups: signupBuckets } = useMemo(
+    () => seriesFor(gran, visits, signups),
+    [gran, visits, signups],
+  );
 
   // Visits: per-bucket loads. Running-total them and baseline so the final
   // point lands exactly on the printed total.
@@ -1279,12 +1369,22 @@ const PUBLIC_PAGE_LABELS: Record<string, string> = {
   unsubscribe: "Unsubscribe",
 };
 
-/** Dashboard page key → its sidebar label, via the NAV_GROUPS table above. */
+/** Dashboard page key → its sidebar label, via the NAV_GROUPS table above.
+ *
+ *  Built ONCE into a lookup map. This is called per visit row from
+ *  describePage(); the old body rebuilt a flattened array of every nav item and
+ *  linear-scanned it on each call, so a 20k-row pass over the visit log
+ *  allocated 20k throwaway arrays before it counted anything. */
+const NAV_LABEL_BY_HREF: Map<string, string> = (() => {
+  const m = new Map<string, string>();
+  for (const g of NAV_GROUPS) {
+    for (const it of g.items) m.set("/" + it.href.replace(/^\//, "").toLowerCase(), it.label);
+  }
+  return m;
+})();
+
 function navLabelFor(key: string): string | null {
-  const norm = (s: string) => "/" + s.replace(/^\//, "").toLowerCase();
-  const want = norm(key);
-  const hit = NAV_GROUPS.flatMap((g) => g.items).find((it) => norm(it.href) === want);
-  return hit?.label ?? null;
+  return NAV_LABEL_BY_HREF.get("/" + key.replace(/^\//, "").toLowerCase()) ?? null;
 }
 
 /**
@@ -1292,7 +1392,26 @@ function navLabelFor(key: string): string | null {
  * page that was beaconed under a key AND (on older rows) under a bare path still
  * collapses to one line wherever we can tell they're the same thing.
  */
-function describePage(v: PageVisit): { id: string; name: string; route: string; isPublic: boolean } {
+type PageDesc = { id: string; name: string; route: string; isPublic: boolean };
+
+/** Memo for describePage. The visit log has tens of thousands of rows and only
+ *  a few dozen distinct (page_key, path, label) triples, so every row after the
+ *  first for a page is a map hit instead of a regex + nav lookup. */
+const PAGE_DESC_CACHE = new Map<string, PageDesc>();
+
+function describePage(v: PageVisit): PageDesc {
+  const cacheKey = `${v.pageKey ?? ""}\u0000${v.path ?? ""}\u0000${v.pageLabel ?? ""}`;
+  const cached = PAGE_DESC_CACHE.get(cacheKey);
+  if (cached) return cached;
+  const built = describePageUncached(v);
+  // Distinct pages are few; the guard only exists so a pathological log can't
+  // grow this without bound.
+  if (PAGE_DESC_CACHE.size > 4000) PAGE_DESC_CACHE.clear();
+  PAGE_DESC_CACHE.set(cacheKey, built);
+  return built;
+}
+
+function describePageUncached(v: PageVisit): PageDesc {
   const key = (v.pageKey || "").trim();
   const path = (v.path || "").trim();
 
@@ -1773,10 +1892,9 @@ const OverviewSection = React.memo(function OverviewSection({ metrics, gran }: {
           projection + 177-feature re-render on every hover was dominating this
           tab's frame budget. */}
 
-      {/* Hourly heatmap — now self-contained: it fetches and folds the visit
-          log at most once per ET day and caches the finished grid, instead of
-          rebuilding a 7×24 grid from 5,000 rows on every render of this page. */}
-      <HourlyHeatmap />
+      {/* The hourly load heatmap was removed on 2026-08-23. Nothing was read
+          off it that the Traffic card's live/daily buckets don't already say,
+          and it cost a fetch plus a 7×24 fold of the visit log. */}
 
     </div>
   );
@@ -2515,12 +2633,7 @@ export default function ControlPanel() {
   // among them (see above) — including a per-second value would defeat the memo
   // completely, which is exactly what the removed `uptime` field did.
   const overviewMetrics = useMemo(() => {
-    const labelFor = (key: string): string => {
-      const hit = NAV_GROUPS.flatMap((g) => g.items).find(
-        (it) => it.href.replace(/^\//, "") === key || it.href === key
-      );
-      return hit?.label ?? key;
-    };
+    const labelFor = (key: string): string => navLabelFor(key) ?? key;
     const totalVisits = pageStatuses.reduce((sum, p) => sum + (p.totalLoads ?? 0), 0);
     const activePages = pageStatuses.filter((p) => p.status === "active").length;
     const feed = pageStatuses
@@ -2565,13 +2678,18 @@ export default function ControlPanel() {
     // Unique visitors "on today" — distinct user (ip fallback for logged-out)
     // seen since midnight ET. The real "who came today", unlike activeSessions
     // which counts 30-day-unexpired logins regardless of recent activity.
-    const etToday = new Date().toLocaleDateString("en-US", { timeZone: "America/New_York" });
+    //
+    // Compared on the cheap ET day key rather than a per-row
+    // toLocaleDateString — same boundary, without an Intl construction for
+    // every one of the ~20k rows in the log. A cutoff alone would not do: the
+    // ET day starts at a different UTC instant depending on DST.
+    const etToday = etDayKeyMs(Date.now());
     const onTodaySet = new Set<string>();
     for (const v of visits) {
       if (!v.createdAt) continue;
-      const t = new Date(v.createdAt);
-      if (isNaN(t.getTime())) continue;
-      if (t.toLocaleDateString("en-US", { timeZone: "America/New_York" }) !== etToday) continue;
+      const t = Date.parse(v.createdAt);
+      if (!Number.isFinite(t)) continue;
+      if (etDayKeyMs(t) !== etToday) continue;
       const key = v.userId || (v.ip ? `ip:${v.ip}` : "");
       if (key) onTodaySet.add(key);
     }

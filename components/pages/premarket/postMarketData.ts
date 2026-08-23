@@ -83,6 +83,23 @@ export function recentSessions(today: string, n = 15): string[] {
   return out;
 }
 
+/**
+ * The trading session before `date` — weekends skipped, holidays not (see
+ * recentSessions for why the client does not carry a holiday calendar). Used to
+ * pull the prior day's ES bars, which is what the overnight window is made of.
+ */
+export function prevSessionOf(date: string): string {
+  let t = Date.parse(`${date}T12:00:00Z`);
+  if (!Number.isFinite(t)) return date;
+  for (let i = 0; i < 7; i++) {
+    t -= 86_400_000;
+    const d = new Date(t);
+    if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
+    return d.toISOString().slice(0, 10);
+  }
+  return date;
+}
+
 /** "Fri Aug 21" for a session date — the picker's label. Parsed at 12:00Z. */
 export function sessionLabel(date: string): string {
   const t = Date.parse(`${date}T12:00:00Z`);
@@ -108,6 +125,250 @@ const numOrNull = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  THE SESSION FREEZE — a past date rendering the REAL tabs
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * server-v2/premarket-freeze-recorder.js captures the page's INPUTS twice a
+ * trading day — 'pre' at 09:10-09:29 and 'post' at 16:05-16:25 ET — into
+ * premarket_freeze. A frozen date therefore renders the real Premarket and
+ * Post-Market tabs off the real chain from that session: same components, same
+ * math, just not live.
+ *
+ * INPUTS, not outputs. The payload is the /proxy/snapshot the socket would have
+ * delivered, so every derived value on the page (walls, CORE, max pain,
+ * expected move, DEX/vanna, premium, written-vs-traded) is recomputed in the
+ * browser by the SAME memos the live path runs. Nothing is stored twice and
+ * nothing can drift.
+ *
+ * It cannot be back-filled: no per-strike marks/volume history exists to
+ * rebuild an older session's chain from, so this only covers dates from the day
+ * the recorder shipped. HistoricalRecap is what a date without a freeze gets,
+ * and the picker chooses between them by whether a row exists.
+ */
+export type FreezeSlot = "pre" | "post";
+
+export type FreezePayload = {
+  symbol: string;
+  spot: number;
+  prevClose: number | null;
+  vix: number | null;
+  esFut: number;
+  basis: number | null;
+  expiry: string;
+  expirations: string[];
+  updatedAt: number;
+  gexRows: ChainRow[];
+  callWall: number | null;
+  putWall: number | null;
+  gexFlip: number | null;
+  totalNetGex: number | null;
+  totalFlowGex: number;
+};
+
+/**
+ * The shape Premarket.tsx destructures off useMobileGex. A frozen session is
+ * swapped in HERE, at the one place the live data enters the page, so every
+ * memo downstream is untouched — that is the whole trick.
+ */
+export type FrozenGex = {
+  chain: ChainRow[];
+  spot: number;
+  flip: number | null;
+  callWall: number | null;
+  putWall: number | null;
+  totalNetGex: number | null;
+  esFut: number;
+  basis: number | null;
+  expiry: string;
+  isZeroDte: boolean;
+  connected: boolean;
+  hasData: boolean;
+  updatedAt: number | null;
+  source: "live" | "rest" | "off";
+};
+
+/**
+ * Freeze payload → the live hook's shape.
+ *
+ * `flip` is recomputed with findGEXFlip exactly as useMobileGex does, falling
+ * back to the server's own value the same way, so the frozen page cannot show a
+ * different flip than the live page showed that day for the same chain.
+ *
+ * `basis` is the pair captured WITH the chain, which is the only honest basis
+ * for a past session — today's ES−SPX difference says nothing about last
+ * Friday's.
+ */
+export function frozenGexOf(p: FreezePayload | null, date: string): FrozenGex | null {
+  if (!p || !Array.isArray(p.gexRows) || !p.gexRows.length) return null;
+  const chain = p.gexRows;
+  return {
+    chain,
+    spot: p.spot,
+    flip: findGEXFlip(chain, p.spot) ?? p.gexFlip,
+    callWall: p.callWall,
+    putWall: p.putWall,
+    totalNetGex: p.totalNetGex,
+    esFut: p.esFut,
+    basis: p.basis,
+    expiry: p.expiry,
+    isZeroDte: !!p.expiry && p.expiry.slice(0, 10) === date,
+    // FROZEN, so: not connected, and source 'off'. The page's own status chip
+    // reads these — it must say the feed is not live rather than inheriting a
+    // green LIVE badge from a day that ended a week ago.
+    connected: false,
+    hasData: true,
+    updatedAt: p.updatedAt,
+    source: "off",
+  };
+}
+
+/** Both captures for one session, in one request. */
+export function useSessionFreeze(date: string, enabled: boolean) {
+  const [pre, setPre] = useState<FreezePayload | null>(null);
+  const [post, setPost] = useState<FreezePayload | null>(null);
+  const [state, setState] = useState<HistState>("loading");
+
+  useEffect(() => {
+    if (!enabled || !date) { setState("empty"); setPre(null); setPost(null); return; }
+    let alive = true;
+    setState("loading"); setPre(null); setPost(null);
+    (async () => {
+      try {
+        const r = await dedupeFetch(
+          `/proxy/premarket-freeze?date=${encodeURIComponent(date)}&symbol=SPX`,
+          { cache: "no-store" },
+          30_000,
+        );
+        const j = await r.json();
+        if (!alive) return;
+        if (!j?.ok || !Array.isArray(j.rows)) { setState("error"); return; }
+        const rows = j.rows as { slot?: string; payload?: FreezePayload }[];
+        const pick = (s: FreezeSlot) => rows.find((x) => x.slot === s)?.payload ?? null;
+        const p = pick("pre"), q = pick("post");
+        setPre(p); setPost(q);
+        setState(p || q ? "ok" : "empty");
+      } catch {
+        if (alive) setState("error");
+      }
+    })();
+    return () => { alive = false; };
+  }, [date, enabled]);
+
+  return { pre, post, state };
+}
+
+/**
+ * Which sessions have a capture, and which slots. The picker needs this to know
+ * whether a date opens the real tabs or the recorded-stores recap — and it is
+ * one small request (no payloads, just flags), unlike asking for each date.
+ */
+export type FreezeDay = { date: string; pre: boolean; post: boolean };
+
+export function useFreezeDates(limit = 120) {
+  const [rows, setRows] = useState<FreezeDay[]>([]);
+  const [state, setState] = useState<HistState>("loading");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await dedupeFetch(
+          `/proxy/premarket-freeze?dates=1&limit=${limit}&symbol=SPX`,
+          { cache: "no-store" },
+          60_000,
+        );
+        const j = await r.json();
+        if (!alive) return;
+        if (!j?.ok || !Array.isArray(j.rows)) { setState("error"); return; }
+        const out: FreezeDay[] = (j.rows as Record<string, unknown>[])
+          .map((x) => ({
+            date: String(x.date ?? "").slice(0, 10),
+            pre: !!x.has_pre,
+            post: !!x.has_post,
+          }))
+          .filter((x) => x.date);
+        setRows(out);
+        setState(out.length ? "ok" : "empty");
+      } catch {
+        if (alive) setState("error");
+      }
+    })();
+    return () => { alive = false; };
+  }, [limit]);
+
+  const byDate = useMemo(() => new Map(rows.map((r) => [r.date, r])), [rows]);
+  return { rows, byDate, state };
+}
+
+/**
+ * A named session's ES 5m bars PLUS the prior session's, in the shape
+ * useEsCandles' `sessionCandles` returns.
+ *
+ * Two dates, not one, because the page's overnight window is built from them:
+ * the 18:00→09:30 range, the prior RTH high/low and the prior 16:00 close all
+ * live in the day BEFORE the session on screen. One date would leave the
+ * overnight panel permanently blank on a frozen page.
+ */
+export type DatedBar = {
+  timestamp: number; date: string; slotKey: string;
+  open: number; high: number; low: number; close: number; volume: number;
+};
+
+async function fetchDatedBars(date: string): Promise<DatedBar[]> {
+  const r = await dedupeFetch(
+    `/api/snapshots/candles?date=${encodeURIComponent(date)}&interval=5&limit=600&lite=1`,
+    { cache: "no-store" },
+    30_000,
+  );
+  const j = await r.json();
+  const cols: string[] = Array.isArray(j?.cols) ? j.cols : [];
+  const raw: unknown[][] = Array.isArray(j?.rows) ? j.rows : [];
+  if (!cols.length || !raw.length) return [];
+  const ix = (n: string) => cols.indexOf(n);
+  const iT = ix("timestamp"), iD = ix("date"), iK = ix("slotKey");
+  const iO = ix("open"), iH = ix("high"), iL = ix("low"), iC = ix("close"), iV = ix("volume");
+  return raw
+    .map((t) => ({
+      timestamp: num(t[iT]),
+      date: String(t[iD] ?? date),
+      slotKey: String(t[iK] ?? ""),
+      open: num(t[iO]), high: num(t[iH]), low: num(t[iL]), close: num(t[iC]),
+      volume: num(t[iV]),
+    }))
+    .filter((b) => b.timestamp > 0 && b.close > 0 && b.slotKey);
+}
+
+export function useDatedEsCandles(date: string, enabled: boolean) {
+  const [rows, setRows] = useState<DatedBar[]>([]);
+  const [state, setState] = useState<HistState>("loading");
+
+  useEffect(() => {
+    if (!enabled || !date) { setRows([]); setState("empty"); return; }
+    let alive = true;
+    setState("loading"); setRows([]);
+    (async () => {
+      try {
+        const [prior, day] = await Promise.all([
+          fetchDatedBars(prevSessionOf(date)),
+          fetchDatedBars(date),
+        ]);
+        if (!alive) return;
+        const merged = [...prior, ...day]
+          .sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
+        setRows(merged);
+        setState(merged.length ? "ok" : "empty");
+      } catch {
+        if (alive) setState("error");
+      }
+    })();
+    return () => { alive = false; };
+  }, [date, enabled]);
+
+  return { rows, state };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  THE DEEP HISTORY — one settled row per session, kept forever

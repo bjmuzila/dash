@@ -1,51 +1,94 @@
 # Changelog
 
-## 2026-08-22 (b) - Owner Overview: fix the 1Hz re-render that made the page crawl
+## 2026-08-22 - Frozen sessions: the real Premarket / Post-Market tabs on a past date
 
-Edited: `owner-vite/src/pages/ControlPanel.tsx`.
+Added: `server-v2/premarket-freeze-recorder.js`,
+Edited: `server-v2/server-with-proxy.js`, `components/pages/Premarket.tsx`,
+`components/pages/premarket/PostMarketTab.tsx`,
+`components/pages/premarket/postMarketData.ts`.
 
-The page had become very laggy. Four causes, all of them the same shape: a
-one-second interval that exists to move a clock was driving work that has
-nothing to do with a clock. The visit-log cards added yesterday didn't create
-any of this — they made an existing problem expensive enough to feel.
+Picking Friday used to grey out both tabs. Now it opens them for real.
 
-**1. `overviewMetrics` was a bare IIFE.** A `setInterval` bumps
-`uptimeTick`/`setTick` every second so the sidebar's uptime and "Ns ago" stay
-live. That re-renders ControlPanel, and the metrics block re-ran on every tick:
-a full pass over `visits` for the unique-visitors-today set, three more for the
-daily/weekly series, a sort of `pageStatuses` — thousands of rows of work per
-second, to redraw a clock. It also returned a **fresh object** each time, so
-`OverviewSection` and every chart, bar list and table under it re-rendered at
-1Hz too. Now `useMemo`, keyed on the state the numbers actually come from.
+### The recorder
 
-**2. The metrics object carried a per-second field.** `uptime: fmtUptime(…)`
-recomputed every tick and was the one thing in the object that could never be
-stable — so it alone would have defeated the memo. Nothing read it: the
-destructure in `OverviewSection` never included it. Removed from the object and
-the type.
+`premarket-freeze-recorder.js` captures the page's **inputs** twice a trading
+day into a new `premarket_freeze (date, symbol, slot, ts, payload JSONB)` table:
 
-**3. `OverviewSection` is now `React.memo`.** Paired with (1), and both are
-needed: memoising the data alone still hands down a new object, memoising the
-component alone still receives one. Together a tick that changes nothing on the
-tab costs nothing on the tab.
+- **`pre`** 09:10–09:29 ET — the premarket map, upserted each poll so it holds
+  the freshest pre-bell state right up to the open.
+- **`post`** 16:05–16:25 ET — the settle. 16:05, not the bell, for the same
+  reason the page's own `afterClose` gate uses it.
 
-**4. `SidebarContent` was a component declared inside render.** A new function
-identity every render means React tears down and rebuilds the subtree whose type
-changed — so the mobile drawer was unmounting and remounting once per second,
-losing any focus or scroll inside it. Called as `{SidebarContent()}` now, which
-inlines the JSX into the parent's own tree where it reconciles normally.
+The payload is the trimmed `/proxy/snapshot` the socket would have delivered —
+`gexRows`, spot, esFut, basis, expiry, walls, flip, totals. `flow`, the candle
+arrays and `status` are dropped; es_candles is already a per-date table and the
+frozen page reads that session's bars from `/api/snapshots/candles?date=`.
 
-**Plus: the visit log no longer re-downloads every 60s.** `refresh()` runs on a
-one-minute timer and was re-pulling `/api/page-visits?days=30&limit=20000` with
-it. Every arrival replaces the array, which invalidates the memos in four
-consumers (metrics, Top pages, Acquisition, the link builder) and makes all of
-them re-derive from scratch — a visible hitch every minute, buying a fresher
-view of a log that is read in 24h/7d/30d windows. Throttled to 5 minutes via a
-ref that only advances on a SUCCESSFUL fetch, so a failed attempt retries on the
-next refresh instead of waiting out the window.
+**Inputs, never outputs.** The recorder does no arithmetic at all — it never
+computes a wall or a flip. This is the same pattern `home_static_snapshots` and
+`mult_greek_static_snapshots` already use, and it is why there is no second
+implementation of the page's math on the server to drift out of step with the
+client's.
 
-The 1s interval itself is left alone — it is correct for what it was for, and
-the fix is that it can no longer reach anything else.
+Server-side, not client-side: the page's old localStorage EOD snapshot only ran
+while mounted between 15:40 and 16:10, so nobody was ever on /premarket at
+3:40pm and it never wrote. That deadlock is documented in Premarket.tsx's header
+and is not being repeated.
+
+Retention 120 days (`PREMARKET_FREEZE_KEEP_DAYS`), pruned daily.
+
+### Proxy routes (additive — nothing existing altered)
+
+- `GET /proxy/premarket-freeze?date=&symbol=` — both slots in one answer, so
+  switching tabs costs no second request. `sessionCacheOpts()` lets the browser
+  keep a past session for a day; today stays `no-store` because today's `pre`
+  row is still being upserted until the bell.
+- `GET /proxy/premarket-freeze?dates=1&limit=` — flags only, no payloads. Feeds
+  the picker.
+- `POST /proxy/premarket-freeze-run { slot }` — owner-only via proxy-auth, for a
+  missed window or to seed today right after a deploy.
+- One boot line next to the other recorders.
+
+### The client swap
+
+Exactly one line changes what the page reads:
+
+```
+const gex = frozen && frozenGex ? frozenGex : liveGex;
+```
+
+Everything below it — every memo, both tabs, every panel — is untouched, so a
+frozen date renders the actual page off that day's actual book. Walls, CORE, max
+pain, expected move, DEX/vanna, premium and written-vs-traded are all recomputed
+now, by the live code, from old inputs.
+
+Three things had to start following the session instead of the clock: `viewDate`
+(the overnight window's idea of "today", the wall log, the journal, and the
+baseline's `today=` param — without which a frozen Tuesday would be diffed
+against last night's close), `viewMin` (a frozen day reads as just past the
+settle, which is what puts the Post-Market tab in its finished state), and the ES
+bars, which come from a dated pair — that session's and the prior session's,
+because the overnight range and the prior close live in the day before.
+
+`PostMarketTab` gained one optional `frozenDate` prop. It changes only the three
+things that reach outside the props: the intraday ladder is asked for by date,
+the accuracy log is not back-dated, and **Tomorrow's Map is suppressed** — that
+panel fetches the CURRENT next expiry, so on a past session it would staple next
+week's structure onto last Tuesday's recap.
+
+The picker marks capture-backed dates with a leading bullet, the header carries a
+violet FROZEN banner, and both tabs only go dead on a date with **no** capture,
+where HistoricalRecap still takes over. Frozen sessions are SPX only (the freeze
+captures the one symbol the socket carries), so stepping back onto a past date
+from a SPY/QQQ board snaps to SPX.
+
+### Limitation
+
+**No back-fill.** Nothing stores per-strike marks and volume for past sessions,
+so the freeze only covers dates from the day it deploys forward. Everything
+before that keeps the recorded-stores recap.
+
+
 ## 2026-08-22 - Session picker: wire it to the history that actually exists
 
 Edited: `components/pages/premarket/postMarketData.ts`,

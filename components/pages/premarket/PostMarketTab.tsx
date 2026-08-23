@@ -296,6 +296,22 @@ export type PostMarketProps = {
   etDate: string;
   etMin: number;
   hasData: boolean;
+  /**
+   * Set when this tab is rendering a FROZEN past session (Premarket.tsx swaps
+   * the whole prop bundle for that day's captured chain — see its DATA SOURCE
+   * block). Everything derived from the props is correct as-is; what this flag
+   * changes is the three things that reach OUTSIDE the props and would
+   * otherwise describe today:
+   *
+   *   the intraday ladder  — asked for by date instead of "the last 8 hours"
+   *   next-expiry structure — suppressed; "tomorrow" for a past session means a
+   *                           day that has already happened, and the panel would
+   *                           fetch the CURRENT next expiry to answer it
+   *   the accuracy log      — not written; it is a rolling append-only list of
+   *                           finished sessions and back-dating into it puts it
+   *                           out of order
+   */
+  frozenDate?: string;
 };
 
 // NOTES_KEY now lives in ./postMarketData so the historical recap writes the
@@ -353,10 +369,12 @@ export default function PostMarketTab(p: PostMarketProps) {
   const {
     spot, esFut, basis, flip, callWall, putWall, totalNetGex, perStrike, chain,
     coreBullseye, maxPain, em, totals, overnight, candles, expiry, etDate, etMin, hasData,
+    frozenDate,
   } = p;
+  const frozen = !!frozenDate;
 
-  const { cols, state: histState } = useIntradayLadder(true, expiry);
-  const { next, state: nextState } = useNextExpiryStructure(true, expiry, spot);
+  const { cols, state: histState } = useIntradayLadder(true, expiry, frozenDate);
+  const { next, state: nextState } = useNextExpiryStructure(!frozen, expiry, spot);
   const { log: wallLog, byLevel: recorded, state: wallState } = useRecordedWalls(etDate, "SPX");
 
   const es = (px: number | null | undefined) => (px == null || basis == null ? null : px + basis);
@@ -983,6 +1001,7 @@ export default function PostMarketTab(p: PostMarketProps) {
   const wroteLogRef = useRef(false);
   useEffect(() => {
     if (wroteLogRef.current) return;
+    if (frozen) return;                                  // never back-date the log
     if (etMin < RTH_CLOSE_MIN + 5) return;               // only after the settle
     if (!hasData || rthHi == null || rthLo == null || callWall == null || putWall == null) return;
     let rows: LogRow[] = [];
@@ -1000,7 +1019,7 @@ export default function PostMarketTab(p: PostMarketProps) {
     try { localStorage.setItem(LOG_KEY, JSON.stringify(nextRows)); } catch { /* quota */ }
     setLog(nextRows);
     wroteLogRef.current = true;
-  }, [etMin, etDate, hasData, rthHi, rthLo, callWall, putWall, coreBullseye, closePx, spot]);
+  }, [frozen, etMin, etDate, hasData, rthHi, rthLo, callWall, putWall, coreBullseye, closePx, spot]);
 
   const accRows = log.slice(-10);
   const hitRate = (pick: (r: LogRow) => boolean) =>
@@ -1517,6 +1536,24 @@ export default function PostMarketTab(p: PostMarketProps) {
         )}
 
       {/* ── 5. TOMORROW'S MAP ────────────────────────────────────────────── */}
+      {/* Suppressed on a frozen session. "Tomorrow" for a day that has already
+          happened is a day that has also already happened, and the only chain
+          this panel can fetch is the CURRENT next expiry — so leaving it in
+          would staple next week's structure onto last Tuesday's recap. There is
+          no stored next-expiry chain per past session to substitute. */}
+      {frozen ? (
+        <div className="sec">
+          <div className="sechead">
+            <h3><span className="secn">5</span>Tomorrow&apos;s Map</h3>
+            <span className="tiny right">not available for a past session</span>
+          </div>
+          <div className="warnbar">
+            This panel builds the NEXT expiry&apos;s structure from a live chain fetch. On a frozen
+            session that would be the next expiry as it stands today, not as it stood the evening of{" "}
+            {etDate} — so it is left out rather than filled in with the wrong week.
+          </div>
+        </div>
+      ) : (
       <div className="sec">
         <div className="sechead">
           <h3><span className="secn">5</span>Tomorrow&apos;s Map — after 0DTE rolls off</h3>
@@ -1603,6 +1640,7 @@ export default function PostMarketTab(p: PostMarketProps) {
           </>
         )}
       </div>
+      )}
 
       {/* ── 6. JOURNAL · ACCURACY · PREMIUM ──────────────────────────────── */}
       <div className="sec">
@@ -1693,12 +1731,14 @@ export default function PostMarketTab(p: PostMarketProps) {
 
       <div className="footbar">
         <span className="l">
-          Recap for {etDate} · {expiry || "—"} · ES {fmtPx(esFut, 2)}
+          {frozen ? "Frozen recap for " : "Recap for "}{etDate} · {expiry || "—"} · ES {fmtPx(esFut, 2)}
           {em != null ? ` · EM ±${nf(em, 0)}` : ""}
         </span>
         <span className="l">
           {histState === "ok" ? "intraday ladder: recorded" : "intraday ladder: unavailable"} ·{" "}
-          {nextState === "ok" ? "next expiry: loaded" : "next expiry: unavailable"}
+          {frozen
+            ? "frozen session"
+            : nextState === "ok" ? "next expiry: loaded" : "next expiry: unavailable"}
         </span>
       </div>
     </section>

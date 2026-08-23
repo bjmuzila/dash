@@ -1504,6 +1504,61 @@ async function main() {
         })();
         return;
       }
+      // ── /premarket session freeze ─────────────────────────────────────────
+      //   GET /proxy/premarket-freeze?date=YYYY-MM-DD[&symbol=SPX]
+      //   GET /proxy/premarket-freeze?dates=1[&limit=120][&symbol=SPX]
+      //
+      // The captured page inputs for ONE past session — both slots ('pre' at
+      // 09:10-09:29, 'post' at 16:05-16:25) in one answer, so the page can
+      // switch tabs without a second request. `?dates=1` instead returns just
+      // which sessions have a capture, which is what the date picker needs in
+      // order to know whether to offer the real tabs or the recorded recap.
+      //
+      // Read-only, subscriber-gated by proxy-auth like every other GET here.
+      // sessionCacheOpts() lets the browser keep a PAST session for a day —
+      // those rows never change again — while today's stays no-store, since
+      // today's 'pre' row is still being upserted until the bell.
+      if (pathname === '/proxy/premarket-freeze' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { readFreeze, freezeDates } = require('./premarket-freeze-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || 'SPX').trim().replace(/^\$/, '');
+            if (u.searchParams.get('dates') === '1') {
+              const limit = Number(u.searchParams.get('limit') || 120);
+              const rows = await freezeDates(limit, symbol);
+              sendJson(res, 200, { ok: true, rows: rows ?? [] }, req);
+              return;
+            }
+            const date = (u.searchParams.get('date') || '').trim();
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+              sendJson(res, 400, { ok: false, error: 'date=YYYY-MM-DD required' });
+              return;
+            }
+            const rows = await readFreeze(date, symbol);
+            if (rows == null) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            sendJson(res, 200, { ok: true, date, symbol, rows }, req, sessionCacheOpts(date));
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manually fire a freeze capture — a window can be missed on a restart,
+      // and it is how today's row gets seeded right after a deploy.
+      // POST /proxy/premarket-freeze-run  { slot: 'pre' | 'post' }
+      // OWNER-only via proxy-auth, which gates every non-GET on /proxy/*.
+      if (pathname === '/proxy/premarket-freeze-run' && req.method === 'POST') {
+        (async () => {
+          try {
+            const body = await readJsonBody(req);
+            const { collectPremarketFreeze } = require('./premarket-freeze-recorder');
+            const r = await collectPremarketFreeze(`http://localhost:${PORT}`, {
+              force: true, slot: body?.slot === 'pre' ? 'pre' : 'post',
+            });
+            sendJson(res, 200, { ok: true, result: r ?? null });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // ── Per-strike net GEX across expirations (all + ex-0DTE) ─────────────
       //   GET /proxy/gex-by-strike-multi?symbol=$SPX
       //
@@ -4010,6 +4065,11 @@ async function main() {
     // GEX Levels history recorder: persists the /test GEX Levels "History of
     // key level changes" row (walls/flip/$gamma/CPG/R2/S2/OI) forever in PG.
     require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);
+    // /premarket session freeze: captures the page's INPUTS twice a trading day
+    // (pre 09:10–09:29, post 16:05–16:25 ET) into premarket_freeze, so a past
+    // date renders the real Premarket / Post-Market tabs instead of a reduced
+    // recap. Stores inputs, never derived values — see the recorder's header.
+    require('./premarket-freeze-recorder').startPremarketFreezeRecorder(PORT);
     // Earnings calendar: Sat 09:00 ET scrape of next Mon–Fri from Nasdaq,
     // mcap ≥ $100B → earnings_calendar (feeds /economic-calendar bottom strip).
     require('./earnings-calendar-recorder').startEarningsCalendarRecorder();

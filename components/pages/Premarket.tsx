@@ -61,6 +61,32 @@
  * "OI basis" out loud so the two numbers are never silently mismatched.
  * The full argument is in premarket-baseline.js's header.
  *
+ * ── LOOKING AT A PAST SESSION (2026-08-22) ──────────────────────────────────
+ * The page head carries a SESSION PICKER. Today is the live page; an earlier
+ * date is served one of two ways, and which one depends only on what was
+ * stored:
+ *
+ *   FROZEN — server-v2/premarket-freeze-recorder.js captured that session's
+ *     chain twice (09:10-09:29 and 16:05-16:25 ET). The captured snapshot is
+ *     swapped in at ONE place, where useMobileGex's values are destructured,
+ *     and every memo and both tabs below that line run unchanged. A frozen date
+ *     is therefore the REAL page — same walls, same CORE, same max pain, same
+ *     expected move, same premium and written-vs-traded — recomputed here and
+ *     now from that day's own book. There is no second rendering path to drift.
+ *
+ *   OLDER — no capture exists, and none can be manufactured: nothing in this
+ *     repo stores per-strike marks and volume for a past session. Those dates
+ *     fall back to components/pages/premarket/HistoricalRecap.tsx, which shows
+ *     the per-date stores that DO go back indefinitely (the settled levels row,
+ *     eod_gex, the wall log, that session's ES bars).
+ *
+ * Three things follow the session rather than the clock once a date is picked:
+ * `viewDate` (what the overnight window, the wall log, the journal and the
+ * baseline's `today=` all key off), `viewMin` (a frozen day reads as just past
+ * the settle) and the ES bars, which come from the dated pair rather than the
+ * live rolling window. Everything else needed no change at all, which is the
+ * clearest sign the swap is in the right place.
+ *
  * Styling: the approved mockup's CSS, scoped under `.pmk` (custom properties on
  * `.pmk`, not `:root`) so its generic class names cannot leak into the app.
  */
@@ -76,9 +102,13 @@ import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/Hi
 import TickerBoard from "@/components/pages/premarket/TickerBoard";
 import {
   GEX_HISTORY_LIMIT,
+  frozenGexOf,
   recentSessions,
   sessionLabel,
+  useDatedEsCandles,
+  useFreezeDates,
   useGexLevelsHistory,
+  useSessionFreeze,
 } from "@/components/pages/premarket/postMarketData";
 import {
   netGEXOf,
@@ -145,6 +175,15 @@ const CSS = `
 .pmk .dsel option{background:var(--panel2);color:var(--txt)}
 .pmk .dsel.past select{border-color:rgba(245,185,66,.45);color:var(--amber)}
 .pmk .dsel.past::after{border-color:var(--amber)}
+
+/* FROZEN banner. Violet, not amber: amber on this page means "caution, check
+   this" (the warnbars, the stale-calendar chip) and a frozen session is not a
+   warning — it is a correct, complete render of a day that has ended. It sits
+   above the section so it cannot read as one panel's caveat. */
+.pmk .frozenbar{margin-bottom:12px;padding:9px 13px;border-radius:var(--r);
+  border:1px solid rgba(167,139,250,.3);background:rgba(167,139,250,.07);
+  font-size:12px;color:var(--dim)}
+.pmk .frozenbar b{color:var(--violet)}
 
 .pmk .prep{
   border:1px solid var(--card);border-radius:14px;overflow:hidden;
@@ -474,15 +513,185 @@ type Quote = { symbol: string; last: number | null; change: number | null; pct: 
 type SectorBar = { symbol: string; name: string; chg5d: number | null };
 
 export default function Premarket() {
-  // ── live GEX (shared socket, pinned to today's 0DTE) ───────────────────────
-  const gex = useMobileGex("oi-vol");
+  // ── ET clock ───────────────────────────────────────────────────────────────
+  // Every "is it before the open / after the settle" question on this page is
+  // asked of this, and the SESSION PICKER below needs today's date before the
+  // data source is chosen — which is why the clock leads the component instead
+  // of sitting next to the quotes it used to live beside.
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setClock(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const { date: etDate, minutes: etMin } = etWall(clock);
+
+  // ── PRE / POST tab ─────────────────────────────────────────────────────────
+  // The page answers a different question before the open than it does after the
+  // close, so it carries both and picks the one that matches the clock: Premarket
+  // until 09:30, Post-Market from 16:05 (the settle, not the bell — the last
+  // frames still land in those five minutes). Between them either is defensible,
+  // so the last manual choice wins and is remembered for the session; once the
+  // user picks a tab, the clock never moves it again.
+  const afterClose = etMin >= RTH_CLOSE_MIN + 5;
+  const [tab, setTab] = useState<"pre" | "post">("pre");
+  const tabPinned = useRef(false);
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(TAB_KEY);
+      if (saved === "pre" || saved === "post") { tabPinned.current = true; setTab(saved); }
+    } catch { /* private mode — fall through to the clock */ }
+  }, []);
+  useEffect(() => {
+    if (tabPinned.current) return;
+    setTab(afterClose ? "post" : "pre");
+  }, [afterClose]);
+  const pickTab = useCallback((t: "pre" | "post") => {
+    tabPinned.current = true;
+    setTab(t);
+    try { sessionStorage.setItem(TAB_KEY, t); } catch { /* nothing to do */ }
+  }, []);
+
+  // ── SYMBOL ─────────────────────────────────────────────────────────────────
+  // Remembered for the session like the tab. Only the MARKUP switches: this
+  // component's hooks (useMobileGex / useEsCandles) run whatever symbol is
+  // selected, so the SPX feed keeps flowing while you read SPY and switching
+  // back is instant with no reconnect. That costs nothing extra — gexSocket is
+  // one refcounted connection shared with the toolbar and every other consumer,
+  // and it would stay open for them anyway. TickerBoard's own poll only starts
+  // when it mounts, so at most one chain is being polled at a time.
+  const [sym, setSym] = useState<Symbol_>("SPX");
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(SYM_KEY) as Symbol_ | null;
+      if (saved && (SYMBOLS as readonly string[]).includes(saved)) setSym(saved);
+    } catch { /* private mode — SPX it is */ }
+  }, []);
+  const pickSym = useCallback((v: Symbol_) => {
+    setSym(v);
+    try { sessionStorage.setItem(SYM_KEY, v); } catch { /* nothing to do */ }
+  }, []);
+
+  // ── SESSION DATE ───────────────────────────────────────────────────────────
+  // Today is the live page and the default. An earlier entry shows that session
+  // in one of two ways, and which one it gets depends on what was stored:
+  //
+  //   a FROZEN date — premarket_freeze has that session's captured chain, so
+  //     both tabs open for real, off that day's own book. This is the point of
+  //     the picker and it covers every session since the freeze recorder
+  //     shipped.
+  //   an OLDER date — no capture exists and none can be manufactured, so it
+  //     falls back to HistoricalRecap: the settled per-day stores, the wall log
+  //     and the ES range. Less, but true.
+  //
+  // The list is the sessions that ACTUALLY HAVE a settled row, straight off
+  // /proxy/gex-levels-history (one row per session, kept indefinitely, gaps
+  // back-filled from settled OI). Offering the recorded dates rather than a
+  // computed run of weekdays is the difference between a picker that always
+  // lands on data and one that offers Thanksgiving. The weekday walk stays as
+  // the fallback for the moment before that request lands, and for the case
+  // where it fails — a picker with only "Today" in it would read as breakage.
+  //
+  // This is the SAME request HistoricalRecap makes; dedupeFetch collapses the
+  // two into one, so the picker costs nothing extra once the recap mounts.
+  const { dates: recordedDates, state: recordedState } = useGexLevelsHistory(SESSION_COUNT);
+  // Flags only — no payloads — so the option list can mark which dates open the
+  // real tabs. One small request, cached for a minute.
+  const { byDate: freezeByDate } = useFreezeDates(SESSION_COUNT);
+  const sessions = useMemo(() => {
+    const fallback = recentSessions(etDate, SESSION_COUNT);
+    if (recordedState !== "ok" || !recordedDates.length) return fallback;
+    // Today is always first even before it has a settled row of its own — it is
+    // the live option and the picker must be able to get back to it.
+    const past = recordedDates.filter((d) => d < etDate).slice(0, SESSION_COUNT - 1);
+    return [etDate, ...past];
+  }, [etDate, recordedDates, recordedState]);
+
+  const [sessionDate, setSessionDate] = useState(etDate);
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(DATE_KEY);
+      if (saved && /^\d{4}-\d{2}-\d{2}$/.test(saved) && saved <= etDate) setSessionDate(saved);
+    } catch { /* private mode — today it is */ }
+    // Deliberately once, on mount. Re-running it whenever `sessions` changes
+    // would drag the user back to a stored date every time the clock ticked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // A selection outside the offered window snaps back to today rather than
+  // querying a date the picker no longer shows. Waits for the recorded list to
+  // settle: while it is still loading `sessions` is the weekday fallback, and
+  // bouncing a valid stored date off that would undo the restore above.
+  useEffect(() => {
+    if (recordedState === "loading") return;
+    if (!sessions.includes(sessionDate)) setSessionDate(etDate);
+  }, [sessions, sessionDate, etDate, recordedState]);
+  const pickDate = useCallback((v: string) => {
+    setSessionDate(v);
+    try { sessionStorage.setItem(DATE_KEY, v); } catch { /* nothing to do */ }
+  }, []);
+  // Frozen sessions are SPX only (the freeze captures the one symbol the socket
+  // carries), so stepping back onto a past date from a SPY/QQQ board lands on
+  // SPX rather than on a disabled button with the wrong page behind it. The
+  // sessionStorage choice is left alone: it is what today comes back to.
+  useEffect(() => {
+    if (sessionDate !== etDate && sym !== "SPX") setSym("SPX");
+  }, [sessionDate, etDate, sym]);
+  const isHistorical = sessionDate !== etDate;
+
+  // ── DATA SOURCE: live, or a frozen past session ────────────────────────────
+  // This is THE swap, and it is the only one. Everything below this line — every
+  // memo, every panel, both tabs — reads the destructured values and cannot tell
+  // which side they came from. That is deliberate and it is what makes a frozen
+  // date the REAL page rather than a second implementation of it: there is no
+  // historical rendering path to drift out of step with the live one.
+  //
+  // The freeze stores INPUTS (see the recorder's header), so the walls, CORE,
+  // max pain, expected move, DEX/vanna, premium and the written-vs-traded split
+  // on a frozen date are all recomputed here, now, by the same code that runs
+  // live. Only the numbers going in are old.
+  const liveGex = useMobileGex("oi-vol");
+  const { pre: freezePre, post: freezePost, state: freezeState } =
+    useSessionFreeze(sessionDate, isHistorical);
+
+  // Each tab gets its OWN capture: 'pre' is the 09:10-09:29 map, 'post' the
+  // 16:05 settle. Showing the settle under a Premarket Prep header would be the
+  // same lie as showing today's chain under a past date.
+  const frozenPre = useMemo(() => frozenGexOf(freezePre, sessionDate), [freezePre, sessionDate]);
+  const frozenPost = useMemo(() => frozenGexOf(freezePost, sessionDate), [freezePost, sessionDate]);
+  // A session that only captured one slot still opens that one — better a
+  // Post-Market tab on a day the morning was missed than neither.
+  const frozenGex = tab === "post" ? (frozenPost ?? frozenPre) : (frozenPre ?? frozenPost);
+  /** True when the chosen date has a capture the page can actually render. */
+  const frozen = isHistorical && !!frozenGex;
+
+  const gex = frozen && frozenGex ? frozenGex : liveGex;
   const {
     chain, spot, flip, callWall, putWall, totalNetGex,
     esFut, basis, expiry, isZeroDte, connected, hasData, updatedAt, source,
   } = gex;
 
-  // ── overnight session (same socket; 3 days of history is plenty) ───────────
-  const { sessionCandles } = useEsCandles(true, 3, 5, false);
+  // ── overnight session ──────────────────────────────────────────────────────
+  // Live: the rolling ~30h window off the socket. Frozen: that session's ES bars
+  // plus the PRIOR session's, because the overnight range, the prior RTH high
+  // and low and the prior 16:00 close all live in the day before the one on
+  // screen. Both hooks always run — calling one conditionally would break the
+  // hook order — and the dated one no-ops unless it is needed.
+  const { sessionCandles: liveCandles } = useEsCandles(true, 3, 5, false);
+  const { rows: datedCandles } = useDatedEsCandles(sessionDate, frozen);
+  const sessionCandles = frozen ? datedCandles : liveCandles;
+
+  /**
+   * The session the page DESCRIBES. Live it is today; frozen it is the picked
+   * date. Everything dated downstream — the overnight window's idea of "today",
+   * the wall log, the journal, the baseline — keys off this rather than the
+   * clock, which is the one change that lets a past session render correctly.
+   */
+  const viewDate = frozen ? sessionDate : etDate;
+  /**
+   * ...and the minute of that session. A frozen day is over, so it reads as
+   * just past the settle: that is what puts the Post-Market tab into its
+   * finished state instead of a mid-session one.
+   */
+  const viewMin = frozen ? RTH_CLOSE_MIN + 10 : etMin;
 
   // ── catalysts ──────────────────────────────────────────────────────────────
   const { events, earnByDate, now: calNow } = useEconCalendar({ withQuote: false });
@@ -491,12 +700,6 @@ export default function Premarket() {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [sectors, setSectors] = useState<SectorBar[] | null>(null);
   const [mqScore, setMqScore] = useState<{ score: number; decision: string } | null>(null);
-  const [clock, setClock] = useState(() => Date.now());
-
-  useEffect(() => {
-    const id = setInterval(() => setClock(Date.now()), 30_000);
-    return () => clearInterval(id);
-  }, []);
 
   const loadQuotes = useCallback(async () => {
     try {
@@ -562,11 +765,21 @@ export default function Premarket() {
    */
   const baselineGen = useRef(0);
 
-  const loadBaseline = useCallback(async (exp: string) => {
+  /**
+   * `asOf` is the session the page is showing. Live it is omitted and the route
+   * defaults to today; frozen it is passed as `today=`, which the route already
+   * understands — it walks back from that date to find the prior settled
+   * session. Without it a frozen Tuesday would be diffed against last night's
+   * close, and the "vs prior close" chip would be measuring the wrong gap
+   * entirely while looking perfectly normal.
+   */
+  const loadBaseline = useCallback(async (exp: string, asOf?: string) => {
     const gen = ++baselineGen.current;
     setBaselineState("loading");
     try {
-      const r = await fetch(`/api/premarket-baseline?expiry=${encodeURIComponent(exp)}&basis=oi`,
+      const r = await fetch(
+        `/api/premarket-baseline?expiry=${encodeURIComponent(exp)}&basis=oi` +
+          (asOf ? `&today=${encodeURIComponent(asOf)}` : ""),
         { cache: "no-store" });
       if (gen !== baselineGen.current) return;
       if (!r.ok) { setBaseline(null); setBaselineState("empty"); return; }
@@ -590,8 +803,8 @@ export default function Premarket() {
     // Clear first: a stale baseline for the PREVIOUS expiry would silently
     // diff today's chain against the wrong session's board.
     setBaseline(null);
-    void loadBaseline(expiry);
-  }, [expiry, loadBaseline]);
+    void loadBaseline(expiry, frozen ? viewDate : undefined);
+  }, [expiry, loadBaseline, frozen, viewDate]);
 
   // ── derived from the chain ─────────────────────────────────────────────────
   const perStrike = useMemo(() => {
@@ -715,9 +928,12 @@ export default function Premarket() {
   }, [baseline, perStrikeOi]);
 
   // ── overnight window off the ES bars ───────────────────────────────────────
+  // "today" here is the session BEING SHOWN, not the wall clock: on a frozen
+  // date the bars are that day's and the day before's, and reading the clock
+  // would make every one of them "before today" and the whole window empty.
   const overnight = useMemo(() => {
     if (!sessionCandles.length) return null;
-    const today = etWall(clock).date;
+    const today = viewDate;
     const minOf = (slotKey: string) => {
       const hm = slotKey.slice(11, 16);
       const [h, m] = hm.split(":").map(Number);
@@ -770,7 +986,7 @@ export default function Premarket() {
       rthHi: Number.isFinite(rthHi) ? rthHi : null,
       rthLo: Number.isFinite(rthLo) ? rthLo : null,
     };
-  }, [sessionCandles, clock]);
+  }, [sessionCandles, viewDate]);
 
   /**
    * The gap: prior 16:00 ET close -> today's 09:30 ET open. That pair, always.
@@ -830,22 +1046,24 @@ export default function Premarket() {
     return { pts, pct, projected, flat, up, filled, retrace, remaining, outside, openPx, pdc, pd };
   }, [overnight, esFut]);
 
-  // ── catalysts for today ────────────────────────────────────────────────────
+  // ── catalysts for the session on screen ────────────────────────────────────
+  // Keyed to viewDate, so a frozen date asks for THAT day's catalysts. The
+  // calendar hook fetches a forward window, so a date far enough back simply
+  // has none and the panel shows nothing — which is the honest answer, and much
+  // better than printing today's Fed speakers next to last Tuesday's chain.
   const todayEvents = useMemo(() => {
-    const today = etWall(clock).date;
     return events
-      .filter((e) => e.date === today && e.country === "USD" && (e.impact === "High" || e.impact === "Medium" || e.impact === "President"))
+      .filter((e) => e.date === viewDate && e.country === "USD" && (e.impact === "High" || e.impact === "Medium" || e.impact === "President"))
       .slice(0, 4);
-  }, [events, clock]);
+  }, [events, viewDate]);
 
   const todayEarnings = useMemo(() => {
-    const today = etWall(clock).date;
-    const b = earnByDate.get(today);
+    const b = earnByDate.get(viewDate);
     if (!b) return [];
     return [...b.pre, ...b.after]
       .sort((a, z) => (z.market_cap ?? 0) - (a.market_cap ?? 0))
       .slice(0, 2);
-  }, [earnByDate, clock]);
+  }, [earnByDate, viewDate]);
 
   // ── regime / bias ──────────────────────────────────────────────────────────
   const posGamma = (totalNetGex ?? 0) >= 0;
@@ -861,11 +1079,13 @@ export default function Premarket() {
       ? ((oiVsBaseline.live - oiVsBaseline.base) / Math.abs(oiVsBaseline.base)) * 100
       : null;
 
-  const { date: etDate, minutes: etMin } = etWall(clock);
-  const toOpen = RTH_OPEN_MIN - etMin;
+  // etDate / etMin are computed at the top of the component now — the session
+  // picker needs them before the data source is chosen.
+  const toOpen = RTH_OPEN_MIN - viewMin;
   const openLabel =
-    toOpen > 0 ? `RTH open in ${Math.floor(toOpen / 60)}h ${String(toOpen % 60).padStart(2, "0")}m`
-      : etMin < RTH_CLOSE_MIN ? "RTH open" : "after the close";
+    frozen ? "session closed"
+      : toOpen > 0 ? `RTH open in ${Math.floor(toOpen / 60)}h ${String(toOpen % 60).padStart(2, "0")}m`
+        : viewMin < RTH_CLOSE_MIN ? "RTH open" : "after the close";
 
   const esQ = quotes["/ES"], nqQ = quotes["/NQ"], vixQ = quotes["VIX"];
 
@@ -1024,101 +1244,24 @@ export default function Premarket() {
 
   const feedLabel = source === "live" ? (connected ? "LIVE" : "RECONNECTING") : source === "rest" ? "REST FALLBACK" : "PAUSED";
 
-  // ── PRE / POST tab ─────────────────────────────────────────────────────────
-  // The page answers a different question before the open than it does after the
-  // close, so it carries both and picks the one that matches the clock: Premarket
-  // until 09:30, Post-Market from 16:05 (the settle, not the bell — the last
-  // frames still land in those five minutes). Between them either is defensible,
-  // so the last manual choice wins and is remembered for the session; once the
-  // user picks a tab, the clock never moves it again.
-  const afterClose = etMin >= RTH_CLOSE_MIN + 5;
-  const [tab, setTab] = useState<"pre" | "post">("pre");
-  const tabPinned = useRef(false);
-  useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem(TAB_KEY);
-      if (saved === "pre" || saved === "post") { tabPinned.current = true; setTab(saved); }
-    } catch { /* private mode — fall through to the clock */ }
-  }, []);
-  useEffect(() => {
-    if (tabPinned.current) return;
-    setTab(afterClose ? "post" : "pre");
-  }, [afterClose]);
-  const pickTab = useCallback((t: "pre" | "post") => {
-    tabPinned.current = true;
-    setTab(t);
-    try { sessionStorage.setItem(TAB_KEY, t); } catch { /* nothing to do */ }
-  }, []);
+  /**
+   * A past date with NO capture. This — not `isHistorical` — is what disables
+   * the two tabs, because a frozen date drives them perfectly well; only a date
+   * with nothing stored has to fall back to HistoricalRecap.
+   *
+   * While the freeze request is still in flight the page waits rather than
+   * flashing the recap: `freezeState === "loading"` is not yet an answer, and
+   * rendering the fallback for 200ms and then swapping to the real tabs looks
+   * exactly like a bug.
+   */
+  const recapOnly = isHistorical && !frozen && freezeState !== "loading";
 
-  // ── SYMBOL ─────────────────────────────────────────────────────────────────
-  // Remembered for the session like the tab. Only the MARKUP switches: this
-  // component's hooks (useMobileGex / useEsCandles) run whatever symbol is
-  // selected, so the SPX feed keeps flowing while you read SPY and switching
-  // back is instant with no reconnect. That costs nothing extra — gexSocket is
-  // one refcounted connection shared with the toolbar and every other consumer,
-  // and it would stay open for them anyway. TickerBoard's own poll only starts
-  // when it mounts, so at most one chain is being polled at a time.
-  const [sym, setSym] = useState<Symbol_>("SPX");
-  useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem(SYM_KEY) as Symbol_ | null;
-      if (saved && (SYMBOLS as readonly string[]).includes(saved)) setSym(saved);
-    } catch { /* private mode — SPX it is */ }
-  }, []);
-  const pickSym = useCallback((v: Symbol_) => {
-    setSym(v);
-    try { sessionStorage.setItem(SYM_KEY, v); } catch { /* nothing to do */ }
-  }, []);
+  /** Said out loud when the tab on screen is not the slot it asked for. */
+  const slotNote =
+    tab === "post" && !frozenPost && frozenPre ? " — the settle capture is missing for this session, so this is the pre-open one"
+      : tab === "pre" && !frozenPre && frozenPost ? " — the pre-open capture is missing for this session, so this is the settle one"
+        : "";
 
-  // ── SESSION DATE ───────────────────────────────────────────────────────────
-  // Today is the live page and the default; any earlier entry is a look-up of
-  // what was RECORDED that day, which is a different surface entirely — see
-  // HistoricalRecap's header for why a past date does not just get piped into
-  // PostMarketTab.
-  //
-  // The list is the sessions that ACTUALLY HAVE a settled row, straight off
-  // /proxy/gex-levels-history (one row per session, kept indefinitely, gaps
-  // back-filled from settled OI). Offering the recorded dates rather than a
-  // computed run of weekdays is the difference between a picker that always
-  // lands on data and one that offers Thanksgiving. The weekday walk stays as
-  // the fallback for the moment before that request lands, and for the case
-  // where it fails — a picker with only "Today" in it would read as breakage.
-  //
-  // This is the SAME request HistoricalRecap makes; dedupeFetch collapses the
-  // two into one, so the picker costs nothing extra once the recap mounts.
-  const { dates: recordedDates, state: recordedState } = useGexLevelsHistory(SESSION_COUNT);
-  const sessions = useMemo(() => {
-    const fallback = recentSessions(etDate, SESSION_COUNT);
-    if (recordedState !== "ok" || !recordedDates.length) return fallback;
-    // Today is always first even before it has a settled row of its own — it is
-    // the live option and the picker must be able to get back to it.
-    const past = recordedDates.filter((d) => d < etDate).slice(0, SESSION_COUNT - 1);
-    return [etDate, ...past];
-  }, [etDate, recordedDates, recordedState]);
-
-  const [sessionDate, setSessionDate] = useState(etDate);
-  useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem(DATE_KEY);
-      if (saved && /^\d{4}-\d{2}-\d{2}$/.test(saved) && saved <= etDate) setSessionDate(saved);
-    } catch { /* private mode — today it is */ }
-    // Deliberately once, on mount. Re-running it whenever `sessions` changes
-    // would drag the user back to a stored date every time the clock ticked.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  // A selection outside the offered window snaps back to today rather than
-  // querying a date the picker no longer shows. Waits for the recorded list to
-  // settle: while it is still loading `sessions` is the weekday fallback, and
-  // bouncing a valid stored date off that would undo the restore above.
-  useEffect(() => {
-    if (recordedState === "loading") return;
-    if (!sessions.includes(sessionDate)) setSessionDate(etDate);
-  }, [sessions, sessionDate, etDate, recordedState]);
-  const pickDate = useCallback((v: string) => {
-    setSessionDate(v);
-    try { sessionStorage.setItem(DATE_KEY, v); } catch { /* nothing to do */ }
-  }, []);
-  const isHistorical = sessionDate !== etDate;
 
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
@@ -1127,63 +1270,99 @@ export default function Premarket() {
 
         <div className="pagehead">
           <h1>
-            {isHistorical ? "Session Recap" : tab === "post" ? "Post-Market Recap" : "Premarket Prep"}
+            {recapOnly ? "Session Recap" : tab === "post" ? "Post-Market Recap" : "Premarket Prep"}
           </h1>
           <div className="tabs">
+            {/* SPX only on a frozen session: the freeze captures the one symbol
+                the socket carries, and TickerBoard's SPY/QQQ boards are a live
+                chain poll with no per-date form. Disabling beats rendering an
+                SPX page under a SPY button. */}
             {SYMBOLS.map((s2) => (
-              <button key={s2} className={sym === s2 ? "on" : ""} onClick={() => pickSym(s2)}>{s2}</button>
+              <button
+                key={s2}
+                className={sym === s2 ? "on" : ""}
+                disabled={frozen && s2 !== "SPX"}
+                title={frozen && s2 !== "SPX" ? "Frozen sessions are SPX only" : undefined}
+                style={frozen && s2 !== "SPX" ? { opacity: .4, cursor: "not-allowed" } : undefined}
+                onClick={() => pickSym(s2)}
+              >
+                {s2}
+              </button>
             ))}
           </div>
           <span className="badge-concept">
-            {isHistorical
+            {recapOnly
               ? `${sym} · RECORDED · ${sessionLabel(sessionDate)}`
-              : sym === "SPX"
-                ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · ${feedLabel} · ${openLabel}`
-                : `${sym} · CHAIN POLL · ${openLabel}`}
+              : frozen
+                ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · FROZEN ${sessionLabel(sessionDate)}`
+                : sym === "SPX"
+                  ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · ${feedLabel} · ${openLabel}`
+                  : `${sym} · CHAIN POLL · ${openLabel}`}
           </span>
           <span className={`dsel${isHistorical ? " past" : ""}`} style={{ marginLeft: "auto" }}>
             <select
               value={sessionDate}
               onChange={(e) => pickDate(e.target.value)}
-              title="Which session to show. Today is the live page; earlier dates show what was recorded that day."
+              title="Which session to show. Today is live; a dot marks the dates whose captured chain can drive the full Premarket and Post-Market tabs."
               aria-label="Session date"
             >
               {sessions.map((d) => (
                 <option key={d} value={d}>
-                  {d === etDate ? `Today · ${sessionLabel(d)}` : sessionLabel(d)}
+                  {/* A leading dot marks a session with a capture, so the list
+                      says which dates open the real tabs before you click one.
+                      A plain bullet rather than an icon: the OS draws this menu
+                      and nothing but text survives the trip. */}
+                  {d === etDate
+                    ? `Today · ${sessionLabel(d)}`
+                    : `${freezeByDate.has(d) ? "• " : "  "}${sessionLabel(d)}`}
                 </option>
               ))}
             </select>
           </span>
           <div className="tabs">
+            {/* Both tabs stay LIVE on a frozen date — that is the whole point of
+                the capture. They only go dead on a date with no capture, where
+                there is no chain to render either tab from. */}
             <button
-              className={!isHistorical && tab === "pre" ? "on" : ""}
-              disabled={isHistorical}
-              title={isHistorical ? "A premarket map only exists for the live session" : undefined}
-              style={isHistorical ? { opacity: .4, cursor: "not-allowed" } : undefined}
+              className={!recapOnly && tab === "pre" ? "on" : ""}
+              disabled={recapOnly}
+              title={recapOnly ? "No captured chain for this session — showing the recorded recap instead" : undefined}
+              style={recapOnly ? { opacity: .4, cursor: "not-allowed" } : undefined}
               onClick={() => pickTab("pre")}
             >
               Premarket
             </button>
             <button
-              className={!isHistorical && tab === "post" ? "on" : ""}
-              disabled={isHistorical}
-              title={isHistorical ? "Showing the recorded recap for the chosen session" : undefined}
-              style={isHistorical ? { opacity: .4, cursor: "not-allowed" } : undefined}
+              className={!recapOnly && tab === "post" ? "on" : ""}
+              disabled={recapOnly}
+              title={recapOnly ? "No captured chain for this session — showing the recorded recap instead" : undefined}
+              style={recapOnly ? { opacity: .4, cursor: "not-allowed" } : undefined}
               onClick={() => pickTab("post")}
             >
-              <span className="tdot" style={{ background: afterClose ? "var(--blue)" : "#55606e" }} />
+              <span className="tdot" style={{ background: frozen ? "var(--violet)" : afterClose ? "var(--blue)" : "#55606e" }} />
               Post-Market
             </button>
           </div>
         </div>
 
-        {isHistorical ? (
-          /* A past session is recorded history, not a live board — TickerBoard
-             and PostMarketTab both read the CURRENT chain, so neither can be
-             pointed at it. HistoricalRecap renders only the per-date stores. */
+        {frozen && (
+          <div className="frozenbar">
+            <b>Frozen session — {sessionLabel(sessionDate)}.</b> Every number below is computed from
+            that day&apos;s captured chain by the same code the live page runs
+            {tab === "post"
+              ? ", captured at the 16:05 settle"
+              : ", captured just before the 09:30 open"}
+            {slotNote}. Nothing here is live.
+          </div>
+        )}
+
+        {recapOnly ? (
+          /* No capture for this date, and none can be manufactured: nothing
+             stores per-strike marks and volume for a past session, so both tabs
+             would have to invent the chain they render. HistoricalRecap shows
+             the per-date stores that DO go back instead. */
           <HistoricalRecap date={sessionDate} symbol={sym} />
-        ) : sym !== "SPX" ? (
+        ) : sym !== "SPX" && !frozen ? (
           <TickerBoard ticker={sym} view={tab} etDate={etDate} />
         ) : tab === "post" ? (
           <PostMarketTab
@@ -1203,9 +1382,10 @@ export default function Premarket() {
             overnight={overnight}
             candles={sessionCandles}
             expiry={expiry || ""}
-            etDate={etDate}
-            etMin={etMin}
+            etDate={viewDate}
+            etMin={viewMin}
             hasData={hasData}
+            frozenDate={frozen ? sessionDate : undefined}
           />
         ) : (
         <section className={`prep${posGamma ? "" : " is-neg"}`}>

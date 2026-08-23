@@ -64,6 +64,11 @@ const WINDOWS: { key: WindowKey; label: string; hours: number | null }[] = [
   { key: "all", label: "All", hours: null },
 ];
 
+/** Campaign row grid: name + magnitude bar | sessions | signups | paid | conv.
+ *  Mirrors the column rhythm of the "Pages being visited" card so the two
+ *  ranked lists on the Overview tab read as one thing. */
+const CAMPAIGN_COLS = "minmax(0,1fr) 72px 68px 56px 56px";
+
 // ── Small pieces ─────────────────────────────────────────────────────────────
 
 const num = (n: number) => n.toLocaleString();
@@ -276,7 +281,12 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
         }
         return { source, medium, campaign, sessions: agg.arrivals.size, signups, paid };
       })
-      .sort((a, b) => b.paid - a.paid || b.signups - a.signups || b.sessions - a.sessions)
+      // Sorted by SESSIONS — the clicks the link actually got. That has to be
+      // the sort now that the campaign list draws a magnitude bar off sessions:
+      // a ranked bar list sorted on a column other than the one the bars encode
+      // reads as broken. Paid and signups stay as the columns beside it and
+      // break ties, so "which push earned customers" is still one glance away.
+      .sort((a, b) => b.sessions - a.sessions || b.paid - a.paid || b.signups - a.signups)
       .slice(0, 12);
 
     return {
@@ -294,6 +304,9 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
   }, [rows, win]);
 
   const s = view.sessionCount;
+  // Bars are scaled to the top campaign's sessions — the list is sorted by that
+  // same number, so row 0 is the maximum.
+  const campaignMax = view.campaigns[0]?.sessions ?? 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -382,13 +395,16 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
         </Section>
       </div>
 
-      {/* Campaigns — a table, because five dimensions can't be a bar. Sorted by
-          PAID, then signups, then sessions: the ranking answers "which push
-          earned customers", not "which push got clicks", and those two orders
-          are routinely different. */}
+      {/* Campaigns — a ranked bar list, same shape as "Pages being visited":
+          name on the left with a magnitude bar under it, counts right-aligned.
+          The bar encodes SESSIONS (the clicks the link got), which is also the
+          sort — a bar list ranked on a column other than the one it draws reads
+          as broken. Signups / Paid / Conv. stay as columns beside it, so "which
+          push earned customers" is still one glance away even though "which
+          push got clicked" is what the shape now shows. */}
       <Section
         title="Campaigns"
-        subtitle="tagged links (utm_*) and inferred ad clicks — ranked by what they earned"
+        subtitle="tagged links (utm_*) and inferred ad clicks — ranked by sessions"
       >
         {view.campaigns.length === 0 ? (
           <Empty>
@@ -398,40 +414,55 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
           </Empty>
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ color: T.textSecondary, opacity: 0.5, textAlign: "left" }}>
-                  <th style={{ padding: "6px 10px 6px 0", fontWeight: 600 }}>Source</th>
-                  <th style={{ padding: "6px 10px", fontWeight: 600 }}>Medium</th>
-                  <th style={{ padding: "6px 10px", fontWeight: 600 }}>Campaign</th>
-                  <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }} title="Unique arrivals from this campaign — one per person, not per click.">Sessions</th>
-                  <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }} title="Arrivals whose account was created at or after the click.">Signups</th>
-                  <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }} title="Of those signups, the ones now on an active or trialing subscription.">Paid</th>
-                  <th style={{ padding: "6px 0 6px 10px", fontWeight: 600, textAlign: "right" }} title="Signups ÷ sessions.">Conv.</th>
-                </tr>
-              </thead>
-              <tbody>
-                {view.campaigns.map((c) => (
-                  <tr key={`${c.source}|${c.medium}|${c.campaign}`} style={{ borderTop: `1px solid ${T.border}` }}>
-                    <td style={{ padding: "8px 10px 8px 0", color: T.text }}>{c.source}</td>
-                    <td style={{ padding: "8px 10px", color: T.textSecondary, opacity: 0.7 }}>{c.medium || "—"}</td>
-                    <td style={{ padding: "8px 10px", color: T.textSecondary, opacity: 0.7 }}>{c.campaign || "—"}</td>
-                    <td style={{ ...monoStyle, padding: "8px 10px", textAlign: "right", color: T.text }}>
-                      {num(c.sessions)}
-                    </td>
-                    <td style={{ ...monoStyle, padding: "8px 10px", textAlign: "right", color: c.signups ? T.text : T.textSecondary, opacity: c.signups ? 1 : 0.35 }}>
-                      {num(c.signups)}
-                    </td>
-                    <td style={{ ...monoStyle, padding: "8px 10px", textAlign: "right", color: c.paid ? T.gold : T.textSecondary, opacity: c.paid ? 1 : 0.35, fontWeight: c.paid ? 700 : 400 }}>
-                      {num(c.paid)}
-                    </td>
-                    <td style={{ ...monoStyle, padding: "8px 0 8px 10px", textAlign: "right", color: T.textSecondary, opacity: 0.6 }}>
-                      {pct(c.signups, c.sessions)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div style={{ minWidth: 460 }}>
+              {/* Header row */}
+              <div style={{
+                display: "grid", gridTemplateColumns: CAMPAIGN_COLS, gap: 8,
+                fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase",
+                color: T.textSecondary, opacity: 0.5,
+                paddingBottom: 6, borderBottom: `1px solid ${T.border}`,
+              }}>
+                <span>Campaign</span>
+                <span style={{ textAlign: "right" }} title="Unique arrivals from this campaign — one per person, not per click.">Sessions</span>
+                <span style={{ textAlign: "right" }} title="Arrivals whose account was created at or after the click.">Signups</span>
+                <span style={{ textAlign: "right" }} title="Of those signups, the ones now on an active or trialing subscription.">Paid</span>
+                <span style={{ textAlign: "right" }} title="Signups ÷ sessions.">Conv.</span>
+              </div>
+
+              {view.campaigns.map((c) => {
+                const w = campaignMax > 0 ? Math.max(2, (c.sessions / campaignMax) * 100) : 0;
+                const detail = [c.medium, c.campaign].filter(Boolean).join(" · ");
+                return (
+                  <div
+                    key={`${c.source}|${c.medium}|${c.campaign}`}
+                    title={`${c.source}${detail ? ` — ${detail}` : ""}\n${num(c.sessions)} sessions · ${num(c.signups)} signups · ${num(c.paid)} paying`}
+                    style={{
+                      display: "grid", gridTemplateColumns: CAMPAIGN_COLS, gap: 8,
+                      alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${T.border}`,
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+                        <span style={{ fontSize: 13, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {c.source}
+                        </span>
+                        <span style={{ fontSize: 12, ...monoStyle, color: T.textSecondary, opacity: 0.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {detail || "—"}
+                        </span>
+                      </div>
+                      <div style={{ height: 5, background: ownerRgba(T.text, 0.05), borderRadius: 3, overflow: "hidden", marginTop: 5 }}>
+                        <div style={{ height: "100%", width: `${w}%`, background: T.cyan, borderRadius: 3 }} />
+                      </div>
+                    </div>
+
+                    <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: T.text }}>{num(c.sessions)}</span>
+                    <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: c.signups ? T.text : T.textSecondary, opacity: c.signups ? 1 : 0.35 }}>{num(c.signups)}</span>
+                    <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: c.paid ? T.gold : T.textSecondary, opacity: c.paid ? 1 : 0.35, fontWeight: c.paid ? 700 : 400 }}>{num(c.paid)}</span>
+                    <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: T.textSecondary, opacity: 0.6 }}>{pct(c.signups, c.sessions)}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </Section>
