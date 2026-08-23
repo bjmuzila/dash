@@ -47,6 +47,34 @@ export interface EarningsTicker { symbol: string; logoUrl?: string; }
 export interface EarningsDay { label: string; tickers: EarningsTicker[]; }
 export interface ConfRow { date: string; s945: string; c945: string; s1030: string; c1030: string; s1200: string; c1200: string; hit945: boolean; hit1030: boolean; hit1200: boolean; }
 
+/**
+ * A flow-scanner card, reproduced in HTML rather than screenshotted so it stays
+ * crisp and dark-mode-safe. Same shape and field names as the one in
+ * `edge3-annual.ts` — if you change the real scanner card, change both.
+ */
+export interface ScannerProof {
+  /** Rank badge shown before the ticker, e.g. "2". */
+  rank: string;
+  ticker: string;
+  /** Premium on the sweep, as rendered on the card, e.g. "0.6M". */
+  premium: string;
+  /** Right-hand number on the card header, e.g. "68". */
+  headline: string;
+  expiry: string;
+  /** Spot at capture. */
+  spot: string;
+  /** When the scanner flagged it, e.g. "Aug 14 · 2:00 PM ET". */
+  captured: string;
+  otm: string;
+  vsOpen: string;
+  score: string;
+  strength: string;
+  /** The realized move, stated as the contract's own premium. */
+  resultFrom: string;
+  resultTo: string;
+  resultPct: string;
+}
+
 export interface WeeklyEdgeOpts {
   issueLabel?: string;              // e.g. "Week of Jul 27"
   recapHeadline?: string;
@@ -66,6 +94,9 @@ export interface WeeklyEdgeOpts {
   estMoveSub?: string;
   confRows?: ConfRow[];
   resultsNote?: string;
+  /** Set false to drop the scanner-proof card from the results section. */
+  showScannerProof?: boolean;
+  scannerProof?: Partial<ScannerProof>;
   ctaUrl?: string;
   /** Set false to drop the affiliate-program band entirely. */
   showAffiliate?: boolean;
@@ -116,13 +147,38 @@ const DEFAULT_EARNINGS: EarningsDay[] = [
  */
 const DEFAULT_CONF_ROWS: ConfRow[] = [];
 
+/**
+ * The week's scanner example. Flagged Aug 14 on the 2026-08-21 expiry, so the
+ * whole run resolved inside the Aug 17–21 week this issue recaps. Same catch as
+ * `edge3-annual.ts` → `DEFAULT_PROOF` — keep the two in sync if either changes.
+ */
+const DEFAULT_SCANNER_PROOF: ScannerProof = {
+  rank: "2",
+  ticker: "MRNA",
+  premium: "0.6M",
+  headline: "68",
+  expiry: "2026-08-21",
+  spot: "63.52",
+  captured: "Aug 14 · 2:00 PM ET",
+  otm: "7.1%",
+  vsOpen: "+11142%",
+  score: "44",
+  strength: "Very strong",
+  resultFrom: "$0.75",
+  resultTo: "$95.00",
+  resultPct: "+12,567%",
+};
+
 function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "issueLabel" | "recapHeadline" | "recapBody" | "indexMoves" | "aheadHeadline" | "calendarEvents" |
   "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
   "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
-  "confRows" | "resultsNote" | "ctaUrl" |
+  "confRows" | "resultsNote" | "showScannerProof" | "ctaUrl" |
   "showAffiliate" | "affiliateHeadline" | "affiliateBody" | "affiliateUrl" | "affiliateBannerUrl" |
-  "showTradeify" | "tradeifyHeadline" | "tradeifyBody" | "tradeifyUrl" | "tradeifyCode">> {
+  "showTradeify" | "tradeifyHeadline" | "tradeifyBody" | "tradeifyUrl" | "tradeifyCode">>
+  // scannerProof is Partial<> on the way in and complete on the way out, so it
+  // is intersected rather than Pick'd — Required<Partial<X>> is still Partial<X>.
+  & { scannerProof: ScannerProof } {
   return {
     issueLabel: opts.issueLabel || "Week of Aug 24–28",
     recapHeadline: opts.recapHeadline || "Bonds broke the streak — yields ripped and the Nasdaq wore it",
@@ -148,6 +204,8 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     estMoveSub: opts.estMoveSub || "[fill before send]",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
     resultsNote: opts.resultsNote || "[ADD THIS WEEK'S CORE BULLSEYE + ESTIMATED MOVE SUMMARY]",
+    showScannerProof: opts.showScannerProof !== false,
+    scannerProof: { ...DEFAULT_SCANNER_PROOF, ...(opts.scannerProof || {}) },
     ctaUrl: opts.ctaUrl || PRICING_URL,
     // `!== false` rather than `||` — the band is on by default, and passing
     // showAffiliate: false has to actually turn it off.
@@ -211,6 +269,22 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     `Estimated Move: ${o.estMovePct} (${strip(o.estMoveSub)})`,
     strip(o.resultsNote),
     "",
+    ...(o.showScannerProof ? (() => {
+      const p = o.scannerProof;
+      return [
+        "WHAT THE FLOW SCANNER CAUGHT",
+        `${p.ticker} — ${p.resultFrom} -> ${p.resultTo} = ${p.resultPct}`,
+        `  #${p.rank} ${p.ticker}   ${p.headline}`,
+        `  ${p.premium}`,
+        `  ${p.expiry} · spot ${p.spot}`,
+        `  captured ${p.captured}`,
+        `  OTM ${p.otm} · ${p.vsOpen} vs open · score ${p.score}`,
+        `  * ${p.strength}`,
+        "Off the scanner in real time, not a backtest. One contract is not a track",
+        "record, and options can and do go to zero.",
+        "",
+      ];
+    })() : []),
     `Annual access is $400/yr instead of $1,000 with code EDGE3: ${o.ctaUrl}`,
     "",
     ...(o.showAffiliate ? [
@@ -243,6 +317,11 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
   const affiliateHref = escapeHtml(o.affiliateUrl);
   const affiliateBanner = escapeHtml(o.affiliateBannerUrl);
   const tradeifyHref = escapeHtml(o.tradeifyUrl);
+  // Every scanner field is interpolated into the card below, so escape once
+  // here rather than at each of the dozen call sites.
+  const sp = Object.fromEntries(
+    Object.entries(o.scannerProof).map(([k, v]) => [k, escapeHtml(String(v))])
+  ) as unknown as ScannerProof;
   const unsubHref = opts.email ? escapeHtml(unsubscribeUrl(opts.email)) : UNSUB_URL_PLACEHOLDER;
 
   const indexTile = (m: IndexMove) => {
@@ -421,6 +500,45 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                 <tr><td align="center" style="padding:22px 16px;font:600 12px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;">[ADD CB EDGE SCREENSHOT / CONFIDENCE TABLE HERE]</td></tr>
               </table>`}
               <div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:14px;">${o.resultsNote}</div>
+
+              ${o.showScannerProof ? `
+              <!-- Flow-scanner example. The card is rebuilt in HTML, not
+                   screenshotted, so it stays sharp and matches the palette. -->
+              <div style="font:800 10px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">What the flow scanner caught</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(255,255,255,0.10);border-radius:12px;background:#080B11;">
+                <tr>
+                  <td style="padding:16px 18px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="font:800 14px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">
+                          <span style="color:#6b7d8f;font-weight:700;">${sp.rank}</span>&nbsp;&nbsp;${sp.ticker}
+                        </td>
+                        <td align="right" style="font:600 13px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;">${sp.headline}</td>
+                      </tr>
+                    </table>
+                    <div style="font:900 22px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#219EBC;padding-top:8px;">${sp.premium}</div>
+                    <div style="font:400 12px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;padding-top:6px;">${sp.expiry} &middot; spot ${sp.spot}</div>
+                    <div style="font:400 12px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;">captured ${sp.captured}</div>
+                    <div style="font:600 12px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding-top:10px;">
+                      <span style="color:#F2A65A;">OTM ${sp.otm}</span>
+                      <span style="color:#8ECAE6;padding-left:10px;">${sp.vsOpen} vs open</span>
+                      <span style="color:#6b7d8f;padding-left:10px;">score ${sp.score}</span>
+                    </div>
+                    <div style="font:800 12px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#F2A65A;padding-top:8px;">&#9733; ${sp.strength}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:0 18px 16px 18px;">
+                    <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;font:800 16px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">
+                      ${sp.resultFrom} <span style="color:#6b7d8f;">&rarr;</span> ${sp.resultTo}
+                      <span style="color:#00E676;">&nbsp;${sp.resultPct}</span>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+              <div style="font:400 12px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;margin-top:10px;">
+                Flagged on the ${sp.expiry} expiry with ${sp.ticker} at ${sp.spot} — off the scanner in real time, not a backtest. One contract is not a track record, and options can and do go to zero.
+              </div>` : ""}
             </td>
           </tr>
 

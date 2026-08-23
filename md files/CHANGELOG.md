@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-08-23 - Weekly Edge: MRNA flow-scanner example in the results section
+
+`lib/emails/weekly-edge.ts`. The "CB Edge - This Week's Results" band now carries
+a real scanner catch under the (still-placeholder) Core Bullseye table.
+
+- MRNA, #2, 0.6M premium, 2026-08-21 expiry, spot 63.52, captured Aug 14 2:00 PM
+  ET, OTM 7.1%, +11142% vs open, score 44, "Very strong" - then a divider row
+  with the realized move: $0.75 -> $95.00, +12,567%.
+- Flagged Aug 14 on the Aug 21 expiry, so the run resolved inside the Aug 17-21
+  week this issue recaps. That is why it belongs in THIS letter.
+- The card is REBUILT IN HTML, not screenshotted - stays sharp on retina, honours
+  the palette, and needs no hosted image. Markup mirrors the proof card in
+  `edge3-annual.ts`, left-aligned instead of centred because this letter is.
+- New exported `ScannerProof` interface + `DEFAULT_SCANNER_PROOF`, and opts
+  `showScannerProof` (defaults TRUE, `!== false`) and `scannerProof`
+  (`Partial<ScannerProof>`, merged over the default so you can override one
+  field). `withDefaults()`'s return type intersects `{ scannerProof:
+  ScannerProof }` rather than Pick'ing it, because `Required<Partial<X>>` is
+  still `Partial<X>` and every field would type as possibly-undefined.
+- Fields are escaped once via an `Object.fromEntries` pass, same as
+  `edge3-annual.ts`, rather than at each of the dozen interpolation sites.
+- `weeklyEdgeText()` gains the matching "WHAT THE FLOW SCANNER CAUGHT" block.
+- Caveat line under the card is deliberate and should stay: "One contract is not
+  a track record, and options can and do go to zero." A +12,567% number in a
+  marketing email without it is the kind of claim that draws complaints.
+
+DUPLICATED DATA: this is the same catch as `DEFAULT_PROOF` in
+`edge3-annual.ts`. Two copies now. If the numbers are ever corrected, fix both.
+
+Preview regenerated at `generated/2026-08-23-weekly-edge-preview.html` and
+`generated/2026-08-23-weekly-edge-preview.png`.
+
+## 2026-08-23 - Watch feed lane 2: "building now" (intraday), clearly separated
+
+Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.
+Follows this morning's watch-feed entry. The ΔGEX Board (`GexGrowth.tsx`) was
+deliberately NOT touched — the feed's eventual home is the premarket page, and
+one endpoint returning ready-made lines is what makes that a drop-in later.
+
+`strike-gex-watch` now returns two lanes off one call:
+
+- **`feed`** — *since last close*. `eod_strike_gex`, 400 sessions, so every line
+  carries a real historical hit rate. This is the premarket read.
+- **`feed_live`** — *building now*. `strike_growth` 1-minute rows, so it can flag
+  a strike stacking mid-session. Every line is marked **UNTESTED**.
+
+Separate keys, separate notes, separate baselines. `live_note` is also folded
+into `note` behind a `— LANE 2 —` separator, because the owner Panel renders only
+`note` and a second string key would have been silently invisible on screen.
+
+### The two things lane 2 gets right, both non-obvious
+
+1. **The baseline is TIME-OF-DAY MATCHED.** `delta_abs` is the build since the
+   open, so it grows monotonically through the session by construction. Judged
+   against a flat daily average, every ticker would flag every afternoon and
+   nothing in the morning. The denominator is that symbol's biggest build at the
+   SAME 10-minute slot on prior sessions — 11:20 is scored against other 11:20s.
+2. **It refuses to score off nothing.** Fewer than `minSess` (default 2) prior
+   sessions at that slot and the line says "no baseline yet — needs 2+, has 1"
+   instead of producing a confident multiple from n=1.
+
+### Why lane 2 has no odds and won't for a while
+
+`strike_growth` is on a ~5-day retention sweep, so there is no outcome history to
+score against. That is not a gap to paper over: raise
+`RETENTION_STRIKE_GROWTH_DAYS` and the sample accrues forward only — the table is
+the only record of those minutes. Until then the lane is a live signal with no
+track record, and it says so on every line. A regression test fails the suite if
+a lane-2 line ever quotes lane-1's "big-move next session" phrasing.
+
+### Verified
+
+55 assertions, all green. New: lane-2 feed shape, UNTESTED marking, the
+never-quote-lane-1-odds guard, "since the open" wording, time-of-day baseline,
+baseline-depth reporting, hottest-first ordering, the thin-baseline refusal path,
+and that `live_note` actually reaches the screen. The intraday fixture was
+widened from 2 sessions to 4 so the time-of-day baseline has something to average.
+
+
 ## 2026-08-23 - Strike-GEX watch feed (the daily report) + normalizer fix
 
 Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.
@@ -494,30 +573,6 @@ rewrites `repeat(N…)` and `1fr 1fr` signatures, and this grid is neither.
 Sidebar gets **Owner → Feedback**. The account menu's "Send feedback" is now
 "Feedback & Support", because the reply comes back to the same place.
 
-
-### The inbox had to be on owner-vite, not Next
-
-`/owner/feedback` was first built as a Next page under `app/owner/`. That is the
-right place for cbedge.net — and the wrong place for where the queue is actually
-worked, which is **owner.cbedge.net**. That subdomain is served by `owner-vite`,
-its own Vite SPA behind its own nginx; AGENTS.md still lists owner-vite under
-legacy/experiments, which is stale.
-
-Added `owner-vite/src/pages/Feedback.tsx`, registered in
-`owner-vite/src/pages/registry.ts`, linked from `owner-vite/src/lib/nav.ts` under
-**Content → Feedback** (that group is "sending something to someone" — answering
-a customer is the same job as Emails and Newsletter; you don't open this to read
-a number). nav.ts is also the route table, so the link is the route.
-
-Same API on both — `owner-vite`'s nginx already proxies `/api` to the dashboard
-container, so these calls are same-origin and carry the owner session cookie.
-The thread is inlined in that file rather than imported: owner-vite has its own
-copies of theme / PageCard / DockToolbar and no `@/components` alias. Same
-mirrored-page arrangement Budget and Reta already have on both sides — the file
-header on each says so, and a change to the API shapes has to touch both.
-
-The Next `app/owner/feedback/page.tsx` stays; cbedge.net/owner/feedback still
-works and reads the same tickets.
 
 ## 2026-08-22 - Frozen sessions: the real Premarket / Post-Market tabs on a past date
 

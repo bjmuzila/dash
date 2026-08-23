@@ -7,8 +7,8 @@
 <style>
   :root{
     --bg:#05060A; --panel:#0D1119; --panelBg:rgba(13,17,25,0.45); --panelStrong:rgba(13,17,25,0.72);
-    --border:rgba(255,255,255,0.10); --text:#FFFFFF; --muted:rgba(255,255,255,0.55);
-    --dim:rgba(255,255,255,0.35);
+    --border:rgba(255,255,255,0.10); --text:#FFFFFF; --muted:#FFFFFF;
+    --dim:#FFFFFF;
     --cyan:#219EBC; --purple:#126783; --orange:#FB8501; --lightblue:#8ECAE6; --red:#EF4444;
     --cb:#ffd600;    /* neutral / gex flip  */
     --cw:#29b6f6;    /* resistance / call wall */
@@ -260,7 +260,7 @@ function fmtBig(v){
 }
 function el(id){ return document.getElementById(id); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
-function setStatus(t,bad){ var s=el('status'); s.textContent=t; s.style.borderColor = bad?'rgba(239,68,68,.5)':'var(--border)'; s.style.color = bad?'#EF4444':'var(--muted)'; }
+function setStatus(t,bad){ var s=el('status'); s.textContent=t; s.style.borderColor = bad?'rgba(239,68,68,.5)':'var(--border)'; s.style.color = bad?'#EF4444':'#FFFFFF'; }
 
 /* ─────────────────────────── load ─────────────────────────── */
 function normalise(rows){
@@ -467,7 +467,7 @@ function xLabels(rows,x,H,n){
   var s='', lblN=Math.min(n||8,rows.length);
   for(var j=0;j<lblN;j++){
     var idx=Math.round(j*(rows.length-1)/Math.max(1,lblN-1));
-    s+='<text x="'+x(idx).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle" fill="rgba(255,255,255,.35)" font-size="10">'+rows[idx].date+'</text>';
+    s+='<text x="'+x(idx).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle" fill="#FFFFFF" font-size="10">'+rows[idx].date+'</text>';
   }
   return s;
 }
@@ -544,11 +544,11 @@ function renderLevels(){
   niceTicks(dmn,dmx,7).forEach(function(v){
     var zero = MODE==='delta' && Math.abs(v)<1e-9;
     s+='<line x1="'+PL+'" x2="'+(PL+iw)+'" y1="'+yRaw(v).toFixed(1)+'" y2="'+yRaw(v).toFixed(1)+'" stroke="rgba(255,255,255,'+(zero?'.30':'.07')+')"/>';
-    s+='<text x="'+(PL-8)+'" y="'+(yRaw(v)+3.5).toFixed(1)+'" text-anchor="end" fill="rgba(255,255,255,'+(zero?'.7':'.4')+')" font-size="10">'+
+    s+='<text x="'+(PL-8)+'" y="'+(yRaw(v)+3.5).toFixed(1)+'" text-anchor="end" fill="#FFFFFF" font-size="10">'+
        (MODE==='delta'?((v>0?'+':'')+v.toFixed(UNIT==='pct'?1:0)):fmt(v,0))+'</text>';
   });
   if(MODE==='delta'){
-    s+='<text x="'+(PL+4)+'" y="'+(yRaw(0)-5).toFixed(1)+'" fill="rgba(255,255,255,.55)" font-size="10">spot</text>';
+    s+='<text x="'+(PL+4)+'" y="'+(yRaw(0)-5).toFixed(1)+'" fill="#FFFFFF" font-size="10">spot</text>';
   }
   if(SHOW.support&&SHOW.resistance){
     var top='',bot='';
@@ -606,7 +606,7 @@ function renderSplit(){
     s+='<rect x="'+PL+'" y="'+y(mx).toFixed(1)+'" width="'+iw+'" height="'+Math.max(1,(y(mn)-y(mx))).toFixed(1)+'" fill="rgba(255,255,255,.03)"/>';
     [mx,mn].forEach(function(v){
       s+='<line x1="'+PL+'" x2="'+(PL+iw)+'" y1="'+y(v).toFixed(1)+'" y2="'+y(v).toFixed(1)+'" stroke="rgba(255,255,255,.10)"/>';
-      s+='<text x="'+(PL-8)+'" y="'+(y(v)+3.5).toFixed(1)+'" text-anchor="end" fill="rgba(255,255,255,.42)" font-size="10">'+fmt(v,ser.k==='spot'?1:0)+'</text>';
+      s+='<text x="'+(PL-8)+'" y="'+(y(v)+3.5).toFixed(1)+'" text-anchor="end" fill="#FFFFFF" font-size="10">'+fmt(v,ser.k==='spot'?1:0)+'</text>';
     });
     var d='',open=false, pts='';
     rows.forEach(function(r,i){
@@ -649,7 +649,7 @@ function barChart(mount, rows, key, colorFn, fmtFn, title){
   var s='';
   niceTicks(mn,mx,5).forEach(function(v){
     s+='<line x1="'+PL+'" x2="'+(PL+iw)+'" y1="'+y(v).toFixed(1)+'" y2="'+y(v).toFixed(1)+'" stroke="rgba(255,255,255,'+(v===0?'.22':'.06')+')"/>';
-    s+='<text x="'+(PL-8)+'" y="'+(y(v)+3.5).toFixed(1)+'" text-anchor="end" fill="rgba(255,255,255,.4)" font-size="10">'+fmtFn(v)+'</text>';
+    s+='<text x="'+(PL-8)+'" y="'+(y(v)+3.5).toFixed(1)+'" text-anchor="end" fill="#FFFFFF" font-size="10">'+fmtFn(v)+'</text>';
   });
   rows.forEach(function(r,i){
     if(r[key]==null) return;
@@ -661,7 +661,7 @@ function barChart(mount, rows, key, colorFn, fmtFn, title){
   var lblN=Math.min(8,rows.length);
   for(var j=0;j<lblN;j++){
     var idx=Math.round(j*(rows.length-1)/Math.max(1,lblN-1));
-    s+='<text x="'+(PL+(idx+0.5)/rows.length*iw).toFixed(1)+'" y="'+(H-7)+'" text-anchor="middle" fill="rgba(255,255,255,.32)" font-size="10">'+rows[idx].date+'</text>';
+    s+='<text x="'+(PL+(idx+0.5)/rows.length*iw).toFixed(1)+'" y="'+(H-7)+'" text-anchor="middle" fill="#FFFFFF" font-size="10">'+rows[idx].date+'</text>';
   }
   el(mount).innerHTML = svgEl(W,H)+s+'</svg>';
   var svg=el(mount).firstChild;
@@ -698,7 +698,7 @@ function renderDeltas(){
   var s='';
   niceTicks(-m,m,5).forEach(function(v){
     s+='<line x1="'+PL+'" x2="'+(PL+iw)+'" y1="'+yRaw(v).toFixed(1)+'" y2="'+yRaw(v).toFixed(1)+'" stroke="rgba(255,255,255,'+(v===0?'.22':'.06')+')"/>';
-    s+='<text x="'+(PL-8)+'" y="'+(yRaw(v)+3.5).toFixed(1)+'" text-anchor="end" fill="rgba(255,255,255,.4)" font-size="10">'+(v>0?'+':'')+v.toFixed(0)+'</text>';
+    s+='<text x="'+(PL-8)+'" y="'+(yRaw(v)+3.5).toFixed(1)+'" text-anchor="end" fill="#FFFFFF" font-size="10">'+(v>0?'+':'')+v.toFixed(0)+'</text>';
   });
   rows.forEach(function(r,i){
     keys.forEach(function(k,ki){
@@ -715,7 +715,7 @@ function renderDeltas(){
   var lblN=Math.min(8,rows.length);
   for(var j=0;j<lblN;j++){
     var idx=Math.round(j*(rows.length-1)/Math.max(1,lblN-1));
-    s+='<text x="'+(PL+(idx+0.5)*gw).toFixed(1)+'" y="'+(H-7)+'" text-anchor="middle" fill="rgba(255,255,255,.32)" font-size="10">'+rows[idx].date+'</text>';
+    s+='<text x="'+(PL+(idx+0.5)*gw).toFixed(1)+'" y="'+(H-7)+'" text-anchor="middle" fill="#FFFFFF" font-size="10">'+rows[idx].date+'</text>';
   }
   el('deltachart').innerHTML = svgEl(W,H)+s+'</svg>';
   var svg=el('deltachart').firstChild;
@@ -764,7 +764,7 @@ function renderCpg(){
   var lblN=Math.min(6,rows.length);
   for(var j=0;j<lblN;j++){
     var idx=Math.round(j*(rows.length-1)/Math.max(1,lblN-1));
-    s+='<text x="'+x(idx).toFixed(1)+'" y="'+(H-7)+'" text-anchor="middle" fill="rgba(255,255,255,.32)" font-size="10">'+rows[idx].date+'</text>';
+    s+='<text x="'+x(idx).toFixed(1)+'" y="'+(H-7)+'" text-anchor="middle" fill="#FFFFFF" font-size="10">'+rows[idx].date+'</text>';
   }
   el('cpgchart').innerHTML = svgEl(W,H)+s+'</svg>';
   var svg=el('cpgchart').firstChild;
@@ -806,7 +806,7 @@ function renderCurve(r){
   var s='';
   niceTicks(-m,m,6).forEach(function(v){
     s+='<line x1="'+PL+'" x2="'+(PL+iw)+'" y1="'+y(v).toFixed(1)+'" y2="'+y(v).toFixed(1)+'" stroke="rgba(255,255,255,'+(v===0?'.25':'.06')+')"/>';
-    s+='<text x="'+(PL-8)+'" y="'+(y(v)+3.5).toFixed(1)+'" text-anchor="end" fill="rgba(255,255,255,.4)" font-size="10">'+fmtBig(v)+'</text>';
+    s+='<text x="'+(PL-8)+'" y="'+(y(v)+3.5).toFixed(1)+'" text-anchor="end" fill="#FFFFFF" font-size="10">'+fmtBig(v)+'</text>';
   });
   var d='', area='M'+x(kmn).toFixed(1)+' '+y(0).toFixed(1);
   curve.forEach(function(p,i){
@@ -826,7 +826,7 @@ function renderCurve(r){
       s+='<text x="'+px+'" y="'+ly+'" text-anchor="middle" fill="'+L[2]+'" font-size="10">'+L[0]+' '+fmt(L[1],0)+'</text>';
     });
   niceTicks(kmn,kmx,7).forEach(function(v){
-    s+='<text x="'+x(v).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle" fill="rgba(255,255,255,.32)" font-size="10">'+fmt(v,0)+'</text>';
+    s+='<text x="'+x(v).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle" fill="#FFFFFF" font-size="10">'+fmt(v,0)+'</text>';
   });
   el('curvechart').innerHTML = svgEl(W,H)+s+'</svg>';
 }

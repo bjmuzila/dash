@@ -7779,6 +7779,122 @@ if (libDb) {
     };
 
     /**
+     * LANE 2 — "BUILDING NOW". Reads strike_growth (1-minute), not
+     * eod_strike_gex, and answers a different question from lane 1: not "what
+     * grew by yesterday's close" but "what is stacking right now, mid-session".
+     *
+     * ── THE BASELINE IS TIME-OF-DAY MATCHED, AND HAS TO BE ──────────────────
+     * strike_growth's `delta_abs` is the build SINCE THE OPEN, so it grows
+     * monotonically through the session by construction. Comparing 15:45 against
+     * a flat all-day average would flag every ticker every afternoon and nothing
+     * in the morning. The denominator is therefore that symbol's own biggest
+     * build AT THE SAME 10-MINUTE SLOT on prior sessions: 11:20 is judged
+     * against other 11:20s.
+     *
+     * ── IT IS HONEST ABOUT HAVING NO ODDS ───────────────────────────────────
+     * Lane 1 attaches a historical hit rate to every line because
+     * eod_strike_gex keeps 400 sessions. This lane CANNOT: strike_growth is on a
+     * ~5-day retention sweep (RETENTION_STRIKE_GROWTH_DAYS), so there is no
+     * outcome history to score against and there will not be until retention is
+     * raised and weeks pass. Every line here says UNTESTED, and says how many
+     * prior sessions its baseline rests on. Do not quote lane 1's odds on a
+     * lane 2 line — they are different measurements of different data.
+     *
+     * A symbol with fewer than `minSess` prior sessions at that slot gets no
+     * ×normal at all and says so, rather than being scored off n=1.
+     */
+    const strikeGexBuildingNow = async (days, ticker, limit, minSess) => {
+      const t = upper(ticker);
+      const rows = await libDb.queryAll(
+        `WITH b AS (
+           SELECT symbol, date, strike, expiry, delta_abs, spot, ts,
+                  (floor(EXTRACT(EPOCH FROM (ts AT TIME ZONE 'America/New_York'))::numeric % 86400 / 600) * 600)::int AS tod
+             FROM strike_growth
+            WHERE date >= (CURRENT_DATE - ?::int)
+              AND (?::text = '' OR symbol = ?::text)
+              AND spot > 0
+         ),
+         g AS (
+           SELECT DISTINCT ON (symbol, date, strike, expiry, tod)
+                  symbol, date, strike, expiry, tod, delta_abs, spot, ts
+             FROM b ORDER BY symbol, date, strike, expiry, tod, ts DESC
+         ),
+         daymax AS (
+           SELECT symbol, date, tod, MAX(ABS(delta_abs)) AS mx
+             FROM g GROUP BY symbol, date, tod
+         ),
+         latest AS (SELECT symbol, MAX(date) AS d FROM g GROUP BY symbol),
+         cur AS (
+           SELECT g.* FROM g JOIN latest l ON l.symbol = g.symbol AND l.d = g.date
+         ),
+         curtod AS (SELECT symbol, MAX(tod) AS t FROM cur GROUP BY symbol),
+         now_rows AS (
+           SELECT c.* FROM cur c JOIN curtod ct ON ct.symbol = c.symbol AND ct.t = c.tod
+         ),
+         basel AS (
+           SELECT d.symbol, d.tod, AVG(d.mx) AS norm, COUNT(*) AS n_sess
+             FROM daymax d JOIN latest l ON l.symbol = d.symbol
+            WHERE d.date < l.d
+            GROUP BY d.symbol, d.tod
+         )
+         SELECT n.symbol, to_char(n.date, 'YYYY-MM-DD') AS date,
+                to_char(n.ts AT TIME ZONE 'America/New_York', 'HH24:MI') AS at,
+                n.strike, n.expiry, n.delta_abs, n.spot,
+                bl.norm, bl.n_sess,
+                CASE WHEN bl.norm > 0 THEN ABS(n.delta_abs) / bl.norm END AS zx
+           FROM now_rows n
+           LEFT JOIN basel bl ON bl.symbol = n.symbol AND bl.tod = n.tod
+          ORDER BY (CASE WHEN bl.norm > 0 THEN ABS(n.delta_abs) / bl.norm ELSE 0 END) DESC,
+                   ABS(n.delta_abs) DESC
+          LIMIT ?::int`,
+        [days, t, t, limit]);
+
+      const WORDS = (zx) => (zx >= 5 ? 'far above normal' : zx >= 3 ? 'way above normal'
+        : zx >= 2 ? 'well above normal' : zx >= 1.5 ? 'above normal' : zx >= 1 ? 'a bit above normal' : 'normal');
+
+      const live = rows.map((r) => {
+        const zx = r.zx == null ? null : num(r.zx);
+        const d = num(r.delta_abs), spot = num(r.spot), strike = num(r.strike);
+        const nSess = num(r.n_sess);
+        return {
+          symbol: r.symbol, strike: round(strike, 2), expiry: r.expiry,
+          '×normal': zx == null || nSess < minSess ? null : round(zx, 1),
+          'built $M': round(d / 1e6, 2),
+          'typical $M': r.norm == null ? null : round(num(r.norm) / 1e6, 2),
+          'baseline sessions': nSess,
+          spot: round(spot, 2),
+          'vs spot': `${round(100 * (strike / spot - 1), 1)}%`,
+          side: d > 0 ? 'call/positive γ' : 'put/negative γ',
+          at: r.at, date: r.date,
+        };
+      });
+
+      const feed_live = live.map((r) => {
+        const zx = r['×normal'];
+        const scored = zx != null;
+        return {
+          building: `${r.symbol} ${r.strike} strike (exp ${r.expiry}) — building `
+            + `${r['built $M'] >= 0 ? '+' : '−'}$${Math.abs(r['built $M'])}M since the open`
+            + (scored
+              ? `, ${WORDS(zx)} for this time of day (${zx}× a typical ${r.at}, from ${r['baseline sessions']} prior session${r['baseline sessions'] === 1 ? '' : 's'})`
+              : `, no baseline yet — needs ${minSess}+ prior sessions at ${r.at}, has ${r['baseline sessions']}`)
+            + `. ${r['vs spot']} vs spot, ${r.side.split('/')[0]} side. As of ${r.at} ET ${r.date}.`
+            + ` ⚠ UNTESTED — strike_growth keeps ~5 days, so there is no outcome history to score this against.`,
+        };
+      });
+
+      const scored = live.filter((r) => r['×normal'] != null).length;
+      return {
+        feed_live, live,
+        live_note: rows.length
+          ? `${rows.length} strike(s) building on the latest recorded minute · ${scored} with a time-of-day baseline. `
+            + `Baseline = that symbol's biggest build at the SAME 10-minute slot on prior sessions — delta_abs grows all day by construction, so 15:45 must be judged against other 15:45s, never against a flat daily average. `
+            + `⚠ NO ODDS ON THIS LANE, and there cannot be until RETENTION_STRIKE_GROWTH_DAYS is raised and weeks pass. Do not read lane-1 hit rates onto these lines.`
+          : `Nothing in strike_growth for this filter. That table keeps ~5 days and only writes during RTH — outside market hours the latest recorded minute may be from the prior session.`,
+      };
+    };
+
+    /**
      * THE WATCH REPORT. This is the operational one — the other five are how it
      * got calibrated.
      *
@@ -7812,7 +7928,7 @@ if (libDb) {
      * symbol whose recorder has been failing quietly will otherwise sit near the
      * top of the board forever on a build from three weeks ago.
      */
-    const strikeGexWatch = async (days, win, ticker, hit, minZ, minBase, maxGap, limit, minBucketN) => {
+    const strikeGexWatch = async (days, win, ticker, hit, minZ, minBase, maxGap, limit, minBucketN, liveDays, minSess) => {
       const t = upper(ticker);
 
       // The per-ticker normalizer, shared by both halves so the report and its
@@ -7985,16 +8101,25 @@ if (libDb) {
         ? `RULE THAT EARNED ITS KEEP: ${BANDS[winner]} → ${byBand.get(winner).hit}% of ticker-days saw a ≥${hit}σ next-session move vs a ${baseRate}% baseline (${byBand.get(winner).lift}×), firing ~${round(byBand.get(winner).n / years, 0)} ticker-days/yr.`
         : `NO BAND EARNED A RULE — nothing cleared 1.3× lift on n≥${minBucketN}. The watchlist below is still "what grew most today", but history does not say it means anything yet. Check coverage before concluding the effect is absent rather than the sample thin.`;
 
+      // LANE 2 runs off a different table with a different baseline and no odds.
+      // It is merged here so one call serves the whole feed, but the two lanes
+      // are kept as SEPARATE keys and separate notes on purpose — a reader must
+      // never have to work out which lane a line came from.
+      const lane2 = await strikeGexBuildingNow(liveDays, t, limit, minSess);
+
       // Key order drives section order in the owner Panel — feed first, on purpose.
       return {
-        feed, by_symbol, odds, coverage, detail: watchlist,
+        feed, feed_live: lane2.feed_live, by_symbol, odds, coverage,
+        live: lane2.live, detail: watchlist,
+        live_note: lane2.live_note,
         note: `${thinWarning(totN, [], minBucketN)} Scanned ${t || 'all tickers'} · ${totN} ticker-days of history over ${nDates} sessions · baseline ${baseRate}% of ticker-days see a ≥${hit}σ next-session move. `
           + `${rule} `
           + (watchlist.length
             ? `TODAY: ${tickersOnWatch.size} ticker(s), ${watchlist.length} strike(s) at ≥${minZ}× normal. Read FEED — one line per alert; the tables under it justify those lines. `
               + `⚠ Not live: eod_strike_gex is written once daily after the close; stalest row here is ${stale}d old. `
             : `TODAY: NOTHING ON WATCH — no strike on any symbol's latest recorded session grew ≥${minZ}× its ticker's normal. That is a real answer, not a failure; most days are quiet. Lower minZ to see the near-misses, and check coverage if it stays empty for days (a stalled recorder looks exactly like a quiet market here). `)
-          + `"×normal" is |Δ| ÷ the trailing average of that ticker's OWN biggest daily strike move, so 1.0 is an ordinary day's hottest strike and 3× is three times that. Mid-caps and SPX land on one scale. Odds are per TICKER-day (hottest strike), not per strike.`,
+          + `"×normal" is |Δ| ÷ the trailing average of that ticker's OWN biggest daily strike move, so 1.0 is an ordinary day's hottest strike and 3× is three times that. Mid-caps and SPX land on one scale. Odds are per TICKER-day (hottest strike), not per strike.`
+          + `\n\n— LANE 2 · BUILDING NOW (different table, different baseline, NO odds) — ${lane2.live_note}`,
       };
     };
 
@@ -8247,7 +8372,7 @@ if (libDb) {
           else if (test === 'strike-gex-premove') body = await strikeGexPremove(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1.5), n('lead', 3), n('minBase', 1e6), n('maxGap', 5), n('minBucketN', 20));
           else if (test === 'strike-gex-threshold') body = await strikeGexThreshold(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minBase', 1e6), n('maxGap', 5), n('minBucketN', 20));
           else if (test === 'strike-gex-timeline') body = await strikeGexTimeline(n('days', 60), n('win', 20), q.get('ticker') || 'SPX', n('strike', 0), n('topN', 3), n('minBase', 1e6), n('maxGap', 5));
-          else if (test === 'strike-gex-watch') body = await strikeGexWatch(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minZ', 1.5), n('minBase', 1e6), n('maxGap', 5), n('limit', 60), n('minBucketN', 20));
+          else if (test === 'strike-gex-watch') body = await strikeGexWatch(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minZ', 1.5), n('minBase', 1e6), n('maxGap', 5), n('limit', 60), n('minBucketN', 20), n('liveDays', 5), n('minSess', 2));
           else if (test === 'strike-gex-move') body = await strikeGexMove(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minStrikes', 20), n('maxGap', 5), n('minBucketN', 20));
           else if (test === 'strike-gex-move-intraday') body = await strikeGexMoveIntraday(n('days', 3), n('slotMin', 10), n('look', 3), n('fwd', 3), n('win', 12), q.get('ticker') ?? 'SPX', n('hitSigma', 1), n('minStrikes', 4), n('minBucketN', 10));
           else { send(res, 400, { error: 'unknown test' }); return; }

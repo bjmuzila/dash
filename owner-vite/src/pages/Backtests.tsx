@@ -204,12 +204,13 @@ export default function Backtests() {
 
       <Panel
         title="① THE FEED — what's growing more than normal, right now" test="strike-gex-watch"
-        subtitle="Scans every ticker's latest session for strikes growing more than that ticker normally grows. One line per alert, each carrying its own historical hit rate."
+        subtitle="Two lanes: what grew since last close (with odds attached), and what is stacking right now (untested). One line per alert."
         fields={[
           { key: "minZ", label: "min ×normal", type: "number", def: 1.5 },
           { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
           { key: "days", label: "history (days)", type: "number", def: 180 },
           { key: "hitSigma", label: "big move (σ)", type: "number", def: 1 },
+          { key: "minSess", label: "live baseline sess", type: "number", def: 2 },
         ]}
         help={
           <>
@@ -234,6 +235,21 @@ export default function Backtests() {
             <p style={{ margin: "6px 0 0" }}>
               An empty feed is a real answer, not a failure — most days nothing clears the bar. Drop{" "}
               <strong>min ×normal</strong> to about 1.0 to see the near-misses.
+            </p>
+
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, margin: "16px 0 8px" }}>Two lanes, and they are not interchangeable</div>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>feed</strong> — <em>since last close</em>. Built on <code>eod_strike_gex</code> (400 sessions), so every line carries real odds. This is the premarket read.</p>
+            <p style={{ margin: "0 0 8px" }}><strong style={{ color: LIGHT_BLUE }}>feed_live</strong> — <em>building now</em>. Built on <code>strike_growth</code> (1-minute), so it can flag a strike stacking mid-session. Every line says <strong style={{ color: SOFT_RED }}>UNTESTED</strong>, because 5-day retention leaves no outcome history to score against.</p>
+            <p style={{ margin: "0 0 8px", color: HOME_THEME.text }}>
+              <strong>Never read a lane-1 hit rate onto a lane-2 line.</strong> Different table, different baseline,
+              different question. The note keeps them apart behind a LANE 2 separator for exactly that reason.
+            </p>
+            <p style={{ margin: "6px 0 0" }}>
+              Lane 2's baseline is <strong>time-of-day matched</strong>: <code>delta_abs</code> is the build since the
+              open and grows all day by construction, so 15:45 is judged against other 15:45s on prior sessions, never
+              against a flat daily average — otherwise every ticker flags every afternoon and none in the morning.{" "}
+              <strong>live baseline sess</strong> is the minimum prior sessions needed before a line gets a ×normal at
+              all; below it the line says “no baseline yet” rather than scoring off n=1.
             </p>
           </>
         }
