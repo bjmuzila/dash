@@ -260,7 +260,9 @@ export default function Backtests() {
 
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, margin: "16px 0 8px" }}>The three numbers on a line</div>
             <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>×normal</strong> — the strike's dollar change ÷ the trailing average of <em>that ticker's own biggest daily strike move</em>. 1.0 is an ordinary day's hottest strike; 3× is three times that. It is what puts a mid-cap and SPX on one scale — a plain dollar cutoff would just rank the feed by market cap.</p>
-            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>Δ %</strong> — the raw growth, measured only on strikes that already held real gamma. Without that floor a strike going $12K → $900K reads as “+7,400%”.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>Δ %</strong> — the raw growth, measured only on strikes that already held real gamma. Without that floor a strike going $12K → $900K reads as “+7,400%”. A line that says <strong>FLIPPED</strong> crossed zero, which is a regime change and not a percentage at all.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>side</strong> — read from the real call/put legs, not the sign of Δ. A positive Δ means calls were added <em>or</em> puts were removed, and those are opposite events.</p>
+            <p style={{ margin: "0 0 5px", color: HOME_THEME.text }}><strong style={{ color: SOFT_RED }}>⚠ OPEX SESSION</strong> — on the third Friday the expiring tranche leaves the chain, so strikes collapse for calendar reasons. Those lines are flagged and excluded from the calibration; pass <code>opex=1</code> to put them back in.</p>
             <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>History</strong> — what happened the last n times anything hit that band. “Not enough past events” means the flag is untested, not proven.</p>
 
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, margin: "16px 0 8px" }}>The cutoff is earned, not chosen</div>
@@ -279,6 +281,28 @@ export default function Backtests() {
             <p style={{ margin: "0 0 10px" }}>
               <strong>odds</strong> is the sanity check: does lift <em>rise</em> as changes get bigger? The note says so
               out loud. One bin popping while its neighbours sit at baseline is a coincidence, not a threshold.
+            </p>
+
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, margin: "16px 0 8px" }}>The log — believe this over the backtest</div>
+            <p style={{ margin: "0 0 8px" }}>
+              A recorder writes the alerts down every day at 16:40 ET and grades them once the next session
+              exists. <strong>logged_feed</strong> is that record — the line exactly as it was said on the day,
+              with the outcome appended:
+            </p>
+            <p style={{ margin: "0 0 8px", padding: "8px 10px", background: "rgba(125,211,252,0.07)", borderLeft: `2px solid ${LIGHT_BLUE}`, fontSize: 13, lineHeight: 1.55, color: HOME_THEME.text }}>
+              [2026-08-21] MU 2000 strike — GEX grew +187%… → RESULT: −1.42σ next session ✓ HIT
+            </p>
+            <p style={{ margin: "0 0 8px" }}>
+              <strong>track_record</strong> is the same thing summarised, and it is{" "}
+              <strong style={{ color: LIGHT_BLUE }}>forward-tested</strong>: of the alerts the rule ACTUALLY
+              fired, how many were followed by a move. Nothing in it was chosen after seeing the outcome, which
+              is exactly what you cannot say about the calibration sweep. Where the two disagree, the log wins.
+            </p>
+            <p style={{ margin: "0 0 10px" }}>
+              It also survives the retention problem — the log accrues on its own, so even if{" "}
+              <code>eod_strike_gex</code> keeps getting truncated, your record of what was flagged and what
+              happened next does not reset. Rows reading “not graded yet” are waiting on a forward session,
+              not broken.
             </p>
 
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, margin: "16px 0 8px" }}>Two lanes, and run checks</div>

@@ -1,5 +1,102 @@
 # Changelog
 
+## 2026-08-23 - GEX watch: opex, flips, real legs, dollar floor, and an ALERT LOG
+
+Edited: `server-v2/api-router.js`, `server-v2/server-with-proxy.js`,
+`owner-vite/src/pages/Backtests.tsx`.
+New: `server-v2/_lib-gex-watch.cjs`, `server-v2/gex-watch-recorder.js`.
+
+A live board full of alerts turned out to be mostly wrong. Five things.
+
+### 0. The engines moved to a shared module
+
+`_lib-gex-watch.cjs` — pure functions over an injected `queryAll`, no pool, no
+schedule, no HTTP. api-router and the new recorder both require it. That is the
+point: the alerts the recorder logs and the odds the panel shows must be one
+definition. A copy-paste would drift within a week and neither would be worth
+reading. Do not inline this SQL anywhere else.
+
+### 1. OPEX was the whole board
+
+2026-08-21 was the third Friday. `eod_strike_gex` sums ALL expiries, so on opex
+the expiring tranche stops existing and every strike carrying it collapses:
+
+    WBD  28   −78%   $77.39M → $17.02M
+    UBER 80   −75%   $60.27M → $15.12M
+    FCX  70   −89%   $18.61M → $2.00M
+
+None of that is repositioning. It is the calendar, and it was the largest Δ in
+the table, so it dominated the board and poisoned the calibration. Detected as
+`DOW = 5 AND day-of-month BETWEEN 15 AND 21` (that can only be the third
+Friday), flagged in words on the line, and excluded from the calibration by
+default. `opex=1` puts them back.
+
+### 2. A sign flip is not a percentage
+
+    IEF  93   "+116%"   $-345.01M → $54.72M
+    RUT  2970 "−349%"   $118.48M  → $-295.09M
+
+Both crossed zero — a regime change, arguably the most interesting thing on the
+board, described as a growth rate. Flips are now detected in SQL and worded
+separately: `GEX FLIPPED −$345M → +$55M`. This failure mode was documented and
+guarded against in the ranking, then shipped anyway in the sentence.
+
+### 3. The side label was inferred from the sign, and was often backwards
+
+`CORZ 19: $-3.92M → $-0.61M` read as "call side". Δ is positive, but the strike
+still holds NEGATIVE gamma — what happened is put gamma came OFF. A positive Δ
+means calls added OR puts removed, and those are opposite events. `call_gex` /
+`put_gex` are carried through the spine now and the larger leg is described:
+"put gamma removed". NULL before 2026-08-18 → hedged wording, never a guess.
+
+### 4. ×normal had no dollar floor
+
+`WOLF $1.85M` and `BTDR $380K` scored 4× and 3.5× because those names normally
+carry almost no gamma. New `minAbs` (default $2M) gates the board AND the
+calibration. Applied with `COALESCE(MAX(zx) FILTER (…), 0)`, not a `WHERE`: a
+quiet ticker-day still belongs in the baseline scored 0, or the denominator
+silently becomes "days something moved" and every lift is against the wrong
+universe.
+
+Also `maxStale` (7d): a symbol whose last session is weeks old is held off a
+DAILY board entirely instead of sitting near the top forever.
+
+### 5. THE ALERT LOG — the panel was a view, not a log
+
+"When did this fire" had no answer, because nothing fired: the list was
+recomputed on every Run, and every hit rate was backtested. `gex-watch-recorder.js`
+runs daily at 16:40 ET (after eod-strike-gex-recorder writes the ladder — fire it
+earlier and it logs off yesterday's board, silently), writes
+`gex_watch_alerts`, and grades each row once its forward session exists.
+
+Three things that buys:
+
+- **Real fire times.** Every feed line is stamped `[2026-08-21]`, and the
+  rendered sentence is FROZEN in the row — if wording or the cutoff changes next
+  month, the log still shows what the reader was told on the day.
+- **Forward-tested odds.** "Of the alerts this rule ACTUALLY fired, N were
+  followed by a move" — nothing chosen after seeing the outcome. `track_record`
+  reports it against a live baseline. Where it disagrees with the calibration
+  sweep, believe the log.
+- **Survives retention.** `eod_strike_gex` has been stuck at ~8 sessions. This
+  table accrues forward on its own, so the record of what was flagged and what
+  happened next does not reset with it.
+
+Grading is strictly backward-looking: only once the forward bar exists, with
+sigma trailing and excluding the alert bar. Ungraded rows say so — they are
+waiting, not failing. 1095-day retention; rows are tiny. Manual fire:
+`POST /proxy/gex-watch-run`.
+
+### Verified
+
+112 assertions. New: the four fixes each tested where they bite (a fixture opex
+session, a planted sign flip, a sub-floor mover, NULL-leg fallback), opex
+exclusion actually changing the calibration n, the staleness cap, and the
+recorder end-to-end — writes, freezes the line, leaves the newest session
+ungraded (no forward bar yet), grades across many sessions once backdated, and
+does not mark everything a hit.
+
+
 ## 2026-08-23 - FIX: absent query params silently defaulted to 0, not their default
 
 Edited: `server-v2/api-router.js` (`/api/backtests` dispatch helper).

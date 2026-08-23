@@ -75,6 +75,16 @@ catch (e) { console.warn('[oi-daily] recorder not loaded:', e.message); }
 let startEodStrikeGexRecorder = () => {};
 try { ({ startEodStrikeGexRecorder } = require('./eod-strike-gex-recorder')); }
 catch (e) { console.warn('[eod-strike-gex] recorder not loaded:', e.message); }
+// Daily (16:40 ET) GEX WATCH log: writes the strikes that grew far more than
+// their own ticker normally grows, then grades them once the forward session
+// exists. Runs AFTER eod-strike-gex-recorder because it reads the ladder that
+// one writes — fire it earlier and it logs alerts off yesterday's board,
+// silently and looking perfectly correct. Shares its scan with
+// /api/backtests?test=strike-gex-watch via _lib-gex-watch.cjs, so the alerts
+// and the panel can never drift apart.
+let startGexWatchRecorder = () => {};
+try { ({ startGexWatchRecorder } = require('./gex-watch-recorder')); }
+catch (e) { console.warn('[gex-watch] recorder not loaded:', e.message); }
 // Daily (16:05 ET) near-the-money PREMIUM TRADED snapshot: call and put notional
 // for the front and back monthly at ±1/2/5% of spot → atm_prem_diff. Backs the
 // Test Lab "Prem Diff" tab. Same defensive load as its neighbours above — a
@@ -2091,6 +2101,21 @@ async function main() {
         })();
         return;
       }
+      // Manual fire of the GEX watch log (normally automatic at 16:40 ET).
+      // Records today's alerts and grades any older ones whose forward session
+      // has since landed. Safe to re-fire: the write is a PK upsert on
+      // (date, symbol, strike), and grading only touches ungraded rows.
+      //   POST /proxy/gex-watch-run
+      if (pathname === '/proxy/gex-watch-run' && req.method === 'POST') {
+        (async () => {
+          try {
+            const { runOnce } = require('./gex-watch-recorder');
+            const out = await runOnce('manual');
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // Manual fire of the morning OI re-stamp (normally automatic at 09:25 ET).
       //   POST /proxy/eod-strike-gex-restamp[?symbol=NVDA][&date=YYYY-MM-DD]
       //
@@ -4062,6 +4087,9 @@ async function main() {
     // spot per symbol; the Ticker Lookup Δ column diffs today's row against
     // the previous snapshot date to show which walls were built or taken off.
     startEodStrikeGexRecorder();
+    // Reads the ladder above and logs what it flagged, so the watch feed has
+    // real fire times and its odds become forward-tested rather than re-derived.
+    startGexWatchRecorder();
     // Daily near-the-money PREMIUM TRADED snapshot (16:05 ET, weekdays) →
     // atm_prem_diff. Fires after the close because it reads the chain's DAY
     // VOLUME, which is only final once the 16:00 print is in. One row per
