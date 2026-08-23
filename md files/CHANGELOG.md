@@ -1,36 +1,64 @@
 # Changelog
 
-## 2026-08-23 - Weekly Edge: MRNA flow-scanner example in the results section
+## 2026-08-23 - The backtest now SETS the watch cutoff (and refuses to overfit)
 
-`lib/emails/weekly-edge.ts`. The "CB Edge - This Week's Results" band now carries
-a real scanner catch under the (still-placeholder) Core Bullseye table.
+Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.
 
-- MRNA, #2, 0.6M premium, 2026-08-21 expiry, spot 63.52, captured Aug 14 2:00 PM
-  ET, OTM 7.1%, +11142% vs open, score 44, "Very strong" - then a divider row
-  with the realized move: $0.75 -> $95.00, +12,567%.
-- Flagged Aug 14 on the Aug 21 expiry, so the run resolved inside the Aug 17-21
-  week this issue recaps. That is why it belongs in THIS letter.
-- The card is REBUILT IN HTML, not screenshotted - stays sharp on retina, honours
-  the palette, and needs no hosted image. Markup mirrors the proof card in
-  `edge3-annual.ts`, left-aligned instead of centred because this letter is.
-- New exported `ScannerProof` interface + `DEFAULT_SCANNER_PROOF`, and opts
-  `showScannerProof` (defaults TRUE, `!== false`) and `scannerProof`
-  (`Partial<ScannerProof>`, merged over the default so you can override one
-  field). `withDefaults()`'s return type intersects `{ scannerProof:
-  ScannerProof }` rather than Pick'ing it, because `Required<Partial<X>>` is
-  still `Partial<X>` and every field would type as possibly-undefined.
-- Fields are escaped once via an `Object.fromEntries` pass, same as
-  `edge3-annual.ts`, rather than at each of the dozen interpolation sites.
-- `weeklyEdgeText()` gains the matching "WHAT THE FLOW SCANNER CAUGHT" block.
-- Caveat line under the card is deliberate and should stay: "One contract is not
-  a track record, and options can and do go to zero." A +12,567% number in a
-  marketing email without it is the kind of claim that draws complaints.
+`minZ` was a knob with a default I picked. That inverted the whole point: the
+backtest exists to DEFINE "higher than normal" — look at extreme GEX changes,
+see whether price follows, and let the answer set the threshold. Now it does.
+`minZ` defaults to **0 = AUTO**; the scan runs at whatever the sweep earned, and
+the note says which cutoff and why. A non-zero value is reported as a manual
+override.
 
-DUPLICATED DATA: this is the same catch as `DEFAULT_PROOF` in
-`edge3-annual.ts`. Two copies now. If the numbers are ever corrected, fix both.
+### Cumulative sweep, not bins
 
-Preview regenerated at `generated/2026-08-23-weekly-edge-preview.html` and
-`generated/2026-08-23-weekly-edge-preview.png`.
+The odds table was mutually-exclusive bands. Operationally wrong shape: a
+watchlist has ONE cutoff, so the question is always "everything at or above X".
+New `calibration` table sweeps 1 / 1.25 / 1.5 / 1.75 / 2 / 2.5 / 3 / 4 / 5 / 6 /
+8 cumulatively. The banded `odds` table stays, demoted to its real job —
+monotonicity. The HALF-1 query now returns raw ticker-days and all statistics are
+computed in JS, because a cutoff sweep cannot be done from pre-binned SQL counts.
+
+### The pick is on a Wilson lower bound, and this is the important part
+
+Ranking cutoffs on raw lift picks the most extreme one essentially every time,
+because the tail has the fewest events and the widest scatter. On the fixture
+that meant **≥4× (lift 1.86, n=24) beating ≥1.5× (lift 1.66, n=154)** — an edge
+built on twenty-four coin flips, i.e. precisely the overfit this panel exists to
+avoid.
+
+Each cutoff is now scored on the lower bound of a 95% Wilson interval around its
+hit rate (Wilson, not normal-approximation: it stays sane at small n and near
+0/1, which is exactly where the tail lives). The fixture now picks ≥1.5×
+(low 1.39) over ≥3× (low 1.36) and ≥4× (low 1.21). `lift (low)` is shown in the
+table so the choice is inspectable rather than magic.
+
+Two regression tests lock this in: one asserts the fixture still CONTAINS a
+tempting high-lift/small-n cutoff (so the guard is actually being exercised and
+cannot silently stop testing anything), the other asserts it is not chosen.
+
+### Monotonicity is now judged out loud
+
+A threshold is only believable if bigger changes keep doing better. The note
+reports how many band-to-band steps rise, and when lift jumps around it says so:
+"One bin got lucky; treat any cutoff below as a coincidence." A single popping
+bin next to neighbours at baseline is noise wearing a result's clothes, and the
+panel now names that rather than shipping it as a rule.
+
+### Also
+
+"⚠ Not live" moved out of the has-alerts branch — a quiet day was silently
+dropping the staleness warning, which is exactly the day a stalled recorder is
+indistinguishable from a quiet market.
+
+### Verified
+
+68 assertions, all green. New: cumulative-sweep shape, monotone n as the cutoff
+rises, untested-cutoff marking, that the feed's cutoff IS the swept one, the
+manual-override path, the anti-overfit guard (both halves), that the chosen
+cutoff fires ≥12×/yr, and that monotonicity is stated.
+
 
 ## 2026-08-23 - Watch feed lane 2: "building now" (intraday), clearly separated
 

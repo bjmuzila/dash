@@ -204,9 +204,9 @@ export default function Backtests() {
 
       <Panel
         title="① THE FEED — what's growing more than normal, right now" test="strike-gex-watch"
-        subtitle="Two lanes: what grew since last close (with odds attached), and what is stacking right now (untested). One line per alert."
+        subtitle="The backtest finds the level of GEX change that price actually followed; the scan then reports every ticker at or above it. Two lanes: since last close (with odds) and building now (untested)."
         fields={[
-          { key: "minZ", label: "min ×normal", type: "number", def: 1.5 },
+          { key: "minZ", label: "×normal (0 = auto)", type: "number", def: 0 },
           { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
           { key: "days", label: "history (days)", type: "number", def: 180 },
           { key: "hitSigma", label: "big move (σ)", type: "number", def: 1 },
@@ -225,7 +225,20 @@ export default function Backtests() {
             <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>×normal</strong> — the whole idea. It's that strike's dollar change divided by the trailing average of <em>that ticker's own biggest daily strike move</em>. So <strong>1.0× is an ordinary day's hottest strike</strong> and 3× is three times that. A $40M build is enormous for a mid-cap and a rounding error for SPX; this is what puts them on one scale, and it's why a plain dollar cutoff would just rank the report by market cap.</p>
             <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>History:</strong> on each line — what happened the last n times <em>anything</em> hit that band. That's the part that makes an alert worth acting on rather than just interesting. If it says “not enough past events,” the flag is untested, not proven.</p>
             <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>by_symbol</strong> — the watchlist proper: one row per ticker, its hottest strike. Five strikes lighting up on MU is one thing to watch, not five.</p>
-            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>odds</strong> — the backtest behind the feed, over your whole history window. The note names the band that earned its keep (lift ≥1.3 on real n) or says none did. Watch <strong>per yr</strong> next to <strong>lift</strong>: a 3× lift firing twice a year is a curiosity.</p>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, margin: "16px 0 8px" }}>The backtest sets the threshold — nobody picked it</div>
+            <p style={{ margin: "0 0 8px" }}>
+              Leave <strong>×normal</strong> at <strong>0</strong> and the cutoff is whatever the history earned.
+              That is the point of the panel: “higher than normal” is not a number anyone chose, it is the level of
+              GEX change that price actually followed.
+            </p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>calibration</strong> — the sweep. Each row is a candidate cutoff and everything at or above it, so it is <em>cumulative</em>: “if I watched every ticker-day at ≥2×, here is what I'd have got.” That is the operational shape, because a watchlist has one cutoff, not six bins.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>lift (low)</strong> — the column the pick is made on, and the one to trust. It is the worst case at 95% confidence. Raw <strong>lift</strong> almost always peaks at the most extreme cutoff simply because the tail has the fewest events and the widest scatter; on the test fixture, ≥4× showed 1.86× on 24 events while ≥1.5× showed 1.66× on 154. The first is twenty-four coin flips. Scoring on the lower bound picks the second, which is correct.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>odds</strong> — the same history in exclusive bins rather than cumulatively. Its job is the sanity check: does lift <em>rise</em> as the change gets bigger? The note says out loud whether it does. If one bin pops while its neighbours sit at baseline, that bin got lucky and the cutoff is a coincidence.</p>
+            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>per yr</strong> — how often the chosen cutoff fires. Read it next to lift: a 3× edge firing twice a year is a curiosity, not a tool.</p>
+            <p style={{ margin: "0 0 10px", color: HOME_THEME.text }}>
+              Type a number instead of 0 to override the sweep — the note will say the cutoff is a manual override
+              rather than earned.
+            </p>
             <p style={{ margin: "0 0 6px", color: HOME_THEME.text }}>
               <strong style={{ color: SOFT_RED }}>Not live.</strong> <code>eod_strike_gex</code> is written once daily
               after the close, so this is the last <em>recorded</em> session per symbol and every line over 3 days old

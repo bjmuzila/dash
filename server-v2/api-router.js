@@ -7961,35 +7961,149 @@ if (libDb) {
            WHERE s.norm > 0
         )`;
 
-      // ── HALF 1: the odds. Aggregated in Postgres — the raw event set is
-      // ~169 tickers × `days` sessions and has no business crossing the wire.
+      // ── HALF 1: THE BACKTEST THAT DEFINES "HIGHER THAN NORMAL" ──────────
+      //
+      // This is the point of the whole panel. The watch cutoff is NOT a number
+      // anyone picked — it is whatever level of GEX change price actually
+      // followed, measured over `days` of history. HALF 2 then scans today at
+      // exactly that level.
+      //
+      // Raw ticker-days come back and every statistic is computed in JS. That
+      // is deliberate: the operational question is CUMULATIVE ("everything at
+      // or above X fires"), and a cutoff sweep cannot be done from pre-binned
+      // SQL counts. ~169 tickers × `days` is tens of thousands of tiny rows,
+      // which is cheap; only aggregates ever reach the client.
       const oddsRows = await libDb.queryAll(
         `WITH ${DAILY_SPINE}, ${STRIKE_CHG}, ${NORM},
          sd AS (
-           SELECT symbol, date, i, MAX(zx) AS zx,
-                  COUNT(*) FILTER (WHERE zx >= 1.5) AS n_hot
-             FROM ev GROUP BY symbol, date, i
-         ),
-         j AS (
-           SELECT d.symbol, d.date, d.zx, d.n_hot,
-                  ABS((v.f1 / v.spot - 1) / v.sigma) AS a1,
-                  CASE WHEN v.f3 IS NOT NULL THEN ABS((v.f3 / v.spot - 1) / v.sigma) END AS a3
-             FROM sd d
-             JOIN vol v ON v.symbol = d.symbol AND v.date = d.date
-            WHERE v.sigma > 0 AND v.spot > 0 AND v.f1 IS NOT NULL
+           SELECT symbol, date, i, MAX(zx) AS zx FROM ev GROUP BY symbol, date, i
          )
-         SELECT CASE WHEN zx >= 5 THEN 6 WHEN zx >= 3 THEN 5 WHEN zx >= 2 THEN 4
-                     WHEN zx >= 1.5 THEN 3 WHEN zx >= 1 THEN 2 ELSE 1 END AS b,
-                count(*)                                    AS n,
-                count(*) FILTER (WHERE a1 >= ?::float8)      AS hit1,
-                count(*) FILTER (WHERE a3 IS NOT NULL)       AS n3,
-                count(*) FILTER (WHERE a3 >= ?::float8)      AS hit3,
-                count(DISTINCT date)                         AS days_seen,
-                avg(a1)                                      AS avg1
-           FROM j GROUP BY 1 ORDER BY 1`,
-        [...spineParams(days, t, maxGap, win), minBase, win, hit, hit]);
+         SELECT d.symbol, to_char(d.date, 'YYYY-MM-DD') AS date, d.zx,
+                ABS((v.f1 / v.spot - 1) / v.sigma) AS a1,
+                CASE WHEN v.f3 IS NOT NULL THEN ABS((v.f3 / v.spot - 1) / v.sigma) END AS a3
+           FROM sd d
+           JOIN vol v ON v.symbol = d.symbol AND v.date = d.date
+          WHERE v.sigma > 0 AND v.spot > 0 AND v.f1 IS NOT NULL`,
+        [...spineParams(days, t, maxGap, win), minBase, win]);
 
-      // ── HALF 2: today's board.
+      const coverage = await gexCoverage(days, t);
+
+      const BANDS = [
+        ['<1× normal', 0, 1], ['1–1.5×', 1, 1.5], ['1.5–2×', 1.5, 2],
+        ['2–3×', 2, 3], ['3–5×', 3, 5], ['≥5×', 5, Infinity],
+      ];
+      const bandOf = (zx) => BANDS.find(([, lo, hi]) => zx >= lo && zx < hi)?.[0] || '<1× normal';
+
+      const evs = oddsRows.map((r) => ({
+        symbol: r.symbol, date: r.date, zx: num(r.zx),
+        a1: num(r.a1), a3: r.a3 == null ? null : num(r.a3),
+      })).filter((e) => Number.isFinite(e.zx) && Number.isFinite(e.a1));
+
+      const N = evs.length;
+      const nDates = new Set(evs.map((e) => e.date)).size;
+      const years = Math.max(nDates / 252, 1 / 252);
+      const rate = (g) => (g.length ? pct(g.filter((e) => e.a1 >= hit).length, g.length) : 0);
+      const rate3 = (g) => {
+        const h = g.filter((e) => e.a3 != null);
+        return h.length ? pct(h.filter((e) => e.a3 >= hit).length, h.length) : null;
+      };
+      const baseRate = rate(evs);
+      const avgSig = (g) => (g.length ? round(mean(g.map((e) => e.a1)), 2) : null);
+
+      // BANDED — mutually exclusive bins. Diagnostic only: its job is to show
+      // whether the effect RISES with size. A single band that pops while its
+      // neighbours sit at baseline is noise wearing a result's clothes.
+      const odds = [{
+        band: 'ALL (baseline)', 'ticker-days': N, 'hit % 1d': baseRate,
+        'hit % 3d': rate3(evs), lift: 1, 'per yr': round(N / years, 0), 'avg |σ|': avgSig(evs),
+      }];
+      const bandLifts = [];
+      for (const [label, lo, hi] of BANDS) {
+        const g = evs.filter((e) => e.zx >= lo && e.zx < hi);
+        if (!g.length) continue;
+        const lift = baseRate ? round(rate(g) / baseRate, 2) : null;
+        if (g.length >= minBucketN) bandLifts.push({ label, lift: num(lift) });
+        if (g.length >= minBucketN) {
+          odds.push({
+            band: label, 'ticker-days': g.length, 'hit % 1d': rate(g), 'hit % 3d': rate3(g),
+            lift, 'per yr': round(g.length / years, 0), 'avg |σ|': avgSig(g),
+          });
+        }
+      }
+
+      /** Band stats for a feed line, or null when that band is untested. */
+      const statFor = (label) => {
+        const row = odds.find((o) => o.band === label);
+        return row && row['ticker-days'] >= minBucketN
+          ? { hit: row['hit % 1d'], lift: row.lift, n: row['ticker-days'] } : null;
+      };
+
+      // CUMULATIVE — "everything at or above X fires". This is the operational
+      // shape, because a watch list has ONE cutoff, not six bins.
+      const CUTOFFS = [1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8];
+      const calibration = CUTOFFS.map((c) => {
+        const g = evs.filter((e) => e.zx >= c);
+        return {
+          '≥ ×normal': c, 'ticker-days': g.length,
+          'hit % 1d': rate(g), 'hit % 3d': rate3(g),
+          lift: baseRate && g.length ? round(rate(g) / baseRate, 2) : null,
+          'per yr': round(g.length / years, 0),
+          'avg |σ|': avgSig(g),
+          tested: g.length >= minBucketN ? 'yes' : `no (n=${g.length})`,
+        };
+      }).filter((r) => r['ticker-days'] > 0);
+
+      // THE PICK — ON THE CONFIDENCE LOWER BOUND, NOT THE POINT ESTIMATE.
+      //
+      // Ranking on raw lift picks the most extreme cutoff essentially every
+      // time, because the tail has the fewest events and therefore the widest
+      // scatter. On the test fixture that meant ≥4× (lift 1.86, n=24) beating
+      // ≥1.5× (lift 1.66, n=154) — an edge built on twenty-four coin flips,
+      // which is exactly the overfit this panel exists to avoid.
+      //
+      // So each cutoff is scored on the LOWER BOUND of a 95% Wilson interval
+      // around its hit rate. Wilson (not normal-approximation) because it stays
+      // sane at small n and near 0/1, which is precisely where the tail lives.
+      // A small sample must clear a much higher point estimate to win, which is
+      // the correct trade: a cutoff that fires 150 times a year at a solid
+      // 1.66× beats one that fires 24 times at a hopeful 1.86×.
+      const wilsonLow = (k, n, z = 1.96) => {
+        if (!n) return 0;
+        const p = k / n, zz = z * z;
+        return (p + zz / (2 * n) - z * Math.sqrt((p * (1 - p) + zz / (4 * n)) / n)) / (1 + zz / n);
+      };
+      const baseFrac = baseRate / 100;
+      for (const r of calibration) {
+        const n = r['ticker-days'], k = Math.round((r['hit % 1d'] / 100) * n);
+        r['lift (low)'] = baseFrac > 0 ? round(wilsonLow(k, n) / baseFrac, 2) : null;
+      }
+      const eligible = calibration.filter((r) => r['ticker-days'] >= minBucketN && num(r['lift (low)']) >= 1);
+      const best = eligible.length
+        ? eligible.reduce((a, b) => (num(b['lift (low)']) > num(a['lift (low)'])
+          || (num(b['lift (low)']) === num(a['lift (low)']) && b['≥ ×normal'] < a['≥ ×normal'])) ? b : a)
+        : null;
+
+      // MONOTONICITY. A threshold is only believable if bigger changes keep
+      // doing better. If lift jumps around across the bands, one bin got lucky
+      // and the "rule" is a coincidence — say so instead of shipping it.
+      let monoNote = '';
+      if (bandLifts.length >= 3) {
+        let rising = 0;
+        for (let i = 1; i < bandLifts.length; i++) if (bandLifts[i].lift >= bandLifts[i - 1].lift) rising++;
+        const frac = rising / (bandLifts.length - 1);
+        monoNote = frac >= 0.66
+          ? `Lift rises with size across ${rising}/${bandLifts.length - 1} steps — the effect behaves like a real threshold.`
+          : `⚠ Lift does NOT rise consistently with size (${rising}/${bandLifts.length - 1} steps up: ${bandLifts.map((b) => `${b.label} ${b.lift}×`).join(', ')}). One bin got lucky; treat any cutoff below as a coincidence until more history accumulates.`;
+      }
+
+      // AUTO: minZ <= 0 means "use whatever the backtest just earned".
+      const autoPicked = minZ <= 0;
+      const effMinZ = autoPicked ? (best ? best['≥ ×normal'] : 1.5) : minZ;
+
+      // ── HALF 2: TODAY, SCANNED AT THE EARNED CUTOFF ─────────────────────
+      // effMinZ comes from the sweep above, not from a default. That is the
+      // whole loop: the backtest decides what "higher than normal" means and
+      // this scan applies it. Passing minZ > 0 overrides it manually.
       const boardRows = await libDb.queryAll(
         `WITH ${DAILY_SPINE}, ${STRIKE_CHG}, ${NORM},
          last AS (SELECT symbol, MAX(i) AS mi FROM sess GROUP BY symbol)
@@ -8002,53 +8116,16 @@ if (libDb) {
           WHERE e.zx >= ?::float8
           ORDER BY e.zx DESC
           LIMIT ?::int`,
-        [...spineParams(days, t, maxGap, win), minBase, win, minZ, limit]);
+        [...spineParams(days, t, maxGap, win), minBase, win, effMinZ, limit]);
 
-      const coverage = await gexCoverage(days, t);
-
-      const BANDS = { 1: '<1× normal', 2: '1–1.5×', 3: '1.5–2×', 4: '2–3×', 5: '3–5×', 6: '≥5×' };
-      const bandOf = (zx) => (zx >= 5 ? 6 : zx >= 3 ? 5 : zx >= 2 ? 4 : zx >= 1.5 ? 3 : zx >= 1 ? 2 : 1);
-
-      const totN = oddsRows.reduce((s, r) => s + num(r.n), 0);
-      const totHit = oddsRows.reduce((s, r) => s + num(r.hit1), 0);
-      const baseRate = pct(totHit, totN);
-      const nDates = Math.max(...oddsRows.map((r) => num(r.days_seen)), 1);
-      const years = Math.max(nDates / 252, 1 / 252);
-
-      const byBand = new Map();
-      const odds = [{
-        band: 'ALL (baseline)', 'ticker-days': totN, 'hit % 1d': baseRate,
-        'hit % 3d': pct(oddsRows.reduce((s, r) => s + num(r.hit3), 0), oddsRows.reduce((s, r) => s + num(r.n3), 0)),
-        lift: 1, 'per yr': round(totN / years, 0),
-        'avg |σ|': totN ? round(oddsRows.reduce((s, r) => s + num(r.avg1) * num(r.n), 0) / totN, 2) : null,
-      }];
-      for (const r of oddsRows) {
-        const n = num(r.n), h1 = pct(num(r.hit1), n);
-        const row = {
-          band: BANDS[num(r.b)] || String(r.b), 'ticker-days': n,
-          'hit % 1d': h1, 'hit % 3d': pct(num(r.hit3), num(r.n3)),
-          lift: baseRate ? round(h1 / baseRate, 2) : null,
-          'per yr': round(n / years, 0),
-          'avg |σ|': round(num(r.avg1), 2),
-        };
-        byBand.set(num(r.b), { hit: h1, lift: row.lift, n });
-        if (n >= minBucketN) odds.push(row);
-      }
-
-      // The rule worth watching: cheapest band that clears 1.3× on a real n.
-      const ladder = [2, 3, 4, 5, 6];
-      const winner = ladder.find((b) => {
-        const x = byBand.get(b);
-        return x && x.n >= minBucketN && num(x.lift) >= 1.3;
-      });
 
       const watchlist = boardRows.map((r) => {
         const zx = num(r.zx), spot = num(r.spot), strike = num(r.strike), dNet = num(r.d_net);
-        const b = bandOf(zx), stat = byBand.get(b);
+        const b = bandOf(zx), stat = statFor(b);
         return {
           symbol: r.symbol, strike: round(strike, 2),
           '×normal': round(zx, 1),
-          band: BANDS[b],
+          band: b,
           'hist hit %': stat && stat.n >= minBucketN ? stat.hit : null,
           lift: stat && stat.n >= minBucketN ? stat.lift : null,
           'Δ $M': round(dNet / 1e6, 2),
@@ -8078,10 +8155,11 @@ if (libDb) {
       // tables underneath it are there to justify the sentence, not to be read
       // first. Keep it one line per row: it is meant to be skimmed, and a feed
       // you have to decode is a table with extra steps.
-      const WORDS = { 6: 'far above normal', 5: 'way above normal', 4: 'well above normal',
-                      3: 'above normal', 2: 'a bit above normal', 1: 'normal' };
+      const WORDS = (zx) => (zx >= 5 ? 'far above normal' : zx >= 3 ? 'way above normal'
+        : zx >= 2 ? 'well above normal' : zx >= 1.5 ? 'above normal'
+        : zx >= 1 ? 'a bit above normal' : 'normal');
       const feed = watchlist.map((r) => {
-        const zx = num(r['×normal']), b = bandOf(zx), stat = byBand.get(b);
+        const zx = num(r['×normal']), b = bandOf(zx), stat = statFor(b);
         const grew = r['Δ %'] === '-'
           ? `GEX moved ${r['Δ $M'] >= 0 ? '+' : ''}$${r['Δ $M']}M (no %, base was under the floor)`
           : `GEX grew ${num(r['Δ %']) >= 0 ? '+' : ''}${r['Δ %']}%`;
@@ -8090,16 +8168,16 @@ if (libDb) {
           : ` History: not enough past events at this level to quote odds.`;
         const age = num(r['stale (d)']) > 3 ? ` ⚠ ${r['stale (d)']}d stale.` : '';
         return {
-          alert: `${r.symbol} ${r.strike} strike — ${grew}, ${WORDS[b]} (${r['×normal']}× typical). `
+          alert: `${r.symbol} ${r.strike} strike — ${grew}, ${WORDS(zx)} (${r['×normal']}× typical). `
             + `$${r['from $M']}M → $${r['now $M']}M, ${r['vs spot']} vs spot, ${r.side.split('/')[0]} side.`
             + `${hist}${age}`,
         };
       });
 
       const stale = watchlist.length ? Math.max(...watchlist.map((r) => r['stale (d)'])) : 0;
-      const rule = winner
-        ? `RULE THAT EARNED ITS KEEP: ${BANDS[winner]} → ${byBand.get(winner).hit}% of ticker-days saw a ≥${hit}σ next-session move vs a ${baseRate}% baseline (${byBand.get(winner).lift}×), firing ~${round(byBand.get(winner).n / years, 0)} ticker-days/yr.`
-        : `NO BAND EARNED A RULE — nothing cleared 1.3× lift on n≥${minBucketN}. The watchlist below is still "what grew most today", but history does not say it means anything yet. Check coverage before concluding the effect is absent rather than the sample thin.`;
+      const rule = best
+        ? `"HIGHER THAN NORMAL" = ≥${best['≥ ×normal']}× — EARNED, not chosen: over ${nDates} sessions, ticker-days at or above it saw a ≥${hit}σ next-session move ${best['hit % 1d']}% of the time vs a ${baseRate}% baseline (${best.lift}×, worst-case ${best['lift (low)']}× at 95% confidence), firing ~${best['per yr']}/yr on n=${best['ticker-days']}. Chosen on the confidence LOWER bound, so a tail cutoff cannot win on a lucky handful of events. ${monoNote}`
+        : `NO CUTOFF EARNED A RULE — no level of GEX change cleared 1.3× lift on n≥${minBucketN}, so history does not yet say extreme changes are followed by price. ${monoNote} The scan below still runs (at ${effMinZ}×) and shows what grew most, but treat it as unproven. Check coverage before concluding the effect is absent rather than the sample thin.`;
 
       // LANE 2 runs off a different table with a different baseline and no odds.
       // It is merged here so one call serves the whole feed, but the two lanes
@@ -8109,15 +8187,16 @@ if (libDb) {
 
       // Key order drives section order in the owner Panel — feed first, on purpose.
       return {
-        feed, feed_live: lane2.feed_live, by_symbol, odds, coverage,
+        feed, feed_live: lane2.feed_live, by_symbol, calibration, odds, coverage,
         live: lane2.live, detail: watchlist,
         live_note: lane2.live_note,
-        note: `${thinWarning(totN, [], minBucketN)} Scanned ${t || 'all tickers'} · ${totN} ticker-days of history over ${nDates} sessions · baseline ${baseRate}% of ticker-days see a ≥${hit}σ next-session move. `
+        note: `${thinWarning(N, [], minBucketN)} Scanned ${t || 'all tickers'} · ${N} ticker-days of history over ${nDates} sessions · baseline ${baseRate}% of ticker-days see a ≥${hit}σ next-session move. `
           + `${rule} `
+          + `Cutoff in use: ≥${effMinZ}× (${autoPicked ? 'AUTO — set by the sweep above' : 'manual override; pass minZ=0 to let the backtest choose'}). `
           + (watchlist.length
-            ? `TODAY: ${tickersOnWatch.size} ticker(s), ${watchlist.length} strike(s) at ≥${minZ}× normal. Read FEED — one line per alert; the tables under it justify those lines. `
-              + `⚠ Not live: eod_strike_gex is written once daily after the close; stalest row here is ${stale}d old. `
-            : `TODAY: NOTHING ON WATCH — no strike on any symbol's latest recorded session grew ≥${minZ}× its ticker's normal. That is a real answer, not a failure; most days are quiet. Lower minZ to see the near-misses, and check coverage if it stays empty for days (a stalled recorder looks exactly like a quiet market here). `)
+            ? `TODAY: ${tickersOnWatch.size} ticker(s), ${watchlist.length} strike(s) at ≥${effMinZ}× normal. Read FEED — one line per alert; the tables under it justify those lines. Stalest row is ${stale}d old. `
+            : `TODAY: NOTHING ON WATCH — no strike on any symbol's latest recorded session grew ≥${effMinZ}× its ticker's normal. That is a real answer, not a failure; most days are quiet at an earned cutoff. Pass a lower minZ to see the near-misses. `)
+          + `⚠ Not live: eod_strike_gex is written once daily after the close — check coverage if the feed stays empty for days, because a stalled recorder looks exactly like a quiet market from here. `
           + `"×normal" is |Δ| ÷ the trailing average of that ticker's OWN biggest daily strike move, so 1.0 is an ordinary day's hottest strike and 3× is three times that. Mid-caps and SPX land on one scale. Odds are per TICKER-day (hottest strike), not per strike.`
           + `\n\n— LANE 2 · BUILDING NOW (different table, different baseline, NO odds) — ${lane2.live_note}`,
       };
@@ -8372,7 +8451,7 @@ if (libDb) {
           else if (test === 'strike-gex-premove') body = await strikeGexPremove(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1.5), n('lead', 3), n('minBase', 1e6), n('maxGap', 5), n('minBucketN', 20));
           else if (test === 'strike-gex-threshold') body = await strikeGexThreshold(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minBase', 1e6), n('maxGap', 5), n('minBucketN', 20));
           else if (test === 'strike-gex-timeline') body = await strikeGexTimeline(n('days', 60), n('win', 20), q.get('ticker') || 'SPX', n('strike', 0), n('topN', 3), n('minBase', 1e6), n('maxGap', 5));
-          else if (test === 'strike-gex-watch') body = await strikeGexWatch(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minZ', 1.5), n('minBase', 1e6), n('maxGap', 5), n('limit', 60), n('minBucketN', 20), n('liveDays', 5), n('minSess', 2));
+          else if (test === 'strike-gex-watch') body = await strikeGexWatch(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minZ', 0), n('minBase', 1e6), n('maxGap', 5), n('limit', 60), n('minBucketN', 20), n('liveDays', 5), n('minSess', 2));
           else if (test === 'strike-gex-move') body = await strikeGexMove(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minStrikes', 20), n('maxGap', 5), n('minBucketN', 20));
           else if (test === 'strike-gex-move-intraday') body = await strikeGexMoveIntraday(n('days', 3), n('slotMin', 10), n('look', 3), n('fwd', 3), n('win', 12), q.get('ticker') ?? 'SPX', n('hitSigma', 1), n('minStrikes', 4), n('minBucketN', 10));
           else { send(res, 400, { error: 'unknown test' }); return; }
