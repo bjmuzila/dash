@@ -8459,7 +8459,21 @@ if (libDb) {
       async handler(req, res, ctx) {
         const q = new URL(req.url || '/', 'http://localhost').searchParams;
         const test = q.get('test');
-        const n = (k, d) => { const v = Number(q.get(k)); return Number.isFinite(v) ? v : d; };
+        // `Number(null)` is 0, and 0 is finite — so the original
+        // `Number.isFinite(Number(q.get(k))) ? … : d` NEVER reached its default
+        // for an absent param, it returned 0. Harmless while every test's params
+        // were all panel fields; catastrophic once handlers grew knobs the UI
+        // does not send. `maxGap` defaulted to 0, making `(date - LAG(date)) <= 0`
+        // impossible for consecutive sessions, so every return was NULL, sigma
+        // was NULL, and strike-gex-watch returned 0 ticker-days on a full table.
+        // `minBucketN` defaulted to 0, which also silenced the "sample too small"
+        // warning that would have flagged it.
+        const n = (k, d) => {
+          const raw = q.get(k);
+          if (raw === null || raw === '') return d;
+          const v = Number(raw);
+          return Number.isFinite(v) ? v : d;
+        };
         try {
           let body;
           if (test === 'cb-size') body = await cbSize(n('tol', 10));
