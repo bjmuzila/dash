@@ -10,9 +10,10 @@ import { HOME_THEME as HT } from "@/components/shared/homeTheme";
  * shows up in both places.
  *
  * Resolution order:
- *   1. /logos/<SYM>.png — mirrored, same-origin, immutably cached
+ *   1. /logos/<SYM>.png?v=LOGO_REV — mirrored, same-origin, immutably cached
  *      (scripts/fetch-ticker-logos.mjs writes these; next.config.js sets the
- *      Cache-Control). Preferred because the resolver below costs TWO round
+ *      Cache-Control). The ?v is load-bearing — see LOGO_REV below. Preferred
+ *      because the resolver below costs TWO round
  *      trips per chip: /proxy/ticker-logo does a PG lookup + a HEAD to GitHub +
  *      up to two Wikidata calls before 302-ing the browser to a third-party
  *      host it has no warm connection to. That was ~2.4s of tail on the home
@@ -21,8 +22,27 @@ import { HOME_THEME as HT } from "@/components/shared/homeTheme";
  *   3. Ticker-text chip — nothing resolved.
  */
 
+/**
+ * Mirror revision. BUMP THIS whenever files are added to public/logos.
+ *
+ * Why a version query is not optional here: next.config.js serves /logos/:path*
+ * with `Cache-Control: immutable, max-age=1y`, and Next applies those headers to
+ * the PATH — it has no idea whether the file exists. So every request for a
+ * ticker we had not mirrored yet came back as a 404 marked immutable, and the
+ * browser then refused to ask again for a YEAR. Adding the PNG later changed
+ * nothing: the tab kept drawing the ticker-text chip out of a cached 404. That
+ * is exactly what happened to the 19 logos added 2026-08-23 — they were on disk
+ * and still invisible.
+ *
+ * The query makes each mirror generation a distinct URL, so a stale 404 for
+ * `?v=1` can never answer a request for `?v=2`. next.config.js only marks the
+ * VERSIONED form immutable now, so this is belt and braces — but the belt is
+ * what fixes the browsers that already hold the bad entry.
+ */
+export const LOGO_REV = 2;
+
 function localLogoUrl(sym: string) {
-  return `/logos/${encodeURIComponent(sym.toUpperCase())}.png`;
+  return `/logos/${encodeURIComponent(sym.toUpperCase())}.png?v=${LOGO_REV}`;
 }
 
 function proxyLogoUrl(sym: string, name?: string) {

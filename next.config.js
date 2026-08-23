@@ -77,7 +77,24 @@ const nextConfig = {
       // Mirrored company logos (scripts/fetch-ticker-logos.mjs). Content keyed by
       // ticker; a logo change is a redeploy, and the earnings chips fall back to
       // /proxy/ticker-logo on 404 anyway.
-      { source: '/logos/:path*', headers: IMMUTABLE },
+      //
+      // ONLY THE VERSIONED FORM IS IMMUTABLE, and that split is a bug fix, not a
+      // refinement. These headers are matched on the PATH — Next does not know
+      // whether the file exists — so `/logos/CRWD.png` returned a 404 stamped
+      // `immutable, max-age=1y` for every ticker not yet mirrored, and the
+      // browser then refused to re-ask for a year. Adding the PNG later changed
+      // nothing on screen: the chip kept rendering from a cached 404. Nineteen
+      // logos added 2026-08-23 were on disk and still invisible for that reason.
+      //
+      // ChipLogo appends `?v=LOGO_REV` (components/shared/ChipLogo.tsx), so a hit
+      // is versioned and cacheable forever, while anything unversioned — an old
+      // bundle, a hand-typed URL — gets five minutes and a chance to recover.
+      { source: '/logos/:path*', has: [{ type: 'query', key: 'v' }], headers: IMMUTABLE },
+      {
+        source: '/logos/:path*',
+        missing: [{ type: 'query', key: 'v' }],
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=300' }],
+      },
     ];
   },
   // Back-compat for the pages that moved out of app/ into components/pages/

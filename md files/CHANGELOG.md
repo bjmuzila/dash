@@ -1,5 +1,88 @@
 # Changelog
 
+## 2026-08-23 - Strike-GEX ↔ move: rebuilt move-first, plus 4 fixes a live run exposed
+
+Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.
+Supersedes the earlier entry today — the build-anchored engine described there
+still exists, but it is now panel 3 of six rather than the whole feature.
+
+### Why it was rebuilt
+
+The original brief was "when a ticker makes a significant move, is there a GEX
+level that grows significant" — that starts from the MOVE and looks back. What
+shipped this morning started from the BUILD and looked forward, and reported
+pooled z-score buckets. Statistically the stronger framing; operationally
+useless, because it hands you a bucket table instead of a number to watch.
+
+Six tests on `/api/backtests` now, and the page explains the reading order:
+
+| test | direction | answers |
+|---|---|---|
+| `strike-gex-premove` | move → back | "when it moved, had a strike grown first?" |
+| `strike-gex-threshold` | — | "at what % growth do the odds actually change?" |
+| `strike-gex-move` | build → forward | "how often does a big build lead nowhere?" |
+| `strike-gex-timeline` | — | the raw per-strike series for one ticker |
+| `strike-gex-hot` | — | latest session ranked by % growth, banded |
+| `strike-gex-move-intraday` | build → forward | the 1-minute version (see retention) |
+
+`strike-gex-premove` ALWAYS returns move days and quiet days side by side, and
+that is not decoration: "9 of 12 moves had a strike grow >100% first" is worth
+nothing if 200 quiet days did too. Do not drop the quiet row to shorten the table.
+
+`strike-gex-threshold` is the one that produces an actionable number. It buckets
+on RAW % growth (not z) and reports `lift` next to `per yr`, because a 3× lift
+that fires twice a year is a curiosity and a 1.5× that fires weekly is a tool.
+It names the winning band in the note, or says no band earned one.
+
+### Percent is now usable, via a denominator floor
+
+The z-score engine ranks on dollars because `net_gex` is signed and crosses zero,
+making an unguarded percent unbounded. The new tests DO rank on percent — it is
+the watchable number — and buy that back with `minBase` (default $1M): a strike
+gets a Δ% only if it had real gamma to start with. Below the floor Δ% is NULL,
+not Infinity. Do not lower it to "get more rows"; you get garbage rows.
+
+### FOUR FIXES, all found by one live SPX run
+
+That run returned 4 symbol-sessions with `avg |σ| 3d = 90.54` and `5d = 173.13`
+— impossible numbers — and a "strong (2–3)" bucket of n=1 rendered as
+"100% big move, lift 2×".
+
+1. **Session spot is a median, not `MAX(spot)`.** Every strike row of a session
+   carries the same spot, so one corrupt row used to become the whole session's
+   price, and the returns around it blew up to tens of sigma. Regression test
+   injects a 12× bad spot row: worst |σ| went from 90–173 to 4.1.
+2. **Forward moves are calendar-gap guarded (`maxGap`, default 5 days).** Row
+   order is not time. With holes in the table, "the next session on file" can be
+   three weeks later, and that is not a next-session move. Regression test adds a
+   sparse symbol with 6 sessions 30 days apart: it now yields ZERO events instead
+   of fabricated ones, while still appearing in coverage.
+3. **Buckets under `minBucketN` (20) are suppressed, and named in the note.**
+   n=1 at "100%, lift 2×" reads exactly like a finding. It is a coin landing heads.
+4. **Every test returns a `coverage` table** — the 20 THINNEST symbols for the
+   filter, with `days stale`. Sorted thinnest-first so the symbol that invalidates
+   the study is row 1, not buried in 169 rows. Thin samples now say
+   "⚠ SAMPLE TOO SMALL TO READ" instead of producing a plausible-looking study.
+
+### On that live run
+
+SPX came back with 4 usable sessions out of 180 days. The symbol string is right
+(`EOD_STRIKE_GEX_FLOW_SYMBOLS` defaults to `SPX,SPY,QQQ`), so this is a
+data-collection question, not a query one — run any panel with a blank ticker and
+read the coverage table to see whether it is SPX-specific or the table is thin
+across the board.
+
+### Verified
+
+33 assertions against a local Postgres fixture with a planted signal, a sparse
+symbol, and a corrupt spot row. All green. Highlights: the planted signal is
+recovered (>400% band at 2.28× baseline; extreme z-bucket 60% vs 29%), baseline
+`up %` lands at exactly 50 (no lookahead), every rendered bucket clears n≥20, the
+sparse symbol contributes 0 events, and the corrupt row no longer poisons the
+series. `node --check` clean; esbuild parse clean on Backtests.tsx with no
+orphaned imports; every panel's `test=` string has a matching handler.
+
+
 ## 2026-08-23 - Strike-GEX growth → move backtest (daily + intraday)
 
 Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`,

@@ -180,83 +180,217 @@ export default function Backtests() {
         }
       />
 
+      <Card variant="budget" accent={LIGHT_BLUE} title="Strike GEX → move — how the four panels fit together" subtitle="Read them in this order. Each one answers a different question, and any one alone will mislead you.">
+        <ol style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.7, margin: 0, paddingLeft: 20 }}>
+          <li><strong style={{ color: LIGHT_BLUE }}>Pre-move</strong> — “when it moved, had a strike grown first?” Starts from the moves and looks backward. Its two summary rows are move days vs quiet days: if they look alike, stop here, there is nothing to find.</li>
+          <li><strong style={{ color: LIGHT_BLUE }}>Trigger threshold</strong> — “at what % growth do the odds actually change?” Turns the effect into one watchable number, with the events-per-year it fires at.</li>
+          <li><strong style={{ color: LIGHT_BLUE }}>False alarms</strong> — “how often does a big build lead nowhere?” Starts from the builds and looks forward. This is the half that keeps panel 1 honest.</li>
+          <li><strong style={{ color: LIGHT_BLUE }}>Timeline / Board</strong> — the raw per-strike series for one ticker, and the latest session ranked by growth, once you know what number you are watching for.</li>
+        </ol>
+        <p style={{ fontSize: 13.5, color: HOME_THEME.muted, lineHeight: 1.6, margin: "12px 0 0" }}>
+          Every panel returns a <strong>coverage</strong> table first — the 20 thinnest symbols in{" "}
+          <code>eod_strike_gex</code> for your filter. Check it before reading anything else. A symbol with a
+          handful of sessions on file, or big holes between them, cannot produce a study, and the panels will
+          say <em>SAMPLE TOO SMALL TO READ</em> rather than dress up four data points as a finding.
+        </p>
+      </Card>
+
       <Panel
-        title="Strike GEX growth → move (daily)" test="strike-gex-move"
-        subtitle="Does the day's biggest per-strike GEX build precede a move? 400 sessions of eod_strike_gex, vol-normalized."
+        title="1 · Pre-move — did a strike grow before the move?" test="strike-gex-premove"
+        subtitle="Move-anchored: starts from every significant move and looks back for the strike that grew most."
         fields={[
-          { key: "days", label: "lookback (days)", type: "number", def: 180 },
-          { key: "win", label: "trailing win", type: "number", def: 20 },
-          { key: "hitSigma", label: "big move (σ)", type: "number", def: 1 },
           { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
+          { key: "days", label: "lookback (days)", type: "number", def: 180 },
+          { key: "hitSigma", label: "move size (σ)", type: "number", def: 1.5 },
+          { key: "lead", label: "look back (sessions)", type: "number", def: 3 },
         ]}
         help={
           <>
-            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>How to read this</div>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>The two summary rows are the whole answer</div>
             <p style={{ margin: "0 0 8px" }}>
-              For every symbol-session it finds the single strike whose net GEX changed most vs the
-              prior session, scores that change against the symbol's own recent history, and looks at
-              what price did over the next 1 / 3 / 5 sessions.
+              For every session it finds the biggest %-grower among the strikes over the previous few sessions.
+              Then it splits those sessions into ones that <strong>moved</strong> and ones that <strong>didn't</strong>,
+              and shows the same statistics for both.
             </p>
-            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>z</strong> — how unusual the build was for that ticker: (biggest |Δ$ gamma| − its trailing mean) ÷ trailing stdev. This is what everything ranks on, <em>not</em> percent change. Net GEX is a signed sum that crosses zero, so a % off a near-flat strike is unbounded noise — −2M → +1M would read as “−150%”.</p>
-            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>Δ %</strong> — the raw percent change you asked for, kept on every event row in the detail table. Read it per-event, never as a ranking.</p>
-            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>σ</strong> — every move is divided by that ticker's own trailing return stdev, so a 2% day in a $30 name and a 2% day in SPX are comparable and the buckets can pool the whole roster.</p>
-            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>buckets</strong> — the answer lives here. Compare each z-bucket's “big move %” to the <strong>ALL (baseline)</strong> row. If extreme builds don't beat baseline, there is no edge at this horizon and no amount of staring at the detail table will create one.</p>
-            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>conc %</strong> — the top strike's share of the day's total |Δ|. High means one strike carried it; low means the whole ladder shifted and the “top strike” is arbitrary.</p>
-            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>lift</strong> (by ticker) — strong-build big-move % ÷ that ticker's own baseline. Above 1 means the signal adds something for that name. Tickers with fewer than 5 strong events are hidden.</p>
-            <p style={{ margin: "0 0 6px", color: HOME_THEME.text }}>
-              Every scoring window is strictly trailing and excludes the event bar, so nothing leaks the
-              outcome into the score. A quick audit: the baseline <strong>up %</strong> should sit near 50 —
-              if it drifts far off, something has gone wrong with the forward join.
+            <p style={{ margin: "0 0 8px", color: HOME_THEME.text }}>
+              <strong style={{ color: SOFT_RED }}>Compare the rows, never read one alone.</strong> “9 of 12 moves had
+              a strike grow over 100% first” sounds like a finding and is worth nothing — if 200 quiet days also had
+              one, the build tells you nothing about tomorrow. That is exactly why the quiet row is there.
+            </p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>med / p75 |Δ%|</strong> — how much the top strike grew, in percent. This is the number you'd watch live.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>≥50 / ≥100 / ≥200% grew</strong> — share of days in that group where the build cleared each bar. If “≥100% grew” is 60% on move days and 55% on quiet days, that's noise, not an edge.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>med lead</strong> — how many sessions before the move the build landed. <strong>lead_profile</strong> breaks that out session by session, so you can see whether the signal is same-day-ish or has real warning time.</p>
+            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>above spot %</strong> — where the growing strike sat. Heavily above-spot on down moves would be an interesting asymmetry; near 50/50 means direction isn't in the signal.</p>
+            <p style={{ margin: "0 0 6px" }}>
+              <strong>move size (σ)</strong> is in multiples of that ticker's own normal day, so a 2% day in a small
+              cap and a 2% day in SPX aren't treated as the same event. 1.5σ is roughly a “that was a real move” day.
             </p>
             <p style={{ margin: "6px 0 0" }}>
-              Sign convention: Δ&gt;0 = call / positive gamma added, Δ&lt;0 = put / negative gamma added.
-              The <code>call_gex</code>/<code>put_gex</code> legs only exist after 2026-08-18 and were never
-              backfilled, so this reads net GEX and infers the side from the sign — which works on every
-              row in the table.
+              No lookahead: a strike's Δ on session <em>i−1</em> is known at that close, and the move is measured on
+              session <em>i</em>. The window is strictly before the move.
             </p>
           </>
         }
       />
 
       <Panel
-        title="Strike GEX growth → move (intraday)" test="strike-gex-move-intraday"
-        subtitle="Same engine on 1-minute strike_growth: build over the last N minutes vs the move over the next N."
+        title="2 · Trigger threshold — what % growth actually matters?" test="strike-gex-threshold"
+        subtitle="Buckets sessions by the raw % growth of the top strike and reports where the odds shift."
+        fields={[
+          { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
+          { key: "days", label: "lookback (days)", type: "number", def: 180 },
+          { key: "hitSigma", label: "big move (σ)", type: "number", def: 1 },
+          { key: "minBase", label: "min base $", type: "number", def: 1000000 },
+        ]}
+        help={
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>This is the panel that gives you a number</div>
+            <p style={{ margin: "0 0 8px" }}>
+              Walk the <strong>thresholds</strong> table from the top. Each row is a band of % growth; the question is
+              where <strong>lift</strong> first climbs meaningfully above 1 <em>and stays there</em> on decent n. The
+              note names that band outright as the TRIGGER, or says no band earned one.
+            </p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>lift</strong> — that band's big-move rate ÷ the ALL baseline. 1.0 is “no different from any random day.” Below 1.3 isn't worth acting on.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>per yr</strong> — how often the band fires. <strong>Read this next to lift, always.</strong> A 3× lift that triggers twice a year is a curiosity; a 1.5× lift that fires weekly is a tool.</p>
+            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>min base $</strong> — a strike only gets a % at all if it already held this much gamma. This is what makes percent usable: without a floor, a strike going from $12K to $900K is a “+7,400%” that means nothing. Lower it and you'll get more rows and worse ones.</p>
+            <p style={{ margin: "0 0 6px" }}>
+              <strong>by_side</strong> splits the ≥100% builds by call/put and above/below spot. If one side carries all
+              the lift, that's a sharper rule than the pooled number — and if they're all the same, the side doesn't matter.
+            </p>
+            <p style={{ margin: "6px 0 0", color: HOME_THEME.text }}>
+              A band with too few events is suppressed rather than shown, and the note lists what got dropped. A single
+              event reading “100%, lift 2×” is a coin landing heads, and it looks exactly like a discovery.
+            </p>
+          </>
+        }
+      />
+
+      <Panel
+        title="3 · False alarms — how often does a big build lead nowhere?" test="strike-gex-move"
+        subtitle="Build-anchored: starts from the biggest dollar-gamma builds and looks forward 1 / 3 / 5 sessions."
+        fields={[
+          { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
+          { key: "days", label: "lookback (days)", type: "number", def: 180 },
+          { key: "win", label: "trailing win", type: "number", def: 20 },
+          { key: "hitSigma", label: "big move (σ)", type: "number", def: 1 },
+        ]}
+        help={
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>The other direction, on purpose</div>
+            <p style={{ margin: "0 0 8px" }}>
+              Panel 1 asks “when it moved, had something built?” This asks the reverse: “when something built, did it
+              move?” You need both. A signal that appears before every move but also before every quiet day is not a signal.
+            </p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>z</strong> — this panel ranks on <em>dollars</em>, not percent: (the day's biggest |Δ$ gamma| − that ticker's trailing mean) ÷ its trailing stdev. Dollar builds and percent builds are different animals — a huge percent move on a small strike is not a huge dollar build — and it's worth seeing whether both point the same way.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>buckets</strong> — compare each z band's “big move %” to the ALL row. If the extreme band doesn't beat baseline, there's no edge at this horizon.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>conc %</strong> (detail) — the top strike's share of the day's total |Δ|. High means one strike carried it; low means the whole ladder shifted and “top strike” is arbitrary.</p>
+            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>lift</strong> (by ticker) — which names respond and which don't. Tickers without enough strong events are hidden rather than shown at n=2.</p>
+            <p style={{ margin: "6px 0 0", color: HOME_THEME.text }}>
+              Audit check you can run on any result: the baseline <strong>up %</strong> should sit near 50. Markets rise
+              about half the time; if it comes back at 70 or 30, the forward join is broken and nothing else on the page
+              can be trusted.
+            </p>
+          </>
+        }
+      />
+
+      <Panel
+        title="4 · Per-strike timeline — the raw series" test="strike-gex-timeline"
+        subtitle="One ticker, day by day: what each strike held, what it changed by in $ and %, where price was, and how big that day's move was."
+        fields={[
+          { key: "ticker", label: "ticker", type: "text", def: "SPX" },
+          { key: "days", label: "lookback (days)", type: "number", def: 60 },
+          { key: "strike", label: "strike (0 = auto)", type: "number", def: 0 },
+          { key: "topN", label: "auto strikes", type: "number", def: 3 },
+        ]}
+        help={
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>What to look at</div>
+            <p style={{ margin: "0 0 8px" }}>
+              The <strong>strikes</strong> table ranks that ticker's strikes by how much they actually moved over the
+              window — pick one from it and put its number in the <strong>strike</strong> field to pin the series to it.
+              Leave it at 0 and the most active few are chosen for you.
+            </p>
+            <p style={{ margin: "0 0 8px" }}>
+              The series itself is under <strong>Per-day detail</strong>. Read the <strong>Δ %</strong> column against
+              the <strong>move σ</strong> column beside it: that's the whole question in raw form — did the growth show
+              up before the big σ day, or on it, or after?
+            </p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>Δ %</strong> is blank when the strike held under the base floor the prior session. A percent off nothing is not a percent, so it's shown as nothing rather than as a giant number.</p>
+            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>move σ</strong> is that session's own move in the ticker's normal-day units, so ±1 is an ordinary day and ±2 is a notable one.</p>
+            <p style={{ margin: "6px 0 0" }}>
+              This panel is per-ticker by design — a pooled timeline would be meaningless. Use it to sanity-check what
+              the other three panels claim: if the threshold panel says +150% is the trigger, come here and look at
+              what a few of those days actually looked like before you believe it.
+            </p>
+          </>
+        }
+      />
+
+      <Panel
+        title="5 · Board — latest session ranked by growth" test="strike-gex-hot"
+        subtitle="The strikes that grew most on each symbol's last recorded session, banded against the trigger."
+        fields={[
+          { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
+          { key: "days", label: "lookback (days)", type: "number", def: 30 },
+          { key: "limit", label: "rows", type: "number", def: 40 },
+        ]}
+        help={
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>Not live — check the staleness first</div>
+            <p style={{ margin: "0 0 8px", color: HOME_THEME.text }}>
+              <code>eod_strike_gex</code> is written once a day after the close, so this is “as of the last recorded
+              session,” not now. The note gives the freshest and stalest symbol in days, and the coverage table's{" "}
+              <strong>days stale</strong> column gives it per symbol. For genuinely live intraday strike growth, the
+              data is <code>strike_growth</code> via <code>/proxy/strike-growth/*</code>.
+            </p>
+            <p style={{ margin: "0 0 8px" }}>
+              The <strong>band</strong> column is the % bucket each row falls in. Match it against whatever the
+              threshold panel named as the trigger — that's the intended workflow: panel 2 finds the number, this one
+              tells you who cleared it.
+            </p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>vs spot</strong> — how far the strike sits from price, as a percent. A 300% build 15% out of the money is a very different thing from the same build at the money.</p>
+            <p style={{ margin: "6px 0 0" }}>
+              <strong>from $M → now $M</strong> shows the base and the result, so you can see at a glance whether a big
+              percentage came off a real position or off a nearly-empty strike.
+            </p>
+          </>
+        }
+      />
+
+      <Panel
+        title="6 · Intraday (wiring check only)" test="strike-gex-move-intraday"
+        subtitle="The 1-minute version on strike_growth — the only one that can separate cause from effect, once it has history."
         fields={[
           { key: "ticker", label: "ticker", type: "text", def: "SPX" },
           { key: "days", label: "lookback (days)", type: "number", def: 3 },
           { key: "slotMin", label: "slot (min)", type: "number", def: 10 },
           { key: "look", label: "build (slots)", type: "number", def: 3 },
-          { key: "fwd", label: "forward (slots)", type: "number", def: 3 },
-          { key: "hitSigma", label: "big move (σ)", type: "number", def: 1 },
         ]}
         help={
           <>
             <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>Read the sample-size warning first</div>
             <p style={{ margin: "0 0 8px", color: HOME_THEME.text }}>
               <strong style={{ color: SOFT_RED }}>This is a wiring check, not a study.</strong>{" "}
-              <code>strike_growth</code> is on a 5-day retention sweep, so whatever this returns today is a
-              handful of sessions. It <em>cannot</em> be backfilled — that table is the only record of those
-              minutes. Raise <code>RETENTION_STRIKE_GROWTH_DAYS</code> on the VPS (no redeploy) and the sample
-              grows forward from that day at roughly 0.3GB of disk per extra session.
+              <code>strike_growth</code> is on a 5-day retention sweep, so it can only ever see a handful of sessions.
+              It <em>cannot</em> be backfilled — that table is the only record of those minutes. Raise{" "}
+              <code>RETENTION_STRIKE_GROWTH_DAYS</code> on the VPS (no redeploy) and the sample grows forward from that
+              day at roughly 0.3GB of disk per extra session.
             </p>
             <p style={{ margin: "0 0 8px" }}>
-              Everything else reads exactly like the daily panel above: z-scored build, moves in the session's
-              own σ, buckets compared against the ALL row. The difference is the clock — build is measured over
-              <strong> slot × build</strong> minutes and the move over <strong>slot × forward</strong> minutes,
-              both shown in the note. Times are ET.
-            </p>
-            <p style={{ margin: "0 0 6px" }}>
-              This is the version that can actually test causality, because a daily bar cannot tell you whether
-              the gamma stacked before or after the move. Give it weeks of retention before reading anything
-              into the buckets.
+              It matters because a <em>daily</em> bar genuinely cannot tell you whether the gamma stacked before the
+              move or because of it — both happen inside the same 24 hours. Only the minute data can. Give this weeks
+              of retention before reading anything into its buckets.
             </p>
             <p style={{ margin: "6px 0 0" }}>
-              Leave <strong>ticker</strong> blank to sweep the whole roster — expect it to be slow, the table
-              writes about 2M rows a session.
+              Build is measured over <strong>slot × build</strong> minutes and the move over the same span forward; both
+              are spelled out in the note. Times are ET. Blank the ticker to sweep the roster — expect it to be slow,
+              the table writes about 2M rows a session.
             </p>
           </>
         }
       />
+
     </PageShell>
   );
 }
