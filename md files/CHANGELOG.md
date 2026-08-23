@@ -1,5 +1,67 @@
 # Changelog
 
+## 2026-08-23 - Backtests page: six strike-GEX panels collapsed into one
+
+Edited: `owner-vite/src/pages/Backtests.tsx`, `server-v2/api-router.js`.
+
+The page had grown to six strike-GEX panels and a wall of always-visible prose.
+Three of the six were duplicates of work panel ① already did, and the docs — which
+you read once while calibrating and never again — were burying the numbers.
+
+### One panel: GEX Watch
+
+Panels ②–⑥ removed from the page. **Their handlers stay registered and callable**
+(`strike-gex-premove`, `-threshold`, `-move`, `-timeline`, `-move-intraday`) —
+this is a page-level removal, and re-adding any of them is ~20 lines. What went
+and why:
+
+- `strike-gex-threshold` — asked "at what growth do the odds shift" in % units;
+  ①'s `calibration` sweep asks it in ×normal units. Same question twice.
+- `strike-gex-move` — z-scored dollars vs forward move; ①'s `odds` table is the
+  same measurement. Same question twice.
+- `strike-gex-move-intraday` — has no data and will not until
+  `RETENTION_STRIKE_GROWTH_DAYS` is raised and weeks pass. Noise on the page.
+- `strike-gex-premove` and `-timeline` were NOT duplicates and were folded in
+  rather than dropped (below).
+
+### `withChecks` — the calibration panels, behind a checkbox
+
+Off by default, because each runs its own full-history query and making them
+automatic would double the cost of the one thing read every morning in service of
+two tables looked at once a month. Ticked, the response gains:
+
+- `premove_check` — the study run BACKWARDS (start from moves, look back),
+  printing move-days beside quiet-days. This is the honesty check and the reason
+  it is offered at all: **if those two rows look alike the earned cutoff is
+  describing noise**, however good its lift looks.
+- `timeline` — per-strike series, only when a ticker is set, since it is
+  per-ticker by design.
+
+### `primary` on the Panel component
+
+New optional prop naming the sections worth seeing without a click. Everything
+else the endpoint returns drops behind one "Calibration & diagnostics" toggle.
+GEX Watch shows `feed` and `by_symbol`; `calibration`, `odds`, `live`, `coverage`
+and the checks are one click away. Omitting the prop renders every section, so
+the four older panels are untouched.
+
+### Everything wordy is now collapsed by default
+
+`help` blocks, both intro cards, and the returned `note` — which now leads with
+its first sentence (on GEX Watch that is the earned cutoff, i.e. the answer) and
+hides the caveats behind "— more ▾". `details > summary::-webkit-details-marker`
+is suppressed so the ▸ glyph is the only marker.
+
+Page went from ~470 lines and 10 panels to 306 lines and 5.
+
+### Verified
+
+73 assertions, all green. New: `withChecks=false` adds no keys (the lean daily
+path), `withChecks=true` folds in a 2-row premove check, timeline appears only
+with a ticker, and `feed` stays the first key either way. esbuild parse clean,
+no orphaned imports, every remaining panel's `test=` resolves to a handler.
+
+
 ## 2026-08-23 - The backtest now SETS the watch cutoff (and refuses to overfit)
 
 Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.

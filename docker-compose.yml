@@ -280,3 +280,90 @@ services:
     ports:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8084:8084"
+
+  # The daily.cbedge.net backend — /api/daily/* in its own process
+  # (server-v2/daily-server.js), on its own port, in its own container.
+  #
+  # A THIRD backend, and the split is deliberate rather than lazy. household-api
+  # already exists to keep the private life-OS off the trading process; this one
+  # exists because daily.cbedge.net has something neither of the others does —
+  # PAYING STRANGERS. A public signup form is an open attack surface, a Stripe
+  # webhook has to answer in seconds or Stripe starts disabling the endpoint, and
+  # neither of those belongs anywhere near the process recording market data.
+  # It also means a bug here can never take the trading stack down, and the
+  # container a customer's browser can reach holds `pg` and nothing else.
+  #
+  # SAME DATABASE, like household: the Markets tab reads the `earnings_calendar`
+  # table the trading recorder maintains, and running a second Postgres to hold a
+  # copy of it would be pure work. Isolation here is the PROCESS and the SCHEMA —
+  # every daily_* table is tenant-scoped by household_id, and this binary has no
+  # code path into hh_* or into a cbedge.net session. See _lib-daily.cjs.
+  #
+  # ./state is mounted READ-ONLY so the economic calendar can read the cache file
+  # the dashboard already maintains instead of fetching the same upstream feed a
+  # second time. That feed rate-limited the VPS once already when two pollers sat
+  # in front of it uncached; see _lib-daily-markets.cjs. Read-only because this
+  # process must never be the one writing that file.
+  #
+  # Loopback-only and not fronted by the tunnel — the daily-web nginx reaches it
+  # over the compose network. The published port is for `curl` on the box when
+  # something looks wrong.
+  daily:
+    build:
+      context: .
+      dockerfile: deploy/daily/Dockerfile
+    image: cbedge-daily:latest
+    container_name: daily-api
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    environment:
+      NODE_ENV: production
+      TZ: America/New_York
+      # NOT `PORT` — .env.local sets that to the dashboard's 3002 and env_file is
+      # applied before this block. A separate name means the three backends can
+      # never collide by accident.
+      DAILY_PORT: 3011
+    volumes:
+      - ./state:/app/state:ro
+    ports:
+      - "127.0.0.1:3011:3011"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3011/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # daily.cbedge.net — the public life-OS SPA (daily-vite/Dockerfile: node build
+  # stage → nginx), reverse-proxying ONLY /api to the daily container (same
+  # compose network → daily-api:3011). Same narrow surface as budget: no /ws, no
+  # /proxy, so this app cannot reach the market-data stack at all.
+  #
+  # Reached only via the Cloudflare Tunnel — add to /etc/cloudflared/config.yml
+  # ABOVE the catch-all 404 rule:
+  #     - hostname: daily.cbedge.net
+  #       service: http://127.0.0.1:8086
+  # then `cloudflared tunnel route dns <tunnel> daily.cbedge.net` and
+  # `systemctl restart cloudflared`.
+  #
+  # STRIPE WEBHOOK: the endpoint is https://daily.cbedge.net/api/daily/stripe/webhook
+  # and it must be registered in the Stripe dashboard as its OWN endpoint with its
+  # OWN signing secret (DAILY_STRIPE_WEBHOOK_SECRET). Do not reuse the CB Edge
+  # trading webhook's secret — one endpoint per app is what lets either be
+  # rotated or disabled without taking the other's billing down with it.
+  #
+  # Auth is its own system (daily_users / dy_session). A cbedge.net session grants
+  # nothing here, a budget.cbedge.net hh_session grants nothing here, and a
+  # dy_session grants nothing anywhere else.
+  daily-web:
+    build:
+      context: ./daily-vite
+    image: daily-web:latest
+    container_name: daily-web
+    restart: unless-stopped
+    depends_on:
+      - daily
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8086:8086"

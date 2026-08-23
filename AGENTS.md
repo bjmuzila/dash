@@ -21,6 +21,50 @@ but nothing shows on the live site. Read the map below first.
 - One process serves all of it. `server.js` at the root is just a shim to
   `server-v2/server-with-proxy.js`.
 
+## The three OTHER apps on this box (separate SPAs, separate backends)
+
+These are not part of the trading dashboard and do not share its process. Each is
+its own Vite SPA behind its own nginx, talking to its own Node backend, on its own
+subdomain. They share a Postgres server and nothing else.
+
+| Subdomain | SPA | Backend | Container / port | Auth |
+|---|---|---|---|---|
+| budget.cbedge.net | `budget-vite/` | `server-v2/household-server.js` | household-api:3010 | `hh_session`, `hh_*` tables |
+| recipe.cbedge.net | `recipe-vite/` | same household backend | household-api:3010 | same login as budget |
+| daily.cbedge.net  | `daily-vite/`  | `server-v2/daily-server.js`    | daily-api:3011     | `dy_session`, `daily_*` tables |
+
+**budget and daily are the same product and NOT the same code.** budget is the
+private, owner-gated life-OS for two people. daily is the public, paid version of
+it with a landing page, Stripe checkout and members. It was COPIED across once and
+the two now evolve independently — deliberately, because a shared component
+library between them guarantees that a change meant for the private app
+eventually surprises a paying customer.
+
+So: **editing `budget-vite/` does nothing to daily.cbedge.net, and editing
+`daily-vite/` does nothing to budget.cbedge.net.** Work out which one the request
+is about before you touch a file. Same for the backends — `_lib-household*.cjs`
+and `household-routes.cjs` serve budget and recipe; `_lib-daily*.cjs` and
+`daily-routes.cjs` serve daily. There is no shared module and no code path from a
+session on one into the other's data.
+
+### Editing daily.cbedge.net
+
+- Pages: `daily-vite/src/pages/*.tsx`, routed in `daily-vite/src/App.tsx`.
+- Colours and type come from `daily-vite/src/theme.ts`. Never hardcode a hex.
+- The HTTP contract is `daily-vite/src/api.ts`. Change a route in
+  `server-v2/daily-routes.cjs` and change the client in the same commit.
+- **Tenancy is not optional.** Every `daily_*` content row carries
+  `household_id NOT NULL` and every query filters on it via `scoped(user)` from
+  `_lib-daily.cjs`. There is no visibility column. A query on a `daily_*` table
+  without `household_id` beside it is a bug that shows one customer another
+  customer's data — see the long header comment in `_lib-daily.cjs`.
+- Route auth levels are `public` / `user` / `member`. `member` means signed in
+  AND paying; every app-data route is `member`. `user` is for billing, settings
+  and account routes, so someone whose card failed can still fix it.
+- Setup that has to exist outside the repo — Stripe prices and webhook, the
+  Google redirect URI, `DAILY_TOKEN_KEY`, the tunnel entry — is in
+  `md files/DAILY-SETUP.md`.
+
 ## DEAD CODE — never edit (changes here do NOTHING on the live site)
 
 There was an original **vanilla HTML/JS prototype**, and a couple of abandoned

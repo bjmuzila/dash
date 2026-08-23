@@ -479,7 +479,10 @@ export default function EconomicCalendarPage() {
             <div style={{ display: "flex", gap: 14, marginTop: 2 }}>
               {ev.actual   && <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#22c55e", fontFamily: "var(--font-mono)" }}>A: <strong>{ev.actual}</strong></span>}
               {ev.forecast && <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#f59e0b", fontFamily: "var(--font-mono)" }}>F: {ev.forecast}</span>}
-              {ev.previous && <span style={{ fontSize: 12, color: faded ? "#1e2a38" : "#8a9ab8", fontFamily: "var(--font-mono)" }}>P: {ev.previous}</span>}
+              {/* White, not grey. A/F/P is already colour-coded green/amber and
+                  the grey "previous" was the one body value on either tab that
+                  read as disabled rather than as data. */}
+              {ev.previous && <span style={{ fontSize: 12, color: faded ? "#1e2a38" : HT.text, fontFamily: "var(--font-mono)" }}>P: {ev.previous}</span>}
             </div>
           )}
         </div>
@@ -610,36 +613,42 @@ export default function EconomicCalendarPage() {
           borderTop: `2px solid ${HT.cyan}`,
           background: BOARD.header,
         }}>
-          {/* Same-origin file in public/ — a real image the capture can draw,
-              unlike the 302'd ticker logos. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 24, width: "auto", display: "block" }} />
           <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
             <span style={{ fontSize: 13, fontWeight: 900, color: HT.text, letterSpacing: "0.14em" }}>
               EARNINGS THIS WEEK
             </span>
-            <span style={{ fontSize: 11, color: "#8a9ab8", fontFamily: "var(--font-mono)", letterSpacing: "0.04em" }}>
+            <span style={{ fontSize: 11, color: HT.text, fontFamily: "var(--font-mono)", letterSpacing: "0.04em" }}>
               {dayDate(first)} – {dayDate(last)}
             </span>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+            {/* PILL TEXT CENTERING. A <span> with vertical padding centers its
+                LINE BOX, not its glyphs — the font's ascent/descent metrics
+                decide where the text sits inside that box, and for this mono
+                stack they push it high, which is why the count read as sitting
+                above the middle of its own button. inline-flex + a 1 line-height
+                makes the glyph box the thing being centered. */}
             <span style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              lineHeight: 1, height: 22, boxSizing: "border-box",
               fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
               color: HT.cyan, background: `${HT.cyan}1A`, border: `1px solid ${HT.cyan}55`,
-              padding: "3px 9px", borderRadius: 999, letterSpacing: "0.06em",
+              padding: "0 10px", borderRadius: 999, letterSpacing: "0.06em",
             }}>
               {shown} NAMES
             </span>
             {mcapMin > 0 && (
               <span style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                lineHeight: 1, height: 22, boxSizing: "border-box",
                 fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono)",
-                color: "#8a9ab8", border: `1px solid ${HT.border}`,
-                padding: "3px 9px", borderRadius: 999,
+                color: HT.text, border: `1px solid ${BOARD.edge}`,
+                padding: "0 10px", borderRadius: 999,
               }}>
                 {mcapLabel}
               </span>
             )}
-            <span style={{ fontSize: 11, color: "#8a9ab8", fontFamily: "var(--font-mono)" }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: HT.text, fontFamily: "var(--font-mono)" }}>
               cbedge.net
             </span>
           </div>
@@ -661,6 +670,18 @@ export default function EconomicCalendarPage() {
               tbd={s.tbd}
             />
           ))}
+        </div>
+
+        {/* Signature. Bottom-right, under the grid rather than beside the title:
+            the header's left edge is the week's own label, and a mark there was
+            competing with it. Down here it reads as the source of the board,
+            which is what it is once the image is pasted somewhere else. Inside
+            earnRef, so the capture carries it. */}
+        <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 10 }}>
+          {/* Same-origin file in public/ — a real image the capture can draw,
+              unlike the 302'd ticker logos. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 26, width: "auto", display: "block" }} />
         </div>
       </div>
     );
@@ -937,7 +958,7 @@ function EarnChip({ row }: { row: EarnRow }) {
       {cap && (
         <span style={{
           width: "100%", textAlign: "center", lineHeight: 1,
-          fontSize: 9, color: "#8a9ab8", fontFamily: "var(--font-mono)",
+          fontSize: 9, color: HT.text, fontFamily: "var(--font-mono)",
         }}>
           {cap}
         </span>
@@ -960,7 +981,7 @@ function EarnSession({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
           {k.board}
         </span>
         <span style={{
-          marginLeft: "auto", fontSize: 9, color: "#8a9ab8",
+          marginLeft: "auto", fontSize: 9, color: HT.text, fontWeight: 700,
           fontFamily: "var(--font-mono)",
         }}>
           {rows.length}
@@ -989,33 +1010,45 @@ function EarnDayColumn({
       border: `1px solid ${isToday ? BOARD.edgeToday : BOARD.edge}`,
       background: isToday ? BOARD.cardToday : BOARD.card,
     }}>
-      {/* Day header. The date is WHITE on every day — the cyan weekday and the
-          TODAY pill already carry the emphasis, and the old #3a5570 made every
-          day that was not today read as a disabled row. */}
+      {/* Day header.
+
+          THREE-COLUMN GRID, not a flex row, because the date has to sit in the
+          MIDDLE of the strip. A flex row with the count pushed right by
+          margin-left:auto centres nothing — the date lands wherever the count's
+          width leaves it, so a column showing "11" put its date a few px left of
+          a column showing "1". The outer tracks are equal `1fr`, so the middle
+          track's centre is the strip's centre no matter what either side holds.
+
+          The date is WHITE on every day — the cyan weekday and the TODAY pill
+          already carry the emphasis, and the old #3a5570 made every day that was
+          not today read as a disabled row. */}
       <div style={{
-        display: "flex", alignItems: "baseline", gap: 7,
+        display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center",
         padding: "9px 10px 8px",
         background: isToday ? BOARD.headToday : BOARD.head,
       }}>
-        <span style={{
-          fontSize: 10, fontWeight: 900, color: HT.cyan,
-          letterSpacing: "0.14em", fontFamily: "var(--font-mono)",
-        }}>
-          {dayShort(date)}
-        </span>
-        <span style={{ fontSize: 13, fontWeight: 800, color: HT.text, letterSpacing: "0.04em" }}>
-          {dayDate(date)}
-        </span>
-        {isToday && (
+        <span />
+        <span style={{ display: "flex", alignItems: "baseline", gap: 7, justifyContent: "center" }}>
           <span style={{
-            fontSize: 9, fontWeight: 900, background: HT.cyan, color: "#05080d",
-            padding: "1px 5px", borderRadius: 3, letterSpacing: "0.1em",
+            fontSize: 10, fontWeight: 900, color: HT.cyan,
+            letterSpacing: "0.14em", fontFamily: "var(--font-mono)",
           }}>
-            TODAY
+            {dayShort(date)}
           </span>
-        )}
+          <span style={{ fontSize: 13, fontWeight: 800, color: HT.text, letterSpacing: "0.04em" }}>
+            {dayDate(date)}
+          </span>
+          {isToday && (
+            <span style={{
+              fontSize: 9, fontWeight: 900, background: HT.cyan, color: "#05080d",
+              padding: "1px 5px", borderRadius: 3, letterSpacing: "0.1em",
+            }}>
+              TODAY
+            </span>
+          )}
+        </span>
         <span style={{
-          marginLeft: "auto", fontSize: 10, color: "#8a9ab8",
+          justifySelf: "end", fontSize: 10, color: HT.text, fontWeight: 700,
           fontFamily: "var(--font-mono)",
         }}>
           {n}
@@ -1040,7 +1073,7 @@ type EarnKind = "pre" | "after" | "tbd";
 const EARN_KIND: Record<EarnKind, { top: string; sub: string; title: string; board: string; color: string }> = {
   pre:   { top: "PRE",   sub: "MARKET", title: "Premarket earnings",   board: "Premarket",    color: HT.cyan },
   after: { top: "AFTER", sub: "HOURS",  title: "After-hours earnings", board: "After hours",  color: HT.orange },
-  tbd:   { top: "TIME",  sub: "TBD",    title: "Time unconfirmed",     board: "Time unconfirmed", color: "#8a9ab8" },
+  tbd:   { top: "TIME",  sub: "TBD",    title: "Time unconfirmed",     board: "Time unconfirmed", color: HT.text },
 };
 
 function EarnRowBlock({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {

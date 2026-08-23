@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+    <!-- The private household app this grew out of carried `noindex, nofollow`,
+         because nobody was ever meant to find it. This one sells a subscription
+         from its own front page, so that tag is deliberately absent: the
+         marketing route at / is the whole point of being crawled. -->
+
+    <!-- #05060A — the app's own background. This paints the browser chrome and
+         the launch screen of the installed app; on the light default the app
+         flashes white on every cold start. -->
+    <meta name="theme-color" content="#05060A" />
+
+    <title>Daily</title>
+    <meta
+      name="description"
+      content="Daily is a paid life OS for two people: today, tasks, shared lists and meals, habits, projects, money — plus the CB Edge economic and earnings calendars, in the same app as the rest of your day."
+    />
+
+    <!-- Open Graph / Twitter. A link to daily.cbedge.net gets pasted into a
+         text message far more often than it gets typed, so the unfurl is a
+         first impression, not an afterthought. og.png is the one image asset
+         the deploy has to ship for these to render. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Daily" />
+    <meta property="og:title" content="Daily — your whole day on one screen" />
+    <meta
+      property="og:description"
+      content="Today, tasks, shared lists and meals, habits, projects, money, and the CB Edge market calendars. Two people, one household, one subscription."
+    />
+    <meta property="og:url" content="https://daily.cbedge.net/" />
+    <meta property="og:image" content="https://daily.cbedge.net/og.png" />
+    <meta property="og:image:alt" content="Daily — a dark, serif-typeset day view on a phone." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Daily — your whole day on one screen" />
+    <meta
+      name="twitter:description"
+      content="Today, tasks, shared lists and meals, habits, projects, money, and the CB Edge market calendars."
+    />
+    <meta name="twitter:image" content="https://daily.cbedge.net/og.png" />
+
+    <!-- No <link rel="canonical"> on purpose. This is a single HTML file served
+         for every route, so a static canonical would tell a crawler that
+         /pricing and /sign-in are both the homepage. -->
+
+    <!-- Installs to the home screen as a standalone app on iOS.
+         black-translucent, not default: the shell already pads with
+         env(safe-area-inset-top) and the viewport is viewport-fit=cover, so the
+         page runs under the status bar instead of leaving a white band. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Daily" />
+
+    <!-- iOS ignores the manifest icons and uses THIS one, which is why it is
+         declared separately. It must be opaque — iOS composites a transparent
+         PNG onto black, and a logo drawn in white would install as a blank
+         tile. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <!-- .json, not .webmanifest: nginx:alpine's bundled mime.types has no entry
+         for the .webmanifest extension, so it would go out as
+         application/octet-stream. application/json is accepted for a manifest
+         and needs no nginx change. -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Newsreader: the serif for headlines and hero numbers.
+         JetBrains Mono: every label, all uppercase and letterspaced.
+         Inter: body copy only. -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

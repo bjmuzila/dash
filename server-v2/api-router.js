@@ -7928,7 +7928,7 @@ if (libDb) {
      * symbol whose recorder has been failing quietly will otherwise sit near the
      * top of the board forever on a build from three weeks ago.
      */
-    const strikeGexWatch = async (days, win, ticker, hit, minZ, minBase, maxGap, limit, minBucketN, liveDays, minSess) => {
+    const strikeGexWatch = async (days, win, ticker, hit, minZ, minBase, maxGap, limit, minBucketN, liveDays, minSess, withChecks) => {
       const t = upper(ticker);
 
       // The per-ticker normalizer, shared by both halves so the report and its
@@ -8185,9 +8185,30 @@ if (libDb) {
       // never have to work out which lane a line came from.
       const lane2 = await strikeGexBuildingNow(liveDays, t, limit, minSess);
 
+      // OPT-IN CHECKS. These are the calibration panels folded in, behind a
+      // checkbox rather than always-on: each runs its own full-history query, so
+      // making them automatic would double the cost of the one thing you read
+      // every morning in service of two tables you look at once a month.
+      //
+      // `premove_check` is the honesty check and the reason it is offered at
+      // all — it runs the study in the OTHER direction (start from the moves,
+      // look back) and prints move-days next to quiet-days. If those two rows
+      // look alike, the cutoff above is describing noise no matter how good its
+      // lift looks. `timeline` needs a single ticker, so it only appears when
+      // one is set.
+      let checks = {};
+      if (withChecks) {
+        const pre = await strikeGexPremove(days, win, t, Math.max(hit, 1.5), 3, minBase, maxGap, minBucketN);
+        checks.premove_check = pre.summary;
+        if (t) {
+          const tl = await strikeGexTimeline(Math.min(days, 60), win, t, 0, 2, minBase, maxGap);
+          checks.timeline = tl.detail;
+        }
+      }
+
       // Key order drives section order in the owner Panel — feed first, on purpose.
       return {
-        feed, feed_live: lane2.feed_live, by_symbol, calibration, odds, coverage,
+        feed, feed_live: lane2.feed_live, by_symbol, calibration, odds, ...checks, coverage,
         live: lane2.live, detail: watchlist,
         live_note: lane2.live_note,
         note: `${thinWarning(N, [], minBucketN)} Scanned ${t || 'all tickers'} · ${N} ticker-days of history over ${nDates} sessions · baseline ${baseRate}% of ticker-days see a ≥${hit}σ next-session move. `
@@ -8451,7 +8472,7 @@ if (libDb) {
           else if (test === 'strike-gex-premove') body = await strikeGexPremove(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1.5), n('lead', 3), n('minBase', 1e6), n('maxGap', 5), n('minBucketN', 20));
           else if (test === 'strike-gex-threshold') body = await strikeGexThreshold(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minBase', 1e6), n('maxGap', 5), n('minBucketN', 20));
           else if (test === 'strike-gex-timeline') body = await strikeGexTimeline(n('days', 60), n('win', 20), q.get('ticker') || 'SPX', n('strike', 0), n('topN', 3), n('minBase', 1e6), n('maxGap', 5));
-          else if (test === 'strike-gex-watch') body = await strikeGexWatch(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minZ', 0), n('minBase', 1e6), n('maxGap', 5), n('limit', 60), n('minBucketN', 20), n('liveDays', 5), n('minSess', 2));
+          else if (test === 'strike-gex-watch') body = await strikeGexWatch(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minZ', 0), n('minBase', 1e6), n('maxGap', 5), n('limit', 60), n('minBucketN', 20), n('liveDays', 5), n('minSess', 2), q.get('withChecks') === '1');
           else if (test === 'strike-gex-move') body = await strikeGexMove(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minStrikes', 20), n('maxGap', 5), n('minBucketN', 20));
           else if (test === 'strike-gex-move-intraday') body = await strikeGexMoveIntraday(n('days', 3), n('slotMin', 10), n('look', 3), n('fwd', 3), n('win', 12), q.get('ticker') ?? 'SPX', n('hitSigma', 1), n('minStrikes', 4), n('minBucketN', 10));
           else { send(res, 400, { error: 'unknown test' }); return; }

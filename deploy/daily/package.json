@@ -1,0 +1,13 @@
+{
+  "name": "cbedge-daily-api",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Backend for daily.cbedge.net — /api/daily/* only. Deliberately minimal: pg and node builtins.",
+  "main": "server-v2/daily-server.js",
+  "scripts": {
+    "start": "node server-v2/daily-server.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}
