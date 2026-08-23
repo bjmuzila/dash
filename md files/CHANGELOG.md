@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-08-23 - Weekly Edge: gold border on the MRNA scanner card
+
+`lib/emails/weekly-edge.ts`. The "What the flow scanner caught" card now has a
+2px gold border (`#FFB300`) instead of the 1px hairline every other card in the
+letter uses, with a faint `box-shadow` ring at `rgba(255,179,0,0.18)`. The inner
+divider above the `$0.75 -> $95.00` row moved to `rgba(255,179,0,0.28)` so it
+reads as part of the same box rather than a leftover grey line.
+
+`#FFB300` is the amber already in the palette - the same value the oil price uses
+- so this is emphasis, not a new colour. The card is the only element in the
+letter that gets it, which is the point: it is the one thing on the page a reader
+should stop on.
+
+Note the box-shadow is decoration only. Outlook strips it; the 2px border is what
+actually carries the effect, which is why the emphasis lives in the border rather
+than a glow.
+
+Preview regenerated at `generated/2026-08-23-weekly-edge-preview.html` and
+`generated/2026-08-23-weekly-edge-preview.jpg`.
+
+## 2026-08-23 - CORRECTION: Estimated Move note had the mechanism backwards
+
+The `estMoveNote` shipped in the entry below explained the 41.0% week as names
+"not travelling far enough to reach their bands". That is the OPPOSITE of what
+happens. Rewritten in `lib/emails/weekly-edge.ts`.
+
+How the score actually works:
+
+- A LOSS is a BREACH. Price left the estimated-move band.
+- Estimated moves are priced off implied vol. VIX down => bands price NARROWER.
+- Realized range did NOT come down with it - the tape is still covering the same
+  distance it was.
+- Same range, smaller box => price exits the band earlier in the session => more
+  breaches => the win rate falls. 96-138 on 234 names.
+
+So it is an implied-versus-realized gap, and it closes when implied vol catches
+back up to what the market is doing. It is not "low vol means nothing moves".
+
+A comment block now sits above `estMovePct` in `withDefaults()` stating that a
+loss is a breach, so the next person writing this note does not reach for the
+intuitive-but-wrong version again.
+
+Preview regenerated at `generated/2026-08-23-weekly-edge-preview.html` and
+`generated/2026-08-23-weekly-edge-preview.jpg`.
+
 ## 2026-08-23 - GEX watch: opex, flips, real legs, dollar floor, and an ALERT LOG
 
 Edited: `server-v2/api-router.js`, `server-v2/server-with-proxy.js`,

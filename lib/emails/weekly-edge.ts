@@ -216,13 +216,17 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     coreBullseyePct: opts.coreBullseyePct || "100%",
     coreBullseyeSub: opts.coreBullseyeSub || "&le;5 pts &middot; 10:30 &amp; 12:00 CB &middot; 5 of 5 sessions",
     // A losing week, reported as one. 96-138 on 234 scored names.
+    // A "loss" here is a BREACH — price left the estimated-move band. Low VIX
+    // narrows the band while realized range stays put, so breaches come earlier
+    // and the score falls. Do not rewrite the note as "failed to reach" — that
+    // is the opposite of what happened.
     estMovePct: opts.estMovePct || "41.0%",
     estMoveSub: opts.estMoveSub || "96-138 &middot; 234 scored (week of 8/21)",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
     resultsNote: opts.resultsNote ||
       "A ✓ means the Core Bullseye landed within 5 points of where SPX actually printed. Across Aug 17–21 that was 12 of 15 reads — 5 of 5 at both 10:30 and 12:00, and 2 of 5 at 9:45. The two 9:45 misses (8/20 and 8/21) still came in inside 15 points; the 8/17 open at 19.5 was the only genuine whiff of the week. Five sessions is a small sample, which is why the daily rows are printed rather than summarised.",
     estMoveNote: opts.estMoveNote ||
-      "Estimated Move had a bad week, and it goes in the letter the same as a good one: <strong style=\"color:#ffffff;\">96 wins against 138 losses</strong> on 234 scored names, 41.0%. The cause is not a mystery — the VIX got destroyed, realized volatility came down with it, and names simply did not travel far enough to reach their bands. Expected-move models earn their keep when volatility is expanding; a vol crush is the environment they read worst, and last week was one.",
+      "Estimated Move had a bad week, and it goes in the letter the same as a good one: <strong style=\"color:#ffffff;\">96 wins against 138 losses</strong> on 234 scored names, 41.0%. The mechanism is simple. The VIX got destroyed, so the bands price narrower — but the tape is still travelling the same distance it was. Same range, smaller box: names breach the estimated move earlier in the session and the read scores as a miss. That is an implied-versus-realized gap, not a broken model, and it closes when implied vol catches back up to what the market is actually doing.",
     showScannerProof: opts.showScannerProof !== false,
     scannerProof: { ...DEFAULT_SCANNER_PROOF, ...(opts.scannerProof || {}) },
     ctaUrl: opts.ctaUrl || PRICING_URL,
@@ -530,7 +534,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               <!-- Flow-scanner example. The card is rebuilt in HTML, not
                    screenshotted, so it stays sharp and matches the palette. -->
               <div style="font:800 10px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">What the flow scanner caught</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(255,255,255,0.10);border-radius:12px;background:#080B11;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:2px solid #FFB300;border-radius:12px;background:#080B11;box-shadow:0 0 0 1px rgba(255,179,0,0.18);">
                 <tr>
                   <td style="padding:16px 18px;">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
@@ -554,7 +558,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                 </tr>
                 <tr>
                   <td style="padding:0 18px 16px 18px;">
-                    <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:12px;font:800 16px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">
+                    <div style="border-top:1px solid rgba(255,179,0,0.28);padding-top:12px;font:800 16px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">
                       ${sp.resultFrom} <span style="color:#6b7d8f;">&rarr;</span> ${sp.resultTo}
                       <span style="color:#00E676;">&nbsp;${sp.resultPct}</span>
                     </div>
