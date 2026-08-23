@@ -59,6 +59,15 @@
   .lg.on{color:var(--text);background:rgba(255,255,255,.05)}
   .lg .sw{width:10px;height:10px;border-radius:3px}
   .lg.off .sw{opacity:.25}
+  .seg{display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden;margin-right:6px}
+  .segb{background:transparent;border:none;border-radius:0;color:var(--muted);padding:5px 11px;font-size:11px;cursor:pointer}
+  .segb:hover{background:rgba(255,255,255,.06);color:var(--text)}
+  .segb.on{background:rgba(33,158,188,.22);color:var(--text)}
+  .panel{border-bottom:1px solid rgba(255,255,255,.05);padding:8px 0 2px}
+  .plab{display:flex;gap:10px;align-items:baseline;font-size:11px;letter-spacing:.6px;
+        text-transform:uppercase;margin:0 0 2px 4px}
+  .plab .dim{font-size:9.5px;letter-spacing:.4px}
+  .panel:last-child{border-bottom:none}
   .charttitle{font-size:11px;letter-spacing:1.1px;text-transform:uppercase;color:var(--dim);margin-bottom:10px}
   svg{display:block;width:100%;overflow:visible}
   .tblwrap{overflow-x:auto;border-radius:12px;border:1px solid var(--border)}
@@ -141,9 +150,9 @@
     <div class="charttitle">Key levels over time — every recorded session</div>
     <div class="legend" id="legend"></div>
     <div id="lvlchart"></div>
-    <div class="sub" style="margin-top:8px">
-      Drag across the chart to zoom a date range · double-click to reset.
-    </div>
+    <div class="sub" style="margin-top:8px" id="lvlnote"></div>
+    <div class="sub" style="margin-top:4px" id="clipnote"></div>
+    <div class="sub" style="margin-top:4px" class="dim">Drag across a chart to zoom a date range · double-click to reset.</div>
   </div>
 
   <div class="grid2">
@@ -205,6 +214,9 @@ var VIEW = [];             // filtered rows
 var SORT = { key:'date', dir:-1 };
 var ZOOM = null;           // [i0,i1] index range on RAW for the level chart
 var SEL = null;            // selected date
+var MODE = 'delta';        // 'delta' | 'abs' | 'split'
+var UNIT = 'pts';          // 'pts' | 'pct'
+var FIT  = 'robust';       // 'robust' | 'full'  — y-domain fit
 var SHOW = { spot:true, resistance:true, support:true, neutral:true, r2:false, s2:false };
 
 var SERIES = [
@@ -376,6 +388,11 @@ function niceTicks(min,max,n){
   for(var v=s; v<=max+1e-9; v+=step) out.push(Number(v.toFixed(10)));
   return out;
 }
+function quantile(sorted,q){
+  if(!sorted.length) return null;
+  var i=(sorted.length-1)*q, lo=Math.floor(i), hi=Math.ceil(i);
+  return sorted[lo]+(sorted[hi]-sorted[lo])*(i-lo);
+}
 var TT = el('tt');
 function showTT(html,x,y){
   TT.innerHTML=html; TT.style.display='block';
@@ -393,99 +410,231 @@ function zoomRows(){
   return RAW.slice(ZOOM[0], ZOOM[1]+1);
 }
 function renderLegend(){
-  el('legend').innerHTML = SERIES.map(function(s){
+  var modes=[['delta','Δ from spot'],['abs','Absolute price'],['split','Split panels']];
+  var h='<span class="seg">'+modes.map(function(m){
+    return '<button class="segb'+(MODE===m[0]?' on':'')+'" data-m="'+m[0]+'">'+m[1]+'</button>';
+  }).join('')+'</span>';
+  if(MODE==='delta'){
+    h+='<span class="seg">'+[['pts','pts'],['pct','%']].map(function(u){
+      return '<button class="segb'+(UNIT===u[0]?' on':'')+'" data-u="'+u[0]+'">'+u[1]+'</button>';
+    }).join('')+'</span>';
+  }
+  if(MODE!=='split'){
+    h+='<span class="seg">'+[['robust','auto scale'],['full','full range']].map(function(f){
+      return '<button class="segb'+(FIT===f[0]?' on':'')+'" data-f="'+f[0]+'">'+f[1]+'</button>';
+    }).join('')+'</span>';
+  }
+  h+=SERIES.filter(function(s){ return !(MODE==='delta' && s.k==='spot'); }).map(function(s){
     return '<span class="lg '+(SHOW[s.k]?'on':'off')+'" data-k="'+s.k+'">'+
            '<span class="sw" style="background:'+s.c+'"></span>'+s.label+'</span>';
-  }).join('') + '<span class="lg on" id="zreset" style="border-style:dashed">reset zoom</span>';
+  }).join('');
+  h+='<span class="lg on" id="zreset" style="border-style:dashed">reset zoom</span>';
+  el('legend').innerHTML=h;
   Array.prototype.forEach.call(el('legend').querySelectorAll('.lg[data-k]'), function(n){
-    n.onclick = function(){ SHOW[n.getAttribute('data-k')] = !SHOW[n.getAttribute('data-k')]; renderLegend(); renderLevels(); };
+    n.onclick=function(){ SHOW[n.getAttribute('data-k')]=!SHOW[n.getAttribute('data-k')]; renderLegend(); renderLevels(); };
   });
-  el('zreset').onclick = function(){ ZOOM=null; renderLevels(); };
+  Array.prototype.forEach.call(el('legend').querySelectorAll('.segb[data-m]'), function(n){
+    n.onclick=function(){ MODE=n.getAttribute('data-m'); renderLegend(); renderLevels(); };
+  });
+  Array.prototype.forEach.call(el('legend').querySelectorAll('.segb[data-u]'), function(n){
+    n.onclick=function(){ UNIT=n.getAttribute('data-u'); renderLegend(); renderLevels(); };
+  });
+  Array.prototype.forEach.call(el('legend').querySelectorAll('.segb[data-f]'), function(n){
+    n.onclick=function(){ FIT=n.getAttribute('data-f'); renderLegend(); renderLevels(); };
+  });
+  el('zreset').onclick=function(){ ZOOM=null; renderLevels(); };
+  el('lvlnote').innerHTML = MODE==='delta'
+    ? 'Each level is drawn as its distance from that session’s spot, so the trend is removed and the walls separate. 0 = spot. Resistance above the line, support below.'
+    : MODE==='split'
+      ? 'One panel per level, each on its own y-scale — nothing can sit on top of anything else. Grey band = full range of that level over the window.'
+      : 'Raw price. Levels that hug spot will overlap here — that is the point of the other two modes.';
+  el('lvlnote').innerHTML += MODE!=='split'
+    ? ' <span class="dim">Auto scale fits the y-axis to the bulk of the values (IQR fence), so one runaway session cannot flatten the rest.</span>' : '';
 }
-function renderLevels(){
-  var rows = zoomRows();
-  var W=1200, H=380, PL=62, PR=16, PT=14, PB=30;
-  var iw=W-PL-PR, ih=H-PT-PB;
-  var vals=[];
-  SERIES.forEach(function(s){ if(SHOW[s.k]) rows.forEach(function(r){ if(r[s.k]!=null) vals.push(r[s.k]); }); });
-  if(!vals.length){ el('lvlchart').innerHTML='<div class="dim">nothing selected</div>'; return; }
-  var mn=Math.min.apply(null,vals), mx=Math.max.apply(null,vals), pad=(mx-mn)*0.05||1;
-  var y=scale(mn-pad,mx+pad,PT+ih,PT), x=function(i){ return PL + (rows.length<2?iw/2:(i/(rows.length-1))*iw); };
 
-  var s='';
-  niceTicks(mn-pad,mx+pad,6).forEach(function(v){
-    s+='<line x1="'+PL+'" x2="'+(PL+iw)+'" y1="'+y(v).toFixed(1)+'" y2="'+y(v).toFixed(1)+'" stroke="rgba(255,255,255,.07)" stroke-width="1"/>';
-    s+='<text x="'+(PL-8)+'" y="'+(y(v)+3.5).toFixed(1)+'" text-anchor="end" fill="rgba(255,255,255,.4)" font-size="10">'+fmt(v,0)+'</text>';
-  });
-  // shaded support→resistance band
-  if(SHOW.support && SHOW.resistance){
-    var top='', bot='';
-    rows.forEach(function(r,i){ if(r.resistance!=null) top += (top?' L':'M')+x(i).toFixed(1)+' '+y(r.resistance).toFixed(1); });
-    for(var i=rows.length-1;i>=0;i--){ if(rows[i].support!=null) bot += ' L'+x(i).toFixed(1)+' '+y(rows[i].support).toFixed(1); }
-    if(top&&bot) s+='<path d="'+top+bot+' Z" fill="rgba(33,158,188,.07)" stroke="none"/>';
-  }
-  SERIES.forEach(function(ser){
-    if(!SHOW[ser.k]) return;
-    var d='', open=false;
-    rows.forEach(function(r,i){
-      if(r[ser.k]==null){ open=false; return; }
-      d += (open?' L':' M')+x(i).toFixed(1)+' '+y(r[ser.k]).toFixed(1); open=true;
-    });
-    var wdt = ser.k==='spot' ? 1.6 : 1.9;
-    var dash = (ser.k==='r2'||ser.k==='s2') ? ' stroke-dasharray="4 3"' : '';
-    s+='<path d="'+d+'" fill="none" stroke="'+ser.c+'" stroke-width="'+wdt+'" stroke-linejoin="round" stroke-linecap="round" opacity="'+(ser.k==='spot'?0.9:1)+'"'+dash+'/>';
-  });
-  // x labels
-  var lblN=Math.min(8,rows.length);
+/** value of a level under the current mode */
+function mval(r,k){
+  if(MODE==='abs') return r[k];
+  if(r[k]==null||r.spot==null) return null;
+  return UNIT==='pct' ? (r[k]-r.spot)/r.spot*100 : r[k]-r.spot;
+}
+function mfmt(v){
+  if(v==null) return '—';
+  if(MODE==='abs') return fmt(v,0);
+  return (v>0?'+':'')+v.toFixed(UNIT==='pct'?2:0)+(UNIT==='pct'?'%':'');
+}
+function xLabels(rows,x,H,n){
+  var s='', lblN=Math.min(n||8,rows.length);
   for(var j=0;j<lblN;j++){
     var idx=Math.round(j*(rows.length-1)/Math.max(1,lblN-1));
     s+='<text x="'+x(idx).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle" fill="rgba(255,255,255,.35)" font-size="10">'+rows[idx].date+'</text>';
   }
-  s+='<line id="cross" x1="0" x2="0" y1="'+PT+'" y2="'+(PT+ih)+'" stroke="rgba(255,255,255,.35)" stroke-width="1" style="display:none"/>';
-  s+='<rect id="sel" y="'+PT+'" height="'+ih+'" fill="rgba(33,158,188,.15)" style="display:none"/>';
-  s+='<rect id="hit" x="'+PL+'" y="'+PT+'" width="'+iw+'" height="'+ih+'" fill="transparent" style="cursor:crosshair"/>';
-  el('lvlchart').innerHTML = svgEl(W,H)+s+'</svg>';
-
-  var svg = el('lvlchart').firstChild;
-  var hit = svg.querySelector('#hit'), cross = svg.querySelector('#cross'), selr = svg.querySelector('#sel');
-  var drag = null;
+  return s;
+}
+/** wire drag-to-zoom + crosshair onto a chart svg */
+function wireZoom(svg, rows, PL, iw, x, onHover){
+  var hit=svg.querySelector('.hit'), cross=svg.querySelector('.cross'), selr=svg.querySelector('.selr');
+  var drag=null;
   function idxAt(ev){
-    var b = svg.getBoundingClientRect();
-    var px = (ev.clientX-b.left)/b.width*W;
-    var f = (px-PL)/iw;
-    return Math.max(0, Math.min(rows.length-1, Math.round(f*(rows.length-1))));
+    var b=svg.getBoundingClientRect();
+    var px=(ev.clientX-b.left)/b.width*1200;
+    var f=(px-PL)/iw;
+    return Math.max(0,Math.min(rows.length-1,Math.round(f*(rows.length-1))));
   }
   hit.addEventListener('mousemove', function(ev){
-    var i = idxAt(ev), r = rows[i];
-    cross.style.display=''; cross.setAttribute('x1',x(i)); cross.setAttribute('x2',x(i));
-    if(drag!=null){
-      var a=Math.min(x(drag),x(i)), b2=Math.abs(x(i)-x(drag));
-      selr.style.display=''; selr.setAttribute('x',a); selr.setAttribute('width',b2);
+    var i=idxAt(ev);
+    if(cross){ cross.style.display=''; cross.setAttribute('x1',x(i)); cross.setAttribute('x2',x(i)); }
+    if(drag!=null&&selr){
+      selr.style.display=''; selr.setAttribute('x',Math.min(x(drag),x(i))); selr.setAttribute('width',Math.abs(x(i)-x(drag)));
     }
-    var h = '<b>'+r.date+'</b>';
-    SERIES.forEach(function(s2){
-      if(!SHOW[s2.k]) return;
-      var d = r.dl[s2.k];
-      h += '<div class="r"><span style="color:'+s2.c+'">'+s2.label+'</span><span>'+fmt(r[s2.k], s2.k==='spot'?2:0)+
-           (d? ' <span class="'+(d>0?'up':'dn')+'">'+(d>0?'+':'')+d.toFixed(0)+'</span>':'')+'</span></div>';
-    });
-    h += '<div class="r"><span class="dim">$ gamma</span><span>'+fmtBig(r.dollar_gamma)+'</span></div>';
-    h += '<div class="r"><span class="dim">C/P γ</span><span>'+fmt(r.cpg_ratio,2)+'</span></div>';
-    showTT(h, ev.clientX, ev.clientY);
+    onHover(rows[i], ev);
   });
-  hit.addEventListener('mouseleave', function(){ cross.style.display='none'; hideTT(); });
-  hit.addEventListener('mousedown', function(ev){ drag = idxAt(ev); });
+  hit.addEventListener('mouseleave', function(){ if(cross) cross.style.display='none'; hideTT(); });
+  hit.addEventListener('mousedown', function(ev){ drag=idxAt(ev); });
   window.addEventListener('mouseup', function(ev){
     if(drag==null) return;
-    var i = idxAt(ev); selr.style.display='none';
-    var a=Math.min(drag,i), b=Math.max(drag,i);
-    drag=null;
-    if(b-a>=2){
-      var base = ZOOM? ZOOM[0] : 0;
-      ZOOM=[base+a, base+b]; renderLevels();
-    }
+    var i=idxAt(ev); if(selr) selr.style.display='none';
+    var a=Math.min(drag,i), b=Math.max(drag,i); drag=null;
+    if(b-a>=2){ var base=ZOOM?ZOOM[0]:0; ZOOM=[base+a,base+b]; renderLevels(); }
   });
   hit.addEventListener('dblclick', function(){ ZOOM=null; renderLevels(); });
+}
+function tipRows(r){
+  var h='<b>'+r.date+'</b><div class="r"><span class="dim">spot</span><span>'+fmt(r.spot,2)+
+        (r.dl.spot?' <span class="'+(r.dl.spot>0?'up':'dn')+'">'+(r.dl.spot>0?'+':'')+r.dl.spot.toFixed(1)+'</span>':'')+'</span></div>';
+  SERIES.forEach(function(s){
+    if(s.k==='spot'||!SHOW[s.k]||r[s.k]==null) return;
+    var off=r.spot!=null? r[s.k]-r.spot : null;
+    h+='<div class="r"><span style="color:'+s.c+'">'+s.label+'</span><span>'+fmt(r[s.k],0)+
+       (off!=null?' <span class="dim">('+(off>0?'+':'')+off.toFixed(0)+')</span>':'')+
+       (r.dl[s.k]? ' <span class="'+(r.dl[s.k]>0?'up':'dn')+'">Δ'+(r.dl[s.k]>0?'+':'')+r.dl[s.k].toFixed(0)+'</span>':'')+'</span></div>';
+  });
+  h+='<div class="r"><span class="dim">$ gamma</span><span>'+fmtBig(r.dollar_gamma)+'</span></div>';
+  return h;
+}
+
+function renderLevels(){
+  if(MODE==='split') return renderSplit();
+  var rows=zoomRows();
+  var W=1200,H=380,PL=62,PR=16,PT=16,PB=30, iw=W-PL-PR, ih=H-PT-PB;
+  var list=SERIES.filter(function(s){ return SHOW[s.k] && !(MODE==='delta'&&s.k==='spot'); });
+  var vals=[];
+  list.forEach(function(s){ rows.forEach(function(r){ var v=mval(r,s.k); if(v!=null) vals.push(v); }); });
+  if(!vals.length){ el('lvlchart').innerHTML='<div class="dim" style="padding:30px 0">nothing selected</div>'; return; }
+  var sortedV=vals.slice().sort(function(a,b){ return a-b; });
+  var mn, mx;
+  if(FIT==='robust' && sortedV.length>=12){
+    var q1=quantile(sortedV,0.25), q3=quantile(sortedV,0.75), iqr=q3-q1;
+    if(iqr>0){
+      mn=Math.max(sortedV[0], q1-2.5*iqr);
+      mx=Math.min(sortedV[sortedV.length-1], q3+2.5*iqr);
+    } else { mn=quantile(sortedV,0.05); mx=quantile(sortedV,0.95); }
+  }
+  else { mn=sortedV[0]; mx=sortedV[sortedV.length-1]; }
+  if(!(mx>mn)){ mn=sortedV[0]; mx=sortedV[sortedV.length-1]; }
+  if(MODE==='delta'){ var m=Math.max(Math.abs(mn),Math.abs(mx))||1; mn=-m; mx=m; }
+  var pad=(mx-mn)*0.06||1;
+  var dmn=mn-pad, dmx=mx+pad;
+  var yRaw=scale(dmn,dmx,PT+ih,PT);
+  var clipped=0;
+  var y=function(v){ if(v<dmn){ clipped++; return yRaw(dmn); } if(v>dmx){ clipped++; return yRaw(dmx); } return yRaw(v); };
+  var isClipped=function(v){ return v<dmn||v>dmx; };
+  var x=function(i){ return PL+(rows.length<2?iw/2:(i/(rows.length-1))*iw); };
+  var s='';
+  niceTicks(dmn,dmx,7).forEach(function(v){
+    var zero = MODE==='delta' && Math.abs(v)<1e-9;
+    s+='<line x1="'+PL+'" x2="'+(PL+iw)+'" y1="'+yRaw(v).toFixed(1)+'" y2="'+yRaw(v).toFixed(1)+'" stroke="rgba(255,255,255,'+(zero?'.30':'.07')+')"/>';
+    s+='<text x="'+(PL-8)+'" y="'+(yRaw(v)+3.5).toFixed(1)+'" text-anchor="end" fill="rgba(255,255,255,'+(zero?'.7':'.4')+')" font-size="10">'+
+       (MODE==='delta'?((v>0?'+':'')+v.toFixed(UNIT==='pct'?1:0)):fmt(v,0))+'</text>';
+  });
+  if(MODE==='delta'){
+    s+='<text x="'+(PL+4)+'" y="'+(yRaw(0)-5).toFixed(1)+'" fill="rgba(255,255,255,.55)" font-size="10">spot</text>';
+  }
+  if(SHOW.support&&SHOW.resistance){
+    var top='',bot='';
+    rows.forEach(function(r,i){ var v=mval(r,'resistance'); if(v!=null) top+=(top?' L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1); });
+    for(var i2=rows.length-1;i2>=0;i2--){ var v2=mval(rows[i2],'support'); if(v2!=null) bot+=' L'+x(i2).toFixed(1)+' '+y(v2).toFixed(1); }
+    if(top&&bot) s+='<path d="'+top+bot+' Z" fill="rgba(33,158,188,.07)" stroke="none"/>';
+  }
+  var marks='', nOut=0;
+  list.forEach(function(ser){
+    var d='',open=false;
+    rows.forEach(function(r,i){
+      var v=mval(r,ser.k);
+      if(v==null){ open=false; return; }
+      d+=(open?' L':' M')+x(i).toFixed(1)+' '+y(v).toFixed(1); open=true;
+      if(isClipped(v)){
+        nOut++;
+        var up=v>dmx, yy=up?yRaw(dmx)+6:yRaw(dmn)-6, cx=x(i);
+        marks+='<path d="M'+(cx-4).toFixed(1)+' '+yy.toFixed(1)+' L'+(cx+4).toFixed(1)+' '+yy.toFixed(1)+' L'+cx.toFixed(1)+' '+(up?yy-6:yy+6).toFixed(1)+' Z" fill="'+ser.c+'"/>';
+      }
+    });
+    var dash=(ser.k==='r2'||ser.k==='s2')?' stroke-dasharray="4 3"':'';
+    s+='<path d="'+d+'" fill="none" stroke="'+ser.c+'" stroke-width="'+(ser.k==='spot'?1.6:2)+'" stroke-linejoin="round" stroke-linecap="round"'+dash+'/>';
+  });
+  s+=marks;
+  s+=xLabels(rows,x,H,8);
+  s+='<line class="cross" x1="0" x2="0" y1="'+PT+'" y2="'+(PT+ih)+'" stroke="rgba(255,255,255,.35)" style="display:none"/>';
+  s+='<rect class="selr" y="'+PT+'" height="'+ih+'" fill="rgba(33,158,188,.15)" style="display:none"/>';
+  s+='<rect class="hit" x="'+PL+'" y="'+PT+'" width="'+iw+'" height="'+ih+'" fill="transparent" style="cursor:crosshair"/>';
+  el('lvlchart').innerHTML=svgEl(W,H)+s+'</svg>';
+  el('clipnote').innerHTML = nOut
+    ? '<span style="color:var(--orange)">'+nOut+' point'+(nOut===1?'':'s')+' outside the auto scale</span> — pinned to the rail and flagged with a triangle. Switch to <b>full range</b> to see them, or <b>split panels</b> to give each level its own axis.'
+    : '';
+  wireZoom(el('lvlchart').firstChild, rows, PL, iw, x, function(r,ev){ showTT(tipRows(r), ev.clientX, ev.clientY); });
+}
+
+function renderSplit(){
+  el('clipnote').innerHTML='';
+  var rows=zoomRows();
+  var list=SERIES.filter(function(s){ return SHOW[s.k]; });
+  if(!list.length){ el('lvlchart').innerHTML='<div class="dim" style="padding:30px 0">nothing selected</div>'; return; }
+  var W=1200, PL=66, PR=70, PT=12, PB=14, ih=78, H=ih+PT+PB, iw=W-PL-PR;
+  var html='';
+  list.forEach(function(ser,pi){
+    var last = pi===list.length-1;
+    var hh = last? H+18 : H;
+    var vals=rows.map(function(r){ return r[ser.k]; }).filter(function(v){ return v!=null; });
+    var s='';
+    if(!vals.length){
+      html+='<div class="panel"><div class="plab" style="color:'+ser.c+'">'+ser.label+'</div>'+
+            '<div class="dim" style="padding:16px 0 16px 66px">no data</div></div>';
+      return;
+    }
+    var mn=Math.min.apply(null,vals), mx=Math.max.apply(null,vals), pad=(mx-mn)*0.12||1;
+    var y=scale(mn-pad,mx+pad,PT+ih,PT), x=function(i){ return PL+(rows.length<2?iw/2:(i/(rows.length-1))*iw); };
+    s+='<rect x="'+PL+'" y="'+y(mx).toFixed(1)+'" width="'+iw+'" height="'+Math.max(1,(y(mn)-y(mx))).toFixed(1)+'" fill="rgba(255,255,255,.03)"/>';
+    [mx,mn].forEach(function(v){
+      s+='<line x1="'+PL+'" x2="'+(PL+iw)+'" y1="'+y(v).toFixed(1)+'" y2="'+y(v).toFixed(1)+'" stroke="rgba(255,255,255,.10)"/>';
+      s+='<text x="'+(PL-8)+'" y="'+(y(v)+3.5).toFixed(1)+'" text-anchor="end" fill="rgba(255,255,255,.42)" font-size="10">'+fmt(v,ser.k==='spot'?1:0)+'</text>';
+    });
+    var d='',open=false, pts='';
+    rows.forEach(function(r,i){
+      var v=r[ser.k];
+      if(v==null){ open=false; return; }
+      d+=(open?' L':' M')+x(i).toFixed(1)+' '+y(v).toFixed(1); open=true;
+      var moved = r.dl[ser.k]!=null && r.dl[ser.k]!==0;
+      if(moved) pts+='<circle cx="'+x(i).toFixed(1)+'" cy="'+y(v).toFixed(1)+'" r="2.2" fill="'+ser.c+'"/>';
+    });
+    s+='<path d="'+d+'" fill="none" stroke="'+ser.c+'" stroke-width="2" stroke-linejoin="round"/>'+pts;
+    var lastRow=null;
+    for(var i3=rows.length-1;i3>=0;i3--){ if(rows[i3][ser.k]!=null){ lastRow=rows[i3]; break; } }
+    if(lastRow) s+='<text x="'+(PL+iw+8)+'" y="'+(y(lastRow[ser.k])+3.5).toFixed(1)+'" fill="'+ser.c+'" font-size="11">'+fmt(lastRow[ser.k],0)+'</text>';
+    var moves=rows.filter(function(r){ return r.dl[ser.k]!=null&&r.dl[ser.k]!==0; }).length;
+    if(last) s+=xLabels(rows,x,hh,7);
+    s+='<line class="cross" x1="0" x2="0" y1="'+PT+'" y2="'+(PT+ih)+'" stroke="rgba(255,255,255,.35)" style="display:none"/>';
+    s+='<rect class="selr" y="'+PT+'" height="'+ih+'" fill="rgba(33,158,188,.15)" style="display:none"/>';
+    s+='<rect class="hit" x="'+PL+'" y="'+PT+'" width="'+iw+'" height="'+ih+'" fill="transparent" style="cursor:crosshair"/>';
+    html+='<div class="panel" data-k="'+ser.k+'">'+
+          '<div class="plab"><span style="color:'+ser.c+'">'+ser.label+'</span>'+
+          '<span class="dim">'+moves+' moves · range '+fmt(mx-mn,0)+' pts · last '+fmt(lastRow?lastRow[ser.k]:null,0)+'</span></div>'+
+          svgEl(W,hh)+s+'</svg></div>';
+  });
+  el('lvlchart').innerHTML=html;
+  Array.prototype.forEach.call(el('lvlchart').querySelectorAll('.panel svg'), function(svg){
+    wireZoom(svg, rows, PL, iw, function(i){ return PL+(rows.length<2?iw/2:(i/(rows.length-1))*iw); },
+      function(r,ev){ showTT(tipRows(r), ev.clientX, ev.clientY); });
+  });
 }
 
 /* ─────────────────────────── gamma / cpg / delta charts ─────────────────────────── */
@@ -536,13 +685,20 @@ function renderDeltas(){
   var vals=[];
   rows.forEach(function(r){ keys.forEach(function(k){ if(r.dl[k[0]]!=null) vals.push(r.dl[k[0]]); }); });
   if(!vals.length){ el('deltachart').innerHTML='<div class="dim">no data</div>'; return; }
-  var m=Math.max(Math.abs(Math.min.apply(null,vals)),Math.abs(Math.max.apply(null,vals)))||1;
-  var y=scale(-m,m,PT+ih,PT);
+  var sv=vals.map(Math.abs).sort(function(a,b){return a-b;});
+  var m;
+  if(FIT==='robust' && sv.length>=12){
+    var q1=quantile(sv,0.25), q3=quantile(sv,0.75), iqr=q3-q1;
+    m = iqr>0 ? Math.min(sv[sv.length-1], q3+2.5*iqr) : quantile(sv,0.95);
+  } else m = sv[sv.length-1];
+  m = m || 1;
+  var yRaw=scale(-m,m,PT+ih,PT);
+  var y=function(v){ return yRaw(Math.max(-m,Math.min(m,v))); };
   var gw=iw/rows.length, bw=Math.max(0.8,(gw*0.8)/keys.length);
   var s='';
   niceTicks(-m,m,5).forEach(function(v){
-    s+='<line x1="'+PL+'" x2="'+(PL+iw)+'" y1="'+y(v).toFixed(1)+'" y2="'+y(v).toFixed(1)+'" stroke="rgba(255,255,255,'+(v===0?'.22':'.06')+')"/>';
-    s+='<text x="'+(PL-8)+'" y="'+(y(v)+3.5).toFixed(1)+'" text-anchor="end" fill="rgba(255,255,255,.4)" font-size="10">'+(v>0?'+':'')+v.toFixed(0)+'</text>';
+    s+='<line x1="'+PL+'" x2="'+(PL+iw)+'" y1="'+yRaw(v).toFixed(1)+'" y2="'+yRaw(v).toFixed(1)+'" stroke="rgba(255,255,255,'+(v===0?'.22':'.06')+')"/>';
+    s+='<text x="'+(PL-8)+'" y="'+(yRaw(v)+3.5).toFixed(1)+'" text-anchor="end" fill="rgba(255,255,255,.4)" font-size="10">'+(v>0?'+':'')+v.toFixed(0)+'</text>';
   });
   rows.forEach(function(r,i){
     keys.forEach(function(k,ki){
@@ -550,6 +706,10 @@ function renderDeltas(){
       var cx=PL+(i+0.5)*gw - (keys.length*bw)/2 + ki*bw;
       var y0=y(0), y1=y(d);
       s+='<rect x="'+cx.toFixed(1)+'" y="'+Math.min(y0,y1).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1,Math.abs(y1-y0)).toFixed(1)+'" fill="'+k[1]+'" opacity=".85"/>';
+      if(Math.abs(d)>m){
+        var yy=d>0?yRaw(m)-4:yRaw(-m)+4, cx2=cx+bw/2;
+        s+='<path d="M'+(cx2-3.5).toFixed(1)+' '+yy.toFixed(1)+' L'+(cx2+3.5).toFixed(1)+' '+yy.toFixed(1)+' L'+cx2.toFixed(1)+' '+(d>0?yy-5:yy+5).toFixed(1)+' Z" fill="'+k[1]+'"/>';
+      }
     });
   });
   var lblN=Math.min(8,rows.length);
