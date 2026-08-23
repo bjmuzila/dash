@@ -23,6 +23,10 @@ import { unsubscribeUrl, UNSUB_URL_PLACEHOLDER } from "@/lib/unsubscribe";
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
 const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
 const PRICING_URL = `${SITE_URL}/pricing`;
+/** Affiliate portal. Its own subdomain/container — NOT a route under SITE_URL. */
+const AFFILIATE_URL = "https://affiliate.cbedge.net";
+/** Banner art lives in `public/`, so it is served from the main site root. */
+const AFFILIATE_BANNER_URL = `${SITE_URL}/affiliate-program-banner.jpg`;
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
@@ -56,6 +60,12 @@ export interface WeeklyEdgeOpts {
   confRows?: ConfRow[];
   resultsNote?: string;
   ctaUrl?: string;
+  /** Set false to drop the affiliate-program band entirely. */
+  showAffiliate?: boolean;
+  affiliateHeadline?: string;
+  affiliateBody?: string[];
+  affiliateUrl?: string;
+  affiliateBannerUrl?: string;
   /** Recipient email — when set, renders a real tokenized unsubscribe link. */
   email?: string | null;
 }
@@ -97,7 +107,8 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "issueLabel" | "recapHeadline" | "recapBody" | "indexMoves" | "aheadHeadline" | "calendarEvents" |
   "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
   "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
-  "confRows" | "resultsNote" | "ctaUrl">> {
+  "confRows" | "resultsNote" | "ctaUrl" |
+  "showAffiliate" | "affiliateHeadline" | "affiliateBody" | "affiliateUrl" | "affiliateBannerUrl">> {
   return {
     issueLabel: opts.issueLabel || "Week of Aug 24–28",
     recapHeadline: opts.recapHeadline || "Bonds broke the streak — yields ripped and the Nasdaq wore it",
@@ -124,6 +135,16 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
     resultsNote: opts.resultsNote || "[ADD THIS WEEK'S CORE BULLSEYE + ESTIMATED MOVE SUMMARY]",
     ctaUrl: opts.ctaUrl || PRICING_URL,
+    // `!== false` rather than `||` — the band is on by default, and passing
+    // showAffiliate: false has to actually turn it off.
+    showAffiliate: opts.showAffiliate !== false,
+    affiliateHeadline: opts.affiliateHeadline || "The CB Edge affiliate program is live",
+    affiliateBody: opts.affiliateBody || [
+      "One flat rate — <strong style=\"color:#ffffff;\">20% of every payment</strong>, on the first invoice and on every renewal for as long as that member stays subscribed. No tiers, no volume ladder to climb.",
+      "Sales attribute either by your code at checkout or by a 60-day cookie on your link, with the code winning if both apply. Commission holds 30 days to clear refunds, then pays out by Stripe, PayPal or Zelle. Applying takes about two minutes and review is usually same-day.",
+    ],
+    affiliateUrl: opts.affiliateUrl || AFFILIATE_URL,
+    affiliateBannerUrl: opts.affiliateBannerUrl || AFFILIATE_BANNER_URL,
   };
 }
 
@@ -172,6 +193,13 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     "",
     `Annual access is $400/yr instead of $1,000 with code EDGE3: ${o.ctaUrl}`,
     "",
+    ...(o.showAffiliate ? [
+      "NEW — AFFILIATE PROGRAM",
+      strip(o.affiliateHeadline),
+      ...o.affiliateBody.map(strip),
+      `Apply for a code: ${o.affiliateUrl}`,
+      "",
+    ] : []),
     "— The CB Edge Team",
     "",
     "cbedge.net · not financial advice",
@@ -185,6 +213,8 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
 export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
   const o = withDefaults(opts);
   const cta = escapeHtml(o.ctaUrl);
+  const affiliateHref = escapeHtml(o.affiliateUrl);
+  const affiliateBanner = escapeHtml(o.affiliateBannerUrl);
   const unsubHref = opts.email ? escapeHtml(unsubscribeUrl(opts.email)) : UNSUB_URL_PLACEHOLDER;
 
   const indexTile = (m: IndexMove) => {
@@ -279,7 +309,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
 <title>${escapeHtml(WEEKLY_EDGE_SUBJECT)}</title>
 </head>
 <body style="margin:0;padding:0;background:#05060A;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Bonds snapped the win streak and oil ripped 7% — and this week brings July PCE, NVIDIA earnings and Jackson Hole.</div>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Bonds snapped the win streak and oil ripped 7%, this week brings July PCE, NVIDIA and Jackson Hole — plus the affiliate program is now live.</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#05060A;">
     <tr>
       <td align="center" style="padding:32px 16px;">
@@ -385,6 +415,26 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               </table>
             </td>
           </tr>
+
+          <!-- AFFILIATE PROGRAM — the "one more thing" band. Sits AFTER the
+               pricing CTA on purpose so it never competes with it. -->
+          ${o.showAffiliate ? `
+          <tr>
+            <td style="padding:22px 28px 0 28px;">
+              <div style="font:800 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.14em;text-transform:uppercase;color:#FB8501;">● New — Affiliate Program</div>
+              <a href="${affiliateHref}" style="display:block;text-decoration:none;margin-top:12px;">
+                <img src="${affiliateBanner}" alt="CB Edge affiliate program now open — earn up to 20% recurring commission" width="584" style="display:block;width:100%;max-width:584px;height:auto;border:0;border-radius:12px;">
+              </a>
+              <div style="font:800 17px/1.35 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:14px;">${o.affiliateHeadline}</div>
+              ${o.affiliateBody.map((p) => `<div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:10px;">${p}</div>`).join("")}
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;"><tr>
+                <td align="center" style="border-radius:10px;border:1px solid rgba(251,133,1,0.45);background:rgba(251,133,1,0.10);">
+                  <a href="${affiliateHref}" style="display:inline-block;padding:12px 26px;font:800 13px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#FB8501;text-decoration:none;border-radius:10px;">Apply for a code →</a>
+                </td>
+              </tr></table>
+              <div style="font:400 12px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;margin-top:10px;">${escapeHtml(o.affiliateUrl.replace(/^https?:\/\//, ""))}</div>
+            </td>
+          </tr>` : ""}
 
           <tr>
             <td align="center" style="padding:18px 28px 30px 28px;">

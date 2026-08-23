@@ -15,11 +15,17 @@
  * Fetch-on-load + an explicit refresh — no polling, so an open tab never
  * hammers the recorder.
  *
- * Two views, switched by the WALLS / CORE pills:
+ * Three views, switched by the WALLS / CORE / ALL pills:
  *   WALLS — call wall + put wall entries only.
  *   CORE  — CORE (cb) entries only.
+ *   ALL   — walls + CORE interleaved on one timeline. THE DEFAULT: the page
+ *           opens on the whole log and the other two pills narrow it, rather
+ *           than opening scoped and hiding two thirds of the day until you
+ *           notice the pills.
  * The switch filters the ticker rail, the capture rail, the timeline, the copy
  * text and the PNG together, so what you export is exactly what you're reading.
+ * It is a pure client-side filter over one fetch — every view is already loaded
+ * when the page settles, so switching pills never re-hits /proxy/walls.
  *
  * Snapshot: goes through lib/snapshot.ts like every other capture in the app
  * (scripts/audit-ui.mjs --strict fails the build on a second html2canvas call
@@ -32,6 +38,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import { HOME_THEME, LIGHT_BLUE, homeInputStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { PageShell } from "@/components/shared/PageCard";
+import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { captureAndCopy } from "@/lib/snapshot";
 
@@ -450,7 +457,10 @@ function WallDelta({ now, open }: { now: number | null | undefined; open: number
 
 export default function LevelLog() {
   const [date, setDate] = useState(todayETStr());
-  const [view, setView] = useState<LogView>("walls");
+  // Opens on ALL (2026-08-23; was "walls"). One fetch already carries all three
+  // level types, so ALL is the view that shows everything that loaded — WALLS
+  // and CORE are the narrowing, not the starting point.
+  const [view, setView] = useState<LogView>("all");
   const [tickers, setTickers] = useState<WallTicker[]>([]);
   const [sel, setSel] = useState<string | null>(null);
   const [detail, setDetail] = useState<{ symbol: string; log: WallLogRow[]; events: WallEventRow[] } | null>(null);
@@ -584,7 +594,8 @@ export default function LevelLog() {
           {viewMeta.blurb} — 09:29 open + every 15m to 16:00 ET, change-only
         </span>
 
-        {/* WALLS / CORE — the whole page is scoped by this. */}
+        {/* WALLS / CORE / ALL — the whole page is scoped by this. Defaults to
+            ALL: everything the day's fetch returned, already on screen. */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 4 }}>
           {VIEW_META.map((v) => (
             <button key={v.id} onClick={() => setView(v.id)} style={chipStyle(view === v.id, v.color)} title={v.blurb}>
@@ -617,9 +628,16 @@ export default function LevelLog() {
         </div>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            type="date" value={date} onChange={(e) => { setDate(e.target.value); setSel(null); }}
-            style={{ ...homeInputStyle, fontSize: 13, padding: "7px 10px", fontFamily: "inherit", colorScheme: "dark" }}
+          {/* Dock-themed calendar dropdown rather than <input type="date">: the
+              native control paints the browser's own calendar (white sheet,
+              system font, an indicator that ignores colorScheme on Windows
+              Chrome) in the middle of a dark control bar. Same "YYYY-MM-DD"
+              contract, so nothing downstream changes. The panel portals to
+              <body> at z-index 9999, so the card's overflow can't clip it. */}
+          <ThemedDatePicker
+            value={date}
+            onChange={(v) => { setDate(v); setSel(null); }}
+            width={160}
           />
           <input
             value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter ticker…"

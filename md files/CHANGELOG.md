@@ -1,189 +1,265 @@
 # Changelog
 
-## 2026-08-23 - The Weekly Edge refreshed for the week of Aug 24-28
+## 2026-08-23 - Mirrored the earnings names that were still rendering as text chips
 
-`lib/emails/weekly-edge.ts` - the "Weekly Edge" newsletter template loaded by the
-owner Emails composer (`/api/admin/email-templates?id=weekly-edge`). Markup
-untouched; only the `withDefaults()` data and the CTA band changed.
+Added: 17 files in `public/logos/`.
+Edited: `scripts/fetch-ticker-logos.mjs`.
 
-- Subject is now "The Weekly Edge - NVIDIA, PCE and Jackson Hole all land in one
-  week"; issue pill reads "Week of Aug 24-28"; preheader rewritten to match.
-- Recap covers Aug 17-21: S&P -1.4% (snapping a three-week streak, ~1.6% below
-  the Aug 13 record close), Nasdaq -2.1%, Dow -0.9%, driven by the 10-year
-  pushing to 4.737% on AI-related issuance; Bessent's buyback doubling, gold
-  $4,680.60, bitcoin ~$80k, WTI +6.9% to $87.06, and Friday's bounce.
-- Week ahead: Chicago Fed NAI Mon, New Home Sales / Richmond Fed Tue, July PCE +
-  Personal Income/Spending + Durable Goods + Q2 GDP second estimate Wed, Jobless
-  Claims + Jackson Hole open Thu, NFP benchmark revision + Chicago PMI with Chair
-  Warsh Fri.
-- Earnings tiles rebuilt: PDD/XPEV, DKS/INTU/ZM/BMO/HEI, NVDA/CRM/CRWD/SNPS/KSS/
-  ANF (Wed after the close), BBY/DG/DLTR/MRVL/WDAY/ADSK, MNSO.
-- Oil band moved to Brent $94.39 (Aug 21, +0.7% d/d, +39.4% YoY, WTI $87.06
-  +6.9% w/w) with the Hormuz standoff, the tightened Treasury sanctions, and
-  Pezeshkian's "conclude the war from a position of strength" line.
-- `DEFAULT_CONF_ROWS` is now EMPTY ON PURPOSE, so the results section renders the
-  dashed "[ADD CB EDGE SCREENSHOT / CONFIDENCE TABLE HERE]" block and the two
-  tiles read "[fill before send]" rather than shipping last week's numbers. The
-  row shape is kept in a comment directly above it. Fill from the owner Results
-  page before sending.
-- CTA band swapped off the stale "Founding Access Closing Soon" scarcity copy to
-  the current annual offer: code EDGE3, $400/yr instead of $1,000, button now
-  "Get Annual Access".
-- `weeklyEdgeText()`'s `strip()` also decodes `&amp;`/`&middot;`/`&nbsp;`/`&lt;`/
-  `&gt;`/`&quot;`/`&#39;` now, so the plain-text part no longer ships literal
-  "S&amp;P 500" to text-only clients.
+Two thirds of this week's earnings board was ticker-TEXT chips — CRWD, VEEV,
+HPQ, OKTA, WSM, TCOM, DG, MRVL, ADSK, WDAY, AFRM, ZM, CM, BMO, BNS, HEI. None of
+them were broken: they were simply not in `public/logos/`, and the live
+`/proxy/ticker-logo` fallback is exactly what the snapshot engine STRIPS from a
+capture (it 302s off-site and taints the canvas), so a name without a mirrored
+file could never appear in a copied image no matter how many times it resolved
+in the browser.
 
-Preview mirrored to `generated/2026-08-23-weekly-edge-preview.html` and
-`generated/2026-08-23-weekly-edge-preview.png`.
+All 16 were available upstream and are now on disk. `HEI.A` gets the `PBR.A`
+treatment — a copy of `HEI.png`, added to `MANUAL` so no run overwrites it —
+because resolveLogo has nothing for a dotted class suffix: GitHub keys on the
+plain root symbol and Wikidata searches the company, not the share class. Both
+HEICO lines report on the same day, so that is not a hypothetical.
 
-## 2026-08-23 (c) - Owner Overview: the two 2px "bars" at the bottom were collapsed cards
+### The seed list
 
-Edited: `owner-vite/src/pages/ControlPanel.tsx`.
+`SEED` in `scripts/fetch-ticker-logos.mjs` was ~190 mega-caps, which is why the
+gap kept reopening: a `$25B`–`$150B` name that reports every quarter was never
+going to be in it. It now carries ~490 symbols — the rest of the S&P 500 plus the
+mid-cap software / fintech / Canadian-bank names that actually populate an
+earnings week.
 
-Two thin horizontal lines sat at the bottom of the Overview page under the
-campaign link builder, 12px apart, with nothing between them. They are the
-**Flow · Ticker Visits** and **EM · Ticker Visits** cards, shrunk to zero
-height — each line is that card's top and bottom border with no content
-between.
+Every added symbol was HEAD-verified against davidepalazzo/ticker-logos before
+being listed, so an "unresolved" line in the run tally now means the upstream
+repo dropped that file, not that the name was a guess.
 
-Cause: the scrollable page body is a **column flex container** with
-`height: 0; flex: 1; overflow-y: auto`, and flex items default to
-`flex-shrink: 1`. A card normally survives that because of its automatic
-minimum size — but that protection only applies while `overflow` is `visible`,
-and `TickerVisitsCard` sets `overflow: hidden` on its panel for the rounded
-clip. With the page content taller than the container, the shrink had to land
-somewhere, and those two were the only children free to absorb it.
+    node scripts/fetch-ticker-logos.mjs        # ~285 more, incremental
 
-Fix: the scroll body now also carries `owner-page-body`, with one rule —
-`.owner-page-body > * { flex-shrink: 0; }`. Nothing in a scroll container
-should ever shrink; it scrolls. This covers every current and future card on
-the page rather than patching the two that happened to show it.
+Two names in this week's board resolve nowhere upstream — `P` and `UI` — and stay
+as text chips until a file is dropped in by hand.
 
-Separately: those two cards are also **empty** — `/api/ticker-event?sinceDays=7`
-returns nothing for either source, so once they have height they read "No ticker
-visits recorded in this window."
+One trap worth naming: the seed is a template literal that gets
+whitespace-split straight into symbols, and `main()`'s filename guard
+(`/^[A-Z0-9.\-]{1,10}$/`) accepts a bare date. A `#` comment line inside the
+literal would have quietly seeded `2026-08-23` as a ticker. The prose lives
+above the literal for that reason.
 
-## 2026-08-23 (b) - Owner Overview: hourly heatmap removed, Campaigns is a bar list
+## 2026-08-23 - Earnings tab rebuilt as a week board; snapshot copies to the clipboard
 
-Edited: `owner-vite/src/pages/ControlPanel.tsx`, `owner-vite/src/components/AcquisitionPanel.tsx`.
+Edited: `components/pages/EconomicCalendar.tsx`.
 
-**Hourly load heatmap removed** from the Overview tab. `<HourlyHeatmap />` and
-its import are gone; `components/HourlyHeatmap.tsx` still exists on disk but is
-no longer mounted anywhere. Nothing was read off it that the Traffic card's
-live/daily buckets don't already say, and it cost its own fetch plus a 7x24 fold
-of the visit log.
+The `/economic-calendar` **Earnings** tab was the calendar's own row grid with
+the events removed: a full-width band per session, an 80px time gutter, chips
+flowing left. A week with four names on Tuesday spent a 2000px-wide row on four
+46px chips, so the tab was mostly empty background down the right-hand side, and
+five days of it stacked past the fold for ~25 names.
 
-**Campaigns is now a ranked bar list, not a table** — same shape as "Pages being
-visited": name on the left with a magnitude bar under it, counts right-aligned
-in a matching column grid (`CAMPAIGN_COLS`). The bar encodes **sessions** (the
-clicks the link got).
+### The board
 
-The sort moved with it, and had to: it was `paid → signups → sessions`, which
-answers "which push earned customers". A ranked bar list sorted on a column
-other than the one its bars draw reads as broken, so it is now
-`sessions → paid → signups`. Signups / Paid / Conv. stay as columns beside the
-bar, so the earnings question is still one glance away.
+One **column per trading day**, `repeat(auto-fit, minmax(210px, 1fr))` — the
+width is divided between the days instead of being handed to one row, and the
+whole week lands in a single screen. `auto-fit` rather than `repeat(5)` on
+purpose: the feed decides how many days come back, and globals.css's GLOBAL GRID
+COLLAPSE flattens fixed `repeat(N)` counts on phones but deliberately re-exempts
+`auto-fit`/`auto-fill`.
 
-## 2026-08-23 - Owner Overview: kill the Intl cost behind the traffic / pages-visited lag
+Inside a column: a day header, then a PRE / AFTER / TBD block per session, each
+with its own `repeat(auto-fill, minmax(52px, 1fr))` chip grid.
 
-Edited: `owner-vite/src/pages/ControlPanel.tsx`.
+- **Dates are white.** Every day, not just today — the cyan weekday and the TODAY
+  pill already carry the emphasis, and the old `#3a5570` made every other day
+  read as a disabled row.
+- **Chips are centered on their cell's axis.** The old chip centered a 34px logo
+  in a 46px column but let the ticker text start at the column's left edge, so
+  any symbol narrower or wider than the logo sat visibly off-axis. The fix is
+  `textAlign:center` + `width:100%` on the label — `align-items` centers the
+  span, not the text inside a span that stretches. Each chip also carries its
+  market cap on a second line.
+- **PRE and AFTER no longer share one cyan.** After-hours is now the theme
+  orange, so the two sessions are distinguishable at a glance (this also applies
+  to the earnings rows woven into the calendar tab).
 
-Still laggy after the 2026-08-22 re-render fix. That one stopped the work from
-running *every second*; it did nothing about how expensive one run is. Profiling
-the Overview tab put nearly all of it in one place: **`Date#toLocaleDateString` /
-`toLocaleString` called once per visit row.** Each of those calls constructs a
-fresh `Intl.DateTimeFormat` internally, and the construction — not the
-formatting — is the cost. `/api/page-visits?days=30&limit=20000` returns tens of
-thousands of rows, and six separate passes were formatting every one of them.
+### CB Edge mark
 
-**1. ET bucket keys are now arithmetic, not `Intl`.** America/New_York's UTC
-offset only changes at DST boundaries, and those land on an hour mark — so one
-`Intl` lookup per *UTC hour* answers for every row inside it. 30 days of visits
-touch ~720 cached buckets instead of 20,000 formats; every key after that is
-integer math on a shifted timestamp. New `etOffsetMs` / `etDayKeyMs` /
-`etHourKeyMs` / `etYearMs`; `etDayKey`/`etDayLabel` keep their signatures and
-delegate. Verified identical output against the old formatters over three years
-at 7-minute steps (225,463 samples, both DST switches, zero mismatches).
-Measured on one 20k-row pass: **1528ms → 51ms.**
+Two places: the page toolbar (replacing the 📅 emoji), and the **board's own
+header**, which also carries the week range, the name count and the active cap
+floor. `/cb-edge-logo.png` is a real same-origin file in `public/`, so unlike the
+302'd ticker logos the capture can actually draw it.
 
-**2. `hourBuckets` formatted every timestamp twice.** It called `hourKey(t)` for
-the map read *and* again for the map write, doubling the cost of the hottest
-loop on the tab. Keyed once now.
+### Snapshot → clipboard, earnings only
 
-**3. `navLabelFor` rebuilt the nav table on every call.**
-`NAV_GROUPS.flatMap(g => g.items).find(...)` — allocated a flattened array and
-linear-scanned it, once per visit row, because `describePage()` calls it. Now a
-module-level `NAV_LABEL_BY_HREF` map built once. `labelFor` inside
-`overviewMetrics` had the same body and now shares it.
+The button copies now (`captureAndCopy` → `copyOrDownload`) instead of dropping a
+PNG in Downloads. A browser that refuses an image clipboard write still gets the
+file, and the button says which happened — **✓ Copied** vs **✓ Saved** — because
+a Firefox user staring at a bare ✓ has no way to know Ctrl+V will do nothing.
 
-**4. `describePage` is memoised.** Tens of thousands of rows, a few dozen
-distinct `(page_key, path, label)` triples — every row after the first for a
-page is a map hit instead of a regex plus a nav lookup.
+What gets captured is now tab-dependent: on the earnings tab the target is the
+**board alone** (`earnRef`), not the toolbar, filter dropdowns or search box. The
+board carries its own header, so the pasted image is a self-contained card rather
+than a screenshot of an app. The calendar tab still captures the page shell, and
+keeps the scroll-container expansion dance it needs; the board is the scroller's
+content, so its own box is already the full height and it skips that entirely.
 
-**5. `seriesFor` is memoised in both of its callers.** `KpiStrip` and
-`MetricsTabSection` each called it bare, so each re-bucketed the whole visit log
-on every render. `KpiStrip` is the worse of the two: its five `useLiveSeries`
-hooks append a point on every poll, so it re-renders on a timer regardless of
-whether `visits` changed. Both are `useMemo`d on `[gran, visits, signups]`.
+## 2026-08-23 - Feedback became a ticket system (customer + owner, both ends of one thread)
 
-**6. `onToday` no longer formats per row.** The unique-visitors-today set
-compared `toLocaleDateString(...)` against today's date string for every row; it
-now compares the cheap ET day key. A plain timestamp cutoff would have been
-wrong — the ET day starts at a different UTC instant depending on DST — so the
-key comparison stays.
+Added: `components/shared/FeedbackThread.tsx`, `app/owner/feedback/page.tsx`.
+Edited: `server-v2/api-router.js`, `app/feedback/page.tsx`,
+`components/shared/OwnerSidebar.tsx`, `components/shared/UserMenu.tsx`.
 
-Also trimmed the per-row `new Date()` allocations in the weekly/daily/monthly/
-yearly bucketers in favour of `Date.parse` plus one reused `Date`.
+`/feedback` used to be fire-and-forget: a form, a thank-you, silence. There was
+no way for a customer to see what happened to a note they sent, and no way to
+answer one. Every submission is now a **ticket** with a conversation on it.
 
-No behavior change: same buckets, same labels, same numbers. Client-side only —
-no API, proxy or server change.
+### The flow
 
-## 2026-08-22 (b) - Owner Overview: fix the 1Hz re-render that made the page crawl
+1. A customer opens a ticket at `/feedback` (same category tiles, same box). It
+   lands as **Open** and the page drops straight into the thread — that is the
+   confirmation, and it shows them where the reply will arrive.
+2. Both sides reply on the thread. The customer's tickets live under a "My
+   tickets" tab on the same page; unread owner replies carry a badge.
+3. The owner works the queue at **`/owner/feedback`** and hits **Mark complete**
+   when it's done. **Only the owner can change status** — enforced server-side,
+   not by hiding a button.
+4. A customer replying to a completed ticket **reopens it**. Otherwise the reply
+   lands in a thread nobody is watching any more.
 
-Edited: `owner-vite/src/pages/ControlPanel.tsx`.
+### Schema
 
-The page had become very laggy. Four causes, all of them the same shape: a
-one-second interval that exists to move a clock was driving work that has
-nothing to do with a clock. The visit-log cards added yesterday didn't create
-any of this — they made an existing problem expensive enough to feel.
+New `customer_feedback_messages (feedback_id → customer_feedback, author, body,
+created_at)` plus two read marks on `customer_feedback`: `user_read_at` and
+`owner_read_at`. Two of them, because "unread" means something different on each
+end — the customer wants to know about owner replies, the owner about customer
+ones. Opening a thread stamps the viewer's mark; that is the only read signal
+either surface has.
 
-**1. `overviewMetrics` was a bare IIFE.** A `setInterval` bumps
-`uptimeTick`/`setTick` every second so the sidebar's uptime and "Ns ago" stay
-live. That re-renders ControlPanel, and the metrics block re-ran on every tick:
-a full pass over `visits` for the unique-visitors-today set, three more for the
-daily/weekly series, a sort of `pageStatuses` — thousands of rows of work per
-second, to redraw a clock. It also returned a **fresh object** each time, so
-`OverviewSection` and every chart, bar list and table under it re-rendered at
-1Hz too. Now `useMemo`, keyed on the state the numbers actually come from.
+Status stays the original two values, `'open'` and `'resolved'` (labelled
+"Complete"), so every row written before threads existed still reads correctly.
 
-**2. The metrics object carried a per-second field.** `uptime: fmtUptime(…)`
-recomputed every tick and was the one thing in the object that could never be
-stable — so it alone would have defeated the memo. Nothing read it: the
-destructure in `OverviewSection` never included it. Removed from the object and
-the type.
+Both are created **lazily in `api-router.js`**, with the same `ensureX(pool)`
+pattern `em_snapshots` and `es_stats` use — deliberately NOT in `lib/db.ts`. The
+checked-in `lib/db.ts` is behind `server-v2/_lib-db.cjs`, so regenerating that
+bundle to add a helper would drop unrelated hand-patches (the same reason
+`/api/strike-gex-series` uses raw SQL).
 
-**3. `OverviewSection` is now `React.memo`.** Paired with (1), and both are
-needed: memoising the data alone still hands down a new object, memoising the
-component alone still receives one. Together a tick that changes nothing on the
-tab costs nothing on the tab.
+### Routes
 
-**4. `SidebarContent` was a component declared inside render.** A new function
-identity every render means React tears down and rebuilds the subtree whose type
-changed — so the mobile drawer was unmounting and remounting once per second,
-losing any focus or scroll inside it. Called as `{SidebarContent()}` now, which
-inlines the JSX into the parent's own tree where it reconciles normally.
+| Route | Who |
+|-------|-----|
+| `GET /api/feedback` | owner: every ticket; customer: their own |
+| `POST /api/feedback` | any signed-in user — opens a ticket |
+| `GET /api/feedback/:id` | ticket + thread; also marks it read |
+| `PATCH /api/feedback/:id` | `{status}` owner-only, `{read:true}` either side |
+| `POST /api/feedback/:id/messages` | one reply, from whichever side is signed in |
 
-**Plus: the visit log no longer re-downloads every 60s.** `refresh()` runs on a
-one-minute timer and was re-pulling `/api/page-visits?days=30&limit=20000` with
-it. Every arrival replaces the array, which invalidates the memos in four
-consumers (metrics, Top pages, Acquisition, the link builder) and makes all of
-them re-derive from scratch — a visible hitch every minute, buying a fresher
-view of a log that is read in 24h/7d/30d windows. Throttled to 5 minutes via a
-ref that only advances on a SUCCESSFUL fetch, so a failed attempt retries on the
-next refresh instead of waiting out the window.
+`GET /api/feedback` was owner-only and 403'd everyone else; it now scopes to the
+caller's own tickets instead. The legacy `PATCH /api/feedback {id,status}` body
+shape still works. The list returns `openCount` and `unreadCount` computed over
+the whole set, not the filtered page, so a status filter never moves a badge.
 
-The 1s interval itself is left alone — it is correct for what it was for, and
-the fix is that it can no longer reach anything else.
+### UI
+
+`components/shared/FeedbackThread.tsx` is the thread itself — bubbles, stamps,
+composer, status chip — and **both** pages render it, so a reply cannot read
+differently on the two ends. "Mine" is whichever side is looking: the owner sees
+their replies on the right, the customer sees theirs there. Enter sends,
+Shift+Enter breaks the line.
+
+The owner inbox is a two-pane split (queue left, thread right) with Open /
+Complete / All filters, polling the list every 30s and an open thread every 15s.
+Its breakpoint is declared in the page: globals.css's GLOBAL GRID COLLAPSE only
+rewrites `repeat(N…)` and `1fr 1fr` signatures, and this grid is neither.
+
+Sidebar gets **Owner → Feedback**. The account menu's "Send feedback" is now
+"Feedback & Support", because the reply comes back to the same place.
+
+
+## 2026-08-22 - Frozen sessions: the real Premarket / Post-Market tabs on a past date
+
+Added: `server-v2/premarket-freeze-recorder.js`,
+Edited: `server-v2/server-with-proxy.js`, `components/pages/Premarket.tsx`,
+`components/pages/premarket/PostMarketTab.tsx`,
+`components/pages/premarket/postMarketData.ts`.
+
+Picking Friday used to grey out both tabs. Now it opens them for real.
+
+### The recorder
+
+`premarket-freeze-recorder.js` captures the page's **inputs** twice a trading
+day into a new `premarket_freeze (date, symbol, slot, ts, payload JSONB)` table:
+
+- **`pre`** 09:10–09:29 ET — the premarket map, upserted each poll so it holds
+  the freshest pre-bell state right up to the open.
+- **`post`** 16:05–16:25 ET — the settle. 16:05, not the bell, for the same
+  reason the page's own `afterClose` gate uses it.
+
+The payload is the trimmed `/proxy/snapshot` the socket would have delivered —
+`gexRows`, spot, esFut, basis, expiry, walls, flip, totals. `flow`, the candle
+arrays and `status` are dropped; es_candles is already a per-date table and the
+frozen page reads that session's bars from `/api/snapshots/candles?date=`.
+
+**Inputs, never outputs.** The recorder does no arithmetic at all — it never
+computes a wall or a flip. This is the same pattern `home_static_snapshots` and
+`mult_greek_static_snapshots` already use, and it is why there is no second
+implementation of the page's math on the server to drift out of step with the
+client's.
+
+Server-side, not client-side: the page's old localStorage EOD snapshot only ran
+while mounted between 15:40 and 16:10, so nobody was ever on /premarket at
+3:40pm and it never wrote. That deadlock is documented in Premarket.tsx's header
+and is not being repeated.
+
+Retention 120 days (`PREMARKET_FREEZE_KEEP_DAYS`), pruned daily.
+
+### Proxy routes (additive — nothing existing altered)
+
+- `GET /proxy/premarket-freeze?date=&symbol=` — both slots in one answer, so
+  switching tabs costs no second request. `sessionCacheOpts()` lets the browser
+  keep a past session for a day; today stays `no-store` because today's `pre`
+  row is still being upserted until the bell.
+- `GET /proxy/premarket-freeze?dates=1&limit=` — flags only, no payloads. Feeds
+  the picker.
+- `POST /proxy/premarket-freeze-run { slot }` — owner-only via proxy-auth, for a
+  missed window or to seed today right after a deploy.
+- One boot line next to the other recorders.
+
+### The client swap
+
+Exactly one line changes what the page reads:
+
+```
+const gex = frozen && frozenGex ? frozenGex : liveGex;
+```
+
+Everything below it — every memo, both tabs, every panel — is untouched, so a
+frozen date renders the actual page off that day's actual book. Walls, CORE, max
+pain, expected move, DEX/vanna, premium and written-vs-traded are all recomputed
+now, by the live code, from old inputs.
+
+Three things had to start following the session instead of the clock: `viewDate`
+(the overnight window's idea of "today", the wall log, the journal, and the
+baseline's `today=` param — without which a frozen Tuesday would be diffed
+against last night's close), `viewMin` (a frozen day reads as just past the
+settle, which is what puts the Post-Market tab in its finished state), and the ES
+bars, which come from a dated pair — that session's and the prior session's,
+because the overnight range and the prior close live in the day before.
+
+`PostMarketTab` gained one optional `frozenDate` prop. It changes only the three
+things that reach outside the props: the intraday ladder is asked for by date,
+the accuracy log is not back-dated, and **Tomorrow's Map is suppressed** — that
+panel fetches the CURRENT next expiry, so on a past session it would staple next
+week's structure onto last Tuesday's recap.
+
+The picker marks capture-backed dates with a leading bullet, the header carries a
+violet FROZEN banner, and both tabs only go dead on a date with **no** capture,
+where HistoricalRecap still takes over. Frozen sessions are SPX only (the freeze
+captures the one symbol the socket carries), so stepping back onto a past date
+from a SPY/QQQ board snaps to SPX.
+
+### Limitation
+
+**No back-fill.** Nothing stores per-strike marks and volume for past sessions,
+so the freeze only covers dates from the day it deploys forward. Everything
+before that keeps the recorded-stores recap.
+
+
 ## 2026-08-22 - Session picker: wire it to the history that actually exists
 
 Edited: `components/pages/premarket/postMarketData.ts`,

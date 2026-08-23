@@ -53,6 +53,18 @@ const CONCURRENCY = 6;
 
 // Large caps that show up in the earnings strip often enough to be worth having
 // on disk before they appear. Anything not here resolves live on first miss.
+//
+// The second half of this list (everything from ABNB down) was added 2026-08-23
+// and every symbol in it was HEAD-verified against davidepalazzo/ticker-logos
+// first — so an "unresolved" tally on one of those means the upstream repo
+// dropped the file, not that the name was a guess. It covers the rest of the
+// S&P 500 plus the mid-cap software / fintech / Canadian-bank names that kept
+// showing up in the earnings week as ticker-TEXT chips (ZM, CRWD, VEEV, OKTA,
+// WDAY, MRVL, AFRM, BMO, BNS, HPQ, WSM, TCOM, DG, ADSK, CM…).
+//
+// NO COMMENTS INSIDE THE TEMPLATE LITERAL: it is whitespace-split straight into
+// symbols, and the filename filter in main() (`/^[A-Z0-9.\-]{1,10}$/`) happily
+// accepts things like a bare date. Keep prose out here.
 const SEED = `
 AAPL MSFT NVDA AMZN GOOGL GOOG META TSLA AVGO BRK.B LLY JPM V UNH XOM MA
 JNJ PG COST HD ABBV WMT NFLX MRK KO ADBE PEP CVX CSCO CRM AMD TMO ACN MCD
@@ -66,17 +78,37 @@ T TMUS CHTR WBD PARA FOX NWSA OMC IPG DISH LYV EA TTWO RBLX U SNAP PINS
 ENB CVE SU TRP CNQ IMO ETN LIN APD SHW ECL DD DOW LYB PPG NUE FCX NEM
 ABBV BIIB MRNA BNTX ILMN IQV A DXCM IDXX WST MTD ALGN PODD ZBH BAX
 PLTR APP HWM WDC SNDK PBR PBR.A
+ABNB ACGL ADM ADSK AEP AER AFL AFRM AIG AJG AKAM ALB ALL AMAT AMP AMT AON
+APH ARM ATVI AVB AVY AWK AXON AZO BAC BAH BBY BDX BEN BG BIDU BILI BK BKR
+BMO BNS BR BRO BSY BX BXP C CAH CARR CBOE CBRE CCEP CCI CCL CDW CE CEG CF
+CFG CHD CHKP CHWY CINF CLX CM CMA CME CMG CMI CNC COF COIN CPB CPRT CRH CRWD
+CSGP CSX CTAS CTRA CTSH CTVA CZR D DAL DASH DDOG DELL DFS DG DGX DHI DKNG
+DLR DLTR DOCU DPZ DRI DTE DUOL DXC EBAY EFX EIX EL EMN EMR ENPH EPAM EQIX
+EQR EQT ES ESS ETR ETSY EW EXC EXPD EXPE EXR F FAST FCNCA FDX FE FI FICO FIS
+FITB FLEX FMC FSLR FTNT FTV GD GDDY GEHC GIS GL GLW GM GPC GPN GRMN HAS HEI
+HIG HLT HOLX HOOD HPE HPQ HRL HST HSY HUBS HUM IEX IFF INCY INFY IP IRM ITW
+IVZ J JBHT JBL JCI JNPR K KDP KEY KEYS KHC KIM KMB KMX KR KVUE L LDOS LEN LH
+LKQ LNT LRCX LULU LUV LVS LW MANH MCHP MCK MCO MELI MET MGM MHK MKC MKTX MLM
+MNST MO MOH MOS MRVL MS MSCI MSI MTB MTCH NCLH NDAQ NDSN NET NI NOC NRG NSC
+NTAP NTES NTRS NWS NXPI O ODFL OKE OKTA OMCL ON ORLY OTIS OWL PAYX PCAR PEG
+PH PHM PKG PNC PNW PPL PRU RCL REG RF RJF RL RMD ROK ROL ROST RSG SBUX SEDG
+SJM SLG SMCI SNOW SOFI SPOT SRE STE STLD STT STX STZ SWK SWKS SYF SYY TAP
+TCOM TDY TECH TER TFC TGT TOST TROW TSN TTD TWLO TXT UAL ULTA UPS USB VEEV
+VICI VRSK VRT VST VTRS WAB WBA WDAY WM WRB WSM WYNN XYL ZM ZS
 `.trim().split(/\s+/).filter(Boolean);
 
 // Hand-mirrored logos: neither the GitHub set nor Wikidata resolves these, so
 // public/logos/<SYM>.png was cropped and committed by hand. Never overwrite
 // them — including under --force, which would otherwise replace a good file
 // with nothing (resolveLogo returns null) or with an unusable wide lockup.
-// PBR.A is Petrobras' preferred-share line. resolveLogo has nothing for the
-// dotted class suffix (GitHub keys on the plain root symbol, and Wikidata
-// searches the company, not the share class), so public/logos/PBR.A.png is a
-// copy of PBR.png. Same treatment as SPCX: keep it, never re-resolve it.
-const MANUAL = new Set(['SPCX', 'PBR.A']);
+// PBR.A is Petrobras' preferred-share line and HEI.A is HEICO's class A.
+// resolveLogo has nothing for a dotted class suffix (GitHub keys on the plain
+// root symbol, and Wikidata searches the company, not the share class), so
+// public/logos/PBR.A.png and HEI.A.png are copies of PBR.png / HEI.png. Same
+// treatment as SPCX: keep them, never re-resolve them. Note that both class
+// lines DO appear in the earnings feed alongside their root symbol (HEI and
+// HEI.A both reported 2026-08-25), so this is not a hypothetical.
+const MANUAL = new Set(['SPCX', 'PBR.A', 'HEI.A']);
 
 const args = process.argv.slice(2);
 const FORCE = args.includes('--force');
