@@ -9,7 +9,7 @@ import { T, display, label, body, section, button, input, textAction, SANS } fro
  * First run, at /welcome. Three small things that make the app better, and not
  * one of them is required.
  *
- * The governing rule: NOTHING HERE BLOCKS. A household with no ZIP, no calendar
+ * The governing rule: NOTHING HERE BLOCKS. An account with no ZIP, no calendar
  * and no bank accounts is a completely usable app — Today still shows the day,
  * lists still work, tasks still work. Every step has a Skip that costs nothing
  * and every one of them can be done later in Settings. An onboarding flow that
@@ -177,7 +177,7 @@ function CalendarStep({ connected, onNext }: { connected: string | null; onNext:
       </h2>
       <p style={{ ...body(15), color: T.inkSoft, marginTop: 8 }}>
         {connected
-          ? `Today will show what's on ${connected}. You can choose which calendars count, and whether to share them with the other person in your household, in Settings.`
+          ? `Today will show what's on ${connected}. You can choose which of your calendars count in Settings.`
           : 'Today can show what’s on your Google Calendar next to your tasks, so the day is one list instead of two apps. Read-only unless you add an event yourself.'}
       </p>
 
@@ -274,9 +274,9 @@ function DoneStep({ onStart }: { onStart: () => void }) {
   return (
     <div style={section()}>
       <p style={{ ...body(16), color: T.inkSoft, margin: 0 }}>
-        Everything else lives in the app: invite the other person from Settings,
-        add tasks from Today, plan the week's meals from Lists. Anything you
-        skipped is waiting for you in Settings whenever you want it.
+        Everything else lives in the app: add tasks from Today, plan the week's
+        meals from Lists, set your accounts up under Money. Anything you skipped
+        is waiting for you in Settings whenever you want it.
       </p>
       <button type="button" onClick={onStart} style={{ ...button('primary'), width: '100%', marginTop: 18 }}>
         Start

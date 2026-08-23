@@ -37,7 +37,7 @@ export default function Routines() {
       </div>
     )
   }
-  // The habits are the household's, not yours — `user` is only the readiness
+  // The habits belong to the account, not to a session — `user` is only the readiness
   // gate that keeps this from painting before auth settles.
   if (!data || !user) return null
 

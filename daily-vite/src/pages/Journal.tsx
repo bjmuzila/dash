@@ -108,12 +108,11 @@ function Capture() {
       />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     gap: 12, marginTop: 10 }}>
-        {/* Said out loud on the one screen where it matters most. There is no
-            private mode in this app: an entry is visible to everyone in the
-            household, and someone should learn that before they write, not
-            after. */}
+        {/* A character count is a small thing, but it is the only feedback this
+            box gives before you commit — and on an empty box it is the prompt
+            that says the field is live rather than decorative. */}
         <span style={label({ letterSpacing: '0.06em' })}>
-          {text.trim() ? `${text.trim().length} characters` : 'Shared with the household'}
+          {text.trim() ? `${text.trim().length} characters` : 'Write anything'}
         </span>
         <button type="submit" disabled={!text.trim() || create.isPending}
                 style={button(text.trim() ? 'primary' : 'ghost')}>
@@ -154,7 +153,7 @@ function Entry({ note, mine, people, onDelete }: {
         </span>
         <span style={{ flex: 1 }} />
         {/* Only the person who wrote it gets the delete control. Everything else
-            in this app is the household's to edit, but an entry is the one thing
+            in this app is yours to edit, but an entry is the one thing
             here that nobody else could retype if they were wrong about wanting
             it gone. */}
         {mine && (confirming ? (

@@ -22,21 +22,23 @@
  *
  * ── TENANCY: household_id, on every row, always ───────────────────────────
  *
- * The unit of ownership is a HOUSEHOLD, not a user. A signup creates one
- * household containing one user; that user can later invite a partner, which
- * is the same "two people, one set of lists" shape budget.cbedge.net has —
- * scoped to a tenant instead of to the whole database.
+ * The unit of ownership is a HOUSEHOLD, not a user, even though a household
+ * here holds exactly one person (see HOUSEHOLD_SEATS). That looks like an
+ * indirection with nothing behind it and is not: fusing the tenant key to the
+ * user id would make "whose row is this" and "who is signed in" the same
+ * question, and separating them again later means touching every query in every
+ * module. One column now, or a migration across the whole codebase later.
  *
  * The rule, without exception:
  *
  *     every content row carries household_id NOT NULL
  *     every read and every write filters on household_id = <caller's>
  *
- * There is no visibility column and no per-row sharing switch. Inside a
- * household everything is shared (that is what a household is); across
- * households nothing is, ever. A missing WHERE clause is therefore a bug you
- * can find by grepping for a table name without `household_id` beside it,
- * rather than a subtle predicate that silently over-matches.
+ * There is no visibility column and no per-row sharing switch — with one person
+ * per household there is nobody to hide a row from, and across households
+ * nothing is shared, ever. A missing WHERE clause is therefore a bug you can
+ * find by grepping for a table name without `household_id` beside it, rather
+ * than a subtle predicate that silently over-matches.
  *
  * `scoped()` below is the helper every route module must use to build that
  * predicate. Do not hand-roll it.
@@ -45,13 +47,16 @@
  *
  * Ported from _lib-household.cjs — scrypt passwords, an opaque session token
  * whose SHA-256 is what the database stores, and the device-bound 4-digit PIN
- * for quick sign-in on a phone. What is NEW here, because this one has members
- * rather than two known people:
+ * for quick sign-in on a phone. What is NEW here, because this one has paying
+ * customers rather than two known people:
  *
  *   * public self-signup, with email verification
  *   * password reset by emailed token
- *   * Sign in with Google (which doubles as the Gmail/Calendar link)
- *   * a subscription gate — see requireSubscription() and _lib-daily-billing
+ *   * a subscription gate — see subscriptionProblem() and _lib-daily-billing
+ *
+ * Accounts are email and password only. loginWithGoogle() below still exists and
+ * is correct, but the route that reached it is switched off — Google is a
+ * calendar integration here and nothing else. See /api/daily/google/start.
  *
  * Cookies are dy_session / dy_device and carry NO Domain attribute, so the
  * browser scopes them host-only to daily.cbedge.net. Never add
@@ -93,10 +98,20 @@ const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 const VERIFY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RESET_TTL_MS = 60 * 60 * 1000;
 
-/** How many people one household may hold. Two is the product, not a limit
- *  anyone has asked to raise; it exists so an "invite" link can't be pasted
- *  into a group chat and turn one subscription into a company account. */
-const HOUSEHOLD_SEATS = 2;
+/**
+ * How many people one account may hold. ONE — Daily is a single-person product.
+ *
+ * The tenancy is still keyed on `household_id` rather than `user_id`, and that
+ * is deliberate rather than leftover. A household of one is a household; making
+ * the tenant key the user id would fuse identity and ownership, and un-fusing
+ * them later means rewriting every query in every module. This way the seat cap
+ * is a number in one place.
+ *
+ * Setting it to 1 is what actually turns invites off — the invite route and
+ * joinHousehold() both check it, so neither can add a second person while this
+ * says one, whatever the UI does or doesn't show.
+ */
+const HOUSEHOLD_SEATS = 1;
 
 const available = () => !!libDb;
 
@@ -129,8 +144,11 @@ async function ensureSchema() {
     // has no password at all, and inventing one would mean emailing a secret
     // nobody asked for. Such an account can add a password later from Settings.
     //
-    // role is 'owner' | 'member'. The owner is the billing contact and the only
-    // one who can invite, remove a member, or cancel. Both see the same data.
+    // role is 'owner' | 'member'. Every account created today is an owner —
+    // 'member' is reachable only through joinHousehold(), which the seat cap now
+    // refuses. The column stays because the billing routes read it, and because
+    // dropping a column is the one schema change that cannot be undone by
+    // adding it back.
     await pool.query(`
       CREATE TABLE IF NOT EXISTS daily_users (
         id                   SERIAL PRIMARY KEY,

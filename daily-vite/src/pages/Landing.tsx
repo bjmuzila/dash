@@ -42,9 +42,9 @@ export default function Landing() {
             Your whole day — tasks, meals, money and the market calendar — on one screen.
           </h1>
           <p style={{ ...body(17), color: T.inkSoft, marginTop: 16, maxWidth: 580 }}>
-            Built for two people running one household together, and for the one of
-            them who also watches the market open. It started as a private app its
-            author used every morning; this is that app, for you.
+            Built for someone running their own life out of one app — and who also
+            watches the market open. It started as a private thing its author used
+            every morning; this is that app, for you.
           </p>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 26 }}>
@@ -57,7 +57,7 @@ export default function Landing() {
               "No free tier" is a real objection and burying it does not make it
               go away — it just moves the moment somebody feels tricked. */}
           <div style={{ ...label({ color: T.faint, letterSpacing: '0.08em' }), marginTop: 14, lineHeight: 1.7 }}>
-            Card required · No free tier · Cancel any time · Two people, one bill
+            Card required · No free tier · Cancel any time
           </div>
         </div>
 
@@ -77,10 +77,10 @@ export default function Landing() {
         {/* ── Plans ────────────────────────────────────────────────────── */}
         <div style={{ marginTop: 52 }}>
           <div style={label()}>Plans</div>
-          <h2 style={{ ...display(28), marginTop: 10 }}>One subscription, two people.</h2>
+          <h2 style={{ ...display(28), marginTop: 10 }}>One price, everything in it.</h2>
           <p style={{ ...body(16), color: T.inkSoft, marginTop: 10, maxWidth: 560 }}>
-            Monthly or annual. The second person in your household is invited from
-            Settings and costs nothing extra.
+            Monthly or annual. Every screen is included on both — there is no tier
+            that holds a feature back.
           </p>
 
           <div style={{ marginTop: 20 }}>
@@ -146,7 +146,7 @@ const FEATURES = [
   {
     title: 'Lists & meals',
     lines: [
-      'A grocery list both of you can see, sorted by aisle, so nobody buys milk twice.',
+      'A grocery list sorted by aisle, so one walk round the shop covers it.',
       'Plan the week\'s meals and the ingredients land on the list already grouped.',
     ],
   },

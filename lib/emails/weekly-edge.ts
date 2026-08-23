@@ -94,6 +94,8 @@ export interface WeeklyEdgeOpts {
   estMoveSub?: string;
   confRows?: ConfRow[];
   resultsNote?: string;
+  /** Second paragraph under the results table — the Estimated Move read. */
+  estMoveNote?: string;
   /** Set false to drop the scanner-proof card from the results section. */
   showScannerProof?: boolean;
   scannerProof?: Partial<ScannerProof>;
@@ -183,7 +185,7 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "issueLabel" | "recapHeadline" | "recapBody" | "indexMoves" | "aheadHeadline" | "calendarEvents" |
   "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
   "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
-  "confRows" | "resultsNote" | "showScannerProof" | "ctaUrl" |
+  "confRows" | "resultsNote" | "estMoveNote" | "showScannerProof" | "ctaUrl" |
   "showAffiliate" | "affiliateHeadline" | "affiliateBody" | "affiliateUrl" | "affiliateBannerUrl" |
   "showTradeify" | "tradeifyHeadline" | "tradeifyBody" | "tradeifyUrl" | "tradeifyCode">>
   // scannerProof is Partial<> on the way in and complete on the way out, so it
@@ -213,11 +215,14 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     // rather than averaged away.
     coreBullseyePct: opts.coreBullseyePct || "100%",
     coreBullseyeSub: opts.coreBullseyeSub || "&le;5 pts &middot; 10:30 &amp; 12:00 CB &middot; 5 of 5 sessions",
-    estMovePct: opts.estMovePct || "—",
-    estMoveSub: opts.estMoveSub || "[fill before send]",
+    // A losing week, reported as one. 96-138 on 234 scored names.
+    estMovePct: opts.estMovePct || "41.0%",
+    estMoveSub: opts.estMoveSub || "96-138 &middot; 234 scored (week of 8/21)",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
     resultsNote: opts.resultsNote ||
       "A ✓ means the Core Bullseye landed within 5 points of where SPX actually printed. Across Aug 17–21 that was 12 of 15 reads — 5 of 5 at both 10:30 and 12:00, and 2 of 5 at 9:45. The two 9:45 misses (8/20 and 8/21) still came in inside 15 points; the 8/17 open at 19.5 was the only genuine whiff of the week. Five sessions is a small sample, which is why the daily rows are printed rather than summarised.",
+    estMoveNote: opts.estMoveNote ||
+      "Estimated Move had a bad week, and it goes in the letter the same as a good one: <strong style=\"color:#ffffff;\">96 wins against 138 losses</strong> on 234 scored names, 41.0%. The cause is not a mystery — the VIX got destroyed, realized volatility came down with it, and names simply did not travel far enough to reach their bands. Expected-move models earn their keep when volatility is expanding; a vol crush is the environment they read worst, and last week was one.",
     showScannerProof: opts.showScannerProof !== false,
     scannerProof: { ...DEFAULT_SCANNER_PROOF, ...(opts.scannerProof || {}) },
     ctaUrl: opts.ctaUrl || PRICING_URL,
@@ -285,6 +290,8 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     `Core Bullseye: ${o.coreBullseyePct} (${strip(o.coreBullseyeSub)})`,
     `Estimated Move: ${o.estMovePct} (${strip(o.estMoveSub)})`,
     strip(o.resultsNote),
+    "",
+    strip(o.estMoveNote),
     "",
     ...(o.showScannerProof ? (() => {
       const p = o.scannerProof;
@@ -505,7 +512,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               <div style="font:800 17px/1.35 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:8px;">The dashboard called it — here's the scorecard</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr>
                 ${resultTile("Core Bullseye", o.coreBullseyePct, o.coreBullseyeSub, "#38BDF8", "50%")}
-                ${resultTile("Estimated Move", o.estMovePct, o.estMoveSub, "#FFB300", "50%")}
+                ${resultTile("Estimated Move", o.estMovePct, o.estMoveSub, "#FF4757", "50%")}
               </tr></table>
 
               ${o.confRows.length ? `
@@ -517,6 +524,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                 <tr><td align="center" style="padding:22px 16px;font:600 12px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;">[ADD CB EDGE SCREENSHOT / CONFIDENCE TABLE HERE]</td></tr>
               </table>`}
               <div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:14px;">${o.resultsNote}</div>
+              <div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:12px;">${o.estMoveNote}</div>
 
               ${o.showScannerProof ? `
               <!-- Flow-scanner example. The card is rebuilt in HTML, not

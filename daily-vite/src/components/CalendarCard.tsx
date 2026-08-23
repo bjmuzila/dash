@@ -51,7 +51,7 @@ export default function CalendarCard({ status, date }: { status: CalendarStatus;
 
       <Body status={status} data={data} isLoading={isLoading} hadError={!!error} />
 
-      {/* Writing is new here — the household app only ever read. It sits at the
+      {/* Writing is new here — the app this came from only ever read. It sits at the
           bottom of the day it adds to, under the events it will join. */}
       {status.connected && !data?.error && <AddEvent date={date} />}
     </div>
@@ -208,15 +208,16 @@ function EventRow({ event, showDay }: { event: CalendarEvent; showDay?: boolean 
         }}>
           {event.summary}
         </div>
-        {(event.location || event.owner || showDay) && (
+        {(event.location || showDay) && (
           <div style={label({ marginTop: 3, letterSpacing: '0.06em' })}>
             {[
               showDay ? (event.allDay ? 'All day' : timeOf(event.start)) : null,
               event.location,
-              // Whose connection this came through. On a shared household
-              // calendar "dentist" means something different depending on
-              // whose dentist it is.
-              event.owner,
+              // `event.owner` is deliberately NOT rendered. It names whose
+              // connection an event arrived through, which was worth saying when
+              // two calendars were merged and is pure noise when there is only
+              // ever one. The field stays on the type — the server still sends
+              // it — so nothing here has to change if that ever comes back.
             ].filter(Boolean).join(' · ')}
           </div>
         )}

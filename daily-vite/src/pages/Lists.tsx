@@ -69,7 +69,7 @@ export default function Lists() {
     )
   }
   // `user` is only a readiness gate here — nothing on this screen is filtered
-  // by who you are. The list is the household's.
+  // by who you are. The list is the account's.
   if (!data || !user) return null
 
   const shift = (n: number) => {

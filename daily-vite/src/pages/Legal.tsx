@@ -59,18 +59,17 @@ export function Terms() {
       <Part heading="What Daily is">
         <p style={{ margin: 0 }}>
           Daily is a personal planning app operated by CB Edge. One subscription covers one
-          household of up to two people. You keep whatever you put into it; we run the software
-          that stores and displays it.
+          account, for one person. You keep whatever you put into it; we run the software that
+          stores and displays it.
         </p>
       </Part>
 
       <Part heading="Your account">
         <p style={{ margin: 0 }}>
           You are responsible for what happens under your sign-in, so keep your password to
-          yourself. Anyone you invite into your household can see and edit everything in it —
-          tasks, lists, meals, habits, projects and money. That is the whole point of a shared
-          household, and it is not reversible after the fact: removing someone stops their future
-          access, it does not un-show them what they already saw.
+          yourself. An account is for one person; anyone who has your password has your tasks,
+          your lists, your calendar and your money screen, because none of it is separately
+          locked once you are through the front door.
         </p>
         <p style={{ margin: 0 }}>
           You must be old enough to enter a contract where you live, and the email address on the
@@ -116,7 +115,7 @@ export function Terms() {
 
       <Part heading="Ending things">
         <p style={{ margin: 0 }}>
-          You can stop using Daily whenever you like and ask us to delete your household's data.
+          You can stop using Daily whenever you like and ask us to delete your data.
           We can suspend an account that is being used to attack the service or to break the law.
           If we ever shut Daily down, we will give you notice and a way to export what is yours.
         </p>
@@ -136,9 +135,8 @@ export function Privacy() {
     <Doc title="Privacy">
       <Part heading="The short version">
         <p style={{ margin: 0 }}>
-          Daily stores what you type into it so it can show it back to you and to the other person
-          in your household. We do not sell it, we do not advertise against it, and we do not use
-          it to train anything.
+          Daily stores what you type into it so it can show it back to you. We do not sell it, we
+          do not advertise against it, and we do not use it to train anything.
         </p>
       </Part>
 
@@ -171,10 +169,9 @@ export function Privacy() {
 
       <Part heading="Who else sees it">
         <p style={{ margin: 0 }}>
-          The other person in your household, in full. Our hosting provider and database, because
-          the data physically lives there. Stripe, for billing. Google, if you connect a calendar.
-          Our email provider, to send you a verification link, a password reset or a household
-          invitation. Nobody else, and never for money.
+          Our hosting provider and database, because the data physically lives there. Stripe, for
+          billing. Google, if you connect a calendar. Our email provider, to send you a
+          verification link or a password reset. Nobody else, and never for money.
         </p>
       </Part>
 
@@ -189,7 +186,7 @@ export function Privacy() {
 
       <Part heading="Getting it back, or getting rid of it">
         <p style={{ margin: 0 }}>
-          Email us and we will send you an export of your household's data, or delete it. Deletion
+          Email us and we will send you an export of your data, or delete it. Deletion
           is real deletion, not a hidden flag, though backups roll off on their own schedule over
           the following weeks.
         </p>

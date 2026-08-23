@@ -113,7 +113,7 @@ function CreateAccount({ onDone }: { onDone: (email: string) => void }) {
         <div style={label({ marginBottom: 7 })}>Your name</div>
         <input style={input()} type="text" value={displayName}
                onChange={(e) => setDisplayName(e.target.value)}
-               autoComplete="name" placeholder="What the other person calls you" />
+               autoComplete="name" placeholder="What we should call you" />
       </label>
 
       {error && <FormError>{error}</FormError>}
@@ -203,7 +203,7 @@ function ChoosePlan({ email }: { email: string }) {
       )}
 
       <div style={{ ...label({ color: T.faint, letterSpacing: '0.06em' }), marginTop: 22, lineHeight: 1.7 }}>
-        Cancel any time from Settings · Two people on one subscription
+        Cancel any time from Settings · Every screen on both plans
       </div>
     </div>
   )

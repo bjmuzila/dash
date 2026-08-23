@@ -1001,38 +1001,20 @@ function registerDailyRoutes({ register, send, readJson, readRaw }) {
           return;
         }
 
+        // INVITES ARE OFF. Daily is a single-person product — HOUSEHOLD_SEATS
+        // is 1, so an invite could only ever mint a token for a seat that does
+        // not exist, and joinHousehold() would refuse it at the far end anyway.
+        // Refused HERE, with a plain sentence, rather than left to fail deeper
+        // down: an email that arrives and then cannot be redeemed is a worse
+        // outcome than a button that was never offered.
+        //
+        // The token machinery, the join route and joinHousehold() all still
+        // work. Raising HOUSEHOLD_SEATS and deleting this branch is the whole of
+        // turning invites back on.
         if (action === 'invite') {
-          // Owner-only: an invite spends the household's second seat, and a
-          // member handing it out could fill the house with someone the person
-          // paying never agreed to.
-          if (!isOwner) throw Object.assign(new Error('Only the account owner can invite someone.'), { status: 403 });
-          const email = daily.normEmail(body?.email);
-          const problem = daily.emailProblem(email);
-          if (problem) throw bad(problem);
-
-          const members = await daily.householdMembers(hid);
-          if (members.length >= daily.HOUSEHOLD_SEATS) {
-            throw Object.assign(
-              new Error(`A household holds ${daily.HOUSEHOLD_SEATS} people. Remove someone first.`),
-              { status: 409 });
-          }
-          if (members.some((m) => daily.normEmail(m.email) === email)) {
-            throw Object.assign(new Error('They’re already in this household.'), { status: 409 });
-          }
-
-          // Bound to the HOUSEHOLD, not to a user: the person receiving it does
-          // not have an account yet, and the token is the only thing that says
-          // which household they are joining.
-          const token = await daily.issueEmailToken({ kind: 'invite', householdId: hid, email });
-          let sent = false;
-          if (mail) {
-            const r = await mail.sendInvite({
-              to: email, inviterName: u.display_name, householdName: u.household_name, token,
-            }).catch(() => ({ ok: false }));
-            sent = !!r?.ok;
-          }
-          send(res, 200, { ok: true, sent, email }, nostore);
-          return;
+          throw Object.assign(
+            new Error('Daily accounts are for one person. There is nobody to invite.'),
+            { status: 409 });
         }
 
         if (action === 'revokeInvite') {

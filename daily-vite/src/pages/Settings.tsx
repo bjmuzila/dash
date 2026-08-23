@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../auth'
 import {
-  ApiError, auth as authApi, billing, calendar as calendarApi, household as householdApi,
+  ApiError, auth as authApi, billing, calendar as calendarApi,
   settings as settingsApi,
-  type BillingStatus, type GoogleCalendar, type HouseholdPayload, type SubStatus,
+  type BillingStatus, type GoogleCalendar, type SubStatus,
 } from '../api'
 import { T, label, body, section, input, button, segment, textAction } from '../theme'
 import Collapsible from '../components/Collapsible'
@@ -15,18 +15,14 @@ import PinPad from '../components/PinPad'
  *
  * The private version of this page answered one question: what do I want the app
  * to do? This one also has to answer the questions a customer asks — am I paying,
- * who else is in here, what happens if my card fails, how do I get out. Those
- * belong on the same screen as the weather ZIP, because a person looking for
- * them looks under Settings and nowhere else.
+ * what happens if my card fails, how do I get out. Those belong on the same
+ * screen as the weather ZIP, because a person looking for them looks under
+ * Settings and nowhere else.
  *
- * Two rules run through the whole file:
- *
- *   1. State is described in plain words, never in Stripe's. "past_due" means
- *      nothing to anybody; "your card was declined, we're retrying it, you still
- *      have access" is the same fact and is actionable.
- *   2. A member sees everything an owner sees and can change less. Hiding the
- *      subscription from the second person in a household just makes them ask
- *      the first one what it says.
+ * The rule that runs through the whole file: state is described in plain words,
+ * never in Stripe's. "past_due" means nothing to anybody; "your card was
+ * declined, we're retrying it, you still have access" is the same fact and is
+ * actionable.
  */
 
 export default function Settings() {
@@ -37,7 +33,6 @@ export default function Settings() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <AccountCard />
       <SubscriptionCard isOwner={isOwner} />
-      <HouseholdCard isOwner={isOwner} />
       <GoogleCalendarCard />
       <WeatherCard />
       <MarketsFeedsCard />
@@ -92,10 +87,10 @@ const longDate = (iso: string | null) =>
 /**
  * Who you are signed in as, and whether we can actually email you.
  *
- * The verification line is not housekeeping: password resets and household
- * invites both go by email, so an unverified address is a person who can be
- * locked out of an account they are paying for. That is why the resend button
- * sits here rather than in a nag banner someone learns to dismiss.
+ * The verification line is not housekeeping: a password reset goes by email, so
+ * an unverified address is a person who can be locked out of an account they are
+ * paying for. That is why the resend button sits here rather than in a nag
+ * banner someone learns to dismiss.
  */
 function AccountCard() {
   const { user, refresh, setUser } = useAuth()
@@ -234,7 +229,7 @@ function statusSentence(s: BillingStatus): { text: string; colour: string } {
     case 'incomplete_expired':
       return { colour: T.muted, text: 'That checkout expired. Nothing was charged.' }
     default:
-      return { colour: T.muted, text: 'No subscription on this household yet.' }
+      return { colour: T.muted, text: 'No subscription on this account yet.' }
   }
 }
 
@@ -286,201 +281,22 @@ function SubscriptionCard({ isOwner }: { isOwner: boolean }) {
               </button>
             )
           ) : (
-            // A member can see the state — they should know if the household is
-            // about to lapse — but the card, the plan and the cancellation all
-            // belong to whoever's payment method it is.
-            <Explain>The account owner manages the subscription and the payment method.</Explain>
+            // The server can still answer `role` with something other than
+            // owner — an account migrated from the old two-seat data, for
+            // instance. It can read its own status but has no payment method to
+            // open a portal against, so it gets a way to reach a human rather
+            // than a button that would 403.
+            <Explain>
+              This account can't open the billing portal itself. Email{' '}
+              <a href="mailto:support@cbedge.net" style={{ color: T.accent }}>support@cbedge.net</a>{' '}
+              and we'll move the subscription onto it.
+            </Explain>
           )}
         </>
       )}
 
       <Flash msg={msg} />
     </section>
-  )
-}
-
-// ── Household ────────────────────────────────────────────────────────────────
-
-function HouseholdCard({ isOwner }: { isOwner: boolean }) {
-  const qc = useQueryClient()
-  const { data } = useQuery({ queryKey: ['household'], queryFn: householdApi.get })
-  const [msg, setMsg] = useState<Msg | null>(null)
-
-  const done = (text: string) => {
-    setMsg({ kind: 'ok', text })
-    void qc.invalidateQueries({ queryKey: ['household'] })
-  }
-  const failed = (e: unknown, fallback: string) => setMsg({ kind: 'err', text: errText(e, fallback) })
-
-  const seatsWord = data ? `${data.seatsUsed} of ${data.seats} seats` : ''
-
-  return (
-    <Collapsible variant="section" title="Household" right={seatsWord}>
-      <Explain>
-        Two people, one subscription. Everything in the app — tasks, lists, the money
-        register — is shared between whoever is in here.
-      </Explain>
-
-      {data && (
-        <>
-          <HouseholdName data={data} isOwner={isOwner} onDone={done} onFail={failed} />
-
-          <div style={label({ marginTop: 18, letterSpacing: '0.1em', color: T.faint })}>People</div>
-          {data.members.map((m) => (
-            <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 12,
-                                     padding: '12px 0', borderTop: `1px solid ${T.rule}` }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ ...body(14), wordBreak: 'break-word' }}>{m.displayName}</div>
-                <div style={label({ marginTop: 2, letterSpacing: '0.08em', color: T.faint })}>
-                  {m.role === 'owner' ? 'Owner' : 'Member'}
-                  {m.emailVerified ? '' : ' · email not verified'}
-                </div>
-                <div style={{ ...body(13), color: T.muted, wordBreak: 'break-all' }}>{m.email}</div>
-              </div>
-              {isOwner && m.role !== 'owner' && (
-                <RemoveMember id={m.id} name={m.displayName} onDone={done} onFail={failed} />
-              )}
-            </div>
-          ))}
-
-          {data.invites.length > 0 && (
-            <>
-              <div style={label({ marginTop: 18, letterSpacing: '0.1em', color: T.faint })}>Invited</div>
-              {data.invites.map((i) => (
-                <div key={i.email} style={{ display: 'flex', alignItems: 'center', gap: 12,
-                                            padding: '12px 0', borderTop: `1px solid ${T.rule}` }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ ...body(14), wordBreak: 'break-all' }}>{i.email}</div>
-                    <div style={label({ marginTop: 2, letterSpacing: '0.08em', color: T.faint })}>
-                      invitation pending
-                    </div>
-                  </div>
-                  {isOwner && <RevokeInvite email={i.email} onDone={done} onFail={failed} />}
-                </div>
-              ))}
-            </>
-          )}
-
-          {isOwner
-            ? <InviteForm seatsLeft={data.seats - data.seatsUsed} onDone={done} onFail={failed} />
-            : <Explain>The account owner can invite or remove people.</Explain>}
-        </>
-      )}
-
-      <Flash msg={msg} />
-    </Collapsible>
-  )
-}
-
-type Ack = { onDone: (t: string) => void; onFail: (e: unknown, f: string) => void }
-
-function HouseholdName({ data, isOwner, onDone, onFail }: { data: HouseholdPayload; isOwner: boolean } & Ack) {
-  const [name, setName] = useState(data.household.name ?? '')
-  const save = useMutation({
-    mutationFn: (n: string) => householdApi.rename(n),
-    onSuccess: () => onDone('Household renamed.'),
-    onError: (e) => onFail(e, 'Could not rename the household.'),
-  })
-
-  if (!isOwner) {
-    return <div style={{ ...body(15), marginTop: 12 }}>{data.household.name || 'Your household'}</div>
-  }
-
-  const changed = name.trim() !== '' && name.trim() !== (data.household.name ?? '')
-
-  return (
-    <div style={{ marginTop: 14 }}>
-      <div style={label()}>Name</div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-        <input style={{ ...input(), flex: 1, minWidth: 0 }} value={name}
-               onChange={(e) => setName(e.target.value)} placeholder="Our house" />
-        <button onClick={() => changed && save.mutate(name.trim())}
-                disabled={!changed || save.isPending}
-                style={{ ...button('ghost'), flexShrink: 0, opacity: changed ? 1 : 0.4 }}>
-          {save.isPending ? 'Saving…' : 'Save'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function InviteForm({ seatsLeft, onDone, onFail }: { seatsLeft: number } & Ack) {
-  const [email, setEmail] = useState('')
-  const invite = useMutation({
-    mutationFn: (e: string) => householdApi.invite(e),
-    onSuccess: (r) => { setEmail(''); onDone(`Invitation sent to ${r.email}.`) },
-    onError: (e) => onFail(e, 'Could not send that invitation.'),
-  })
-
-  if (seatsLeft <= 0) {
-    return <Explain>Every seat on this plan is taken. Remove someone to free one up.</Explain>
-  }
-
-  return (
-    <form
-      onSubmit={(e: FormEvent) => { e.preventDefault(); const v = email.trim(); if (v) invite.mutate(v) }}
-      style={{ marginTop: 18 }}
-    >
-      <div style={label()}>Invite someone</div>
-      <Explain>
-        They get an email with a link, choose their own password, and land in this household.
-        {seatsLeft === 1 ? ' One seat left.' : ` ${seatsLeft} seats left.`}
-      </Explain>
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <input style={{ ...input(), flex: 1, minWidth: 0 }} type="email" inputMode="email"
-               autoCapitalize="off" autoCorrect="off" spellCheck={false}
-               placeholder="them@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <button type="submit" disabled={!email.trim() || invite.isPending}
-                style={{ ...button('ghost'), flexShrink: 0 }}>
-          {invite.isPending ? 'Sending…' : 'Invite'}
-        </button>
-      </div>
-    </form>
-  )
-}
-
-function RevokeInvite({ email, onDone, onFail }: { email: string } & Ack) {
-  const revoke = useMutation({
-    mutationFn: () => householdApi.revokeInvite(email),
-    onSuccess: () => onDone('Invitation revoked.'),
-    onError: (e) => onFail(e, 'Could not revoke that invitation.'),
-  })
-  return (
-    <button onClick={() => revoke.mutate()} disabled={revoke.isPending}
-            style={{ ...segment(false), flexShrink: 0, minHeight: 44 }}>
-      {revoke.isPending ? '…' : 'Revoke'}
-    </button>
-  )
-}
-
-/** Two taps, deliberately. Removing someone signs them out of a shared account
- *  and there is no undo button anywhere in the product. */
-function RemoveMember({ id, name, onDone, onFail }: { id: number; name: string } & Ack) {
-  const [confirming, setConfirming] = useState(false)
-  const remove = useMutation({
-    mutationFn: () => householdApi.removeMember(id),
-    onSuccess: () => { setConfirming(false); onDone(`${name} was removed.`) },
-    onError: (e) => onFail(e, 'Could not remove them.'),
-  })
-
-  if (!confirming) {
-    return (
-      <button onClick={() => setConfirming(true)}
-              style={{ ...segment(false), flexShrink: 0, minHeight: 44 }}>
-        Remove
-      </button>
-    )
-  }
-  return (
-    <span style={{ display: 'inline-flex', gap: 8, flexShrink: 0 }}>
-      <button onClick={() => remove.mutate()} disabled={remove.isPending}
-              style={{ ...segment(false), minHeight: 44, color: T.bad, borderColor: 'rgba(239,68,68,0.35)' }}>
-        {remove.isPending ? '…' : 'Really'}
-      </button>
-      <button onClick={() => setConfirming(false)} style={{ ...segment(false), minHeight: 44 }}>
-        Keep
-      </button>
-    </span>
   )
 }
 
@@ -607,18 +423,18 @@ function LastSynced({ at }: { at: string | null }) {
 }
 
 /**
- * Which calendars are read, and whether the other person sees them.
+ * Which of your Google calendars are read.
  *
- * This picker IS the privacy control. "Share with the household" exposes only
- * the calendars ticked here — never the whole Google account — so someone can
- * put the family calendar on their partner's Today without handing over their
- * work diary.
+ * This picker IS the privacy control. Connecting Google grants us the whole
+ * account; ticking a calendar here is what decides which of them ever reaches
+ * the app, so someone can put their personal calendar on Today without pulling
+ * their work diary in with it.
  */
 function CalendarPicker() {
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({ queryKey: ['calendar-list'], queryFn: calendarApi.list })
   const save = useMutation({
-    mutationFn: (b: { calendarIds?: string[]; shareWithHousehold?: boolean }) => calendarApi.select(b),
+    mutationFn: (b: { calendarIds?: string[] }) => calendarApi.select(b),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['calendar-list'] })
       void qc.invalidateQueries({ queryKey: ['calendar-status'] })
@@ -652,7 +468,7 @@ function CalendarPicker() {
                  style={{ width: 20, height: 20, accentColor: T.ink, flexShrink: 0, margin: 0 }} />
           <span style={{ ...body(14), flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
             {c.name}
-            {c.primary && <span style={label({ marginLeft: 8, letterSpacing: '0.1em', color: T.faint })}>yours</span>}
+            {c.primary && <span style={label({ marginLeft: 8, letterSpacing: '0.1em', color: T.faint })}>main</span>}
           </span>
         </label>
       ))}
@@ -662,21 +478,6 @@ function CalendarPicker() {
           Nothing ticked — Today will have no events on it
         </div>
       )}
-
-      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer',
-                      padding: '12px 0', minHeight: 44, borderTop: `1px solid ${T.rule}` }}>
-        <input type="checkbox" checked={data?.shareWithHousehold ?? false}
-               onChange={(e) => save.mutate({ shareWithHousehold: e.target.checked })}
-               disabled={save.isPending}
-               style={{ width: 20, height: 20, accentColor: T.ink, flexShrink: 0, margin: '2px 0 0' }} />
-        <span style={{ ...body(14) }}>
-          Show these on the other person's Today
-          <span style={{ ...body(13), color: T.muted, display: 'block', marginTop: 3 }}>
-            Only the calendars ticked above. They never see the rest of your account, and they
-            don't have to connect anything themselves.
-          </span>
-        </span>
-      </label>
     </div>
   )
 }

@@ -146,9 +146,8 @@ export default function Paywall() {
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, marginTop: 26, alignItems: 'center' }}>
         {/* Settings stays reachable from here on purpose: it is where the email
-            address, the household and sign-out live, and locking somebody out of
-            it while their billing is broken is how an account becomes
-            unfixable. */}
+            address and sign-out live, and locking somebody out of it while their
+            billing is broken is how an account becomes unfixable. */}
         <Link to="/settings" style={textAction({ color: T.muted })}>Account settings</Link>
         <Link to="/pricing" style={textAction({ color: T.muted })}>What's included</Link>
       </div>
@@ -165,7 +164,7 @@ function Settling() {
       <div style={{ minHeight: '60dvh', display: 'grid', placeItems: 'center', textAlign: 'center' }}>
         <div>
           <div style={label({ color: T.accent })}>Payment received</div>
-          <h1 style={{ ...display(30), marginTop: 10 }}>Setting up your household…</h1>
+          <h1 style={{ ...display(30), marginTop: 10 }}>Setting up your account…</h1>
           <p style={{ ...body(15), color: T.inkSoft, marginTop: 12 }}>
             A few seconds while Stripe and Daily agree. Don't close this tab.
           </p>
@@ -276,7 +275,7 @@ const STATUS: Record<SubStatus, { badge: string; title: string; blurb: string }>
   unpaid: {
     badge: 'Unpaid',
     title: 'There’s an unpaid invoice',
-    blurb: 'Stripe stopped retrying after several failed attempts. Settle it in the billing portal, or start a fresh plan below — either way your household is exactly as you left it.',
+    blurb: 'Stripe stopped retrying after several failed attempts. Settle it in the billing portal, or start a fresh plan below — either way your data is exactly as you left it.',
   },
   canceled: {
     badge: 'Cancelled',

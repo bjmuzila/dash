@@ -1,39 +1,63 @@
 # Changelog
 
-## 2026-08-23 - Weekly Edge: real Core Bullseye rows for Aug 17-21
+## 2026-08-23 - daily.cbedge.net is a single-person product
 
-`lib/emails/weekly-edge.ts`. `DEFAULT_CONF_ROWS` is no longer empty - the five
-sessions off the owner Results page are in, so the results band renders the real
-table instead of the dashed placeholder.
+Edited: `daily-vite/src/pages/{Landing,Pricing,SignUp,Paywall,Onboarding,Legal,Journal,Settings}.tsx`,
+`daily-vite/src/components/CalendarCard.tsx`, `server-v2/_lib-daily.cjs`,
+`server-v2/daily-routes.cjs`. Deleted: `daily-vite/src/pages/Join.tsx`,
+`daily-vite/src/components/CalendarPicker.tsx`.
 
-| Date  | 9:45          | 10:30        | 12:00        |
-|-------|---------------|--------------|--------------|
-| 08-21 | 7640 / 14.7 X | 7680 / 0.3 v | 7700 / 4.4 v |
-| 08-20 | 7710 / 12.2 X | 7700 / 2.2 v | 7670 / 0.6 v |
-| 08-19 | 7730 / 0.1 v  | 7730 / 0.1 v | 7740 / 1.6 v |
-| 08-18 | 7700 / 0.0 v  | 7700 / 0.0 v | 7700 / 0.0 v |
-| 08-17 | 7800 / 19.5 X | 7770 / 0.0 v | 7770 / 0.0 v |
+It was built as a two-person product — one subscription covering a couple, with
+invites, seats and "shared so nobody buys milk twice" running through the copy.
+It is for one person. Nothing user-facing says otherwise any more.
 
-THRESHOLD: the template has ONE boolean per window and the Results page scores
-three (<=5 / <=10 / <=15). The v/X here is the <=5 column, which is what every
-previous issue used - do not silently switch it to <=15 to make a week look
-better. Where <=5 hides something the note says so in words: the 9:45 reads on
-8/20 and 8/21 missed <=5 but cleared <=15, and 8/17 at 19.5 was the only read
-that missed all three.
+### Gone
 
-- Core Bullseye tile: 100%, sub "<=5 pts - 10:30 & 12:00 CB - 5 of 5 sessions".
-  The tile is the two clean windows, NOT a blended average - 9:45 was 2 of 5 and
-  is stated in the note rather than averaged into a friendlier number.
-- `resultsNote` now defines what a check mark means, gives 12 of 15 overall with
-  the per-window split, names the misses, and says five sessions is a small
-  sample. Keep that last clause.
-- Estimated Move tile is STILL a placeholder ("-" / "[fill before send]") - no EM
-  data was supplied for this week.
-- `weeklyEdgeText()`'s `strip()` also decodes `&le;` / `&ge;` / `&rarr;` now; the
-  new tile subtitle uses `&le;` and the plain-text part was shipping it raw.
+The Household card in Settings (members, seats, invite, revoke, remove, rename),
+the `/join` route and the page behind it, and the "show these on the other
+person's Today" toggle on the calendar picker. The per-event owner chip went too:
+it named whose connection an event arrived through, which was worth saying when
+two calendars were merged and is noise when there is only ever one. The field
+stays on the type and the server still sends it.
 
-Preview regenerated at `generated/2026-08-23-weekly-edge-preview.html` and
-`generated/2026-08-23-weekly-edge-preview.jpg`.
+`components/CalendarPicker.tsx` was deleted as well — Settings has defined its
+own inline picker since it was written, and nothing had imported the standalone
+one for a while.
+
+### Copy
+
+Landing, Pricing, SignUp, Paywall and Onboarding no longer mention a second
+person, a household, an invite or a seat. The Terms and Privacy pages were
+rewritten where they described the two-person arrangement: "one subscription
+covers one household of up to two people" is now one account for one person, and
+the privacy page's who-else-sees-it list no longer opens with "the other person
+in your household, in full."
+
+The Journal compose box used to label an empty entry "Shared with the household"
+— a warning that someone else would read it. There is no someone else.
+
+### The seat cap is where this is actually enforced
+
+`HOUSEHOLD_SEATS` is 1. That is what turns invites off, not the removed button:
+the invite route and `joinHousehold()` both check it, so a second person cannot
+be added whatever the UI does or doesn't show. The invite action refuses with a
+plain sentence rather than being deleted, because an emailed invite that cannot
+be redeemed at the far end is a worse outcome than a button nobody was offered.
+
+### Why household_id stayed
+
+The tenancy key is still `household_id` and not `user_id`, which looks like an
+indirection with nothing behind it. Fusing them would make "whose row is this"
+and "who is signed in" the same question, and separating them again later means
+touching every query in every module. One column now beats a migration across
+the whole codebase later — and raising the seat cap is a one-line change if that
+decision is ever revisited.
+
+### Verified
+
+SPA typechecks clean under `strict` + `noUnusedLocals` and builds. `node --check`
+passes on both edited backend modules. A grep across `src/` for the two-person
+vocabulary returns nothing outside the `household_id` mechanism itself.
 
 ## 2026-08-23 - daily.cbedge.net is live, and sign-in is email only
 

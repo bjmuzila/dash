@@ -33,7 +33,7 @@ export default function Pricing() {
       <main style={{ padding: '10px 0 8px' }}>
         <div style={{ maxWidth: 620 }}>
           <div style={label()}>Plans</div>
-          <h1 style={{ ...display(36), marginTop: 10 }}>One subscription, two people.</h1>
+          <h1 style={{ ...display(36), marginTop: 10 }}>One price, everything in it.</h1>
           <p style={{ ...body(16), color: T.inkSoft, marginTop: 12 }}>
             Daily is paid from the first day — there is no free tier and nothing to
             downgrade into. Pick monthly if you want to try it for a month, annual if
@@ -83,9 +83,8 @@ export default function Pricing() {
           <div style={label()}>The small print, in plain words</div>
           <p style={{ ...body(15), color: T.inkSoft, marginTop: 8 }}>
             A card is required to sign up. You can cancel from inside the app at any
-            time and keep access to the end of the period you already paid for. Two
-            people share one household and one bill — the second person is invited
-            from Settings and costs nothing extra.
+            time and keep access to the end of the period you already paid for. Both
+            plans include every screen — annual is the same product, billed once.
           </p>
         </div>
       </main>
@@ -126,13 +125,12 @@ export const planCadence = (p: Plan) => `per ${p.interval}`
 export const WHAT_YOU_GET = [
   'Today — the whole day on one screen, and nothing you have to assemble.',
   'Tasks with a Top 3, an urgent flag, and a nudge when something starts slipping.',
-  'Shared lists and a week of meals, sorted by aisle so one shop covers it.',
+  'Lists and a week of meals, sorted by aisle so one shop covers it.',
   'Habits with streaks, a 30-day history, and no punishment for one missed day.',
   'Projects with milestones and logged time.',
   'Money — your accounts, your bills, and what is actually left this month.',
   'The CB Edge economic and earnings calendars, in the same app as the rest of it.',
   'Your Google Calendar on Today, if you want it there.',
-  'Two people in one household on one subscription.',
   'A 4-digit PIN for the phone you use every day.',
 ]
 

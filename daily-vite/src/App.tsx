@@ -13,7 +13,6 @@ import SignUp from './pages/SignUp'
 import Forgot from './pages/Forgot'
 import Reset from './pages/Reset'
 import Verify from './pages/Verify'
-import Join from './pages/Join'
 import { Terms, Privacy } from './pages/Legal'
 import Paywall from './pages/Paywall'
 import Onboarding from './pages/Onboarding'
@@ -36,9 +35,9 @@ const Money    = lazy(() => import('./pages/Money'))
 const Markets  = lazy(() => import('./pages/Markets'))
 const Settings = lazy(() => import('./pages/Settings'))
 
-// staleTime 30s: this is a household app, not a market feed. Refetching on
-// every focus is noise and burns phone battery for data that changes when one
-// of two people types something.
+// staleTime 30s: this is a planner, not a market feed. Refetching on every
+// focus is noise and burns phone battery for data that only changes when the
+// person holding the phone types something.
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } },
 })
@@ -72,9 +71,9 @@ let pinOfferSettledThisLoad = false
 /**
  * THERE IS NO SPLASH SCREEN, AND THERE MUST NOT BE ONE.
  *
- * The private household app this grew out of opened with a hand-drawn heart held
- * for five seconds. That was a private thing between two people; it is not a
- * feature, and it is not something to reintroduce here as a logo animation, a
+ * The private app this grew out of opened with a hand-drawn heart held for five
+ * seconds. That was a private joke in a private app; it is not a feature, and
+ * it is not something to reintroduce here as a logo animation, a
  * fade-in wordmark or a "loading your day" interstitial. Somebody who signs in
  * wants Today, and they want it now — every second of intro is a second charged
  * to a paying customer for nothing. Sign-in lands on Today immediately.
@@ -130,9 +129,9 @@ function Gate() {
   const [, bump] = useState(0)
 
   // A fresh sign-in re-opens the PIN offer even if this page load had already
-  // settled it. Two people share a phone here, the device PIN belongs to an
-  // account rather than to the browser, and the second person to sign in
-  // deserves the same offer the first one got.
+  // settled it. The device PIN belongs to the account rather than to the
+  // browser, so signing out and back in — on a borrowed laptop, say — has to
+  // get the same offer the first sign-in on this device got.
   useEffect(() => {
     if (!justSignedIn) return
     pinOfferSettledThisLoad = false
@@ -155,7 +154,6 @@ function Gate() {
           <Route path="/forgot" element={<Forgot />} />
           <Route path="/reset" element={<Reset />} />
           <Route path="/verify" element={<Verify />} />
-          <Route path="/join" element={<Join />} />
           {/* Terms and privacy are routes in every world, signed in or not.
               Somebody reading the cancellation terms is usually somebody about
               to cancel; making them sign out first is hostile and pointless. */}
@@ -188,11 +186,12 @@ function Gate() {
               status of whatever subscription they already had. */}
           <Route path="/pricing" element={<Paywall />} />
           {/* Settings stays open. It holds sign-out, the email address and the
-              household, and locking somebody out of it while their card is
-              declined turns a billing problem into an unfixable account. */}
+              subscription itself, and locking somebody out of it while their
+              card is declined turns a billing problem into an unfixable
+              account. */}
           <Route path="/settings" element={S(<Settings />)} />
           {/* Verification links keep working while unpaid — the address is how
-              a password reset and an invite reach them. */}
+              a password reset reaches them. */}
           <Route path="/verify" element={<Verify />} />
           <Route path="/terms" element={<Terms />} />
           <Route path="/privacy" element={<Privacy />} />

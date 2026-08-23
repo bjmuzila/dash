@@ -132,7 +132,7 @@ const errText = (e: unknown, fallback: string) => (e instanceof ApiError ? e.mes
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Money() {
-  // undefined = "whatever month the server thinks it is in the household's
+  // undefined = "whatever month the server thinks it is in the account's
   // timezone". Never seeded from the browser clock: a phone in another zone
   // would open the wrong month on the 1st and the 31st.
   const [month, setMonth] = useState<string | undefined>(undefined)
