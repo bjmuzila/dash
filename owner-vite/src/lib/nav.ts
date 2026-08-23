@@ -66,6 +66,10 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     label: "Content",
     accent: OWNER_THEME.orange,
     links: [
+      // Customer support tickets — the other end of /feedback on cbedge.net.
+      // Content rather than Info: you open this to ANSWER someone, which is the
+      // same job as Emails and Newsletter, not to read a number.
+      { label: "Feedback", href: "/owner/feedback", glyph: "⚑", key: "Feedback" },
       { label: "Social Media", href: "/social-media", glyph: "🗨︎", key: "SocialMedia" },
       { label: "Post Studio", href: "/owner/post-studio", glyph: "✎", key: "PostStudio" },
       { label: "Changelog", href: "/changelog", glyph: "↻", key: "Changelog" },

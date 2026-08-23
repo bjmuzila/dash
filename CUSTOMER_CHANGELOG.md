@@ -4,6 +4,12 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Sunday 8/23/2026
 
+* **The Level Log now shows which expiration it's reading.** A tag next to the price tells you the contract and how many days to expiry, so a 0DTE log is never mistaken for a weekly one.
+
+* **The Level Log opens on All.** Walls and CORE show together on load — the Walls and Core buttons now narrow the view instead of being where you start.
+
+* **New date picker on the Level Log** — a proper calendar that matches the dashboard instead of the browser's white pop-up.
+
 * **The wall migration chart now covers the whole day.** A level that never moved after the open used to cut the chart off at 10am — now you see it holding flat while price travels all session.
 
 * **The CORE can switch walls without a strike moving.** Dominance is read from the 5-minute gamma, so you see the day's heavier wall change sides as it builds.

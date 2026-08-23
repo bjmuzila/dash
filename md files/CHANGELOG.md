@@ -1,5 +1,71 @@
 # Changelog
 
+## 2026-08-23 - Strike-GEX watch feed (the daily report) + normalizer fix
+
+Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.
+Third pass today; supersedes both earlier entries. The research panels stay, but
+they are now the calibration behind one operational report rather than the point.
+
+### What was actually wanted
+
+"Backtest if a strike grew before a big move, run a report of higher-than-normal
+GEX growth on ALL tickers, and have them on watch." That is a FEED, not a study:
+
+    MU 2000 strike — GEX grew +187%, way above normal (3.4× typical).
+    $4.2M → $12.1M, 3.1% vs spot, call side.
+    History: 51% big-move next session (1.8× base, n=64).
+
+New test `strike-gex-watch`, now panel ① of the page. Two halves, one definition:
+it scans every ticker's latest recorded session for outsized strike growth, and
+aggregates the same measure over `days` of history so every feed line carries the
+odds for its own band. Report and proof cannot drift apart because they are
+computed from one shared `NORM` CTE — do not fork them.
+
+`strike-gex-hot` is REMOVED; the watch report subsumes it (hot ranked on raw %
+with no odds attached, which is the part that made it unusable).
+
+### The normalizer bug the fixture caught, and it was fatal
+
+`×normal` was originally |Δ| ÷ the MEDIAN |Δ| across the session's strikes. That
+is wrong: eod_strike_gex keeps ±40 strikes, so most rows are dead wings holding
+near-zero gamma. The median sits near zero, every genuine build scored 50–90×,
+and **767 of 768 ticker-days landed in the top band**. A report that flags the
+entire roster flags nothing, and the odds table was a single row.
+
+The denominator is now the trailing average of that ticker's own **daily biggest
+|Δ|** — "what a large strike move looks like on an ordinary day for this name."
+So 1.0× is a normal day's hottest strike and 3× is three times that, which is
+also what makes the phrase "above average growth" literally true rather than
+decorative. Bands rescaled to <1× / 1–1.5× / 1.5–2× / 2–3× / 3–5× / ≥5×, default
+watch level 1.5×. Two regression assertions now fail the suite if the odds ladder
+ever piles back into one band.
+
+On the fixture the ladder spreads properly and the rule falls out:
+<1× → 0.83× lift, 1–1.5× → 0.97×, 1.5–2× → 1.72×, 2–3× → 1.52×, 3–5× → 1.66×.
+
+### Other decisions worth keeping
+
+- **Watch unit is (ticker, session), not (strike, session).** Odds aggregate on
+  each day's hottest strike. Five strikes lighting up on MU is ONE thing to
+  watch; counting it five times inflates n and makes a thin sample look robust.
+  The feed still lists strikes because you need to know which one.
+- **An empty feed says NOTHING ON WATCH and explains itself.** Most days are
+  quiet. A blank screen is indistinguishable from a broken query, so it says
+  which it is — and points at coverage, because a stalled recorder looks exactly
+  like a quiet market from here.
+- **`feed` is the first key in the payload** — the owner Panel renders sections
+  in key order, so the feed lands above its own justification.
+
+### Verified
+
+45 assertions against a local Postgres fixture with a planted signal, a sparse
+symbol (6 sessions 30 days apart) and a corrupt spot row. All green, including
+the three earlier regressions (median spot, calendar-gap guard, min-n
+suppression), both new normalizer-spread checks, feed-line shape, the quiet-day
+path, and per-ticker dedupe in by_symbol. `node --check` clean; esbuild parse
+clean with no orphaned imports; all 10 panel `test=` strings resolve to handlers.
+
+
 ## 2026-08-23 - Strike-GEX ↔ move: rebuilt move-first, plus 4 fixes a live run exposed
 
 Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.
@@ -428,6 +494,30 @@ rewrites `repeat(N…)` and `1fr 1fr` signatures, and this grid is neither.
 Sidebar gets **Owner → Feedback**. The account menu's "Send feedback" is now
 "Feedback & Support", because the reply comes back to the same place.
 
+
+### The inbox had to be on owner-vite, not Next
+
+`/owner/feedback` was first built as a Next page under `app/owner/`. That is the
+right place for cbedge.net — and the wrong place for where the queue is actually
+worked, which is **owner.cbedge.net**. That subdomain is served by `owner-vite`,
+its own Vite SPA behind its own nginx; AGENTS.md still lists owner-vite under
+legacy/experiments, which is stale.
+
+Added `owner-vite/src/pages/Feedback.tsx`, registered in
+`owner-vite/src/pages/registry.ts`, linked from `owner-vite/src/lib/nav.ts` under
+**Content → Feedback** (that group is "sending something to someone" — answering
+a customer is the same job as Emails and Newsletter; you don't open this to read
+a number). nav.ts is also the route table, so the link is the route.
+
+Same API on both — `owner-vite`'s nginx already proxies `/api` to the dashboard
+container, so these calls are same-origin and carry the owner session cookie.
+The thread is inlined in that file rather than imported: owner-vite has its own
+copies of theme / PageCard / DockToolbar and no `@/components` alias. Same
+mirrored-page arrangement Budget and Reta already have on both sides — the file
+header on each says so, and a change to the API shapes has to touch both.
+
+The Next `app/owner/feedback/page.tsx` stays; cbedge.net/owner/feedback still
+works and reads the same tickets.
 
 ## 2026-08-22 - Frozen sessions: the real Premarket / Post-Market tabs on a past date
 

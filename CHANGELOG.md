@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-08-23 — Level Log: themed date picker, opens on ALL, and tags its expiration (`components/pages/LevelLog.tsx`, `server-v2/server-with-proxy.js`)
+
+`components/pages/LevelLog.tsx` swapped its bare `<input type="date">` for the shared `ThemedDatePicker` (`components/shared/ThemedDatePicker.tsx`, its first import site), defaults the WALLS/CORE/ALL switch to **ALL** since one fetch already carries all three level types, and now labels which contract the levels came from — an `exp 08/25 · 2DTE` chip in the log card header (also in the PNG and the copied text), fed by `useWallSeries` returning `{ samples, expiry }`. That expiry rides on an additive `expiry` column added to the `/proxy/walls?…&series=1` SELECT in `server-v2/server-with-proxy.js` (~2861) — no filter, no join, no other walls route touched. Full write-up in `md files/CHANGELOG.md`.
+
+
 ## 2026-08-22 — Level Log wall migration: draw the whole session, and read gamma from the 5m snapshots (`components/pages/LevelLog.tsx`, `server-v2/server-with-proxy.js`)
 
 The Wall Migration chart in `components/pages/LevelLog.tsx` ended its x axis at the last `walls_log` row — and that table is change-only — so AMZN, whose walls last rolled at 10:00, drew a 31-minute chart and discarded the full-day 1m tape it had already fetched; `lastSlot` is now `max(lastWrite, last tape slot)`, levels forward-fill past the last write behind a dashed boundary mark, and a new additive `/proxy/walls?…&series=1` branch in `server-v2/server-with-proxy.js` serves that symbol's 5-minute `scanner_snapshots` rows so the CORE/other roles can swap on a gamma build with no strike move. Full write-up in `md files/CHANGELOG.md`.

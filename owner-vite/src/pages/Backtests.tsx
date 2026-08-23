@@ -180,23 +180,67 @@ export default function Backtests() {
         }
       />
 
-      <Card variant="budget" accent={LIGHT_BLUE} title="Strike GEX → move — how the four panels fit together" subtitle="Read them in this order. Each one answers a different question, and any one alone will mislead you.">
-        <ol style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.7, margin: 0, paddingLeft: 20 }}>
-          <li><strong style={{ color: LIGHT_BLUE }}>Pre-move</strong> — “when it moved, had a strike grown first?” Starts from the moves and looks backward. Its two summary rows are move days vs quiet days: if they look alike, stop here, there is nothing to find.</li>
-          <li><strong style={{ color: LIGHT_BLUE }}>Trigger threshold</strong> — “at what % growth do the odds actually change?” Turns the effect into one watchable number, with the events-per-year it fires at.</li>
-          <li><strong style={{ color: LIGHT_BLUE }}>False alarms</strong> — “how often does a big build lead nowhere?” Starts from the builds and looks forward. This is the half that keeps panel 1 honest.</li>
-          <li><strong style={{ color: LIGHT_BLUE }}>Timeline / Board</strong> — the raw per-strike series for one ticker, and the latest session ranked by growth, once you know what number you are watching for.</li>
-        </ol>
-        <p style={{ fontSize: 13.5, color: HOME_THEME.muted, lineHeight: 1.6, margin: "12px 0 0" }}>
-          Every panel returns a <strong>coverage</strong> table first — the 20 thinnest symbols in{" "}
-          <code>eod_strike_gex</code> for your filter. Check it before reading anything else. A symbol with a
-          handful of sessions on file, or big holes between them, cannot produce a study, and the panels will
-          say <em>SAMPLE TOO SMALL TO READ</em> rather than dress up four data points as a finding.
+      <Card variant="budget" accent={LIGHT_BLUE} title="Strike GEX → move" subtitle="One report you read every day, and four panels that exist to prove the report means something.">
+        <p style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.65, margin: "0 0 10px" }}>
+          <strong style={{ color: LIGHT_BLUE }}>Panel ① is the thing.</strong> It scans every ticker for strikes
+          growing more than that ticker normally grows and prints one line per alert, each carrying the historical
+          odds for its band. On a normal day that is all you read.
+        </p>
+        <p style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.65, margin: "0 0 10px" }}>
+          Panels ②–⑤ are the calibration. They answer, in order: when price moved, had a strike grown first
+          (<strong>pre-move</strong>)? At what % growth do the odds actually shift (<strong>threshold</strong>)? How
+          often does a big build lead nowhere (<strong>false alarms</strong>)? And what did a flagged day actually
+          look like, strike by strike (<strong>timeline</strong>)? Run them when you want to change the feed's
+          settings or stop trusting it — not every morning.
+        </p>
+        <p style={{ fontSize: 13.5, color: HOME_THEME.muted, lineHeight: 1.6, margin: 0 }}>
+          Every panel returns a <strong>coverage</strong> table — the 20 thinnest symbols in{" "}
+          <code>eod_strike_gex</code> for your filter, thinnest first, with days-stale. Check it before believing
+          anything. A symbol with a handful of sessions on file, or big holes between them, cannot produce a study,
+          and the panels say <em>SAMPLE TOO SMALL TO READ</em> rather than dress up four data points as a finding.
         </p>
       </Card>
 
+
       <Panel
-        title="1 · Pre-move — did a strike grow before the move?" test="strike-gex-premove"
+        title="① THE FEED — what's growing more than normal, right now" test="strike-gex-watch"
+        subtitle="Scans every ticker's latest session for strikes growing more than that ticker normally grows. One line per alert, each carrying its own historical hit rate."
+        fields={[
+          { key: "minZ", label: "min ×normal", type: "number", def: 1.5 },
+          { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
+          { key: "days", label: "history (days)", type: "number", def: 180 },
+          { key: "hitSigma", label: "big move (σ)", type: "number", def: 1 },
+        ]}
+        help={
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>This is the daily report — the rest of the page is how it got calibrated</div>
+            <p style={{ margin: "0 0 8px" }}>
+              Read <strong>feed</strong> and nothing else on a normal day. Each line is one alert:
+            </p>
+            <p style={{ margin: "0 0 10px", padding: "8px 10px", background: "rgba(125,211,252,0.07)", borderLeft: `2px solid ${LIGHT_BLUE}`, fontSize: 13, lineHeight: 1.55, color: HOME_THEME.text }}>
+              MU 2000 strike — GEX grew +187%, way above normal (3.4× typical). $4.2M → $12.1M, 3.1% vs spot,
+              call side. History: 51% big-move next session (1.8× base, n=64).
+            </p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>×normal</strong> — the whole idea. It's that strike's dollar change divided by the trailing average of <em>that ticker's own biggest daily strike move</em>. So <strong>1.0× is an ordinary day's hottest strike</strong> and 3× is three times that. A $40M build is enormous for a mid-cap and a rounding error for SPX; this is what puts them on one scale, and it's why a plain dollar cutoff would just rank the report by market cap.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>History:</strong> on each line — what happened the last n times <em>anything</em> hit that band. That's the part that makes an alert worth acting on rather than just interesting. If it says “not enough past events,” the flag is untested, not proven.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>by_symbol</strong> — the watchlist proper: one row per ticker, its hottest strike. Five strikes lighting up on MU is one thing to watch, not five.</p>
+            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>odds</strong> — the backtest behind the feed, over your whole history window. The note names the band that earned its keep (lift ≥1.3 on real n) or says none did. Watch <strong>per yr</strong> next to <strong>lift</strong>: a 3× lift firing twice a year is a curiosity.</p>
+            <p style={{ margin: "0 0 6px", color: HOME_THEME.text }}>
+              <strong style={{ color: SOFT_RED }}>Not live.</strong> <code>eod_strike_gex</code> is written once daily
+              after the close, so this is the last <em>recorded</em> session per symbol and every line over 3 days old
+              is marked stale. A recorder that quietly stopped looks exactly like a quiet market here — that's what the
+              coverage table is for.
+            </p>
+            <p style={{ margin: "6px 0 0" }}>
+              An empty feed is a real answer, not a failure — most days nothing clears the bar. Drop{" "}
+              <strong>min ×normal</strong> to about 1.0 to see the near-misses.
+            </p>
+          </>
+        }
+      />
+
+      <Panel
+        title="② Pre-move — did a strike grow before the move?" test="strike-gex-premove"
         subtitle="Move-anchored: starts from every significant move and looks back for the strike that grew most."
         fields={[
           { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
@@ -234,7 +278,7 @@ export default function Backtests() {
       />
 
       <Panel
-        title="2 · Trigger threshold — what % growth actually matters?" test="strike-gex-threshold"
+        title="③ Trigger threshold — what % growth actually matters?" test="strike-gex-threshold"
         subtitle="Buckets sessions by the raw % growth of the top strike and reports where the odds shift."
         fields={[
           { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
@@ -266,7 +310,7 @@ export default function Backtests() {
       />
 
       <Panel
-        title="3 · False alarms — how often does a big build lead nowhere?" test="strike-gex-move"
+        title="④ False alarms — how often does a big build lead nowhere?" test="strike-gex-move"
         subtitle="Build-anchored: starts from the biggest dollar-gamma builds and looks forward 1 / 3 / 5 sessions."
         fields={[
           { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
@@ -295,7 +339,7 @@ export default function Backtests() {
       />
 
       <Panel
-        title="4 · Per-strike timeline — the raw series" test="strike-gex-timeline"
+        title="⑤ Per-strike timeline — the raw series" test="strike-gex-timeline"
         subtitle="One ticker, day by day: what each strike held, what it changed by in $ and %, where price was, and how big that day's move was."
         fields={[
           { key: "ticker", label: "ticker", type: "text", def: "SPX" },
@@ -328,38 +372,7 @@ export default function Backtests() {
       />
 
       <Panel
-        title="5 · Board — latest session ranked by growth" test="strike-gex-hot"
-        subtitle="The strikes that grew most on each symbol's last recorded session, banded against the trigger."
-        fields={[
-          { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
-          { key: "days", label: "lookback (days)", type: "number", def: 30 },
-          { key: "limit", label: "rows", type: "number", def: 40 },
-        ]}
-        help={
-          <>
-            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>Not live — check the staleness first</div>
-            <p style={{ margin: "0 0 8px", color: HOME_THEME.text }}>
-              <code>eod_strike_gex</code> is written once a day after the close, so this is “as of the last recorded
-              session,” not now. The note gives the freshest and stalest symbol in days, and the coverage table's{" "}
-              <strong>days stale</strong> column gives it per symbol. For genuinely live intraday strike growth, the
-              data is <code>strike_growth</code> via <code>/proxy/strike-growth/*</code>.
-            </p>
-            <p style={{ margin: "0 0 8px" }}>
-              The <strong>band</strong> column is the % bucket each row falls in. Match it against whatever the
-              threshold panel named as the trigger — that's the intended workflow: panel 2 finds the number, this one
-              tells you who cleared it.
-            </p>
-            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>vs spot</strong> — how far the strike sits from price, as a percent. A 300% build 15% out of the money is a very different thing from the same build at the money.</p>
-            <p style={{ margin: "6px 0 0" }}>
-              <strong>from $M → now $M</strong> shows the base and the result, so you can see at a glance whether a big
-              percentage came off a real position or off a nearly-empty strike.
-            </p>
-          </>
-        }
-      />
-
-      <Panel
-        title="6 · Intraday (wiring check only)" test="strike-gex-move-intraday"
+        title="⑥ Intraday (wiring check only)" test="strike-gex-move-intraday"
         subtitle="The 1-minute version on strike_growth — the only one that can separate cause from effect, once it has history."
         fields={[
           { key: "ticker", label: "ticker", type: "text", def: "SPX" },
