@@ -2,6 +2,12 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Sunday 8/23/2026
+
+* **The wall migration chart now covers the whole day.** A level that never moved after the open used to cut the chart off at 10am — now you see it holding flat while price travels all session.
+
+* **The CORE can switch walls without a strike moving.** Dominance is read from the 5-minute gamma, so you see the day's heavier wall change sides as it builds.
+
 ## Friday 8/21/2026
 
 * **Fixed the "How the book was built" chart.** Bars no longer max out at the same length, they all read left to right, and each strike shows whether its gamma is positive or negative.

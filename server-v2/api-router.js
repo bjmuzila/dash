@@ -5492,48 +5492,256 @@ if (libDb) {
     },
   });
 
-  // /api/feedback — POST any signed-in user; GET/PATCH owner-only.
-  register('/api/feedback', {
-    auth: 'user', methods: ['GET', 'POST', 'PATCH'],
-    async handler(req, res, ctx, access) {
-      const userId = access.userId;
-      if (req.method === 'POST') {
+  // ── /api/feedback — customer support tickets ────────────────────────────────
+  //
+  // A TICKET is one customer_feedback row (the opening message, the category and
+  // the status) plus a thread of customer_feedback_messages. Any signed-in user
+  // can open a ticket and read/reply to their OWN tickets; the owner sees every
+  // ticket and is the only side that can change status.
+  //
+  // Status stays the original two values — 'open' and 'resolved' ("Complete") —
+  // so every row written before the thread existed still reads correctly.
+  //
+  // The messages table and the two read-mark columns are created LAZILY here
+  // rather than in lib/db.ts. The checked-in lib/db.ts is behind
+  // server-v2/_lib-db.cjs (see the /api/strike-gex-series note further down), so
+  // regenerating that bundle to add a helper would drop unrelated hand-patches.
+  // Same ensureX(pool) pattern as em_snapshots / es_stats below.
+  //
+  //   GET    /api/feedback              list — owner: everyone's; user: their own
+  //   POST   /api/feedback              open a ticket
+  //   PATCH  /api/feedback              {id,status} — owner only (legacy shape)
+  //   GET    /api/feedback/:id          ticket + thread (also marks it read)
+  //   PATCH  /api/feedback/:id          {status} owner-only | {read:true}
+  //   POST   /api/feedback/:id/messages {message} — reply from either side
+  {
+    let fbEnsured = false;
+    const ensureFeedback = async (pool) => {
+      if (fbEnsured) return;
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS customer_feedback_messages (
+          id            SERIAL PRIMARY KEY,
+          feedback_id   INTEGER NOT NULL REFERENCES customer_feedback(id) ON DELETE CASCADE,
+          author        TEXT NOT NULL DEFAULT 'user',
+          clerk_user_id TEXT,
+          body          TEXT NOT NULL,
+          created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_feedback_msgs ON customer_feedback_messages(feedback_id, created_at)`);
+      // Per-side read marks. Two of them, because "unread" means something
+      // different on each surface: the customer wants to know about OWNER
+      // replies, the owner about CUSTOMER ones.
+      await pool.query(`ALTER TABLE customer_feedback ADD COLUMN IF NOT EXISTS user_read_at  TIMESTAMPTZ`);
+      await pool.query(`ALTER TABLE customer_feedback ADD COLUMN IF NOT EXISTS owner_read_at TIMESTAMPTZ`);
+      fbEnsured = true;
+    };
+
+    // One ticket row plus its thread rollup. reply_count / last_activity_at
+    // drive the list ordering; the unread counts are computed per side against
+    // that side's read mark. The OPENING message counts as unread for the owner
+    // until the owner has opened the ticket once (owner_read_at IS NULL), which
+    // is what makes a brand-new ticket badge with zero replies on it.
+    const TICKET_SELECT = `
+      SELECT f.id, f.clerk_user_id, f.email, f.category, f.message, f.page, f.status,
+             f.created_at, f.updated_at, f.user_read_at, f.owner_read_at,
+             COALESCE(t.msg_count, 0) AS reply_count,
+             COALESCE(t.last_at, f.created_at) AS last_activity_at,
+             COALESCE(t.owner_unread, 0) + (CASE WHEN f.owner_read_at IS NULL THEN 1 ELSE 0 END) AS unread_owner,
+             COALESCE(t.user_unread, 0) AS unread_user
+        FROM customer_feedback f
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*) AS msg_count,
+                 MAX(m.created_at) AS last_at,
+                 COUNT(*) FILTER (WHERE m.author = 'user'  AND (f.owner_read_at IS NULL OR m.created_at > f.owner_read_at)) AS owner_unread,
+                 COUNT(*) FILTER (WHERE m.author = 'owner' AND (f.user_read_at  IS NULL OR m.created_at > f.user_read_at))  AS user_unread
+            FROM customer_feedback_messages m
+           WHERE m.feedback_id = f.id
+        ) t ON TRUE
+    `;
+
+    const isFeedbackOwner = (ctx, userId) => Boolean(ctx.ownerUserId) && userId === ctx.ownerUserId;
+    const loadTicket = async (pool, id) =>
+      (await pool.query(`${TICKET_SELECT} WHERE f.id = $1`, [id])).rows[0] ?? null;
+    // Which read mark a viewer stamps. Derived from a boolean, never from input.
+    const readCol = (owner) => (owner ? 'owner_read_at' : 'user_read_at');
+
+    register('/api/feedback', {
+      auth: 'user', methods: ['GET', 'POST', 'PATCH'],
+      async handler(req, res, ctx, access) {
+        const userId = access.userId;
+        const owner = isFeedbackOwner(ctx, userId);
+        let pool;
         try {
-          if (!userId) return send(res, 401, { error: 'Sign in to send feedback' });
-          const body = await readJson(req);
-          const message = String(body?.message ?? '').trim();
-          if (!message) return send(res, 400, { error: 'Message is required' });
-          if (message.length > 5000) return send(res, 400, { error: 'Message too long' });
-          let email = null;
-          try { const u = await libDb.getUserById(userId); email = u?.email ?? null; } catch { /* email optional */ }
-          const row = await libDb.addFeedback({
-            clerk_user_id: userId, email,
-            category: body?.category ? String(body.category) : 'note',
-            message, page: body?.page ? String(body.page) : null,
-          });
-          return send(res, 200, { ok: true, feedback: row });
-        } catch (err) { return send(res, 500, { error: 'Feedback save failed', detail: String(err) }); }
-      }
-      // GET / PATCH — owner only (mirrors the route's ownerGate).
-      if (!ctx.ownerUserId || userId !== ctx.ownerUserId) return send(res, 403, { error: 'Forbidden' });
-      if (req.method === 'PATCH') {
+          pool = await libDb.getDb();
+          await ensureFeedback(pool);
+        } catch (err) { return send(res, 500, { error: 'Feedback unavailable', detail: String(err) }); }
+
+        if (req.method === 'POST') {
+          try {
+            if (!userId) return send(res, 401, { error: 'Sign in to send feedback' });
+            const body = await readJson(req);
+            const message = String(body?.message ?? '').trim();
+            if (!message) return send(res, 400, { error: 'Message is required' });
+            if (message.length > 5000) return send(res, 400, { error: 'Message too long' });
+            let email = null;
+            try { const u = await libDb.getUserById(userId); email = u?.email ?? null; } catch { /* email optional */ }
+            const row = await libDb.addFeedback({
+              clerk_user_id: userId, email,
+              category: body?.category ? String(body.category) : 'note',
+              message, page: body?.page ? String(body.page) : null,
+            });
+            // Opening a ticket marks it read for its author — the customer's
+            // unread dot is for owner replies, not for their own words.
+            try { await pool.query(`UPDATE customer_feedback SET user_read_at = CURRENT_TIMESTAMP WHERE id = $1`, [row.id]); }
+            catch { /* read mark is cosmetic */ }
+            return send(res, 200, { ok: true, feedback: row, id: row.id });
+          } catch (err) { return send(res, 500, { error: 'Feedback save failed', detail: String(err) }); }
+        }
+
+        if (req.method === 'PATCH') {
+          // Legacy body shape ({id,status}), kept so anything already calling it
+          // keeps working. Status is owner-only on every path.
+          if (!owner) return send(res, 403, { error: 'Forbidden' });
+          try {
+            const body = await readJson(req);
+            const id = Number(body?.id ?? 0);
+            const status = body?.status === 'open' ? 'open' : 'resolved';
+            if (!id) return send(res, 400, { error: 'id required' });
+            await libDb.setFeedbackStatus(id, status);
+            return send(res, 200, { ok: true, ticket: await loadTicket(pool, id) });
+          } catch (err) { return send(res, 500, { error: 'Feedback update failed', detail: String(err) }); }
+        }
+
+        // GET — the owner sees every ticket, a customer only their own.
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const status = sp.get('status');
+          const where = [];
+          const params = [];
+          if (!owner) { params.push(userId); where.push(`f.clerk_user_id = $${params.length}`); }
+          if (status === 'open' || status === 'resolved') { params.push(status); where.push(`f.status = $${params.length}`); }
+          params.push(Math.min(Number(sp.get('limit') ?? 300) || 300, 1000));
+          const rows = (await pool.query(
+            `${TICKET_SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+             ORDER BY last_activity_at DESC LIMIT $${params.length}`,
+            params,
+          )).rows;
+
+          // Counts are deliberately computed over the WHOLE set rather than the
+          // page above — they drive badges ("3 open"), so a status filter on the
+          // list must not move them.
+          const scoped = owner ? [] : [userId];
+          const openCount = Number((await pool.query(
+            owner
+              ? `SELECT COUNT(*) AS n FROM customer_feedback f WHERE f.status = 'open'`
+              : `SELECT COUNT(*) AS n FROM customer_feedback f WHERE f.clerk_user_id = $1 AND f.status = 'open'`,
+            scoped,
+          )).rows[0]?.n ?? 0);
+          const unreadCount = Number((await pool.query(
+            owner
+              ? `SELECT COUNT(*) AS n FROM customer_feedback f
+                  WHERE f.owner_read_at IS NULL
+                     OR EXISTS (SELECT 1 FROM customer_feedback_messages m
+                                 WHERE m.feedback_id = f.id AND m.author = 'user' AND m.created_at > f.owner_read_at)`
+              : `SELECT COUNT(*) AS n FROM customer_feedback f
+                  WHERE f.clerk_user_id = $1
+                    AND EXISTS (SELECT 1 FROM customer_feedback_messages m
+                                 WHERE m.feedback_id = f.id AND m.author = 'owner'
+                                   AND (f.user_read_at IS NULL OR m.created_at > f.user_read_at))`,
+            scoped,
+          )).rows[0]?.n ?? 0);
+
+          send(res, 200, { items: rows, openCount, unreadCount, isOwner: owner });
+        } catch (err) { send(res, 500, { error: 'Feedback load failed', detail: String(err) }); }
+      },
+    });
+
+    // /api/feedback/:id — the thread. GET also stamps the viewer's read mark,
+    // because "I opened it" is the only read signal either surface has.
+    registerDynamic('/api/feedback/:id', {
+      auth: 'user', methods: ['GET', 'PATCH'],
+      async handler(req, res, ctx, access) {
+        const userId = access.userId;
+        const owner = isFeedbackOwner(ctx, userId);
+        const id = Number(ctx.params?.id ?? 0);
+        if (!Number.isFinite(id) || id <= 0) return send(res, 400, { error: 'Bad ticket id' });
+        try {
+          const pool = await libDb.getDb();
+          await ensureFeedback(pool);
+          const ticket = await loadTicket(pool, id);
+          if (!ticket) return send(res, 404, { error: 'Not found' });
+          if (!owner && ticket.clerk_user_id !== userId) return send(res, 403, { error: 'Forbidden' });
+
+          if (req.method === 'PATCH') {
+            const body = await readJson(req);
+            if (body?.status != null) {
+              if (!owner) return send(res, 403, { error: 'Only the CB Edge team can close a ticket' });
+              const status = body.status === 'open' ? 'open' : 'resolved';
+              await pool.query(
+                `UPDATE customer_feedback SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+                [status, id],
+              );
+            }
+            if (body?.read) {
+              await pool.query(`UPDATE customer_feedback SET ${readCol(owner)} = CURRENT_TIMESTAMP WHERE id = $1`, [id]);
+            }
+            return send(res, 200, { ok: true, ticket: await loadTicket(pool, id) });
+          }
+
+          const messages = (await pool.query(
+            `SELECT id, author, body, created_at FROM customer_feedback_messages
+              WHERE feedback_id = $1 ORDER BY created_at ASC, id ASC`,
+            [id],
+          )).rows;
+          await pool.query(`UPDATE customer_feedback SET ${readCol(owner)} = CURRENT_TIMESTAMP WHERE id = $1`, [id]);
+          send(res, 200, { ticket, messages, isOwner: owner });
+        } catch (err) { send(res, 500, { error: 'Feedback load failed', detail: String(err) }); }
+      },
+    });
+
+    // /api/feedback/:id/messages — one reply, from whichever side is signed in.
+    registerDynamic('/api/feedback/:id/messages', {
+      auth: 'user', methods: ['POST'],
+      async handler(req, res, ctx, access) {
+        const userId = access.userId;
+        const owner = isFeedbackOwner(ctx, userId);
+        const id = Number(ctx.params?.id ?? 0);
+        if (!Number.isFinite(id) || id <= 0) return send(res, 400, { error: 'Bad ticket id' });
         try {
           const body = await readJson(req);
-          const id = Number(body?.id ?? 0);
-          const status = body?.status === 'open' ? 'open' : 'resolved';
-          if (!id) return send(res, 400, { error: 'id required' });
-          await libDb.setFeedbackStatus(id, status);
-          return send(res, 200, { ok: true });
-        } catch (err) { return send(res, 500, { error: 'Feedback update failed', detail: String(err) }); }
-      }
-      try {
-        const status = new URL(req.url || '/', 'http://localhost').searchParams.get('status') || undefined;
-        const items = await libDb.listFeedback({ status });
-        const openCount = (await libDb.listFeedback({ status: 'open', limit: 1000 })).length;
-        send(res, 200, { items, openCount });
-      } catch (err) { send(res, 500, { error: 'Feedback load failed', detail: String(err) }); }
-    },
-  });
+          const text = String(body?.message ?? '').trim();
+          if (!text) return send(res, 400, { error: 'Message is required' });
+          if (text.length > 5000) return send(res, 400, { error: 'Message too long' });
+          const pool = await libDb.getDb();
+          await ensureFeedback(pool);
+          const row = (await pool.query('SELECT id, clerk_user_id, status FROM customer_feedback WHERE id = $1', [id])).rows[0];
+          if (!row) return send(res, 404, { error: 'Not found' });
+          if (!owner && row.clerk_user_id !== userId) return send(res, 403, { error: 'Forbidden' });
+
+          const author = owner ? 'owner' : 'user';
+          const message = (await pool.query(
+            `INSERT INTO customer_feedback_messages (feedback_id, author, clerk_user_id, body)
+             VALUES ($1, $2, $3, $4) RETURNING id, author, body, created_at`,
+            [id, author, userId, text],
+          )).rows[0];
+
+          // A customer replying to a closed ticket reopens it — otherwise the
+          // reply lands in a thread nobody is looking at any more.
+          const reopen = author === 'user' && row.status === 'resolved';
+          await pool.query(
+            `UPDATE customer_feedback
+                SET updated_at = CURRENT_TIMESTAMP,
+                    status = ${reopen ? `'open'` : 'status'},
+                    ${readCol(owner)} = CURRENT_TIMESTAMP
+              WHERE id = $1`,
+            [id],
+          );
+          send(res, 200, { ok: true, message, ticket: await loadTicket(pool, id) });
+        } catch (err) { send(res, 500, { error: 'Reply failed', detail: String(err) }); }
+      },
+    });
+  }
 
   // ── Journal /trading (per-user; needs the bundled CSV parser) ────────────────
   if (libJournalCsv) {

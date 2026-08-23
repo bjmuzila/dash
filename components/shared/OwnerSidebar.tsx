@@ -31,6 +31,8 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     links: [
       { label: "Hub", href: "/owner", glyph: "⌂" },
       { label: "Admin", href: "/owner/dev/admin", glyph: "⚿" },
+      // Customer support tickets — the other end of /feedback.
+      { label: "Feedback", href: "/owner/feedback", glyph: "⚑" },
       { label: "Sales", href: "/owner/dev/sales", glyph: "$" },
       // Control Panel sections promoted to top-level entries (no longer nested).
       { label: "Overview", href: "/owner/dev/owner?tab=overview", glyph: "⊞" },

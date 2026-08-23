@@ -9,9 +9,10 @@ import { HOME_THEME } from "./homeTheme";
 // Feedback leads: the CB Edge logo used to be the /feedback link, but the logo
 // is the Bzila alerts trigger now and the in-panel feedback link that replaced
 // it only shows for viewers who can see alerts. This entry is the one every
-// signed-in user gets.
+// signed-in user gets. /feedback is a ticket system now — send one and the
+// reply comes back on the same page — so the label is no longer "Send".
 const INFO_LINKS: { href: string; label: string }[] = [
-  { href: "/feedback", label: "Send feedback" },
+  { href: "/feedback", label: "Feedback & Support" },
   { href: "/docs", label: "Help & Docs" },
   { href: "/disclaimer", label: "Disclaimer" },
   { href: "/risk-disclosure", label: "Risk Disclosure" },

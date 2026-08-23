@@ -39,6 +39,23 @@ function fmtMcap(n: number) {
   return `$${Math.round(n / 1e9)}B`;
 }
 
+/** Compact cap for the chip's second line — one line, never wraps a column. */
+function fmtMcapShort(n: number) {
+  if (!n) return "";
+  if (n >= 1e12) return `${(n / 1e12).toFixed(1)}T`;
+  return `${Math.round(n / 1e9)}B`;
+}
+
+/** "MON" / "AUG 24" for the earnings week board's day headers. */
+function dayShort(dateStr: string) {
+  return new Date(dateStr + "T12:00:00")
+    .toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
+}
+function dayDate(dateStr: string) {
+  return new Date(dateStr + "T12:00:00")
+    .toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase();
+}
+
 const IMPACT_COLOR: Record<string, string> = {
   High:      HT.red,
   Medium:    "#f59e0b",
@@ -141,12 +158,16 @@ export default function EconomicCalendarPage() {
   // Earnings market-cap floor, in dollars. 0 = no floor (see MCAP_OPTS).
   const [mcapMin,       setMcapMin]       = useState(0);
   const [capOpen,       setCapOpen]       = useState(false);
-  // "idle" | "working" | "failed" — drives the screenshot button's label only.
-  const [shot,          setShot]          = useState<"idle" | "working" | "failed">("idle");
+  // Drives the screenshot button's label only. "copied"/"saved" are the two
+  // success outcomes — the clipboard write is the intent, the download is the
+  // fallback the browser forces, and the button has to say which happened or a
+  // Firefox user stares at a "✓" wondering why Ctrl+V does nothing.
+  const [shot,          setShot]          = useState<"idle" | "working" | "copied" | "saved" | "failed">("idle");
   const dropRef   = useRef<HTMLDivElement>(null);
   const capRef    = useRef<HTMLDivElement>(null);
   const shotRef   = useRef<HTMLDivElement>(null);   // whole page, incl. toolbar
   const scrollRef = useRef<HTMLDivElement>(null);   // the clipping scroll box
+  const earnRef   = useRef<HTMLDivElement>(null);   // the earnings week board only
 
   useEffect(() => {
     function h(e: MouseEvent) {
@@ -159,8 +180,15 @@ export default function EconomicCalendarPage() {
   }, []);
 
   /**
-   * PNG of the whole page — toolbar, day separators and every row, not just the
-   * part currently on screen.
+   * Snapshot → CLIPBOARD (falls back to a download only when the browser will
+   * not take an image write — see copyOrDownload).
+   *
+   * WHAT gets captured depends on the tab, and that is the point:
+   *   - earnings tab → `earnRef`, the week board ALONE. Not the page toolbar,
+   *     not the filter dropdowns, not the search box. The board carries its own
+   *     header (CB Edge mark + week range + name count), so the pasted image is
+   *     a self-contained card rather than a screenshot of an app.
+   *   - calendar tab → the whole page, as before.
    *
    * Two things make this less trivial than handing the node to html2canvas:
    *
@@ -187,18 +215,26 @@ export default function EconomicCalendarPage() {
    *    same-origin files and still draw normally.
    */
   const takeShot = useCallback(async () => {
-    const el = shotRef.current;
+    // The earnings board is its own capture target; the calendar tab still
+    // captures the page shell. Falling back to the shell keeps the button
+    // working if the board is not mounted (empty week).
+    const earnMode = activeTab === "earnings" && !!earnRef.current;
+    const el = earnMode ? earnRef.current! : shotRef.current;
     if (!el || shot === "working") return;
     setDropOpen(false);
     setCapOpen(false);
     setShot("working");
 
-    const sc = scrollRef.current;
+    // Only the page-shell capture has to fight the scroll container: the board
+    // IS the scroller's content, so its own box is already the full height.
+    const sc = earnMode ? null : scrollRef.current;
     const prevSc = sc ? { overflowY: sc.style.overflowY, height: sc.style.height, flex: sc.style.flex } : null;
     const prevEl = { height: el.style.height, overflow: el.style.overflow };
     if (sc) { sc.style.overflowY = "visible"; sc.style.height = "auto"; sc.style.flex = "none"; }
-    el.style.height = "auto";
-    el.style.overflow = "visible";
+    if (!earnMode) {
+      el.style.height = "auto";
+      el.style.overflow = "visible";
+    }
 
     try {
       // Dynamic import: the snapshot engine pulls in a ~200KB rendering
@@ -211,28 +247,31 @@ export default function EconomicCalendarPage() {
       // backdrop-filter is unimplemented, live <canvas> bitmaps do not survive
       // the clone, cloned <script> tags 404 from about:blank) that a hand-rolled
       // call site silently does without.
-      const { captureToBlob, downloadBlob } = await import("@/lib/snapshot");
+      const { captureAndCopy } = await import("@/lib/snapshot");
       await new Promise(r => requestAnimationFrame(() => r(null)));  // let the re-layout settle
-      const blob = await captureToBlob(el, {
-        background: HT.bg,     // else transparent, which reads black-on-black in most viewers
-        // See the ticker-logo note above: a 302'd third-party logo taints the
-        // canvas and toBlob then throws. The engine defaults to allowTaint:true
-        // for the chart panels, which carry no foreign images; this page does.
-        allowTaint: false,
-        // A logo that never answers must not hold the capture: html2canvas
-        // waits 15s per image by default, and the earnings tab has one chip per
-        // name. A skipped logo costs a chip, not the PNG.
-        imageTimeout: 4000,
-        // The scroll container is expanded to its natural height above, so the
-        // element's own box is already the full list. `height` is a pure output
-        // crop, unlike windowWidth/windowHeight which REFLOW the cloned document
-        // at a virtual viewport and would re-run every media query mid-capture.
-        height: el.scrollHeight,
-      });
       // etToday() rather than the `today` const — that is declared further down
       // and would be in its TDZ at the point this callback is created.
-      downloadBlob(blob, `${activeTab === "earnings" ? "earnings" : "econ-calendar"}-${etToday()}.png`);
-      setShot("idle");
+      const where = await captureAndCopy(
+        el,
+        `${earnMode ? "earnings" : "econ-calendar"}-${etToday()}.png`,
+        {
+          background: HT.bg,   // else transparent, which reads black-on-black in most viewers
+          // See the ticker-logo note above: a 302'd third-party logo taints the
+          // canvas and toBlob then throws. The engine defaults to allowTaint:true
+          // for the chart panels, which carry no foreign images; this page does.
+          allowTaint: false,
+          // A logo that never answers must not hold the capture: html2canvas
+          // waits 15s per image by default, and the earnings tab has one chip per
+          // name. A skipped logo costs a chip, not the PNG.
+          imageTimeout: 4000,
+          // The board already paints its own header, so framing it a SECOND time
+          // would stack two titles. The page capture keeps the plain form it has
+          // always had. Either way the CB Edge mark is in the image.
+          height: earnMode ? undefined : el.scrollHeight,
+        },
+      );
+      setShot(where === "copied" ? "copied" : "saved");
+      setTimeout(() => setShot("idle"), 2000);
     } catch (e) {
       console.warn("[econ-calendar] screenshot failed:", e);
       setShot("failed");
@@ -243,6 +282,13 @@ export default function EconomicCalendarPage() {
       el.style.overflow = prevEl.overflow;
     }
   }, [shot, activeTab]);
+
+  const shotLabel =
+    shot === "working" ? "…"
+    : shot === "copied" ? "✓ Copied"
+    : shot === "saved"  ? "✓ Saved"
+    : shot === "failed" ? "✕ Failed"
+    : "⧉ Copy";
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -461,6 +507,24 @@ export default function EconomicCalendarPage() {
     })
     .filter(s => s.pre.length > 0 || s.after.length > 0 || s.tbd.length > 0);
 
+  /**
+   * Earnings tab — a WEEK BOARD, one column per trading day.
+   *
+   * The old layout was the calendar's own row grid: a full-width band per
+   * session with a fixed 80px time gutter and the chips flowing left. A week
+   * with four names on Tuesday spent a 2000px-wide row on four 46px chips, so
+   * the tab was mostly empty background running down the right-hand side, and
+   * the five days stacked into a page taller than the fold for ~25 names.
+   *
+   * Columns fix both halves of that: the width is divided between the days
+   * instead of being handed to one row, and the whole week lands in one screen —
+   * which is also what makes the tab worth pasting into a chat as a single
+   * image.
+   *
+   * `auto-fit` (not repeat(5)) because the feed decides how many days come back,
+   * and because globals.css's GLOBAL GRID COLLAPSE flattens fixed repeat(N)
+   * counts on phones but deliberately re-exempts auto-fit/auto-fill.
+   */
   function renderEarningsOnly() {
     if (earningsSections.length === 0) {
       // Name the reason. "No earnings match." reads as an empty feed, but the
@@ -472,33 +536,78 @@ export default function EconomicCalendarPage() {
           : "No earnings match.";
       return <div style={{ color: HT.text, fontSize: 14, padding: 20 }}>{why}</div>;
     }
-    return earningsSections.map(({ date, pre, after, tbd }) => {
-      const isTod = date === today;
-      return (
-        <div key={`earn-sec-${date}`}>
-          <div
-            style={{
-              padding: "6px 16px",
-              background: isTod ? "rgba(33,158,188,0.06)" : HT.panelBg,
-              borderTop: `1px solid ${HT.border}`,
-              display: "flex", alignItems: "center", gap: 8,
-            }}
-          >
-            <span style={{ fontSize: 12, fontWeight: 800, color: isTod ? HT.cyan : "#3a5570", letterSpacing: "0.1em" }}>
-              {fullDayLabel(date, today)}
+
+    const first = earningsSections[0].date;
+    const last  = earningsSections[earningsSections.length - 1].date;
+    const shown = earningsSections.reduce((n, s) => n + s.pre.length + s.after.length + s.tbd.length, 0);
+
+    return (
+      <div ref={earnRef} style={{ background: HT.bg, padding: 12 }}>
+
+        {/* Board header — lives INSIDE the capture target, so the copied image
+            carries the mark and the week it covers without the app chrome. */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+          padding: "10px 12px", marginBottom: 10,
+          borderRadius: 12,
+          border: `1px solid ${HT.border}`,
+          borderTop: `2px solid ${HT.cyan}`,
+          background: `linear-gradient(180deg, rgba(33,158,188,0.10) 0%, transparent 70%), ${HT.panelBg}`,
+        }}>
+          {/* Same-origin file in public/ — a real image the capture can draw,
+              unlike the 302'd ticker logos. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 24, width: "auto", display: "block" }} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+            <span style={{ fontSize: 13, fontWeight: 900, color: HT.text, letterSpacing: "0.14em" }}>
+              EARNINGS THIS WEEK
             </span>
-            {isTod && (
-              <span style={{ fontSize: 10, fontWeight: 900, background: HT.cyan, color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
-                TODAY
+            <span style={{ fontSize: 11, color: "#8a9ab8", fontFamily: "var(--font-mono)", letterSpacing: "0.04em" }}>
+              {dayDate(first)} – {dayDate(last)}
+            </span>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{
+              fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
+              color: HT.cyan, background: `${HT.cyan}1A`, border: `1px solid ${HT.cyan}55`,
+              padding: "3px 9px", borderRadius: 999, letterSpacing: "0.06em",
+            }}>
+              {shown} NAMES
+            </span>
+            {mcapMin > 0 && (
+              <span style={{
+                fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono)",
+                color: "#8a9ab8", border: `1px solid ${HT.border}`,
+                padding: "3px 9px", borderRadius: 999,
+              }}>
+                {mcapLabel}
               </span>
             )}
+            <span style={{ fontSize: 11, color: "#8a9ab8", fontFamily: "var(--font-mono)" }}>
+              cbedge.net
+            </span>
           </div>
-          {pre.length > 0 && <EarnRowBlock kind="pre" rows={pre} />}
-          {after.length > 0 && <EarnRowBlock kind="after" rows={after} />}
-          {tbd.length > 0 && <EarnRowBlock kind="tbd" rows={tbd} />}
         </div>
-      );
-    });
+
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+          gap: 10,
+          alignItems: "start",
+        }}>
+          {earningsSections.map(s => (
+            <EarnDayColumn
+              key={`earn-col-${s.date}`}
+              date={s.date}
+              isToday={s.date === today}
+              pre={s.pre}
+              after={s.after}
+              tbd={s.tbd}
+            />
+          ))}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -511,8 +620,10 @@ export default function EconomicCalendarPage() {
         borderBottom: `1px solid ${HT.border}`, flexShrink: 0,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 20, width: "auto", display: "block", flexShrink: 0 }} />
           <span style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.15em", color: HT.text }}>
-            📅 Economic Calendar
+            Economic Calendar
           </span>
           {lastRefresh && (
             <span style={{ fontSize: 12, color: HT.text, fontFamily: "var(--font-mono)", background: HT.panelBg, padding: "2px 8px", borderRadius: 3 }}>
@@ -649,17 +760,21 @@ export default function EconomicCalendarPage() {
           <button
             onClick={takeShot}
             disabled={shot === "working"}
-            title="Save the full calendar as a PNG"
-            // The capture includes this toolbar, so without this the PNG shows
-            // the button frozen mid-click on "…". Dropped from the clone only.
+            title={activeTab === "earnings"
+              ? "Copy the earnings week board to the clipboard"
+              : "Copy the full calendar to the clipboard"}
+            // The page capture includes this toolbar, so without this the PNG
+            // shows the button frozen mid-click on "…". Dropped from the clone
+            // only. (The earnings capture targets the board, which excludes it
+            // outright — this still matters for the calendar tab.)
             data-noshot="1"
             style={{
               ...homeButtonStyle,
-              color: shot === "failed" ? HT.red : undefined,
-              borderColor: shot === "failed" ? HT.red : undefined,
+              color: shot === "failed" ? HT.red : shot === "copied" || shot === "saved" ? HT.cyan : undefined,
+              borderColor: shot === "failed" ? HT.red : shot === "copied" || shot === "saved" ? HT.cyan : undefined,
             }}
           >
-            {shot === "working" ? "…" : shot === "failed" ? "✕ failed" : "⧉ Shot"}
+            {shotLabel}
           </button>
           <button onClick={load} disabled={loading} data-noshot="1" style={{ ...homeButtonStyle }}>
             {loading ? "…" : "↻ Now"}
@@ -721,15 +836,157 @@ export default function EconomicCalendarPage() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Earnings WEEK BOARD (the earnings tab). The calendar tab keeps EarnRowBlock
+// below — there the earnings have to interleave with timed econ events, so they
+// must stay in that table's row grid.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One ticker tile.
+ *
+ * Every box is a fixed-width grid cell and everything inside is centered on the
+ * cell's axis — logo, ticker, cap. The old chip centered a 34px logo inside a
+ * 46px column but let the ticker text start at the column's left edge, so any
+ * symbol narrower or wider than the logo sat visibly off-axis (the "words not in
+ * the middle of the boxes" in the report). `textAlign:center` + `width:100%` on
+ * the label is what actually fixes it: align-items only centers the SPAN, not
+ * the text inside a span that stretches.
+ */
+function EarnChip({ row }: { row: EarnRow }) {
+  const cap = fmtMcapShort(row.market_cap);
+  return (
+    <a
+      href={`https://finance.yahoo.com/quote/${row.symbol}`}
+      target="_blank"
+      rel="noreferrer"
+      title={`${row.company || row.symbol} · ${fmtMcap(row.market_cap)}${row.eps_est ? ` · est ${row.eps_est}` : ""}`}
+      style={{
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start",
+        gap: 5, minWidth: 0, padding: "7px 3px 6px", textDecoration: "none",
+        borderRadius: 9,
+        background: "rgba(255,255,255,0.03)",
+        border: `1px solid ${HT.border}`,
+      }}
+    >
+      <ChipLogo sym={row.symbol} company={row.company} size={30} radius={7} />
+      <span style={{
+        width: "100%", textAlign: "center", lineHeight: 1.2,
+        fontSize: 10, fontWeight: 800, color: HT.text,
+        fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+      }}>
+        {row.symbol}
+      </span>
+      {cap && (
+        <span style={{
+          width: "100%", textAlign: "center", lineHeight: 1,
+          fontSize: 9, color: "#8a9ab8", fontFamily: "var(--font-mono)",
+        }}>
+          {cap}
+        </span>
+      )}
+    </a>
+  );
+}
+
+/** PRE / AFTER / TBD block inside a day column. */
+function EarnSession({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
+  const k = EARN_KIND[kind];
+  return (
+    <div style={{ padding: "8px 9px 10px", borderTop: `1px solid ${HT.border}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7 }}>
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: k.color, flexShrink: 0 }} />
+        <span style={{
+          fontSize: 9, fontWeight: 900, color: k.color,
+          textTransform: "uppercase", letterSpacing: "0.12em",
+        }}>
+          {k.board}
+        </span>
+        <span style={{
+          marginLeft: "auto", fontSize: 9, color: "#8a9ab8",
+          fontFamily: "var(--font-mono)",
+        }}>
+          {rows.length}
+        </span>
+      </div>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(52px, 1fr))",
+        gap: 7,
+      }}>
+        {rows.map(r => <EarnChip key={r.symbol} row={r} />)}
+      </div>
+    </div>
+  );
+}
+
+/** One day of the week board. */
+function EarnDayColumn({
+  date, isToday, pre, after, tbd,
+}: { date: string; isToday: boolean; pre: EarnRow[]; after: EarnRow[]; tbd: EarnRow[] }) {
+  const n = pre.length + after.length + tbd.length;
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", minWidth: 0,
+      borderRadius: 12, overflow: "hidden",
+      border: `1px solid ${isToday ? "rgba(33,158,188,0.45)" : HT.border}`,
+      background: isToday
+        ? `linear-gradient(180deg, rgba(33,158,188,0.10) 0%, transparent 45%), ${HT.panelBg}`
+        : HT.panelBg,
+    }}>
+      {/* Day header. The date is WHITE on every day — the cyan weekday and the
+          TODAY pill already carry the emphasis, and the old #3a5570 made every
+          day that was not today read as a disabled row. */}
+      <div style={{
+        display: "flex", alignItems: "baseline", gap: 7,
+        padding: "9px 10px 8px",
+        background: isToday ? "rgba(33,158,188,0.08)" : "rgba(255,255,255,0.02)",
+      }}>
+        <span style={{
+          fontSize: 10, fontWeight: 900, color: HT.cyan,
+          letterSpacing: "0.14em", fontFamily: "var(--font-mono)",
+        }}>
+          {dayShort(date)}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 800, color: HT.text, letterSpacing: "0.04em" }}>
+          {dayDate(date)}
+        </span>
+        {isToday && (
+          <span style={{
+            fontSize: 9, fontWeight: 900, background: HT.cyan, color: "#05080d",
+            padding: "1px 5px", borderRadius: 3, letterSpacing: "0.1em",
+          }}>
+            TODAY
+          </span>
+        )}
+        <span style={{
+          marginLeft: "auto", fontSize: 10, color: "#8a9ab8",
+          fontFamily: "var(--font-mono)",
+        }}>
+          {n}
+        </span>
+      </div>
+
+      {pre.length   > 0 && <EarnSession kind="pre"   rows={pre} />}
+      {after.length > 0 && <EarnSession kind="after" rows={after} />}
+      {tbd.length   > 0 && <EarnSession kind="tbd"   rows={tbd} />}
+    </div>
+  );
+}
+
 // One earnings row woven into the calendar table — same grid as an event row.
 // "tbd" is the unconfirmed-time bucket: same layout, deliberately desaturated
 // so it never reads as a confirmed premarket/after-hours slot at a glance.
 type EarnKind = "pre" | "after" | "tbd";
 
-const EARN_KIND: Record<EarnKind, { top: string; sub: string; title: string; color: string }> = {
-  pre:   { top: "PRE",   sub: "MARKET", title: "Premarket earnings",      color: HT.cyan },
-  after: { top: "AFTER", sub: "HOURS",  title: "After-hours earnings",    color: HT.cyan },
-  tbd:   { top: "TIME",  sub: "TBD",    title: "Time unconfirmed",        color: "#8a9ab8" },
+// `board` is the week-board's session label — shorter than `title` because it
+// sits in a ~200px column, and colored per session so PRE and AFTER are
+// distinguishable at a glance (they used to share one cyan).
+const EARN_KIND: Record<EarnKind, { top: string; sub: string; title: string; board: string; color: string }> = {
+  pre:   { top: "PRE",   sub: "MARKET", title: "Premarket earnings",   board: "Premarket",    color: HT.cyan },
+  after: { top: "AFTER", sub: "HOURS",  title: "After-hours earnings", board: "After hours",  color: HT.orange },
+  tbd:   { top: "TIME",  sub: "TBD",    title: "Time unconfirmed",     board: "Time unconfirmed", color: "#8a9ab8" },
 };
 
 function EarnRowBlock({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {

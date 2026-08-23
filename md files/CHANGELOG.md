@@ -1,5 +1,134 @@
 # Changelog
 
+## 2026-08-23 - Earnings tab rebuilt as a week board; snapshot copies to the clipboard
+
+Edited: `components/pages/EconomicCalendar.tsx`.
+
+The `/economic-calendar` **Earnings** tab was the calendar's own row grid with
+the events removed: a full-width band per session, an 80px time gutter, chips
+flowing left. A week with four names on Tuesday spent a 2000px-wide row on four
+46px chips, so the tab was mostly empty background down the right-hand side, and
+five days of it stacked past the fold for ~25 names.
+
+### The board
+
+One **column per trading day**, `repeat(auto-fit, minmax(210px, 1fr))` — the
+width is divided between the days instead of being handed to one row, and the
+whole week lands in a single screen. `auto-fit` rather than `repeat(5)` on
+purpose: the feed decides how many days come back, and globals.css's GLOBAL GRID
+COLLAPSE flattens fixed `repeat(N)` counts on phones but deliberately re-exempts
+`auto-fit`/`auto-fill`.
+
+Inside a column: a day header, then a PRE / AFTER / TBD block per session, each
+with its own `repeat(auto-fill, minmax(52px, 1fr))` chip grid.
+
+- **Dates are white.** Every day, not just today — the cyan weekday and the TODAY
+  pill already carry the emphasis, and the old `#3a5570` made every other day
+  read as a disabled row.
+- **Chips are centered on their cell's axis.** The old chip centered a 34px logo
+  in a 46px column but let the ticker text start at the column's left edge, so
+  any symbol narrower or wider than the logo sat visibly off-axis. The fix is
+  `textAlign:center` + `width:100%` on the label — `align-items` centers the
+  span, not the text inside a span that stretches. Each chip also carries its
+  market cap on a second line.
+- **PRE and AFTER no longer share one cyan.** After-hours is now the theme
+  orange, so the two sessions are distinguishable at a glance (this also applies
+  to the earnings rows woven into the calendar tab).
+
+### CB Edge mark
+
+Two places: the page toolbar (replacing the 📅 emoji), and the **board's own
+header**, which also carries the week range, the name count and the active cap
+floor. `/cb-edge-logo.png` is a real same-origin file in `public/`, so unlike the
+302'd ticker logos the capture can actually draw it.
+
+### Snapshot → clipboard, earnings only
+
+The button copies now (`captureAndCopy` → `copyOrDownload`) instead of dropping a
+PNG in Downloads. A browser that refuses an image clipboard write still gets the
+file, and the button says which happened — **✓ Copied** vs **✓ Saved** — because
+a Firefox user staring at a bare ✓ has no way to know Ctrl+V will do nothing.
+
+What gets captured is now tab-dependent: on the earnings tab the target is the
+**board alone** (`earnRef`), not the toolbar, filter dropdowns or search box. The
+board carries its own header, so the pasted image is a self-contained card rather
+than a screenshot of an app. The calendar tab still captures the page shell, and
+keeps the scroll-container expansion dance it needs; the board is the scroller's
+content, so its own box is already the full height and it skips that entirely.
+
+## 2026-08-23 - Feedback became a ticket system (customer + owner, both ends of one thread)
+
+Added: `components/shared/FeedbackThread.tsx`, `app/owner/feedback/page.tsx`.
+Edited: `server-v2/api-router.js`, `app/feedback/page.tsx`,
+`components/shared/OwnerSidebar.tsx`, `components/shared/UserMenu.tsx`.
+
+`/feedback` used to be fire-and-forget: a form, a thank-you, silence. There was
+no way for a customer to see what happened to a note they sent, and no way to
+answer one. Every submission is now a **ticket** with a conversation on it.
+
+### The flow
+
+1. A customer opens a ticket at `/feedback` (same category tiles, same box). It
+   lands as **Open** and the page drops straight into the thread — that is the
+   confirmation, and it shows them where the reply will arrive.
+2. Both sides reply on the thread. The customer's tickets live under a "My
+   tickets" tab on the same page; unread owner replies carry a badge.
+3. The owner works the queue at **`/owner/feedback`** and hits **Mark complete**
+   when it's done. **Only the owner can change status** — enforced server-side,
+   not by hiding a button.
+4. A customer replying to a completed ticket **reopens it**. Otherwise the reply
+   lands in a thread nobody is watching any more.
+
+### Schema
+
+New `customer_feedback_messages (feedback_id → customer_feedback, author, body,
+created_at)` plus two read marks on `customer_feedback`: `user_read_at` and
+`owner_read_at`. Two of them, because "unread" means something different on each
+end — the customer wants to know about owner replies, the owner about customer
+ones. Opening a thread stamps the viewer's mark; that is the only read signal
+either surface has.
+
+Status stays the original two values, `'open'` and `'resolved'` (labelled
+"Complete"), so every row written before threads existed still reads correctly.
+
+Both are created **lazily in `api-router.js`**, with the same `ensureX(pool)`
+pattern `em_snapshots` and `es_stats` use — deliberately NOT in `lib/db.ts`. The
+checked-in `lib/db.ts` is behind `server-v2/_lib-db.cjs`, so regenerating that
+bundle to add a helper would drop unrelated hand-patches (the same reason
+`/api/strike-gex-series` uses raw SQL).
+
+### Routes
+
+| Route | Who |
+|-------|-----|
+| `GET /api/feedback` | owner: every ticket; customer: their own |
+| `POST /api/feedback` | any signed-in user — opens a ticket |
+| `GET /api/feedback/:id` | ticket + thread; also marks it read |
+| `PATCH /api/feedback/:id` | `{status}` owner-only, `{read:true}` either side |
+| `POST /api/feedback/:id/messages` | one reply, from whichever side is signed in |
+
+`GET /api/feedback` was owner-only and 403'd everyone else; it now scopes to the
+caller's own tickets instead. The legacy `PATCH /api/feedback {id,status}` body
+shape still works. The list returns `openCount` and `unreadCount` computed over
+the whole set, not the filtered page, so a status filter never moves a badge.
+
+### UI
+
+`components/shared/FeedbackThread.tsx` is the thread itself — bubbles, stamps,
+composer, status chip — and **both** pages render it, so a reply cannot read
+differently on the two ends. "Mine" is whichever side is looking: the owner sees
+their replies on the right, the customer sees theirs there. Enter sends,
+Shift+Enter breaks the line.
+
+The owner inbox is a two-pane split (queue left, thread right) with Open /
+Complete / All filters, polling the list every 30s and an open thread every 15s.
+Its breakpoint is declared in the page: globals.css's GLOBAL GRID COLLAPSE only
+rewrites `repeat(N…)` and `1fr 1fr` signatures, and this grid is neither.
+
+Sidebar gets **Owner → Feedback**. The account menu's "Send feedback" is now
+"Feedback & Support", because the reply comes back to the same place.
+
+
 ## 2026-08-22 - Frozen sessions: the real Premarket / Post-Market tabs on a past date
 
 Added: `server-v2/premarket-freeze-recorder.js`,
