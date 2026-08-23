@@ -15,6 +15,12 @@
  * Fetch-on-load + an explicit refresh — no polling, so an open tab never
  * hammers the recorder.
  *
+ * ONE EXPIRATION, ALWAYS. scanner-recorder.js snapshots `chain.expirations[0]`
+ * — the nearest listed contract — and the walls and the CORE are all picked off
+ * that single chain; nothing aggregates across the board. The `…&series=1` read
+ * carries that `expiry` back, and the log card tags it (`exp 08/25 · 2DTE`), so
+ * a 0DTE SPX log and a front-weekly single-name log can be told apart on sight.
+ *
  * Three views, switched by the WALLS / CORE / ALL pills:
  *   WALLS — call wall + put wall entries only.
  *   CORE  — CORE (cb) entries only.
@@ -69,6 +75,35 @@ function todayETStr(): string {
   }).formatToParts(new Date());
   const g = (t: string) => p.find((x) => x.type === t)?.value ?? "";
   return `${g("year")}-${g("month")}-${g("day")}`;
+}
+
+/** Calendar days from the session date to the expiry. null if either won't parse. */
+function dteBetween(date: string, expiry: string): number | null {
+  const a = Date.parse(`${date}T00:00:00Z`);
+  const b = Date.parse(`${expiry}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return Math.round((b - a) / 86_400_000);
+}
+
+/**
+ * "exp 08/25 · 2DTE" — the contract every level on this page was computed from.
+ *
+ * Not decoration. scanner-recorder.js snapshots ONE expiration per sweep —
+ * `chain.expirations[0]`, the nearest listed contract — and the walls and CORE
+ * are all picked off that single chain. For SPX/SPY/QQQ that is 0DTE intraday;
+ * a single name whose nearest listed expiry is Friday's weekly logs a 3DTE
+ * board on a Tuesday. The two look identical without this tag.
+ *
+ * Calendar days, not trading days: it labels the contract, it is not a decay
+ * measure. Returns null when the recorder wrote no expiry (pre-migration rows
+ * hold ""), so the tag is absent rather than guessed.
+ */
+function expiryTag(expiry: string | null, date: string): string | null {
+  if (!expiry) return null;
+  const [, mm, dd] = expiry.split("-");
+  const md = mm && dd ? `${mm}/${dd}` : expiry;
+  const d = dteBetween(date, expiry);
+  return d == null || d < 0 ? `exp ${md}` : `exp ${md} · ${d}DTE`;
 }
 
 // ── types (mirror /proxy/walls) ──────────────────────────────────────────────
@@ -297,12 +332,18 @@ const missPts = (strike: number | null | undefined, spot: number | null | undefi
  */
 function buildLogText(
   symbol: string, spot: number | null, date: string, view: LogView,
-  log: WallLogRow[], events: WallEventRow[],
+  log: WallLogRow[], events: WallEventRow[], expiry: string | null,
 ): string {
   const L = (lt: WallLevel) => LEVEL_LABEL[lt];
   const out: string[] = [];
   const scope = `${VIEW_SCOPE[view].toUpperCase()} LOG`;
-  out.push(`${symbol} — ${scope} · ${date}${spot != null ? ` · spot ${wallNum(spot)}` : ""}`);
+  // The expiry goes in the header line for the same reason it is on the card:
+  // a pasted log with no contract on it reads as "the levels", and these are
+  // one expiration's levels.
+  const exp = expiryTag(expiry, date);
+  out.push(
+    `${symbol} — ${scope} · ${date}${exp ? ` · ${exp}` : ""}${spot != null ? ` · spot ${wallNum(spot)}` : ""}`,
+  );
 
   const opens = log.filter((r) => r.reason === "open");
   if (opens.length) {
@@ -509,8 +550,11 @@ export default function LevelLog() {
 
   /** The real tape for the selected ticker/date — best-effort, see the hook. */
   const price = useIntradaySpot(sel, date, nonce);
-  /** The 5m wall/gamma history the change-only log was distilled from. */
-  const snaps = useWallSeries(sel, date, nonce);
+  /** The 5m wall/gamma history the change-only log was distilled from — and,
+   *  riding along on the same rows, the expiration those levels came from. */
+  const series = useWallSeries(sel, date, nonce);
+  const snaps = series.samples;
+  const expiry = series.expiry;
 
   // ── the view switch, applied once ──────────────────────────────────────────
   // Everything downstream (rail, timeline, copy text, PNG) reads these, so the
@@ -555,9 +599,11 @@ export default function LevelLog() {
   const spot = selRow?.spot ?? null;
 
   const empty = !sel || !(log.length || events.length);
+  /** The contract tag, once, for the card header / copy text / PNG title. */
+  const expTag = useMemo(() => expiryTag(expiry, date), [expiry, date]);
   const logText = useMemo(
-    () => buildLogText(sel ?? "—", spot, date, view, log, events),
-    [sel, spot, date, view, log, events],
+    () => buildLogText(sel ?? "—", spot, date, view, log, events, expiry),
+    [sel, spot, date, view, log, events, expiry],
   );
   const snapTitle = `${sel ?? "—"} — ${view === "core" ? "CORE" : view === "all" ? "Level" : "Wall"} log · ${date}`;
   const snapFile = `${(sel ?? "walls").toLowerCase()}-${view}-log-${date}.png`;
@@ -724,6 +770,24 @@ export default function LevelLog() {
               {sel ?? "—"} — {VIEW_SCOPE[view]} log
             </span>
             <span style={{ fontSize: FS_META, fontFamily: "var(--font-mono)" }}>{wallNum(spot)}</span>
+            {/* WHICH CONTRACT. Every level here comes from one expiration — the
+                nearest listed one at capture — so the log is 0DTE for the daily
+                names and a front weekly for most single names. Deliberately NOT
+                data-capture-hide: the PNG should carry it too, or a shared
+                screenshot is a set of levels with no board attached. */}
+            {expTag ? (
+              <span
+                title={`Levels computed from the ${expiry} expiration — the nearest listed contract at capture. Walls and CORE all come from that one chain; nothing is aggregated across expirations.`}
+                style={{
+                  fontSize: FS_META, fontFamily: "var(--font-mono)", fontWeight: 800,
+                  padding: "2px 7px", borderRadius: 6, whiteSpace: "nowrap",
+                  color: LIGHT_BLUE, background: rgba(LIGHT_BLUE, 0.12),
+                  border: `1px solid ${rgba(LIGHT_BLUE, 0.35)}`,
+                }}
+              >
+                {expTag}
+              </span>
+            ) : null}
             {/* data-capture-hide: live-page chrome, dropped from the screenshot. */}
             <div data-capture-hide style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
               <CopyLogButton disabled={empty} text={logText} />
@@ -1063,6 +1127,22 @@ type SnapSample = {
   callG: number | null; putG: number | null;
 };
 
+/**
+ * What the series read gives the page: the samples, and the CONTRACT they were
+ * computed from.
+ *
+ * The expiry matters more than it looks. Every level on this page — both walls
+ * and the CORE — comes from ONE expiration: `chain.expirations[0]`, the nearest
+ * listed contract at capture (scanner-recorder.js). Nothing is aggregated across
+ * the board. For SPX/SPY/QQQ that is 0DTE intraday; for most single names the
+ * front weekly, so the same page can be showing a 0DTE log and a 4DTE log
+ * depending on which ticker is selected. Unlabelled, the two read identically.
+ */
+type SnapSeries = { samples: SnapSample[]; expiry: string | null };
+
+/** Stable empty value — a fresh object literal would re-run every consumer's memo. */
+const EMPTY_SERIES: SnapSeries = { samples: [], expiry: null };
+
 /** Finite number or null — the series columns are nullable all the way down. */
 function fin(v: unknown): number | null {
   const n = Number(v);
@@ -1099,10 +1179,10 @@ function etMinsOfTs(ts: string): number {
  * symbol outside the scanner universe all resolve to [], and the chart falls
  * back to the log's own change-row gamma — which is what it used before.
  */
-function useWallSeries(symbol: string | null, date: string, nonce: number): SnapSample[] {
-  const [rows, setRows] = useState<SnapSample[]>([]);
+function useWallSeries(symbol: string | null, date: string, nonce: number): SnapSeries {
+  const [rows, setRows] = useState<SnapSeries>(EMPTY_SERIES);
   useEffect(() => {
-    if (!symbol) { setRows([]); return; }
+    if (!symbol) { setRows(EMPTY_SERIES); return; }
     let alive = true;
     (async () => {
       try {
@@ -1113,10 +1193,18 @@ function useWallSeries(symbol: string | null, date: string, nonce: number): Snap
         const j = await r.json();
         const src: unknown[] = Array.isArray(j?.series) ? j.series : [];
         const out: SnapSample[] = [];
+        // Last non-empty `expiry` on the day wins. The column is NOT NULL
+        // DEFAULT '' — rows written before it existed hold "" — and a roll can
+        // land mid-session (the 0DTE contract expires and the next one becomes
+        // expirations[0]), so the newest labelled row is the honest answer for
+        // where the levels ended the day.
+        let exp: string | null = null;
         for (const row of src) {
           const rec = row as Record<string, unknown>;
           const mins = etMinsOfTs(String(rec?.ts ?? ""));
           if (!Number.isFinite(mins)) continue;
+          const e = typeof rec.expiry === "string" ? rec.expiry.trim() : "";
+          if (/^\d{4}-\d{2}-\d{2}$/.test(e)) exp = e;
           out.push({
             s: slotAtMins(mins),
             callWall: fin(rec.call_wall), putWall: fin(rec.put_wall),
@@ -1124,8 +1212,8 @@ function useWallSeries(symbol: string | null, date: string, nonce: number): Snap
           });
         }
         out.sort((a, b) => a.s - b.s);
-        if (alive) setRows(out);
-      } catch { if (alive) setRows([]); }
+        if (alive) setRows({ samples: out, expiry: exp });
+      } catch { if (alive) setRows(EMPTY_SERIES); }
     })();
     return () => { alive = false; };
   }, [symbol, date, nonce]);

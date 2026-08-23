@@ -117,31 +117,101 @@ import {
   netDEXOf,
   type ChainRow,
 } from "@/lib/calculations/calculations";
+import {
+  HOME_THEME as HT,
+  LIGHT_BLUE,
+  ES_CANDLE_UP,
+  ES_CANDLE_DOWN,
+} from "@/components/shared/homeTheme";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  CSS (mockup, scoped)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * `#rrggbb` → `rgba(r,g,b,a)`.
+ *
+ * The theme exports flat hexes; this page needs alpha versions of them for
+ * washes, rings and dimmed bar ends. Deriving them here is the whole point —
+ * a hand-typed rgba() in the stylesheet is a hardcoded colour that stops
+ * tracking the theme the moment the theme moves (AGENTS.md).
+ */
+function hexA(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+/** White alpha — the app's neutral surface rung (borders, sunken tracks, hover). */
+const ink = (a: number) => `rgba(255,255,255,${a})`;
+
 const CSS = `
 .pmk{
-  --bg:#0a0d12; --panel:#11161f; --panel2:#151b26;
-  --line:#242e3b; --line2:#33404f;
-  /* Card outline. Deliberately a white alpha, not a slate hex: the cards sit on
-     three different backgrounds (panel, panel2, the green/red regime wash) and
-     a fixed hex reads as a different weight on each. */
-  --card:rgba(255,255,255,.20);
-  --txt:#e6edf6; --dim:#ffffff; --dim2:#ffffff;
-  --pos:#2ecc8f; --posDim:#1b7a56; --neg:#ff5c6c; --negDim:#8c2f3a;
+  /* SURFACE TOKENS — interpolated from components/shared/homeTheme, never typed
+     as hex here (AGENTS.md). This block used to be the mockup's own slate ramp
+     (#0a0d12 / #11161f / #151b26 / #242e3b), which is why the page read as a
+     different product from the rest of the app: the cards sat a full step
+     lighter than every other card in the dashboard and their edges were a solid
+     slate line rather than the app's white hairline.
+     Everything below is now the SAME surface language as the shared Card and
+     the earnings week board: HT.panelBg fill, HT.border hairline, one radius. */
+  --bg:${HT.bg}; --panel:${HT.panel}; --panel2:${HT.panelBg};
+  --line:${HT.border}; --line2:${ink(0.2)};
+  /* Card outline. Still a white alpha, and now literally the app's border token:
+     the cards sit on three different backgrounds (panel, panel2, the green/red
+     regime wash) and a fixed hex reads as a different weight on each. */
+  --card:${HT.border};
+  /* Card interior + the hover/active fill controls use. Both are white alphas
+     over --bg for the same reason the border is. */
+  --sunken:${ink(0.05)}; --active:${ink(0.08)};
+  --line3:${ink(0.3)}; --off:${ink(0.28)};
+  /* The one SOLID plate on the page. Bar tags, the ladder's spot/flip labels and
+     the footer sit ON TOP of coloured bars, so they cannot use a white alpha —
+     it would let the bar read straight through the text. HT.panel is the app's
+     opaque panel colour, which is what the old var(--plate) was approximating. */
+  --plate:${HT.panel};
+  --cyan:${HT.cyan}; --cyanEdge:${hexA(HT.cyan, 0.45)}; --cyanWash:${hexA(HT.cyan, 0.1)};
+  --txt:${HT.text}; --dim:${HT.text}; --dim2:${HT.muted};
+  /* The +/- gamma pair is the app's CANDLE pair now (homeTheme ES_CANDLE_UP /
+     ES_CANDLE_DOWN), not this page's private green/red — so a bar on the
+     premarket ladder is the same green as an up-candle two tabs over. */
+  --pos:${ES_CANDLE_UP}; --posDim:${hexA(ES_CANDLE_UP, 0.45)};
+  --neg:${ES_CANDLE_DOWN}; --negDim:${hexA(ES_CANDLE_DOWN, 0.45)};
   /* WALL COLOURS, kept separate from the +/− gamma pair on purpose.
      --pos / --neg say "positive or negative gamma" and belong to the bars.
      --cw / --pw say "call wall / put wall" and belong to the LEVELS. They were
      the same tokens until 2026-08-20, which meant flipping the wall convention
      would have re-coloured every bar on the page. Call wall reads GREEN and put
-     wall RED on every ticker and every surface — change it here, once. */
-  --cw:#2ecc8f; --pw:#ff5c6c;
-  --amber:#f5b942; --blue:#4da3ff; --violet:#a78bfa; --r:10px;
+     wall RED on every ticker and every surface — change it here, once.
+     NOT re-pointed at LEVEL_COLORS.cw/.pw (blue/red): that would silently undo
+     the 2026-08-20 green/red decision as a side effect of a re-theme. */
+  --cw:${ES_CANDLE_UP}; --pw:${ES_CANDLE_DOWN};
+  --amber:${HT.orange}; --blue:${LIGHT_BLUE}; --violet:#a78bfa;
+  /* ALPHA RUNGS. Every wash, edge, glow and bar-fill on this page is derived
+     from the five accent tokens above instead of being typed as a literal
+     rgba(). That is not tidiness: PostMarketTab.tsx and HistoricalRecap.tsx are
+     separate template literals with no access to the JS side, so a hand-typed
+     green in one of them silently keeps the OLD hue after this block moves —
+     which is exactly how a "pill.cool" ends up with a border one shade off its
+     own text. Change an accent above and every rung follows, in all four
+     files. */
+  --posWash:${hexA(ES_CANDLE_UP, 0.08)}; --posEdge:${hexA(ES_CANDLE_UP, 0.22)};
+  --posEdgeUp:${hexA(ES_CANDLE_UP, 0.4)}; --posBand:${hexA(ES_CANDLE_UP, 0.28)};
+  --posGlow:${hexA(ES_CANDLE_UP, 0.16)}; --posGlow2:${hexA(ES_CANDLE_UP, 0.05)};
+  --negWash:${hexA(ES_CANDLE_DOWN, 0.08)}; --negEdge:${hexA(ES_CANDLE_DOWN, 0.22)};
+  --negEdgeUp:${hexA(ES_CANDLE_DOWN, 0.4)}; --negBand:${hexA(ES_CANDLE_DOWN, 0.28)};
+  --negGlow:${hexA(ES_CANDLE_DOWN, 0.16)};
+  --blueWash:${hexA(LIGHT_BLUE, 0.06)}; --blueBand:${hexA(LIGHT_BLUE, 0.14)};
+  --blueEdge:${hexA(LIGHT_BLUE, 0.22)}; --blueSoft:${hexA(LIGHT_BLUE, 0.3)};
+  --blueFill1:${hexA(LIGHT_BLUE, 0.4)}; --blueFill2:${hexA(LIGHT_BLUE, 0.6)};
+  --blueFill3:${hexA(LIGHT_BLUE, 0.85)};
+  --amberWash:${hexA(HT.orange, 0.07)}; --amberEdge:${hexA(HT.orange, 0.4)};
+  --amberSoft:${hexA(HT.orange, 0.5)};
+  /* Two radii for the whole page — the week board's card (12) and its inner
+     tile (9). Every rounded surface picks one; nothing types its own. */
+  --r:12px; --r2:9px;
   background:var(--bg);color:var(--txt);
-  font:13px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Inter,Roboto,sans-serif;
+  font:13px/1.45 var(--font-inter),'Inter',ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
   -webkit-font-smoothing:antialiased;height:100%;overflow:auto;
 }
 .pmk *{box-sizing:border-box}
@@ -168,12 +238,12 @@ const CSS = `
   background:transparent;color:var(--txt);border:1px solid var(--line2);border-radius:9px;
   font:inherit;font-size:11.5px;letter-spacing:.04em;padding:5px 27px 5px 12px;cursor:pointer;
   font-variant-numeric:tabular-nums}
-.pmk .dsel select:hover{background:#1e2836}
-.pmk .dsel select:focus{outline:none;border-color:var(--dim2)}
+.pmk .dsel select:hover{background:var(--active)}
+.pmk .dsel select:focus{outline:none;border-color:var(--cyanEdge)}
 /* The popup list is drawn by the OS and inherits nothing — these two are the
    only properties it honours, and without them a dark page opens a white menu. */
-.pmk .dsel option{background:var(--panel2);color:var(--txt)}
-.pmk .dsel.past select{border-color:rgba(245,185,66,.45);color:var(--amber)}
+.pmk .dsel option{background:var(--plate);color:var(--txt)}
+.pmk .dsel.past select{border-color:var(--amberEdge);color:var(--amber)}
 .pmk .dsel.past::after{border-color:var(--amber)}
 
 /* FROZEN banner. Violet, not amber: amber on this page means "caution, check
@@ -185,14 +255,22 @@ const CSS = `
   font-size:12px;color:var(--dim)}
 .pmk .frozenbar b{color:var(--violet)}
 
+/* OUTER SHELL — the app's card, with a regime tint on top.
+   The tint is semantic (green = positive gamma, red = negative) so it stays,
+   but the SURFACE underneath is now the shared card: the app's panel colour,
+   one hairline border, the app's drop shadow, and the cyan top edge every other
+   glossy panel in the dashboard carries. The old coloured 1px ring is gone — it
+   read as a second border in a UI where no other card has one, and 190px of
+   gradient already makes the regime unmistakable. */
 .pmk .prep{
-  border:1px solid var(--card);border-radius:14px;overflow:hidden;
-  background:linear-gradient(180deg,rgba(46,204,143,.07),rgba(46,204,143,0) 190px), var(--panel);
-  box-shadow:0 0 0 1px rgba(46,204,143,.09), 0 18px 50px -30px #000;
+  border:1px solid var(--card);border-top:2px solid var(--cyanEdge);
+  border-radius:16px;overflow:hidden;
+  background:linear-gradient(180deg,${hexA(ES_CANDLE_UP, 0.07)},${hexA(ES_CANDLE_UP, 0)} 190px), var(--panel);
+  box-shadow:0 18px 40px rgba(0,0,0,0.22);
 }
 .pmk .prep.is-neg{
-  background:linear-gradient(180deg,rgba(255,92,108,.08),rgba(255,92,108,0) 190px), var(--panel);
-  box-shadow:0 0 0 1px rgba(255,92,108,.10), 0 18px 50px -30px #000;
+  border-top-color:${hexA(ES_CANDLE_DOWN, 0.45)};
+  background:linear-gradient(180deg,${hexA(ES_CANDLE_DOWN, 0.08)},${hexA(ES_CANDLE_DOWN, 0)} 190px), var(--panel);
 }
 
 .pmk .regime{
@@ -201,10 +279,10 @@ const CSS = `
 }
 .pmk .vr{background:var(--line);height:44px;width:1px;margin:0 18px}
 .pmk .regbadge{display:flex;align-items:center;gap:11px}
-.pmk .dot{width:9px;height:9px;border-radius:50%;background:var(--pos);box-shadow:0 0 0 4px rgba(46,204,143,.16);animation:pmkpulse 2.6s infinite}
-.pmk .dot.neg{background:var(--neg);box-shadow:0 0 0 4px rgba(255,92,108,.16)}
-.pmk .dot.off{background:#55606e;box-shadow:none;animation:none}
-@keyframes pmkpulse{0%,100%{box-shadow:0 0 0 4px rgba(46,204,143,.16)}50%{box-shadow:0 0 0 8px rgba(46,204,143,.05)}}
+.pmk .dot{width:9px;height:9px;border-radius:50%;background:var(--pos);box-shadow:0 0 0 4px var(--posGlow);animation:pmkpulse 2.6s infinite}
+.pmk .dot.neg{background:var(--neg);box-shadow:0 0 0 4px var(--negGlow)}
+.pmk .dot.off{background:var(--off);box-shadow:none;animation:none}
+@keyframes pmkpulse{0%,100%{box-shadow:0 0 0 4px var(--posGlow)}50%{box-shadow:0 0 0 8px var(--posGlow2)}}
 .pmk .regbadge .lbl{font-size:19px;font-weight:700;letter-spacing:-.02em;color:var(--pos)}
 .pmk .regbadge .lbl.neg{color:var(--neg)}
 .pmk .regbadge .sub{font-size:10.5px;color:var(--dim)}
@@ -215,9 +293,9 @@ const CSS = `
 .pmk .chg-neg{color:var(--neg)}
 .pmk .bias{
   justify-self:end;text-align:right;max-width:300px;padding:8px 12px;border-radius:var(--r);
-  background:rgba(46,204,143,.07);border:1px solid rgba(46,204,143,.22);
+  background:var(--posWash);border:1px solid var(--posEdge);
 }
-.pmk .bias.neg{background:rgba(255,92,108,.07);border-color:rgba(255,92,108,.22)}
+.pmk .bias.neg{background:var(--negWash);border-color:var(--negEdge)}
 .pmk .bias .t{font-size:12.5px;font-weight:600;color:var(--pos)}
 .pmk .bias.neg .t{color:var(--neg)}
 .pmk .bias .d{font-size:11px;color:var(--dim);margin-top:2px}
@@ -236,8 +314,8 @@ const CSS = `
 .pmk .gexrail .rh{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
 .pmk .gexrail .rh h3{margin:0;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:600}
 .pmk .rail{position:relative;height:120px;margin-top:2px}
-.pmk .rail .track2{position:absolute;left:0;right:0;top:54px;height:10px;border-radius:6px;background:#1a2230;border:1px solid var(--line)}
-.pmk .rail .band{position:absolute;top:-1px;bottom:-1px;border-radius:6px;background:linear-gradient(90deg,rgba(255,92,108,.28),rgba(77,163,255,.14),rgba(46,204,143,.28))}
+.pmk .rail .track2{position:absolute;left:0;right:0;top:54px;height:10px;border-radius:6px;background:var(--sunken);border:1px solid var(--line)}
+.pmk .rail .band{position:absolute;top:-1px;bottom:-1px;border-radius:6px;background:linear-gradient(90deg,var(--negBand),var(--blueBand),var(--posBand))}
 .pmk .rail .mk2{position:absolute;top:44px;width:2px;height:30px;border-radius:2px;transform:translateX(-50%)}
 .pmk .rail .mk2.spot{width:3px;height:34px;top:42px;box-shadow:0 0 0 3px rgba(255,255,255,.10)}
 .pmk .rail .cap2{position:absolute;transform:translateX(-50%);text-align:center;white-space:nowrap;line-height:1.25}
@@ -251,24 +329,28 @@ const CSS = `
 .pmk .levels{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
 .pmk .lvl{position:relative;border:1px solid var(--card);border-radius:var(--r);background:var(--panel2);padding:10px 11px 11px;overflow:hidden}
 .pmk .lvl .name{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);display:flex;justify-content:space-between;align-items:center;gap:6px}
-.pmk .lvl .name em{font-style:normal;font-size:9px;padding:1px 5px;border-radius:4px;background:#0d1117;border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
+.pmk .lvl .name em{font-style:normal;font-size:9px;padding:1px 5px;border-radius:4px;background:var(--plate);border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
 .pmk .lvl .px{font-size:21px;font-weight:660;letter-spacing:-.03em;margin:4px 0 1px}
 .pmk .lvl .es{font-size:10.5px;color:var(--dim)}
 .pmk .lvl .dist{font-size:11px;margin-top:6px;display:flex;justify-content:space-between;align-items:center;gap:6px}
 .pmk .pill{font-size:10px;padding:2px 6px;border-radius:5px;border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
-.pmk .pill.hot{border-color:rgba(255,92,108,.4);color:var(--neg);background:rgba(255,92,108,.08)}
-.pmk .pill.cool{border-color:rgba(46,204,143,.4);color:var(--pos);background:rgba(46,204,143,.08)}
-.pmk .pill.warn{border-color:rgba(245,185,66,.4);color:var(--amber);background:rgba(245,185,66,.08)}
+.pmk .pill.hot{border-color:var(--negEdgeUp);color:var(--neg);background:var(--negWash)}
+.pmk .pill.cool{border-color:var(--posEdgeUp);color:var(--pos);background:var(--posWash)}
+.pmk .pill.warn{border-color:var(--amberEdge);color:var(--amber);background:var(--amberWash)}
 
 .pmk .body{display:grid;grid-template-columns:1.55fr 1fr 1fr;gap:0}
 .pmk .col{padding:14px 18px;border-right:1px solid var(--line);min-width:0}
 .pmk .col:last-child{border-right:0}
 .pmk .colhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px}
 .pmk .colhead h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:0;font-weight:600}
-.pmk .seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+.pmk .seg{display:inline-flex;border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden}
 .pmk .seg button{background:transparent;border:0;color:var(--dim);font:inherit;font-size:10.5px;padding:3px 9px;cursor:pointer;border-right:1px solid var(--line2)}
 .pmk .seg button:last-child{border-right:0}
-.pmk .seg button.on{background:#1e2836;color:var(--txt)}
+/* Active states are CYAN across the page — the app's selection colour, the
+   same one the earnings week board and the toolbars use. They were a flat
+   slate fill, which is why a selected tab here did not look selected next to
+   any other page. */
+.pmk .seg button.on{background:var(--cyanWash);color:var(--cyan);font-weight:600}
 
 /* SCROLLING PROFILE.
    The ladder renders ±60 strikes but only ~22 rows are ever in view, so the
@@ -278,15 +360,15 @@ const CSS = `
    - overscroll-behavior:contain stops a flick at the end of the ladder from
      scrolling the whole page behind it. */
 .pmk .chart{position:relative;max-height:440px;overflow-y:auto;overscroll-behavior:contain;
-  scrollbar-width:thin;scrollbar-color:#33404f transparent;padding-right:2px}
+  scrollbar-width:thin;scrollbar-color:var(--line2) transparent;padding-right:2px}
 .pmk .chart::-webkit-scrollbar{width:8px}
-.pmk .chart::-webkit-scrollbar-thumb{background:#2b3745;border-radius:4px}
-.pmk .chart::-webkit-scrollbar-thumb:hover{background:#3b4a5c}
+.pmk .chart::-webkit-scrollbar-thumb{background:var(--line2);border-radius:4px}
+.pmk .chart::-webkit-scrollbar-thumb:hover{background:var(--line3)}
 .pmk .chart::-webkit-scrollbar-track{background:transparent}
 .pmk .recenter{position:absolute;right:10px;bottom:8px;z-index:3;font:inherit;font-size:10px;
   letter-spacing:.06em;text-transform:uppercase;color:var(--dim);cursor:pointer;
   background:rgba(13,17,23,.92);border:1px solid var(--line2);border-radius:6px;padding:3px 8px}
-.pmk .recenter:hover{color:var(--txt);border-color:#4a5b70}
+.pmk .recenter:hover{color:var(--txt);border-color:var(--cyanEdge)}
 .pmk .row{display:grid;grid-template-columns:52px 1fr;align-items:center;height:19px;gap:8px}
 .pmk .row .k{font-size:10.5px;text-align:right;color:var(--dim)}
 .pmk .row.key .k{color:var(--txt);font-weight:600}
@@ -305,14 +387,14 @@ const CSS = `
    NOTE: no backticks anywhere in this string — it is a template literal, and a
    stray backtick in a CSS comment ends it and turns the rest into a tagged
    template call. That shipped once and blew up the page at runtime. */
-.pmk .row .tag{position:absolute;top:-1px;font-size:9.5px;padding:1px 5px;border-radius:4px;white-space:nowrap;letter-spacing:.03em;background:#0d1117;max-width:calc(50% - 8px);overflow:hidden;text-overflow:ellipsis}
+.pmk .row .tag{position:absolute;top:-1px;font-size:9.5px;padding:1px 5px;border-radius:4px;white-space:nowrap;letter-spacing:.03em;background:var(--plate);max-width:calc(50% - 8px);overflow:hidden;text-overflow:ellipsis}
 .pmk .row .tag.inside{background:rgba(6,10,16,.55);border-color:transparent!important;color:#fff!important}
 .pmk .spotline,.pmk .flipline{position:absolute;left:60px;right:0;border-top:1px dashed;display:flex;justify-content:flex-end;pointer-events:none}
 .pmk .spotline{border-color:#fff9}
 .pmk .flipline{border-color:var(--amber)}
-.pmk .spotline span,.pmk .flipline span{transform:translateY(-50%);font-size:9.5px;padding:1px 6px;border-radius:4px;background:#0d1117}
+.pmk .spotline span,.pmk .flipline span{transform:translateY(-50%);font-size:9.5px;padding:1px 6px;border-radius:4px;background:var(--plate)}
 .pmk .spotline span{color:#fff;border:1px solid #ffffff40}
-.pmk .flipline span{color:var(--amber);border:1px solid rgba(245,185,66,.45)}
+.pmk .flipline span{color:var(--amber);border:1px solid var(--amberEdge)}
 .pmk .axis{display:flex;justify-content:space-between;font-size:9.5px;color:var(--dim2);margin-top:6px;padding-left:60px}
 
 .pmk .stat{display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;border-bottom:1px dashed var(--line);gap:10px}
@@ -320,8 +402,8 @@ const CSS = `
 .pmk .stat .l{font-size:11.5px;color:var(--dim)}
 .pmk .stat .r{font-size:12.5px;font-weight:600;white-space:nowrap}
 .pmk .onrange{margin:12px 0 4px;position:relative;height:52px}
-.pmk .onrange .bar2{position:absolute;left:0;right:0;top:22px;height:8px;border-radius:5px;background:#1a2230;overflow:hidden}
-.pmk .onrange .fill{position:absolute;top:0;bottom:0;background:linear-gradient(90deg,rgba(77,163,255,.35),rgba(77,163,255,.65));border-radius:5px}
+.pmk .onrange .bar2{position:absolute;left:0;right:0;top:22px;height:8px;border-radius:5px;background:var(--sunken);overflow:hidden}
+.pmk .onrange .fill{position:absolute;top:0;bottom:0;background:linear-gradient(90deg,var(--blueFill1),var(--blueFill2));border-radius:5px}
 .pmk .onrange .mk{position:absolute;top:12px;width:2px;height:28px;border-radius:2px}
 .pmk .onrange .cap{position:absolute;font-size:9.5px;white-space:nowrap;transform:translateX(-50%)}
 .pmk .onrange .cap.top{top:0}
@@ -331,18 +413,18 @@ const CSS = `
    above can only say filled or not. */
 .pmk .stat.gap-filled .l{color:var(--pos)}
 .pmk .gapbar{display:flex;align-items:center;gap:8px;padding:6px 0 2px}
-.pmk .gapbar .t{flex:1;height:5px;border-radius:3px;background:#1a2230;overflow:hidden}
+.pmk .gapbar .t{flex:1;height:5px;border-radius:3px;background:var(--sunken);overflow:hidden}
 .pmk .gapbar .t .f{height:100%;border-radius:3px;transition:width .3s}
 .pmk .gapbar .lbl{font-size:10px;color:var(--dim2);white-space:nowrap}
 
 .pmk .deltas .d{display:grid;grid-template-columns:54px 1fr 66px;align-items:center;gap:8px;padding:4px 0}
 .pmk .deltas .d .s{font-size:11px;color:var(--dim)}
-.pmk .deltas .d .t{height:6px;background:#1a2230;border-radius:4px;position:relative;overflow:hidden}
+.pmk .deltas .d .t{height:6px;background:var(--sunken);border-radius:4px;position:relative;overflow:hidden}
 .pmk .deltas .d .t i{position:absolute;top:0;bottom:0;border-radius:4px}
 .pmk .deltas .d .v{font-size:11px;text-align:right}
 
 .pmk .sect{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:4px}
-.pmk .sect .s{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:7px;font-size:11.5px;border:1px solid var(--card);gap:8px;min-width:0}
+.pmk .sect .s{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:var(--r2);font-size:11.5px;border:1px solid var(--card);gap:8px;min-width:0}
 .pmk .sect .s > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pmk .sect .s b{font-weight:600;font-size:11.5px}
 
@@ -361,16 +443,16 @@ const CSS = `
    inherited the tile's panel background, border and padding — that is what put
    a black box through the middle of the sentence. */
 .pmk .greeks{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
-.pmk .greeks .g{border:1px solid var(--card);border-radius:8px;padding:8px 9px;background:var(--panel2)}
+.pmk .greeks .g{border:1px solid var(--card);border-radius:var(--r2);padding:8px 9px;background:var(--panel2)}
 .pmk .greeks .g .n{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
 .pmk .greeks .g .v{font-size:15px;font-weight:640;margin-top:2px;letter-spacing:-.02em}
 .pmk .greeks .g .m{font-size:10px;color:var(--dim)}
 
-.pmk .footbar{display:flex;justify-content:space-between;align-items:center;padding:9px 18px;border-top:1px solid var(--line);background:#0d1117;gap:10px;flex-wrap:wrap}
+.pmk .footbar{display:flex;justify-content:space-between;align-items:center;padding:9px 18px;border-top:1px solid var(--line);background:var(--plate);gap:10px;flex-wrap:wrap}
 .pmk .footbar .l{font-size:10.5px;color:var(--dim2)}
 .pmk .chips{display:flex;gap:6px;flex-wrap:wrap}
 .pmk .chip{font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--line2);color:var(--dim);cursor:pointer;background:transparent;font:inherit;font-size:10px}
-.pmk .chip.on{background:#1e2836;color:var(--txt);border-color:#33404f}
+.pmk .chip.on{background:var(--cyanWash);color:var(--cyan);border-color:var(--cyanEdge)}
 
 @media (max-width:1180px){ .pmk .body{grid-template-columns:1fr} .pmk .col{border-right:0;border-bottom:1px solid var(--line)}
   .pmk .levels{grid-template-columns:repeat(3,1fr)} .pmk .regime{grid-template-columns:1fr;gap:12px} .pmk .vr{display:none} .pmk .bias{justify-self:start;text-align:left;max-width:none}
@@ -1339,7 +1421,7 @@ export default function Premarket() {
               style={recapOnly ? { opacity: .4, cursor: "not-allowed" } : undefined}
               onClick={() => pickTab("post")}
             >
-              <span className="tdot" style={{ background: frozen ? "var(--violet)" : afterClose ? "var(--blue)" : "#55606e" }} />
+              <span className="tdot" style={{ background: frozen ? "var(--violet)" : afterClose ? "var(--blue)" : "var(--off)" }} />
               Post-Market
             </button>
           </div>

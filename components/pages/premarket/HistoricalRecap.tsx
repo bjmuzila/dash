@@ -87,7 +87,7 @@ export const HISTORICAL_CSS = `
 .pmk .hrow .track i.n{background:var(--neg)}
 /* Level strip: the day's five SPX levels as one row of labelled figures. */
 .pmk .hlev{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px}
-.pmk .hlev .l{border:1px solid var(--card);border-radius:9px;background:var(--panel2);padding:9px 10px}
+.pmk .hlev .l{border:1px solid var(--card);border-radius:var(--r2);background:var(--panel2);padding:9px 10px}
 .pmk .hlev .l .n2{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
 .pmk .hlev .l .v2{font-size:17px;font-weight:640;margin-top:2px;letter-spacing:-.02em}
 .pmk .hlev .l .m2{font-size:10px;color:var(--dim)}

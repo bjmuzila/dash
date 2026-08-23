@@ -52,7 +52,9 @@ export default function OwnerFeedbackPage() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
-  const [thread, setThread] = useState<{ ticket: FeedbackTicket; messages: FeedbackMessage[] } | null>(null);
+  const [thread, setThread] = useState<
+    { ticket: FeedbackTicket; messages: FeedbackMessage[]; isAuthor: boolean } | null
+  >(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -84,7 +86,13 @@ export default function OwnerFeedbackPage() {
       if (!res.ok) throw new Error(`Failed (${res.status})`);
       const j = await res.json();
       if (openIdRef.current !== id) return; // selection moved while in flight
-      setThread({ ticket: j.ticket, messages: Array.isArray(j.messages) ? j.messages : [] });
+      // isAuthor matters here too — a ticket the owner opened themselves must
+      // not label its own opening message as the customer's.
+      setThread({
+        ticket: j.ticket,
+        messages: Array.isArray(j.messages) ? j.messages : [],
+        isAuthor: Boolean(j.isAuthor),
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load that ticket.");
     }
@@ -224,6 +232,7 @@ export default function OwnerFeedbackPage() {
                 ticket={thread.ticket}
                 messages={thread.messages}
                 isOwner
+                isAuthor={thread.isAuthor}
                 sending={sending}
                 onSend={reply}
                 onSetStatus={setStatus}

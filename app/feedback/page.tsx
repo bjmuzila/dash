@@ -54,7 +54,9 @@ export default function FeedbackPage() {
   const [unread, setUnread] = useState(0);
   const [listLoaded, setListLoaded] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
-  const [thread, setThread] = useState<{ ticket: FeedbackTicket; messages: FeedbackMessage[] } | null>(null);
+  const [thread, setThread] = useState<
+    { ticket: FeedbackTicket; messages: FeedbackMessage[]; isOwner: boolean; isAuthor: boolean } | null
+  >(null);
   const [sending, setSending] = useState(false);
 
   // Guards a poll response landing after the user moved to another ticket.
@@ -63,7 +65,9 @@ export default function FeedbackPage() {
 
   const loadList = useCallback(async () => {
     try {
-      const res = await fetch("/api/feedback", { cache: "no-store" });
+      // scope=mine, always. This page is "my tickets" — without it the owner
+      // opening their own support page gets the whole customer queue.
+      const res = await fetch("/api/feedback?scope=mine", { cache: "no-store" });
       if (!res.ok) throw new Error(String(res.status));
       const j = await res.json();
       setTickets(Array.isArray(j?.items) ? j.items : []);
@@ -81,7 +85,12 @@ export default function FeedbackPage() {
       if (!res.ok) throw new Error(String(res.status));
       const j = await res.json();
       if (openIdRef.current !== id) return; // moved on while this was in flight
-      setThread({ ticket: j.ticket, messages: Array.isArray(j.messages) ? j.messages : [] });
+      setThread({
+        ticket: j.ticket,
+        messages: Array.isArray(j.messages) ? j.messages : [],
+        isOwner: Boolean(j.isOwner),
+        isAuthor: Boolean(j.isAuthor),
+      });
     } catch {
       /* keep whatever is already on screen */
     }
@@ -291,7 +300,8 @@ export default function FeedbackPage() {
           <FeedbackThread
             ticket={thread.ticket}
             messages={thread.messages}
-            isOwner={false}
+            isOwner={thread.isOwner}
+            isAuthor={thread.isAuthor}
             sending={sending}
             onSend={reply}
             header={

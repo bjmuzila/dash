@@ -5614,12 +5614,19 @@ if (libDb) {
         }
 
         // GET — the owner sees every ticket, a customer only their own.
+        //
+        // ?scope=mine narrows even the owner to tickets they opened themselves.
+        // The customer page always asks for that: /feedback is "my tickets", and
+        // without it the owner opening their own support page saw the whole
+        // queue rendered as if they had written every word of it. The inbox at
+        // /owner/feedback is the surface that reads everyone's.
         try {
           const sp = new URL(req.url || '/', 'http://localhost').searchParams;
           const status = sp.get('status');
+          const mineOnly = !owner || sp.get('scope') === 'mine';
           const where = [];
           const params = [];
-          if (!owner) { params.push(userId); where.push(`f.clerk_user_id = $${params.length}`); }
+          if (mineOnly) { params.push(userId); where.push(`f.clerk_user_id = $${params.length}`); }
           if (status === 'open' || status === 'resolved') { params.push(status); where.push(`f.status = $${params.length}`); }
           params.push(Math.min(Number(sp.get('limit') ?? 300) || 300, 1000));
           const rows = (await pool.query(
@@ -5630,29 +5637,31 @@ if (libDb) {
 
           // Counts are deliberately computed over the WHOLE set rather than the
           // page above — they drive badges ("3 open"), so a status filter on the
-          // list must not move them.
-          const scoped = owner ? [] : [userId];
+          // list must not move them. They follow the same scope as the list, and
+          // "unread" flips meaning with it: my-tickets counts owner replies I
+          // have not read, the inbox counts customer messages I have not read.
+          const scoped = mineOnly ? [userId] : [];
           const openCount = Number((await pool.query(
-            owner
-              ? `SELECT COUNT(*) AS n FROM customer_feedback f WHERE f.status = 'open'`
-              : `SELECT COUNT(*) AS n FROM customer_feedback f WHERE f.clerk_user_id = $1 AND f.status = 'open'`,
+            mineOnly
+              ? `SELECT COUNT(*) AS n FROM customer_feedback f WHERE f.clerk_user_id = $1 AND f.status = 'open'`
+              : `SELECT COUNT(*) AS n FROM customer_feedback f WHERE f.status = 'open'`,
             scoped,
           )).rows[0]?.n ?? 0);
           const unreadCount = Number((await pool.query(
-            owner
+            mineOnly
               ? `SELECT COUNT(*) AS n FROM customer_feedback f
-                  WHERE f.owner_read_at IS NULL
-                     OR EXISTS (SELECT 1 FROM customer_feedback_messages m
-                                 WHERE m.feedback_id = f.id AND m.author = 'user' AND m.created_at > f.owner_read_at)`
-              : `SELECT COUNT(*) AS n FROM customer_feedback f
                   WHERE f.clerk_user_id = $1
                     AND EXISTS (SELECT 1 FROM customer_feedback_messages m
                                  WHERE m.feedback_id = f.id AND m.author = 'owner'
-                                   AND (f.user_read_at IS NULL OR m.created_at > f.user_read_at))`,
+                                   AND (f.user_read_at IS NULL OR m.created_at > f.user_read_at))`
+              : `SELECT COUNT(*) AS n FROM customer_feedback f
+                  WHERE f.owner_read_at IS NULL
+                     OR EXISTS (SELECT 1 FROM customer_feedback_messages m
+                                 WHERE m.feedback_id = f.id AND m.author = 'user' AND m.created_at > f.owner_read_at)`,
             scoped,
           )).rows[0]?.n ?? 0);
 
-          send(res, 200, { items: rows, openCount, unreadCount, isOwner: owner });
+          send(res, 200, { items: rows, openCount, unreadCount, isOwner: owner, scope: mineOnly ? 'mine' : 'all' });
         } catch (err) { send(res, 500, { error: 'Feedback load failed', detail: String(err) }); }
       },
     });
@@ -5695,7 +5704,12 @@ if (libDb) {
             [id],
           )).rows;
           await pool.query(`UPDATE customer_feedback SET ${readCol(owner)} = CURRENT_TIMESTAMP WHERE id = $1`, [id]);
-          send(res, 200, { ticket, messages, isOwner: owner });
+          // isAuthor is what decides whose words read as "You" in the thread.
+          // It is NOT the same question as isOwner: the owner reading someone
+          // else's ticket is not its author, and the owner reading their own is
+          // both. Only the server knows which, so it says so rather than letting
+          // each page guess from the surface it happens to be rendering on.
+          send(res, 200, { ticket, messages, isOwner: owner, isAuthor: ticket.clerk_user_id === userId });
         } catch (err) { send(res, 500, { error: 'Feedback load failed', detail: String(err) }); }
       },
     });

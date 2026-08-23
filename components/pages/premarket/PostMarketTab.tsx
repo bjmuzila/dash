@@ -82,17 +82,21 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const POSTMARKET_CSS = `
-.pmk .tabs{display:inline-flex;border:1px solid var(--line2);border-radius:9px;overflow:hidden}
+.pmk .tabs{display:inline-flex;border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden}
 .pmk .tabs button{background:transparent;border:0;border-right:1px solid var(--line2);color:var(--dim);
   font:inherit;font-size:11.5px;letter-spacing:.04em;padding:5px 13px;cursor:pointer}
 .pmk .tabs button:last-child{border-right:0}
-.pmk .tabs button.on{background:#1e2836;color:var(--txt)}
+.pmk .tabs button.on{background:var(--cyanWash);color:var(--cyan);font-weight:600}
 .pmk .tabs button .tdot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;
   vertical-align:middle;background:var(--amber)}
 
+/* Post-market shell — same card as .prep (border, radius, shadow all inherited);
+   only the regime tint changes to the blue that means "settled session". The
+   coloured 1px ring went with .prep's for the same reason: no other card in the
+   app has a second border. */
 .pmk .prep.is-post{
-  background:linear-gradient(180deg,rgba(77,163,255,.06),rgba(77,163,255,0) 190px), var(--panel);
-  box-shadow:0 0 0 1px rgba(77,163,255,.09), 0 18px 50px -30px #000;
+  border-top-color:var(--blueFill1);
+  background:linear-gradient(180deg,var(--blueWash),transparent 190px), var(--panel);
 }
 .pmk .sec{padding:14px 18px;border-bottom:1px solid var(--line)}
 .pmk .sec:last-child{border-bottom:0}
@@ -111,10 +115,10 @@ export const POSTMARKET_CSS = `
 .pmk .sechead{display:flex;align-items:baseline;justify-content:flex-start;gap:14px;margin-bottom:11px;flex-wrap:wrap}
 .pmk .sechead .right{margin-left:auto}
 .pmk .sechead h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:0;font-weight:600}
-.pmk .secn{width:17px;height:17px;border-radius:5px;background:#1e2836;color:var(--dim);display:inline-grid;
+.pmk .secn{width:17px;height:17px;border-radius:5px;background:var(--cyanWash);color:var(--cyan);display:inline-grid;
   place-items:center;font-size:9.5px;font-weight:700;margin-right:8px;vertical-align:1px}
-.pmk .warnbar{padding:8px 11px;border-radius:8px;border:1px solid rgba(245,185,66,.28);
-  background:rgba(245,185,66,.06);font-size:11.5px;color:var(--dim)}
+.pmk .warnbar{padding:8px 11px;border-radius:var(--r2);border:1px solid var(--amberEdge);
+  background:var(--amberWash);font-size:11.5px;color:var(--dim)}
 
 /* 1 — snapshot. Every column carries a min-width: the captions under the range
    bar are absolutely positioned, and without a floor the grid squeezes a column
@@ -130,9 +134,9 @@ export const POSTMARKET_CSS = `
 .pmk .snap .bias{justify-self:stretch;max-width:none;text-align:left}
 .pmk .rangebar{position:relative;height:42px;margin-top:8px}
 .pmk .rangebar .wallband{position:absolute;left:0;right:0;top:16px;height:14px;border-radius:7px;
-  background:linear-gradient(90deg,rgba(255,92,108,.20),rgba(255,255,255,.05),rgba(46,204,143,.20));border:1px solid var(--line)}
+  background:linear-gradient(90deg,var(--negBand),rgba(255,255,255,.05),var(--posBand));border:1px solid var(--line)}
 .pmk .rangebar .act{position:absolute;top:19px;height:8px;border-radius:5px;
-  background:linear-gradient(90deg,rgba(77,163,255,.45),rgba(77,163,255,.85))}
+  background:linear-gradient(90deg,var(--blueFill1),var(--blueFill3))}
 .pmk .rangebar .mk3{position:absolute;top:11px;width:2px;height:24px;border-radius:2px;transform:translateX(-50%)}
 .pmk .rangebar .cp3{position:absolute;top:0;font-size:9.5px;white-space:nowrap;transform:translateX(-50%)}
 .pmk .rangelabs{display:flex;justify-content:space-between;gap:8px;font-size:9.5px;color:var(--dim)}
@@ -152,7 +156,7 @@ export const POSTMARKET_CSS = `
 .pmk .sc .px{font-size:20px;font-weight:660;letter-spacing:-.03em;margin:3px 0 1px}
 .pmk .sc .sub{font-size:10.5px;color:var(--dim)}
 .pmk .taps{display:flex;gap:2px;margin-top:8px;height:16px;align-items:flex-end}
-.pmk .taps i{flex:1;background:#1a2230;border-radius:2px;height:5px}
+.pmk .taps i{flex:1;background:var(--sunken);border-radius:2px;height:5px}
 .pmk .taps i.t{background:var(--pos);height:13px}
 .pmk .taps i.b{background:var(--neg);height:16px}
 .pmk .taps i.c{background:var(--amber);height:10px}
@@ -173,9 +177,9 @@ export const POSTMARKET_CSS = `
 /* Left-anchored rail. Overrides the centre-axis .track the premarket profile
    uses (higher specificity, so it wins regardless of sheet order) — that
    gradient draws a zero line down the middle, which is meaningless here. */
-.pmk .evrow .track{position:relative;height:13px;border-radius:3px;background:#141b26;
+.pmk .evrow .track{position:relative;height:13px;border-radius:3px;background:var(--sunken);
   box-shadow:inset 1px 0 0 var(--line2)}
-.pmk .evrow .track.neg{background:#1a1520}
+.pmk .evrow .track.neg{background:var(--negWash)}
 /* Build-time segments: the bar keeps the profile's magnitude and its COLOUR
    composition is WHEN that gamma arrived — blue morning, violet midday, amber
    power hour. Laid left→right in time order, so a bar reads the way the day ran.
@@ -210,11 +214,11 @@ export const POSTMARKET_CSS = `
 .pmk .srow{display:grid;grid-template-columns:54px 1fr 128px;align-items:center;height:22px;gap:9px}
 .pmk .srow .k{font-size:10.5px;text-align:right;color:var(--dim)}
 .pmk .srow .v{font-size:10.5px;text-align:right;white-space:nowrap}
-.pmk .stack{display:flex;height:13px;border-radius:3px;overflow:hidden;background:#141b26}
+.pmk .stack{display:flex;height:13px;border-radius:3px;overflow:hidden;background:var(--sunken)}
 .pmk .stack i{display:block;height:100%}
 
 .pmk .heat{display:grid;gap:2px;margin-top:6px}
-.pmk .heat i{height:22px;border-radius:3px;background:#1a2230}
+.pmk .heat i{height:22px;border-radius:3px;background:var(--sunken)}
 .pmk .heatx{display:flex;justify-content:space-between;font-size:9px;color:var(--dim2);margin-top:4px}
 
 /* 4/5/6 */
@@ -227,13 +231,13 @@ export const POSTMARKET_CSS = `
 .pmk .split{display:flex;height:9px;border-radius:5px;overflow:hidden;margin-top:10px;border:1px solid var(--line)}
 .pmk .split i{display:block;height:100%}
 .pmk .biasbox{margin-top:10px;padding:10px 12px;border-radius:var(--r);
-  background:rgba(77,163,255,.06);border:1px solid rgba(77,163,255,.22);font-size:12.5px}
+  background:var(--blueWash);border:1px solid var(--blueEdge);font-size:12.5px}
 .pmk .biasbox b{color:var(--blue)}
-.pmk .jot{width:100%;min-height:86px;resize:vertical;background:#0d1117;color:var(--txt);
+.pmk .jot{width:100%;min-height:86px;resize:vertical;background:var(--plate);color:var(--txt);
   border:1px solid var(--line2);border-radius:8px;padding:9px 10px;font:inherit;font-size:12px}
-.pmk .jot:focus{outline:none;border-color:#4a5b70}
+.pmk .jot:focus{outline:none;border-color:var(--cyanEdge)}
 .pmk .acc{display:flex;align-items:flex-end;gap:5px;height:60px;margin-top:6px}
-.pmk .acc .c{flex:1;background:#1a2230;border-radius:3px 3px 0 0;position:relative;min-height:4px}
+.pmk .acc .c{flex:1;background:var(--sunken);border-radius:3px 3px 0 0;position:relative;min-height:4px}
 .pmk .acc .c i{position:absolute;left:0;right:0;bottom:0;border-radius:3px 3px 0 0;
   background:linear-gradient(180deg,var(--pos),var(--posDim))}
 .pmk .movelog{display:grid;gap:0;margin-top:10px}
@@ -253,7 +257,7 @@ export const POSTMARKET_CSS = `
 .pmk .premlist{display:grid;gap:7px;margin-top:8px}
 .pmk .premrow{display:grid;grid-template-columns:52px 1fr 54px;gap:9px;align-items:center}
 .pmk .premrow .pl{font-size:11px;color:var(--txt);font-weight:600}
-.pmk .premrow .ptrack{height:9px;border-radius:5px;background:#141b26;overflow:hidden}
+.pmk .premrow .ptrack{height:9px;border-radius:5px;background:var(--sunken);overflow:hidden}
 .pmk .premrow .ptrack i{display:block;height:100%;border-radius:5px}
 .pmk .premrow .pu{font-size:10.5px;text-align:right;font-weight:640;white-space:nowrap}
 
@@ -1423,7 +1427,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                       <div>
                         <div className="mbar" style={{
                           width: `${(r.minutes / maxM) * 100}%`,
-                          background: "linear-gradient(90deg,var(--blue),rgba(77,163,255,.3))",
+                          background: "linear-gradient(90deg,var(--blue),var(--blueSoft))",
                         }} />
                       </div>
                     </div>
@@ -1506,8 +1510,8 @@ export default function PostMarketTab(p: PostMarketProps) {
                     <div className="k mono">{nf(r.strike, 0)}</div>
                     <div>
                       <div className="stack" style={{ width: `${(Math.abs(r.net) / maxN2) * 100}%` }}>
-                        <i style={{ width: `${(r.oiShare ?? 0) * 100}%`, background: "linear-gradient(90deg,rgba(77,163,255,.5),var(--blue))" }} />
-                        <i style={{ width: `${(1 - (r.oiShare ?? 0)) * 100}%`, background: "linear-gradient(90deg,rgba(245,185,66,.5),var(--amber))" }} />
+                        <i style={{ width: `${(r.oiShare ?? 0) * 100}%`, background: "linear-gradient(90deg,var(--blueFill2),var(--blue))" }} />
+                        <i style={{ width: `${(1 - (r.oiShare ?? 0)) * 100}%`, background: "linear-gradient(90deg,var(--amberSoft),var(--amber))" }} />
                       </div>
                     </div>
                     <div className="v mono">
@@ -1804,7 +1808,7 @@ function WallChart({
             const i = pts.length - 1 - k;
             return p.other == null ? null : `${x(i)},${y(p.other)}`;
           }).filter(Boolean).join(" ")}`}
-          fill="rgba(77,163,255,.06)"
+          fill="var(--blueWash)"
         />
       )}
       {other && <polyline points={other} fill="none" stroke="rgba(255,255,255,.42)" strokeWidth={1.4}

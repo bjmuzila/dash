@@ -15,6 +15,12 @@
  *
  * "Mine" is whichever side is looking. The owner sees their own replies on the
  * right; the customer sees theirs there. Nobody has to decode a color.
+ *
+ * That side is decided by `isAuthor` — did the VIEWER open this ticket — not by
+ * which page is rendering. isOwner and isAuthor are different questions and all
+ * four combinations happen: the owner reading a customer's ticket is not its
+ * author, and the owner reading one they opened themselves is both. Both flags
+ * come from the server, because only it knows who the caller is.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -192,13 +198,15 @@ function Bubble({ mine, who, body, when }: { mine: boolean; who: string; body: s
 /**
  * The conversation + composer.
  *
- * `isOwner` only decides which side is "mine" and whether the status controls
- * render — the server is what actually enforces who may close a ticket.
+ * `isAuthor` decides which side reads as "You". `isOwner` only affects the
+ * placeholder and the "CB Edge"/"You" label on staff replies — the server is
+ * what actually enforces who may reply or close a ticket.
  */
 export function FeedbackThread({
   ticket,
   messages,
   isOwner,
+  isAuthor,
   sending,
   onSend,
   onSetStatus,
@@ -208,6 +216,8 @@ export function FeedbackThread({
   ticket: FeedbackTicket;
   messages: FeedbackMessage[];
   isOwner: boolean;
+  /** Did the VIEWER open this ticket? From the server, never inferred. */
+  isAuthor: boolean;
   sending: boolean;
   onSend: (text: string) => void | Promise<void>;
   /** Owner-only. Omit to hide the status controls entirely. */
@@ -233,6 +243,16 @@ export function FeedbackThread({
 
   const closed = ticket.status === "resolved";
 
+  // Who a message belongs to, from the viewer's seat. Authoring the ticket wins
+  // over being staff: on your own ticket your customer-side words are "You",
+  // even when you are also the person who answers tickets.
+  const isMine = (author: "user" | "owner") =>
+    isAuthor ? author === "user" : author === "owner";
+  const whoSaid = (author: "user" | "owner") => {
+    if (author === "user") return isAuthor ? "You" : (ticket.email || "Customer");
+    return isOwner && !isAuthor ? "You" : "CB Edge";
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0 }}>
       {header}
@@ -247,22 +267,19 @@ export function FeedbackThread({
           padding: "4px 2px",
         }}
       >
-        {/* The opening message is the ticket row itself, not a thread row. */}
+        {/* The opening message is the ticket row itself, not a thread row —
+            but it is always a CUSTOMER message, so it takes the same seat. */}
         <Bubble
-          mine={!isOwner}
-          who={isOwner ? (ticket.email || "Customer") : "You"}
+          mine={isMine("user")}
+          who={whoSaid("user")}
           body={ticket.message}
           when={fmtStamp(ticket.created_at)}
         />
         {messages.map((m) => (
           <Bubble
             key={m.id}
-            mine={isOwner ? m.author === "owner" : m.author === "user"}
-            who={
-              m.author === "owner"
-                ? (isOwner ? "You" : "CB Edge")
-                : (isOwner ? (ticket.email || "Customer") : "You")
-            }
+            mine={isMine(m.author)}
+            who={whoSaid(m.author)}
             body={m.body}
             when={fmtStamp(m.created_at)}
           />

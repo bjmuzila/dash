@@ -1,74 +1,104 @@
 # Changelog
 
-## 2026-08-23 - Levels history: the key-level chart no longer stacks every level on one line
+## 2026-08-23 - Premarket / post-market cards moved onto the app's theme
 
-Edited: `public/levels-history.html`.
+Edited: `components/pages/Premarket.tsx`,
+`components/pages/premarket/PostMarketTab.tsx`,
+`components/pages/premarket/HistoricalRecap.tsx`.
 
-On real SPX data every level sits within ~50 points of spot while spot itself
-travels 400+ points across the window, so on a raw price axis resistance,
-support, R2, S2 and spot drew as one thick line and only the flip separated. The
-chart was unreadable - which was the whole point of the page.
+`/premarket` was built from an approved mockup and shipped with the mockup's own
+colour ramp, scoped under `.pmk`. That scope kept it from leaking — and also kept
+it from ever being corrected. The page's cards sat on `#151b26` behind a solid
+`#242e3b` edge, a full step lighter than every other card in the dashboard, so
+the tab read as a different product.
 
-Three fixes, all in the "Key levels over time" card:
+The fix is one token block, not 200 rules: `.pmk`'s custom properties are now
+**interpolated from `homeTheme`** instead of typed as hex, and every card on all
+three tabs inherits the change.
 
-- **Δ from spot (new default).** Each level is plotted as its distance from that
-  session's own spot, in points or %. The trend is removed, 0 is spot,
-  resistance sits above the line and support below. The levels separate because
-  the thing they share - the trend - is gone.
-- **Split panels.** One mini panel per level, each on its own y-scale with its
-  own range and move-count in the header, sharing one x-axis. Nothing can
-  overlap by construction. Dots mark the sessions where that level actually
-  moved.
-- **Absolute price** is still there as the third mode, for when the raw number
-  is the thing you want.
+| token | was | now |
+|---|---|---|
+| `--bg` / `--panel` | `#0a0d12` / `#11161f` | `HT.bg` / `HT.panel` |
+| `--panel2` (card fill) | `#151b26` | `HT.panelBg` |
+| `--line` / `--card` | `#242e3b` / white .20 | `HT.border` |
+| `--pos` / `--neg` | `#2ecc8f` / `#ff5c6c` | `ES_CANDLE_UP` / `ES_CANDLE_DOWN` |
+| `--blue` | `#4da3ff` | `LIGHT_BLUE` |
+| `--amber` | `#f5b942` | `HT.orange` |
+| `--r` | `10px` | `12px` (+ `--r2: 9px` for inner tiles) |
 
-**Auto scale (IQR fence).** A single runaway session - a gamma flip 900 points
-below spot - used to own the whole y-axis and flatten everything else back into
-one line. The domain now fits the bulk of the values (q1/q3 ± 2.5·IQR); anything
-outside is pinned to the rail and flagged with a triangle, with a count under
-the chart and a **full range** toggle to see it properly. The same fence is
-applied to the "Level movement" day-over-day chart, which had the identical
-problem.
+So a green bar on the premarket ladder is now literally the same green as an
+up-candle two tabs over, and a level tile is the same surface as an earnings day
+column.
 
-Drag-to-zoom and double-click-to-reset now work from any panel, and the zoom
-still drives every chart on the page.
+### Alpha rungs, because three files share one scope
 
-## 2026-08-23 - GEX levels history viewer served at /levels-history.html
+Every wash, edge, glow and bar fill used to be a hand-typed `rgba(46,204,143,.4)`.
+`PostMarketTab.tsx` and `HistoricalRecap.tsx` are separate template literals with
+no access to the JS side, so those literals would have silently kept the OLD hue
+after the block above moved — a `.pill.cool` with a border one shade off its own
+text. They are now `--posWash` / `--posEdge` / `--posGlow` / `--blueFill1` … all
+derived by a local `hexA()` from the five accent tokens. A check confirms every
+`var()` used across the four `.pmk` files resolves, and that none are orphaned.
 
-Added: `public/levels-history.html` (also mirrored to `generated/2026-08-23-gex-levels-history.html`).
+### Also
 
-A standalone, dependency-free page that renders the ENTIRE `gex_levels_history`
-table - the "History of key level changes" record the
-`gex-levels-history-recorder` writes every 5m during 09:25-16:10 ET.
+- **Active states are cyan** — tabs, segmented buttons, symbol chips, select
+  focus. They were a flat slate fill, which is why a selected tab here did not
+  look selected next to any other page.
+- **`.prep` / `.prep.is-post`** lost their coloured 1px ring (no other card in
+  the app has a second border) and gained the cyan top edge the glossy panels
+  use. The green / red / blue regime tint stays — it is semantic.
+- **`--plate`** is the one deliberately SOLID surface: bar tags, the ladder's
+  spot/flip labels and the footer sit on top of coloured bars, where a white
+  alpha would let the bar read through the text. The OS `<select>` popup uses it
+  too, since a native menu ignores alpha.
+- `--cw` / `--pw` were NOT re-pointed at `LEVEL_COLORS` (blue/red). That would
+  have undone the 2026-08-20 green/red wall decision as a side effect of a
+  re-theme.
+- Line endings: these files are CRLF in the repo. The four touched here are
+  written back as CRLF so the diff is the change, not the file.
 
-Reads `GET /proxy/gex-levels-history?symbol=SPX&limit=3650` on load. Because it
-is served from `public/`, it is same-origin and the subscriber session cookie
-already applies; no new endpoint and no server change. Falls back to `$SPX` if
-`SPX` returns nothing, and offers a paste-the-JSON path for opening the file
-locally.
+## 2026-08-23 - Mirrored the earnings names that were still rendering as text chips
 
-What it draws, all from the stored columns:
+Added: 17 files in `public/logos/`.
+Edited: `scripts/fetch-ticker-logos.mjs`.
 
-- Stat tiles: sessions recorded, latest spot/resistance/neutral/support with the
-  delta vs the prior session, latest $ gamma, how many sessions a level moved,
-  average level move, per-level move counts, average S->R width, long-gamma-day
-  share.
-- Key levels over time - spot, resistance (CW), support (PW), neutral (flip),
-  plus optional R2/S2, with the S->R band shaded. Drag to zoom a date range,
-  double-click to reset; the zoom drives every chart below it.
-- Dollar gamma per session (signed bars), C/P gamma ratio vs open interest on a
-  twin axis with the 1.0 parity line.
-- Level movement - day-over-day change in resistance / neutral / support.
-- Full sortable table: every column plus derived S->R width and where spot sat in
-  the band, inline deltas, a coloured bar on any level that moved from the prior
-  session, the `source` badge (live vs theta catch-up), and a sparkline of the
-  stored cumulative net-GEX curve. Filters for date range and "only sessions
-  where a level moved"; CSV export includes the deltas.
-- Click a row to draw that day's full cumulative net-GEX-by-strike curve with its
-  support / neutral / resistance / spot markers.
+Two thirds of this week's earnings board was ticker-TEXT chips — CRWD, VEEV,
+HPQ, OKTA, WSM, TCOM, DG, MRVL, ADSK, WDAY, AFRM, ZM, CM, BMO, BNS, HEI. None of
+them were broken: they were simply not in `public/logos/`, and the live
+`/proxy/ticker-logo` fallback is exactly what the snapshot engine STRIPS from a
+capture (it 302s off-site and taints the canvas), so a name without a mirrored
+file could never appear in a copied image no matter how many times it resolved
+in the browser.
 
-Colours come from `homeTheme` values (CW blue, PW red, CB gold); no colour
-literal outside the token block at the top of the file.
+All 16 were available upstream and are now on disk. `HEI.A` gets the `PBR.A`
+treatment — a copy of `HEI.png`, added to `MANUAL` so no run overwrites it —
+because resolveLogo has nothing for a dotted class suffix: GitHub keys on the
+plain root symbol and Wikidata searches the company, not the share class. Both
+HEICO lines report on the same day, so that is not a hypothetical.
+
+### The seed list
+
+`SEED` in `scripts/fetch-ticker-logos.mjs` was ~190 mega-caps, which is why the
+gap kept reopening: a `$25B`–`$150B` name that reports every quarter was never
+going to be in it. It now carries ~490 symbols — the rest of the S&P 500 plus the
+mid-cap software / fintech / Canadian-bank names that actually populate an
+earnings week.
+
+Every added symbol was HEAD-verified against davidepalazzo/ticker-logos before
+being listed, so an "unresolved" line in the run tally now means the upstream
+repo dropped that file, not that the name was a guess.
+
+    node scripts/fetch-ticker-logos.mjs        # ~285 more, incremental
+
+Two names in this week's board resolve nowhere upstream — `P` and `UI` — and stay
+as text chips until a file is dropped in by hand.
+
+One trap worth naming: the seed is a template literal that gets
+whitespace-split straight into symbols, and `main()`'s filename guard
+(`/^[A-Z0-9.\-]{1,10}$/`) accepts a bare date. A `#` comment line inside the
+literal would have quietly seeded `2026-08-23` as a ticker. The prose lives
+above the literal for that reason.
 
 ## 2026-08-23 - Earnings tab rebuilt as a week board; snapshot copies to the clipboard
 

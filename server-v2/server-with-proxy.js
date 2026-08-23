@@ -2858,8 +2858,16 @@ async function main() {
               const seriesDate = u.searchParams.get('date')
                 || new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
               const { rows } = await p.query(
+                // `expiry` rides along (2026-08-23) so a reader can say WHICH
+                // contract the levels came from. scanner-recorder writes
+                // chain.expirations[0] — the nearest listed expiry — so it is
+                // 0DTE for the daily-expiry indices and the front weekly for
+                // most single names. Pre-migration rows hold '' (the column is
+                // NOT NULL DEFAULT ''), so treat empty as unknown, not as a
+                // date. Additive column only: no filter, no join, no change to
+                // which rows come back.
                 `SELECT ts, spot, call_wall, put_wall, cb, gex_flip, total_net_gex,
-                        call_wall_gex, put_wall_gex, cb_gex
+                        call_wall_gex, put_wall_gex, cb_gex, expiry
                    FROM scanner_snapshots
                   WHERE date = $1 AND symbol = $2
                   ORDER BY ts ASC`,
