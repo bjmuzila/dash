@@ -118,49 +118,32 @@ export function FormError({ children }: { children: ReactNode }) {
 }
 
 /**
- * The Google button. A link, not a button, because it is a navigation — and
- * because a middle-click or a long-press behaving like every other link on the
- * web is the correct behaviour for one.
- */
-export function GoogleButton({ href, children }: { href: string; children: ReactNode }) {
-  return (
-    <a href={href} style={{
-      ...button('ghost'),
-      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-      width: '100%', textDecoration: 'none',
-    }}>
-      {/* Inline, not an <img> from a CDN: the sign-in screen must render with no
-          network beyond the app's own origin, and a broken favicon next to
-          "Continue with Google" is its own small trust problem. */}
-      <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden focusable="false">
-        <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.2-.1-2.3-.4-3.5z" />
-        <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
-        <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.3 0-9.7-3.1-11.3-8l-6.5 5C9.5 39.6 16.1 44 24 44z" />
-        <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.5l6.2 5.2C37 41 44 36 44 24c0-1.2-.1-2.3-.4-3.5z" />
-      </svg>
-      {children}
-    </a>
-  )
-}
-
-/**
- * The `?error=` codes come back on the redirect from the Google round trip, so
+ * The `?error=` codes come back on the redirect from a Google round trip, so
  * this screen has to explain a failure that happened three redirects ago and
  * left no other trace. Anything unrecognised still gets shown WITH its code:
  * "something went wrong" gives a support conversation nothing to work with,
  * whereas a person reading a code back over the phone gives it everything.
+ *
+ * Sign-in with Google is switched off — accounts here are email and password
+ * only — so in normal use the codes that land here come from a CALENDAR link
+ * that bounced back to this screen because the session had expired. The
+ * disabled case is handled explicitly anyway: somebody with an old bookmark, or
+ * a consent screen still open in another tab, deserves a straight answer rather
+ * than a bare code.
  */
 function googleError(code: string | null): string | null {
   if (!code) return null
   const known: Record<string, string> = {
     google_denied: 'You cancelled at the Google screen. Nothing happened.',
     access_denied: 'You cancelled at the Google screen. Nothing happened.',
-    google_failed: 'Google sign-in didn’t complete. Try again, or use your password.',
-    no_account: 'No Daily account is linked to that Google address yet. Create one first — you can link Google afterwards.',
+    google_failed: 'That didn’t complete. Sign in with your email and password.',
+    'google-signin-disabled': 'Daily accounts use an email address and a password. Sign in below — you can link Google Calendar afterwards, in More.',
+    'google-unavailable': 'The Google connection isn’t available right now. Signing in with your password still works.',
+    no_account: 'No Daily account is linked to that Google address yet. Create one with your email first.',
     state: 'That sign-in attempt expired before it came back. Start it again.',
     expired: 'That sign-in attempt expired before it came back. Start it again.',
   }
-  return known[code] || `Sign-in didn’t complete (${code}). Try again, or use your email and password.`
+  return known[code] || `That didn’t complete (${code}). Sign in with your email and password.`
 }
 
 // ── PIN ──────────────────────────────────────────────────────────────────────
@@ -298,15 +281,6 @@ function PasswordSignIn({ onSignIn, onBackToPin, roundTripError }: {
         {busy ? 'Signing in…' : 'Sign in'}
       </button>
 
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0',
-      }}>
-        <span style={{ flex: 1, height: 1, background: T.rule }} />
-        <span style={label({ color: T.faint, letterSpacing: '0.1em' })}>or</span>
-        <span style={{ flex: 1, height: 1, background: T.rule }} />
-      </div>
-
-      <GoogleButton href={authApi.googleSignInUrl}>Continue with Google</GoogleButton>
 
       <div style={{ textAlign: 'center', marginTop: 22, ...body(14), color: T.inkSoft }}>
         No account yet? <Link to="/sign-up" style={{ color: T.accent }}>Create one</Link>

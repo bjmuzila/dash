@@ -1,66 +1,181 @@
 # Changelog
 
-## 2026-08-23 - Backtests page: six strike-GEX panels collapsed into one
+## 2026-08-23 - Weekly Edge: real Core Bullseye rows for Aug 17-21
 
-Edited: `owner-vite/src/pages/Backtests.tsx`, `server-v2/api-router.js`.
+`lib/emails/weekly-edge.ts`. `DEFAULT_CONF_ROWS` is no longer empty - the five
+sessions off the owner Results page are in, so the results band renders the real
+table instead of the dashed placeholder.
 
-The page had grown to six strike-GEX panels and a wall of always-visible prose.
-Three of the six were duplicates of work panel ① already did, and the docs — which
-you read once while calibrating and never again — were burying the numbers.
+| Date  | 9:45          | 10:30        | 12:00        |
+|-------|---------------|--------------|--------------|
+| 08-21 | 7640 / 14.7 X | 7680 / 0.3 v | 7700 / 4.4 v |
+| 08-20 | 7710 / 12.2 X | 7700 / 2.2 v | 7670 / 0.6 v |
+| 08-19 | 7730 / 0.1 v  | 7730 / 0.1 v | 7740 / 1.6 v |
+| 08-18 | 7700 / 0.0 v  | 7700 / 0.0 v | 7700 / 0.0 v |
+| 08-17 | 7800 / 19.5 X | 7770 / 0.0 v | 7770 / 0.0 v |
 
-### One panel: GEX Watch
+THRESHOLD: the template has ONE boolean per window and the Results page scores
+three (<=5 / <=10 / <=15). The v/X here is the <=5 column, which is what every
+previous issue used - do not silently switch it to <=15 to make a week look
+better. Where <=5 hides something the note says so in words: the 9:45 reads on
+8/20 and 8/21 missed <=5 but cleared <=15, and 8/17 at 19.5 was the only read
+that missed all three.
 
-Panels ②–⑥ removed from the page. **Their handlers stay registered and callable**
-(`strike-gex-premove`, `-threshold`, `-move`, `-timeline`, `-move-intraday`) —
-this is a page-level removal, and re-adding any of them is ~20 lines. What went
-and why:
+- Core Bullseye tile: 100%, sub "<=5 pts - 10:30 & 12:00 CB - 5 of 5 sessions".
+  The tile is the two clean windows, NOT a blended average - 9:45 was 2 of 5 and
+  is stated in the note rather than averaged into a friendlier number.
+- `resultsNote` now defines what a check mark means, gives 12 of 15 overall with
+  the per-window split, names the misses, and says five sessions is a small
+  sample. Keep that last clause.
+- Estimated Move tile is STILL a placeholder ("-" / "[fill before send]") - no EM
+  data was supplied for this week.
+- `weeklyEdgeText()`'s `strip()` also decodes `&le;` / `&ge;` / `&rarr;` now; the
+  new tile subtitle uses `&le;` and the plain-text part was shipping it raw.
 
-- `strike-gex-threshold` — asked "at what growth do the odds shift" in % units;
-  ①'s `calibration` sweep asks it in ×normal units. Same question twice.
-- `strike-gex-move` — z-scored dollars vs forward move; ①'s `odds` table is the
-  same measurement. Same question twice.
-- `strike-gex-move-intraday` — has no data and will not until
-  `RETENTION_STRIKE_GROWTH_DAYS` is raised and weeks pass. Noise on the page.
-- `strike-gex-premove` and `-timeline` were NOT duplicates and were folded in
-  rather than dropped (below).
+Preview regenerated at `generated/2026-08-23-weekly-edge-preview.html` and
+`generated/2026-08-23-weekly-edge-preview.jpg`.
 
-### `withChecks` — the calibration panels, behind a checkbox
+## 2026-08-23 - daily.cbedge.net is live, and sign-in is email only
 
-Off by default, because each runs its own full-history query and making them
-automatic would double the cost of the one thing read every morning in service of
-two tables looked at once a month. Ticked, the response gains:
+Edited: `daily-vite/src/pages/SignIn.tsx`, `SignUp.tsx`, `daily-vite/src/api.ts`,
+`server-v2/daily-routes.cjs`. Deployed: `/etc/cloudflared/config.yml` on the VPS
+(ingress for daily.cbedge.net → 127.0.0.1:8086), CNAME added, `DAILY_TOKEN_KEY`
+and `DAILY_BASE_URL` set.
 
-- `premove_check` — the study run BACKWARDS (start from moves, look back),
-  printing move-days beside quiet-days. This is the honesty check and the reason
-  it is offered at all: **if those two rows look alike the earned cutoff is
-  describing noise**, however good its lift looks.
-- `timeline` — per-strike series, only when a ticker is set, since it is
-  per-ticker by design.
+`https://daily.cbedge.net/` answers 200 through the tunnel, the schema built
+itself on first boot, and the health route reports `db`, `google` and `mail`
+configured. Stripe is still the only integration outstanding.
 
-### `primary` on the Panel component
+### Sign in with Google is off
 
-New optional prop naming the sections worth seeing without a click. Everything
-else the endpoint returns drops behind one "Calibration & diagnostics" toggle.
-GEX Watch shows `feed` and `by_symbol`; `calibration`, `odds`, `live`, `coverage`
-and the checks are one click away. Omitting the prop renders every section, so
-the four older panels are untouched.
+Accounts are an email address and a password. The button is gone from both
+SignIn and SignUp and `googleSignInUrl` is gone from the API client — but the
+decision is enforced at the SERVER, in `/api/daily/google/start`, because a
+removed button is not an access control and anybody can type a URL.
+`/google/callback` refuses a `signin` state too: /start no longer mints one, but
+a state already sitting in someone's browser stays valid for its ten-minute TTL
+and honouring it would mint a session the front door now refuses.
 
-### Everything wordy is now collapsed by default
+Google remains a CALENDAR integration and only that — connecting one requires an
+account that already exists, which is the other reason the sign-in arm had no
+business being there.
 
-`help` blocks, both intro cards, and the returned `note` — which now leads with
-its first sentence (on GEX Watch that is the earned cutoff, i.e. the answer) and
-hides the caveats behind "— more ▾". `details > summary::-webkit-details-marker`
-is suppressed so the ▸ glyph is the only marker.
+The machinery underneath (the RS256 id_token verifier, the JWKS cache,
+`loginWithGoogle`) is left in place rather than deleted. It is correct, it was
+the expensive part to get right, and switching it back on is deleting one branch
+in `daily-routes.cjs` and putting the button back. What matters is that nothing
+can currently reach it.
 
-Page went from ~470 lines and 10 panels to 306 lines and 5.
+`?error=google-signin-disabled` explains itself on the sign-in screen rather than
+showing a bare code — somebody with an old bookmark or a consent screen open in
+another tab gets a straight answer.
 
 ### Verified
 
-73 assertions, all green. New: `withChecks=false` adds no keys (the lean daily
-path), `withChecks=true` folds in a 2-row premove check, timeline appears only
-with a ticker, and `feed` stays the first key either way. esbuild parse clean,
-no orphaned imports, every remaining panel's `test=` resolves to a handler.
+SPA typechecks clean and builds. `node --check` passes on the routes module.
 
+## 2026-08-23 - daily.cbedge.net: the household app, as a product you can sell
+
+New: `daily-vite/` (the SPA), `server-v2/daily-server.js`, `server-v2/daily-routes.cjs`,
+`server-v2/_lib-daily.cjs`, `_lib-daily-budget.cjs`, `_lib-daily-billing.cjs`,
+`_lib-daily-google.cjs`, `_lib-daily-markets.cjs`, `_lib-daily-mail.cjs`,
+`deploy/daily/`. Edited: `docker-compose.yml`, `AGENTS.md`.
+budget.cbedge.net is **untouched** — not one hh_* table, route or file changed.
+
+budget.cbedge.net stays the private, owner-gated life-OS. daily.cbedge.net is the
+same product with a landing page, Stripe checkout and members, built as a sibling
+rather than a fork with a feature flag: the private app and the paid one now
+evolve separately, and a change to one can never surprise the other.
+
+### The reason it is a copy and not a flag
+
+`hh_*` says, in so many words, "everything is shared" — every content row
+defaults to `visibility='shared'` and every read is
+`owner_id = :me OR visibility = 'shared'`. With two people who live together that
+is a feature. With paying strangers on the same tables it is a data breach with a
+default value: one signup and a customer's Today screen shows the owner's
+journal.
+
+So `daily_*` is a separate schema whose unit of ownership is a **household**, not
+a user. Every content row carries `household_id NOT NULL`; every read and write
+filters on it through one `scoped()` helper, so "did this query filter by tenant?"
+is answerable by eye instead of by reading a predicate. There is no visibility
+column at all — inside a household everything is shared, across households
+nothing is, ever.
+
+### What was removed on the way across
+
+- **The intro splash.** budget opens on a pencil drawing held for five seconds.
+  That is a private thing between two people; it is gone, and there is a comment
+  in `App.tsx` where it used to be so nobody re-adds it.
+- **The Cookbook tab.** It pointed at recipe.cbedge.net — the owner's own
+  cookbook, on the owner's own login. Its slot went to **Markets**.
+- **The owner's calendar, budget and location.** No connected Google account, no
+  `budget_profile_key='owner'`, no hardcoded ZIP. Each of those is now something
+  a customer sets for themselves in onboarding or Settings.
+- **The three banks.** Coastal / Truist / SECU were fixed columns. They are now
+  `daily_accounts` rows a customer names themselves, of kind checking / savings /
+  credit / cash, and balances moved from three columns to `(account_id, day)`
+  rows. The Amazon and consulting tiles went with them.
+
+### What was added
+
+**Markets** — the reason a trader would pick this planner over any other. The
+economic calendar and the earnings calendar from the trading side, in the same
+app as the grocery list. Earnings is a read-only SELECT against the
+`earnings_calendar` table the existing recorder maintains; the econ feed reads the
+cache file the dashboard already writes (`./state` mounted read-only) and only
+fetches upstream itself if that file is missing or stale. That indirection is not
+politeness — a 20-second poller with nothing cached in front of it is what got
+this VPS rate-limited by faireconomy once already.
+
+**Billing** — Stripe over plain `fetch`, no SDK, with hand-rolled webhook
+signature verification against the raw request bytes. One subscription per
+household, monthly or annual, no free tier. `past_due` still grants access on
+purpose: Stripe retries a declined card for days, and locking someone out of
+their shopping list the morning their card expires is worse than a few days of
+unpaid access. The webhook is the source of truth; the post-checkout page calls
+`billing.sync()` as a repair path so a customer who has just paid never lands on
+a paywall because a webhook was slow.
+
+**Public auth** — self-signup, email verification, password reset, household
+invites (two seats, hard-capped so an invite link can't become a company
+account), and Sign in with Google, whose id_token is verified in-process against
+Google's JWKS rather than trusted because it arrived. "Forgot password" answers
+identically whether or not the address exists; on a public form the alternative
+is an oracle for whether someone is a customer.
+
+**Google Calendar, now read AND write.** The private app is deliberately
+`calendar.readonly`. This one promises "add it to my calendar from Today", so it
+carries `calendar.events` as well — and every write path requires an explicit
+calendar id checked against the account's own writable list, so nothing can be
+silently created on someone's primary calendar.
+
+### Isolation
+
+A third backend container, `daily-api` on 3011, holding `pg` and node builtins
+and nothing else. The argument household-server made once already applies harder
+here: a public signup form is an open attack surface, a Stripe webhook has to
+answer in seconds or Stripe disables the endpoint, and neither belongs in the
+process recording market data. nginx proxies only `/api` — no `/ws`, no `/proxy`
+— so the one CB Edge surface a paying stranger is invited to load cannot reach
+the trading stack at all. Cookies are `dy_session` / `dy_device`, host-only: a
+cbedge.net session grants nothing here, an hh_session grants nothing here, and a
+dy_session grants nothing anywhere else.
+
+### Verified
+
+SPA typechecks clean under `strict` + `noUnusedLocals` and builds (111 modules).
+All eight backend files pass `node --check`; the server boots against a stubbed
+database, registers 46 routes (16 public / 11 signed-in / 19 entitled), answers
+`/health`, 401s an unauthenticated `/api/daily/today`, and rejects an unsigned
+Stripe webhook with a 400. `docker-compose.yml` parses with all nine services.
+
+**Not yet done — it cannot go live without these:** two Stripe prices and a
+dedicated webhook endpoint, the Google redirect URI, `DAILY_TOKEN_KEY`, the
+Cloudflare tunnel entry and DNS record. Every one of them is in
+`md files/DAILY-SETUP.md`, and until they exist the app reports each integration
+as "not set up" rather than crashing.
 
 ## 2026-08-23 - The backtest now SETS the watch cutoff (and refuses to overfit)
 

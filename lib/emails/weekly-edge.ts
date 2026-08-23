@@ -137,15 +137,25 @@ const DEFAULT_EARNINGS: EarningsDay[] = [
 ];
 
 /**
- * Daily Core Bullseye confidence rows. LEFT EMPTY ON PURPOSE for this issue —
- * an empty array makes the template render the dashed "[ADD CB EDGE SCREENSHOT
- * / CONFIDENCE TABLE HERE]" block instead of a stale table. Fill from the owner
- * Results page before sending; row shape:
- *   { date: "08-21", s945: "7810", c945: "2.1", hit945: true,
- *                    s1030: "7810", c1030: "3.1", hit1030: true,
- *                    s1200: "7780", c1200: "0.1", hit1200: true },
+ * Daily Core Bullseye rows for Aug 17–21, newest first, taken off the owner
+ * Results page.
+ *
+ * THE ✓/✗ IS THE ≤5-POINT COLUMN. The Results page scores three thresholds per
+ * window (≤5 / ≤10 / ≤15); this table has room for one, and every previous
+ * issue used ≤5, so ≤5 it stays. Where that hides something — the 9:45 read on
+ * 8/21 and 8/20 missed ≤5 but cleared ≤15 — `resultsNote` says so in words
+ * rather than the table quietly implying a whiff.
+ *
+ * Empty array is still meaningful: it renders the dashed
+ * "[ADD CB EDGE SCREENSHOT / CONFIDENCE TABLE HERE]" placeholder instead.
  */
-const DEFAULT_CONF_ROWS: ConfRow[] = [];
+const DEFAULT_CONF_ROWS: ConfRow[] = [
+  { date: "08-21", s945: "7640", c945: "14.7", hit945: false, s1030: "7680", c1030: "0.3", hit1030: true, s1200: "7700", c1200: "4.4", hit1200: true },
+  { date: "08-20", s945: "7710", c945: "12.2", hit945: false, s1030: "7700", c1030: "2.2", hit1030: true, s1200: "7670", c1200: "0.6", hit1200: true },
+  { date: "08-19", s945: "7730", c945: "0.1", hit945: true, s1030: "7730", c1030: "0.1", hit1030: true, s1200: "7740", c1200: "1.6", hit1200: true },
+  { date: "08-18", s945: "7700", c945: "0.0", hit945: true, s1030: "7700", c1030: "0.0", hit1030: true, s1200: "7700", c1200: "0.0", hit1200: true },
+  { date: "08-17", s945: "7800", c945: "19.5", hit945: false, s1030: "7770", c1030: "0.0", hit1030: true, s1200: "7770", c1200: "0.0", hit1200: true },
+];
 
 /**
  * The week's scanner example. Flagged Aug 14 on the 2026-08-21 expiry, so the
@@ -198,12 +208,16 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
       "Crude posted its biggest weekly gain since late July as the Strait of Hormuz standoff dragged into another week. President Trump threatened \"TREMENDOUS Economic Consequences\" for any nation still trading with Iran, and the Treasury followed with a tighter sanctions package — enough to keep a war premium in every barrel even as tanker traffic through the region held up better than the headlines implied.",
       "Friday brought the first real crack in the deadlock: Iranian President Pezeshkian said Tehran would rather conclude the war while it still holds a position of strength. Oil barely moved on it, which tells you how little this market is willing to price a deal it hasn't seen. Until the strait actually reopens, crude stays a headline-driven overnight risk — and that is gap risk landing straight into the 9:45 CB window.",
     ],
-    coreBullseyePct: opts.coreBullseyePct || "—",
-    coreBullseyeSub: opts.coreBullseyeSub || "[fill before send]",
+    // 12 of 15 reads inside 5 points: 5/5 at 10:30, 5/5 at 12:00, 2/5 at 9:45.
+    // The headline number is the two clean windows; 9:45 is stated in the note
+    // rather than averaged away.
+    coreBullseyePct: opts.coreBullseyePct || "100%",
+    coreBullseyeSub: opts.coreBullseyeSub || "&le;5 pts &middot; 10:30 &amp; 12:00 CB &middot; 5 of 5 sessions",
     estMovePct: opts.estMovePct || "—",
     estMoveSub: opts.estMoveSub || "[fill before send]",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
-    resultsNote: opts.resultsNote || "[ADD THIS WEEK'S CORE BULLSEYE + ESTIMATED MOVE SUMMARY]",
+    resultsNote: opts.resultsNote ||
+      "A ✓ means the Core Bullseye landed within 5 points of where SPX actually printed. Across Aug 17–21 that was 12 of 15 reads — 5 of 5 at both 10:30 and 12:00, and 2 of 5 at 9:45. The two 9:45 misses (8/20 and 8/21) still came in inside 15 points; the 8/17 open at 19.5 was the only genuine whiff of the week. Five sessions is a small sample, which is why the daily rows are printed rather than summarised.",
     showScannerProof: opts.showScannerProof !== false,
     scannerProof: { ...DEFAULT_SCANNER_PROOF, ...(opts.scannerProof || {}) },
     ctaUrl: opts.ctaUrl || PRICING_URL,
@@ -237,6 +251,9 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     s.replace(/<[^>]+>/g, "")
      .replace(/&middot;/g, "·")
      .replace(/&nbsp;/g, " ")
+     .replace(/&le;/g, "≤")
+     .replace(/&ge;/g, "≥")
+     .replace(/&rarr;/g, "→")
      .replace(/&lt;/g, "<")
      .replace(/&gt;/g, ">")
      .replace(/&quot;/g, '"')

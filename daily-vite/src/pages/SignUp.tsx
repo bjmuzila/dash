@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { auth as authApi, billing, ApiError, type Plan } from '../api'
-import { AuthFrame, FormError, GoogleButton } from './SignIn'
+import { AuthFrame, FormError } from './SignIn'
 import { PlanChoice } from './Pricing'
 import { T, display, label, body, section, button, input, textAction } from '../theme'
 
@@ -123,17 +123,6 @@ function CreateAccount({ onDone }: { onDone: (email: string) => void }) {
         {busy ? 'Creating…' : 'Continue to plans'}
       </button>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '20px 0' }}>
-        <span style={{ flex: 1, height: 1, background: T.rule }} />
-        <span style={label({ color: T.faint, letterSpacing: '0.1em' })}>or</span>
-        <span style={{ flex: 1, height: 1, background: T.rule }} />
-      </div>
-
-      {/* Same URL as the sign-in page uses. The server creates the account if
-          there isn't one and signs in if there is, then redirects back — and an
-          account with no subscription lands on the paywall, which is the same
-          plan picker as step 2. One destination, two routes to it. */}
-      <GoogleButton href={authApi.googleSignInUrl}>Continue with Google</GoogleButton>
 
       <div style={{ textAlign: 'center', marginTop: 22, ...body(14), color: T.inkSoft }}>
         Already have an account? <Link to="/sign-in" style={{ color: T.accent }}>Sign in</Link>

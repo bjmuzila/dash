@@ -584,9 +584,15 @@ export const auth = {
   setPin: (pin: string) => api.post<{ ok: true }>(`${P}/auth/pin`, { pin }),
   removePin: () => api.post<{ ok: true }>(`${P}/auth/pin/remove`),
 
-  /** Full page navigations, NOT fetches — the browser has to follow the
-   *  redirect to Google's consent screen. */
-  googleSignInUrl: `${P}/google/start?purpose=signin`,
+  /**
+   * A full page navigation, NOT a fetch — the browser has to follow the redirect
+   * to Google's consent screen.
+   *
+   * There is deliberately no googleSignInUrl. Signing in is email and password
+   * only; Google is a CALENDAR integration here and nothing else, so linking one
+   * requires an account that already exists. The server refuses
+   * `?purpose=signin` outright — see /api/daily/google/start.
+   */
   googleConnectUrl: `${P}/google/start?purpose=connect`,
 }
 

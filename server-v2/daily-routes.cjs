@@ -728,28 +728,40 @@ function registerDailyRoutes({ register, send, readJson, readRaw }) {
     async handler(req, res) {
       try {
         const q = params(req);
-        // Purpose comes from the query here and is immediately SIGNED into the
-        // state by authUrl(). It is read back only from inside that verified
-        // blob — never from the callback's query string, where flipping
-        // 'connect' to 'signin' would turn a link click into a session mint.
-        const purpose = q.get('purpose') === 'signin' ? 'signin' : 'connect';
         const next = q.get('next');
 
-        if (!google || !google.configured()) {
-          redirect(res, purpose === 'signin'
-            ? '/sign-in?error=google-unavailable'
-            : '/settings?google=unavailable');
+        // SIGN-IN WITH GOOGLE IS OFF, deliberately and at the server.
+        //
+        // Google here is a CALENDAR integration and nothing else: accounts are
+        // email and password only. The machinery for the sign-in flow still
+        // exists in _lib-daily-google.cjs (the id_token verifier, the JWKS cache,
+        // loginWithGoogle) because it is correct and was expensive to get right —
+        // but nothing may reach it, so it is refused HERE rather than merely
+        // hidden in the UI. A disabled button is not an access control; anybody
+        // can type a URL.
+        //
+        // To turn it back on: delete this branch, restore the 'signin' arm below,
+        // and put the button back in SignIn.tsx / SignUp.tsx.
+        if (q.get('purpose') === 'signin') {
+          redirect(res, '/sign-in?error=google-signin-disabled');
           return;
         }
 
-        if (purpose === 'connect') {
-          // Linking a calendar to an account requires knowing which account.
-          const u = await daily.userFromRequest(req);
-          if (!u) { redirect(res, '/sign-in?next=/settings'); return; }
-          redirect(res, google.authUrl({ purpose: 'connect', userId: u.id, next }));
+        if (!google || !google.configured()) {
+          redirect(res, '/settings?google=unavailable');
           return;
         }
-        redirect(res, google.authUrl({ purpose: 'signin', next }));
+
+        // Linking a calendar to an account requires knowing which account —
+        // which is the other reason there is no sign-in arm: this flow only ever
+        // runs for somebody who has already proved who they are.
+        const u = await daily.userFromRequest(req);
+        if (!u) { redirect(res, '/sign-in?next=/settings'); return; }
+        // Purpose is set HERE and immediately SIGNED into the state by authUrl().
+        // It is read back only from inside that verified blob — never from the
+        // callback's query string, where flipping a value would turn a link click
+        // into a session mint.
+        redirect(res, google.authUrl({ purpose: 'connect', userId: u.id, next }));
       } catch (err) {
         console.error(`[daily] GET ${pathOf(req)} failed:`, err?.message || err);
         redirect(res, '/sign-in?error=google-failed');
@@ -773,8 +785,17 @@ function registerDailyRoutes({ register, send, readJson, readRaw }) {
           redirect(res, result.redirect || '/sign-in?error=google-failed');
           return;
         }
-        // `cookie` is only present for a sign-in: the lib does not own the HTTP
-        // response, so it hands the session back for us to set.
+        // Belt and braces against a state minted before sign-in was switched
+        // off: /google/start no longer issues a 'signin' state, but one already
+        // in a browser stays valid for its ten-minute TTL, and a callback that
+        // honoured it would mint a session the front door refuses to.
+        if (result.purpose === 'signin') {
+          redirect(res, '/sign-in?error=google-signin-disabled');
+          return;
+        }
+        // `cookie` is only present for a sign-in, which cannot happen while the
+        // branch above stands. Passed through regardless so re-enabling sign-in
+        // is one deletion rather than two edits in different files.
         redirect(res, result.redirect || '/today', result.cookie || null);
       } catch (err) {
         console.error(`[daily] GET ${pathOf(req)} failed:`, err?.message || err);
