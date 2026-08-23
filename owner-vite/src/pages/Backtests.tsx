@@ -179,6 +179,84 @@ export default function Backtests() {
           </>
         }
       />
+
+      <Panel
+        title="Strike GEX growth → move (daily)" test="strike-gex-move"
+        subtitle="Does the day's biggest per-strike GEX build precede a move? 400 sessions of eod_strike_gex, vol-normalized."
+        fields={[
+          { key: "days", label: "lookback (days)", type: "number", def: 180 },
+          { key: "win", label: "trailing win", type: "number", def: 20 },
+          { key: "hitSigma", label: "big move (σ)", type: "number", def: 1 },
+          { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
+        ]}
+        help={
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>How to read this</div>
+            <p style={{ margin: "0 0 8px" }}>
+              For every symbol-session it finds the single strike whose net GEX changed most vs the
+              prior session, scores that change against the symbol's own recent history, and looks at
+              what price did over the next 1 / 3 / 5 sessions.
+            </p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>z</strong> — how unusual the build was for that ticker: (biggest |Δ$ gamma| − its trailing mean) ÷ trailing stdev. This is what everything ranks on, <em>not</em> percent change. Net GEX is a signed sum that crosses zero, so a % off a near-flat strike is unbounded noise — −2M → +1M would read as “−150%”.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>Δ %</strong> — the raw percent change you asked for, kept on every event row in the detail table. Read it per-event, never as a ranking.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>σ</strong> — every move is divided by that ticker's own trailing return stdev, so a 2% day in a $30 name and a 2% day in SPX are comparable and the buckets can pool the whole roster.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>buckets</strong> — the answer lives here. Compare each z-bucket's “big move %” to the <strong>ALL (baseline)</strong> row. If extreme builds don't beat baseline, there is no edge at this horizon and no amount of staring at the detail table will create one.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>conc %</strong> — the top strike's share of the day's total |Δ|. High means one strike carried it; low means the whole ladder shifted and the “top strike” is arbitrary.</p>
+            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>lift</strong> (by ticker) — strong-build big-move % ÷ that ticker's own baseline. Above 1 means the signal adds something for that name. Tickers with fewer than 5 strong events are hidden.</p>
+            <p style={{ margin: "0 0 6px", color: HOME_THEME.text }}>
+              Every scoring window is strictly trailing and excludes the event bar, so nothing leaks the
+              outcome into the score. A quick audit: the baseline <strong>up %</strong> should sit near 50 —
+              if it drifts far off, something has gone wrong with the forward join.
+            </p>
+            <p style={{ margin: "6px 0 0" }}>
+              Sign convention: Δ&gt;0 = call / positive gamma added, Δ&lt;0 = put / negative gamma added.
+              The <code>call_gex</code>/<code>put_gex</code> legs only exist after 2026-08-18 and were never
+              backfilled, so this reads net GEX and infers the side from the sign — which works on every
+              row in the table.
+            </p>
+          </>
+        }
+      />
+
+      <Panel
+        title="Strike GEX growth → move (intraday)" test="strike-gex-move-intraday"
+        subtitle="Same engine on 1-minute strike_growth: build over the last N minutes vs the move over the next N."
+        fields={[
+          { key: "ticker", label: "ticker", type: "text", def: "SPX" },
+          { key: "days", label: "lookback (days)", type: "number", def: 3 },
+          { key: "slotMin", label: "slot (min)", type: "number", def: 10 },
+          { key: "look", label: "build (slots)", type: "number", def: 3 },
+          { key: "fwd", label: "forward (slots)", type: "number", def: 3 },
+          { key: "hitSigma", label: "big move (σ)", type: "number", def: 1 },
+        ]}
+        help={
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 8 }}>Read the sample-size warning first</div>
+            <p style={{ margin: "0 0 8px", color: HOME_THEME.text }}>
+              <strong style={{ color: SOFT_RED }}>This is a wiring check, not a study.</strong>{" "}
+              <code>strike_growth</code> is on a 5-day retention sweep, so whatever this returns today is a
+              handful of sessions. It <em>cannot</em> be backfilled — that table is the only record of those
+              minutes. Raise <code>RETENTION_STRIKE_GROWTH_DAYS</code> on the VPS (no redeploy) and the sample
+              grows forward from that day at roughly 0.3GB of disk per extra session.
+            </p>
+            <p style={{ margin: "0 0 8px" }}>
+              Everything else reads exactly like the daily panel above: z-scored build, moves in the session's
+              own σ, buckets compared against the ALL row. The difference is the clock — build is measured over
+              <strong> slot × build</strong> minutes and the move over <strong>slot × forward</strong> minutes,
+              both shown in the note. Times are ET.
+            </p>
+            <p style={{ margin: "0 0 6px" }}>
+              This is the version that can actually test causality, because a daily bar cannot tell you whether
+              the gamma stacked before or after the move. Give it weeks of retention before reading anything
+              into the buckets.
+            </p>
+            <p style={{ margin: "6px 0 0" }}>
+              Leave <strong>ticker</strong> blank to sweep the whole roster — expect it to be slow, the table
+              writes about 2M rows a session.
+            </p>
+          </>
+        }
+      />
     </PageShell>
   );
 }

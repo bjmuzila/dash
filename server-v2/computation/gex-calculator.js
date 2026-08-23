@@ -161,25 +161,67 @@ function computeGexRows(rows, spot, flowInventory = null) {
   return result.sort((a, b) => a.strike - b.strike);
 }
 
-/** Find the GEX flip point (zero-crossing of cumulative net GEX). */
-function findGexFlip(gexRows, spot) {
+/**
+ * Find the GEX flip point (zero-crossing of cumulative net GEX).
+ *
+ * DEFAULT BEHAVIOUR IS UNCHANGED: scan up from the lowest strike and return the
+ * FIRST negative→positive crossing. Every existing caller (the SPX live feed via
+ * computeGexSummary, the GEX chart, Multi Greek) passes no options and is
+ * completely unaffected.
+ *
+ * `nearest: true` opts into the hardened version, and fixes two real failures
+ * seen in gex_levels_history:
+ *
+ *   1. FIRST-FROM-THE-BOTTOM IS ARBITRARY. A chain can cross zero several times.
+ *      The lowest crossing is usually a stale far-OTM artifact, not the level
+ *      price is trading around — which is how the recorder ended up storing a
+ *      6,425 "neutral" against a 7,300 spot. The flip that matters is the one
+ *      NEAREST SPOT.
+ *   2. ONE DIRECTION ONLY. The old scan tests `prevCum < 0 && cum >= 0` and so
+ *      misses every positive→negative crossing. `nearest` collects both.
+ *
+ * `maxDistancePct` (only meaningful with `nearest`) discards crossings further
+ * than that percentage from spot, so a lone crossing 12% away returns null
+ * rather than a number nobody should act on. 0 disables the band.
+ *
+ * Returns null when there is no crossing at all — which is a real and common
+ * state (a chain whose cumulative never changes sign), not an error.
+ *
+ * @param {Array<object>} gexRows
+ * @param {number} spot
+ * @param {{nearest?: boolean, maxDistancePct?: number}} [opts]
+ */
+function findGexFlip(gexRows, spot, { nearest = false, maxDistancePct = 0 } = {}) {
   if (!gexRows.length || !(spot > 0)) return null;
   const sorted = [...gexRows].sort((a, b) => a.strike - b.strike);
+
+  const crossings = [];
   let cum = 0;
   let prevCum = 0;
   let prevStrike = null;
   for (const row of sorted) {
     prevCum = cum;
     cum += oiVolNet(row);
-    if (prevStrike !== null && prevCum < 0 && cum >= 0) {
-      const range = cum - prevCum;
-      return Math.abs(range) > 0
-        ? prevStrike + (row.strike - prevStrike) * (-prevCum / range)
-        : row.strike;
+    if (prevStrike !== null) {
+      const up = prevCum < 0 && cum >= 0;
+      const down = nearest && prevCum > 0 && cum <= 0;
+      if (up || down) {
+        const range = cum - prevCum;
+        const at = Math.abs(range) > 0
+          ? prevStrike + (row.strike - prevStrike) * (-prevCum / range)
+          : row.strike;
+        if (!nearest) return at;   // legacy: first crossing wins, exactly as before
+        crossings.push(at);
+      }
     }
     prevStrike = row.strike;
   }
-  return null;
+  if (!crossings.length) return null;
+
+  const band = maxDistancePct > 0 ? (spot * maxDistancePct) / 100 : Infinity;
+  const inBand = crossings.filter((k) => Math.abs(k - spot) <= band);
+  if (!inBand.length) return null;
+  return inBand.reduce((best, k) => (Math.abs(k - spot) < Math.abs(best - spot) ? k : best));
 }
 
 // OI+Vol net GEX for a row = OI-net (netGEX) + vol-net (netVolGEX). This is the
@@ -212,18 +254,86 @@ function excluding(gexRows, exclude) {
   return gexRows.filter((r) => Number(r.strike) !== Number(exclude));
 }
 
-/** Strike with highest positive OI+Vol net GEX above spot. */
-function findCallWall(gexRows, spot, { exclude = null } = {}) {
-  const above = excluding(gexRows, exclude).filter((r) => r.strike > spot && oiVolNet(r) > 0);
-  if (!above.length) return null;
-  return above.reduce((best, r) => (oiVolNet(r) > oiVolNet(best) ? r : best)).strike;
+/**
+ * `basis` — WHICH quantity a wall is the extreme of.
+ *
+ * WHY THIS EXISTS. The default 'oivol' is netGEX + netVolGEX, and netVolGEX
+ * substitutes the day's VOLUME for open interest. On the live SPX feed — which
+ * is a single nearest expiry, so 0–1 DTE — same-day volume runs 5–20× the open
+ * interest at that strike AND concentrates at the money, while gamma also peaks
+ * at the money as DTE→0. The two stack, and the argmax lands on whatever strike
+ * is busiest today, which is by construction the one next to spot.
+ *
+ * Measured on a live 221-strike chain (spot 7,648.19), the same session:
+ *
+ *   basis    call wall            put wall             band
+ *   oivol    7710 (+62)           7630 (−18)            80   ← today's default
+ *   oi       7725 (+77)           7630 (−18)            95
+ *   oi +0.25% 7725 (+77)          7585 (−63)           140
+ *   oiRaw    7850 (+202)          7575 (−73)           275
+ *
+ * That is the whole "the walls hug spot" problem in one table: gex_levels_history
+ * recorded a median support→resistance width of 18 points over 30 sessions, and
+ * spot closed INSIDE the band 30 times out of 30.
+ *
+ *   'oivol'  netGEX + netVolGEX — the default, unchanged, what every existing
+ *            caller gets. Reads as "where is the gamma being traded today".
+ *   'oi'     netGEX alone. Drops the volume term, keeps the gamma weighting.
+ *            Reads as "where is the gamma that is actually on the book".
+ *   'vol'    netVolGEX alone, for symmetry / diagnostics.
+ *   'oiRaw'  raw contract counts (callOI above, putOI below) with NO gamma
+ *            weighting at all — the plain "most open contracts" wall. Furthest
+ *            from spot because gamma is what pulls the others in.
+ *
+ * `minDistance` / `minDistancePct` — a dead zone around spot that no wall may
+ * win from. A level 6 points away is not a wall, it is a rounding of spot. The
+ * two are combined with Math.max, so a caller can set a floor in points, in
+ * percent, or both. Percent is the portable one: 0.25% is ~19 points on SPX at
+ * 7,650 and ~1 point on a $400 stock, and the same call site works for each.
+ *
+ * BOTH ARE OPT-IN AND DEFAULT TO THE OLD BEHAVIOUR. Callers that pass nothing —
+ * the SPX live feed, the GEX chart, Multi Greek, computeGexSummary — return
+ * exactly what they returned before this change, to the strike.
+ *
+ * Returns null when the dead zone leaves no qualifying strike. That is
+ * deliberate: falling back to the unfiltered winner would silently hand back the
+ * spot-hugging strike the dead zone existed to reject.
+ */
+function wallMetric(basis, side) {
+  switch (basis) {
+    case 'oi':    return (r) => Number(r.netGEX ?? 0);
+    case 'vol':   return (r) => Number(r.netVolGEX ?? 0);
+    // Raw contracts carry no sign of their own, so the put side is negated to
+    // keep one convention for both walls: call side maximises, put side minimises.
+    case 'oiRaw': return side === 'call'
+      ? (r) => Number(r.callOI ?? 0)
+      : (r) => -Number(r.putOI ?? 0);
+    case 'oivol':
+    default:      return oiVolNet;
+  }
 }
 
-/** Strike with most negative OI+Vol net GEX below spot. */
-function findPutWall(gexRows, spot, { exclude = null } = {}) {
-  const below = excluding(gexRows, exclude).filter((r) => r.strike < spot && oiVolNet(r) < 0);
+function deadZone(spot, minDistance, minDistancePct) {
+  const byPct = minDistancePct > 0 ? (spot * minDistancePct) / 100 : 0;
+  return Math.max(Number(minDistance) || 0, byPct);
+}
+
+/** Strike with the highest positive `basis` value above spot. */
+function findCallWall(gexRows, spot, { exclude = null, basis = 'oivol', minDistance = 0, minDistancePct = 0 } = {}) {
+  const net = wallMetric(basis, 'call');
+  const floor = spot + deadZone(spot, minDistance, minDistancePct);
+  const above = excluding(gexRows, exclude).filter((r) => r.strike > floor && net(r) > 0);
+  if (!above.length) return null;
+  return above.reduce((best, r) => (net(r) > net(best) ? r : best)).strike;
+}
+
+/** Strike with the most negative `basis` value below spot. */
+function findPutWall(gexRows, spot, { exclude = null, basis = 'oivol', minDistance = 0, minDistancePct = 0 } = {}) {
+  const net = wallMetric(basis, 'put');
+  const ceil = spot - deadZone(spot, minDistance, minDistancePct);
+  const below = excluding(gexRows, exclude).filter((r) => r.strike < ceil && net(r) < 0);
   if (!below.length) return null;
-  return below.reduce((best, r) => (oiVolNet(r) < oiVolNet(best) ? r : best)).strike;
+  return below.reduce((best, r) => (net(r) < net(best) ? r : best)).strike;
 }
 
 /** Total OI+Vol net GEX across all strikes. */

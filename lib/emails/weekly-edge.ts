@@ -27,6 +27,13 @@ const PRICING_URL = `${SITE_URL}/pricing`;
 const AFFILIATE_URL = "https://affiliate.cbedge.net";
 /** Banner art lives in `public/`, so it is served from the main site root. */
 const AFFILIATE_BANNER_URL = `${SITE_URL}/affiliate-program-banner.jpg`;
+/**
+ * Tradeify partner link. Third-party host, so `lib/emails/utm.ts` leaves it
+ * alone by design (rule 4: never tag someone else's site) — the `?ref=Bzila`
+ * is the attribution and must survive untouched.
+ */
+const TRADEIFY_URL = "https://tradeify.co/?ref=Bzila";
+const TRADEIFY_CODE = "BZILA";
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
@@ -66,6 +73,12 @@ export interface WeeklyEdgeOpts {
   affiliateBody?: string[];
   affiliateUrl?: string;
   affiliateBannerUrl?: string;
+  /** Set false to drop the Tradeify partner band entirely. */
+  showTradeify?: boolean;
+  tradeifyHeadline?: string;
+  tradeifyBody?: string;
+  tradeifyUrl?: string;
+  tradeifyCode?: string;
   /** Recipient email — when set, renders a real tokenized unsubscribe link. */
   email?: string | null;
 }
@@ -108,7 +121,8 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
   "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
   "confRows" | "resultsNote" | "ctaUrl" |
-  "showAffiliate" | "affiliateHeadline" | "affiliateBody" | "affiliateUrl" | "affiliateBannerUrl">> {
+  "showAffiliate" | "affiliateHeadline" | "affiliateBody" | "affiliateUrl" | "affiliateBannerUrl" |
+  "showTradeify" | "tradeifyHeadline" | "tradeifyBody" | "tradeifyUrl" | "tradeifyCode">> {
   return {
     issueLabel: opts.issueLabel || "Week of Aug 24–28",
     recapHeadline: opts.recapHeadline || "Bonds broke the streak — yields ripped and the Nasdaq wore it",
@@ -145,6 +159,12 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     ],
     affiliateUrl: opts.affiliateUrl || AFFILIATE_URL,
     affiliateBannerUrl: opts.affiliateBannerUrl || AFFILIATE_BANNER_URL,
+    showTradeify: opts.showTradeify !== false,
+    tradeifyHeadline: opts.tradeifyHeadline || "Trading these levels funded? My Tradeify code is BZILA",
+    tradeifyBody: opts.tradeifyBody ||
+      "Tradeify is the futures prop firm I use. Sign up through the link below, or enter code <strong style=\"color:#ffffff;\">BZILA</strong> at checkout.",
+    tradeifyUrl: opts.tradeifyUrl || TRADEIFY_URL,
+    tradeifyCode: opts.tradeifyCode || TRADEIFY_CODE,
   };
 }
 
@@ -200,6 +220,13 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
       `Apply for a code: ${o.affiliateUrl}`,
       "",
     ] : []),
+    ...(o.showTradeify ? [
+      "PARTNER · TRADEIFY",
+      strip(o.tradeifyHeadline),
+      strip(o.tradeifyBody),
+      `${o.tradeifyUrl} (affiliate link — CB Edge earns a commission if you sign up)`,
+      "",
+    ] : []),
     "— The CB Edge Team",
     "",
     "cbedge.net · not financial advice",
@@ -215,6 +242,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
   const cta = escapeHtml(o.ctaUrl);
   const affiliateHref = escapeHtml(o.affiliateUrl);
   const affiliateBanner = escapeHtml(o.affiliateBannerUrl);
+  const tradeifyHref = escapeHtml(o.tradeifyUrl);
   const unsubHref = opts.email ? escapeHtml(unsubscribeUrl(opts.email)) : UNSUB_URL_PLACEHOLDER;
 
   const indexTile = (m: IndexMove) => {
@@ -433,6 +461,30 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                 </td>
               </tr></table>
               <div style="font:400 12px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;margin-top:10px;">${escapeHtml(o.affiliateUrl.replace(/^https?:\/\//, ""))}</div>
+            </td>
+          </tr>` : ""}
+
+          <!-- TRADEIFY — partner line. Compact card, not a full band: it sits
+               below the affiliate program and must not out-shout it. -->
+          ${o.showTradeify ? `
+          <tr>
+            <td style="padding:22px 28px 0 28px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(255,255,255,0.10);border-radius:12px;background:rgba(255,255,255,0.02);">
+                <tr><td style="padding:18px 18px;">
+                  <div style="font:800 10px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.14em;text-transform:uppercase;color:#8ECAE6;">Partner · Tradeify</div>
+                  <div style="font:800 15px/1.35 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:8px;">${o.tradeifyHeadline}</div>
+                  <div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:8px;">${o.tradeifyBody}</div>
+                  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr>
+                    <td align="center" style="border-radius:10px;border:1px solid rgba(142,202,230,0.45);background:rgba(142,202,230,0.10);">
+                      <a href="${tradeifyHref}" style="display:inline-block;padding:11px 24px;font:800 13px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8ECAE6;text-decoration:none;border-radius:10px;">Get funded with code ${escapeHtml(o.tradeifyCode)} →</a>
+                    </td>
+                  </tr></table>
+                  <div style="font:400 11px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;margin-top:10px;">
+                    <a href="${tradeifyHref}" style="color:#6b7d8f;text-decoration:underline;">${escapeHtml(o.tradeifyUrl.replace(/^https?:\/\//, ""))}</a>
+                    &nbsp;·&nbsp;Affiliate link — CB Edge earns a commission if you sign up.
+                  </div>
+                </td></tr>
+              </table>
             </td>
           </tr>` : ""}
 

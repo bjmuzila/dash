@@ -7308,6 +7308,390 @@ if (libDb) {
       };
     };
 
+    // ── Strike-GEX growth → forward move ─────────────────────────────────────
+    //
+    // The question both engines below answer: when the GEX at ONE strike grows
+    // hard, does the underlying then actually move?
+    //
+    // Three choices here are load-bearing. Read them before changing a number.
+    //
+    // 1. RANK ON A Z-SCORE, NOT ON % CHANGE. net_gex is a signed sum (positive
+    //    call leg + negative put leg), so it crosses zero, and a % change with a
+    //    near-zero denominator is unbounded garbage: −2M → +1M reads as −150%,
+    //    and a genuinely huge build off a flat strike reads as ±∞. The ranking
+    //    stat is therefore (the day's biggest |Δ$ gamma| − that symbol's own
+    //    trailing mean) / its trailing stdev. The raw % IS still reported on
+    //    every event row, because that is the number that was asked for — it is
+    //    just not what anything sorts or buckets on.
+    //
+    // 2. NORMALIZE THE MOVE BY THE TICKER'S OWN VOL. A 2% day in a $30 name and
+    //    a 2% day in SPX are not the same event. Forward moves are divided by a
+    //    trailing stdev of that symbol's own returns, so every ticker
+    //    contributes on one scale and the buckets can be pooled across the
+    //    roster. Everything labelled σ is in those units.
+    //
+    // 3. EVERY WINDOW IS STRICTLY TRAILING AND EXCLUDES THE EVENT BAR
+    //    (ROWS BETWEEN n PRECEDING AND 1 PRECEDING). Including the current bar
+    //    would leak the outcome into the score that is supposed to predict it,
+    //    and the panel would show a beautiful edge that does not exist.
+    //
+    // A strike only counts when it existed on BOTH bars being differenced
+    // (`gap = 1`). eod_strike_gex keeps a ±40-strike window around the close,
+    // so strikes drift in and out of the ladder as spot moves; differencing
+    // across a gap would book a strike's first appearance as a giant build.
+
+    /** Bucket a set of event rows into the forward-move stats every table shows. */
+    const moveStats = (rows, hit) => {
+      const col = (k) => rows.map((r) => r[k]).filter((v) => Number.isFinite(v));
+      const absAvg = (k) => { const a = col(k).map(Math.abs); return a.length ? round(mean(a), 2) : null; };
+      const absMed = (k) => {
+        const a = col(k).map(Math.abs).sort((x, y) => x - y);
+        return a.length ? round(a[Math.floor(a.length / 2)], 2) : null;
+      };
+      const s1 = col('s1');
+      const out = {
+        n: rows.length,
+        'avg |σ|': absAvg('s1'),
+        'med |σ|': absMed('s1'),
+        [`big move % (≥${hit}σ)`]: s1.length ? pct(s1.filter((v) => Math.abs(v) >= hit).length, s1.length) : 0,
+        'up %': s1.length ? pct(s1.filter((v) => v > 0).length, s1.length) : 0,
+      };
+      if (rows.some((r) => Number.isFinite(r.s3))) out['avg |σ| 3d'] = absAvg('s3');
+      if (rows.some((r) => Number.isFinite(r.s5))) out['avg |σ| 5d'] = absAvg('s5');
+      return out;
+    };
+
+    /** Fixed z-buckets, shared by both engines so the two tables read alike. */
+    const Z_BUCKETS = [
+      ['quiet (z<0)', -Infinity, 0],
+      ['normal (0–1)', 0, 1],
+      ['elevated (1–2)', 1, 2],
+      ['strong (2–3)', 2, 3],
+      ['extreme (≥3)', 3, Infinity],
+    ];
+    const bucketEvents = (evs, hit) => {
+      const rows = [{ bucket: 'ALL (baseline)', ...moveStats(evs, hit) }];
+      for (const [label, lo, hi] of Z_BUCKETS) {
+        const g = evs.filter((e) => e.z >= lo && e.z < hi);
+        if (g.length) rows.push({ bucket: label, ...moveStats(g, hit) });
+      }
+      return rows;
+    };
+
+    /**
+     * DAILY — eod_strike_gex (≈400 sessions retained) → forward 1/3/5-session move.
+     *
+     * One row per (symbol, session): the single biggest day-over-day |Δ net GEX|
+     * on the ladder, z-scored against that symbol's own trailing distribution,
+     * against what price did next.
+     *
+     * NOTE ON THE LEGS: call_gex / put_gex were added 2026-08-18 with no
+     * backfill (the chains are gone), so anything before that date has NULL
+     * legs. This engine therefore reads only net_gex and infers the side from
+     * the SIGN of Δ plus the strike's position vs spot — which works on every
+     * row in the table. Do not "improve" it by joining the legs; it would
+     * silently drop a year of history.
+     */
+    const strikeGexMove = async (days, win, ticker, hit, minStrikes) => {
+      const sym = String(ticker || '').trim().toUpperCase();
+      const rows = await libDb.queryAll(
+        `WITH sym AS (
+           SELECT symbol, date, MAX(spot) AS spot
+             FROM eod_strike_gex
+            WHERE date >= (CURRENT_DATE - ?::int)
+              AND (?::text = '' OR symbol = ?::text)
+              AND spot > 0
+            GROUP BY symbol, date
+         ),
+         sess AS (
+           SELECT symbol, date, spot,
+                  ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date) AS i
+             FROM sym
+         ),
+         px AS (
+           SELECT symbol, date, i, spot,
+                  CASE WHEN LAG(spot) OVER w > 0 THEN spot / LAG(spot) OVER w - 1 END AS r1,
+                  LEAD(spot, 1) OVER w AS f1,
+                  LEAD(spot, 3) OVER w AS f3,
+                  LEAD(spot, 5) OVER w AS f5
+             FROM sess
+           WINDOW w AS (PARTITION BY symbol ORDER BY i)
+         ),
+         vol AS (
+           SELECT p.*,
+                  STDDEV_SAMP(r1) OVER (PARTITION BY symbol ORDER BY i
+                                        ROWS BETWEEN ?::int PRECEDING AND 1 PRECEDING) AS sigma
+             FROM px p
+         ),
+         g AS (
+           SELECT e.symbol, e.date, e.strike, e.net_gex, s.i
+             FROM eod_strike_gex e
+             JOIN sess s ON s.symbol = e.symbol AND s.date = e.date
+         ),
+         chg AS (
+           SELECT symbol, date, i, strike, net_gex,
+                  net_gex - LAG(net_gex) OVER w AS d_net,
+                  LAG(net_gex) OVER w          AS prev_net,
+                  i - LAG(i) OVER w            AS gap
+             FROM g
+           WINDOW w AS (PARTITION BY symbol, strike ORDER BY i)
+         ),
+         ok AS (SELECT * FROM chg WHERE gap = 1 AND d_net IS NOT NULL),
+         agg AS (
+           SELECT symbol, date, i,
+                  SUM(ABS(d_net)) AS tot_abs,
+                  MAX(ABS(d_net)) AS max_abs,
+                  COUNT(*)        AS k_strikes
+             FROM ok GROUP BY symbol, date, i
+         ),
+         topk AS (
+           SELECT DISTINCT ON (symbol, date)
+                  symbol, date, strike AS top_strike, d_net AS top_d, prev_net AS top_prev
+             FROM ok
+            ORDER BY symbol, date, ABS(d_net) DESC
+         ),
+         z AS (
+           SELECT a.*,
+                  AVG(max_abs)         OVER w AS mu,
+                  STDDEV_SAMP(max_abs) OVER w AS sd
+             FROM agg a
+           WINDOW w AS (PARTITION BY symbol ORDER BY i ROWS BETWEEN ?::int PRECEDING AND 1 PRECEDING)
+         )
+         SELECT v.symbol, to_char(v.date, 'YYYY-MM-DD') AS date, v.spot, v.sigma,
+                v.f1, v.f3, v.f5,
+                z.max_abs, z.tot_abs, z.k_strikes, z.mu, z.sd,
+                t.top_strike, t.top_d, t.top_prev
+           FROM vol v
+           JOIN z    ON z.symbol = v.symbol AND z.date = v.date
+           JOIN topk t ON t.symbol = v.symbol AND t.date = v.date
+          WHERE v.sigma > 0 AND z.sd > 0 AND v.f1 IS NOT NULL
+            AND z.k_strikes >= ?::int
+          ORDER BY v.symbol, v.date`,
+        [days, sym, sym, win, win, minStrikes]);
+
+      if (!rows.length) {
+        return { buckets: [], by_side: [], by_ticker: [], detail: [],
+          note: `No qualifying sessions. eod_strike_gex needs ≥2 consecutive sessions per symbol inside the last ${days} days, plus ${win} trailing sessions to score against.` };
+      }
+
+      const evs = rows.map((r) => {
+        const spot = num(r.spot), sigma = num(r.sigma);
+        const sig = (f) => { const v = Number(f); return Number.isFinite(v) && spot > 0 && sigma > 0 ? (v / spot - 1) / sigma : null; };
+        const topD = num(r.top_d), prev = num(r.top_prev);
+        const above = num(r.top_strike) > spot;
+        return {
+          symbol: r.symbol, date: r.date, spot,
+          z: (num(r.max_abs) - num(r.mu)) / num(r.sd),
+          maxAbs: num(r.max_abs), totAbs: num(r.tot_abs),
+          strike: num(r.top_strike), topD, prev,
+          // The number that was actually asked for. Null when the prior GEX is
+          // ~0 — a percentage off nothing is not a percentage.
+          dPct: Math.abs(prev) > 1e4 ? (100 * topD) / Math.abs(prev) : null,
+          conc: num(r.max_abs) / (num(r.tot_abs) || 1),
+          side: topD > 0 ? (above ? 'call build above' : 'call build below')
+                         : (above ? 'put build above' : 'put build below'),
+          s1: sig(r.f1), s3: sig(r.f3), s5: sig(r.f5),
+        };
+      }).filter((e) => Number.isFinite(e.z) && Number.isFinite(e.s1));
+
+      const buckets = bucketEvents(evs, hit);
+      const base = buckets[0];
+
+      const sides = [...new Set(evs.map((e) => e.side))].sort();
+      const by_side = sides.map((s) => {
+        const g = evs.filter((e) => e.side === s && e.z >= 2);
+        return { side: s, ...moveStats(g, hit) };
+      }).filter((r) => r.n >= 5);
+
+      const tickers = [...new Set(evs.map((e) => e.symbol))];
+      const baseBig = num(base[`big move % (≥${hit}σ)`]);
+      const by_ticker = tickers.map((t) => {
+        const all = evs.filter((e) => e.symbol === t);
+        const strong = all.filter((e) => e.z >= 2);
+        const st = moveStats(strong, hit);
+        const al = moveStats(all, hit);
+        return {
+          symbol: t, sessions: all.length, 'strong (z≥2)': strong.length,
+          'strong avg |σ|': st['avg |σ|'], 'all avg |σ|': al['avg |σ|'],
+          'strong big %': st[`big move % (≥${hit}σ)`],
+          'all big %': al[`big move % (≥${hit}σ)`],
+          lift: st.n >= 5 && al[`big move % (≥${hit}σ)`] > 0
+            ? round(st[`big move % (≥${hit}σ)`] / al[`big move % (≥${hit}σ)`], 2) : null,
+        };
+      }).filter((r) => r['strong (z≥2)'] >= 5)
+        .sort((a, b) => (num(b.lift) - num(a.lift)));
+
+      const detail = [...evs].sort((a, b) => b.z - a.z).slice(0, 80).map((e) => ({
+        symbol: e.symbol, date: e.date, strike: round(e.strike, 2),
+        z: round(e.z, 2),
+        'Δ $M': round(e.topD / 1e6, 2),
+        'prev $M': round(e.prev / 1e6, 2),
+        'Δ %': e.dPct == null ? '-' : round(e.dPct, 1),
+        'conc %': Math.round(100 * e.conc),
+        side: e.side, spot: round(e.spot, 2),
+        'σ 1d': round(e.s1, 2), 'σ 3d': e.s3 == null ? '-' : round(e.s3, 2), 'σ 5d': e.s5 == null ? '-' : round(e.s5, 2),
+      }));
+
+      const strong = evs.filter((e) => e.z >= 2);
+      const strongBig = strong.length ? pct(strong.filter((e) => Math.abs(e.s1) >= hit).length, strong.length) : 0;
+      return {
+        buckets, by_side, by_ticker, detail,
+        note: `${evs.length} symbol-sessions · ${tickers.length} tickers · last ${days} days · ${win}-session trailing windows. `
+          + `Strong builds (z≥2, n=${strong.length}) were followed by a ≥${hit}σ next-session move ${strongBig}% of the time vs a ${baseBig}% baseline`
+          + (baseBig > 0 ? ` (lift ${round(strongBig / baseBig, 2)}×).` : '.')
+          + ` σ = the ticker's own trailing ${win}-session return stdev, so tickers pool. "Δ %" is the raw percent change on the top strike and is shown per-event only — it is NOT what the buckets rank on (net GEX crosses zero, so its percent change is unbounded). `
+          + `Sign convention: Δ>0 = call/positive gamma added, Δ<0 = put/negative gamma added.`,
+      };
+    };
+
+    /**
+     * INTRADAY — strike_growth (1-minute, top-5 strikes/side × 3 expiries).
+     *
+     * Same engine, minute grain: build over a trailing `look` slots vs the move
+     * over the next `fwd` slots, both in the session's own σ.
+     *
+     * SAMPLE-SIZE WARNING, and it is the whole story for this panel:
+     * strike_growth is on a 5-day retention sweep (RETENTION_STRIKE_GROWTH_DAYS
+     * in state/retention-cleanup.js). Whatever this returns today is a handful
+     * of sessions and cannot be backfilled — the table is the only record of
+     * those minutes. Raise the retention env var and the sample grows forward
+     * from that day, never backward.
+     *
+     * COST: strike_growth writes ~2M rows/session. An unfiltered multi-day scan
+     * is expensive; pass a ticker when you can.
+     */
+    const strikeGexMoveIntraday = async (days, slotMin, look, fwd, win, ticker, hit, minStrikes) => {
+      const sym = String(ticker || '').trim().toUpperCase();
+      const rows = await libDb.queryAll(
+        `WITH base AS (
+           SELECT symbol, date, strike, expiry,
+                  to_timestamp(floor(EXTRACT(EPOCH FROM ts) / (?::int * 60)) * (?::int * 60)) AS slot,
+                  delta_abs, spot
+             FROM strike_growth
+            WHERE date >= (CURRENT_DATE - ?::int)
+              AND (?::text = '' OR symbol = ?::text)
+              AND spot > 0
+         ),
+         g AS (
+           SELECT symbol, date, strike, expiry, slot,
+                  AVG(delta_abs) AS gex, AVG(spot) AS spot
+             FROM base GROUP BY symbol, date, strike, expiry, slot
+         ),
+         px AS (
+           SELECT symbol, date, slot, AVG(spot) AS spot,
+                  ROW_NUMBER() OVER (PARTITION BY symbol, date ORDER BY slot) AS k
+             FROM g GROUP BY symbol, date, slot
+         ),
+         gk AS (
+           SELECT g.symbol, g.date, g.strike, g.expiry, g.gex, p.k
+             FROM g JOIN px p ON p.symbol = g.symbol AND p.date = g.date AND p.slot = g.slot
+         ),
+         bld AS (
+           SELECT symbol, date, k, strike, expiry,
+                  gex - LAG(gex, ?::int) OVER w AS d,
+                  k   - LAG(k,   ?::int) OVER w AS gap
+             FROM gk
+           WINDOW w AS (PARTITION BY symbol, date, strike, expiry ORDER BY k)
+         ),
+         ok AS (SELECT * FROM bld WHERE gap = ?::int AND d IS NOT NULL),
+         agg AS (
+           SELECT symbol, date, k,
+                  SUM(ABS(d)) AS tot_abs, MAX(ABS(d)) AS max_abs, COUNT(*) AS k_strikes
+             FROM ok GROUP BY symbol, date, k
+         ),
+         topk AS (
+           SELECT DISTINCT ON (symbol, date, k)
+                  symbol, date, k, strike AS top_strike, expiry AS top_expiry, d AS top_d
+             FROM ok ORDER BY symbol, date, k, ABS(d) DESC
+         ),
+         pxr AS (
+           SELECT symbol, date, k, slot, spot,
+                  CASE WHEN LAG(spot) OVER w > 0 THEN spot / LAG(spot) OVER w - 1 END AS r,
+                  LEAD(spot, ?::int) OVER w AS fwd
+             FROM px
+           WINDOW w AS (PARTITION BY symbol, date ORDER BY k)
+         ),
+         pxv AS (
+           SELECT p.*,
+                  STDDEV_SAMP(r) OVER (PARTITION BY symbol, date ORDER BY k
+                                       ROWS BETWEEN ?::int PRECEDING AND 1 PRECEDING) AS sig1
+             FROM pxr p
+         ),
+         z AS (
+           SELECT a.*, AVG(max_abs) OVER w AS mu, STDDEV_SAMP(max_abs) OVER w AS sd
+             FROM agg a
+           WINDOW w AS (PARTITION BY symbol, date ORDER BY k ROWS BETWEEN ?::int PRECEDING AND 1 PRECEDING)
+         )
+         SELECT v.symbol, to_char(v.date, 'YYYY-MM-DD') AS date,
+                to_char(v.slot AT TIME ZONE 'America/New_York', 'HH24:MI') AS at,
+                v.spot, v.fwd, v.sig1,
+                z.max_abs, z.tot_abs, z.k_strikes, z.mu, z.sd,
+                t.top_strike, t.top_expiry, t.top_d
+           FROM pxv v
+           JOIN z    ON z.symbol = v.symbol AND z.date = v.date AND z.k = v.k
+           JOIN topk t ON t.symbol = v.symbol AND t.date = v.date AND t.k = v.k
+          WHERE v.sig1 > 0 AND z.sd > 0 AND v.fwd IS NOT NULL
+            AND z.k_strikes >= ?::int
+          ORDER BY v.symbol, v.date, v.k`,
+        [slotMin, slotMin, days, sym, sym, look, look, look, fwd, win, win, minStrikes]);
+
+      const horizon = slotMin * fwd;
+      if (!rows.length) {
+        return { buckets: [], by_side: [], detail: [],
+          note: `No qualifying slots. strike_growth keeps only ~5 days (RETENTION_STRIKE_GROWTH_DAYS) — if the table is inside its window, try a smaller look/fwd or a blank ticker.` };
+      }
+
+      const scale = Math.sqrt(fwd);
+      const evs = rows.map((r) => {
+        const spot = num(r.spot), sig1 = num(r.sig1);
+        const fwdPx = Number(r.fwd);
+        const s1 = Number.isFinite(fwdPx) && spot > 0 && sig1 > 0 ? (fwdPx / spot - 1) / (sig1 * scale) : null;
+        const topD = num(r.top_d);
+        const above = num(r.top_strike) > spot;
+        return {
+          symbol: r.symbol, date: r.date, at: r.at, spot,
+          z: (num(r.max_abs) - num(r.mu)) / num(r.sd),
+          maxAbs: num(r.max_abs), totAbs: num(r.tot_abs),
+          strike: num(r.top_strike), expiry: r.top_expiry, topD,
+          conc: num(r.max_abs) / (num(r.tot_abs) || 1),
+          side: topD > 0 ? (above ? 'call build above' : 'call build below')
+                         : (above ? 'put build above' : 'put build below'),
+          s1,
+        };
+      }).filter((e) => Number.isFinite(e.z) && Number.isFinite(e.s1));
+
+      const buckets = bucketEvents(evs, hit);
+      const base = buckets[0];
+      const sides = [...new Set(evs.map((e) => e.side))].sort();
+      const by_side = sides.map((s) => {
+        const g = evs.filter((e) => e.side === s && e.z >= 2);
+        return { side: s, ...moveStats(g, hit) };
+      }).filter((r) => r.n >= 5);
+
+      const detail = [...evs].sort((a, b) => b.z - a.z).slice(0, 80).map((e) => ({
+        symbol: e.symbol, date: e.date, at: e.at,
+        strike: round(e.strike, 2), expiry: e.expiry,
+        z: round(e.z, 2), 'Δ $M': round(e.topD / 1e6, 2),
+        'conc %': Math.round(100 * e.conc), side: e.side,
+        spot: round(e.spot, 2), 'σ fwd': round(e.s1, 2),
+      }));
+
+      const sessions = new Set(evs.map((e) => `${e.symbol}|${e.date}`)).size;
+      const dates = [...new Set(evs.map((e) => e.date))].sort();
+      const strong = evs.filter((e) => e.z >= 2);
+      const strongBig = strong.length ? pct(strong.filter((e) => Math.abs(e.s1) >= hit).length, strong.length) : 0;
+      const baseBig = num(base[`big move % (≥${hit}σ)`]);
+      return {
+        buckets, by_side, detail,
+        note: `${evs.length} slots · ${sessions} symbol-sessions · ${dates.length} dates (${dates[0]}…${dates[dates.length - 1]}) · `
+          + `${slotMin}m grid, ${slotMin * look}m build window, ${horizon}m forward. `
+          + `Strong builds (z≥2, n=${strong.length}) were followed by a ≥${hit}σ ${horizon}m move ${strongBig}% of the time vs a ${baseBig}% baseline`
+          + (baseBig > 0 ? ` (lift ${round(strongBig / baseBig, 2)}×).` : '.')
+          + ` ⚠ strike_growth is on a ~5-day retention sweep, so this is a few sessions, not a study — treat it as a wiring check until the history accumulates. `
+          + `It cannot be backfilled: raise RETENTION_STRIKE_GROWTH_DAYS and the sample grows forward only.`,
+      };
+    };
+
     register('/api/backtests', {
       auth: 'owner', methods: ['GET'],
       async handler(req, res, ctx) {
@@ -7323,6 +7707,8 @@ if (libDb) {
           else if (test === 'normalized-gex') body = await normalizedGex(ctx, (q.get('ticker') || 'SPX').trim().toUpperCase(), (q.get('expiration') || '').trim());
           else if (test === 'gex-dex-cross') body = await gexDexCross(n('horizon', 30), n('hit', 5), n('band', 60), n('days', 30), n('gap', 5));
           else if (test === 'gex-change-summary') body = await gexChangeSummary(q.get('date') || '');
+          else if (test === 'strike-gex-move') body = await strikeGexMove(n('days', 180), n('win', 20), q.get('ticker') || '', n('hitSigma', 1), n('minStrikes', 20));
+          else if (test === 'strike-gex-move-intraday') body = await strikeGexMoveIntraday(n('days', 3), n('slotMin', 10), n('look', 3), n('fwd', 3), n('win', 12), q.get('ticker') ?? 'SPX', n('hitSigma', 1), n('minStrikes', 4));
           else { send(res, 400, { error: 'unknown test' }); return; }
           send(res, 200, { ok: true, test, ...body });
         } catch (e) { send(res, 500, { ok: false, error: e.message }); }

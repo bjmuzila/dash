@@ -1,5 +1,122 @@
 # Changelog
 
+## 2026-08-23 - Strike-GEX growth → move backtest (daily + intraday)
+
+Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`,
+`server-v2/state/retention-cleanup.js` (comment only).
+
+Answers "when a strike's GEX grows hard, does the ticker then move?" — the one
+thing the existing GEX-change panels never checked. `gex-change-summary` ranks
+what built and stops there; it never looks at what price did next.
+
+Two new owner-only tests on `/api/backtests`:
+
+- **`strike-gex-move`** (daily) — `eod_strike_gex`, 400 sessions retained.
+  Per symbol-session it takes the single biggest day-over-day |Δ net GEX| on the
+  ladder, z-scores it against that symbol's own trailing window, and joins the
+  forward 1/3/5-session move. Params: `days` (180), `win` (20), `hitSigma` (1),
+  `ticker` (blank = all roster).
+- **`strike-gex-move-intraday`** — same engine on `strike_growth`'s 1-minute
+  rows: build over `look` slots vs the move over `fwd` slots. Params: `days` (3),
+  `slotMin` (10), `look` (3), `fwd` (3), `ticker` (SPX; pass an empty ticker to
+  sweep the roster), `hitSigma` (1).
+
+Both return `buckets` (z-bucket → forward-move stats, with an ALL baseline row
+to compare against), `by_side`, and a per-event `detail` table. The daily one
+also returns `by_ticker` with a lift column.
+
+Three decisions that are load-bearing — do not "simplify" them:
+
+1. **Ranks on a z-score, not on percent change.** `net_gex` is a signed sum
+   (positive call leg + negative put leg) and crosses zero, so a percent change
+   with a near-flat denominator is unbounded: −2M → +1M reads as "−150%" and a
+   real build off a flat strike reads as ±∞. The raw `Δ %` IS still on every
+   detail row — that is the number that was asked for — it is just not what
+   anything sorts or buckets on.
+2. **Moves are divided by the ticker's own trailing return stdev (σ).** A 2% day
+   in a $30 name is not a 2% day in SPX. Without this the roster cannot pool and
+   the buckets are just a high-vol-ticker census.
+3. **Every scoring window is trailing and EXCLUDES the event bar**
+   (`ROWS BETWEEN n PRECEDING AND 1 PRECEDING`). Including the current bar leaks
+   the outcome into the score and manufactures an edge that is not there. Audit
+   check: the baseline `up %` should sit near 50.
+
+A strike only counts when it existed on both bars being differenced (`gap = 1`).
+`eod_strike_gex` keeps a ±40-strike window around the close, so strikes drift in
+and out as spot moves; differencing across a gap would book a strike's first
+appearance in the window as a giant build.
+
+Reads `net_gex` only and infers the side from the sign of Δ plus the strike's
+position vs spot. The `call_gex`/`put_gex` legs were added 2026-08-18 with no
+backfill, so joining them would silently drop a year of history.
+
+**The intraday panel is a wiring check, not a study.** `strike_growth` is on a
+5-day retention sweep, so it can only ever see a handful of sessions, and it
+cannot be backfilled — that table is the only record of those minutes. Retention
+was deliberately NOT raised here: the table writes ~320MB/session, so every extra
+day is ~0.3GB resident and that is a VPS-disk decision, not a code one. Raise
+`RETENTION_STRIKE_GROWTH_DAYS` (no redeploy needed) and the sample grows forward
+only; ~30 days ≈ 10GB and ≈ six weeks before the panel has a real n. A comment
+in `retention-cleanup.js` now says so at the constant.
+
+Verified against a local Postgres fixture with a planted signal (one strike gets
+a huge build, the next bar moves ~3x its usual size): the extreme z-bucket
+recovered it at 60% big-move rate vs a 29% baseline (2.0x lift), and the baseline
+`up %` came back at exactly 50 — i.e. no lookahead. `node --check` clean on
+api-router.js, esbuild parse clean on Backtests.tsx with no orphaned imports.
+
+Cost note: the daily test scans ~169 tickers × 81 strikes × `days` sessions with
+window functions. At `days=180` that is ~2.5M rows; pass a ticker when you can.
+
+
+## 2026-08-23 - Bigger earnings chips (30px → 42px)
+
+Edited: `components/pages/EconomicCalendar.tsx`.
+
+The week board's logo was 30px inside a track that resolves to ~57px on a
+five-column week, so every tile carried ~25px of dead air around a small mark
+and a column with two names was mostly empty box.
+
+`CHIP_LOGO = 42` (radius 7 → 10), ticker label 10px → 11px, tile gap 7 → 8.
+
+42 is not arbitrary — it is the largest logo that still clears the tile's 3px
+side padding at the **same four-across track**. Going wider would have reflowed
+the grid to three per row, which makes a nine-name Wednesday taller rather than
+denser: the opposite of the point. `CHIP_LOGO` and `CHIP_MIN` are now named
+constants next to each other with that constraint written down, because the two
+have to move together or the logo starts driving the column width.
+
+## 2026-08-23 - Earnings day cards lifted off the background
+
+Edited: `components/pages/EconomicCalendar.tsx`.
+
+The week board's day columns were `HT.panelBg` — `rgba(13,17,25,0.45)` over a
+near-black page. That is the right card fill on a page where a card is an island
+in open background, and the wrong one here: the earnings tab is five columns of
+card edge to edge, so a 45% dark panel over `#05060A` lands almost exactly on the
+background and the whole tab reads as one flat black rectangle. The cards were
+there; they had no luminance to separate them.
+
+New `BOARD` surface block at the top of the file. The cards are lifted with a
+**white alpha over the panel** rather than by picking a lighter hex — it keeps
+tracking `HT.panelBg` if the theme moves, it stays neutral instead of drifting
+blue, and it is the same rung system the rest of the app uses for hover/active.
+
+Three levels, and the gap between them is what makes the board readable:
+
+| rung | value | what it is |
+|---|---|---|
+| `card` | white .075 → .045 over `HT.panelBg` | a day column — the lightest thing on the page |
+| `head` | white .06 | its date strip, one rung UP so the date has a plate |
+| `tile` | white .035 | a ticker chip, one rung DOWN so chips sit ON the column |
+
+`edge` is white .16 rather than `HT.border` (white .10), which disappears at the
+new fill; `rule` (white .09) divides the PRE / AFTER / TBD blocks inside a
+column. Today keeps its cyan tint at the same three rungs, and the board's own
+branded header gets a deeper cyan ramp (`header`).
+
+Preview: `generated/2026-08-23-earnings-board-lighter.png`.
+
 ## 2026-08-23 - Premarket / post-market cards moved onto the app's theme
 
 Edited: `components/pages/Premarket.tsx`,

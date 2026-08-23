@@ -34,6 +34,62 @@ interface EarnRow {
 const CHIP_W = 46;
 const CHIP_GAP = 10;
 
+/**
+ * Week-board chip geometry.
+ *
+ * The logo was 30px in a track that resolves to ~57px on a five-column week —
+ * so every tile carried ~25px of dead air around a small mark, and a column
+ * with two names was mostly empty box. 42px is the largest logo that still
+ * clears the tile's 3px side padding at the SAME four-across track, so the
+ * chips get bigger without the grid reflowing to three per row (which would
+ * have made a nine-name Wednesday taller, not denser).
+ *
+ * Keep these two in step: CHIP_LOGO + 6px of padding must stay under the track
+ * width CHIP_MIN resolves to, or the logo drives the column width instead of
+ * the other way round.
+ */
+const CHIP_LOGO = 42;
+const CHIP_MIN = 52;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  EARNINGS BOARD SURFACES
+//
+//  HT.panelBg is rgba(13,17,25,0.45) — a dark panel at 45% over a near-black
+//  page. On a surface that is MOSTLY card (the week board is five columns of
+//  them edge to edge) that lands almost on the background and the whole tab
+//  reads as one flat black rectangle: the cards were there, they just had no
+//  luminance to separate them.
+//
+//  So the board's cards are lifted with a WHITE alpha over the panel rather
+//  than by picking a lighter hex. Three reasons: it keeps tracking HT.panelBg
+//  if the theme moves, it stays neutral instead of drifting blue, and it is the
+//  same rung system the rest of the app uses for hover/active states.
+//
+//  Three levels, and the gap between them is what makes the board readable:
+//    CARD  — a day column. The lightest thing on the page.
+//    HEAD  — its date strip, one rung up from the card so the date has a plate.
+//    TILE  — a ticker chip, one rung DOWN from the card so the chips read as
+//            objects sitting ON the column rather than holes cut into it.
+// ─────────────────────────────────────────────────────────────────────────────
+const BOARD = {
+  /** Day column / board header fill. */
+  card: `linear-gradient(180deg, rgba(255,255,255,0.075) 0%, rgba(255,255,255,0.045) 100%), ${HT.panelBg}`,
+  /** Same, tinted cyan for today. */
+  cardToday: `linear-gradient(180deg, rgba(33,158,188,0.16) 0%, rgba(255,255,255,0.05) 55%), ${HT.panelBg}`,
+  /** The board's own branded header. Same lift, deeper cyan ramp. */
+  header: `linear-gradient(180deg, rgba(33,158,188,0.18) 0%, rgba(255,255,255,0.05) 75%), ${HT.panelBg}`,
+  /** Date strip across the top of a column. */
+  head: "rgba(255,255,255,0.06)",
+  headToday: "rgba(33,158,188,0.14)",
+  /** One ticker chip. */
+  tile: "rgba(255,255,255,0.035)",
+  /** Card edge. A touch stronger than HT.border, which disappears at this fill. */
+  edge: "rgba(255,255,255,0.16)",
+  edgeToday: "rgba(33,158,188,0.55)",
+  /** Divider between the PRE / AFTER / TBD blocks inside a column. */
+  rule: "rgba(255,255,255,0.09)",
+} as const;
+
 function fmtMcap(n: number) {
   if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
   return `$${Math.round(n / 1e9)}B`;
@@ -550,9 +606,9 @@ export default function EconomicCalendarPage() {
           display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
           padding: "10px 12px", marginBottom: 10,
           borderRadius: 12,
-          border: `1px solid ${HT.border}`,
+          border: `1px solid ${BOARD.edge}`,
           borderTop: `2px solid ${HT.cyan}`,
-          background: `linear-gradient(180deg, rgba(33,158,188,0.10) 0%, transparent 70%), ${HT.panelBg}`,
+          background: BOARD.header,
         }}>
           {/* Same-origin file in public/ — a real image the capture can draw,
               unlike the 302'd ticker logos. */}
@@ -865,14 +921,14 @@ function EarnChip({ row }: { row: EarnRow }) {
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start",
         gap: 5, minWidth: 0, padding: "7px 3px 6px", textDecoration: "none",
         borderRadius: 9,
-        background: "rgba(255,255,255,0.03)",
-        border: `1px solid ${HT.border}`,
+        background: BOARD.tile,
+        border: `1px solid ${BOARD.rule}`,
       }}
     >
-      <ChipLogo sym={row.symbol} company={row.company} size={30} radius={7} />
+      <ChipLogo sym={row.symbol} company={row.company} size={CHIP_LOGO} radius={10} />
       <span style={{
         width: "100%", textAlign: "center", lineHeight: 1.2,
-        fontSize: 10, fontWeight: 800, color: HT.text,
+        fontSize: 11, fontWeight: 800, color: HT.text,
         fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
       }}>
@@ -894,7 +950,7 @@ function EarnChip({ row }: { row: EarnRow }) {
 function EarnSession({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
   const k = EARN_KIND[kind];
   return (
-    <div style={{ padding: "8px 9px 10px", borderTop: `1px solid ${HT.border}` }}>
+    <div style={{ padding: "8px 9px 10px", borderTop: `1px solid ${BOARD.rule}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7 }}>
         <span style={{ width: 6, height: 6, borderRadius: "50%", background: k.color, flexShrink: 0 }} />
         <span style={{
@@ -912,8 +968,8 @@ function EarnSession({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
       </div>
       <div style={{
         display: "grid",
-        gridTemplateColumns: "repeat(auto-fill, minmax(52px, 1fr))",
-        gap: 7,
+        gridTemplateColumns: `repeat(auto-fill, minmax(${CHIP_MIN}px, 1fr))`,
+        gap: 8,
       }}>
         {rows.map(r => <EarnChip key={r.symbol} row={r} />)}
       </div>
@@ -930,10 +986,8 @@ function EarnDayColumn({
     <div style={{
       display: "flex", flexDirection: "column", minWidth: 0,
       borderRadius: 12, overflow: "hidden",
-      border: `1px solid ${isToday ? "rgba(33,158,188,0.45)" : HT.border}`,
-      background: isToday
-        ? `linear-gradient(180deg, rgba(33,158,188,0.10) 0%, transparent 45%), ${HT.panelBg}`
-        : HT.panelBg,
+      border: `1px solid ${isToday ? BOARD.edgeToday : BOARD.edge}`,
+      background: isToday ? BOARD.cardToday : BOARD.card,
     }}>
       {/* Day header. The date is WHITE on every day — the cyan weekday and the
           TODAY pill already carry the emphasis, and the old #3a5570 made every
@@ -941,7 +995,7 @@ function EarnDayColumn({
       <div style={{
         display: "flex", alignItems: "baseline", gap: 7,
         padding: "9px 10px 8px",
-        background: isToday ? "rgba(33,158,188,0.08)" : "rgba(255,255,255,0.02)",
+        background: isToday ? BOARD.headToday : BOARD.head,
       }}>
         <span style={{
           fontSize: 10, fontWeight: 900, color: HT.cyan,

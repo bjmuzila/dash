@@ -23,6 +23,37 @@ const { computeHistoricalGexRows } = require('./eod-gex-recorder');
 
 const POLL_MINS = Number(process.env.GEX_LEVELS_HISTORY_POLL_MINS || 5);
 
+// ── Level definition (this recorder only — the live /proxy/gex feed is not
+//    touched by any of this) ────────────────────────────────────────────────
+//
+// Until 2026-08-23 this file stored whatever /proxy/gex had already put in
+// v2.callWall / v2.putWall / v2.gexFlip. Those come from the default
+// 'oivol' basis on a SINGLE nearest expiry, where the volume term and the
+// at-the-money gamma peak stack and drag both walls onto the strike next to
+// spot. The recorded evidence, 30 sessions of it: median support→resistance
+// width 18 points, median resistance 7.8 points above spot, R2 exactly one
+// strike past resistance every session, and spot closing INSIDE the band 30
+// times out of 30. Those are not walls, they are spot with a rounding error.
+//
+// So the recorder now DERIVES its own levels from the snapshot's gexRows using
+// the opt-in options added to gex-calculator, instead of trusting the
+// pre-computed fields. Every knob is env-overridable, because the right basis
+// is a product decision and should not need a redeploy to change.
+//
+//   GEX_LEVELS_WALL_BASIS    'oi' (default) | 'oivol' | 'vol' | 'oiRaw'
+//   GEX_LEVELS_WALL_MIN_PCT  dead zone around spot, in percent (default 0.25)
+//   GEX_LEVELS_FLIP_BAND_PCT flip must be within this % of spot (default 5)
+//
+// Defaults chosen from the same live chain the table above was measured on:
+// 'oi' keeps the gamma weighting the product is built around while dropping the
+// day's volume, and 0.25% (~19 pts on SPX at 7,650) is the smallest dead zone
+// that pushed the put wall off the adjacent strike. Set 'oiRaw' for the plain
+// "most open contracts" wall, which sits considerably further out.
+const WALL_BASIS = String(process.env.GEX_LEVELS_WALL_BASIS || 'oi');
+const WALL_MIN_PCT = Number(process.env.GEX_LEVELS_WALL_MIN_PCT ?? 0.25);
+const FLIP_BAND_PCT = Number(process.env.GEX_LEVELS_FLIP_BAND_PCT ?? 5);
+const WALL_OPTS = { basis: WALL_BASIS, minDistancePct: WALL_MIN_PCT };
+
 // RTH-ish window (ET minutes-since-midnight): 09:25–16:10.
 const WINDOW_OPEN_MINS = 9 * 60 + 25;
 const WINDOW_CLOSE_MINS = 16 * 60 + 10;
@@ -96,6 +127,11 @@ async function ensureSchema() {
   await p.query(`ALTER TABLE gex_levels_history ADD COLUMN IF NOT EXISTS curve JSONB`);
   // 'live' = intraday snapshot; 'theta' = boot catch-up re-derived from settled OI.
   await p.query(`ALTER TABLE gex_levels_history ADD COLUMN IF NOT EXISTS source TEXT`);
+  // cpg_ratio was created NOT NULL DEFAULT 0, from when a missing ratio was
+  // written as 0. It is now null when the put-gamma denominator is below the
+  // floor (see deriveFromSnapshot), because 0 and "not measurable" are different
+  // readings and a chart should be able to tell them apart. Idempotent.
+  await p.query(`ALTER TABLE gex_levels_history ALTER COLUMN cpg_ratio DROP NOT NULL`);
   _schemaReady = true;
   return true;
 }
@@ -144,9 +180,14 @@ function deriveFromSnapshot(v2) {
   const spot = Number(v2.spot ?? 0);
   if (!rows.length || !(spot > 0)) return null;
 
-  const resistance = Number.isFinite(Number(v2.callWall)) ? Number(v2.callWall) : null;
-  const support = Number.isFinite(Number(v2.putWall)) ? Number(v2.putWall) : null;
-  const neutral = Number.isFinite(Number(v2.gexFlip)) ? Number(v2.gexFlip) : null;
+  // Derived here, NOT read from v2.callWall / v2.putWall / v2.gexFlip — see the
+  // WALL_BASIS block at the top of this file for why. v2's own fields stay
+  // exactly as they are and keep feeding the live dashboards untouched.
+  const asNum = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  const resistance = asNum(findCallWall(rows, spot, WALL_OPTS));
+  const support = asNum(findPutWall(rows, spot, WALL_OPTS));
+  const neutral = asNum(findGexFlip(rows, spot, { nearest: true, maxDistancePct: FLIP_BAND_PCT }));
+
   const dollarGamma = Number.isFinite(Number(v2.totalNetGex))
     ? Number(v2.totalNetGex)
     : rows.reduce((s, r) => s + oiVolNet(r), 0);
@@ -158,17 +199,21 @@ function deriveFromSnapshot(v2) {
     totalCallOI += Number(r.callOI) || 0;
     totalPutOI += Number(r.putOI) || 0;
   }
-  const cpgRatio = totalPutGEXabs > 0 ? totalCallGEX / totalPutGEXabs : 0;
+  // CPG ratio — call gamma over |put gamma|. The denominator needs a FLOOR: on a
+  // chain whose put gamma is ~0 this divides by almost nothing and prints a
+  // number that is noise wearing a ratio's clothes. The stored history has
+  // 599.109 (2026-08-04) and 13.276 (2026-08-13) from exactly that. Anything
+  // under a millionth of the call side is treated as no put gamma at all, and
+  // the ratio is stored as null rather than a fake reading.
+  const CPG_FLOOR = Math.max(1, totalCallGEX * 1e-6);
+  const cpgRatio = totalPutGEXabs > CPG_FLOOR ? totalCallGEX / totalPutGEXabs : null;
 
-  // R2/S2 — 2nd-strongest wall each side, excluding the #1 winner.
-  const above = rows
-    .filter((r) => r.strike > spot && oiVolNet(r) > 0 && r.strike !== resistance)
-    .sort((a, b) => oiVolNet(b) - oiVolNet(a));
-  const below = rows
-    .filter((r) => r.strike < spot && oiVolNet(r) < 0 && r.strike !== support)
-    .sort((a, b) => oiVolNet(a) - oiVolNet(b));
-  const r2 = above[0]?.strike ?? null;
-  const s2 = below[0]?.strike ?? null;
+  // R2/S2 — 2nd-strongest wall each side. Same basis and same dead zone as the
+  // primary walls, or they land one strike past them and say nothing: the old
+  // version used raw oiVolNet with no dead zone, and duly recorded r2 =
+  // resistance + 5 and s2 = support − 5 on essentially every session.
+  const r2 = asNum(findCallWall(rows, spot, { ...WALL_OPTS, exclude: resistance }));
+  const s2 = asNum(findPutWall(rows, spot, { ...WALL_OPTS, exclude: support }));
 
   return {
     spot, resistance, support, neutral, dollarGamma, cpgRatio, r2, s2,
@@ -305,13 +350,10 @@ async function catchUpMissing(opts = {}) {
   for (const date of gaps) {
     try {
       const { gexRows, spot } = await computeHistoricalGexRows(thetaSym, date);
-      const d = deriveFromSnapshot({
-        symbol, spot, gexRows,
-        callWall: findCallWall(gexRows, spot),
-        putWall:  findPutWall(gexRows, spot),
-        gexFlip:  findGexFlip(gexRows, spot),
-        totalNetGex: totalNetGex(gexRows),
-      });
+      // No callWall/putWall/gexFlip passed any more: deriveFromSnapshot computes
+      // all three itself, so the catch-up path and the live path cannot drift
+      // into two different definitions of the same column.
+      const d = deriveFromSnapshot({ symbol, spot, gexRows, totalNetGex: totalNetGex(gexRows) });
       if (!d) throw new Error('derive returned null');
       await upsertLevels(date, symbol, d, 'theta');
       filled.push(date);

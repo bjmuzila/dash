@@ -33,6 +33,21 @@ const WINDOW_END_MINS   = Number(process.env.RETENTION_WINDOW_END_MINS || 40);  
 // Per-table cutoffs (days). Env-overridable so any one can be loosened without
 // a redeploy if a feature turns out to need more lookback than expected.
 const RETENTION = {
+  // 5 days is a LIVE-PANEL window, not a research window. The intraday
+  // strike-GEX→move backtest (/api/backtests?test=strike-gex-move-intraday)
+  // reads this table and can only ever see what survives here, so at the
+  // default it returns a wiring check, not a study.
+  //
+  // This is deliberately left at 5 rather than raised for the backtest: the
+  // table writes ~320MB/session, so every extra day is ~0.3GB resident and the
+  // decision belongs to whoever is watching the VPS disk. Raise
+  // RETENTION_STRIKE_GROWTH_DAYS (no redeploy needed) and the sample grows
+  // FORWARD from that day — it cannot be backfilled, because this table is the
+  // only record of those minutes. ~30 days ≈ 10GB and ≈ six weeks of waiting
+  // before the intraday panel has a real n.
+  //
+  // The daily engine (test=strike-gex-move) has no such problem: it reads
+  // eod_strike_gex, which keeps 400 sessions and is pruned by its own recorder.
   strike_growth:              Number(process.env.RETENTION_STRIKE_GROWTH_DAYS || 5),
   option_strike_gex_history:  Number(process.env.RETENTION_GEX_HISTORY_DAYS || 10),
   // Sessions of option_strike_gex_history kept at FULL 1-minute resolution.
