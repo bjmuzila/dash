@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-08-23 - GEX levels history viewer served at /levels-history.html
+
+Added: `public/levels-history.html` (also mirrored to `generated/2026-08-23-gex-levels-history.html`).
+
+A standalone, dependency-free page that renders the ENTIRE `gex_levels_history`
+table - the "History of key level changes" record the
+`gex-levels-history-recorder` writes every 5m during 09:25-16:10 ET.
+
+Reads `GET /proxy/gex-levels-history?symbol=SPX&limit=3650` on load. Because it
+is served from `public/`, it is same-origin and the subscriber session cookie
+already applies; no new endpoint and no server change. Falls back to `$SPX` if
+`SPX` returns nothing, and offers a paste-the-JSON path for opening the file
+locally.
+
+What it draws, all from the stored columns:
+
+- Stat tiles: sessions recorded, latest spot/resistance/neutral/support with the
+  delta vs the prior session, latest $ gamma, how many sessions a level moved,
+  average level move, per-level move counts, average S->R width, long-gamma-day
+  share.
+- Key levels over time - spot, resistance (CW), support (PW), neutral (flip),
+  plus optional R2/S2, with the S->R band shaded. Drag to zoom a date range,
+  double-click to reset; the zoom drives every chart below it.
+- Dollar gamma per session (signed bars), C/P gamma ratio vs open interest on a
+  twin axis with the 1.0 parity line.
+- Level movement - day-over-day change in resistance / neutral / support.
+- Full sortable table: every column plus derived S->R width and where spot sat in
+  the band, inline deltas, a coloured bar on any level that moved from the prior
+  session, the `source` badge (live vs theta catch-up), and a sparkline of the
+  stored cumulative net-GEX curve. Filters for date range and "only sessions
+  where a level moved"; CSV export includes the deltas.
+- Click a row to draw that day's full cumulative net-GEX-by-strike curve with its
+  support / neutral / resistance / spot markers.
+
+Colours come from `homeTheme` values (CW blue, PW red, CB gold); no colour
+literal outside the token block at the top of the file.
+
 ## 2026-08-23 - Earnings tab rebuilt as a week board; snapshot copies to the clipboard
 
 Edited: `components/pages/EconomicCalendar.tsx`.
