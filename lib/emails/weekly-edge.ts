@@ -7,6 +7,12 @@
 // gets reused week to week without touching markup. Sensible defaults are
 // filled in from the most recent week so a blank call still renders.
 //
+// CURRENT ISSUE: week of Aug 24–28, 2026. Recap covers Aug 17–21 (S&P -1.4%
+// snapping a 3-week streak on a bond selloff); the week ahead is July PCE +
+// Q2 GDP revision Wed, NVIDIA/CRM/CRWD Wed after the close, Jackson Hole
+// Thu–Fri with Chair Warsh. DEFAULT_CONF_ROWS is intentionally empty so the
+// results table renders as the dashed placeholder — fill it before sending.
+//
 // Same brand shell/conventions as cb-confidence.ts (see EMAILS_HANDOFF.md),
 // with one deliberate deviation: logo is TOP-LEFT (not centered) per request.
 // Palette: bg #05060A · panel #0D1119 · cyan #219EBC · accent #8ECAE6 ·
@@ -55,36 +61,37 @@ export interface WeeklyEdgeOpts {
 }
 
 const DEFAULT_INDEX_MOVES: IndexMove[] = [
-  { name: "S&amp;P 500", pct: "+1.1%" },
-  { name: "Nasdaq", pct: "+0.4%" },
-  { name: "Dow", pct: "-0.3%" },
+  { name: "S&amp;P 500", pct: "-1.4%" },
+  { name: "Nasdaq", pct: "-2.1%" },
+  { name: "Dow", pct: "-0.9%" },
 ];
 
 const DEFAULT_CALENDAR: CalendarEvent[] = [
-  { day: "MON 8/17", desc: "Quiet open after last week's soft retail-sales print — positioning ahead of Wednesday/Thursday's retail-earnings gauntlet." },
-  { day: "TUE 8/18", desc: "<strong>Building Permits &amp; Housing Starts</strong> — first housing read of the week, paired with Home Depot's earnings for a consumer-health check." },
-  { day: "WED 8/19", desc: "The heaviest retail-earnings day of the week — Target, Lowe's and TJX all report, testing whether last week's weak retail sales was a one-off." },
-  { day: "THU 8/20", desc: "<strong>FOMC Minutes</strong> from the July meeting and <strong>Jobless Claims</strong> — plus Walmart's earnings, the single biggest read on the US consumer this week." },
-  { day: "FRI 8/21", desc: "<strong>S&amp;P Global Flash Manufacturing &amp; Services PMI</strong> — first look at August activity heading into next week's Jackson Hole symposium." },
+  { day: "MON 8/24", desc: "Quiet macro open — <strong>Chicago Fed National Activity Index</strong> and remarks from Treasury Secretary Bessent. PDD and XPEV report; the tape mostly positions for Wednesday." },
+  { day: "TUE 8/25", desc: "<strong>New Home Sales</strong>, the <strong>Richmond Fed</strong> survey and the FHFA House Price Index. Dick's Sporting Goods before the bell, Intuit and Zoom after it." },
+  { day: "WED 8/26", desc: "The heavy one — <strong>July PCE</strong>, Personal Income &amp; Spending and Durable Goods at 8:30, plus the second estimate of <strong>Q2 GDP</strong>. Then <strong>NVIDIA</strong>, Salesforce and CrowdStrike after the close." },
+  { day: "THU 8/27", desc: "<strong>Jobless Claims</strong> and the Kansas City Fed survey, and the <strong>Jackson Hole symposium</strong> opens — this year's theme is financial innovation and its implications for payments and policy." },
+  { day: "FRI 8/28", desc: "Preliminary <strong>benchmark revision to Non-Farm Payrolls</strong> and the Chicago Business Barometer, with <strong>Chair Warsh</strong> speaking from Jackson Hole." },
 ];
 
 const DEFAULT_EARNINGS: EarningsDay[] = [
-  { label: "Mon 8/17", tickers: [{ symbol: "FN" }] },
-  { label: "Tue 8/18", tickers: [{ symbol: "HD" }, { symbol: "BIDU" }, { symbol: "TOL" }, { symbol: "KEYS" }] },
-  { label: "Wed 8/19 — retail-earnings gauntlet", tickers: [{ symbol: "TGT" }, { symbol: "LOW" }, { symbol: "TJX" }, { symbol: "ADI" }, { symbol: "EL" }] },
-  { label: "Thu 8/20 — Walmart reports", tickers: [{ symbol: "WMT" }, { symbol: "BABA" }, { symbol: "DE" }, { symbol: "ROST" }] },
-  { label: "Fri 8/21", tickers: [{ symbol: "BJ" }, { symbol: "BKE" }] },
+  { label: "Mon 8/24", tickers: [{ symbol: "PDD" }, { symbol: "XPEV" }] },
+  { label: "Tue 8/25", tickers: [{ symbol: "DKS" }, { symbol: "INTU" }, { symbol: "ZM" }, { symbol: "BMO" }, { symbol: "HEI" }] },
+  { label: "Wed 8/26 — NVIDIA reports after the close", tickers: [{ symbol: "NVDA" }, { symbol: "CRM" }, { symbol: "CRWD" }, { symbol: "SNPS" }, { symbol: "KSS" }, { symbol: "ANF" }] },
+  { label: "Thu 8/27 — retail + software double header", tickers: [{ symbol: "BBY" }, { symbol: "DG" }, { symbol: "DLTR" }, { symbol: "MRVL" }, { symbol: "WDAY" }, { symbol: "ADSK" }] },
+  { label: "Fri 8/28", tickers: [{ symbol: "MNSO" }] },
 ];
 
-const DEFAULT_CONF_ROWS: ConfRow[] = [
-  { date: "08-14", s945: "7810", c945: "2.1", hit945: true, s1030: "7810", c1030: "3.1", hit1030: true, s1200: "7780", c1200: "0.1", hit1200: true },
-  { date: "08-13", s945: "7800", c945: "0.1", hit945: true, s1030: "7820", c1030: "4.8", hit1030: true, s1200: "7780", c1200: "0.1", hit1200: true },
-  { date: "08-12", s945: "7800", c945: "41.3", hit945: false, s1030: "7780", c1030: "21.7", hit1030: false, s1200: "7740", c1200: "0.3", hit1200: true },
-  { date: "08-11", s945: "7780", c945: "17.9", hit945: false, s1030: "7780", c1030: "17.9", hit1030: false, s1200: "7740", c1200: "0.2", hit1200: true },
-  { date: "08-10", s945: "7775", c945: "2.0", hit945: true, s1030: "7775", c1030: "2.0", hit1030: true, s1200: "7775", c1200: "8.3", hit1200: false },
-  { date: "08-07", s945: "7750", c945: "0.2", hit945: true, s1030: "7750", c1030: "0.2", hit1030: true, s1200: "7760", c1200: "0.3", hit1200: true },
-  { date: "08-06", s945: "7700", c945: "1.7", hit945: true, s1030: "7700", c1030: "1.7", hit1030: true, s1200: "7700", c1200: "1.7", hit1200: true },
-];
+/**
+ * Daily Core Bullseye confidence rows. LEFT EMPTY ON PURPOSE for this issue —
+ * an empty array makes the template render the dashed "[ADD CB EDGE SCREENSHOT
+ * / CONFIDENCE TABLE HERE]" block instead of a stale table. Fill from the owner
+ * Results page before sending; row shape:
+ *   { date: "08-21", s945: "7810", c945: "2.1", hit945: true,
+ *                    s1030: "7810", c1030: "3.1", hit1030: true,
+ *                    s1200: "7780", c1200: "0.1", hit1200: true },
+ */
+const DEFAULT_CONF_ROWS: ConfRow[] = [];
 
 function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "issueLabel" | "recapHeadline" | "recapBody" | "indexMoves" | "aheadHeadline" | "calendarEvents" |
@@ -92,40 +99,50 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
   "confRows" | "resultsNote" | "ctaUrl">> {
   return {
-    issueLabel: opts.issueLabel || "Week of Aug 17–21",
-    recapHeadline: opts.recapHeadline || "A third straight winning week for stocks, but cracks showed on Friday",
+    issueLabel: opts.issueLabel || "Week of Aug 24–28",
+    recapHeadline: opts.recapHeadline || "Bonds broke the streak — yields ripped and the Nasdaq wore it",
     recapBody: opts.recapBody || [
-      "The S&amp;P 500 notched its third consecutive weekly gain and Nasdaq eked out a small advance, even as both slipped Friday off fresh record highs. The Dow finished the week lower. Friday's pullback came on a weak University of Michigan consumer-sentiment report — Americans flagged renewed inflation anxiety — and a sharper-than-expected drop in retail sales, the steepest monthly decline in over a year.",
-      "Strong corporate earnings had carried the market for most of the week before that consumer-data one-two punch stalled momentum into the close. Oil added to the pressure, climbing more than 5% on the week as Middle East supply risk stayed front and center.",
+      "The S&amp;P 500 fell 1.4% on the week, snapping a three-week winning streak and leaving it about 1.6% below the record close it set on August 13. The Nasdaq took the worst of it at -2.1%; the Dow got off lightest at -0.9%. The damage was rate-driven: the 10-year yield pushed to 4.737%, its biggest one-week gain since July 31, as a wave of AI-related debt issuance and renewed inflation anxiety hit the long end.",
+      "Treasury Secretary Bessent tried to steady the tape — doubling long-term buybacks to at least $4 billion per operation through November — but yields snapped straight back to their highs. Away from equities the risk bid was alive and well: gold added 2.4% to $4,680.60 for a third straight winning week, bitcoin ran nearly 20% in 48 hours to almost $80,000 (its best week in two years), and WTI gained 6.9% to $87.06 as Iran headlines stayed live. Friday finally caught a bid — Dow +0.98%, S&amp;P and Nasdaq both +0.43% — but not enough to save the week.",
     ],
     indexMoves: opts.indexMoves || DEFAULT_INDEX_MOVES,
-    aheadHeadline: opts.aheadHeadline || "FOMC Minutes, flash PMIs, and a retail-earnings gauntlet — Home Depot, Target, Lowe's, TJX and Walmart",
+    aheadHeadline: opts.aheadHeadline || "PCE Wednesday morning, NVIDIA Wednesday night, Jackson Hole Thursday — three events set the tape",
     calendarEvents: opts.calendarEvents || DEFAULT_CALENDAR,
     earningsDays: opts.earningsDays || DEFAULT_EARNINGS,
-    aheadNote: opts.aheadNote || "After last week's weak retail sales and soft consumer sentiment, this week's retail earnings (HD, TGT, LOW, TJX, WMT) become a real referendum on the consumer rather than routine prints. Thursday's FOMC Minutes and Friday's flash PMIs round out the macro picture ahead of next week's Jackson Hole symposium.",
-    oilHeadline: opts.oilHeadline || "Hormuz remains closed, and the IEA warns of the widest supply shortfall in five years",
-    oilPrice: opts.oilPrice || "$88.52",
-    oilChangeNote: opts.oilChangeNote || "Brent, Aug 14 · +1.7% on the day, +5%+ on the week, +34.4% YoY",
+    aheadNote: opts.aheadNote || "Three things do the work this week. Wednesday's July PCE is the last major inflation print before the September meeting, with consensus at +0.2% on core. Wednesday night NVIDIA reports into an expectation of roughly 97% revenue growth — the same AI-capex story the long end of the curve has spent two weeks repricing. Then Jackson Hole hands Chair Warsh the microphone with rates already coming off their sharpest one-week move since July. Expect gap risk Thursday morning and again into Friday's benchmark payroll revision.",
+    oilHeadline: opts.oilHeadline || "Hormuz still isn't open — but Tehran is finally talking about ending it",
+    oilPrice: opts.oilPrice || "$94.39",
+    oilChangeNote: opts.oilChangeNote || "Brent, Aug 21 · +0.7% on the day, +39.4% YoY · WTI $87.06, +6.9% on the week",
     oilBody: opts.oilBody || [
-      "Brent gained more than 5% last week as the Strait of Hormuz stayed closed amid a diplomatic deadlock — the US Treasury has rolled out what it calls \"unprecedented economic measures\" alongside a naval blockade of Iranian ports, and Iran and Oman have yet to reach terms on reopening the strait. The IEA now warns of the widest global supply shortfall in five years, projecting a 4.3 million barrel-per-day decline.",
-      "Adding to the pressure, Iran-backed Houthi militants struck Saudi Arabia's Jazan refinery, and tankers continue transiting the Red Sea with elevated risk — some running with transponders switched off. With no resolution in sight, expect crude to stay a headline-sensitive driver of overnight futures and gap risk into the 9:45 CB window.",
+      "Crude posted its biggest weekly gain since late July as the Strait of Hormuz standoff dragged into another week. President Trump threatened \"TREMENDOUS Economic Consequences\" for any nation still trading with Iran, and the Treasury followed with a tighter sanctions package — enough to keep a war premium in every barrel even as tanker traffic through the region held up better than the headlines implied.",
+      "Friday brought the first real crack in the deadlock: Iranian President Pezeshkian said Tehran would rather conclude the war while it still holds a position of strength. Oil barely moved on it, which tells you how little this market is willing to price a deal it hasn't seen. Until the strait actually reopens, crude stays a headline-driven overnight risk — and that is gap risk landing straight into the 9:45 CB window.",
     ],
-    coreBullseyePct: opts.coreBullseyePct || "86%",
-    coreBullseyeSub: opts.coreBullseyeSub || "12:00 CB &middot; 71% at 9:45 &amp; 10:30",
-    estMovePct: opts.estMovePct || "67.5%",
-    estMoveSub: opts.estMoveSub || "158-76 &middot; 234 scored (week of 8/14)",
+    coreBullseyePct: opts.coreBullseyePct || "—",
+    coreBullseyeSub: opts.coreBullseyeSub || "[fill before send]",
+    estMovePct: opts.estMovePct || "—",
+    estMoveSub: opts.estMoveSub || "[fill before send]",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
-    resultsNote: opts.resultsNote || "Core Bullseye hit rate this week: 71% at 9:45, 71% at 10:30, and 86% at 12:00 — with the 12:00 read landing within 8 points on 6 of the last 7 sessions.",
+    resultsNote: opts.resultsNote || "[ADD THIS WEEK'S CORE BULLSEYE + ESTIMATED MOVE SUMMARY]",
     ctaUrl: opts.ctaUrl || PRICING_URL,
   };
 }
 
-export const WEEKLY_EDGE_SUBJECT = "The Weekly Edge — retail earnings, FOMC Minutes, and where CB Edge called it right";
+export const WEEKLY_EDGE_SUBJECT = "The Weekly Edge — NVIDIA, PCE and Jackson Hole all land in one week";
 
 /** Plain-text fallback. */
 export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
   const o = withDefaults(opts);
-  const strip = (s: string) => s.replace(/<[^>]+>/g, "");
+  // Strip tags AND decode the handful of entities the HTML copy carries, so the
+  // plain-text part doesn't ship literal "S&amp;P 500" to text-only clients.
+  const strip = (s: string) =>
+    s.replace(/<[^>]+>/g, "")
+     .replace(/&middot;/g, "·")
+     .replace(/&nbsp;/g, " ")
+     .replace(/&lt;/g, "<")
+     .replace(/&gt;/g, ">")
+     .replace(/&quot;/g, '"')
+     .replace(/&#39;/g, "'")
+     .replace(/&amp;/g, "&");
   return [
     `THE WEEKLY EDGE — ${o.issueLabel.toUpperCase()}`,
     "",
@@ -153,7 +170,7 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     `Estimated Move: ${o.estMovePct} (${strip(o.estMoveSub)})`,
     strip(o.resultsNote),
     "",
-    `Claim your access: ${o.ctaUrl}`,
+    `Annual access is $400/yr instead of $1,000 with code EDGE3: ${o.ctaUrl}`,
     "",
     "— The CB Edge Team",
     "",
@@ -262,7 +279,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
 <title>${escapeHtml(WEEKLY_EDGE_SUBJECT)}</title>
 </head>
 <body style="margin:0;padding:0;background:#05060A;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Last week's recap, this week's FOMC + Mag 7 earnings, the oil/war situation, and where CB Edge called it right.</div>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Bonds snapped the win streak and oil ripped 7% — and this week brings July PCE, NVIDIA earnings and Jackson Hole.</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#05060A;">
     <tr>
       <td align="center" style="padding:32px 16px;">
@@ -355,12 +372,12 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(0,230,118,0.35);border-radius:16px;background:radial-gradient(circle at 50% 0%,rgba(0,230,118,0.14) 0%,transparent 70%),rgba(0,230,118,0.04);">
                 <tr>
                   <td align="center" style="padding:26px 20px;">
-                    <div style="font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.16em;text-transform:uppercase;color:#00E676;">Founding Access Closing Soon</div>
-                    <div style="font:900 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:10px;">This is a heavy week. <span style="color:#00E676;">Trade it with an edge.</span></div>
-                    <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">A retail-earnings gauntlet, FOMC Minutes, and an oil market still pricing in war risk — get the live GEX levels, Core Bullseye confidence scoring, and estimated-move tracking before founding pricing ends.</div>
+                    <div style="font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.16em;text-transform:uppercase;color:#00E676;">Code EDGE3 · $400/yr instead of $1,000</div>
+                    <div style="font:900 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:10px;">NVIDIA, PCE and Jackson Hole in one week. <span style="color:#00E676;">Don't trade it blind.</span></div>
+                    <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">Live GEX levels, Core Bullseye confidence scoring and estimated-move tracking — full annual access for $400 with code <strong style="color:#ffffff;">EDGE3</strong>, instead of $1,000.</div>
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;"><tr>
                       <td align="center" style="border-radius:12px;background:#00C853;">
-                        <a href="${cta}" style="display:inline-block;padding:14px 34px;font:800 15px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#04140A;text-decoration:none;border-radius:12px;">Claim Your Access →</a>
+                        <a href="${cta}" style="display:inline-block;padding:14px 34px;font:800 15px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#04140A;text-decoration:none;border-radius:12px;">Get Annual Access →</a>
                       </td>
                     </tr></table>
                   </td>

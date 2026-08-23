@@ -2870,6 +2870,18 @@ export default function ControlPanel() {
         .owner-scroll::-webkit-scrollbar-thumb { background: ${HOME_THEME.cyan}40; border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
         .owner-scroll::-webkit-scrollbar-thumb:hover { background: ${HOME_THEME.cyan}80; background-clip: padding-box; }
         .owner-scroll { scrollbar-width: thin; scrollbar-color: ${HOME_THEME.cyan}40 transparent; }
+
+        /* THE COLLAPSED-CARD BUG, fixed once for the whole page.
+           The scroll body below is a column flex container with height:0, and
+           flex items default to flex-shrink:1. A card is normally saved from
+           that by its automatic minimum size — but that protection only applies
+           while overflow is 'visible', and several cards here set
+           overflow:hidden (Ticker Visits, anything with a rounded clip). Those
+           were free to shrink, and with the content taller than the container
+           they shrank all the way to zero: two 2px lines at the bottom of
+           Overview, which is a top and bottom border with nothing between them.
+           Nothing in the scroll body should ever shrink — it scrolls. */
+        .owner-page-body > * { flex-shrink: 0; }
         .owner-nav-item { transition: background 0.12s, color 0.12s; }
         .owner-nav-item:hover { background: rgba(255,255,255,0.05) !important; }
         .owner-ctrl-btn:hover { background: rgba(255,255,255,0.07) !important; color: ${HOME_THEME.text} !important; }
@@ -2985,7 +2997,7 @@ export default function ControlPanel() {
 
         {/* Scrollable body */}
         <div
-          className="owner-scroll"
+          className="owner-scroll owner-page-body"
           style={{
             flex: 1,
             minHeight: 0,
