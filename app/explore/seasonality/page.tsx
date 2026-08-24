@@ -1,0 +1,214 @@
+import Link from "next/link";
+import type { Metadata } from "next";
+import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import PublicNav from "@/components/landing/PublicNav";
+import SeasonalityView from "@/components/seasonality/SeasonalityView";
+import { ALMANAC } from "@/components/seasonality/seasonalityData";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// /explore/seasonality — the FREE S&P 500 seasonality almanac.
+//
+// This is the one page on the site that gives away a complete tool to a
+// signed-out visitor. It exists to be posted on socials: someone lands here from
+// a link, gets something genuinely useful with nothing asked of them, and the
+// join CTA is sitting at the top the whole time.
+//
+// A STATIC segment under /explore, so it wins over app/explore/[slug]/page.tsx
+// (Next resolves literal segments before dynamic ones). It deliberately does NOT
+// go through the EXPLORE content map — the other explore pages are teasers built
+// from a shared {tagline, body, highlights, teaserStats} shape, and this page is
+// the product itself, not a pitch for one.
+//
+// PUBLIC: covered by the existing /^\/explore(\/.*)?$/ entry in
+// middleware.ts PUBLIC_PATTERNS. No middleware change was needed and none should
+// be added — narrowing that pattern later would silently gate this page.
+//
+// STATIC: every number on it is compiled into seasonalityData.ts at build time.
+// No DATABASE_URL, no proxy, no socket — so unlike the sibling explore pages
+// this one must NOT be force-dynamic. It prerenders, which is what makes it
+// survive a link storm and render instantly for a cold visitor off X.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const START_YEAR = ALMANAC.meta.start.slice(0, 4);
+const END_YEAR = ALMANAC.meta.end.slice(0, 4);
+const SESSIONS = ALMANAC.meta.trading_days.toLocaleString("en-US");
+const TITLE = `Free S&P 500 Seasonality Almanac — ${START_YEAR}–${END_YEAR}`;
+const DESC =
+  `Every calendar pattern in the S&P 500's full price history, recomputed from ${SESSIONS} ` +
+  `daily closes back to ${ALMANAC.meta.start}. Month by month, turn of the month, day of week, ` +
+  `the two half-years, presidential and decennial cycles, volatility by month. Free, no signup.`;
+
+export const metadata: Metadata = {
+  title: TITLE,
+  description: DESC,
+  alternates: { canonical: "/explore/seasonality" },
+  openGraph: { title: TITLE, description: DESC, url: "/explore/seasonality", type: "article" },
+  twitter: { card: "summary_large_image", title: TITLE, description: DESC },
+};
+
+export default function SeasonalityPublicPage() {
+  return (
+    <div
+      className="explore-root"
+      style={{
+        // Bare LayoutShell wrapper is overflow:hidden — own the scroll here so the
+        // fixed toolbar's reserved top padding doesn't get clipped. Same as the
+        // sibling /explore/[slug] page.
+        flex: 1,
+        minHeight: 0,
+        overflowY: "auto",
+        background: T.bg,
+        backgroundImage: T.shellGlow,
+        color: T.text,
+        fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
+      }}
+    >
+      {/* Shared public toolbar — carries its own trial CTA and Sign in. */}
+      <PublicNav active="Features" />
+
+      <main
+        style={{
+          maxWidth: 1180,
+          margin: "0 auto",
+          paddingTop: "clamp(24px,4vw,52px)",
+          paddingLeft: "clamp(14px,3vw,32px)",
+          paddingRight: "clamp(14px,3vw,32px)",
+          paddingBottom: 90,
+          display: "flex",
+          flexDirection: "column",
+          gap: "clamp(16px,2vw,24px)",
+          minWidth: 0,
+        }}
+      >
+        {/* ═══ Hero + the CTA that has to be in their face ═════════════════ */}
+        <header>
+          <div style={badge}>Free tool · no account needed</div>
+
+          <h1
+            style={{
+              fontSize: "clamp(28px,5vw,46px)",
+              fontWeight: 800,
+              letterSpacing: "-0.02em",
+              lineHeight: 1.08,
+              margin: "16px 0 10px",
+              textWrap: "balance",
+            }}
+          >
+            S&amp;P 500 Seasonality Almanac
+          </h1>
+
+          <p style={{ color: T.cyan, fontSize: "clamp(15px,2.4vw,19px)", fontWeight: 600, margin: "0 0 14px" }}>
+            {START_YEAR}–{END_YEAR} · {SESSIONS} sessions of ^GSPC, recomputed from the raw daily closes
+          </p>
+
+          <p style={{ color: T.muted, opacity: 0.78, fontSize: 16, lineHeight: 1.6, margin: "0 0 22px", maxWidth: "70ch" }}>
+            Not copied from an almanac — every table here is computed from the index's own price history, and every one
+            of them prints its sample size so you can see how thin the evidence gets. It is yours free, in full, with
+            nothing to sign up for.
+          </p>
+
+          {/* The join band. Sits directly under the headline, above the tool. */}
+          <div style={ctaBand}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center" }}>
+              <Link href="/pricing?from=seasonality&trial=1" style={ctaPrimary}>
+                START MY 2-DAY FREE TRIAL ›
+              </Link>
+              <Link href="/pricing?from=seasonality" style={ctaGhost}>
+                See what&apos;s inside
+              </Link>
+            </div>
+            <p style={{ margin: "12px 0 0", fontSize: 14, color: T.muted, opacity: 0.72, maxWidth: "62ch" }}>
+              This page is history. The dashboard is <strong style={{ color: T.text, fontWeight: 700 }}>today</strong> —
+              live SPX gamma exposure and flip levels, option flow side-classified print by print, ES and NQ market
+              structure, and estimated-move levels, all updating through the session. Two days free, everything
+              included, cancel anytime.
+            </p>
+          </div>
+        </header>
+
+        {/* ═══ The tool ════════════════════════════════════════════════════ */}
+        <SeasonalityView />
+
+        {/* ═══ Close ═══════════════════════════════════════════════════════ */}
+        <section style={closeCard}>
+          <h2 style={{ fontSize: "clamp(20px,3vw,28px)", fontWeight: 800, margin: "0 0 10px", letterSpacing: "-0.01em" }}>
+            Seasonality tells you the weather. It doesn&apos;t tell you the day.
+          </h2>
+          <p style={{ color: T.muted, opacity: 0.78, fontSize: 15.5, lineHeight: 1.65, margin: "0 0 20px", maxWidth: "68ch" }}>
+            A ninety-eight-year average is a weak prior about a distribution — useful for knowing what October
+            volatility usually costs, useless for knowing where price goes tomorrow. That part needs the order flow.
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center" }}>
+            <Link href="/pricing?from=seasonality-footer&trial=1" style={ctaPrimary}>
+              START MY 2-DAY FREE TRIAL ›
+            </Link>
+            <Link href="/" style={ctaGhost}>
+              What is CB Edge?
+            </Link>
+          </div>
+        </section>
+
+        <p style={{ fontSize: 12, color: T.muted, opacity: 0.45, lineHeight: 1.6, maxWidth: "80ch" }}>
+          Data: {ALMANAC.meta.symbol} daily closes, {ALMANAC.meta.start} through {ALMANAC.meta.end}. Price return only —
+          dividends excluded. Historical calendar patterns describe what happened; they do not forecast what will. Not
+          investment advice.
+        </p>
+      </main>
+    </div>
+  );
+}
+
+const badge: React.CSSProperties = {
+  display: "inline-block",
+  padding: "5px 12px",
+  borderRadius: 999,
+  border: `1px solid ${T.cyan}55`,
+  background: `${T.cyan}14`,
+  color: T.cyan,
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: "0.12em",
+  textTransform: "uppercase",
+};
+
+const ctaBand: React.CSSProperties = {
+  marginTop: 4,
+  padding: "clamp(16px,2.5vw,22px)",
+  borderRadius: 16,
+  border: `1px solid ${T.cyan}33`,
+  background: `linear-gradient(180deg, ${T.cyan}14, rgba(255,255,255,0.02))`,
+};
+
+const ctaPrimary: React.CSSProperties = {
+  display: "inline-block",
+  padding: "13px 24px",
+  borderRadius: 10,
+  background: T.orange,
+  color: "#0A0A0A",
+  fontSize: 14,
+  fontWeight: 800,
+  letterSpacing: "0.05em",
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+};
+
+const ctaGhost: React.CSSProperties = {
+  display: "inline-block",
+  padding: "13px 20px",
+  borderRadius: 10,
+  border: `1px solid ${T.border}`,
+  background: "rgba(255,255,255,0.04)",
+  color: T.text,
+  fontSize: 14,
+  fontWeight: 700,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+};
+
+const closeCard: React.CSSProperties = {
+  marginTop: 8,
+  padding: "clamp(20px,3vw,32px)",
+  borderRadius: 18,
+  border: `1px solid ${T.border}`,
+  background: T.panelBg,
+};

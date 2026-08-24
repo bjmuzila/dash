@@ -6,7 +6,9 @@ import { PageShell } from "@/components/shared/PageCard";
 import { SqueezeBoard } from "@/app/squeeze/page";
 import DealerGammaTab from "./DealerGammaTab";
 import GexMapTab from "./GexMapTab";
-import SeasonalityTab from "./SeasonalityTab";
+// Lives in components/, not here: the same view is mounted on the PUBLIC
+// /explore/seasonality page. See the header of SeasonalityView.tsx.
+import SeasonalityView from "@/components/seasonality/SeasonalityView";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /test — Test Lab.
@@ -128,7 +130,7 @@ export default function TestPage() {
       ) : tab === "dealergamma" ? (
         <DealerGammaTab />
       ) : tab === "seasonality" ? (
-        <SeasonalityTab />
+        <SeasonalityView />
       ) : (
         <SqueezeBoard />
       )}

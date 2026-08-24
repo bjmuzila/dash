@@ -231,6 +231,22 @@ export default function LandingClient() {
                 </Link>
               ))}
             </div>
+
+            {/* Free tool. Deliberately NOT a seventh cell in the grid above:
+                that grid is six paid features and this is a giveaway, so it
+                gets its own full-width strip rather than sitting in the row
+                pretending to be part of the product. */}
+            <Link href="/explore/seasonality" style={freeTool} className="landing-feature">
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 10 }}>
+                <span style={freeTag}>Free · no account</span>
+                <span style={{ fontWeight: 700, fontSize: 14 }}>S&P 500 Seasonality Almanac</span>
+              </div>
+              <div style={{ color: T.muted, opacity: 0.75, fontSize: 12, lineHeight: 1.45, marginTop: 5 }}>
+                Ninety-eight years of ^GSPC, recomputed from the daily closes — month by month, turn of the
+                month, day of week, the two half-years, volatility by month. Yours in full, nothing to sign up for.
+              </div>
+              <div style={featureGo}>Open the almanac →</div>
+            </Link>
           </div>
         </section>
 
@@ -532,6 +548,29 @@ const featureCell: React.CSSProperties = {
 
 const featureGo: React.CSSProperties = {
   marginTop: 8, fontSize: 12, fontWeight: 700, color: T.cyan, letterSpacing: "0.04em",
+};
+
+const freeTool: React.CSSProperties = {
+  display: "block",
+  textDecoration: "none",
+  color: "inherit",
+  marginTop: 12,
+  background: `linear-gradient(180deg, ${cyanA(0.07)}, rgba(255,255,255,0.02))`,
+  border: `1px solid ${cyanA(0.22)}`,
+  borderRadius: 12,
+  padding: 14,
+};
+
+const freeTag: React.CSSProperties = {
+  padding: "3px 9px",
+  borderRadius: 999,
+  border: `1px solid ${cyanA(0.45)}`,
+  background: cyanA(0.12),
+  color: T.cyan,
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: "0.1em",
+  textTransform: "uppercase",
 };
 
 const trialLine: React.CSSProperties = {

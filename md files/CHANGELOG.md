@@ -1,5 +1,118 @@
 # Changelog
 
+## 2026-08-24 - Seasonality goes public at /explore/seasonality (free, no account)
+
+Added: `app/explore/seasonality/page.tsx`, `components/seasonality/` (View,
+Almanac, Data — moved out of `app/test/`).
+Edited: `app/test/page.tsx`, `components/landing/LandingClient.tsx`.
+Tombstoned: `app/test/SeasonalityTab.tsx`, `app/test/SeasonalityAlmanac.tsx`,
+`app/test/seasonalityData.ts` — see "Left to do" at the bottom.
+
+The seasonality tab shipped this morning is now also a free public page, meant
+to be posted on socials. Signed-out visitors get the whole thing — overlay
+chart, baseline selector, every almanac table — with the trial CTA sitting
+above it.
+
+### Why the components moved
+
+The same view is now mounted twice: Test Lab (signed in) and
+/explore/seasonality (signed out). A component under `app/test/` that a public
+marketing page depends on is a trap — deleting the test tab would break the
+public page, and the import would read as if the marketing page were part of
+the lab. It lives in `components/seasonality/` and reads no session, no cookie
+and no API. A component that quietly needs an auth context renders empty for
+exactly the visitors the public page exists to convert, and nothing in the
+signed-in view would ever show it.
+
+### Why /explore/seasonality and not a new top-level route
+
+`/^\/explore(\/.*)?$/` is ALREADY in `PUBLIC_PATTERNS`. **No middleware change
+was made and none is needed** — do not narrow that pattern without checking
+this page, it would gate it silently. The route is a STATIC segment, so Next
+resolves it ahead of `app/explore/[slug]/page.tsx`; it deliberately skips the
+EXPLORE content map, because the other explore pages are teasers built from a
+shared `{tagline, body, highlights, teaserStats}` shape and this page is the
+tool itself.
+
+Unlike its siblings it is **not** `force-dynamic`. Every number is compiled into
+`seasonalityData.ts` at build time — no DATABASE_URL, no proxy, no socket — so
+it prerenders and serves instantly to a cold visitor off a link.
+
+### One layout fix that mattered
+
+`SeasonalityView`'s root is a `grid` with `minmax(0, 1fr)`, not a flex column.
+As flex items the cards carry `min-width:auto`, so a wide table pushed its CARD
+past the viewport and the table's own `overflow-x:auto` wrapper never got to
+scroll — the whole page scrolled sideways instead. Verified at 390px: card 362,
+wrapper 320, table 562 scrolling inside it, document scrollWidth == clientWidth.
+This is a phone-first concern, since that is where a social link gets opened.
+
+### Landing page
+
+A full-width "Free · no account" strip under the six-cell feature grid, not a
+seventh cell in it. That grid is paid features; this is a giveaway, and putting
+it in the row would have it pretending to be part of the product.
+
+### Verified before commit
+
+`tsc --strict` clean. Both surfaces rendered in a real browser at 1440px and
+390px: zero console errors, zero horizontal overflow, no hydration-unsafe
+initial state (chart widths still start at 0 both sides; baseline starts from a
+constant).
+
+### Left to do
+
+The three `app/test/Seasonality*` files are tombstones (`export {}` plus a
+pointer) because this session could not delete files on the box. Run:
+
+    git rm "app/test/SeasonalityTab.tsx" "app/test/SeasonalityAlmanac.tsx" "app/test/seasonalityData.ts"
+
+Nothing imports them; the build is green either way.
+
+## 2026-08-24 - ES Candles: "Latest" moved onto the chart (TradingView-style)
+
+Edited: `components/dashboard/es-candles/EsChartCard.tsx`.
+
+The "Latest" jump-back control was a `View` field inside the dock's **Chart**
+menu — two clicks deep, and always present whether or not you were near needing
+it. It is now a small round button floating over the **bottom-right corner of
+the plot**, and it only exists while the newest candle is scrolled off screen.
+
+### The condition
+
+`checkLatestOffscreen()` compares the time scale's visible logical range against
+the series length: the button shows when `range.to < barCount - 1.5`. The range
+edges are fractional indices, so the bar-and-a-half of slack is what stops the
+button flickering in and out when the live candle is merely half-clipped by the
+right axis gutter.
+
+It runs from two places:
+
+- a second `subscribeVisibleLogicalRangeChange` on the chart (kept separate from
+  `schedulePaint`, which is rAF-coalesced canvas work and can drop frames mid-
+  gesture — a React state flip must not be dropped with it), and
+- the candle-data effect, because a new bar appended while you are parked in
+  history extends the series **without moving the viewport**, so the last index
+  can cross out of range with no range event to announce it.
+
+State, not an imperative style write like the SPX price badges: this mounts and
+unmounts a node rather than nudging one, and it changes at most once per pan
+gesture. The setter early-returns on an unchanged value, so the hundreds of
+range events that do not flip it cost nothing.
+
+### The button
+
+`right: 70` clears the price scale gutter, `bottom: 34` clears the time scale, so
+it sits inside the drawing area where a leftward pan leaves the cursor. `z-20`
+puts it over the chart canvas (z-2) and the gamma overlay (z-1), and it is the
+one element in that corner that *wants* pointer events. Chevron-into-a-bar drawn
+as inline SVG rather than the `⇥` glyph, which sits low in Inter and would not
+centre in the circle. Colors from `HOME_THEME` / `DOCK_THEME`, no hardcoded hex.
+
+Click behavior is unchanged: `scrollToRealTime()` keeps your zoom, with the
+synchronous overlay + rail repaint. Double-click on the canvas still re-frames
+the whole session at the default zoom.
+
 ## 2026-08-23 - GEX Watch box on /premarket (customer-facing)
 
 New: `components/pages/premarket/GexWatchFeed.tsx`.

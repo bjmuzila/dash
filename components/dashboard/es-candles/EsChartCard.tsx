@@ -1738,6 +1738,41 @@ function EsChartCard({
     drawOverlayRef.current();
     railDrawRef.current();
   }, []);
+
+  // ── Where the button LIVES ─────────────────────────────────────────────────
+  //
+  // It used to be a "Latest" row inside the dock's Chart menu — two clicks deep,
+  // and permanently present whether or not you were anywhere near needing it.
+  // TradingView solves the same problem the opposite way: nothing on screen
+  // while the newest bar is in view, and the moment you pan it off the right
+  // edge a small round jump-back control fades in over the bottom-right corner
+  // of the plot, right where the pan gesture left your cursor.
+  //
+  // So the control is CONDITIONAL, and the condition is purely geometric: is the
+  // last logical index inside the visible logical range? `getVisibleLogicalRange`
+  // returns FRACTIONAL indices (the edges of the viewport rarely land on a bar
+  // boundary), so the test carries a bar and a half of slack — without it, the
+  // newest candle being half-clipped by the right axis gutter would flicker the
+  // button in and out on every tick.
+  //
+  // React state, not an imperative style write like the price badges: this
+  // mounts and unmounts a node rather than moving one, it changes at most once
+  // per pan gesture, and a `setState` that early-returns on an unchanged value
+  // costs nothing on the hundreds of range events that don't flip it.
+  const [latestOffscreen, setLatestOffscreen] = useState(false);
+  const checkLatestOffscreen = useCallback(() => {
+    const chart = chartApiRef.current;
+    const n = barCountRef.current;
+    let off = false;
+    if (chart && n > 0) {
+      try {
+        const r = chart.timeScale().getVisibleLogicalRange();
+        off = r != null && r.to < n - 1.5;
+      } catch { off = false; }
+    }
+    setLatestOffscreen((prev) => (prev === off ? prev : off));
+  }, []);
+
   // Mirrored into refs so the imperative overlay draw reads them without
   // re-subscribing.
   useEffect(() => { bubbleMinsRef.current = bubbleMins; }, [bubbleMins]);
@@ -2943,6 +2978,11 @@ function EsChartCard({
       // drawOverlayRef.
       const tsApi = chart.timeScale();
       tsApi.subscribeVisibleLogicalRangeChange(schedulePaint);
+      // Same event drives the floating "Latest" button's visibility. Kept as its
+      // own subscriber rather than folded into schedulePaint: schedulePaint is
+      // rAF-coalesced canvas work, and this is a React state flip that must not
+      // be skipped when a paint is dropped mid-gesture.
+      tsApi.subscribeVisibleLogicalRangeChange(checkLatestOffscreen);
 
       // lightweight-charts doesn't expose a price-scale (Y-axis) range-change
       // event — dragging the right axis to expand/contract the chart vertically
@@ -2982,6 +3022,7 @@ function EsChartCard({
         interactingRef.current = false;
         chart.unsubscribeCrosshairMove(onCrosshair);
         tsApi.unsubscribeVisibleLogicalRangeChange(schedulePaint);
+        tsApi.unsubscribeVisibleLogicalRangeChange(checkLatestOffscreen);
         container.removeEventListener("dblclick", onDblClick);
         container.removeEventListener("wheel", onWheel);
         container.removeEventListener("pointermove", onDragMove);
@@ -3006,7 +3047,7 @@ function EsChartCard({
       chartApiRef.current = null;
       candleSeriesRef.current = null;
     };
-  }, [schedulePaint]);
+  }, [schedulePaint, checkLatestOffscreen]);
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
@@ -3104,10 +3145,15 @@ function EsChartCard({
       lastFitDayRef.current = lastDay;
     }
     schedulePaint();
+    // …and for the same reason, re-test the live edge here. A new bar appended
+    // while the user is parked in history extends the series without moving the
+    // viewport, so the last index can cross out of range with no range event to
+    // announce it — the button has to appear on the data change itself.
+    checkLatestOffscreen();
     // Live candle updates shift the time axis without always firing a logical-
     // range change, which could leave the heatmap overlay painting a stale or
     // cleared frame. Repaint whenever candle data changes.
-  }, [rows, replayTs]);
+  }, [rows, replayTs, checkLatestOffscreen]);
 
   // Live SPX badge: last ES close → SPX, pinned at its y-coordinate on the
   // right gutter. Recomputed on data, basis, and pan/zoom (range subscribe).
@@ -5583,18 +5629,12 @@ function EsChartCard({
               onChange={(v) => { const n = Number(v); if (isChartInterval(n)) setInterval_(n); }}
             />
           </DockField>
-          {/* "Latest", not "Now" — the refresh button on the bar reads "↻ Now"
-              (see useRefreshButton), and two controls saying Now while doing
-              different things is the kind of thing you only notice after
-              clicking the wrong one. */}
-          <DockField label="View">
-            <div style={{ display: "flex" }}>
-              <DockButton onClick={scrollToNow} title="Jump to the current candle — keeps your zoom (double-click the chart to re-frame the whole session instead)">
-                <span aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>⇥</span>
-                <span>Latest</span>
-              </DockButton>
-            </div>
-          </DockField>
+          {/* The "Latest" jump-back control used to sit here as a View field. It
+              is now a floating button on the chart's bottom-right corner, shown
+              only while the newest candle is scrolled off screen — see
+              `latestOffscreen`. Nothing replaced it in the menu: a control that
+              is only ever wanted mid-pan belongs where the pan happens, not two
+              clicks deep in a panel you have to open with the other hand. */}
         </>
       ),
     });
@@ -6183,6 +6223,61 @@ function EsChartCard({
                 padding: "3px 6px",
               }}
             />
+          ) : null}
+          {/* ── "Latest" ────────────────────────────────────────────────────
+              Only mounted while the newest bar is off the right edge (see
+              `latestOffscreen`), which is what makes it affordable to put it on
+              the chart at all: on a chart following the tape — the normal case —
+              this renders nothing and covers no candles.
+
+              Placed INSIDE the plot, not over the axes: `right: 70` clears the
+              price scale's gutter and `bottom: 34` clears the time scale, so it
+              sits in the corner of the drawing area exactly where a leftward pan
+              gesture leaves the cursor. z-20 puts it over the chart canvas
+              (z-2) and the overlay (z-1); it is the one element in this corner
+              that WANTS pointer events, so unlike the badges above it does not
+              carry `pointer-events-none`. */}
+          {latestOffscreen && rows.length > 0 ? (
+            <button
+              type="button"
+              onClick={scrollToNow}
+              title="Jump to the current candle — keeps your zoom (double-click the chart to re-frame the whole session instead)"
+              aria-label="Scroll to the latest candle"
+              className="absolute z-20 flex items-center justify-center"
+              style={{
+                right: 70,
+                bottom: 34,
+                width: 28,
+                height: 28,
+                borderRadius: 999,
+                border: `1px solid ${HOME_THEME.border}`,
+                background: "rgba(10,13,20,0.86)",
+                backdropFilter: "blur(8px)",
+                color: LIGHT_BLUE,
+                cursor: "pointer",
+                padding: 0,
+                boxShadow: "0 6px 16px rgba(0,0,0,0.45)",
+                transition: "background 120ms ease, color 120ms ease, border-color 120ms ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = DOCK_THEME.hoverTile;
+                e.currentTarget.style.borderColor = DOCK_THEME.activeBorder;
+                e.currentTarget.style.color = HOME_THEME.text;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(10,13,20,0.86)";
+                e.currentTarget.style.borderColor = HOME_THEME.border;
+                e.currentTarget.style.color = LIGHT_BLUE;
+              }}
+            >
+              {/* Chevron into a bar — the right edge of the tape, not a generic
+                  "next". Drawn as SVG rather than a glyph so it centres in the
+                  circle at any font stack (the ⇥ character sits low in Inter). */}
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden focusable="false">
+                <path d="M4 3.5 8.5 8 4 12.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M12 3.5v9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+              </svg>
+            </button>
           ) : null}
           {rows.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-white/50">
