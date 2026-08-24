@@ -13,6 +13,12 @@
 // it renders instantly, works with the backend down, and can prerender for a
 // cold visitor off a social link.
 //
+// ONE SECTION AT A TIME. This component no longer renders the whole almanac —
+// SeasonalityView owns a rail and passes the `active` section key, and only
+// that section is mounted. Everything else is unmounted, not hidden: a display
+// toggle would keep 13 charts' worth of SVG and ResizeObservers alive for a
+// reader looking at one of them.
+//
 // EVERY TABLE IS COLLAPSED BY DEFAULT, as a native <details>. Native, not React
 // state, for three reasons: it needs no client state to seed (so it cannot
 // desync between the server and the first client paint), it is keyboard- and
@@ -39,12 +45,13 @@
 // Same rule as the overlay chart above it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { HOME_THEME, ES_CANDLE_UP, ES_CANDLE_DOWN } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ALMANAC, ERA_KEYS, EXTRAS, type Stat } from "./seasonalityData";
 import Watermark, { watermarkHost } from "./Watermark";
+import type { SectionKey } from "./sections";
 
 const UP = ES_CANDLE_UP;
 const DOWN = ES_CANDLE_DOWN;
@@ -65,18 +72,30 @@ const fmtUS = (iso: string) => {
   return `${m}/${d}/${y}`;
 };
 
-/** Width of a chart box, measured after mount. 0 until then. */
+/**
+ * Width of a chart box, measured after mount. 0 until then.
+ *
+ * CALLBACK REF, not useRef + useEffect([]). Only one section is mounted at a
+ * time now, so a chart is destroyed and rebuilt every time you move around the
+ * rail. An effect with an empty dep array runs once against the FIRST node and
+ * never re-attaches, so every chart after the first navigation would sit at
+ * width 0 and render nothing — silently, with no error. Attaching the observer
+ * in the ref callback ties it to the node's lifetime instead of the
+ * component's first paint.
+ */
 function useMeasuredWidth() {
-  const ref = useRef<HTMLDivElement | null>(null);
   const [w, setW] = useState(0);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
-    ro.observe(el);
-    setW(el.clientWidth);
-    return () => ro.disconnect();
+  const ro = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((node: HTMLDivElement | null) => {
+    ro.current?.disconnect();
+    ro.current = null;
+    if (!node) return;
+    const obs = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    obs.observe(node);
+    ro.current = obs;
+    setW(node.clientWidth);
   }, []);
+  useEffect(() => () => ro.current?.disconnect(), []);
   return [ref, w] as const;
 }
 
@@ -637,7 +656,7 @@ const statRow = (label: string, s: Stat): Cell[] => [
 
 // ── the almanac ─────────────────────────────────────────────────────────────
 
-export default function SeasonalityAlmanac() {
+export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
   const A = ALMANAC;
   const M = A.months;
   const [era, setEra] = useState<string>(ERA_KEYS[0]);
@@ -663,9 +682,8 @@ export default function SeasonalityAlmanac() {
   const eom = EXTRAS.eom;
   const opex = EXTRAS.opex;
 
-  return (
-    <>
-      {/* ── where the calendar stands ─────────────────────────────────────── */}
+  const SECTIONS: Partial<Record<SectionKey, ReactNode>> = {
+    now: (
       <Card title="Where the Calendar Stands" subtitle={`Last close ${now.as_of} · session ${now.trading_day_of_year} of the trading year`} padding={20}>
         <div style={TILES}>
           <Tile label="Rest of year · mean" value={pct(royMod.avg)} sub={`since 1985 · n=${royMod.n}`} color={signColor(royMod.avg)} />
@@ -713,8 +731,8 @@ export default function SeasonalityAlmanac() {
         </Collapse>
 
       </Card>
-
-      {/* ── VIX spike ─────────────────────────────────────────────────────── */}
+    ),
+    vix: (
       <Card
         title="After a VIX Spike"
         subtitle={`^VIX open → high ≥ +20% in a session · ${vix.meta.start} – ${vix.meta.end} · ${n0(vix.meta.sessions)} sessions`}
@@ -810,8 +828,8 @@ export default function SeasonalityAlmanac() {
         </Collapse>
 
       </Card>
-
-      {/* ── month end / quarter end ───────────────────────────────────────── */}
+    ),
+    eom: (
       <Card title="Last Day of the Month" subtitle="Return of the final session of a month, close-to-close" padding={20}>
         <div style={TILES}>
           <Tile label="Every month end" value={bp(eom.all.avg, 1)} sub={`n=${n0(eom.all.n)} · ${pctp(eom.all.pos_pct, 1)} positive`} color={signColor(eom.all.avg)} />
@@ -849,8 +867,8 @@ export default function SeasonalityAlmanac() {
         </Collapse>
 
       </Card>
-
-      {/* ── opex ──────────────────────────────────────────────────────────── */}
+    ),
+    opex: (
       <Card title="Opex Week &amp; the Week After" subtitle="Third-Friday expiration, monthly and quarterly" padding={20}>
         <div style={TILES}>
           <Tile label="Opex week" value={bp(opex.monthly.week.avg, 1)} sub={`n=${n0(opex.monthly.week.n)} · ${pctp(opex.monthly.week.pos_pct, 1)} positive`} color={signColor(opex.monthly.week.avg)} />
@@ -938,8 +956,8 @@ export default function SeasonalityAlmanac() {
         </Collapse>
 
       </Card>
-
-      {/* ── month by month ────────────────────────────────────────────────── */}
+    ),
+    month: (
       <Card title="Month by Month" subtitle={`${A.meta.symbol} monthly returns · ${A.meta.start.slice(0, 4)}–${A.meta.end.slice(0, 4)}`} padding={20}>
         <Pills options={eraOptions} value={era} onChange={setEra} label="Sample" />
         <Legend items={[{ color: UP, label: "Positive mean" }, { color: DOWN, label: "Negative mean" }]} />
@@ -976,8 +994,8 @@ export default function SeasonalityAlmanac() {
           />
         </Collapse>
       </Card>
-
-      {/* ── sell in may ───────────────────────────────────────────────────── */}
+    ),
+    six: (
       <Card title="The Two Half-Years" subtitle="Nov–Apr against May–Oct, compounded within each season" padding={20}>
         <div style={TILES}>
           {smOrder.map((i) => (
@@ -1005,8 +1023,8 @@ export default function SeasonalityAlmanac() {
           ))}
         </div>
       </Card>
-
-      {/* ── turn of month ─────────────────────────────────────────────────── */}
+    ),
+    tdom: (
       <Card title="Turn of the Month" subtitle="Mean session return by trading day of month" padding={20}>
         <Legend items={[{ color: A1, label: "All history" }, { color: A2, label: "Since 1985" }]} />
         <PairBars
@@ -1032,8 +1050,8 @@ export default function SeasonalityAlmanac() {
           ))}
         </div>
       </Card>
-
-      {/* ── day of week ───────────────────────────────────────────────────── */}
+    ),
+    dow: (
       <Card title="Day of Week" subtitle="Mean session return by weekday" padding={20}>
         <Pills options={eraOptions} value={dowEra} onChange={setDowEra} label="Sample" />
         <DivBars
@@ -1061,8 +1079,8 @@ export default function SeasonalityAlmanac() {
           />
         </Collapse>
       </Card>
-
-      {/* ── cycles ────────────────────────────────────────────────────────── */}
+    ),
+    cycles: (
       <Card title="Presidential &amp; Decennial Cycles" subtitle="Mean calendar-year return, price only" padding={20}>
         <div style={{ display: "grid", gap: 18, gridTemplateColumns: "repeat(auto-fit, minmax(min(320px,100%), 1fr))" }}>
           <div>
@@ -1110,8 +1128,8 @@ export default function SeasonalityAlmanac() {
           />
         </Collapse>
       </Card>
-
-      {/* ── volatility ────────────────────────────────────────────────────── */}
+    ),
+    vol: (
       <Card title="Volatility by Month" subtitle="Annualized standard deviation of daily returns" padding={20}>
         <Legend items={[{ color: A1, label: "All history" }, { color: A2, label: "Since 1985" }]} />
         <PairBars
@@ -1126,17 +1144,18 @@ export default function SeasonalityAlmanac() {
           }
         />
       </Card>
-
-      {/* ── heatmaps ──────────────────────────────────────────────────────── */}
+    ),
+    decade: (
       <Card title="Has the Seasonal Shape Moved?" subtitle="Mean monthly return by decade, % · newest first" padding={20}>
         <HeatTable cols={M} rows={A.decadeMonth.index} data={A.decadeMonth.data} scale={0.035} rowLabel={(r) => `${r}s`} newestFirst />
       </Card>
-
+    ),
+    matrix: (
       <Card title="Every Month, Every Year" subtitle={`${A.matrix.years.length} years of monthly returns, % · newest first`} padding={20}>
         <HeatTable cols={M} rows={A.matrix.years} data={A.matrix.data} scale={0.1} rowLabel={(r) => String(r)} maxHeight={520} newestFirst />
       </Card>
-
-      {/* ── barometers ────────────────────────────────────────────────────── */}
+    ),
+    baro: (
       <Card title="Early-Year Barometers" subtitle="What the full year did after each signal window" padding={20}>
         <Collapse
           label="Santa · First Five Days · January Barometer"
@@ -1164,6 +1183,8 @@ export default function SeasonalityAlmanac() {
           />
         </Collapse>
       </Card>
-    </>
-  );
+    ),
+  };
+
+  return <>{SECTIONS[active] ?? null}</>;
 }

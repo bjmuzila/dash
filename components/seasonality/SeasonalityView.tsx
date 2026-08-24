@@ -1,7 +1,25 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// S&P 500 seasonality — the whole view, chart + almanac.
+// S&P 500 seasonality — the shell: a section rail plus one pane.
+//
+// This used to be one very long scroll of fourteen cards. It is now a rail on
+// the left and ONE section in the pane, because the studies here answer
+// different questions and stacking them made every one of them harder to find.
+// The rail doubles as a table of contents — you can see the whole shape of the
+// tool without scrolling it.
+//
+// ONE SECTION IS MOUNTED AT A TIME. Unmounted, not hidden: a display toggle
+// would keep every chart's SVG and ResizeObserver alive for a reader looking at
+// one of them. That is also why the width hooks here and in the almanac use
+// CALLBACK refs — see useMeasuredWidth's comment there. A useEffect([]) would
+// attach to the first node only, and every chart after the first navigation
+// would render blank at width 0.
+//
+// DEEP LINKS: each section owns a hash (/explore/seasonality#vix-spike). First
+// paint always starts from DEFAULT_SECTION, a constant; the hash is read in an
+// effect AFTER hydration and written with replaceState, so Back leaves the page
+// instead of walking the rail. Same rule app/test/page.tsx follows.
 //
 // Mounted in TWO places and it must keep working in both:
 //   • Test Lab → Seasonality (/app/test#seasonality), signed in.
@@ -48,11 +66,18 @@
 // The selected baseline also starts from a CONSTANT for the same reason.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import SeasonalityAlmanac from "./SeasonalityAlmanac";
+import {
+  DEFAULT_SECTION,
+  SECTION_GROUPS,
+  hashForSection,
+  sectionForHash,
+  type SectionKey,
+} from "./sections";
 import Watermark, { watermarkHost } from "./Watermark";
 import {
   ALMANAC,
@@ -204,6 +229,47 @@ function StatTile({
   );
 }
 
+/**
+ * Shell CSS lives here rather than in globals.css.
+ *
+ * The rail needs a media query (it becomes a horizontal strip on a phone) and
+ * :hover / :focus-visible states, none of which inline styles can express. The
+ * alternative was reaching into the shared globals.css for a component only two
+ * routes mount — that file is already carrying a "GLOBAL GRID COLLAPSE" block
+ * added for one page's benefit, and this would be the next one. Prefixed
+ * `sea-` so it cannot collide with anything.
+ *
+ * Colors are read from HOME_THEME at module scope, not hardcoded.
+ */
+const SHELL_CSS = `
+.sea-shell{display:grid;grid-template-columns:225px minmax(0,1fr);gap:18px;min-width:0}
+.sea-pane{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0}
+.sea-rail{position:sticky;top:12px;align-self:start;min-width:0;
+  border:1px solid ${HOME_THEME.border};border-radius:14px;background:${HOME_THEME.panelBg};
+  padding:8px;max-height:calc(100vh - 40px);overflow:auto}
+.sea-railgrp{font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
+  color:${HOME_THEME.green};padding:10px 10px 4px}
+.sea-railitem{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:8px;
+  border:1px solid transparent;background:transparent;color:${HOME_THEME.text};
+  font:inherit;font-size:12px;font-weight:600;cursor:pointer;line-height:1.3}
+.sea-railitem:hover{background:rgba(255,255,255,.06)}
+.sea-railitem:focus-visible{outline:2px solid ${HOME_THEME.cyan};outline-offset:2px}
+.sea-railitem[aria-current="true"]{font-weight:800;color:${HOME_THEME.cyan};
+  border-color:rgba(33,158,188,.4);
+  background:linear-gradient(90deg,rgba(33,158,188,.26),rgba(33,158,188,.04))}
+@media (max-width:860px){
+  /* Rail becomes a horizontally scrollable strip above the pane. It stays a
+     single <nav> of the same buttons — no duplicate markup, so there is no
+     second copy to keep in sync and nothing hidden from a screen reader. */
+  .sea-shell{grid-template-columns:minmax(0,1fr)}
+  .sea-rail{position:static;max-height:none;display:flex;gap:6px;overflow-x:auto;
+    padding:8px;scrollbar-width:thin}
+  .sea-rail>div{display:flex;gap:6px;align-items:center;flex:none}
+  .sea-railgrp{padding:0 4px 0 8px;white-space:nowrap;align-self:center;font-size:8.5px}
+  .sea-railitem{width:auto;white-space:nowrap;border:1px solid ${HOME_THEME.border}}
+}
+`;
+
 export default function SeasonalityView() {
   const [mode, setMode] = useState<Mode>("pct");
   const [baselineKey, setBaselineKey] = useState<string>(DEFAULT_BASELINE);
@@ -213,16 +279,42 @@ export default function SeasonalityView() {
   const [overlays, setOverlays] = useState<number[]>([]);
   const [width, setWidth] = useState(0);
   const [hover, setHover] = useState<number | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
+  // Callback ref, not useRef + useEffect([]) — the chart unmounts whenever the
+  // rail moves to another section, and an empty-dep effect would only ever
+  // observe the first node. See useMeasuredWidth in SeasonalityAlmanac.
+  const roRef = useRef<ResizeObserver | null>(null);
+  const wrapRef = useCallback((node: HTMLDivElement | null) => {
+    roRef.current?.disconnect();
+    roRef.current = null;
+    if (!node) return;
     const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
-    ro.observe(el);
-    setWidth(el.clientWidth);
-    return () => ro.disconnect();
+    ro.observe(node);
+    roRef.current = ro;
+    setWidth(node.clientWidth);
   }, []);
+  useEffect(() => () => roRef.current?.disconnect(), []);
+
+  // ── section routing ──────────────────────────────────────────────────────
+  const [active, setActive] = useState<SectionKey>(DEFAULT_SECTION);
+  useEffect(() => {
+    const apply = () => {
+      const k = sectionForHash(window.location.hash);
+      if (k) setActive(k);
+    };
+    apply();
+    window.addEventListener("hashchange", apply);
+    return () => window.removeEventListener("hashchange", apply);
+  }, []);
+  const go = (k: SectionKey) => {
+    setActive(k);
+    if (typeof window !== "undefined") {
+      // replaceState, not `location.hash =` — the latter pushes a history entry
+      // per rail click, so Back walks the rail instead of leaving the page.
+      window.history.replaceState(null, "", `#${hashForSection(k)}`);
+    }
+    document.getElementById("sea-pane")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
 
   const baseline = useMemo(
     () => SEASONAL_BASELINES.find((b) => b.key === baselineKey) ?? SEASONAL_BASELINES[0],
@@ -316,14 +408,38 @@ export default function SeasonalityView() {
   const hYear = hover != null && hover < LIVE ? yearSeries[hover] : null;
 
   return (
-    // GRID, not flex-column, and the track is minmax(0,1fr) on purpose. As a
-    // flex column these cards are items with min-width:auto, so a wide table
-    // inside one pushes the CARD past the viewport and its own overflow:auto
-    // wrapper never gets to scroll — the whole page scrolls sideways instead.
-    // A 0-min grid track lets each card shrink and hand the overflow back to
-    // the wrapper that is built to handle it. Matters most on a phone, which
-    // is where this page gets opened from a social link.
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16, minWidth: 0 }}>
+    <>
+      <style>{SHELL_CSS}</style>
+      <div className="sea-shell">
+        <nav className="sea-rail" aria-label="Seasonality sections">
+          {SECTION_GROUPS.map((g) => (
+            <div key={g.label}>
+              <div className="sea-railgrp">{g.label}</div>
+              {g.items.map((it) => (
+                <button
+                  key={it.key}
+                  type="button"
+                  className="sea-railitem"
+                  aria-current={active === it.key ? "true" : undefined}
+                  onClick={() => go(it.key)}
+                >
+                  {it.label}
+                </button>
+              ))}
+            </div>
+          ))}
+        </nav>
+
+        {/* GRID with a minmax(0,1fr) track, not a flex column. As flex items
+            these cards carry min-width:auto, so a wide table inside one pushes
+            the CARD past the viewport and its own overflow:auto wrapper never
+            gets to scroll — the whole page scrolls sideways instead. A 0-min
+            track lets the card shrink and hand the overflow back to the wrapper
+            built to handle it. Matters most on a phone, which is where this
+            page gets opened from a social link. */}
+        <div id="sea-pane" className="sea-pane">
+      {active === "season" ? (
+        <>
       <Card
         title="S&P 500 Seasonality vs 2026"
         subtitle={`^GSPC cash index · ${baseline.label} average (${baseline.span}, ${baseline.years} years) · 2026 through ${dayLabel(last)}`}
@@ -594,8 +710,11 @@ export default function SeasonalityView() {
                 </g>
               ))}
 
-              {/* month gridlines + labels */}
-              {MONTHS.map((m) => (
+              {/* Month gridlines + labels. Every OTHER label once the plot gets
+                  narrow: twelve three-letter labels across a 340px phone chart
+                  is ~28px each and they overlap into an unreadable smear. The
+                  gridlines all stay — it is only the text that has to thin. */}
+              {MONTHS.map((m, mi) => (
                 <g key={m.label}>
                   <line
                     x1={x(m.day)}
@@ -605,15 +724,11 @@ export default function SeasonalityView() {
                     stroke="rgba(255,255,255,0.07)"
                     strokeDasharray="3 4"
                   />
-                  <text
-                    x={x(m.day) + 4}
-                    y={CHART_H - 10}
-                    fontSize={11}
-                    fontWeight={700}
-                    fill={INK}
-                  >
-                    {m.label}
-                  </text>
+                  {mi % (innerW < 470 ? 2 : 1) === 0 ? (
+                    <text x={x(m.day) + 4} y={CHART_H - 10} fontSize={11} fontWeight={700} fill={INK}>
+                      {m.label}
+                    </text>
+                  ) : null}
                 </g>
               ))}
 
@@ -803,8 +918,13 @@ export default function SeasonalityView() {
 
       </Card>
 
-      <SeasonalityAlmanac />
-    </div>
+        </>
+      ) : (
+        <SeasonalityAlmanac active={active} />
+      )}
+        </div>
+      </div>
+    </>
   );
 }
 

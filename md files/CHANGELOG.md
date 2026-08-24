@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-08-24 - Seasonality restructured: section rail instead of one long scroll
+
+Added: `components/seasonality/sections.ts`.
+Edited: `SeasonalityView.tsx` (now the shell), `SeasonalityAlmanac.tsx`.
+
+Fourteen cards stacked in one scroll became a rail on the left and ONE section
+in the pane. These studies answer different questions; stacking them made every
+one of them harder to find, and the rail doubles as a table of contents — you
+can see the whole shape of the tool without scrolling it.
+
+Groups: The calendar year (5) · Inside the month (4) · Event triggers (3) ·
+Long cycles (2).
+
+### One section is MOUNTED at a time
+
+Unmounted, not hidden. A display toggle would keep fourteen charts' worth of SVG
+and ResizeObservers alive for a reader looking at one of them.
+
+That change broke width measurement, which is worth writing down because it
+fails silently. Both files measured chart width with `useRef` + `useEffect([])`.
+That attaches to the FIRST node and never re-attaches — and now every chart is
+destroyed and rebuilt on each rail click, so every chart after the first
+navigation would have sat at width 0 and rendered nothing, with no error in the
+console. Both are now CALLBACK refs, which tie the observer to the node's
+lifetime rather than the component's first paint. Verified by walking all
+fourteen sections and asserting zero sub-10px SVGs.
+
+### sections.ts is the single source of truth
+
+Key, label and URL hash for every section, plus the grouping. The rail is built
+from it and the almanac keys its section map off the same union, so a section
+cannot appear in the nav without a body — that mismatch renders a blank pane,
+which reads as a broken page rather than a missing case.
+
+Hashes are public API now (`/explore/seasonality#vix-spike`) — keep them stable.
+
+### Routing
+
+First paint always starts from `DEFAULT_SECTION`, a constant — never the hash or
+localStorage. The hash is read in an effect after hydration and written with
+`replaceState`, so Back leaves the page instead of walking the rail. Same rule
+`app/test/page.tsx` already follows.
+
+### Two things the narrow layout forced
+
+- Shell CSS lives in a `<style>` block in `SeasonalityView`, not `globals.css`.
+  The rail needs a media query and hover/focus states, which inline styles
+  cannot express, and globals.css is already carrying a "GLOBAL GRID COLLAPSE"
+  block added for one page's benefit. Prefixed `sea-` so nothing can collide. On
+  a phone the rail becomes a horizontally scrollable strip — the same single
+  `<nav>` of the same buttons, so there is no duplicate markup to keep in sync
+  and nothing hidden from a screen reader.
+- The seasonal chart now labels every OTHER month below ~470px of plot. Twelve
+  three-letter labels across a 340px phone chart is ~28px each and they overlap
+  into a smear. Gridlines all stay; only the text thins.
+
+### Verified before commit
+
+`tsc --strict` clean. All 14 sections walked in a real browser at 1440px: every
+one renders, every chart measures, every hash lands. At 390px, with every
+disclosure force-expanded, `document.scrollWidth == clientWidth`.
+
+> **Note.** The three entries below this one (watermark, heatmap order, VIX
+> table) were written earlier today, then lost when a concurrent session wrote
+> `CHANGELOG.md` from a stale copy. They are restored here verbatim. The code
+> those entries describe was never affected — it was verified byte-for-byte on
+> disk before this commit. Shared single-file logs are last-writer-wins; if two
+> sessions are running, re-read before you write.
+
 ## 2026-08-24 - VIX spike events table rebuilt in Brandon's layout
 
 Edited: `components/seasonality/SeasonalityAlmanac.tsx`.
@@ -31,143 +100,6 @@ sessions that do clear 20% open→high (2/4/2026, 2/12/2026, 3/6/2026, 6/5/2026,
 6/9/2026). This page uses the definition that was actually specified — the
 session's own open → its own high — and 191 sessions clear it since 1990.
 
-## 2026-08-24 - ES Candles: "Keep live", and heal the gap when the feed comes back
-
-Edited: `hooks/useWsLifecycle.ts`, `components/dashboard/es-candles/slotStore.ts`,
-`components/pages/EsCandles.tsx`, `components/dashboard/es-candles/EsChartCard.tsx`.
-
-### What was wrong
-
-Leave `/app/es-candles` up on a second monitor or on a stream, walk away for a
-couple of hours, come back — the GEX bubbles are wrong.
-
-`useWsLifecycle` drops `/ws/gex` after 15 minutes with no mouse or keyboard,
-**on a fully visible tab**. There is an owner exemption
-(`NEXT_PUBLIC_OWNER_USER_ID`) but it is dead on `/app/*`: those routes are the
-Vite bundle, Vite does not inline arbitrary `process.env.X`, and the built
-bundle literally reads `var yo={}` — so `OWNER_USER_ID` is `""` and `isOwner` is
-false for everyone, owner included.
-
-Two things then compound it:
-
-- **Nothing heals the hole.** The wake refetch in `EsChartCard` watches
-  `visibilitychange` only, and the 60s `gexPoll` is ETF-only (`if (isEs) return`).
-  A visible-but-idle drop matches neither, so `minuteColsRef` keeps an
-  hours-long gap until the page is reloaded.
-- **A hole makes every bubble wrong, not just the missing ones.** Bubble radius
-  is normalised against the biggest |net GEX| the session has carried. A partial
-  session is a wrong size reference, so the whole chart is drawn at the wrong
-  scale. That is the "no longer looking good" symptom rather than an obvious
-  blank stretch — and the LIVE pill is `socket.readyState`, so it keeps saying
-  LIVE the whole time.
-
-### Keep live
-
-`useWsLifecycle` gained a refcounted keep-alive: `useKeepWsAlive(true)` suspends
-the **inactivity** timeout for as long as the caller is mounted.
-
-Visibility is deliberately untouched. A hidden tab is the abandoned case worth
-shedding and it is where most of the bandwidth saving comes from; a *visible*
-tab with a live chart on it is being watched, and "nobody moved the mouse for 15
-minutes" is not evidence that it isn't.
-
-It is refcounted rather than a boolean so two mounted consumers — or a remount
-that overlaps its own unmount — cannot cancel each other out, and it notifies
-listeners on change so flipping it mid-session cancels a countdown already
-running (or starts one) instead of waiting for the next mouse move, which on a
-page you have walked away from is never.
-
-`/app/es-candles` declares it, **defaulting ON**, with a `Keep live` toggle in
-the chart cog's Page tab (persisted, `es-candles-keep-live-v1`). The `embedded`
-render — the /home GEX card and the /board tile — opts out and keeps the
-app-wide policy: that is one tile on a dashboard that has its own reasons to be
-open, not a chart someone parked a monitor on.
-
-### Reconnect refetch
-
-`EsChartCard` now also watches the lifecycle gate itself, not just
-`visibilitychange`, and re-keys the history backfill when the feed returns from
-a gap longer than `WAKE_REFETCH_MS`. That constant was a local inside the wake
-effect and is now module scope, shared by both paths so they cannot drift.
-
-Both can fire on the same tick (a hidden tab becoming visible flips the gate
-too); React batches the two updater calls into one render, so that is one
-refetch, not two. The 45s floor keeps a two-second alt-tab, or a `?topics=`
-rescope, from wiping the column maps and re-pulling ~700KB.
-
-### Not done here
-
-Left alone on purpose, and worth knowing about:
-
-- **No client-side liveness check.** `lib/gexSocket.ts` has no ping and no
-  stale-frame watchdog. A half-open TCP socket (Wi-Fi drop, VPN, laptop sleep)
-  stays `readyState === OPEN` forever, `onclose` never fires, and the reconnect
-  is never scheduled. The server's 30s ping reaps its own half; the client never
-  learns. This is a second, independent "walked away for hours" failure mode.
-- **The LIVE pill is `readyState`, not freshness**, and it is wired to the
-  *candles* socket while the bubbles ride the *GEX* subscription. It reads LIVE
-  for a dead feed, a deduped chain, and `/proxy/idle`. `components/shared/DataFreshness.tsx`
-  already exists, does the honest thing, and is imported by nothing.
-
-## 2026-08-24 - Snapshot: composite the chart where the CLONE put it
-
-Edited: `lib/snapshot.ts`, `components/dashboard/es-candles/EsChartCard.tsx`.
-
-### What was wrong
-
-An ES Candles snapshot came back with the candle bitmap painted ~150px above
-its own panel — straight over the CANDLES toolbar and the "Data provided by
-CBEdge.net" watermark — and a matching void at the bottom of the PNG where the
-chart should have been. The toolbar looked mangled because the chart was drawn
-on top of it.
-
-The DOM half of the capture was fine. The *composite* half was not.
-
-Gotcha 5 blanks every live `<canvas>` in the clone and draws the real bitmap in
-afterwards. It positioned that bitmap from the LIVE bounding rect, offset by
-`bandShift - hiddenShift` — a hand-computed estimate of how far the clone's
-layout had moved relative to the page. That made every source of clone/live
-drift something the engine had to predict in advance: the title band's padding,
-`[data-capture-hide]` chrome removed above the chart, a row that re-flows a
-pixel taller in the clone, a dock that is `createPortal`ed OUT of the capture
-subtree. Miss one and the bitmap lands somewhere the chart isn't.
-
-### The fix
-
-Stop estimating. By the time `onclone` runs, the clone is a laid-out document in
-a real iframe, and html2canvas crops at the clone root's own box — so the clone
-can simply be measured.
-
-- Every canvas that will be composited is stamped `data-snap-composite` on the
-  LIVE node before the clone (so the clone inherits it), and the tags are
-  removed again in a `.finally()` whether the capture succeeds or throws.
-- At the very END of `onclone` — after every removal, the band injection and the
-  height/padding changes, so it reflects the layout that will actually render —
-  each tagged node's rect is recorded relative to the clone root.
-- The composite draws into the measured box. `bandShift - hiddenShift` survives
-  only as the fallback for a target with no measurable counterpart (a clone box
-  of zero size).
-
-This is gotcha 11 in the file's header, and it retires a whole class of bug
-rather than this one instance.
-
-### Two things found on the way
-
-**Canvas placeholders were losing their classes.** The placeholder div that
-stands in for a blanked canvas copied only `style.cssText`. Most canvases here
-are sized and positioned by CLASSES (`absolute inset-0`, `w-full h-full`), so
-the placeholder came back as a static zero-height div: the box the composite was
-supposed to land in vanished, and anything laid out around it moved. It now
-copies `className` too, and pins the rendered width/height for a canvas that is
-in flow (an absolutely-positioned one is already pinned by its own insets, and
-forcing a width onto it would fight them).
-
-**Every ES Candles snapshot was titled "SPX GEX".** `BoxSnapBtn` bakes `title`
-into the PNG's top-left; the card was passing only `label`, which names the
-Discord message. So an AMD 1m capture claimed to be SPX. Both buttons now get
-one `snapTitle` (`"<SYM> <interval> Candles"`), used for the image title and the
-message name, so the two can no longer drift.
-
 ## 2026-08-24 - Seasonality heatmaps flipped to newest-first
 
 Edited: `components/seasonality/SeasonalityAlmanac.tsx`.
@@ -187,66 +119,282 @@ cell value it had ascending.
 Both subtitles now say "newest first", because a reversed table with no label
 reads as a data error to anyone who expects chronological order.
 
-## 2026-08-24 - Postgres index bloat: 13 GB -> 7.5 GB (and counting)
+## 2026-08-24 - Seasonality: CB Edge watermark, prose moved into the disclosures
 
-Edited: nothing in the repo. This was a DB maintenance session, recorded here
-because the cause is a gap in `server-v2/state/retention-cleanup.js`.
+Added: `components/seasonality/Watermark.tsx`.
+Edited: `SeasonalityAlmanac.tsx`, `SeasonalityView.tsx`.
 
-### What was wrong
+### Watermark on every chart and table
 
-`flow_prints` held 205,208 live rows in a 184 MB heap - under **6,869 MB of
-index**. Thirty-seven times the table. Same shape elsewhere:
-`option_strike_gex_history` 515 MB heap / 2,296 MB index,
-`strike_growth` 591 MB heap / 1,354 MB index. Indexes were ~11 GB of a 13 GB
-database.
+23 of them. `/cb-edge-logo.png` is a chrome wordmark on a genuinely transparent
+background (alpha 0 at the corners — checked with PIL, not assumed), so it reads
+as a ghost behind the marks rather than a white plate over them.
 
-The retention sweep is working exactly as written - `n_dead_tup` was low,
-autovacuum had run an hour earlier. The gap is that **plain `VACUUM` never
-returns B-tree index pages**. A table that is mass-deleted and rewritten nightly
-bloats its indexes forever, and nothing in the stack reindexes anything. The
-file's long comment about avoiding `VACUUM FULL` is right; it just never
-considered `REINDEX`.
+**Centered, not cornered.** This page exists to be screenshotted and posted. A
+corner mark is cropped off in two seconds; a centered one has to be cloned out.
+That is the entire reason the watermark exists, so it beats the tidier option.
 
-### The fix
+Three variants, and the third is not decoration:
 
-`REINDEX INDEX CONCURRENTLY`, one index at a time. Reclaimed on `flow_prints`:
+| variant | opacity | z-index | why |
+|---|---|---|---|
+| `chart` | 0.09 | behind SVG | plot area is transparent, so behind works |
+| `table` | 0.06 | behind table | cells are transparent |
+| `heatmap` | 0.16 | **in front** | heatmap cells are OPAQUE fills — a mark behind the table is simply not there. Caught it on screen, not in review. |
 
-| index | before | after |
+`pointerEvents: none` on all three, which is what lets the in-front variant sit
+over heatmap cells without eating their tooltips. `aria-hidden` keeps it out of
+the accessibility tree — it is branding, not content.
+
+The asset loads as a plain `<img>` from /public, the same way PublicNav does it.
+That matters on the signed-out page: the middleware matcher explicitly excludes
+".png", so it is never auth-gated. Do not swap it for a fetched or generated
+source without re-checking that.
+
+### Explanatory prose moved inside the collapse
+
+`Collapse` gained a `note` slot; the paragraph that explains a table now renders
+under that table, inside the disclosure. A card shows numbers, and the words
+about them are one click away instead of stacked under every chart.
+
+Eight notes moved in. Four were deleted outright, because their cards have
+nothing collapsible to move them into: Two Half-Years, Turn of the Month,
+Volatility by Month, and the decade heatmap. The "Where 2026 Stands" paragraph
+in `SeasonalityView` went the same way for the same reason.
+
+No loose `<p style={NOTE}>` remains in either file — asserted in the edit script
+rather than eyeballed.
+
+### Verified before commit
+
+`tsc --strict` clean. Public page and Test Lab tab both rendered over HTTP (not
+file://, so the /public asset actually resolves) at 1440px and 390px: zero
+console errors, 23/23 watermarks loaded on each, 14 disclosures all closed on
+first paint, and with every disclosure force-expanded
+`document.scrollWidth == clientWidth` with zero overflowing cards.
+
+## 2026-08-24 (2) - Post-market §3: the power hour gets its own column and its own scale
+
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
+
+### The bug: "everything was given back?"
+
+Every row of **How the book was built** drew a full-width hatch, every AM/MID/PM
+segment was invisible, and the `$4.02B` call wall rendered shorter than a
+`−$2.13B` strike. All one cause.
+
+Per-strike GEX is `γ × (OI+Vol) × S²`, and `γ ∝ 1/√T`. On an expiring book that
+means every strike's raw high-water mark lands in the **final minutes**, not
+where the positioning was: an ATM 0DTE strike with ~20k OI prices to roughly
+**$200–300B at 15:55** against a ~$2B settle. Two things then went wrong:
+
+1. `maxAbsBar` was `max(|net|, |peak|)` over all 121 rendered rows, so **one**
+   ATM strike's terminal mark set the scale for the whole ladder. Every real bar
+   collapsed to ~2px — which is where the 15:00–close data had gone. It was
+   being drawn, two pixels wide.
+2. `offPeakPct` was `1 − |net| / |peak|` with `net` from the **live chain** and
+   `peak` from the **recorder**. Two sources, and after the settle not
+   necessarily the same book. Every row read ≈ −99% off peak, which is a
+   statement about the clock, not about anyone's position.
+
+### The fix — three changes that only work together
+
+- **Bar scale is the biggest closing bar.** `|peak|` is out of `maxAbsBar`. The
+  earlier ±12-vs-±60 fix is kept and its note preserved; the artefact it was
+  guarding against (several peaks clamped onto one pixel, silently) is now
+  handled explicitly by a `›` chevron on rows whose peak overflows the track,
+  and only when the clamp is actually hiding something.
+- **Peak window ends at 15:00**, and off-peak is measured **series-vs-series** —
+  the recorder's own 15:00 high against the recorder's own last value. The hatch
+  is that *ratio* applied to the bar rather than a second absolute length, so it
+  stays true even when the live chain and the recorder sit at different absolute
+  levels.
+- **New `15:00→close` column, on its own scale.** Change in **magnitude**
+  (`|close| − |15:00|`), centred, amber right = the strike **added** gamma into
+  the bell, red left = it **bled out**. Magnitude and not signed value, so a put
+  wall going from −$1B to −$3B reads as growth, which is what it is. Normalised
+  over its own column only. Empty and unpainted when the recording never reached
+  15:00 — a missing power hour must not read as a flat one.
+
+### Supporting bits
+
+- `pmAnchor` guards the 15:00 column to **±10 min**. `idxAtMin` snaps to the
+  nearest column, so on a recorder that started at 15:40 the old behaviour would
+  have handed back a 20-minute number wearing an hour's label.
+- Legend: "day's peak" → **"peak to 15:00"**, plus a `15:00→close · own scale`
+  entry. An explanatory bar above the ladder says the two tracks are **not**
+  comparable in length and why — without it a reader would compare them.
+- `builtcol` shows the power-hour percentage when there is one (it is the
+  question the panel was failing to answer); the off-peak reading stays as the
+  hatch, the tick, and the row tooltip. Percentages are suppressed under a base
+  of 1% of the biggest bar, where "+1,900%" is true and useless.
+- A strike that ends **above** its own 15:00 high — routine on 0DTE — now reads
+  `past peak` instead of the old sign error, which printed it as "426% below".
+- Row `title` carries the close, the 15:00 peak and time, and the signed
+  power-hour move in dollars, flagged as not comparable to the bar.
+
+### What it now shows
+
+On a normal 0DTE the ATM band **grew** into the close and draws **no hatch at
+all**; the hatch appears only where a strike genuinely closed below its own
+15:00 high. So: no, everything was not given back — the panel was measuring
+time decay and calling it an unwind.
+
+
+## 2026-08-24 - Premarket: gap / prior close fixed, "Biggest GEX Changes" un-deadlocked
+
+Edited: `components/pages/Premarket.tsx`, `server-v2/premarket-baseline.js`.
+
+### 1. Gap, gap-fill and prior RTH close were blank every Monday
+
+`overnight` read `sessionCandles`, which `useEsCandles` clips to a rolling
+**30 hours**. On a Monday premarket the Friday 16:00 ES bar is ~64 hours old,
+so it simply was not in the array: `pdc` came back null and **Prior RTH close
+(ES)**, **Gap (4pm → 9:30)** and **Gap fill target** all printed `—`. Same
+every Tuesday after a Monday holiday. Nothing was wrong with the gap math — it
+never had a prior close to work from.
+
+Two changes:
+
+- `overnight` now reads a new `candlePool` = the hook's un-clipped `historical`
+  array plus the live session bars, instead of the 30-hour `sessionCandles`.
+  The chart above still gets `sessionCandles` — its window is unchanged. The
+  pool is deliberately not de-duplicated or sorted: every use is a min / max /
+  latest-timestamp scan, all idempotent under duplicates, so a Map+sort at the
+  feed's 4Hz would buy nothing.
+- The page asks `useEsCandles` for **8** history days instead of 3. `daysBack`
+  is CALENDAR days; the prior *trading* session is three calendar days back on
+  a Monday and four after a holiday, so 3 sat exactly on the Monday boundary
+  and fell off it entirely after a holiday. `withAverages` is already false
+  here, so the extra sessions cost one larger read and no recompute.
+
+`overnight` also now tracks **two** prior dates instead of one, because over a
+weekend they are different days:
+
+| | means | Monday |
 |---|---|---|
-| flow_prints_netprem_covering_idx | 2,688 MB | 91 MB |
-| flow_prints_date_prem_ts_idx | 1,365 MB | 11 MB |
-| flow_prints_date_norm_ts_idx | 1,140 MB | 10 MB |
-| flow_prints_date_ts_idx | 697 MB | 9.6 MB |
+| `pdDate` | last session that traded RTH — prior close, prior day range | **Friday** |
+| `evDate` | last date with a Globex evening (≥18:00) bar — where the overnight began | **Sunday** |
 
-All eight `option_strike_gex_history` indexes rebuilt clean as well.
-`flow_prints_pkey` (977 MB), `strike_growth` and `oi_daily` still pending.
+The old single `pdDate` was "latest date before today with any bar". Inside a
+30-hour window that collapses to the same thing; over a weekend it landed on
+**Sunday**, which has no RTH bars at all. Pinning the overnight hi/lo scan to
+`evDate` also stops the now-wider pool folding *Friday* evening into a Monday
+overnight range.
 
-**Per-index, never `REINDEX TABLE CONCURRENTLY`.** Four invalid
-`pg_toast_17864_index_ccnew*` indexes were found on the database - leftovers
-from four earlier `REINDEX TABLE CONCURRENTLY` runs against
-`option_strike_gex_history` (OID 17864) that died at the toast index, which
-`dash_n572_user` cannot touch ("permission denied for schema pg_toast" - Render
-gives no superuser). They are 8 KB total and harmless, but they are why the
-table form of the command must not be used here.
+The **Prior RTH close (ES)** row now names its session (`Fri Aug 21`), because
+over a weekend "prior" is not "yesterday".
 
-### Not done
+### 2. "Biggest GEX Changes" has been dead since ThetaData was removed
 
-Nothing reindexes on a schedule yet, so this will silently rebuild. A periodic
-`REINDEX CONCURRENTLY` pass in `retention-cleanup.js` is the durable fix and is
-still outstanding.
+Root cause, one layer below where it looked: `premarket-baseline.js` builds its
+board from `eod-gex-recorder.computeHistoricalGexRows()`, which needs settled
+ThetaData history. ThetaData was removed **2026-08-18** and `tt-snapshot.js`
+now stubs `fetchIndexEodTheta` / `fetchStockEodTheta` / `fetchOiHistoryTheta` /
+`fetchGreeksEodHistoryTheta` / `fetchEodHistoryTheta` to empties — so that
+function throws `no settle spot for <date>` on **every** call. `buildBaseline`
+always threw, `getBaseline` walked back three sessions and returned `ok:false`,
+and the card showed its empty state permanently. Exactly the same
+silent-deadlock shape as the localStorage snapshot this module was written to
+replace.
 
-`RETENTION_STRIKE_GROWTH_DAYS` was **not** changed - still 5.
+No existing table could stand in. `eod_gex` is scalars; `eod_strike_gex`
+collapses every expiry onto one strike and drops 0DTE; `option_strike_gex_history`
+is per-expiry but its SPX writer only ever writes the **front** expiry;
+`premarket_freeze` stores one expiry — the one the snapshot was rendering, i.e.
+that day's 0DTE. Nothing anywhere held "yesterday's ladder for today's expiry".
 
-### Also reverted today
+So the board is now **recorded at the close** rather than reconstructed the
+next morning. New in `premarket-baseline.js`:
 
-A `/gex-watch` page (GEX Watch moved off the owner Backtests panel onto its own
-Test Lab route, with a polling live lane and a new `/api/gex-watch-live`
-endpoint) was built earlier today and has been **fully reverted** at the owner's
-call - too much data, too slow. The GEX Watch panel is back on
-`owner-vite/src/pages/Backtests.tsx` exactly as it was; `sectionNav.ts`,
-`SectionSubStrip.tsx`, `app-vite/src/App.tsx` and `server-v2/api-router.js` are
-byte-identical to their pre-change state. `components/pages/GexWatch.tsx` and
-`app/app/gex-watch/route.ts` are deleted.
+- `captureSession()` — for each of `$SPX, SPY, QQQ`, takes the next **3** listed
+  expirations strictly after today, pulls the live TastyTrade chain through
+  `tt-snapshot` (OI + volume + greeks coalesce into ONE upstream fetch per
+  expiry), runs the same `computeGexRowsMultiExpiry` the rest of the app runs,
+  and writes it into the existing `premarket_baseline` / `premarket_baseline_meta`
+  tables keyed `date = today`, `source = 'tt-close'`. Next morning `readCached`
+  hits on the first try and no build is attempted at all.
+- `captureTick()` — 16:05 ET, catch-up window open to 22:00 ET so a late VPS
+  restart still gets the session. Latches only on a successful write; guarded
+  against re-entry so a slow chain cannot double every upstream pull.
+- One timer for both jobs (`startPremarketBaseline`), because capture writes at
+  the close and warm-up reads it back in the morning — non-overlapping windows,
+  and it stops `PREMARKET_BASELINE_WARMUP=0` silently disabling the capture,
+  which is now the load-bearing half.
+- Strikes that price to **exactly zero on both legs** are not stored. That means
+  "not priced on this pull" (missing gamma) or "no OI and no volume"; a stored
+  zero gets diffed next morning and prints the strike's whole live gamma as
+  overnight change, whereas an absent strike is correctly skipped by the page.
+
+Env knobs: `PREMARKET_BASELINE_CAPTURE=0`,
+`PREMARKET_BASELINE_CAPTURE_SYMBOLS`, `PREMARKET_BASELINE_CAPTURE_EXPIRIES`,
+`PREMARKET_BASELINE_CAPTURE_PACE_MS`.
+
+The Theta path is **kept** as a fallback and is untouched — if `DATA_SOURCE`
+goes back to theta it starts working again and can still backfill older dates.
+No proxy file was modified.
+
+**One-session cold start.** The first board is written at the next 16:05 ET
+close; nothing can recover a ladder that was never stored. The card's empty
+state now says that instead of implying it backfills itself, and the API's
+error string names the real cause.
+
+
+## 2026-08-24 - GEX Watch moved to its own live page (/gex-watch)
+
+Edited: `components/pages/GexWatch.tsx` (new), `app/app/gex-watch/route.ts`
+(new), `app-vite/src/App.tsx`, `components/shared/sectionNav.ts`,
+`components/shared/SectionSubStrip.tsx`, `server-v2/api-router.js`,
+`owner-vite/src/pages/Backtests.tsx`.
+
+### What moved
+
+GEX Watch was one `<Panel>` on the owner-vite **Backtests** page: press Run,
+it ran the whole study once, you read the result. It is now its own route,
+**/gex-watch**, pinned in the **Test Lab** sub-strip next to Flow Inventory and
+Prem Diff. The panel is gone from Backtests, replaced by a pointer comment —
+two renderers of one feed is two answers.
+
+### What "live" means here — two lanes, two cadences
+
+**Building now** polls `/api/gex-watch-live` (new, `auth: 'owner'`) on a
+selectable interval — off / 1m / 5m / 10m, default 1m — plus a manual refresh
+and an `updated HH:MM:SS ET` stamp. That endpoint calls the SAME exported
+`strikeGexBuildingNow()` the panel already used, so no second definition of the
+lane exists: one query over ~5 days of `strike_growth` for the latest recorded
+10-minute slot, judged against that symbol's own biggest build at the same slot
+on prior sessions. A failed poll keeps the last good rows on screen and says
+the read is the older one, rather than blanking the card.
+
+**Since last close** is the full study, still
+`/api/backtests?test=strike-gex-watch`, and is deliberately NOT polled: it is a
+169-ticker window-function calibration sweep plus the 400-session odds join,
+and its input only changes at the 16:40 ET recorder run. It runs once on mount
+and on **Run study**. Editing an input does not re-fire it.
+
+The untested warning is on the live card in full, not in a footnote:
+`strike_growth` is on a ~5-day retention sweep, so there is no outcome history
+to score that lane against, and lane-1 hit rates must never be read onto a
+lane-2 line. `feed_live` is filtered out of the study card's sections for the
+same reason — the live card above it is the same lane, fresher.
+
+### Owner gating
+
+Both endpoints are `auth: 'owner'` server-side. `SectionRoute` gained an
+`ownerOnly` flag (it already existed on `SectionTab`) and `SectionSubStrip` now
+honours it for split-out routes, so the pill is drawn for the owner only; the
+page itself shows an "owner only" card rather than an empty error. The
+customer-facing read of this data is unchanged: the GEX Watch box on
+**/premarket**, which reads the logged, graded, opex-filtered feed via
+`/api/gex-watch-feed` and never runs the sweep.
+
+### Route plumbing
+
+New page needs all three, per AGENTS.md: the client component, the `<Route>` in
+`app-vite/src/App.tsx`, and `app/app/gex-watch/route.ts` calling
+`serveSpaShell` so a hard refresh on `/app/gex-watch` boots the SPA instead of
+404ing. `/gex-watch` was also added to `TESTLAB_SECTION.paths` so the Test Lab
+strip stays on screen while you are on it.
 
 
 ## 2026-08-24 - Seasonality: VIX-spike, month-end, opex studies + year overlays
