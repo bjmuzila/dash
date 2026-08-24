@@ -50,6 +50,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { HOME_THEME, ES_CANDLE_UP, ES_CANDLE_DOWN } from "@/components/shared/homeTheme";
 import { ALMANAC, ERA_KEYS, EXTRAS, type Stat } from "./seasonalityData";
 import { SeaCard } from "./Watermark";
+import { SEA } from "./seaTheme";
 import type { SectionKey } from "./sections";
 
 const UP = ES_CANDLE_UP;
@@ -216,7 +217,7 @@ function Collapse({
   children: ReactNode;
 }) {
   return (
-    <details style={{ marginTop: 14, border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, background: "rgba(255,255,255,0.02)" }}>
+    <details style={{ marginTop: 14, border: `1px solid ${SEA.line}`, borderRadius: 12, background: SEA.card2 }}>
       <summary
         style={{
           listStyle: "none",
@@ -623,7 +624,7 @@ function Tile({ label, value, sub, color }: { label: string; value: ReactNode; s
         padding: "12px 14px",
         borderRadius: 10,
         border: `1px solid ${HOME_THEME.border}`,
-        background: "rgba(255,255,255,0.03)",
+        background: SEA.card2,
       }}
     >
       <div style={capLabel}>{label}</div>
@@ -728,7 +729,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
     vix: (
       <SeaCard
         title="After a VIX Spike"
-        subtitle={`VIX open → high ≥ +20% in a session · ${vix.meta.start} – ${vix.meta.end} · ${n0(vix.meta.sessions)} sessions`}
+        subtitle={`VIX prior close → high ≥ +20% · ${vix.meta.start} – ${vix.meta.end} · ${n0(vix.meta.sessions)} sessions`}
         padding={20}
       >
         <div style={TILES}>
@@ -801,7 +802,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           hint={`${n0(vix.events.length)} events, newest first`}
           note={
             <>
-              <strong>VIX up</strong> is that session&apos;s own open → high. <strong>SPX next day</strong> is the
+              <strong>VIX up</strong> is the PRIOR session&apos;s close → this session&apos;s high, so an overnight gap counts. <strong>SPX next day</strong> is the
               session low → the following session&apos;s high, the same window the tiles above use; the bar scales it
               against the biggest move in the list ({pct(maxLowNextHigh, 1)}). <strong>Next O→C</strong> is the
               following session&apos;s open to close — the one you could actually have traded, since the low and the

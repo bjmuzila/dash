@@ -30,6 +30,22 @@
  *      over 85%). No lookahead — every SlimDay field was stamped at its own
  *      confirm bar and this file only counts and divides.
  *
+ * SESSION PICKER (the "Session" dropdown, 2026-08-24). The rail can be pointed
+ * at a PAST session instead of the live tape. Two things change when it is, and
+ * both are the point of the feature rather than side effects:
+ *
+ *   • The rail is seeded from that day's OWN classification — every criterion
+ *     answered by `c.f(day)` off the stored SlimDay, so nothing is PENDING: the
+ *     session is over, the book already knows what it was.
+ *   • The book is cut to sessions STRICTLY BEFORE that date. Reading back a
+ *     Tuesday against a book that contains that Tuesday and everything after it
+ *     is not "what the stats were" — it is hindsight wearing the same number.
+ *     `since` still applies on top, so the window is [since, selected date).
+ *
+ * The selected day's ACTUAL outcome is printed next to the rate it was quoted,
+ * which is the only honest way to show a past read: the number it gave, and
+ * what the session then did.
+ *
  * Data: public/data/ib-ES.json + ib-NQ.json (same slim exports the Stat
  * Prompter reads) plus the live 5m tape for today's classification.
  */
@@ -175,11 +191,18 @@ export default function ConditionRailTab() {
   const [err, setErr] = useState<string | null>(null);
   const [sym, setSym] = useState<"ES" | "NQ">("ES");
   const [since, setSince] = useState("all");
+  /** "live" = today's tape. Otherwise a past session date (YYYY-MM-DD). */
+  const [asOf, setAsOf] = useState("live");
   const [metricId, setMetricId] = useState("hit1");
   const [sel, setSel] = useState<string[]>([]);
   const [why, setWhy] = useState("");
   const touched = useRef(false);
-  const seeded = useRef("");
+  // Signature of the classification the rail was last auto-seeded from. UNSEEDED
+  // is a sentinel no real signature can equal — an empty selection IS a valid
+  // signature (a session where nothing classified), so `""` cannot mean "never
+  // seeded" as well.
+  const UNSEEDED = "\u0000unseeded";
+  const seeded = useRef(UNSEEDED);
 
   const { candles: esLive } = useEsCandles(true, 2);
   const { candles: nqLive } = useNqCandles(true, 2);
@@ -213,18 +236,46 @@ export default function ConditionRailTab() {
   const live = sym === "ES" ? esLive : nqLive;
   const today = useMemo(() => (ds ? computeToday(live, ds.days) : null), [live, ds]);
 
+  const isLive = asOf === "live";
+
+  /** The stored row for the session being read back, when one is selected. */
+  const pastDay = useMemo(
+    () => (isLive ? null : (ds?.days.find((d) => d.date === asOf) ?? null)),
+    [ds, asOf, isLive]
+  );
+
+  // The book. On a past session it is cut to what existed BEFORE that date —
+  // see the SESSION PICKER note at the top. `since` narrows it further.
   const days = useMemo(() => {
     if (!ds) return [];
     const cut = since === "all" ? "" : `${since}-01-01`;
-    return ds.days.filter((d) => d.date >= cut);
-  }, [ds, since]);
+    return ds.days.filter((d) => d.date >= cut && (isLive || d.date < asOf));
+  }, [ds, since, asOf, isLive]);
 
-  /** today's answer for one criterion: true / false / null (not knowable yet) */
+  /** Every session in the file, newest first — what the Session picker offers. */
+  const sessionOptions = useMemo(() => {
+    const rows = [...(ds?.days ?? [])].reverse().slice(0, 250);
+    return [
+      { value: "live", label: "Today · live tape" },
+      ...rows.map((d) => ({ value: d.date, label: d.date })),
+    ];
+  }, [ds]);
+
+  /**
+   * The selected session's answer for one criterion.
+   *
+   * Live: true / false / null (the tape can't answer it yet).
+   * Past: never null — the session is closed, so `c.f(day)` decides every one.
+   */
   const todayOf = useMemo(() => {
     const m: Record<string, boolean | null> = {};
+    if (!isLive) {
+      for (const c of ALL) m[c.id] = pastDay ? c.f(pastDay) : null;
+      return m;
+    }
     for (const c of ALL) m[c.id] = today ? c.today(today, nowMin) : null;
     return m;
-  }, [today, nowMin]);
+  }, [today, nowMin, isLive, pastDay]);
 
   const todayTrue = useMemo(() => ALL.filter((c) => todayOf[c.id] === true).map((c) => c.id), [todayOf]);
 
@@ -234,13 +285,28 @@ export default function ConditionRailTab() {
   // The signature guard matters: `todayTrue` is rebuilt on every websocket tick,
   // so seeding on identity alone would re-set state a few times a minute and
   // stomp a selection the user made in between.
+  //
+  // Changing the session (or the index) hands the rail back: the selection on
+  // screen described the OLD session, so it is no longer the user's answer to
+  // this one. Declared before the seeding effect so that on the render where
+  // `asOf` changes this clears first and the seed below lands in the same pass.
   useEffect(() => {
-    if (touched.current || !todayTrue.length) return;
+    touched.current = false;
+    seeded.current = UNSEEDED;
+    setWhy("");
+  }, [asOf, sym, UNSEEDED]);
+
+  useEffect(() => {
+    if (touched.current) return;
+    // Live: an empty classification means the IB hasn't settled yet, so wait
+    // rather than clearing the rail. Past: empty is an ANSWER — that session
+    // classified as nothing — and it seeds like any other.
+    if (isLive && !todayTrue.length) return;
     const sig = todayTrue.join("|");
     if (sig === seeded.current) return;
     seeded.current = sig;
     setSel(todayTrue);
-  }, [todayTrue]);
+  }, [todayTrue, isLive]);
 
   /* ── selection mechanics: exclusion + conflicts ─────────────────────────── */
 
@@ -319,6 +385,10 @@ export default function ConditionRailTab() {
   const selPending = sel.filter((id) => todayOf[id] == null);
   const isTodayCohort = sel.length > 0 && selNotToday.length === 0;
 
+  /** What the session being read back ACTUALLY did on the selected outcome. */
+  const pastOutcome: "yes" | "no" | "nobreak" | null =
+    pastDay == null ? null : pastDay.fcb == null ? "nobreak" : metric.f(pastDay) ? "yes" : "no";
+
   /* ── styles ─────────────────────────────────────────────────────────────── */
 
   const sect: React.CSSProperties = { fontSize: 10.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 10, display: "flex", alignItems: "center", gap: 7 };
@@ -361,6 +431,12 @@ export default function ConditionRailTab() {
             <span style={{ ...sect, marginBottom: 0 }}>Index</span>
             <ThemedSelect width={90} value={sym} onChange={(v) => setSym(v as "ES" | "NQ")} options={[{ value: "ES", label: "ES" }, { value: "NQ", label: "NQ" }]} />
           </div>
+          {/* Read the rail back on a past session. Picking one re-seeds the
+              criteria from that day and cuts the book to what came BEFORE it. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <span style={{ ...sect, marginBottom: 0 }}>Session</span>
+            <ThemedSelect width={170} value={asOf} onChange={setAsOf} options={sessionOptions} />
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             <span style={{ ...sect, marginBottom: 0 }}>Outcome</span>
             <ThemedSelect width={180} value={metricId} onChange={setMetricId} options={METRICS.map((m) => ({ value: m.id, label: m.label }))} />
@@ -382,7 +458,9 @@ export default function ConditionRailTab() {
           </div>
           <div style={{ flex: 1 }} />
           <div style={{ fontSize: 13, color: HOME_THEME.text }}>
-            {ds ? `${days.length} ${sym} sessions${since === "all" ? "" : ` since ${since}`} · ${days[0]?.date ?? "—"} → ${days[days.length - 1]?.date ?? "—"}` : "loading ib-ES.json + ib-NQ.json…"}
+            {ds
+              ? `${days.length} ${sym} sessions${since === "all" ? "" : ` since ${since}`}${isLive ? "" : ` before ${asOf}`} · ${days[0]?.date ?? "—"} → ${days[days.length - 1]?.date ?? "—"}`
+              : "loading ib-ES.json + ib-NQ.json…"}
           </div>
         </div>
       </Card>
@@ -402,7 +480,7 @@ export default function ConditionRailTab() {
                   border: `1px solid ${LIGHT_BLUE}66`, background: `${LIGHT_BLUE}1A`, color: LIGHT_BLUE,
                 }}
               >
-                MATCH TODAY
+                {isLive ? "MATCH TODAY" : "MATCH SESSION"}
               </button>
               <button
                 onClick={() => { touched.current = true; setWhy(""); setSel([]); }}
@@ -413,13 +491,31 @@ export default function ConditionRailTab() {
             </div>
           </div>
 
-          {/* today's classification, straight off the live tape */}
-          <div style={{ background: `${LIGHT_BLUE}0F`, border: `1px solid ${LIGHT_BLUE}33`, borderRadius: 10, padding: "10px 11px", marginBottom: 14 }}>
-            <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 5 }}>
-              Today so far · {clock(nowMin)} ET
+          {/* the selected session's classification — live tape, or the stored row */}
+          <div style={{
+            background: isLive ? `${LIGHT_BLUE}0F` : `${HOME_THEME.orange}0F`,
+            border: `1px solid ${isLive ? `${LIGHT_BLUE}33` : `${HOME_THEME.orange}44`}`,
+            borderRadius: 10, padding: "10px 11px", marginBottom: 14,
+          }}>
+            <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: isLive ? LIGHT_BLUE : HOME_THEME.orange, marginBottom: 5 }}>
+              {isLive ? `Today so far · ${clock(nowMin)} ET` : `Session ${asOf} · closed`}
             </div>
             <div style={{ fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.55 }}>
-              {!today ? (
+              {!isLive ? (
+                !pastDay ? (
+                  `no ${sym} row in the book for ${asOf}.`
+                ) : (
+                  <>
+                    <span style={{ color: HOME_THEME.text, fontWeight: 700 }}>
+                      {todayTrue.map((id) => BY[id].label).join(" · ") || "classified as nothing on this rail"}
+                    </span>
+                    <br />
+                    <span style={{ color: HOME_THEME.text }}>
+                      Book cut to sessions before this date — the read is what it would have been on the day.
+                    </span>
+                  </>
+                )
+              ) : !today ? (
                 "waiting on the live tape — today's IB isn't complete yet."
               ) : (
                 <>
@@ -474,8 +570,12 @@ export default function ConditionRailTab() {
           {why && <div style={{ fontSize: 11, color: HOME_THEME.orange, lineHeight: 1.5, marginTop: 4 }}>⚠ {why}</div>}
 
           <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 11, color: HOME_THEME.text, lineHeight: 1.8 }}>
-            <span style={{ color: LIGHT_BLUE }}>●</span> true of today&apos;s session<br />
-            <span style={{ color: HOME_THEME.orange }}>○</span> the tape can&apos;t answer it yet<br />
+            <span style={{ color: LIGHT_BLUE }}>●</span> true of {isLive ? "today's session" : `the ${asOf} session`}<br />
+            {isLive && (
+              <>
+                <span style={{ color: HOME_THEME.orange }}>○</span> the tape can&apos;t answer it yet<br />
+              </>
+            )}
             <span style={{ textDecoration: "line-through" }}>struck</span> ruled out by a pick above<br />
             <span style={{ display: "block", marginTop: 8 }}>
               Sample strength{" "}
@@ -520,16 +620,32 @@ export default function ConditionRailTab() {
                   </div>
                 )}
 
+                {/* What the session being read back actually did. A past rate is
+                    only worth anything next to the outcome it was quoting. */}
+                {pastOutcome && (
+                  <div style={{ marginTop: 11, fontSize: 12, color: HOME_THEME.text, lineHeight: 1.6 }}>
+                    <span style={badge(pastOutcome === "yes" ? HOME_THEME.green : pastOutcome === "no" ? HOME_THEME.red : HOME_THEME.orange)}>
+                      {pastOutcome === "yes" ? "IT DID" : pastOutcome === "no" ? "IT DIDN'T" : "NO BREAK"}
+                    </span>{" "}
+                    {pastOutcome === "nobreak"
+                      ? `${asOf} never broke the IB, so this outcome never came up.`
+                      : pastOutcome === "yes"
+                        ? `On ${asOf}, ${metric.sentence}.`
+                        : `On ${asOf}, ${metric.sentence} — it did not.`}
+                  </div>
+                )}
+
                 <div style={{ marginTop: 12, fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.6 }}>
                   {sel.length === 0 ? null : isTodayCohort ? (
                     <>
-                      <span style={badge(LIGHT_BLUE)}>TODAY</span> every selected criterion is true of this session right now.
+                      <span style={badge(LIGHT_BLUE)}>{isLive ? "TODAY" : "THAT SESSION"}</span>{" "}
+                      every selected criterion is true of {isLive ? "this session right now" : `the ${asOf} session`}.
                     </>
                   ) : (
                     <>
                       <span style={badge(HOME_THEME.orange)}>HYPOTHETICAL</span>{" "}
                       {selNotToday.map((id) => BY[id].label.toLowerCase()).join(", ")}{" "}
-                      {selNotToday.length > 1 ? "are" : "is"} not true of today.
+                      {selNotToday.length > 1 ? "are" : "is"} not true of {isLive ? "today" : asOf}.
                     </>
                   )}
                   {selPending.length > 0 && (
@@ -613,7 +729,10 @@ export default function ConditionRailTab() {
             {broke.length ? (
               <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
                 {broke.slice(-160).map((d, i, arr) => {
-                  const isLast = isTodayCohort && i === arr.length - 1;
+                  // Only meaningful on the live tape: on a past session the book
+                  // stops BEFORE that date, so the last cell is the session
+                  // before it, not the one being read back.
+                  const isLast = isLive && isTodayCohort && i === arr.length - 1;
                   return (
                     <span
                       key={d.date}
@@ -643,6 +762,10 @@ export default function ConditionRailTab() {
         <br />
         No lookahead: every field was stamped at its own confirm bar. Sample sizes aren&apos;t printed, but they still gate the read — a thin cohort is
         badged THIN, and any rate over 85% is flagged to check for bias rather than treated as an edge.
+        <br />
+        The <b>Session</b> picker reads the rail back on a past day: the criteria are re-seeded from that session&apos;s own classification and the book is
+        cut to sessions <i>before</i> it, so the rate shown is the one the rail would have quoted that morning — not the same day scored with hindsight.
+        What the session then did is printed beside it.
       </div>
     </div>
   );

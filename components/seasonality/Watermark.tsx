@@ -26,6 +26,7 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { Card } from "@/components/shared/PageCard";
+import { SEA } from "./seaTheme";
 
 /** Sits in the card's top-right corner, above the content. */
 export function Watermark({ inset = 14 }: { inset?: number }) {
@@ -73,7 +74,20 @@ export function SeaCard({
   children?: ReactNode;
 }) {
   return (
-    <Card title={title} subtitle={subtitle} padding={padding} style={{ position: "relative", ...style }}>
+    <Card
+      title={title}
+      subtitle={subtitle}
+      padding={padding}
+      style={{
+        position: "relative",
+        // Painted here, not by a class: the shared Card sets its background
+        // INLINE, and no stylesheet can beat that. See seaTheme.ts.
+        background: SEA.card,
+        border: `1px solid ${SEA.line}`,
+        boxShadow: "none",
+        ...style,
+      }}
+    >
       <Watermark />
       {children}
     </Card>

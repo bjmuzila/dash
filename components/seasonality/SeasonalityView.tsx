@@ -78,6 +78,7 @@ import {
   type SectionKey,
 } from "./sections";
 import { SeaCard } from "./Watermark";
+import { SEA } from "./seaTheme";
 import {
   ALMANAC,
   DEFAULT_BASELINE,
@@ -241,21 +242,32 @@ function StatTile({
  * Colors are read from HOME_THEME at module scope, not hardcoded.
  */
 const SHELL_CSS = `
-.sea-shell{display:grid;grid-template-columns:225px minmax(0,1fr);gap:18px;min-width:0}
+.sea-shell{display:grid;grid-template-columns:225px minmax(0,1fr);gap:16px;min-width:0;
+  background:${SEA.shell};border:1px solid ${SEA.lineSoft};border-radius:16px;padding:12px}
 .sea-pane{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0}
 .sea-rail{position:sticky;top:12px;align-self:start;min-width:0;
-  border:1px solid ${HOME_THEME.border};border-radius:14px;background:${HOME_THEME.panelBg};
+  border:1px solid ${SEA.lineSoft};border-radius:12px;background:${SEA.rail};
   padding:8px;max-height:calc(100vh - 40px);overflow:auto}
 .sea-railgrp{font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
   color:${HOME_THEME.green};padding:10px 10px 4px}
 .sea-railitem{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:8px;
   border:1px solid transparent;background:transparent;color:${HOME_THEME.text};
   font:inherit;font-size:12px;font-weight:600;cursor:pointer;line-height:1.3}
-.sea-railitem:hover{background:rgba(255,255,255,.06)}
+.sea-railitem:hover{background:${SEA.cardHi}}
 .sea-railitem:focus-visible{outline:2px solid ${HOME_THEME.cyan};outline-offset:2px}
 .sea-railitem[aria-current="true"]{font-weight:800;color:${HOME_THEME.cyan};
   border-color:rgba(33,158,188,.4);
   background:linear-gradient(90deg,rgba(33,158,188,.26),rgba(33,158,188,.04))}
+.sea-compare{border:1px solid ${HOME_THEME.cyan}66;
+  background:linear-gradient(180deg,${HOME_THEME.cyan}1F,${SEA.card2});transition:border-color .15s}
+.sea-compare:hover{border-color:${HOME_THEME.cyan}}
+.sea-compare summary:focus-visible{outline:2px solid ${HOME_THEME.cyan};outline-offset:2px;border-radius:12px}
+.sea-caret{color:${HOME_THEME.cyan};font-size:11px;display:inline-block;transition:transform .15s}
+.sea-compare[open] .sea-caret{transform:rotate(90deg)}
+.sea-comparecta{margin-left:auto;flex:none;padding:5px 12px;border-radius:999px;
+  background:${HOME_THEME.cyan};color:#04121a;font-size:11px;font-weight:800;letter-spacing:.06em;
+  text-transform:uppercase;white-space:nowrap}
+.sea-compare[open] .sea-comparecta{display:none}
 @media (max-width:860px){
   /* Rail becomes a horizontally scrollable strip above the pane. It stays a
      single <nav> of the same buttons — no duplicate markup, so there is no
@@ -265,7 +277,7 @@ const SHELL_CSS = `
     padding:8px;scrollbar-width:thin}
   .sea-rail>div{display:flex;gap:6px;align-items:center;flex:none}
   .sea-railgrp{padding:0 4px 0 8px;white-space:nowrap;align-self:center;font-size:8.5px}
-  .sea-railitem{width:auto;white-space:nowrap;border:1px solid ${HOME_THEME.border}}
+  .sea-railitem{width:auto;white-space:nowrap;border:1px solid ${SEA.line}}
 }
 `;
 
@@ -545,25 +557,28 @@ export default function SeasonalityView() {
 
         {/* Compare years — collapsed by default; 98 year chips is a lot of
             chrome for a control most visitors never touch. */}
-        <details style={{ marginBottom: 14, border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, background: "rgba(255,255,255,0.02)" }}>
+        {/* The single best thing on this page, so it is styled like a call to
+            action rather than a disclosure: accent border, filled ground, an
+            explicit "click to open" and a caret that rotates when it does.
+            A bare ▸ next to grey text got missed by everyone who saw it. */}
+        <details className="sea-compare" style={{ marginBottom: 14, borderRadius: 12 }}>
           <summary
             style={{
               listStyle: "none",
               cursor: "pointer",
-              padding: "10px 14px",
+              padding: "13px 16px",
               display: "flex",
               alignItems: "center",
-              gap: 10,
+              gap: 12,
               flexWrap: "wrap",
               color: INK,
-              fontSize: 11,
+              fontSize: 13.5,
               fontWeight: 800,
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
+              letterSpacing: "0.01em",
             }}
           >
-            <span aria-hidden style={{ color: HOME_THEME.cyan, fontSize: 10 }}>▶</span>
-            <span>Compare years</span>
+            <span aria-hidden className="sea-caret">▶</span>
+            <span style={{ fontSize: 15, fontWeight: 800 }}>Compare any year</span>
             {overlaySeries.length ? (
               <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {overlaySeries.map((o) => (
@@ -590,10 +605,11 @@ export default function SeasonalityView() {
                 ))}
               </span>
             ) : (
-              <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.02em", textTransform: "none", color: INK }}>
-                overlay up to {MAX_OVERLAYS} past years on {LIVE_YEAR}
+              <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>
+                — put 1987, 2008, 2020 or any other year straight on top of {LIVE_YEAR}
               </span>
             )}
+            <span className="sea-comparecta" aria-hidden>Click to open</span>
           </summary>
 
           <div style={{ padding: "0 14px 14px" }}>

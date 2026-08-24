@@ -1,5 +1,99 @@
 # Changelog
 
+## 2026-08-24 - Condition Rail: read the rail back on a past session
+
+Edited: `components/scanner/ConditionRailTab.tsx`.
+
+**New `Session` dropdown** next to Index / Outcome / Since. `Today - live tape`
+is the default and behaves exactly as before; picking a past date reads the rail
+back on that session.
+
+Two things change when a past session is selected, and both are the feature
+rather than side effects:
+
+- **The rail is re-seeded from that day's own classification.** Every criterion
+  is answered by `c.f(day)` off the stored `SlimDay`, so nothing sits PENDING -
+  the session is closed and the book already knows what it was. The chips keep
+  their exclusion and conflict rules; the round PENDING mark and its legend line
+  are hidden, because on a closed session nothing is unanswered.
+- **The book is cut to sessions STRICTLY BEFORE that date.** Scoring a Tuesday
+  against a book that contains that Tuesday and everything after it is not "what
+  the stats were", it is hindsight wearing the same number. `Since` still
+  applies on top, so the window is [since, selected date).
+
+**The selected session's actual outcome is printed under the rate** - IT DID /
+IT DIDN'T / NO BREAK against the chosen Outcome metric. A past rate is only worth
+reading next to what the session then did.
+
+Smaller consequences of the above:
+
+- Changing session (or index) hands the rail back: `touched` and the seed
+  signature reset, so the next classification seeds instead of leaving the
+  previous session's ticks on screen. The seed sentinel is no longer `""` - an
+  empty selection is a valid answer for a past day ("classified as nothing"),
+  so it cannot double as "never seeded".
+- The orange highlight on the last cell of "Matching sessions" is live-only. On
+  a past session the book stops before that date, so the last cell is the
+  session before the one being read, not the one being read.
+- Header count line says `... before <date>` when a past session is selected.
+
+No change to the data path, the criteria set, the metrics, or the honesty rules
+(sample sizes still unprinted, THIN under 30, CHECK FOR BIAS over 85%).
+
+
+
+## 2026-08-24 - Seasonality: VIX rule changed to prior-close→high, dark theme, hero compressed
+
+Added: `components/seasonality/seaTheme.ts`.
+Edited: `seasonalityData.ts`, `SeasonalityView.tsx`, `SeasonalityAlmanac.tsx`,
+`Watermark.tsx`, `app/explore/seasonality/page.tsx`.
+
+### VIX trigger is now PRIOR CLOSE → HIGH
+
+Was the session's own open → high. Prior close includes the overnight gap,
+which is where a lot of VIX expansion actually happens. Pulled VIX daily closes
+(1990-01-02 → 2026-08-21, 9,228 rows) and recomputed the whole card.
+
+The sample nearly doubles: **n=284 at ≥+20%, up from 191.** Next-session
+open-to-close is **+0.26%** (59.9% positive) against a +0.03% / 53.5%
+unconditional baseline.
+
+**Read the ladder before trusting the edge.** On open→high it was monotonic all
+the way out — +0.11% at ≥10% rising to +0.64% at ≥40%. On prior-close→high it is
+not: +0.08% / +0.19% / +0.26% / +0.19% / +0.21% / +0.42%. The ≥25% and ≥30%
+buckets sit BELOW ≥20%. That is what a noisier signal looks like, and with n=95
+at ≥30% the wobble is well inside sampling error either way. The rule is the one
+that was asked for; the ladder is on the card so nobody has to take it on faith.
+
+`EXTRAS.vix.meta.basis` now records the definition in the data itself, so a
+regenerated file cannot silently change it under the UI copy.
+
+### Surface theme
+
+`seaTheme.ts` — app / rail / shell / card / card2 / cardHi, darkest outward.
+Deliberately NOT in `homeTheme.ts`: these are darker and flatter than the app's
+frosted panel, and putting them in the shared theme would restyle every card on
+every route as a side effect. Cards are painted through `SeaCard`'s inline style
+because the shared `Card` sets its background inline and no class can beat that.
+
+### Hero compressed
+
+The masthead, blurb and CTA block ran ~520px before the first chart — a visitor
+off a social link scrolled past the reason they came. Now one band: identity
+left, offer right, tool immediately under.
+
+### "Compare any year" promoted
+
+It was a grey `▸` next to uppercase micro-text and it read as boilerplate. It is
+the best thing on the page, so it now looks like a call to action: accent border
+and fill, 15px label, an explicit CLICK TO OPEN pill that disappears once open,
+and a caret that rotates. Copy names 1987/2008/2020 so the value is concrete.
+
+### Verified before commit
+
+`tsc --strict` clean. 1600px: no horizontal overflow, first chart now ~516px
+down the document.
+
 ## 2026-08-24 - Seasonality: corner watermark, full-bleed page, harder CTA, SPX naming
 
 Edited: `components/seasonality/Watermark.tsx`, `SeasonalityAlmanac.tsx`,
