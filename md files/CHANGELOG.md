@@ -1,60 +1,65 @@
 # Changelog
 
-## 2026-08-24 - GEX Watch moved to its own live page (/gex-watch)
+## 2026-08-24 - Postgres index bloat: 13 GB -> 7.5 GB (and counting)
 
-Edited: `components/pages/GexWatch.tsx` (new), `app/app/gex-watch/route.ts`
-(new), `app-vite/src/App.tsx`, `components/shared/sectionNav.ts`,
-`components/shared/SectionSubStrip.tsx`, `server-v2/api-router.js`,
-`owner-vite/src/pages/Backtests.tsx`.
+Edited: nothing in the repo. This was a DB maintenance session, recorded here
+because the cause is a gap in `server-v2/state/retention-cleanup.js`.
 
-### What moved
+### What was wrong
 
-GEX Watch was one `<Panel>` on the owner-vite **Backtests** page: press Run,
-it ran the whole study once, you read the result. It is now its own route,
-**/gex-watch**, pinned in the **Test Lab** sub-strip next to Flow Inventory and
-Prem Diff. The panel is gone from Backtests, replaced by a pointer comment —
-two renderers of one feed is two answers.
+`flow_prints` held 205,208 live rows in a 184 MB heap - under **6,869 MB of
+index**. Thirty-seven times the table. Same shape elsewhere:
+`option_strike_gex_history` 515 MB heap / 2,296 MB index,
+`strike_growth` 591 MB heap / 1,354 MB index. Indexes were ~11 GB of a 13 GB
+database.
 
-### What "live" means here — two lanes, two cadences
+The retention sweep is working exactly as written - `n_dead_tup` was low,
+autovacuum had run an hour earlier. The gap is that **plain `VACUUM` never
+returns B-tree index pages**. A table that is mass-deleted and rewritten nightly
+bloats its indexes forever, and nothing in the stack reindexes anything. The
+file's long comment about avoiding `VACUUM FULL` is right; it just never
+considered `REINDEX`.
 
-**Building now** polls `/api/gex-watch-live` (new, `auth: 'owner'`) on a
-selectable interval — off / 1m / 5m / 10m, default 1m — plus a manual refresh
-and an `updated HH:MM:SS ET` stamp. That endpoint calls the SAME exported
-`strikeGexBuildingNow()` the panel already used, so no second definition of the
-lane exists: one query over ~5 days of `strike_growth` for the latest recorded
-10-minute slot, judged against that symbol's own biggest build at the same slot
-on prior sessions. A failed poll keeps the last good rows on screen and says
-the read is the older one, rather than blanking the card.
+### The fix
 
-**Since last close** is the full study, still
-`/api/backtests?test=strike-gex-watch`, and is deliberately NOT polled: it is a
-169-ticker window-function calibration sweep plus the 400-session odds join,
-and its input only changes at the 16:40 ET recorder run. It runs once on mount
-and on **Run study**. Editing an input does not re-fire it.
+`REINDEX INDEX CONCURRENTLY`, one index at a time. Reclaimed on `flow_prints`:
 
-The untested warning is on the live card in full, not in a footnote:
-`strike_growth` is on a ~5-day retention sweep, so there is no outcome history
-to score that lane against, and lane-1 hit rates must never be read onto a
-lane-2 line. `feed_live` is filtered out of the study card's sections for the
-same reason — the live card above it is the same lane, fresher.
+| index | before | after |
+|---|---|---|
+| flow_prints_netprem_covering_idx | 2,688 MB | 91 MB |
+| flow_prints_date_prem_ts_idx | 1,365 MB | 11 MB |
+| flow_prints_date_norm_ts_idx | 1,140 MB | 10 MB |
+| flow_prints_date_ts_idx | 697 MB | 9.6 MB |
 
-### Owner gating
+All eight `option_strike_gex_history` indexes rebuilt clean as well.
+`flow_prints_pkey` (977 MB), `strike_growth` and `oi_daily` still pending.
 
-Both endpoints are `auth: 'owner'` server-side. `SectionRoute` gained an
-`ownerOnly` flag (it already existed on `SectionTab`) and `SectionSubStrip` now
-honours it for split-out routes, so the pill is drawn for the owner only; the
-page itself shows an "owner only" card rather than an empty error. The
-customer-facing read of this data is unchanged: the GEX Watch box on
-**/premarket**, which reads the logged, graded, opex-filtered feed via
-`/api/gex-watch-feed` and never runs the sweep.
+**Per-index, never `REINDEX TABLE CONCURRENTLY`.** Four invalid
+`pg_toast_17864_index_ccnew*` indexes were found on the database - leftovers
+from four earlier `REINDEX TABLE CONCURRENTLY` runs against
+`option_strike_gex_history` (OID 17864) that died at the toast index, which
+`dash_n572_user` cannot touch ("permission denied for schema pg_toast" - Render
+gives no superuser). They are 8 KB total and harmless, but they are why the
+table form of the command must not be used here.
 
-### Route plumbing
+### Not done
 
-New page needs all three, per AGENTS.md: the client component, the `<Route>` in
-`app-vite/src/App.tsx`, and `app/app/gex-watch/route.ts` calling
-`serveSpaShell` so a hard refresh on `/app/gex-watch` boots the SPA instead of
-404ing. `/gex-watch` was also added to `TESTLAB_SECTION.paths` so the Test Lab
-strip stays on screen while you are on it.
+Nothing reindexes on a schedule yet, so this will silently rebuild. A periodic
+`REINDEX CONCURRENTLY` pass in `retention-cleanup.js` is the durable fix and is
+still outstanding.
+
+`RETENTION_STRIKE_GROWTH_DAYS` was **not** changed - still 5.
+
+### Also reverted today
+
+A `/gex-watch` page (GEX Watch moved off the owner Backtests panel onto its own
+Test Lab route, with a polling live lane and a new `/api/gex-watch-live`
+endpoint) was built earlier today and has been **fully reverted** at the owner's
+call - too much data, too slow. The GEX Watch panel is back on
+`owner-vite/src/pages/Backtests.tsx` exactly as it was; `sectionNav.ts`,
+`SectionSubStrip.tsx`, `app-vite/src/App.tsx` and `server-v2/api-router.js` are
+byte-identical to their pre-change state. `components/pages/GexWatch.tsx` and
+`app/app/gex-watch/route.ts` are deleted.
 
 
 ## 2026-08-24 - Seasonality: VIX-spike, month-end, opex studies + year overlays

@@ -47,13 +47,6 @@ export type SectionRoute = {
   short: string;
   color: string;
   icon: string;
-  /**
-   * Same contract as SectionTab.ownerOnly: the pill is drawn for the owner
-   * only. Chrome, not security — the route's DATA must be gated server-side as
-   * well (for /gex-watch both endpoints are `auth: 'owner'`), because a hidden
-   * pill is one pasted URL away from being visited.
-   */
-  ownerOnly?: boolean;
 };
 
 /** A cluster of pills, separated from its neighbours by a hairline divider. */
@@ -104,20 +97,13 @@ export const TESTLAB_SECTION: SectionNav = {
   // makes the Test Lab strip show on /levels, which is now the only chrome that
   // links to it (it came out of GlobalToolbar's NAV_ITEMS) besides the
   // hamburger.
-  // /gex-watch joined on 2026-08-24 — it was one Run-once panel on the
-  // owner-vite Backtests page and is now its own route with a polling live
-  // lane. Listing it here is what puts its pill in this strip and keeps the
-  // strip on screen while you are on it.
-  paths: ["/test", "/strike-history", "/levels", "/gex-watch"],
+  paths: ["/test", "/strike-history", "/levels"],
   defaultTab: "squeeze",
   routes: [
     { href: "/strike-history", label: "Strike History", short: "History", color: LIGHT_BLUE, icon: "🕘" },
     // The whole scanner universe's CB / call wall / put wall on one page —
     // 169 tickers of the three numbers Multi Greek shows for four.
     { href: "/levels",         label: "Levels",         short: "Levels",  color: HOME_THEME.cyan, icon: "🧱" },
-    // OWNER ONLY: the calibration sweep and the untested intraday lane. The
-    // customer-ready read of the same data is the GEX Watch box on /premarket.
-    { href: "/gex-watch",      label: "GEX Watch",      short: "Watch",   color: HOME_THEME.orange, icon: "👁️", ownerOnly: true },
   ],
   tabs: [
     { id: "squeeze",     label: "Squeeze",         short: "Squeeze",  color: HOME_THEME.orange, icon: "🌀" },
@@ -152,7 +138,7 @@ export const TESTLAB_SECTION: SectionNav = {
   groups: [
     { key: "gamma",   tabs: ["squeeze", "dealergamma", "gexmap"] },
     { key: "scanner", tabs: ["gex", "gexpct", "marketquality", "statprompter", "condrail"], routes: ["/strike-history", "/levels"] },
-    { key: "flow",    tabs: ["flow", "premdiff"], routes: ["/gex-watch"] },
+    { key: "flow",    tabs: ["flow", "premdiff"] },
     { key: "season",  tabs: ["seasonality"] },
   ],
   event: TESTLAB_TAB_EVENT,

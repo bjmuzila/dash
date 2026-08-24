@@ -407,15 +407,92 @@ export default function Backtests() {
         }
       />
 
-      {/* GEX Watch MOVED — 2026-08-24.
-          It is its own page now: /gex-watch, in the Test Lab sub-strip
-          (components/pages/GexWatch.tsx). It was the only panel here whose
-          answer changed intraday, and a Run-once panel could not show that;
-          the page splits it into a polling "building now" lane
-          (/api/gex-watch-live) and the full on-demand study, which is still
-          this same endpoint, test=strike-gex-watch.
-          Do NOT re-add a copy here — two renderers of one feed is two
-          answers. */}
+      <Panel
+        title="GEX Watch" test="strike-gex-watch"
+        subtitle="Strikes growing more than their ticker normally grows, at a cutoff the backtest earned rather than one anybody picked."
+        primary={["feed", "feed_live", "logged_feed"]}
+        fields={[
+          { key: "minZ", label: "×normal (0 = auto)", type: "number", def: 0 },
+          { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },
+          { key: "days", label: "history (days)", type: "number", def: 180 },
+          { key: "hitSigma", label: "big move (σ)", type: "number", def: 1 },
+          { key: "withChecks", label: "run checks", type: "checkbox", def: false },
+        ]}
+        help={
+          <>
+            <p style={{ margin: "0 0 10px", color: HOME_THEME.text }}>
+              Hit Run. Read <strong style={{ color: LIGHT_BLUE }}>feed</strong>. That is the whole daily use.
+            </p>
+            <p style={{ margin: "0 0 10px", padding: "8px 10px", background: "rgba(125,211,252,0.07)", borderLeft: `2px solid ${LIGHT_BLUE}`, fontSize: 13, lineHeight: 1.55, color: HOME_THEME.text }}>
+              MU 2000 strike — GEX grew +187%, way above normal (3.4× typical). $4.2M → $12.1M, 3.1% vs spot,
+              call side. History: 51% big-move next session (1.8× base, n=64).
+            </p>
+
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, margin: "16px 0 8px" }}>The three numbers on a line</div>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>×normal</strong> — the strike's dollar change ÷ the trailing average of <em>that ticker's own biggest daily strike move</em>. 1.0 is an ordinary day's hottest strike; 3× is three times that. It is what puts a mid-cap and SPX on one scale — a plain dollar cutoff would just rank the feed by market cap.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>Δ %</strong> — the raw growth, measured only on strikes that already held real gamma. Without that floor a strike going $12K → $900K reads as “+7,400%”. A line that says <strong>FLIPPED</strong> crossed zero, which is a regime change and not a percentage at all.</p>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>side</strong> — read from the real call/put legs, not the sign of Δ. A positive Δ means calls were added <em>or</em> puts were removed, and those are opposite events.</p>
+            <p style={{ margin: "0 0 5px", color: HOME_THEME.text }}><strong style={{ color: SOFT_RED }}>⚠ OPEX SESSION</strong> — on the third Friday the expiring tranche leaves the chain, so strikes collapse for calendar reasons. Those lines are flagged and excluded from the calibration; pass <code>opex=1</code> to put them back in.</p>
+            <p style={{ margin: "0 0 10px" }}><strong style={{ color: LIGHT_BLUE }}>History</strong> — what happened the last n times anything hit that band. “Not enough past events” means the flag is untested, not proven.</p>
+
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, margin: "16px 0 8px" }}>The cutoff is earned, not chosen</div>
+            <p style={{ margin: "0 0 8px" }}>
+              Leave <strong>×normal</strong> at <strong>0</strong> and the backtest sets it: it sweeps candidate levels
+              across your history and takes the one where price actually followed. Open{" "}
+              <strong>Calibration &amp; diagnostics</strong> to see that sweep.
+            </p>
+            <p style={{ margin: "0 0 8px" }}>
+              In <strong>calibration</strong>, trust <strong style={{ color: LIGHT_BLUE }}>lift (low)</strong>, not{" "}
+              <strong>lift</strong>. Raw lift almost always peaks at the most extreme cutoff simply because the tail has
+              the fewest events — on the test data ≥4× showed 1.86× on 24 events while ≥1.5× showed 1.66× on 154. The
+              first is twenty-four coin flips. The lower bound is the worst case at 95% confidence, and picking on it
+              chooses the second.
+            </p>
+            <p style={{ margin: "0 0 10px" }}>
+              <strong>odds</strong> is the sanity check: does lift <em>rise</em> as changes get bigger? The note says so
+              out loud. One bin popping while its neighbours sit at baseline is a coincidence, not a threshold.
+            </p>
+
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, margin: "16px 0 8px" }}>The log — believe this over the backtest</div>
+            <p style={{ margin: "0 0 8px" }}>
+              A recorder writes the alerts down every day at 16:40 ET and grades them once the next session
+              exists. <strong>logged_feed</strong> is that record — the line exactly as it was said on the day,
+              with the outcome appended:
+            </p>
+            <p style={{ margin: "0 0 8px", padding: "8px 10px", background: "rgba(125,211,252,0.07)", borderLeft: `2px solid ${LIGHT_BLUE}`, fontSize: 13, lineHeight: 1.55, color: HOME_THEME.text }}>
+              [2026-08-21] MU 2000 strike — GEX grew +187%… → RESULT: −1.42σ next session ✓ HIT
+            </p>
+            <p style={{ margin: "0 0 8px" }}>
+              <strong>track_record</strong> is the same thing summarised, and it is{" "}
+              <strong style={{ color: LIGHT_BLUE }}>forward-tested</strong>: of the alerts the rule ACTUALLY
+              fired, how many were followed by a move. Nothing in it was chosen after seeing the outcome, which
+              is exactly what you cannot say about the calibration sweep. Where the two disagree, the log wins.
+            </p>
+            <p style={{ margin: "0 0 10px" }}>
+              It also survives the retention problem — the log accrues on its own, so even if{" "}
+              <code>eod_strike_gex</code> keeps getting truncated, your record of what was flagged and what
+              happened next does not reset. Rows reading “not graded yet” are waiting on a forward session,
+              not broken.
+            </p>
+
+            <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LIGHT_BLUE, margin: "16px 0 8px" }}>Two lanes, and run checks</div>
+            <p style={{ margin: "0 0 5px" }}><strong style={{ color: LIGHT_BLUE }}>feed</strong> — since last close, off 400 sessions, so every line carries odds. The premarket read.</p>
+            <p style={{ margin: "0 0 8px" }}><strong style={{ color: LIGHT_BLUE }}>feed_live</strong> — building now, off 1-minute data. Marked <strong style={{ color: SOFT_RED }}>UNTESTED</strong>: 5-day retention leaves no outcome history to score against. Never read a feed hit-rate onto a feed_live line.</p>
+            <p style={{ margin: "0 0 8px" }}>
+              <strong>run checks</strong> is off by default because each one runs its own full-history query.
+              Tick it and you get <strong>premove_check</strong> — the same study run backwards, starting from the moves
+              and looking back, printing move-days next to quiet-days. <strong>If those two rows look alike, the cutoff
+              above is describing noise</strong> however good its lift looks. With a ticker set you also get its
+              per-strike timeline.
+            </p>
+            <p style={{ margin: "6px 0 0", color: HOME_THEME.text }}>
+              <strong style={{ color: SOFT_RED }}>Not live.</strong> Written once daily after the close. An empty feed
+              is a real answer — most days are quiet at an earned cutoff — but a stalled recorder looks identical from
+              here, which is what <strong>coverage</strong> is for. Check it first if the feed goes quiet for days.
+            </p>
+          </>
+        }
+      />
 
     </PageShell>
   );
