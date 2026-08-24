@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME } from "./homeTheme";
@@ -23,6 +23,20 @@ const INFO_LINKS: { href: string; label: string }[] = [
 const STRIPE_PORTAL = "https://billing.stripe.com/p/login/dR6cNfd9J3zE84U4gg";
 
 /**
+ * "My Tickets" lives here so a reply is findable without hunting for the
+ * feedback page and switching tabs — the deep link opens /feedback already on
+ * the "My tickets" view (app/feedback/page.tsx reads ?tab=mine).
+ *
+ * Unread is polled, not pushed: /api/feedback?scope=mine already returns
+ * `unreadCount` (owner replies the customer has not opened) as a by-product of
+ * the ticket list, so this costs one cheap query a minute and needs no new
+ * endpoint and nothing on the socket. limit=1 keeps the payload to a stub —
+ * the counts are computed over the whole set server-side regardless.
+ */
+const TICKETS_HREF = "/feedback?tab=mine";
+const TICKET_POLL_MS = 60_000;
+
+/**
  * Replacement for Clerk's <UserButton>: a round avatar that opens a small
  * menu with the email + a Sign out action. Shows the initials avatar unless
  * the user has linked Discord (see /api/discord/status), in which case their
@@ -40,6 +54,7 @@ export default function UserMenu() {
   const [open, setOpen] = useState(false);
   const [resetSent, setResetSent] = useState(false);
   const [discord, setDiscord] = useState<DiscordStatus>({ connected: false });
+  const [unreadTickets, setUnreadTickets] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -49,6 +64,39 @@ export default function UserMenu() {
       .then((d: DiscordStatus) => setDiscord(d))
       .catch(() => {});
   }, [user]);
+
+  // Unread ticket replies. COUNT comes back from Postgres as a string on some
+  // paths, so it is coerced here rather than trusted.
+  const loadTicketUnread = useCallback(async () => {
+    try {
+      const r = await fetch("/api/feedback?scope=mine&limit=1", { cache: "no-store" });
+      if (!r.ok) return; // signed out / not provisioned — leave the badge dark
+      const j = await r.json();
+      const n = Number(j?.unreadCount ?? 0);
+      setUnreadTickets(Number.isFinite(n) && n > 0 ? n : 0);
+    } catch {
+      /* the badge is a nicety — never let it surface an error */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) { setUnreadTickets(0); return; }
+    void loadTicketUnread();
+    // A background tab is nobody looking at a badge — skip the query and catch
+    // up on the way back, so a parked dashboard is not a query a minute.
+    const tick = () => { if (!document.hidden) void loadTicketUnread(); };
+    const onVisible = () => { if (!document.hidden) void loadTicketUnread(); };
+    const t = window.setInterval(tick, TICKET_POLL_MS);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [user, loadTicketUnread]);
+
+  // Opening the menu is the one moment the number is actually being read —
+  // refresh it then so it is never a minute stale at the moment it matters.
+  useEffect(() => { if (open && user) void loadTicketUnread(); }, [open, user, loadTicketUnread]);
 
   const handleDisconnectDiscord = async () => {
     await fetch("/api/discord/status", { method: "POST" }).catch(() => {});
@@ -79,14 +127,27 @@ export default function UserMenu() {
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
+      {/* Keyframes for the unread pulse. Inline styles cannot express an
+          animation, and this is the only place in the menu that needs one. */}
+      <style>{`
+        @keyframes cbTicketPulse {
+          0%, 100% { box-shadow: 0 0 0 0 ${HOME_THEME.orange}00; }
+          50%      { box-shadow: 0 0 0 4px ${HOME_THEME.orange}33; }
+        }
+      `}</style>
       <button
         onClick={() => setOpen((v) => !v)}
-        title={user?.email ?? "Account"}
+        title={
+          unreadTickets > 0
+            ? `${unreadTickets} unread ticket ${unreadTickets === 1 ? "reply" : "replies"}`
+            : user?.email ?? "Account"
+        }
         style={{
           width: 38,
           height: 38,
           borderRadius: "50%",
-          border: `1px solid ${HOME_THEME.border}`,
+          border: `1px solid ${unreadTickets > 0 ? HOME_THEME.orange : HOME_THEME.border}`,
+          boxShadow: unreadTickets > 0 ? `0 0 10px ${HOME_THEME.orange}59` : "none",
           background: avatarUrl ? `center/cover url(${avatarUrl})` : "rgba(33,158,188,0.22)",
           color: HOME_THEME.text,
           fontWeight: 700,
@@ -101,6 +162,26 @@ export default function UserMenu() {
       >
         {!avatarUrl && initial}
       </button>
+
+      {/* The "light up": a dot on the avatar itself, so an unread reply is
+          visible without opening the menu. The count lives on the row inside. */}
+      {unreadTickets > 0 && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: -1,
+            right: -1,
+            width: 11,
+            height: 11,
+            borderRadius: "50%",
+            background: HOME_THEME.orange,
+            border: `2px solid ${HOME_THEME.bg}`,
+            animation: "cbTicketPulse 2s ease-in-out infinite",
+            pointerEvents: "none",
+          }}
+        />
+      )}
 
       {open && (
         <div
@@ -268,6 +349,49 @@ export default function UserMenu() {
           )}
 
           <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
+
+          {/* My Tickets — native <a> for the same reason as the links below:
+              inside the Vite SPA (basename="/app") a next/link would resolve
+              to /app/feedback, which is not a route. The ?tab=mine lands the
+              customer on the ticket list rather than the new-ticket form. */}
+          <a
+            href={TICKETS_HREF}
+            onClick={() => setOpen(false)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+              padding: "8px 10px",
+              borderRadius: 6,
+              color: unreadTickets > 0 ? HOME_THEME.orange : HOME_THEME.text,
+              fontSize: 14,
+              fontWeight: unreadTickets > 0 ? 700 : 500,
+              textDecoration: "none",
+              background: unreadTickets > 0 ? `${HOME_THEME.orange}14` : "transparent",
+            }}
+          >
+            <span>My Tickets</span>
+            {unreadTickets > 0 && (
+              <span
+                style={{
+                  minWidth: 18,
+                  height: 18,
+                  padding: "0 5px",
+                  borderRadius: 999,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 10,
+                  fontWeight: 800,
+                  color: HOME_THEME.bg,
+                  background: HOME_THEME.orange,
+                }}
+              >
+                {unreadTickets > 99 ? "99+" : unreadTickets}
+              </span>
+            )}
+          </a>
 
           {/* Native <a>, NOT next/link — same reason as What's New above, which
               this block had missed. These are top-level Next pages, but inside

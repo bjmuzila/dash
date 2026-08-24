@@ -6861,6 +6861,35 @@ if (libDb) {
     });
   }
 
+  // /api/gex-watch-feed — the premarket page's "what grew overnight" box.
+  //
+  // SUBSCRIBER, not owner: this is a customer surface. It reads the alert log
+  // the recorder already wrote and runs NO calibration — the sweep behind the
+  // owner panel is a 169-ticker window-function scan and must never fire on a
+  // page load. One indexed read plus a small rollup.
+  //
+  // The "simple conditions" filter (latest session, at or above that day's
+  // earned cutoff, opex excluded) lives in _lib-gex-watch.cjs so this route and
+  // the owner panel can never disagree about what counts as flagged.
+  {
+    register('/api/gex-watch-feed', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          if (!libDb?.queryAll) { send(res, 200, { ok: true, rows: [], note: 'Feed unavailable.' }); return; }
+          const q = new URL(req.url || '/', 'http://localhost').searchParams;
+          const lim = Math.max(1, Math.min(25, Number(q.get('limit')) || 8));
+          const GW = require('./_lib-gex-watch.cjs').create({ queryAll: (...a) => libDb.queryAll(...a) });
+          const out = await GW.readSimpleFeed(lim, 20);
+          send(res, 200, { ok: true, ...out });
+        } catch (e) {
+          // A customer page must degrade to "nothing to show", never to a stack.
+          send(res, 200, { ok: true, rows: [], note: 'Feed unavailable right now.', error: e.message });
+        }
+      },
+    });
+  }
+
   // /api/backtests?test=... — owner-only research panels (read-only SELECTs +
   // one live-chain fetch). Ported verbatim from app/api/backtests/route.ts:
   // queryAll->libDb.queryAll, getServerUserId gate->enforceAuth 'owner',

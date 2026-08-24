@@ -69,14 +69,34 @@ const GAMMA_PUT = "#C96A3E";
 const WARN = "#E0B341";
 
 type FeedRow = {
-  alert?: string; logged?: string;
+  alert?: string; logged?: string; building?: string;
   date?: string; symbol?: string; strike?: number; zx?: number; band?: string;
   verdict?: string; what?: string; side?: string; vsSpot?: string;
   isCall?: boolean; isAdded?: boolean; flip?: boolean; opex?: boolean;
   histHit?: number | null; histLift?: number | null; histN?: number | null;
   staleDays?: number;
   graded?: boolean; moveSigma?: number | null; move3d?: number | null; hit?: boolean;
+  lane?: string; untested?: boolean; at?: string; expiry?: string;
+  builtM?: number; typicalM?: number | null; baselineSessions?: number;
 };
+
+/**
+ * The row's canonical sentence. Each lane names it differently — `alert` on the
+ * daily feed, `building` on the intraday one, `logged` in the recorder's log —
+ * and the last fallback scans for ANY string field.
+ *
+ * That last clause is not paranoia: `feed_live` shipped with only `building`,
+ * the lookup checked `alert || logged`, and every row rendered as an empty
+ * styled box. A renderer that can silently produce nothing is worse than one
+ * that throws, so this cannot return blank while the row holds any text at all.
+ */
+function rowText(r: FeedRow): string {
+  if (r.alert) return r.alert;
+  if (r.building) return r.building;
+  if (r.logged) return r.logged;
+  const first = Object.values(r).find((v) => typeof v === "string" && v.length > 12);
+  return typeof first === "string" ? first : "";
+}
 
 const chipBase: CSSProperties = {
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 10, fontWeight: 700,
@@ -96,7 +116,7 @@ function Chips({ r }: { r: FeedRow }) {
           background: "repeating-linear-gradient(45deg, rgba(224,179,65,0.14) 0 3px, transparent 3px 6px)",
         }}>OPEX</span>
       )}
-      {r.histHit == null && r.zx != null && (
+      {r.histHit == null && r.zx != null && r.lane !== "live" && (
         <span style={{ ...chipBase, color: HOME_THEME.muted, opacity: 0.55, border: `1px solid ${HOME_THEME.border}` }}>UNTESTED</span>
       )}
     </>
@@ -113,15 +133,18 @@ function FeedRows({ rows }: { rows: FeedRow[] }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 10 }}>
       {rows.map((r, i) => {
-        const text = r.alert || r.logged || "";
-        if (!r.symbol || r.zx == null) {
+        const text = rowText(r);
+        // Structured rendering needs a symbol; `zx` may legitimately be null on
+        // an intraday row with no time-of-day baseline yet, so it is handled
+        // inside rather than dropping the row to plain text.
+        if (!r.symbol) {
           return (
             <div key={i} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 6, padding: "9px 12px",
               fontSize: 13, color: HOME_THEME.text, fontFamily: mono, lineHeight: 1.5 }}>{text}</div>
           );
         }
         const edge = r.isCall ? GAMMA_CALL : GAMMA_PUT;
-        const pctOfScale = Math.max(3, Math.min(100, (r.zx / 8) * 100));
+        const pctOfScale = r.zx == null ? 0 : Math.max(3, Math.min(100, (r.zx / 8) * 100));
         return (
           <div key={i} style={{ display: "grid", gridTemplateColumns: "3px 1fr",
             background: "rgba(255,255,255,0.03)", borderRadius: 6, overflow: "hidden" }}>
@@ -130,7 +153,10 @@ function FeedRows({ rows }: { rows: FeedRow[] }) {
               <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
                 <span style={{ fontFamily: mono, fontSize: 11.5, color: HOME_THEME.muted, opacity: 0.55 }}>[{r.date}]</span>
                 <span style={{ fontSize: 14.5, fontWeight: 700 }}>{r.symbol}</span>
-                <span style={{ fontFamily: mono, fontSize: 13, color: HOME_THEME.muted, opacity: 0.75 }}>{r.strike} strike</span>
+                <span style={{ fontFamily: mono, fontSize: 13, color: HOME_THEME.muted, opacity: 0.75 }}>
+                  {r.strike} strike{r.expiry ? ` · exp ${r.expiry}` : ""}
+                </span>
+                {r.at && <span style={{ fontFamily: mono, fontSize: 11.5, color: LIGHT_BLUE, opacity: 0.8 }}>{r.at} ET</span>}
                 <Chips r={r} />
                 {(r.staleDays ?? 0) > 3 && (
                   <span style={{ ...chipBase, color: SOFT_RED, border: `1px solid ${SOFT_RED}88` }}>{r.staleDays}D STALE</span>
@@ -142,18 +168,28 @@ function FeedRows({ rows }: { rows: FeedRow[] }) {
               </div>
 
               <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                <span style={{ fontFamily: mono, fontSize: 12.5, fontWeight: 700, color: edge, minWidth: 40 }}>
-                  {r.zx}×
+                <span style={{ fontFamily: mono, fontSize: 12.5, fontWeight: 700, color: r.zx == null ? HOME_THEME.muted : edge, minWidth: 40, opacity: r.zx == null ? 0.5 : 1 }}>
+                  {r.zx == null ? "—" : `${r.zx}×`}
                 </span>
                 <span style={{ flex: "0 1 200px", height: 5, background: "rgba(255,255,255,0.07)", borderRadius: 3, overflow: "hidden" }}>
                   <span style={{ display: "block", height: "100%", width: `${pctOfScale}%`, background: edge, borderRadius: 3 }} />
                 </span>
                 <span style={{ fontFamily: mono, fontSize: 11.5, color: HOME_THEME.muted, opacity: 0.6 }}>
-                  {r.histHit == null
-                    ? "no odds at this level yet"
-                    : `hist ${r.histHit}%${r.histLift ? ` · ${r.histLift}× base` : ""}${r.histN ? ` · n=${r.histN}` : ""}`}
+                  {r.lane === "live"
+                    ? (r.zx == null
+                        ? `no baseline yet — ${r.baselineSessions ?? 0} prior session(s) at this time`
+                        : `vs a typical ${r.at} · ${r.baselineSessions} prior session${r.baselineSessions === 1 ? "" : "s"}`)
+                    : r.histHit == null
+                      ? "no odds at this level yet"
+                      : `hist ${r.histHit}%${r.histLift ? ` · ${r.histLift}× base` : ""}${r.histN ? ` · n=${r.histN}` : ""}`}
                 </span>
               </div>
+
+              {r.lane === "live" && (
+                <div style={{ fontFamily: mono, fontSize: 11.5, color: WARN, opacity: 0.8 }}>
+                  ⚠ UNTESTED — no outcome history for intraday builds yet
+                </div>
+              )}
 
               {r.graded !== undefined && (
                 <div style={{ fontFamily: mono, fontSize: 12, color: HOME_THEME.muted, opacity: 0.75,

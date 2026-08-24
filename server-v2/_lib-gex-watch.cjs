@@ -607,14 +607,35 @@ function create({ queryAll }) {
     const feed_live = live.map((r) => {
       const zx = r['×normal'];
       const scored = zx != null;
+      const built = num(r['built $M']);
+      // strike_growth has NO call/put legs — only opt_type 'NET' — so this lane
+      // must not claim a side the way lane 1 does. It says which way net gamma
+      // moved and stops there. Inferring "call side" from a positive Δ is the
+      // exact error that was fixed on the daily feed; do not reintroduce it here
+      // because the sentence reads better.
+      const dir = built >= 0 ? 'positive γ building' : 'negative γ building';
       return {
+        // `building` stays first and canonical, same contract as `alert`.
         building: `${r.symbol} ${r.strike} strike (exp ${r.expiry}) — building `
-          + `${r['built $M'] >= 0 ? '+' : '−'}$${Math.abs(r['built $M'])}M since the open`
+          + `${built >= 0 ? '+' : '−'}$${Math.abs(built)}M since the open`
           + (scored
             ? `, ${WORDS(zx)} for this time of day (${zx}× a typical ${r.at}, from ${r['baseline sessions']} prior session${r['baseline sessions'] === 1 ? '' : 's'})`
             : `, no baseline yet — needs ${minSess}+ prior sessions at ${r.at}, has ${r['baseline sessions']}`)
-          + `. ${r['vs spot']} vs spot, ${r.side.split('/')[0]} side. As of ${r.at} ET ${r.date}.`
+          + `. ${r['vs spot']} vs spot, ${dir}. As of ${r.at} ET ${r.date}.`
           + ` ⚠ UNTESTED — strike_growth keeps ~5 days, so there is no outcome history to score this against.`,
+        // Same additive fields the daily feed carries, so ONE renderer serves
+        // both lanes. `alert` is deliberately absent — this lane is not an alert
+        // and must never be mistaken for one in a log or a Discord relay.
+        date: r.date, at: r.at, symbol: r.symbol, strike: r.strike, expiry: r.expiry,
+        zx: scored ? zx : null,
+        what: `building ${built >= 0 ? '+' : '−'}$${Math.abs(built)}M since the open`,
+        side: dir, vsSpot: r['vs spot'],
+        builtM: built, typicalM: r['typical $M'], baselineSessions: r['baseline sessions'],
+        isCall: built >= 0, isAdded: true,
+        flip: false, opex: false,
+        // No odds exist for this lane and none can until retention is raised.
+        histHit: null, histLift: null, histN: null,
+        lane: 'live', untested: true,
       };
     });
 
@@ -626,6 +647,121 @@ function create({ queryAll }) {
           + `Baseline = that symbol's biggest build at the SAME 10-minute slot on prior sessions — delta_abs grows all day by construction, so 15:45 must be judged against other 15:45s, never against a flat daily average. `
           + `⚠ NO ODDS ON THIS LANE, and there cannot be until RETENTION_STRIKE_GROWTH_DAYS is raised and weeks pass. Do not read lane-1 hit rates onto these lines.`
         : `Nothing in strike_growth for this filter. That table keeps ~5 days and only writes during RTH — outside market hours the latest recorded minute may be from the prior session.`,
+    };
+  };
+
+  /**
+   * THE CUSTOMER FEED — the simple conditions only.
+   *
+   * Reads gex_watch_alerts, which the recorder already wrote. It does NOT run
+   * the calibration sweep: that is a 169-ticker window-function scan and has no
+   * business firing on every page load of a subscriber page. Everything here is
+   * one indexed read of the latest session plus one small rollup.
+   *
+   * "Simple conditions" is a real filter, not a vibe. A row reaches a customer
+   * only if it is:
+   *   · on the LATEST recorded session (never a mix of dates),
+   *   · at or above the cutoff the recorder itself used that day, and
+   *   · not an opex session — on the third Friday the expiring tranche leaves
+   *     the chain and every strike carrying it collapses. Those are the largest
+   *     numbers in the table and none of them mean anything. Owners can see them
+   *     flagged on the panel; customers should never be shown the calendar and
+   *     told it is a signal.
+   *
+   * Track record is FORWARD-TESTED and comes from the log's own graded rows, so
+   * "N of the last M" is a count of what this rule actually did — not a
+   * backtest, and never quoted before `minGraded` outcomes exist.
+   */
+  const readSimpleFeed = async (limit, minGraded) => {
+    let rows, track;
+    try {
+      rows = await libDb.queryAll(
+        // The latest NON-OPEX session, not simply the latest. On the third
+        // Friday every flagged row is expiring gamma, so `MAX(date)` would
+        // blank this box once a month and leave a customer staring at
+        // "nothing unusual" on the one day the chain changed most. Showing
+        // Thursday's, labelled with its own date, is the honest answer.
+        //
+        // COALESCE, not `= false`: NULL is not false in SQL, so a legacy or
+        // partially-written row would be silently dropped and the box would go
+        // mysteriously empty. Unknown means "not known to be opex".
+        `WITH latest AS (
+           SELECT MAX(date) AS d FROM gex_watch_alerts WHERE COALESCE(is_opex, false) = false
+         )
+         SELECT to_char(a.date, 'YYYY-MM-DD') AS date, a.symbol, a.strike, a.zx, a.band,
+                a.d_pct, a.prev_net, a.now_net, a.spot, a.side, a.is_flip,
+                (CURRENT_DATE - a.date) AS stale
+           FROM gex_watch_alerts a, latest
+          WHERE a.date = latest.d
+            AND COALESCE(a.is_opex, false) = false
+            AND (a.cutoff IS NULL OR a.zx >= a.cutoff)
+          ORDER BY a.zx DESC
+          LIMIT ?::int`, [limit]);
+      track = await libDb.queryAll(
+        `SELECT band,
+                count(*) FILTER (WHERE graded_at IS NOT NULL)::int AS graded,
+                count(*) FILTER (WHERE hit_1d)::int               AS hits
+           FROM gex_watch_alerts
+          WHERE COALESCE(is_opex, false) = false
+          GROUP BY band`);
+    } catch {
+      // The recorder has never run, so the table does not exist. That is a
+      // normal pre-launch state, not an error to shout about on a customer page.
+      return { rows: [], asOf: null, note: 'The daily scan has not run yet.' };
+    }
+    if (!rows.length) {
+      return { rows: [], asOf: null,
+        note: 'Nothing cleared the bar on the last session — most days are quiet.' };
+    }
+
+    const byBand = new Map(track.map((t) => [t.band, { graded: num(t.graded), hits: num(t.hits) }]));
+    const m = (v) => `${v < 0 ? '−' : ''}$${Math.abs(round(num(v) / 1e6, 1))}M`;
+
+    const out = rows.map((r) => {
+      const zx = round(num(r.zx), 1);
+      const spot = Number(r.spot), strike = num(r.strike);
+      // EVERY optional field is guarded. A row written by an older recorder, or
+      // one where the chain came back without a spot, must degrade to a shorter
+      // sentence — never to "Infinity% above spot" or the literal "null", which
+      // is exactly what an unguarded template produces and what a customer would
+      // then be looking at on the premarket page.
+      const hasSpot = Number.isFinite(spot) && spot > 0 && strike > 0;
+      const vs = hasSpot ? round(100 * (strike / spot - 1), 1) : null;
+      const hasNow = r.now_net != null;
+      const side = typeof r.side === 'string' && r.side.trim() ? r.side.trim() : null;
+      const isCall = side ? /^call/.test(side) : num(r.d_pct) >= 0;
+      const t = byBand.get(r.band);
+      const shown = t && t.graded >= minGraded ? t : null;
+
+      // Plain English on the face. A customer does not need "×normal" or "lift"
+      // explained to them before the sentence means something.
+      const headline = r.is_flip && r.prev_net != null && hasNow
+        ? `gamma flipped ${m(r.prev_net)} → ${m(r.now_net)}`
+        : r.d_pct == null
+          ? (hasNow ? `gamma now ${m(r.now_net)}` : 'gamma moved sharply')
+          : `gamma ${num(r.d_pct) >= 0 ? 'grew' : 'shrank'} ${Math.abs(Math.round(num(r.d_pct)))}%`
+            + (hasNow ? ` to ${m(r.now_net)}` : '');
+
+      const vsText = vs == null ? null : `${Math.abs(vs)}% ${vs > 0 ? 'above' : 'below'} spot`;
+      return {
+        date: r.date, symbol: r.symbol, strike: round(strike, 2),
+        headline, side, isCall, flip: !!r.is_flip,
+        zx, times: `${zx}× a normal day for ${r.symbol}`,
+        vsSpot: vs == null ? null : `${vs > 0 ? '+' : ''}${vs}%`,
+        above: vs == null ? null : vs > 0,
+        track: shown ? { graded: shown.graded, hits: shown.hits, pct: pct(shown.hits, shown.graded) } : null,
+        stale: num(r.stale),
+        line: [
+          `${r.symbol} ${round(strike, 2)} — ${headline}, ${zx}× a normal day.`,
+          vsText, side,
+        ].filter(Boolean).join(' ').replace(/\.\s([a-z0-9])/g, '. $1')
+          + (shown ? ` ${shown.hits} of the last ${shown.graded} like this moved.` : ''),
+      };
+    });
+    return {
+      rows: out, asOf: rows[0].date,
+      note: `${out.length} strike${out.length === 1 ? '' : 's'} grew far more than normal on the last session. `
+        + `Opex sessions are excluded — on the third Friday gamma disappears because options expire, not because anyone repositioned.`,
     };
   };
 
@@ -1392,7 +1528,7 @@ function create({ queryAll }) {
   return {
     strikeGexWatch, strikeGexPremove, strikeGexThreshold, strikeGexTimeline,
     strikeGexMove, strikeGexMoveIntraday, strikeGexBuildingNow, gexCoverage,
-    readAlertLog,
+    readAlertLog, readSimpleFeed,
   };
 }
 

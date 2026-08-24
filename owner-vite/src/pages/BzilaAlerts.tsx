@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { PageShell, Card } from "../components/PageCard";
 import { OWNER_THEME, rgba, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle } from "../lib/theme";
 import { useRefreshButton } from "../hooks/useRefreshButton";
@@ -26,26 +26,42 @@ type Alert = {
   down?: number;
 };
 
-type Reactor = { email: string; reaction: "" | "up" | "down"; clicks: number; updated_at: string };
-type ReportAlert = Alert & { reactors: Reactor[] };
-
+// All-time scoreboard row from /api/bzila-alerts/history. That endpoint reads
+// the append-only reaction LOG, not the live reaction table — every 👍/👎 a
+// subscriber has ever given counts here, including ones on alerts that were
+// later DELETED or edited, and ones they toggled back off afterwards. The old
+// build derived this card from /report, which could only ever see reactions
+// still attached to a living alert, so deleting an alert silently erased its
+// reactions from the tally.
+type HistoryItem = {
+  alertId: number;
+  title: string;
+  body: string;
+  reaction: "up" | "down";
+  at: string;
+  deleted: boolean;
+};
 type UserRow = {
   email: string;
+  userId: string;
   up: number;
   down: number;
+  total: number;
+  alerts: number;
   clicks: number;
+  firstAt: string;
   lastAt: string;
-  items: { alertId: number; title: string; body: string; reaction: "up" | "down"; updated_at: string }[];
+  items: HistoryItem[];
 };
 
 const GREEN = "#1FD98A";
 const CYAN = OWNER_THEME.cyan;
 
-// Both cards on this page are a HISTORY view, not a feed. The bare endpoints
-// return what the customer toolbar bell needs (latest 5 alerts, latest 50 in the
-// report), which quietly truncated the owner's list and made older alerts — and
-// the 👍/👎 recorded against them — vanish from the tallies. ?limit= is honoured
-// for the owner only, so the bell is unaffected.
+// The "All alerts" list is a HISTORY view, not a feed. The bare endpoint returns
+// what the customer toolbar bell needs (latest 5), which quietly truncated the
+// owner's list. ?limit= is honoured for the owner only, so the bell is
+// unaffected. (The scoreboard card below has its own, larger limit — it reads
+// the reaction log, which outlives the alerts themselves.)
 const HISTORY_LIMIT = 2000;
 
 function ago(iso: string): string {
@@ -87,8 +103,8 @@ export default function BzilaAlerts() {
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [report, setReport] = useState<ReportAlert[]>([]);
-  const [reportLoaded, setReportLoaded] = useState(false);
+  const [userRows, setUserRows] = useState<UserRow[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [expandedUser, setExpandedUser] = useState<string | null>(null);
 
   const [draftTitle, setDraftTitle] = useState("");
@@ -112,48 +128,29 @@ export default function BzilaAlerts() {
     }
   }, []);
 
-  const loadReport = useCallback(async () => {
+  // The scoreboard is served pre-aggregated by /api/bzila-alerts/history — the
+  // server owns it because only the log table knows about alerts that no longer
+  // exist. Nothing here derives from `report`, which is per-LIVE-alert only.
+  const loadHistory = useCallback(async () => {
     try {
-      const r = await fetch(`/api/bzila-alerts/report?limit=${HISTORY_LIMIT}`, { cache: "no-store" });
+      const r = await fetch(`/api/bzila-alerts/history?limit=20000`, { cache: "no-store" });
       const d = await r.json();
-      setReport(Array.isArray(d?.alerts) ? d.alerts : []);
+      setUserRows(Array.isArray(d?.users) ? d.users : []);
     } catch {
-      // report is supplementary; main alert list already shows an error if that fetch fails
+      // supplementary; the main alert list already surfaces a load error
     } finally {
-      setReportLoaded(true);
+      setHistoryLoaded(true);
     }
   }, []);
 
   useEffect(() => {
     load();
-    loadReport();
-    const id = setInterval(() => { load(); loadReport(); }, 45000);
+    loadHistory();
+    const id = setInterval(() => { load(); loadHistory(); }, 45000);
     return () => clearInterval(id);
-  }, [load, loadReport]);
+  }, [load, loadHistory]);
 
-  const refresh = useRefreshButton(() => Promise.all([load(), loadReport()]));
-
-  // Flatten per-alert reactors into one row per user (email), tallying up/down
-  // across every alert they reacted to and keeping the list of what + how.
-  const userRows = useMemo<UserRow[]>(() => {
-    const byEmail = new Map<string, UserRow>();
-    for (const a of report) {
-      for (const r of a.reactors) {
-        if (r.reaction !== "up" && r.reaction !== "down") continue;
-        let row = byEmail.get(r.email);
-        if (!row) {
-          row = { email: r.email, up: 0, down: 0, clicks: 0, lastAt: r.updated_at, items: [] };
-          byEmail.set(r.email, row);
-        }
-        if (r.reaction === "up") row.up += 1;
-        else row.down += 1;
-        row.clicks += r.clicks || 0;
-        if (new Date(r.updated_at).getTime() > new Date(row.lastAt).getTime()) row.lastAt = r.updated_at;
-        row.items.push({ alertId: a.id, title: a.title, body: a.body, reaction: r.reaction, updated_at: r.updated_at });
-      }
-    }
-    return Array.from(byEmail.values()).sort((a, b) => (b.up + b.down) - (a.up + a.down));
-  }, [report]);
+  const refresh = useRefreshButton(() => Promise.all([load(), loadHistory()]));
 
   const send = async () => {
     const body = draftBody.trim();
@@ -341,9 +338,15 @@ export default function BzilaAlerts() {
         )}
       </Card>
 
-      {/* Who reacted */}
-      <Card title={`Reactions by user${reportLoaded ? ` · ${userRows.length}` : ""}`} variant="classic">
-        {!reportLoaded ? (
+      {/* All-time reaction scoreboard. Sourced from the append-only reaction
+          LOG (/api/bzila-alerts/history), so a subscriber keeps every 👍/👎
+          they have ever given — alerts that were later deleted still count,
+          and their text is shown from the snapshot taken at click time. */}
+      <Card title={`Reactions by user${historyLoaded ? ` · ${userRows.length}` : ""}`} variant="classic">
+        <div style={{ fontSize: 12, color: OWNER_THEME.text, opacity: 0.5, marginBottom: 10 }}>
+          All-time score · includes reactions on alerts that have since been deleted
+        </div>
+        {!historyLoaded ? (
           <div style={{ fontSize: 14, color: OWNER_THEME.text, opacity: 0.5, padding: "8px 2px" }}>Loading…</div>
         ) : userRows.length === 0 ? (
           <div style={{ fontSize: 14, color: OWNER_THEME.text, opacity: 0.5, padding: "8px 2px" }}>No reactions yet.</div>
@@ -352,7 +355,7 @@ export default function BzilaAlerts() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr>
-                  {["Subscriber", "👍 Up", "👎 Down", "Total", "Last reacted"].map((h, i) => (
+                  {["Subscriber", "👍 Up", "👎 Down", "Total", "Alerts", "Taps", "First", "Last reacted"].map((h, i) => (
                     <th
                       key={h}
                       style={{
@@ -365,6 +368,7 @@ export default function BzilaAlerts() {
                         textTransform: "uppercase",
                         color: OWNER_THEME.text,
                         opacity: 0.6,
+                        whiteSpace: "nowrap",
                       }}
                     >
                       {h}
@@ -374,40 +378,42 @@ export default function BzilaAlerts() {
               </thead>
               <tbody>
                 {userRows.map((u) => {
-                  const open = expandedUser === u.email;
+                  const key = u.email || u.userId;
+                  const open = expandedUser === key;
+                  const cell: React.CSSProperties = {
+                    padding: "9px 10px",
+                    borderBottom: `1px solid ${OWNER_THEME.border}`,
+                    textAlign: "right",
+                    fontWeight: 700,
+                    fontVariantNumeric: "tabular-nums",
+                  };
                   return (
-                    <>
+                    <Fragment key={key}>
                       <tr
-                        key={u.email}
-                        onClick={() => setExpandedUser(open ? null : u.email)}
+                        onClick={() => setExpandedUser(open ? null : key)}
                         style={{ cursor: "pointer" }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.03)")}
                         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                       >
                         <td style={{ padding: "9px 10px", borderBottom: `1px solid ${OWNER_THEME.border}`, color: OWNER_THEME.text, fontWeight: 600 }}>
                           <span style={{ color: CYAN, marginRight: 6 }}>{open ? "▾" : "▸"}</span>
-                          {u.email || "(unknown)"}
+                          {u.email || u.userId || "(unknown)"}
                         </td>
-                        <td style={{ padding: "9px 10px", borderBottom: `1px solid ${OWNER_THEME.border}`, textAlign: "right", color: GREEN, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
-                          {u.up}
-                        </td>
-                        <td style={{ padding: "9px 10px", borderBottom: `1px solid ${OWNER_THEME.border}`, textAlign: "right", color: OWNER_THEME.red, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
-                          {u.down}
-                        </td>
-                        <td style={{ padding: "9px 10px", borderBottom: `1px solid ${OWNER_THEME.border}`, textAlign: "right", color: OWNER_THEME.text, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
-                          {u.up + u.down}
-                        </td>
-                        <td style={{ padding: "9px 10px", borderBottom: `1px solid ${OWNER_THEME.border}`, textAlign: "right", color: OWNER_THEME.text, opacity: 0.6 }}>
-                          {ago(u.lastAt)}
-                        </td>
+                        <td style={{ ...cell, color: GREEN }}>{u.up}</td>
+                        <td style={{ ...cell, color: OWNER_THEME.red }}>{u.down}</td>
+                        <td style={{ ...cell, color: OWNER_THEME.text }}>{u.total}</td>
+                        <td style={{ ...cell, color: OWNER_THEME.text, opacity: 0.7 }}>{u.alerts}</td>
+                        <td style={{ ...cell, color: CYAN, opacity: 0.8 }}>{u.clicks}</td>
+                        <td style={{ ...cell, fontWeight: 500, color: OWNER_THEME.text, opacity: 0.5, whiteSpace: "nowrap" }}>{ago(u.firstAt)}</td>
+                        <td style={{ ...cell, fontWeight: 500, color: OWNER_THEME.text, opacity: 0.6, whiteSpace: "nowrap" }}>{ago(u.lastAt)}</td>
                       </tr>
                       {open && (
-                        <tr key={`${u.email}-detail`}>
-                          <td colSpan={5} style={{ padding: "0 10px 12px", borderBottom: `1px solid ${OWNER_THEME.border}` }}>
+                        <tr>
+                          <td colSpan={8} style={{ padding: "0 10px 12px", borderBottom: `1px solid ${OWNER_THEME.border}` }}>
                             <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 4 }}>
                               {u.items
                                 .slice()
-                                .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+                                .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
                                 .map((it, i) => (
                                   <div
                                     key={`${it.alertId}-${i}`}
@@ -418,25 +424,45 @@ export default function BzilaAlerts() {
                                       padding: "8px 10px",
                                       borderRadius: 8,
                                       background: "rgba(255,255,255,0.03)",
+                                      opacity: it.deleted ? 0.72 : 1,
                                     }}
                                   >
                                     <span style={{ color: it.reaction === "up" ? GREEN : OWNER_THEME.red, fontWeight: 700 }}>
                                       {it.reaction === "up" ? "👍" : "👎"}
                                     </span>
                                     <div style={{ flex: 1, minWidth: 0 }}>
-                                      {it.title && <div style={{ fontWeight: 700, color: OWNER_THEME.text }}>{it.title}</div>}
+                                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                        {it.title && <span style={{ fontWeight: 700, color: OWNER_THEME.text }}>{it.title}</span>}
+                                        {it.deleted && (
+                                          <span
+                                            style={{
+                                              fontSize: 10,
+                                              fontWeight: 800,
+                                              letterSpacing: "0.08em",
+                                              textTransform: "uppercase",
+                                              padding: "2px 6px",
+                                              borderRadius: 999,
+                                              color: OWNER_THEME.red,
+                                              border: `1px solid ${rgba(OWNER_THEME.red as string, 0.4)}`,
+                                              background: rgba(OWNER_THEME.red as string, 0.12),
+                                            }}
+                                          >
+                                            Deleted alert
+                                          </span>
+                                        )}
+                                      </div>
                                       <div style={{ color: OWNER_THEME.text, opacity: 0.75, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                                        {it.body}
+                                        {it.body || "(alert text no longer available)"}
                                       </div>
                                     </div>
-                                    <span style={{ fontSize: 12, color: OWNER_THEME.text, opacity: 0.45, whiteSpace: "nowrap" }}>{ago(it.updated_at)}</span>
+                                    <span style={{ fontSize: 12, color: OWNER_THEME.text, opacity: 0.45, whiteSpace: "nowrap" }}>{ago(it.at)}</span>
                                   </div>
                                 ))}
                             </div>
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>

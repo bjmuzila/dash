@@ -98,6 +98,25 @@ export default function FeedbackPage() {
 
   useEffect(() => { void loadList(); }, [loadList]);
 
+  /**
+   * Deep link. "New" stays the default — most arrivals are writing a ticket —
+   * but the "My Tickets" entry in the account menu (and the unread badge on the
+   * avatar) links here with ?tab=mine, and that arrival is coming to READ a
+   * reply, not write one. ?ticket=<id> opens that thread directly.
+   *
+   * Read in an effect rather than in the initial state on purpose: this page is
+   * server-rendered, and the server has no query string to read, so deciding
+   * the tab during render would hydrate to a different tree than the HTML.
+   */
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const id = Number(sp.get("ticket") ?? 0);
+    const wantsMine = sp.get("tab") === "mine" || (Number.isFinite(id) && id > 0);
+    if (!wantsMine) return;
+    setTab("mine");
+    if (Number.isFinite(id) && id > 0) setOpenId(id);
+  }, []);
+
   useEffect(() => {
     if (openId == null) { setThread(null); return; }
     void loadThread(openId);

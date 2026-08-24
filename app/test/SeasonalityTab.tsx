@@ -4,43 +4,51 @@
 // Test Lab → Seasonality.
 //
 // Two lines on one calendar-day axis:
-//   • the average cumulative % path of the E-mini S&P 500 across 2018-2025
-//     (the "seasonal" curve — same construction as the published EquityClock
-//     chart, computed here from the ES continuous series), and
+//   • the average cumulative % path of the S&P 500 across a selectable window
+//     (10 / 20 / 50 years, or the whole 1928-2025 record) — the "seasonal" curve,
+//     same construction as the published EquityClock chart, and
 //   • 2026 so far, re-based to the same 31-Dec-2025 close.
 //
 // The point of putting them on one axis is the SPREAD: how far ahead of, or
 // behind, its own seasonal script this year is running. That number is the
 // headline tile, not the two levels.
 //
-// TWO AXES, ONE SCALE. The left axis and the right axis are the SAME axis in
-// two units — right = YTD_BASE_PX × (1 + left/100). Both are drawn off the same
-// tick positions, so the ES price on the right is always the literal price that
+// BASIS. Everything on this tab is the ^GSPC CASH INDEX, price return only. It
+// used to be a back-adjusted ES continuous series over eight years, which meant
+// the seasonal curve and the price axis were on a contract that does not exist
+// as a level — and back-adjustment damps the percentage swings of older years.
+// Cash removes both problems and buys 90 more years of sample. It also means the
+// right-hand price axis is now a real index level you can compare to a quote.
+//
+// TWO AXES, ONE SCALE. The left axis and the right axis are the SAME axis in two
+// units — right = YTD_BASE_PX × (1 + left/100). Both are drawn off the same tick
+// positions, so the index level on the right is always the literal level that
 // corresponds to the % on the left. That is the only honest way to overlay this
-// year's PRICE on a seasonal % curve: an independently auto-scaled second axis
+// year's LEVEL on a seasonal % curve: an independently auto-scaled second axis
 // would let the two lines cross wherever the scaling happened to put them and
 // the crossings would mean nothing.
 //
-// The mode toggle only picks which unit is primary — % on the left with price
-// on the right, or price on the left with % on the right. The lines do not move
-// between modes; only the labels swap. In price mode the seasonal curve reads
-// as the path projected forward off the 2025 close.
+// The mode toggle only picks which unit is primary — % on the left with the
+// index on the right, or the index on the left with % on the right. The lines do
+// not move between modes; only the labels swap.
 //
-// Everything is drawn as hand-rolled SVG. No chart dependency, no canvas, and
-// no color that is not from HOME_THEME.
+// Everything is drawn as hand-rolled SVG. No chart dependency, no canvas, and no
+// color that is not from HOME_THEME.
 //
 // HYDRATION: chart width starts at 0 on BOTH sides and is filled in by a
 // ResizeObserver after mount, so the server and the first client paint agree.
+// The selected baseline also starts from a CONSTANT for the same reason.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
+import SeasonalityAlmanac from "./SeasonalityAlmanac";
 import {
-  SEASONAL_AVG,
-  SEASONAL_BASE_YEARS,
-  SEASONAL_YEAR_COUNT,
+  ALMANAC,
+  DEFAULT_BASELINE,
+  SEASONAL_BASELINES,
   SEASONAL_YEAR_RETURNS,
   YTD_2026_PCT,
   YTD_2026_PX,
@@ -70,7 +78,7 @@ const MONTHS = [
   { label: "Dec", day: 334 },
 ];
 
-const N = SEASONAL_AVG.length;          // 365
+const N = 365;                          // calendar days on the axis
 const LIVE = YTD_2026_PCT.length;       // days of 2026 we actually have
 
 const PAD = { top: 18, right: 82, bottom: 30, left: 62 };
@@ -156,6 +164,7 @@ function StatTile({
 
 export default function SeasonalityTab() {
   const [mode, setMode] = useState<Mode>("pct");
+  const [baselineKey, setBaselineKey] = useState<string>(DEFAULT_BASELINE);
   const [width, setWidth] = useState(0);
   const [hover, setHover] = useState<number | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -169,10 +178,16 @@ export default function SeasonalityTab() {
     return () => ro.disconnect();
   }, []);
 
+  const baseline = useMemo(
+    () => SEASONAL_BASELINES.find((b) => b.key === baselineKey) ?? SEASONAL_BASELINES[0],
+    [baselineKey],
+  );
+  const SEASONAL_AVG = baseline.curve;
+
   // The seasonal curve, in whichever unit the chart is currently showing.
   const seasonSeries = useMemo(
     () => (mode === "pct" ? SEASONAL_AVG : SEASONAL_AVG.map((p) => YTD_BASE_PX * (1 + p / 100))),
-    [mode],
+    [mode, SEASONAL_AVG],
   );
   const yearSeries = mode === "pct" ? YTD_2026_PCT : YTD_2026_PX;
 
@@ -234,10 +249,54 @@ export default function SeasonalityTab() {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <Card
         title="S&P 500 Seasonality vs 2026"
-        subtitle={`E-mini futures · ${SEASONAL_YEAR_COUNT}-year average (${SEASONAL_BASE_YEARS}) · 2026 through ${dayLabel(last)}`}
+        subtitle={`^GSPC cash index · ${baseline.label} average (${baseline.span}, ${baseline.years} years) · 2026 through ${dayLabel(last)}`}
         padding={20}
       >
-        {/* Controls + legend */}
+        {/* Baseline window */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 800,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              opacity: 0.5,
+              marginRight: 2,
+            }}
+          >
+            Baseline
+          </span>
+          {SEASONAL_BASELINES.map((b) => {
+            const on = b.key === baselineKey;
+            return (
+              <button
+                key={b.key}
+                type="button"
+                aria-pressed={on}
+                onClick={() => setBaselineKey(b.key)}
+                title={`${b.span} · ${b.years} years`}
+                style={{
+                  padding: "6px 13px",
+                  borderRadius: 8,
+                  border: `1px solid ${on ? SEASON_COLOR : HOME_THEME.border}`,
+                  background: on
+                    ? `linear-gradient(180deg, ${SEASON_COLOR}33, ${SEASON_COLOR}0D)`
+                    : "rgba(255,255,255,0.04)",
+                  color: on ? SEASON_COLOR : HOME_THEME.text,
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: "0.05em",
+                  textTransform: "uppercase",
+                  cursor: "pointer",
+                }}
+              >
+                {b.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Unit toggle + legend */}
         <div
           style={{
             display: "flex",
@@ -251,7 +310,7 @@ export default function SeasonalityTab() {
           <div style={{ display: "flex", gap: 8 }}>
             {([
               { k: "pct" as Mode, label: "% Return" },
-              { k: "price" as Mode, label: "ES Price" },
+              { k: "price" as Mode, label: "Index Level" },
             ]).map((m) => {
               const on = mode === m.k;
               return (
@@ -283,11 +342,11 @@ export default function SeasonalityTab() {
           <div style={{ display: "flex", gap: 18, fontSize: 12, fontWeight: 700 }}>
             <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <span style={{ width: 22, height: 2, background: SEASON_COLOR, display: "inline-block" }} />
-              Seasonal avg ({SEASONAL_BASE_YEARS})
+              Seasonal avg ({baseline.span})
             </span>
             <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <span style={{ width: 22, height: 2, background: YEAR_COLOR, display: "inline-block" }} />
-              2026 {mode === "pct" ? "(ES price on right axis)" : "(% on right axis)"}
+              2026 {mode === "pct" ? "(index level on right axis)" : "(% on right axis)"}
             </span>
           </div>
         </div>
@@ -299,7 +358,7 @@ export default function SeasonalityTab() {
               width={width}
               height={CHART_H}
               role="img"
-              aria-label="E-mini S&P 500 seasonality versus 2026 year to date"
+              aria-label="S&P 500 seasonality versus 2026 year to date"
               style={{ display: "block", touchAction: "none" }}
               onPointerMove={onMove}
               onPointerLeave={() => setHover(null)}
@@ -327,7 +386,7 @@ export default function SeasonalityTab() {
                     {mode === "pct" ? `${t.toFixed(1)}%` : Math.round(t).toLocaleString("en-US")}
                   </text>
                   {/* Same tick, the other unit. This is what makes the 2026
-                      PRICE readable straight off a seasonal % chart. */}
+                      LEVEL readable straight off a seasonal % chart. */}
                   <text
                     x={PAD.left + innerW + 8}
                     y={y(t) + 4}
@@ -432,7 +491,7 @@ export default function SeasonalityTab() {
               <span style={{ color: YEAR_COLOR }}>
                 2026{" "}
                 {hover < LIVE
-                  ? `${fmtPct(YTD_2026_PCT[hover])} · ES ${fmtPx(YTD_2026_PX[hover])}`
+                  ? `${fmtPct(YTD_2026_PCT[hover])} · SPX ${fmtPx(YTD_2026_PX[hover])}`
                   : "—"}
               </span>
               {hover < LIVE ? (
@@ -455,19 +514,19 @@ export default function SeasonalityTab() {
           <StatTile
             label="2026 YTD"
             value={fmtPct(ytdPct)}
-            sub={`ES ${fmtPx(YTD_2026_PX[last])}`}
+            sub={`SPX ${fmtPx(YTD_2026_PX[last])}`}
             color={YEAR_COLOR}
           />
           <StatTile
             label="Seasonal to date"
             value={fmtPct(seasonToDate)}
-            sub={`avg of ${SEASONAL_YEAR_COUNT} years`}
+            sub={`avg of ${baseline.years} years`}
             color={SEASON_COLOR}
           />
           <StatTile
             label={spread >= 0 ? "Ahead of season" : "Behind season"}
             value={fmtPct(spread)}
-            sub={`${spread >= 0 ? "+" : ""}${Math.round((spread / 100) * YTD_BASE_PX)} ES pts`}
+            sub={`${spread >= 0 ? "+" : ""}${Math.round((spread / 100) * YTD_BASE_PX)} SPX pts`}
             color={spread >= 0 ? HOME_THEME.cyan : HOME_THEME.red}
           />
           <StatTile
@@ -478,7 +537,7 @@ export default function SeasonalityTab() {
           <StatTile
             label="Base"
             value={fmtPx(YTD_BASE_PX)}
-            sub="2025 year-end ES close"
+            sub="2025 year-end SPX close"
           />
         </div>
 
@@ -510,16 +569,17 @@ export default function SeasonalityTab() {
         </div>
 
         <p style={{ marginTop: 16, fontSize: 12, lineHeight: 1.6, opacity: 0.55, maxWidth: 900 }}>
-          Each of the {SEASONAL_YEAR_COUNT} sample years is re-based to its prior 31-Dec close, laid on a
-          calendar-day axis and averaged — the same construction as the published 20-year
-          seasonality curve, run on the ES continuous series instead of the cash index. The
-          average full year here finishes at {fmtPct(seasonFull)} against +10.4% for the
-          20-year study, so the amplitude is in the right place; the turning points (the
-          February push, the March give-back, the September fade into an October low, the
-          November–December run) are what the chart is for. 2026 data runs through{" "}
-          {YTD_LAST_DATE}; the shaded band is the part of the year still ahead.
+          Each sample year is re-based to its own prior 31-Dec close, laid on a calendar-day axis (29-Feb dropped,
+          weekends and holidays forward-filled) and averaged — the same construction as the published seasonality
+          curves, run here on {ALMANAC.meta.trading_days.toLocaleString("en-US")} sessions of ^GSPC cash back to{" "}
+          {ALMANAC.meta.start}. Widening the baseline flattens the curve, because idiosyncratic years average out; the
+          turning points that survive all four windows (the February push, the March give-back, the September fade into
+          an October low, the November–December run) are what the chart is for. 2026 runs through {YTD_LAST_DATE}; the
+          shaded band is the part of the year still ahead. Price return only — no dividends.
         </p>
       </Card>
+
+      <SeasonalityAlmanac />
     </div>
   );
 }

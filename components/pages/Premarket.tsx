@@ -99,6 +99,7 @@ import { useEconCalendar } from "@/hooks/useEconCalendar";
 import { isStale } from "@/lib/econCalendar";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
+import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
 import TickerBoard from "@/components/pages/premarket/TickerBoard";
 import {
   GEX_HISTORY_LIMIT,
@@ -333,6 +334,41 @@ const CSS = `
 .pmk .lvl .px{font-size:21px;font-weight:660;letter-spacing:-.03em;margin:4px 0 1px}
 .pmk .lvl .es{font-size:10.5px;color:var(--dim)}
 .pmk .lvl .dist{font-size:11px;margin-top:6px;display:flex;justify-content:space-between;align-items:center;gap:6px}
+
+/* KEY LEVELS HEAD — the basis switch plus what the Δ below is measured against.
+   The grid used to start straight after the rail with no header at all, which
+   was fine while every tile printed one basis. It does not survive a SWITCH:
+   the tiles would silently change meaning with nothing on screen naming the
+   leg they are on. The head is the label, and the switch lives in it so the
+   two can never drift apart. */
+.pmk .lvlhead{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:12px 18px 0}
+.pmk .lvlhead .lh{display:flex;align-items:baseline;gap:10px;min-width:0}
+.pmk .lvlhead h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+  margin:0;font-weight:600;white-space:nowrap}
+.pmk .lvlhead .vs{font-size:10px;color:var(--dim2);letter-spacing:.04em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pmk .lvlhead .vs b{color:var(--dim);font-weight:600}
+.pmk .lvlhead .vs.warn{color:var(--amber)}
+
+/* MIGRATION LINE — the "was" row Option B folds into each tile.
+   Sits below .dist behind its own hairline so a tile with no baseline (max
+   pain, or any tile before the fetch lands) simply ends where it always did
+   instead of leaving a gap where a rule used to be. */
+.pmk .lvl .mig{margin-top:7px;padding-top:6px;border-top:1px dashed var(--line);
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:10.5px;color:var(--dim2)}
+.pmk .lvl .mig .arw{color:var(--line3)}
+.pmk .lvl .mig .now{color:var(--dim)}
+/* Tag = the STATE of the move, one word. Neutral by default; only a move that
+   actually means something takes a colour, so a screen of grey tags reads
+   correctly as "nothing migrated overnight". */
+.pmk .mtag{font-size:9px;letter-spacing:.06em;text-transform:uppercase;padding:1px 5px;
+  border-radius:999px;border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
+.pmk .mtag.up{color:var(--pos);border-color:var(--posEdge);background:var(--posWash)}
+.pmk .mtag.down{color:var(--neg);border-color:var(--negEdge);background:var(--negWash)}
+.pmk .mtag.warnt{color:var(--amber);border-color:var(--amberEdge);background:var(--amberWash)}
+.pmk .mtag.flipt{color:var(--violet);border-color:rgba(167,139,250,.35);background:rgba(167,139,250,.08)}
+
 .pmk .pill{font-size:10px;padding:2px 6px;border-radius:5px;border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
 .pmk .pill.hot{border-color:var(--negEdgeUp);color:var(--neg);background:var(--negWash)}
 .pmk .pill.cool{border-color:var(--posEdgeUp);color:var(--pos);background:var(--posWash)}
@@ -576,6 +612,41 @@ type Baseline = {
   putWall: number | null;
   strikes: number;
   byStrike: Record<string, number>;
+  /**
+   * Both legs, per strike, on every response regardless of `basis` — added
+   * 2026-08-24 so the Key Levels basis switch never refetches. OPTIONAL on
+   * purpose: a VPS running a build that predates the server change returns
+   * neither, and `basisMaps()` below degrades to "OI only has a baseline"
+   * rather than silently diffing one basis against another.
+   */
+  byStrikeOi?: Record<string, number>;
+  byStrikeVol?: Record<string, number>;
+};
+
+/**
+ * Which leg of the chain the Key Levels tiles are read on.
+ *
+ *   oi     γ × OI       × S²   — the premarket-honest basis (see the header)
+ *   oivol  γ × (OI+Vol) × S²   — what the bars and the KPI print
+ *   vol    γ × Volume    × S²  — today's trading only; ~0 before 09:30
+ *
+ * This is deliberately NOT the page-wide basis: the profile bars, the rail and
+ * Biggest Changes keep their own (documented) bases. The switch exists because
+ * the same six levels answer different questions on each leg, and reading them
+ * on one leg while the Δ beside them is computed on another is the exact
+ * mismatch the OI default was chosen to avoid.
+ */
+type LvlBasis = "oi" | "oivol" | "vol";
+
+const LVL_BASIS_KEY = "cb-premarket-lvlbasis-v1";
+
+const LVL_BASIS_META: Record<LvlBasis, { tab: string; long: string; hint: string }> = {
+  oi:    { tab: "OI",     long: "OI only",
+           hint: "γ × OI × S². Both sides of the overnight Δ carry the same settled OI, so the change is pure gamma re-pricing. The honest premarket basis." },
+  oivol: { tab: "OI+VOL", long: "OI + Vol",
+           hint: "γ × (OI+Vol) × S² — what the profile bars and the Net GEX KPI print. Premarket the Δ drags yesterday's whole session volume in; read the levels, not the change." },
+  vol:   { tab: "VOL",    long: "Vol only",
+           hint: "γ × Volume × S². Today's trading only — near zero before 09:30, and the cleanest read on what is actually being traded once the session is running." },
 };
 
 /**
@@ -585,6 +656,91 @@ type Baseline = {
  */
 function oiLeg(row: ChainRow, spot: number): number {
   return netGEXOf(row, "net", spot) - netGEXOf(row, "vol", spot);
+}
+
+/** One gamma Δ at one strike, as the migration memo shapes it. */
+type GexDelta = { was: number; now: number; delta: number; pct: number | null; flipped: boolean };
+/** One level move, in points. */
+type PxMove = { was: number; now: number; move: number };
+
+/**
+ * The migration line on a Key Levels tile: `[TAG] was <x> → <y> · <pct>`.
+ *
+ * Renders NOTHING when it has nothing to say. That is the whole contract — a
+ * tile with no baseline for the selected basis must look like the tile always
+ * did, not like a tile reporting no change. `null` in, null out.
+ */
+function MigLine({ tag, tagClass, was, now, pct, note }: {
+  tag?: string | null;
+  tagClass?: string;
+  was?: string | null;
+  now?: string | null;
+  pct?: string | null;
+  note?: string | null;
+}) {
+  if (!tag && !was && !note) return null;
+  return (
+    <div className="mig">
+      {tag && <span className={`mtag ${tagClass ?? ""}`}>{tag}</span>}
+      {was && (
+        <span className="mono">
+          was {was}
+          {now && <><span className="arw"> → </span><span className="now">{now}</span></>}
+          {pct && <> · {pct}</>}
+        </span>
+      )}
+      {note && <span className="mono">{note}</span>}
+    </div>
+  );
+}
+
+/**
+ * State word for a WALL's gamma change.
+ *
+ * Read on magnitude, not sign, because a put wall's gamma is negative: −39.2M
+ * from −37.0M is the wall getting HEAVIER, and calling that "down" because the
+ * number fell would invert the only thing the tag is for. `strong`/`weak` are
+ * the caller's words for "more of what this wall is" / "less".
+ */
+function wallState(d: GexDelta | null | undefined, strong: string, weak: string):
+  { text: string; cls: string } | null {
+  if (!d) return null;
+  if (d.flipped) return { text: "flipped sign", cls: "flipt" };
+  const grew = Math.abs(d.now) - Math.abs(d.was);
+  // Under 2% either way is noise on a re-priced chain, not a migration.
+  if (d.pct != null && Math.abs(d.pct) < 2) return { text: "unchanged", cls: "" };
+  return grew >= 0
+    ? { text: strong, cls: strong === "deepening" ? "down" : "up" }
+    : { text: weak, cls: "warnt" };
+}
+
+/** The live per-strike number on a given Key Levels basis. */
+function liveLeg(row: ChainRow, basis: LvlBasis, spot: number): number {
+  if (basis === "vol") return netGEXOf(row, "vol", spot);
+  if (basis === "oivol") return netGEXOf(row, "net", spot);
+  return oiLeg(row, spot);
+}
+
+/**
+ * The prior-close per-strike map on a given basis, or null when this baseline
+ * cannot honestly answer for that basis.
+ *
+ * Null is the important case. `byStrike` is on whatever basis the fetch asked
+ * for (`oi`), so on the VOL and OI+VOL tabs it is the WRONG map — using it
+ * would print a Δ that is entirely basis mismatch. When the server predates
+ * the per-strike legs, those two tabs get null and the tiles say "no baseline
+ * on this basis" instead of a plausible wrong number.
+ */
+function basisMap(b: Baseline | null, basis: LvlBasis): Record<string, number> | null {
+  if (!b) return null;
+  const oi = b.byStrikeOi;
+  const vol = b.byStrikeVol;
+  if (basis === "oi") return oi ?? (b.basis === "oi" ? b.byStrike : null);
+  if (!oi || !vol) return null;
+  if (basis === "vol") return vol;
+  const sum: Record<string, number> = {};
+  for (const k of Object.keys(oi)) sum[k] = (oi[k] ?? 0) + (vol[k] ?? 0);
+  return sum;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -651,6 +807,23 @@ export default function Premarket() {
   const pickSym = useCallback((v: Symbol_) => {
     setSym(v);
     try { sessionStorage.setItem(SYM_KEY, v); } catch { /* nothing to do */ }
+  }, []);
+
+  // ── KEY LEVELS BASIS ───────────────────────────────────────────────────────
+  // OI is the default and the honest premarket answer (see LvlBasis). Persisted
+  // in localStorage rather than sessionStorage — unlike the pre/post tab, which
+  // the clock should be free to pick each morning, a basis preference is a way
+  // of reading the board and should survive the session.
+  const [lvlBasis, setLvlBasis] = useState<LvlBasis>("oi");
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LVL_BASIS_KEY) as LvlBasis | null;
+      if (saved && saved in LVL_BASIS_META) setLvlBasis(saved);
+    } catch { /* private mode — OI it is */ }
+  }, []);
+  const pickLvlBasis = useCallback((v: LvlBasis) => {
+    setLvlBasis(v);
+    try { localStorage.setItem(LVL_BASIS_KEY, v); } catch { /* nothing to do */ }
   }, []);
 
   // ── SESSION DATE ───────────────────────────────────────────────────────────
@@ -937,11 +1110,91 @@ export default function Premarket() {
     return nearBars.reduce((b, r) => (Math.abs(r.net) > Math.abs(b.net) ? r : b), nearBars[0]);
   }, [nearBars]);
 
+  /**
+   * The per-strike number the Key Levels tiles print, on the SELECTED basis.
+   *
+   * Separate from `perStrike` (which is fixed at OI+Vol) on purpose: the bars,
+   * the rail and the magnet must not move when the tiles' basis changes — they
+   * are documented as OI+Vol everywhere else on this page and in the profile's
+   * own header. This map exists only for the six tiles and their Δ.
+   */
+  const lvlByStrike = useMemo(() => {
+    const m = new Map<number, number>();
+    if (!chain.length || !(spot > 0)) return m;
+    for (const r of chain) {
+      const v = liveLeg(r, lvlBasis, spot);
+      if (Number.isFinite(v)) m.set(r.strike, v);
+    }
+    return m;
+  }, [chain, spot, lvlBasis]);
+
   const wallGex = useMemo(() => {
     const at = (k: number | null | undefined) =>
-      k == null ? null : perStrike.find((r) => r.strike === k)?.net ?? null;
+      k == null ? null : lvlByStrike.get(k) ?? null;
     return { call: at(callWall), put: at(putWall) };
-  }, [perStrike, callWall, putWall]);
+  }, [lvlByStrike, callWall, putWall]);
+
+  /**
+   * OPTION-B MIGRATION — the "was" line each Key Levels tile carries.
+   *
+   * One memo, six tiles, so every tile is answering the same question against
+   * the same baseline on the same basis. Everything here is null-safe by
+   * construction: `null` anywhere means "we cannot say", and the tile renders
+   * no migration line at all rather than a zero or a dash that reads as a real
+   * measurement of no change.
+   *
+   * WHAT EACH TILE CAN AND CANNOT SAY
+   *   callWall / putWall  strike moved (baseline.callWall/putWall) AND the
+   *                       gamma at the CURRENT strike re-priced (byStrike).
+   *   flip                strike only. The baseline's flip is OI+Vol on the
+   *                       server regardless of basis (documented there), so it
+   *                       is shown on every tab and labelled as a level move,
+   *                       never as a gamma Δ.
+   *   spot                prior settle, from baseline.spot — the overnight gap.
+   *   magnet              gamma at the magnet strike, incl. a sign flip, which
+   *                       is the single most useful thing a magnet can tell you
+   *                       overnight (a +γ pin that went −γ is now a launch pad).
+   *   maxPain             NOTHING. Max pain needs per-side OI, and the baseline
+   *                       stores net GEX per strike. Deriving it from what we
+   *                       have would be an invention, so the tile keeps its
+   *                       existing drift pill and gains no "was".
+   */
+  const migration = useMemo(() => {
+    const base = basisMap(baseline, lvlBasis);
+    const none = {
+      available: false, basisHasBaseline: false,
+      callWall: null, putWall: null, flip: null, spot: null, magnet: null,
+    } as const;
+    if (!baseline) return none;
+
+    /** Δ at ONE strike, both sides on `lvlBasis`. */
+    const at = (k: number | null | undefined) => {
+      if (k == null || !base) return null;
+      const was = base[String(k)];
+      const now = lvlByStrike.get(k);
+      if (was == null || now == null || !Number.isFinite(was) || !Number.isFinite(now)) return null;
+      const delta = now - was;
+      // Percent is meaningless off a ~zero base (the VOL tab premarket is all
+      // zeros), so it is omitted rather than printed as a huge bogus number.
+      const pct = Math.abs(was) > 1e6 ? (delta / Math.abs(was)) * 100 : null;
+      return { was, now, delta, pct, flipped: (was >= 0) !== (now >= 0) };
+    };
+
+    /** How far a LEVEL moved overnight, in points. */
+    const moved = (was: number | null | undefined, now: number | null | undefined) =>
+      was == null || now == null || !Number.isFinite(was) || !Number.isFinite(now)
+        ? null : { was, now, move: now - was };
+
+    return {
+      available: true,
+      basisHasBaseline: !!base,
+      callWall: { gex: at(callWall), px: moved(baseline.callWall, callWall) },
+      putWall:  { gex: at(putWall),  px: moved(baseline.putWall, putWall) },
+      flip:     moved(baseline.flip, flip),
+      spot:     moved(baseline.spot, spot > 0 ? spot : null),
+      magnet:   magnet ? at(magnet.strike) : null,
+    };
+  }, [baseline, lvlBasis, lvlByStrike, callWall, putWall, flip, spot, magnet]);
 
   const totals = useMemo(() => {
     let dex = 0, vanna = 0, cg = 0, pg = 0;
@@ -1347,7 +1600,7 @@ export default function Premarket() {
 
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
-      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS }} />
       <div className="wrap">
 
         <div className="pagehead">
@@ -1577,6 +1830,39 @@ export default function Premarket() {
           </div>
 
           {/* ── 2. KEY LEVELS ─────────────────────────────────────────────── */}
+          {/* Head names the basis the six tiles are on and what their "was"
+              line is measured against. Both must be on screen: the tiles change
+              meaning with the switch, and a Δ with no stated baseline is not a
+              number anyone can act on. */}
+          <div className="lvlhead">
+            <div className="lh">
+              <h3>Key Levels</h3>
+              <span className={`vs${migration.available && !migration.basisHasBaseline ? " warn" : ""}`}>
+                {!baseline
+                  ? (baselineState === "loading" || baselineState === "idle"
+                      ? "prior-close baseline loading…"
+                      : "no prior-close baseline — levels only")
+                  : !migration.basisHasBaseline
+                    ? `no prior-close baseline on the ${LVL_BASIS_META[lvlBasis].long} basis — levels only`
+                    : <>vs <b>{baseline.date}</b> close · {LVL_BASIS_META[lvlBasis].long} basis</>}
+              </span>
+            </div>
+            <div className="seg" role="group" aria-label="Key levels basis">
+              {(Object.keys(LVL_BASIS_META) as LvlBasis[]).map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  className={lvlBasis === b ? "on" : ""}
+                  aria-pressed={lvlBasis === b}
+                  title={LVL_BASIS_META[b].hint}
+                  onClick={() => pickLvlBasis(b)}
+                >
+                  {LVL_BASIS_META[b].tab}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="levels">
             <div className="lvl call">
               <div className="name">Call Wall <em>resistance</em></div>
@@ -1590,6 +1876,26 @@ export default function Premarket() {
                   ? <span className="pill hot">ON high tagged</span>
                   : <span className="pill">untested o/n</span>}
               </div>
+              {/* A wall that BUILT overnight is one dealers have to defend; one
+                  that eroded is a level with nothing behind it. That is the
+                  whole reason this line exists — the strike alone cannot say it. */}
+              {(() => {
+                const m = migration.callWall;
+                if (!m || (!m.gex && !m.px)) return null;
+                const st = wallState(m.gex, "building", "eroding");
+                return (
+                  <MigLine
+                    tag={st?.text}
+                    tagClass={st?.cls}
+                    was={m.gex ? fmtUsd(m.gex.was, false) : null}
+                    now={m.gex ? fmtUsd(m.gex.now, false) : null}
+                    pct={m.gex?.pct != null ? fmtPct(m.gex.pct, 0) : null}
+                    note={m.px && Math.abs(m.px.move) >= 1
+                      ? `wall moved ${fmtPts(m.px.move)} from ${fmtPx(m.px.was, 0)}`
+                      : null}
+                  />
+                );
+              })()}
             </div>
 
             <div className="lvl magnet">
@@ -1597,12 +1903,32 @@ export default function Premarket() {
               <div className="px mono">{magnet ? fmtPx(magnet.strike, 0) : "—"}</div>
               <div className="es mono">
                 {magnet && es(magnet.strike) != null ? `ES ${fmtPx(es(magnet.strike), 0)} · ` : ""}
-                {magnet ? fmtUsd(magnet.net, false) : "—"}
+                {/* Value on the SELECTED basis; the STRIKE stays the OI+Vol pick
+                    so the magnet does not jump around as you switch tabs — it is
+                    a structural choice (biggest |γ| in the near window), not a
+                    reading of one leg. */}
+                {magnet ? fmtUsd(lvlByStrike.get(magnet.strike) ?? magnet.net, false) : "—"}
               </div>
               <div className="dist">
                 <span className="mono">{magnet ? fmtPts(magnet.strike - spot) : "—"}</span>
                 <span className="pill">{magnet && Math.abs(magnet.strike - spot) <= 10 ? "pinning" : "magnet"}</span>
               </div>
+              {/* A magnet that changed SIGN overnight is the single most useful
+                  thing this tile can report: a +γ pin that went −γ stopped being
+                  a magnet and became a launch pad. */}
+              {migration.magnet && (
+                <MigLine
+                  tag={migration.magnet.flipped
+                    ? (migration.magnet.now >= 0 ? "flipped +γ" : "flipped −γ")
+                    : (Math.abs(migration.magnet.now) >= Math.abs(migration.magnet.was) ? "building" : "eroding")}
+                  tagClass={migration.magnet.flipped
+                    ? "flipt"
+                    : (Math.abs(migration.magnet.now) >= Math.abs(migration.magnet.was) ? "up" : "warnt")}
+                  was={fmtUsd(migration.magnet.was, false)}
+                  now={fmtUsd(migration.magnet.now, false)}
+                  pct={migration.magnet.pct != null ? fmtPct(migration.magnet.pct, 0) : null}
+                />
+              )}
             </div>
 
             <div className="lvl spot">
@@ -1612,6 +1938,17 @@ export default function Premarket() {
                 ES {fmtPx(esFut, 2)}{esQ?.pct != null ? ` · ${fmtPct(esQ.pct)}` : ""}
               </div>
               <div className="dist"><span className="mono muted">{openLabel}</span></div>
+              {/* The overnight gap, from the baseline's own settle — the number
+                  every level on this row has re-priced against. */}
+              {migration.spot && (
+                <MigLine
+                  tag={Math.abs(migration.spot.move) < 1 ? "flat o/n" : (migration.spot.move > 0 ? "gap up" : "gap down")}
+                  tagClass={Math.abs(migration.spot.move) < 1 ? "" : (migration.spot.move > 0 ? "up" : "down")}
+                  was={fmtPx(migration.spot.was, 0)}
+                  now={fmtPx(migration.spot.now, 0)}
+                  pct={fmtPts(migration.spot.move)}
+                />
+              )}
             </div>
 
             <div className="lvl pain">
@@ -1624,6 +1961,10 @@ export default function Premarket() {
                 </span>
                 <span className="pill">{maxPain != null ? (maxPain > spot ? "drift ↑" : "drift ↓") : "—"}</span>
               </div>
+              {/* NO migration line, deliberately. Max pain is computed from
+                  per-side OI and the baseline stores net GEX per strike, so a
+                  prior-close max pain cannot be derived from what we have.
+                  Inventing one would be the only wrong number on this row. */}
             </div>
 
             <div className="lvl flip">
@@ -1638,6 +1979,19 @@ export default function Premarket() {
                   </span>
                 )}
               </div>
+              {/* Shown on every tab. The baseline's flip is OI+Vol on the server
+                  regardless of the requested basis (documented there), so this
+                  is a LEVEL move and never labelled as a gamma Δ. */}
+              {migration.flip && (
+                <MigLine
+                  tag={Math.abs(migration.flip.move) < 1
+                    ? "held"
+                    : (migration.flip.move > 0 ? `rose ${nf(migration.flip.move, 0)}` : `fell ${nf(Math.abs(migration.flip.move), 0)}`)}
+                  tagClass={Math.abs(migration.flip.move) < 1 ? "" : "flipt"}
+                  was={fmtPx(migration.flip.was, 2)}
+                  now={fmtPx(migration.flip.now, 2)}
+                />
+              )}
             </div>
 
             <div className="lvl put">
@@ -1652,6 +2006,26 @@ export default function Premarket() {
                   ? <span className="pill hot">ON low tagged</span>
                   : <span className="pill cool">untested</span>}
               </div>
+              {/* "deepening" = MORE negative gamma, i.e. a heavier floor. Read on
+                  magnitude in wallState(), because the put wall's number is
+                  negative and a falling number here means a stronger wall. */}
+              {(() => {
+                const m = migration.putWall;
+                if (!m || (!m.gex && !m.px)) return null;
+                const st = wallState(m.gex, "deepening", "easing");
+                return (
+                  <MigLine
+                    tag={st?.text}
+                    tagClass={st?.cls}
+                    was={m.gex ? fmtUsd(m.gex.was, false) : null}
+                    now={m.gex ? fmtUsd(m.gex.now, false) : null}
+                    pct={m.gex?.pct != null ? fmtPct(m.gex.pct, 0) : null}
+                    note={m.px && Math.abs(m.px.move) >= 1
+                      ? `wall moved ${fmtPts(m.px.move)} from ${fmtPx(m.px.was, 0)}`
+                      : null}
+                  />
+                );
+              })()}
             </div>
           </div>
 
@@ -2044,6 +2418,13 @@ export default function Premarket() {
               ))}
             </div>
           </div>
+
+          {/* Which strikes grew far more than normal at yesterday's close.
+              Reads the recorder's log via /api/gex-watch-feed — no live scan,
+              and opex sessions are filtered out server-side, so this never
+              shows the calendar and calls it a signal. Sits at the bottom
+              because it is context for the session, not a number to trade off. */}
+          <GexWatchFeed />
 
           <div className="footbar">
             <span className="l mono">

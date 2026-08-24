@@ -35,7 +35,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { HOME_THEME, LIGHT_BLUE, SOFT_RED, classicCardAccentStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { failOutcome, type IbDataset, type SlimDay } from "@/lib/ibStats";
@@ -160,6 +160,8 @@ const METRICS: Metric[] = [
 /** The failed-break partition — the one place a stacked bar is an honest claim. */
 const PARTS = [
   { k: "recovered" as const, label: "RECOVERED — new extreme past the pre-fail peak", color: LIGHT_BLUE },
+  // This one is a BAR FILL, not text — it stays a muted neutral so the four
+  // segments read apart. Only font colors went white.
   { k: "chop" as const, label: "CHOP — never saw the mid, never re-took its high", color: "rgba(255,255,255,0.28)" },
   { k: "to_mid" as const, label: "TO THE MID — reached the midpoint, no further", color: HOME_THEME.orange },
   { k: "full_rotation" as const, label: "FULL ROTATION — reached the opposite extreme", color: HOME_THEME.red },
@@ -303,7 +305,7 @@ export default function ConditionRailTab() {
   }));
 
   const compare: { label: string; v: number | null; b: number | null; color: string }[] = [
-    { label: "Failed ≤30m", v: share(broke, (d) => d.fcb!.failed), b: share(allBroke, (d) => d.fcb!.failed), color: SOFT_RED },
+    { label: "Failed ≤30m", v: share(broke, (d) => d.fcb!.failed), b: share(allBroke, (d) => d.fcb!.failed), color: HOME_THEME.red },
     { label: "Hit 0.5×", v: share(broke, (d) => hit(d, "0.5")), b: share(allBroke, (d) => hit(d, "0.5")), color: HOME_THEME.green },
     { label: "Hit 1.0×", v: share(broke, (d) => hit(d, "1")), b: share(allBroke, (d) => hit(d, "1")), color: LIGHT_BLUE },
     { label: "Hit 2.0×", v: share(broke, (d) => hit(d, "2")), b: share(allBroke, (d) => hit(d, "2")), color: HOME_THEME.cyan },
@@ -319,7 +321,7 @@ export default function ConditionRailTab() {
 
   /* ── styles ─────────────────────────────────────────────────────────────── */
 
-  const sect: React.CSSProperties = { fontSize: 10.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginBottom: 10, display: "flex", alignItems: "center", gap: 7 };
+  const sect: React.CSSProperties = { fontSize: 10.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 10, display: "flex", alignItems: "center", gap: 7 };
   const badge = (color: string): React.CSSProperties => ({ marginLeft: 8, fontSize: 10, fontWeight: 800, color, border: `1px solid ${color}66`, background: `${color}1A`, borderRadius: 4, padding: "1px 5px", letterSpacing: ".04em", whiteSpace: "nowrap" });
   const tile: React.CSSProperties = { background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 10, padding: 12 };
 
@@ -328,7 +330,7 @@ export default function ConditionRailTab() {
     display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 7,
     border: `1px solid ${on ? LIGHT_BLUE : isToday ? `${LIGHT_BLUE}55` : HOME_THEME.border}`,
     background: on ? `${LIGHT_BLUE}22` : "rgba(255,255,255,0.03)",
-    color: on ? LIGHT_BLUE : "rgba(255,255,255,0.62)",
+    color: on ? LIGHT_BLUE : HOME_THEME.text,
     opacity: dead ? 0.28 : 1,
     textDecoration: dead ? "line-through" : "none",
     boxShadow: isToday && !dead ? `inset 2px 0 0 ${LIGHT_BLUE}` : "none",
@@ -340,7 +342,7 @@ export default function ConditionRailTab() {
       <Card title="Condition Rail">
         <div style={{ color: HOME_THEME.red, fontSize: 14 }}>
           Couldn&apos;t load the IB datasets: {err}
-          <div style={{ color: "rgba(255,255,255,0.6)", marginTop: 6 }}>
+          <div style={{ color: HOME_THEME.text, marginTop: 6 }}>
             Export them from <code>ib-backtest-esu6.html</code> → &quot;Export JSON for dashboard&quot; into <code>public/data/</code>.
           </div>
         </div>
@@ -379,7 +381,7 @@ export default function ConditionRailTab() {
             />
           </div>
           <div style={{ flex: 1 }} />
-          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.55)" }}>
+          <div style={{ fontSize: 13, color: HOME_THEME.text }}>
             {ds ? `${days.length} ${sym} sessions${since === "all" ? "" : ` since ${since}`} · ${days[0]?.date ?? "—"} → ${days[days.length - 1]?.date ?? "—"}` : "loading ib-ES.json + ib-NQ.json…"}
           </div>
         </div>
@@ -404,7 +406,7 @@ export default function ConditionRailTab() {
               </button>
               <button
                 onClick={() => { touched.current = true; setWhy(""); setSel([]); }}
-                style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".04em", padding: "4px 8px", borderRadius: 6, cursor: "pointer", border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.6)" }}
+                style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".04em", padding: "4px 8px", borderRadius: 6, cursor: "pointer", border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.03)", color: HOME_THEME.text }}
               >
                 CLEAR
               </button>
@@ -416,7 +418,7 @@ export default function ConditionRailTab() {
             <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 5 }}>
               Today so far · {clock(nowMin)} ET
             </div>
-            <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.62)", lineHeight: 1.55 }}>
+            <div style={{ fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.55 }}>
               {!today ? (
                 "waiting on the live tape — today's IB isn't complete yet."
               ) : (
@@ -425,7 +427,7 @@ export default function ConditionRailTab() {
                     {todayTrue.map((id) => BY[id].label).join(" · ") || "nothing confirmed yet"}
                   </span>
                   <br />
-                  <span style={{ color: "rgba(255,255,255,0.4)" }}>
+                  <span style={{ color: HOME_THEME.text }}>
                     Still open: {ALL.filter((c) => todayOf[c.id] == null).map((c) => c.label.toLowerCase()).join(", ") || "—"}
                   </span>
                 </>
@@ -438,7 +440,7 @@ export default function ConditionRailTab() {
               <div style={sect}>
                 {g.name}
                 {g.hint && (
-                  <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: ".03em", textTransform: "none", color: "rgba(255,255,255,0.4)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 4, padding: "1px 4px" }}>
+                  <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: ".03em", textTransform: "none", color: HOME_THEME.text, border: `1px solid ${HOME_THEME.border}`, borderRadius: 4, padding: "1px 4px" }}>
                     {g.hint}
                   </span>
                 )}
@@ -461,7 +463,7 @@ export default function ConditionRailTab() {
                       {!dead && tv === true && <span style={{ fontSize: 8, color: LIGHT_BLUE }}>●</span>}
                       {!dead && tv == null && <span style={{ fontSize: 8, color: HOME_THEME.orange }}>○</span>}
                       {c.label}
-                      {c.mini && <span style={{ fontSize: 9.5, fontWeight: 800, color: "rgba(255,255,255,0.4)" }}>{c.mini}</span>}
+                      {c.mini && <span style={{ fontSize: 9.5, fontWeight: 800, color: HOME_THEME.text }}>{c.mini}</span>}
                     </button>
                   );
                 })}
@@ -471,7 +473,7 @@ export default function ConditionRailTab() {
 
           {why && <div style={{ fontSize: 11, color: HOME_THEME.orange, lineHeight: 1.5, marginTop: 4 }}>⚠ {why}</div>}
 
-          <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 11, color: "rgba(255,255,255,0.4)", lineHeight: 1.8 }}>
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 11, color: HOME_THEME.text, lineHeight: 1.8 }}>
             <span style={{ color: LIGHT_BLUE }}>●</span> true of today&apos;s session<br />
             <span style={{ color: HOME_THEME.orange }}>○</span> the tape can&apos;t answer it yet<br />
             <span style={{ textDecoration: "line-through" }}>struck</span> ruled out by a pick above<br />
@@ -493,7 +495,7 @@ export default function ConditionRailTab() {
                 <div style={{ fontSize: 56, fontWeight: 800, lineHeight: 1, letterSpacing: "-0.035em", color: LIGHT_BLUE, fontVariantNumeric: "tabular-nums" }}>
                   {rate != null ? pctS(rateK, rateN) : "—"}
                 </div>
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.62)", marginTop: 8, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 12, color: HOME_THEME.text, marginTop: 8, lineHeight: 1.5 }}>
                   {conds.length ? (
                     <>
                       of {sym} sessions where{" "}
@@ -509,16 +511,16 @@ export default function ConditionRailTab() {
                     style={{
                       display: "inline-flex", alignItems: "center", gap: 6, marginTop: 11, fontSize: 12, fontWeight: 800,
                       padding: "4px 9px", borderRadius: 7,
-                      color: Math.abs(deltaPts) < 1.5 ? "rgba(255,255,255,0.45)" : deltaPts > 0 ? HOME_THEME.green : SOFT_RED,
-                      border: `1px solid ${Math.abs(deltaPts) < 1.5 ? HOME_THEME.border : deltaPts > 0 ? `${HOME_THEME.green}66` : `${SOFT_RED}66`}`,
-                      background: Math.abs(deltaPts) < 1.5 ? "rgba(255,255,255,0.03)" : deltaPts > 0 ? `${HOME_THEME.green}1A` : `${SOFT_RED}1A`,
+                      color: Math.abs(deltaPts) < 1.5 ? HOME_THEME.text : deltaPts > 0 ? HOME_THEME.green : HOME_THEME.red,
+                      border: `1px solid ${Math.abs(deltaPts) < 1.5 ? HOME_THEME.border : deltaPts > 0 ? `${HOME_THEME.green}66` : `${HOME_THEME.red}66`}`,
+                      background: Math.abs(deltaPts) < 1.5 ? "rgba(255,255,255,0.03)" : deltaPts > 0 ? `${HOME_THEME.green}1A` : `${HOME_THEME.red}1A`,
                     }}
                   >
                     {deltaPts > 0 ? "▲" : deltaPts < 0 ? "▼" : "●"} {Math.abs(deltaPts).toFixed(1)} pts vs the {pct0(baseline)} baseline
                   </div>
                 )}
 
-                <div style={{ marginTop: 12, fontSize: 11.5, color: "rgba(255,255,255,0.55)", lineHeight: 1.6 }}>
+                <div style={{ marginTop: 12, fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.6 }}>
                   {sel.length === 0 ? null : isTodayCohort ? (
                     <>
                       <span style={badge(LIGHT_BLUE)}>TODAY</span> every selected criterion is true of this session right now.
@@ -531,7 +533,7 @@ export default function ConditionRailTab() {
                     </>
                   )}
                   {selPending.length > 0 && (
-                    <div style={{ marginTop: 4, color: "rgba(255,255,255,0.4)" }}>
+                    <div style={{ marginTop: 4, color: HOME_THEME.text }}>
                       Unresolved on the tape: {selPending.map((id) => BY[id].label.toLowerCase()).join(", ")}.
                     </div>
                   )}
@@ -544,7 +546,7 @@ export default function ConditionRailTab() {
               <div style={{ display: "grid", gap: 9 }}>
                 {compare.map((c) => (
                   <div key={c.label} style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr) 54px", gap: 11, alignItems: "center", fontSize: 12 }}>
-                    <div style={{ color: "rgba(255,255,255,0.62)", textAlign: "right" }}>{c.label}</div>
+                    <div style={{ color: HOME_THEME.text, textAlign: "right" }}>{c.label}</div>
                     <div style={{ height: 16, background: "rgba(255,255,255,0.05)", borderRadius: 5, position: "relative", overflow: "hidden" }}>
                       <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${(c.v ?? 0) * 100}%`, background: c.color, opacity: 0.85, borderRadius: 5 }} />
                       <div style={{ position: "absolute", top: -3, bottom: -3, left: `${(c.b ?? 0) * 100}%`, width: 1.5, background: "rgba(255,255,255,0.45)" }} />
@@ -552,7 +554,7 @@ export default function ConditionRailTab() {
                     <div style={{ fontWeight: 800, textAlign: "right", color: c.color, fontVariantNumeric: "tabular-nums" }}>{pct0(c.v)}</div>
                   </div>
                 ))}
-                <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.35)", textAlign: "right" }}>
+                <div style={{ fontSize: 10.5, color: HOME_THEME.text, textAlign: "right" }}>
                   bar = this cohort · hairline = the unconditional {sym} book
                 </div>
               </div>
@@ -573,7 +575,7 @@ export default function ConditionRailTab() {
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 9 }}>
                   {partition.map((p) => (
-                    <span key={p.k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "rgba(255,255,255,0.62)" }}>
+                    <span key={p.k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: HOME_THEME.text }}>
                       <span style={{ width: 9, height: 9, borderRadius: 2, background: p.color, display: "inline-block" }} />
                       {p.label}
                     </span>
@@ -581,7 +583,7 @@ export default function ConditionRailTab() {
                 </div>
               </>
             ) : (
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>No failed breaks in this cohort.</div>
+              <div style={{ fontSize: 12, color: HOME_THEME.text }}>No failed breaks in this cohort.</div>
             )}
           </div>
 
@@ -593,9 +595,9 @@ export default function ConditionRailTab() {
               { t: "Never saw the mid", v: pct0(share(broke, (d) => d.noMidReturn)), s: "trend-day filter" },
             ].map((x) => (
               <div key={x.t} style={tile}>
-                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.07em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)" }}>{x.t}</div>
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.07em", textTransform: "uppercase", color: HOME_THEME.text }}>{x.t}</div>
                 <div style={{ fontSize: 22, fontWeight: 800, marginTop: 5, letterSpacing: "-0.02em", color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{x.v}</div>
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>{x.s}</div>
+                <div style={{ fontSize: 11, color: HOME_THEME.text, marginTop: 2 }}>{x.s}</div>
               </div>
             ))}
           </div>
@@ -604,7 +606,7 @@ export default function ConditionRailTab() {
           <div style={{ ...classicCardAccentStyle, padding: 20 }}>
             <div style={sect}>
               Matching sessions, oldest → newest
-              <span style={{ textTransform: "none", letterSpacing: 0, fontWeight: 600, color: "rgba(255,255,255,0.4)" }}>
+              <span style={{ textTransform: "none", letterSpacing: 0, fontWeight: 600, color: HOME_THEME.text }}>
                 — filled = {metric.label.toLowerCase()}
               </span>
             </div>
@@ -626,13 +628,13 @@ export default function ConditionRailTab() {
                 })}
               </div>
             ) : (
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>No sessions match — loosen a criterion.</div>
+              <div style={{ fontSize: 12, color: HOME_THEME.text }}>No sessions match — loosen a criterion.</div>
             )}
           </div>
         </div>
       </div>
 
-      <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", lineHeight: 1.6 }}>
+      <div style={{ fontSize: 12, color: HOME_THEME.text, lineHeight: 1.6 }}>
         Reads <code>public/data/ib-{sym}.json</code> (slim export from <code>ib-backtest-esu6.html</code>) plus the live 5m tape for today&apos;s
         classification. Break = first 5m CLOSE outside the 09:30–10:30 IB. Failed = closed back inside within 30m. Extension is in IB widths.
         <br />

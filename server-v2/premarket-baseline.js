@@ -90,6 +90,17 @@
  * `basis=oivol` is still served for callers that want the printed-everywhere
  * number and understand the artifact above. Do not make it the default.
  *
+ * PER-STRIKE LEGS ARE ALWAYS SHIPPED (2026-08-24). `byStrike` stays on the
+ * REQUESTED basis and is unchanged, but the response now also carries
+ * `byStrikeOi` and `byStrikeVol` — the two legs, per strike, every time. The
+ * totals already worked this way ("both totals always present, so a caller can
+ * switch basis without a refetch"); the per-strike map did not, so a client
+ * with a basis SWITCH had to refetch on every click or — worse — diff a
+ * vol-basis live side against an OI-basis baseline and print a number that is
+ * pure basis mismatch. The premarket Key Levels tiles have such a switch
+ * (OI · OI+VOL · VOL) and read these two maps directly. Additive only:
+ * `byStrike` keeps its old meaning, so nothing that predates this cares.
+ *
  * ── SHAPE ───────────────────────────────────────────────────────────────────
  * Two tables, both keyed (date, symbol, expiry): `premarket_baseline` holds the
  * strikes, `premarket_baseline_meta` the derived scalars (spot, total, flip,
@@ -621,7 +632,17 @@ async function getBaseline({
 function shape({ meta, strikes }, { symbol, expiry, today, basis, tried }) {
   const pick = basis === 'oivol' ? (r) => r.oi + r.vol : (r) => r.oi;
   const byStrike = {};
-  for (const r of strikes) byStrike[String(r.strike)] = pick(r);
+  // Both legs, always — see PER-STRIKE LEGS in the header. Built in the same
+  // pass as `byStrike` so a caller that switches basis never refetches, and can
+  // never accidentally diff one basis against another.
+  const byStrikeOi = {};
+  const byStrikeVol = {};
+  for (const r of strikes) {
+    const k = String(r.strike);
+    byStrike[k] = pick(r);
+    byStrikeOi[k] = r.oi;
+    byStrikeVol[k] = r.vol;
+  }
   const total = basis === 'oivol'
     ? (meta.totalNetGex ?? (meta.totalOiGex ?? 0) + (meta.totalVolGex ?? 0))
     : meta.totalOiGex;
@@ -648,6 +669,15 @@ function shape({ meta, strikes }, { symbol, expiry, today, basis, tried }) {
     putWall: meta.putWall,
     strikes: meta.strikes,
     byStrike,
+    /**
+     * The two legs, per strike, on EVERY response regardless of `basis`.
+     *   oi  → γ × OI     × S²   (compare against the live chain's OI leg)
+     *   vol → γ × Volume × S²   (compare against netGEXOf(row, "vol", spot))
+     * OI+Vol for a strike is their sum. A client with a basis switch reads
+     * these; `byStrike` above stays on the requested basis for older callers.
+     */
+    byStrikeOi,
+    byStrikeVol,
     source: meta.source,
     computedAt: meta.computedAt ?? null,
     /** More than one entry means the immediately prior session had no data. */
