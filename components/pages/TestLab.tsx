@@ -9,7 +9,11 @@ import { SqueezeBoard } from "@/app/squeeze/page";
 import DealerGammaTab from "@/app/test/DealerGammaTab";
 import GexMapTab from "@/app/test/GexMapTab";
 import PremDiffTab from "@/app/test/PremDiffTab";
-import SeasonalityTab from "@/app/test/SeasonalityTab";
+// Seasonality lives in components/seasonality/ — it is mounted twice: here in
+// the Test Lab and on the public /explore/seasonality page. The old
+// app/test/SeasonalityTab.tsx is a dead tombstone (export {}), which is what
+// broke the Vite build.
+import SeasonalityView from "@/components/seasonality/SeasonalityView";
 // Moved over from /scanner on 2026-08-16. The files stay under
 // components/scanner/ — that folder is the feature family, not the page.
 import GexScannerTab from "@/components/scanner/GexScannerTab";
@@ -703,7 +707,7 @@ export default function TestPage() {
       ) : tab === "premdiff" ? (
         <PremDiffTab />
       ) : tab === "seasonality" ? (
-        <SeasonalityTab />
+        <SeasonalityView />
       ) : (
         <FlowInventoryTab />
       )}

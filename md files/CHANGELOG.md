@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-08-24 - Fix: Vite build failed on tombstoned SeasonalityTab import
+
+Edited: `components/pages/TestLab.tsx`.
+
+The seasonality move left one importer behind. `app/test/page.tsx` (the Next
+copy) was updated to `@/components/seasonality/SeasonalityView`, but the SPA's
+Test Lab — `components/pages/TestLab.tsx`, the file the Vite build actually
+compiles — still did `import SeasonalityTab from "@/app/test/SeasonalityTab"`.
+That path now resolves to the tombstone, whose only export is `export {}`, so
+Rollup failed hard:
+
+    "default" is not exported by "../app/test/SeasonalityTab.tsx",
+    imported by "../components/pages/TestLab.tsx"
+
+Next's build passed (it never compiles TestLab.tsx), so the break only showed up
+at `RUN cd app-vite && npm run build` in the Dockerfile and took the whole VPS
+deploy with it.
+
+Fix: TestLab.tsx now imports `SeasonalityView` from
+`@/components/seasonality/SeasonalityView` and renders `<SeasonalityView />` for
+the `seasonality` tab — the same component `app/test/page.tsx` and
+`/explore/seasonality` mount. No behavior change; one import path.
+
+The three `app/test/Seasonality*` tombstones are now genuinely unimported and
+can be `git rm`'d as their headers say.
+
+
 ## 2026-08-24 - Seasonality goes public at /explore/seasonality (free, no account)
 
 Added: `app/explore/seasonality/page.tsx`, `components/seasonality/` (View,
