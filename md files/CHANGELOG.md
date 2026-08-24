@@ -1,49 +1,60 @@
 # Changelog
 
-## 2026-08-23 - Weekly Edge: gold border on the MRNA scanner card
+## 2026-08-23 - GEX watch: the feed renders as rows, not a table
 
-`lib/emails/weekly-edge.ts`. The "What the flow scanner caught" card now has a
-2px gold border (`#FFB300`) instead of the 1px hairline every other card in the
-letter uses, with a faint `box-shadow` ring at `rgba(255,179,0,0.18)`. The inner
-divider above the `$0.75 -> $95.00` row moved to `rgba(255,179,0,0.28)` so it
-reads as part of the same box rather than a leftover grey line.
+Edited: `server-v2/_lib-gex-watch.cjs`, `owner-vite/src/pages/Backtests.tsx`.
 
-`#FFB300` is the amber already in the palette - the same value the oil price uses
-- so this is emphasis, not a new colour. The card is the only element in the
-letter that gets it, which is the point: it is the one thing on the page a reader
-should stop on.
+The feed was an array of one-string objects, so the generic `DataTable` drew it
+as a single-column table — a wall of sentences with no scannable structure. It is
+now a real component: severity stripe, ×normal meter, chips, graded outcome.
 
-Note the box-shadow is decoration only. Outlook strips it; the 2px border is what
-actually carries the effect, which is why the emphasis lives in the border rather
-than a glow.
+### The server hands over fields, not just prose
 
-Preview regenerated at `generated/2026-08-23-weekly-edge-preview.html` and
-`generated/2026-08-23-weekly-edge-preview.jpg`.
+Each feed row keeps **`alert` as its first key and its canonical form** — that is
+what the recorder freezes, what goes to Discord or an email, and what any consumer
+that knows nothing about the new fields will render. Everything else is ADDITIVE:
+`symbol`, `strike`, `zx`, `what`, `side`, `vsSpot`, `isCall`, `isAdded`, `flip`,
+`opex`, `histHit/Lift/N`, `staleDays`. `logged_feed` gets the same plus
+`graded` / `moveSigma` / `move3d` / `hit`.
 
-## 2026-08-23 - CORRECTION: Estimated Move note had the mechanism backwards
+A test asserts the sentence and the fields cannot disagree — every row's `alert`
+must contain its own symbol, strike, ×normal and side. Two renderings of one row
+that drift apart is the failure this shape invites, so it is pinned.
 
-The `estMoveNote` shipped in the entry below explained the 41.0% week as names
-"not travelling far enough to reach their bands". That is the OPPOSITE of what
-happens. Rewritten in `lib/emails/weekly-edge.ts`.
+The log's `alert` stays the line the recorder wrote ON THE DAY and is never
+re-rendered from current data; a test checks it never contains `RESULT:`, because
+a log that rewrites its own history is not a log.
 
-How the score actually works:
+### Encoding decisions
 
-- A LOSS is a BREACH. Price left the estimated-move band.
-- Estimated moves are priced off implied vol. VIX down => bands price NARROWER.
-- Realized range did NOT come down with it - the tape is still covering the same
-  distance it was.
-- Same range, smaller box => price exits the band earlier in the session => more
-  breaches => the win rate falls. 96-138 on 234 names.
+- **CALL `#219EBC` / PUT `#C96A3E`.** Call is `OWNER_THEME.cyan`, already in the
+  app; the clay was picked to pair with it. They separate at ΔE 17.8 under
+  deuteranopia, where a blue/red pair typically collapses. Validated, not
+  eyeballed. If they move into `homeTheme.ts`, move them TOGETHER — re-picking
+  one alone breaks the separation.
+- **Added vs removed is fill-vs-outline, not a third colour**, so the whole
+  encoding survives for a colourblind reader.
+- **OPEX is a hatch, not a hue.** It is not a kind of build, it is contamination;
+  texture says "discount this" without competing with the call/put reading. FLIP
+  is an outline for the same reason.
+- The accent (`#7dd3fc`) stays chrome and never encodes data.
 
-So it is an implied-versus-realized gap, and it closes when implied vol catches
-back up to what the market is doing. It is not "low vol means nothing moves".
+### Panel
 
-A comment block now sits above `estMovePct` in `withDefaults()` stating that a
-loss is a breach, so the next person writing this note does not reach for the
-intuitive-but-wrong version again.
+New `FEED_SECTIONS` set routes `feed` / `feed_live` / `logged_feed` through
+`FeedRows` instead of `DataTable`, in both the primary and the collapsed
+secondary slot. `FeedRows` falls back to the plain sentence for any row lacking
+the structured fields — an older cached response, or a frozen recorder line — so
+it can never render blank. `primary` is now the three feeds; `by_symbol` moved
+into Calibration & diagnostics with the other tables.
 
-Preview regenerated at `generated/2026-08-23-weekly-edge-preview.html` and
-`generated/2026-08-23-weekly-edge-preview.jpg`.
+### Verified
+
+122 assertions. New: `alert` stays first, every field present, `isCall`/`isAdded`
+agree with the side text, flip/opex flags agree with the sentence, an untested
+band reports null rather than 0, the sentence-vs-fields consistency check, and
+the log's frozen-line guard.
+
 
 ## 2026-08-23 - GEX watch: opex, flips, real legs, dollar floor, and an ALERT LOG
 

@@ -52,6 +52,136 @@ function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
   );
 }
 
+/**
+ * The two colours that ENCODE something, as opposed to the accent, which is
+ * chrome. Call-side and put-side gamma are the one real polarity in this data.
+ *
+ * CALL is OWNER_THEME.cyan — already in the app — and the clay was picked to
+ * pair with it: the two separate at ΔE 17.8 under deuteranopia, where a
+ * blue/red pair typically collapses. If these ever move into homeTheme.ts,
+ * move them together; re-picking one alone breaks the separation.
+ *
+ * ADDED vs REMOVED is fill-vs-outline, deliberately NOT a third colour, so the
+ * whole encoding survives for a colourblind reader.
+ */
+const GAMMA_CALL = "#219EBC";
+const GAMMA_PUT = "#C96A3E";
+const WARN = "#E0B341";
+
+type FeedRow = {
+  alert?: string; logged?: string;
+  date?: string; symbol?: string; strike?: number; zx?: number; band?: string;
+  verdict?: string; what?: string; side?: string; vsSpot?: string;
+  isCall?: boolean; isAdded?: boolean; flip?: boolean; opex?: boolean;
+  histHit?: number | null; histLift?: number | null; histN?: number | null;
+  staleDays?: number;
+  graded?: boolean; moveSigma?: number | null; move3d?: number | null; hit?: boolean;
+};
+
+const chipBase: CSSProperties = {
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 10, fontWeight: 700,
+  letterSpacing: "0.09em", padding: "1px 6px", borderRadius: 4, whiteSpace: "nowrap",
+};
+
+function Chips({ r }: { r: FeedRow }) {
+  return (
+    <>
+      {r.flip && <span style={{ ...chipBase, color: LIGHT_BLUE, border: `1px solid ${LIGHT_BLUE}` }}>FLIP</span>}
+      {r.opex && (
+        <span style={{
+          ...chipBase, color: WARN, border: `1px solid ${WARN}88`,
+          // Texture, not another colour: opex is not a KIND of build, it is
+          // contamination, and hatching says "discount this" without competing
+          // with the call/put reading.
+          background: "repeating-linear-gradient(45deg, rgba(224,179,65,0.14) 0 3px, transparent 3px 6px)",
+        }}>OPEX</span>
+      )}
+      {r.histHit == null && r.zx != null && (
+        <span style={{ ...chipBase, color: HOME_THEME.muted, opacity: 0.55, border: `1px solid ${HOME_THEME.border}` }}>UNTESTED</span>
+      )}
+    </>
+  );
+}
+
+/**
+ * Feed rows. Falls back to the plain sentence for any row without the
+ * structured fields — an older cached response, or the recorder's frozen line —
+ * so the component can never render blank.
+ */
+function FeedRows({ rows }: { rows: FeedRow[] }) {
+  const mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 10 }}>
+      {rows.map((r, i) => {
+        const text = r.alert || r.logged || "";
+        if (!r.symbol || r.zx == null) {
+          return (
+            <div key={i} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 6, padding: "9px 12px",
+              fontSize: 13, color: HOME_THEME.text, fontFamily: mono, lineHeight: 1.5 }}>{text}</div>
+          );
+        }
+        const edge = r.isCall ? GAMMA_CALL : GAMMA_PUT;
+        const pctOfScale = Math.max(3, Math.min(100, (r.zx / 8) * 100));
+        return (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "3px 1fr",
+            background: "rgba(255,255,255,0.03)", borderRadius: 6, overflow: "hidden" }}>
+            <div style={{ background: edge }} />
+            <div style={{ padding: "10px 13px", display: "flex", flexDirection: "column", gap: 5 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                <span style={{ fontFamily: mono, fontSize: 11.5, color: HOME_THEME.muted, opacity: 0.55 }}>[{r.date}]</span>
+                <span style={{ fontSize: 14.5, fontWeight: 700 }}>{r.symbol}</span>
+                <span style={{ fontFamily: mono, fontSize: 13, color: HOME_THEME.muted, opacity: 0.75 }}>{r.strike} strike</span>
+                <Chips r={r} />
+                {(r.staleDays ?? 0) > 3 && (
+                  <span style={{ ...chipBase, color: SOFT_RED, border: `1px solid ${SOFT_RED}88` }}>{r.staleDays}D STALE</span>
+                )}
+              </div>
+
+              <div style={{ fontFamily: mono, fontSize: 12.5, color: HOME_THEME.text, lineHeight: 1.5 }}>
+                {r.what}{r.side ? ` · ${r.side}` : ""}{r.vsSpot ? ` · ${r.vsSpot} vs spot` : ""}
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ fontFamily: mono, fontSize: 12.5, fontWeight: 700, color: edge, minWidth: 40 }}>
+                  {r.zx}×
+                </span>
+                <span style={{ flex: "0 1 200px", height: 5, background: "rgba(255,255,255,0.07)", borderRadius: 3, overflow: "hidden" }}>
+                  <span style={{ display: "block", height: "100%", width: `${pctOfScale}%`, background: edge, borderRadius: 3 }} />
+                </span>
+                <span style={{ fontFamily: mono, fontSize: 11.5, color: HOME_THEME.muted, opacity: 0.6 }}>
+                  {r.histHit == null
+                    ? "no odds at this level yet"
+                    : `hist ${r.histHit}%${r.histLift ? ` · ${r.histLift}× base` : ""}${r.histN ? ` · n=${r.histN}` : ""}`}
+                </span>
+              </div>
+
+              {r.graded !== undefined && (
+                <div style={{ fontFamily: mono, fontSize: 12, color: HOME_THEME.muted, opacity: 0.75,
+                  display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  {r.graded && r.moveSigma != null ? (
+                    <>
+                      <span>→ RESULT: {r.moveSigma >= 0 ? "+" : ""}{r.moveSigma.toFixed(2)}σ next session</span>
+                      <span style={{ color: r.hit ? GAMMA_CALL : GAMMA_PUT, fontWeight: 700 }}>
+                        {r.hit ? "✓ HIT" : "✗ miss"}
+                      </span>
+                      {r.move3d != null && <span style={{ opacity: 0.7 }}>· {r.move3d >= 0 ? "+" : ""}{r.move3d.toFixed(2)}σ by 3d</span>}
+                    </>
+                  ) : (
+                    <span>→ not graded yet — waiting on the forward session</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Sections rendered as feed rows rather than as a table. */
+const FEED_SECTIONS = new Set(["feed", "feed_live", "logged_feed"]);
+
 function Panel({ title, subtitle, test, fields, help, primary }: {
   title: string; subtitle: string; test: string; fields: Field[]; help?: ReactNode;
   /** Section keys to render inline. Everything else the endpoint returns goes
@@ -138,7 +268,9 @@ function Panel({ title, subtitle, test, fields, help, primary }: {
           {sections.map(([k, v]) => (
             <div key={k} style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>{k}</div>
-              <DataTable rows={v as Record<string, unknown>[]} />
+              {FEED_SECTIONS.has(k)
+                ? <FeedRows rows={v as FeedRow[]} />
+                : <DataTable rows={v as Record<string, unknown>[]} />}
             </div>
           ))}
           {secondary.length > 0 && (
@@ -148,7 +280,9 @@ function Panel({ title, subtitle, test, fields, help, primary }: {
                 {secondary.map(([k, v]) => (
                   <div key={k} style={{ marginBottom: 14 }}>
                     <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE, opacity: 0.8 }}>{k}</div>
-                    <DataTable rows={v as Record<string, unknown>[]} />
+                    {FEED_SECTIONS.has(k)
+                      ? <FeedRows rows={v as FeedRow[]} />
+                      : <DataTable rows={v as Record<string, unknown>[]} />}
                   </div>
                 ))}
               </div>
@@ -240,7 +374,7 @@ export default function Backtests() {
       <Panel
         title="GEX Watch" test="strike-gex-watch"
         subtitle="Strikes growing more than their ticker normally grows, at a cutoff the backtest earned rather than one anybody picked."
-        primary={["feed", "by_symbol"]}
+        primary={["feed", "feed_live", "logged_feed"]}
         fields={[
           { key: "minZ", label: "×normal (0 = auto)", type: "number", def: 0 },
           { key: "ticker", label: "ticker (blank = all)", type: "text", def: "" },

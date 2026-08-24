@@ -721,6 +721,12 @@ function create({ queryAll }) {
           ? `  →  RESULT: ${e.m1 >= 0 ? '+' : ''}${round(e.m1, 2)}σ next session${e.hit ? ' ✓ HIT' : ' ✗ miss'}`
             + (e.m3 == null ? '' : `, ${e.m3 >= 0 ? '+' : ''}${round(e.m3, 2)}σ by 3d`)
           : `  →  not graded yet (forward session not on file)`),
+      // Same additive fields as the live feed. `alert` here is the FROZEN line
+      // the recorder wrote on the day — never re-rendered from current data, or
+      // the log would quietly rewrite its own history.
+      alert: e.alert, date: e.date, symbol: e.symbol, strike: e.strike,
+      zx: e.zx, band: e.band, opex: e.isOpex,
+      graded: e.graded, moveSigma: e.m1, move3d: e.m3, hit: e.hit,
     }));
 
     const nGraded = graded.length;
@@ -1071,9 +1077,26 @@ function create({ queryAll }) {
         ? ` ⚠ OPEX SESSION — decay here is expiring gamma, not repositioning.` : '';
       const age = num(r['stale (d)']) > 3 ? ` ⚠ ${r['stale (d)']}d stale.` : '';
       return {
+        // `alert` stays first and stays canonical. It is what the recorder
+        // freezes, what goes to Discord or an email, and what any consumer that
+        // does not know about the fields below will show. The structured fields
+        // are ADDITIVE — a renderer that wants a severity stripe and a meter can
+        // have one without the text and the pixels ever disagreeing.
         alert: `[${r['as of']}] ${r.symbol} ${r.strike} strike — ${what}, ${WORDS(zx)} (${r['×normal']}× typical). `
           + `${r['vs spot']} vs spot, ${r.side}.`
           + `${hist}${opex}${age}`,
+        date: r['as of'], symbol: r.symbol, strike: r.strike,
+        zx: r['×normal'], band: r.band, verdict: WORDS(zx),
+        what, side: r.side, vsSpot: r['vs spot'],
+        fromM: r['from $M'], nowM: r['now $M'], dM: r['Δ $M'],
+        // Two booleans, not a colour: the renderer decides how to encode them,
+        // and CALL vs PUT is the one real polarity in the data.
+        isCall: /^call/.test(r.side), isAdded: /added$/.test(r.side),
+        flip: r.flip === 'FLIP', opex: r.opex === 'OPEX',
+        histHit: stat && stat.n >= minBucketN ? stat.hit : null,
+        histLift: stat && stat.n >= minBucketN ? stat.lift : null,
+        histN: stat && stat.n >= minBucketN ? stat.n : null,
+        staleDays: num(r['stale (d)']),
       };
     });
 
