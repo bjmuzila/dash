@@ -4,6 +4,18 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Sunday 8/23/2026
 
+* **The Earnings tab is a week at a glance.** One card per day, side by side, so the whole week fits on one screen instead of scrolling.
+
+* **Company logos for a lot more names.** Nineteen were showing as plain ticker text — they show their real logo now, bigger than before.
+
+* **The Earnings screenshot button copies to your clipboard.** It grabs just the earnings board, branded and ready to paste into a chat or a post.
+
+* **Easier to read.** Day cards stand out from the background, dates are centred and white, and the grey text is gone.
+
+* **Premarket and Post-Market now match the rest of the dashboard** — same card style, same colors, same green and red as the candles.
+
+* **Feedback is now a support ticket.** Send one and it stays on your account as Open — we reply on the same page, and you'll see when it's marked complete.
+
 * **The Level Log now shows which expiration it's reading.** A tag next to the price tells you the contract and how many days to expiry, so a 0DTE log is never mistaken for a weekly one.
 
 * **The Level Log opens on All.** Walls and CORE show together on load — the Walls and Core buttons now narrow the view instead of being where you start.

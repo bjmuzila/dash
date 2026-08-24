@@ -113,6 +113,34 @@ const RESET_TTL_MS = 60 * 60 * 1000;
  */
 const HOUSEHOLD_SEATS = 1;
 
+/**
+ * Site owner(s) — the people who run daily.cbedge.net, as opposed to the people
+ * who pay for it.
+ *
+ * By EMAIL and from the environment, not a column and not a role on the row. A
+ * boolean in the database is one bad UPDATE away from making a customer an
+ * admin, and there is no UI anywhere that can grant this — you get it by having
+ * shell access to the box that sets the variable, which is the same access you
+ * would need to grant yourself a column anyway.
+ *
+ * Comma-separated, matched case-insensitively against the account's email, and
+ * defaulting to the owner's address so a deployment that forgets the variable
+ * still has somebody who can get in.
+ */
+const ADMIN_EMAILS = new Set(
+  String(process.env.DAILY_ADMIN_EMAILS || 'bjmuzila@gmail.com')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
+);
+
+/** True for the site owner. Takes the user row, never a raw string from a
+ *  request — the email being compared has to be the one on the session. */
+function isAdmin(user) {
+  const email = String(user?.email || '').trim().toLowerCase();
+  return !!email && ADMIN_EMAILS.has(email);
+}
+
 const available = () => !!libDb;
 
 // ---------------------------------------------------------------------------
@@ -1176,6 +1204,9 @@ async function removePin({ userId, req }) {
 const ACTIVE_SUB = new Set(['active', 'trialing', 'past_due']);
 
 function subscriptionOk(user) {
+  // Mirrors subscriptionProblem() — these two must never disagree, or the SPA
+  // draws a paywall the server would have let through (or worse, the reverse).
+  if (isAdmin(user)) return true;
   return ACTIVE_SUB.has(String(user?.sub_status || 'none'));
 }
 
@@ -1185,6 +1216,15 @@ function subscriptionOk(user) {
  * { code, reason } to send back.
  */
 function subscriptionProblem(user) {
+  // The site owner is never billed and is never locked out. This is the ONLY
+  // bypass, and it is here rather than sprinkled through the routes so that
+  // "who can use the app without paying" is one function you can read.
+  //
+  // It deliberately does not fake a subscription row: statusFor() still reports
+  // the truth, so the Settings screen says "no subscription" for an admin rather
+  // than inventing a plan that Stripe has never heard of.
+  if (isAdmin(user)) return null;
+
   const status = String(user?.sub_status || 'none');
   if (ACTIVE_SUB.has(status)) return null;
   if (status === 'none') return { code: 402, reason: 'subscription-required' };
@@ -1279,6 +1319,8 @@ module.exports = {
   issueEmailToken, peekEmailToken, consumeEmailToken, markEmailVerified, resetPassword,
   // billing gate
   subscriptionOk, subscriptionProblem, subscriptionFor,
+  // site owner
+  isAdmin, ADMIN_EMAILS,
   // settings
   getSettings, putSettings, SETTING_DEFAULTS,
   // primitives other daily modules need

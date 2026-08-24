@@ -316,6 +316,10 @@ function registerDailyRoutes({ register, send, readJson, readRaw }) {
     // The entitlement decision, already made, so the SPA never has to reason
     // about Stripe statuses to decide whether to draw the app or the paywall.
     entitled: daily.subscriptionOk(u),
+    // Site owner. Read-only from the browser's point of view: it comes from an
+    // env var compared against the session's own email, so no request can claim
+    // it and no UPDATE can grant it.
+    admin: daily.isAdmin(u),
     subscription: {
       status: u.sub_status || 'none',
       plan: u.sub_plan ?? null,
@@ -2691,6 +2695,75 @@ function registerDailyRoutes({ register, send, readJson, readRaw }) {
   // deployment's configuration to anyone who curls it is free reconnaissance.
   // Whoever is deploying can read the container log, which says exactly what is
   // missing.
+
+  // ── Admin ─────────────────────────────────────────────────────────────────
+  //
+  // One route, one screen: who has signed up and what state their billing is in.
+  // Deliberately READ-ONLY. An admin panel that can edit a customer's data is a
+  // panel that will one day edit the wrong customer's data, and every write it
+  // could offer is already available over psql to whoever has the box.
+  //
+  // auth:'user' rather than 'member' — the owner has no subscription and never
+  // will, so gating this behind entitlement would lock the only person who needs
+  // it out of it.
+
+  add('/api/daily/admin/overview', {
+    auth: 'user', methods: ['GET'],
+    async handler(req, res, _ctx, access) {
+      // Checked HERE, per request, against the session's own email. Not on a
+      // column, not on anything the browser sent.
+      if (!daily.isAdmin(access.user)) {
+        // 404, not 403. A 403 confirms the route exists and that this account is
+        // simply not the one — which is a small thing to tell a stranger probing
+        // URLs, and free not to.
+        send(res, 404, { error: 'not-found' }, nostore);
+        return;
+      }
+      try {
+        const [totals, byStatus, recent] = await Promise.all([
+          pool().query(
+            `SELECT
+               (SELECT COUNT(*)::int FROM daily_users WHERE active)        AS accounts,
+               (SELECT COUNT(*)::int FROM daily_households)                AS households,
+               (SELECT COUNT(*)::int FROM daily_users
+                 WHERE active AND created_at > now() - interval '7 days')  AS new_this_week,
+               (SELECT COUNT(*)::int FROM daily_users
+                 WHERE active AND last_login_at > now() - interval '7 days') AS active_this_week`),
+          pool().query(
+            `SELECT status, COUNT(*)::int AS n FROM daily_subscriptions
+              GROUP BY status ORDER BY n DESC`),
+          // Capped at 50 and ordered newest first. This is a glance at who has
+          // arrived, not an export — an unbounded list is a page that gets slower
+          // every week until nobody opens it.
+          pool().query(
+            `SELECT u.id, u.email, u.display_name, u.created_at, u.last_login_at,
+                    u.email_verified_at IS NOT NULL AS verified,
+                    COALESCE(s.status, 'none') AS sub_status, s.plan,
+                    s.current_period_end
+               FROM daily_users u
+               LEFT JOIN daily_subscriptions s ON s.household_id = u.household_id
+              WHERE u.active
+              ORDER BY u.id DESC LIMIT 50`),
+        ]);
+
+        send(res, 200, {
+          totals: totals.rows[0],
+          byStatus: byStatus.rows,
+          recent: recent.rows.map((r) => ({
+            id: r.id,
+            email: r.email,
+            displayName: r.display_name,
+            createdAt: r.created_at,
+            lastLoginAt: r.last_login_at,
+            verified: r.verified,
+            subStatus: r.sub_status,
+            plan: r.plan,
+            currentPeriodEnd: r.current_period_end,
+          })),
+        }, nostore);
+      } catch (err) { oops(res, req, err, 'Could not load the admin overview.'); }
+    },
+  });
 
   add('/api/daily/health', {
     auth: 'public', methods: ['GET'],

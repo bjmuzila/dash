@@ -98,6 +98,10 @@ export type User = {
   /** The entitlement decision, already made by the server. The SPA never
    *  reasons about Stripe statuses itself — see publicUser in daily-routes.cjs. */
   entitled: boolean
+  /** The site owner. Comes from an env var on the server compared against this
+   *  session's own email, so nothing in the browser can claim it — but it is
+   *  still only a HINT for what to draw. Every admin route re-checks. */
+  admin: boolean
   subscription: Subscription
   /** True when THIS browser is armed for quick (PIN) sign-in. Comes from the
    *  dy_device cookie, so it is per-device and not a property of the account. */
@@ -623,6 +627,27 @@ export const household = {
       `${P}/household/invite?token=${encodeURIComponent(token)}`),
   join: (b: { token: string; password: string; displayName?: string }) =>
     api.post<{ ok: true; user: User }>(`${P}/household/join`, b),
+}
+
+export type AdminOverview = {
+  totals: { accounts: number; households: number; new_this_week: number; active_this_week: number }
+  byStatus: { status: SubStatus; n: number }[]
+  recent: {
+    id: number
+    email: string
+    displayName: string
+    createdAt: string
+    lastLoginAt: string | null
+    verified: boolean
+    subStatus: SubStatus
+    plan: string | null
+    currentPeriodEnd: string | null
+  }[]
+}
+
+/** Read-only, and 404s for anybody who isn't the site owner. */
+export const admin = {
+  overview: () => api.get<AdminOverview>(`${P}/admin/overview`),
 }
 
 export const tasks = {

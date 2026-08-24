@@ -34,6 +34,7 @@ const Projects = lazy(() => import('./pages/Projects'))
 const Money    = lazy(() => import('./pages/Money'))
 const Markets  = lazy(() => import('./pages/Markets'))
 const Settings = lazy(() => import('./pages/Settings'))
+const Admin    = lazy(() => import('./pages/Admin'))
 
 // staleTime 30s: this is a planner, not a market feed. Refetching on every
 // focus is noise and burns phone battery for data that only changes when the
@@ -249,6 +250,11 @@ function Gate() {
             <Route path="/routines" element={S(<Routines />)} />
             <Route path="/projects" element={S(<Projects />)} />
             {/* Onboarding is done; the bookmark somebody kept should not replay it. */}
+            {/* Always routed, never conditionally registered. The page itself
+                renders "nothing here" for a non-owner and the server 404s the
+                data, so a route that appears and disappears with a flag would
+                only add a way for the two to disagree. */}
+            <Route path="/admin" element={S(<Admin />)} />
             <Route path="/terms" element={<Terms />} />
             <Route path="/privacy" element={<Privacy />} />
             <Route path="/welcome" element={<Navigate to="/today" replace />} />

@@ -46,6 +46,7 @@ export default function SignUp() {
 function CreateAccount({ onDone }: { onDone: (email: string) => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -55,6 +56,15 @@ function CreateAccount({ onDone }: { onDone: (email: string) => void }) {
     if (busy) return
     if (password.length < MIN_PASSWORD) {
       setError(`Use at least ${MIN_PASSWORD} characters.`)
+      return
+    }
+    // Checked before the length message would ever fire on the second field, and
+    // checked here rather than trusted to the browser: a typo in a password you
+    // cannot see is the one signup mistake that locks somebody out of an account
+    // they are about to put a card against, and the reset email is a poor way to
+    // find out.
+    if (password !== confirm) {
+      setError('The two passwords do not match.')
       return
     }
     setBusy(true); setError(null)
@@ -107,6 +117,20 @@ function CreateAccount({ onDone }: { onDone: (email: string) => void }) {
         <input style={input()} type="password" value={password}
                onChange={(e) => setPassword(e.target.value)}
                autoComplete="new-password" minLength={MIN_PASSWORD} required />
+      </label>
+
+      <label style={{ display: 'block', marginBottom: 14 }}>
+        <div style={label({ marginBottom: 7 })}>Confirm password</div>
+        <input style={input()} type="password" value={confirm}
+               onChange={(e) => setConfirm(e.target.value)}
+               autoComplete="new-password" required />
+        {/* Said as you type rather than on submit. Waiting for the button to
+            tell you the two fields disagree means retyping both. */}
+        {confirm.length > 0 && confirm !== password && (
+          <div style={{ ...label({ color: T.warn, letterSpacing: '0.06em' }), marginTop: 7 }}>
+            These don't match yet
+          </div>
+        )}
       </label>
 
       <label style={{ display: 'block', marginBottom: 22 }}>

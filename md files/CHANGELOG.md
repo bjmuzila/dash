@@ -1,271 +1,262 @@
 # Changelog
 
-## 2026-08-23 - GEX watch: the feed renders as rows, not a table
+## 2026-08-23 - Site owner account, and a confirm field on every new password
 
-Edited: `server-v2/_lib-gex-watch.cjs`, `owner-vite/src/pages/Backtests.tsx`.
+New: `daily-vite/src/pages/Admin.tsx`. Edited: `server-v2/_lib-daily.cjs`,
+`server-v2/daily-routes.cjs`, `daily-vite/src/api.ts`, `App.tsx`,
+`pages/SignUp.tsx`, `pages/Settings.tsx`.
 
-The feed was an array of one-string objects, so the generic `DataTable` drew it
-as a single-column table — a wall of sentences with no scannable structure. It is
-now a real component: severity stripe, ×normal meter, chips, graded outcome.
+### The owner is an email address in an env var
 
-### The server hands over fields, not just prose
+`DAILY_ADMIN_EMAILS`, comma-separated, defaulting to the owner's own address so
+a deployment that forgets the variable still has somebody who can get in. Not a
+column and not a role on the row: a boolean in the database is one bad UPDATE
+away from making a customer an admin, and there is no UI anywhere that can grant
+it — you get it by having shell access to the box, which is the same access you
+would need to grant yourself a column anyway.
 
-Each feed row keeps **`alert` as its first key and its canonical form** — that is
-what the recorder freezes, what goes to Discord or an email, and what any consumer
-that knows nothing about the new fields will render. Everything else is ADDITIVE:
-`symbol`, `strike`, `zx`, `what`, `side`, `vsSpot`, `isCall`, `isAdded`, `flip`,
-`opex`, `histHit/Lift/N`, `staleDays`. `logged_feed` gets the same plus
-`graded` / `moveSigma` / `move3d` / `hit`.
+That account is entitled without a subscription. The bypass lives in
+`subscriptionProblem()` and `subscriptionOk()` and nowhere else, so "who can use
+this without paying" is one function you can read. It deliberately does NOT fake
+a Stripe row — Settings still says "no subscription" for the owner rather than
+inventing a plan Stripe has never heard of.
 
-A test asserts the sentence and the fields cannot disagree — every row's `alert`
-must contain its own symbol, strike, ×normal and side. Two renderings of one row
-that drift apart is the failure this shape invites, so it is pinned.
+### /admin
 
-The log's `alert` stays the line the recorder wrote ON THE DAY and is never
-re-rendered from current data; a test checks it never contains `RESULT:`, because
-a log that rewrites its own history is not a log.
+One read-only screen: account and signup counts, subscriptions grouped by
+status, and the newest 50 accounts with their billing state. There is no button
+on it that edits a customer, which is a decision and not an unfinished feature —
+an admin panel that can change somebody's data will one day change the wrong
+somebody's, and every write it could offer is already a psql command away for
+whoever has the box.
 
-### Encoding decisions
+Guarded twice, doing different jobs: `user.admin` decides whether the link is
+drawn, the server re-checks the session's own email on every request. The route
+answers **404, not 403**, to anyone else — a 403 confirms the route exists and
+that this account simply isn't the one, which is a small thing to tell a
+stranger probing URLs and free not to say. The page renders "nothing here" to
+match, rather than contradicting the server with "access denied".
 
-- **CALL `#219EBC` / PUT `#C96A3E`.** Call is `OWNER_THEME.cyan`, already in the
-  app; the clay was picked to pair with it. They separate at ΔE 17.8 under
-  deuteranopia, where a blue/red pair typically collapses. Validated, not
-  eyeballed. If they move into `homeTheme.ts`, move them TOGETHER — re-picking
-  one alone breaks the separation.
-- **Added vs removed is fill-vs-outline, not a third colour**, so the whole
-  encoding survives for a colourblind reader.
-- **OPEX is a hatch, not a hue.** It is not a kind of build, it is contamination;
-  texture says "discount this" without competing with the call/put reading. FLIP
-  is an outline for the same reason.
-- The accent (`#7dd3fc`) stays chrome and never encodes data.
+`auth:'user'` rather than `'member'`, because the owner has no subscription and
+gating the admin screen behind entitlement would lock out the only person who
+needs it.
 
-### Panel
+### Confirm the password
 
-New `FEED_SECTIONS` set routes `feed` / `feed_live` / `logged_feed` through
-`FeedRows` instead of `DataTable`, in both the primary and the collapsed
-secondary slot. `FeedRows` falls back to the plain sentence for any row lacking
-the structured fields — an older cached response, or a frozen recorder line — so
-it can never render blank. `primary` is now the three feeds; `by_symbol` moved
-into Calibration & diagnostics with the other tables.
-
-### Verified
-
-122 assertions. New: `alert` stays first, every field present, `isCall`/`isAdded`
-agree with the side text, flip/opex flags agree with the sentence, an untested
-band reports null rather than 0, the sentence-vs-fields consistency check, and
-the log's frozen-line guard.
-
-
-## 2026-08-23 - GEX watch: opex, flips, real legs, dollar floor, and an ALERT LOG
-
-Edited: `server-v2/api-router.js`, `server-v2/server-with-proxy.js`,
-`owner-vite/src/pages/Backtests.tsx`.
-New: `server-v2/_lib-gex-watch.cjs`, `server-v2/gex-watch-recorder.js`.
-
-A live board full of alerts turned out to be mostly wrong. Five things.
-
-### 0. The engines moved to a shared module
-
-`_lib-gex-watch.cjs` — pure functions over an injected `queryAll`, no pool, no
-schedule, no HTTP. api-router and the new recorder both require it. That is the
-point: the alerts the recorder logs and the odds the panel shows must be one
-definition. A copy-paste would drift within a week and neither would be worth
-reading. Do not inline this SQL anywhere else.
-
-### 1. OPEX was the whole board
-
-2026-08-21 was the third Friday. `eod_strike_gex` sums ALL expiries, so on opex
-the expiring tranche stops existing and every strike carrying it collapses:
-
-    WBD  28   −78%   $77.39M → $17.02M
-    UBER 80   −75%   $60.27M → $15.12M
-    FCX  70   −89%   $18.61M → $2.00M
-
-None of that is repositioning. It is the calendar, and it was the largest Δ in
-the table, so it dominated the board and poisoned the calibration. Detected as
-`DOW = 5 AND day-of-month BETWEEN 15 AND 21` (that can only be the third
-Friday), flagged in words on the line, and excluded from the calibration by
-default. `opex=1` puts them back.
-
-### 2. A sign flip is not a percentage
-
-    IEF  93   "+116%"   $-345.01M → $54.72M
-    RUT  2970 "−349%"   $118.48M  → $-295.09M
-
-Both crossed zero — a regime change, arguably the most interesting thing on the
-board, described as a growth rate. Flips are now detected in SQL and worded
-separately: `GEX FLIPPED −$345M → +$55M`. This failure mode was documented and
-guarded against in the ranking, then shipped anyway in the sentence.
-
-### 3. The side label was inferred from the sign, and was often backwards
-
-`CORZ 19: $-3.92M → $-0.61M` read as "call side". Δ is positive, but the strike
-still holds NEGATIVE gamma — what happened is put gamma came OFF. A positive Δ
-means calls added OR puts removed, and those are opposite events. `call_gex` /
-`put_gex` are carried through the spine now and the larger leg is described:
-"put gamma removed". NULL before 2026-08-18 → hedged wording, never a guess.
-
-### 4. ×normal had no dollar floor
-
-`WOLF $1.85M` and `BTDR $380K` scored 4× and 3.5× because those names normally
-carry almost no gamma. New `minAbs` (default $2M) gates the board AND the
-calibration. Applied with `COALESCE(MAX(zx) FILTER (…), 0)`, not a `WHERE`: a
-quiet ticker-day still belongs in the baseline scored 0, or the denominator
-silently becomes "days something moved" and every lift is against the wrong
-universe.
-
-Also `maxStale` (7d): a symbol whose last session is weeks old is held off a
-DAILY board entirely instead of sitting near the top forever.
-
-### 5. THE ALERT LOG — the panel was a view, not a log
-
-"When did this fire" had no answer, because nothing fired: the list was
-recomputed on every Run, and every hit rate was backtested. `gex-watch-recorder.js`
-runs daily at 16:40 ET (after eod-strike-gex-recorder writes the ladder — fire it
-earlier and it logs off yesterday's board, silently), writes
-`gex_watch_alerts`, and grades each row once its forward session exists.
-
-Three things that buys:
-
-- **Real fire times.** Every feed line is stamped `[2026-08-21]`, and the
-  rendered sentence is FROZEN in the row — if wording or the cutoff changes next
-  month, the log still shows what the reader was told on the day.
-- **Forward-tested odds.** "Of the alerts this rule ACTUALLY fired, N were
-  followed by a move" — nothing chosen after seeing the outcome. `track_record`
-  reports it against a live baseline. Where it disagrees with the calibration
-  sweep, believe the log.
-- **Survives retention.** `eod_strike_gex` has been stuck at ~8 sessions. This
-  table accrues forward on its own, so the record of what was flagged and what
-  happened next does not reset with it.
-
-Grading is strictly backward-looking: only once the forward bar exists, with
-sigma trailing and excluding the alert bar. Ungraded rows say so — they are
-waiting, not failing. 1095-day retention; rows are tiny. Manual fire:
-`POST /proxy/gex-watch-run`.
+Reset and the first-run ChangePassword screen already asked twice. Signup and the
+Settings password card did not, and both are the places where getting it wrong
+hurts most: a typo at signup locks somebody out of an account they are one screen
+away from putting a card against, and a typo in Settings signs every other device
+out and then locks you out of the one in your hand. Signup says "these don't
+match yet" as you type rather than waiting for the submit, which would mean
+retyping both fields.
 
 ### Verified
 
-112 assertions. New: the four fixes each tested where they bite (a fixture opex
-session, a planted sign flip, a sub-floor mover, NULL-leg fallback), opex
-exclusion actually changing the calibration n, the staleness cap, and the
-recorder end-to-end — writes, freezes the line, leaves the newest session
-ungraded (no forward bar yet), grades across many sessions once backdated, and
-does not mark everything a hit.
+SPA typechecks clean and builds. The backend smoke run registers 47 routes and
+confirms the bypass: the owner's address is entitled with `sub_status = 'none'`,
+a customer's is not, and the match is case- and whitespace-insensitive.
 
+## 2026-08-23 - daily.cbedge.net is a single-person product
 
-## 2026-08-23 - FIX: absent query params silently defaulted to 0, not their default
+Edited: `daily-vite/src/pages/{Landing,Pricing,SignUp,Paywall,Onboarding,Legal,Journal,Settings}.tsx`,
+`daily-vite/src/components/CalendarCard.tsx`, `server-v2/_lib-daily.cjs`,
+`server-v2/daily-routes.cjs`. Deleted: `daily-vite/src/pages/Join.tsx`,
+`daily-vite/src/components/CalendarPicker.tsx`.
 
-Edited: `server-v2/api-router.js` (`/api/backtests` dispatch helper).
+It was built as a two-person product — one subscription covering a couple, with
+invites, seats and "shared so nobody buys milk twice" running through the copy.
+It is for one person. Nothing user-facing says otherwise any more.
 
-`strike-gex-watch` returned **0 ticker-days against a full 169-symbol table**.
-The data was fine, the SQL was fine, the deployed build was current. The bug was
-one line in the dispatch:
+### Gone
 
-```js
-const n = (k, d) => { const v = Number(q.get(k)); return Number.isFinite(v) ? v : d; };
-```
+The Household card in Settings (members, seats, invite, revoke, remove, rename),
+the `/join` route and the page behind it, and the "show these on the other
+person's Today" toggle on the calendar picker. The per-event owner chip went too:
+it named whose connection an event arrived through, which was worth saying when
+two calendars were merged and is noise when there is only ever one. The field
+stays on the type and the server still sends it.
 
-`q.get(k)` returns **null** for an absent param. `Number(null)` is **0**, and 0
-is finite — so the default was never reached. Every knob the panel has no field
-for silently arrived as 0.
+`components/CalendarPicker.tsx` was deleted as well — Settings has defined its
+own inline picker since it was written, and nothing had imported the standalone
+one for a while.
 
-`maxGap = 0` was the fatal one: the spine gates returns on
-`(date - LAG(date)) <= maxGap`, and consecutive sessions always differ by ≥1, so
-EVERY return went NULL → sigma NULL → every row filtered out. `minBucketN = 0`
-then suppressed the "⚠ SAMPLE TOO SMALL TO READ" warning that would have made
-this obvious, because `total < 5 * 0` is false for any total. The note therefore
-looked like an older build's, which cost a long detour through deploy forensics —
-rebuilding the container, checking git, fingerprinting the image — before the
-real cause turned up.
+### Copy
 
-Harmless for years because every earlier test's params were all panel fields. It
-only became lethal when handlers grew tunables the UI does not send.
+Landing, Pricing, SignUp, Paywall and Onboarding no longer mention a second
+person, a household, an invite or a seat. The Terms and Privacy pages were
+rewritten where they described the two-person arrangement: "one subscription
+covers one household of up to two people" is now one account for one person, and
+the privacy page's who-else-sees-it list no longer opens with "the other person
+in your household, in full."
 
-Fixed to distinguish absent from zero:
+The Journal compose box used to label an empty entry "Shared with the household"
+— a warning that someone else would read it. There is no someone else.
 
-```js
-const n = (k, d) => {
-  const raw = q.get(k);
-  if (raw === null || raw === '') return d;
-  const v = Number(raw);
-  return Number.isFinite(v) ? v : d;
-};
-```
+### The seat cap is where this is actually enforced
 
-Applies to every test on `/api/backtests`, not just the new ones.
+`HOUSEHOLD_SEATS` is 1. That is what turns invites off, not the removed button:
+the invite route and `joinHousehold()` both check it, so a second person cannot
+be added whatever the UI does or doesn't show. The invite action refuses with a
+plain sentence rather than being deleted, because an emailed invite that cannot
+be redeemed at the far end is a worse outcome than a button nobody was offered.
 
-### Regression coverage
+### Why household_id stayed
 
-The helper is now sliced out of `api-router.js` by the test harness the same way
-the engines are, so the test tracks the real code and cannot drift from a copy.
-12 new assertions: every absent param takes its default, a blank string falls
-back, and an explicit `0` is still honoured rather than overridden (the fix must
-not swing too far the other way — `minZ=0` means AUTO and has to survive).
-
-85 assertions total, all green.
-
-
-## 2026-08-23 - Backtests page: six strike-GEX panels collapsed into one
-
-Edited: `owner-vite/src/pages/Backtests.tsx`, `server-v2/api-router.js`.
-
-The page had grown to six strike-GEX panels and a wall of always-visible prose.
-Three of the six were duplicates of work panel ① already did, and the docs — which
-you read once while calibrating and never again — were burying the numbers.
-
-### One panel: GEX Watch
-
-Panels ②–⑥ removed from the page. **Their handlers stay registered and callable**
-(`strike-gex-premove`, `-threshold`, `-move`, `-timeline`, `-move-intraday`) —
-this is a page-level removal, and re-adding any of them is ~20 lines. What went
-and why:
-
-- `strike-gex-threshold` — asked "at what growth do the odds shift" in % units;
-  ①'s `calibration` sweep asks it in ×normal units. Same question twice.
-- `strike-gex-move` — z-scored dollars vs forward move; ①'s `odds` table is the
-  same measurement. Same question twice.
-- `strike-gex-move-intraday` — has no data and will not until
-  `RETENTION_STRIKE_GROWTH_DAYS` is raised and weeks pass. Noise on the page.
-- `strike-gex-premove` and `-timeline` were NOT duplicates and were folded in
-  rather than dropped (below).
-
-### `withChecks` — the calibration panels, behind a checkbox
-
-Off by default, because each runs its own full-history query and making them
-automatic would double the cost of the one thing read every morning in service of
-two tables looked at once a month. Ticked, the response gains:
-
-- `premove_check` — the study run BACKWARDS (start from moves, look back),
-  printing move-days beside quiet-days. This is the honesty check and the reason
-  it is offered at all: **if those two rows look alike the earned cutoff is
-  describing noise**, however good its lift looks.
-- `timeline` — per-strike series, only when a ticker is set, since it is
-  per-ticker by design.
-
-### `primary` on the Panel component
-
-New optional prop naming the sections worth seeing without a click. Everything
-else the endpoint returns drops behind one "Calibration & diagnostics" toggle.
-GEX Watch shows `feed` and `by_symbol`; `calibration`, `odds`, `live`, `coverage`
-and the checks are one click away. Omitting the prop renders every section, so
-the four older panels are untouched.
-
-### Everything wordy is now collapsed by default
-
-`help` blocks, both intro cards, and the returned `note` — which now leads with
-its first sentence (on GEX Watch that is the earned cutoff, i.e. the answer) and
-hides the caveats behind "— more ▾". `details > summary::-webkit-details-marker`
-is suppressed so the ▸ glyph is the only marker.
-
-Page went from ~470 lines and 10 panels to 306 lines and 5.
+The tenancy key is still `household_id` and not `user_id`, which looks like an
+indirection with nothing behind it. Fusing them would make "whose row is this"
+and "who is signed in" the same question, and separating them again later means
+touching every query in every module. One column now beats a migration across
+the whole codebase later — and raising the seat cap is a one-line change if that
+decision is ever revisited.
 
 ### Verified
 
-73 assertions, all green. New: `withChecks=false` adds no keys (the lean daily
-path), `withChecks=true` folds in a 2-row premove check, timeline appears only
-with a ticker, and `feed` stays the first key either way. esbuild parse clean,
-no orphaned imports, every remaining panel's `test=` resolves to a handler.
+SPA typechecks clean under `strict` + `noUnusedLocals` and builds. `node --check`
+passes on both edited backend modules. A grep across `src/` for the two-person
+vocabulary returns nothing outside the `household_id` mechanism itself.
 
+## 2026-08-23 - daily.cbedge.net is live, and sign-in is email only
+
+Edited: `daily-vite/src/pages/SignIn.tsx`, `SignUp.tsx`, `daily-vite/src/api.ts`,
+`server-v2/daily-routes.cjs`. Deployed: `/etc/cloudflared/config.yml` on the VPS
+(ingress for daily.cbedge.net → 127.0.0.1:8086), CNAME added, `DAILY_TOKEN_KEY`
+and `DAILY_BASE_URL` set.
+
+`https://daily.cbedge.net/` answers 200 through the tunnel, the schema built
+itself on first boot, and the health route reports `db`, `google` and `mail`
+configured. Stripe is still the only integration outstanding.
+
+### Sign in with Google is off
+
+Accounts are an email address and a password. The button is gone from both
+SignIn and SignUp and `googleSignInUrl` is gone from the API client — but the
+decision is enforced at the SERVER, in `/api/daily/google/start`, because a
+removed button is not an access control and anybody can type a URL.
+`/google/callback` refuses a `signin` state too: /start no longer mints one, but
+a state already sitting in someone's browser stays valid for its ten-minute TTL
+and honouring it would mint a session the front door now refuses.
+
+Google remains a CALENDAR integration and only that — connecting one requires an
+account that already exists, which is the other reason the sign-in arm had no
+business being there.
+
+The machinery underneath (the RS256 id_token verifier, the JWKS cache,
+`loginWithGoogle`) is left in place rather than deleted. It is correct, it was
+the expensive part to get right, and switching it back on is deleting one branch
+in `daily-routes.cjs` and putting the button back. What matters is that nothing
+can currently reach it.
+
+`?error=google-signin-disabled` explains itself on the sign-in screen rather than
+showing a bare code — somebody with an old bookmark or a consent screen open in
+another tab gets a straight answer.
+
+### Verified
+
+SPA typechecks clean and builds. `node --check` passes on the routes module.
+
+## 2026-08-23 - daily.cbedge.net: the household app, as a product you can sell
+
+New: `daily-vite/` (the SPA), `server-v2/daily-server.js`, `server-v2/daily-routes.cjs`,
+`server-v2/_lib-daily.cjs`, `_lib-daily-budget.cjs`, `_lib-daily-billing.cjs`,
+`_lib-daily-google.cjs`, `_lib-daily-markets.cjs`, `_lib-daily-mail.cjs`,
+`deploy/daily/`. Edited: `docker-compose.yml`, `AGENTS.md`.
+budget.cbedge.net is **untouched** — not one hh_* table, route or file changed.
+
+budget.cbedge.net stays the private, owner-gated life-OS. daily.cbedge.net is the
+same product with a landing page, Stripe checkout and members, built as a sibling
+rather than a fork with a feature flag: the private app and the paid one now
+evolve separately, and a change to one can never surprise the other.
+
+### The reason it is a copy and not a flag
+
+`hh_*` says, in so many words, "everything is shared" — every content row
+defaults to `visibility='shared'` and every read is
+`owner_id = :me OR visibility = 'shared'`. With two people who live together that
+is a feature. With paying strangers on the same tables it is a data breach with a
+default value: one signup and a customer's Today screen shows the owner's
+journal.
+
+So `daily_*` is a separate schema whose unit of ownership is a **household**, not
+a user. Every content row carries `household_id NOT NULL`; every read and write
+filters on it through one `scoped()` helper, so "did this query filter by tenant?"
+is answerable by eye instead of by reading a predicate. There is no visibility
+column at all — inside a household everything is shared, across households
+nothing is, ever.
+
+### What was removed on the way across
+
+- **The intro splash.** budget opens on a pencil drawing held for five seconds.
+  That is a private thing between two people; it is gone, and there is a comment
+  in `App.tsx` where it used to be so nobody re-adds it.
+- **The Cookbook tab.** It pointed at recipe.cbedge.net — the owner's own
+  cookbook, on the owner's own login. Its slot went to **Markets**.
+- **The owner's calendar, budget and location.** No connected Google account, no
+  `budget_profile_key='owner'`, no hardcoded ZIP. Each of those is now something
+  a customer sets for themselves in onboarding or Settings.
+- **The three banks.** Coastal / Truist / SECU were fixed columns. They are now
+  `daily_accounts` rows a customer names themselves, of kind checking / savings /
+  credit / cash, and balances moved from three columns to `(account_id, day)`
+  rows. The Amazon and consulting tiles went with them.
+
+### What was added
+
+**Markets** — the reason a trader would pick this planner over any other. The
+economic calendar and the earnings calendar from the trading side, in the same
+app as the grocery list. Earnings is a read-only SELECT against the
+`earnings_calendar` table the existing recorder maintains; the econ feed reads the
+cache file the dashboard already writes (`./state` mounted read-only) and only
+fetches upstream itself if that file is missing or stale. That indirection is not
+politeness — a 20-second poller with nothing cached in front of it is what got
+this VPS rate-limited by faireconomy once already.
+
+**Billing** — Stripe over plain `fetch`, no SDK, with hand-rolled webhook
+signature verification against the raw request bytes. One subscription per
+household, monthly or annual, no free tier. `past_due` still grants access on
+purpose: Stripe retries a declined card for days, and locking someone out of
+their shopping list the morning their card expires is worse than a few days of
+unpaid access. The webhook is the source of truth; the post-checkout page calls
+`billing.sync()` as a repair path so a customer who has just paid never lands on
+a paywall because a webhook was slow.
+
+**Public auth** — self-signup, email verification, password reset, household
+invites (two seats, hard-capped so an invite link can't become a company
+account), and Sign in with Google, whose id_token is verified in-process against
+Google's JWKS rather than trusted because it arrived. "Forgot password" answers
+identically whether or not the address exists; on a public form the alternative
+is an oracle for whether someone is a customer.
+
+**Google Calendar, now read AND write.** The private app is deliberately
+`calendar.readonly`. This one promises "add it to my calendar from Today", so it
+carries `calendar.events` as well — and every write path requires an explicit
+calendar id checked against the account's own writable list, so nothing can be
+silently created on someone's primary calendar.
+
+### Isolation
+
+A third backend container, `daily-api` on 3011, holding `pg` and node builtins
+and nothing else. The argument household-server made once already applies harder
+here: a public signup form is an open attack surface, a Stripe webhook has to
+answer in seconds or Stripe disables the endpoint, and neither belongs in the
+process recording market data. nginx proxies only `/api` — no `/ws`, no `/proxy`
+— so the one CB Edge surface a paying stranger is invited to load cannot reach
+the trading stack at all. Cookies are `dy_session` / `dy_device`, host-only: a
+cbedge.net session grants nothing here, an hh_session grants nothing here, and a
+dy_session grants nothing anywhere else.
+
+### Verified
+
+SPA typechecks clean under `strict` + `noUnusedLocals` and builds (111 modules).
+All eight backend files pass `node --check`; the server boots against a stubbed
+database, registers 46 routes (16 public / 11 signed-in / 19 entitled), answers
+`/health`, 401s an unauthenticated `/api/daily/today`, and rejects an unsigned
+Stripe webhook with a 400. `docker-compose.yml` parses with all nine services.
+
+**Not yet done — it cannot go live without these:** two Stripe prices and a
+dedicated webhook endpoint, the Google redirect URI, `DAILY_TOKEN_KEY`, the
+Cloudflare tunnel entry and DNS record. Every one of them is in
+`md files/DAILY-SETUP.md`, and until they exist the app reports each integration
+as "not set up" rather than crashing.
 
 ## 2026-08-23 - The backtest now SETS the watch cutoff (and refuses to overfit)
 

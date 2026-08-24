@@ -16,6 +16,7 @@ import GexScannerTab from "@/components/scanner/GexScannerTab";
 import GexPctTab from "@/components/scanner/GexPctTab";
 import MarketQualityTab from "@/components/scanner/MarketQualityTab";
 import StatPrompterTab from "@/components/scanner/StatPrompterTab";
+import ConditionRailTab from "@/components/scanner/ConditionRailTab";
 import { TESTLAB_SECTION, TESTLAB_TAB_EVENT, readSectionTab } from "@/components/shared/sectionNav";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -614,7 +615,10 @@ function SymbolPanel({ data }: { data: SymbolData }) {
 type TestTab =
   | "flow" | "squeeze" | "dealergamma" | "gexmap" | "premdiff" | "seasonality"
   // moved in from /scanner, 2026-08-16
-  | "gex" | "gexpct" | "marketquality" | "statprompter";
+  | "gex" | "gexpct" | "marketquality" | "statprompter"
+  // 2026-08-23 — the Stat Prompter's IB book, driven from a criteria rail
+  // instead of 31 fixed prompts (components/scanner/ConditionRailTab.tsx).
+  | "condrail";
 
 function FlowInventoryTab() {
   const { dataByTicker, errors, loadedAt, reload } = useFlowInventory();
@@ -690,6 +694,8 @@ export default function TestPage() {
         <MarketQualityTab />
       ) : tab === "statprompter" ? (
         <StatPrompterTab />
+      ) : tab === "condrail" ? (
+        <ConditionRailTab />
       ) : tab === "dealergamma" ? (
         <DealerGammaTab />
       ) : tab === "gexmap" ? (

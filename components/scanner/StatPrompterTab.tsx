@@ -133,8 +133,13 @@ export type BarStats = {
 /** Today's live IB, classified on every in-session-knowable dimension the tables
  *  slice by, so the row matching today's session can be badged TODAY. EOD-only
  *  fields (fail outcome, hit multiples, retest, containment) are intentionally
- *  absent — they aren't final until the close, so those tables don't badge. */
-type TodayFull = {
+ *  absent — they aren't final until the close, so those tables don't badge.
+ *
+ *  Exported (with computeToday + backfillWidthBuckets below) because
+ *  ConditionRailTab classifies today's session the SAME way. Two copies of this
+ *  logic would drift and the two tabs would disagree about what kind of day it
+ *  is — this file stays the single definition. */
+export type TodayFull = {
   bucket: "narrow" | "normal" | "wide" | null;
   first: "H" | "L" | null;
   bias: "H" | "L" | null;
@@ -205,7 +210,7 @@ const worked = (d: SlimDay) => side(d) != null && closeSide(d) === side(d);
  *  leaves widthBucket null — the bucket rule lives in lib/ibStats.ts and the HTML
  *  exporter never replicated it, so every width prompt came up empty. Derive it
  *  here on load from the fields that ARE present. Same thresholds as ibStats. */
-function backfillWidthBuckets(ds: IbDataset | null): IbDataset | null {
+export function backfillWidthBuckets(ds: IbDataset | null): IbDataset | null {
   if (!ds?.days) return ds;
   for (const d of ds.days) {
     if (d.widthBucket || d.atr == null || d.avgIB == null || !d.width) continue;
@@ -239,7 +244,7 @@ function etDayKey(ts: number): string {
 function etWeekdayShort(): string {
   return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short" }).format(new Date());
 }
-function computeToday(candles: EsCandle[], dsDays: SlimDay[]): TodayFull | null {
+export function computeToday(candles: EsCandle[], dsDays: SlimDay[]): TodayFull | null {
   if (!candles.length) return null;
   const vol = (c: EsCandle) => (c as { volume?: number }).volume ?? 0;
   const all = candles

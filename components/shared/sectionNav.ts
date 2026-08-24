@@ -2,7 +2,7 @@
  * sectionNav — the registry behind the GlobalToolbar's sub-strip.
  *
  * A "section" is a toolbar destination that owns more than one view: Scanner
- * (6 inline tabs + the /level-log route) and Test Lab (10 inline tabs + the
+ * (6 inline tabs + the /level-log route) and Test Lab (11 inline tabs + the
  * /strike-history route) today. Each one declares its tabs, how they cluster,
  * and which routes it owns; the toolbar renders whichever section matches the
  * current path.
@@ -117,6 +117,9 @@ export const TESTLAB_SECTION: SectionNav = {
     { id: "gexpct",      label: "GEX%",            short: "GEX%",     color: LIGHT_BLUE,        icon: "％" },
     { id: "marketquality", label: "Market Quality", short: "Quality", color: HOME_THEME.orange, icon: "📶" },
     { id: "statprompter", label: "Stat Prompter",  short: "Prompter", color: LIGHT_BLUE,        icon: "💡" },
+    // Same IB book as the Stat Prompter, asked the other way round: tick what
+    // has happened in the session, get the cohort's stats. Sits next to it.
+    { id: "condrail",    label: "Condition Rail",  short: "Rail",     color: LIGHT_BLUE,        icon: "🎛️" },
     // No "dexcharm" pill. app/test/DexCharmTab.tsx was deleted and TestLab's
     // TestTab union dropped the id with it, so the pill navigated to
     // /test?tab=dexcharm and rendered the fallback tab — a button that opened
@@ -134,7 +137,7 @@ export const TESTLAB_SECTION: SectionNav = {
   ],
   groups: [
     { key: "gamma",   tabs: ["squeeze", "dealergamma", "gexmap"] },
-    { key: "scanner", tabs: ["gex", "gexpct", "marketquality", "statprompter"], routes: ["/strike-history", "/levels"] },
+    { key: "scanner", tabs: ["gex", "gexpct", "marketquality", "statprompter", "condrail"], routes: ["/strike-history", "/levels"] },
     { key: "flow",    tabs: ["flow", "premdiff"] },
     { key: "season",  tabs: ["seasonality"] },
   ],

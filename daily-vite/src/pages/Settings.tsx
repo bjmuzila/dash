@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../auth'
 import {
@@ -38,6 +39,21 @@ export default function Settings() {
       <MarketsFeedsCard />
       <QuickPinCard />
       <ChangePasswordCard />
+      {/* Only the owner sees this, and only as a link — the page and the API
+          behind it do their own checking, so this is a convenience rather than
+          the thing keeping anybody out. */}
+      {user?.admin && (
+        <section style={section()}>
+          <div style={label()}>Site</div>
+          <p style={{ ...body(14), color: T.muted, marginTop: 8 }}>
+            You're signed in as the site owner, so the app is open to you without a
+            subscription.
+          </p>
+          <Link to="/admin" style={{ ...textAction(), display: 'inline-block', marginTop: 10, minHeight: 44 }}>
+            Signups and billing →
+          </Link>
+        </section>
+      )}
 
       <button
         onClick={() => void signOut()}
@@ -724,16 +740,23 @@ function QuickPinCard() {
 function ChangePasswordCard() {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<Msg | null>(null)
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (busy) return
+    // A mistyped new password signs every other device out and then locks you
+    // out of the one you are holding. Confirming is cheap; that is not.
+    if (next !== confirm) {
+      setMsg({ kind: 'err', text: 'The two new passwords do not match.' })
+      return
+    }
     setBusy(true); setMsg(null)
     try {
       await authApi.changePassword(current, next)
-      setCurrent(''); setNext('')
+      setCurrent(''); setNext(''); setConfirm('')
       setMsg({ kind: 'ok', text: 'Password changed. Every other device was signed out.' })
     } catch (err) {
       setMsg({ kind: 'err', text: errText(err, 'Something went wrong.') })
@@ -746,8 +769,11 @@ function ChangePasswordCard() {
         <input style={{ ...input(), marginBottom: 10 }} type="password" placeholder="Current password"
                value={current} onChange={(e) => setCurrent(e.target.value)}
                autoComplete="current-password" required />
-        <input style={{ ...input(), marginBottom: 12 }} type="password" placeholder="New password (10+ characters)"
+        <input style={{ ...input(), marginBottom: 10 }} type="password" placeholder="New password (10+ characters)"
                value={next} onChange={(e) => setNext(e.target.value)}
+               autoComplete="new-password" required />
+        <input style={{ ...input(), marginBottom: 12 }} type="password" placeholder="Confirm new password"
+               value={confirm} onChange={(e) => setConfirm(e.target.value)}
                autoComplete="new-password" required />
         <Flash msg={msg} />
         <button type="submit" disabled={busy}
