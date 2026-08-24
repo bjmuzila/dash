@@ -68,11 +68,18 @@ export default function SeasonalityPublicPage() {
 
       <main
         style={{
-          maxWidth: 1180,
-          margin: "0 auto",
-          paddingTop: "clamp(24px,4vw,52px)",
-          paddingLeft: "clamp(14px,3vw,32px)",
-          paddingRight: "clamp(14px,3vw,32px)",
+          // Full-bleed. The rail + pane layout wants the width — a 1180px cap
+          // left the year x month heatmap scrolling inside its own box on a
+          // display wide enough to show the whole thing.
+          //
+          // borderBox, not `width:100%`: this app does not set a global
+          // box-sizing, so width:100% PLUS the horizontal padding below is
+          // wider than the viewport and the page scrolls sideways.
+          boxSizing: "border-box",
+          width: "100%",
+          paddingTop: "clamp(20px,3vw,40px)",
+          paddingLeft: "clamp(14px,2vw,28px)",
+          paddingRight: "clamp(14px,2vw,28px)",
           paddingBottom: 90,
           display: "flex",
           flexDirection: "column",
@@ -98,7 +105,7 @@ export default function SeasonalityPublicPage() {
           </h1>
 
           <p style={{ color: T.cyan, fontSize: "clamp(15px,2.4vw,19px)", fontWeight: 600, margin: "0 0 14px" }}>
-            {START_YEAR}–{END_YEAR} · {SESSIONS} sessions of ^GSPC, recomputed from the raw daily closes
+            {START_YEAR}–{END_YEAR} · {SESSIONS} sessions of SPX, recomputed from the raw daily closes
           </p>
 
           <p style={{ color: T.text, fontSize: 16, lineHeight: 1.6, margin: "0 0 22px", maxWidth: "70ch" }}>
@@ -107,22 +114,37 @@ export default function SeasonalityPublicPage() {
             nothing to sign up for.
           </p>
 
-          {/* The join band. Sits directly under the headline, above the tool. */}
+          {/* The join band. Sits directly under the headline, above the tool.
+              Concrete about what you get, what it costs and how to stop — a CTA
+              that hides the price makes the reader assume the worst. */}
           <div style={ctaBand}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center" }}>
-              <Link href="/pricing?from=seasonality&trial=1" style={ctaPrimary}>
-                START MY 2-DAY FREE TRIAL ›
-              </Link>
-              <Link href="/pricing?from=seasonality" style={ctaGhost}>
-                See what&apos;s inside
-              </Link>
+            <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit,minmax(min(300px,100%),1fr))", alignItems: "center" }}>
+              <div>
+                <h2 style={{ margin: "0 0 6px", fontSize: "clamp(19px,2.4vw,25px)", fontWeight: 800, letterSpacing: "-0.01em" }}>
+                  This page is history. The dashboard is today.
+                </h2>
+                <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.6, color: T.text }}>
+                  Live SPX gamma exposure and flip levels, option flow side-classified print by print, ES and NQ market
+                  structure, and estimated-move levels — all updating through the session.
+                </p>
+                <ul style={ctaList}>
+                  <li><b style={{ color: T.cyan }}>2 days free.</b> The full dashboard, every ticker, every tool.</li>
+                  <li><b style={{ color: T.cyan }}>$45/month</b> after that. One tier — no per-symbol upsell.</li>
+                  <li><b style={{ color: T.cyan }}>Cancel anytime,</b> including during the trial.</li>
+                </ul>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <Link href="/pricing?from=seasonality&trial=1" style={ctaPrimary}>
+                  Start my 2-day free trial →
+                </Link>
+                <Link href="/pricing?from=seasonality" style={ctaGhost}>
+                  See everything included
+                </Link>
+                <Link href="/sign-in?from=seasonality" style={ctaQuiet}>
+                  Already a member? Sign in
+                </Link>
+              </div>
             </div>
-            <p style={{ margin: "12px 0 0", fontSize: 14, color: T.text, maxWidth: "62ch" }}>
-              This page is history. The dashboard is <strong style={{ color: T.text, fontWeight: 700 }}>today</strong> —
-              live SPX gamma exposure and flip levels, option flow side-classified print by print, ES and NQ market
-              structure, and estimated-move levels, all updating through the session. Two days free, everything
-              included, cancel anytime.
-            </p>
           </div>
         </header>
 
@@ -148,11 +170,6 @@ export default function SeasonalityPublicPage() {
           </div>
         </section>
 
-        <p style={{ fontSize: 12.5, color: T.text, lineHeight: 1.65, maxWidth: "80ch" }}>
-          Data: {ALMANAC.meta.symbol} daily closes, {ALMANAC.meta.start} through {ALMANAC.meta.end}. Price return only —
-          dividends excluded. Historical calendar patterns describe what happened; they do not forecast what will. Not
-          investment advice.
-        </p>
       </main>
     </div>
   );
@@ -180,8 +197,9 @@ const ctaBand: React.CSSProperties = {
 };
 
 const ctaPrimary: React.CSSProperties = {
-  display: "inline-block",
-  padding: "13px 24px",
+  display: "block",
+  textAlign: "center",
+  padding: "15px 24px",
   borderRadius: 10,
   background: T.orange,
   color: "#0A0A0A",
@@ -192,8 +210,31 @@ const ctaPrimary: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-const ctaGhost: React.CSSProperties = {
+const ctaList: React.CSSProperties = {
+  listStyle: "none",
+  padding: 0,
+  margin: "14px 0 0",
+  display: "grid",
+  gap: 7,
+  fontSize: 14,
+  lineHeight: 1.5,
+  color: T.text,
+};
+
+const ctaQuiet: React.CSSProperties = {
   display: "inline-block",
+  padding: "6px 4px",
+  color: T.text,
+  fontSize: 13,
+  fontWeight: 600,
+  textDecoration: "underline",
+  textUnderlineOffset: 3,
+  textAlign: "center",
+};
+
+const ctaGhost: React.CSSProperties = {
+  display: "block",
+  textAlign: "center",
   padding: "13px 20px",
   borderRadius: 10,
   border: `1px solid ${T.border}`,

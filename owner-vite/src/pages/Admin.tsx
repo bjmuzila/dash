@@ -817,6 +817,183 @@ function CompAccessPanel() {
   );
 }
 
+// ─── System checks ─────────────────────────────────────────────────────────────
+// Owner diagnostics, run on click. Backed by /api/admin/checks in
+// server-v2/api-router.js, which holds a FIXED registry of named read-only
+// queries — this panel never sends SQL or a command, only a check id.
+//
+// WHY: on 2026-08-24 two customers kept paid access for a month after their
+// cards were declined. The Sales page reads live from Stripe and said "past
+// due"; the gate reads our Postgres copy and said "active". Nothing showed both
+// at once, so the disagreement was invisible. "DB vs Stripe drift" is that
+// missing screen.
+//
+// Adding a check is a backend-only change — the catalogue is fetched, so this
+// component needs no edit to pick one up.
+
+interface CheckMeta { id: string; title: string; question: string; command: string | null }
+interface CheckResult {
+  id: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  summary: string;
+  ranAt: string;
+  ms: number;
+}
+
+/** Colour the one column that carries a verdict. Everything else stays neutral
+ *  so the eye lands on the row that costs money. */
+function effectColor(v: unknown): string {
+  const s = String(v ?? "");
+  if (s === "REVOKES" || s === "stale grant") return T.orange;
+  if (s === "GRANTS") return T.gold;
+  if (s === "no user") return T.red;
+  return T.textSecondary;
+}
+
+function SystemChecksPanel() {
+  const [checks, setChecks] = useState<CheckMeta[] | null>(null);
+  const [results, setResults] = useState<Record<string, CheckResult>>({});
+  const [running, setRunning] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [copied, setCopied] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/checks")
+      .then((r) => r.json())
+      .then((j) => setChecks(j.checks ?? []))
+      .catch(() => setChecks([]));
+  }, []);
+
+  const run = useCallback(async (id: string) => {
+    setRunning(id);
+    setErrors((e) => ({ ...e, [id]: "" }));
+    try {
+      const res = await fetch(`/api/admin/checks?id=${encodeURIComponent(id)}`);
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setResults((r) => ({ ...r, [id]: j as CheckResult }));
+    } catch (e) {
+      setErrors((er) => ({ ...er, [id]: e instanceof Error ? e.message : "Failed" }));
+    } finally {
+      setRunning(null);
+    }
+  }, []);
+
+  const copyCommand = async (id: string, cmd: string) => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopied(id);
+      setTimeout(() => setCopied(null), 1500);
+    } catch { /* clipboard blocked — ignore */ }
+  };
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: T.cyan }}>System Checks</span>
+        <span style={{ fontSize: 14, padding: "2px 8px", borderRadius: 10, background: `${T.green}18`, border: `1px solid ${T.green}44`, color: T.green, fontWeight: 700 }}>
+          read-only
+        </span>
+        <span style={{ fontSize: 14, color: T.textSecondary }}>
+          nothing here changes data — write actions stay on the VPS
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        {checks === null ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>Loading…</div>
+        ) : checks.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>No checks registered.</div>
+        ) : (
+          checks.map((c) => {
+            const result = results[c.id];
+            const err = errors[c.id];
+            const busy = running === c.id;
+            return (
+              <div key={c.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.06)` }}>
+                <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ minWidth: 240, flex: 1 }}>
+                    <div style={{ fontSize: 15, fontWeight: 600, color: T.text }}>{c.title}</div>
+                    <div style={{ fontSize: 13, color: T.textSecondary, marginTop: 2 }}>{c.question}</div>
+                  </div>
+                  {result && (
+                    <span style={{ fontSize: 13, color: T.textSecondary, fontFamily: "var(--font-mono)" }}>
+                      {result.summary} · {result.ms}ms
+                    </span>
+                  )}
+                  {c.command && (
+                    <button
+                      onClick={() => copyCommand(c.id, c.command as string)}
+                      title="Copy the equivalent VPS command"
+                      style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 13 }}
+                    >
+                      {copied === c.id ? "✓" : "⧉ cmd"}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => run(c.id)}
+                    disabled={busy}
+                    style={{ ...homeButtonStyle, padding: "5px 16px", fontSize: 14, opacity: busy ? 0.5 : 1 }}
+                  >
+                    {busy ? "Running…" : result ? "Re-run" : "Run"}
+                  </button>
+                </div>
+
+                {err && (
+                  <div style={{ padding: "0 16px 12px", color: T.red, fontSize: 13 }}>{err}</div>
+                )}
+
+                {result && !err && (
+                  result.rows.length === 0 ? (
+                    <div style={{ padding: "0 16px 14px", fontSize: 14, color: T.green }}>{result.summary}</div>
+                  ) : (
+                    // Wide results scroll inside their own box rather than
+                    // stretching the panel.
+                    <div style={{ overflowX: "auto", padding: "0 16px 14px" }}>
+                      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13, fontFamily: "var(--font-mono)" }}>
+                        <thead>
+                          <tr>
+                            {result.columns.map((col) => (
+                              <th key={col} style={{ textAlign: "left", padding: "6px 12px 6px 0", color: T.textSecondary, fontWeight: 600, borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap" }}>
+                                {col}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {result.rows.map((row, i) => (
+                            <tr key={i}>
+                              {result.columns.map((col) => (
+                                <td
+                                  key={col}
+                                  style={{
+                                    padding: "5px 12px 5px 0",
+                                    color: col === "effect" ? effectColor(row[col]) : T.text,
+                                    fontWeight: col === "effect" && String(row[col] ?? "") !== "none" ? 700 : 400,
+                                    borderBottom: `1px solid rgba(255,255,255,0.04)`,
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {row[col] == null || row[col] === "" ? "—" : String(row[col])}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function Admin() {
@@ -852,6 +1029,11 @@ export default function Admin() {
         {/* Server controls + signal alerts — moved off the (now deleted) Infra
             tab. Feed toggles, maintenance mode, manual job triggers. */}
         <OwnerControls />
+
+        {/* Owner diagnostics, run on click. Sits high because "who has access"
+            and "does our copy still match Stripe" are the two questions worth
+            asking before trusting anything else on this page. */}
+        <SystemChecksPanel />
 
         {/* Customer feedback queue — moved off the Owner → Overview tab. */}
         <FeedbackPanel />

@@ -1,77 +1,83 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The CB Edge watermark that sits on every chart and every table in the
-// seasonality almanac.
+// The CB Edge mark on every seasonality card.
 //
-// WHY IT IS CENTERED, NOT IN A CORNER. This page exists to be screenshotted and
-// posted. A corner mark is cropped off in two seconds; a centered one has to be
-// cloned out. It is the only reason the watermark exists, so it wins over the
-// tidier-looking option.
+// ONE PER CARD, top right. It used to be one per chart and per table, centered —
+// which put three or four marks on a card like Opex and sat them over the data.
+// Card-level means exactly one mark per screenshot, in the corner the card title
+// leaves empty.
 //
-// WHY IT IS SAFE TO PUT OVER DATA. `/cb-edge-logo.png` is a chrome wordmark on a
-// genuinely transparent background (alpha 0 at the corners — checked, not
-// assumed), so at these opacities it reads as a ghost behind the marks rather
-// than a white plate over them. `pointerEvents: none` keeps it out of every
-// hover target underneath, and aria-hidden keeps it out of the accessibility
-// tree — it is branding, not content.
+// Tradeoff worth stating once: a corner mark crops off in two seconds where a
+// centered one has to be cloned out. This is the deliberate choice, not an
+// oversight — if reposting ever becomes a real problem, the fix is to move it
+// back to center, not to make it darker.
 //
-// The asset is a plain <img> from /public, the same way PublicNav loads it. That
-// matters on the signed-out page: the middleware matcher explicitly excludes
-// ".png", so it is never auth-gated. Do not swap it for a fetched or generated
-// source without re-checking that.
+// `/cb-edge-logo.png` is a chrome wordmark on a genuinely transparent background
+// (alpha 0 at the corners — checked, not assumed). `pointerEvents: none` keeps it
+// out of every hover target underneath; `aria-hidden` keeps it out of the
+// accessibility tree, because it is branding, not content.
+//
+// The asset loads as a plain <img> from /public, the same way PublicNav does it.
+// That matters on the signed-out page: the middleware matcher explicitly
+// excludes ".png", so it is never auth-gated. Do not swap it for a fetched or
+// generated source without re-checking that.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Tuned per surface.
- *
- * `heatmap` is the odd one and the reason this has three modes rather than a
- * single opacity: heatmap cells are OPAQUE fills, so a mark sitting behind the
- * table is simply not there. That variant renders ON TOP instead, which needs a
- * higher opacity to read at all and a low enough one to stay out of the way of
- * the numbers — hence its own row. `pointerEvents: none` is what keeps an
- * on-top mark from eating the cell tooltips underneath it.
- */
-export type WatermarkSize = "chart" | "table" | "heatmap";
+import type { CSSProperties, ReactNode } from "react";
+import { Card } from "@/components/shared/PageCard";
 
-const SPEC: Record<WatermarkSize, { width: string; opacity: number; max: number; over: boolean }> = {
-  chart: { width: "26%", opacity: 0.09, max: 240, over: false },
-  table: { width: "20%", opacity: 0.06, max: 190, over: false },
-  heatmap: { width: "22%", opacity: 0.16, max: 200, over: true },
-};
-
-export default function Watermark({ size = "chart" }: { size?: WatermarkSize }) {
-  const s = SPEC[size];
+/** Sits in the card's top-right corner, above the content. */
+export function Watermark({ inset = 14 }: { inset?: number }) {
   return (
     <div
       aria-hidden
       style={{
         position: "absolute",
-        inset: 0,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
+        top: inset,
+        right: inset,
         pointerEvents: "none",
-        zIndex: s.over ? 4 : 2,
-        overflow: "hidden",
+        zIndex: 4,
+        lineHeight: 0,
       }}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src="/cb-edge-logo.png"
         alt=""
-        style={{
-          width: s.width,
-          maxWidth: s.max,
-          minWidth: 96,
-          height: "auto",
-          opacity: s.opacity,
-          userSelect: "none",
-        }}
+        style={{ width: 104, height: "auto", opacity: 0.34, userSelect: "none", display: "block" }}
       />
     </div>
   );
 }
 
-/** Every watermarked container needs this — the mark is absolutely positioned. */
-export const watermarkHost = { position: "relative" as const };
+/**
+ * A themed Card with the mark in its corner. Every seasonality card goes
+ * through this rather than `Card` directly, so no card can ship unmarked and
+ * the mark's position is defined once.
+ *
+ * Props mirror the ones these cards actually use — deliberately not a spread of
+ * Card's whole surface, so this stays a thin, obvious wrapper.
+ */
+export function SeaCard({
+  title,
+  subtitle,
+  padding = 20,
+  style,
+  children,
+}: {
+  title?: ReactNode;
+  subtitle?: ReactNode;
+  padding?: number | string;
+  style?: CSSProperties;
+  children?: ReactNode;
+}) {
+  return (
+    <Card title={title} subtitle={subtitle} padding={padding} style={{ position: "relative", ...style }}>
+      <Watermark />
+      {children}
+    </Card>
+  );
+}
+
+export default Watermark;

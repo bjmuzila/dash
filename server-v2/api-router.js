@@ -9998,4 +9998,220 @@ try {
   console.warn('[api-router] affiliate routes not loaded:', e.message);
 }
 
+// ---------------------------------------------------------------------------
+// /api/admin/checks — owner diagnostics, run from the Admin page.
+//
+// WHY THIS EXISTS: on 2026-08-24 two customers kept full paid access for a
+// month after their cards were declined. Nothing was broken in the gate — the
+// Stripe webhook simply wasn't subscribed to `customer.subscription.updated`,
+// so `past_due` never reached our table. The owner Sales page reads LIVE from
+// Stripe and showed "past due"; the gate reads our Postgres copy and said
+// "active". Two screens, two answers, and no screen anywhere showed both.
+//
+// These checks close that gap. Each one is a NAMED, FIXED query — this is a
+// registry, not a command runner. Nothing here interpolates caller input into
+// SQL or shell, and every check is strictly read-only, so a mis-click cannot
+// change a customer's access. Write actions (reconcile --apply, revoking an
+// account) stay on the VPS deliberately.
+//
+// Adding a check is one entry in OWNER_CHECKS: give it a title, the one-line
+// question it answers, an optional equivalent VPS command for copy-paste, and
+// a run() that resolves { columns, rows, summary }.
+// ---------------------------------------------------------------------------
+{
+  // Lazily constructed so a missing/blank STRIPE_SECRET_KEY degrades to "this
+  // check is unavailable" instead of throwing at module load and taking every
+  // other route in this file down with it.
+  let _stripeClient;
+  function stripeClient() {
+    if (_stripeClient !== undefined) return _stripeClient;
+    const key = (process.env.STRIPE_SECRET_KEY || '').trim();
+    if (!key) { _stripeClient = null; return null; }
+    try {
+      const Stripe = require('stripe');
+      _stripeClient = new Stripe(key);
+    } catch (e) {
+      console.warn('[api-router] stripe not loadable for admin checks:', e.message);
+      _stripeClient = null;
+    }
+    return _stripeClient;
+  }
+
+  const PAID = ['active', 'trialing'];
+  const isPaid = (s) => !!s && PAID.includes(s);
+  const iso = (unix) => (unix ? new Date(Number(unix) * 1000).toISOString().slice(0, 10) : null);
+
+  /** Stripe moved current_period_end onto the subscription ITEM; fall back to
+   *  the subscription itself for older API versions. */
+  const periodEnd = (sub) =>
+    sub.items?.data?.[0]?.current_period_end ?? sub.current_period_end ?? null;
+
+  const OWNER_CHECKS = {
+    // ── Who the gate currently lets in ───────────────────────────────────────
+    access: {
+      title: 'Who has access',
+      question: 'Everyone the paywall currently lets in, by the same test the app uses.',
+      command:
+        'docker compose exec -T dashboard node -e \'const {Pool}=require("pg");const p=new Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:false}});p.query("SELECT u.email, sub.status FROM users u LEFT JOIN subscriptions sub ON sub.clerk_user_id=u.id WHERE sub.status IN (\\\'active\\\',\\\'trialing\\\')").then(r=>{console.table(r.rows);return p.end();});\'',
+      columns: ['email', 'status', 'source', 'period_end'],
+      async run() {
+        // Deliberately a copy of the is_paid expression in getSessionWithUser()
+        // (lib/db.ts). If that gate changes, change this with it — a diagnostic
+        // that has drifted from the thing it diagnoses is worse than none.
+        const rows = await libDb.queryAll(
+          `SELECT u.email,
+                  sub.status,
+                  (ca.email IS NOT NULL) AS comped,
+                  u.is_owner,
+                  sub.current_period_end
+             FROM users u
+             LEFT JOIN subscriptions sub ON sub.clerk_user_id = u.id
+             LEFT JOIN comp_access ca
+                    ON ca.email = LOWER(u.email)
+                   AND ca.revoked_at IS NULL
+                   AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+            WHERE COALESCE(sub.status IN ('active','trialing'), FALSE)
+               OR ca.email IS NOT NULL
+            ORDER BY (ca.email IS NOT NULL), sub.status, u.email`
+        );
+        const out = rows.map((r) => ({
+          email: r.email,
+          status: r.status ?? '—',
+          source: r.comped ? 'comped' : r.is_owner ? 'owner' : 'stripe',
+          period_end: iso(r.current_period_end),
+        }));
+        const comped = out.filter((r) => r.source === 'comped').length;
+        const trialing = out.filter((r) => r.status === 'trialing').length;
+        return {
+          columns: this.columns,
+          rows: out,
+          summary:
+            `${out.length} with access` +
+            (trialing ? ` · ${trialing} on trial` : '') +
+            (comped ? ` · ${comped} comped` : ''),
+        };
+      },
+    },
+
+    // ── Where our copy and Stripe disagree ───────────────────────────────────
+    drift: {
+      title: 'DB vs Stripe drift',
+      question: 'Subscriptions where our table and Stripe disagree. Empty is the healthy answer.',
+      command: 'docker compose exec -T dashboard node scripts/reconcile-subscriptions.mjs',
+      columns: ['email', 'local', 'stripe', 'effect', 'subscription'],
+      async run() {
+        const stripe = stripeClient();
+        if (!stripe) {
+          return { columns: this.columns, rows: [], summary: 'STRIPE_SECRET_KEY not set — check unavailable.' };
+        }
+
+        const local = await libDb.queryAll(
+          `SELECT sub.clerk_user_id, sub.stripe_customer_id, sub.stripe_subscription_id,
+                  sub.status, sub.current_period_end, u.email
+             FROM subscriptions sub
+             LEFT JOIN users u ON u.id = sub.clerk_user_id`
+        );
+        const byUser = new Map(local.map((r) => [r.clerk_user_id, r]));
+        const byCustomer = new Map(
+          local.filter((r) => r.stripe_customer_id).map((r) => [r.stripe_customer_id, r])
+        );
+
+        const rows = [];
+        const seenSubIds = new Set();
+
+        for await (const sub of stripe.subscriptions.list({ status: 'all', limit: 100 })) {
+          seenSubIds.add(sub.id);
+          const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id ?? null;
+
+          // Same two-step the webhook uses: the metadata stamped at checkout,
+          // then the customer→user mapping we already hold.
+          const userId = sub.metadata?.clerk_user_id ?? byCustomer.get(customerId)?.clerk_user_id ?? null;
+          if (!userId) {
+            rows.push({
+              email: '(unmatched)', local: '—', stripe: sub.status,
+              effect: 'no user', subscription: sub.id,
+            });
+            continue;
+          }
+
+          const row = byUser.get(userId);
+          const have = row?.status ?? null;
+          const want = sub.status;
+          if (have === want && (row?.current_period_end ?? null) === periodEnd(sub)) continue;
+
+          rows.push({
+            email: row?.email ?? userId,
+            local: have ?? '—',
+            stripe: want,
+            // The line that matters: does fixing this drift hand access out, or
+            // take it away? A local 'active' against a Stripe 'past_due' is
+            // unpaid service running right now.
+            effect: isPaid(have) === isPaid(want) ? 'none' : isPaid(have) ? 'REVOKES' : 'GRANTS',
+            subscription: sub.id,
+          });
+        }
+
+        // Rows pointing at a subscription Stripe has never heard of — a
+        // hand-written comp living in the Stripe mirror, or a leftover from an
+        // earlier auth stack. Inert for access, but they inflate every count.
+        for (const r of local) {
+          if (!r.stripe_subscription_id || seenSubIds.has(r.stripe_subscription_id)) continue;
+          if (!r.status) continue;
+          rows.push({
+            email: r.email ?? r.clerk_user_id,
+            local: r.status,
+            stripe: 'not in Stripe',
+            effect: isPaid(r.status) ? 'stale grant' : 'none',
+            subscription: r.stripe_subscription_id,
+          });
+        }
+
+        const revokes = rows.filter((r) => r.effect === 'REVOKES').length;
+        const grants = rows.filter((r) => r.effect === 'GRANTS').length;
+        return {
+          columns: this.columns,
+          rows,
+          summary: rows.length
+            ? `${rows.length} drifted` +
+              (revokes ? ` · ${revokes} served without paying` : '') +
+              (grants ? ` · ${grants} paying but locked out` : '')
+            : 'In sync with Stripe.',
+        };
+      },
+    },
+  };
+
+  register('/api/admin/checks', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      const id = new URL(req.url || '/', 'http://localhost').searchParams.get('id');
+
+      // No id → the catalogue, so the panel renders its buttons without having
+      // to hardcode a list that can fall out of step with this file.
+      if (!id) {
+        return send(res, 200, {
+          checks: Object.entries(OWNER_CHECKS).map(([key, c]) => ({
+            id: key, title: c.title, question: c.question, command: c.command ?? null,
+          })),
+        }, { 'Cache-Control': NO_STORE });
+      }
+
+      const check = OWNER_CHECKS[id];
+      if (!check) return send(res, 404, { error: 'unknown-check' });
+
+      const t0 = Date.now();
+      try {
+        const result = await check.run();
+        send(res, 200, {
+          id, title: check.title, ranAt: new Date().toISOString(),
+          ms: Date.now() - t0, ...result,
+        }, { 'Cache-Control': NO_STORE });
+      } catch (err) {
+        console.error(`[api-router] admin check "${id}" failed:`, err);
+        send(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  });
+}
+
 module.exports = { handleApiRoute, register, _routes: ROUTES };

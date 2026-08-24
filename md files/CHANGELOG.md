@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-08-24 - Seasonality: corner watermark, full-bleed page, harder CTA, SPX naming
+
+Edited: `components/seasonality/Watermark.tsx`, `SeasonalityAlmanac.tsx`,
+`SeasonalityView.tsx`, `seasonalityData.ts`, `app/explore/seasonality/page.tsx`.
+
+**Watermark is now ONE per card, top right.** It was one per chart and per table,
+centered — which put three or four marks on a card like Opex and sat them over
+the data. `Watermark.tsx` now exports `SeaCard`, a thin `Card` wrapper that
+places the mark; all 15 cards go through it, so no card can ship unmarked and
+the position is defined once. The three size variants and the on-top heatmap
+special case are gone with them.
+
+Worth stating once, since it reverses an earlier decision: a corner mark crops
+off in two seconds where a centered one has to be cloned out. That is the
+deliberate trade now, not an oversight. If reposting becomes a real problem the
+fix is to move it back to center, not to darken it.
+
+**Page is full-bleed.** The 1180px cap left the year x month heatmap scrolling
+inside its own box on a display wide enough to show all of it. `boxSizing:
+border-box` on the same rule — this app sets no global box-sizing, so
+`width:100%` plus horizontal padding is wider than the viewport and the page
+scrolls sideways. Verified at 1600 / 1280 / 390: `scrollWidth == clientWidth`
+with every disclosure expanded.
+
+**CTA rebuilt.** Two lines and a button became a two-column band: what the
+dashboard is, then the three facts a reader wants before clicking — 2 days free,
+$45/month after, one tier, cancel anytime. Figures taken from the landing page's
+own copy, not invented. Adds a quiet "Already a member? Sign in" so a returning
+customer is not funnelled at /pricing.
+
+**^GSPC → SPX** everywhere a customer can see it, including `ALMANAC.meta.symbol`
+and the VIX card's subtitle. The Yahoo symbol is still recorded in the
+`seasonalityData.ts` header so the provenance is not lost.
+
+**Removed** the trailing "Data: … dividends excluded … not investment advice"
+paragraph from the public page.
+
+### Verified before commit
+
+`tsc --strict` clean. All 14 sections walked at 1600px: exactly one watermark
+per card (two on the Seasonal section, which is two cards), all loaded. No
+`^GSPC` string anywhere in rendered text. No horizontal overflow at 1600, 1280
+or 390.
+
+> **Note — second clobber.** The five seasonality entries at the top of this file
+> (this one plus watermark, heatmap order, VIX table, section rail) were written
+> across today, lost once to a concurrent session writing `CHANGELOG.md` from a
+> stale copy, restored, and lost again the same way. This is the second restore.
+> The CODE was never affected either time — verified byte-for-byte on disk before
+> each commit; only the log was overwritten.
+>
+> This file is last-writer-wins. If two sessions are working the repo at once,
+> whoever writes second silently deletes the other's entries. Re-read immediately
+> before writing, or give long-running work its own log file.
+
 ## 2026-08-24 - Seasonality restructured: section rail instead of one long scroll
 
 Added: `components/seasonality/sections.ts`.
@@ -61,13 +116,6 @@ localStorage. The hash is read in an effect after hydration and written with
 `tsc --strict` clean. All 14 sections walked in a real browser at 1440px: every
 one renders, every chart measures, every hash lands. At 390px, with every
 disclosure force-expanded, `document.scrollWidth == clientWidth`.
-
-> **Note.** The three entries below this one (watermark, heatmap order, VIX
-> table) were written earlier today, then lost when a concurrent session wrote
-> `CHANGELOG.md` from a stale copy. They are restored here verbatim. The code
-> those entries describe was never affected — it was verified byte-for-byte on
-> disk before this commit. Shared single-file logs are last-writer-wins; if two
-> sessions are running, re-read before you write.
 
 ## 2026-08-24 - VIX spike events table rebuilt in Brandon's layout
 
@@ -172,6 +220,120 @@ file://, so the /public asset actually resolves) at 1440px and 390px: zero
 console errors, 23/23 watermarks loaded on each, 14 disclosures all closed on
 first paint, and with every disclosure force-expanded
 `document.scrollWidth == clientWidth` with zero overflowing cards.
+
+## 2026-08-24 - Password reset was going to spam: split auth mail off the marketing sender
+
+Edited: `lib/emails/send.ts`, `app/api/auth/forgot-password/route.ts`.
+
+A password-reset test landed in Gmail's spam folder. DNS was not the problem —
+SPF (`send.cbedge.net` → `include:amazonses.com`), DKIM (`resend._domainkey`),
+the bounce MX (`feedback-smtp.us-east-1.amazonses.com`) and DMARC are all
+published and aligned. The cause was in the send path.
+
+`forgot-password/route.ts` called `sendTransactional()`, which is the **bulk**
+sender. On a security email that did three harmful things:
+
+1. **Appended the marketing unsubscribe footer.** The reset template has no
+   `{{UNSUBSCRIBE_URL}}` placeholder, so `applyUnsubscribeHtml` fell to its
+   `else` branch and stapled *"You're receiving this because you signed up for
+   CB Edge launch updates"* onto a password reset — and appended it AFTER the
+   closing `</html>` tag, which is malformed markup on top of the mismatch.
+2. **Set `List-Unsubscribe` + `List-Unsubscribe-Post: One-Click`.** Those
+   headers *declare* the message bulk/list mail, so Gmail scored the reset
+   against the promotional reputation bucket shared with `weekly-edge`,
+   `nopants-promo` and friends.
+3. **UTM-tagged the reset link.** `tagEmailLinksHtml` rewrote
+   `…/auth/reset-password?token=…` to carry
+   `&utm_source=email&utm_medium=email&utm_campaign=reset-your-cb-edge-password`.
+   Campaign tracking welded onto a one-shot security token is a textbook
+   phishing tell.
+
+### What changed
+
+- **New `sendAuthEmail()`** in `lib/emails/send.ts` for auth/security mail. No
+  unsubscribe injection, no List-Unsubscribe headers, no UTM rewriting — the
+  body ships exactly as the template built it. Adds `X-Entity-Ref-ID`
+  (a `randomUUID()`, so Gmail stops collapsing two reset requests into one
+  thread and handing the user the expired link) and
+  `Auto-Submitted: auto-generated` (keeps vacation autoresponders quiet).
+- **New `EMAIL_AUTH_FROM` env**, defaulting to `CB Edge <no-reply@cbedge.net>`.
+  Auth mail now builds and spends sender reputation separately from marketing,
+  so a promo complaint can't sink everyone's password resets. `EMAIL_FROM`
+  (`hello@cbedge.net`) still serves the bulk sender.
+- **Extracted `postToResend()`** — both senders share one fetch/error/log path
+  instead of duplicating it.
+- `forgot-password/route.ts` repointed to `sendAuthEmail()`, with a comment
+  saying why it must not drift back.
+
+`sendTransactional()` is unchanged and still correct for broadcasts, lifecycle
+and promos. The header comment in `send.ts` now spells out which sender to pick
+and why they are not interchangeable.
+
+Checked: `app/api/auth/signup/route.ts` sends no mail, so the reset was the only
+auth email on the bulk path. Nothing else to repoint.
+
+### Still to do (dashboard, not code)
+
+- Add `rua=` to DMARC: `v=DMARC1; p=none; rua=mailto:dmarc@cbedge.net; fo=1;` —
+  currently bare `p=none`, so there is zero visibility into auth failures.
+- Move marketing to its own verified subdomain in Resend (`mail.cbedge.net` or
+  `news.cbedge.net`) to finish the separation the two From addresses start.
+- Confirm Resend click/open tracking is OFF for the transactional domain —
+  link rewriting to a tracking host on a reset link is its own spam signal.
+- The DKIM key at `resend._domainkey` is 1024-bit (Resend's default);
+  regenerate at 2048 if the dashboard offers it.
+
+## 2026-08-24 (3) - Post-market §3: "given back" removed, everything measured in board share
+
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
+
+### Why the hatch had to go, not just be rescaled
+
+The previous pass narrowed the high-water mark to 15:00 and gave the power hour
+its own column. It made the bars legible, and the panel still read
+**"−100% pm"** on almost every row with a full-width hatch behind it.
+
+That number was correct and worthless. `γ ∝ 1/√T` piles gamma onto whatever is
+ATM into the bell and drains it from everything else, so by the last recorded
+column all but a handful of strikes sit at ~zero. Every strike ends ~100% off
+its own high **on every expiry session**. It cannot distinguish a level that was
+abandoned from one that merely expired, so it is not a measurement — it is a
+property of expiry. Removed: the hatch, the peak tick, the overflow chevron, and
+`peak` / `peakTs` / `offPeakPct` / `recClose` behind them.
+
+### What replaced it: share of the board
+
+    share_k(t) = |net_k(t)| / Σ_j |net_j(t)|
+
+The `1/√T` term is in the numerator and the denominator, so it divides straight
+out and what is left is the board changing hands. Σ is over the **whole ladder**,
+not the ±60 window — normalising over the window would make shares jump as it
+slid with spot and stop being comparable row to row.
+
+- **`15:00→close` column** is now the change in board share, in **percentage
+  points** (`+2.4pp` / `−0.8pp`), not a percentage of the strike's own 15:00
+  dollars. That old basis is what produced `+610%` on a strike that went from a
+  rounding error to a small number and `−100%` on the eighty strikes that simply
+  expired. Bounded by construction.
+- **Build buckets** (AM / MID / PM colour composition) are share moves too, so
+  the composition is no longer biased toward the last hour by decay alone.
+- A move under `0.02pp` reads **flat pm** and draws the zero line only — a 1px
+  stub on a row that did nothing is a mark that reads as a measurement.
+- A row where the recorder never reached 15:00 draws **no track at all**, so a
+  missing power hour can't be mistaken for a flat one.
+
+### Layout
+
+- The four-line 1/√T explanation above the ladder is **gone** — a caveat that
+  permanent is furniture. It lives on the legend chip's tooltip now, which also
+  says the column is not comparable in length to the bar.
+- Legend: dropped `peak to 15:00` and `given back`; the remaining chip reads
+  `15:00→close · board share · own scale`.
+- Row tooltip: close in dollars, share of the board at the close, and the
+  power-hour move as `15:00% → close%`.
+- Dropped the now-unused `CSSProperties` import and the `.chg` / `.openmk` /
+  `.ovf` rules.
+
 
 ## 2026-08-24 (2) - Post-market §3: the power hour gets its own column and its own scale
 

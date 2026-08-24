@@ -16,33 +16,43 @@
  * Section 2 deliberately does NOT ask "what changed since 09:30". On 0DTE the
  * open book is ~2% of the close, so that question always answers "everything"
  * and its delta chart is a copy of the profile. Each strike is instead reduced
- * to WHEN its gamma arrived (three buckets, coloured along the bar) and WHETHER
- * IT IS STILL THERE (a high-water mark, with the given-back part hatched).
+ * to WHEN it took its share of the board (three buckets, coloured along the bar)
+ * and WHAT IT DID IN THE LAST HOUR (its own column, its own scale).
  *
- * ── THE POWER HOUR IS ITS OWN COLUMN (2026-08-24) ───────────────────────────
- * That high-water mark used to be scanned across the WHOLE session, and the bar
- * scale folded it in. Both are wrong on an expiring book and for the same
- * reason: per-strike GEX is γ × (OI+Vol) × S² and γ ∝ 1/√T, so every strike's
- * raw peak lands in the last few minutes at 50-150× its own settle. An ATM 0DTE
- * strike marks ~$200-300B at 15:55 against a ~$2B close. One such strike set
- * the scale for all 121 rows, so every real bar — the call wall included — drew
- * as a 2px sliver with its AM/MID/PM colours invisible, and every row carried a
- * full-width "given back" hatch reading −99%. The panel was measuring the clock
- * and reporting it as positioning.
+ * ── THE HIGH-WATER MARK IS GONE; EVERYTHING IS SHARE NOW (2026-08-24) ───────
+ * This panel used to carry a peak tick and a hatched "given back" region, and
+ * the bar scale folded the peak in. All of it was measuring the clock.
  *
- * Three changes, and they only make sense together:
- *   · The bar scale is the biggest CLOSING bar. No peaks in it.
- *   · The high-water mark is scanned to 15:00, and compared against the
- *     RECORDER's own 15:00-to-close value — never against the live chain's
- *     close, which is a different source and after the settle can be a
- *     different book. The hatch is that ratio applied to the bar, so it stays
- *     true whatever the two sources' absolute levels do.
- *   · 15:00→close gets its OWN column on its OWN scale: the change in
- *     MAGNITUDE, right for gamma added into the bell, left for gamma that bled
- *     out. Magnitude, not signed value, so a put wall going more negative reads
- *     as growth — which is what it is.
- * The answer to "was everything given back?" is now visible instead of assumed:
- * on a normal 0DTE the ATM band GREW into the close and draws no hatch at all.
+ * Per-strike GEX is γ × (OI+Vol) × S² and γ ∝ 1/√T. Into the bell that term
+ * piles gamma onto whatever is ATM and drains it from everything else, so:
+ *   · every strike's raw peak lands in the final minutes at 50-150× its own
+ *     settle — an ATM 0DTE strike marks ~$200-300B at 15:55 against a ~$2B
+ *     close — and ONE such strike set the bar scale for all 121 rows, which is
+ *     why every real bar, the call wall included, drew as a 2px sliver with its
+ *     AM/MID/PM colours invisible;
+ *   · and by the last recorded column all but a handful of ATM strikes have
+ *     decayed to ~zero, so EVERY row read ~100% off its own high. "Everything
+ *     was given back" is true of every strike on every expiry session. It is a
+ *     property of expiry, not a measurement, and it cannot tell an abandoned
+ *     level apart from one that merely expired.
+ *
+ * So the peak, the hatch and the tick are removed, and the panel measures SHARE
+ * OF THE BOARD instead:
+ *
+ *     share_k(t) = |net_k(t)| / Σ_j |net_j(t)|
+ *
+ * The 1/√T term is in the numerator and the denominator, so it divides straight
+ * out. What is left is the board changing hands. Both the build buckets and the
+ * 15:00→close column are measured this way, in percentage points.
+ *
+ * What each part of a row means now:
+ *   · bar LENGTH   where the strike closed, in dollars, scaled over the biggest
+ *                  closing bar on screen. Nothing else is in that scale.
+ *   · bar COLOUR   when it took its board share — blue AM, violet MID, amber PM.
+ *   · the column   15:00→close change in board share, in points, on its own
+ *                  scale. Right/amber took share into the bell, left/red lost
+ *                  it. Magnitude-based, so a put wall going more negative reads
+ *                  as growth, which is what it is.
  *
  * DATA SOURCES
  *   props                       everything the Premarket tab already computed off
@@ -84,7 +94,6 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import { findGEXFlip, netGEXOf, type ChainRow } from "@/lib/calculations/calculations";
 import {
   etHm,
@@ -186,8 +195,11 @@ export const POSTMARKET_CSS = `
 .pmk .taps i.b{background:var(--neg);height:16px}
 .pmk .taps i.c{background:var(--amber);height:10px}
 
-/* 3 — evolution. ONE bar (now) + the day's peak tick + a hatch for what was
-   given back between them.
+/* 3 — evolution. ONE bar per strike (where it closed), coloured by WHEN it took
+   its share of the board, plus a separate 15:00→close column.
+   There is no peak tick and no "given back" hatch any more — on an expiring book
+   every strike ends ~100% off its own high, so the hatch was a constant. See the
+   EvRow header.
    ALL BARS GROW RIGHT off a shared left edge. The mirrored layout this replaced
    put negative strikes on the left of a centre axis, which meant bar LENGTH read
    in two different directions and the two halves could not be compared at all.
@@ -205,11 +217,11 @@ export const POSTMARKET_CSS = `
 .pmk .evrow .track{position:relative;height:13px;border-radius:3px;background:var(--sunken);
   box-shadow:inset 1px 0 0 var(--line2)}
 .pmk .evrow .track.neg{background:var(--negWash)}
-/* Build-time segments: the bar keeps the profile's magnitude and its COLOUR
-   composition is WHEN that gamma arrived — blue morning, violet midday, amber
-   power hour. Laid left→right in time order, so a bar reads the way the day ran.
-   Shares are normalised over the ABSOLUTE moves, so a strike that built and then
-   gave some back reads as its two moves, not as >100%. */
+/* Build-time segments: bar LENGTH is where the strike closed in dollars, its
+   COLOUR composition is when it took its share of the board — blue morning,
+   violet midday, amber power hour. Laid left→right in time order, so a bar reads
+   the way the day ran. Shares are normalised over the ABSOLUTE share moves, so a
+   strike that built and then gave some back reads as its two moves, not >100%. */
 .pmk .evrow .seg{position:absolute;top:3px;bottom:3px}
 .pmk .evrow .seg:first-of-type{border-radius:2px 0 0 2px}
 .pmk .evrow .bar{position:absolute;left:0;top:3px;bottom:3px;border-radius:2px}
@@ -219,33 +231,18 @@ export const POSTMARKET_CSS = `
 .pmk .builtcol .sep{color:var(--dim2)}
 .pmk .evrow .k{font-size:10.5px;text-align:right;color:var(--dim)}
 .pmk .evrow.key .k{color:var(--txt);font-weight:700}
-.pmk .evrow .chg{position:absolute;top:1px;bottom:1px;border-radius:2px;
-  background:repeating-linear-gradient(45deg,rgba(255,255,255,.22) 0 3px,rgba(255,255,255,.06) 3px 6px)}
-/* High-water mark: where the strike PEAKED today. A bar sitting at its peak is a
-   live level; one well short of its own mark was abandoned, and the hatch
-   between the two is the gamma that left.
-   NOTE the peak is scanned to 15:00 ONLY — see PEAK WINDOW in evRows. */
-.pmk .evrow .openmk{position:absolute;top:0;bottom:0;width:2px;background:#fff;opacity:.9;border-radius:1px}
-/* Peak past the right edge. The scale is set by the biggest CLOSING bar, so a
-   strike whose intraday high beat every close overflows the track. Saying so
-   with a chevron is the one honest option: clamping the tick silently would put
-   several different peaks on the same pixel — the exact artefact the old
-   peak-inclusive scale was introduced to avoid, and which it fixed by crushing
-   every real bar to a sliver instead. */
-.pmk .evrow .ovf{position:absolute;right:1px;top:50%;transform:translateY(-50%);
-  font-size:9px;line-height:1;color:#fff;opacity:.75}
 .pmk .evrow .tagcol{font-size:9px;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
 /* ── POWER HOUR, ON ITS OWN SCALE ───────────────────────────────────────────
-   15:00→close change in MAGNITUDE, normalised over its own column, not over the
-   main bar. It has to be separate: per-strike GEX is γ×(OI+Vol)×S² and γ ∝
-   1/√T, so on an expiring book the last hour is inflated by a factor the rest
-   of the day cannot be compared against — one ATM strike at 15:55 prices to
-   ~100× the biggest closing bar on the board. Sharing a scale with it is what
-   flattened every AM/MID segment to two pixels and made the whole panel read
-   "everything was given back".
-   Right/green = the strike ADDED gamma into the close. Left/red = it bled out.
-   Magnitude, not signed value, so a put wall getting more negative reads as
-   growth — which is what it is. */
+   15:00→close change in the strike's SHARE OF THE BOARD, in percentage points,
+   normalised over its own column and not over the main bar.
+   Share rather than dollars, because dollars cannot answer the question: γ ∝
+   1/√T drains every non-ATM strike toward zero into the bell whatever anyone
+   traded, so a dollar reading says "−100%" on almost every row and means only
+   "the options expired". A share has that term in numerator and denominator, so
+   it cancels and what is left is the board changing hands.
+   Right/amber = the strike TOOK board share into the close. Left/red = it lost
+   share. Magnitude-based, so a put wall going more negative reads as growth —
+   which is what it is. */
 .pmk .evrow .pmtrack{position:relative;height:13px;border-radius:3px;background:var(--sunken);
   box-shadow:inset 1px 0 0 var(--line2)}
 .pmk .evrow .pmtrack .zero{position:absolute;left:50%;top:1px;bottom:1px;width:1px;background:var(--line3)}
@@ -536,39 +533,49 @@ export default function PostMarketTab(p: PostMarketProps) {
   const evBars = useMemo(() => evWindow(60), [evWindow]);
 
   /**
-   * One row of the evolution profile: the live value, the day's high-water mark,
-   * and how the bar splits by when its gamma arrived.
+   * One row of the evolution profile: where the strike ended, and how it got
+   * there — measured in SHARE OF THE BOARD, not in dollars.
    *
-   * Bucket shares are normalised over the ABSOLUTE moves, not the signed ones —
-   * a strike that built +$4B in the morning and gave back $1B at lunch should
-   * read as two thirds morning, not as 133%. The segments therefore always fill
-   * the bar exactly.
+   * ── WHY SHARE, AND WHY THE HIGH-WATER MARK IS GONE ──────────────────────────
+   * The bar used to carry a peak tick and a "given back" hatch. On an expiring
+   * book they are a constant, not a measurement: per-strike GEX is
+   * γ × (OI+Vol) × S² with γ ∝ 1/√T, so as the bell approaches gamma piles onto
+   * whatever is ATM and drains from everything else, and by the last recorded
+   * column all but a handful of strikes are near zero. Every row therefore drew
+   * a full-width hatch and read "−100%", which is a fact about expiry that is
+   * equally true of every strike on every 0DTE session. It cannot distinguish a
+   * level that was abandoned from one that simply expired, so it is not shown.
+   *
+   * What DOES survive the decay is each strike's share of the board:
+   *
+   *     share_k(t) = |net_k(t)| / Σ_j |net_j(t)|
+   *
+   * The 1/√T term is in every strike's numerator and in the denominator, so it
+   * divides straight out. A strike holding 12% of the board's gamma at noon and
+   * 3% at the close genuinely lost the board — that is positioning, not the
+   * clock. Both the build buckets and the 15:00→close column are now measured
+   * this way, in PERCENTAGE POINTS of the board.
+   *
+   * Bucket shares are normalised over the ABSOLUTE share moves, not the signed
+   * ones — a strike that took +4pp in the morning and gave 1pp back at lunch
+   * should read as two thirds morning, not as 133%. The segments therefore
+   * always fill the bar exactly.
    */
   type EvRow = {
     strike: number;
     net: number;
-    peak: number | null;
-    peakTs: number | null;
-    offPeakPct: number | null;
     segs: { share: number; color: string; label: string }[];
     dominant: { share: number; color: string; label: string } | null;
     /**
-     * POWER HOUR — 15:00→close change in MAGNITUDE (|last| − |15:00|), read off
-     * the recorder's OWN series at both ends so it never mixes sources.
-     * Positive = the strike added gamma into the close. Null when the recording
-     * does not actually reach 15:00.
+     * POWER HOUR — 15:00→close change in the strike's share of the board, in
+     * percentage points. Positive = it took board share into the bell, negative
+     * = it lost it. Null when the recording does not actually reach 15:00.
      */
-    pmDelta: number | null;
-    /** |value at 15:00|, so the delta can also be shown as a percentage. */
+    pmShare: number | null;
+    /** The strike's board share at 15:00, in points — the base pmShare moved from. */
     pmBase: number | null;
-    /**
-     * The RECORDER's own last value. The `net` above is the live chain's; these
-     * two are the same expiry on the same basis and should agree, but they are
-     * different sources and after the settle they can diverge badly. Everything
-     * peak-related is measured against THIS one so the comparison never has one
-     * foot in each source — see the ghost note in the row renderer.
-     */
-    recClose: number | null;
+    /** …and at the last recorded column. */
+    closeShare: number | null;
   };
 
   const BUCKET_DEFS = useMemo(() => [
@@ -625,6 +632,19 @@ export default function PostMarketTab(p: PostMarketProps) {
     return Math.abs(etMinutes(cols[i].ts) - PM_FROM_MIN) <= 10 ? i : null;
   }, [cols, activeBuckets, idxAtMin]);
 
+  /**
+   * BOARD TOTAL per column — Σ|net| over the WHOLE ladder, not the ±60 window.
+   *
+   * This is the denominator that divides the 1/√T decay out (see the EvRow
+   * header). It has to be the whole board: normalising over the rendered window
+   * would make every strike's share jump around as the window slid with spot,
+   * and the shares would no longer be comparable between rows.
+   */
+  const colAbsTotal = useMemo(
+    () => cols.map((c) => c.cells.reduce((s, x) => s + Math.abs(x.net), 0)),
+    [cols],
+  );
+
   const evRows = useMemo<EvRow[]>(() => {
     // Boundary column for each active bucket's END, clamped into range. Built
     // from the ACTIVE list, so the segments always describe recorded time.
@@ -632,75 +652,38 @@ export default function PostMarketTab(p: PostMarketProps) {
     return evBars.map((b) => {
       const e = series.get(b.strike);
       const base: EvRow = {
-        strike: b.strike, net: b.net, peak: null, peakTs: null,
-        offPeakPct: null, segs: [], dominant: null, pmDelta: null, pmBase: null,
-        recClose: null,
+        strike: b.strike, net: b.net,
+        segs: [], dominant: null, pmShare: null, pmBase: null, closeShare: null,
       };
       if (!e || e.vals.length < 3 || !activeBuckets.length || bounds.some((i) => i < 0)) return base;
 
-      /**
-       * PEAK WINDOW — scanned to 15:00, NOT to the close.
-       *
-       * Per-strike GEX is γ × (OI+Vol) × S² and γ ∝ 1/√T, so on an expiring
-       * book every strike's raw high-water mark lands in the final minutes and
-       * is a time-decay artefact, not a position. Measured to the close, an ATM
-       * 0DTE strike marks ~$200-300B against a ~$2B settle — so EVERY row drew
-       * a full-width "given back" hatch and read −99% off peak, which is a
-       * statement about the clock, not about anyone's book.
-       *
-       * Scanned to 15:00 the mark means what the legend claims: the most gamma
-       * this strike carried during the session it was actually traded in. What
-       * happens after 15:00 is answered separately, on its own scale, by
-       * `pmDelta` — see the POWER HOUR block in the stylesheet.
-       */
       const last = e.vals.length - 1;
-      const peakEnd = pmAnchor != null ? Math.min(pmAnchor, last) : last;
-      let peak = e.vals[0], peakI = 0;
-      for (let i = 1; i <= peakEnd; i++) {
-        if (Math.abs(e.vals[i]) > Math.abs(peak)) { peak = e.vals[i]; peakI = i; }
-      }
-
-      // Magnitude, not signed value: a put wall going from −$1B to −$3B into the
-      // close GREW, and a signed delta would call that a $2B loss.
-      const pmBase = pmAnchor != null ? Math.abs(e.vals[pmAnchor]) : null;
-      const pmDelta = pmAnchor != null ? Math.abs(e.vals[last]) - Math.abs(e.vals[pmAnchor]) : null;
+      /**
+       * This strike's share of the board at column `i`, in PERCENTAGE POINTS.
+       * Every quantity below is built from this and nothing else, so the whole
+       * row is decay-free — see the EvRow header for the algebra.
+       */
+      const shareAt = (i: number) => {
+        const tot = colAbsTotal[i] ?? 0;
+        return tot > 0 ? (Math.abs(e.vals[i]) / tot) * 100 : 0;
+      };
 
       const cuts = [0, ...bounds.map((i) => Math.min(i, last))];
       cuts[cuts.length - 1] = last;                       // the final bucket always ends at the close
-      const moves = activeBuckets.map((_, i) => Math.abs(e.vals[cuts[i + 1]] - e.vals[cuts[i]]));
+      const moves = activeBuckets.map((_, i) => Math.abs(shareAt(cuts[i + 1]) - shareAt(cuts[i])));
       const total = moves.reduce((a, c) => a + c, 0);
       const segs = total > 0
         ? moves.map((mv, i) => ({ share: mv / total, color: activeBuckets[i].color, label: activeBuckets[i].label }))
         : [];
       const dominant = segs.length ? segs.reduce((bb, x) => (x.share > bb.share ? x : bb), segs[0]) : null;
 
-      /**
-       * OFF-PEAK IS NOW SERIES-vs-SERIES.
-       *
-       * It used to be `1 − |b.net| / |peak|`, i.e. the LIVE chain's close over
-       * the RECORDER's high. Those are two different sources, and after the
-       * settle they need not describe the same book at all — so a number that
-       * reads as "this level was abandoned" could just as easily have been the
-       * chain rolling to the next expiry underneath a recorder still holding
-       * today's. Both ends now come from `series`, and the renderer applies the
-       * RATIO to the bar rather than re-scaling it, so the hatch is meaningful
-       * whatever the two sources' absolute levels are doing.
-       */
-      const recClose = e.vals[last];
+      const closeShare = shareAt(last);
+      const pmBase = pmAnchor != null ? shareAt(pmAnchor) : null;
+      const pmShare = pmBase != null ? closeShare - pmBase : null;
 
-      return {
-        ...base,
-        peak,
-        peakTs: e.ts[peakI] ?? null,
-        offPeakPct: Math.abs(peak) > 0 ? (1 - Math.abs(recClose) / Math.abs(peak)) * 100 : null,
-        segs,
-        dominant,
-        pmDelta,
-        pmBase,
-        recClose,
-      };
+      return { ...base, segs, dominant, pmShare, pmBase, closeShare };
     });
-  }, [evBars, series, idxAtMin, activeBuckets, evCover, pmAnchor]);
+  }, [evBars, series, idxAtMin, activeBuckets, evCover, pmAnchor, colAbsTotal]);
 
   /**
    * WALL MIGRATION — where the levels sat, minute by minute, against spot.
@@ -1176,21 +1159,24 @@ export default function PostMarketTab(p: PostMarketProps) {
    * maxed out, they can't all have peaked at the same number" artefact: they had
    * not, the chart was clipping them to a common ceiling and saying nothing.
    *
-   * SECOND FIX (2026-08-24): `|peak|` is out of the scale as well.
+   * SECOND FIX (2026-08-24): the peak is gone entirely, and with it the "given
+   * back" hatch it anchored.
    *
-   * Folding the peak in was right when the peak was a comparable number. It is
-   * not on an expiring book: γ ∝ 1/√T puts every strike's raw high-water mark in
-   * the final minutes at 50-150× its own settle, so ONE ATM strike's terminal
-   * mark set the scale for all 121 rows. Every real bar — the call wall included
-   * — rendered as a 2px sliver with its AM/MID/PM colours invisible, and every
-   * row carried a full-width "given back" hatch. "Where is the 15:00-close
-   * data?" was the panel drawing it two pixels wide.
+   * Folding `|peak|` into the scale was right when the peak was a comparable
+   * number. It is not on an expiring book: γ ∝ 1/√T puts every strike's raw
+   * high-water mark in the final minutes at 50-150× its own settle, so ONE ATM
+   * strike's terminal mark set the scale for all 121 rows. Every real bar — the
+   * call wall included — rendered as a 2px sliver with its AM/MID/PM colours
+   * invisible. "Where is the 15:00-close data?" was the panel drawing it two
+   * pixels wide.
    *
-   * The peak is now scanned to 15:00 (see PEAK WINDOW in evRows), which takes
-   * most of the inflation out of it, and the scale is the biggest CLOSING bar.
-   * A peak that still overflows the track is marked with a chevron rather than
-   * clamped silently — see `.ovf` — which is the first artefact above, handled
-   * explicitly instead of by re-clipping.
+   * Narrowing the peak window to 15:00 was not enough either, because the mark
+   * itself carries no information on 0DTE: by the last recorded column all but
+   * a handful of ATM strikes have decayed to ~zero, so EVERY row is ~100% off
+   * its own high. That is true of every strike on every expiry session, which
+   * makes it a constant rather than a reading — so the hatch, the tick and the
+   * overflow chevron are all removed. What replaced them is share-of-board,
+   * which divides the decay out; the EvRow header has the algebra.
    *
    * Cost, unchanged from the first fix: a little resolution near the money when
    * one far strike is enormous. Buys the thing a bar chart is for — two bars of
@@ -1199,12 +1185,12 @@ export default function PostMarketTab(p: PostMarketProps) {
   const maxAbsBar = Math.max(1, ...evRows.map((r) => Math.abs(r.net)));
 
   /**
-   * The power hour's OWN scale. This is the whole point of splitting it out: it
-   * is normalised over the 15:00→close moves only, so the column is legible on
-   * its own terms and cannot be flattened by — or flatten — the main bar.
+   * The power hour's OWN scale, in percentage points of the board. Normalised
+   * over the 15:00→close share moves only, so the column is legible on its own
+   * terms and cannot be flattened by — or flatten — the main bar.
    */
-  const maxPmAbs = Math.max(1, ...evRows.map((r) => Math.abs(r.pmDelta ?? 0)));
-  const hasPm = evRows.some((r) => r.pmDelta != null);
+  const maxPmAbs = Math.max(0.05, ...evRows.map((r) => Math.abs(r.pmShare ?? 0)));
+  const hasPm = evRows.some((r) => r.pmShare != null);
   const openTag = (strike: number): { text: string; color: string } | null => {
     if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--cw)" };
     if (putWall != null && strike === putWall) return { text: "PUT WALL", color: "var(--pw)" };
@@ -1431,12 +1417,22 @@ export default function PostMarketTab(p: PostMarketProps) {
                 {`${etMinOfDay(b.from)}–${b.until >= RTH_CLOSE_MIN ? "close" : etMinOfDay(b.until)}`}
               </span>
             ))}
-            <span><i style={{ background: "#fff", width: 3 }} />peak to 15:00</span>
-            <span><i style={{ background: "repeating-linear-gradient(45deg,rgba(255,255,255,.5) 0 2px,rgba(255,255,255,.12) 2px 4px)" }} />given back</span>
             {hasPm && (
-              <span style={{ color: "var(--txt)" }}>
+              <span
+                style={{ color: "var(--txt)", cursor: "help" }}
+                title={[
+                  "15:00→close change in the strike's SHARE of the board's total gamma, in percentage points.",
+                  "Right/amber = it took share into the bell. Left/red = it lost share.",
+                  "",
+                  "Share, not dollars: per-strike GEX is γ × (OI+Vol) × S² and γ ∝ 1/√T, so on an expiring",
+                  "book every strike's dollar figure collapses into the close no matter what anyone did.",
+                  "The 1/√T term is in the numerator and the denominator of a share, so it divides out and",
+                  "what is left is positioning. This column is on its own scale — its length is not",
+                  "comparable to the bar beside it.",
+                ].join("\n")}
+              >
                 <i style={{ background: "linear-gradient(90deg,var(--neg) 0 50%,var(--amber) 50% 100%)" }} />
-                15:00→close · own scale
+                15:00→close · board share · own scale
               </span>
             )}
           </div>
@@ -1453,21 +1449,9 @@ export default function PostMarketTab(p: PostMarketProps) {
           </div>
         )}
 
-        {/* Why the last hour is a separate column rather than a third segment.
-            Without this the reader has no way to know the two tracks are not on
-            one scale, and would compare their lengths. */}
-        {hasPm && (
-          <div className="warnbar" style={{ marginBottom: 11 }}>
-            The <b>15:00→close</b> column is on its <b>own scale</b> and its length is not comparable to
-            the bar beside it. Per-strike gamma exposure carries a 1/√T term, so on an expiring book the
-            final hour is inflated by around two orders of magnitude against the rest of the session;
-            sharing one scale with it flattened every morning and midday segment to nothing and drew a
-            full-width &quot;given back&quot; hatch on every row. The high-water mark and that hatch are
-            therefore measured <b>to 15:00 only</b>, and against the recorder&apos;s own series at both
-            ends. What happened after 15:00 is the amber/red column: right means the strike
-            <b> added</b> gamma into the close, left means it <b>bled out</b>.
-          </div>
-        )}
+        {/* The 1/√T explanation used to live here as a paragraph. It is on the
+            legend chip's tooltip now — a caveat that permanent is furniture, and
+            it was taking four lines off the ladder every session. */}
 
         <div className="body" style={{ gridTemplateColumns: "1.35fr 1fr" }}>
           <div className="col" style={{ position: "relative" }}>
@@ -1488,31 +1472,6 @@ export default function PostMarketTab(p: PostMarketProps) {
                 // in its own column, plus the +/− chip and the bar's tint.
                 const w = Math.min(100, (Math.abs(r.net) / maxAbsBar) * 100);
 
-                /**
-                 * THE PEAK IS A RATIO APPLIED TO THE BAR, not its own absolute
-                 * length. `peak / recClose` is taken entirely inside the
-                 * recorder's series, then multiplied onto a bar whose length
-                 * comes from the live chain — so the hatch says "this closed N%
-                 * below its own 15:00 high" and stays true even when the two
-                 * sources sit at different absolute levels (which they do the
-                 * moment the chain rolls past the settle). Dividing one source
-                 * by the other, as this did, produced a ratio of two different
-                 * books and drew it as fact.
-                 */
-                const peakRatio = r.peak != null && r.recClose != null && Math.abs(r.recClose) > 0
-                  ? Math.abs(r.peak) / Math.abs(r.recClose)
-                  : null;
-                const wpRaw = peakRatio == null ? null : w * peakRatio;
-                const wp = wpRaw == null ? null : Math.min(100, wpRaw);
-                // A strike whose high was far above where it closed runs the
-                // tick past the track. Clamping it is fine; parking several
-                // different peaks on one pixel and saying nothing is not, so the
-                // row gets a chevron.
-                // Only when the clamp is actually HIDING something. A bar that
-                // closed at its own high is already full-width; a chevron there
-                // would flag rounding, not a hidden peak.
-                const peakOverflows = wpRaw != null && wpRaw > 100.5 && wpRaw - w > 2;
-
                 // Segments run left→right in time order, so a bar reads the way
                 // the day ran.
                 let acc = 0;
@@ -1525,49 +1484,38 @@ export default function PostMarketTab(p: PostMarketProps) {
                   );
                 });
 
-                const ghost: CSSProperties | null = wp == null || wp <= w
-                  ? null
-                  : { left: `${w}%`, width: `${wp - w}%` };
-                const peakStyle: CSSProperties | null = wp == null
-                  ? null
-                  : { left: `calc(${wp}% - 1px)` };
-
                 // A strike carrying under 2% of the window's biggest bar is
-                // noise — "−100% 09:32" on a line that never held anything is
-                // false precision, so the row keeps its bar and drops the label.
+                // noise — a composition label on a line that never held anything
+                // is false precision, so the row keeps its bar and drops it.
                 const meaningful = Math.abs(r.net) >= maxAbsBar * 0.02;
-                const off = meaningful ? r.offPeakPct : null;
 
                 // POWER HOUR — its own scale, centred, half-track each way.
-                const pmW = r.pmDelta == null
+                // Under a fiftieth of a point the strike did nothing in the last
+                // hour, and a 1px stub on a flat row is a mark that reads as a
+                // measurement. Those draw the zero line only.
+                const pmFlat = r.pmShare != null && Math.abs(r.pmShare) < 0.02;
+                const pmW = r.pmShare == null || pmFlat
                   ? null
-                  : Math.min(50, (Math.abs(r.pmDelta) / maxPmAbs) * 50);
-                const pmGrew = (r.pmDelta ?? 0) >= 0;
-                // Percent needs a base worth dividing by — a strike holding
-                // $30M at 15:00 that ends at $600M is "+1,900%", which is true
-                // and useless. Below 1% of the board's biggest bar, show the
-                // direction and drop the number.
-                const pmPct = r.pmDelta != null && r.pmBase != null && r.pmBase > maxAbsBar * 0.01
-                  ? (r.pmDelta / r.pmBase) * 100
-                  : null;
+                  : Math.min(50, (Math.abs(r.pmShare) / maxPmAbs) * 50);
+                const pmGrew = (r.pmShare ?? 0) >= 0;
+                // Points of board share, printed to one decimal: the moves that
+                // matter here are whole points and the ones that do not should
+                // read as ~0.0 rather than being rounded away to nothing.
+                const pmTxt = r.pmShare == null || !meaningful
+                  ? null
+                  : pmFlat ? "flat pm"
+                    : `${pmGrew ? "+" : "−"}${Math.abs(r.pmShare).toFixed(1)}pp`;
                 return (
                   <div
                     className={`evrow${tag ? " key" : ""}`}
                     key={r.strike}
                     title={[
                       `${nf(r.strike, 0)} · ${fmtUsd(r.net, false)} at the close`,
-                      off != null
-                        ? `peak to 15:00 ${fmtUsd(r.peak ?? 0, false)}${r.peakTs ? ` at ${etHm(r.peakTs)}` : ""} · ${
-                          // A NEGATIVE off means the strike ended above its own
-                          // 15:00 high — routine on 0DTE, where gamma keeps
-                          // climbing into the bell. Printing it as "426% below"
-                          // is how a sign error reads as a fact.
-                          off < 0 ? `ended ${Math.abs(off).toFixed(0)}% above it`
-                            : off < 3 ? "closed at that peak"
-                              : `closed ${off.toFixed(0)}% below it`}`
+                      r.closeShare != null
+                        ? `${r.closeShare.toFixed(1)}% of the board's gamma at the close`
                         : null,
-                      r.pmDelta != null
-                        ? `15:00→close ${pmGrew ? "+" : "−"}${fmtUsd(Math.abs(r.pmDelta), false)}${pmPct != null ? ` (${pmGrew ? "+" : "−"}${Math.abs(pmPct).toFixed(0)}%)` : ""} — own scale, not comparable to the bar`
+                      r.pmShare != null && r.pmBase != null
+                        ? `15:00→close ${pmGrew ? "+" : "−"}${Math.abs(r.pmShare).toFixed(2)} points of board share (${r.pmBase.toFixed(1)}% → ${(r.pmBase + r.pmShare).toFixed(1)}%) — own scale, not comparable to the bar`
                         : "15:00→close not recorded",
                     ].filter(Boolean).join("\n")}
                   >
@@ -1578,44 +1526,30 @@ export default function PostMarketTab(p: PostMarketProps) {
                     </div>
                     <div className={`track${pos ? "" : " neg"}`}>
                       {segs.length ? segs : <div className={`bar ${pos ? "p" : "n"}`} style={{ width: `${w}%` }} />}
-                      {ghost && <div className="chg" style={ghost} />}
-                      {peakStyle && <div className="openmk" style={peakStyle} />}
-                      {peakOverflows && <span className="ovf">›</span>}
                     </div>
-                    {/* 15:00 → close, on its own scale. Empty (and unpainted)
-                        when the recording never reached 15:00, so a missing
-                        power hour never reads as a flat one. */}
-                    <div className={`pmtrack${pmW == null ? " off" : ""}`}>
+                    {/* 15:00 → close, on its own scale. Unpainted entirely when
+                        the recording never reached 15:00 — a MISSING power hour
+                        must not look like a flat one, which is why the zero line
+                        is drawn only when there is a reading behind it. */}
+                    <div className={`pmtrack${r.pmShare == null ? " off" : ""}`}>
+                      {r.pmShare != null && <div className="zero" />}
                       {pmW != null && (
-                        <>
-                          <div className="zero" />
-                          <i className={pmGrew ? "up" : "dn"} style={{ width: `${Math.max(1, pmW)}%` }} />
-                        </>
+                        <i className={pmGrew ? "up" : "dn"} style={{ width: `${Math.max(1, pmW)}%` }} />
                       )}
                     </div>
                     <div className="builtcol mono">
                       {meaningful && r.dominant && (
                         <span style={{ color: r.dominant.color }}>{Math.round(r.dominant.share * 100)}% {r.dominant.label}</span>
                       )}
-                      {/* The power-hour number wins the slot when there is one:
-                          it is the question this panel was failing to answer.
-                          The off-peak reading is still on the row's title, and
-                          is still drawn as the hatch and the tick. */}
-                      {meaningful && pmPct != null ? (
+                      {/* Points of BOARD SHARE, not a percentage of the strike's
+                          own 15:00 value. The latter is what produced "+610%"
+                          on a strike that went from a rounding error to a small
+                          number, and "−100%" on the eighty strikes that simply
+                          expired. */}
+                      {pmTxt && (
                         <>
                           <span className="sep"> · </span>
-                          <span style={{ color: pmGrew ? "var(--amber)" : "var(--neg)" }}>
-                            {pmGrew ? "+" : "−"}{Math.abs(pmPct).toFixed(0)}% pm
-                          </span>
-                        </>
-                      ) : off != null && (
-                        <>
-                          <span className="sep"> · </span>
-                          <span style={{ color: off < 3 ? "var(--pos)" : off > 25 ? "var(--neg)" : "var(--dim)" }}>
-                            {off < 0 ? "past peak"
-                              : off < 3 ? "at peak"
-                                : `−${off.toFixed(0)}%${r.peakTs ? ` ${etHm(r.peakTs)}` : ""}`}
-                          </span>
+                          <span style={{ color: pmFlat ? "var(--dim2)" : pmGrew ? "var(--amber)" : "var(--neg)" }}>{pmTxt}</span>
                         </>
                       )}
                     </div>

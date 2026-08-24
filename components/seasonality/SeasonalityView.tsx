@@ -39,8 +39,8 @@
 // behind, its own seasonal script this year is running. That number is the
 // headline tile, not the two levels.
 //
-// BASIS. Everything on this tab is the ^GSPC CASH INDEX, price return only. It
-// used to be a back-adjusted ES continuous series over eight years, which meant
+// BASIS. Everything here is the SPX CASH INDEX (Yahoo ^GSPC), price return
+// only. It used to be a back-adjusted ES continuous series over eight years, which meant
 // the seasonal curve and the price axis were on a contract that does not exist
 // as a level — and back-adjustment damps the percentage swings of older years.
 // Cash removes both problems and buys 90 more years of sample. It also means the
@@ -69,7 +69,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
-import { Card } from "@/components/shared/PageCard";
 import SeasonalityAlmanac from "./SeasonalityAlmanac";
 import {
   DEFAULT_SECTION,
@@ -78,7 +77,7 @@ import {
   sectionForHash,
   type SectionKey,
 } from "./sections";
-import Watermark, { watermarkHost } from "./Watermark";
+import { SeaCard } from "./Watermark";
 import {
   ALMANAC,
   DEFAULT_BASELINE,
@@ -440,9 +439,9 @@ export default function SeasonalityView() {
         <div id="sea-pane" className="sea-pane">
       {active === "season" ? (
         <>
-      <Card
+      <SeaCard
         title="S&P 500 Seasonality vs 2026"
-        subtitle={`^GSPC cash index · ${baseline.label} average (${baseline.span}, ${baseline.years} years) · 2026 through ${dayLabel(last)}`}
+        subtitle={`SPX cash index · ${baseline.label} average (${baseline.span}, ${baseline.years} years) · 2026 through ${dayLabel(last)}`}
         padding={20}
       >
         {/* Baseline window */}
@@ -659,16 +658,15 @@ export default function SeasonalityView() {
         </details>
 
         {/* Chart */}
-        <div ref={wrapRef} style={{ width: "100%", ...watermarkHost }}>
+        <div ref={wrapRef} style={{ width: "100%" }}>
           {innerW > 0 ? (
             <>
-            <Watermark size="chart" />
             <svg
               width={width}
               height={CHART_H}
               role="img"
               aria-label="S&P 500 seasonality versus 2026 year to date"
-              style={{ display: "block", touchAction: "none", overflow: "visible", position: "relative", zIndex: 3 }}
+              style={{ display: "block", touchAction: "none", overflow: "visible" }}
               onPointerMove={onMove}
               onPointerLeave={() => setHover(null)}
             >
@@ -855,9 +853,9 @@ export default function SeasonalityView() {
             <span>Hover the chart for any calendar day.</span>
           )}
         </div>
-      </Card>
+      </SeaCard>
 
-      <Card title="Where 2026 Stands" padding={20}>
+      <SeaCard title="Where 2026 Stands" padding={20}>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <StatTile
             label="2026 YTD"
@@ -916,7 +914,7 @@ export default function SeasonalityView() {
           ))}
         </div>
 
-      </Card>
+      </SeaCard>
 
         </>
       ) : (

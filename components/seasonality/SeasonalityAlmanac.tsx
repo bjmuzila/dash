@@ -48,9 +48,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { HOME_THEME, ES_CANDLE_UP, ES_CANDLE_DOWN } from "@/components/shared/homeTheme";
-import { Card } from "@/components/shared/PageCard";
 import { ALMANAC, ERA_KEYS, EXTRAS, type Stat } from "./seasonalityData";
-import Watermark, { watermarkHost } from "./Watermark";
+import { SeaCard } from "./Watermark";
 import type { SectionKey } from "./sections";
 
 const UP = ES_CANDLE_UP;
@@ -286,11 +285,10 @@ function DivBars({
   const gap = Math.min(10, bw * 0.3);
 
   return (
-    <div ref={ref} style={{ width: "100%", ...watermarkHost }}>
+    <div ref={ref} style={{ width: "100%" }}>
       {innerW > 0 ? (
         <>
-          <Watermark size="chart" />
-          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none", position: "relative", zIndex: 3 }} onPointerLeave={() => setHover(null)}>
+          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none" }} onPointerLeave={() => setHover(null)}>
             {ticks.map((t) => (
               <g key={`t${t}`}>
                 <line x1={PAD.left} x2={PAD.left + innerW} y1={y(t)} y2={y(t)} stroke={t === 0 ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.08)"} />
@@ -371,11 +369,10 @@ function PairBars({
   const bw = Math.max(1, (inner - 2) / 2);
 
   return (
-    <div ref={ref} style={{ width: "100%", ...watermarkHost }}>
+    <div ref={ref} style={{ width: "100%" }}>
       {innerW > 0 ? (
         <>
-          <Watermark size="chart" />
-          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none", position: "relative", zIndex: 3 }} onPointerLeave={() => setHover(null)}>
+          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none" }} onPointerLeave={() => setHover(null)}>
             {ticks.map((t) => (
               <g key={`t${t}`}>
                 <line x1={PAD.left} x2={PAD.left + innerW} y1={y(t)} y2={y(t)} stroke={t === 0 ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.08)"} />
@@ -422,9 +419,8 @@ type Cell = { t: string; c?: string; bar?: number } | string | number;
 
 function DataTable({ head, rows }: { head: string[]; rows: Cell[][] }) {
   return (
-    <div style={{ overflowX: "auto", ...watermarkHost }}>
-      <Watermark size="table" />
-      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5, color: INK, fontVariantNumeric: "tabular-nums", position: "relative", zIndex: 3 }}>
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5, color: INK, fontVariantNumeric: "tabular-nums" }}>
         <thead>
           <tr>
             {/* keyed by position, not label — the barometer table repeats
@@ -547,12 +543,9 @@ function HeatTable({
     data = [...data].reverse();
   }
   return (
-    <div style={{ overflow: "auto", maxHeight, width: "100%", ...watermarkHost }}>
-      <Watermark size="heatmap" />
+    <div style={{ overflow: "auto", maxHeight, width: "100%" }}>
       <table
         style={{
-          position: "relative",
-          zIndex: 3,
           borderCollapse: "separate",
           borderSpacing: 2,
           fontSize: 11,
@@ -684,7 +677,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
 
   const SECTIONS: Partial<Record<SectionKey, ReactNode>> = {
     now: (
-      <Card title="Where the Calendar Stands" subtitle={`Last close ${now.as_of} · session ${now.trading_day_of_year} of the trading year`} padding={20}>
+      <SeaCard title="Where the Calendar Stands" subtitle={`Last close ${now.as_of} · session ${now.trading_day_of_year} of the trading year`} padding={20}>
         <div style={TILES}>
           <Tile label="Rest of year · mean" value={pct(royMod.avg)} sub={`since 1985 · n=${royMod.n}`} color={signColor(royMod.avg)} />
           <Tile label="Rest of year · positive" value={pctp(royMod.pos_pct, 0)} sub={`${Math.round(royMod.pos_pct * royMod.n)} of ${royMod.n} years`} />
@@ -730,12 +723,12 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           />
         </Collapse>
 
-      </Card>
+      </SeaCard>
     ),
     vix: (
-      <Card
+      <SeaCard
         title="After a VIX Spike"
-        subtitle={`^VIX open → high ≥ +20% in a session · ${vix.meta.start} – ${vix.meta.end} · ${n0(vix.meta.sessions)} sessions`}
+        subtitle={`VIX open → high ≥ +20% in a session · ${vix.meta.start} – ${vix.meta.end} · ${n0(vix.meta.sessions)} sessions`}
         padding={20}
       >
         <div style={TILES}>
@@ -827,10 +820,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           />
         </Collapse>
 
-      </Card>
+      </SeaCard>
     ),
     eom: (
-      <Card title="Last Day of the Month" subtitle="Return of the final session of a month, close-to-close" padding={20}>
+      <SeaCard title="Last Day of the Month" subtitle="Return of the final session of a month, close-to-close" padding={20}>
         <div style={TILES}>
           <Tile label="Every month end" value={bp(eom.all.avg, 1)} sub={`n=${n0(eom.all.n)} · ${pctp(eom.all.pos_pct, 1)} positive`} color={signColor(eom.all.avg)} />
           <Tile label="Quarter ends" value={bp(eom.quarter.avg, 1)} sub={`Mar/Jun/Sep/Dec · n=${eom.quarter.n} · ${pctp(eom.quarter.pos_pct, 1)} positive`} color={signColor(eom.quarter.avg)} />
@@ -866,10 +859,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           <DataTable head={STAT_HEAD} rows={eom.by_month.map((m) => statRow(m.label, m))} />
         </Collapse>
 
-      </Card>
+      </SeaCard>
     ),
     opex: (
-      <Card title="Opex Week &amp; the Week After" subtitle="Third-Friday expiration, monthly and quarterly" padding={20}>
+      <SeaCard title="Opex Week &amp; the Week After" subtitle="Third-Friday expiration, monthly and quarterly" padding={20}>
         <div style={TILES}>
           <Tile label="Opex week" value={bp(opex.monthly.week.avg, 1)} sub={`n=${n0(opex.monthly.week.n)} · ${pctp(opex.monthly.week.pos_pct, 1)} positive`} color={signColor(opex.monthly.week.avg)} />
           <Tile label="Week after opex" value={bp(opex.monthly.after.avg, 1)} sub={`n=${n0(opex.monthly.after.n)} · ${pctp(opex.monthly.after.pos_pct, 1)} positive`} color={signColor(opex.monthly.after.avg)} />
@@ -955,10 +948,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           />
         </Collapse>
 
-      </Card>
+      </SeaCard>
     ),
     month: (
-      <Card title="Month by Month" subtitle={`${A.meta.symbol} monthly returns · ${A.meta.start.slice(0, 4)}–${A.meta.end.slice(0, 4)}`} padding={20}>
+      <SeaCard title="Month by Month" subtitle={`${A.meta.symbol} monthly returns · ${A.meta.start.slice(0, 4)}–${A.meta.end.slice(0, 4)}`} padding={20}>
         <Pills options={eraOptions} value={era} onChange={setEra} label="Sample" />
         <Legend items={[{ color: UP, label: "Positive mean" }, { color: DOWN, label: "Negative mean" }]} />
         <DivBars
@@ -993,10 +986,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             ])}
           />
         </Collapse>
-      </Card>
+      </SeaCard>
     ),
     six: (
-      <Card title="The Two Half-Years" subtitle="Nov–Apr against May–Oct, compounded within each season" padding={20}>
+      <SeaCard title="The Two Half-Years" subtitle="Nov–Apr against May–Oct, compounded within each season" padding={20}>
         <div style={TILES}>
           {smOrder.map((i) => (
             <Tile
@@ -1022,10 +1015,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             />
           ))}
         </div>
-      </Card>
+      </SeaCard>
     ),
     tdom: (
-      <Card title="Turn of the Month" subtitle="Mean session return by trading day of month" padding={20}>
+      <SeaCard title="Turn of the Month" subtitle="Mean session return by trading day of month" padding={20}>
         <Legend items={[{ color: A1, label: "All history" }, { color: A2, label: "Since 1985" }]} />
         <PairBars
           labels={A.tdom.index}
@@ -1049,10 +1042,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             />
           ))}
         </div>
-      </Card>
+      </SeaCard>
     ),
     dow: (
-      <Card title="Day of Week" subtitle="Mean session return by weekday" padding={20}>
+      <SeaCard title="Day of Week" subtitle="Mean session return by weekday" padding={20}>
         <Pills options={eraOptions} value={dowEra} onChange={setDowEra} label="Sample" />
         <DivBars
           labels={dw.index}
@@ -1078,10 +1071,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             rows={dw.index.map((d, i) => [d, n0(dw.n[i]), { t: bp(dw.avg[i], 2), c: signColor(dw.avg[i]) }, pctp(dw.pos_pct[i], 1), pctp(dw.stdev[i], 2)])}
           />
         </Collapse>
-      </Card>
+      </SeaCard>
     ),
     cycles: (
-      <Card title="Presidential &amp; Decennial Cycles" subtitle="Mean calendar-year return, price only" padding={20}>
+      <SeaCard title="Presidential &amp; Decennial Cycles" subtitle="Mean calendar-year return, price only" padding={20}>
         <div style={{ display: "grid", gap: 18, gridTemplateColumns: "repeat(auto-fit, minmax(min(320px,100%), 1fr))" }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 800, color: INK, marginBottom: 8 }}>Four-year political cycle</div>
@@ -1127,10 +1120,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             rowLabel={(r) => String(r).replace(/^\d\s/, "")}
           />
         </Collapse>
-      </Card>
+      </SeaCard>
     ),
     vol: (
-      <Card title="Volatility by Month" subtitle="Annualized standard deviation of daily returns" padding={20}>
+      <SeaCard title="Volatility by Month" subtitle="Annualized standard deviation of daily returns" padding={20}>
         <Legend items={[{ color: A1, label: "All history" }, { color: A2, label: "Since 1985" }]} />
         <PairBars
           labels={A.vol.index}
@@ -1143,20 +1136,20 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             `${A.vol.index[i]} · all history ${pctp(A.vol.all[i], 1)} vol, mean daily move ${pctp(A.vol.avg_abs_all[i], 2)} · since 1985 ${pctp(A.vol.modern[i], 1)} vol, ${pctp(A.vol.avg_abs_modern[i], 2)}`
           }
         />
-      </Card>
+      </SeaCard>
     ),
     decade: (
-      <Card title="Has the Seasonal Shape Moved?" subtitle="Mean monthly return by decade, % · newest first" padding={20}>
+      <SeaCard title="Has the Seasonal Shape Moved?" subtitle="Mean monthly return by decade, % · newest first" padding={20}>
         <HeatTable cols={M} rows={A.decadeMonth.index} data={A.decadeMonth.data} scale={0.035} rowLabel={(r) => `${r}s`} newestFirst />
-      </Card>
+      </SeaCard>
     ),
     matrix: (
-      <Card title="Every Month, Every Year" subtitle={`${A.matrix.years.length} years of monthly returns, % · newest first`} padding={20}>
+      <SeaCard title="Every Month, Every Year" subtitle={`${A.matrix.years.length} years of monthly returns, % · newest first`} padding={20}>
         <HeatTable cols={M} rows={A.matrix.years} data={A.matrix.data} scale={0.1} rowLabel={(r) => String(r)} maxHeight={520} newestFirst />
-      </Card>
+      </SeaCard>
     ),
     baro: (
-      <Card title="Early-Year Barometers" subtitle="What the full year did after each signal window" padding={20}>
+      <SeaCard title="Early-Year Barometers" subtitle="What the full year did after each signal window" padding={20}>
         <Collapse
           label="Santa · First Five Days · January Barometer"
           hint="split by whether the signal window was up or down"
@@ -1182,7 +1175,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             ])}
           />
         </Collapse>
-      </Card>
+      </SeaCard>
     ),
   };
 

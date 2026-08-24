@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes, createHash } from "crypto";
 import { getUserByEmail, insertPasswordReset } from "@/lib/db";
-import { sendTransactional } from "@/lib/emails/send";
+import { sendAuthEmail } from "@/lib/emails/send";
 import { resetPasswordEmail, resetPasswordText, RESET_PASSWORD_SUBJECT } from "@/lib/emails/reset-password";
 import { rateLimit, clientIp } from "@/lib/rateLimit";
 
@@ -68,7 +68,10 @@ export async function POST(req: NextRequest) {
       const resetUrl = `${publicOrigin(req)}/auth/reset-password?token=${token}`;
       const expiresInMinutes = RESET_TTL_MS / 60_000;
 
-      await sendTransactional({
+      // sendAuthEmail, NOT sendTransactional: a reset must not carry the
+      // marketing unsubscribe footer, the List-Unsubscribe (bulk) headers, or
+      // UTM params welded onto the tokenized link. All three push it to spam.
+      await sendAuthEmail({
         to: user.email,
         subject: RESET_PASSWORD_SUBJECT,
         html: resetPasswordEmail({ resetUrl, expiresInMinutes }),

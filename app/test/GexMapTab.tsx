@@ -1040,6 +1040,25 @@ function NoDex({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
   );
 }
 
+/**
+ * Level-line casing, for the TERRAIN field only.
+ *
+ * Call wall / put wall / magnet / gamma flip are drawn as thin coloured lines
+ * across the field. Over the heatmap that reads fine — the cells are dark and
+ * the line is the brightest thing on its row. Over the terrain it does not: the
+ * hypsometric surface is at its brightest exactly where the walls are (a wall
+ * IS a summit), so a 0.9-wide 50%-opacity green line lands on a bright green
+ * ridge and vanishes into it.
+ *
+ * So on the terrain each level line gets a white casing painted under it, wide
+ * enough to show as a border on both sides of the colour. The casing is what
+ * separates the line from the surface; the colour on top is what says WHICH
+ * level it is. Heatmap and GEX × DEX keep the bare line — a white border there
+ * would be louder than the field it is drawn over.
+ */
+const WALL_CASING_W = 4.4;   // white border under the line (≈1.4 each side)
+const WALL_LINE_W = 1.6;     // the coloured line that sits on top of it
+
 // ═════════════════════════════ TAPE FIELD ════════════════════════════════════
 function TapeField({ m, compact, field = "heat", intensity = 1, snap = false }: {
   m: MapModel; compact?: boolean; field?: FieldMode; intensity?: number;
@@ -1160,12 +1179,19 @@ function TapeField({ m, compact, field = "heat", intensity = 1, snap = false }: 
         <line key={`tg${label}`} x1={FX + f * FW} y1={FY} x2={FX + f * FW} y2={FY + FH} stroke={GRID} />
       ))}
 
-      {/* walls + flip */}
+      {/* walls + flip. On the terrain they carry a white casing (see
+          WALL_CASING_W); on the cell fields they stay as they were. */}
       {([[m.callWall, GEX_POS_HEX, "CALL WALL"], [m.magnet, GOLD, "MAGNET"], [m.putWall, GEX_NEG_HEX, "PUT WALL"]] as [number | null, string, string][])
         .filter(([k]) => k != null).map(([k, col, label]) => (
           <g key={label}>
             <rect x={FX} y={yOf(k as number) - 4} width={FW} height={8} fill={col} opacity={0.11} />
-            <line x1={FX} y1={yOf(k as number)} x2={FX + FW} y2={yOf(k as number)} stroke={col} strokeWidth={0.9} opacity={0.5} />
+            {field === "terrain" && (
+              <line x1={FX} y1={yOf(k as number)} x2={FX + FW} y2={yOf(k as number)}
+                stroke="#ffffff" strokeWidth={WALL_CASING_W} opacity={0.9} />
+            )}
+            <line x1={FX} y1={yOf(k as number)} x2={FX + FW} y2={yOf(k as number)} stroke={col}
+              strokeWidth={field === "terrain" ? WALL_LINE_W : 0.9}
+              opacity={field === "terrain" ? 1 : 0.5} />
           </g>
         ))}
       {/* The "GAMMA FLIP 6350" caption that used to ride this line is gone, as
@@ -1175,7 +1201,17 @@ function TapeField({ m, compact, field = "heat", intensity = 1, snap = false }: 
           with the field for the same pixels. The lines and bands stay: those are
           positional information the strip cannot carry. */}
       {m.flip != null && (
-        <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)} stroke={FLIP_C} strokeWidth={1.2} strokeDasharray="5 4" opacity={0.75} />
+        <g>
+          {/* Same casing as the walls, dashed on the SAME pattern so the white
+              wraps each dash instead of running as a solid line under them. */}
+          {field === "terrain" && (
+            <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)}
+              stroke="#ffffff" strokeWidth={WALL_CASING_W} strokeDasharray="5 4" opacity={0.9} />
+          )}
+          <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)} stroke={FLIP_C}
+            strokeWidth={field === "terrain" ? WALL_LINE_W : 1.2} strokeDasharray="5 4"
+            opacity={field === "terrain" ? 1 : 0.75} />
+        </g>
       )}
 
       {/* Spot path.
