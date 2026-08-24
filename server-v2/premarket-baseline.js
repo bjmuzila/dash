@@ -101,6 +101,44 @@
  * (OI · OI+VOL · VOL) and read these two maps directly. Additive only:
  * `byStrike` keeps its old meaning, so nothing that predates this cares.
  *
+ * ── THE CLOSE CAPTURE (2026-08-24) — READ THIS FIRST ────────────────────────
+ * Everything above describes building the baseline from settled ThetaData
+ * history. THAT SOURCE IS GONE. ThetaData was removed on 2026-08-18 and
+ * server-v2/tt-snapshot.js now stubs fetchIndexEodTheta / fetchStockEodTheta /
+ * fetchOiHistoryTheta / fetchGreeksEodHistoryTheta / fetchEodHistoryTheta to
+ * benign empties, so eod-gex-recorder's computeHistoricalGexRows() throws
+ * "no settle spot for <date>" on EVERY call. buildBaseline() therefore always
+ * threw, getBaseline() walked back three sessions and returned ok:false, and
+ * the page's "Biggest GEX Changes" card has been permanently empty ever since
+ * — the same silent-deadlock shape as the localStorage snapshot it replaced,
+ * one layer down.
+ *
+ * Nothing else in the repo could stand in for it either. The header above
+ * already rules out eod_gex (scalars) and eod_strike_gex (every expiry
+ * collapsed onto one strike, 0DTE dropped); option_strike_gex_history is
+ * per-expiry but its SPX writer only ever writes the FRONT expiry, so the prior
+ * session never held a ladder of the expiry this page shows; premarket_freeze
+ * stores exactly one expiry — the one the snapshot was rendering, i.e. that
+ * day's 0DTE. There is no table anywhere holding "yesterday's ladder for
+ * today's expiry".
+ *
+ * So it is now RECORDED rather than reconstructed. captureSession() runs at
+ * 16:05 ET (catch-up window open to 22:00 ET) and, for the next few listed
+ * expirations, pulls the live TastyTrade chain through tt-snapshot, runs the
+ * SAME computeGexRowsMultiExpiry the rest of the app runs, and writes the
+ * result straight into the two tables below keyed `date = today`. The next
+ * morning readCached() finds it on the first try and no build is attempted.
+ *
+ * Three consequences worth knowing:
+ *   · The Theta path is KEPT as a fallback, unchanged. If DATA_SOURCE goes back
+ *     to theta it starts working again and can still backfill older dates.
+ *   · There is a ONE SESSION cold start — the first capture happens at the next
+ *     close, and no amount of cleverness recovers a ladder nobody stored. The
+ *     card says that out loud rather than showing a dash.
+ *   · It captures the next THREE expirations, not one, so a page showing a
+ *     non-0DTE front expiry (holiday weeks) and a recorder that missed a day
+ *     both still have a board to diff against.
+ *
  * ── SHAPE ───────────────────────────────────────────────────────────────────
  * Two tables, both keyed (date, symbol, expiry): `premarket_baseline` holds the
  * strikes, `premarket_baseline_meta` the derived scalars (spot, total, flip,
@@ -623,7 +661,10 @@ async function getBaseline({
     symbol, expiry, basis,
     date: null,
     error: build
-      ? 'no settled prior-session chain found for this expiry'
+      // Named precisely, because the two causes need different reactions: a
+      // board that was never captured heals by itself at the next close, a
+      // Theta gap does not.
+      ? 'no prior-session board for this expiry — the close capture writes it at 16:05 ET'
       : 'not cached',
     tried,
   };
@@ -685,6 +726,244 @@ function shape({ meta, strikes }, { symbol, expiry, today, basis, tried }) {
   };
 }
 
+// ── THE CLOSE CAPTURE ────────────────────────────────────────────────────────
+//
+// See "THE CLOSE CAPTURE" in the header for why this exists at all. In short:
+// the settled-history source this module was built on no longer answers, so the
+// prior-session board is now WRITTEN at the close instead of reconstructed the
+// next morning.
+
+/** Runs at 16:05 ET; the window stays open so a late restart still captures. */
+const CAPTURE_AT_MIN = 16 * 60 + 5;
+const CAPTURE_CLOSE_MIN = 22 * 60;
+
+/**
+ * How many listed expirations forward to store. ONE would be enough on a normal
+ * Monday→Tuesday, and is wrong the moment the page is not on a 0DTE (holiday
+ * weeks, an expiry that is not listed daily) or the recorder misses a session.
+ * Three is two spare boards for a few hundred rows each.
+ */
+const CAPTURE_EXPIRIES = (() => {
+  const n = Math.floor(Number(process.env.PREMARKET_BASELINE_CAPTURE_EXPIRIES));
+  return Number.isFinite(n) && n > 0 && n <= 10 ? n : 3;
+})();
+
+/** Matches the page's symbol picker, filtered through the same allowlist. */
+const CAPTURE_SYMBOLS = String(
+  process.env.PREMARKET_BASELINE_CAPTURE_SYMBOLS || '$SPX,SPY,QQQ')
+  .split(',').map((s) => normSymbol(s)).filter(Boolean);
+
+/** Politeness gap between chain pulls so one capture never bursts the proxy. */
+const CAPTURE_PACE_MS = Math.max(0,
+  Number(process.env.PREMARKET_BASELINE_CAPTURE_PACE_MS) || 400);
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * tt-snapshot is required LAZILY. It pulls in proxy-tastytrade, which is a
+ * heavy module with its own boot side effects, and this file is required by
+ * api-router at module-load time — eagerly requiring it here would reorder that
+ * boot for every process that merely serves the READ path. Nothing in the read
+ * path touches it.
+ */
+let _tt = null;
+function ttSnapshot() {
+  if (!_tt) _tt = require('./tt-snapshot');
+  return _tt;
+}
+
+/** Spot for the capture. Index roots quote as an index; SPY/QQQ as equities. */
+async function captureSpot(symbol) {
+  const tt = ttSnapshot();
+  if (symbol === DEFAULT_SYMBOL) {
+    const px = await tt.fetchIndexPriceTheta('SPX');
+    return Number(px) > 0 ? Number(px) : null;
+  }
+  const q = await tt.fetchStockQuoteTheta(symbol);
+  const px = Number(q?.last) || Number(q?.mark) || Number(q?.close);
+  return px > 0 ? px : null;
+}
+
+/**
+ * One expiry's per-strike GEX rows off the LIVE chain.
+ *
+ * The three maps come from one upstream `/market-data/by-type` fetch (tt-
+ * snapshot coalesces them for 4s) and are keyed identically — `exp|strike|type`
+ * — so they line up by construction rather than by matching on floats.
+ *
+ * The key union is deliberate: TastyTrade can carry OI on a strike whose greeks
+ * are momentarily absent and vice versa, and iterating either map alone drops
+ * those strikes silently. A missing gamma contributes zero, which is the honest
+ * answer for a strike we cannot price; a missing OI likewise.
+ */
+async function liveExpiryRows(symbol, expiry, spot) {
+  const tt = ttSnapshot();
+  const [oiMap, volMap, grkMap] = await Promise.all([
+    tt.fetchOpenInterestTheta(symbol, expiry),
+    tt.fetchVolumeTheta(symbol, expiry),
+    tt.fetchGreeksTheta(symbol, expiry),
+  ]);
+
+  const keys = new Set([...oiMap.keys(), ...grkMap.keys(), ...volMap.keys()]);
+  const flat = [];
+  for (const k of keys) {
+    // keyOf() is `${exp}|${strike}|${type}` and none of the three parts can
+    // contain a pipe, so a plain split is exact.
+    const [, strikeStr, type] = String(k).split('|');
+    const strike = Number(strikeStr);
+    if (!(strike > 0) || (type !== 'C' && type !== 'P')) continue;
+    const g = grkMap.get(k) || {};
+    flat.push({
+      expiration: expiry,
+      strike,
+      side: type === 'C' ? 'call' : 'put',
+      oi: Number(oiMap.get(k)?.oi ?? 0),
+      volume: Number(volMap.get(k) ?? 0),
+      gamma: Number(g.gamma ?? 0),
+      delta: Number(g.delta ?? 0),
+      iv: Number(g.iv ?? 0),
+      mark: Number(g.mark ?? 0),
+    });
+  }
+  if (!flat.length) return null;
+
+  // Same helper the Theta path used, for the same reason: this and every other
+  // GEX number in the app must be provably the same math.
+  const gexRows = computeGexRowsMultiExpiry(flat, spot);
+  return gexRows.length ? gexRows : null;
+}
+
+/** Turn gexRows into the (meta, strikes) pair `persist` wants and store it. */
+async function storeRows(symbol, session, expiry, spot, gexRows) {
+  const strikes = gexRows
+    .map((r) => ({
+      strike: Number(r.strike),
+      oi: Number(r.netGEX ?? 0),
+      vol: Number(r.netVolGEX ?? 0),
+    }))
+    .filter((r) => Number.isFinite(r.strike) && r.strike > 0)
+    // A strike that prices to exactly zero on BOTH legs was not priced at all —
+    // TastyTrade was missing its gamma on this pull, or it carries no OI and no
+    // volume. Storing that zero is worse than storing nothing: `strikeDeltas`
+    // on the page skips strikes the baseline never listed, but a listed ZERO is
+    // diffed, so tomorrow the strike would print its entire live gamma as
+    // overnight "change". Two floats cancelling to an exact 0 does not happen.
+    .filter((r) => r.oi !== 0 || r.vol !== 0)
+    .sort((a, b) => a.strike - b.strike);
+  if (!strikes.length) return null;
+
+  const meta = {
+    date: session,
+    symbol,
+    expiry,
+    spot: Number(spot),
+    totalNetGex: totalNetGex(gexRows),
+    totalOiGex: strikes.reduce((s, r) => s + r.oi, 0),
+    totalVolGex: strikes.reduce((s, r) => s + r.vol, 0),
+    flip: findGexFlip(gexRows, spot),
+    callWall: findCallWall(gexRows, spot),
+    putWall: findPutWall(gexRows, spot),
+    strikes: strikes.length,
+    // Distinguishable from 'theta-settled' in the meta table and in the API
+    // response, so a board's provenance is never a guess.
+    source: 'tt-close',
+  };
+  await persist(meta, strikes);
+  return { meta, strikes };
+}
+
+/**
+ * Capture every symbol's next few expirations for ONE session.
+ * Returns how many (symbol, expiry) boards were written.
+ *
+ * Never throws: a capture is best-effort by nature (one symbol's chain being
+ * briefly unavailable must not cost the other two theirs), and the only caller
+ * is a timer.
+ */
+async function captureSession(session = etDateStr()) {
+  const tt = ttSnapshot();
+  let written = 0;
+
+  for (const symbol of CAPTURE_SYMBOLS) {
+    let spot = null;
+    let expirations = [];
+    try {
+      const [px, chain] = await Promise.all([
+        captureSpot(symbol),
+        tt.fetchChainTheta(symbol),
+      ]);
+      spot = px;
+      expirations = chain?.expirations || [];
+    } catch (e) {
+      console.warn(`[premarket-baseline] capture ${symbol}: chain unavailable — ${e.message}`);
+      continue;
+    }
+    if (!(Number(spot) > 0)) {
+      console.warn(`[premarket-baseline] capture ${symbol}: no spot, skipped`);
+      continue;
+    }
+
+    // Strictly AFTER the session being captured. Today's expiry has already
+    // expired by 16:05 and would store a ladder of zeros — the same reason
+    // eod-strike-gex-recorder drops it.
+    const targets = [...new Set(expirations.map(String))]
+      .filter((e) => YMD.test(e) && e > session)
+      .sort()
+      .slice(0, CAPTURE_EXPIRIES);
+
+    for (const expiry of targets) {
+      try {
+        const gexRows = await liveExpiryRows(symbol, expiry, spot);
+        if (!gexRows) {
+          console.warn(`[premarket-baseline] capture ${symbol} ${expiry}: empty chain`);
+          continue;
+        }
+        const out = await storeRows(symbol, session, expiry, spot, gexRows);
+        if (out) {
+          written++;
+          console.log(`[premarket-baseline] captured ${symbol} ${session} → ${expiry} (${out.meta.strikes} strikes)`);
+        }
+      } catch (e) {
+        console.warn(`[premarket-baseline] capture ${symbol} ${expiry} failed: ${e.message}`);
+      }
+      if (CAPTURE_PACE_MS) await sleep(CAPTURE_PACE_MS);
+    }
+  }
+
+  return written;
+}
+
+let _capturedFor = null;
+/**
+ * The tick fires every 5 minutes and a full capture (3 symbols × 3 expiries,
+ * paced) can outlast that on a slow chain. Without this a second run would
+ * start mid-flight, double every upstream pull and race the first one's upserts
+ * for the same primary keys.
+ */
+let _capturing = false;
+
+async function captureTick() {
+  if (_capturing) return;
+  try {
+    if (process.env.PREMARKET_BASELINE_CAPTURE === '0') return;
+    if (!CAPTURE_SYMBOLS.length) return;
+    const today = etDateStr();
+    if (_capturedFor === today) return;
+    if (!isTradingDay(today)) return;
+    const mins = etMinutes();
+    if (mins < CAPTURE_AT_MIN || mins > CAPTURE_CLOSE_MIN) return;
+    _capturing = true;
+    const written = await captureSession(today);
+    // Latch only on success, same as the warm-up: a 16:05 hiccup must not cost
+    // the whole session's board when the window is open until 22:00.
+    if (written > 0) _capturedFor = today;
+  } catch (e) {
+    console.warn('[premarket-baseline] capture tick failed:', e.message);
+  } finally {
+    _capturing = false;
+  }
+}
+
 // ── warm-up ──────────────────────────────────────────────────────────────────
 //
 // Purely an optimisation: without it the first person to open the page in the
@@ -729,13 +1008,26 @@ async function warmTick() {
   }
 }
 
+/**
+ * ONE timer for both jobs, deliberately.
+ *
+ * They are the two halves of the same thing — captureTick WRITES the board at
+ * the close, warmTick READS it back the next morning — and their windows do not
+ * overlap, so each tick is one cheap clock check and at most one job. Splitting
+ * them into two intervals would double the wake-ups for no gain, and would let
+ * PREMARKET_BASELINE_WARMUP=0 silently disable the capture as well, which is
+ * exactly backwards: the capture is now the load-bearing half.
+ */
 function startPremarketBaseline() {
   if (_warmTimer) return;
-  if (process.env.PREMARKET_BASELINE_WARMUP === '0') return;
-  _warmTimer = setInterval(warmTick, 5 * 60_000);
+  const tick = async () => {
+    if (process.env.PREMARKET_BASELINE_WARMUP !== '0') await warmTick();
+    await captureTick();
+  };
+  _warmTimer = setInterval(() => { tick().catch(() => {}); }, 5 * 60_000);
   if (typeof _warmTimer.unref === 'function') _warmTimer.unref();
-  // Nudge once shortly after boot so a restart inside the window still warms.
-  const kick = setTimeout(() => { warmTick().catch(() => {}); }, 30_000);
+  // Nudge once shortly after boot so a restart inside either window still runs.
+  const kick = setTimeout(() => { tick().catch(() => {}); }, 30_000);
   if (typeof kick.unref === 'function') kick.unref();
 }
 
@@ -744,6 +1036,7 @@ module.exports = {
   buildBaseline,
   startPremarketBaseline,
   // exported for tests / manual pokes
+  captureSession,
   prevTradingDay,
   etDateStr,
 };

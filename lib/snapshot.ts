@@ -35,7 +35,8 @@
  *  5. Live <canvas> bitmaps do not survive the clone reliably — and when they
  *     DO copy, compositing our own bitmap on top yields the chart twice at two
  *     slightly different scales. So: blank every canvas in the clone, then draw
- *     the real bitmaps in ourselves, positioned off their live bounding rects.
+ *     the real bitmaps in ourselves, into the boxes measured in the clone
+ *     (gotcha 11).
  *  6. `background-clip: text` renders INVISIBLE. Gradient headings must be
  *     flattened to a solid color in the clone (see `data-snap-plain`).
  *  8. `overflow:hidden` on a truncated text span SHEARS the glyphs — only the
@@ -57,6 +58,15 @@
  *     full-page capture of a long list at devicePixelRatio 2 gets there easily,
  *     so the scale is clamped to a pixel budget before rendering and the encode
  *     retries once at half size.
+ * 11. The clone's layout is NOT the live page's layout, so the bitmaps from
+ *     gotcha 5 cannot be positioned from live rects plus a hand-computed shift.
+ *     Every drift (the title band's padding, dropped chrome, a row that
+ *     re-flows, a portal that isn't in the subtree) had to be predicted, and one
+ *     that wasn't put the ES Candles chart ~150px above its own panel, over the
+ *     toolbar and the watermark, with a void where the chart should have been.
+ *     The clone is a laid-out document by the time `onclone` runs and
+ *     html2canvas crops at the clone root's own box — so the boxes are MEASURED
+ *     there (see SNAP_TAG) and the composite draws into what was measured.
  */
 
 import { HOME_THEME } from "@/components/shared/homeTheme";
@@ -101,6 +111,14 @@ export const SNAP_BAND_GAP = 10;
 export const SNAP_BOTTOM_SLACK = 48;
 /** Background margin left below the content after trimming, in CSS px. */
 export const SNAP_BOTTOM_PAD = 10;
+/**
+ * Marker attribute stamped on the live nodes whose bitmaps get composited, so
+ * their counterparts can be found — and MEASURED — in the clone (gotcha 11).
+ * Applied only for the duration of one capture and always removed afterwards.
+ * Deliberately distinct from data-capture-hide / data-noshot: those say what to
+ * DROP, this one says what to LOCATE.
+ */
+const SNAP_TAG = "data-snap-composite";
 
 /**
  * One scale policy for the whole app. Capped at 2 — beyond that PNGs get large
@@ -776,6 +794,11 @@ async function captureToCanvasInner(
       ) as HTMLCanvasElement[])
     : [];
 
+  // NOTE: `hiddenShift` below is now only the FALLBACK for a composite target
+  // whose clone box could not be measured — see gotcha 11 and `cloneBoxes`. It
+  // is kept because a measurement can legitimately come back empty (a clone box
+  // of zero size), and a rough position beats none.
+  //
   // Elements tagged [data-capture-hide] are live-page chrome (toolbars, control
   // docks) that shouldn't appear in the PNG. Framed mode drops them at the END
   // of onclone (after the index-paired children loop, so pairing stays exact).
@@ -873,6 +896,34 @@ async function captureToCanvasInner(
   const budgetH = captureH || el.scrollHeight || 0;
   const scale = fitScale(requestedScale, budgetW, budgetH);
 
+  // ── Gotcha 11: composite where the CLONE put the box, not where the live
+  // page put it ─────────────────────────────────────────────────────────────
+  // The composited bitmaps used to be positioned from LIVE rects, offset by
+  // `bandShift - hiddenShift` — an estimate of how far the clone's layout had
+  // moved relative to the page. Every source of clone/live drift had to be
+  // predicted and subtracted by hand, and any one that wasn't put the chart
+  // somewhere it isn't: on /es-candles the candle bitmap landed ~150px above
+  // its own panel, straight over the toolbar and the watermark band, with a
+  // matching void at the bottom of the PNG where the chart should have been.
+  //
+  // The clone is laid out in a real (iframe) document by the time `onclone`
+  // runs, and html2canvas crops at the clone root's own box — so the clone can
+  // simply be MEASURED. Every canvas we intend to composite is tagged here, its
+  // clone counterpart's rect is recorded relative to the clone root at the very
+  // end of `onclone` (after every removal and style change, so it reflects the
+  // final layout), and the composite draws into that. No estimate, no drift,
+  // and it holds for anything that moves the clone — dropped chrome, the title
+  // band's padding, a reflow, a portal that isn't in the subtree.
+  //
+  // The live-rect math is kept as the fallback for anything that has no
+  // measurable counterpart (a canvas whose clone is display:none, or a
+  // capture path where onclone never ran).
+  const cloneBoxes = new Map<string, { left: number; top: number; width: number; height: number }>();
+  const tagged: Element[] = [];
+  const tag = (n: Element, v: string) => { n.setAttribute(SNAP_TAG, v); tagged.push(n); };
+  otherLiveCanvases.forEach((c, i) => tag(c, `c${i}`));
+  if (lt) tag(lt.target, "lt");
+
   const base = await html2canvas(el, {
     backgroundColor: bg,
     useCORS: true,
@@ -917,8 +968,28 @@ async function captureToCanvasInner(
         const cloned = idx >= 0 ? cloneCanvases[idx] : undefined;
         if (!cloned) return;
         // A placeholder div keeps the layout box that the canvas occupied.
+        //
+        // className as well as cssText: most canvases in this app are sized and
+        // positioned by CLASSES ("absolute inset-0", "w-full h-full"), not by
+        // inline style, so copying only the inline style handed back a static
+        // zero-height div — the box the composite is supposed to land in
+        // vanished, and anything laid out around it moved.
         const placeholder = doc.createElement("div");
+        placeholder.className = cloned.className;
         placeholder.style.cssText = cloned.style.cssText;
+        // Pin the rendered size for a canvas that is IN FLOW. An out-of-flow one
+        // (absolute/fixed) is already pinned by its own insets, and forcing a
+        // width onto it would fight them.
+        const cbox = cloned.getBoundingClientRect();
+        const cpos = doc.defaultView?.getComputedStyle(cloned).position ?? "static";
+        if ((cpos === "static" || cpos === "relative") && cbox.width > 0 && cbox.height > 0) {
+          placeholder.style.width = `${cbox.width}px`;
+          placeholder.style.height = `${cbox.height}px`;
+        }
+        // Carry the composite tag onto the placeholder — the placeholder IS the
+        // box the bitmap has to land in, and the canvas it replaces is gone.
+        const t = cloned.getAttribute(SNAP_TAG);
+        if (t) placeholder.setAttribute(SNAP_TAG, t);
         cloned.replaceWith(placeholder);
       });
       if (lt) {
@@ -948,11 +1019,31 @@ async function captureToCanvasInner(
       // the subtree taint-sensitive.
       if (opts.allowTaint === false) stripUntrustedImages(doc, clone);
 
+      // Record where the clone actually put each composite target. Must be the
+      // LAST thing either branch does — a rect read before a removal or a style
+      // change measures a layout that will not be the one html2canvas renders.
+      const measureCloneBoxes = () => {
+        const cr = clone.getBoundingClientRect();
+        const record = (n: Element) => {
+          const key = n.getAttribute(SNAP_TAG);
+          if (!key) return;
+          const r = n.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return; // no box — fall back to live math
+          cloneBoxes.set(key, {
+            left: r.left - cr.left, top: r.top - cr.top, width: r.width, height: r.height,
+          });
+        };
+        // The capture target itself can be the lightweight-charts host.
+        if (clone.hasAttribute(SNAP_TAG)) record(clone);
+        clone.querySelectorAll(`[${SNAP_TAG}]`).forEach(record);
+      };
+
       if (!framed) {
         // Plain mode drops the chrome here (framed mode does it at the very end
         // of this callback, after its index-paired children loop). Either way it
         // happens AFTER the canvas pairing above, never before.
         clone.querySelectorAll("[data-capture-hide]").forEach((n) => n.remove());
+        measureCloneBoxes();
         return;
       }
 
@@ -1026,29 +1117,34 @@ async function captureToCanvasInner(
       // live kids by index, so removing anything before it desyncs them. The
       // attribute survives cloneNode, so no index matching is needed here.
       clone.querySelectorAll("[data-capture-hide]").forEach((n) => n.remove());
+      measureCloneBoxes();
     },
-  });
+  // The tags are ours and they sit on the LIVE page — drop them whatever
+  // happened, so a failed capture can't leave stray attributes behind.
+  }).finally(() => tagged.forEach((n) => n.removeAttribute(SNAP_TAG)));
 
   // ── Composite the live canvas bitmaps (gotcha 5) ──────────────────────────
   const ctx = base.getContext("2d");
   if (ctx) {
     const elRect = el.getBoundingClientRect();
-    const paint = (src: HTMLCanvasElement, rect: DOMRect) => {
+    // Where the CLONE put the box (gotcha 11), falling back to the live rect
+    // plus the estimated shift when there is nothing measured to use.
+    const paint = (src: HTMLCanvasElement, rect: DOMRect, key: string) => {
       if (!src.width || !src.height) return;
-      ctx.drawImage(
-        src,
-        (rect.left - elRect.left) * scale,
-        (rect.top - elRect.top + bandShift - hiddenShift) * scale,
-        rect.width * scale,
-        rect.height * scale,
-      );
+      const box = cloneBoxes.get(key);
+      const x = box ? box.left : rect.left - elRect.left;
+      const y = box ? box.top : rect.top - elRect.top + bandShift - hiddenShift;
+      const w = box ? box.width : rect.width;
+      const h = box ? box.height : rect.height;
+      if (w <= 0 || h <= 0) return;
+      ctx.drawImage(src, x * scale, y * scale, w * scale, h * scale);
     };
     // The lightweight-charts provider hands us its own correctly rendered
     // bitmap; draw it at the chart layer's position.
-    if (lt) paint(lt.canvas, lt.target.getBoundingClientRect());
-    for (const liveCanvas of otherLiveCanvases) {
-      paint(liveCanvas, liveCanvas.getBoundingClientRect());
-    }
+    if (lt) paint(lt.canvas, lt.target.getBoundingClientRect(), "lt");
+    otherLiveCanvases.forEach((liveCanvas, i) => {
+      paint(liveCanvas, liveCanvas.getBoundingClientRect(), `c${i}`);
+    });
   }
 
   // Cut the reserved slack back to a fixed margin by measuring actual pixels —

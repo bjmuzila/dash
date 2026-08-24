@@ -1,5 +1,83 @@
 # Changelog
 
+## 2026-08-24 - Snapshot: composite the chart where the CLONE put it
+
+Edited: `lib/snapshot.ts`, `components/dashboard/es-candles/EsChartCard.tsx`.
+
+### What was wrong
+
+An ES Candles snapshot came back with the candle bitmap painted ~150px above
+its own panel — straight over the CANDLES toolbar and the "Data provided by
+CBEdge.net" watermark — and a matching void at the bottom of the PNG where the
+chart should have been. The toolbar looked mangled because the chart was drawn
+on top of it.
+
+The DOM half of the capture was fine. The *composite* half was not.
+
+Gotcha 5 blanks every live `<canvas>` in the clone and draws the real bitmap in
+afterwards. It positioned that bitmap from the LIVE bounding rect, offset by
+`bandShift - hiddenShift` — a hand-computed estimate of how far the clone's
+layout had moved relative to the page. That made every source of clone/live
+drift something the engine had to predict in advance: the title band's padding,
+`[data-capture-hide]` chrome removed above the chart, a row that re-flows a
+pixel taller in the clone, a dock that is `createPortal`ed OUT of the capture
+subtree. Miss one and the bitmap lands somewhere the chart isn't.
+
+### The fix
+
+Stop estimating. By the time `onclone` runs, the clone is a laid-out document in
+a real iframe, and html2canvas crops at the clone root's own box — so the clone
+can simply be measured.
+
+- Every canvas that will be composited is stamped `data-snap-composite` on the
+  LIVE node before the clone (so the clone inherits it), and the tags are
+  removed again in a `.finally()` whether the capture succeeds or throws.
+- At the very END of `onclone` — after every removal, the band injection and the
+  height/padding changes, so it reflects the layout that will actually render —
+  each tagged node's rect is recorded relative to the clone root.
+- The composite draws into the measured box. `bandShift - hiddenShift` survives
+  only as the fallback for a target with no measurable counterpart (a clone box
+  of zero size).
+
+This is gotcha 11 in the file's header, and it retires a whole class of bug
+rather than this one instance.
+
+### Two things found on the way
+
+**Canvas placeholders were losing their classes.** The placeholder div that
+stands in for a blanked canvas copied only `style.cssText`. Most canvases here
+are sized and positioned by CLASSES (`absolute inset-0`, `w-full h-full`), so
+the placeholder came back as a static zero-height div: the box the composite was
+supposed to land in vanished, and anything laid out around it moved. It now
+copies `className` too, and pins the rendered width/height for a canvas that is
+in flow (an absolutely-positioned one is already pinned by its own insets, and
+forcing a width onto it would fight them).
+
+**Every ES Candles snapshot was titled "SPX GEX".** `BoxSnapBtn` bakes `title`
+into the PNG's top-left; the card was passing only `label`, which names the
+Discord message. So an AMD 1m capture claimed to be SPX. Both buttons now get
+one `snapTitle` (`"<SYM> <interval> Candles"`), used for the image title and the
+message name, so the two can no longer drift.
+
+## 2026-08-24 - Seasonality heatmaps flipped to newest-first
+
+Edited: `components/seasonality/SeasonalityAlmanac.tsx`.
+
+Both heatmaps were ascending — 1928 and the 1920s at the top. "Every Month,
+Every Year" is 99 rows in a 520px scroll box, so the years anyone actually looks
+for were the ones you had to scroll to find. Now 2026 and the 2020s are the
+first rows.
+
+`HeatTable` gained a `newestFirst` prop rather than the call sites reversing
+their own arrays. Reversing `rows` and `data` as two separate expressions is a
+bug that mislabels every row while still looking plausible, and nobody catches
+it by eye — so the flip happens once, inside the component, where the two cannot
+drift apart. Verified after the change that 2020s/Sep still reads -2.9, the same
+cell value it had ascending.
+
+Both subtitles now say "newest first", because a reversed table with no label
+reads as a data error to anyone who expects chronological order.
+
 ## 2026-08-24 - Postgres index bloat: 13 GB -> 7.5 GB (and counting)
 
 Edited: nothing in the repo. This was a DB maintenance session, recorded here

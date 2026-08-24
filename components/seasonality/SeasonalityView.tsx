@@ -53,6 +53,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import SeasonalityAlmanac from "./SeasonalityAlmanac";
+import Watermark, { watermarkHost } from "./Watermark";
 import {
   ALMANAC,
   DEFAULT_BASELINE,
@@ -542,14 +543,16 @@ export default function SeasonalityView() {
         </details>
 
         {/* Chart */}
-        <div ref={wrapRef} style={{ width: "100%" }}>
+        <div ref={wrapRef} style={{ width: "100%", ...watermarkHost }}>
           {innerW > 0 ? (
+            <>
+            <Watermark size="chart" />
             <svg
               width={width}
               height={CHART_H}
               role="img"
               aria-label="S&P 500 seasonality versus 2026 year to date"
-              style={{ display: "block", touchAction: "none", overflow: "visible" }}
+              style={{ display: "block", touchAction: "none", overflow: "visible", position: "relative", zIndex: 3 }}
               onPointerMove={onMove}
               onPointerLeave={() => setHover(null)}
             >
@@ -687,6 +690,7 @@ export default function SeasonalityView() {
                 </g>
               ) : null}
             </svg>
+            </>
           ) : (
             <div style={{ height: CHART_H }} />
           )}
@@ -797,15 +801,6 @@ export default function SeasonalityView() {
           ))}
         </div>
 
-        <p style={{ marginTop: 16, fontSize: 12.5, lineHeight: 1.65, color: INK, maxWidth: 900 }}>
-          Each sample year is re-based to its own prior 31-Dec close, laid on a calendar-day axis (29-Feb dropped,
-          weekends and holidays forward-filled) and averaged — the same construction as the published seasonality
-          curves, run here on {ALMANAC.meta.trading_days.toLocaleString("en-US")} sessions of ^GSPC cash back to{" "}
-          {ALMANAC.meta.start}. Widening the baseline flattens the curve, because idiosyncratic years average out; the
-          turning points that survive all four windows (the February push, the March give-back, the September fade into
-          an October low, the November–December run) are what the chart is for. 2026 runs through {YTD_LAST_DATE}; the
-          shaded band is the part of the year still ahead. Price return only — no dividends.
-        </p>
       </Card>
 
       <SeasonalityAlmanac />

@@ -5414,6 +5414,11 @@ function EsChartCard({
   // away.
   const dockWanted = dockMode === "full" || dockMode === "shared";
 
+  // One string for both capture buttons: the PNG's baked-in title AND the
+  // Discord message's name. They were drifting apart — the message said
+  // "AMD 1m Candles" while the image said "SPX GEX".
+  const snapTitle = `${sym.label} ${INTERVAL_LABEL[interval]} Candles`;
+
   /**
    * The cog's contents, as SECTIONS rather than a scrolling column.
    *
@@ -5835,10 +5840,15 @@ function EsChartCard({
               Per-card by design: "snap THIS chart" is the useful gesture when
               three are on screen, and the label carries the symbol + timeframe
               so three PNGs are distinguishable. `hideCapture` exists for a host
-              that supplies its own. */}
+              that supplies its own.
+
+              `title` as well as `label`: `label` only names the Discord message,
+              while `title` is what the capture bakes into the PNG's top-left.
+              Without it every chart's snapshot was titled "SPX GEX" — the
+              engine's default — so an AMD 1m capture claimed to be SPX. */}
           {!hideCapture && (<>
-            <span data-capture-hide><BoxSnapBtn targetRef={captureRef} label={`${sym.label} ${INTERVAL_LABEL[interval]} Candles`} /></span>
-            <span data-capture-hide><BoxDiscordBtn targetRef={captureRef} label={`${sym.label} ${INTERVAL_LABEL[interval]} Candles`} /></span>
+            <span data-capture-hide><BoxSnapBtn targetRef={captureRef} title={snapTitle} label={snapTitle} /></span>
+            <span data-capture-hide><BoxDiscordBtn targetRef={captureRef} title={snapTitle} label={snapTitle} /></span>
           </>)}
 
           <DockCogMenu

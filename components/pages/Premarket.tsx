@@ -930,9 +930,41 @@ export default function Premarket() {
   // and low and the prior 16:00 close all live in the day before the one on
   // screen. Both hooks always run — calling one conditionally would break the
   // hook order — and the dated one no-ops unless it is needed.
-  const { sessionCandles: liveCandles } = useEsCandles(true, 3, 5, false);
+  //
+  // historyDays 8, not 3 (2026-08-24). `daysBack` is CALENDAR days, and the two
+  // things below need the prior TRADING session — which on a Monday is three
+  // calendar days back and on a Tuesday after a Monday holiday is four. A 3 sat
+  // exactly on the Monday boundary and fell off it entirely after a holiday.
+  // With withAverages=false the extra sessions cost one larger read and no
+  // recompute at all.
+  const { sessionCandles: liveCandles, historical: liveHistory } =
+    useEsCandles(true, 8, 5, false);
   const { rows: datedCandles } = useDatedEsCandles(sessionDate, frozen);
   const sessionCandles = frozen ? datedCandles : liveCandles;
+
+  /**
+   * The pool `overnight` reads — deliberately NOT `sessionCandles`.
+   *
+   * `sessionCandles` is clipped to a rolling 30 HOURS (useEsCandles), which is
+   * the right window for the chart above and the wrong one for the prior RTH
+   * close: on a Monday premarket the Friday 16:00 bar is ~64h old, so it is not
+   * in there, `pdc` came back null, and "Prior RTH close (ES)", "Gap" and "Gap
+   * fill target" all printed "—" every Monday (and every day after a holiday).
+   *
+   * `historical` is the same hook's un-clipped DB read, so the union covers the
+   * prior session however far back it is. The chart keeps `sessionCandles` —
+   * nothing about its window changes.
+   *
+   * Not de-duplicated and not sorted, on purpose. Everything `overnight` does
+   * with this is a min / max / latest-timestamp scan, and all three are
+   * idempotent under duplicates — so a slot present in both arrays costs
+   * nothing, while a Map+sort here would run at the live feed's 4Hz over ~8
+   * sessions of bars for no benefit at all.
+   */
+  const candlePool = useMemo(
+    () => (frozen ? datedCandles
+      : liveHistory.length ? [...liveHistory, ...liveCandles] : liveCandles),
+    [frozen, datedCandles, liveHistory, liveCandles]);
 
   /**
    * The session the page DESCRIBES. Live it is today; frozen it is the picked
@@ -1267,7 +1299,7 @@ export default function Premarket() {
   // date the bars are that day's and the day before's, and reading the clock
   // would make every one of them "before today" and the whole window empty.
   const overnight = useMemo(() => {
-    if (!sessionCandles.length) return null;
+    if (!candlePool.length) return null;
     const today = viewDate;
     const minOf = (slotKey: string) => {
       const hm = slotKey.slice(11, 16);
@@ -1275,12 +1307,31 @@ export default function Premarket() {
       return Number.isFinite(h) ? h * 60 + (m || 0) : -1;
     };
 
-    // The last dated session before today — what "prior close" and "prior day
-    // range" mean.
-    let pdDate = "";
-    for (const c of sessionCandles) {
+    /**
+     * TWO prior dates, because on a Monday they are not the same day.
+     *
+     *   pdDate  the last session before today that actually TRADED RTH — Friday
+     *           on a Monday, Thursday after a Friday holiday. "Prior RTH close"
+     *           and "prior day range" mean this one, and nothing else.
+     *   evDate  the last date before today carrying a Globex evening (>=18:00)
+     *           bar — SUNDAY on a Monday. That is where the overnight session on
+     *           screen actually began.
+     *
+     * This used to be one `pdDate` = "latest date before today with any bar",
+     * plus an overnight test of `d < today && mins >= 18:00`. Inside a 30-hour
+     * window those collapse to the same thing and it worked; over a weekend they
+     * do not, and the single date landed on SUNDAY — which has no RTH bars at
+     * all, so pdHi/pdLo/pdc stayed null and the gap rows went blank.
+     */
+    const EVENING_MIN = 18 * 60;
+    let pdDate = "", evDate = "";
+    for (const c of candlePool) {
       const d = c.date ?? c.slotKey.slice(0, 10);
-      if (d < today && d > pdDate) pdDate = d;
+      if (!d || d >= today) continue;
+      const mins = minOf(c.slotKey);
+      if (mins < 0) continue;
+      if (mins >= RTH_OPEN_MIN && mins < RTH_CLOSE_MIN && d > pdDate) pdDate = d;
+      if (mins >= EVENING_MIN && d > evDate) evDate = d;
     }
 
     let hi = -Infinity, lo = Infinity;          // overnight (18:00 -> 09:30)
@@ -1289,16 +1340,19 @@ export default function Premarket() {
     let openPx: number | null = null;           // today's 09:30 open
     let rthHi = -Infinity, rthLo = Infinity;    // today's RTH so far
 
-    for (const c of sessionCandles) {
+    for (const c of candlePool) {
       const d = c.date ?? c.slotKey.slice(0, 10);
       const mins = minOf(c.slotKey);
       if (mins < 0) continue;
 
-      if ((d === today && mins < RTH_OPEN_MIN) || (d < today && mins >= 18 * 60)) {
+      // Pinned to evDate rather than "any earlier date", so the wider pool
+      // cannot fold FRIDAY evening into a Monday overnight range.
+      if ((d === today && mins < RTH_OPEN_MIN)
+        || (!!evDate && d === evDate && mins >= EVENING_MIN)) {
         if (c.high > hi) hi = c.high;
         if (c.low < lo) lo = c.low;
       }
-      if (d === pdDate && mins >= RTH_OPEN_MIN && mins < RTH_CLOSE_MIN) {
+      if (!!pdDate && d === pdDate && mins >= RTH_OPEN_MIN && mins < RTH_CLOSE_MIN) {
         if (c.high > pdHi) pdHi = c.high;
         if (c.low < pdLo) pdLo = c.low;
         // The prior session's LAST RTH bar is the 16:00 close the gap is
@@ -1320,8 +1374,10 @@ export default function Premarket() {
       openPx,
       rthHi: Number.isFinite(rthHi) ? rthHi : null,
       rthLo: Number.isFinite(rthLo) ? rthLo : null,
+      /** Which session "prior close" came from — surfaced next to the number. */
+      pdDate: pdDate || null,
     };
-  }, [sessionCandles, viewDate]);
+  }, [candlePool, viewDate]);
 
   /**
    * The gap: prior 16:00 ET close -> today's 09:30 ET open. That pair, always.
@@ -2176,7 +2232,14 @@ export default function Premarket() {
               <div className="stat"><span className="l">ON range</span><span className="r mono">
                 {onRange != null ? `${nf(onRange, 0)} pts` : "—"}
               </span></div>
-              <div className="stat"><span className="l">Prior RTH close (ES)</span><span className="r mono">{fmtPx(overnight?.pdc, 2)}</span></div>
+              <div className="stat">
+                <span className="l">
+                  Prior RTH close (ES)
+                  {/* Named, because over a weekend it is FRIDAY, not "yesterday". */}
+                  {overnight?.pdDate && <> <span className="muted">{sessionLabel(overnight.pdDate)}</span></>}
+                </span>
+                <span className="r mono">{fmtPx(overnight?.pdc, 2)}</span>
+              </div>
               <div className="stat"><span className="l">VIX</span><span className="r mono">
                 {vixQ?.last != null ? vixQ.last.toFixed(2) : "—"}{" "}
                 {vixQ?.change != null && (
@@ -2264,7 +2327,7 @@ export default function Premarket() {
                   {baselineState === "loading" || baselineState === "idle"
                     ? "Loading the prior-close board…"
                     : baselineState === "empty"
-                      ? `No settled prior-session board for ${expiry || "this expiry"} yet — it is published overnight and backfills on its own.`
+                      ? `No prior-session board for ${expiry || "this expiry"} yet — server-v2/premarket-baseline.js records one at 16:05 ET each session, so this fills in after the next close.`
                       : "No strike moved against the prior close."}
                 </div>
               )}

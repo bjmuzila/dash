@@ -44,6 +44,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { HOME_THEME, ES_CANDLE_UP, ES_CANDLE_DOWN } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ALMANAC, ERA_KEYS, EXTRAS, type Stat } from "./seasonalityData";
+import Watermark, { watermarkHost } from "./Watermark";
 
 const UP = ES_CANDLE_UP;
 const DOWN = ES_CANDLE_DOWN;
@@ -104,6 +105,8 @@ function barPath(x: number, w: number, yTop: number, h: number, up: boolean) {
 }
 
 // ── controls ────────────────────────────────────────────────────────────────
+
+const NOTE: CSSProperties = { marginTop: 14, fontSize: 12.5, lineHeight: 1.65, color: INK, maxWidth: 900 };
 
 const capLabel: CSSProperties = {
   fontSize: 10,
@@ -175,7 +178,20 @@ function Legend({ items }: { items: { color: string; label: string }[] }) {
  * Collapsed-by-default disclosure for one table. Native <details> — see the
  * file header for why this is not React state.
  */
-function Collapse({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+function Collapse({
+  label,
+  hint,
+  note,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  /** The prose that explains this table. Lives INSIDE the disclosure — a card
+   *  shows numbers, and the words about them are one click away, not stacked
+   *  under every chart. */
+  note?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <details style={{ marginTop: 14, border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, background: "rgba(255,255,255,0.02)" }}>
       <summary
@@ -201,7 +217,10 @@ function Collapse({ label, hint, children }: { label: string; hint?: string; chi
           </span>
         ) : null}
       </summary>
-      <div style={{ padding: "0 14px 14px" }}>{children}</div>
+      <div style={{ padding: "0 14px 14px" }}>
+        {children}
+        {note ? <div style={NOTE}>{note}</div> : null}
+      </div>
     </details>
   );
 }
@@ -243,10 +262,11 @@ function DivBars({
   const gap = Math.min(10, bw * 0.3);
 
   return (
-    <div ref={ref} style={{ width: "100%" }}>
+    <div ref={ref} style={{ width: "100%", ...watermarkHost }}>
       {innerW > 0 ? (
         <>
-          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none" }} onPointerLeave={() => setHover(null)}>
+          <Watermark size="chart" />
+          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none", position: "relative", zIndex: 3 }} onPointerLeave={() => setHover(null)}>
             {ticks.map((t) => (
               <g key={`t${t}`}>
                 <line x1={PAD.left} x2={PAD.left + innerW} y1={y(t)} y2={y(t)} stroke={t === 0 ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.08)"} />
@@ -327,10 +347,11 @@ function PairBars({
   const bw = Math.max(1, (inner - 2) / 2);
 
   return (
-    <div ref={ref} style={{ width: "100%" }}>
+    <div ref={ref} style={{ width: "100%", ...watermarkHost }}>
       {innerW > 0 ? (
         <>
-          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none" }} onPointerLeave={() => setHover(null)}>
+          <Watermark size="chart" />
+          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none", position: "relative", zIndex: 3 }} onPointerLeave={() => setHover(null)}>
             {ticks.map((t) => (
               <g key={`t${t}`}>
                 <line x1={PAD.left} x2={PAD.left + innerW} y1={y(t)} y2={y(t)} stroke={t === 0 ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.08)"} />
@@ -372,8 +393,9 @@ type Cell = { t: string; c?: string } | string | number;
 
 function DataTable({ head, rows }: { head: string[]; rows: Cell[][] }) {
   return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5, color: INK, fontVariantNumeric: "tabular-nums" }}>
+    <div style={{ overflowX: "auto", ...watermarkHost }}>
+      <Watermark size="table" />
+      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5, color: INK, fontVariantNumeric: "tabular-nums", position: "relative", zIndex: 3 }}>
         <thead>
           <tr>
             {/* keyed by position, not label — the barometer table repeats
@@ -449,6 +471,7 @@ function HeatTable({
   scale,
   rowLabel,
   maxHeight,
+  newestFirst = false,
 }: {
   cols: string[];
   rows: (string | number)[];
@@ -456,11 +479,22 @@ function HeatTable({
   scale: number;
   rowLabel: (r: string | number) => string;
   maxHeight?: number;
+  /** Flip to newest-at-top. Reverses labels AND data together — doing it at the
+   *  call site means two reverses that can silently drift out of sync and
+   *  mislabel every row, which is a bug nobody spots by eye. */
+  newestFirst?: boolean;
 }) {
+  if (newestFirst) {
+    rows = [...rows].reverse();
+    data = [...data].reverse();
+  }
   return (
-    <div style={{ overflow: "auto", maxHeight, width: "100%" }}>
+    <div style={{ overflow: "auto", maxHeight, width: "100%", ...watermarkHost }}>
+      <Watermark size="heatmap" />
       <table
         style={{
+          position: "relative",
+          zIndex: 3,
           borderCollapse: "separate",
           borderSpacing: 2,
           fontSize: 11,
@@ -548,7 +582,6 @@ function Tile({ label, value, sub, color }: { label: string; value: ReactNode; s
   );
 }
 
-const NOTE: CSSProperties = { marginTop: 14, fontSize: 12.5, lineHeight: 1.65, color: INK, maxWidth: 900 };
 const TILES: CSSProperties = { display: "flex", gap: 12, flexWrap: "wrap" };
 
 /** The seven columns every Stat renders as. */
@@ -599,7 +632,17 @@ export default function SeasonalityAlmanac() {
           <Tile label="Worst rest-of-year" value={pct(royAll.worst)} sub={`all history · n=${royAll.n}`} color={DOWN} />
         </div>
 
-        <Collapse label="Rest-of-year detail" hint="by sample window">
+        <Collapse
+          label="Rest-of-year detail"
+          hint="by sample window"
+          note={
+            <>
+              Rest-of-year is measured by trading-day count, not calendar date: each past year is cut at its own{" "}
+            {now.trading_day_of_year}th session and the remainder compounded. That keeps the comparison honest across
+            years with different holiday calendars.
+            </>
+          }
+        >
           <DataTable
             head={["Sample", "Years", "Mean", "Median", "Positive", "Best", "Worst"]}
             rows={now.rest_of_year.map((r) => [
@@ -627,11 +670,6 @@ export default function SeasonalityAlmanac() {
           />
         </Collapse>
 
-        <p style={NOTE}>
-          Rest-of-year is measured by trading-day count, not calendar date: each past year is cut at its own{" "}
-          {now.trading_day_of_year}th session and the remainder compounded. That keeps the comparison honest across
-          years with different holiday calendars.
-        </p>
       </Card>
 
       {/* ── VIX spike ─────────────────────────────────────────────────────── */}
@@ -662,7 +700,22 @@ export default function SeasonalityAlmanac() {
           />
         </div>
 
-        <Collapse label="Threshold ladder" hint="does the effect scale with the size of the pop?">
+        <Collapse
+          label="Threshold ladder"
+          hint="does the effect scale with the size of the pop?"
+          note={
+            <>
+              Read every row against the <strong>Every session</strong> baseline, not on its own. &ldquo;Low → next
+            high&rdquo; is a rally measured from the worst tick of the panic to the best tick of the following session —
+            it is flattering by construction, and the baseline is already {pct(vix.baseline.low_to_next_high.avg)}. The
+            number that is actually tradeable is the next session&apos;s open-to-close, and there the ladder does what a
+            real effect does: it gets stronger the bigger the pop, from {pct(vix.buckets[0].next_open_close.avg)} at
+            ≥+{(vix.buckets[0].threshold * 100).toFixed(0)}% to {pct(v20.next_open_close.avg)} at ≥+20%, against{" "}
+            {pct(vix.baseline.next_open_close.avg)} unconditionally. Note the sample thins fast: n={v20.n} at +20% and
+            only {vix.buckets[vix.buckets.length - 1].n} at the far end.
+            </>
+          }
+        >
           <DataTable
             head={["VIX pop", "n", "Low → next high", "median", "Next open → close", "median", "positive", "Spike day O→C"]}
             rows={[
@@ -705,16 +758,6 @@ export default function SeasonalityAlmanac() {
           />
         </Collapse>
 
-        <p style={NOTE}>
-          Read every row against the <strong>Every session</strong> baseline, not on its own. &ldquo;Low → next
-          high&rdquo; is a rally measured from the worst tick of the panic to the best tick of the following session —
-          it is flattering by construction, and the baseline is already {pct(vix.baseline.low_to_next_high.avg)}. The
-          number that is actually tradeable is the next session&apos;s open-to-close, and there the ladder does what a
-          real effect does: it gets stronger the bigger the pop, from {pct(vix.buckets[0].next_open_close.avg)} at
-          ≥+{(vix.buckets[0].threshold * 100).toFixed(0)}% to {pct(v20.next_open_close.avg)} at ≥+20%, against{" "}
-          {pct(vix.baseline.next_open_close.avg)} unconditionally. Note the sample thins fast: n={v20.n} at +20% and
-          only {vix.buckets[vix.buckets.length - 1].n} at the far end.
-        </p>
       </Card>
 
       {/* ── month end / quarter end ───────────────────────────────────────── */}
@@ -726,7 +769,18 @@ export default function SeasonalityAlmanac() {
           <Tile label="Since 1985" value={bp(eom.modern.avg, 1)} sub={`n=${eom.modern.n} · ${pctp(eom.modern.pos_pct, 1)} positive`} color={signColor(eom.modern.avg)} />
         </div>
 
-        <Collapse label="Month-end summary" hint="all history vs quarter ends vs modern era">
+        <Collapse
+          label="Month-end summary"
+          hint="all history vs quarter ends vs modern era"
+          note={
+            <>
+              The last session of a month is worth about {bp(eom.all.avg, 1)} against roughly +3 bp for an average session,
+            and it is the NON-quarter ends doing it — quarter ends run {bp(eom.quarter.avg, 1)} and are barely better
+            than a coin flip. Since 1985 the whole effect is close to gone ({bp(eom.modern.avg, 1)},{" "}
+            {pctp(eom.modern.pos_pct, 1)} positive), which is the same arc the Monday effect took.
+            </>
+          }
+        >
           <DataTable
             head={STAT_HEAD}
             rows={[
@@ -743,12 +797,6 @@ export default function SeasonalityAlmanac() {
           <DataTable head={STAT_HEAD} rows={eom.by_month.map((m) => statRow(m.label, m))} />
         </Collapse>
 
-        <p style={NOTE}>
-          The last session of a month is worth about {bp(eom.all.avg, 1)} against roughly +3 bp for an average session,
-          and it is the NON-quarter ends doing it — quarter ends run {bp(eom.quarter.avg, 1)} and are barely better
-          than a coin flip. Since 1985 the whole effect is close to gone ({bp(eom.modern.avg, 1)},{" "}
-          {pctp(eom.modern.pos_pct, 1)} positive), which is the same arc the Monday effect took.
-        </p>
       </Card>
 
       {/* ── opex ──────────────────────────────────────────────────────────── */}
@@ -779,7 +827,21 @@ export default function SeasonalityAlmanac() {
           }}
         />
 
-        <Collapse label="Opex summary" hint="monthly, quarterly, and the modern era">
+        <Collapse
+          label="Opex summary"
+          hint="monthly, quarterly, and the modern era"
+          note={
+            <>
+              Opex is the third Friday, or the last session on or before it when that Friday is a holiday. <em>Opex week</em>{" "}
+            is the prior Friday&apos;s close to the opex Friday&apos;s close; <em>week after</em> is the opex close to the
+            following Friday&apos;s close. Two things stand out: opex week itself is firmly positive and much more so
+            since 1985 ({bp(opex.monthly_modern.week.avg, 1)}, {pctp(opex.monthly_modern.week.pos_pct, 1)} positive), and
+            the give-back concentrates in the week after a QUARTERLY expiration — {bp(opex.quarterly.after.avg, 1)} all
+            history, {bp(opex.quarterly_modern.after.avg, 1)} and only {pctp(opex.quarterly_modern.after.pos_pct, 1)}{" "}
+            positive since 1985, on n={opex.quarterly_modern.after.n}.
+            </>
+          }
+        >
           <DataTable
             head={STAT_HEAD}
             rows={[
@@ -824,15 +886,6 @@ export default function SeasonalityAlmanac() {
           />
         </Collapse>
 
-        <p style={NOTE}>
-          Opex is the third Friday, or the last session on or before it when that Friday is a holiday. <em>Opex week</em>{" "}
-          is the prior Friday&apos;s close to the opex Friday&apos;s close; <em>week after</em> is the opex close to the
-          following Friday&apos;s close. Two things stand out: opex week itself is firmly positive and much more so
-          since 1985 ({bp(opex.monthly_modern.week.avg, 1)}, {pctp(opex.monthly_modern.week.pos_pct, 1)} positive), and
-          the give-back concentrates in the week after a QUARTERLY expiration — {bp(opex.quarterly.after.avg, 1)} all
-          history, {bp(opex.quarterly_modern.after.avg, 1)} and only {pctp(opex.quarterly_modern.after.pos_pct, 1)}{" "}
-          positive since 1985, on n={opex.quarterly_modern.after.n}.
-        </p>
       </Card>
 
       {/* ── month by month ────────────────────────────────────────────────── */}
@@ -846,7 +899,17 @@ export default function SeasonalityAlmanac() {
           height={280}
           readout={(i) => `${M[i]} · mean ${pct(mt.avg[i])} · median ${pct(mt.median[i])} · ${pctp(mt.pos_pct[i], 1)} positive · n=${mt.n[i]} years`}
         />
-        <Collapse label="Monthly table" hint={`${era} · mean, median, hit rate, extremes`}>
+        <Collapse
+          label="Monthly table"
+          hint={`${era} · mean, median, hit rate, extremes`}
+          note={
+            <>
+              September is the only month with a negative mean and a losing hit rate across the whole record, and it stays
+            negative in every sample window above. December has the highest hit rate. Bars run from a zero baseline, so
+            direction carries the sign independently of the color.
+            </>
+          }
+        >
           <DataTable
             head={["Month", "Years", "Mean", "Median", "Positive", "Std dev", "Best", "Worst"]}
             rows={M.map((m, i) => [
@@ -861,11 +924,6 @@ export default function SeasonalityAlmanac() {
             ])}
           />
         </Collapse>
-        <p style={NOTE}>
-          September is the only month with a negative mean and a losing hit rate across the whole record, and it stays
-          negative in every sample window above. December has the highest hit rate. Bars run from a zero baseline, so
-          direction carries the sign independently of the color.
-        </p>
       </Card>
 
       {/* ── sell in may ───────────────────────────────────────────────────── */}
@@ -895,12 +953,6 @@ export default function SeasonalityAlmanac() {
             />
           ))}
         </div>
-        <p style={NOTE}>
-          A season-year runs Nov of year <i>t−1</i> through Oct of year <i>t</i>, so both halves belong to the same
-          cycle. The winter half wins on average, but the summer half is still positive two years in three — the effect
-          is a difference in size, not in direction, and &ldquo;sell in May&rdquo; as a rule has you flat through a
-          period with a positive expectancy.
-        </p>
       </Card>
 
       {/* ── turn of month ─────────────────────────────────────────────────── */}
@@ -928,11 +980,6 @@ export default function SeasonalityAlmanac() {
             />
           ))}
         </div>
-        <p style={NOTE}>
-          T−5…T−1 are the last five sessions of a month; T1…T15 count forward from the first. The cluster around the
-          turn does effectively all of the index&apos;s work — the rest of the month, taken together, has compounded at
-          close to nothing.
-        </p>
       </Card>
 
       {/* ── day of week ───────────────────────────────────────────────────── */}
@@ -947,16 +994,21 @@ export default function SeasonalityAlmanac() {
             `${dw.index[i]} · mean ${bp(dw.avg[i], 2)} · ${pctp(dw.pos_pct[i], 1)} positive · std dev ${pctp(dw.stdev[i], 2)} · n=${n0(dw.n[i])} sessions`
           }
         />
-        <Collapse label="Day-of-week table" hint={dowEra}>
+        <Collapse
+          label="Day-of-week table"
+          hint={dowEra}
+          note={
+            <>
+              Switch the sample to &ldquo;Since 1985&rdquo; and the Monday effect largely disappears — the clearest example
+            on this page of a documented seasonal edge being arbitraged away after publication.
+            </>
+          }
+        >
           <DataTable
             head={["Day", "Sessions", "Mean", "Positive", "Std dev"]}
             rows={dw.index.map((d, i) => [d, n0(dw.n[i]), { t: bp(dw.avg[i], 2), c: signColor(dw.avg[i]) }, pctp(dw.pos_pct[i], 1), pctp(dw.stdev[i], 2)])}
           />
         </Collapse>
-        <p style={NOTE}>
-          Switch the sample to &ldquo;Since 1985&rdquo; and the Monday effect largely disappears — the clearest example
-          on this page of a documented seasonal edge being arbitraged away after publication.
-        </p>
       </Card>
 
       {/* ── cycles ────────────────────────────────────────────────────────── */}
@@ -987,7 +1039,17 @@ export default function SeasonalityAlmanac() {
             />
           </div>
         </div>
-        <Collapse label="Cycle year × month" hint="mean monthly return, %">
+        <Collapse
+          label="Cycle year × month"
+          hint="mean monthly return, %"
+          note={
+            <>
+              Twenty-five observations for the four-year cycle, ten for each decade digit. At those sample sizes a single
+            outlier year moves a bar several points, so read both as folklore with a sample size attached rather than as
+            evidence. They are here because they get quoted, and quoting them without the <i>n</i> is how they survive.
+            </>
+          }
+        >
           <HeatTable
             cols={M}
             rows={A.presidentialMonth.index}
@@ -996,11 +1058,6 @@ export default function SeasonalityAlmanac() {
             rowLabel={(r) => String(r).replace(/^\d\s/, "")}
           />
         </Collapse>
-        <p style={NOTE}>
-          Twenty-five observations for the four-year cycle, ten for each decade digit. At those sample sizes a single
-          outlier year moves a bar several points, so read both as folklore with a sample size attached rather than as
-          evidence. They are here because they get quoted, and quoting them without the <i>n</i> is how they survive.
-        </p>
       </Card>
 
       {/* ── volatility ────────────────────────────────────────────────────── */}
@@ -1017,29 +1074,31 @@ export default function SeasonalityAlmanac() {
             `${A.vol.index[i]} · all history ${pctp(A.vol.all[i], 1)} vol, mean daily move ${pctp(A.vol.avg_abs_all[i], 2)} · since 1985 ${pctp(A.vol.modern[i], 1)} vol, ${pctp(A.vol.avg_abs_modern[i], 2)}`
           }
         />
-        <p style={NOTE}>
-          The October peak is the most durable seasonal fact on this page — it survives every sample window and every
-          decade. For an options book that matters more than the return table above it: the calendar says far more about
-          what to pay for premium than about which way to lean.
-        </p>
       </Card>
 
       {/* ── heatmaps ──────────────────────────────────────────────────────── */}
-      <Card title="Has the Seasonal Shape Moved?" subtitle="Mean monthly return by decade, %" padding={20}>
-        <HeatTable cols={M} rows={A.decadeMonth.index} data={A.decadeMonth.data} scale={0.035} rowLabel={(r) => `${r}s`} />
-        <p style={NOTE}>
-          Read down a column to see whether a month&apos;s reputation holds decade to decade. Most do not hold up nearly
-          as well as the pooled average implies — September is the notable exception.
-        </p>
+      <Card title="Has the Seasonal Shape Moved?" subtitle="Mean monthly return by decade, % · newest first" padding={20}>
+        <HeatTable cols={M} rows={A.decadeMonth.index} data={A.decadeMonth.data} scale={0.035} rowLabel={(r) => `${r}s`} newestFirst />
       </Card>
 
-      <Card title="Every Month, Every Year" subtitle={`${A.matrix.years.length} years of monthly returns, %`} padding={20}>
-        <HeatTable cols={M} rows={A.matrix.years} data={A.matrix.data} scale={0.1} rowLabel={(r) => String(r)} maxHeight={520} />
+      <Card title="Every Month, Every Year" subtitle={`${A.matrix.years.length} years of monthly returns, % · newest first`} padding={20}>
+        <HeatTable cols={M} rows={A.matrix.years} data={A.matrix.data} scale={0.1} rowLabel={(r) => String(r)} maxHeight={520} newestFirst />
       </Card>
 
       {/* ── barometers ────────────────────────────────────────────────────── */}
       <Card title="Early-Year Barometers" subtitle="What the full year did after each signal window" padding={20}>
-        <Collapse label="Santa · First Five Days · January Barometer" hint="split by whether the signal window was up or down">
+        <Collapse
+          label="Santa · First Five Days · January Barometer"
+          hint="split by whether the signal window was up or down"
+          note={
+            <>
+              Santa Claus rally = the last five sessions of December plus the first two of January. First Five Days =
+            sessions 1–5. January = the full calendar month. All three are contaminated by the fact that the signal window
+            is itself part of the year being predicted — the January Barometer&apos;s apparent power is partly just
+            January being 1/12th of the answer.
+            </>
+          }
+        >
           <DataTable
             head={["Signal", "Up years", "Mean year after", "Positive", "Down years", "Mean year after", "Positive"]}
             rows={A.barometers.map((b) => [
@@ -1053,12 +1112,6 @@ export default function SeasonalityAlmanac() {
             ])}
           />
         </Collapse>
-        <p style={NOTE}>
-          Santa Claus rally = the last five sessions of December plus the first two of January. First Five Days =
-          sessions 1–5. January = the full calendar month. All three are contaminated by the fact that the signal window
-          is itself part of the year being predicted — the January Barometer&apos;s apparent power is partly just
-          January being 1/12th of the answer.
-        </p>
       </Card>
     </>
   );
