@@ -1,5 +1,83 @@
 # Changelog
 
+## 2026-08-24 - ES Candles: "Keep live", and heal the gap when the feed comes back
+
+Edited: `hooks/useWsLifecycle.ts`, `components/dashboard/es-candles/slotStore.ts`,
+`components/pages/EsCandles.tsx`, `components/dashboard/es-candles/EsChartCard.tsx`.
+
+### What was wrong
+
+Leave `/app/es-candles` up on a second monitor or on a stream, walk away for a
+couple of hours, come back — the GEX bubbles are wrong.
+
+`useWsLifecycle` drops `/ws/gex` after 15 minutes with no mouse or keyboard,
+**on a fully visible tab**. There is an owner exemption
+(`NEXT_PUBLIC_OWNER_USER_ID`) but it is dead on `/app/*`: those routes are the
+Vite bundle, Vite does not inline arbitrary `process.env.X`, and the built
+bundle literally reads `var yo={}` — so `OWNER_USER_ID` is `""` and `isOwner` is
+false for everyone, owner included.
+
+Two things then compound it:
+
+- **Nothing heals the hole.** The wake refetch in `EsChartCard` watches
+  `visibilitychange` only, and the 60s `gexPoll` is ETF-only (`if (isEs) return`).
+  A visible-but-idle drop matches neither, so `minuteColsRef` keeps an
+  hours-long gap until the page is reloaded.
+- **A hole makes every bubble wrong, not just the missing ones.** Bubble radius
+  is normalised against the biggest |net GEX| the session has carried. A partial
+  session is a wrong size reference, so the whole chart is drawn at the wrong
+  scale. That is the "no longer looking good" symptom rather than an obvious
+  blank stretch — and the LIVE pill is `socket.readyState`, so it keeps saying
+  LIVE the whole time.
+
+### Keep live
+
+`useWsLifecycle` gained a refcounted keep-alive: `useKeepWsAlive(true)` suspends
+the **inactivity** timeout for as long as the caller is mounted.
+
+Visibility is deliberately untouched. A hidden tab is the abandoned case worth
+shedding and it is where most of the bandwidth saving comes from; a *visible*
+tab with a live chart on it is being watched, and "nobody moved the mouse for 15
+minutes" is not evidence that it isn't.
+
+It is refcounted rather than a boolean so two mounted consumers — or a remount
+that overlaps its own unmount — cannot cancel each other out, and it notifies
+listeners on change so flipping it mid-session cancels a countdown already
+running (or starts one) instead of waiting for the next mouse move, which on a
+page you have walked away from is never.
+
+`/app/es-candles` declares it, **defaulting ON**, with a `Keep live` toggle in
+the chart cog's Page tab (persisted, `es-candles-keep-live-v1`). The `embedded`
+render — the /home GEX card and the /board tile — opts out and keeps the
+app-wide policy: that is one tile on a dashboard that has its own reasons to be
+open, not a chart someone parked a monitor on.
+
+### Reconnect refetch
+
+`EsChartCard` now also watches the lifecycle gate itself, not just
+`visibilitychange`, and re-keys the history backfill when the feed returns from
+a gap longer than `WAKE_REFETCH_MS`. That constant was a local inside the wake
+effect and is now module scope, shared by both paths so they cannot drift.
+
+Both can fire on the same tick (a hidden tab becoming visible flips the gate
+too); React batches the two updater calls into one render, so that is one
+refetch, not two. The 45s floor keeps a two-second alt-tab, or a `?topics=`
+rescope, from wiping the column maps and re-pulling ~700KB.
+
+### Not done here
+
+Left alone on purpose, and worth knowing about:
+
+- **No client-side liveness check.** `lib/gexSocket.ts` has no ping and no
+  stale-frame watchdog. A half-open TCP socket (Wi-Fi drop, VPN, laptop sleep)
+  stays `readyState === OPEN` forever, `onclose` never fires, and the reconnect
+  is never scheduled. The server's 30s ping reaps its own half; the client never
+  learns. This is a second, independent "walked away for hours" failure mode.
+- **The LIVE pill is `readyState`, not freshness**, and it is wired to the
+  *candles* socket while the bubbles ride the *GEX* subscription. It reads LIVE
+  for a dead feed, a deduped chain, and `/proxy/idle`. `components/shared/DataFreshness.tsx`
+  already exists, does the honest thing, and is imported by nothing.
+
 ## 2026-08-24 - Snapshot: composite the chart where the CLONE put it
 
 Edited: `lib/snapshot.ts`, `components/dashboard/es-candles/EsChartCard.tsx`.

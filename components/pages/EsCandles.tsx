@@ -69,9 +69,11 @@ import {
   readEmbedSidePanel, writeEmbedSidePanel,
   readChainGreek, writeChainGreek,
   readIndicators, writeIndicators, broadcastReplayCmd, subscribeReplayCmd,
+  readKeepLive, writeKeepLive,
   INDICATORS_DEFAULT, MAX_EMAS,
   type SidePanelKind, type IndicatorCfg,
 } from "@/components/dashboard/es-candles/slotStore";
+import { useKeepWsAlive } from "@/hooks/useWsLifecycle";
 import { EMA_COLORS } from "@/components/dashboard/es-candles/indicators";
 import { CHAIN_GREEKS, GREEK_LABEL, isChainGreek, type ChainGreek } from "@/components/dashboard/es-candles/ChainRail";
 import { DockButton, SegGroup, type DockCogSection } from "@/components/shared/DockToolbar";
@@ -316,6 +318,24 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const [embedPanel, setEmbedPanel] = useState<SidePanelKind>("rail");
   const embedPanelRef = useRef<SidePanelKind>("rail");
   const [chainGreek, setChainGreekState] = useState<ChainGreek>("gex");
+  /**
+   * Keep the live feed up while this route is open, even with no interaction.
+   *
+   * `useWsLifecycle` drops /ws/gex after 15 minutes of no mouse/keyboard, which
+   * is the right default for a page someone wandered onto — and the wrong one
+   * for this page, which is the one people put on a second monitor or a stream
+   * and watch without touching. When it fires, the bubble trail and the newest
+   * heatmap columns simply stop growing; the LIVE pill is `readyState`, so it
+   * keeps saying LIVE, and the first symptom is noticing hours later that the
+   * bubbles "no longer look good" (every radius is normalised against the
+   * session's biggest |net GEX|, so a hole in the middle of the session throws
+   * off the size of every bubble on the chart, not just the missing ones).
+   *
+   * First paint is `true` to match the persisted default — see the note above
+   * about localStorage during render.
+   */
+  const [keepLive, setKeepLiveState] = useState(true);
+  const keepLiveRef = useRef(true);
   const [indicators, setIndicatorsState] = useState<IndicatorCfg>(INDICATORS_DEFAULT);
   // (No `popover` state any more. Charts / Indicators / Layout are SECTIONS of
   // the chart cog's rail — see `pageSections` below — so there is no floating
@@ -350,6 +370,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     setIndicatorsState(readIndicators());
     const g = readChainGreek();
     if (isChainGreek(g)) setChainGreekState(g);
+    const kl = readKeepLive();
+    keepLiveRef.current = kl;
+    setKeepLiveState(kl);
   }, []);
 
   // Keep `replayActiveRef` honest.
@@ -391,6 +414,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const setChainGreek = useCallback((v: ChainGreek) => {
     setChainGreekState(v);
     writeChainGreek(v);
+  }, []);
+  // Mirrored into a ref for the same reason `embedPanelRef` is: the toggle has
+  // to read the current value to invert it, and the localStorage write is a side
+  // effect that must not live inside a state updater.
+  const toggleKeepLive = useCallback(() => {
+    const next = !keepLiveRef.current;
+    keepLiveRef.current = next;
+    setKeepLiveState(next);
+    writeKeepLive(next);
   }, []);
   /**
    * Embed only: show / hide the right-edge GEX rail.
@@ -525,6 +557,20 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 onChange={(v) => setSidePanel(v as SidePanelKind)}
               />
             </Group>
+            {/* Not a display setting — a lifecycle one, and it belongs on the
+                page's own tab because it is a property of leaving THIS route
+                open. See `keepLive` above for what breaks without it. */}
+            <Group label="Feed">
+              <Toggle
+                on={keepLive}
+                onClick={toggleKeepLive}
+                title={keepLive
+                  ? "Staying live with no interaction. Turn off to let the feed drop after 15 idle minutes."
+                  : "The feed drops after 15 idle minutes. Turn on to keep it live while this page is open."}
+              >
+                Keep live
+              </Toggle>
+            </Group>
             {/* The chain's greek lives up here rather than in the panel itself for
                 a structural reason, not a cosmetic one: ChainRail's box has to be
                 exactly the chart container's box or its rows stop matching the
@@ -635,7 +681,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         body: <LayoutPresetButton inline />,
       },
     ];
-  }, [cards, sidePanel, chainGreek, indicators, setCardCount, setSidePanel, setChainGreek, patchIndicators, patchEma]);
+  }, [cards, sidePanel, chainGreek, keepLive, indicators, setCardCount, setSidePanel, setChainGreek, toggleKeepLive, patchIndicators, patchEma]);
 
   // The GEX rail toggle, injected into the embedded card's own dock. Declared
   // with the other hooks, above the early return — a useMemo after a conditional
@@ -655,6 +701,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
   // The home GEX card and the /board ES tile embed this component. They want
   // exactly the chart, with their own switcher in the dock and no page chrome —
+  // Suspend the inactivity socket drop while the full route is open. Declared
+  // here, ABOVE the `embedded` early return — it is a hook, and the home GEX
+  // card renders this component with `embedded` true, so it has to be called
+  // unconditionally. The embed itself opts out: it is one tile on a dashboard
+  // that has its own reasons to be open, not a chart someone parked a monitor
+  // on, and it should keep the app-wide bandwidth policy.
+  useKeepWsAlive(keepLive && !embedded);
+
   // so short-circuit to one card rather than growing an `embedded` branch
   // through the layout below.
   if (embedded) {

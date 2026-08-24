@@ -476,6 +476,26 @@ export function writeSidePanel(v: SidePanelKind): void {
   try { window.localStorage.setItem(SIDE_PANEL_KEY, v); } catch { /* ignore */ }
 }
 
+// ── Keep live ────────────────────────────────────────────────────────────────
+// Suspend the 15-minute inactivity socket drop (hooks/useWsLifecycle.ts) while
+// this route is up. This is the page people leave on a second monitor or on a
+// stream for hours, and the idle timer cannot tell "abandoned" from "being
+// watched without touching the mouse" — so on THIS route the benefit of the
+// doubt goes to the chart. A hidden tab still disconnects either way.
+//
+// Defaults to ON. The stored value is the string "0"/"1" so that "never set"
+// (null) and "deliberately off" ("0") stay distinguishable.
+const KEEP_LIVE_KEY = "es-candles-keep-live-v1";
+
+export function readKeepLive(): boolean {
+  if (typeof window === "undefined") return true;
+  try { return window.localStorage.getItem(KEEP_LIVE_KEY) !== "0"; } catch { return true; }
+}
+export function writeKeepLive(on: boolean): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(KEEP_LIVE_KEY, on ? "1" : "0"); } catch { /* ignore */ }
+}
+
 // ── The EMBEDDED card's side panel ───────────────────────────────────────────
 // `EsCandlesPage embedded` (the /home GEX card's ES view, and the /board ES
 // tile) used to hardcode "rail". It is now a toggle in that card's own dock,

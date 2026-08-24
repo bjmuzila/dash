@@ -56,6 +56,15 @@ import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
 // value keys gexSocket's subscription effect.)
 const ES_CHART_TOPICS = ["gex", "spot", "aux", "status"] as const;
 const ETF_CHART_TOPICS = ["spot", "aux", "status"] as const;
+
+/**
+ * How long the live feed has to have been away before coming back is worth a
+ * history refetch. Shared by the two paths that can lose it — hiding the tab and
+ * the inactivity timeout — so they cannot drift apart. Under the threshold the
+ * reconnect has cost at most one 1-minute column, and the next frame overwrites
+ * that minute anyway; over it, re-pulling ~700KB beats a hole in the session.
+ */
+const WAKE_REFETCH_MS = 45_000;
 import { dedupeFetch } from "@/lib/dedupeFetch";
 // cachedJson, NOT dedupeFetch, for the page-GLOBAL reads below (levels, mvc,
 // basis, eod-gex). dedupeFetch only collapses requests that overlap in time; it
@@ -2213,6 +2222,39 @@ function EsChartCard({
     return () => clearInterval(id);
   }, [isEs]);
 
+  // ── Reconnect refetch ──────────────────────────────────────────────────────
+  // The wake refetch below heals a gap caused by HIDING the tab, because that is
+  // the only transition it watches. It does not see the OTHER way the socket
+  // goes away: `useWsLifecycle`'s inactivity timeout, which drops the feed on a
+  // fully VISIBLE tab after 15 minutes of no mouse or keyboard. Walk away from a
+  // chart you are streaming, come back, jiggle the mouse — the socket reconnects
+  // and starts writing new minutes onto a `minuteColsRef` with an hours-long
+  // hole in the middle of it.
+  //
+  // That hole is not just missing bubbles. Every bubble's radius is normalised
+  // against the biggest |net GEX| the session has carried (see `bubblePrepRef`),
+  // so a partial session is a wrong size reference, and every bubble on the
+  // chart is drawn at the wrong size — which is what "the bubbles no longer
+  // look good" is.
+  //
+  // So: watch the gate itself rather than one of the two things that move it,
+  // and re-key the backfill when it comes back from a gap long enough to have
+  // lost columns. Same 45s threshold and the same reasoning as the wake refetch.
+  // Both can fire on the same visible-again tick; React batches the two updater
+  // calls into one render, so that is one refetch, not two.
+  const feedOffSinceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!esShouldConnect) {
+      feedOffSinceRef.current = Date.now();
+      return;
+    }
+    const since = feedOffSinceRef.current;
+    feedOffSinceRef.current = null;
+    // null on the first run — a fresh mount has nothing to heal.
+    if (since == null || Date.now() - since < WAKE_REFETCH_MS) return;
+    setGexPoll((n) => n + 1);
+  }, [esShouldConnect]);
+
   // ── Wake refetch ───────────────────────────────────────────────────────────
   // useWsLifecycle CLOSES /ws/gex the moment the tab goes hidden (bandwidth
   // policy — see hooks/useWsLifecycle.ts; the owner is exempt from the IDLE
@@ -2242,7 +2284,6 @@ function EsChartCard({
   const hiddenSinceRef = useRef<number | null>(null);
   useEffect(() => {
     if (typeof document === "undefined") return;
-    const WAKE_REFETCH_MS = 45_000;
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
         hiddenSinceRef.current = Date.now();
