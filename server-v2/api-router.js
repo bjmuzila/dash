@@ -6890,6 +6890,49 @@ if (libDb) {
     });
   }
 
+  // /api/gex-watch-live — the LIVE lane of GEX Watch, on its own, so the
+  // /gex-watch page can poll it.
+  //
+  // WHY THIS EXISTS SEPARATELY FROM /api/backtests?test=strike-gex-watch.
+  // That panel runs the whole study: a 169-ticker window-function calibration
+  // sweep, the 400-session odds join, the alert log and the grading rollup.
+  // Correct once, indefensible every 60 seconds. `strikeGexBuildingNow` is the
+  // one piece that actually changes intraday — one query over strike_growth
+  // (~5-day retention) for the latest recorded 10-minute slot — so the live
+  // page polls THIS and runs the full study only when asked.
+  //
+  // OWNER, not subscriber: same data family as the owner panel, and the
+  // customer-facing read is /api/gex-watch-feed, which is a different (logged,
+  // graded, opex-filtered) surface on purpose.
+  //
+  // No new engine: it calls the SAME exported function the panel calls, so the
+  // live lane can never drift into a second definition.
+  {
+    register('/api/gex-watch-live', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          if (!libDb?.queryAll) { send(res, 200, { ok: true, feed_live: [], live: [], live_note: 'Database unavailable.' }); return; }
+          const q = new URL(req.url || '/', 'http://localhost').searchParams;
+          const n = (k, d) => {
+            const raw = q.get(k);
+            if (raw === null || raw === '') return d;
+            const v = Number(raw);
+            return Number.isFinite(v) ? v : d;
+          };
+          const GW = require('./_lib-gex-watch.cjs').create({ queryAll: (...a) => libDb.queryAll(...a) });
+          const out = await GW.strikeGexBuildingNow(
+            n('liveDays', 5),
+            (q.get('ticker') || '').trim(),
+            n('limit', 60),
+            n('minSess', 2),
+          );
+          send(res, 200, { ok: true, at: new Date().toISOString(), ...out });
+        } catch (e) { send(res, 500, { ok: false, error: e.message }); }
+      },
+    });
+  }
+
   // /api/backtests?test=... — owner-only research panels (read-only SELECTs +
   // one live-chain fetch). Ported verbatim from app/api/backtests/route.ts:
   // queryAll->libDb.queryAll, getServerUserId gate->enforceAuth 'owner',

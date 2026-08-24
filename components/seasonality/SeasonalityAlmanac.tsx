@@ -6,10 +6,19 @@
 // Everything below the seasonal-overlay chart in SeasonalityView. Rendered both
 // signed in (Test Lab) and signed OUT (the public /explore/seasonality page).
 //
-// All of it is precomputed at build time into ALMANAC (see seasonalityData.ts)
-// from the ^GSPC daily closes back to 1927-12-30 — no fetch, no API route, no
-// socket subscription. Pure static data plus SVG, which is why it renders
-// instantly, works with the backend down, and can prerender for a cold visitor.
+// All of it is precomputed at build time into ALMANAC / EXTRAS (see
+// seasonalityData.ts) from the ^GSPC daily closes back to 1927-12-30, plus
+// ^VIX + ^GSPC daily OHLC from 1990 for the volatility-spike study — no fetch,
+// no API route, no socket subscription. Pure static data plus SVG, which is why
+// it renders instantly, works with the backend down, and can prerender for a
+// cold visitor off a social link.
+//
+// EVERY TABLE IS COLLAPSED BY DEFAULT, as a native <details>. Native, not React
+// state, for three reasons: it needs no client state to seed (so it cannot
+// desync between the server and the first client paint), it is keyboard- and
+// screen-reader-correct for free, and Ctrl+F still finds text inside a closed
+// <details> in current Chrome. The charts and the stat tiles stay open — those
+// are the scan layer; the tables are the drill-down.
 //
 // WHY EVERY TABLE PRINTS ITS SAMPLE SIZE. A monthly mean built from 98
 // observations carries a standard error near 0.6pp, so most month-to-month
@@ -21,6 +30,10 @@
 // from a zero baseline, so direction carries the sign as well as the hue; no
 // reading here depends on telling green from red.
 //
+// TEXT IS WHITE. Hierarchy comes from size, weight and letter-spacing, never
+// from dimming the ink. Translucency is reserved for chrome — gridlines, hairline
+// borders, card fills.
+//
 // HYDRATION: every chart's width starts at 0 on BOTH sides and is filled in by a
 // ResizeObserver after mount, so the server and the first client paint agree.
 // Same rule as the overlay chart above it.
@@ -30,20 +43,21 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { HOME_THEME, ES_CANDLE_UP, ES_CANDLE_DOWN } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
-import { ALMANAC, ERA_KEYS } from "./seasonalityData";
+import { ALMANAC, ERA_KEYS, EXTRAS, type Stat } from "./seasonalityData";
 
 const UP = ES_CANDLE_UP;
 const DOWN = ES_CANDLE_DOWN;
 const A1 = HOME_THEME.cyan;    // "all history" series
 const A2 = HOME_THEME.orange;  // "modern era" series
+const INK = HOME_THEME.text;   // #FFFFFF — the only text color on this page
 
 const pct = (v: number | null | undefined, d = 2) =>
   v == null ? "—" : `${v >= 0 ? "+" : "−"}${(Math.abs(v) * 100).toFixed(d)}%`;
 const pctp = (v: number | null | undefined, d = 1) => (v == null ? "—" : `${(v * 100).toFixed(d)}%`);
 const bp = (v: number | null | undefined, d = 1) =>
   v == null ? "—" : `${v >= 0 ? "+" : "−"}${(Math.abs(v) * 10000).toFixed(d)} bp`;
-const signColor = (v: number | null | undefined) =>
-  v == null ? HOME_THEME.text : v >= 0 ? UP : DOWN;
+const signColor = (v: number | null | undefined) => (v == null ? INK : v >= 0 ? UP : DOWN);
+const n0 = (v: number) => v.toLocaleString("en-US");
 
 /** Width of a chart box, measured after mount. 0 until then. */
 function useMeasuredWidth() {
@@ -91,6 +105,14 @@ function barPath(x: number, w: number, yTop: number, h: number, up: boolean) {
 
 // ── controls ────────────────────────────────────────────────────────────────
 
+const capLabel: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: INK,
+};
+
 function Pills<T extends string>({
   options,
   value,
@@ -104,20 +126,7 @@ function Pills<T extends string>({
 }) {
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-      {label ? (
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 800,
-            letterSpacing: "0.12em",
-            textTransform: "uppercase",
-            opacity: 0.5,
-            marginRight: 2,
-          }}
-        >
-          {label}
-        </span>
-      ) : null}
+      {label ? <span style={{ ...capLabel, marginRight: 2 }}>{label}</span> : null}
       {options.map((o) => {
         const on = o.k === value;
         return (
@@ -133,7 +142,7 @@ function Pills<T extends string>({
               background: on
                 ? `linear-gradient(180deg, ${HOME_THEME.cyan}33, ${HOME_THEME.cyan}0D)`
                 : "rgba(255,255,255,0.04)",
-              color: on ? HOME_THEME.cyan : HOME_THEME.text,
+              color: on ? HOME_THEME.cyan : INK,
               fontSize: 11,
               fontWeight: 800,
               letterSpacing: "0.05em",
@@ -151,7 +160,7 @@ function Pills<T extends string>({
 
 function Legend({ items }: { items: { color: string; label: string }[] }) {
   return (
-    <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12, fontWeight: 700, marginBottom: 12 }}>
+    <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12, fontWeight: 700, color: INK, marginBottom: 12 }}>
       {items.map((i) => (
         <span key={i.label} style={{ display: "flex", alignItems: "center", gap: 7 }}>
           <span style={{ width: 12, height: 12, borderRadius: 3, background: i.color, display: "inline-block" }} />
@@ -159,6 +168,41 @@ function Legend({ items }: { items: { color: string; label: string }[] }) {
         </span>
       ))}
     </div>
+  );
+}
+
+/**
+ * Collapsed-by-default disclosure for one table. Native <details> — see the
+ * file header for why this is not React state.
+ */
+function Collapse({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <details style={{ marginTop: 14, border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, background: "rgba(255,255,255,0.02)" }}>
+      <summary
+        style={{
+          listStyle: "none",
+          cursor: "pointer",
+          padding: "11px 14px",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          color: INK,
+          fontSize: 12,
+          fontWeight: 800,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+        }}
+      >
+        <span aria-hidden style={{ color: HOME_THEME.cyan, fontSize: 10 }}>▶</span>
+        <span>{label}</span>
+        {hint ? (
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.02em", textTransform: "none", color: INK }}>
+            {hint}
+          </span>
+        ) : null}
+      </summary>
+      <div style={{ padding: "0 14px 14px" }}>{children}</div>
+    </details>
   );
 }
 
@@ -187,8 +231,8 @@ function DivBars({
   const innerH = height - PAD.top - PAD.bottom;
 
   const { lo, hi } = useMemo(() => {
-    let l = Math.min(0, ...values);
-    let h = Math.max(0, ...values);
+    const l = Math.min(0, ...values);
+    const h = Math.max(0, ...values);
     const p = (h - l) * 0.16 || 1;
     return { lo: l - p, hi: h + p };
   }, [values]);
@@ -202,31 +246,11 @@ function DivBars({
     <div ref={ref} style={{ width: "100%" }}>
       {innerW > 0 ? (
         <>
-          <svg
-            width={width}
-            height={height}
-            role="img"
-            style={{ display: "block", touchAction: "none" }}
-            onPointerLeave={() => setHover(null)}
-          >
+          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none" }} onPointerLeave={() => setHover(null)}>
             {ticks.map((t) => (
               <g key={`t${t}`}>
-                <line
-                  x1={PAD.left}
-                  x2={PAD.left + innerW}
-                  y1={y(t)}
-                  y2={y(t)}
-                  stroke={t === 0 ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.07)"}
-                />
-                <text
-                  x={PAD.left - 8}
-                  y={y(t) + 4}
-                  textAnchor="end"
-                  fontSize={10}
-                  fill={HOME_THEME.text}
-                  opacity={0.5}
-                  style={{ fontVariantNumeric: "tabular-nums" }}
-                >
+                <line x1={PAD.left} x2={PAD.left + innerW} y1={y(t)} y2={y(t)} stroke={t === 0 ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.08)"} />
+                <text x={PAD.left - 8} y={y(t) + 4} textAnchor="end" fontSize={10} fill={INK} style={{ fontVariantNumeric: "tabular-nums" }}>
                   {fmt(t)}
                 </text>
               </g>
@@ -238,41 +262,21 @@ function DivBars({
               return (
                 <g key={labels[i]} onPointerEnter={() => setHover(i)}>
                   <rect x={PAD.left + i * bw} y={PAD.top} width={bw} height={innerH} fill="transparent" />
-                  <path
-                    d={barPath(x, w, up ? y(v) : y(0), Math.abs(y(v) - y(0)), up)}
-                    fill={up ? UP : DOWN}
-                    opacity={hover == null || hover === i ? 1 : 0.55}
-                  />
+                  <path d={barPath(x, w, up ? y(v) : y(0), Math.abs(y(v) - y(0)), up)} fill={up ? UP : DOWN} opacity={hover == null || hover === i ? 1 : 0.55} />
                   {showValues ? (
-                    <text
-                      x={x + w / 2}
-                      y={up ? y(v) - 6 : y(v) + 13}
-                      textAnchor="middle"
-                      fontSize={9.5}
-                      fill={HOME_THEME.text}
-                      opacity={0.7}
-                      style={{ fontVariantNumeric: "tabular-nums" }}
-                    >
+                    <text x={x + w / 2} y={up ? y(v) - 6 : y(v) + 13} textAnchor="middle" fontSize={9.5} fill={INK} style={{ fontVariantNumeric: "tabular-nums" }}>
                       {fmt(v)}
                     </text>
                   ) : null}
-                  <text
-                    x={x + w / 2}
-                    y={height - 9}
-                    textAnchor="middle"
-                    fontSize={10}
-                    fontWeight={700}
-                    fill={HOME_THEME.text}
-                    opacity={0.5}
-                  >
+                  <text x={x + w / 2} y={height - 9} textAnchor="middle" fontSize={10} fontWeight={700} fill={INK}>
                     {labels[i]}
                   </text>
                 </g>
               );
             })}
           </svg>
-          <div style={{ minHeight: 20, fontSize: 12, fontVariantNumeric: "tabular-nums", opacity: 0.8 }}>
-            {hover != null ? readout(hover) : <span style={{ opacity: 0.4 }}>Hover a bar for the detail.</span>}
+          <div style={{ minHeight: 20, fontSize: 12, color: INK, fontVariantNumeric: "tabular-nums" }}>
+            {hover != null ? readout(hover) : "Hover a bar for the detail."}
           </div>
         </>
       ) : (
@@ -310,8 +314,8 @@ function PairBars({
 
   const { lo, hi } = useMemo(() => {
     const all = [...a, ...b];
-    let l = Math.min(0, ...all);
-    let h = Math.max(0, ...all);
+    const l = Math.min(0, ...all);
+    const h = Math.max(0, ...all);
     const p = (h - l) * 0.14 || 1;
     return { lo: l - p, hi: h + p };
   }, [a, b]);
@@ -326,31 +330,11 @@ function PairBars({
     <div ref={ref} style={{ width: "100%" }}>
       {innerW > 0 ? (
         <>
-          <svg
-            width={width}
-            height={height}
-            role="img"
-            style={{ display: "block", touchAction: "none" }}
-            onPointerLeave={() => setHover(null)}
-          >
+          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none" }} onPointerLeave={() => setHover(null)}>
             {ticks.map((t) => (
               <g key={`t${t}`}>
-                <line
-                  x1={PAD.left}
-                  x2={PAD.left + innerW}
-                  y1={y(t)}
-                  y2={y(t)}
-                  stroke={t === 0 ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.07)"}
-                />
-                <text
-                  x={PAD.left - 8}
-                  y={y(t) + 4}
-                  textAnchor="end"
-                  fontSize={10}
-                  fill={HOME_THEME.text}
-                  opacity={0.5}
-                  style={{ fontVariantNumeric: "tabular-nums" }}
-                >
+                <line x1={PAD.left} x2={PAD.left + innerW} y1={y(t)} y2={y(t)} stroke={t === 0 ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.08)"} />
+                <text x={PAD.left - 8} y={y(t) + 4} textAnchor="end" fontSize={10} fill={INK} style={{ fontVariantNumeric: "tabular-nums" }}>
                   {fmt(t)}
                 </text>
               </g>
@@ -361,33 +345,18 @@ function PairBars({
                 {[a[i], b[i]].map((v, k) => {
                   const x = PAD.left + i * gw + (gw - inner) / 2 + k * (bw + 2);
                   const up = v >= 0;
-                  return (
-                    <path
-                      key={k}
-                      d={barPath(x, bw, up ? y(v) : y(0), Math.abs(y(v) - y(0)), up)}
-                      fill={colors[k]}
-                      opacity={hover == null || hover === i ? 1 : 0.5}
-                    />
-                  );
+                  return <path key={k} d={barPath(x, bw, up ? y(v) : y(0), Math.abs(y(v) - y(0)), up)} fill={colors[k]} opacity={hover == null || hover === i ? 1 : 0.5} />;
                 })}
                 {i % labelEvery === 0 ? (
-                  <text
-                    x={PAD.left + i * gw + gw / 2}
-                    y={height - 9}
-                    textAnchor="middle"
-                    fontSize={10}
-                    fontWeight={700}
-                    fill={HOME_THEME.text}
-                    opacity={0.5}
-                  >
+                  <text x={PAD.left + i * gw + gw / 2} y={height - 9} textAnchor="middle" fontSize={10} fontWeight={700} fill={INK}>
                     {lab}
                   </text>
                 ) : null}
               </g>
             ))}
           </svg>
-          <div style={{ minHeight: 20, fontSize: 12, fontVariantNumeric: "tabular-nums", opacity: 0.8 }}>
-            {hover != null ? readout(hover) : <span style={{ opacity: 0.4 }}>Hover a group for the detail.</span>}
+          <div style={{ minHeight: 20, fontSize: 12, color: INK, fontVariantNumeric: "tabular-nums" }}>
+            {hover != null ? readout(hover) : "Hover a group for the detail."}
           </div>
         </>
       ) : (
@@ -404,14 +373,7 @@ type Cell = { t: string; c?: string } | string | number;
 function DataTable({ head, rows }: { head: string[]; rows: Cell[][] }) {
   return (
     <div style={{ overflowX: "auto" }}>
-      <table
-        style={{
-          borderCollapse: "collapse",
-          width: "100%",
-          fontSize: 12.5,
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
+      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5, color: INK, fontVariantNumeric: "tabular-nums" }}>
         <thead>
           <tr>
             {/* keyed by position, not label — the barometer table repeats
@@ -426,7 +388,7 @@ function DataTable({ head, rows }: { head: string[]; rows: Cell[][] }) {
                   fontWeight: 800,
                   letterSpacing: "0.12em",
                   textTransform: "uppercase",
-                  opacity: 0.5,
+                  color: INK,
                   whiteSpace: "nowrap",
                   borderBottom: `1px solid ${HOME_THEME.border}`,
                 }}
@@ -448,9 +410,8 @@ function DataTable({ head, rows }: { head: string[]; rows: Cell[][] }) {
                       textAlign: ci === 0 ? "left" : "right",
                       padding: "7px 12px",
                       whiteSpace: "nowrap",
-                      opacity: ci === 0 ? 0.75 : 1,
-                      color: isObj && (c as { c?: string }).c ? (c as { c?: string }).c : HOME_THEME.text,
-                      borderBottom: ri === rows.length - 1 ? "none" : "1px solid rgba(255,255,255,0.05)",
+                      color: isObj && (c as { c?: string }).c ? (c as { c?: string }).c : INK,
+                      borderBottom: ri === rows.length - 1 ? "none" : "1px solid rgba(255,255,255,0.06)",
                     }}
                   >
                     {isObj ? (c as { t: string }).t : String(c)}
@@ -465,9 +426,9 @@ function DataTable({ head, rows }: { head: string[]; rows: Cell[][] }) {
   );
 }
 
-/** Blend two #rrggbb values. Used for the heatmap ramp: a neutral cell color
- *  toward the up/down hue, so a zero cell reads as "no signal" rather than as a
- *  washed-out version of one of the two directions. */
+/** Blend two #rrggbb values — the heatmap ramp runs a neutral cell color toward
+ *  the up/down hue, so a zero cell reads as "no signal" rather than as a washed
+ *  out version of one of the two directions. */
 function mixHex(from: string, to: string, t: number) {
   const parse = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
   const a = parse(from);
@@ -475,6 +436,12 @@ function mixHex(from: string, to: string, t: number) {
   return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(",")})`;
 }
 
+/**
+ * Heatmap. `width:100%` with `tableLayout:fixed` so the twelve month columns
+ * divide the FULL card width instead of sitting in a narrow 42px-per-cell block
+ * with dead space beside it. minWidth on the wrapper keeps it readable when the
+ * card itself is narrow (phone) — it scrolls there instead of crushing.
+ */
 function HeatTable({
   cols,
   rows,
@@ -491,8 +458,25 @@ function HeatTable({
   maxHeight?: number;
 }) {
   return (
-    <div style={{ overflow: "auto", maxHeight }}>
-      <table style={{ borderCollapse: "separate", borderSpacing: 2, fontSize: 10.5, fontVariantNumeric: "tabular-nums" }}>
+    <div style={{ overflow: "auto", maxHeight, width: "100%" }}>
+      <table
+        style={{
+          borderCollapse: "separate",
+          borderSpacing: 2,
+          fontSize: 11,
+          color: INK,
+          fontVariantNumeric: "tabular-nums",
+          width: "100%",
+          minWidth: 620,
+          tableLayout: "fixed",
+        }}
+      >
+        <colgroup>
+          <col style={{ width: 62 }} />
+          {cols.map((c) => (
+            <col key={c} />
+          ))}
+        </colgroup>
         <thead>
           <tr>
             <th />
@@ -500,11 +484,11 @@ function HeatTable({
               <th
                 key={c}
                 style={{
-                  fontSize: 9.5,
+                  fontSize: 10,
                   fontWeight: 800,
                   letterSpacing: "0.08em",
                   textTransform: "uppercase",
-                  opacity: 0.5,
+                  color: INK,
                   padding: "3px 4px",
                   position: "sticky",
                   top: 0,
@@ -520,16 +504,7 @@ function HeatTable({
         <tbody>
           {rows.map((r, i) => (
             <tr key={String(r)}>
-              <th
-                style={{
-                  textAlign: "right",
-                  paddingRight: 8,
-                  fontSize: 10,
-                  fontWeight: 700,
-                  opacity: 0.5,
-                  whiteSpace: "nowrap",
-                }}
-              >
+              <th style={{ textAlign: "right", paddingRight: 8, fontSize: 10.5, fontWeight: 700, color: INK, whiteSpace: "nowrap" }}>
                 {rowLabel(r)}
               </th>
               {data[i].map((v, j) => (
@@ -537,14 +512,10 @@ function HeatTable({
                   key={j}
                   title={v == null ? "" : `${cols[j]} ${rowLabel(r)} · ${pct(v)}`}
                   style={{
-                    width: 42,
-                    height: 21,
+                    height: 24,
                     textAlign: "center",
                     borderRadius: 3,
-                    background:
-                      v == null
-                        ? "transparent"
-                        : mixHex("#1b2028", v >= 0 ? UP : DOWN, Math.pow(Math.min(1, Math.abs(v) / scale), 0.72)),
+                    background: v == null ? "transparent" : mixHex("#1b2028", v >= 0 ? UP : DOWN, Math.pow(Math.min(1, Math.abs(v) / scale), 0.72)),
                   }}
                 >
                   {v == null ? "" : (v * 100).toFixed(1)}
@@ -562,40 +533,35 @@ function Tile({ label, value, sub, color }: { label: string; value: ReactNode; s
   return (
     <div
       style={{
-        flex: "1 1 150px",
-        minWidth: 140,
+        flex: "1 1 160px",
+        minWidth: 148,
         padding: "12px 14px",
         borderRadius: 10,
         border: `1px solid ${HOME_THEME.border}`,
         background: "rgba(255,255,255,0.03)",
       }}
     >
-      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.55 }}>
-        {label}
-      </div>
-      <div
-        style={{
-          fontSize: 22,
-          fontWeight: 800,
-          marginTop: 4,
-          fontVariantNumeric: "tabular-nums",
-          color: color ?? HOME_THEME.text,
-        }}
-      >
-        {value}
-      </div>
-      {sub ? <div style={{ fontSize: 11, opacity: 0.5, marginTop: 2 }}>{sub}</div> : null}
+      <div style={capLabel}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4, fontVariantNumeric: "tabular-nums", color: color ?? INK }}>{value}</div>
+      {sub ? <div style={{ fontSize: 11.5, color: INK, marginTop: 3 }}>{sub}</div> : null}
     </div>
   );
 }
 
-const NOTE: CSSProperties = {
-  marginTop: 14,
-  fontSize: 12,
-  lineHeight: 1.6,
-  opacity: 0.55,
-  maxWidth: 900,
-};
+const NOTE: CSSProperties = { marginTop: 14, fontSize: 12.5, lineHeight: 1.65, color: INK, maxWidth: 900 };
+const TILES: CSSProperties = { display: "flex", gap: 12, flexWrap: "wrap" };
+
+/** The seven columns every Stat renders as. */
+const STAT_HEAD = ["", "n", "Mean", "Median", "Positive", "Best", "Worst"];
+const statRow = (label: string, s: Stat): Cell[] => [
+  label,
+  n0(s.n),
+  { t: pct(s.avg), c: signColor(s.avg) },
+  { t: pct(s.median), c: signColor(s.median) },
+  pctp(s.pos_pct, 1),
+  { t: pct(s.best), c: UP },
+  { t: pct(s.worst), c: DOWN },
+];
 
 // ── the almanac ─────────────────────────────────────────────────────────────
 
@@ -617,36 +583,23 @@ export default function SeasonalityAlmanac() {
   const sm = A.sixMonth;
   const smOrder = [sm.index.indexOf("Nov-Apr"), sm.index.indexOf("May-Oct")].filter((i) => i >= 0);
 
+  const vix = EXTRAS.vix;
+  const v20 = vix.buckets.find((b) => b.threshold === 0.2) ?? vix.buckets[0];
+  const eom = EXTRAS.eom;
+  const opex = EXTRAS.opex;
+
   return (
     <>
       {/* ── where the calendar stands ─────────────────────────────────────── */}
-      <Card
-        title="Where the Calendar Stands"
-        subtitle={`Last close ${now.as_of} · session ${now.trading_day_of_year} of the trading year`}
-        padding={20}
-      >
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <Tile
-            label="Rest of year · mean"
-            value={pct(royMod.avg)}
-            sub={`since 1985 · n=${royMod.n}`}
-            color={signColor(royMod.avg)}
-          />
-          <Tile
-            label="Rest of year · positive"
-            value={pctp(royMod.pos_pct, 0)}
-            sub={`${Math.round(royMod.pos_pct * royMod.n)} of ${royMod.n} years`}
-          />
-          <Tile
-            label={win.window}
-            value={pct(win.avg)}
-            sub={`all history · n=${win.n} · ${pctp(win.pos_pct, 0)} positive`}
-            color={signColor(win.avg)}
-          />
+      <Card title="Where the Calendar Stands" subtitle={`Last close ${now.as_of} · session ${now.trading_day_of_year} of the trading year`} padding={20}>
+        <div style={TILES}>
+          <Tile label="Rest of year · mean" value={pct(royMod.avg)} sub={`since 1985 · n=${royMod.n}`} color={signColor(royMod.avg)} />
+          <Tile label="Rest of year · positive" value={pctp(royMod.pos_pct, 0)} sub={`${Math.round(royMod.pos_pct * royMod.n)} of ${royMod.n} years`} />
+          <Tile label={win.window} value={pct(win.avg)} sub={`all history · n=${win.n} · ${pctp(win.pos_pct, 0)} positive`} color={signColor(win.avg)} />
           <Tile label="Worst rest-of-year" value={pct(royAll.worst)} sub={`all history · n=${royAll.n}`} color={DOWN} />
         </div>
 
-        <div style={{ marginTop: 16 }}>
+        <Collapse label="Rest-of-year detail" hint="by sample window">
           <DataTable
             head={["Sample", "Years", "Mean", "Median", "Positive", "Best", "Worst"]}
             rows={now.rest_of_year.map((r) => [
@@ -659,11 +612,11 @@ export default function SeasonalityAlmanac() {
               { t: pct(r.worst), c: DOWN },
             ])}
           />
-        </div>
+        </Collapse>
 
-        <div style={{ marginTop: 16 }}>
+        <Collapse label="September, split in half" hint="1st–15th vs 16th–30th">
           <DataTable
-            head={["September half", "Years", "Mean", "Median", "Positive"]}
+            head={["Window", "Years", "Mean", "Median", "Positive"]}
             rows={now.sep_halves.index.map((lab, i) => [
               lab,
               now.sep_halves.n[i],
@@ -672,7 +625,7 @@ export default function SeasonalityAlmanac() {
               pctp(now.sep_halves.pos_pct[i], 0),
             ])}
           />
-        </div>
+        </Collapse>
 
         <p style={NOTE}>
           Rest-of-year is measured by trading-day count, not calendar date: each past year is cut at its own{" "}
@@ -681,29 +634,219 @@ export default function SeasonalityAlmanac() {
         </p>
       </Card>
 
-      {/* ── month by month ────────────────────────────────────────────────── */}
+      {/* ── VIX spike ─────────────────────────────────────────────────────── */}
       <Card
-        title="Month by Month"
-        subtitle={`${A.meta.symbol} monthly returns · ${A.meta.start.slice(0, 4)}–${A.meta.end.slice(0, 4)}`}
+        title="After a VIX Spike"
+        subtitle={`^VIX open → high ≥ +20% in a session · ${vix.meta.start} – ${vix.meta.end} · ${n0(vix.meta.sessions)} sessions`}
         padding={20}
       >
-        <Pills options={eraOptions} value={era} onChange={setEra} label="Sample" />
-        <Legend
-          items={[
-            { color: UP, label: "Positive mean" },
-            { color: DOWN, label: "Negative mean" },
-          ]}
+        <div style={TILES}>
+          <Tile label="Spike sessions" value={n0(v20.n)} sub={`${((v20.n / vix.baseline.n) * 100).toFixed(1)}% of all sessions since 1990`} />
+          <Tile
+            label="SPX low → next high"
+            value={pct(v20.low_to_next_high.avg)}
+            sub={`median ${pct(v20.low_to_next_high.median)} · baseline ${pct(vix.baseline.low_to_next_high.avg)}`}
+            color={signColor(v20.low_to_next_high.avg)}
+          />
+          <Tile
+            label="Next day open → close"
+            value={pct(v20.next_open_close.avg)}
+            sub={`${pctp(v20.next_open_close.pos_pct, 1)} positive · baseline ${pct(vix.baseline.next_open_close.avg)} / ${pctp(vix.baseline.next_open_close.pos_pct, 1)}`}
+            color={signColor(v20.next_open_close.avg)}
+          />
+          <Tile
+            label="Spike day open → close"
+            value={pct(v20.same_open_close.avg)}
+            sub="what it took to get the spike"
+            color={signColor(v20.same_open_close.avg)}
+          />
+        </div>
+
+        <Collapse label="Threshold ladder" hint="does the effect scale with the size of the pop?">
+          <DataTable
+            head={["VIX pop", "n", "Low → next high", "median", "Next open → close", "median", "positive", "Spike day O→C"]}
+            rows={[
+              [
+                "Every session",
+                n0(vix.baseline.n),
+                { t: pct(vix.baseline.low_to_next_high.avg), c: signColor(vix.baseline.low_to_next_high.avg) },
+                { t: pct(vix.baseline.low_to_next_high.median), c: signColor(vix.baseline.low_to_next_high.median) },
+                { t: pct(vix.baseline.next_open_close.avg), c: signColor(vix.baseline.next_open_close.avg) },
+                { t: pct(vix.baseline.next_open_close.median), c: signColor(vix.baseline.next_open_close.median) },
+                pctp(vix.baseline.next_open_close.pos_pct, 1),
+                { t: pct(vix.baseline.same_open_close.avg), c: signColor(vix.baseline.same_open_close.avg) },
+              ],
+              ...vix.buckets.map((b) => [
+                `≥ +${(b.threshold * 100).toFixed(0)}%`,
+                n0(b.n),
+                { t: pct(b.low_to_next_high.avg), c: signColor(b.low_to_next_high.avg) },
+                { t: pct(b.low_to_next_high.median), c: signColor(b.low_to_next_high.median) },
+                { t: pct(b.next_open_close.avg), c: signColor(b.next_open_close.avg) },
+                { t: pct(b.next_open_close.median), c: signColor(b.next_open_close.median) },
+                pctp(b.next_open_close.pos_pct, 1),
+                { t: pct(b.same_open_close.avg), c: signColor(b.same_open_close.avg) },
+              ]),
+            ]}
+          />
+        </Collapse>
+
+        <Collapse label={`Every +20% session`} hint={`${n0(vix.events.length)} events, newest first`}>
+          <DataTable
+            head={["Date", "VIX pop", "VIX o→h", "SPX low", "Next high", "Low → next high", "Next O→C"]}
+            rows={vix.events.map((e) => [
+              e.date,
+              pctp(e.vix_pop, 1),
+              `${e.vix_open.toFixed(2)} → ${e.vix_high.toFixed(2)}`,
+              n0(Math.round(e.spx_low)),
+              n0(Math.round(e.next_high)),
+              { t: pct(e.low_to_next_high), c: signColor(e.low_to_next_high) },
+              { t: pct(e.next_open_close), c: signColor(e.next_open_close) },
+            ])}
+          />
+        </Collapse>
+
+        <p style={NOTE}>
+          Read every row against the <strong>Every session</strong> baseline, not on its own. &ldquo;Low → next
+          high&rdquo; is a rally measured from the worst tick of the panic to the best tick of the following session —
+          it is flattering by construction, and the baseline is already {pct(vix.baseline.low_to_next_high.avg)}. The
+          number that is actually tradeable is the next session&apos;s open-to-close, and there the ladder does what a
+          real effect does: it gets stronger the bigger the pop, from {pct(vix.buckets[0].next_open_close.avg)} at
+          ≥+{(vix.buckets[0].threshold * 100).toFixed(0)}% to {pct(v20.next_open_close.avg)} at ≥+20%, against{" "}
+          {pct(vix.baseline.next_open_close.avg)} unconditionally. Note the sample thins fast: n={v20.n} at +20% and
+          only {vix.buckets[vix.buckets.length - 1].n} at the far end.
+        </p>
+      </Card>
+
+      {/* ── month end / quarter end ───────────────────────────────────────── */}
+      <Card title="Last Day of the Month" subtitle="Return of the final session of a month, close-to-close" padding={20}>
+        <div style={TILES}>
+          <Tile label="Every month end" value={bp(eom.all.avg, 1)} sub={`n=${n0(eom.all.n)} · ${pctp(eom.all.pos_pct, 1)} positive`} color={signColor(eom.all.avg)} />
+          <Tile label="Quarter ends" value={bp(eom.quarter.avg, 1)} sub={`Mar/Jun/Sep/Dec · n=${eom.quarter.n} · ${pctp(eom.quarter.pos_pct, 1)} positive`} color={signColor(eom.quarter.avg)} />
+          <Tile label="Non-quarter ends" value={bp(eom.nonquarter.avg, 1)} sub={`n=${eom.nonquarter.n} · ${pctp(eom.nonquarter.pos_pct, 1)} positive`} color={signColor(eom.nonquarter.avg)} />
+          <Tile label="Since 1985" value={bp(eom.modern.avg, 1)} sub={`n=${eom.modern.n} · ${pctp(eom.modern.pos_pct, 1)} positive`} color={signColor(eom.modern.avg)} />
+        </div>
+
+        <Collapse label="Month-end summary" hint="all history vs quarter ends vs modern era">
+          <DataTable
+            head={STAT_HEAD}
+            rows={[
+              statRow("Every month end", eom.all),
+              statRow("Quarter ends", eom.quarter),
+              statRow("Non-quarter ends", eom.nonquarter),
+              statRow("Every month end · since 1985", eom.modern),
+              statRow("Quarter ends · since 1985", eom.quarter_modern),
+            ]}
+          />
+        </Collapse>
+
+        <Collapse label="Month-end by calendar month" hint="which month ends carry it">
+          <DataTable head={STAT_HEAD} rows={eom.by_month.map((m) => statRow(m.label, m))} />
+        </Collapse>
+
+        <p style={NOTE}>
+          The last session of a month is worth about {bp(eom.all.avg, 1)} against roughly +3 bp for an average session,
+          and it is the NON-quarter ends doing it — quarter ends run {bp(eom.quarter.avg, 1)} and are barely better
+          than a coin flip. Since 1985 the whole effect is close to gone ({bp(eom.modern.avg, 1)},{" "}
+          {pctp(eom.modern.pos_pct, 1)} positive), which is the same arc the Monday effect took.
+        </p>
+      </Card>
+
+      {/* ── opex ──────────────────────────────────────────────────────────── */}
+      <Card title="Opex Week &amp; the Week After" subtitle="Third-Friday expiration, monthly and quarterly" padding={20}>
+        <div style={TILES}>
+          <Tile label="Opex week" value={bp(opex.monthly.week.avg, 1)} sub={`n=${n0(opex.monthly.week.n)} · ${pctp(opex.monthly.week.pos_pct, 1)} positive`} color={signColor(opex.monthly.week.avg)} />
+          <Tile label="Week after opex" value={bp(opex.monthly.after.avg, 1)} sub={`n=${n0(opex.monthly.after.n)} · ${pctp(opex.monthly.after.pos_pct, 1)} positive`} color={signColor(opex.monthly.after.avg)} />
+          <Tile label="Quarterly opex week" value={bp(opex.quarterly.week.avg, 1)} sub={`Mar/Jun/Sep/Dec · n=${opex.quarterly.week.n} · ${pctp(opex.quarterly.week.pos_pct, 1)} positive`} color={signColor(opex.quarterly.week.avg)} />
+          <Tile
+            label="Week after quarterly"
+            value={bp(opex.quarterly.after.avg, 1)}
+            sub={`n=${opex.quarterly.after.n} · ${pctp(opex.quarterly.after.pos_pct, 1)} positive`}
+            color={signColor(opex.quarterly.after.avg)}
+          />
+        </div>
+
+        <Legend items={[{ color: A1, label: "Opex week" }, { color: A2, label: "Week after" }]} />
+        <PairBars
+          labels={opex.by_month.map((m) => m.label)}
+          a={opex.by_month.map((m) => m.week.avg)}
+          b={opex.by_month.map((m) => m.after.avg)}
+          colors={[A1, A2]}
+          fmt={(v) => bp(v, 0)}
+          height={260}
+          readout={(i) => {
+            const m = opex.by_month[i];
+            return `${m.label} · opex week ${pct(m.week.avg)} (${pctp(m.week.pos_pct, 1)} positive, n=${m.week.n}) · week after ${pct(m.after.avg)} (${pctp(m.after.pos_pct, 1)} positive)`;
+          }}
         />
+
+        <Collapse label="Opex summary" hint="monthly, quarterly, and the modern era">
+          <DataTable
+            head={STAT_HEAD}
+            rows={[
+              statRow("Opex week · all monthly", opex.monthly.week),
+              statRow("Week after · all monthly", opex.monthly.after),
+              statRow("Opex week · quarterly", opex.quarterly.week),
+              statRow("Week after · quarterly", opex.quarterly.after),
+              statRow("Opex week · non-quarterly", opex.nonquarterly.week),
+              statRow("Week after · non-quarterly", opex.nonquarterly.after),
+              statRow("Opex week · monthly, since 1985", opex.monthly_modern.week),
+              statRow("Week after · monthly, since 1985", opex.monthly_modern.after),
+              statRow("Opex week · quarterly, since 1985", opex.quarterly_modern.week),
+              statRow("Week after · quarterly, since 1985", opex.quarterly_modern.after),
+            ]}
+          />
+        </Collapse>
+
+        <Collapse label="Opex by calendar month" hint="both windows, all 12 months">
+          <DataTable
+            head={["Month", "n", "Opex week", "positive", "Week after", "positive"]}
+            rows={opex.by_month.map((m) => [
+              m.label,
+              m.week.n,
+              { t: pct(m.week.avg), c: signColor(m.week.avg) },
+              pctp(m.week.pos_pct, 1),
+              { t: pct(m.after.avg), c: signColor(m.after.avg) },
+              pctp(m.after.pos_pct, 1),
+            ])}
+          />
+        </Collapse>
+
+        <Collapse label="Last 24 expirations" hint="newest first">
+          <DataTable
+            head={["Expiration", "Opex Friday", "Opex week", "Week after", "Type"]}
+            rows={opex.recent.map((r) => [
+              r.label,
+              r.opex,
+              { t: pct(r.week), c: signColor(r.week) },
+              { t: pct(r.after), c: signColor(r.after) },
+              r.is_q ? "Quarterly" : "Monthly",
+            ])}
+          />
+        </Collapse>
+
+        <p style={NOTE}>
+          Opex is the third Friday, or the last session on or before it when that Friday is a holiday. <em>Opex week</em>{" "}
+          is the prior Friday&apos;s close to the opex Friday&apos;s close; <em>week after</em> is the opex close to the
+          following Friday&apos;s close. Two things stand out: opex week itself is firmly positive and much more so
+          since 1985 ({bp(opex.monthly_modern.week.avg, 1)}, {pctp(opex.monthly_modern.week.pos_pct, 1)} positive), and
+          the give-back concentrates in the week after a QUARTERLY expiration — {bp(opex.quarterly.after.avg, 1)} all
+          history, {bp(opex.quarterly_modern.after.avg, 1)} and only {pctp(opex.quarterly_modern.after.pos_pct, 1)}{" "}
+          positive since 1985, on n={opex.quarterly_modern.after.n}.
+        </p>
+      </Card>
+
+      {/* ── month by month ────────────────────────────────────────────────── */}
+      <Card title="Month by Month" subtitle={`${A.meta.symbol} monthly returns · ${A.meta.start.slice(0, 4)}–${A.meta.end.slice(0, 4)}`} padding={20}>
+        <Pills options={eraOptions} value={era} onChange={setEra} label="Sample" />
+        <Legend items={[{ color: UP, label: "Positive mean" }, { color: DOWN, label: "Negative mean" }]} />
         <DivBars
           labels={M}
           values={mt.avg}
           fmt={(v) => pct(v, 1)}
           height={280}
-          readout={(i) =>
-            `${M[i]} · mean ${pct(mt.avg[i])} · median ${pct(mt.median[i])} · ${pctp(mt.pos_pct[i], 1)} positive · n=${mt.n[i]} years`
-          }
+          readout={(i) => `${M[i]} · mean ${pct(mt.avg[i])} · median ${pct(mt.median[i])} · ${pctp(mt.pos_pct[i], 1)} positive · n=${mt.n[i]} years`}
         />
-        <div style={{ marginTop: 14 }}>
+        <Collapse label="Monthly table" hint={`${era} · mean, median, hit rate, extremes`}>
           <DataTable
             head={["Month", "Years", "Mean", "Median", "Positive", "Std dev", "Best", "Worst"]}
             rows={M.map((m, i) => [
@@ -717,7 +860,7 @@ export default function SeasonalityAlmanac() {
               { t: pct(mt.worst[i]), c: DOWN },
             ])}
           />
-        </div>
+        </Collapse>
         <p style={NOTE}>
           September is the only month with a negative mean and a losing hit rate across the whole record, and it stays
           negative in every sample window above. December has the highest hit rate. Bars run from a zero baseline, so
@@ -727,7 +870,7 @@ export default function SeasonalityAlmanac() {
 
       {/* ── sell in may ───────────────────────────────────────────────────── */}
       <Card title="The Two Half-Years" subtitle="Nov–Apr against May–Oct, compounded within each season" padding={20}>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <div style={TILES}>
           {smOrder.map((i) => (
             <Tile
               key={sm.index[i]}
@@ -744,7 +887,7 @@ export default function SeasonalityAlmanac() {
               value={
                 <span>
                   <span style={{ color: UP }}>{pct(sm.best[i], 1)}</span>
-                  <span style={{ opacity: 0.4 }}> / </span>
+                  <span> / </span>
                   <span style={{ color: DOWN }}>{pct(sm.worst[i], 1)}</span>
                 </span>
               }
@@ -755,19 +898,14 @@ export default function SeasonalityAlmanac() {
         <p style={NOTE}>
           A season-year runs Nov of year <i>t−1</i> through Oct of year <i>t</i>, so both halves belong to the same
           cycle. The winter half wins on average, but the summer half is still positive two years in three — the effect
-          is a difference in size, not in direction, and "sell in May" as a rule has you flat through a period with a
-          positive expectancy.
+          is a difference in size, not in direction, and &ldquo;sell in May&rdquo; as a rule has you flat through a
+          period with a positive expectancy.
         </p>
       </Card>
 
       {/* ── turn of month ─────────────────────────────────────────────────── */}
       <Card title="Turn of the Month" subtitle="Mean session return by trading day of month" padding={20}>
-        <Legend
-          items={[
-            { color: A1, label: "All history" },
-            { color: A2, label: "Since 1985" },
-          ]}
-        />
+        <Legend items={[{ color: A1, label: "All history" }, { color: A2, label: "Since 1985" }]} />
         <PairBars
           labels={A.tdom.index}
           a={A.tdom.all}
@@ -779,21 +917,21 @@ export default function SeasonalityAlmanac() {
             `${A.tdom.index[i]} · all ${bp(A.tdom.all[i], 1)} (${pctp(A.tdom.pos_all[i], 1)} positive) · since 1985 ${bp(A.tdom.modern[i], 1)} (${pctp(A.tdom.pos_modern[i], 1)})`
           }
         />
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 14 }}>
+        <div style={{ ...TILES, marginTop: 14 }}>
           {A.tom.map((t) => (
             <Tile
               key={t.window}
               label={t.window}
               value={bp(t.avg_daily, 1)}
-              sub={`${t.n.toLocaleString("en-US")} sessions · ${pctp(t.pos_pct, 1)} positive · ${pct(t.annualized, 1)} annualized`}
+              sub={`${n0(t.n)} sessions · ${pctp(t.pos_pct, 1)} positive · ${pct(t.annualized, 1)} annualized`}
               color={signColor(t.avg_daily)}
             />
           ))}
         </div>
         <p style={NOTE}>
           T−5…T−1 are the last five sessions of a month; T1…T15 count forward from the first. The cluster around the
-          turn does effectively all of the index's work — the rest of the month, taken together, has compounded at close
-          to nothing.
+          turn does effectively all of the index&apos;s work — the rest of the month, taken together, has compounded at
+          close to nothing.
         </p>
       </Card>
 
@@ -806,24 +944,18 @@ export default function SeasonalityAlmanac() {
           fmt={(v) => bp(v, 0)}
           height={230}
           readout={(i) =>
-            `${dw.index[i]} · mean ${bp(dw.avg[i], 2)} · ${pctp(dw.pos_pct[i], 1)} positive · std dev ${pctp(dw.stdev[i], 2)} · n=${dw.n[i].toLocaleString("en-US")} sessions`
+            `${dw.index[i]} · mean ${bp(dw.avg[i], 2)} · ${pctp(dw.pos_pct[i], 1)} positive · std dev ${pctp(dw.stdev[i], 2)} · n=${n0(dw.n[i])} sessions`
           }
         />
-        <div style={{ marginTop: 14 }}>
+        <Collapse label="Day-of-week table" hint={dowEra}>
           <DataTable
             head={["Day", "Sessions", "Mean", "Positive", "Std dev"]}
-            rows={dw.index.map((d, i) => [
-              d,
-              dw.n[i].toLocaleString("en-US"),
-              { t: bp(dw.avg[i], 2), c: signColor(dw.avg[i]) },
-              pctp(dw.pos_pct[i], 1),
-              pctp(dw.stdev[i], 2),
-            ])}
+            rows={dw.index.map((d, i) => [d, n0(dw.n[i]), { t: bp(dw.avg[i], 2), c: signColor(dw.avg[i]) }, pctp(dw.pos_pct[i], 1), pctp(dw.stdev[i], 2)])}
           />
-        </div>
+        </Collapse>
         <p style={NOTE}>
-          Switch the sample to "Since 1985" and the Monday effect largely disappears — the clearest example on this tab
-          of a documented seasonal edge being arbitraged away after publication.
+          Switch the sample to &ldquo;Since 1985&rdquo; and the Monday effect largely disappears — the clearest example
+          on this page of a documented seasonal edge being arbitraged away after publication.
         </p>
       </Card>
 
@@ -831,7 +963,7 @@ export default function SeasonalityAlmanac() {
       <Card title="Presidential &amp; Decennial Cycles" subtitle="Mean calendar-year return, price only" padding={20}>
         <div style={{ display: "grid", gap: 18, gridTemplateColumns: "repeat(auto-fit, minmax(min(320px,100%), 1fr))" }}>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.6, marginBottom: 8 }}>Four-year political cycle</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: INK, marginBottom: 8 }}>Four-year political cycle</div>
             <DivBars
               labels={A.presidential.index.map((s) => s.replace(/^\d\s/, ""))}
               values={A.presidential.avg}
@@ -843,7 +975,7 @@ export default function SeasonalityAlmanac() {
             />
           </div>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.6, marginBottom: 8 }}>Decade digit</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: INK, marginBottom: 8 }}>Decade digit</div>
             <DivBars
               labels={A.decennial.index.map((v) => `…${v}`)}
               values={A.decennial.avg}
@@ -855,6 +987,15 @@ export default function SeasonalityAlmanac() {
             />
           </div>
         </div>
+        <Collapse label="Cycle year × month" hint="mean monthly return, %">
+          <HeatTable
+            cols={M}
+            rows={A.presidentialMonth.index}
+            data={A.presidentialMonth.data}
+            scale={0.03}
+            rowLabel={(r) => String(r).replace(/^\d\s/, "")}
+          />
+        </Collapse>
         <p style={NOTE}>
           Twenty-five observations for the four-year cycle, ten for each decade digit. At those sample sizes a single
           outlier year moves a bar several points, so read both as folklore with a sample size attached rather than as
@@ -864,98 +1005,59 @@ export default function SeasonalityAlmanac() {
 
       {/* ── volatility ────────────────────────────────────────────────────── */}
       <Card title="Volatility by Month" subtitle="Annualized standard deviation of daily returns" padding={20}>
-        <Legend
-          items={[
-            { color: A1, label: "All history" },
-            { color: A2, label: "Since 1985" },
-          ]}
-        />
+        <Legend items={[{ color: A1, label: "All history" }, { color: A2, label: "Since 1985" }]} />
         <PairBars
           labels={A.vol.index}
           a={A.vol.all}
           b={A.vol.modern}
           colors={[A1, A2]}
-          fmt={(v) => pctp(v, 0)}
+          fmt={(x) => pctp(x, 0)}
           height={260}
           readout={(i) =>
             `${A.vol.index[i]} · all history ${pctp(A.vol.all[i], 1)} vol, mean daily move ${pctp(A.vol.avg_abs_all[i], 2)} · since 1985 ${pctp(A.vol.modern[i], 1)} vol, ${pctp(A.vol.avg_abs_modern[i], 2)}`
           }
         />
         <p style={NOTE}>
-          The October peak is the most durable seasonal fact on this tab — it survives every sample window and every
+          The October peak is the most durable seasonal fact on this page — it survives every sample window and every
           decade. For an options book that matters more than the return table above it: the calendar says far more about
           what to pay for premium than about which way to lean.
         </p>
       </Card>
 
       {/* ── heatmaps ──────────────────────────────────────────────────────── */}
-      <Card title="Has the Seasonal Shape Moved?" subtitle="Mean monthly return by decade" padding={20}>
-        <HeatTable
-          cols={M}
-          rows={A.decadeMonth.index}
-          data={A.decadeMonth.data}
-          scale={0.035}
-          rowLabel={(r) => `${r}s`}
-        />
+      <Card title="Has the Seasonal Shape Moved?" subtitle="Mean monthly return by decade, %" padding={20}>
+        <HeatTable cols={M} rows={A.decadeMonth.index} data={A.decadeMonth.data} scale={0.035} rowLabel={(r) => `${r}s`} />
         <p style={NOTE}>
-          Read down a column to see whether a month's reputation holds decade to decade. Most do not hold up nearly as
-          well as the pooled average implies — September is the notable exception.
+          Read down a column to see whether a month&apos;s reputation holds decade to decade. Most do not hold up nearly
+          as well as the pooled average implies — September is the notable exception.
         </p>
       </Card>
 
-      <Card
-        title="Every Month, Every Year"
-        subtitle={`${A.matrix.years.length} years of monthly returns, %`}
-        padding={20}
-      >
-        <HeatTable
-          cols={M}
-          rows={A.matrix.years}
-          data={A.matrix.data}
-          scale={0.1}
-          rowLabel={(r) => String(r)}
-          maxHeight={460}
-        />
+      <Card title="Every Month, Every Year" subtitle={`${A.matrix.years.length} years of monthly returns, %`} padding={20}>
+        <HeatTable cols={M} rows={A.matrix.years} data={A.matrix.data} scale={0.1} rowLabel={(r) => String(r)} maxHeight={520} />
       </Card>
 
       {/* ── barometers ────────────────────────────────────────────────────── */}
       <Card title="Early-Year Barometers" subtitle="What the full year did after each signal window" padding={20}>
-        <DataTable
-          head={["Signal", "Up years", "Mean year after", "Positive", "Down years", "Mean year after", "Positive"]}
-          rows={A.barometers.map((b) => [
-            { santa: "Santa Claus rally", first5: "First Five Days", january: "January Barometer" }[b.signal] ??
-              b.signal,
-            b.up_n,
-            { t: pct(b.up_avg_full), c: signColor(b.up_avg_full) },
-            pctp(b.up_hit, 0),
-            b.dn_n,
-            { t: pct(b.dn_avg_full), c: signColor(b.dn_avg_full) },
-            pctp(b.dn_hit, 0),
-          ])}
-        />
+        <Collapse label="Santa · First Five Days · January Barometer" hint="split by whether the signal window was up or down">
+          <DataTable
+            head={["Signal", "Up years", "Mean year after", "Positive", "Down years", "Mean year after", "Positive"]}
+            rows={A.barometers.map((b) => [
+              ({ santa: "Santa Claus rally", first5: "First Five Days", january: "January Barometer" } as Record<string, string>)[b.signal] ?? b.signal,
+              b.up_n,
+              { t: pct(b.up_avg_full), c: signColor(b.up_avg_full) },
+              pctp(b.up_hit, 0),
+              b.dn_n,
+              { t: pct(b.dn_avg_full), c: signColor(b.dn_avg_full) },
+              pctp(b.dn_hit, 0),
+            ])}
+          />
+        </Collapse>
         <p style={NOTE}>
           Santa Claus rally = the last five sessions of December plus the first two of January. First Five Days =
           sessions 1–5. January = the full calendar month. All three are contaminated by the fact that the signal window
-          is itself part of the year being predicted — the January Barometer's apparent power is partly just January
-          being 1/12th of the answer.
-        </p>
-      </Card>
-
-      {/* ── method ────────────────────────────────────────────────────────── */}
-      <Card title="Method" padding={20}>
-        <p style={{ ...NOTE, marginTop: 0 }}>
-          <b style={{ opacity: 0.85 }}>Data.</b> {A.meta.symbol} daily closes, {A.meta.start} through {A.meta.end},{" "}
-          {A.meta.trading_days.toLocaleString("en-US")} sessions. Returns are close-to-close and price-only — dividends
-          are excluded, which understates long-run totals by roughly 2–4 percentage points a year depending on era. The
-          current partial year and the final partial month are excluded from every monthly and annual aggregate, so no
-          table is contaminated by a stub period.
-        </p>
-        <p style={NOTE}>
-          <b style={{ opacity: 0.85 }}>How to read it.</b> Sample sizes are printed everywhere for a reason. A monthly
-          mean built from 98 observations carries a standard error near 0.6 percentage points, so most of the
-          differences between adjacent months here are not statistically distinguishable. Seasonality is a weak prior
-          about the distribution of outcomes, not a trade — it belongs on the same shelf as knowing October is a
-          high-vol month, not on the shelf with a level.
+          is itself part of the year being predicted — the January Barometer&apos;s apparent power is partly just
+          January being 1/12th of the answer.
         </p>
       </Card>
     </>

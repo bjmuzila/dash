@@ -475,6 +475,9 @@ export default function SectionSubStrip({ open }: { open: boolean }) {
     const href = key.slice(2);
     const r = routeByHref(href);
     if (!r) return null;
+    // Split-out routes can be owner-only too (/gex-watch). Same rule as the
+    // tabs above: skip the pill, keep the key in the saved order.
+    if (r.ownerOnly && !isOwner) return null;
     return (
       <Pill
         href={r.href}

@@ -41,6 +41,10 @@ const Fails        = lazy(() => import('@/components/pages/Fails'))
 const EconCalendar = lazy(() => import('@/components/pages/EconomicCalendar'))
 const TestLab      = lazy(() => import('@/components/pages/TestLab'))
 const StrikeHistory = lazy(() => import('@/components/pages/StrikeHistory'))
+// /gex-watch — the GEX Watch bench, moved off the owner Backtests page so its
+// live lane can poll on its own. Owner-only (both endpoints are auth:'owner');
+// the customer read of the same data is the box on /premarket.
+const GexWatch     = lazy(() => import('@/components/pages/GexWatch'))
 const Replay       = lazy(() => import('@/components/pages/Replay'))
 const LevelLog     = lazy(() => import('@/components/pages/LevelLog'))
 // /guide — static site guide (GEX/DEX explainer + page directory). Linked from
@@ -92,6 +96,7 @@ export default function App() {
               <Route path="/scanner" element={S(<Scanner />)} />
               <Route path="/level-log" element={S(<LevelLog />)} />
               <Route path="/strike-history" element={S(<StrikeHistory />)} />
+              <Route path="/gex-watch" element={S(<GexWatch />)} />
               <Route path="/replay" element={S(<Replay />)} />
               <Route path="/ict" element={S(<Ict />)} />
               <Route path="/test" element={S(<TestLab />)} />

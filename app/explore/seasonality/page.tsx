@@ -101,7 +101,7 @@ export default function SeasonalityPublicPage() {
             {START_YEAR}–{END_YEAR} · {SESSIONS} sessions of ^GSPC, recomputed from the raw daily closes
           </p>
 
-          <p style={{ color: T.muted, opacity: 0.78, fontSize: 16, lineHeight: 1.6, margin: "0 0 22px", maxWidth: "70ch" }}>
+          <p style={{ color: T.text, fontSize: 16, lineHeight: 1.6, margin: "0 0 22px", maxWidth: "70ch" }}>
             Not copied from an almanac — every table here is computed from the index's own price history, and every one
             of them prints its sample size so you can see how thin the evidence gets. It is yours free, in full, with
             nothing to sign up for.
@@ -117,7 +117,7 @@ export default function SeasonalityPublicPage() {
                 See what&apos;s inside
               </Link>
             </div>
-            <p style={{ margin: "12px 0 0", fontSize: 14, color: T.muted, opacity: 0.72, maxWidth: "62ch" }}>
+            <p style={{ margin: "12px 0 0", fontSize: 14, color: T.text, maxWidth: "62ch" }}>
               This page is history. The dashboard is <strong style={{ color: T.text, fontWeight: 700 }}>today</strong> —
               live SPX gamma exposure and flip levels, option flow side-classified print by print, ES and NQ market
               structure, and estimated-move levels, all updating through the session. Two days free, everything
@@ -134,7 +134,7 @@ export default function SeasonalityPublicPage() {
           <h2 style={{ fontSize: "clamp(20px,3vw,28px)", fontWeight: 800, margin: "0 0 10px", letterSpacing: "-0.01em" }}>
             Seasonality tells you the weather. It doesn&apos;t tell you the day.
           </h2>
-          <p style={{ color: T.muted, opacity: 0.78, fontSize: 15.5, lineHeight: 1.65, margin: "0 0 20px", maxWidth: "68ch" }}>
+          <p style={{ color: T.text, fontSize: 15.5, lineHeight: 1.65, margin: "0 0 20px", maxWidth: "68ch" }}>
             A ninety-eight-year average is a weak prior about a distribution — useful for knowing what October
             volatility usually costs, useless for knowing where price goes tomorrow. That part needs the order flow.
           </p>
@@ -148,7 +148,7 @@ export default function SeasonalityPublicPage() {
           </div>
         </section>
 
-        <p style={{ fontSize: 12, color: T.muted, opacity: 0.45, lineHeight: 1.6, maxWidth: "80ch" }}>
+        <p style={{ fontSize: 12.5, color: T.text, lineHeight: 1.65, maxWidth: "80ch" }}>
           Data: {ALMANAC.meta.symbol} daily closes, {ALMANAC.meta.start} through {ALMANAC.meta.end}. Price return only —
           dividends excluded. Historical calendar patterns describe what happened; they do not forecast what will. Not
           investment advice.

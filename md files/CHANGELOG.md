@@ -1,5 +1,144 @@
 # Changelog
 
+## 2026-08-24 - GEX Watch moved to its own live page (/gex-watch)
+
+Edited: `components/pages/GexWatch.tsx` (new), `app/app/gex-watch/route.ts`
+(new), `app-vite/src/App.tsx`, `components/shared/sectionNav.ts`,
+`components/shared/SectionSubStrip.tsx`, `server-v2/api-router.js`,
+`owner-vite/src/pages/Backtests.tsx`.
+
+### What moved
+
+GEX Watch was one `<Panel>` on the owner-vite **Backtests** page: press Run,
+it ran the whole study once, you read the result. It is now its own route,
+**/gex-watch**, pinned in the **Test Lab** sub-strip next to Flow Inventory and
+Prem Diff. The panel is gone from Backtests, replaced by a pointer comment —
+two renderers of one feed is two answers.
+
+### What "live" means here — two lanes, two cadences
+
+**Building now** polls `/api/gex-watch-live` (new, `auth: 'owner'`) on a
+selectable interval — off / 1m / 5m / 10m, default 1m — plus a manual refresh
+and an `updated HH:MM:SS ET` stamp. That endpoint calls the SAME exported
+`strikeGexBuildingNow()` the panel already used, so no second definition of the
+lane exists: one query over ~5 days of `strike_growth` for the latest recorded
+10-minute slot, judged against that symbol's own biggest build at the same slot
+on prior sessions. A failed poll keeps the last good rows on screen and says
+the read is the older one, rather than blanking the card.
+
+**Since last close** is the full study, still
+`/api/backtests?test=strike-gex-watch`, and is deliberately NOT polled: it is a
+169-ticker window-function calibration sweep plus the 400-session odds join,
+and its input only changes at the 16:40 ET recorder run. It runs once on mount
+and on **Run study**. Editing an input does not re-fire it.
+
+The untested warning is on the live card in full, not in a footnote:
+`strike_growth` is on a ~5-day retention sweep, so there is no outcome history
+to score that lane against, and lane-1 hit rates must never be read onto a
+lane-2 line. `feed_live` is filtered out of the study card's sections for the
+same reason — the live card above it is the same lane, fresher.
+
+### Owner gating
+
+Both endpoints are `auth: 'owner'` server-side. `SectionRoute` gained an
+`ownerOnly` flag (it already existed on `SectionTab`) and `SectionSubStrip` now
+honours it for split-out routes, so the pill is drawn for the owner only; the
+page itself shows an "owner only" card rather than an empty error. The
+customer-facing read of this data is unchanged: the GEX Watch box on
+**/premarket**, which reads the logged, graded, opex-filtered feed via
+`/api/gex-watch-feed` and never runs the sweep.
+
+### Route plumbing
+
+New page needs all three, per AGENTS.md: the client component, the `<Route>` in
+`app-vite/src/App.tsx`, and `app/app/gex-watch/route.ts` calling
+`serveSpaShell` so a hard refresh on `/app/gex-watch` boots the SPA instead of
+404ing. `/gex-watch` was also added to `TESTLAB_SECTION.paths` so the Test Lab
+strip stays on screen while you are on it.
+
+
+## 2026-08-24 - Seasonality: VIX-spike, month-end, opex studies + year overlays
+
+Edited: `components/seasonality/seasonalityData.ts` (regenerated),
+`SeasonalityView.tsx`, `SeasonalityAlmanac.tsx`,
+`app/explore/seasonality/page.tsx`.
+
+### New data
+
+^VIX and ^GSPC daily OHLC from Yahoo, 1990-01-02 -> 2026-08-21, joined on
+session date: 9,227 rows, zero drops. VIX does not exist before 1990, so that
+study is 36 years while everything else stays at 98.
+
+### Four new studies
+
+**After a VIX spike.** Sessions where ^VIX ran >= X% from its own OPEN to its
+own HIGH. Reports SPX same-day low -> next-day high, and next-day open ->
+close, each against an unconditional baseline over all 9,226 sessions — a
+number like "+1.84%" is meaningless until you know the baseline is +1.29%.
+The ladder is monotonic in the threshold, which is what a real effect looks
+like rather than a fluke: next-day open-to-close runs +0.11% at >=+10%, +0.36%
+at >=+20% (n=191, 61.3% positive) and +0.64% at >=+40%, against +0.03% / 53.5%
+unconditionally. Every +20% session is listed.
+
+**Last day of the month.** +8.6 bp against roughly +3 bp for an average
+session — and it is the NON-quarter ends carrying it (+10.2 bp vs +5.4 bp).
+Since 1985 the effect is essentially gone (+3.1 bp, 49.9% positive), the same
+arc the Monday effect took.
+
+**Opex week and the week after.** Opex = the third Friday, or the last session
+on or before it when that Friday is a holiday. Week = prior Friday's close ->
+opex Friday's close; after = opex close -> the following Friday's close. Opex
+week is positive and much more so since 1985 (+27.7 bp, 58.9%). The give-back
+concentrates after QUARTERLY expiration: -5.7 bp all history, -12.5 bp and only
+40.4% positive since 1985 (n=166). September's post-opex week is the worst on
+the calendar.
+
+**Year overlays on the seasonality chart.** Pick up to four past years to
+overlay on the live year — 1987, 2008, 2020 and 2022 read instantly. Each year
+is re-based to its own prior 31-Dec close so 1932 and 2026 sit on one axis.
+
+Capped at FOUR deliberately. With the seasonal average and the live year
+already drawn, six lines is where the palette validator's normal-vision floor
+fails, and that check is not one a legend buys you out of. So each overlay
+carries three encodings — hue, dash pattern, and a year label printed at the
+end of its own line, in its own gutter column past the price ticks. Want a
+fifth? Facet the chart, do not add a hue.
+
+98 years x 365 points is the biggest thing in the data file, so it ships as
+comma-joined integer hundredths parsed on FIRST USE, not at module load — most
+visitors never open the picker. The whole module is 260KB raw / 84KB gzipped.
+
+It is in the JS bundle rather than a fetched /public/*.json ON PURPOSE. The
+middleware matcher excludes ".js" but its `js(?!on)` lookahead does NOT exclude
+".json", so a fetched year file would be auth-gated and 307 to "/" for exactly
+the signed-out visitors /explore/seasonality exists to serve. Still no
+middleware change.
+
+### Presentation
+
+- **Method card removed** from the bottom of the page.
+- **All text is white.** Hierarchy now comes from size, weight and
+  letter-spacing; translucency is reserved for chrome (gridlines, hairline
+  borders, card fills). No `opacity` on a text node remains in any of the three
+  files.
+- **Heatmaps span the full card**: `width:100%` + `tableLayout:fixed` instead
+  of 42px fixed cells sitting in a narrow block with dead space beside them.
+  `minWidth:620` keeps them readable on a phone by scrolling rather than
+  crushing.
+- **Every data table is collapsed by default**, as a native `<details>` — 14 of
+  them. Native rather than React state on purpose: nothing to seed, so it cannot
+  desync between the server and the first client paint; keyboard and
+  screen-reader correct for free; and Ctrl+F still finds text inside a closed
+  `<details>`. Charts and stat tiles stay open — those are the scan layer, the
+  tables are the drill-down.
+
+### Verified before commit
+
+`tsc --strict` clean. Both surfaces (public page and Test Lab tab) rendered in a
+real browser at 1440px and 390px with zero console errors. On mobile, with all
+14 tables force-expanded, `document.scrollWidth == clientWidth` and no card
+overflows — the tables scroll inside their own wrappers.
+
 ## 2026-08-24 - Fix: Vite build failed on tombstoned SeasonalityTab import
 
 Edited: `components/pages/TestLab.tsx`.
