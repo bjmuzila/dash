@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-08-24 - VIX spike events table rebuilt in Brandon's layout
+
+Edited: `components/seasonality/SeasonalityAlmanac.tsx`.
+
+The "Every +20% session" table now reads like the sheet it replaces:
+`VIX date | VIX up | SPX next day | Next O→C`, dates as M/D/YYYY, newest first,
+with an inline proportional bar on the SPX-next-day column scaled to the largest
+move in the list.
+
+`DataTable`'s `Cell` type gained an optional `bar` (0..1). The caller computes
+the ratio because only the caller knows what the column is scaled against —
+`DataTable` has no business deciding that.
+
+Kept a fourth column the original sheet did not have: the following session's
+open-to-close. The low → next-high number is the headline, but it is measured
+between two ticks you only identify in hindsight; O→C is the version you could
+have traded, and leaving it off the row would flatter the setup.
+
+### Reconciliation against the old sheet
+
+Its SPY-next-day column matches this one almost exactly — 2.44/2.43, 1.08/1.08,
+8.20/8.18 — so both are measuring session low → next session high, and the
+residual is SPY vs SPX.
+
+Its VIX-up column does not reconcile. It disagrees per row (2/3/2026: 1.37% vs
+26.05% here; 1/27/2025: 51.58% vs 19.54%), it lists rows below the 20% threshold
+it claims to filter on (1.37%, 10.76%), 4/4/2025 appears twice, and it omits
+sessions that do clear 20% open→high (2/4/2026, 2/12/2026, 3/6/2026, 6/5/2026,
+6/9/2026). This page uses the definition that was actually specified — the
+session's own open → its own high — and 191 sessions clear it since 1990.
+
 ## 2026-08-24 - ES Candles: "Keep live", and heal the gap when the feed comes back
 
 Edited: `hooks/useWsLifecycle.ts`, `components/dashboard/es-candles/slotStore.ts`,

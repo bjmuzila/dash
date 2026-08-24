@@ -59,6 +59,11 @@ const bp = (v: number | null | undefined, d = 1) =>
   v == null ? "—" : `${v >= 0 ? "+" : "−"}${(Math.abs(v) * 10000).toFixed(d)} bp`;
 const signColor = (v: number | null | undefined) => (v == null ? INK : v >= 0 ? UP : DOWN);
 const n0 = (v: number) => v.toLocaleString("en-US");
+/** M/D/YYYY, parsed as UTC so a YYYY-MM-DD string never slips a day westward. */
+const fmtUS = (iso: string) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${m}/${d}/${y}`;
+};
 
 /** Width of a chart box, measured after mount. 0 until then. */
 function useMeasuredWidth() {
@@ -389,7 +394,12 @@ function PairBars({
 
 // ── tables ──────────────────────────────────────────────────────────────────
 
-type Cell = { t: string; c?: string } | string | number;
+/**
+ * A table cell. `bar` draws a proportional bar behind/next to the value —
+ * `bar` is the value's share of the column max, 0..1, computed by the caller
+ * because only the caller knows what the column is scaled against.
+ */
+type Cell = { t: string; c?: string; bar?: number } | string | number;
 
 function DataTable({ head, rows }: { head: string[]; rows: Cell[][] }) {
   return (
@@ -425,6 +435,7 @@ function DataTable({ head, rows }: { head: string[]; rows: Cell[][] }) {
             <tr key={ri}>
               {r.map((c, ci) => {
                 const isObj = typeof c === "object" && c !== null;
+                const cell = isObj ? (c as { t: string; c?: string; bar?: number }) : null;
                 return (
                   <td
                     key={ci}
@@ -432,11 +443,39 @@ function DataTable({ head, rows }: { head: string[]; rows: Cell[][] }) {
                       textAlign: ci === 0 ? "left" : "right",
                       padding: "7px 12px",
                       whiteSpace: "nowrap",
-                      color: isObj && (c as { c?: string }).c ? (c as { c?: string }).c : INK,
+                      color: cell?.c ? cell.c : INK,
                       borderBottom: ri === rows.length - 1 ? "none" : "1px solid rgba(255,255,255,0.06)",
                     }}
                   >
-                    {isObj ? (c as { t: string }).t : String(c)}
+                    {cell?.bar != null ? (
+                      <span style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
+                        <span>{cell.t}</span>
+                        <span
+                          aria-hidden
+                          style={{
+                            display: "inline-block",
+                            width: 70,
+                            height: 9,
+                            flex: "none",
+                            background: "rgba(255,255,255,0.05)",
+                            borderRadius: 2,
+                            overflow: "hidden",
+                          }}
+                        >
+                          <span
+                            style={{
+                              display: "block",
+                              height: "100%",
+                              width: `${Math.max(2, Math.min(100, cell.bar * 100))}%`,
+                              background: cell.c ?? UP,
+                              borderRadius: 2,
+                            }}
+                          />
+                        </span>
+                      </span>
+                    ) : (
+                      cell ? cell.t : String(c)
+                    )}
                   </td>
                 );
               })}
@@ -618,6 +657,9 @@ export default function SeasonalityAlmanac() {
 
   const vix = EXTRAS.vix;
   const v20 = vix.buckets.find((b) => b.threshold === 0.2) ?? vix.buckets[0];
+  // Bar scale for the events table — the largest move in the list, so the
+  // longest bar is full width and every other bar is read against it.
+  const maxLowNextHigh = Math.max(...vix.events.map((e) => Math.abs(e.low_to_next_high)), 0.0001);
   const eom = EXTRAS.eom;
   const opex = EXTRAS.opex;
 
@@ -743,17 +785,26 @@ export default function SeasonalityAlmanac() {
           />
         </Collapse>
 
-        <Collapse label={`Every +20% session`} hint={`${n0(vix.events.length)} events, newest first`}>
+        <Collapse
+          label="Every +20% session"
+          hint={`${n0(vix.events.length)} events, newest first`}
+          note={
+            <>
+              <strong>VIX up</strong> is that session&apos;s own open → high. <strong>SPX next day</strong> is the
+              session low → the following session&apos;s high, the same window the tiles above use; the bar scales it
+              against the biggest move in the list ({pct(maxLowNextHigh, 1)}). <strong>Next O→C</strong> is the
+              following session&apos;s open to close — the one you could actually have traded, since the low and the
+              next high are both ticks you only know afterwards.
+            </>
+          }
+        >
           <DataTable
-            head={["Date", "VIX pop", "VIX o→h", "SPX low", "Next high", "Low → next high", "Next O→C"]}
+            head={["VIX date", "VIX up", "SPX next day", "Next O→C"]}
             rows={vix.events.map((e) => [
-              e.date,
-              pctp(e.vix_pop, 1),
-              `${e.vix_open.toFixed(2)} → ${e.vix_high.toFixed(2)}`,
-              n0(Math.round(e.spx_low)),
-              n0(Math.round(e.next_high)),
-              { t: pct(e.low_to_next_high), c: signColor(e.low_to_next_high) },
-              { t: pct(e.next_open_close), c: signColor(e.next_open_close) },
+              fmtUS(e.date),
+              pctp(e.vix_pop, 2),
+              { t: pct(e.low_to_next_high, 2), c: signColor(e.low_to_next_high), bar: Math.abs(e.low_to_next_high) / maxLowNextHigh },
+              { t: pct(e.next_open_close, 2), c: signColor(e.next_open_close) },
             ])}
           />
         </Collapse>
