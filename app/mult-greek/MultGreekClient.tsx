@@ -1007,7 +1007,7 @@ function TickerPanel({
 
   // The active skin, resolved once per render. Every cell style below reads
   // from SK — nothing about the cell's look is hardcoded past this line.
-  const SK = HEAT_SKINS[heatSkin] ?? HEAT_SKINS.vivid;
+  const SK = HEAT_SKINS[heatSkin] ?? HEAT_SKINS.classic;
   // A skin with a gap has to open the SAME gap on the header and totals grids,
   // or the columns stop lining up with the cells under them.
   const colGap = SK.cell.gap;
@@ -1988,13 +1988,13 @@ export function MultGreekClient({
   const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const [contractMode, setContractMode] = useState<ContractMode>("oivol");
-  const [intensity, setIntensity] = useState(HEAT_SKINS.vivid.intensity.def);
+  const [intensity, setIntensity] = useState(HEAT_SKINS.classic.intensity.def);
   // Heat skin — cosmetic only (see HEAT_SKINS). Persisted per browser like the
   // 4th ticker: it is a preference about the board, not part of a session.
-  // VIVID is the default the page ships on; CLASSIC is the opt-out. Server
-  // render always starts on VIVID and any saved value is applied in the effect
-  // below, so the markup can't mismatch on hydration.
-  const [heatSkin, setHeatSkin] = useState<HeatSkin>("vivid");
+  // CLASSIC is the default the page ships on; VIVID is the opt-in. Server
+  // render always starts on CLASSIC and any saved value is applied in the
+  // effect below, so the markup can't mismatch on hydration.
+  const [heatSkin, setHeatSkin] = useState<HeatSkin>("classic");
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -2916,8 +2916,8 @@ export function MultGreekClient({
                   <DockField label="Skin">
                     <SegGroup
                       options={[
-                        { label: "VIVID", value: "vivid" },
                         { label: "CLASSIC", value: "classic" },
+                        { label: "VIVID", value: "vivid" },
                       ]}
                       active={heatSkin}
                       onChange={(v) => changeHeatSkin(v as HeatSkin)}

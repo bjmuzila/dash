@@ -27,25 +27,37 @@
  * and drives the levels; this one is a property of this chart and persists on
  * its own key.
  *
- * ── THE X WINDOW IS THE WHOLE ERGONOMIC PROBLEM ─────────────────────────────
+ * ── PAN / ZOOM: THE SAME HANDS AS THE GEX CHART ─────────────────────────────
+ * Wheel zooms, cursor-anchored, on the SAME ×1.16 / ×0.86 step GexChart.tsx
+ * uses. Drag pans. Dragging in the left gutter (inside the y-axis) scales the
+ * bars vertically, again on GexChart's ×1.003^dy. Double-click resets to the
+ * Range tab. Someone who has learned the GEX chart already knows this one, and
+ * that is the entire reason the constants were copied rather than picked.
+ *
+ * The wheel listener is bound NATIVELY with `{ passive: false }` — React's
+ * onWheel prop is passive in React 18, so preventDefault() there is a no-op and
+ * the page scrolls out from under the chart. Same note lives in GexChart.
+ *
+ * ── THE X WINDOW ────────────────────────────────────────────────────────────
  * A fixed ±2.8% band is ±215 points on a 7,670 SPX. On a 0DTE board the mass
  * has a 1σ of ~25 points, so EVERYTHING lives in the middle 12% of the axis and
  * the other 88% is a flat line — the chart reads as cramped no matter how tall
  * the card is, because the problem is horizontal, not vertical.
  *
  * So AUTO is the default and it is width-adaptive: σ is measured on a wide ±3%
- * pass, and the drawn window is spot ± max(4.5σ, 0.35% of spot), then widened
- * just enough to keep spot, flip and both walls on screen, then clamped to ±3%.
- * The peak fills the card instead of hiding in it. 1% / 2% / 3% are there for
- * anyone who wants a fixed band (and for comparing two sessions on one scale),
- * and the choice persists.
+ * pass, and the window is spot ± max(4.5σ, 0.35% of spot), widened just enough
+ * to keep spot, flip and both walls on screen, then clamped to ±3%. 1% / 2% /
+ * 3% pin it to a fixed band, and the choice persists. Any wheel or drag takes
+ * over from all of that until the next double-click, which is why the window
+ * stops re-centring on spot the moment you touch it — a chart that pans itself
+ * out from under a drag is unusable.
  *
- * ── LAYOUT: NOTHING FLOATS OVER THE PLOT ────────────────────────────────────
- * Stats and legend sit in their own strips ABOVE the plot, never inside the
- * SVG. The tooltip is the only floating thing, and it has nothing to collide
- * with. Level labels are packed greedily into up to three rows in the top pad:
- * spot, flip and both walls routinely land within a few points of each other,
- * and one row turns into an unreadable smear.
+ * ── LAYOUT ──────────────────────────────────────────────────────────────────
+ * Stats and legend sit in strips ABOVE the plot, never inside the SVG. Level
+ * labels fan out from the middle (below-spot to the left, above-spot to the
+ * right) and pack into up to three rows, each with a leader back to its rule:
+ * spot, flip and both walls land within a few points of each other on a 0DTE
+ * board, and one centred row is an unreadable smear.
  *
  * ── SCALE ───────────────────────────────────────────────────────────────────
  * Bars are net GEX (calls +, puts −) on ONE linear scale across both sides —
@@ -54,14 +66,16 @@
  * in the above-zero half on their own shared factor, so their heights are
  * comparable to each other and never to the bars. The axis labels belong to the
  * bars only, which is why the mass/fit pair is labelled in the legend instead.
+ * Both scales are fitted to what is INSIDE the window, so zooming in on a quiet
+ * wing actually resolves it instead of leaving it a flat line under the peak.
  *
  * Colours/typography come from the `.pmk` custom properties (which are
  * interpolated from components/shared/homeTheme in Premarket.tsx) — nothing is
  * hardcoded here, per AGENTS.md.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
   callGEXOf,
   putGEXOf,
@@ -109,6 +123,10 @@ export const GAMMA_DIST_CSS = `
 .gdist .gd-ctl{display:flex;align-items:center;gap:6px}
 .gdist .gd-ctl>b{font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim2);
   font-weight:600}
+.gdist .gd-reset{background:transparent;border:1px solid var(--amberEdge);color:var(--amber);
+  font:inherit;font-size:10px;letter-spacing:.05em;padding:3px 9px;border-radius:var(--r2);
+  cursor:pointer;white-space:nowrap}
+.gdist .gd-reset:hover{background:var(--amberWash)}
 
 /* KPI STRIP — the old floating stats card, unstacked. Five facts on one line
    above the plot, so nothing sits on top of the drawing. */
@@ -129,7 +147,11 @@ export const GAMMA_DIST_CSS = `
 .gdist .gd-legend i{display:block;width:16px;height:0;border-top-width:2px;border-top-style:solid;flex:0 0 16px}
 
 .gdist .gd-wrap{position:relative;width:100%}
-.gdist svg{display:block;width:100%;height:auto;touch-action:pan-y}
+/* pan-y keeps the PAGE scrollable under a vertical flick on a phone while a
+   horizontal drag still pans the chart. */
+.gdist svg{display:block;width:100%;height:auto;touch-action:pan-y;cursor:grab;
+  user-select:none;-webkit-user-select:none}
+.gdist svg.dragging{cursor:grabbing}
 .gdist .gd-tip{position:absolute;pointer-events:none;z-index:3;transform:translateX(-50%);
   background:var(--plate);border:1px solid var(--line2);border-radius:var(--r2);
   padding:6px 9px;font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--txt);
@@ -156,6 +178,7 @@ function fmtB(v: number, sign = true): string {
 }
 
 const nf0 = (v: number) => Math.round(v).toLocaleString("en-US");
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 // ── per-row legs on the selected basis ───────────────────────────────────────
 
@@ -195,8 +218,21 @@ const PAD = { t: 58, r: 18, b: 38, l: 72 };
 const MAX_BAND = 0.03;
 /** Above this many bars the axis is unreadable, so neighbours are binned. */
 const MAX_BARS = 150;
+/** Zoom stops here — about six 5-point strikes across the card. */
+const MIN_HALF = 14;
+/** GexChart's constants, on purpose — the two charts must feel identical. */
+const WHEEL_IN = 0.86;
+const WHEEL_OUT = 1.16;
+/** Drag inside this many px of the left edge scales Y instead of panning. */
+const YZONE = 18;
 
 type Bin = { k: number; net: number; mass: number };
+type Drag = {
+  mode: "pan" | "yscale";
+  startX: number; startY: number;
+  startC: number; startYScale: number;
+  kPerPx: number;
+};
 
 /** Mass-weighted mean and sd of a bin set. */
 function moments(rows: Bin[]): { mu: number; sigma: number; total: number } | null {
@@ -227,6 +263,8 @@ export default function GammaDistribution({
   /** A captured past session — the footer says so instead of implying live. */
   frozen?: boolean;
 }) {
+  const clipId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+
   // ── switches (own keys; NOT the page's three-leg lvlBasis) ────────────────
   const [basis, setBasis] = useState<GammaBasis>("oi");
   const [zoom, setZoom] = useState<GammaZoom>("auto");
@@ -242,13 +280,21 @@ export default function GammaDistribution({
     setBasis(b);
     try { localStorage.setItem(BASIS_KEY, b); } catch { /* nothing to do */ }
   }, []);
+
+  // ── manual view (wheel / drag). null = follow the Range tab ───────────────
+  const [view, setView] = useState<{ c: number; h: number } | null>(null);
+  const [yScale, setYScale] = useState(1);
+  const resetView = useCallback(() => { setView(null); setYScale(1); }, []);
+
   const pickZoom = useCallback((z: GammaZoom) => {
     setZoom(z);
+    resetView(); // a Range tab is an explicit "show me THIS band"
     try { localStorage.setItem(ZOOM_KEY, z); } catch { /* nothing to do */ }
-  }, []);
+  }, [resetView]);
 
   // ── responsive box ────────────────────────────────────────────────────────
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
   const [W, setW] = useState(1100);
   useEffect(() => {
     const el = wrapRef.current;
@@ -262,6 +308,8 @@ export default function GammaDistribution({
   }, []);
   /** Height follows width so the plot keeps a shape instead of letterboxing. */
   const H = Math.round(Math.min(620, Math.max(430, W * 0.42)));
+  const plotW = Math.max(80, W - PAD.l - PAD.r);
+  const plotH = H - PAD.t - PAD.b;
 
   // ── WIDE pass: every strike this card would ever read (±3% of spot) ───────
   // Kept separate from the drawn set because the AUTO window is derived FROM
@@ -278,8 +326,17 @@ export default function GammaDistribution({
       .sort((a, b) => a.k - b.k);
   }, [chain, spot, basis]);
 
-  // ── the drawn window ──────────────────────────────────────────────────────
-  const half = useMemo(() => {
+  /** Typical strike spacing — the curve's integration step and the bar margin. */
+  const gridStep = useMemo(() => {
+    if (wide.length < 2) return 5;
+    const gaps: number[] = [];
+    for (let i = 1; i < wide.length; i++) gaps.push(wide[i].k - wide[i - 1].k);
+    gaps.sort((a, b) => a - b);
+    return Math.max(0.5, gaps[Math.floor(gaps.length / 2)] || 5);
+  }, [wide]);
+
+  // ── the Range tab's window ────────────────────────────────────────────────
+  const tabHalf = useMemo(() => {
     if (!(spot > 0)) return 0;
     if (zoom !== "auto") return spot * (Number(zoom) / 100);
     const m = moments(wide);
@@ -295,21 +352,30 @@ export default function GammaDistribution({
     return Math.min(h, spot * MAX_BAND);
   }, [wide, zoom, spot, flip, callWall, putWall]);
 
-  const bins = useMemo<Bin[]>(() => {
-    if (!wide.length || !(half > 0)) return [];
-    const raw = wide.filter((b) => b.k >= spot - half && b.k <= spot + half);
+  // The window actually drawn. A manual view wins until it is reset — the
+  // window must NOT chase spot while someone is reading a zoomed wing.
+  const center = view ? view.c : spot;
+  const halfEff = view ? view.h : tabHalf;
+  const k0 = center - halfEff;
+  const k1 = center + halfEff;
+
+  // ── bins: everything drawn (a margin past each edge, clipped), and the
+  //    subset INSIDE the window, which is what the scales and stats fit to ───
+  const binsAll = useMemo<Bin[]>(() => {
+    if (!wide.length || !(halfEff > 0)) return [];
+    const raw = wide.filter((b) => b.k >= k0 - 2 * gridStep && b.k <= k1 + 2 * gridStep);
     if (raw.length <= MAX_BARS) return raw;
 
     // Too many strikes to draw one bar each: fold neighbours into equal-width
     // buckets. Sums, not averages — a bucket must carry the same dollars its
     // strikes did or the totals stop matching the ladder.
-    const k0 = raw[0].k;
-    const k1 = raw[raw.length - 1].k;
-    const step = (k1 - k0) / MAX_BARS || 1;
+    const a0 = raw[0].k;
+    const a1 = raw[raw.length - 1].k;
+    const step = (a1 - a0) / MAX_BARS || 1;
     const out: Bin[] = [];
     for (const b of raw) {
-      const idx = Math.min(MAX_BARS - 1, Math.floor((b.k - k0) / step));
-      const kMid = k0 + (idx + 0.5) * step;
+      const idx = Math.min(MAX_BARS - 1, Math.floor((b.k - a0) / step));
+      const kMid = a0 + (idx + 0.5) * step;
       const last = out[out.length - 1];
       if (last && Math.abs(last.k - kMid) < 1e-9) {
         last.net += b.net; last.mass += b.mass;
@@ -318,92 +384,183 @@ export default function GammaDistribution({
       }
     }
     return out;
-  }, [wide, half, spot]);
+  }, [wide, k0, k1, halfEff, gridStep]);
 
-  // ── fit, on what is DRAWN (so the stats describe the picture) ─────────────
+  const binsIn = useMemo(() => binsAll.filter((b) => b.k >= k0 && b.k <= k1), [binsAll, k0, k1]);
+
+  // ── fit, on what is INSIDE the window (so the stats describe the picture) ─
   const fit = useMemo(() => {
-    const m = moments(bins);
+    const m = moments(binsIn);
     if (!m) return null;
-    const inside = bins
+    const inside = binsIn
       .filter((b) => b.k >= m.mu - m.sigma && b.k <= m.mu + m.sigma)
       .reduce((s, b) => s + b.mass, 0);
-    const netTotal = bins.reduce((s, b) => s + b.net, 0);
-    const step = bins.length > 1 ? (bins[bins.length - 1].k - bins[0].k) / (bins.length - 1) : 5;
+    const netTotal = binsIn.reduce((s, b) => s + b.net, 0);
+    const step = binsIn.length > 1
+      ? (binsIn[binsIn.length - 1].k - binsIn[0].k) / (binsIn.length - 1)
+      : gridStep;
     return {
       totalMass: m.total, mu: m.mu, sigma: m.sigma,
       insidePct: (inside / m.total) * 100, netTotal, step,
     };
-  }, [bins]);
+  }, [binsIn, gridStep]);
 
   // ── scales ────────────────────────────────────────────────────────────────
   const geo = useMemo(() => {
-    if (!bins.length || !fit) return null;
-    const k0 = bins[0].k - fit.step / 2;
-    const k1 = bins[bins.length - 1].k + fit.step / 2;
-    const plotW = Math.max(80, W - PAD.l - PAD.r);
-    const plotH = H - PAD.t - PAD.b;
+    if (!binsIn.length || !fit) return null;
 
-    const maxP = Math.max(0, ...bins.map((b) => b.net));
-    const maxN = Math.max(0, ...bins.map((b) => -b.net));
+    const maxP = Math.max(0, ...binsIn.map((b) => b.net));
+    const maxN = Math.max(0, ...binsIn.map((b) => -b.net));
     const span = maxP + maxN || 1;
 
     // ONE linear scale across both sides. The zero line therefore sits wherever
     // the pos/neg split puts it — a small put side gets a small strip, which is
     // the truth. (Per-side scales made a −500M bar as tall as a +4B one.)
     const zeroY = PAD.t + plotH * (maxP / span);
-    const pxPerDollar = plotH / span;
+    const pxPerDollar = (plotH / span) * yScale;
 
     const x = (k: number) => PAD.l + ((k - k0) / (k1 - k0)) * plotW;
     const y = (v: number) => zeroY - v * pxPerDollar;
 
     // Mass line + fitted normal share ONE factor of their own, filling the
     // above-zero half. Comparable to each other; never to the bars.
-    const maxMass = Math.max(...bins.map((b) => b.mass), 1);
-    const mScale = (zeroY - PAD.t) / maxMass;
+    const maxMass = Math.max(...binsIn.map((b) => b.mass), 1);
+    const mScale = ((zeroY - PAD.t) / maxMass) * yScale;
     const yMass = (m: number) => zeroY - m * mScale;
 
-    // Bars get a real gap once there is room for one; below ~4px they butt up
-    // against each other rather than dissolving into hairlines.
-    const slot = plotW / bins.length;
+    // Bars get a real gap once there is room for one; below ~6px of slot they
+    // butt up against each other rather than dissolving into hairlines.
+    const slot = (plotW / Math.max(1, k1 - k0)) * gridStep;
     const barW = slot > 6 ? Math.max(3, slot - 3) : Math.max(1.5, slot * 0.82);
-    return { k0, k1, plotW, plotH, zeroY, x, y, yMass, maxP, maxN, maxMass, barW };
-  }, [bins, fit, W, H]);
+    return { zeroY, x, y, yMass, maxP, maxN, maxMass, barW };
+  }, [binsIn, fit, k0, k1, plotW, plotH, yScale, gridStep]);
 
-  // ── hover ─────────────────────────────────────────────────────────────────
+  // ── pan / zoom ────────────────────────────────────────────────────────────
+  // The handlers read live geometry off a ref: the wheel listener is bound
+  // once (natively, non-passive) and would otherwise close over a stale window.
+  const domRef = useRef({ k0, k1, W, plotW, spot });
+  useEffect(() => { domRef.current = { k0, k1, W, plotW, spot }; }, [k0, k1, W, plotW, spot]);
+
+  const clampWin = useCallback((c: number, h: number) => {
+    const s = domRef.current.spot;
+    const hh = clamp(h, MIN_HALF, s * MAX_BAND);
+    return { c: clamp(c, s * (1 - MAX_BAND), s * (1 + MAX_BAND)), h: hh };
+  }, []);
+
+  const onWheel = useCallback((e: WheelEvent) => {
+    const el = svgRef.current;
+    const d = domRef.current;
+    if (!el || !(d.k1 > d.k0)) return;
+    e.preventDefault();
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const svgX = ((e.clientX - rect.left) / rect.width) * d.W;
+    const frac = clamp((svgX - PAD.l) / d.plotW, 0, 1);
+    const anchor = d.k0 + frac * (d.k1 - d.k0);
+    const curH = (d.k1 - d.k0) / 2;
+    const nextH = clamp(curH * (e.deltaY > 0 ? WHEEL_OUT : WHEEL_IN), MIN_HALF, d.spot * MAX_BAND);
+    if (Math.abs(nextH - curH) < 1e-6) return;
+    // Keep the strike under the cursor under the cursor.
+    setView(clampWin(anchor - (frac - 0.5) * 2 * nextH, nextH));
+  }, [clampWin]);
+
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    // React's onWheel is passive in React 18, so preventDefault() there does
+    // nothing and the page scrolls instead of the chart zooming.
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [onWheel]);
+
+  const dragRef = useRef<Drag | null>(null);
+  const [dragging, setDragging] = useState(false);
   const [hover, setHover] = useState<number | null>(null);
-  const onMove = useCallback((e: ReactMouseEvent<SVGSVGElement>) => {
-    if (!geo || !bins.length) return;
+
+  const onPointerDown = useCallback((e: ReactPointerEvent<SVGSVGElement>) => {
+    if (e.button !== 0) return;
+    const d = domRef.current;
     const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || !(d.k1 > d.k0)) return;
+    const scale = d.W / rect.width;             // svg units per css px
+    const svgX = (e.clientX - rect.left) * scale;
+    dragRef.current = {
+      mode: svgX < PAD.l + YZONE ? "yscale" : "pan",
+      startX: e.clientX,
+      startY: e.clientY,
+      startC: (d.k0 + d.k1) / 2,
+      startYScale: yScale,
+      kPerPx: ((d.k1 - d.k0) / d.plotW) * scale, // strikes per CSS px
+    };
+    setDragging(true);
+    setHover(null);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }, [yScale]);
+
+  const onPointerMove = useCallback((e: ReactPointerEvent<SVGSVGElement>) => {
+    const drag = dragRef.current;
+    if (drag) {
+      if (drag.mode === "yscale") {
+        // GexChart's ×1.003^dy — up is bigger.
+        setYScale(clamp(drag.startYScale * Math.pow(1.003, drag.startY - e.clientY), 0.1, 12));
+      } else {
+        const dx = e.clientX - drag.startX;
+        const d = domRef.current;
+        setView(clampWin(drag.startC - dx * drag.kPerPx, (d.k1 - d.k0) / 2));
+      }
+      return;
+    }
+    // Not dragging: hover readout.
+    if (!geo || !binsIn.length) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0) return;
     const px = ((e.clientX - rect.left) / rect.width) * W;
     if (px < PAD.l || px > W - PAD.r) { setHover(null); return; }
     let best = 0;
     let bestD = Infinity;
-    for (let i = 0; i < bins.length; i++) {
-      const d = Math.abs(geo.x(bins[i].k) - px);
-      if (d < bestD) { bestD = d; best = i; }
+    for (let i = 0; i < binsIn.length; i++) {
+      const dd = Math.abs(geo.x(binsIn[i].k) - px);
+      if (dd < bestD) { bestD = dd; best = i; }
     }
     setHover(best);
-  }, [geo, bins, W]);
+  }, [geo, binsIn, W, clampWin]);
+
+  const endDrag = useCallback(() => {
+    dragRef.current = null;
+    setDragging(false);
+  }, []);
+
+  // Keep the tooltip's index in range when the window changes under it.
+  const hv = hover != null && hover < binsIn.length ? binsIn[hover] : null;
 
   // ── head ──────────────────────────────────────────────────────────────────
   const meta = BASIS_META[basis];
+  const touched = view != null || yScale !== 1;
   const head = (
     <div className="gd-head">
       <div className="gd-lh">
         <h3>Gamma Exposure by Strike</h3>
         <span className="gd-sub">
           {isZeroDte ? "0DTE" : "front"}{expiry ? ` ${expiry}` : ""} · {meta.long}
-          {bins.length
-            ? ` · ${bins.length} bars · ${nf0(spot - half)} – ${nf0(spot + half)} (±${((half / spot) * 100).toFixed(2)}%)`
+          {binsIn.length
+            ? ` · ${binsIn.length} bars · ${nf0(k0)} – ${nf0(k1)} (±${((halfEff / spot) * 100).toFixed(2)}%)`
             : ""}
+          {yScale !== 1 ? ` · y ×${yScale.toFixed(2)}` : ""}
         </span>
       </div>
       <div className="gd-rh">
-        {bins.length > 0 && (
+        {binsIn.length > 0 && (
           <div className="gd-legend">
             <span><i style={{ borderTopColor: "var(--amber)" }} />Fitted normal</span>
             <span><i style={{ borderTopColor: "var(--blue)" }} />Gamma mass (|call| + |put|)</span>
           </div>
+        )}
+        {touched && (
+          <button type="button" className="gd-reset" onClick={resetView}
+            title="Back to the Range tab's window and y-scale (or just double-click the chart)">
+            ⤾ reset view
+          </button>
         )}
         <div className="gd-ctl">
           <b>Range</b>
@@ -412,8 +569,8 @@ export default function GammaDistribution({
               <button
                 key={z}
                 type="button"
-                className={zoom === z ? "on" : ""}
-                aria-pressed={zoom === z}
+                className={zoom === z && !touched ? "on" : ""}
+                aria-pressed={zoom === z && !touched}
                 title={ZOOM_META[z].hint}
                 onClick={() => pickZoom(z)}
               >
@@ -443,7 +600,7 @@ export default function GammaDistribution({
     </div>
   );
 
-  if (!bins.length || !fit || !geo) {
+  if (!binsIn.length || !fit || !geo) {
     return (
       <div className="gdist">
         {head}
@@ -452,14 +609,16 @@ export default function GammaDistribution({
             ? "Waiting for the chain…"
             : basis === "vol"
               ? "No volume on this board yet — the session has not traded. Switch to OI."
-              : "No gamma within ±3% of spot on this basis."}
+              : touched
+                ? "Nothing in this window — double-click to reset the view."
+                : "No gamma within ±3% of spot on this basis."}
         </div>
       </div>
     );
   }
 
   const { mu, sigma, insidePct, netTotal, totalMass, step } = fit;
-  const { zeroY, x, y, yMass, maxP, maxN, barW, k0, k1 } = geo;
+  const { zeroY, x, y, yMass, maxP, maxN, barW } = geo;
 
   // Fitted normal, on the mass scale: totalMass × step × pdf(k).
   const curve: string = (() => {
@@ -473,7 +632,7 @@ export default function GammaDistribution({
     return pts.join(" ");
   })();
 
-  const massPath = bins
+  const massPath = binsAll
     .map((b, i) => `${i === 0 ? "M" : "L"}${x(b.k).toFixed(2)},${yMass(b.mass).toFixed(2)}`)
     .join(" ");
 
@@ -527,7 +686,6 @@ export default function GammaDistribution({
       return { ...l, row };
     });
 
-  const hv = hover != null ? bins[hover] : null;
   const shape = insidePct >= 80 ? "far more peaked than the fit"
     : insidePct >= 68 ? "tighter than normal"
       : "flatter than normal";
@@ -566,59 +724,79 @@ export default function GammaDistribution({
 
       <div className="gd-wrap" ref={wrapRef}>
         <svg
+          ref={svgRef}
+          className={dragging ? "dragging" : undefined}
           viewBox={`0 0 ${W} ${H}`}
           width={W}
           height={H}
           role="img"
-          aria-label={`Net gamma exposure per strike on the ${meta.long} basis, with a normal curve fitted to the gamma-mass distribution`}
-          onMouseMove={onMove}
-          onMouseLeave={() => setHover(null)}
+          aria-label={`Net gamma exposure per strike on the ${meta.long} basis, with a normal curve fitted to the gamma-mass distribution. Scroll to zoom, drag to pan, double-click to reset.`}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onDoubleClick={resetView}
+          onMouseLeave={() => { endDrag(); setHover(null); }}
         >
+          <defs>
+            {/* Everything data-drawn is clipped to the plot so a pan or a
+                y-scale drag cannot spill bars over the axes and labels. */}
+            <clipPath id={`gd-clip-${clipId}`}>
+              <rect x={PAD.l} y={PAD.t - 8} width={plotW} height={plotH + 8} />
+            </clipPath>
+          </defs>
+
           {/* ±1σ band */}
           <rect
             x={x(Math.max(k0, mu - sigma))}
             y={PAD.t}
             width={Math.max(0, x(Math.min(k1, mu + sigma)) - x(Math.max(k0, mu - sigma)))}
-            height={H - PAD.t - PAD.b}
+            height={plotH}
             fill="var(--amberWash)"
           />
 
           {/* y grid + labels (bars only — the mass/fit pair has its own scale) */}
-          {yTicks.map((v) => (
-            <g key={`y${v}`}>
-              <line x1={PAD.l} x2={W - PAD.r} y1={y(v)} y2={y(v)} stroke="var(--line)" strokeWidth={1} />
-              <text x={PAD.l - 9} y={y(v) + 3.5} textAnchor="end" fontSize={10.5} fill="var(--dim2)"
-                style={{ fontVariantNumeric: "tabular-nums" }}>
-                {fmtB(v)}
-              </text>
-            </g>
-          ))}
+          {yTicks.map((v) => {
+            const yy = y(v);
+            if (yy < PAD.t - 2 || yy > H - PAD.b + 2) return null;
+            return (
+              <g key={`y${v}`}>
+                <line x1={PAD.l} x2={W - PAD.r} y1={yy} y2={yy} stroke="var(--line)" strokeWidth={1} />
+                <text x={PAD.l - 9} y={yy + 3.5} textAnchor="end" fontSize={10.5} fill="var(--dim2)"
+                  style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {fmtB(v)}
+                </text>
+              </g>
+            );
+          })}
 
           {/* zero line */}
           <line x1={PAD.l} x2={W - PAD.r} y1={zeroY} y2={zeroY} stroke="var(--line3)" strokeWidth={1} />
           <text x={PAD.l - 9} y={zeroY + 3.5} textAnchor="end" fontSize={10.5} fill="var(--dim2)">0</text>
 
-          {/* bars */}
-          {bins.map((b) => {
-            const pos = b.net >= 0;
-            const yv = y(b.net);
-            const h = Math.max(0.6, Math.abs(yv - zeroY));
-            return (
-              <rect
-                key={b.k}
-                x={x(b.k) - barW / 2}
-                y={pos ? yv : zeroY}
-                width={barW}
-                height={h}
-                fill={pos ? "var(--pos)" : "var(--neg)"}
-                opacity={hover == null || bins[hover].k === b.k ? 0.92 : 0.5}
-              />
-            );
-          })}
+          <g clipPath={`url(#gd-clip-${clipId})`}>
+            {/* bars */}
+            {binsAll.map((b) => {
+              const pos = b.net >= 0;
+              const yv = y(b.net);
+              const h = Math.max(0.6, Math.abs(yv - zeroY));
+              return (
+                <rect
+                  key={b.k}
+                  x={x(b.k) - barW / 2}
+                  y={pos ? yv : zeroY}
+                  width={barW}
+                  height={h}
+                  fill={pos ? "var(--pos)" : "var(--neg)"}
+                  opacity={hv == null || hv.k === b.k ? 0.92 : 0.5}
+                />
+              );
+            })}
 
-          {/* fitted normal, then the real mass on top of it */}
-          <path d={curve} fill="none" stroke="var(--amber)" strokeWidth={2.2} strokeLinejoin="round" />
-          <path d={massPath} fill="none" stroke="var(--blue)" strokeWidth={1.7} strokeLinejoin="round" opacity={0.95} />
+            {/* fitted normal, then the real mass on top of it */}
+            <path d={curve} fill="none" stroke="var(--amber)" strokeWidth={2.2} strokeLinejoin="round" />
+            <path d={massPath} fill="none" stroke="var(--blue)" strokeWidth={1.7} strokeLinejoin="round" opacity={0.95} />
+          </g>
 
           {/* level rules; labels packed into up to three rows, each with a
               leader down to its rule so a shifted label still reads as its own */}
@@ -646,7 +824,7 @@ export default function GammaDistribution({
           })}
 
           {/* hover guide */}
-          {hv && (
+          {hv && !dragging && (
             <line x1={x(hv.k)} x2={x(hv.k)} y1={PAD.t - 6} y2={H - PAD.b}
               stroke="var(--cyan)" strokeWidth={1} opacity={0.55} />
           )}
@@ -659,13 +837,17 @@ export default function GammaDistribution({
               {nf0(t)}
             </text>
           ))}
-          <text x={PAD.l + (W - PAD.l - PAD.r) / 2} y={H - 5} textAnchor="middle" fontSize={9.5}
+          <text x={PAD.l + plotW / 2} y={H - 5} textAnchor="middle" fontSize={9.5}
             fill="var(--dim2)" style={{ letterSpacing: ".1em", textTransform: "uppercase" }}>
             Strike
           </text>
+          {/* Same hint, same words as the GEX chart. */}
+          <text x={W - PAD.r} y={H - 5} textAnchor="end" fontSize={9.5} fill="var(--dim2)" opacity={0.75}>
+            scroll=zoom · drag=pan · left edge=y-scale · dbl=reset
+          </text>
         </svg>
 
-        {hv && (
+        {hv && !dragging && (
           <div
             className="gd-tip"
             style={{
@@ -693,7 +875,9 @@ export default function GammaDistribution({
         {basis === "vol"
           ? " Volume basis — this is today's trading only, so it reads near-empty before 09:30."
           : " OI basis — positioning carried into the session, which is the honest premarket read."}
-        {zoom === "auto" ? " Range is auto-fitted to the mass; the tabs pin it to a fixed band." : ""}
+        {touched
+          ? " View is pinned where you left it — double-click the chart to follow spot again."
+          : zoom === "auto" ? " Range is auto-fitted to the mass; the tabs pin it to a fixed band." : ""}
         {frozen ? " Captured session, not live." : ""}
       </p>
     </div>

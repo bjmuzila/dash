@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-08-25 - Multi Greek: the ladder opens on CLASSIC again
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+CLASSIC is the default skin the page ships on; VIVID is now the opt-in. Three
+places moved and they have to stay in step: the `heatSkin` initial state,
+the `intensity` initial state (each skin carries its own tuned position and
+ceiling - see `SkinDef.intensity`), and the `?? HEAT_SKINS.classic` fallback in
+the render. The cog's Skin toggle lists CLASSIC first to match.
+
+Persistence is unchanged: a saved `mg_heat_skin` still wins, applied in the
+hydration effect. Only a browser with nothing saved sees the new default.
+
+## 2026-08-25 - Premarket gamma distribution: pan / zoom, same hands as the GEX chart
+
+Edited: `components/pages/premarket/GammaDistribution.tsx`.
+
+Wheel zooms, drag pans, left-edge drag scales Y, double-click resets. The
+constants are COPIED from `components/dashboard/GexChart.tsx` on purpose -
+x1.16 / x0.86 per wheel notch, x1.003^dy for the y-scale, an 18px left gutter
+for the y-drag zone - so someone who has learned the GEX chart already knows
+this one. Same hint text in the corner, same wording.
+
+Mechanics worth knowing:
+
+- The wheel listener is bound NATIVELY with `{ passive: false }`. React's
+  `onWheel` prop is passive in React 18, so `preventDefault()` there is a no-op
+  and the page scrolls out from under the chart. Same note lives in GexChart.
+- Zoom is cursor-anchored: the strike under the pointer stays under the pointer.
+- The window is now `center +/- half` rather than "whatever bins survived the
+  filter", so panning is smooth instead of snapping bin to bin.
+- A manual view WINS over the Range tab until it is reset - the window must not
+  chase spot while someone is reading a zoomed wing. A `reset view` button
+  appears in the head whenever the view is pinned, and the footer says so.
+- Bars, the mass line and the fitted normal are drawn from a slightly wider set
+  than the window and clipped to the plot, so a pan or a y-scale drag cannot
+  spill them over the axes and labels.
+- Scales and stats fit to what is INSIDE the window, so zooming into a quiet
+  wing actually resolves it instead of leaving it flat under the peak.
+- Zoom floor is +/-14 points (about six 5-point strikes); the ceiling stays the
+  +/-3% board this card reads.
+- Pointer capture on the SVG, `touch-action:pan-y` kept so a vertical flick on
+  a phone still scrolls the page while a horizontal drag pans the chart.
+
 ## 2026-08-25 - Premarket gamma distribution: the cramping was HORIZONTAL
 
 Edited: `components/pages/premarket/GammaDistribution.tsx`.

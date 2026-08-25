@@ -8,12 +8,14 @@
 // name that isn't on the watchlist is off-roster and hidden behind the scope
 // toggle rather than quietly padding the board.
 //
-// TEMPLATE. The layout, derivations and states are final; the DATA is not.
-// Everything on screen comes from one `DgPayload` (see lib/dailyGrades.ts), and
-// the only thing that changes when TT / dxLink lands is `loadGrades()` in that
-// file — this component never fetches a board itself. Until then it falls back
-// to the sealed 2026-08-25 sample and the header says which source is on
-// screen. Paste-JSON is the manual path in the meantime.
+// THE BOARD IS LIVE. `/proxy/daily-grades` serves the board sealed at 09:26 ET
+// by server-v2/daily-grades-recorder.js. Everything on screen comes from one
+// `DgPayload` (see lib/dailyGrades.ts) and this component never fetches a board
+// itself — `loadGrades()` is the only door. The bundled 2026-08-25 sample is
+// the fallback for a session with no seal (a fresh database, a missed run), and
+// the header badge always says which of the three is on screen: Live, Imported
+// or Sample board. Paste-JSON stays as the manual path for a board built
+// somewhere else.
 //
 // NAMING: the payload field is `apex`; the level is CB and the UI says CB. The
 // key is not renamed because it is the sealed board's own wire format — see the
@@ -543,8 +545,8 @@ export default function DailyGrades() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, flexShrink: 0 }}>
         {[
           ["Roster", "The scanner watchlist from /proxy/scanner-tickers — the same universe the ΔGEX Board runs over."],
-          ["Cap", "The strongest POSITIVE GEX strike on the board."],
-          ["Floor", "The strongest NEGATIVE GEX strike on the board."],
+          ["Cap", "Where 80% of the call gamma ladder sits below — the empirical percentile of the settled-OI call GEX, not the single biggest strike."],
+          ["Floor", "Where 20% of the put gamma ladder sits below — the same read from the other end."],
           ["CB", "The CB print. Carried as `apex` in the payload — the column is the same number under the name it is actually called."],
           ["Flip", "Gamma flip. Spot above it is the calmer regime; below it, the chop."],
           ["Δ columns", `How far spot has to travel to reach that level. Positive = the level is above spot; bold = inside ${NEAR_PCT}%.`],

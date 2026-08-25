@@ -7,11 +7,22 @@
  *
  * THE TWO HALVES ARE SEPARATE ON PURPOSE
  * --------------------------------------
- * 1. SEAL  — a board is sealed BEFORE the open (floor / cap / apex / flip / spot
- *    per ticker) and stored verbatim in `daily_grade_seals`. This recorder does
- *    not compute levels; whatever produces them POSTs the payload to
- *    /proxy/daily-grades-seal. Nothing may rewrite a seal's levels after the
- *    open — that is the whole point of sealing — so the upsert refuses to touch
+ * 1. SEAL  — at 09:26 ET `buildSeal()` computes the board for every ticker on
+ *    the scanner watchlist and stores it verbatim in `daily_grade_seals`:
+ *
+ *      floor / cap  daily-grades-levels.js, off the per-strike OI gamma ladder
+ *                   in `eod_strike_gex` (oi_call_gex / oi_put_gex). 09:26 is
+ *                   chosen to sit just after eod-strike-gex-recorder's 09:25 OI
+ *                   re-stamp, so the ladder is the SETTLED overnight OI rather
+ *                   than yesterday's intraday guess at it.
+ *      apex (CB)    scanner_snapshots.cb — the strike carrying the largest
+ *      flip         scanner_snapshots.gex_flip   |net GEX| / the flip, both as
+ *      spot         live quote, falling back to  of the last scanner sweep.
+ *                   the last scanner spot.
+ *
+ *    An external producer can still POST a board to /proxy/daily-grades-seal;
+ *    same table, same lock. Nothing may rewrite a seal's levels after the open —
+ *    that is the whole point of sealing — so the upsert refuses to touch
  *    `boards` once the session it names has started, unless force is passed.
  * 2. GRADE — after the close this reads the seal, pulls the session O/H/L/C for
  *    every sealed ticker, and scores it. The RAW O/H/L/C is stored alongside the
@@ -27,8 +38,8 @@
  * scores lower than one that got tagged and rejected. A cap that got tagged and
  * broken scores lower still. That ordering is the rubric.
  *
- *   cap    (strongest POSITIVE gex)  tagged+held 25 · untested 15 · tagged+broke 5 · gapped through 0
- *   floor  (strongest NEGATIVE gex)  same four, mirrored
+ *   cap    (call-gamma p80)          tagged+held 25 · untested 15 · tagged+broke 5 · gapped through 0
+ *   floor  (put-gamma p20)           same four, mirrored
  *   flip   (gamma flip)              held clean 25 · held after a test 18 · flipped 5
  *   apex   (CB)                      magnet: |close − apex| as % of close, 25/21/15/8/0
  *   range  (floor→cap band)          contained 25 · one side out 12 · both out 0
@@ -44,15 +55,25 @@
  * of their points-available — NOT the mean of the per-ticker percentages, which
  * would let a one-level ticker swing the session as hard as a four-level one.
  *
- * Cadence: checks every 5m, fires once at/after 16:20 ET on trading days.
+ * Cadence: checks every 5m; seals once at/after 09:26 ET, grades once at/after
+ *          16:20 ET, trading days only.
  * Wiring:  startDailyGradesRecorder(PORT) in server-with-proxy.js.
  * Routes:  GET  /proxy/daily-grades[?date=]      seal + grades + day roll-up
- *          POST /proxy/daily-grades-seal         store a sealed board
+ *          POST /proxy/daily-grades-build        build + seal the board now
+ *          POST /proxy/daily-grades-seal         store a board built elsewhere
  *          POST /proxy/daily-grades-run          grade now (manual fire)
  *          POST /proxy/daily-grades-regrade      re-score stored O/H/L/C
  */
 
 // ── config ───────────────────────────────────────────────────────────────────
+
+const { floorCeiling } = require('./daily-grades-levels');
+
+/** Seal time. Just after eod-strike-gex-recorder's 09:25 ET settled-OI re-stamp. */
+const SEAL_HOUR = Number(process.env.DAILY_GRADES_SEAL_HOUR ?? 9);
+const SEAL_MIN = Number(process.env.DAILY_GRADES_SEAL_MIN ?? 26);
+/** How far back to look for a scanner sweep carrying CB / flip / spot. */
+const SCANNER_LOOKBACK_DAYS = Number(process.env.DAILY_GRADES_SCANNER_LOOKBACK || 5);
 
 const GRADE_HOUR = Number(process.env.DAILY_GRADES_HOUR ?? 16);
 const GRADE_MIN = Number(process.env.DAILY_GRADES_MIN ?? 20);
@@ -323,6 +344,157 @@ async function getSeal(date) {
     ? await p.query(`SELECT * FROM daily_grade_seals WHERE date = $1`, [date])
     : await p.query(`SELECT * FROM daily_grade_seals ORDER BY date DESC LIMIT 1`);
   return q.rows[0] || null;
+}
+
+// ── building the seal ────────────────────────────────────────────────────────
+
+/**
+ * Most recent session in `eod_strike_gex` that actually carries the OI gamma
+ * legs. Pre-open this is yesterday's ladder, re-stamped at 09:25 with the
+ * settled overnight OI — which is exactly the input the level math wants. The
+ * legs are nullable with no backfill (nothing before 2026-08-19 has them), so
+ * this asks the table rather than assuming "yesterday".
+ */
+async function latestLadderDate(p, onOrBefore) {
+  const { rows } = await p.query(
+    `SELECT to_char(max(date), 'YYYY-MM-DD') AS d
+       FROM eod_strike_gex
+      WHERE oi_call_gex IS NOT NULL AND date <= $1::date`,
+    [onOrBefore],
+  );
+  return rows[0]?.d || null;
+}
+
+/** symbol → { strikes[], call[], put[] } for one session, strikes ascending. */
+async function ladderBySymbol(p, ladderDate) {
+  const { rows } = await p.query(
+    `SELECT symbol, strike, oi_call_gex, oi_put_gex
+       FROM eod_strike_gex
+      WHERE date = $1::date AND oi_call_gex IS NOT NULL
+      ORDER BY symbol, strike`,
+    [ladderDate],
+  );
+  const out = new Map();
+  for (const r of rows) {
+    const sym = String(r.symbol).toUpperCase().replace(/^\$/, '');
+    let e = out.get(sym);
+    if (!e) { e = { strikes: [], call: [], put: [] }; out.set(sym, e); }
+    e.strikes.push(Number(r.strike));
+    e.call.push(Math.abs(Number(r.oi_call_gex) || 0));
+    e.put.push(Math.abs(Number(r.oi_put_gex) || 0));
+  }
+  return out;
+}
+
+/**
+ * symbol → { spot, cb, flip } from the newest scanner sweep within the lookback.
+ * Pre-open the newest sweep is yesterday's 16:00 row, which is the right value
+ * to seal with: it is the last thing the board actually was.
+ */
+async function scannerLevels(p, onOrBefore) {
+  const { rows } = await p.query(
+    `SELECT DISTINCT ON (symbol) symbol, ts, spot, cb, gex_flip
+       FROM scanner_snapshots
+      WHERE date <= $1 AND date > to_char($1::date - $2::int, 'YYYY-MM-DD')
+      ORDER BY symbol, ts DESC`,
+    [onOrBefore, SCANNER_LOOKBACK_DAYS],
+  );
+  const out = new Map();
+  for (const r of rows) {
+    out.set(String(r.symbol).toUpperCase().replace(/^\$/, ''), {
+      spot: num(r.spot), cb: num(r.cb), flip: num(r.gex_flip),
+    });
+  }
+  return out;
+}
+
+/** Live spots for the roster, best-effort. Falls back to the scanner spot. */
+async function liveSpots(symbols) {
+  try {
+    const { fetchUnderlyingQuotes } = require('./proxy-tastytrade');
+    const m = await fetchUnderlyingQuotes(symbols);
+    const out = new Map();
+    for (const sym of symbols) {
+      const q = m?.get(sym);
+      const v = num(q?.last ?? q?.mark ?? q?.close);
+      if (v) out.set(sym, v);
+    }
+    return out;
+  } catch (e) {
+    console.warn('[daily-grades] live spots unavailable, using scanner spot:', e.message);
+    return new Map();
+  }
+}
+
+/**
+ * Build the board for `date` and seal it.
+ *
+ * The roster is every symbol that has BOTH an OI ladder and a scanner sweep —
+ * i.e. the scanner watchlist, arrived at from the data rather than from a second
+ * copy of the list. A symbol with a ladder but no sweep still gets a board with
+ * floor and cap and a null CB/flip; a symbol with neither is simply absent, and
+ * the page shows it as "not graded" against the live watchlist.
+ */
+async function buildSeal(date, { force = false } = {}) {
+  if (!(await ensureSchema())) return { ok: false, error: 'no database' };
+  const p = getPool();
+  const session = date || etDateStr();
+
+  const ladderDate = await latestLadderDate(p, session);
+  if (!ladderDate) return { ok: false, error: 'no OI ladder on file' };
+
+  const [ladders, levels] = await Promise.all([
+    ladderBySymbol(p, ladderDate),
+    scannerLevels(p, session),
+  ]);
+  if (!ladders.size) return { ok: false, error: `ladder ${ladderDate} is empty` };
+
+  const symbols = [...new Set([...ladders.keys(), ...levels.keys()])].sort();
+  const spots = await liveSpots(symbols);
+
+  const boards = {};
+  let withLevels = 0;
+  for (const sym of symbols) {
+    const lad = ladders.get(sym);
+    const lv = levels.get(sym) || {};
+    const fc = lad ? floorCeiling(lad.strikes, lad.call, lad.put) : null;
+    if (fc) withLevels++;
+    boards[sym] = {
+      // The five the board renders.
+      floor: fc ? fc.floor : null,
+      cap: fc ? fc.cap : null,
+      apex: lv.cb ?? null,
+      flip: lv.flip ?? null,
+      spot: spots.get(sym) ?? lv.spot ?? null,
+      // The rest of what the math saw, carried so a disagreement between the
+      // two methods is inspectable instead of thrown away.
+      ceiling_emp: fc ? fc.ceilingEmp : null,
+      floor_emp: fc ? fc.floorEmp : null,
+      ceiling_bell: fc ? fc.ceilingBell : null,
+      floor_bell: fc ? fc.floorBell : null,
+      mu_call: fc ? fc.muCall : null,
+      sd_call: fc ? fc.sdCall : null,
+      mu_put: fc ? fc.muPut : null,
+      sd_put: fc ? fc.sdPut : null,
+      strikes: fc ? fc.strikes : 0,
+    };
+  }
+
+  const r = await sealBoard({
+    boards,
+    sealed_for_session: session,
+    sealed_at: new Date().toISOString(),
+    note: `Daily grades. floor/cap = empirical percentile of the ${ladderDate} settled-OI `
+      + 'gamma ladder; CB and flip from the last scanner sweep. Sealed before the open '
+      + 'and graded after the close.',
+  }, { source: 'engine', force });
+
+  console.log(
+    `[daily-grades] sealed ${session} — ${symbols.length} tickers, `
+    + `${withLevels} with floor/cap from the ${ladderDate} ladder`
+    + (r.locked ? ' (LOCKED: session already open, levels untouched)' : ''),
+  );
+  return { ...r, ladderDate, tickers: symbols.length, withLevels };
 }
 
 // ── the rubric (PURE — no I/O, no clock) ─────────────────────────────────────
@@ -724,20 +896,35 @@ async function readSession(date) {
 
 let _timer = null;
 let _lastGradedDate = null;
+let _lastSealedDate = null;
 
 function startDailyGradesRecorder(port) {
   const base = `http://localhost:${port}`;
+  const hhmm = (h, m) => `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   console.log(
-    `[daily-grades] enabled — fires once at/after ${String(GRADE_HOUR).padStart(2, '0')}:`
-    + `${String(GRADE_MIN).padStart(2, '0')} ET on trading days → daily_grades / daily_grade_days`,
+    `[daily-grades] enabled — seals ${hhmm(SEAL_HOUR, SEAL_MIN)} ET, `
+    + `grades ${hhmm(GRADE_HOUR, GRADE_MIN)} ET, trading days `
+    + '→ daily_grade_seals / daily_grades / daily_grade_days',
   );
 
   const tick = () => {
     const today = etDateStr();
-    if (_lastGradedDate === today) return;
     if (!isTradingDay(today)) return;
     const { hour, minute } = etParts();
-    if (hour * 60 + minute < GRADE_HOUR * 60 + GRADE_MIN) return;
+    const mins = hour * 60 + minute;
+
+    // Seal first — the same tick can seal in the morning and grade in the
+    // afternoon, and the two latches are separate so a failed seal does not
+    // block the grade (there may be a board POSTed from elsewhere).
+    if (_lastSealedDate !== today && mins >= SEAL_HOUR * 60 + SEAL_MIN && mins < GRADE_HOUR * 60 + GRADE_MIN) {
+      buildSeal(today)
+        .then((r) => { if (r?.ok) _lastSealedDate = today; })
+        .catch((e) => console.warn('[daily-grades] seal:', e.message));
+      return;
+    }
+
+    if (_lastGradedDate === today) return;
+    if (mins < GRADE_HOUR * 60 + GRADE_MIN) return;
 
     gradeSession(base, today)
       .then((r) => { if (r) _lastGradedDate = today; })
@@ -752,6 +939,7 @@ function startDailyGradesRecorder(port) {
 
 module.exports = {
   startDailyGradesRecorder,
+  buildSeal,
   gradeSession,
   regradeSession,
   readSession,

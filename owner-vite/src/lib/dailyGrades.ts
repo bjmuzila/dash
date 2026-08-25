@@ -5,17 +5,18 @@
 //
 //   { apex, cap, flip, floor, spot }
 //
-//   floor — the strongest NEGATIVE GEX strike
-//   cap   — the strongest POSITIVE GEX strike
+//   floor — 20th percentile of the cumulative PUT gamma ladder
+//   cap   — 80th percentile of the cumulative CALL gamma ladder
+//           (server-v2/daily-grades-levels.js owns the math; the payload also
+//            carries the moment-matched bell pair for comparison)
 //   apex  — CB (the wire name is `apex`; the level is CB and the UI says CB)
 //   flip  — gamma flip; spot above it is the calmer regime, below is the choppy one
 //   spot  — last price at seal time
 //
 // floor and cap name the two ends of the GEX board, NOT support and resistance,
-// and nothing here assumes floor sits below cap in price — the strongest
-// negative strike can perfectly well print above the strongest positive one.
-// That case is flagged (`cap < floor`) and the floor→cap bar goes blank rather
-// than drawing itself backwards.
+// and nothing here assumes floor sits below cap in price — the put mass can sit
+// entirely above the call mass. That case is flagged (`cap < floor`) and the
+// floor→cap bar goes blank rather than drawing itself backwards.
 //
 // Any of the four levels may be null (not every board has a flip, and a name
 // that hasn't been graded yet has none at all). Everything below is null-safe.
@@ -30,12 +31,13 @@
 //
 // WHERE THE DATA COMES FROM
 // -------------------------
-// This is the template; the live wiring lands later and there is exactly ONE
-// seam for it: `loadGrades()`. When TT / dxLink is ready, `spot` becomes a
-// streaming quote and the four levels come off the levels engine — swap the
-// body of `loadGrades()` (and, for streaming spot, feed `applySpots()` from the
-// quote handler). Nothing in the page component needs to change: it renders
-// whatever `DgPayload` it is handed.
+// `/proxy/daily-grades` → server-v2/daily-grades-recorder.js. The board is built
+// and sealed at 09:26 ET from the settled-OI gamma ladder (`eod_strike_gex`) and
+// the last scanner sweep, then graded after the close. `loadGrades()` is the one
+// seam: it is the only thing in this file that touches the network, and the
+// bundled sample is its fallback for a session with no seal. For a streaming
+// spot, feed `applySpots()` from the quote handler — the four levels stay frozen
+// at their sealed values and every delta, bar and flag recomputes off spot.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type DgBoard = {

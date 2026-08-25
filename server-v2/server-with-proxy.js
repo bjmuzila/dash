@@ -1805,7 +1805,8 @@ async function main() {
       // The board is sealed BEFORE the open and graded AFTER the close; see
       // daily-grades-recorder.js for the rubric. Backs /owner/daily-grades.
       //   GET  /proxy/daily-grades[?date=]   seal + per-ticker grades + day roll-up
-      //   POST /proxy/daily-grades-seal      store a sealed board (body = the payload)
+      //   POST /proxy/daily-grades-build     compute + seal the board now
+      //   POST /proxy/daily-grades-seal      store a board built elsewhere (body = payload)
       //   POST /proxy/daily-grades-run       grade now (manual fire)
       //   POST /proxy/daily-grades-regrade   re-score stored O/H/L/C — no network
       if (pathname === '/proxy/daily-grades' && req.method === 'GET') {
@@ -1816,6 +1817,18 @@ async function main() {
             if (!out) { sendJson(res, 404, { error: 'no sealed board' }, req); return; }
             sendJson(res, 200, out, req, sessionCacheOpts(out.sealed_for_session));
           } catch (e) { sendJson(res, 502, { error: String(e?.message || e) }, req); }
+        })();
+        return;
+      }
+      if (pathname === '/proxy/daily-grades-build' && req.method === 'POST') {
+        (async () => {
+          try {
+            const u = new URL(req.url || '/', 'http://localhost');
+            const date = (u.searchParams.get('date') || '').slice(0, 10) || null;
+            const r = await require('./daily-grades-recorder')
+              .buildSeal(date, { force: u.searchParams.get('force') === '1' });
+            sendJson(res, r.ok ? 200 : 400, r, req);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }, req); }
         })();
         return;
       }
