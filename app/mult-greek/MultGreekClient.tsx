@@ -10,7 +10,6 @@ import { isCashOpen, isPlausibleBasis } from "@/components/dashboard/es-candles/
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS, classicCardAccentStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls } from "@/lib/calculations/heatLevels";
-import { rankBg } from "@/lib/calculations/optionChain";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockSlider, DockExpiryPicker, DockCogMenu, DockField } from "@/components/shared/DockToolbar";
 import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/MultiGreekLevelSnapshot";
@@ -36,6 +35,84 @@ const TickerLookupCard = lazy(() =>
 const BASE_TICKERS = ["SPX", "SPY", "QQQ"] as const;
 type Ticker = string;
 const CUSTOM_TICKER_KEY = "mg_custom_ticker";
+const HEAT_SKIN_KEY = "mg_heat_skin";
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * HEAT SKINS — how a ladder cell is painted, as data.
+ *
+ * The ladder used to hardcode one answer to "what does a heat cell look like":
+ * one alpha ramp, three rank floors, one padding, one font. A skin is that
+ * whole answer, named, so a second look can be tried on the live board from the
+ * cog without touching the cell renderer — and so the two can be compared on
+ * the SAME data instead of from memory.
+ *
+ * Nothing about the MATH the numbers come from is in here. A skin only decides
+ * how strong the tint is, how the cell is shaped and how the figure is
+ * written — never which strike is a wall, which is rank 1, or what the value
+ * is. Both skins read the identical `ratio = |gex| / columnMax`.
+ *
+ *   classic — byte-for-byte what shipped: a 0.02→0.18 wash under white
+ *             figures, square cells, full "$1.23M" values.
+ *   vivid   — the tuner's export (generated/2026-08-25-heatmap-tuner.html):
+ *             a near-opaque ramp so the column reads as a gradient at a
+ *             glance, rounded cells with a gap so each one is its own tile,
+ *             thin tracked-in type with a shadow to survive a hot fill, and
+ *             compact "1.2M" figures so the wider padding still fits.
+ *
+ * `colW` from the tuner is deliberately NOT carried over: the ladder's columns
+ * are 1fr inside four side-by-side panels, and a 94px floor per column would
+ * overflow the row on anything under ~1800px.
+ * ─────────────────────────────────────────────────────────────────────────── */
+export type HeatSkin = "classic" | "vivid";
+
+type SkinDef = {
+  label: string;
+  /** rgb triplets — the sign of the value picks one. */
+  pos: string;
+  neg: string;
+  /** alpha = min(max, base + (ratio × max(intensity,1))^ease × span) */
+  ramp: { base: number; span: number; max: number; ease: number };
+  /** Fixed alphas for ranks 1/2/3 — also what levels-only mode paints CB/CW/PW at. */
+  rank: readonly [number, number, number];
+  cell: {
+    radius: number; gap: number; padV: number; padH: number;
+    fontSize: number; tracking: string; shadow?: string;
+    /** weight by rank: [rank 1, ranks 2-3, unranked] */
+    weight: readonly [number, number, number];
+  };
+  /** money = "$1.23M" (2dp) · compact = "1.2M" (1dp) */
+  fmt: "money" | "compact";
+};
+
+const HEAT_SKINS: Record<HeatSkin, SkinDef> = {
+  classic: {
+    label: "CLASSIC",
+    pos: "41,182,246", neg: "255,71,87",
+    ramp: { base: 0.02, span: 0.16, max: 0.18, ease: 1.4 },
+    rank: [0.90, 0.45, 0.25],
+    cell: {
+      radius: 0, gap: 0, padV: 4, padH: 4,
+      fontSize: 9, tracking: "0", weight: [900, 800, 700],
+    },
+    fmt: "money",
+  },
+  vivid: {
+    label: "VIVID",
+    pos: "41,182,246", neg: "255,71,87",
+    ramp: { base: 0.07, span: 0.49, max: 1, ease: 0.85 },
+    rank: [1, 0.81, 0.6],
+    cell: {
+      radius: 4.5, gap: 2, padV: 2, padH: 14.5,
+      fontSize: 9, tracking: "-0.05em", shadow: "0 1px 2px rgba(0,0,0,0.85)",
+      weight: [900, 400, 300],
+    },
+    fmt: "compact",
+  },
+};
+
+function isHeatSkin(v: unknown): v is HeatSkin {
+  return v === "classic" || v === "vivid";
+}
 
 // Columns are now the N closest expirations (all NET GEX) instead of the four
 // greeks. Front expiry (from the picker) + the next 3 = 4 closest. The 4th
@@ -272,19 +349,38 @@ function fmtExpShort(exp?: string | null): string {
  * painted (see lib/calculations/heatLevels and the levelsOnly branch at the cell
  * render). Everything below describes the normal, above-minimum behaviour.
  */
-function metricBg(value: number, maxValue: number, topRank: number, intensity: number): string {
+function metricBg(value: number, maxValue: number, topRank: number, intensity: number, skin: SkinDef): string {
   const n = parseFloat(String(value)) || 0;
   const m = maxValue || 0;
   if (m === 0 || !n) return "transparent";
-  const pos = n >= 0;
-  // Rank floors come from the shared chain helper — the ladder here and the
-  // option chain grid paint their dominant strikes identically, and levels-only
-  // mode reuses the same three colours.
-  if (topRank === 1 || topRank === 2 || topRank === 3) return rankBg(n, topRank);
+  // Rank floors are the skin's — the ladder's dominant strikes and levels-only
+  // mode paint from the same three numbers, so a skin can never make "rank 1"
+  // mean two different things on the same board.
+  if (topRank === 1 || topRank === 2 || topRank === 3) return skinRankBg(n, topRank as 1 | 2 | 3, skin);
   const ratio = Math.min(Math.abs(n) / m, 1);
-  const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), 1.4);
-  const alpha = Math.min(0.18, 0.02 + eased * 0.16);
-  return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
+  const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), skin.ramp.ease);
+  const alpha = Math.min(skin.ramp.max, skin.ramp.base + eased * skin.ramp.span);
+  return `rgba(${n >= 0 ? skin.pos : skin.neg},${alpha.toFixed(2)})`;
+}
+
+/** Heat fill for a cell painted at one of the skin's three fixed rank floors. */
+function skinRankBg(value: number, rank: 1 | 2 | 3, skin: SkinDef): string {
+  return `rgba(${(value || 0) >= 0 ? skin.pos : skin.neg},${skin.rank[rank - 1]})`;
+}
+
+/** The cell figure, written the way the skin writes it. */
+function fmtCell(v: number, skin: SkinDef): { sign: string; value: string } {
+  const n = parseFloat(String(v));
+  if (!isFinite(n) || n === 0) return { sign: "", value: "--" };
+  const sign = n >= 0 ? "+" : "-";
+  const a = Math.abs(n);
+  if (skin.fmt === "money") return { sign, value: "$" + (a / 1e6).toFixed(2) + "M" };
+  // compact: no $, one decimal, and it steps up to B rather than printing
+  // "1450.3M" in a cell the wider padding has already narrowed.
+  if (a >= 1e9) return { sign, value: (a / 1e9).toFixed(1) + "B" };
+  if (a >= 1e6) return { sign, value: (a / 1e6).toFixed(1) + "M" };
+  if (a >= 1e3) return { sign, value: (a / 1e3).toFixed(0) + "K" };
+  return { sign, value: a.toFixed(0) };
 }
 
 // Compact column-header label for an expiry: "0DTE" over "MM-DD".
@@ -651,7 +747,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
 }
 
 function TickerPanel({
-  ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
+  ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, heatSkin, emLevels, showEm, captureWindow,
   showCB, showCW, showPW, onToggleWall, getGexChange, deltaWindow, onExpandChain,
   replayFrame = null, replayStrikes = null, dteBase = null,
   editableTicker = false, tickerInput = "", onTickerInputChange, onCommitTicker,
@@ -665,6 +761,8 @@ function TickerPanel({
   spot: number;
   contractMode: ContractMode;
   intensity: number;
+  /** Which HEAT_SKINS entry paints the cells. Cosmetic only — see HEAT_SKINS. */
+  heatSkin: HeatSkin;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
   /** Toolbar toggles: show the CB (1st) / CW (2nd) / PW (3rd) top-|GEX| level
@@ -805,6 +903,13 @@ function TickerPanel({
   const gridCols = (
     `64px ${displayCols.map(() => "1fr").join(" ")}`
   ).trim() || "64px";
+
+  // The active skin, resolved once per render. Every cell style below reads
+  // from SK — nothing about the cell's look is hardcoded past this line.
+  const SK = HEAT_SKINS[heatSkin] ?? HEAT_SKINS.classic;
+  // A skin with a gap has to open the SAME gap on the header and totals grids,
+  // or the columns stop lining up with the cells under them.
+  const colGap = SK.cell.gap;
 
   // CB / CW / PW levels for the FRONT expiry — shown in the header and marked in
   // the front column. Computed from the full (untrimmed) rows so the capture
@@ -1164,7 +1269,7 @@ function TickerPanel({
       </div>
 
       {/* Column headers — STRIKE + one NET GEX column per expiry */}
-      <div style={{ display: "grid", gridTemplateColumns: gridCols, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: gridCols, columnGap: colGap, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center" }}>STRIKE</div>
         {displayCols.map((c, ci) => {
           const lbl = c.label;
@@ -1189,12 +1294,14 @@ function TickerPanel({
       </div>
 
       {/* Totals row */}
-      <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: gridCols, columnGap: colGap, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {displayCols.map(c => {
           const t = totals?.[c.date] ?? null;
           const v = t?.net ?? 0;
-          const fmt = t != null ? fmtMoney(v) : { sign: "", value: "--" };
+          // The column total speaks the SKIN's number language too — a compact
+          // "1.2B" total over "$1.23M" cells reads as two different scales.
+          const fmt = t != null ? fmtCell(v, SK) : { sign: "", value: "--" };
           return (
             <div key={c.date} title="Column NET GEX total · % of gross GEX that is positive" style={{
               padding: "4px 4px", fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
@@ -1238,7 +1345,7 @@ function TickerPanel({
             <div
               key={r.strike}
               data-strike={r.strike}
-              style={{ display: "grid", gridTemplateColumns: gridCols, background: rowBg, position: "relative", ...atmOutline }}
+              style={{ display: "grid", gridTemplateColumns: gridCols, columnGap: colGap, background: rowBg, position: "relative", ...atmOutline }}
             >
               <div style={{
                 padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
@@ -1260,8 +1367,8 @@ function TickerPanel({
                 const val = r.gex[e];
                 const topRank = (computed.top3[e]?.[r.strike]) || 0;
                 const scaleMax = computed.maxAbs[e];
-                const weight = topRank === 1 ? 900 : topRank ? 800 : 700;
-                const formatted = val == null ? { sign: "", value: "--" } : fmtMoney(val);
+                const weight = topRank === 1 ? SK.cell.weight[0] : topRank ? SK.cell.weight[1] : SK.cell.weight[2];
+                const formatted = val == null ? { sign: "", value: "--" } : fmtCell(val, SK);
                 const signColor = val == null ? SOFT_WHITE : val > 0 ? "#22c55e" : val < 0 ? "#ef4444" : SOFT_WHITE;
                 // CB / CW / PW level badges — only on the FRONT expiry column,
                 // each gated by its toolbar toggle. Strikes come from computeWalls
@@ -1304,7 +1411,11 @@ function TickerPanel({
                         : { strike: r.strike, expiry: e, x: ev.clientX, y: ev.clientY });
                     }}
                     style={{
-                    padding: "4px 4px", fontSize: 9, fontFamily: "var(--font-mono)",
+                    padding: `${SK.cell.padV}px ${SK.cell.padH}px`,
+                    fontSize: SK.cell.fontSize, fontFamily: "var(--font-mono)",
+                    letterSpacing: SK.cell.tracking,
+                    borderRadius: SK.cell.radius,
+                    ...(SK.cell.shadow ? { textShadow: SK.cell.shadow } : {}),
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     // The click card reads LIVE 15m/30m/open baselines, which
                     // say nothing about a rewound clock — so replay cells are
@@ -1319,14 +1430,14 @@ function TickerPanel({
                     // so it still reads cyan for +GEX and red for −GEX; the
                     // badge, not the fill, is what names the level.
                     background: levelsOnly
-                      ? (lvlShown && lvlKind && val != null ? rankBg(val, WALL_RANK[lvlKind]) : "transparent")
-                      : (val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity)),
+                      ? (lvlShown && lvlKind && val != null ? skinRankBg(val, WALL_RANK[lvlKind], SK) : "transparent")
+                      : (val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity, SK)),
                     fontWeight: weight,
                     position: "relative",
                     // The rank-1 ring is part of the heat field, so it goes with
                     // it — otherwise "only the levels" still leaves a ring on
                     // every column's top strike.
-                    ...(!levelsOnly && topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
+                    ...(!levelsOnly && topRank === 1 && val != null ? { outline: `1px solid rgba(${val >= 0 ? SK.pos : SK.neg},.9)`, outlineOffset: "-1px", zIndex: 1 } : {}),
                     ...(lvl ? { outline: `2px solid ${lvl.c}`, outlineOffset: "-2px", zIndex: 2 } : {}),
                     ...(isSel ? { outline: "2px solid #ffffff", outlineOffset: "-2px", zIndex: 3 } : {}),
                   }}>
@@ -1752,6 +1863,27 @@ export function MultGreekClient({
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const [contractMode, setContractMode] = useState<ContractMode>("oivol");
   const [intensity, setIntensity] = useState(1.75);
+  // Heat skin — cosmetic only (see HEAT_SKINS). Persisted per browser like the
+  // 4th ticker: it is a preference about the board, not part of a session.
+  // Server render always starts on `classic` and the saved value is applied in
+  // the effect below, so the markup can't mismatch on hydration.
+  const [heatSkin, setHeatSkin] = useState<HeatSkin>("classic");
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = window.localStorage.getItem(HEAT_SKIN_KEY);
+      if (isHeatSkin(saved)) setHeatSkin(saved);
+    } catch { /* ignore */ }
+  }, []);
+  // VIVID was tuned at 3.3x, past CLASSIC's 3x stop, so the slider's ceiling
+  // moves with the skin rather than CLASSIC's range being widened for it.
+  // Switching back down clamps, or the slider would sit off its own track.
+  const intensityMax = heatSkin === "vivid" ? 4 : 3;
+  const changeHeatSkin = useCallback((v: HeatSkin) => {
+    setHeatSkin(v);
+    if (v !== "vivid") setIntensity(i => Math.min(i, 3));
+    try { window.localStorage.setItem(HEAT_SKIN_KEY, v); } catch { /* ignore */ }
+  }, []);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>(
     isStatic ? { state: "idle", msg: "DELAYED" } : { state: "idle", msg: "READY" }
   );
@@ -2634,21 +2766,37 @@ export function MultGreekClient({
             {
               id: "heat",
               label: "Heat",
-              summary: intensity <= 0.5 ? "levels" : `${intensity.toFixed(2)}x`,
+              summary: `${HEAT_SKINS[heatSkin].label.toLowerCase()} · ${intensity <= 0.5 ? "levels" : `${intensity.toFixed(2)}x`}`,
               body: (
-                <DockField label="Intensity">
-                  <DockSlider
-                    value={intensity}
-                    min={0.5}
-                    max={3}
-                    step={0.01}
-                    onChange={setIntensity}
-                    width="auto"
-                    format={(v) => (v <= 0.5 ? "LEVELS" : `${v.toFixed(2)}x`)}
-                    valueWidth={52}
-                    title="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."
-                  />
-                </DockField>
+                <>
+                  <DockField label="Intensity">
+                    <DockSlider
+                      value={intensity}
+                      min={0.5}
+                      max={intensityMax}
+                      step={0.01}
+                      onChange={setIntensity}
+                      width="auto"
+                      format={(v) => (v <= 0.5 ? "LEVELS" : `${v.toFixed(2)}x`)}
+                      valueWidth={52}
+                      title="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."
+                    />
+                  </DockField>
+                  {/* Skin — how the cell is PAINTED, not what it says. Same
+                      values, same ranks, same walls either way; VIVID just
+                      pushes the ramp to near-opaque, rounds the cells apart
+                      and writes the figures compact. See HEAT_SKINS. */}
+                  <DockField label="Skin">
+                    <SegGroup
+                      options={[
+                        { label: "CLASSIC", value: "classic" },
+                        { label: "VIVID", value: "vivid" },
+                      ]}
+                      active={heatSkin}
+                      onChange={(v) => changeHeatSkin(v as HeatSkin)}
+                    />
+                  </DockField>
+                </>
               ),
             },
             {
@@ -2851,6 +2999,7 @@ export function MultGreekClient({
             spot={replayOn ? (replayFrameByTicker[ticker]?.spot ?? 0) : (effectiveSpots[ticker] ?? 0)}
             contractMode={contractMode}
             intensity={intensity}
+            heatSkin={heatSkin}
             emLevels={emByTicker[ticker] ?? null}
             // EM bands are THIS week's expected move; drawing them on a past
             // session would be a level that didn't exist yet. Δ stamps come

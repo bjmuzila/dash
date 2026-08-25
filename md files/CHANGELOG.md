@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-08-25 - Multi Greek: CLASSIC / VIVID heat skin toggle in the cog
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+The ladder's cell look is now DATA, not hardcoded. `HEAT_SKINS` holds two named
+answers to "how is a heat cell painted" and the cog's Heat section picks one.
+
+- **CLASSIC** - byte-for-byte what shipped: 0.02 -> 0.18 wash, rank floors
+  0.90 / 0.45 / 0.25, square 4px cells, `$1.23M` values, 700/800/900 weights.
+- **VIVID** - the tuner's export: ramp `base 0.07 / span 0.49 / max 1.00 /
+  ease 0.85`, rank floors `1.00 / 0.81 / 0.60`, 4.5px radius with a 2px column
+  gap so each cell is its own tile, `2px 14.5px` padding, 9px type tracked in
+  -0.05em at weight 300 (900 on rank 1) with a text shadow to survive a
+  near-opaque fill, and compact `1.2M` / `1.2B` figures so the wider padding
+  still fits the number.
+
+A skin only decides how strong the tint is, how the cell is shaped and how the
+figure is written. It never touches which strike is a wall, which is rank 1, or
+what the value is - both skins read the identical `ratio = |gex| / columnMax`.
+
+**What moved to be skin-driven:** `metricBg()` takes the skin instead of
+hardcoding the ramp; the local `skinRankBg()` replaces the imported `rankBg`
+so levels-only mode paints CB/CW/PW at the ACTIVE skin's floors rather than the
+option chain's fixed ones; `fmtCell()` writes the cell and the column TOTAL in
+the skin's number language; the rank-1 ring takes the skin's hue; and the
+header, totals and body grids all open the same `columnGap` so a skin with a
+gap cannot knock the columns out of alignment.
+
+**Slider ceiling follows the skin.** VIVID was tuned at 3.3x, past CLASSIC's 3x
+stop, so the Intensity slider's max is 4 on VIVID and 3 on CLASSIC; switching
+back to CLASSIC clamps a >3 value rather than leaving the handle off its track.
+
+Persisted per browser under `mg_heat_skin`. Server render always starts on
+CLASSIC and the saved value is applied in an effect, so hydration can't
+mismatch. The tuner's `colW: 94` was deliberately NOT carried over - the
+ladder's columns are `1fr` inside four side-by-side panels and a 94px floor per
+column overflows the row under ~1800px.
+
+CB/CW/PW badges, the peak star, EM badges and the delta stamp keep their own
+existing toggles - a skin does not silently switch a marker off.
+
+## 2026-08-25 - Standalone heat-cell tuner for the Multi Greek ladder + Option Chain grid
+
+New: `generated/2026-08-25-heatmap-tuner.html`. No app files touched.
+
+A self-contained HTML sandbox that reproduces both heat surfaces side by side -
+the Multi Greek GEX ladder and the Option Chain grid - against synthetic SPX
+data, with every knob that decides how a cell looks wired to a live control.
+
+It mirrors the real math rather than approximating it: the same
+`alpha = min(maxAlpha, baseAlpha + (ratio x max(intensity,1))^ease x spanAlpha)`
+ramp, the same three fixed rank floors for CB / CW / PW, and the same
+levels-only branch that switches the gamma wash off at the slider's bottom stop.
+
+Adjustable:
+
+- **Heat scale** - positive / negative color, alpha-vs-solid fill mode,
+  intensity, ease exponent, base alpha, alpha span, max alpha cap.
+- **Rank floors** - alpha per rank 1/2/3, levels-only toggle, rank-1 ring width.
+- **Cell shape** - corner radius, grid gap, cell inset, vertical / horizontal
+  padding, column min-width, row lines, ATM box.
+- **Type** - font family, size, weight, rank-1 weight bump, letter spacing,
+  value / empty / sign / strike-rail colors, alignment, text shadow, and an
+  auto-contrast option that flips text white over hot fills.
+- **Cell contents** - value format (compact $, compact, raw, % of column max,
+  rank, none), decimals, and independent toggles for the colored sign glyph,
+  the peak star, the CB/CW/PW badge, the delta stamp, % of column, an OI/Vol
+  second line, EM strike badges, the TOTAL row, the total column and the
+  mirrored right strike rail.
+
+Five presets (Current app / Bold / Soft / Solid fill / Minimal), a ramp
+inspector view showing every step of the scale in both signs, and reseedable
+sample data.
+
+**Export** emits either the settings as JSON or a paste-ready code snippet with
+the new `RANK_FLOOR_ALPHA`, `rankBg()` and `metricBg()` bodies for
+`lib/calculations/optionChain.ts` plus the cell style block for the grid cells
+in `components/pages/OptionsChain.tsx` and `app/mult-greek/MultGreekClient.tsx`.
+
 ## 2026-08-25 - Comped access provisions the account instead of waiting for a signup
 
 Edited: `app/api/admin/comp-access/route.ts`, `app/api/auth/signup/route.ts`,
