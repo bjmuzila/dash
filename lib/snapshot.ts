@@ -241,7 +241,7 @@ export type SnapOptions = {
 /** Default whole-capture watchdog. Generous — real captures finish in <5s. */
 export const CAPTURE_WATCHDOG_MS = 20000;
 
-type LtProvider = () => { canvas: HTMLCanvasElement; target: HTMLElement } | null;
+type LtProvider = () => { canvas: HTMLCanvasElement; target: HTMLElement; overlay?: HTMLCanvasElement | null } | null;
 type SnapRedraw = (capturing: boolean) => void;
 
 /**
@@ -750,6 +750,20 @@ async function captureToCanvasInner(
     out.width = src.width;
     out.height = src.height;
     const octx = out.getContext("2d")!;
+    // The chart's own bitmap can have transparent margins (the dark look
+    // normally comes from the DOM panel behind it, which this path skips
+    // entirely) — fill the theme background first or those spots render
+    // white wherever the PNG is viewed.
+    octx.fillStyle = bg;
+    octx.fillRect(0, 0, out.width, out.height);
+    // The overlay canvas (heatmap / volume profile / GEX bubbles) sits BEHIND
+    // the chart in the live page (z-index 1 vs the chart's 2) and shows
+    // through because the chart's own background is transparent — draw it
+    // first, in that same order, or the bubbles are simply missing from the
+    // chart-only capture. It covers the identical absolute-inset-0 box as the
+    // chart, so stretching it to the output's full size lines the pixels up
+    // regardless of its own backing resolution.
+    if (lt.overlay) octx.drawImage(lt.overlay, 0, 0, out.width, out.height);
     octx.drawImage(src, 0, 0);
     const drawCorner = (text: string | undefined, corner: "top" | "bottom") => {
       if (!text) return;

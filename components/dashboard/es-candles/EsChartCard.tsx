@@ -2941,12 +2941,16 @@ function EsChartCard({
       // the chart layer. captureElement (DataBox) looks for __ltScreenshot.
       if (captureRef.current) {
         (captureRef.current as unknown as {
-          __ltScreenshot?: () => { canvas: HTMLCanvasElement; target: HTMLElement } | null;
+          __ltScreenshot?: () => { canvas: HTMLCanvasElement; target: HTMLElement; overlay?: HTMLCanvasElement | null } | null;
         }).__ltScreenshot = () => {
           try {
             const c = chartApiRef.current?.takeScreenshot();
             if (!c || !chartRef.current) return null;
-            return { canvas: c, target: chartRef.current };
+            // overlayRef paints the heatmap / volume profile / GEX bubbles
+            // BEHIND the chart (transparent chart background lets it show
+            // through) — the chart-only corner-label capture composites it
+            // the same way, or the bubbles are simply missing from the PNG.
+            return { canvas: c, target: chartRef.current, overlay: overlayRef.current };
           } catch { return null; }
         };
       }
