@@ -102,7 +102,6 @@ import { isStale } from "@/lib/econCalendar";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
-import GammaDistribution, { GAMMA_DIST_CSS } from "@/components/pages/premarket/GammaDistribution";
 import GammaBellCurve, { GAMMA_BELL_CSS } from "@/components/pages/premarket/GammaBellCurve";
 import TickerBoard from "@/components/pages/premarket/TickerBoard";
 import {
@@ -1267,49 +1266,6 @@ export default function Premarket() {
     return null;
   }, [chain, spot]);
 
-  /**
-   * Straddle → expected RANGE.
-   *
-   * `em` above is a DISPLACEMENT — how far spot ends up from here. The high-low
-   * RANGE over the same window is a different, strictly larger quantity, and the
-   * two rows were being read as if they were comparable. For a driftless normal
-   * the ratio is exact, not fitted:
-   *
-   *   straddle = E|S_T − K| = √(2/π)·σ√T = 0.7979·σ√T
-   *   E[range]              = √(8/π)·σ√T = 1.5958·σ√T
-   *   E[range] / straddle   = √4         = 2.0
-   *
-   * So the raw expected range is simply TWICE the ATM straddle.
-   *
-   * `adj` carries the same 0.85 vol-risk-premium haircut `em` already applies,
-   * so the panel stays on one convention; `raw` is the untouched theoretical
-   * figure. Both are shown because they bracket the answer and the haircut is a
-   * judgement call, not a derivation — 0.85 assumes IV systematically overprices
-   * realized, which is usually but not always true.
-   *
-   * IV fallback: σ√T is converted back to a straddle-equivalent (×√(2/π)) so a
-   * single formula feeds both paths and the row never silently changes meaning.
-   *
-   * VERIFIED 2026-08-25: SPX ATM straddle 9.60 at 13:23 ET → raw 19.2 / adj 16.3,
-   * against a realized 13:20–16:00 range of 15.75 (ES). Full-session RTH range
-   * was 38.0 on a 0.50% day.
-   */
-  const emRange = useMemo(() => {
-    if (!chain.length || !(spot > 0)) return null;
-    const atm = chain.reduce((b, r) => (Math.abs(r.strike - spot) < Math.abs(b.strike - spot) ? r : b), chain[0]);
-    const cm = atm.callMark ?? ((atm.bid ?? 0) + (atm.ask ?? 0)) / 2;
-    const pm = atm.putMark ?? 0;
-    let straddle = 0;
-    if (cm > 0 && pm > 0) {
-      straddle = cm + pm;
-    } else {
-      const iv = ((atm.callIV ?? 0) + (atm.putIV ?? 0)) / 2;
-      if (iv > 0) straddle = spot * iv * Math.sqrt(1 / 252) * Math.sqrt(2 / Math.PI);
-    }
-    if (!(straddle > 0)) return null;
-    return { straddle, raw: straddle * 2, adj: straddle * 2 * 0.85 };
-  }, [chain, spot]);
-
   /** Live per-strike OI leg — the side of the baseline comparison, not the bars. */
   const perStrikeOi = useMemo(() => {
     if (!chain.length || !(spot > 0)) return [];
@@ -1715,7 +1671,7 @@ export default function Premarket() {
 
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
-      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GAMMA_DIST_CSS + GAMMA_BELL_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GAMMA_BELL_CSS }} />
       <div className="wrap">
 
         <div className="pagehead">
@@ -2458,17 +2414,6 @@ export default function Premarket() {
               <div className="stat"><span className="l">IV-implied move</span><span className="r mono">
                 {em != null ? `±${nf(em, 0)} pts (${((em / spot) * 100).toFixed(2)}%)` : "—"}
               </span></div>
-              <div className="stat"><span className="l">ATM straddle</span><span className="r mono">
-                {emRange != null ? `${nf(emRange.straddle, 2)} pts` : "—"}
-              </span></div>
-              <div className="stat">
-                <span className="l">Straddle-implied range<span className="muted"> (high−low)</span></span>
-                <span className="r mono">
-                  {emRange != null
-                    ? `${nf(emRange.adj, 0)} adj · ${nf(emRange.raw, 0)} raw`
-                    : "—"}
-                </span>
-              </div>
               <div className="stat"><span className="l">GEX-implied range</span><span className="r mono">
                 {putWall != null && callWall != null
                   ? `${fmtPx(putWall, 0)} – ${fmtPx(callWall, 0)} (${nf(Math.abs(callWall - putWall), 0)})`
@@ -2552,40 +2497,28 @@ export default function Premarket() {
             </div>
           </div>
 
-          {/* THE GAMMA PAIR — the same chain as the ladder above, drawn twice on
-              a STRIKE axis, side by side (stacked below 1500px, where half a
-              card is too narrow for a strike axis carrying four level labels).
-              Left: net GEX on the main axis, mass as an overlay — "which side
-              is long gamma and where does it flip". Right: the mass histogram
-              on its own axis with a least-squares normal through it, over a net
-              GEX pane — "what bell would you draw through this, and how wide".
-              Same numbers, opposite emphasis, which is why both are on screen.
-              Each has its OWN basis / range / pan-zoom state: the page's
-              three-leg lvlBasis drives the Key Levels tiles, and zooming one
-              chart to inspect a wing must not drag the other along with it.
-              The shared definitions live in premarket/gammaChartKit.ts. */}
-          <div className="gd-pair">
-            <GammaDistribution
-              chain={chain}
-              spot={spot}
-              expiry={expiry}
-              isZeroDte={isZeroDte}
-              flip={flip}
-              callWall={callWall}
-              putWall={putWall}
-              frozen={frozen}
-            />
-            <GammaBellCurve
-              chain={chain}
-              spot={spot}
-              expiry={expiry}
-              isZeroDte={isZeroDte}
-              flip={flip}
-              callWall={callWall}
-              putWall={putWall}
-              frozen={frozen}
-            />
-          </div>
+          {/* THE GAMMA CARD — the same chain as the ladder above, drawn on a
+              STRIKE axis: gamma mass with a least-squares normal through it on
+              top, net GEX per strike underneath, one shared axis and one shared
+              ±1σ band. Full width, because the read is the SHAPE — how peaked,
+              how wide, where the centre sits against spot — and that needs the
+              whole row. (It briefly shared the row with a second net-GEX card;
+              two half-width copies of the same board read worse than one full
+              one, and the bell card's lower pane already drew that view.)
+              Its basis / range / pan-zoom state is its own — the page's
+              three-leg lvlBasis drives the Key Levels tiles, and folding them
+              together would mean changing the tiles to change this chart.
+              The shared math lives in premarket/gammaChartKit.ts. */}
+          <GammaBellCurve
+            chain={chain}
+            spot={spot}
+            expiry={expiry}
+            isZeroDte={isZeroDte}
+            flip={flip}
+            callWall={callWall}
+            putWall={putWall}
+            frozen={frozen}
+          />
 
           {/* Which strikes grew far more than normal at yesterday's close.
               Reads the recorder's log via /api/gex-watch-feed — no live scan,

@@ -1,39 +1,39 @@
 # Changelog
 
-## 2026-08-25 - Expected Range: straddle-implied high-low, alongside the move
+## 2026-08-25 - Premarket gamma: one card, not two
 
-Edited: `components/pages/Premarket.tsx`.
+Edited: `components/pages/premarket/GammaBellCurve.tsx`,
+        `components/pages/premarket/GammaDistribution.tsx` (now a tombstone),
+        `components/pages/Premarket.tsx`.
 
-**What was missing.** The Expected Range panel showed "IV-implied move" (`em` =
-ATM straddle x 0.85) next to "GEX-implied range" (put wall - call wall), and the
-two read as comparable. They are not. `em` is a DISPLACEMENT - how far spot ends
-up from here - while the GEX row is a RANGE. The high-low range over the same
-window is a strictly larger quantity, so the panel was inviting a comparison
-between two different things.
+The net-GEX card is removed. Two cards of the same board at half width each read
+worse than one at full width, and the bell card's LOWER PANE already drew net
+GEX per strike - the pair was showing the same view twice with less room.
 
-**The conversion.** For a driftless normal the ratio is exact, not fitted:
+What moved: its three KPI tiles are now in the bell card's strip, so it carries
+six. Three describe the FIT (curve peak, width 1-sigma, mass inside 1-sigma) and
+three describe the BOARD (center of mass, net GEX over the window, total gamma
+mass). "Curve peak" (least-squares mu) and "center of mass" (moment mu) are kept
+side by side deliberately - they are different questions, and on a board with a
+fat wing they separate. Both are labelled; neither pretends to be the other.
 
-    straddle = E|S_T - K| = sqrt(2/pi) * sigma*sqrt(T) = 0.7979 * sigma*sqrt(T)
-    E[range]              = sqrt(8/pi) * sigma*sqrt(T) = 1.5958 * sigma*sqrt(T)
-    E[range] / straddle   = sqrt(4)                    = 2.0
+Also:
+- The `.gdist` stylesheet moved from GAMMA_DIST_CSS into GAMMA_BELL_CSS. The
+  `.gd-pair` grid is gone.
+- Card height ratio back to width x 0.44 (clamp 440-660); 0.62 was tuned for a
+  half-width column and letterboxes at full width.
+- KPI strip is 6 columns, 3 under 1300px, 2 under 680px.
 
-The expected high-low range is simply TWICE the ATM straddle.
+Nothing was lost with the removed card: everything shared it had introduced -
+the OI/VOL row math, gamma mass, the +/-3% board, bin folding, the AUTO window,
+the level-label fan/pack, the GexChart-style pan/zoom hook - was already
+extracted to `gammaChartKit.ts`, which is what the bell card runs on and where a
+future second view should take it from.
 
-**Added.** A `emRange` memo next to `em`, and two rows: "ATM straddle" (the raw
-price, so the input is visible) and "Straddle-implied range (high-low)" printing
-both `adj` and `raw`. `adj` carries the same 0.85 vol-risk-premium haircut `em`
-already applies so the panel stays on one convention; `raw` is the untouched
-theoretical figure. Both are shown because the haircut is a judgement call, not
-a derivation - 0.85 assumes IV systematically overprices realized, which is
-usually but not always true, and the two bracket the answer.
-
-The IV fallback path converts sigma*sqrt(T) back to a straddle-equivalent
-(x sqrt(2/pi)) so one formula feeds both branches and the row never silently
-changes meaning when the straddle is unavailable.
-
-**Verified 2026-08-25.** SPX ATM straddle 9.60 at 13:23 ET -> raw 19.2 / adj
-16.3, against a realized 13:20-16:00 range of 15.75 (ES). Full-session RTH range
-was 38.0 on a 0.50% day. `em` and the EM bar are untouched.
+`GammaDistribution.tsx` is left as a comment-only tombstone (`export {}`) so the
+removal is discoverable from the import path, and nothing imports it. Safe to
+delete outright - I could not delete it from here (no shell on the device this
+session).
 
 ## 2026-08-25 - Post-Market recap: no ES on an SPX page (fixes the false put-wall break)
 

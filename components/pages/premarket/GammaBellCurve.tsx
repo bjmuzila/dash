@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * GAMMA BELL CURVE — the right half of the gamma pair on /premarket.
+ * GAMMA BELL CURVE — the gamma card on /premarket. Full width, and the only one.
  *
  * Two stacked panes over ONE strike axis:
  *
@@ -12,10 +12,13 @@
  *           gamma / short-gamma sides named on the pane. "Which side of the
  *           board dampens and which amplifies?"
  *
- * Its partner, `GammaDistribution.tsx`, puts net GEX on the main axis with the
- * mass as an overlay. Same numbers, opposite emphasis — which is the point of
- * having both on screen at once. Everything they must agree about lives in
- * `gammaChartKit.ts`.
+ * This briefly sat beside a second card (`GammaDistribution.tsx`) that put net
+ * GEX on the main axis with the mass as an overlay. Two cards of the same board
+ * at half width each read worse than one at full width, and the second card's
+ * bottom pane was already here — so it was removed and its three KPI tiles
+ * (center of mass, net GEX over the window, total gamma mass) were folded into
+ * this card's strip. The shared math still lives in `gammaChartKit.ts`, which
+ * is also where a future second view would take it from.
  *
  * ── WHY LEAST SQUARES AND NOT THE MOMENT FIT ────────────────────────────────
  * The moment fit (Σm·k / Σm and its sd) is dragged around by every far-OTM
@@ -48,7 +51,7 @@ import {
   BASIS_META, ZOOM_META,
   MAX_BAND,
   fmtB, nf0,
-  foldBins, layoutLevels, lsqGaussian, massInside,
+  foldBins, layoutLevels, lsqGaussian, massInside, moments,
   useGridStep, usePref, useStrikeWindow, useWideBins,
   type Bin, type GammaBasis, type GammaZoom,
 } from "@/components/pages/premarket/gammaChartKit";
@@ -63,8 +66,64 @@ const GAP = 16;
 /** The mass pane gets the lion's share — it carries the fit. */
 const TOP_SHARE = 0.6;
 
+/**
+ * The card's stylesheet. It carries the whole `.gdist` block because this is
+ * now the ONLY gamma card on the page — the net-GEX card that used to own these
+ * rules was removed and its three KPI tiles folded into this one's strip.
+ */
 export const GAMMA_BELL_CSS = `
+.gdist{margin-top:14px;border-top:1px solid var(--line);padding:14px 18px 6px}
+.gdist .gd-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  flex-wrap:wrap;margin-bottom:9px}
+.gdist .gd-lh{display:flex;align-items:baseline;gap:9px;min-width:0;flex-wrap:wrap}
+.gdist .gd-lh h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+  margin:0;font-weight:600;white-space:nowrap}
+.gdist .gd-sub{font-size:10px;letter-spacing:.04em;color:var(--dim2);
+  font-variant-numeric:tabular-nums}
+.gdist .gd-rh{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.gdist .gd-ctl{display:flex;align-items:center;gap:5px}
+.gdist .gd-ctl>b{font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim2);
+  font-weight:600}
+.gdist .gd-reset{background:transparent;border:1px solid var(--amberEdge);color:var(--amber);
+  font:inherit;font-size:10px;letter-spacing:.05em;padding:3px 9px;border-radius:var(--r2);
+  cursor:pointer;white-space:nowrap}
+.gdist .gd-reset:hover{background:var(--amberWash)}
+
+/* KPI STRIP — six tiles, never floated over the plot. Three describe the FIT
+   (peak, width, mass inside 1σ) and three describe the BOARD (its moment
+   centre, net GEX, total mass). They are deliberately adjacent: "curve peak"
+   and "center of mass" are different numbers and the gap between them is a
+   real read — see the least-squares note in this file's header. */
+.gdist .gd-kpis{display:grid;grid-template-columns:repeat(var(--gd-cols,6),minmax(0,1fr));
+  gap:7px;margin-bottom:9px}
+.gdist .gd-kpi{border:1px solid var(--line);border-radius:var(--r2);background:var(--sunken);
+  padding:6px 9px;min-width:0}
+.gdist .gd-kpi .n{font-size:9px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gdist .gd-kpi .v{font-size:13.5px;font-weight:650;color:var(--txt);margin-top:2px;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.gdist .gd-kpi .m{font-size:9.5px;color:var(--dim2);font-variant-numeric:tabular-nums;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.gdist .gd-wrap{position:relative;width:100%}
+/* pan-y keeps the PAGE scrollable under a vertical flick on a phone while a
+   horizontal drag still pans the chart. */
+.gdist svg{display:block;width:100%;height:auto;touch-action:pan-y;cursor:grab;
+  user-select:none;-webkit-user-select:none}
+.gdist svg.dragging{cursor:grabbing}
 .gdist .gd-pane-l{font-size:9px;letter-spacing:.09em;text-transform:uppercase;font-weight:700}
+.gdist .gd-tip{position:absolute;pointer-events:none;z-index:3;transform:translateX(-50%);
+  background:var(--plate);border:1px solid var(--line2);border-radius:var(--r2);
+  padding:6px 9px;font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--txt);
+  box-shadow:0 8px 22px rgba(0,0,0,.35);white-space:nowrap;line-height:1.55}
+.gdist .gd-tip b{font-weight:700}
+.gdist .gd-tip .r{display:flex;justify-content:space-between;gap:14px;color:var(--dim2)}
+.gdist .gd-tip .r span:last-child{color:var(--txt)}
+.gdist .gd-foot{font-size:11px;color:var(--dim2);line-height:1.6;margin:9px 0 4px;max-width:104ch}
+.gdist .gd-foot b{color:var(--dim);font-weight:650}
+.gdist .gd-empty{padding:48px 0;text-align:center;color:var(--dim);font-size:12px}
+@media (max-width:1300px){ .gdist .gd-kpis{--gd-cols:3} }
+@media (max-width:680px){ .gdist .gd-kpis{--gd-cols:2} }
 `;
 
 export default function GammaBellCurve({
@@ -97,7 +156,9 @@ export default function GammaBellCurve({
     });
     ro.observe(el);
   }, []);
-  const H = Math.round(Math.min(620, Math.max(430, W * 0.62)));
+  // Back to a wide card's ratio now that this is the only chart in the row —
+  // 0.62 was tuned for a half-width column and letterboxes at full width.
+  const H = Math.round(Math.min(660, Math.max(440, W * 0.44)));
   const plotW = Math.max(80, W - PAD.l - PAD.r);
   const plotH = H - PAD.t - PAD.b;
   const topH = Math.max(60, (plotH - GAP) * TOP_SHARE);
@@ -131,8 +192,14 @@ export default function GammaBellCurve({
   const fit = useMemo(() => {
     const g = lsqGaussian(binsIn);
     if (!g) return null;
+    // The MOMENT centre is kept alongside the fitted peak on purpose. They are
+    // different questions — "where would you draw the bell" vs "where does the
+    // dollar-weighted mass actually sit" — and on a board with a fat wing they
+    // separate. Two tiles, both labelled, neither pretending to be the other.
+    const m = moments(binsIn);
     return {
       ...g,
+      com: m ? m.mu : g.mu,
       insidePct: massInside(binsIn, g.mu, g.sigma),
       totalMass: binsIn.reduce((s, b) => s + b.mass, 0),
       netTotal: binsIn.reduce((s, b) => s + b.net, 0),
@@ -252,7 +319,7 @@ export default function GammaBellCurve({
     );
   }
 
-  const { a, mu, sigma, lsq, insidePct, totalMass, netTotal } = fit;
+  const { a, mu, sigma, lsq, com, insidePct, totalMass, netTotal } = fit;
   const { x, yTop, yNet, maxMass, maxP, maxN, zeroY, barW } = geo;
 
   // The fitted bell, drawn at its own amplitude — NOT normalised to the tallest
@@ -306,7 +373,29 @@ export default function GammaBellCurve({
         <div className="gd-kpi">
           <div className="n">Mass inside 1σ</div>
           <div className="v">{insidePct.toFixed(0)}%</div>
-          <div className="m">{fmtB(totalMass, false)} total</div>
+          <div className="m">
+            {insidePct >= 80 ? "more peaked than normal"
+              : insidePct >= 68 ? "tighter than normal"
+                : "flatter than normal"}
+          </div>
+        </div>
+        {/* The three below came off the net-GEX card when it was removed. They
+            describe the BOARD rather than the fit, which is why they sit as
+            their own run of tiles instead of being mixed into the first three. */}
+        <div className="gd-kpi">
+          <div className="n">Center of mass</div>
+          <div className="v">{nf0(com)}</div>
+          <div className="m">{com >= spot ? "+" : "−"}{nf0(Math.abs(com - spot))} vs spot</div>
+        </div>
+        <div className="gd-kpi">
+          <div className="n">Net GEX, window</div>
+          <div className={`v ${netTotal >= 0 ? "chg-pos" : "chg-neg"}`}>{fmtB(netTotal)}</div>
+          <div className="m">{netTotal >= 0 ? "dealers dampen" : "dealers amplify"}</div>
+        </div>
+        <div className="gd-kpi">
+          <div className="n">Gamma mass, total</div>
+          <div className="v">{fmtB(totalMass, false)}</div>
+          <div className="m">{meta.long}</div>
         </div>
       </div>
 
