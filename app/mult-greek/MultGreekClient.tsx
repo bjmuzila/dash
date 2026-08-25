@@ -1558,7 +1558,12 @@ function TickerPanel({
                         can safely be gold. */}
                     {lvl && (
                       <span title={lvl.title} style={{
-                        position: "absolute", top: 1, right: 2, fontSize: 8, fontWeight: 900,
+                        // Vertically CENTRED, not pinned to the top edge. The
+                        // cell is barely taller than the badge, so a top-anchored
+                        // chip sat a pixel or two above the figure beside it and
+                        // read as misaligned rather than as a corner mark.
+                        position: "absolute", top: "50%", transform: "translateY(-50%)",
+                        right: 2, fontSize: 8, fontWeight: 900,
                         lineHeight: 1.3, letterSpacing: "0.04em",
                         color: "#ffffff", background: "rgba(4,8,16,0.92)",
                         boxShadow: `inset 0 0 0 1px ${lvl.c}`,

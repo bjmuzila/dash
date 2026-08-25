@@ -442,18 +442,18 @@ function TickerVisitsCard({ source, icon, label }: { source: string; icon: strin
         {err ? (
           <div style={{ fontSize: 14, color: HOME_THEME.red }}>{err}</div>
         ) : rows == null ? (
-          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>Loading…</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1 }}>Loading…</div>
         ) : ranked.length === 0 ? (
-          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>No ticker visits recorded in this window.</div>
+          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1 }}>No ticker visits recorded in this window.</div>
         ) : ranked.map((r, i) => (
           <div key={r.ticker} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.5, width: 18, flexShrink: 0 }}>{i + 1}</span>
+            <span style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1, width: 18, flexShrink: 0 }}>{i + 1}</span>
             <span style={{ fontSize: 14, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.text, width: 70, flexShrink: 0 }}>{r.ticker}</span>
             <div style={{ flex: 1, height: 9, background: "rgba(255,255,255,0.06)", borderRadius: 5, overflow: "hidden" }}>
               <div style={{ height: "100%", width: `${Math.round((r.clicks / max) * 100)}%`, background: HOME_THEME.cyan, borderRadius: 5 }} />
             </div>
             <span style={{ fontSize: 14, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, width: 54, textAlign: "right", flexShrink: 0 }}>{r.clicks.toLocaleString()}</span>
-            <span title="impressions" style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 0.45, width: 60, textAlign: "right", flexShrink: 0 }}>{r.renders.toLocaleString()} imp</span>
+            <span title="impressions" style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1, width: 60, textAlign: "right", flexShrink: 0 }}>{r.renders.toLocaleString()} imp</span>
           </div>
         ))}
       </div>
@@ -902,7 +902,7 @@ function MetricsTabSection({
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {/* Window caption — the picker itself lives in the page header. */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-        <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
+        <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
           {caption}
         </span>
       </div>
@@ -924,7 +924,7 @@ function MetricsTabSection({
           </div>
           <div style={{ display: "flex", gap: 7, marginBottom: 6 }}>
             {traffic.labels.map((l, i) => (
-              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 1, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
             ))}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.text, opacity: 1 }}>
@@ -948,7 +948,7 @@ function MetricsTabSection({
           </div>
           <div style={{ display: "flex", gap: 7, marginBottom: 6 }}>
             {signupsSeries.labels.map((l, i) => (
-              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 1, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
             ))}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.text, opacity: 1 }}>
@@ -972,7 +972,7 @@ function MetricsTabSection({
           </div>
           <div style={{ display: "flex", gap: 7, marginBottom: 6 }}>
             {signupsSeries.labels.map((l, i) => (
-              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 0.6, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
+              <div key={i} style={{ flex: 1, fontSize: 12, color: HOME_THEME.text, opacity: 1, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l}</div>
             ))}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: HOME_THEME.text, opacity: 1 }}>
@@ -1126,10 +1126,10 @@ function HostingStrip({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.45 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 1 }}>
           Hosting · Hetzner + Cloudflare
         </span>
-        <span style={{ fontSize: 10, fontFamily: "var(--font-mono), monospace", color: HOME_THEME.text, opacity: 0.35 }}>
+        <span style={{ fontSize: 10, fontFamily: "var(--font-mono), monospace", color: HOME_THEME.text, opacity: 1 }}>
           {gran === "yearly" ? "30 day — no yearly upstream" : renderWindow === "live" ? "live window" : renderWindow === "weekly" ? "7 day window" : "30 day window"}
         </span>
       </div>
@@ -1584,7 +1584,7 @@ function TopPagesCard({
   const shown = expanded ? view.rows.slice(0, 40) : view.rows.slice(0, 10);
   const max = view.rows[0]?.loads ?? 0;
   const num = (n: number) => n.toLocaleString();
-  const dim = { color: HOME_THEME.text, opacity: 0.45 } as React.CSSProperties;
+  const dim = { color: HOME_THEME.text, opacity: 1 } as React.CSSProperties;
   const mono: React.CSSProperties = { fontFamily: "monospace", fontVariantNumeric: "tabular-nums" };
 
   const Pill = ({ on, label, title, onClick }: { on: boolean; label: string; title?: string; onClick: () => void }) => (
@@ -1730,7 +1730,7 @@ function TopPagesCard({
                       <div style={{ width: `${100 - memberPct}%`, background: HOME_THEME.orange }} />
                     </div>
                     <span style={{ fontSize: 11, ...mono, ...dim }}>
-                      {num(r.memberLoads)} <span style={{ opacity: 0.7 }}>({num(r.paidLoads)})</span> / {num(r.guestLoads)}
+                      {num(r.memberLoads)} <span style={{ opacity: 1 }}>({num(r.paidLoads)})</span> / {num(r.guestLoads)}
                     </span>
                   </div>
                 )}

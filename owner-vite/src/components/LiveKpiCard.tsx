@@ -231,7 +231,7 @@ export function LiveLineChart({
     return (
       <div style={{
         height, display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: 10, color: T.muted, opacity: 0.35, letterSpacing: "0.04em",
+        fontSize: 10, color: T.muted, opacity: 1, letterSpacing: "0.04em",
         border: `1px dashed ${ownerRgba("#FFFFFF", 0.08)}`, borderRadius: 8,
       }}>
         {emptyHint}
@@ -350,7 +350,7 @@ export function LiveLineChart({
           position: "absolute", right: 0, top: 0, height, width: rightGutter - 4,
           display: "flex", flexDirection: "column", justifyContent: "space-between",
           fontSize: 10, fontFamily: "var(--font-mono), monospace", color: T.muted,
-          opacity: 0.4, textAlign: "right", pointerEvents: "none", lineHeight: 1,
+          opacity: 1, textAlign: "right", pointerEvents: "none", lineHeight: 1,
         }}>
           {yLabels.map((v, i) => <span key={i}>{formatValue(v)}</span>)}
         </div>
@@ -374,7 +374,7 @@ export function LiveLineChart({
             boxShadow: "0 6px 18px rgba(0,0,0,0.6)",
           }}>
             <div style={{ fontWeight: 700, color }}>{formatValue(targets[hoverI] ?? vals[hoverI])}</div>
-            {raw[hoverI]?.label && <div style={{ opacity: 0.6, marginTop: 2, fontSize: 10 }}>{raw[hoverI].label}</div>}
+            {raw[hoverI]?.label && <div style={{ opacity: 1, marginTop: 2, fontSize: 10 }}>{raw[hoverI].label}</div>}
           </div>
         </>
       )}
@@ -383,7 +383,7 @@ export function LiveLineChart({
         <div style={{
           display: "flex", justifyContent: "space-between", marginTop: 4,
           fontSize: 10, fontFamily: "var(--font-mono), monospace",
-          color: T.muted, opacity: 0.4, lineHeight: 1, pointerEvents: "none",
+          color: T.muted, opacity: 1, lineHeight: 1, pointerEvents: "none",
         }}>
           <span>{firstLabel}</span>
           <span>{lastLabel}</span>
@@ -505,7 +505,7 @@ export function LiveKpiCard({
       </div>
 
       {sub != null && sub !== "" && (
-        <div style={{ fontSize: 12, color: T.textSecondary, opacity: 0.55, lineHeight: 1.3 }}>{sub}</div>
+        <div style={{ fontSize: 12, color: T.textSecondary, opacity: 1, lineHeight: 1.3 }}>{sub}</div>
       )}
 
       {pts.length > 0 && (

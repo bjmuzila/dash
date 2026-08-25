@@ -1,107 +1,138 @@
 # Changelog
 
-## 2026-08-25 - Daily Grades: level glossary corrected, dashboard scrollbar, no left accent
+## 2026-08-25 - Owner Overview: AI assistant traffic split out of Campaigns
 
-Edited: `owner-vite/src/pages/DailyGrades.tsx`, `owner-vite/src/lib/dailyGrades.ts`,
-`generated/2026-08-25-daily-grades.html`.
+Edited: `owner-vite/src/components/AcquisitionPanel.tsx`.
 
-**The level glossary was WRONG and is now right.** It had been written as if the
-board were a support/resistance pair, which it is not:
+`chatgpt.com` was showing as a campaign row. It is not a bug and nothing is
+falling through to "use the referrer host as the campaign" - the grouping
+requires a real `utm_source`, and ChatGPT stamps `?utm_source=chatgpt.com` on
+every citation link it hands out. Real people, real UTM tag, just not a tag
+anyone here wrote.
 
-- **cap** - the strongest POSITIVE GEX strike (was "upper level / call wall")
-- **floor** - the strongest NEGATIVE GEX strike (was "lower level / put wall")
-- **apex** - CB (was "the single biggest level on the board")
-- **flip** - gamma flip, unchanged
+The Campaigns table now holds only links we tagged. A new `AUTO_TAG_SOURCES`
+set (chatgpt.com / chat.openai.com / perplexity / claude.ai / gemini / copilot /
+you.com / poe / grok, plus the bare-word forms) routes platform-stamped sources
+into a second "AI assistants" table under it, same columns, hidden entirely when
+empty.
 
-The consequence is spelled out in the header of `dailyGrades.ts` because it is
-easy to re-break: NOTHING assumes floor sits below cap in price. The strongest
-negative strike can print above the strongest positive one, so `cap < floor` is
-a legitimate board and not a data fault - it stays flagged, and the Floor->Cap
-bar goes blank rather than drawing itself backwards. The legend now says so on
-screen instead of leaving a blank bar unexplained.
+Mechanics:
 
-**Scrollbar is the dashboard's own.** The board box takes `.wall-scroll`
-(index.css) - cyan thumb on an inset track, the same bar the Walls table and the
-ranked rail use. The browser default is a white wash that reads as chrome
-sitting on top of the card. No new CSS; the class already existed.
+- The row markup was extracted to a shared `CampaignTable` component, so both
+  tables stay one implementation.
+- Bars scale WITHIN each table. A shared scale would stub out every bar in the
+  smaller list for no gain - the two lists answer different questions.
+- The split happens AFTER the sort, and each table takes its own top 12, so one
+  assistant out-clicking every push cannot evict our own campaigns from their
+  own table.
+- Matched on `utm_source` alone. A link we tag ourselves with
+  `utm_source=chatgpt.com` would land in the assistants table; accepted, since
+  nothing on the row records who wrote the tag.
 
-**Left accent removed** from the seal-note callout - it now sits flush on the
-inset surface like every other block on the page.
+Unchanged: `lib/visitorAttribution.ts` and the channel buckets. `chatgpt.com` is
+already in `SEARCH_HOSTS`, so the referrer side still counts these as search.
 
-## 2026-08-25 - Daily Grades: flat SURFACE ramp, white type, board scrolls in its own box
+## 2026-08-25 - Owner Overview: no more dimmed text
 
-Edited: `owner-vite/src/lib/theme.ts`, `owner-vite/src/pages/DailyGrades.tsx`,
-`generated/2026-08-25-daily-grades.html`.
+Edited: `owner-vite/src/pages/ControlPanel.tsx`,
+`owner-vite/src/components/AcquisitionPanel.tsx`,
+`owner-vite/src/components/LiveKpiCard.tsx`,
+`owner-vite/src/components/CampaignLinkBuilder.tsx`.
 
-**New `SURFACE` export in `lib/theme.ts`** - a six-step flat surface ramp,
-darkest first, each step a plane further forward: `app` #020304, `rail` #040507,
-`shell` #07080b, `card` #0F1117, `card2` #14171D, `cardHi` #191B22. Additive
-only; every page still on `OWNER_THEME.panelBg` is untouched.
+Every gray-looking string on `/owner/dev/owner?tab=overview` was already
+`#FFFFFF` - `OWNER_THEME.text`, `textSecondary` and `muted` are all white in
+`lib/theme.ts`. The gray came from `opacity` dimmers (0.35 - 0.75) layered on
+that white: column headers, hints, subtitles, percentages, zero counts, axis
+labels, the footnote block.
 
-The ramp is deliberately FLAT - opaque fills, no translucency. Daily Grades opts
-in and therefore also drops `backdropFilter` on the surfaces it repaints: a blur
-behind an opaque fill buys nothing but a compositor layer. Shell behind the page,
-`card` for each panel, `card2` for anything inset in a card (stat tiles, the
-sticky table head, the search box and the paste area), `cardHi` for row hover and
-the Floor->Cap track.
+All text opacities on the Overview page and its panels are now `1`. Bar tracks,
+fills, borders and backgrounds are untouched, and so are the state-driven
+opacities that are not decoration - `renderLoading`, `ctlBusy`, `publishing`,
+the disabled Copy/link preview in the campaign builder, and the `lkc-ping`
+keyframes.
 
-**All type is white.** Every muted `ownerRgba(T.text, .28-.7)` is gone - column
-heads, tile labels, the seal line, the legend, the "-" in an empty cell. State is
-carried by the pills and the accent colours, never by dimming the type, so the
-0.55-opacity wash on ungraded rows is gone too: those rows now read at full
-strength with a `not graded` pill, which is what actually names the condition.
+Net effect: the Overview page has no text hierarchy by dimming any more. Size,
+weight and the accent hues (cyan / gold / orange) are the only ranking signals
+left there.
 
-**The board scrolls in its own box** - `max-height: clamp(360px, 64vh, 900px)`
-with `overflow: auto`, so ~169 watchlist names scroll under a sticky header
-instead of running the whole page down and leaving the column heads off-screen.
-The head needed an opaque fill of its own (`card2`) now that rows slide beneath
-it. Horizontal scroll for narrow windows lives in the same box.
+## 2026-08-25 - CB / CW / PW badge sits on the figure's centre line
 
-The standalone `generated/` copy of the board got the same three changes.
+Edited: `app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`.
 
-## 2026-08-25 - Daily Grades board on the owner site (/owner/daily-grades)
+The badge was pinned `top: 1`. The cell is barely taller than the chip, so that
+put it a pixel or two above the figure beside it - not high enough to read as a
+deliberate corner mark, just high enough to read as misaligned against every
+other cell in the row.
 
-Added: `owner-vite/src/pages/DailyGrades.tsx`, `owner-vite/src/lib/dailyGrades.ts`,
-`owner-vite/src/pages/daily-grades/sample.ts`, `generated/2026-08-25-daily-grades.html`.
-Edited: `owner-vite/src/lib/nav.ts`, `owner-vite/src/pages/registry.ts`.
+It is now vertically centred (`top: 50%` + `translateY(-50%)`, still `right: 2`),
+so the label shares a centre line with the number it belongs to.
 
-A readable levels board - one row per ticker, floor / apex / cap / flip against
-spot. New page under **Market** in the owner rail.
+The tuner's `corner()` helper grew a middle row to match: badge and glyph corners
+now offer `middle right` / `middle left` alongside the four corners, and the
+badge defaults to `mr` - what ships.
 
-**The roster is the watchlist.** Rows come from `useTickerUniverse()`
-(`lib/tickers.ts` -> `GET /proxy/scanner-tickers`) - the same scanner universe
-the ΔGEX Board runs over - NOT `Object.keys(payload.boards)`. A watchlist name
-the seal didn't grade still gets a row, dimmed and flagged `not graded`, so a
-short board reads as a gap instead of a clean list. A graded name that isn't on
-the watchlist is off-roster and sits behind a `+N off roster` toggle rather than
-quietly padding the board. `deriveRows(payload, roster, includeOffRoster)` owns
-that merge.
+## 2026-08-25 - VIVID is the default; CB/CW/PW cards removed; strike + TOTAL up a size
 
-**This is the template.** The data is not wired yet: the page renders whatever
-`DgPayload` it is handed and there is exactly ONE seam for the live feed -
-`loadGrades()` in `lib/dailyGrades.ts`. It probes `/api/daily-grades` (not
-implemented server-side) and falls back to a bundled sealed board so the
-template renders real-shaped numbers. When TT / dxLink lands, swap that function
-body; for a streaming spot there is `applySpots(payload, quotes)`, which overlays
-live prices while the four levels stay frozen at their sealed values. Every
-delta, bar and flag recomputes off spot, so nothing in the component changes.
-A "Paste JSON" drop/paste box is the manual path until then, and the header
-badges say which source is on screen (Live / Imported / Sample) and whether the
-watchlist itself is live or cached.
+Edited: `app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`.
 
-**What the board shows**
+**VIVID is what the page opens on.** `heatSkin` defaults to `vivid` (server render
+included, so hydration still matches) and the Intensity slider starts at that
+skin's tuned 3x. CLASSIC is now the opt-out, and the cog's Skin toggle lists
+VIVID first.
 
-- Delta columns: percent from spot to each level, signed - positive means the
-  level sits above spot. Bold inside 1%.
-- Floor -> Cap bar: where spot sits in the band, white tick = spot, gold line =
-  flip. Blank when the band is unusable (missing, or cap below floor).
-- State pills: above flip / below flip / no flip, plus flags for `near a level`,
-  `outside floor/cap`, `cap < floor` (seals really do ship inverted boards -
-  KLAC and VOO in the 08-25 sample), `not graded` and `off roster`.
-- Seven summary tiles, ticker search, six filters, every column sortable with
-  nulls sinking to the bottom either way.
+**The three CB / CW / PW cards above each panel are gone.** The ladder paints
+those cells in the level's own colour and badges them, so the cards had become a
+second, smaller copy of something the grid says louder - while costing a whole
+row of vertical space on a page whose entire point is four ladders on one screen.
 
-Colours all come from `lib/theme` (`OWNER_THEME`) - no hardcoded hex.
+Their show/hide toggles were the only thing lost, so they moved into the cog:
+**Heat -> Levels**, three buttons lit in each level's own colour (gold / cyan /
+red) rather than three identical switches, so the row reads as the markers
+themselves. Same page-wide flags, same behaviour. The Heat section's collapsed
+summary now names any level that is switched off, and the cog pane grew to 196px
+to fit three fields. `onToggleWall` is off `TickerPanel` entirely, and
+`classicCardAccentStyle` / `DOCK_THEME` are no longer imported.
+
+**The CB star is black on a filled CB cell.** A gold star on a gold CB tile is an
+invisible star - it flips to `#04121a` with a white halo whenever the skin fills
+that cell in the level colour, and stays gold everywhere else.
+
+**Strike rail and TOTAL row are a size up and both centred** - 13px and 11px, and
+the TOTAL no longer inherits the skin's right alignment. These two are read
+ACROSS the panel rather than down a column, so they keep their own size and
+alignment whatever the cells do. STRIKE / TOTAL headers and the +% chip nudged
+up to match.
+
+The tuner gained `railSize` / `totalSize` sliders and the same black-glyph rule,
+so it still previews what ships.
+
+## 2026-08-25 - ATM: a chip on the strike instead of a box round the row; VIVID walls fill
+
+Edited: `app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`.
+
+**ATM marker is now a skin choice** - `SkinDef.atm`: `box` | `chip` | `both` | `none`.
+
+The 2px white border has to be drawn either on every cell of the row or on the
+row itself, where it fights the cells' own radius and inset - so on VIVID it cut
+across the rounded tiles and boxed in the gaps between them. The chip is one
+mark, on the one column that identifies the row anyway.
+
+- CLASSIC keeps `box` (square, flush cells - the border costs nothing there).
+- VIVID takes `chip`: a white "ATM" chip beside the strike, same shape language
+  as the EM / 2×EM badges already on that rail.
+
+The row's fallback bottom hairline is also dropped when a skin has a gap or an
+inset - the tiles already separate themselves, and a line under floating tiles
+reads as a stray rule.
+
+**VIVID's walls now fill.** `levelFill: { mode: "blend", alpha: { cb: .85, cw: 1,
+pw: 1 } }` - the level's colour laid over the heat, CW and PW at full strength
+because the wall IS the colour, CB pulled back to .85 so gold doesn't swamp the
+row it sits in (and the heat still shows through it).
+
+Tuner: `atmBox` becomes an "ATM marker" select with a chip-colour picker, the
+chip renders on all three strike rails (ladder, chain left, chain mirrored), and
+the blend defaults match what ships.
 
 ## 2026-08-25 - CB / CW / PW can fill the whole cell, not just carry a badge
 

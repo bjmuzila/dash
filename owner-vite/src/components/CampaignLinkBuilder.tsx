@@ -83,7 +83,7 @@ const labelStyle: CSSProperties = {
   letterSpacing: "0.1em",
   textTransform: "uppercase",
   color: T.text,
-  opacity: 0.5,
+  opacity: 1,
 };
 
 const monoStyle: CSSProperties = { fontFamily: "var(--font-mono), monospace" };
@@ -172,7 +172,7 @@ export default function CampaignLinkBuilder({ rows }: { rows: CampaignSeedRow[] 
     >
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 14, color: T.text }}>{label}</div>
-        <div style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4 }}>{note}</div>
+        <div style={{ fontSize: 11, color: T.textSecondary, opacity: 1 }}>{note}</div>
       </div>
       <div
         title={`arrives tagged: ${tags}`}
@@ -210,8 +210,8 @@ export default function CampaignLinkBuilder({ rows }: { rows: CampaignSeedRow[] 
   return (
     <div style={{ ...homePanelStyle, padding: 18, display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <span style={{ ...labelStyle, opacity: 0.75 }}>Campaign links</span>
-        <span style={{ fontSize: 11, color: T.textSecondary, opacity: 0.45 }}>
+        <span style={{ ...labelStyle, opacity: 1 }}>Campaign links</span>
+        <span style={{ fontSize: 11, color: T.textSecondary, opacity: 1 }}>
           Copy and paste. The redirect adds the tracking tags. Broadcast emails tag themselves at send time.
         </span>
       </div>
@@ -229,7 +229,7 @@ export default function CampaignLinkBuilder({ rows }: { rows: CampaignSeedRow[] 
         </div>
         <div>
           <div style={{ ...labelStyle, marginBottom: 6 }}>
-            Name this push <span style={{ opacity: 0.6, textTransform: "none", letterSpacing: 0 }}>— optional</span>
+            Name this push <span style={{ opacity: 1, textTransform: "none", letterSpacing: 0 }}>— optional</span>
           </div>
           <input
             value={campaign}
@@ -240,7 +240,7 @@ export default function CampaignLinkBuilder({ rows }: { rows: CampaignSeedRow[] 
           />
           {seenCampaigns.length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7, alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4 }}>reuse:</span>
+              <span style={{ fontSize: 11, color: T.textSecondary, opacity: 1 }}>reuse:</span>
               {seenCampaigns.map((c) => (
                 <Chip key={c} label={c} onClick={() => setCampaign(c)} title="Same push on another platform — reuse the exact name" />
               ))}
@@ -296,12 +296,12 @@ export default function CampaignLinkBuilder({ rows }: { rows: CampaignSeedRow[] 
             {copied === oneOffUrl ? "Copied" : "Copy"}
           </button>
         </div>
-        <div style={{ ...monoStyle, fontSize: 12, color: T.cyan, opacity: slug(oneOffSource) ? 0.9 : 0.35, marginTop: 8, wordBreak: "break-all" }}>
+        <div style={{ ...monoStyle, fontSize: 12, color: T.cyan, opacity: slug(oneOffSource) ? 1 : 0.35, marginTop: 8, wordBreak: "break-all" }}>
           {oneOffUrl}
         </div>
       </div>
 
-      <div style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 11, color: T.textSecondary, opacity: 1, lineHeight: 1.6 }}>
         Every link 302s through <span style={monoStyle}>app/[source]/route.ts</span> (bare) or{" "}
         <span style={monoStyle}>app/[source]/[action]/route.ts</span> (with a verb), which attaches{" "}
         <span style={monoStyle}>utm_source</span> / <span style={monoStyle}>utm_medium</span> /

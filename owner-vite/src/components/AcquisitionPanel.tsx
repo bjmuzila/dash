@@ -80,7 +80,7 @@ const labelStyle: CSSProperties = {
   letterSpacing: "0.12em",
   textTransform: "uppercase",
   color: T.text,
-  opacity: 0.75,
+  opacity: 1,
 };
 
 const monoStyle: CSSProperties = { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" };
@@ -89,8 +89,8 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
       <span style={{ ...monoStyle, fontSize: 26, fontWeight: 700, color: T.text, lineHeight: 1.1 }}>{value}</span>
-      <span style={{ fontSize: 12, color: T.textSecondary, opacity: 0.6 }}>{label}</span>
-      {hint && <span style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4 }}>{hint}</span>}
+      <span style={{ fontSize: 12, color: T.textSecondary, opacity: 1 }}>{label}</span>
+      {hint && <span style={{ fontSize: 11, color: T.textSecondary, opacity: 1 }}>{hint}</span>}
     </div>
   );
 }
@@ -110,7 +110,7 @@ function Bar({ name, value, total, max }: { name: string; value: number; total: 
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
         <span
           style={{
-            fontSize: 13, color: T.text, opacity: 0.9,
+            fontSize: 13, color: T.text, opacity: 1,
             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
           }}
         >
@@ -118,7 +118,7 @@ function Bar({ name, value, total, max }: { name: string; value: number; total: 
         </span>
         <span style={{ ...monoStyle, fontSize: 13, color: T.text, flexShrink: 0 }}>
           {num(value)}
-          <span style={{ color: T.textSecondary, opacity: 0.45, marginLeft: 6 }}>{pct(value, total)}</span>
+          <span style={{ color: T.textSecondary, opacity: 1, marginLeft: 6 }}>{pct(value, total)}</span>
         </span>
       </div>
       <div style={{ height: 8, borderRadius: 999, background: ownerRgba(T.text, 0.05), overflow: "hidden" }}>
@@ -133,7 +133,7 @@ function Section({ title, subtitle, children }: { title: string; subtitle?: stri
     <div style={{ ...homePanelStyle, padding: 18, display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <span style={labelStyle}>{title}</span>
-        {subtitle && <span style={{ fontSize: 11, color: T.textSecondary, opacity: 0.45 }}>{subtitle}</span>}
+        {subtitle && <span style={{ fontSize: 11, color: T.textSecondary, opacity: 1 }}>{subtitle}</span>}
       </div>
       {children}
     </div>
@@ -142,7 +142,7 @@ function Section({ title, subtitle, children }: { title: string; subtitle?: stri
 
 function Empty({ children }: { children: ReactNode }) {
   return (
-    <div style={{ fontSize: 13, color: T.textSecondary, opacity: 0.45, padding: "10px 0", lineHeight: 1.6 }}>
+    <div style={{ fontSize: 13, color: T.textSecondary, opacity: 1, padding: "10px 0", lineHeight: 1.6 }}>
       {children}
     </div>
   );
@@ -182,6 +182,111 @@ function BarList({ pairs }: { pairs: [string, number][] }) {
       {pairs.map(([name, v]) => (
         <Bar key={name} name={name} value={v} total={sum} max={max} />
       ))}
+    </div>
+  );
+}
+
+/**
+ * utm_source values a PLATFORM stamps on the link, not something we tagged.
+ *
+ * ChatGPT appends ?utm_source=chatgpt.com to every citation it hands out, and
+ * the other assistants do the same with their own host. Those are real UTM tags
+ * on real arrivals — they are just not campaigns anyone here ran, so ranking
+ * them beside our own pushes turns the top row into a measure of who cited us
+ * rather than what we did. They get their own table below instead.
+ *
+ * Matched on the lowercased source only. Medium and campaign are left alone:
+ * a link we tag ourselves with utm_source=chatgpt.com (posting into a GPT, say)
+ * would land in the wrong table, and that is the accepted cost of not having a
+ * flag on the row that says who wrote the tag.
+ */
+const AUTO_TAG_SOURCES = new Set([
+  "chatgpt.com", "chat.openai.com", "openai.com", "chatgpt", "openai",
+  "perplexity.ai", "perplexity",
+  "claude.ai", "claude",
+  "gemini.google.com", "gemini", "bard.google.com",
+  "copilot.microsoft.com", "copilot",
+  "you.com", "poe.com", "grok.com", "x.ai",
+]);
+
+const isAutoTag = (source: string) => AUTO_TAG_SOURCES.has(source.trim().toLowerCase());
+
+interface CampaignRow {
+  source: string;
+  medium: string;
+  campaign: string;
+  sessions: number;
+  signups: number;
+  paid: number;
+}
+
+/**
+ * The campaign table — a ranked bar list, same shape as "Pages being visited":
+ * name on the left with a magnitude bar under it, counts right-aligned. The bar
+ * encodes SESSIONS (the clicks the link got), which is also the sort — a bar
+ * list ranked on a column other than the one it draws reads as broken. Signups
+ * / Paid / Conv. stay as columns beside it, so "which push earned customers" is
+ * still one glance away even though "which push got clicked" is what the shape
+ * shows.
+ *
+ * Bars are scaled WITHIN the table, not across both of them. Each list answers
+ * its own question ("which of my pushes did best", "which assistant sends the
+ * most"), and a shared scale would flatten every bar in the smaller list to a
+ * stub for no gain.
+ */
+function CampaignTable({ rows }: { rows: CampaignRow[] }) {
+  const max = rows[0]?.sessions ?? 0;
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <div style={{ minWidth: 460 }}>
+        {/* Header row */}
+        <div style={{
+          display: "grid", gridTemplateColumns: CAMPAIGN_COLS, gap: 8,
+          fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase",
+          color: T.textSecondary, opacity: 1,
+          paddingBottom: 6, borderBottom: `1px solid ${T.border}`,
+        }}>
+          <span>Campaign</span>
+          <span style={{ textAlign: "right" }} title="Unique arrivals from this campaign — one per person, not per click.">Sessions</span>
+          <span style={{ textAlign: "right" }} title="Arrivals whose account was created at or after the click.">Signups</span>
+          <span style={{ textAlign: "right" }} title="Of those signups, the ones now on an active or trialing subscription.">Paid</span>
+          <span style={{ textAlign: "right" }} title="Signups ÷ sessions.">Conv.</span>
+        </div>
+
+        {rows.map((c) => {
+          const w = max > 0 ? Math.max(2, (c.sessions / max) * 100) : 0;
+          const detail = [c.medium, c.campaign].filter(Boolean).join(" · ");
+          return (
+            <div
+              key={`${c.source}|${c.medium}|${c.campaign}`}
+              title={`${c.source}${detail ? ` — ${detail}` : ""}\n${num(c.sessions)} sessions · ${num(c.signups)} signups · ${num(c.paid)} paying`}
+              style={{
+                display: "grid", gridTemplateColumns: CAMPAIGN_COLS, gap: 8,
+                alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${T.border}`,
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+                  <span style={{ fontSize: 13, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {c.source}
+                  </span>
+                  <span style={{ fontSize: 12, ...monoStyle, color: T.textSecondary, opacity: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {detail || "—"}
+                  </span>
+                </div>
+                <div style={{ height: 5, background: ownerRgba(T.text, 0.05), borderRadius: 3, overflow: "hidden", marginTop: 5 }}>
+                  <div style={{ height: "100%", width: `${w}%`, background: T.cyan, borderRadius: 3 }} />
+                </div>
+              </div>
+
+              <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: T.text }}>{num(c.sessions)}</span>
+              <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: c.signups ? T.text : T.textSecondary, opacity: 1 }}>{num(c.signups)}</span>
+              <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: c.paid ? T.gold : T.textSecondary, opacity: 1, fontWeight: c.paid ? 700 : 400 }}>{num(c.paid)}</span>
+              <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: T.textSecondary, opacity: 1 }}>{pct(c.signups, c.sessions)}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -267,7 +372,7 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
     // three different moments, and an account created 900ms "before" the
     // arrival that produced it is a rounding artefact, not a pre-existing user.
     const GRACE_MS = 60_000;
-    const campaigns = [...campAgg.entries()]
+    const ranked: CampaignRow[] = [...campAgg.entries()]
       .map(([k, agg]) => {
         const [source, medium, campaign] = k.split(SEP);
         let signups = 0;
@@ -286,15 +391,20 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
       // a ranked bar list sorted on a column other than the one the bars encode
       // reads as broken. Paid and signups stay as the columns beside it and
       // break ties, so "which push earned customers" is still one glance away.
-      .sort((a, b) => b.sessions - a.sessions || b.paid - a.paid || b.signups - a.signups)
-      .slice(0, 12);
+      .sort((a, b) => b.sessions - a.sessions || b.paid - a.paid || b.signups - a.signups);
+
+    // Split AFTER the sort, and take 12 of each rather than 12 of the union:
+    // one assistant out-clicking every push we ran must not be able to push our
+    // own campaigns off the bottom of their own table.
+    const campaigns = ranked.filter((c) => !isAutoTag(c.source)).slice(0, 12);
+    const assistants = ranked.filter((c) => isAutoTag(c.source)).slice(0, 12);
 
     return {
       pageviews: human.length,
       botLoads: bots.length,
       sessionCount: sessions.length,
       topChannel: channels[0]?.[0] ?? null,
-      channels, referrers, devices, browsers, campaigns,
+      channels, referrers, devices, browsers, campaigns, assistants,
       // Attribution only exists on rows logged after the feature shipped. If
       // there are rows but no entries at all, say so instead of showing zeros
       // that read like "nobody visited".
@@ -304,9 +414,6 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
   }, [rows, win]);
 
   const s = view.sessionCount;
-  // Bars are scaled to the top campaign's sessions — the list is sorted by that
-  // same number, so row 0 is the maximum.
-  const campaignMax = view.campaigns[0]?.sessions ?? 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -395,16 +502,11 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
         </Section>
       </div>
 
-      {/* Campaigns — a ranked bar list, same shape as "Pages being visited":
-          name on the left with a magnitude bar under it, counts right-aligned.
-          The bar encodes SESSIONS (the clicks the link got), which is also the
-          sort — a bar list ranked on a column other than the one it draws reads
-          as broken. Signups / Paid / Conv. stay as columns beside it, so "which
-          push earned customers" is still one glance away even though "which
-          push got clicked" is what the shape now shows. */}
+      {/* Campaigns we ran. Platform auto-tags are NOT in this table — see the
+          section under it and the AUTO_TAG_SOURCES note above. */}
       <Section
         title="Campaigns"
-        subtitle="tagged links (utm_*) and inferred ad clicks — ranked by sessions"
+        subtitle="links you tagged (utm_*) and inferred ad clicks — ranked by sessions"
       >
         {view.campaigns.length === 0 ? (
           <Empty>
@@ -413,59 +515,27 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
             <code style={{ color: T.cyan }}>fbclid</code> clicks are picked up automatically.
           </Empty>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <div style={{ minWidth: 460 }}>
-              {/* Header row */}
-              <div style={{
-                display: "grid", gridTemplateColumns: CAMPAIGN_COLS, gap: 8,
-                fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase",
-                color: T.textSecondary, opacity: 0.5,
-                paddingBottom: 6, borderBottom: `1px solid ${T.border}`,
-              }}>
-                <span>Campaign</span>
-                <span style={{ textAlign: "right" }} title="Unique arrivals from this campaign — one per person, not per click.">Sessions</span>
-                <span style={{ textAlign: "right" }} title="Arrivals whose account was created at or after the click.">Signups</span>
-                <span style={{ textAlign: "right" }} title="Of those signups, the ones now on an active or trialing subscription.">Paid</span>
-                <span style={{ textAlign: "right" }} title="Signups ÷ sessions.">Conv.</span>
-              </div>
-
-              {view.campaigns.map((c) => {
-                const w = campaignMax > 0 ? Math.max(2, (c.sessions / campaignMax) * 100) : 0;
-                const detail = [c.medium, c.campaign].filter(Boolean).join(" · ");
-                return (
-                  <div
-                    key={`${c.source}|${c.medium}|${c.campaign}`}
-                    title={`${c.source}${detail ? ` — ${detail}` : ""}\n${num(c.sessions)} sessions · ${num(c.signups)} signups · ${num(c.paid)} paying`}
-                    style={{
-                      display: "grid", gridTemplateColumns: CAMPAIGN_COLS, gap: 8,
-                      alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${T.border}`,
-                    }}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
-                        <span style={{ fontSize: 13, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {c.source}
-                        </span>
-                        <span style={{ fontSize: 12, ...monoStyle, color: T.textSecondary, opacity: 0.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {detail || "—"}
-                        </span>
-                      </div>
-                      <div style={{ height: 5, background: ownerRgba(T.text, 0.05), borderRadius: 3, overflow: "hidden", marginTop: 5 }}>
-                        <div style={{ height: "100%", width: `${w}%`, background: T.cyan, borderRadius: 3 }} />
-                      </div>
-                    </div>
-
-                    <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: T.text }}>{num(c.sessions)}</span>
-                    <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: c.signups ? T.text : T.textSecondary, opacity: c.signups ? 1 : 0.35 }}>{num(c.signups)}</span>
-                    <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: c.paid ? T.gold : T.textSecondary, opacity: c.paid ? 1 : 0.35, fontWeight: c.paid ? 700 : 400 }}>{num(c.paid)}</span>
-                    <span style={{ ...monoStyle, fontSize: 13, textAlign: "right", color: T.textSecondary, opacity: 0.6 }}>{pct(c.signups, c.sessions)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <CampaignTable rows={view.campaigns} />
         )}
       </Section>
+
+      {/* Assistants. Hidden entirely when empty — an always-visible empty table
+          would read as a channel that is failing, when the honest reading is
+          that nothing has cited us in this window. */}
+      {view.assistants.length > 0 && (
+        <Section
+          title="AI assistants"
+          subtitle="auto-tagged by the assistant, not by you — someone clicked a citation"
+        >
+          <CampaignTable rows={view.assistants} />
+          <div style={{ fontSize: 12, color: T.textSecondary, opacity: 1, lineHeight: 1.6 }}>
+            ChatGPT and the others stamp <code style={{ color: T.cyan }}>?utm_source=&lt;their host&gt;</code> on
+            every link they cite, so these are real people arriving from an answer that mentioned us — not
+            the crawler. They are split out because they are not campaigns anyone here ran, and ranking them
+            beside your own pushes would make the top row a measure of who cited you.
+          </div>
+        </Section>
+      )}
 
       {/* Device + browser — counted over pageviews, not sessions, because the UA
           is on every row and there's no reason to throw that resolution away. */}
@@ -487,12 +557,12 @@ export default function AcquisitionPanel({ rows }: { rows: AcquisitionRow[] }) {
         </Section>
       </div>
 
-      <div style={{ fontSize: 12, color: T.textSecondary, opacity: 0.45, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 12, color: T.textSecondary, opacity: 1, lineHeight: 1.6 }}>
         Sessions are entry rows — one per browser session, the only rows carrying a referrer, so a
         visitor who reads six pages counts once here and six times under pageviews. Bots are excluded
         everywhere except the bot counter.
         <br />
-        <b style={{ color: T.text, opacity: 0.7 }}>Signups and Paid are attributed, not audited.</b>{" "}
+        <b style={{ color: T.text, opacity: 1 }}>Signups and Paid are attributed, not audited.</b>{" "}
         An arrival is anonymous by definition, so the only way to connect it to the account that
         appears later is the account id where we have one and the IP where we don't. A shared office
         or campus IP can credit the wrong campaign; a phone that switches networks between clicking

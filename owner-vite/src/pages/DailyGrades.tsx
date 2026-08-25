@@ -15,6 +15,10 @@
 // to the sealed 2026-08-25 sample and the header says which source is on
 // screen. Paste-JSON is the manual path in the meantime.
 //
+// NAMING: the payload field is `apex`; the level is CB and the UI says CB. The
+// key is not renamed because it is the sealed board's own wire format — see the
+// glossary in lib/dailyGrades.ts.
+//
 // SURFACES: this page paints on the flat `SURFACE` ramp from lib/theme rather
 // than the frosted `panelBg` the older owner pages use — shell behind, card for
 // each panel, card2 for anything inset in a card (tiles, the sticky table head,
@@ -468,7 +472,7 @@ export default function DailyGrades() {
                 <th style={th("spot")} onClick={() => toggleSort("spot")}>Spot{caret("spot")}</th>
                 <th style={th("floor")} onClick={() => toggleSort("floor")}>Floor{caret("floor")}</th>
                 <th style={th("dFloor")} onClick={() => toggleSort("dFloor")}>Δ{caret("dFloor")}</th>
-                <th style={th("apex")} onClick={() => toggleSort("apex")}>Apex{caret("apex")}</th>
+                <th style={th("apex")} onClick={() => toggleSort("apex")}>CB{caret("apex")}</th>
                 <th style={th("cap")} onClick={() => toggleSort("cap")}>Cap{caret("cap")}</th>
                 <th style={th("dCap")} onClick={() => toggleSort("dCap")}>Δ{caret("dCap")}</th>
                 <th style={th("flip")} onClick={() => toggleSort("flip")}>Flip{caret("flip")}</th>
@@ -535,7 +539,7 @@ export default function DailyGrades() {
           ["Roster", "The scanner watchlist from /proxy/scanner-tickers — the same universe the ΔGEX Board runs over."],
           ["Cap", "The strongest POSITIVE GEX strike on the board."],
           ["Floor", "The strongest NEGATIVE GEX strike on the board."],
-          ["Apex", "CB."],
+          ["CB", "The CB print. Carried as `apex` in the payload — the column is the same number under the name it is actually called."],
           ["Flip", "Gamma flip. Spot above it is the calmer regime; below it, the chop."],
           ["Δ columns", `How far spot has to travel to reach that level. Positive = the level is above spot; bold = inside ${NEAR_PCT}%.`],
           ["Floor → Cap", "Where spot sits between the two, in price. White tick = spot, gold line = flip. Blank when floor sits above cap — nothing to draw."],

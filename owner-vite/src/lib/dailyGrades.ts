@@ -7,7 +7,7 @@
 //
 //   floor — the strongest NEGATIVE GEX strike
 //   cap   — the strongest POSITIVE GEX strike
-//   apex  — CB
+//   apex  — CB (the wire name is `apex`; the level is CB and the UI says CB)
 //   flip  — gamma flip; spot above it is the calmer regime, below is the choppy one
 //   spot  — last price at seal time
 //
@@ -292,8 +292,15 @@ export function parsePayload(raw: unknown): DgPayload {
 
 // ── the one live seam ────────────────────────────────────────────────────────
 
-/** Endpoint the page probes for a sealed board. Not wired server-side yet. */
-export const DG_ENDPOINT = "/api/daily-grades";
+/**
+ * Endpoint the page probes for a sealed board — served by
+ * server-v2/daily-grades-recorder.js via `/proxy/daily-grades` in
+ * server-with-proxy.js. `?date=YYYY-MM-DD` picks a past session; no date is the
+ * most recent seal. The response also carries `grades` (one row per ticker) and
+ * `day` (the summed session), which this page ignores for now — the shape below
+ * only reads what it renders.
+ */
+export const DG_ENDPOINT = "/proxy/daily-grades";
 
 /**
  * Load the board for the page.

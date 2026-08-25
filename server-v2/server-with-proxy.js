@@ -1800,6 +1800,60 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+
+      // ── Daily Grades ──────────────────────────────────────────────────────
+      // The board is sealed BEFORE the open and graded AFTER the close; see
+      // daily-grades-recorder.js for the rubric. Backs /owner/daily-grades.
+      //   GET  /proxy/daily-grades[?date=]   seal + per-ticker grades + day roll-up
+      //   POST /proxy/daily-grades-seal      store a sealed board (body = the payload)
+      //   POST /proxy/daily-grades-run       grade now (manual fire)
+      //   POST /proxy/daily-grades-regrade   re-score stored O/H/L/C — no network
+      if (pathname === '/proxy/daily-grades' && req.method === 'GET') {
+        (async () => {
+          try {
+            const date = (new URL(req.url || '/', 'http://localhost').searchParams.get('date') || '').slice(0, 10);
+            const out = await require('./daily-grades-recorder').readSession(date || null);
+            if (!out) { sendJson(res, 404, { error: 'no sealed board' }, req); return; }
+            sendJson(res, 200, out, req, sessionCacheOpts(out.sealed_for_session));
+          } catch (e) { sendJson(res, 502, { error: String(e?.message || e) }, req); }
+        })();
+        return;
+      }
+      if (pathname === '/proxy/daily-grades-seal' && req.method === 'POST') {
+        (async () => {
+          try {
+            // Boards for ~170 tickers overrun readJsonBody's 100KB default.
+            const body = await readJsonBody(req, 2e6);
+            const force = new URL(req.url || '/', 'http://localhost').searchParams.get('force') === '1';
+            const r = await require('./daily-grades-recorder').sealBoard(body, { source: 'api', force });
+            sendJson(res, r.ok ? 200 : 400, r, req);
+          } catch (e) { sendJson(res, 400, { ok: false, error: String(e?.message || e) }, req); }
+        })();
+        return;
+      }
+      if (pathname === '/proxy/daily-grades-run' && req.method === 'POST') {
+        (async () => {
+          try {
+            const u = new URL(req.url || '/', 'http://localhost');
+            const date = (u.searchParams.get('date') || '').slice(0, 10) || null;
+            const r = await require('./daily-grades-recorder')
+              .gradeSession(`http://localhost:${PORT}`, date, { force: u.searchParams.get('force') === '1' });
+            sendJson(res, 200, { ok: true, result: r ?? null }, req);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }, req); }
+        })();
+        return;
+      }
+      if (pathname === '/proxy/daily-grades-regrade' && req.method === 'POST') {
+        (async () => {
+          try {
+            const date = (new URL(req.url || '/', 'http://localhost').searchParams.get('date') || '').slice(0, 10);
+            if (!date) { sendJson(res, 400, { ok: false, error: 'date required' }, req); return; }
+            const r = await require('./daily-grades-recorder').regradeSession(date);
+            sendJson(res, 200, { ok: true, result: r ?? null }, req);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }, req); }
+        })();
+        return;
+      }
       // ── Earnings calendar (weekly, mcap ≥ $100B) ─────────────────────────
       //   GET /proxy/earnings-week  → today → Friday, one row per name
       if (pathname === '/proxy/earnings-week' && req.method === 'GET') {
@@ -4101,6 +4155,12 @@ async function main() {
     // GEX Levels history recorder: persists the /test GEX Levels "History of
     // key level changes" row (walls/flip/$gamma/CPG/R2/S2/OI) forever in PG.
     require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);
+    // Daily Grades: after the close (16:20 ET) grade the board sealed before the
+    // open — floor/cap/apex/flip vs the realized session — one row per ticker
+    // plus one summed row for the day. Raw O/H/L/C is stored beside the grade so
+    // a rubric change is a regrade, not a refetch.
+    try { require('./daily-grades-recorder').startDailyGradesRecorder(PORT); }
+    catch (e) { console.warn('[daily-grades] start failed:', e.message); }
     // /premarket session freeze: captures the page's INPUTS twice a trading day
     // (pre 09:10–09:29, post 16:05–16:25 ET) into premarket_freeze, so a past
     // date renders the real Premarket / Post-Market tabs instead of a reduced

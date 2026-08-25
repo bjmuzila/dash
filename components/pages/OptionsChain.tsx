@@ -3101,7 +3101,9 @@ export default function OptionsChainPage({
           title="Options chain"
           buttonTitle="Options chain settings"
           width={340}
-          paneHeight={196}
+          /* Tall enough for the Grid tab with the Greek strip on two rows —
+             see the `wrap` on that SegGroup. */
+          paneHeight={236}
           sections={[
             {
               id: "grid",
@@ -3125,7 +3127,11 @@ export default function OptionsChainPage({
                       style={{ opacity: replayOn ? 0.4 : 1, pointerEvents: replayOn ? "none" : undefined }}
                       title={replayOn ? "GEX only in replay — DEX/CHEX/VEX/OI/VOL are not recorded" : undefined}
                     >
+                      {/* SIX tiles in a ~316px pane: without `wrap` the last
+                          one (VOL) ran under the panel's right edge, which is
+                          `overflowX: hidden`, so the mode was unclickable. */}
                       <SegGroup
+                        wrap
                         options={GREEK_MODES.map(m => ({ label: m.toUpperCase(), value: m }))}
                         active={greekMode}
                         onChange={(v) => setGreekMode(v as GreekMode)}
@@ -3137,6 +3143,7 @@ export default function OptionsChainPage({
                       toggle means the same thing rewound as it does live. */}
                   <DockField label="Basis">
                     <SegGroup
+                      wrap
                       options={DATA_MODES.filter(m => m !== "flow").map(m => ({ label: DATA_MODE_LABEL[m], value: m }))}
                       active={dataMode}
                       onChange={(v) => setDataMode(v as DataMode)}

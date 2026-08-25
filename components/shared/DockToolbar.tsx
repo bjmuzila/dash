@@ -139,11 +139,24 @@ export function SegGroup({
   active,
   onChange,
   accent = ACCENT,
+  wrap = false,
 }: {
   options: SegOption[];
   active: string;
   onChange: (value: string) => void;
   accent?: string;
+  /**
+   * Let the tiles WRAP onto a second row instead of running off the end.
+   *
+   * Off by default because on a toolbar the strip sits in a row that scrolls,
+   * and a second row there would change the bar's height. Inside a DockCogMenu
+   * section it is the opposite: the pane is a fixed ~340px box with
+   * `overflowX: hidden`, so a strip of six tiles (GEX/DEX/CHEX/VEX/OI/VOL) had
+   * its last tile silently CLIPPED — the option existed but could not be
+   * clicked. Wrapping trades one row of height for every tile staying
+   * reachable.
+   */
+  wrap?: boolean;
 }) {
   return (
     <div
@@ -152,12 +165,17 @@ export function SegGroup({
         display: "flex",
         alignItems: "center",
         gap: "clamp(2px, 0.4vw, 5px)",
-        height: 34,
+        rowGap: wrap ? 4 : undefined,
+        flexWrap: wrap ? "wrap" : "nowrap",
+        // Auto height when wrapping — the box has to grow with the rows.
+        height: wrap ? undefined : 34,
+        minHeight: 34,
         padding: 4,
         background: "rgba(0,0,0,0.22)",
         borderRadius: 12,
         border: "1px solid rgba(255,255,255,0.04)",
         flexShrink: 0,
+        maxWidth: "100%",
         boxSizing: "border-box",
       }}
     >
@@ -174,7 +192,9 @@ export function SegGroup({
               justifyContent: "center",
               gap: "clamp(3px, 0.4vw, 5px)",
               flexShrink: 0,
-              height: "100%",
+              // `100%` of an auto-height wrapping box is meaningless, so the
+              // wrapped tiles carry their own height.
+              height: wrap ? 26 : "100%",
               padding: "0 clamp(7px, 1vw, 14px)",
               fontSize: "clamp(10px, 0.85vw, 12px)",
               border: on ? `1px solid ${rgba(accent, 0.35)}` : "1px solid transparent",
