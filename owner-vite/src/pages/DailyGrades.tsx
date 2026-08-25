@@ -341,7 +341,7 @@ export default function DailyGrades() {
   return (
     <PageShell style={{ background: SURFACE.shell }}>
       {/* ── header ───────────────────────────────────────────────────────── */}
-      <Card variant="classic" padding={20} style={CARD}>
+      <Card variant="classic" padding={20} style={{ ...CARD, flexShrink: 0 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "flex-start", justifyContent: "space-between" }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -418,7 +418,7 @@ export default function DailyGrades() {
       </Card>
 
       {/* ── summary tiles ────────────────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))", gap: 10, flexShrink: 0 }}>
         <Tile value={stats.total} label="on watchlist" accent={T.text} />
         <Tile value={stats.graded} label="graded" accent={T.cyan} />
         <Tile value={stats.ungraded} label="not graded" accent={T.purple} />
@@ -429,7 +429,7 @@ export default function DailyGrades() {
       </div>
 
       {/* ── board ────────────────────────────────────────────────────────── */}
-      <Card variant="classic" padding={0} style={{ ...CARD, overflow: "hidden" }}>
+      <Card variant="classic" padding={0} style={{ ...CARD, overflow: "hidden", flexShrink: 0 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: 14, borderBottom: `1px solid ${T.border}` }}>
           <input
             value={query}
@@ -463,8 +463,14 @@ export default function DailyGrades() {
           dashboard's own scrollbar (index.css) — cyan thumb on an inset track,
           the same bar the Walls table and the ranked rail use. The default
           white-wash bar reads as browser chrome sitting on the card.
+
+          HEIGHT, not max-height, and `flexShrink: 0` on all four page blocks.
+          PageShell's <main> is a fixed-height column flex container, so its
+          children shrink by default when they overflow it — which collapsed this
+          box to three visible rows no matter what max-height said. The box owns
+          its height; the PAGE scrolls past it.
         */}
-        <div className="wall-scroll" style={{ maxHeight: "clamp(360px, 64vh, 900px)", overflow: "auto" }}>
+        <div className="wall-scroll" style={{ height: "clamp(420px, 64vh, 900px)", overflow: "auto" }}>
           <table style={{ width: "100%", minWidth: 1060, borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -534,7 +540,7 @@ export default function DailyGrades() {
       </Card>
 
       {/* ── legend ───────────────────────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, flexShrink: 0 }}>
         {[
           ["Roster", "The scanner watchlist from /proxy/scanner-tickers — the same universe the ΔGEX Board runs over."],
           ["Cap", "The strongest POSITIVE GEX strike on the board."],

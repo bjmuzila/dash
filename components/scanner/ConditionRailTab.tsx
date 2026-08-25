@@ -65,10 +65,15 @@
  * changed nothing. Any row can be clicked to pin it, and clicking the pinned
  * one hands the choice back.
  *
- * PER-CRITERION READ. The headline prices the whole stack. The "Each criterion
- * on its own" card prices each pick two ways — ALONE against the unconditional
- * book, and WITHOUT IT against the rest of the stack — so a thin cohort still
- * says which condition is carrying the number and which is only narrowing it.
+ * THE FAMILY BOARD. Nine ticked chips are not nine opinions — "ORB down",
+ * "broke IB low" and "IB closed below mid" are one bearish idea said three
+ * ways. So the readout groups the picks by the rail's own four families and
+ * blends each family SEPARATELY: one direction, one conviction, and a
+ * CORRELATED badge that is MEASURED (the overlap check's λ inside that family)
+ * rather than hand-placed. Families can disagree, and when they do it is said
+ * out loud instead of averaged into the headline. Per member: its own rate over
+ * the whole book, its last five in-play sessions as hit/miss dots, and its
+ * leave-one-out push on the headline — near zero marks a passenger.
  *
  * Data: public/data/ib-ES.json + ib-NQ.json (same slim exports the Stat
  * Prompter reads) plus the live 5m tape for today's classification.
@@ -79,14 +84,15 @@ import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/sha
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { failOutcome, type IbDataset, type SlimDay } from "@/lib/ibStats";
+import { blendMasks, deepestSupported, makeMask } from "@/lib/ibBlend";
 import { backfillWidthBuckets, computeToday, type TodayFull } from "@/components/scanner/StatPrompterTab";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 
 /* ── helpers ──────────────────────────────────────────────────────────────── */
 
-const pctS = (n: number, d: number) => (d ? ((100 * n) / d).toFixed(1) + "%" : "—");
 const pct0 = (v: number | null) => (v == null ? "—" : (100 * v).toFixed(0) + "%");
+const pct1 = (v: number | null) => (v == null ? "—" : (100 * v).toFixed(1) + "%");
 const med = (a: number[]) => {
   if (!a.length) return null;
   const s = [...a].sort((x, y) => x - y);
@@ -506,35 +512,83 @@ export default function ConditionRailTab() {
   const broke = useMemo(() => cohort.filter((d) => d.fcb != null), [cohort]);
   const allBroke = useMemo(() => days.filter((d) => d.fcb != null), [days]);
 
-  // Every outcome, every time: this cohort's rate, the book's rate, the gap.
-  const rows = useMemo(
-    () =>
-      METRICS.map((m) => {
-        const k = broke.filter(m.f).length;
-        const v = broke.length ? k / broke.length : null;
-        const b = allBroke.length ? allBroke.filter(m.f).length / allBroke.length : null;
-        return { m, k, v, b, delta: v != null && b != null ? (v - b) * 100 : null };
-      }),
-    [broke, allBroke],
+  /* ── the joined read ────────────────────────────────────────────────────── */
+  // Masks are built ONCE over every broken session in the window and reused for
+  // every outcome — see lib/ibBlend.ts for what is done with them and why.
+  const predMasks = useMemo(() => conds.map((c) => makeMask(allBroke, c.f)), [allBroke, conds]);
+  const outMasks = useMemo(() => METRICS.map((m) => makeMask(allBroke, m.f)), [allBroke]);
+  const blends = useMemo(
+    () => outMasks.map((om) => blendMasks(predMasks, om, allBroke.length)),
+    [predMasks, outMasks, allBroke.length],
   );
 
-  /** The headline the rail picks: furthest from the book. See METRICS above. */
+  // Every outcome, every time: the joined number, the exact cohort's own rate,
+  // the book's rate, and the gap the joined number opens on the book.
+  const rows = useMemo(
+    () =>
+      METRICS.map((m, i) => {
+        const b = blends[i];
+        return { m, b, joined: b.joined, exact: b.exact, p0: b.p0, delta: (b.joined - b.p0) * 100 };
+      }),
+    [blends],
+  );
+
+  /**
+   * The headline the rail picks: the outcome whose JOINED number sits furthest
+   * from the book. Ranking on the exact cohort's gap instead would rank on
+   * whichever four-day accident is most extreme — which is how a 0% and a 100%
+   * row used to win the headline.
+   */
   const autoId = useMemo(() => {
-    const scored = rows.filter((r) => r.delta != null);
-    if (!scored.length) return "hit1";
-    return scored.reduce((a, b) => (Math.abs(b.delta!) > Math.abs(a.delta!) ? b : a)).m.id;
+    if (!rows.length) return "hit1";
+    return rows.reduce((a, b) => (Math.abs(b.delta) > Math.abs(a.delta) ? b : a)).m.id;
   }, [rows]);
 
   const metric = METRICS.find((m) => m.id === (focus ?? autoId)) ?? METRICS[0];
+  const focusIdx = Math.max(0, METRICS.findIndex((m) => m.id === metric.id));
   const row = rows.find((r) => r.m.id === metric.id)!;
-  const rateK = row.k;
+  const blend = row.b;
   const rateN = broke.length;
-  const baseline = row.b;
-  const rate = row.v;
+  const baseline = blend.p0;
+  const rate = blend.joined;
+  const exactRate = blend.exact;
   const deltaPts = row.delta;
 
   const thin = rateN > 0 && rateN < 30;
-  const suspicious = rate != null && rateN >= 30 && rate > 0.85;
+  const suspicious = rateN >= 30 && rate > 0.85;
+
+  /** Leave-one-out: what the joined number loses if this pick comes off. */
+  const pushes = useMemo(
+    () =>
+      predMasks.map((_, i) => {
+        const sub = predMasks.filter((__, j) => j !== i);
+        return (blends[focusIdx].joined - blendMasks(sub, outMasks[focusIdx], allBroke.length).joined) * 100;
+      }),
+    [predMasks, outMasks, blends, focusIdx, allBroke.length],
+  );
+
+  /** How far into the stack the book can go on plain conditional rates alone. */
+  const deepest = useMemo(
+    () => deepestSupported(predMasks, outMasks[focusIdx], allBroke.length, 30),
+    [predMasks, outMasks, focusIdx, allBroke.length],
+  );
+
+  /**
+   * IS THIS A REGIME RATHER THAN A RULE?
+   *
+   * A combination whose every match landed inside one stretch of one year, out
+   * of a book spanning several, is not a structural read — it is a description
+   * of that stretch. A rate cannot show this: four-for-four looks identical
+   * whether the four are spread over six years or sit inside seven months of
+   * 2024. So it gets its own check rather than a footnote, and it is the
+   * strongest argument for reading the joined number instead of the cohort —
+   * the joined number leans on each criterion's FULL history, which is spread
+   * across the whole book even when their intersection is not.
+   */
+  const yearsOf = (rowsIn: SlimDay[]) => [...new Set(rowsIn.map((d) => d.date.slice(0, 4)))].sort();
+  const cohortYears = useMemo(() => yearsOf(cohort), [cohort]);
+  const bookYears = useMemo(() => yearsOf(days), [days]);
+  const clustered = cohort.length > 0 && bookYears.length >= 3 && cohortYears.length <= Math.max(1, Math.floor(bookYears.length / 3));
 
   /**
    * "When a break fails, where does the day end up?" — and the base it is asked
@@ -572,30 +626,76 @@ export default function ConditionRailTab() {
   const medMin = med(broke.map((d) => d.fcb!.breakMin));
 
   /**
-   * Every ticked criterion priced on its own, and priced out.
+   * THE FAMILY BOARD — the rail's picks grouped the way they are already
+   * grouped on screen, each family read as ONE idea.
    *
-   * The headline is one number for the whole stack, which says nothing about
-   * WHICH condition is carrying it — and when the stack is thin it is the only
-   * number on the page. Two columns fix that: ALONE is the criterion against
-   * the unconditional book, WITHOUT IT is the ticked cohort with just that one
-   * removed. Together they say what each pick is worth and what it is costing.
+   * Nine ticked chips are not nine opinions. "ORB down", "broke IB low" and
+   * "IB closed below mid" are one bearish idea said three ways, and a board
+   * that lets them cast three votes is lying about how much it knows. The rail
+   * already sorts its criteria into the four families it uses as rail headings,
+   * so each family is blended on its OWN — the same estimator as the headline,
+   * run on that family's ticked members only.
+   *
+   * What each family reports:
+   *   • its joined read for the focused outcome, and how far off the book that
+   *     sits — that is the family's direction and its conviction;
+   *   • the λ the overlap check measured INSIDE it. A CORRELATED badge is no
+   *     longer a hand-placed flag on a family someone thought was redundant:
+   *     the number says so, per family, per outcome, and it changes with what
+   *     is ticked;
+   *   • each member's own rate over the whole book, its last five in-play
+   *     sessions as hit/miss dots, and its leave-one-out push on the headline.
+   *
+   * And because the families are read separately, they can disagree — which is
+   * the one thing the single headline number can never show you. When two pull
+   * opposite ways, that is said out loud rather than averaged away.
    */
-  const perCond = useMemo(
-    () =>
-      conds.map((c) => {
-        const alone = days.filter((d) => d.fcb != null && c.f(d));
-        const rest = conds.filter((x) => x.id !== c.id);
-        const without = days.filter((d) => d.fcb != null && rest.every((x) => x.f(d)));
+  const families = useMemo(() => {
+    const idxOf = new Map(conds.map((c, i) => [c.id, i]));
+    return GROUPS.map((g) => {
+      const mine = g.items.map((it) => idxOf.get(it.id)).filter((i): i is number => i != null);
+      if (!mine.length) return null;
+      const b = blendMasks(mine.map((i) => predMasks[i]), outMasks[focusIdx], allBroke.length);
+      const members = mine.map((i) => {
+        const c = conds[i];
+        // Sessions where this criterion held AND a break happened, oldest →
+        // newest — so the last five are the five most recent times the market
+        // actually put this rule in play.
+        const inPlay = allBroke.filter(c.f);
         return {
           id: c.id,
           label: c.label,
-          alone: alone.length ? alone.filter(metric.f).length / alone.length : null,
-          aloneThin: alone.length > 0 && alone.length < 30,
-          without: without.length ? without.filter(metric.f).length / without.length : null,
+          p: inPlay.length ? inPlay.filter(metric.f).length / inPlay.length : null,
+          thin: inPlay.length > 0 && inPlay.length < 30,
+          last5: inPlay.slice(-5).map((d) => metric.f(d)),
+          push: pushes[i] ?? 0,
         };
-      }),
-    [conds, days, metric],
-  );
+      });
+      return {
+        key: g.name,
+        title: g.name,
+        sub: members.map((m) => m.label.toLowerCase()).join(" · "),
+        blend: b,
+        delta: (b.joined - b.p0) * 100,
+        // Measured, not declared: this family's own picks repeat each other
+        // enough that the overlap check threw most of their evidence away.
+        correlated: b.lambdaPairs > 0 && b.lambda < 0.7,
+        members,
+      };
+    }).filter(Boolean) as {
+      key: string; title: string; sub: string;
+      blend: ReturnType<typeof blendMasks>; delta: number; correlated: boolean;
+      members: { id: string; label: string; p: number | null; thin: boolean; last5: boolean[]; push: number }[];
+    }[];
+  }, [conds, predMasks, outMasks, focusIdx, allBroke, metric, pushes]);
+
+  /** Families pulling opposite ways — the thing one blended number hides. */
+  const CONFLICT_PTS = 3;
+  const conflict = useMemo(() => {
+    const up = families.filter((f) => f.delta >= CONFLICT_PTS);
+    const dn = families.filter((f) => f.delta <= -CONFLICT_PTS);
+    return up.length && dn.length ? { up, dn } : null;
+  }, [families]);
 
   const selNotToday = sel.filter((id) => todayOf[id] === false);
   const selPending = sel.filter((id) => todayOf[id] == null);
@@ -833,12 +933,13 @@ export default function ConditionRailTab() {
             <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 250px) minmax(0, 1fr)", gap: 22, alignItems: "center" }}>
               <div>
                 <div style={{ fontSize: 56, fontWeight: 800, lineHeight: 1, letterSpacing: "-0.035em", color: LIGHT_BLUE, fontVariantNumeric: "tabular-nums" }}>
-                  {rate != null ? pctS(rateK, rateN) : "—"}
+                  {pct1(rate)}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6 }}>
                   <span style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: metric.color }}>
                     {metric.label}
                   </span>
+                  <span style={{ ...badge(LIGHT_BLUE), marginLeft: 0 }}>JOINED</span>
                   <span style={{ ...badge(focus ? HOME_THEME.orange : LIGHT_BLUE), marginLeft: 0 }}>
                     {focus ? "PINNED" : "BIGGEST GAP"}
                   </span>
@@ -873,6 +974,48 @@ export default function ConditionRailTab() {
                     }}
                   >
                     {deltaPts > 0 ? "▲" : deltaPts < 0 ? "▼" : "●"} {Math.abs(deltaPts).toFixed(1)} pts vs the {pct0(baseline)} baseline
+                  </div>
+                )}
+
+                {/* Where the joined number came from. Every input is on screen:
+                    the book's base rate, each criterion's own history, how much
+                    of that evidence survived the overlap check, and the exact
+                    intersection's own rate — which is a passenger while it is
+                    thin and takes the wheel once it is not. */}
+                <div style={{ marginTop: 11, fontSize: 11, color: HOME_THEME.text, lineHeight: 1.7, border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "9px 11px", background: "rgba(255,255,255,0.02)" }}>
+                  <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 4 }}>
+                    Joined from
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 16px" }}>
+                    <span>book base <b>{pct0(baseline)}</b></span>
+                    <span>stacked <b>{pct0(blend.stacked)}</b></span>
+                    <span>
+                      exact match{" "}
+                      <b style={{ color: thin ? HOME_THEME.orange : HOME_THEME.text }}>{pct0(exactRate)}</b>
+                      {thin && <span style={{ color: HOME_THEME.orange }}> (thin — carries little weight)</span>}
+                    </span>
+                    <span>
+                      overlap kept <b>{(blend.lambda * 100).toFixed(0)}%</b>
+                      {blend.lambdaPairs === 0 && <span style={{ color: HOME_THEME.orange }}> (assumed)</span>}
+                    </span>
+                  </div>
+                  {deepest && deepest.dropped.length > 0 && conds.length > 0 && (
+                    <div style={{ marginTop: 5 }}>
+                      Deepest combination the book supports on plain history alone:{" "}
+                      <b>{deepest.keep.map((i) => conds[i]?.label.toLowerCase()).filter(Boolean).join(" + ") || "—"}</b> →{" "}
+                      <b style={{ color: metric.color }}>{pct0(deepest.p)}</b>. The joined number should sit near it, not wildly past it.
+                    </div>
+                  )}
+                </div>
+
+                {/* Every match inside one stretch of one year is a regime, not a
+                    rule — and a rate cannot show it. */}
+                {clustered && (
+                  <div style={{ marginTop: 10, fontSize: 11.5, color: HOME_THEME.orange, lineHeight: 1.6, border: `1px solid ${HOME_THEME.orange}44`, background: `${HOME_THEME.orange}0F`, borderRadius: 8, padding: "9px 11px" }}>
+                    <b>CLUSTERED IN TIME</b> — every session matching this combination falls in{" "}
+                    <b>{cohortYears.join(", ")}</b>, while the book runs {bookYears[0]}–{bookYears[bookYears.length - 1]}. A combination that only ever
+                    showed up in one stretch is describing that stretch, not the market. Lean on the joined number here, not the cohort: it reads each
+                    criterion&apos;s full history, which IS spread across the whole book even when their intersection is not.
                   </div>
                 )}
 
@@ -936,19 +1079,22 @@ export default function ConditionRailTab() {
                     Reading it
                   </div>
                   <div>
-                    Of the {sym} sessions in this cohort that <b>broke the IB</b>,{" "}
-                    <b style={{ color: metric.color }}>{inWords(rate)}</b> saw {metric.label.toLowerCase()}
-                    {baseline != null && <> — the book as a whole does it {pct0(baseline)} of the time</>}.
+                    Given everything ticked at left, the book&apos;s history puts <b style={{ color: metric.color }}>{pct1(rate)}</b> on{" "}
+                    {metric.sentence}, against <b>{pct0(baseline)}</b> for an {sym} IB break with no conditions on it at all.
                   </div>
-                  <div style={{ marginTop: 3 }}>
-                    Sessions that never broke the IB are not in that count at all — every rate on this card is
-                    conditional on a break happening first.
+                  <div style={{ marginTop: 4 }}>
+                    That is <b>not</b> the rate of the handful of sessions matching every criterion at once — those went{" "}
+                    <b>{inWords(exactRate)}</b> ({pct0(exactRate)}), which is far too few days to quote. It is each criterion&apos;s own history,
+                    measured over the whole book, stacked and then discounted for how much the criteria repeat one another.
+                  </div>
+                  <div style={{ marginTop: 4 }}>
+                    Sessions that never broke the IB are not in any of it — every rate here is conditional on a break happening first.
                   </div>
                   {thin && (
                     <div style={{ marginTop: 5, color: HOME_THEME.orange }}>
-                      ⚠ This cohort is a handful of sessions. Read <b>0%</b> as &ldquo;not in these few&rdquo; and <b>100%</b> as
-                      &ldquo;all of these few&rdquo; — neither is &ldquo;never&rdquo; or &ldquo;always&rdquo;. The hairline on each bar is what the
-                      whole book does, and it is the more reliable number of the two.
+                      ⚠ The exact-match cohort is a handful of sessions, so it barely moves the joined number — that is deliberate. Read its{" "}
+                      <b>0%</b> as &ldquo;not in these few&rdquo; and its <b>100%</b> as &ldquo;all of these few&rdquo;; neither is &ldquo;never&rdquo;
+                      or &ldquo;always&rdquo;. As matching sessions accumulate the joined number slides toward the cohort&apos;s own rate on its own.
                     </div>
                   )}
                 </div>
@@ -967,7 +1113,7 @@ export default function ConditionRailTab() {
                       onClick={() => setFocus(focus === r.m.id ? null : r.m.id)}
                       title={auto ? "The rail's pick — furthest from the book" : `Pin ${r.m.label} as the headline`}
                       style={{
-                        display: "grid", gridTemplateColumns: "128px minmax(0,1fr) 54px 62px", gap: 11, alignItems: "center",
+                        display: "grid", gridTemplateColumns: "128px minmax(0,1fr) 54px 46px 46px", gap: 11, alignItems: "center",
                         fontSize: 12, fontFamily: "inherit", textAlign: "left", cursor: "pointer",
                         padding: "3px 6px", margin: "-3px -6px", borderRadius: 7,
                         border: `1px solid ${on ? `${r.m.color}66` : "transparent"}`,
@@ -979,62 +1125,136 @@ export default function ConditionRailTab() {
                         {r.m.label}
                       </div>
                       <div style={{ height: 16, background: "rgba(255,255,255,0.05)", borderRadius: 5, position: "relative", overflow: "hidden" }}>
-                        <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${(r.v ?? 0) * 100}%`, background: r.m.color, opacity: on ? 1 : 0.7, borderRadius: 5 }} />
-                        <div style={{ position: "absolute", top: -3, bottom: -3, left: `${(r.b ?? 0) * 100}%`, width: 1.5, background: "rgba(255,255,255,0.45)" }} />
+                        {/* fill = the JOINED number. The exact cohort's own rate
+                            is a tick, so a four-day 100% shows as a mark rather
+                            than a full bar. */}
+                        <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${r.joined * 100}%`, background: r.m.color, opacity: on ? 1 : 0.7, borderRadius: 5 }} />
+                        <div style={{ position: "absolute", top: -3, bottom: -3, left: `${r.p0 * 100}%`, width: 1.5, background: "rgba(255,255,255,0.45)" }} />
+                        {r.exact != null && (
+                          <div style={{ position: "absolute", top: 2, bottom: 2, left: `${r.exact * 100}%`, width: 2, background: HOME_THEME.bg, opacity: 0.85 }} />
+                        )}
                       </div>
-                      <div style={{ fontWeight: 800, textAlign: "right", color: r.m.color, fontVariantNumeric: "tabular-nums" }}>{pct0(r.v)}</div>
+                      <div style={{ fontWeight: 800, textAlign: "right", color: r.m.color, fontVariantNumeric: "tabular-nums" }}>{pct0(r.joined)}</div>
                       {/* The gap to the book IS the read. A rate on its baseline
                           is the cohort saying it changed nothing. */}
+                      <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 11, color: HOME_THEME.text }}>{pct0(r.exact)}</div>
                       <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 11, fontWeight: 700,
-                        color: r.delta == null || Math.abs(r.delta) < 1.5 ? HOME_THEME.text : r.delta > 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                        {r.delta == null ? "—" : `${r.delta > 0 ? "+" : r.delta < 0 ? "−" : "±"}${Math.abs(r.delta).toFixed(0)}`}
+                        color: Math.abs(r.delta) < 1.5 ? HOME_THEME.text : r.delta > 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                        {`${r.delta > 0 ? "+" : r.delta < 0 ? "−" : "±"}${Math.abs(r.delta).toFixed(0)}`}
                       </div>
                     </button>
                   );
                 })}
                 <div style={{ fontSize: 10.5, color: HOME_THEME.text, textAlign: "right" }}>
-                  bar = this cohort · hairline = the unconditional {sym} book · last column = points off that baseline · click a row to pin it
+                  bar + first number = the JOINED read · hairline = the {sym} book · dark tick = the exact cohort&apos;s own rate · second number = that
+                  exact rate · last = points the joined read sits off the book · click a row to pin it
                   <br />
-                  every row is measured on the cohort&apos;s sessions that BROKE the IB — no-break days are not in the denominator
+                  every rate is measured on sessions that BROKE the IB — no-break days are not in the denominator
                 </div>
               </div>
             </div>
           </div>
 
-          {/* every ticked criterion priced on its own, and priced out */}
+          {/* ── the family board ───────────────────────────────────────────
+              Nine chips are not nine opinions. Each rail family is blended on
+              its own and reports one direction, one conviction, and whether the
+              overlap check found its own members to be restatements of each
+              other. Families can disagree; that is the point. */}
           <div style={{ ...classicCardAccentStyle, padding: 20 }}>
             <div style={sect}>
-              Each criterion on its own
+              What each family says
               <span style={{ textTransform: "none", letterSpacing: 0, fontWeight: 600, color: HOME_THEME.text }}>
-                — {metric.label.toLowerCase()}, {sym} book
+                — {metric.label.toLowerCase()}, book base {pct0(baseline)}
               </span>
             </div>
-            {perCond.length ? (
-              <div style={{ display: "grid", gap: 8 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) minmax(0, 1.5fr) 54px 78px", gap: 11, alignItems: "center", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.07em", textTransform: "uppercase", color: HOME_THEME.text }}>
-                  <div>Criterion</div>
-                  <div>Alone, vs the book</div>
-                  <div style={{ textAlign: "right" }}>Rate</div>
-                  <div style={{ textAlign: "right" }}>Without it</div>
-                </div>
-                {perCond.map((r) => (
-                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) minmax(0, 1.5fr) 54px 78px", gap: 11, alignItems: "center", fontSize: 12 }}>
-                    <div style={{ color: HOME_THEME.text }}>{r.label}</div>
-                    <div style={{ height: 16, background: "rgba(255,255,255,0.05)", borderRadius: 5, position: "relative", overflow: "hidden" }}>
-                      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${(r.alone ?? 0) * 100}%`, background: r.aloneThin ? HOME_THEME.orange : LIGHT_BLUE, opacity: 0.85, borderRadius: 5 }} />
-                      <div style={{ position: "absolute", top: -3, bottom: -3, left: `${(baseline ?? 0) * 100}%`, width: 1.5, background: "rgba(255,255,255,0.45)" }} />
+
+            {conflict && (
+              <div style={{ fontSize: 11.5, color: HOME_THEME.orange, lineHeight: 1.6, border: `1px solid ${HOME_THEME.orange}44`, background: `${HOME_THEME.orange}0F`, borderRadius: 8, padding: "9px 11px", marginBottom: 13 }}>
+                <b>FAMILIES DISAGREE</b> — <b>{conflict.up.map((f) => f.title.toLowerCase()).join(", ")}</b> push toward{" "}
+                {metric.label.toLowerCase()} while <b>{conflict.dn.map((f) => f.title.toLowerCase()).join(", ")}</b> push against it. The headline
+                averages that out; the disagreement itself is the read. Trust the family whose members are least correlated with each other — its
+                evidence is the evidence that has not already been counted.
+              </div>
+            )}
+
+            {families.length ? (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(258px, 1fr))", gap: 12, alignItems: "start" }}>
+                {families.map((f) => {
+                  const strong = Math.abs(f.delta) >= CONFLICT_PTS;
+                  const col = !strong ? HOME_THEME.text : f.delta > 0 ? HOME_THEME.green : HOME_THEME.red;
+                  return (
+                    <div key={f.key} style={{ border: `1px solid ${strong ? `${col}44` : HOME_THEME.border}`, borderRadius: 10, padding: 13, background: "rgba(255,255,255,0.02)" }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.text }}>{f.title}</div>
+                        {f.correlated && (
+                          <span style={{ ...badge(HOME_THEME.orange), marginLeft: 0 }}
+                            title={`The overlap check kept only ${(100 * f.blend.lambda).toFixed(0)}% of this family's stacked evidence — its picks are largely restatements of each other.`}>
+                            CORRELATED · {(100 * f.blend.lambda).toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 10.5, color: HOME_THEME.text, marginTop: 3, lineHeight: 1.45 }}>{f.sub}</div>
+
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 9, marginTop: 9 }}>
+                        <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", color: col, fontVariantNumeric: "tabular-nums" }}>
+                          {pct0(f.blend.joined)}
+                        </span>
+                        <span style={{ fontSize: 11.5, fontWeight: 800, color: col }}>
+                          {!strong ? "NEUTRAL" : f.delta > 0 ? "MORE LIKELY ↑" : "LESS LIKELY ↓"}
+                        </span>
+                        <span style={{ fontSize: 11, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>
+                          {f.delta > 0 ? "+" : f.delta < 0 ? "−" : "±"}{Math.abs(f.delta).toFixed(1)} pts
+                        </span>
+                      </div>
+
+                      <div style={{ display: "grid", gap: 7, marginTop: 11 }}>
+                        {f.members.map((m) => (
+                          <div key={m.id} style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "7px 9px" }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                              <span style={{ fontSize: 11.5, color: HOME_THEME.text }}>{m.label}</span>
+                              <span style={{ fontSize: 12.5, fontWeight: 800, color: m.thin ? HOME_THEME.orange : LIGHT_BLUE, fontVariantNumeric: "tabular-nums" }}>
+                                {pct0(m.p)}
+                              </span>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 5 }}>
+                              {/* oldest → newest: the last five times the market
+                                  actually put this rule in play */}
+                              {m.last5.length ? (
+                                <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
+                                  {m.last5.map((w, i) => (
+                                    <span key={i} title={w ? "it did" : "it didn't"} style={{ width: 9, height: 9, borderRadius: "50%", background: w ? HOME_THEME.green : HOME_THEME.red, opacity: w ? 1 : 0.55 }} />
+                                  ))}
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: 10.5, color: HOME_THEME.text, opacity: 0.5 }}>no history</span>
+                              )}
+                              <span
+                                title="Points the headline moves if this pick comes off. Near zero = a passenger."
+                                style={{ fontSize: 10.5, fontWeight: 700, fontVariantNumeric: "tabular-nums",
+                                  color: Math.abs(m.push) < 1 ? "rgba(255,255,255,0.35)" : m.push > 0 ? HOME_THEME.green : HOME_THEME.red }}
+                              >
+                                push {m.push > 0 ? "+" : m.push < 0 ? "−" : "±"}{Math.abs(m.push).toFixed(1)}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <div style={{ fontWeight: 800, textAlign: "right", color: r.aloneThin ? HOME_THEME.orange : LIGHT_BLUE, fontVariantNumeric: "tabular-nums" }}>{pct0(r.alone)}</div>
-                    <div style={{ textAlign: "right", color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{pct0(r.without)}</div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div style={{ fontSize: 12, color: HOME_THEME.text }}>Nothing ticked — the headline already is the whole book.</div>
             )}
-            <div style={{ fontSize: 10.5, color: HOME_THEME.text, marginTop: 9 }}>
-              bar = that criterion on its own · hairline = the unconditional {sym} book · orange = thin on its own ·
-              &ldquo;without it&rdquo; = the ticked cohort with just that one removed, so the gap to the headline is what the pick costs.
+
+            <div style={{ fontSize: 10.5, color: HOME_THEME.text, marginTop: 12, lineHeight: 1.65 }}>
+              Each family is blended on its own picks only, so one idea said three ways counts once rather than three times. The big number is that
+              family&apos;s joined read; the pts beside it is how far that sits off the book&apos;s {pct0(baseline)}.{" "}
+              <b>CORRELATED</b> is measured, not declared — it is the share of the family&apos;s stacked evidence that survived checking its own picks
+              against each other on the book&apos;s pairs, and it moves as you change what is ticked. Per member: its own rate over the whole book, its
+              last five in-play sessions oldest → newest (<span style={{ color: HOME_THEME.green }}>green</span> = the outcome happened,{" "}
+              <span style={{ color: HOME_THEME.red }}>red</span> = it did not), and <b>push</b>, the points the headline moves if that pick comes off —
+              near zero means it is narrowing the cohort without adding evidence.
             </div>
           </div>
 
@@ -1174,9 +1394,16 @@ export default function ConditionRailTab() {
         The rail only lets you describe a session that could exist: criteria in the same group swap rather than stack, criteria that contradict a pick are
         struck out, and a combination with no session behind it is struck out too.
         <br />
-        There is nothing to pick on the outcome side: all five are measured on every cohort and all five are on screen. The headline is the one sitting
-        furthest from its rate in the unconditional book — the gap is the read, and an outcome on its baseline is the cohort telling you it changed
-        nothing. Click any row to pin it instead, or <b>AUTO</b> to hand the choice back.
+        There is nothing to pick on the outcome side: every outcome is measured on every cohort and all of them are on screen. The headline is the one
+        whose JOINED read sits furthest from its rate in the unconditional book — the gap is the read, and an outcome on its baseline is the stack
+        telling you these conditions changed nothing. Click any row to pin it instead, or <b>AUTO</b> to hand the choice back.
+        <br />
+        <b>The joined read.</b> Ticking nine things leaves a handful of exact matches — an anecdote, not a rate — while the book knows hundreds of days
+        about each of those nine separately. So the number quoted is built from that: each criterion&apos;s own rate is pulled toward the base rate by
+        how little data stands behind it, converted to evidence in log-odds, summed, and then <i>discounted</i> by how much the picks repeat one another
+        — a discount measured on the book&apos;s own pairs rather than assumed. The exact-match cohort is blended in by its size, so it carries almost
+        no weight at four sessions and takes over entirely once it is large. Full method in <code>lib/ibBlend.ts</code>. It is a better-founded prior
+        than either the raw base rate or a four-day cohort — not a forecast, and not a number worth a decimal place of belief.
         <br />
         Every rate on this page is <b>conditional on a break</b>: the denominator is the cohort&apos;s sessions that closed a 5m bar outside the IB, not
         the cohort. The failed-break split narrows that once more — it describes only the breaks that then failed, so a segment at 100% is where those
