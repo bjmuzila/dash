@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-08-25 - Multi Greek: figures sat above the middle of their cells
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+The ladder cell was a BLOCK box outside delta mode. Row height is set by the
+strike rail - 13px type, its own 4px padding, and on some rows an EM badge or
+the ATM chip on top of that - never by the cells, so the grid stretched every
+cell to a height taller than its own figure and a block box paints its text at
+the TOP of that space. The figure therefore sat high, and higher again on any
+row carrying a badge, which is what read as "some are higher than others".
+
+The cell is now `display: flex; alignItems: center` ALWAYS, not only when the
+delta stamp needs a row. Alignment is restated as `justifyContent` from
+`SkinDef.cell.align`, because textAlign no longer places a flex item.
+
+The ellipsis moved onto the value span with `minWidth: 0`: a flex item will not
+shrink without it, and the cell's own `textOverflow` no longer reaches the text.
+Delta mode is unchanged apart from losing its duplicate copy of those rules -
+it keeps `marginLeft: auto` so the value still parks opposite the chip.
+
+## 2026-08-25 - Options Chain: the Strikes picker opened UNDER the cog panel
+
+Edited: `components/pages/OptionsChain.tsx`.
+
+`CustomDropdown` portals its menu to `<body>` at `zIndex: 9999`. DockToolbar's
+`popoverPanel` - the cog pane the Grid tab lives in - is at `zIndex: 100000`.
+Both are body-level siblings, so nothing else orders them and the "% strikes"
+list opened from inside the cog rendered behind it.
+
+Menu raised to `100010`, with the dependency stated in place: it has to stay
+above DockToolbar's panel z-index or the same bug comes straight back. Same
+component is used by the toolbar dropdowns, which are unaffected.
+
 ## 2026-08-25 - ES Candles snapshot: chart only, corner labels instead of a title band
 
 Edited: `lib/snapshot.ts`, `components/shared/DataBox.tsx`,

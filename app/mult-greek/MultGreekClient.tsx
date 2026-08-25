@@ -1493,17 +1493,20 @@ function TickerPanel({
                     // say nothing about a rewound clock — so replay cells are
                     // not clickable rather than opening a card about now.
                     textAlign: SK.cell.align, color: SK.cell.text, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
-                    // Δ mode only switches the cell to a flex row so the chip can
-                    // sit beside the value. No minHeight, no padding change, no
-                    // width change — the cell box is byte-identical to Δ-off.
+                    // ALWAYS a vertically-centred flex row, Δ on or off.
+                    // The row's height is set by the STRIKE RAIL (13px type, its
+                    // own 4px padding, and on some rows an EM badge or ATM chip),
+                    // never by these cells — and a block cell paints its figure at
+                    // the TOP of whatever height the grid then stretches it to.
+                    // That is why figures sat above the middle of their cell, and
+                    // higher still on the rows carrying a badge. alignItems:center
+                    // pins every figure to its cell's middle on every row.
                     // In flex, textAlign no longer places the value — justify
                     // does — so the skin's alignment has to be restated here or
-                    // a right-aligned skin re-centres itself the moment Δ is on.
-                    ...(dMode ? {
-                      display: "flex", alignItems: "center", gap: 3,
-                      justifyContent: SK.cell.align === "right" ? "flex-end"
-                        : SK.cell.align === "left" ? "flex-start" : "center",
-                    } : {}),
+                    // a right-aligned skin re-centres itself.
+                    display: "flex", alignItems: "center", gap: dMode ? 3 : 0,
+                    justifyContent: SK.cell.align === "right" ? "flex-end"
+                      : SK.cell.align === "left" ? "flex-start" : "center",
                     // Levels-only: no gamma wash at all. A CB/CW/PW cell is
                     // painted at the heat scale's rank floor (CB 1, CW 2, PW 3)
                     // so it still reads cyan for +GEX and red for −GEX; the
@@ -1592,8 +1595,13 @@ function TickerPanel({
                         matters. Only cells that actually RENDER a badge pay the
                         17px; on a filling skin there is no badge and every cell
                         keeps its full width for the number. */}
+                    {/* The cell is a flex row now, so the ellipsis has to live on
+                        THIS span — a flex item needs minWidth:0 before it will
+                        shrink, and the parent's textOverflow no longer reaches
+                        the text. */}
                     <span style={{
-                      ...(dMode ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : {}),
+                      minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      ...(dMode ? { marginLeft: "auto" } : {}),
                       ...(lvl && showLvlBadge ? { paddingRight: 17 } : {}),
                     }}>
                       <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}

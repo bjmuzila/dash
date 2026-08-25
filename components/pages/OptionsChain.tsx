@@ -159,7 +159,12 @@ function CustomDropdown<T extends string | number>({
       </button>
       {open && rect && createPortal(
         <div ref={menuRef} style={{
-          position: "fixed", left: rect.left, top: rect.top, zIndex: 9999,
+          // ABOVE the dock/cog panels. DockToolbar's popoverPanel sits at
+          // z-index 100000, so a 9999 menu opened from INSIDE the cog (the
+          // Grid tab's "% strikes" picker) rendered underneath it. Any value
+          // here must stay above DockToolbar's — they are siblings under
+          // <body> via portals, so nothing else orders them.
+          position: "fixed", left: rect.left, top: rect.top, zIndex: 100010,
           minWidth: rect.width,
           background: "rgba(13,17,25,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
           border: `1px solid ${HT.border}`, borderTop: `2px solid ${rgba(HT.cyan, 0.5)}`, borderRadius: 6,
