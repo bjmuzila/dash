@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-08-25 — Multi Greek: heat skins, the VIVID default, and a standalone tuner (`app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`)
+
+Built `generated/2026-08-25-heatmap-tuner.html`, a self-contained sandbox that renders the Multi
+Greek ladder and the option-chain grid side by side on synthetic SPX data with every cell knob
+wired to a live control — heat ramp (base / span / cap / ease / intensity), the three rank floors,
+per-rank ring + corner glyph, per-level CB/CW/PW colour, label, badge and cell fill, cell radius /
+gap / inset / padding, type, and what the cell prints. It exports either JSON or a paste-ready
+`HEAT_SKINS` entry.
+
+That entry is now a real thing. `MultGreekClient.tsx` gained `HEAT_SKINS`, a table of named cell
+looks — `classic` (byte-for-byte what shipped) and `vivid` — selected from the cog under
+**Heat → Skin** and persisted per browser as `mg_heat_skin`. A skin owns the ramp, the rank floors,
+radius / gap / inset / padding, font size / weight-by-rank / tracking / shadow, alignment and ink,
+the number format, the ATM marker, the level fill, and its own Intensity default + ceiling; it owns
+nothing about which strike is a wall or what the value is. `metricBg()` takes the skin, the local
+`skinRankBg()` replaced the imported `rankBg` so levels-only paints at the ACTIVE skin's floors, and
+`fmtCell()` writes the cell and the column total in the skin's number language.
+
+**VIVID is the default the page opens on** — ramp `base .05 / span .25 / max 1 / ease 0.4` at 3x
+(the low ease keeps the quiet two-thirds of a column differentiated instead of floored), rank floors
+`.95 / .62 / .40`, 3px radius, 0.5px inset, `2px 8px` padding, 9.5px white right-aligned `$1.23M`
+figures with a shadow, and `levelFill: { mode: "blend", alpha: { cb: .85, cw: 1, pw: 1 } }` so the
+CB / CW / PW cells take the level's own colour over the heat.
+
+Markers were reworked around that fill: the CB / CW / PW ring is gone, the badge is dropped entirely
+on a filling skin (`showLvlBadge = !SK.levelFill` — the colour IS the label) and on CLASSIC renders
+as white text on a dark chip ringed in the level colour; the CB peak star flips to black on a gold
+CB tile; `DeltaStamp` became a white figure on a direction-coloured chip. The three CB / CW / PW
+cards above each panel were deleted (the grid says it louder, and they cost a row of height on a
+four-ladder page) with their show/hide toggles moved into the cog as level-coloured buttons; the ATM
+row's white box became an ATM chip on the strike rail; and the strike rail and TOTAL row went up a
+size and stay centred whatever the skin does to the cells.
+
+Every change was verified by rendering in headless Chromium and reading the screenshot; each step is
+logged in detail in `md files/CHANGELOG.md`.
+
 ## 2026-08-25 — ES Candles: "Latest" moved out of the dock menu and onto the chart (`components/dashboard/es-candles/EsChartCard.tsx`)
 
 The `Latest` jump-back control was a `View` field two clicks deep inside the dock's **Chart** menu and was always present; it is now a 28px round button floating at the bottom-right of the plot (`right:70` clears the price gutter, `bottom:34` clears the time scale, `z-20` over the chart canvas and gamma overlay) that mounts ONLY while the newest bar is off screen — `checkLatestOffscreen()` tests `visibleLogicalRange.to < barCount - 1.5` (fractional range edges, so the 1.5-bar slack stops it flickering when the live candle is half-clipped by the axis), driven by its own `subscribeVisibleLogicalRangeChange` subscriber (deliberately not folded into the rAF-coalesced `schedulePaint`, which can drop frames mid-gesture) plus a call in the candle-data effect, since a bar appended while parked in history extends the series without moving the viewport and fires no range event. Click behavior unchanged (`scrollToRealTime()` keeps zoom + synchronous overlay/rail repaint); icon is inline SVG rather than the `⇥` glyph, which sits low in Inter and would not centre.

@@ -27,21 +27,29 @@
  * and drives the levels; this one is a property of this chart and persists on
  * its own key.
  *
- * ── LAYOUT: NOTHING FLOATS OVER THE PLOT ────────────────────────────────────
- * The stats and the legend used to be absolutely-positioned cards INSIDE the
- * chart. On a 1500px-wide card that put the stats box straight through the
- * y-axis labels and the hover tooltip straight through the stats box, and it
- * squeezed the drawing into whatever was left. Both now sit in their own strips
- * ABOVE the plot, so the SVG owns its whole box and the only floating thing
- * left is the tooltip, which has nothing to collide with.
+ * ── THE X WINDOW IS THE WHOLE ERGONOMIC PROBLEM ─────────────────────────────
+ * A fixed ±2.8% band is ±215 points on a 7,670 SPX. On a 0DTE board the mass
+ * has a 1σ of ~25 points, so EVERYTHING lives in the middle 12% of the axis and
+ * the other 88% is a flat line — the chart reads as cramped no matter how tall
+ * the card is, because the problem is horizontal, not vertical.
  *
- * Height tracks width (~0.46, clamped) instead of being a fixed 430: a chart
- * pinned at 430px inside a 1500px card is a letterbox, and a distribution read
- * on shape needs vertical room to have a shape.
+ * So AUTO is the default and it is width-adaptive: σ is measured on a wide ±3%
+ * pass, and the drawn window is spot ± max(4.5σ, 0.35% of spot), then widened
+ * just enough to keep spot, flip and both walls on screen, then clamped to ±3%.
+ * The peak fills the card instead of hiding in it. 1% / 2% / 3% are there for
+ * anyone who wants a fixed band (and for comparing two sessions on one scale),
+ * and the choice persists.
+ *
+ * ── LAYOUT: NOTHING FLOATS OVER THE PLOT ────────────────────────────────────
+ * Stats and legend sit in their own strips ABOVE the plot, never inside the
+ * SVG. The tooltip is the only floating thing, and it has nothing to collide
+ * with. Level labels are packed greedily into up to three rows in the top pad:
+ * spot, flip and both walls routinely land within a few points of each other,
+ * and one row turns into an unreadable smear.
  *
  * ── SCALE ───────────────────────────────────────────────────────────────────
  * Bars are net GEX (calls +, puts −) on ONE linear scale across both sides —
- * a −800M bar must not look the same size as a +3B one, which is exactly what
+ * a −500M bar must not look the same size as a +4B one, which is exactly what
  * separate per-side scales did. The mass line and the fitted normal are drawn
  * in the above-zero half on their own shared factor, so their heights are
  * comparable to each other and never to the bars. The axis labels belong to the
@@ -62,8 +70,11 @@ import {
 } from "@/lib/calculations/calculations";
 
 export type GammaBasis = "oi" | "vol";
+/** "auto" = spot ± 4.5σ (see the header); the rest are ±N% of spot. */
+export type GammaZoom = "auto" | "1" | "2" | "3";
 
 const BASIS_KEY = "cb-premarket-gdist-basis-v1";
+const ZOOM_KEY = "cb-premarket-gdist-zoom-v1";
 
 const BASIS_META: Record<GammaBasis, { tab: string; long: string; hint: string }> = {
   oi: {
@@ -78,6 +89,13 @@ const BASIS_META: Record<GammaBasis, { tab: string; long: string; hint: string }
   },
 };
 
+const ZOOM_META: Record<GammaZoom, { tab: string; hint: string }> = {
+  auto: { tab: "AUTO", hint: "Spot ± 4.5σ of the gamma mass, widened to keep spot, flip and both walls on screen. The peak fills the card instead of hiding in the middle of a 400-point axis." },
+  "1": { tab: "±1%", hint: "Fixed ±1% of spot." },
+  "2": { tab: "±2%", hint: "Fixed ±2% of spot." },
+  "3": { tab: "±3%", hint: "Fixed ±3% of spot — the whole board this card ever reads." },
+};
+
 export const GAMMA_DIST_CSS = `
 .gdist{margin-top:14px;border-top:1px solid var(--line);padding:14px 18px 6px}
 .gdist .gd-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
@@ -87,11 +105,13 @@ export const GAMMA_DIST_CSS = `
   margin:0;font-weight:600;white-space:nowrap}
 .gdist .gd-sub{font-size:10px;letter-spacing:.04em;color:var(--dim2);
   font-variant-numeric:tabular-nums}
-.gdist .gd-rh{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.gdist .gd-rh{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.gdist .gd-ctl{display:flex;align-items:center;gap:6px}
+.gdist .gd-ctl>b{font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim2);
+  font-weight:600}
 
 /* KPI STRIP — the old floating stats card, unstacked. Five facts on one line
-   above the plot, so nothing sits on top of the drawing and the numbers are
-   readable at a glance instead of squinted at through a bar. */
+   above the plot, so nothing sits on top of the drawing. */
 .gdist .gd-kpis{display:grid;grid-template-columns:repeat(var(--gd-cols,5),minmax(0,1fr));
   gap:8px;margin-bottom:10px}
 .gdist .gd-kpi{border:1px solid var(--line);border-radius:var(--r2);background:var(--sunken);
@@ -169,14 +189,23 @@ function rowMass(r: ChainRow, basis: GammaBasis, spot: number): number {
 
 // ── geometry ─────────────────────────────────────────────────────────────────
 
-/** Top pad carries TWO staggered rows of level labels, hence 46 and not 16. */
-const PAD = { t: 46, r: 18, b: 38, l: 72 };
-/** Strikes further than this from spot are noise on a 0DTE board. */
-const BAND_PCT = 0.028;
+/** Top pad carries up to THREE packed rows of level labels, hence 58. */
+const PAD = { t: 58, r: 18, b: 38, l: 72 };
+/** The widest this card ever reads — the σ pass and the ±3% tab both use it. */
+const MAX_BAND = 0.03;
 /** Above this many bars the axis is unreadable, so neighbours are binned. */
 const MAX_BARS = 150;
 
 type Bin = { k: number; net: number; mass: number };
+
+/** Mass-weighted mean and sd of a bin set. */
+function moments(rows: Bin[]): { mu: number; sigma: number; total: number } | null {
+  const total = rows.reduce((s, b) => s + b.mass, 0);
+  if (!(total > 0)) return null;
+  const mu = rows.reduce((s, b) => s + b.k * b.mass, 0) / total;
+  const varr = rows.reduce((s, b) => s + b.mass * (b.k - mu) ** 2, 0) / total;
+  return { mu, sigma: Math.sqrt(Math.max(varr, 1e-9)), total };
+}
 
 export default function GammaDistribution({
   chain,
@@ -198,17 +227,24 @@ export default function GammaDistribution({
   /** A captured past session — the footer says so instead of implying live. */
   frozen?: boolean;
 }) {
-  // ── basis switch (own key; NOT the page's three-leg lvlBasis) ──────────────
+  // ── switches (own keys; NOT the page's three-leg lvlBasis) ────────────────
   const [basis, setBasis] = useState<GammaBasis>("oi");
+  const [zoom, setZoom] = useState<GammaZoom>("auto");
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(BASIS_KEY) as GammaBasis | null;
-      if (saved && saved in BASIS_META) setBasis(saved);
-    } catch { /* private mode — the default is fine */ }
+      const b = localStorage.getItem(BASIS_KEY) as GammaBasis | null;
+      if (b && b in BASIS_META) setBasis(b);
+      const z = localStorage.getItem(ZOOM_KEY) as GammaZoom | null;
+      if (z && z in ZOOM_META) setZoom(z);
+    } catch { /* private mode — the defaults are fine */ }
   }, []);
   const pickBasis = useCallback((b: GammaBasis) => {
     setBasis(b);
     try { localStorage.setItem(BASIS_KEY, b); } catch { /* nothing to do */ }
+  }, []);
+  const pickZoom = useCallback((z: GammaZoom) => {
+    setZoom(z);
+    try { localStorage.setItem(ZOOM_KEY, z); } catch { /* nothing to do */ }
   }, []);
 
   // ── responsive box ────────────────────────────────────────────────────────
@@ -225,20 +261,43 @@ export default function GammaDistribution({
     return () => ro.disconnect();
   }, []);
   /** Height follows width so the plot keeps a shape instead of letterboxing. */
-  const H = Math.round(Math.min(660, Math.max(440, W * 0.46)));
+  const H = Math.round(Math.min(620, Math.max(430, W * 0.42)));
 
-  // ── bins ──────────────────────────────────────────────────────────────────
-  const bins = useMemo<Bin[]>(() => {
+  // ── WIDE pass: every strike this card would ever read (±3% of spot) ───────
+  // Kept separate from the drawn set because the AUTO window is derived FROM
+  // it: measuring σ inside an already-narrow window would let the window
+  // collapse onto itself on the next render.
+  const wide = useMemo<Bin[]>(() => {
     if (!chain.length || !(spot > 0)) return [];
-    const lo = spot * (1 - BAND_PCT);
-    const hi = spot * (1 + BAND_PCT);
-
-    const raw = chain
+    const lo = spot * (1 - MAX_BAND);
+    const hi = spot * (1 + MAX_BAND);
+    return chain
       .filter((r) => Number.isFinite(r.strike) && r.strike >= lo && r.strike <= hi)
       .map((r) => ({ k: r.strike, net: rowNet(r, basis, spot), mass: rowMass(r, basis, spot) }))
       .filter((b) => Number.isFinite(b.net) && Number.isFinite(b.mass))
       .sort((a, b) => a.k - b.k);
+  }, [chain, spot, basis]);
 
+  // ── the drawn window ──────────────────────────────────────────────────────
+  const half = useMemo(() => {
+    if (!(spot > 0)) return 0;
+    if (zoom !== "auto") return spot * (Number(zoom) / 100);
+    const m = moments(wide);
+    // No mass to measure (a vol board before the open): fall back to a band
+    // wide enough to be a chart rather than a sliver.
+    let h = m ? Math.max(4.5 * m.sigma, spot * 0.0035) : spot * 0.01;
+    // Widen just enough to keep the levels on screen — a chart that hides the
+    // call wall to look tidy is worse than a slightly wider one.
+    for (const lv of [flip, callWall, putWall]) {
+      if (lv != null && Number.isFinite(lv)) h = Math.max(h, Math.abs(lv - spot) * 1.12);
+    }
+    if (m) h = Math.max(h, Math.abs(m.mu - spot) + 2 * m.sigma);
+    return Math.min(h, spot * MAX_BAND);
+  }, [wide, zoom, spot, flip, callWall, putWall]);
+
+  const bins = useMemo<Bin[]>(() => {
+    if (!wide.length || !(half > 0)) return [];
+    const raw = wide.filter((b) => b.k >= spot - half && b.k <= spot + half);
     if (raw.length <= MAX_BARS) return raw;
 
     // Too many strikes to draw one bar each: fold neighbours into equal-width
@@ -259,21 +318,21 @@ export default function GammaDistribution({
       }
     }
     return out;
-  }, [chain, spot, basis]);
+  }, [wide, half, spot]);
 
-  // ── fit ───────────────────────────────────────────────────────────────────
+  // ── fit, on what is DRAWN (so the stats describe the picture) ─────────────
   const fit = useMemo(() => {
-    const totalMass = bins.reduce((s, b) => s + b.mass, 0);
-    if (!(totalMass > 0)) return null;
-    const mu = bins.reduce((s, b) => s + b.k * b.mass, 0) / totalMass;
-    const varr = bins.reduce((s, b) => s + b.mass * (b.k - mu) ** 2, 0) / totalMass;
-    const sigma = Math.sqrt(Math.max(varr, 1e-9));
+    const m = moments(bins);
+    if (!m) return null;
     const inside = bins
-      .filter((b) => b.k >= mu - sigma && b.k <= mu + sigma)
+      .filter((b) => b.k >= m.mu - m.sigma && b.k <= m.mu + m.sigma)
       .reduce((s, b) => s + b.mass, 0);
     const netTotal = bins.reduce((s, b) => s + b.net, 0);
     const step = bins.length > 1 ? (bins[bins.length - 1].k - bins[0].k) / (bins.length - 1) : 5;
-    return { totalMass, mu, sigma, insidePct: (inside / totalMass) * 100, netTotal, step };
+    return {
+      totalMass: m.total, mu: m.mu, sigma: m.sigma,
+      insidePct: (inside / m.total) * 100, netTotal, step,
+    };
   }, [bins]);
 
   // ── scales ────────────────────────────────────────────────────────────────
@@ -290,7 +349,7 @@ export default function GammaDistribution({
 
     // ONE linear scale across both sides. The zero line therefore sits wherever
     // the pos/neg split puts it — a small put side gets a small strip, which is
-    // the truth. (Per-side scales made a −800M bar as tall as a +3B one.)
+    // the truth. (Per-side scales made a −500M bar as tall as a +4B one.)
     const zeroY = PAD.t + plotH * (maxP / span);
     const pxPerDollar = plotH / span;
 
@@ -303,7 +362,10 @@ export default function GammaDistribution({
     const mScale = (zeroY - PAD.t) / maxMass;
     const yMass = (m: number) => zeroY - m * mScale;
 
-    const barW = Math.max(1.5, (plotW / bins.length) * 0.7);
+    // Bars get a real gap once there is room for one; below ~4px they butt up
+    // against each other rather than dissolving into hairlines.
+    const slot = plotW / bins.length;
+    const barW = slot > 6 ? Math.max(3, slot - 3) : Math.max(1.5, slot * 0.82);
     return { k0, k1, plotW, plotH, zeroY, x, y, yMass, maxP, maxN, maxMass, barW };
   }, [bins, fit, W, H]);
 
@@ -325,30 +387,15 @@ export default function GammaDistribution({
 
   // ── head ──────────────────────────────────────────────────────────────────
   const meta = BASIS_META[basis];
-  const seg = (
-    <div className="seg" role="group" aria-label="Gamma distribution basis">
-      {(Object.keys(BASIS_META) as GammaBasis[]).map((b) => (
-        <button
-          key={b}
-          type="button"
-          className={basis === b ? "on" : ""}
-          aria-pressed={basis === b}
-          title={BASIS_META[b].hint}
-          onClick={() => pickBasis(b)}
-        >
-          {BASIS_META[b].tab}
-        </button>
-      ))}
-    </div>
-  );
-
   const head = (
     <div className="gd-head">
       <div className="gd-lh">
         <h3>Gamma Exposure by Strike</h3>
         <span className="gd-sub">
           {isZeroDte ? "0DTE" : "front"}{expiry ? ` ${expiry}` : ""} · {meta.long}
-          {bins.length ? ` · ${bins.length} bars · ±${(BAND_PCT * 100).toFixed(1)}% of spot` : ""}
+          {bins.length
+            ? ` · ${bins.length} bars · ${nf0(spot - half)} – ${nf0(spot + half)} (±${((half / spot) * 100).toFixed(2)}%)`
+            : ""}
         </span>
       </div>
       <div className="gd-rh">
@@ -358,7 +405,40 @@ export default function GammaDistribution({
             <span><i style={{ borderTopColor: "var(--blue)" }} />Gamma mass (|call| + |put|)</span>
           </div>
         )}
-        {seg}
+        <div className="gd-ctl">
+          <b>Range</b>
+          <div className="seg" role="group" aria-label="Strike window">
+            {(Object.keys(ZOOM_META) as GammaZoom[]).map((z) => (
+              <button
+                key={z}
+                type="button"
+                className={zoom === z ? "on" : ""}
+                aria-pressed={zoom === z}
+                title={ZOOM_META[z].hint}
+                onClick={() => pickZoom(z)}
+              >
+                {ZOOM_META[z].tab}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="gd-ctl">
+          <b>Basis</b>
+          <div className="seg" role="group" aria-label="Gamma distribution basis">
+            {(Object.keys(BASIS_META) as GammaBasis[]).map((b) => (
+              <button
+                key={b}
+                type="button"
+                className={basis === b ? "on" : ""}
+                aria-pressed={basis === b}
+                title={BASIS_META[b].hint}
+                onClick={() => pickBasis(b)}
+              >
+                {BASIS_META[b].tab}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -372,7 +452,7 @@ export default function GammaDistribution({
             ? "Waiting for the chain…"
             : basis === "vol"
               ? "No volume on this board yet — the session has not traded. Switch to OI."
-              : "No gamma within ±2.8% of spot on this basis."}
+              : "No gamma within ±3% of spot on this basis."}
         </div>
       </div>
     );
@@ -406,19 +486,46 @@ export default function GammaDistribution({
 
   const yTicks = [maxP, maxP * 0.5, -maxN * 0.5, -maxN].filter((v) => Math.abs(v) > 0);
 
-  // Level rules. Labels are STAGGERED across two rows in the top pad — spot,
-  // flip and both walls routinely land within a few points of each other on a
-  // 0DTE board, and one row of labels turns into a single unreadable smear.
-  const levels = [
+  // Level rules and their labels.
+  //
+  // Two things are happening here, and both exist because spot, flip and both
+  // walls routinely land within a few points of each other on a 0DTE board —
+  // which put all four labels in one pile over the middle of the chart, exactly
+  // where the peak is ("Put wallSpot 7,670" / "FliCall wall 7,675").
+  //
+  // 1. FAN OUT FROM THE MIDDLE. Each label is pushed to its own side of spot —
+  //    strikes below spot hang to the LEFT of their rule, strikes above hang to
+  //    the RIGHT, spot itself stays centred. So the labels open away from the
+  //    centre of the card instead of stacking on top of it.
+  // 2. THEN PACK. Whatever still overlaps after the fan-out is dropped to the
+  //    next of three rows by a greedy first-fit on estimated width. A leader
+  //    line runs from each label back to its own rule, so a label that had to
+  //    move is still unambiguously attached.
+  const rowEnd = [-Infinity, -Infinity, -Infinity];
+  const levels = ([
     { k: putWall, label: `Put wall ${nf0(putWall ?? 0)}`, color: "var(--pw)", dash: "3 3" },
     { k: callWall, label: `Call wall ${nf0(callWall ?? 0)}`, color: "var(--cw)", dash: "3 3" },
     { k: flip, label: `Flip ${nf0(flip ?? 0)}`, color: "var(--violet)", dash: "5 4" },
     { k: spot, label: `Spot ${nf0(spot)}`, color: "var(--txt)", dash: "6 4" },
-  ]
+  ] as { k: number | null | undefined; label: string; color: string; dash: string }[])
     .filter((l): l is { k: number; label: string; color: string; dash: string } =>
       l.k != null && Number.isFinite(l.k) && l.k >= k0 && l.k <= k1)
-    .sort((a, b) => a.k - b.k)
-    .map((l, i) => ({ ...l, row: i % 2 }));
+    .map((l) => {
+      const w = l.label.length * 5.5 + 10;
+      // Fan: −1 below spot, +1 above, 0 for spot itself.
+      const dir = Math.abs(l.k - spot) < 1e-9 ? 0 : l.k < spot ? -1 : 1;
+      const want = x(l.k) + dir * (w / 2 + 12);
+      const cx = Math.min(Math.max(want, PAD.l + w / 2), W - PAD.r - w / 2);
+      return { ...l, w, cx };
+    })
+    .sort((a, b) => a.cx - b.cx)
+    .map((l, i) => {
+      const left = l.cx - l.w / 2;
+      let row = rowEnd.findIndex((end) => left > end + 6);
+      if (row < 0) row = i % 3;
+      rowEnd[row] = left + l.w;
+      return { ...l, row };
+    });
 
   const hv = hover != null ? bins[hover] : null;
   const shape = insidePct >= 80 ? "far more peaked than the fit"
@@ -513,27 +620,34 @@ export default function GammaDistribution({
           <path d={curve} fill="none" stroke="var(--amber)" strokeWidth={2.2} strokeLinejoin="round" />
           <path d={massPath} fill="none" stroke="var(--blue)" strokeWidth={1.7} strokeLinejoin="round" opacity={0.95} />
 
-          {/* level rules, labels staggered over two rows */}
-          {levels.map((l) => (
-            <g key={l.label}>
-              <line
-                x1={x(l.k)} x2={x(l.k)} y1={PAD.t - (l.row === 0 ? 16 : 3)} y2={H - PAD.b}
-                stroke={l.color} strokeWidth={1.2} strokeDasharray={l.dash} opacity={0.85}
-              />
-              <text
-                x={x(l.k)} y={l.row === 0 ? PAD.t - 22 : PAD.t - 9}
-                textAnchor={x(l.k) > W - PAD.r - 64 ? "end" : x(l.k) < PAD.l + 64 ? "start" : "middle"}
-                fontSize={10} fill={l.color} fontWeight={700}
-                style={{ letterSpacing: ".04em" }}
-              >
-                {l.label}
-              </text>
-            </g>
-          ))}
+          {/* level rules; labels packed into up to three rows, each with a
+              leader down to its rule so a shifted label still reads as its own */}
+          {levels.map((l) => {
+            const ly = 14 + l.row * 14;
+            return (
+              <g key={l.label}>
+                <line
+                  x1={x(l.k)} x2={x(l.k)} y1={PAD.t - 6} y2={H - PAD.b}
+                  stroke={l.color} strokeWidth={1.2} strokeDasharray={l.dash} opacity={0.85}
+                />
+                <path
+                  d={`M${l.cx.toFixed(1)},${ly + 4} L${l.cx.toFixed(1)},${(PAD.t - 12).toFixed(1)} L${x(l.k).toFixed(1)},${PAD.t - 6}`}
+                  fill="none" stroke={l.color} strokeWidth={1} opacity={0.45}
+                />
+                <text
+                  x={l.cx} y={ly} textAnchor="middle"
+                  fontSize={10} fill={l.color} fontWeight={700}
+                  style={{ letterSpacing: ".04em" }}
+                >
+                  {l.label}
+                </text>
+              </g>
+            );
+          })}
 
           {/* hover guide */}
           {hv && (
-            <line x1={x(hv.k)} x2={x(hv.k)} y1={PAD.t} y2={H - PAD.b}
+            <line x1={x(hv.k)} x2={x(hv.k)} y1={PAD.t - 6} y2={H - PAD.b}
               stroke="var(--cyan)" strokeWidth={1} opacity={0.55} />
           )}
 
@@ -558,7 +672,7 @@ export default function GammaDistribution({
               // Clamped so a bar at either end cannot push the card outside the
               // plot; the transform keeps it centred everywhere in between.
               left: `clamp(76px, ${((x(hv.k) / W) * 100).toFixed(2)}%, calc(100% - 76px))`,
-              top: 6,
+              top: 4,
             }}
           >
             <b>{nf0(hv.k)}</b>
@@ -574,11 +688,12 @@ export default function GammaDistribution({
           ? "Net long gamma across the window — dealers dampen, and moves toward the peak get sold into."
           : "Net short gamma across the window — dealers amplify, and a move away from the peak feeds itself."}
         {" "}Mass sits at <b>{nf0(mu)}</b> with a 1σ spread of <b>±{nf0(sigma)}</b> pts
-        ({((sigma / spot) * 100).toFixed(2)}% of spot); {insidePct.toFixed(0)}% of the board
-        is inside that band, so the distribution is {shape}.
+        ({((sigma / spot) * 100).toFixed(2)}% of spot); {insidePct.toFixed(0)}% of the drawn
+        board is inside that band, so the distribution is {shape}.
         {basis === "vol"
           ? " Volume basis — this is today's trading only, so it reads near-empty before 09:30."
           : " OI basis — positioning carried into the session, which is the honest premarket read."}
+        {zoom === "auto" ? " Range is auto-fitted to the mass; the tabs pin it to a fixed band." : ""}
         {frozen ? " Captured session, not live." : ""}
       </p>
     </div>

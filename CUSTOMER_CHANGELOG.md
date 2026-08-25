@@ -4,15 +4,19 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Tuesday 8/25/2026
 
+* **The Multi Greek board has a new look.** Bigger, bolder colouring makes the heavy strikes jump out at a glance, with rounded cells and clearer numbers.
+
+* **Core Bullseye, Call Wall and Put Wall now color the whole cell** — gold, blue and red — instead of a small tag, so you spot them without hunting.
+
+* **More room for the ladder.** The three level cards above each ticker are gone (their on/off switches moved into the settings cog) and the at-the-money row is marked with a tag on the strike.
+
+* **Prefer the old look?** Settings cog → Heat → Skin → CLASSIC.
+
 * **The "Latest" button moved onto the ES Candles chart.** Scroll back into history and it appears in the bottom-right corner — one click snaps you to the newest candle, keeping your zoom.
 
 ## Sunday 8/23/2026
 
 * **The Earnings tab is a week at a glance.** One card per day, side by side, so the whole week fits on one screen instead of scrolling.
-
-* **Company logos for a lot more names.** Nineteen were showing as plain ticker text — they show their real logo now, bigger than before.
-
-* **The Earnings screenshot button copies to your clipboard.** It grabs just the earnings board, branded and ready to paste into a chat or a post.
 
 * **Easier to read.** Day cards stand out from the background, dates are centred and white, and the grey text is gone.
 
@@ -21,14 +25,6 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * **Feedback is now a support ticket.** Send one and it stays on your account as Open — we reply on the same page, and you'll see when it's marked complete.
 
 * **The Level Log now shows which expiration it's reading.** A tag next to the price tells you the contract and how many days to expiry, so a 0DTE log is never mistaken for a weekly one.
-
-* **The Level Log opens on All.** Walls and CORE show together on load — the Walls and Core buttons now narrow the view instead of being where you start.
-
-* **New date picker on the Level Log** — a proper calendar that matches the dashboard instead of the browser's white pop-up.
-
-* **The wall migration chart now covers the whole day.** A level that never moved after the open used to cut the chart off at 10am — now you see it holding flat while price travels all session.
-
-* **The CORE can switch walls without a strike moving.** Dominance is read from the 5-minute gamma, so you see the day's heavier wall change sides as it builds.
 
 ## Friday 8/21/2026
 
