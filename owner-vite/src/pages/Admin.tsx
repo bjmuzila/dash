@@ -651,8 +651,11 @@ function FeedbackPanel() {
 // so a comp unlocks exactly what a subscriber sees. It never touches
 // users.is_owner, so nothing owner-only opens up.
 //
-// An email can be comped BEFORE it has an account: the row waits, and applies
-// the moment someone signs up with that address. Those rows show as "pending".
+// Granting also PROVISIONS the account. The API creates the users row with no
+// password and — unless "email invite" is unchecked — mails a 7-day
+// set-password link. The recipient never signs up: they click, pick a password,
+// and are in with full paid access. A row whose account has no password yet
+// shows "no password yet" and offers a Resend.
 // Access appears/disappears within ~8s (the session validation cache TTL).
 
 interface CompRow {
@@ -662,6 +665,8 @@ interface CompRow {
   granted_at: string;
   granted_by: string | null;
   user_id: string | null;
+  /** false = the account exists but hasn't set a password yet. */
+  has_password: boolean | null;
 }
 
 function fmtExpiry(iso: string | null): string {
@@ -678,7 +683,11 @@ function CompAccessPanel() {
   const [newEmail, setNewEmail] = useState("");
   const [newNote, setNewNote] = useState("");
   const [newExpiry, setNewExpiry] = useState("");
+  const [sendInvite, setSendInvite] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Transient "what just happened" line under the grant row — the grant itself
+  // succeeding tells you nothing about whether the invite mail went out.
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -701,19 +710,51 @@ function CompAccessPanel() {
     if (!email) return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const res = await fetch("/api/admin/comp-access", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, note: newNote.trim() || null, expiresAt: newExpiry || null }),
+        body: JSON.stringify({ email, note: newNote.trim() || null, expiresAt: newExpiry || null, sendInvite }),
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j?.error || `HTTP ${res.status}`); }
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+
+      // Report the mail separately from the grant: the comp is live either way,
+      // but "invite bounced" is the difference between them getting in today
+      // and waiting on an email that never came.
+      if (j?.inviteSent) setNotice(`Account created — set-password email sent to ${email}.`);
+      else if (j?.inviteError) setNotice(`Comp granted, but the invite email failed (${j.inviteError}). Use Resend, or send them to “Forgot password?”.`);
+      else if (j?.accountCreated) setNotice(`Account created for ${email} — no email sent. They set a password via “Forgot password?”.`);
+      else setNotice(`Comp granted for ${email} (account already existed).`);
+
       setNewEmail("");
       setNewNote("");
       setNewExpiry("");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Grant failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Re-mint and re-send the set-password link for a row that has no password. */
+  const resendInvite = async (email: string) => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/admin/comp-access", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setNotice(`Set-password email re-sent to ${email}.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Resend failed");
     } finally {
       setBusy(false);
     }
@@ -746,7 +787,7 @@ function CompAccessPanel() {
         <span style={{ fontSize: 14, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
           {rows ? rows.length : "—"}
         </span>
-        <span style={{ fontSize: 14, color: T.textSecondary }}>full customer access, no Stripe · never owner access</span>
+        <span style={{ fontSize: 14, color: T.textSecondary }}>full customer access, no Stripe · never owner access · granting creates the account</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
           <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 14, opacity: loading ? 0.5 : 1 }}>
             {loading ? "…" : "↻"}
@@ -779,9 +820,19 @@ function CompAccessPanel() {
           title="Expires at the end of this day (blank = never)"
           style={{ ...inputStyle, flexShrink: 0 }}
         />
+        <label
+          title="Creates the account either way. Unchecked, no email goes out — you tell them to use “Forgot password?” themselves."
+          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: T.textSecondary, flexShrink: 0, cursor: "pointer", userSelect: "none" }}
+        >
+          <input type="checkbox" checked={sendInvite} onChange={(e) => setSendInvite(e.target.checked)} style={{ accentColor: T.cyan, cursor: "pointer" }} />
+          email invite
+        </label>
         <button onClick={grant} disabled={busy || !newEmail.trim()} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 14, opacity: busy || !newEmail.trim() ? 0.5 : 1 }}>
           Grant
         </button>
+        {notice && (
+          <div style={{ flexBasis: "100%", fontSize: 13, color: T.textSecondary, paddingTop: 2 }}>{notice}</div>
+        )}
       </div>
 
       <div style={{ maxHeight: 300, overflowY: "auto" }}>
@@ -795,11 +846,22 @@ function CompAccessPanel() {
           rows?.map((r) => (
             <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14 }}>
               <span style={{ flex: 1, minWidth: 0, color: T.text, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
-              {!r.user_id && (
-                <span title="No account with this email yet — the comp applies the moment they sign up"
+              {!r.user_id ? (
+                <span title="Granted before accounts were provisioned up front — no account row exists. Resend creates it and mails the link."
                   style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, flexShrink: 0 }}>
-                  pending signup
+                  no account
                 </span>
+              ) : !r.has_password ? (
+                <span title="Account exists but they haven't set a password yet — the invite link is still unused"
+                  style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, flexShrink: 0 }}>
+                  no password yet
+                </span>
+              ) : null}
+              {!r.has_password && (
+                <button onClick={() => resendInvite(r.email)} disabled={busy} title="Re-send the set-password email (new 7-day link)"
+                  style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 14, flexShrink: 0, opacity: busy ? 0.5 : 1 }}>
+                  Resend
+                </button>
               )}
               {r.note && (
                 <span style={{ fontSize: 14, color: T.textSecondary, flexShrink: 0, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.note}</span>

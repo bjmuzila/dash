@@ -1,5 +1,53 @@
 # Changelog
 
+## 2026-08-25 - Comped access provisions the account instead of waiting for a signup
+
+Edited: `app/api/admin/comp-access/route.ts`, `app/api/auth/signup/route.ts`,
+`lib/db.ts`, `owner-vite/src/pages/Admin.tsx`. New: `lib/emails/comp-invite.ts`.
+
+Granting a comp used to write one `comp_access` row and stop there. If that
+email had no account yet the row just sat as "pending signup", and the person
+on the other end had to be told to go sign up - and to spell their email
+exactly the way it had been comped, or the grant pointed at nothing. Until they
+did, nothing in the system said they existed.
+
+**The grant now creates the account.** POST creates the `users` row up front
+with `password_hash = NULL`, then mails a tokenized `/auth/reset-password`
+link - the same one-shot token machinery `forgot-password` uses, with a 7-day
+TTL instead of 1 hour. They click, pick a password, and land in a full
+paid-tier account. There is no sign-up step for them at all, and no way to
+mistype the address, because they never type it.
+
+A passwordless row is not a hole: `login` verifies against a NULL hash and
+fails generically, so nobody can sign into one, and "Forgot password?" on the
+sign-in page reaches the same reset flow if the invite link ever expires. A
+bounced invite is a nuisance, never a dead end.
+
+**Re-comping never touches an existing account.** If a `users` row is already
+there - a real customer, or a re-grant - it is left exactly as it is, and no
+mail goes out. A paying subscriber must never get a "set your password" link
+because their comp was extended.
+
+**The mail is auth mail, not marketing.** `sendAuthEmail()`, so the new
+`comp-invite` template ships without the unsubscribe footer, without the
+List-Unsubscribe bulk headers, and without UTM params welded onto the token
+URL - all three of which push a tokenized credential link to spam. Same reasons
+spelled out in `lib/emails/send.ts`.
+
+**Panel.** An "email invite" checkbox (default on) next to Grant - unchecked,
+the account is still created and no mail goes out, for when you would rather
+tell them yourself. The grant result now reports the mail separately from the
+grant, because the comp being live says nothing about whether the email landed.
+The "pending signup" badge is replaced by "no password yet" (account exists,
+link unused) and "no account" (a pre-existing grant from before this change),
+each with a **Resend** that mints a fresh 7-day link. `listCompAccess` carries
+a `has_password` flag for it; new `PUT /api/admin/comp-access` does the resend.
+
+`signup`'s dead-end branch for a passwordless row said "that email was
+registered with Google sign-in, which has been retired" - which is now wrong
+for every comped account. It splits on `google_sub` and tells a comped user the
+truth: the account is already there, use "Forgot password?".
+
 ## 2026-08-25 - Condition Rail: the historical read came back empty every time
 
 Edited: `components/scanner/ConditionRailTab.tsx`.

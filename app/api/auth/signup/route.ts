@@ -55,15 +55,19 @@ export async function POST(req: NextRequest) {
 
   const existing = await getUserByEmail(email);
   if (existing) {
-    // Accounts created through the retired Google sign-in have no
-    // password_hash, so their owner can neither sign in (no password to type)
-    // nor sign up (this branch). Point them at the reset flow, which sets a
-    // password on the existing row, instead of a dead-end "already exists".
+    // A row with no password_hash can neither sign in (nothing to type) nor
+    // sign up (this branch), so it would be a dead end. Two ways to get one:
+    //   · the retired Google sign-in, which never set a password;
+    //   · a comped account the owner provisioned from the Admin page
+    //     (app/api/admin/comp-access), which mails a set-password link.
+    // The same reset flow fixes both — it sets a password on the row that
+    // already exists. google_sub only picks which explanation they get.
     if (!existing.password_hash) {
       return NextResponse.json(
         {
-          error:
-            "That email was registered with Google sign-in, which has been retired. Use “Forgot password?” on the sign-in page to set a password for it.",
+          error: existing.google_sub
+            ? "That email was registered with Google sign-in, which has been retired. Use “Forgot password?” on the sign-in page to set a password for it."
+            : "An account already exists for that email. Use “Forgot password?” on the sign-in page to set your password — that's all that's left to do.",
         },
         { status: 400 },
       );

@@ -2886,15 +2886,22 @@ export interface CompAccessRow {
   expires_at: string | null;
   granted_at: string;
   granted_by: string | null;
-  /** users.id if this email has signed up yet, else null ("pending"). */
+  /** users.id once an account row exists for this email, else null.
+   *  Since 2026-08 granting a comp CREATES that row up front, so this is
+   *  normally non-null immediately — see grantCompAccess's callers. */
   user_id: string | null;
+  /** false = the account exists but has no password yet (invited, hasn't set
+   *  one). The admin card shows this as "no password yet". Null when there is
+   *  no account row at all. */
+  has_password: boolean | null;
 }
 
 /** Live comps only (not revoked, not expired), newest first. Left-joined to
  *  users so the admin card can show which grants are still waiting on a signup. */
 export async function listCompAccess(): Promise<CompAccessRow[]> {
   return queryAll<CompAccessRow>(
-    `SELECT ca.email, ca.note, ca.expires_at, ca.granted_at, ca.granted_by, u.id AS user_id
+    `SELECT ca.email, ca.note, ca.expires_at, ca.granted_at, ca.granted_by, u.id AS user_id,
+            (u.password_hash IS NOT NULL) AS has_password
        FROM comp_access ca
        LEFT JOIN users u ON LOWER(u.email) = ca.email
       WHERE ca.revoked_at IS NULL
@@ -2923,11 +2930,27 @@ export async function grantCompAccess(
     [norm, opts.note ?? null, opts.expiresAt ?? null, opts.grantedBy ?? null]
   );
   return queryOne<CompAccessRow>(
-    `SELECT ca.email, ca.note, ca.expires_at, ca.granted_at, ca.granted_by, u.id AS user_id
+    `SELECT ca.email, ca.note, ca.expires_at, ca.granted_at, ca.granted_by, u.id AS user_id,
+            (u.password_hash IS NOT NULL) AS has_password
        FROM comp_access ca
        LEFT JOIN users u ON LOWER(u.email) = ca.email
       WHERE ca.email = ?`,
     [norm]
+  );
+}
+
+/** Read one live comp row (same shape as listCompAccess). Used by the invite
+ *  endpoint to re-read a row after it creates the account. */
+export async function getCompAccess(email: string): Promise<CompAccessRow | undefined> {
+  return queryOne<CompAccessRow>(
+    `SELECT ca.email, ca.note, ca.expires_at, ca.granted_at, ca.granted_by, u.id AS user_id,
+            (u.password_hash IS NOT NULL) AS has_password
+       FROM comp_access ca
+       LEFT JOIN users u ON LOWER(u.email) = ca.email
+      WHERE ca.email = ?
+        AND ca.revoked_at IS NULL
+        AND (ca.expires_at IS NULL OR ca.expires_at > NOW())`,
+    [email.trim().toLowerCase()]
   );
 }
 
