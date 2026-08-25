@@ -601,6 +601,11 @@ function gradeTicker(sealed, ohlc) {
 
 const streamerFor = (symbol) => STREAMER_OVERRIDES[symbol] || symbol;
 
+/** Shared secret for the loopback call — see proxy-auth.js. Empty when unset. */
+const INTERNAL_HEADERS = process.env.INTERNAL_API_TOKEN
+  ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN }
+  : {};
+
 /** dxLink candle times arrive as seconds on some feeds and ms on others. */
 const toMs = (t) => (Number(t) < 1e12 ? Number(t) * 1000 : Number(t));
 
@@ -619,7 +624,11 @@ async function fetchSessionOhlc(base, symbol, date) {
   const t = setTimeout(() => ctl.abort(), CANDLE_TIMEOUT_MS);
   let json;
   try {
-    const r = await fetch(url, { signal: ctl.signal });
+    // proxy-auth gates every /proxy/* route once PROXY_AUTH_REQUIRED=1, and this
+    // is a server-to-server call with no session cookie — without the shared
+    // secret every candle pull comes back 401 and the whole roster grades as
+    // `no_candles`. Same header the other in-process callers send.
+    const r = await fetch(url, { signal: ctl.signal, headers: INTERNAL_HEADERS });
     if (!r.ok) return { ok: false, reason: `http ${r.status}` };
     json = await r.json();
   } catch (e) {
@@ -841,6 +850,16 @@ async function gradeSession(base, dateArg, { force = false } = {}) {
     `[daily-grades] ${date} done — ${ok} graded, ${skipped} skipped, `
     + `day ${day?.score ?? '—'} (${day?.grade ?? '—'}) in ${Math.round((Date.now() - t0) / 1000)}s`,
   );
+  // Nothing graded at all is a WIRING fault, not a market outcome — an auth
+  // rejection, a dead feed, a bad base URL. Say so once, loudly, instead of
+  // leaving a zeroed day row to be read as "the board was wrong today".
+  if (ok === 0 && symbols.length) {
+    console.error(
+      `[daily-grades] ${date} graded NOTHING across ${symbols.length} tickers — `
+      + 'that is a plumbing failure, not a result. Check the per-ticker reasons above '
+      + `(401 ⇒ INTERNAL_API_TOKEN missing/wrong for the loopback call).`,
+    );
+  }
   return { date, graded: ok, skipped, day };
 }
 
