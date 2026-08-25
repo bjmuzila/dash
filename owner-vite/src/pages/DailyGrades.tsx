@@ -1,17 +1,21 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// /owner/flowmonkey — the FlowMonkey levels board.
+// /owner/daily-grades — the Daily Grades board.
+//
+// ROSTER = THE WATCHLIST. Rows are the scanner universe from
+// GET /proxy/scanner-tickers (lib/tickers.ts) — the same list the ΔGEX Board
+// runs over — NOT whatever tickers happen to be in the payload. A watchlist
+// name the seal didn't grade still gets a row, marked "not graded"; a graded
+// name that isn't on the watchlist is off-roster and hidden behind the scope
+// toggle rather than quietly padding the board.
 //
 // TEMPLATE. The layout, derivations and states are final; the DATA is not.
-// Everything on screen comes from one `FmPayload` (see lib/flowmonkey.ts), and
-// the only thing that has to change when TT / dxLink lands is `loadLevels()` in
-// that file — this component never fetches anything itself and never reads a
-// ticker-specific special case.
+// Everything on screen comes from one `DgPayload` (see lib/dailyGrades.ts), and
+// the only thing that changes when TT / dxLink lands is `loadGrades()` in that
+// file — this component never fetches a board itself. Until then it falls back
+// to the sealed 2026-08-25 sample and the header says which source is on
+// screen. Paste-JSON is the manual path in the meantime.
 //
-// Until then the page falls back to the sealed 2026-08-25 sample so the board
-// renders with real-shaped numbers, and the header says plainly which source is
-// on screen. Paste-JSON is the manual path in the meantime.
-//
-// Colors come from lib/theme (OWNER_THEME) — no hardcoded hex.
+// Colours come from lib/theme (OWNER_THEME) — no hardcoded hex.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -23,24 +27,25 @@ import {
   homeInputStyle,
   homeSecondaryButtonStyle,
 } from "../lib/theme";
+import { useTickerUniverse } from "../lib/tickers";
 import {
   deriveRows,
   summarize,
   parsePayload,
-  loadLevels,
+  loadGrades,
   fmtPrice,
   fmtPct,
   fmtSealed,
   NEAR_PCT,
-  type FmPayload,
-  type FmRow,
-  type FmSource,
-  type FmFlagKind,
-} from "../lib/flowmonkey";
+  type DgPayload,
+  type DgRow,
+  type DgSource,
+  type DgFlagKind,
+} from "../lib/dailyGrades";
 
 const MONO = "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace";
 
-type FilterId = "all" | "above" | "below" | "near" | "breach";
+type FilterId = "all" | "above" | "below" | "near" | "breach" | "ungraded";
 type SortKey =
   | "ticker" | "spot" | "floor" | "dFloor" | "apex" | "cap" | "dCap" | "flip" | "dFlip";
 
@@ -50,13 +55,15 @@ const FILTERS: { id: FilterId; label: string }[] = [
   { id: "below", label: "Below flip" },
   { id: "near", label: `Within ${NEAR_PCT}%` },
   { id: "breach", label: "Outside range" },
+  { id: "ungraded", label: "Not graded" },
 ];
 
-const FLAG_ACCENT: Record<FmFlagKind, string> = {
+const FLAG_ACCENT: Record<DgFlagKind, string> = {
   near: T.gold,
   breach: T.orange,
   inverted: T.red,
-  nodata: T.lightBlue,
+  ungraded: T.purple,
+  offroster: T.lightBlue,
 };
 
 // ── small pieces ─────────────────────────────────────────────────────────────
@@ -114,7 +121,7 @@ function Tile({ value, label, accent }: { value: number | string; label: string;
 }
 
 /** Where spot sits inside the floor→cap band. White tick = spot, gold line = flip. */
-function BandBar({ row }: { row: FmRow }) {
+function BandBar({ row }: { row: DgRow }) {
   if (row.pos == null) {
     return <div style={{ height: 8, borderRadius: 4, background: ownerRgba(T.text, 0.05) }} />;
   }
@@ -152,12 +159,16 @@ function BandBar({ row }: { row: FmRow }) {
 
 // ── page ─────────────────────────────────────────────────────────────────────
 
-export default function FlowMonkey() {
-  const [payload, setPayload] = useState<FmPayload | null>(null);
-  const [source, setSource] = useState<FmSource>("sample");
+export default function DailyGrades() {
+  const [payload, setPayload] = useState<DgPayload | null>(null);
+  const [source, setSource] = useState<DgSource>("sample");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // The roster. Same universe the ΔGEX Board runs over.
+  const { tickers, loading: rosterLoading, live: rosterLive } = useTickerUniverse();
+
+  const [showOffRoster, setShowOffRoster] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterId>("all");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
@@ -171,11 +182,11 @@ export default function FlowMonkey() {
     setLoading(true);
     setError(null);
     try {
-      const { payload: p, source: s } = await loadLevels();
+      const { payload: p, source: s } = await loadGrades();
       setPayload(p);
       setSource(s);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load levels.");
+      setError(e instanceof Error ? e.message : "Could not load grades.");
     } finally {
       setLoading(false);
     }
@@ -205,8 +216,19 @@ export default function FlowMonkey() {
     [applyImport],
   );
 
-  const rows = useMemo(() => deriveRows(payload), [payload]);
+  const roster = rosterLoading && !tickers.length ? null : tickers;
+  const rows = useMemo(
+    () => deriveRows(payload, roster, showOffRoster),
+    [payload, roster, showOffRoster],
+  );
   const stats = useMemo(() => summarize(rows), [rows]);
+
+  /** Graded names the watchlist doesn't carry — the count behind the scope toggle. */
+  const offRosterCount = useMemo(() => {
+    if (!payload || !roster) return 0;
+    const on = new Set(roster.map((t) => t.toUpperCase()));
+    return Object.keys(payload.boards).filter((t) => !on.has(t)).length;
+  }, [payload, roster]);
 
   const visible = useMemo(() => {
     const q = query.trim().toUpperCase();
@@ -216,6 +238,7 @@ export default function FlowMonkey() {
       if (filter === "below" && r.regime !== "below") return false;
       if (filter === "near" && !r.near) return false;
       if (filter === "breach" && !r.breach) return false;
+      if (filter === "ungraded" && !r.ungraded) return false;
       return true;
     });
     const dir = sortAsc ? 1 : -1;
@@ -238,7 +261,7 @@ export default function FlowMonkey() {
   const sourceLabel =
     source === "live" ? "Live" : source === "import" ? "Imported" : "Sample board";
 
-  // ── header styles ──────────────────────────────────────────────────────────
+  // ── table styles ───────────────────────────────────────────────────────────
   const th = (k?: SortKey, align: "left" | "right" = "right"): React.CSSProperties => ({
     position: "sticky",
     top: 0,
@@ -291,13 +314,17 @@ export default function FlowMonkey() {
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <span style={{ fontSize: TYPE.title, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                FlowMonkey Levels
+                Daily Grades
               </span>
               <Pill accent={sourceAccent}>{sourceLabel}</Pill>
               {payload?.sealed_for_session && <Pill accent={T.cyan}>{payload.sealed_for_session}</Pill>}
+              <Pill accent={rosterLive ? T.green : T.gold}>
+                {rosterLive ? "watchlist live" : rosterLoading ? "watchlist…" : "watchlist cached"}
+              </Pill>
             </div>
             <div style={{ marginTop: 6, fontSize: TYPE.label, color: ownerRgba(T.text, 0.6) }}>
-              Sealed {fmtSealed(payload?.sealed_at)} · {stats.total} tickers
+              Sealed {fmtSealed(payload?.sealed_at)} · {stats.graded} of {stats.total} graded
+              {" · scanner watchlist, same roster as the ΔGEX Board"}
               {source === "sample" && " · placeholder board until the TT / dxLink feed is wired"}
             </div>
           </div>
@@ -327,9 +354,7 @@ export default function FlowMonkey() {
           </div>
         )}
 
-        {error && (
-          <div style={{ marginTop: 12, fontSize: TYPE.label, color: T.red }}>{error}</div>
-        )}
+        {error && <div style={{ marginTop: 12, fontSize: TYPE.label, color: T.red }}>{error}</div>}
 
         {importOpen && (
           <div
@@ -340,15 +365,9 @@ export default function FlowMonkey() {
             <textarea
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
-              placeholder="Drop a sealed flowmonkeylevels*.json here, or paste its contents…"
+              placeholder="Drop a sealed levels JSON here, or paste its contents…"
               spellCheck={false}
-              style={{
-                ...homeInputStyle,
-                minHeight: 130,
-                fontFamily: MONO,
-                fontSize: 12,
-                resize: "vertical",
-              }}
+              style={{ ...homeInputStyle, minHeight: 130, fontFamily: MONO, fontSize: 12, resize: "vertical" }}
             />
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button style={homeSecondaryButtonStyle} onClick={() => applyImport(importText)}>
@@ -361,11 +380,12 @@ export default function FlowMonkey() {
       </Card>
 
       {/* ── summary tiles ────────────────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
-        <Tile value={stats.total} label="tickers" accent={T.text} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))", gap: 10 }}>
+        <Tile value={stats.total} label="on watchlist" accent={T.text} />
+        <Tile value={stats.graded} label="graded" accent={T.cyan} />
+        <Tile value={stats.ungraded} label="not graded" accent={T.purple} />
         <Tile value={stats.above} label="above flip" accent={T.green} />
         <Tile value={stats.below} label="below flip" accent={T.red} />
-        <Tile value={stats.noFlip} label="no flip set" accent={ownerRgba(T.text, 0.45)} />
         <Tile value={stats.near} label={`within ${NEAR_PCT}% of a level`} accent={T.gold} />
         <Tile value={stats.breach} label="outside floor/cap" accent={T.orange} />
       </div>
@@ -402,6 +422,26 @@ export default function FlowMonkey() {
               </button>
             );
           })}
+          {offRosterCount > 0 && (
+            <button
+              onClick={() => setShowOffRoster((v) => !v)}
+              title="Graded names the watchlist doesn't carry"
+              style={{
+                padding: "7px 13px",
+                borderRadius: 999,
+                border: `1px solid ${showOffRoster ? T.lightBlue : T.border}`,
+                background: showOffRoster ? ownerRgba(T.lightBlue, 0.16) : "rgba(255,255,255,0.03)",
+                color: showOffRoster ? T.lightBlue : ownerRgba(T.text, 0.7),
+                fontSize: TYPE.label,
+                fontWeight: 800,
+                letterSpacing: "0.04em",
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              +{offRosterCount} off roster
+            </button>
+          )}
           <span style={{ marginLeft: "auto", fontSize: TYPE.label, color: ownerRgba(T.text, 0.45), fontFamily: MONO }}>
             {visible.length} / {rows.length}
           </span>
@@ -426,7 +466,13 @@ export default function FlowMonkey() {
             </thead>
             <tbody>
               {visible.map((r) => (
-                <tr key={r.ticker} style={{ borderBottom: `1px solid ${ownerRgba(T.text, 0.05)}` }}>
+                <tr
+                  key={r.ticker}
+                  style={{
+                    borderBottom: `1px solid ${ownerRgba(T.text, 0.05)}`,
+                    opacity: r.ungraded ? 0.55 : 1,
+                  }}
+                >
                   <th
                     scope="row"
                     style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800, letterSpacing: "0.02em" }}
@@ -445,9 +491,11 @@ export default function FlowMonkey() {
                     <BandBar row={r} />
                   </td>
                   <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
-                    <Pill accent={r.regime === "above" ? T.green : r.regime === "below" ? T.red : ownerRgba(T.text, 0.4)}>
-                      {r.regime === "above" ? "above flip" : r.regime === "below" ? "below flip" : "no flip"}
-                    </Pill>
+                    {!r.ungraded && (
+                      <Pill accent={r.regime === "above" ? T.green : r.regime === "below" ? T.red : ownerRgba(T.text, 0.4)}>
+                        {r.regime === "above" ? "above flip" : r.regime === "below" ? "below flip" : "no flip"}
+                      </Pill>
+                    )}
                     {r.flags.map((f, i) => (
                       <Pill key={i} accent={FLAG_ACCENT[f.kind]}>{f.label}</Pill>
                     ))}
@@ -457,7 +505,7 @@ export default function FlowMonkey() {
               {!visible.length && (
                 <tr>
                   <td colSpan={11} style={{ ...td, textAlign: "center", padding: 34, color: ownerRgba(T.text, 0.45) }}>
-                    {loading ? "Loading board…" : "Nothing matches that filter."}
+                    {loading || rosterLoading ? "Loading board…" : "Nothing matches that filter."}
                   </td>
                 </tr>
               )}
@@ -469,8 +517,8 @@ export default function FlowMonkey() {
       {/* ── legend ───────────────────────────────────────────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10 }}>
         {[
-          ["Floor", "Lower level on the board — support / put wall."],
-          ["Cap", "Upper level — resistance / call wall."],
+          ["Roster", "The scanner watchlist from /proxy/scanner-tickers — the same universe the ΔGEX Board runs over."],
+          ["Floor / Cap", "Lower and upper level on the board — support / put wall and resistance / call wall."],
           ["Apex", "The single biggest level on the board."],
           ["Flip", "Gamma flip. Spot above it is the calmer regime; below it, the chop."],
           ["Δ columns", `How far spot has to travel to reach that level. Positive = the level is above spot; bold = inside ${NEAR_PCT}%.`],
@@ -478,12 +526,7 @@ export default function FlowMonkey() {
         ].map(([k, v]) => (
           <div
             key={k}
-            style={{
-              background: T.panelInset,
-              border: `1px solid ${T.border}`,
-              borderRadius: 12,
-              padding: "11px 14px",
-            }}
+            style={{ background: T.panelInset, border: `1px solid ${T.border}`, borderRadius: 12, padding: "11px 14px" }}
           >
             <div style={{ fontSize: TYPE.label, fontWeight: 800, marginBottom: 3 }}>{k}</div>
             <div style={{ fontSize: TYPE.label, color: ownerRgba(T.text, 0.6) }}>{v}</div>

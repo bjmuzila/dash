@@ -1,13 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Sealed FlowMonkey board, 2026-08-25 — the PLACEHOLDER payload for
-// /owner/flowmonkey. It exists so the page renders a real-shaped board while
-// the TT / dxLink feed is being wired; delete it once lib/flowmonkey.ts
-// `loadLevels()` reads the live endpoint.
+// Sealed board, 2026-08-25 — the PLACEHOLDER payload for /owner/daily-grades.
+// It exists so the page renders a real-shaped board while the TT / dxLink feed
+// is being wired; delete it once `loadGrades()` in lib/dailyGrades.ts reads the
+// live endpoint.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { FmPayload } from "../../lib/flowmonkey";
+import type { DgPayload } from "../../lib/dailyGrades";
 
-export const SAMPLE_PAYLOAD: FmPayload = {
+export const SAMPLE_PAYLOAD: DgPayload = {
   boards: {
     AAOI: { apex: 110, cap: 130, flip: null, floor: 110, spot: 107.36 },
     AAPL: { apex: null, cap: 320, flip: 308.75, floor: 300, spot: 310.079987 },
@@ -131,7 +131,7 @@ export const SAMPLE_PAYLOAD: FmPayload = {
     XLV: { apex: 175, cap: 175, flip: 169.5, floor: 160, spot: 174.6834 },
     XOM: { apex: 170, cap: 170, flip: 158.75, floor: 145, spot: 163.915146 },
   },
-  note: "FlowMonkey levels, sealed before the open and graded after the close. Re-hash this exact file with SHA-256 to verify nothing changed after publication.",
+  note: "Daily grades, sealed before the open and graded after the close. Re-hash this exact file with SHA-256 to verify nothing changed after publication.",
   sealed_at: "2026-08-25T05:12:01.811210-04:00",
   sealed_for_session: "2026-08-25",
 };

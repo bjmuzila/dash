@@ -278,13 +278,30 @@ const METRICS: Metric[] = [
 
 /** The failed-break partition — the one place a stacked bar is an honest claim. */
 const PARTS = [
-  { k: "recovered" as const, label: "RECOVERED — new extreme past the pre-fail peak", color: LIGHT_BLUE },
+  { k: "recovered" as const, label: "RECOVERED — it failed back inside, then went on to a NEW extreme past where the break had stalled", color: LIGHT_BLUE },
   // This one is a BAR FILL, not text — it stays a muted neutral so the four
   // segments read apart. Only font colors went white.
-  { k: "chop" as const, label: "CHOP — never saw the mid, never re-took its high", color: "rgba(255,255,255,0.28)" },
-  { k: "to_mid" as const, label: "TO THE MID — reached the midpoint, no further", color: HOME_THEME.orange },
-  { k: "full_rotation" as const, label: "FULL ROTATION — reached the opposite extreme", color: HOME_THEME.red },
+  { k: "chop" as const, label: "CHOP — failed and stayed failed: never reached the IB mid, never re-took its break extreme", color: "rgba(255,255,255,0.28)" },
+  { k: "to_mid" as const, label: "TO THE MID — gave the break back and reached the IB midpoint, no further", color: HOME_THEME.orange },
+  { k: "full_rotation" as const, label: "FULL ROTATION — gave the break back and ran all the way to the opposite IB extreme", color: HOME_THEME.red },
 ];
+
+/**
+ * Plain-English size words. The honesty rule says sample counts are never
+ * printed — but "0%" and "100%" off a handful of sessions read as "never" and
+ * "always", which is a bigger lie than the number would have been. So the page
+ * says how many in words, and the THIN badge says the handful is a handful.
+ */
+const inWords = (v: number | null): string => {
+  if (v == null) return "no reading";
+  if (v >= 0.999) return "every one of them";
+  if (v <= 0.001) return "not one of them";
+  if (v >= 0.8) return "nearly all of them";
+  if (v >= 0.6) return "most of them";
+  if (v >= 0.45) return "about half of them";
+  if (v >= 0.2) return "a minority of them";
+  return "a few of them";
+};
 
 /* ── component ────────────────────────────────────────────────────────────── */
 
@@ -524,6 +541,10 @@ export default function ConditionRailTab() {
     ...p,
     pct: fails.length ? (100 * fails.filter((d) => failOutcome(d.fcb!, d.width) === p.k).length) / fails.length : 0,
   }));
+  /** The share of THIS cohort's breaks that failed — the "if" in "if it fails". */
+  const failRate = share(broke, (d) => d.fcb!.failed);
+  /** A stacked bar off a handful of failures is not a distribution. Say so. */
+  const failsThin = fails.length > 0 && fails.length < 30;
 
   const medExt = med(broke.map((d) => d.fcb!.rExt));
   const medMin = med(broke.map((d) => d.fcb!.breakMin));
@@ -882,6 +903,33 @@ export default function ConditionRailTab() {
                   {thin && <span style={badge(HOME_THEME.orange)}>THIN</span>}
                   {suspicious && <span style={badge(HOME_THEME.red)}>CHECK FOR BIAS</span>}
                 </div>
+
+                {/* ── say it in words ───────────────────────────────────────
+                    Percentages off a small cohort get read as certainties: 0%
+                    becomes "never", 100% becomes "always", and a stacked bar
+                    becomes a forecast. Three sentences that cannot be misread
+                    that way, stated every time rather than only when thin. */}
+                <div style={{ marginTop: 13, paddingTop: 11, borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.65 }}>
+                  <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 5 }}>
+                    Reading it
+                  </div>
+                  <div>
+                    Of the {sym} sessions in this cohort that <b>broke the IB</b>,{" "}
+                    <b style={{ color: metric.color }}>{inWords(rate)}</b> saw {metric.label.toLowerCase()}
+                    {baseline != null && <> — the book as a whole does it {pct0(baseline)} of the time</>}.
+                  </div>
+                  <div style={{ marginTop: 3 }}>
+                    Sessions that never broke the IB are not in that count at all — every rate on this card is
+                    conditional on a break happening first.
+                  </div>
+                  {thin && (
+                    <div style={{ marginTop: 5, color: HOME_THEME.orange }}>
+                      ⚠ This cohort is a handful of sessions. Read <b>0%</b> as &ldquo;not in these few&rdquo; and <b>100%</b> as
+                      &ldquo;all of these few&rdquo; — neither is &ldquo;never&rdquo; or &ldquo;always&rdquo;. The hairline on each bar is what the
+                      whole book does, and it is the more reliable number of the two.
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Every outcome, this cohort against the unconditional book. Each
@@ -924,6 +972,8 @@ export default function ConditionRailTab() {
                 })}
                 <div style={{ fontSize: 10.5, color: HOME_THEME.text, textAlign: "right" }}>
                   bar = this cohort · hairline = the unconditional {sym} book · last column = points off that baseline · click a row to pin it
+                  <br />
+                  every row is measured on the cohort&apos;s sessions that BROKE the IB — no-break days are not in the denominator
                 </div>
               </div>
             </div>
@@ -968,10 +1018,28 @@ export default function ConditionRailTab() {
 
           {/* failed-break partition — mutually exclusive, sums to 100 */}
           <div style={{ ...classicCardAccentStyle, padding: 20 }}>
-            <div style={sect}>If the break fails — where the day ends up</div>
+            <div style={sect}>
+              If the break fails — where the day ends up
+              {failsThin && <span style={badge(HOME_THEME.orange)}>THIN</span>}
+            </div>
+            {/* The "IF" is the whole card and it kept getting read as "what the
+                break will do". It is doubly conditional: only the breaks in
+                this cohort, and only the ones that then FAILED. Say both, above
+                the bar, before anyone reads a percentage off it. */}
+            <div style={{ fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.65, marginTop: -4, marginBottom: 12 }}>
+              {failRate != null ? <><b>{pct0(failRate)}</b> of this cohort&apos;s breaks failed</> : <>A failed break</>} — closed back inside the IB
+              within 30 minutes. The bar below splits <i>only those</i> days by where price finished up afterwards. It is not the chance of failing, and
+              it says nothing about whether <i>this</i> break will fail.
+              {failsThin && (
+                <div style={{ marginTop: 5, color: HOME_THEME.orange }}>
+                  ⚠ Only a handful of failures sit behind this split, so a segment at 100% means &ldquo;those few days all did that&rdquo; — it is what
+                  they happened to do, not a distribution.
+                </div>
+              )}
+            </div>
             {fails.length ? (
               <>
-                <div style={{ display: "flex", height: 30, borderRadius: 7, overflow: "hidden", gap: 2 }}>
+                <div style={{ display: "flex", height: 30, borderRadius: 7, overflow: "hidden", gap: 2, opacity: failsThin ? 0.75 : 1 }}>
                   {partition.map((p) => (
                     <div key={p.k} style={{ width: `${p.pct}%`, background: p.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: HOME_THEME.bg, fontVariantNumeric: "tabular-nums" }}>
                       {p.pct >= 9 ? `${p.pct.toFixed(0)}%` : ""}
@@ -988,7 +1056,10 @@ export default function ConditionRailTab() {
                 </div>
               </>
             ) : (
-              <div style={{ fontSize: 12, color: HOME_THEME.text }}>No failed breaks in this cohort.</div>
+              <div style={{ fontSize: 12, color: HOME_THEME.text }}>
+                No break in this cohort ever failed, so there is nothing to split. With a cohort this narrow that is &ldquo;it has not happened
+                yet in these sessions&rdquo;, not &ldquo;it cannot&rdquo;.
+              </div>
             )}
           </div>
 
@@ -1041,6 +1112,15 @@ export default function ConditionRailTab() {
             ) : (
               <div style={{ fontSize: 12, color: HOME_THEME.text }}>No sessions match — loosen a criterion.</div>
             )}
+            {/* Count the squares: this is the sample size, shown rather than
+                printed. A four-square row makes "100%" mean what it actually
+                means far faster than any badge does. */}
+            {broke.length > 0 && (
+              <div style={{ fontSize: 10.5, color: HOME_THEME.text, marginTop: 9 }}>
+                one square = one matching session that broke the IB, oldest at left · filled = {metric.label.toLowerCase()} · count them, that is the
+                whole sample behind every number on this page
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1056,8 +1136,14 @@ export default function ConditionRailTab() {
         furthest from its rate in the unconditional book — the gap is the read, and an outcome on its baseline is the cohort telling you it changed
         nothing. Click any row to pin it instead, or <b>AUTO</b> to hand the choice back.
         <br />
+        Every rate on this page is <b>conditional on a break</b>: the denominator is the cohort&apos;s sessions that closed a 5m bar outside the IB, not
+        the cohort. The failed-break split narrows that once more — it describes only the breaks that then failed, so a segment at 100% is where those
+        days ended up, never the odds of failing.
+        <br />
         No lookahead: every field was stamped at its own confirm bar. Sample sizes aren&apos;t printed, but they still gate the read — a thin cohort is
-        badged THIN, and any rate over 85% is flagged to check for bias rather than treated as an edge.
+        badged THIN, any rate over 85% is flagged to check for bias rather than treated as an edge, and the &ldquo;matching sessions&rdquo; strip shows
+        one square per session so the sample is countable. On a thin cohort, 0% means &ldquo;not in these few&rdquo; and 100% means &ldquo;all of these
+        few&rdquo; — the hairline, the book&apos;s own rate, is the sturdier number.
         <br />
         The <b>Session</b> picker reads the rail back on a past day: the criteria are re-seeded from that session&apos;s own classification and the book is
         cut to sessions <i>before</i> it, so the rate shown is the one the rail would have quoted that morning — not the same day scored with hindsight.

@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// FlowMonkey levels — data contract + derivations for /owner/flowmonkey.
+// Daily Grades — data contract + derivations for /owner/daily-grades.
 //
-// THE SHAPE IS THE CONTRACT. A sealed FlowMonkey board is one row per ticker:
+// THE SHAPE IS THE CONTRACT. A sealed board is one row per ticker:
 //
 //   { apex, cap, flip, floor, spot }
 //
@@ -11,20 +11,28 @@
 //   flip  — gamma flip; spot above it is the calmer regime, below is the choppy one
 //   spot  — last price at seal time
 //
-// Any of the four levels may be null (not every board has a flip, and a fresh
-// roster entry can have none at all). Everything below is null-safe.
+// Any of the four levels may be null (not every board has a flip, and a name
+// that hasn't been graded yet has none at all). Everything below is null-safe.
+//
+// THE ROSTER IS THE WATCHLIST, NOT THE PAYLOAD. The page grades the scanner
+// watchlist — the same universe the ΔGEX Board runs over, served by
+// GET /proxy/scanner-tickers and read through lib/tickers.ts. A payload is
+// matched INTO that roster: a watchlist name with no board shows as "not
+// graded" rather than silently vanishing, and a board for a name that isn't on
+// the watchlist is off-roster (the page has a scope toggle for it) rather than
+// silently appearing. Do not re-key this off `Object.keys(payload.boards)`.
 //
 // WHERE THE DATA COMES FROM
 // -------------------------
-// Today this reads a sealed JSON payload. The page is the template; the live
-// wiring lands later and there is exactly ONE seam for it: `loadLevels()`.
-// When TT / dxLink is ready, `spot` becomes a streaming quote and the four
-// levels come off the levels engine — swap the body of `loadLevels()` (and,
-// for streaming spot, feed `applySpots()` from the quote handler). Nothing in
-// the page component needs to change: it renders whatever `FmPayload` it gets.
+// This is the template; the live wiring lands later and there is exactly ONE
+// seam for it: `loadGrades()`. When TT / dxLink is ready, `spot` becomes a
+// streaming quote and the four levels come off the levels engine — swap the
+// body of `loadGrades()` (and, for streaming spot, feed `applySpots()` from the
+// quote handler). Nothing in the page component needs to change: it renders
+// whatever `DgPayload` it is handed.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type FmBoard = {
+export type DgBoard = {
   apex: number | null;
   cap: number | null;
   flip: number | null;
@@ -32,8 +40,8 @@ export type FmBoard = {
   spot: number | null;
 };
 
-export type FmPayload = {
-  boards: Record<string, FmBoard>;
+export type DgPayload = {
+  boards: Record<string, DgBoard>;
   /** Free-text provenance note carried with the seal. */
   note?: string | null;
   /** ISO timestamp the board was sealed. */
@@ -43,31 +51,37 @@ export type FmPayload = {
 };
 
 /** Where the payload on screen came from — drives the badge in the header. */
-export type FmSource = "live" | "sample" | "import";
+export type DgSource = "live" | "sample" | "import";
 
-export type FmRegime = "above" | "below" | "none";
-export type FmFlagKind = "near" | "breach" | "inverted" | "nodata";
-export type FmFlag = { kind: FmFlagKind; label: string };
+export type DgRegime = "above" | "below" | "none";
+export type DgFlagKind = "near" | "breach" | "inverted" | "ungraded" | "offroster";
+export type DgFlag = { kind: DgFlagKind; label: string };
 
-export type FmRow = FmBoard & {
+export type DgRow = DgBoard & {
   ticker: string;
   /** Percent move from spot to each level. Positive = the level sits above spot. */
   dFloor: number | null;
   dCap: number | null;
   dFlip: number | null;
   dApex: number | null;
-  regime: FmRegime;
+  regime: DgRegime;
   /** 0..1 position of spot inside the floor→cap band; null when the band is unusable. */
   pos: number | null;
   /** 0..1 position of flip inside the same band. */
   flipPos: number | null;
-  flags: FmFlag[];
+  flags: DgFlag[];
   near: boolean;
   breach: boolean;
+  /** On the watchlist but the seal carries no board for it. */
+  ungraded: boolean;
+  /** Has a board but isn't on the watchlist. */
+  offRoster: boolean;
 };
 
-export type FmSummary = {
+export type DgSummary = {
   total: number;
+  graded: number;
+  ungraded: number;
   above: number;
   below: number;
   noFlip: number;
@@ -78,6 +92,8 @@ export type FmSummary = {
 /** A level is "near" once spot is within this much of it, in percent. */
 export const NEAR_PCT = 1.0;
 
+const EMPTY_BOARD: DgBoard = { apex: null, cap: null, flip: null, floor: null, spot: null };
+
 // ── derivations ──────────────────────────────────────────────────────────────
 
 function pctTo(spot: number | null, level: number | null): number | null {
@@ -85,7 +101,11 @@ function pctTo(spot: number | null, level: number | null): number | null {
   return ((level - spot) / spot) * 100;
 }
 
-export function deriveRow(ticker: string, b: FmBoard): FmRow {
+export function deriveRow(
+  ticker: string,
+  b: DgBoard,
+  opts: { ungraded?: boolean; offRoster?: boolean } = {},
+): DgRow {
   const { spot, apex, cap, floor, flip } = b;
 
   const dFloor = pctTo(spot, floor);
@@ -93,18 +113,21 @@ export function deriveRow(ticker: string, b: FmBoard): FmRow {
   const dFlip = pctTo(spot, flip);
   const dApex = pctTo(spot, apex);
 
-  const regime: FmRegime =
+  const regime: DgRegime =
     flip == null || spot == null ? "none" : spot > flip ? "above" : "below";
 
   // The band only means anything when cap actually sits above floor.
   const bandOk = floor != null && cap != null && cap > floor && spot != null;
-  const pos = bandOk ? (spot! - floor!) / (cap! - floor!) : null;
-  const flipPos = bandOk && flip != null ? (flip - floor!) / (cap! - floor!) : null;
+  const pos = bandOk ? (spot - floor) / (cap - floor) : null;
+  const flipPos = bandOk && flip != null ? (flip - floor) / (cap - floor) : null;
 
-  const flags: FmFlag[] = [];
-  if (apex == null && cap == null && floor == null && flip == null) {
-    flags.push({ kind: "nodata", label: "no levels" });
-  }
+  const noLevels = apex == null && cap == null && floor == null && flip == null;
+  const ungraded = !!opts.ungraded || noLevels;
+  const offRoster = !!opts.offRoster;
+
+  const flags: DgFlag[] = [];
+  if (ungraded) flags.push({ kind: "ungraded", label: "not graded" });
+  if (offRoster) flags.push({ kind: "offroster", label: "off roster" });
   if (floor != null && cap != null && cap < floor) {
     flags.push({ kind: "inverted", label: "cap < floor" });
   }
@@ -128,22 +151,50 @@ export function deriveRow(ticker: string, b: FmBoard): FmRow {
     flags,
     near: nearNames.length > 0,
     breach: flags.some((f) => f.kind === "breach"),
+    ungraded,
+    offRoster,
   };
 }
 
-export function deriveRows(payload: FmPayload | null): FmRow[] {
-  if (!payload?.boards) return [];
-  return Object.keys(payload.boards)
-    .sort()
-    .map((t) => deriveRow(t, payload.boards[t]));
+/**
+ * Build the board.
+ *
+ * `roster` is the watchlist and it drives the row set: every name on it gets a
+ * row whether or not the seal graded it. Pass `includeOffRoster` to also append
+ * graded names the watchlist doesn't carry. Pass a null roster to fall back to
+ * "whatever the payload holds" (used while the universe is still loading).
+ */
+export function deriveRows(
+  payload: DgPayload | null,
+  roster: string[] | null,
+  includeOffRoster = false,
+): DgRow[] {
+  const boards = payload?.boards ?? {};
+
+  if (!roster || !roster.length) {
+    return Object.keys(boards).sort().map((t) => deriveRow(t, boards[t]));
+  }
+
+  const onRoster = new Set(roster.map((t) => t.toUpperCase()));
+  const rows = [...onRoster].sort().map((t) =>
+    deriveRow(t, boards[t] ?? EMPTY_BOARD, { ungraded: !boards[t] }),
+  );
+
+  if (includeOffRoster) {
+    const extra = Object.keys(boards).filter((t) => !onRoster.has(t)).sort();
+    rows.push(...extra.map((t) => deriveRow(t, boards[t], { offRoster: true })));
+  }
+  return rows;
 }
 
-export function summarize(rows: FmRow[]): FmSummary {
+export function summarize(rows: DgRow[]): DgSummary {
   return {
     total: rows.length,
+    graded: rows.filter((r) => !r.ungraded).length,
+    ungraded: rows.filter((r) => r.ungraded).length,
     above: rows.filter((r) => r.regime === "above").length,
     below: rows.filter((r) => r.regime === "below").length,
-    noFlip: rows.filter((r) => r.regime === "none").length,
+    noFlip: rows.filter((r) => r.regime === "none" && !r.ungraded).length,
     near: rows.filter((r) => r.near).length,
     breach: rows.filter((r) => r.breach).length,
   };
@@ -156,10 +207,10 @@ export function summarize(rows: FmRow[]): FmSummary {
  * recomputes off it.
  */
 export function applySpots(
-  payload: FmPayload,
+  payload: DgPayload,
   spots: Record<string, number | null | undefined>,
-): FmPayload {
-  const boards: Record<string, FmBoard> = {};
+): DgPayload {
+  const boards: Record<string, DgBoard> = {};
   for (const [t, b] of Object.entries(payload.boards)) {
     const live = spots[t];
     boards[t] = live == null || !isFinite(live) ? b : { ...b, spot: live };
@@ -184,7 +235,7 @@ export function fmtPct(v: number | null): string {
   return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
 }
 
-/** "Aug 25, 2026 · 5:12:01 AM ET" for the seal stamp. */
+/** "Aug 25, 2026, 5:12:01 AM ET" for the seal stamp. */
 export function fmtSealed(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -202,17 +253,17 @@ const numOrNull = (v: unknown): number | null =>
   typeof v === "number" && isFinite(v) ? v : null;
 
 /**
- * Coerce anything claiming to be a FlowMonkey seal into a FmPayload.
+ * Coerce anything claiming to be a sealed board into a DgPayload.
  * Throws with a readable message rather than rendering half a board.
  */
-export function parsePayload(raw: unknown): FmPayload {
+export function parsePayload(raw: unknown): DgPayload {
   if (!raw || typeof raw !== "object") throw new Error("Not a JSON object.");
   const o = raw as Record<string, unknown>;
   const boardsIn = o.boards;
   if (!boardsIn || typeof boardsIn !== "object") {
     throw new Error('Missing a "boards" object.');
   }
-  const boards: Record<string, FmBoard> = {};
+  const boards: Record<string, DgBoard> = {};
   for (const [t, v] of Object.entries(boardsIn as Record<string, unknown>)) {
     if (!v || typeof v !== "object") continue;
     const b = v as Record<string, unknown>;
@@ -236,7 +287,7 @@ export function parsePayload(raw: unknown): FmPayload {
 // ── the one live seam ────────────────────────────────────────────────────────
 
 /** Endpoint the page probes for a sealed board. Not wired server-side yet. */
-export const FM_ENDPOINT = "/api/flowmonkey/levels";
+export const DG_ENDPOINT = "/api/daily-grades";
 
 /**
  * Load the board for the page.
@@ -245,9 +296,9 @@ export const FM_ENDPOINT = "/api/flowmonkey/levels";
  * template renderable while the TT / dxLink feed is being built — swap this
  * body (or just delete the fallback) once the endpoint is live.
  */
-export async function loadLevels(): Promise<{ payload: FmPayload; source: FmSource }> {
+export async function loadGrades(): Promise<{ payload: DgPayload; source: DgSource }> {
   try {
-    const r = await fetch(FM_ENDPOINT, { cache: "no-store" });
+    const r = await fetch(DG_ENDPOINT, { cache: "no-store" });
     if (r.ok) {
       const j = await r.json();
       return { payload: parsePayload(j), source: "live" };
@@ -255,6 +306,6 @@ export async function loadLevels(): Promise<{ payload: FmPayload; source: FmSour
   } catch {
     /* endpoint not up yet — fall through to the sample */
   }
-  const { SAMPLE_PAYLOAD } = await import("../pages/flowmonkey/sample");
+  const { SAMPLE_PAYLOAD } = await import("../pages/daily-grades/sample");
   return { payload: SAMPLE_PAYLOAD, source: "sample" };
 }
