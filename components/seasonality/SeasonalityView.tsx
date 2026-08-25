@@ -123,6 +123,76 @@ const MAX_OVERLAYS = OVERLAY_SLOTS.length;
 /** The live year, taken from the data rather than typed in twice. */
 const LIVE_YEAR = Number(YTD_LAST_DATE.slice(0, 4));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Election-cycle averages.
+//
+// An overlay is normally ONE year. These four are averages across every year
+// sitting in the same slot of the four-year political cycle — the thing people
+// actually mean when they ask "what does a midterm year look like".
+//
+// The cycle slot is `year % 4`, and the mapping is off by one from what you'd
+// guess: the election happens in the year divisible by 4 (1928, 2024), and the
+// FIRST year of the resulting term is the year after it. So mod 1 is
+// post-election, mod 2 is midterm, mod 3 is pre-election, mod 0 is the election
+// year itself. Sanity check: the group sizes this produces (25/24/24/25) match
+// ALMANAC.presidential.n exactly — if a future data regen breaks that, this
+// mapping is what to look at first.
+// ─────────────────────────────────────────────────────────────────────────────
+type CycleDef = {
+  /** Overlay id. Namespaced so it can never collide with a year id. */
+  id: string;
+  /** Chip + hover-readout name. */
+  label: string;
+  /** End-of-line label on the chart. Must stay short — it lives in a ~76px gutter. */
+  short: string;
+  /** year % 4 */
+  mod: number;
+  /** Row in ALMANAC.presidential this cycle corresponds to. */
+  row: number;
+};
+
+// Order here is display order, and it is not the cycle's own order on purpose:
+// midterm and election are what people came for, so they lead.
+// `row` indexes ALMANAC.presidential.index, which is ["1 Post-election",
+// "2 Midterm", "3 Pre-election", "4 Election"] — the full-year averages in the
+// chip tooltips are READ from there rather than retyped, so a data regen can
+// never leave the tooltip disagreeing with the Presidential Cycle card.
+const CYCLE_DEFS: CycleDef[] = [
+  { id: "cycle:2", label: "Midterm years", short: "Midterm", mod: 2, row: 1 },
+  { id: "cycle:0", label: "Election years", short: "Election", mod: 0, row: 3 },
+  { id: "cycle:1", label: "Post-election years", short: "Post-elec", mod: 1, row: 0 },
+  { id: "cycle:3", label: "Pre-election years", short: "Pre-elec", mod: 3, row: 2 },
+];
+
+/** Years that go into a cycle average: full 365-point curves only. */
+function cycleYears(mod: number): number[] {
+  return OVERLAY_YEARS.filter((y) => {
+    if (y % 4 !== mod) return false;
+    // The live year is a PARTIAL curve (it stops at today). Averaging it in
+    // would drag the tail of the average toward zero for no reason and quietly
+    // change the shape of the very line the visitor is comparing against.
+    if (y === LIVE_YEAR) return false;
+    return (yearCurve(y)?.length ?? 0) === N;
+  });
+}
+
+/** Averaged cycle curves, computed once each on first use and cached. */
+const cycleCache = new Map<number, { curve: number[]; years: number[] }>();
+function cycleCurve(mod: number): { curve: number[]; years: number[] } {
+  const hit = cycleCache.get(mod);
+  if (hit) return hit;
+  const years = cycleYears(mod);
+  const out = new Array<number>(N).fill(0);
+  for (const yr of years) {
+    const c = yearCurve(yr)!;
+    for (let i = 0; i < N; i++) out[i] += c[i];
+  }
+  for (let i = 0; i < N; i++) out[i] = years.length ? out[i] / years.length : 0;
+  const val = { curve: out, years };
+  cycleCache.set(mod, val);
+  return val;
+}
+
 // Day-of-year index (0-based) of the 1st of each month, non-leap. 2026 is not a
 // leap year, so this doubles as the calendar map for the live series.
 const MONTHS = [
@@ -268,6 +338,11 @@ const SHELL_CSS = `
   background:${HOME_THEME.cyan};color:#04121a;font-size:11px;font-weight:800;letter-spacing:.06em;
   text-transform:uppercase;white-space:nowrap}
 .sea-compare[open] .sea-comparecta{display:none}
+/* Disclosure caret inside the almanac cards (SeasonalityAlmanac's Collapse).
+   It lives here, not there, because that component ships no stylesheet and a
+   :not-open selector cannot be expressed inline. */
+.sea-disccaret{transition:transform .15s ease}
+.sea-disc[open] > summary .sea-disccaret{transform:rotate(90deg)}
 @media (max-width:860px){
   /* Rail becomes a horizontally scrollable strip above the pane. It stays a
      single <nav> of the same buttons — no duplicate markup, so there is no
@@ -287,7 +362,11 @@ export default function SeasonalityView() {
   // Overlay years start EMPTY, from a constant — never seeded from the URL or
   // localStorage. Seeding client-only state is how this page would render one
   // set of lines on the server and another on the client (React #418).
-  const [overlays, setOverlays] = useState<number[]>([]);
+  // Ids, not years: an overlay is either a single year ("2008") or one of the
+  // four election-cycle averages ("cycle:2"). One ordered list, because slot
+  // colors are assigned by position — two parallel lists would let a year and a
+  // cycle claim the same hue.
+  const [overlays, setOverlays] = useState<string[]>([]);
   const [width, setWidth] = useState(0);
   const [hover, setHover] = useState<number | null>(null);
 
@@ -333,20 +412,26 @@ export default function SeasonalityView() {
   );
   const SEASONAL_AVG = baseline.curve;
 
-  const toggleYear = (y: number) =>
+  const toggle = (id: string) =>
     setOverlays((prev) =>
-      prev.includes(y) ? prev.filter((v) => v !== y) : prev.length >= MAX_OVERLAYS ? prev : [...prev, y],
+      prev.includes(id) ? prev.filter((v) => v !== id) : prev.length >= MAX_OVERLAYS ? prev : [...prev, id],
     );
+  const toggleYear = (y: number) => toggle(String(y));
 
   /** Selected overlay curves, in the unit the chart is currently showing. */
   const overlaySeries = useMemo(
     () =>
       overlays
-        .map((y, i) => {
-          const curve = yearCurve(y);
+        .map((id, i) => {
+          const def = CYCLE_DEFS.find((c) => c.id === id);
+          const curve = def ? cycleCurve(def.mod).curve : yearCurve(Number(id));
           if (!curve) return null;
           return {
-            year: y,
+            id,
+            /** Chart end-label. Kept short so it fits the label gutter. */
+            short: def ? def.short : id,
+            /** Hover readout / summary chip name. */
+            label: def ? def.label : id,
             ...OVERLAY_SLOTS[i % OVERLAY_SLOTS.length],
             pct: curve,
             values: mode === "pct" ? curve : curve.map((p) => YTD_BASE_PX * (1 + p / 100)),
@@ -583,7 +668,7 @@ export default function SeasonalityView() {
               <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {overlaySeries.map((o) => (
                   <span
-                    key={o.year}
+                    key={o.id}
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
@@ -600,13 +685,13 @@ export default function SeasonalityView() {
                     <svg width={16} height={6} aria-hidden>
                       <line x1={0} y1={3} x2={16} y2={3} stroke={o.color} strokeWidth={2} strokeDasharray={o.dash || undefined} />
                     </svg>
-                    {o.year}
+                    {o.short}
                   </span>
                 ))}
               </span>
             ) : (
               <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>
-                — put 1987, 2008, 2020 or any other year straight on top of {LIVE_YEAR}
+                Put 1987, 2008, 2020, or the average midterm or election year, straight on top of {LIVE_YEAR}
               </span>
             )}
             <span className="sea-comparecta" aria-hidden>Click to open</span>
@@ -616,7 +701,7 @@ export default function SeasonalityView() {
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
               <span style={{ fontSize: 12, color: INK }}>
                 {overlays.length}/{MAX_OVERLAYS} selected
-                {overlays.length >= MAX_OVERLAYS ? " — deselect one to add another" : ""}
+                {overlays.length >= MAX_OVERLAYS ? " · deselect one to add another" : ""}
               </span>
               {overlays.length ? (
                 <button type="button" onClick={() => setOverlays([])} style={clearBtn}>
@@ -624,10 +709,48 @@ export default function SeasonalityView() {
                 </button>
               ) : null}
               {QUICK_PICKS.filter((y) => YEAR_META[String(y)]).map((y) => (
-                <button key={y} type="button" onClick={() => toggleYear(y)} style={quickBtn(overlays.includes(y))}>
+                <button key={y} type="button" onClick={() => toggleYear(y)} style={quickBtn(overlays.includes(String(y)))}>
                   {y}
                 </button>
               ))}
+            </div>
+
+            {/* ── Election cycle averages ──────────────────────────────────
+                Not single years: each of these is the average path across
+                every year in that slot of the four-year cycle. They occupy
+                the same four overlay slots as year chips, so selecting one
+                costs a slot. */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+              <span style={{ width: 46, flexShrink: 0, fontSize: 11, fontWeight: 800, color: HOME_THEME.green }}>
+                Cycle
+              </span>
+              {CYCLE_DEFS.map((c) => {
+                const on = overlays.includes(c.id);
+                const slot = on ? OVERLAY_SLOTS[overlays.indexOf(c.id) % OVERLAY_SLOTS.length] : null;
+                const n = ALMANAC.presidential.n[c.row];
+                const avg = ALMANAC.presidential.avg[c.row] * 100;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    aria-pressed={on}
+                    title={`Average of all ${n} ${c.label.toLowerCase()} since ${ALMANAC.meta.start.slice(0, 4)} · full-year average ${avg >= 0 ? "+" : ""}${avg.toFixed(2)}%`}
+                    onClick={() => toggle(c.id)}
+                    style={{
+                      padding: "3px 10px",
+                      borderRadius: 6,
+                      border: `1px solid ${slot ? slot.color : HOME_THEME.border}`,
+                      background: slot ? `${slot.color}2E` : "rgba(255,255,255,0.04)",
+                      color: slot ? slot.color : INK,
+                      fontSize: 11,
+                      fontWeight: on ? 800 : 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {c.label} <span style={{ opacity: 0.7, fontVariantNumeric: "tabular-nums" }}>n={n}</span>
+                  </button>
+                );
+              })}
             </div>
 
             {DECADES.map(([dec, years]) => (
@@ -636,8 +759,8 @@ export default function SeasonalityView() {
                   {dec}s
                 </span>
                 {years.map((y) => {
-                  const on = overlays.includes(y);
-                  const slot = on ? OVERLAY_SLOTS[overlays.indexOf(y) % OVERLAY_SLOTS.length] : null;
+                  const on = overlays.includes(String(y));
+                  const slot = on ? OVERLAY_SLOTS[overlays.indexOf(String(y)) % OVERLAY_SLOTS.length] : null;
                   const meta = YEAR_META[String(y)];
                   return (
                     <button
@@ -666,9 +789,14 @@ export default function SeasonalityView() {
             ))}
             <p style={{ margin: "10px 0 0", fontSize: 12, color: INK, lineHeight: 1.6, maxWidth: "72ch" }}>
               Every year is re-based to its own prior 31-Dec close, so the lines are comparable regardless of the index
-              level at the time — 1932 and 2026 sit on the same axis. Hover a chip for that year&apos;s full-year
+              level at the time, so 1932 and 2026 sit on the same axis. Hover a chip for that year&apos;s full-year
               return. Four is the cap: past six lines the hues stop being reliably separable, so each overlay carries a
               dash pattern and an end label as well as a color.
+            </p>
+            <p style={{ margin: "8px 0 0", fontSize: 12, color: INK, lineHeight: 1.6, maxWidth: "72ch" }}>
+              The four <b>Cycle</b> chips are averages, not years: every year in that slot of the four-year political
+              cycle, averaged day by day. {LIVE_YEAR} is itself a midterm year, and it is left out of its own average,
+              because a part-finished year would drag the tail of the line you are comparing against.
             </p>
           </div>
         </details>
@@ -763,7 +891,7 @@ export default function SeasonalityView() {
                   .join(" ");
                 const endI = o.values.length - 1;
                 return (
-                  <g key={o.year}>
+                  <g key={o.id}>
                     <path d={d} fill="none" stroke={o.color} strokeWidth={1.8} strokeDasharray={o.dash || undefined} opacity={0.95} />
                     <circle cx={x(endI)} cy={y(o.values[endI])} r={3} fill={o.color} />
                     {/* Direct label: identity never depends on the hue alone.
@@ -779,7 +907,7 @@ export default function SeasonalityView() {
                       opacity={0.35}
                     />
                     <text x={PAD.left + innerW + YEAR_LABEL_DX} y={y(o.values[endI]) + 4} fontSize={11} fontWeight={800} fill={o.color}>
-                      {o.year}
+                      {o.short}
                     </text>
                   </g>
                 );
@@ -810,7 +938,7 @@ export default function SeasonalityView() {
                   <circle cx={x(hover)} cy={y(seasonSeries[hover])} r={3.5} fill={SEASON_COLOR} />
                   {overlaySeries.map((o) =>
                     hover < o.values.length ? (
-                      <circle key={o.year} cx={x(hover)} cy={y(o.values[hover])} r={3} fill={o.color} />
+                      <circle key={o.id} cx={x(hover)} cy={y(o.values[hover])} r={3} fill={o.color} />
                     ) : null,
                   )}
                   {hYear != null ? (
@@ -851,8 +979,8 @@ export default function SeasonalityView() {
               </span>
               {overlaySeries.map((o) =>
                 hover < o.pct.length ? (
-                  <span key={o.year} style={{ color: o.color, fontWeight: 700 }}>
-                    {o.year} {fmtPct(o.pct[hover])}
+                  <span key={o.id} style={{ color: o.color, fontWeight: 700 }}>
+                    {o.short} {fmtPct(o.pct[hover])}
                   </span>
                 ) : null,
               )}
@@ -942,10 +1070,15 @@ export default function SeasonalityView() {
   );
 }
 
-/** Chips are grouped by decade so 98 years stay scannable. */
+/**
+ * Chips are grouped by decade so 98 years stay scannable.
+ *
+ * The LIVE year is excluded: its curve stops at today, so overlaying it just
+ * redraws the orange line in a second color and ends mid-chart.
+ */
 const DECADES: [number, number[]][] = (() => {
   const byDecade = new Map<number, number[]>();
-  for (const y of [...OVERLAY_YEARS].sort((a, b) => a - b)) {
+  for (const y of [...OVERLAY_YEARS].filter((y) => y !== LIVE_YEAR).sort((a, b) => a - b)) {
     const d = Math.floor(y / 10) * 10;
     if (!byDecade.has(d)) byDecade.set(d, []);
     byDecade.get(d)!.push(y);

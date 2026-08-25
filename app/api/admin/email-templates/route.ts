@@ -22,6 +22,7 @@ import { flowDialedInEmail, flowDialedInText, FLOW_DIALED_IN_SUBJECT } from "@/l
 import { mobileFeedbackEmail, mobileFeedbackText, MOBILE_FEEDBACK_SUBJECT } from "@/lib/emails/mobile-feedback";
 import { midnight300Email, midnight300Text, MIDNIGHT_300_SUBJECT } from "@/lib/emails/midnight-300";
 import { edge3AnnualEmail, edge3AnnualText, EDGE3_ANNUAL_SUBJECT } from "@/lib/emails/edge3-annual";
+import { seasonalityFreeEmail, seasonalityFreeText, SEASONALITY_FREE_SUBJECT } from "@/lib/emails/seasonality-free";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -195,6 +196,13 @@ function buildTemplates(): Template[] {
       subject: EDGE3_ANNUAL_SUBJECT,
       html: edge3AnnualEmail,
       text: edge3AnnualText,
+    },
+    {
+      id: "seasonality-free",
+      label: "📅 Free seasonality almanac — /explore/seasonality (no signup)",
+      subject: SEASONALITY_FREE_SUBJECT,
+      html: seasonalityFreeEmail,
+      text: seasonalityFreeText,
     },
   ];
 }

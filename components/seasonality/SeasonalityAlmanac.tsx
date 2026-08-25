@@ -206,10 +206,16 @@ function Collapse({
   label,
   hint,
   note,
+  open,
   children,
 }: {
   label: string;
   hint?: string;
+  /** Start expanded. For a card whose ONLY content is this disclosure — it
+   *  would otherwise render as a title and a closed bar with nothing under it.
+   *  A literal, never client state: `open` derived at runtime would hydrate
+   *  differently on the server and the client. */
+  open?: boolean;
   /** The prose that explains this table. Lives INSIDE the disclosure — a card
    *  shows numbers, and the words about them are one click away, not stacked
    *  under every chart. */
@@ -217,7 +223,7 @@ function Collapse({
   children: ReactNode;
 }) {
   return (
-    <details style={{ marginTop: 14, border: `1px solid ${SEA.line}`, borderRadius: 12, background: SEA.card2 }}>
+    <details className="sea-disc" open={open} style={{ marginTop: 14, border: `1px solid ${SEA.line}`, borderRadius: 12, background: SEA.card2 }}>
       <summary
         style={{
           listStyle: "none",
@@ -233,7 +239,9 @@ function Collapse({
           textTransform: "uppercase",
         }}
       >
-        <span aria-hidden style={{ color: HOME_THEME.cyan, fontSize: 10 }}>▶</span>
+        {/* Rotated by .sea-disc[open] .sea-disccaret in SeasonalityView's
+            SHELL_CSS — a static ▶ on an already-open section reads as "closed". */}
+        <span aria-hidden className="sea-disccaret" style={{ color: HOME_THEME.cyan, fontSize: 10, display: "inline-block" }}>▶</span>
         <span>{label}</span>
         {hint ? (
           <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.02em", textTransform: "none", color: INK }}>
@@ -680,10 +688,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
     now: (
       <SeaCard title="Where the Calendar Stands" subtitle={`Last close ${now.as_of} · session ${now.trading_day_of_year} of the trading year`} padding={20}>
         <div style={TILES}>
-          <Tile label="Rest of year · mean" value={pct(royMod.avg)} sub={`since 1985 · n=${royMod.n}`} color={signColor(royMod.avg)} />
+          <Tile label="Rest of year · mean" value={pct(royMod.avg)} sub={`since 1985 · ${royMod.n} years`} color={signColor(royMod.avg)} />
           <Tile label="Rest of year · positive" value={pctp(royMod.pos_pct, 0)} sub={`${Math.round(royMod.pos_pct * royMod.n)} of ${royMod.n} years`} />
-          <Tile label={win.window} value={pct(win.avg)} sub={`all history · n=${win.n} · ${pctp(win.pos_pct, 0)} positive`} color={signColor(win.avg)} />
-          <Tile label="Worst rest-of-year" value={pct(royAll.worst)} sub={`all history · n=${royAll.n}`} color={DOWN} />
+          <Tile label={win.window} value={pct(win.avg)} sub={`all history · ${pctp(win.pos_pct, 0)} positive`} color={signColor(win.avg)} />
+          <Tile label="Worst rest-of-year" value={pct(royAll.worst)} sub={`all history · ${royAll.n} years`} color={DOWN} />
         </div>
 
         <Collapse
@@ -826,10 +834,10 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
     eom: (
       <SeaCard title="Last Day of the Month" subtitle="Return of the final session of a month, close-to-close" padding={20}>
         <div style={TILES}>
-          <Tile label="Every month end" value={bp(eom.all.avg, 1)} sub={`n=${n0(eom.all.n)} · ${pctp(eom.all.pos_pct, 1)} positive`} color={signColor(eom.all.avg)} />
-          <Tile label="Quarter ends" value={bp(eom.quarter.avg, 1)} sub={`Mar/Jun/Sep/Dec · n=${eom.quarter.n} · ${pctp(eom.quarter.pos_pct, 1)} positive`} color={signColor(eom.quarter.avg)} />
-          <Tile label="Non-quarter ends" value={bp(eom.nonquarter.avg, 1)} sub={`n=${eom.nonquarter.n} · ${pctp(eom.nonquarter.pos_pct, 1)} positive`} color={signColor(eom.nonquarter.avg)} />
-          <Tile label="Since 1985" value={bp(eom.modern.avg, 1)} sub={`n=${eom.modern.n} · ${pctp(eom.modern.pos_pct, 1)} positive`} color={signColor(eom.modern.avg)} />
+          <Tile label="Every month end" value={bp(eom.all.avg, 1)} sub={`${pctp(eom.all.pos_pct, 1)} positive`} color={signColor(eom.all.avg)} />
+          <Tile label="Quarter ends" value={bp(eom.quarter.avg, 1)} sub={`Mar/Jun/Sep/Dec · ${pctp(eom.quarter.pos_pct, 1)} positive`} color={signColor(eom.quarter.avg)} />
+          <Tile label="Non-quarter ends" value={bp(eom.nonquarter.avg, 1)} sub={`${pctp(eom.nonquarter.pos_pct, 1)} positive`} color={signColor(eom.nonquarter.avg)} />
+          <Tile label="Since 1985" value={bp(eom.modern.avg, 1)} sub={`${pctp(eom.modern.pos_pct, 1)} positive`} color={signColor(eom.modern.avg)} />
         </div>
 
         <Collapse
@@ -865,13 +873,13 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
     opex: (
       <SeaCard title="Opex Week &amp; the Week After" subtitle="Third-Friday expiration, monthly and quarterly" padding={20}>
         <div style={TILES}>
-          <Tile label="Opex week" value={bp(opex.monthly.week.avg, 1)} sub={`n=${n0(opex.monthly.week.n)} · ${pctp(opex.monthly.week.pos_pct, 1)} positive`} color={signColor(opex.monthly.week.avg)} />
-          <Tile label="Week after opex" value={bp(opex.monthly.after.avg, 1)} sub={`n=${n0(opex.monthly.after.n)} · ${pctp(opex.monthly.after.pos_pct, 1)} positive`} color={signColor(opex.monthly.after.avg)} />
-          <Tile label="Quarterly opex week" value={bp(opex.quarterly.week.avg, 1)} sub={`Mar/Jun/Sep/Dec · n=${opex.quarterly.week.n} · ${pctp(opex.quarterly.week.pos_pct, 1)} positive`} color={signColor(opex.quarterly.week.avg)} />
+          <Tile label="Opex week" value={bp(opex.monthly.week.avg, 1)} sub={`${pctp(opex.monthly.week.pos_pct, 1)} positive`} color={signColor(opex.monthly.week.avg)} />
+          <Tile label="Week after opex" value={bp(opex.monthly.after.avg, 1)} sub={`${pctp(opex.monthly.after.pos_pct, 1)} positive`} color={signColor(opex.monthly.after.avg)} />
+          <Tile label="Quarterly opex week" value={bp(opex.quarterly.week.avg, 1)} sub={`Mar/Jun/Sep/Dec · ${pctp(opex.quarterly.week.pos_pct, 1)} positive`} color={signColor(opex.quarterly.week.avg)} />
           <Tile
             label="Week after quarterly"
             value={bp(opex.quarterly.after.avg, 1)}
-            sub={`n=${opex.quarterly.after.n} · ${pctp(opex.quarterly.after.pos_pct, 1)} positive`}
+            sub={`${pctp(opex.quarterly.after.pos_pct, 1)} positive`}
             color={signColor(opex.quarterly.after.avg)}
           />
         </div>
@@ -997,7 +1005,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
               key={sm.index[i]}
               label={sm.index[i]}
               value={pct(sm.avg[i])}
-              sub={`median ${pct(sm.median[i])} · ${pctp(sm.pos_pct[i], 0)} positive · n=${sm.n[i]}`}
+              sub={`median ${pct(sm.median[i])} · ${pctp(sm.pos_pct[i], 0)} positive`}
               color={signColor(sm.avg[i])}
             />
           ))}
@@ -1152,6 +1160,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
     baro: (
       <SeaCard title="Early-Year Barometers" subtitle="What the full year did after each signal window" padding={20}>
         <Collapse
+          open
           label="Santa · First Five Days · January Barometer"
           hint="split by whether the signal window was up or down"
           note={

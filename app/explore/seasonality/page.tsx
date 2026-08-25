@@ -33,7 +33,7 @@ import { SEA } from "@/components/seasonality/seaTheme";
 const START_YEAR = ALMANAC.meta.start.slice(0, 4);
 const END_YEAR = ALMANAC.meta.end.slice(0, 4);
 const SESSIONS = ALMANAC.meta.trading_days.toLocaleString("en-US");
-const TITLE = `Free S&P 500 Seasonality Almanac — ${START_YEAR}–${END_YEAR}`;
+const TITLE = `Free S&P 500 Seasonality Almanac · ${START_YEAR}–${END_YEAR}`;
 const DESC =
   `Every calendar pattern in the S&P 500's full price history, recomputed from ${SESSIONS} ` +
   `daily closes back to ${ALMANAC.meta.start}. Month by month, turn of the month, day of week, ` +
@@ -116,7 +116,7 @@ export default function SeasonalityPublicPage() {
             <div style={{ fontSize: 13.5, lineHeight: 1.5, marginBottom: 10 }}>
               <b style={{ fontSize: 14.5 }}>This page is history. The dashboard is today.</b>
               <br />
-              Live SPX gamma, flip levels and option flow — <b style={{ color: T.cyan }}>2 days free</b>, then
+              Live SPX gamma, flip levels and option flow. <b style={{ color: T.cyan }}>2 days free</b>, then
               $45/month, one tier, cancel anytime.
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>

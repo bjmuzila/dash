@@ -628,17 +628,38 @@ export function useSessionEsBars(date: string) {
  * `top` is not a parameter this route understands (the bubble hook passes one
  * anyway) — heatmap mode always returns the full ladder. It is not sent here.
  *
- * ── `date` (optional) — READING A PAST SESSION ──────────────────────────────
- * Omitted, everything above holds: a rolling 480-minute window, resolved to the
- * newest non-weekend day in it, polled while the tab is open. That is the live
- * path and it is untouched.
+ * ── ALWAYS ONE NAMED SESSION (2026-08-24) ───────────────────────────────────
+ * This used to have two paths: an explicit `date` asked the route for one exact
+ * day (`minutes=0`), and omitting it asked for a rolling **480-minute window**
+ * and then picked the newest non-weekend day out of whatever came back.
  *
- * Passed, the hook asks for ONE named session instead. `minutes=0` is the
- * route's own switch from "window" to "this exact day" — it drops the
- * wall-clock window and calls getOptionStrikeGexSlots(date, expiry, symbol) —
- * and the newest-non-weekend-day heuristic is skipped, because the caller has
- * already said which day it wants. It is also not polled: a settled session
- * does not change.
+ * The rolling window was wrong for every caller here, and it failed silently.
+ * The window is measured from `Date.now()`, so at 19:57 ET it starts at 11:57
+ * ET and the morning is simply not in the response — on a recap of a session
+ * that recorded perfectly from 09:30. The consumer has no way to tell that from
+ * a recorder that started late, so PostMarketTab dropped its AM bucket and
+ * announced "the ladder recorder only covers 11:57-16:00 today", blaming the
+ * recorder for the caller's own clock. The later you opened the tab, the more
+ * of the session disappeared.
+ *
+ * There is no version of "a recap of one session" that wants a window anchored
+ * to the wall clock, so the window is gone. The date is resolved here — the
+ * caller's, or today in ET — and the request is always `minutes=0&date=`, which
+ * is the route's switch to getOptionStrikeGexSlots(date, expiry, symbol).
+ *
+ * Two details that survive from the old path:
+ *   · WEEKENDS. The recorder has no market-hours gate, so on a Saturday "today"
+ *     is a frozen copy of Friday stamped Saturday. The old code found Friday by
+ *     scanning the payload; there is nothing to scan now, so a weekend date is
+ *     walked back to the previous session before the request goes out.
+ *   · POLLING, but only while the session is still running. A settled day does
+ *     not change, and re-fetching a whole finished session every two minutes is
+ *     pure waste.
+ *
+ * Payload cost is a wash: both queries bucket to ONE MINUTE (see
+ * getOptionStrikeGexSlots / …Window in _lib-db.cjs), and the window was already
+ * unbounded by date — 480 minutes late in the day covers more wall-clock time
+ * than a single RTH session does.
  *
  * NOTE the retention floor. pruneOptionStrikeGexHistory keeps ~2 SESSIONS of
  * the per-minute ladder, so a date older than that legitimately answers empty.
@@ -649,18 +670,25 @@ export function useIntradayLadder(enabled: boolean, expiry: string, date?: strin
   const [cols, setCols] = useState<Col[]>([]);
   const [state, setState] = useState<HistState>("loading");
 
+  /**
+   * The session actually requested. Weekend dates walk back to the previous
+   * weekday — see WEEKENDS above. Resolved outside the effect so it keys the
+   * effect by value and a re-render cannot re-fire the fetch.
+   */
+  const target = useMemo(() => {
+    const wanted = date || etDay(Date.now());
+    return isEtWeekend(Date.parse(`${wanted}T12:00:00Z`)) ? prevSessionOf(wanted) : wanted;
+  }, [date]);
+
   useEffect(() => {
-    if (!enabled || !expiry) return;
+    if (!enabled || !expiry || !target) return;
     let cancelled = false;
 
     const load = async () => {
       try {
         const res = await dedupeFetch(
-          date
-            ? `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=0` +
-                `&date=${encodeURIComponent(date)}&expiry=${encodeURIComponent(expiry)}`
-            : `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=480` +
-                `&expiry=${encodeURIComponent(expiry)}`,
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=0` +
+            `&date=${encodeURIComponent(target)}&expiry=${encodeURIComponent(expiry)}`,
           { cache: "no-store" },
           20_000,
         );
@@ -672,22 +700,6 @@ export function useIntradayLadder(enabled: boolean, expiry: string, date?: strin
         const raw = (json.columns as RawCol[]).filter((c) => Array.isArray(c.cells) && c.cells.length);
         if (!raw.length) { if (!cancelled) { setCols([]); setState("empty"); } return; }
 
-        // Newest NON-WEEKEND day present. The recorder has no market-hours gate,
-        // so on a Saturday "today" is empty and the newest day is a frozen copy
-        // of Friday stamped Saturday.
-        //
-        // An explicit `date` short-circuits it: the caller named the session, so
-        // guessing one from the payload could only disagree with them.
-        let target = date ?? "";
-        if (!target) {
-          for (const c of [...raw].sort((a, b) => b.slotTs - a.slotTs)) {
-            if (isEtWeekend(c.slotTs)) continue;
-            target = etDay(c.slotTs);
-            break;
-          }
-        }
-        if (!target) { if (!cancelled) { setCols([]); setState("empty"); } return; }
-
         const day = raw
           .filter((c) => etDay(c.slotTs) === target)
           .filter((c) => {
@@ -696,10 +708,9 @@ export function useIntradayLadder(enabled: boolean, expiry: string, date?: strin
           })
           .sort((a, b) => a.slotTs - b.slotTs)
           .map((c) => {
-            // One reading per strike per slot. The recorder writes ~once a
-            // minute and the route buckets to 5-minute slots, so a strike can
-            // appear more than once in a column; summing the duplicates would
-            // double-count that strike's gamma.
+            // One reading per strike per slot. The recorder can write more than
+            // once inside a bucket, so a strike may appear twice in a column;
+            // summing the duplicates would double-count that strike's gamma.
             const byStrike = new Map<number, number>();
             for (const x of c.cells) {
               if (!Number.isFinite(x.strike) || !Number.isFinite(x.net)) continue;
@@ -721,11 +732,13 @@ export function useIntradayLadder(enabled: boolean, expiry: string, date?: strin
     };
 
     void load();
-    // A settled session is settled — only the live path polls.
-    if (date) return () => { cancelled = true; };
+    // A settled session is settled. Poll only while the day being shown is the
+    // day in progress — which is now a property of the DATE, not of whether the
+    // caller happened to pass one.
+    if (target !== etDay(Date.now())) return () => { cancelled = true; };
     const id = setInterval(load, 120_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [enabled, expiry, date]);
+  }, [enabled, expiry, target]);
 
   return { cols, state };
 }

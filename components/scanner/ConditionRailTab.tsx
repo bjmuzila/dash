@@ -75,6 +75,14 @@ const hit = (d: SlimDay, k: string) => !!d.fcb?.hit?.[k];
 
 /** Minutes-of-day ET, right now — decides which of today's criteria are even
  *  knowable yet (a "still inside at 14:00" test means nothing at 11:00). */
+/** Today's ET date as YYYY-MM-DD — used only to say how far behind the book is. */
+function etTodayKey(): string {
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const m: Record<string, string> = {};
+  p.forEach((x) => (m[x.type] = x.value));
+  return `${m.year}-${m.month}-${m.day}`;
+}
+
 function etNowMin(): number {
   const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
   const m: Record<string, string> = {};
@@ -262,6 +270,25 @@ export default function ConditionRailTab() {
   }, [ds]);
 
   /**
+   * How far behind the book is.
+   *
+   * The picker can only offer sessions the export contains, so a gap between the
+   * newest stored session and today is not a bug in the picker — it is the
+   * `public/data/ib-<sym>.json` export standing still. That gap used to be
+   * invisible (the live tape classifies today either way), which made the
+   * dropdown look broken when it jumped from "today" to a date weeks back. Say
+   * it out loud instead. Threshold is 5 CALENDAR days so a long weekend or a
+   * holiday never trips it.
+   */
+  const bookEnd = ds?.days.length ? ds.days[ds.days.length - 1].date : null;
+  const bookLagDays = useMemo(() => {
+    if (!bookEnd) return 0;
+    const ms = Date.parse(`${etTodayKey()}T00:00:00Z`) - Date.parse(`${bookEnd}T00:00:00Z`);
+    return Math.max(0, Math.round(ms / 86_400_000));
+  }, [bookEnd]);
+  const bookStale = bookLagDays > 5;
+
+  /**
    * The selected session's answer for one criterion.
    *
    * Live: true / false / null (the tape can't answer it yet).
@@ -436,6 +463,14 @@ export default function ConditionRailTab() {
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             <span style={{ ...sect, marginBottom: 0 }}>Session</span>
             <ThemedSelect width={170} value={asOf} onChange={setAsOf} options={sessionOptions} />
+            {bookStale && (
+              <span
+                title={`The picker lists what public/data/ib-${sym}.json contains. Its newest session is ${bookEnd}; today is classified from the live tape, so everything between the two is missing. Re-export from ib-backtest-esu6.html → "Export JSON for dashboard" into public/data/.`}
+                style={badge(HOME_THEME.orange)}
+              >
+                BOOK ENDS {bookEnd}
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             <span style={{ ...sect, marginBottom: 0 }}>Outcome</span>
@@ -732,7 +767,10 @@ export default function ConditionRailTab() {
                   // Only meaningful on the live tape: on a past session the book
                   // stops BEFORE that date, so the last cell is the session
                   // before it, not the one being read back.
-                  const isLast = isLive && isTodayCohort && i === arr.length - 1;
+                  // ...and only while the book is current: with a stale export
+                  // the last cell is weeks old, so marking it as "today" is a
+                  // straight lie about which session that square is.
+                  const isLast = isLive && !bookStale && isTodayCohort && i === arr.length - 1;
                   return (
                     <span
                       key={d.date}
@@ -766,6 +804,10 @@ export default function ConditionRailTab() {
         The <b>Session</b> picker reads the rail back on a past day: the criteria are re-seeded from that session&apos;s own classification and the book is
         cut to sessions <i>before</i> it, so the rate shown is the one the rail would have quoted that morning — not the same day scored with hindsight.
         What the session then did is printed beside it.
+        <br />
+        The picker can only offer sessions the export contains. Today is classified from the live tape, so if <code>ib-{sym}.json</code> is behind, the list
+        jumps straight from today to the last exported session and a <b>BOOK ENDS</b> badge says where it stops — re-export from{" "}
+        <code>ib-backtest-esu6.html</code> → &quot;Export JSON for dashboard&quot; into <code>public/data/</code> to close the gap.
       </div>
     </div>
   );

@@ -251,6 +251,22 @@ input.dte-range::-moz-range-track {
   border-color: rgba(255, 255, 255, 0.10) !important;
 }
 
+/* /replay: nothing MOVES on hover, on any tab.
+   The replay hub embeds whole other pages inside itself (Multi Greek and
+   Options Chain render their own PageShell), so this scopes off `.replay-root`
+   on the page root rather than the <main> — it has to reach the embedded
+   pages' cards too. Those pages keep their normal lift at their OWN routes;
+   only the copy mounted inside /replay is held still.
+   Only the translate is killed — the shadow and border glow still answer the
+   cursor, so a card still reads as hovered, it just doesn't jump. */
+.replay-root .card-hover:hover,
+.replay-root .greek-card:hover,
+.replay-root .journal-focus.card-hover:hover,
+.replay-root [style*="border-radius: 16px"]:hover,
+.replay-root [style*="border-radius:16px"]:hover {
+  transform: none !important;
+}
+
 /* /trading exception: the journal's finding cards opt BACK IN to the lift.
    The page keeps .no-card-lift (dense tables shouldn't twitch) but each card
    is meant to read as an independent object, and the rise is what sells that.

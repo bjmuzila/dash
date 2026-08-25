@@ -433,7 +433,13 @@ export default function PostMarketTab(p: PostMarketProps) {
   } = p;
   const frozen = !!frozenDate;
 
-  const { cols, state: histState } = useIntradayLadder(true, expiry, frozenDate);
+  // `etDate`, not `frozenDate`: this is the session the tab is DESCRIBING, and
+  // it is the right answer on both paths (live it is today, frozen it equals
+  // frozenDate). Passing frozenDate left the live path with no date at all, and
+  // the hook then fell back to a rolling 480-minute window anchored to the wall
+  // clock — so opening the recap at 20:00 silently threw away the morning and
+  // the panel blamed the recorder for it.
+  const { cols, state: histState } = useIntradayLadder(true, expiry, etDate);
   const { next, state: nextState } = useNextExpiryStructure(!frozen, expiry, spot);
   const { log: wallLog, byLevel: recorded, state: wallState } = useRecordedWalls(etDate, "SPX");
 
@@ -1439,13 +1445,22 @@ export default function PostMarketTab(p: PostMarketProps) {
         </div>
 
         {histNote && <div className="warnbar" style={{ marginBottom: 11 }}>{histNote}</div>}
+        {/* This used to say "the ladder recorder only covers HH:MM-HH:MM" on
+            sessions the recorder had covered from the bell — the hook was
+            fetching a rolling 480-minute window anchored to the wall clock, so
+            the gap was the CALLER's and the notice pinned it on the recorder.
+            Now that the request is for the named session start to finish, a
+            short window is a real gap, and the wording no longer names a
+            culprit it cannot actually identify: a late start and a retention
+            prune look identical from here. */}
         {!histNote && missingBuckets.length > 0 && evCover && (
           <div className="warnbar" style={{ marginBottom: 11 }}>
-            The ladder recorder only covers <b>{etMinOfDay(evCover.from)}–{etMinOfDay(evCover.to)}</b> today, so
+            The per-minute ladder for <b>{etDate}</b> only holds{" "}
+            <b>{etMinOfDay(evCover.from)}–{etMinOfDay(evCover.to)}</b>, so
             the {missingBuckets.map((b) => b.label).join(" and ")} bucket
             {missingBuckets.length > 1 ? "s are" : " is"} not drawn — those bars would be
-            an unrecorded window painted as &quot;no activity&quot;. Everything shown is inside the recorded
-            window.
+            an unrecorded window painted as &quot;no activity&quot;. Everything shown is inside the
+            recorded window.
           </div>
         )}
 

@@ -55,10 +55,10 @@ const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 const FEATURES = [
   { slug: "gex", t: "Real-time SPX GEX", d: "Live gamma exposure profiles and flip levels straight from the options chain." },
   { slug: "flow", t: "Option & Premium Flow", d: "Every print side-classified, with cumulative net premium drift across the session." },
-  { slug: "ict", t: "ICT — Inner Circle Trader", d: "Live FVGs, order blocks, liquidity and market structure on ES and NQ — called as they form." },
+  { slug: "ict", t: "ICT · Inner Circle Trader", d: "Live FVGs, order blocks, liquidity and market structure on ES and NQ, called as they form." },
   { slug: "estimated-moves", t: "Estimated moves", d: "Weekly estimated-move levels with high-confidence zones, backed by 2+ years of historical data and results." },
   { slug: "initial-balance", t: "Initial Balance & Stats", d: "The first hour, graded. Break direction, extension targets and failure rates on every ES & NQ session." },
-  { slug: "tpo", t: "TPO & Market Structure", d: "Market Profile live — POC, value area, single prints — plus a full-day profile forecast from the open." },
+  { slug: "tpo", t: "TPO & Market Structure", d: "Market Profile live: POC, value area and single prints, plus a full-day profile forecast from the open." },
 ];
 
 // The value strip under the hero. Deliberately four FACTS, not four adjectives:
@@ -139,11 +139,11 @@ export default function LandingClient() {
                 <i style={liveDot} /> Live · SPX 0DTE
               </div>
               <h1 style={h1}>
-                Know where the market <em style={h1Em}>has</em> to turn — before it turns.
+                Know where the market <em style={h1Em}>has</em> to turn. Before it turns.
               </h1>
               <p style={heroSub}>
                 Dealers are forced buyers below the gamma flip and forced sellers above it.
-                {" "}{APP_NAME} computes that line off the live SPX chain every 15 seconds —{" "}
+                {" "}{APP_NAME} computes that line off the live SPX chain every 15 seconds,{" "}
                 <b style={{ color: T.text, fontWeight: 600 }}>
                   and shows it to you right here, free, before you ever make an account.
                 </b>
@@ -158,7 +158,7 @@ export default function LandingClient() {
               </div>
 
               <p style={ctaNote}>
-                The live level panel is <b style={{ color: GREEN, fontWeight: 700 }}>free forever</b> — no card, no email.
+                The live level panel is <b style={{ color: GREEN, fontWeight: 700 }}>free forever</b>. No card, no email.
                 The trial unlocks history, rate of change, flow, alerts and every other page.
               </p>
             </div>
@@ -187,7 +187,7 @@ export default function LandingClient() {
               </h2>
               <p style={sectionLede}>
                 Anyone can post a screenshot of a winner. {APP_NAME} auto-scores every level it
-                prints — hit or miss, no hand-entry, no cherry-picking — and the scoreboard is
+                prints: hit or miss, no hand-entry, no cherry-picking. The scoreboard is
                 right here. Read it before you give us anything.
               </p>
             </div>
@@ -242,7 +242,7 @@ export default function LandingClient() {
                 <span style={{ fontWeight: 700, fontSize: 14 }}>S&P 500 Seasonality Almanac</span>
               </div>
               <div style={{ color: T.muted, opacity: 0.75, fontSize: 12, lineHeight: 1.45, marginTop: 5 }}>
-                Ninety-eight years of ^GSPC, recomputed from the daily closes — month by month, turn of the
+                Ninety-eight years of SPX, recomputed from the daily closes: month by month, turn of the
                 month, day of week, the two half-years, volatility by month. Yours in full, nothing to sign up for.
               </div>
               <div style={featureGo}>Open the almanac →</div>
@@ -255,7 +255,7 @@ export default function LandingClient() {
           <div style={{ ...pad, textAlign: "center" }}>
             <h2 style={{ ...h2, maxWidth: "24ch" }}>Tomorrow&apos;s levels print at 9:30 ET.</h2>
             <p style={{ ...sectionLede, marginBottom: 22 }}>
-              You&apos;ve seen today&apos;s flip and the graded record — without an account. Two days is
+              You&apos;ve seen today&apos;s flip and the graded record, without an account. Two days is
               all it takes to see whether the rest of it belongs on your screen.
             </p>
             <Link href="/pricing?from=landing&trial=1" style={ctaBtn} className="landing-cta">

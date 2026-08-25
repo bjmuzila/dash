@@ -164,7 +164,7 @@ export default function ReplayPage() {
   // instead of pushing the tab bar off the top.
   if (active.full) {
     return (
-      <div style={{ ...homeShellStyle, display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+      <div className="replay-root" style={{ ...homeShellStyle, display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
         <div style={{ padding: "12px clamp(14px, 2vw, 24px) 0", flexShrink: 0 }}>{tabBar}</div>
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           <Suspense fallback={fallback}>
@@ -185,7 +185,7 @@ export default function ReplayPage() {
   }
 
   return (
-    <PageShell>
+    <PageShell className="replay-root">
       {tabBar}
       <Card variant="budget" title={active.title} subtitle={active.blurb}>
         <Suspense fallback={fallback}>
