@@ -21,7 +21,9 @@
  *   useEsCandles        5m ES bars incl. the overnight session → ON high/low and
  *                       the prior RTH close. Same socket.
  *   useEconCalendar     /api/calendar + /proxy/earnings-week → today's catalysts.
- *   /api/quotes-batch   ES / NQ / VIX day change.
+ *   /api/quotes-batch   SPX / ES / NQ / VIX day change. SPX is there for its
+ *                       PRIOR CLOSE, which the Post-Market recap needs and must
+ *                       not synthesise from ES.
  *   /api/scanner/market-quality
  *                       SECTOR HEAT (its `sectorBars`, 5-day sector change) plus
  *                       the global market-quality score. Sector heat is NOT
@@ -101,6 +103,7 @@ import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/Post
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
 import GammaDistribution, { GAMMA_DIST_CSS } from "@/components/pages/premarket/GammaDistribution";
+import GammaBellCurve, { GAMMA_BELL_CSS } from "@/components/pages/premarket/GammaBellCurve";
 import TickerBoard from "@/components/pages/premarket/TickerBoard";
 import {
   GEX_HISTORY_LIMIT,
@@ -748,7 +751,11 @@ function basisMap(b: Baseline | null, basis: LvlBasis): Record<string, number> |
 //  page
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Quote = { symbol: string; last: number | null; change: number | null; pct: number | null };
+type Quote = {
+  symbol: string; last: number | null; change: number | null; pct: number | null;
+  /** Yahoo's `prev-close`. SPX carries it so the recap never has to shift ES. */
+  prevClose: number | null;
+};
 type SectorBar = { symbol: string; name: string; chg5d: number | null };
 
 export default function Premarket() {
@@ -941,20 +948,21 @@ export default function Premarket() {
   const { sessionCandles: liveCandles, historical: liveHistory } =
     useEsCandles(true, 8, 5, false);
   const { rows: datedCandles } = useDatedEsCandles(sessionDate, frozen);
-  const sessionCandles = frozen ? datedCandles : liveCandles;
 
   /**
-   * The pool `overnight` reads — deliberately NOT `sessionCandles`.
+   * The pool `overnight` reads — deliberately NOT the hook's clipped
+   * `sessionCandles`.
    *
-   * `sessionCandles` is clipped to a rolling 30 HOURS (useEsCandles), which is
-   * the right window for the chart above and the wrong one for the prior RTH
-   * close: on a Monday premarket the Friday 16:00 bar is ~64h old, so it is not
-   * in there, `pdc` came back null, and "Prior RTH close (ES)", "Gap" and "Gap
-   * fill target" all printed "—" every Monday (and every day after a holiday).
+   * `sessionCandles` is clipped to a rolling 30 HOURS (useEsCandles), which was
+   * the right window for a chart and the wrong one for the prior RTH close: on
+   * a Monday premarket the Friday 16:00 bar is ~64h old, so it is not in there,
+   * `pdc` came back null, and "Prior RTH close (ES)", "Gap" and "Gap fill
+   * target" all printed "—" every Monday (and every day after a holiday).
    *
    * `historical` is the same hook's un-clipped DB read, so the union covers the
-   * prior session however far back it is. The chart keeps `sessionCandles` —
-   * nothing about its window changes.
+   * prior session however far back it is. The clipped array is no longer bound
+   * at all: it existed to hand ES bars to the Post-Market tab, and that tab
+   * takes no ES prop any more.
    *
    * Not de-duplicated and not sorted, on purpose. Everything `overnight` does
    * with this is a min / max / latest-timestamp scan, and all three are
@@ -991,7 +999,13 @@ export default function Premarket() {
 
   const loadQuotes = useCallback(async () => {
     try {
-      const r = await fetch("/api/quotes-batch?symbols=/ES,/NQ,VIX", { cache: "no-store" });
+      // SPX is in the batch for ONE reason: the Post-Market recap needs SPX's
+      // own prior close. It used to take the ES prior close and subtract the
+      // live basis, which is not an SPX price and on one session produced a
+      // "BROKE THE PUT WALL" card off a low SPX never traded. The route already
+      // maps SPX → ^GSPC (server-v2/api-router.js), so this is one more symbol
+      // on a call the page was making anyway — no new endpoint, no new poll.
+      const r = await fetch("/api/quotes-batch?symbols=SPX,/ES,/NQ,VIX", { cache: "no-store" });
       if (!r.ok) return;
       const j = await r.json();
       const items: any[] = j?.data?.items ?? [];
@@ -1002,6 +1016,7 @@ export default function Premarket() {
           last: it.last ?? null,
           change: it.change ?? null,
           pct: it["percent-change"] ?? null,
+          prevClose: it["prev-close"] ?? null,
         };
       }
       setQuotes(map);
@@ -1252,6 +1267,49 @@ export default function Premarket() {
     return null;
   }, [chain, spot]);
 
+  /**
+   * Straddle → expected RANGE.
+   *
+   * `em` above is a DISPLACEMENT — how far spot ends up from here. The high-low
+   * RANGE over the same window is a different, strictly larger quantity, and the
+   * two rows were being read as if they were comparable. For a driftless normal
+   * the ratio is exact, not fitted:
+   *
+   *   straddle = E|S_T − K| = √(2/π)·σ√T = 0.7979·σ√T
+   *   E[range]              = √(8/π)·σ√T = 1.5958·σ√T
+   *   E[range] / straddle   = √4         = 2.0
+   *
+   * So the raw expected range is simply TWICE the ATM straddle.
+   *
+   * `adj` carries the same 0.85 vol-risk-premium haircut `em` already applies,
+   * so the panel stays on one convention; `raw` is the untouched theoretical
+   * figure. Both are shown because they bracket the answer and the haircut is a
+   * judgement call, not a derivation — 0.85 assumes IV systematically overprices
+   * realized, which is usually but not always true.
+   *
+   * IV fallback: σ√T is converted back to a straddle-equivalent (×√(2/π)) so a
+   * single formula feeds both paths and the row never silently changes meaning.
+   *
+   * VERIFIED 2026-08-25: SPX ATM straddle 9.60 at 13:23 ET → raw 19.2 / adj 16.3,
+   * against a realized 13:20–16:00 range of 15.75 (ES). Full-session RTH range
+   * was 38.0 on a 0.50% day.
+   */
+  const emRange = useMemo(() => {
+    if (!chain.length || !(spot > 0)) return null;
+    const atm = chain.reduce((b, r) => (Math.abs(r.strike - spot) < Math.abs(b.strike - spot) ? r : b), chain[0]);
+    const cm = atm.callMark ?? ((atm.bid ?? 0) + (atm.ask ?? 0)) / 2;
+    const pm = atm.putMark ?? 0;
+    let straddle = 0;
+    if (cm > 0 && pm > 0) {
+      straddle = cm + pm;
+    } else {
+      const iv = ((atm.callIV ?? 0) + (atm.putIV ?? 0)) / 2;
+      if (iv > 0) straddle = spot * iv * Math.sqrt(1 / 252) * Math.sqrt(2 / Math.PI);
+    }
+    if (!(straddle > 0)) return null;
+    return { straddle, raw: straddle * 2, adj: straddle * 2 * 0.85 };
+  }, [chain, spot]);
+
   /** Live per-strike OI leg — the side of the baseline comparison, not the bars. */
   const perStrikeOi = useMemo(() => {
     if (!chain.length || !(spot > 0)) return [];
@@ -1479,7 +1537,7 @@ export default function Premarket() {
       : toOpen > 0 ? `RTH open in ${Math.floor(toOpen / 60)}h ${String(toOpen % 60).padStart(2, "0")}m`
         : viewMin < RTH_CLOSE_MIN ? "RTH open" : "after the close";
 
-  const esQ = quotes["/ES"], nqQ = quotes["/NQ"], vixQ = quotes["VIX"];
+  const esQ = quotes["/ES"], nqQ = quotes["/NQ"], vixQ = quotes["VIX"], spxQ = quotes["SPX"];
 
   const onRange = overnight?.hi != null && overnight?.lo != null ? overnight.hi - overnight.lo : null;
 
@@ -1657,7 +1715,7 @@ export default function Premarket() {
 
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
-      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GAMMA_DIST_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GAMMA_DIST_CSS + GAMMA_BELL_CSS }} />
       <div className="wrap">
 
         <div className="pagehead">
@@ -1759,8 +1817,10 @@ export default function Premarket() {
         ) : tab === "post" ? (
           <PostMarketTab
             spot={spot}
-            esFut={esFut}
-            basis={basis}
+            /* SPX's own prior close. The recap is an SPX surface — it takes no
+               ES prop at all any more, so there is no path by which a futures
+               price can become an SPX one. See PostMarketTab's header. */
+            spxPrevClose={spxQ?.prevClose ?? null}
             flip={flip}
             callWall={callWall}
             putWall={putWall}
@@ -1771,8 +1831,6 @@ export default function Premarket() {
             maxPain={maxPain}
             em={em}
             totals={totals}
-            overnight={overnight}
-            candles={sessionCandles}
             expiry={expiry || ""}
             etDate={viewDate}
             etMin={viewMin}
@@ -2400,6 +2458,17 @@ export default function Premarket() {
               <div className="stat"><span className="l">IV-implied move</span><span className="r mono">
                 {em != null ? `±${nf(em, 0)} pts (${((em / spot) * 100).toFixed(2)}%)` : "—"}
               </span></div>
+              <div className="stat"><span className="l">ATM straddle</span><span className="r mono">
+                {emRange != null ? `${nf(emRange.straddle, 2)} pts` : "—"}
+              </span></div>
+              <div className="stat">
+                <span className="l">Straddle-implied range<span className="muted"> (high−low)</span></span>
+                <span className="r mono">
+                  {emRange != null
+                    ? `${nf(emRange.adj, 0)} adj · ${nf(emRange.raw, 0)} raw`
+                    : "—"}
+                </span>
+              </div>
               <div className="stat"><span className="l">GEX-implied range</span><span className="r mono">
                 {putWall != null && callWall != null
                   ? `${fmtPx(putWall, 0)} – ${fmtPx(callWall, 0)} (${nf(Math.abs(callWall - putWall), 0)})`
@@ -2483,23 +2552,40 @@ export default function Premarket() {
             </div>
           </div>
 
-          {/* GAMMA DISTRIBUTION — the same chain as the ladder above, drawn on a
-              STRIKE axis with the gamma-mass curve and a normal fitted to it.
-              Full width because the read is the SHAPE (how peaked, how wide,
-              where the centre sits relative to spot), and that is unreadable in
-              a third of the grid. Its OI / VOL switch is its own — the page's
-              three-leg lvlBasis drives the Key Levels tiles, and folding the two
-              together would mean changing the tiles to change this chart. */}
-          <GammaDistribution
-            chain={chain}
-            spot={spot}
-            expiry={expiry}
-            isZeroDte={isZeroDte}
-            flip={flip}
-            callWall={callWall}
-            putWall={putWall}
-            frozen={frozen}
-          />
+          {/* THE GAMMA PAIR — the same chain as the ladder above, drawn twice on
+              a STRIKE axis, side by side (stacked below 1500px, where half a
+              card is too narrow for a strike axis carrying four level labels).
+              Left: net GEX on the main axis, mass as an overlay — "which side
+              is long gamma and where does it flip". Right: the mass histogram
+              on its own axis with a least-squares normal through it, over a net
+              GEX pane — "what bell would you draw through this, and how wide".
+              Same numbers, opposite emphasis, which is why both are on screen.
+              Each has its OWN basis / range / pan-zoom state: the page's
+              three-leg lvlBasis drives the Key Levels tiles, and zooming one
+              chart to inspect a wing must not drag the other along with it.
+              The shared definitions live in premarket/gammaChartKit.ts. */}
+          <div className="gd-pair">
+            <GammaDistribution
+              chain={chain}
+              spot={spot}
+              expiry={expiry}
+              isZeroDte={isZeroDte}
+              flip={flip}
+              callWall={callWall}
+              putWall={putWall}
+              frozen={frozen}
+            />
+            <GammaBellCurve
+              chain={chain}
+              spot={spot}
+              expiry={expiry}
+              isZeroDte={isZeroDte}
+              flip={flip}
+              callWall={callWall}
+              putWall={putWall}
+              frozen={frozen}
+            />
+          </div>
 
           {/* Which strikes grew far more than normal at yesterday's close.
               Reads the recorder's log via /api/gex-watch-feed — no live scan,

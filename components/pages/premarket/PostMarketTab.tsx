@@ -54,10 +54,19 @@
  *                  it. Magnitude-based, so a put wall going more negative reads
  *                  as growth, which is what it is.
  *
+ * ── NOTHING ON THIS TAB IS ES ───────────────────────────────────────────────
+ * Every price this tab prints is an SPX price from an SPX source. There is no
+ * basis conversion left in the file and no prop that could supply one: `esFut`,
+ * `basis`, `candles` and `overnight` are gone, and so is the ES-bar fallback
+ * for the day's path. A futures print run through a basis is not an SPX print,
+ * and the one time it was allowed to stand in for one it produced a session low
+ * SPX never traded and graded the put wall BROKEN off it. Where SPX has no
+ * source, the number renders "—" — same rule as everywhere else here.
+ *
  * DATA SOURCES
  *   props                       everything the Premarket tab already computed off
  *                               the live chain — spot, walls, flip, CORE, max pain,
- *                               per-strike GEX, totals, the ES session bars.
+ *                               per-strike GEX, totals, and SPX's prior close.
  *   /api/snapshots/option-strike-gex-history
  *                               the per-minute strike ladder the ES chart's bubble
  *                               trail already backfills from. It is what makes a
@@ -321,17 +330,19 @@ export const POSTMARKET_CSS = `
 //  types + small helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** The subset of hooks/useEsCandles' EsCandle this tab reads. Structural on
- *  purpose — it must not drag the candle module's types into this bundle. */
-export type EsBar = {
-  slotKey: string; date?: string; timestamp: number;
-  open: number; high: number; low: number; close: number;
-};
+/* The ES bar type this tab used to take is GONE, along with `candles`,
+   `overnight`, `esFut` and `basis`. This is the SPX recap: every price it
+   prints is an SPX price from an SPX source, and there is no longer a code path
+   that can turn a futures print into one. See the `path` comment. */
 
 export type PostMarketProps = {
   spot: number;
-  esFut: number;
-  basis: number | null;
+  /**
+   * SPX's own prior close, from /api/quotes-batch (Yahoo ^GSPC). NOT the ES
+   * prior close shifted by a basis — see the `path` comment for what that cost.
+   * Null until the quote lands, and the day-change row renders "—" until then.
+   */
+  spxPrevClose: number | null;
   flip: number | null;
   callWall: number | null;
   putWall: number | null;
@@ -343,8 +354,6 @@ export type PostMarketProps = {
   maxPain: number | null;
   em: number | null;
   totals: { dex: number; vanna: number; callGex: number; putGex: number };
-  overnight: { hi: number | null; lo: number | null; pdc: number | null; rthHi: number | null; rthLo: number | null; openPx: number | null } | null;
-  candles: EsBar[];
   expiry: string;
   etDate: string;
   etMin: number;
@@ -427,8 +436,8 @@ type Grade = {
 
 export default function PostMarketTab(p: PostMarketProps) {
   const {
-    spot, esFut, basis, flip, callWall, putWall, totalNetGex, perStrike, chain,
-    coreBullseye, maxPain, em, totals, overnight, candles, expiry, etDate, etMin, hasData,
+    spot, spxPrevClose, flip, callWall, putWall, totalNetGex, perStrike, chain,
+    coreBullseye, maxPain, em, totals, expiry, etDate, etMin, hasData,
     frozenDate,
   } = p;
   const frozen = !!frozenDate;
@@ -443,41 +452,40 @@ export default function PostMarketTab(p: PostMarketProps) {
   const { next, state: nextState } = useNextExpiryStructure(!frozen, expiry, spot);
   const { log: wallLog, byLevel: recorded, state: wallState } = useRecordedWalls(etDate, "SPX");
 
-  const es = (px: number | null | undefined) => (px == null || basis == null ? null : px + basis);
-  const toSpx = useCallback((esPx: number | null | undefined) =>
-    esPx == null || basis == null ? null : esPx - basis, [basis]);
-
   // ── the day's price path, in SPX ───────────────────────────────────────────
-  // The recorder's own spot is first choice: it is SPX, per minute, and it is
-  // the same series the ladder was captured against. The ES bars are the
-  // fallback, converted through the live basis — good enough for high/low, but
-  // 5-minute and one basis for the whole day, so it is marked as such.
-  const path = useMemo<{ src: "recorder" | "es"; pts: { ts: number; px: number }[] }>(() => {
-    if (cols.length && cols.some((c) => c.spot > 0)) {
-      return {
-        src: "recorder",
-        pts: cols.filter((c) => c.spot > 0).map((c) => ({ ts: c.ts, px: c.spot })),
-      };
-    }
-    const pts = candles
-      .filter((c) => (c.date ?? c.slotKey.slice(0, 10)) === etDate)
-      .map((c) => ({ ts: c.timestamp, px: toSpx(c.close) ?? 0 }))
-      .filter((c) => c.px > 0 && etMinutes(c.ts) >= RTH_OPEN_MIN && etMinutes(c.ts) <= RTH_CLOSE_MIN);
-    return { src: "es", pts };
-  }, [cols, candles, etDate, toSpx]);
+  //
+  // ONE SOURCE, AND IT IS SPX. The recorder writes SPX spot per minute, and it
+  // is the same series the ladder was captured against.
+  //
+  // There used to be an ES fallback here — 5-minute ES closes run through the
+  // LIVE basis — and `rthHi`/`rthLo` took the max/min ACROSS both sources. That
+  // is how a "BROKE THE PUT WALL" card printed a low of 7,624 on a day SPX
+  // never traded below ~7,650: ES basis moves through the session and steps on
+  // a contract roll, so converting a 10:15 ES print with the 16:30 basis
+  // produced a price that never existed, and `Math.min` locked it in where the
+  // correct recorder value could never override it. The header badge still said
+  // "per-minute recorder", because that badge only ever described the path
+  // series, not the number.
+  //
+  // A converted futures price is not an SPX price. Nothing on this page derives
+  // an SPX number from ES any more: if the recorder has no coverage, the row
+  // renders "—" like every other underivable number here.
+  const path = useMemo<{ pts: { ts: number; px: number }[] }>(() => ({
+    pts: cols.filter((c) => c.spot > 0).map((c) => ({ ts: c.ts, px: c.spot })),
+  }), [cols]);
 
   const closePx = spot > 0 ? spot : (path.pts.length ? path.pts[path.pts.length - 1].px : 0);
-  const rthHi = useMemo(() => {
-    const fromEs = toSpx(overnight?.rthHi);
-    const fromPath = path.pts.length ? Math.max(...path.pts.map((q) => q.px)) : null;
-    return fromEs != null && fromPath != null ? Math.max(fromEs, fromPath) : (fromEs ?? fromPath);
-  }, [overnight, path, toSpx]);
-  const rthLo = useMemo(() => {
-    const fromEs = toSpx(overnight?.rthLo);
-    const fromPath = path.pts.length ? Math.min(...path.pts.map((q) => q.px)) : null;
-    return fromEs != null && fromPath != null ? Math.min(fromEs, fromPath) : (fromEs ?? fromPath);
-  }, [overnight, path, toSpx]);
-  const pdcSpx = toSpx(overnight?.pdc);
+  const rthHi = useMemo(
+    () => (path.pts.length ? Math.max(...path.pts.map((q) => q.px)) : null),
+    [path],
+  );
+  const rthLo = useMemo(
+    () => (path.pts.length ? Math.min(...path.pts.map((q) => q.px)) : null),
+    [path],
+  );
+  // Prior close is a real SPX quote (Yahoo ^GSPC via /api/quotes-batch), not
+  // the ES prior close shifted by a basis.
+  const pdcSpx = spxPrevClose ?? null;
   const dayChg = pdcSpx != null && closePx > 0 ? closePx - pdcSpx : null;
 
   // ── open vs now, off the recorded ladder ───────────────────────────────────
@@ -894,7 +902,9 @@ export default function PostMarketTab(p: PostMarketProps) {
         prevSide = side;
       });
 
-      const perPt = path.src === "recorder" ? 1 : 5;   // minutes represented by one sample
+      // One sample = one minute. The 5-minute case existed only for the ES-bar
+      // path, and that path is gone — the recorder is the only source now.
+      const perPt = 1;
       const mins = (n: number) => `${n * perPt} min`;
       const stamp = (ts: number) => (ts ? etHm(ts) : "—");
 
@@ -1259,7 +1269,7 @@ export default function PostMarketTab(p: PostMarketProps) {
         <div className="sechead">
           <h3><span className="secn">1</span>Day Snapshot</h3>
           <span className="tiny right">
-            {path.src === "recorder" ? "per-minute recorder" : "5m ES bars via basis"} · {expiry || "—"}
+            {path.pts.length ? "per-minute SPX recorder" : "no recorded path"} · {expiry || "—"}
           </span>
         </div>
 
@@ -1794,7 +1804,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                     <div className="n2" style={{ color: m.color }}>{m.code}<span className="ln"> · {m.name}</span></div>
                     <div className="v2 mono">{fmtPx(m.px)}</div>
                     <div className="d2 mono">
-                      {m.code === "CLOSE" ? (es(m.px) != null ? `ES ${fmtPx(es(m.px))}` : "settled") : fmtPts(m.dist)}
+                      {m.code === "CLOSE" ? "settled" : fmtPts(m.dist)}
                     </div>
                   </div>
                 </div>
@@ -1830,7 +1840,7 @@ export default function PostMarketTab(p: PostMarketProps) {
               <div className="tile">
                 <div className="n2">Overnight watch</div>
                 <div className="v2 mono">{fmtPx(rthHi)} / {fmtPx(rthLo)}</div>
-                <div className="m2">today&apos;s RTH high / low{basis != null ? ` · ES basis ${fmtPts(basis)}` : ""}</div>
+                <div className="m2">today&apos;s SPX RTH high / low · per-minute recorder</div>
               </div>
             </div>
 
@@ -1942,7 +1952,7 @@ export default function PostMarketTab(p: PostMarketProps) {
 
       <div className="footbar">
         <span className="l">
-          {frozen ? "Frozen recap for " : "Recap for "}{etDate} · {expiry || "—"} · ES {fmtPx(esFut, 2)}
+          {frozen ? "Frozen recap for " : "Recap for "}{etDate} · {expiry || "—"} · SPX {fmtPx(closePx, 2)}
           {em != null ? ` · EM ±${nf(em, 0)}` : ""}
         </span>
         <span className="l">
