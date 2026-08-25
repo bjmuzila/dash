@@ -100,6 +100,7 @@ import { isStale } from "@/lib/econCalendar";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
+import GammaDistribution, { GAMMA_DIST_CSS } from "@/components/pages/premarket/GammaDistribution";
 import TickerBoard from "@/components/pages/premarket/TickerBoard";
 import {
   GEX_HISTORY_LIMIT,
@@ -1656,7 +1657,7 @@ export default function Premarket() {
 
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
-      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GAMMA_DIST_CSS }} />
       <div className="wrap">
 
         <div className="pagehead">
@@ -2481,6 +2482,24 @@ export default function Premarket() {
               ))}
             </div>
           </div>
+
+          {/* GAMMA DISTRIBUTION — the same chain as the ladder above, drawn on a
+              STRIKE axis with the gamma-mass curve and a normal fitted to it.
+              Full width because the read is the SHAPE (how peaked, how wide,
+              where the centre sits relative to spot), and that is unreadable in
+              a third of the grid. Its OI / VOL switch is its own — the page's
+              three-leg lvlBasis drives the Key Levels tiles, and folding the two
+              together would mean changing the tiles to change this chart. */}
+          <GammaDistribution
+            chain={chain}
+            spot={spot}
+            expiry={expiry}
+            isZeroDte={isZeroDte}
+            flip={flip}
+            callWall={callWall}
+            putWall={putWall}
+            frozen={frozen}
+          />
 
           {/* Which strikes grew far more than normal at yesterday's close.
               Reads the recorder's log via /api/gex-watch-feed — no live scan,

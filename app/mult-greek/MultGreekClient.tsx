@@ -1011,6 +1011,9 @@ function TickerPanel({
   // A skin with a gap has to open the SAME gap on the header and totals grids,
   // or the columns stop lining up with the cells under them.
   const colGap = SK.cell.gap;
+  // A skin that paints the wall cells in the level's own colour doesn't need a
+  // CB / CW / PW chip as well — the colour IS the label. See the badge below.
+  const showLvlBadge = !SK.levelFill;
 
   // CB / CW / PW levels for the FRONT expiry — shown in the header and marked in
   // the front column. Computed from the full (untrimmed) rows so the capture
@@ -1544,19 +1547,20 @@ function TickerPanel({
                         pointerEvents: "none",
                       }}>★</span>
                     )}
-                    {/* Level badge — WHITE text on a dark chip, ringed in the
-                        level's colour.
-                        The two obvious designs both fail on the cell that
-                        matters most. A solid chip IN the level's colour puts
-                        cyan CW on a cyan cell and red PW on a red one, so the
-                        badge vanishes into the fill. Level-coloured INK on a
-                        dark chip fixes the vanishing but leaves three different
-                        low-contrast label colours, and gold-on-black at 8px is
-                        the weakest of them.
-                        White text is the same crisp read on all three; the 1px
-                        ring is what says WHICH level, and it is the part that
-                        can safely be gold. */}
-                    {lvl && (
+                    {/* Level badge — only on a skin that does NOT fill the cell.
+                        Once the whole cell is painted gold / cyan / red
+                        (SkinDef.levelFill), the COLOUR names the level, and a
+                        chip on top of it is the same fact said twice — in the
+                        one place where the cell has no room to say anything
+                        twice, so it lands on the figure. CLASSIC keeps the badge
+                        because nothing else there marks the level.
+                        Its design, for whenever it does render: white text on a
+                        dark chip, ringed in the level's colour. A solid chip IN
+                        the level's colour vanishes on a cell of the same sign;
+                        level-coloured ink leaves three low-contrast labels, gold
+                        on black the weakest. White reads the same on all three,
+                        and the ring is the part that can safely be gold. */}
+                    {lvl && showLvlBadge && (
                       <span title={lvl.title} style={{
                         // Vertically CENTRED, not pinned to the top edge. The
                         // cell is barely taller than the badge, so a top-anchored
@@ -1582,14 +1586,15 @@ function TickerPanel({
                     {dMode && isFront && dEntry && dEntry.rank <= 5
                       ? <DeltaStamp d={dEntry.d} pct={dEntry.pct} rank={dEntry.rank} />
                       : null}
-                    {/* A level badge is absolutely positioned in the top-right,
-                        so the value has to step out of its way — otherwise the
-                        chip lands on the last digit, which is the one that
-                        matters. Only the badged cells pay the 15px; every other
-                        cell in the column keeps its full width for the number. */}
+                    {/* A level badge is absolutely positioned against the right
+                        edge, so the value has to step out of its way — otherwise
+                        the chip lands on the last digit, which is the one that
+                        matters. Only cells that actually RENDER a badge pay the
+                        17px; on a filling skin there is no badge and every cell
+                        keeps its full width for the number. */}
                     <span style={{
                       ...(dMode ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : {}),
-                      ...(lvl ? { paddingRight: 17 } : {}),
+                      ...(lvl && showLvlBadge ? { paddingRight: 17 } : {}),
                     }}>
                       <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                     </span>

@@ -3423,6 +3423,11 @@ export default function AnalyticsPage() {
   return (
     <PageShell>
       <div className={`analytics-grid${embed ? " analytics-embed" : ""}`} style={{ display: "grid", gap: 14, gridTemplateColumns: embed ? "1fr" : "repeat(4, 1fr)", alignItems: "start" }}>
+        {/* Full-width ticker lookup: any symbol → its live GEX ladder + walls.
+            Sits FIRST — the symbol you type here is the page's entry point, so
+            it leads rather than sitting under the card stack. */}
+        <TickerLookupCard />
+
         <MultiGreekCard />
         <EstimatedMoveCard />
         <PremarketCard />
@@ -3434,9 +3439,6 @@ export default function AnalyticsPage() {
 
         {/* Full-width AI daily strategy, synthesized from all cards above. */}
         <StrategyBuilderCard />
-
-        {/* Full-width ticker lookup: any symbol → its live GEX ladder + walls. */}
-        <TickerLookupCard />
       </div>
     </PageShell>
   );

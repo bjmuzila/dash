@@ -536,15 +536,37 @@ export default function ConditionRailTab() {
   const thin = rateN > 0 && rateN < 30;
   const suspicious = rate != null && rateN >= 30 && rate > 0.85;
 
+  /**
+   * "When a break fails, where does the day end up?" — and the base it is asked
+   * of.
+   *
+   * This used to be split on the TICKED cohort alone, which made it useless
+   * exactly when the rail is doing its job: nine criteria leave four sessions,
+   * one of them failed, and the card drew a 100% bar off that one day. A split
+   * four ways needs a real sample or it is noise with a percent sign.
+   *
+   * So the BOOK is the base and is always drawn — every failed break in the
+   * current window, which is thousands of days and a genuinely stable number.
+   * The cohort's own split is drawn on top of it ONLY when enough of its breaks
+   * failed to be worth splitting; below that the card says so and shows the
+   * book alone. Either way the reader gets an answer to the question rather
+   * than a shape made of one session.
+   */
+  const splitOf = (rowsIn: SlimDay[]) =>
+    PARTS.map((p) => ({
+      ...p,
+      pct: rowsIn.length ? (100 * rowsIn.filter((d) => failOutcome(d.fcb!, d.width) === p.k).length) / rowsIn.length : 0,
+    }));
+
   const fails = broke.filter((d) => d.fcb!.failed);
-  const partition = PARTS.map((p) => ({
-    ...p,
-    pct: fails.length ? (100 * fails.filter((d) => failOutcome(d.fcb!, d.width) === p.k).length) / fails.length : 0,
-  }));
+  const bookFails = useMemo(() => days.filter((d) => d.fcb?.failed === true), [days]);
+  const partition = splitOf(fails);
+  const bookPartition = splitOf(bookFails);
+  /** Below this the cohort's own split is not drawn at all. Four ways needs it. */
+  const cohortSplitUsable = fails.length >= 20;
   /** The share of THIS cohort's breaks that failed — the "if" in "if it fails". */
   const failRate = share(broke, (d) => d.fcb!.failed);
-  /** A stacked bar off a handful of failures is not a distribution. Say so. */
-  const failsThin = fails.length > 0 && fails.length < 30;
+  const bookFailRate = share(allBroke, (d) => d.fcb!.failed);
 
   const medExt = med(broke.map((d) => d.fcb!.rExt));
   const medMin = med(broke.map((d) => d.fcb!.breakMin));
@@ -1016,51 +1038,71 @@ export default function ConditionRailTab() {
             </div>
           </div>
 
-          {/* failed-break partition — mutually exclusive, sums to 100 */}
+          {/* ── when a break fails, where does the day end up? ─────────────
+              The BOOK is the base and is always drawn: thousands of failed
+              breaks, a number that means something. The ticked cohort's own
+              split goes on top only when enough of its breaks failed to survive
+              a four-way split — otherwise it is one session wearing a percent
+              sign, which is what this card used to be. */}
           <div style={{ ...classicCardAccentStyle, padding: 20 }}>
-            <div style={sect}>
-              If the break fails — where the day ends up
-              {failsThin && <span style={badge(HOME_THEME.orange)}>THIN</span>}
-            </div>
-            {/* The "IF" is the whole card and it kept getting read as "what the
-                break will do". It is doubly conditional: only the breaks in
-                this cohort, and only the ones that then FAILED. Say both, above
-                the bar, before anyone reads a percentage off it. */}
-            <div style={{ fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.65, marginTop: -4, marginBottom: 12 }}>
-              {failRate != null ? <><b>{pct0(failRate)}</b> of this cohort&apos;s breaks failed</> : <>A failed break</>} — closed back inside the IB
-              within 30 minutes. The bar below splits <i>only those</i> days by where price finished up afterwards. It is not the chance of failing, and
-              it says nothing about whether <i>this</i> break will fail.
-              {failsThin && (
-                <div style={{ marginTop: 5, color: HOME_THEME.orange }}>
-                  ⚠ Only a handful of failures sit behind this split, so a segment at 100% means &ldquo;those few days all did that&rdquo; — it is what
-                  they happened to do, not a distribution.
+            <div style={sect}>When a break fails — where the day ends up</div>
+            <div style={{ fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.65, marginTop: -4, marginBottom: 14 }}>
+              A failure is a break that closed back inside the IB within 30 minutes. This card is about what happened <i>after</i> that — it is not the
+              chance of failing, and it says nothing about whether <i>this</i> break will fail.
+              {failRate != null && bookFailRate != null && (
+                <div style={{ marginTop: 4 }}>
+                  This cohort&apos;s breaks failed <b style={{ color: HOME_THEME.red }}>{pct0(failRate)}</b> of the time against{" "}
+                  <b>{pct0(bookFailRate)}</b> for the {sym} book — that is the &ldquo;if&rdquo;, and it is the Failed ≤30m row above.
                 </div>
               )}
             </div>
-            {fails.length ? (
-              <>
-                <div style={{ display: "flex", height: 30, borderRadius: 7, overflow: "hidden", gap: 2, opacity: failsThin ? 0.75 : 1 }}>
-                  {partition.map((p) => (
-                    <div key={p.k} style={{ width: `${p.pct}%`, background: p.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: HOME_THEME.bg, fontVariantNumeric: "tabular-nums" }}>
-                      {p.pct >= 9 ? `${p.pct.toFixed(0)}%` : ""}
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 9 }}>
-                  {partition.map((p) => (
-                    <span key={p.k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: HOME_THEME.text }}>
-                      <span style={{ width: 9, height: 9, borderRadius: 2, background: p.color, display: "inline-block" }} />
-                      {p.label}
-                    </span>
-                  ))}
-                </div>
-              </>
+
+            {/* the base — every failed break in the window */}
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.07em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 6 }}>
+              Every failed {sym} break in the window
+            </div>
+            {bookFails.length ? (
+              <div style={{ display: "flex", height: 30, borderRadius: 7, overflow: "hidden", gap: 2 }}>
+                {bookPartition.map((p) => (
+                  <div key={p.k} style={{ width: `${p.pct}%`, background: p.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: HOME_THEME.bg, fontVariantNumeric: "tabular-nums" }}>
+                    {p.pct >= 9 ? `${p.pct.toFixed(0)}%` : ""}
+                  </div>
+                ))}
+              </div>
             ) : (
-              <div style={{ fontSize: 12, color: HOME_THEME.text }}>
-                No break in this cohort ever failed, so there is nothing to split. With a cohort this narrow that is &ldquo;it has not happened
-                yet in these sessions&rdquo;, not &ldquo;it cannot&rdquo;.
+              <div style={{ fontSize: 12, color: HOME_THEME.text }}>No failed breaks in this window at all.</div>
+            )}
+
+            {/* the cohort — only when it can carry a four-way split */}
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.07em", textTransform: "uppercase", color: HOME_THEME.text, margin: "14px 0 6px" }}>
+              This cohort
+            </div>
+            {cohortSplitUsable ? (
+              <div style={{ display: "flex", height: 30, borderRadius: 7, overflow: "hidden", gap: 2 }}>
+                {partition.map((p) => (
+                  <div key={p.k} style={{ width: `${p.pct}%`, background: p.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: HOME_THEME.bg, fontVariantNumeric: "tabular-nums" }}>
+                    {p.pct >= 9 ? `${p.pct.toFixed(0)}%` : ""}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 11.5, color: HOME_THEME.orange, lineHeight: 1.6, border: `1px solid ${HOME_THEME.orange}33`, background: `${HOME_THEME.orange}0F`, borderRadius: 8, padding: "9px 11px" }}>
+                {fails.length === 0
+                  ? `No break in this cohort has failed yet, so there is nothing of its own to split.`
+                  : `Too few of this cohort's breaks failed to split four ways — a bar here would be a couple of days, not a distribution.`}{" "}
+                Read the book&apos;s split above instead: it is what an {sym} break does after failing, and it is the honest answer until this cohort has
+                more failures behind it.
               </div>
             )}
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 11 }}>
+              {PARTS.map((p) => (
+                <span key={p.k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: HOME_THEME.text }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2, background: p.color, display: "inline-block" }} />
+                  {p.label}
+                </span>
+              ))}
+            </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 10 }}>
