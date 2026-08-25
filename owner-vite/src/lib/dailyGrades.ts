@@ -5,11 +5,17 @@
 //
 //   { apex, cap, flip, floor, spot }
 //
-//   floor — lower level on the board (support / put wall)
-//   cap   — upper level (resistance / call wall)
-//   apex  — the single biggest level on the board
+//   floor — the strongest NEGATIVE GEX strike
+//   cap   — the strongest POSITIVE GEX strike
+//   apex  — CB
 //   flip  — gamma flip; spot above it is the calmer regime, below is the choppy one
 //   spot  — last price at seal time
+//
+// floor and cap name the two ends of the GEX board, NOT support and resistance,
+// and nothing here assumes floor sits below cap in price — the strongest
+// negative strike can perfectly well print above the strongest positive one.
+// That case is flagged (`cap < floor`) and the floor→cap bar goes blank rather
+// than drawing itself backwards.
 //
 // Any of the four levels may be null (not every board has a flip, and a name
 // that hasn't been graded yet has none at all). Everything below is null-safe.

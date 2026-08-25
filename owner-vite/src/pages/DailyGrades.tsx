@@ -15,13 +15,21 @@
 // to the sealed 2026-08-25 sample and the header says which source is on
 // screen. Paste-JSON is the manual path in the meantime.
 //
-// Colours come from lib/theme (OWNER_THEME) — no hardcoded hex.
+// SURFACES: this page paints on the flat `SURFACE` ramp from lib/theme rather
+// than the frosted `panelBg` the older owner pages use — shell behind, card for
+// each panel, card2 for anything inset in a card (tiles, the sticky table head,
+// inputs), cardHi for row hover. Every fill is opaque, so the cards drop their
+// backdrop blur. Text is white throughout: rank and state are carried by the
+// pills and the accent colours, never by dimming the type.
+//
+// Colours come from lib/theme — no hardcoded hex.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageShell, Card } from "../components/PageCard";
 import {
   OWNER_THEME as T,
+  SURFACE,
   TYPE,
   ownerRgba,
   homeInputStyle,
@@ -44,6 +52,18 @@ import {
 } from "../lib/dailyGrades";
 
 const MONO = "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace";
+
+/** Flat card, no blur — the SURFACE ramp is opaque by design. */
+const CARD: React.CSSProperties = {
+  background: SURFACE.card,
+  backdropFilter: "none",
+  WebkitBackdropFilter: "none",
+};
+/** Inset surface inside a card: stat tiles, the sticky table head, inputs. */
+const INSET: React.CSSProperties = {
+  background: SURFACE.card2,
+  border: `1px solid ${T.border}`,
+};
 
 type FilterId = "all" | "above" | "below" | "near" | "breach" | "ungraded";
 type SortKey =
@@ -81,8 +101,8 @@ function Pill({ accent, children }: { accent: string; children: React.ReactNode 
         letterSpacing: "0.05em",
         textTransform: "uppercase",
         whiteSpace: "nowrap",
-        background: ownerRgba(accent, 0.13),
-        border: `1px solid ${ownerRgba(accent, 0.32)}`,
+        background: ownerRgba(accent, 0.16),
+        border: `1px solid ${ownerRgba(accent, 0.36)}`,
         color: accent,
       }}
     >
@@ -93,14 +113,7 @@ function Pill({ accent, children }: { accent: string; children: React.ReactNode 
 
 function Tile({ value, label, accent }: { value: number | string; label: string; accent: string }) {
   return (
-    <div
-      style={{
-        background: T.panelInset,
-        border: `1px solid ${T.border}`,
-        borderRadius: 14,
-        padding: "12px 14px",
-      }}
-    >
+    <div style={{ ...INSET, borderRadius: 14, padding: "12px 14px" }}>
       <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.1, color: accent, fontFamily: MONO }}>
         {value}
       </div>
@@ -111,7 +124,7 @@ function Tile({ value, label, accent }: { value: number | string; label: string;
           fontWeight: 700,
           letterSpacing: "0.09em",
           textTransform: "uppercase",
-          color: ownerRgba(T.text, 0.55),
+          color: T.text,
         }}
       >
         {label}
@@ -123,14 +136,14 @@ function Tile({ value, label, accent }: { value: number | string; label: string;
 /** Where spot sits inside the floor→cap band. White tick = spot, gold line = flip. */
 function BandBar({ row }: { row: DgRow }) {
   if (row.pos == null) {
-    return <div style={{ height: 8, borderRadius: 4, background: ownerRgba(T.text, 0.05) }} />;
+    return <div style={{ height: 8, borderRadius: 4, background: SURFACE.cardHi }} />;
   }
   const p = Math.max(0, Math.min(1, row.pos)) * 100;
   const fp = row.flipPos != null && row.flipPos >= 0 && row.flipPos <= 1 ? row.flipPos * 100 : null;
   return (
     <div
       title={`floor ${fmtPrice(row.floor)} → cap ${fmtPrice(row.cap)}`}
-      style={{ position: "relative", height: 8, borderRadius: 4, background: ownerRgba(T.text, 0.07) }}
+      style={{ position: "relative", height: 8, borderRadius: 4, background: SURFACE.cardHi }}
     >
       <div
         style={{
@@ -143,7 +156,7 @@ function BandBar({ row }: { row: DgRow }) {
         <span
           style={{
             position: "absolute", left: `${fp}%`, top: -4, width: 2, height: 16,
-            background: T.gold, opacity: 0.9, transform: "translateX(-1px)",
+            background: T.gold, transform: "translateX(-1px)",
           }}
         />
       )}
@@ -173,6 +186,7 @@ export default function DailyGrades() {
   const [filter, setFilter] = useState<FilterId>("all");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortAsc, setSortAsc] = useState(true);
+  const [hover, setHover] = useState<string | null>(null);
 
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
@@ -262,19 +276,21 @@ export default function DailyGrades() {
     source === "live" ? "Live" : source === "import" ? "Imported" : "Sample board";
 
   // ── table styles ───────────────────────────────────────────────────────────
+  // The head is sticky INSIDE the scroll box below, so it needs an opaque fill
+  // of its own — rows slide under it.
   const th = (k?: SortKey, align: "left" | "right" = "right"): React.CSSProperties => ({
     position: "sticky",
     top: 0,
-    zIndex: 1,
-    background: T.panelBgStrong,
+    zIndex: 2,
+    background: SURFACE.card2,
     padding: "10px 10px",
     textAlign: align,
     fontSize: TYPE.micro,
     fontWeight: 800,
     letterSpacing: "0.09em",
     textTransform: "uppercase",
-    color: k === sortKey ? T.cyan : ownerRgba(T.text, 0.55),
-    borderBottom: `1px solid ${T.border}`,
+    color: k === sortKey ? T.cyan : T.text,
+    borderBottom: `1px solid ${T.borderStrong}`,
     whiteSpace: "nowrap",
     cursor: k ? "pointer" : "default",
     userSelect: "none",
@@ -286,6 +302,7 @@ export default function DailyGrades() {
     fontSize: 13,
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
+    color: T.text,
   };
   const caret = (k: SortKey) => (k === sortKey ? (sortAsc ? " ↑" : " ↓") : "");
 
@@ -293,7 +310,7 @@ export default function DailyGrades() {
     <td
       style={{
         ...td,
-        color: v == null ? ownerRgba(T.text, 0.28) : v > 0 ? T.green : v < 0 ? T.red : T.text,
+        color: v == null ? T.text : v > 0 ? T.green : v < 0 ? T.red : T.text,
         fontWeight: v != null && Math.abs(v) <= NEAR_PCT ? 800 : 500,
       }}
     >
@@ -301,15 +318,26 @@ export default function DailyGrades() {
     </td>
   );
   const priceCell = (v: number | null, strong = false) => (
-    <td style={{ ...td, color: v == null ? ownerRgba(T.text, 0.28) : T.text, fontWeight: strong ? 800 : 500 }}>
-      {fmtPrice(v)}
-    </td>
+    <td style={{ ...td, fontWeight: strong ? 800 : 500 }}>{fmtPrice(v)}</td>
   );
 
+  const chipStyle = (on: boolean, accent: string): React.CSSProperties => ({
+    padding: "7px 13px",
+    borderRadius: 999,
+    border: `1px solid ${on ? accent : T.border}`,
+    background: on ? ownerRgba(accent, 0.16) : SURFACE.card2,
+    color: on ? accent : T.text,
+    fontSize: TYPE.label,
+    fontWeight: 800,
+    letterSpacing: "0.04em",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  });
+
   return (
-    <PageShell>
+    <PageShell style={{ background: SURFACE.shell }}>
       {/* ── header ───────────────────────────────────────────────────────── */}
-      <Card variant="classic" padding={20}>
+      <Card variant="classic" padding={20} style={CARD}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "flex-start", justifyContent: "space-between" }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -322,7 +350,7 @@ export default function DailyGrades() {
                 {rosterLive ? "watchlist live" : rosterLoading ? "watchlist…" : "watchlist cached"}
               </Pill>
             </div>
-            <div style={{ marginTop: 6, fontSize: TYPE.label, color: ownerRgba(T.text, 0.6) }}>
+            <div style={{ marginTop: 6, fontSize: TYPE.label, color: T.text }}>
               Sealed {fmtSealed(payload?.sealed_at)} · {stats.graded} of {stats.total} graded
               {" · scanner watchlist, same roster as the ΔGEX Board"}
               {source === "sample" && " · placeholder board until the TT / dxLink feed is wired"}
@@ -341,13 +369,12 @@ export default function DailyGrades() {
         {payload?.note && (
           <div
             style={{
-              marginTop: 14, padding: "10px 13px",
+              ...INSET,
+              marginTop: 14,
+              padding: "10px 13px",
               borderRadius: 10,
-              border: `1px solid ${T.border}`,
-              borderLeft: `3px solid ${T.purple}`,
-              background: T.panelInset,
               fontSize: TYPE.label,
-              color: ownerRgba(T.text, 0.75),
+              color: T.text,
             }}
           >
             {payload.note}
@@ -367,7 +394,14 @@ export default function DailyGrades() {
               onChange={(e) => setImportText(e.target.value)}
               placeholder="Drop a sealed levels JSON here, or paste its contents…"
               spellCheck={false}
-              style={{ ...homeInputStyle, minHeight: 130, fontFamily: MONO, fontSize: 12, resize: "vertical" }}
+              style={{
+                ...homeInputStyle,
+                background: SURFACE.card2,
+                minHeight: 130,
+                fontFamily: MONO,
+                fontSize: 12,
+                resize: "vertical",
+              }}
             />
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button style={homeSecondaryButtonStyle} onClick={() => applyImport(importText)}>
@@ -391,63 +425,42 @@ export default function DailyGrades() {
       </div>
 
       {/* ── board ────────────────────────────────────────────────────────── */}
-      <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
+      <Card variant="classic" padding={0} style={{ ...CARD, overflow: "hidden" }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: 14, borderBottom: `1px solid ${T.border}` }}>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter ticker…"
-            style={{ ...homeInputStyle, minWidth: 200, fontSize: TYPE.body }}
+            style={{ ...homeInputStyle, background: SURFACE.card2, minWidth: 200, fontSize: TYPE.body }}
           />
-          {FILTERS.map((f) => {
-            const on = filter === f.id;
-            return (
-              <button
-                key={f.id}
-                onClick={() => setFilter(f.id)}
-                style={{
-                  padding: "7px 13px",
-                  borderRadius: 999,
-                  border: `1px solid ${on ? T.cyan : T.border}`,
-                  background: on ? ownerRgba(T.cyan, 0.16) : "rgba(255,255,255,0.03)",
-                  color: on ? T.cyan : ownerRgba(T.text, 0.7),
-                  fontSize: TYPE.label,
-                  fontWeight: 800,
-                  letterSpacing: "0.04em",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {f.label}
-              </button>
-            );
-          })}
+          {FILTERS.map((f) => (
+            <button key={f.id} onClick={() => setFilter(f.id)} style={chipStyle(filter === f.id, T.cyan)}>
+              {f.label}
+            </button>
+          ))}
           {offRosterCount > 0 && (
             <button
               onClick={() => setShowOffRoster((v) => !v)}
               title="Graded names the watchlist doesn't carry"
-              style={{
-                padding: "7px 13px",
-                borderRadius: 999,
-                border: `1px solid ${showOffRoster ? T.lightBlue : T.border}`,
-                background: showOffRoster ? ownerRgba(T.lightBlue, 0.16) : "rgba(255,255,255,0.03)",
-                color: showOffRoster ? T.lightBlue : ownerRgba(T.text, 0.7),
-                fontSize: TYPE.label,
-                fontWeight: 800,
-                letterSpacing: "0.04em",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
+              style={chipStyle(showOffRoster, T.lightBlue)}
             >
               +{offRosterCount} off roster
             </button>
           )}
-          <span style={{ marginLeft: "auto", fontSize: TYPE.label, color: ownerRgba(T.text, 0.45), fontFamily: MONO }}>
+          <span style={{ marginLeft: "auto", fontSize: TYPE.label, color: T.text, fontFamily: MONO }}>
             {visible.length} / {rows.length}
           </span>
         </div>
 
-        <div style={{ overflowX: "auto" }}>
+        {/*
+          The roster is ~169 names, so the board scrolls in its OWN box rather
+          than running the page down: vertical for the rows (head stays put),
+          horizontal for the columns on a narrow window. `.wall-scroll` is the
+          dashboard's own scrollbar (index.css) — cyan thumb on an inset track,
+          the same bar the Walls table and the ranked rail use. The default
+          white-wash bar reads as browser chrome sitting on the card.
+        */}
+        <div className="wall-scroll" style={{ maxHeight: "clamp(360px, 64vh, 900px)", overflow: "auto" }}>
           <table style={{ width: "100%", minWidth: 1060, borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -468,9 +481,11 @@ export default function DailyGrades() {
               {visible.map((r) => (
                 <tr
                   key={r.ticker}
+                  onMouseEnter={() => setHover(r.ticker)}
+                  onMouseLeave={() => setHover((h) => (h === r.ticker ? null : h))}
                   style={{
-                    borderBottom: `1px solid ${ownerRgba(T.text, 0.05)}`,
-                    opacity: r.ungraded ? 0.55 : 1,
+                    background: hover === r.ticker ? SURFACE.cardHi : "transparent",
+                    borderBottom: `1px solid ${T.border}`,
                   }}
                 >
                   <th
@@ -492,7 +507,7 @@ export default function DailyGrades() {
                   </td>
                   <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
                     {!r.ungraded && (
-                      <Pill accent={r.regime === "above" ? T.green : r.regime === "below" ? T.red : ownerRgba(T.text, 0.4)}>
+                      <Pill accent={r.regime === "above" ? T.green : r.regime === "below" ? T.red : T.lightBlue}>
                         {r.regime === "above" ? "above flip" : r.regime === "below" ? "below flip" : "no flip"}
                       </Pill>
                     )}
@@ -504,7 +519,7 @@ export default function DailyGrades() {
               ))}
               {!visible.length && (
                 <tr>
-                  <td colSpan={11} style={{ ...td, textAlign: "center", padding: 34, color: ownerRgba(T.text, 0.45) }}>
+                  <td colSpan={11} style={{ ...td, textAlign: "center", padding: 34 }}>
                     {loading || rosterLoading ? "Loading board…" : "Nothing matches that filter."}
                   </td>
                 </tr>
@@ -518,18 +533,16 @@ export default function DailyGrades() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10 }}>
         {[
           ["Roster", "The scanner watchlist from /proxy/scanner-tickers — the same universe the ΔGEX Board runs over."],
-          ["Floor / Cap", "Lower and upper level on the board — support / put wall and resistance / call wall."],
-          ["Apex", "The single biggest level on the board."],
+          ["Cap", "The strongest POSITIVE GEX strike on the board."],
+          ["Floor", "The strongest NEGATIVE GEX strike on the board."],
+          ["Apex", "CB."],
           ["Flip", "Gamma flip. Spot above it is the calmer regime; below it, the chop."],
           ["Δ columns", `How far spot has to travel to reach that level. Positive = the level is above spot; bold = inside ${NEAR_PCT}%.`],
-          ["Floor → Cap", "Where spot sits in the band. White tick = spot, gold line = flip."],
+          ["Floor → Cap", "Where spot sits between the two, in price. White tick = spot, gold line = flip. Blank when floor sits above cap — nothing to draw."],
         ].map(([k, v]) => (
-          <div
-            key={k}
-            style={{ background: T.panelInset, border: `1px solid ${T.border}`, borderRadius: 12, padding: "11px 14px" }}
-          >
-            <div style={{ fontSize: TYPE.label, fontWeight: 800, marginBottom: 3 }}>{k}</div>
-            <div style={{ fontSize: TYPE.label, color: ownerRgba(T.text, 0.6) }}>{v}</div>
+          <div key={k} style={{ ...INSET, borderRadius: 12, padding: "11px 14px" }}>
+            <div style={{ fontSize: TYPE.label, fontWeight: 800, marginBottom: 3, color: T.text }}>{k}</div>
+            <div style={{ fontSize: TYPE.label, color: T.text }}>{v}</div>
           </div>
         ))}
       </div>

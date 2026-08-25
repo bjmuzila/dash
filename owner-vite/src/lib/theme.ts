@@ -71,6 +71,26 @@ export const OWNER_THEME = {
 // HOME_THEME kept as an alias so ported sidebar/group accents resolve unchanged.
 export const HOME_THEME = OWNER_THEME;
 
+/**
+ * SURFACE — the flat surface ramp. Six steps, darkest first, each one a plane
+ * further forward: the app behind everything, the nav rail, the page shell the
+ * cards sit on, the card itself, an inset surface INSIDE a card (stat tiles,
+ * table headers, inputs), and the lifted state (row hover).
+ *
+ * These are FLAT fills, deliberately — no translucency, no backdrop blur. Where
+ * a page opts into this ramp it also drops `backdropFilter` on the surfaces it
+ * repaints, because a blur over an opaque fill only costs a compositor layer.
+ * Pages still on OWNER_THEME.panelBg are unaffected.
+ */
+export const SURFACE = {
+  app: "#020304",
+  rail: "#040507",
+  shell: "#07080b",
+  card: "#0F1117",
+  card2: "#14171D",
+  cardHi: "#191B22",
+} as const;
+
 export function ownerRgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
   const r = parseInt(h.slice(0, 2), 16);

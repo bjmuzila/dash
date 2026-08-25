@@ -8,7 +8,7 @@ import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { isCashOpen, isPlausibleBasis } from "@/components/dashboard/es-candles/chartMath";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS, classicCardAccentStyle, DOCK_THEME } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
 import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls, type WallKind } from "@/lib/calculations/heatLevels";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockSlider, DockExpiryPicker, DockCogMenu, DockField } from "@/components/shared/DockToolbar";
@@ -852,7 +852,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
 
 function TickerPanel({
   ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, heatSkin, emLevels, showEm, captureWindow,
-  showCB, showCW, showPW, onToggleWall, getGexChange, deltaWindow, onExpandChain,
+  showCB, showCW, showPW, getGexChange, deltaWindow, onExpandChain,
   replayFrame = null, replayStrikes = null, dteBase = null,
   editableTicker = false, tickerInput = "", onTickerInputChange, onCommitTicker,
 }: {
@@ -874,9 +874,6 @@ function TickerPanel({
   showCB: boolean;
   showCW: boolean;
   showPW: boolean;
-  /** Click a wall card above the panel to toggle that marker page-wide (the
-   *  flags are one set for all four panels, as they were on the toolbar). */
-  onToggleWall: (kind: "cb" | "cw" | "pw") => void;
   /** When set (screenshot mode), render only this many strikes on each side of
    *  ATM so the shot is centered + compact instead of the full chain. */
   captureWindow: number | null;
@@ -1010,7 +1007,7 @@ function TickerPanel({
 
   // The active skin, resolved once per render. Every cell style below reads
   // from SK — nothing about the cell's look is hardcoded past this line.
-  const SK = HEAT_SKINS[heatSkin] ?? HEAT_SKINS.classic;
+  const SK = HEAT_SKINS[heatSkin] ?? HEAT_SKINS.vivid;
   // A skin with a gap has to open the SAME gap on the header and totals grids,
   // or the columns stop lining up with the cells under them.
   const colGap = SK.cell.gap;
@@ -1245,23 +1242,14 @@ function TickerPanel({
     return { calls: side(sr?.callSym), puts: side(sr?.putSym) };
   })();
 
-  // ── CB / CW / PW cards, rendered ABOVE this ticker's panel ────────────────
-  // They used to be small chips inside the panel header, squeezed between the
-  // ticker and the spot. Out here each one is a card of its own, three across
-  // the panel's width, so the level and its number are readable at a glance
-  // and always sit over the ticker they belong to. Clicking a card toggles
-  // that marker in the ladder (page-wide, as the toolbar buttons did).
-  //
-  // They are NOT color-coded: the surface is the dashboard card
-  // (classicCardAccentStyle — the same frosted fill + hairline edge the panel
-  // below uses) and the on/off state is the app's standard cyan active tile
-  // from DOCK_THEME. Nothing here is a literal — every color comes from
-  // homeTheme, so a theme change carries these along.
-  const wallCards = ([
-    { k: "cb", t: "CB", name: "Core Bullseye", s: walls?.cb ?? null, on: showCB, title: "Core Bullseye — highest |GEX| level" },
-    { k: "cw", t: "CW", name: "Call Wall", s: walls?.cw ?? null, on: showCW, title: "Call Wall — highest +GEX level" },
-    { k: "pw", t: "PW", name: "Put Wall", s: walls?.pw ?? null, on: showPW, title: "Put Wall — most −GEX level" },
-  ] as const);
+  // ── The CB / CW / PW cards above each panel are GONE ─────────────────────
+  // Three cards that named the front expiry's levels and their strikes. The
+  // ladder now paints those cells in the level's own colour (SkinDef.levelFill)
+  // and badges them, so the cards had become a second, smaller copy of
+  // something the grid says louder — while costing a whole row of vertical
+  // space on a page whose entire point is four ladders on one screen.
+  // The show/hide toggles they carried live in the cog now (Heat → Levels), so
+  // nothing was lost but the duplication.
 
   return (
     <div style={{
@@ -1269,44 +1257,6 @@ function TickerPanel({
       display: "flex", flexDirection: "column", gap: 6,
       minWidth: 0, minHeight: 0,
     }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6, flexShrink: 0 }}>
-        {wallCards.map(x => (
-          <button
-            key={x.k}
-            className="card-hover"
-            onClick={() => onToggleWall(x.k)}
-            title={`${x.title} — click to ${x.on ? "hide" : "show"} the marker`}
-            style={{
-              ...classicCardAccentStyle,
-              display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-              padding: "7px 6px 8px", borderRadius: 12, cursor: "pointer", minWidth: 0,
-              background: x.on ? DOCK_THEME.activeTile : classicCardAccentStyle.background,
-              border: `1px solid ${x.on ? DOCK_THEME.activeBorder : HT.border}`,
-              boxShadow: x.on ? DOCK_THEME.activeGlow : classicCardAccentStyle.boxShadow,
-              opacity: x.on ? 1 : 0.62,
-            }}
-          >
-            <span style={{
-              fontSize: 10, fontWeight: 900, letterSpacing: "0.1em", color: HT.cyan,
-              display: "flex", alignItems: "baseline", gap: 5, whiteSpace: "nowrap",
-            }}>
-              {x.t}
-              <span style={{
-                fontSize: 8, fontWeight: 800, letterSpacing: "0.06em",
-                textTransform: "uppercase", color: HT.muted, opacity: 0.6,
-                overflow: "hidden", textOverflow: "ellipsis",
-              }}>{x.name}</span>
-            </span>
-            <span style={{
-              fontFamily: "var(--font-mono)", fontSize: 18, fontWeight: 900,
-              lineHeight: 1.05, color: HT.text, whiteSpace: "nowrap",
-            }}>
-              {x.s == null ? "—" : Number.isInteger(x.s) ? x.s : x.s.toFixed(2)}
-            </span>
-          </button>
-        ))}
-      </div>
-
     <Card
       variant="budget"
       padding={0}
@@ -1314,8 +1264,7 @@ function TickerPanel({
     >
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
 
-      {/* Panel header — ticker · spot. The CB/CW/PW front-expiry levels are the
-          three cards directly above this panel now.
+      {/* Panel header — ticker · spot.
           Double-click anywhere on it opens this ticker's full-screen chain.
           userSelect:none so the second click of the gesture doesn't leave the
           header text highlighted behind the overlay. */}
@@ -1362,8 +1311,8 @@ function TickerPanel({
         ) : (
           <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
         )}
-        {/* The CB/CW/PW readout moved OUT of this header — it is now the row of
-            three cards directly above this panel (see wallCards). */}
+        {/* No CB/CW/PW readout here or above the panel any more — the ladder
+            paints and badges those cells itself. */}
         <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: HT.text, flexShrink: 0 }}>
           {spot > 0 && (
             <span style={{ color: HT.cyan, fontWeight: 700 }}>{spot.toFixed(2)}</span>
@@ -1374,7 +1323,7 @@ function TickerPanel({
 
       {/* Column headers — STRIKE + one NET GEX column per expiry */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, columnGap: colGap, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center" }}>STRIKE</div>
+        <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center" }}>STRIKE</div>
         {displayCols.map((c, ci) => {
           const lbl = c.label;
           return (
@@ -1399,7 +1348,7 @@ function TickerPanel({
 
       {/* Totals row */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, columnGap: colGap, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
-        <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
+        <div style={{ padding: "4px 4px", fontSize: 11, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {displayCols.map(c => {
           const t = totals?.[c.date] ?? null;
           const v = t?.net ?? 0;
@@ -1408,19 +1357,19 @@ function TickerPanel({
           const fmt = t != null ? fmtCell(v, SK) : { sign: "", value: "--" };
           return (
             <div key={c.date} title="Column NET GEX total · % of gross GEX that is positive" style={{
-              // Padded and aligned like the cells under it — a centred total
-              // over a right-aligned column is the one figure that doesn't line
-              // up with anything, which is the opposite of what a total is for.
-              padding: `4px ${SK.cell.padH}px`, fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
+              // Centred and a size up — see the strike rail note. This is the
+              // panel's summary line, not another cell in the column, so it is
+              // read across the four expiries rather than down one of them.
+              padding: `4px ${SK.cell.padH}px`, fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-              textAlign: SK.cell.align,
+              textAlign: "center",
               color: v > 0 ? "#29b6f6" : v < 0 ? "#ff4757" : "#94a3b8",
             }}>
               <span style={{ color: v > 0 ? "#22c55e" : v < 0 ? "#ef4444" : SOFT_WHITE }}>{fmt.sign}</span>{fmt.value}
               {/* % of positive GEX — share of the column's gross |GEX| that is
                   positive. Green when positive GEX dominates, red otherwise. */}
               {t?.posPct != null && (
-                <span style={{ marginLeft: 3, fontSize: 8, fontWeight: 800, opacity: 0.9, color: t.posPct >= 50 ? "#22c55e" : "#ef4444" }}>
+                <span style={{ marginLeft: 3, fontSize: 9, fontWeight: 800, opacity: 0.9, color: t.posPct >= 50 ? "#22c55e" : "#ef4444" }}>
                   {Math.round(t.posPct)}%
                 </span>
               )}
@@ -1456,7 +1405,10 @@ function TickerPanel({
               style={{ display: "grid", gridTemplateColumns: gridCols, columnGap: colGap, background: rowBg, position: "relative", ...atmOutline }}
             >
               <div style={{
-                padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
+                // The strike rail and the TOTAL row are the two things you read
+                // ACROSS the panel rather than down a column, so they keep their
+                // own size and stay centred whatever the skin does to the cells.
+                padding: "4px 4px", fontSize: 13, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: "transparent",
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 3,
@@ -1581,7 +1533,15 @@ function TickerPanel({
                     {!levelsOnly && !isFront && topRank === 1 && (
                       <span style={{
                         position: "absolute", top: 1, left: 2, fontSize: 10, lineHeight: 1,
-                        color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)", pointerEvents: "none",
+                        // A gold star on a gold CB tile is an invisible star.
+                        // When the skin fills the CB cell in the level colour,
+                        // the star flips to the ink that colour was chosen to
+                        // carry — black — and keeps its halo in the opposite
+                        // direction so it still lifts off the fill.
+                        ...(isCB && SK.levelFill
+                          ? { color: "#04121a", textShadow: "0 0 2px rgba(255,255,255,.55)" }
+                          : { color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)" }),
+                        pointerEvents: "none",
                       }}>★</span>
                     )}
                     {/* Level badge — WHITE text on a dark chip, ringed in the
@@ -2018,12 +1978,13 @@ export function MultGreekClient({
   const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState("");
   const [contractMode, setContractMode] = useState<ContractMode>("oivol");
-  const [intensity, setIntensity] = useState(1.75);
+  const [intensity, setIntensity] = useState(HEAT_SKINS.vivid.intensity.def);
   // Heat skin — cosmetic only (see HEAT_SKINS). Persisted per browser like the
   // 4th ticker: it is a preference about the board, not part of a session.
-  // Server render always starts on `classic` and the saved value is applied in
-  // the effect below, so the markup can't mismatch on hydration.
-  const [heatSkin, setHeatSkin] = useState<HeatSkin>("classic");
+  // VIVID is the default the page ships on; CLASSIC is the opt-out. Server
+  // render always starts on VIVID and any saved value is applied in the effect
+  // below, so the markup can't mismatch on hydration.
+  const [heatSkin, setHeatSkin] = useState<HeatSkin>("vivid");
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -2860,7 +2821,7 @@ export function MultGreekClient({
           title="Multi Greek"
           buttonTitle="Multi Greek settings"
           width={340}
-          paneHeight={158}
+          paneHeight={196}
           sections={[
             {
               // Front-expiry picker — the shown columns are this + the next 3 closest.
@@ -2923,7 +2884,8 @@ export function MultGreekClient({
             {
               id: "heat",
               label: "Heat",
-              summary: `${HEAT_SKINS[heatSkin].label.toLowerCase()} · ${intensity <= 0.5 ? "levels" : `${intensity.toFixed(2)}x`}`,
+              summary: `${HEAT_SKINS[heatSkin].label.toLowerCase()} · ${intensity <= 0.5 ? "levels" : `${intensity.toFixed(2)}x`}`
+                + `${showCB && showCW && showPW ? "" : ` · ${[showCB && "CB", showCW && "CW", showPW && "PW"].filter(Boolean).join("/") || "no levels"}`}`,
               body: (
                 <>
                   <DockField label="Intensity">
@@ -2940,18 +2902,43 @@ export function MultGreekClient({
                     />
                   </DockField>
                   {/* Skin — how the cell is PAINTED, not what it says. Same
-                      values, same ranks, same walls either way; VIVID just
-                      pushes the ramp to near-opaque, rounds the cells apart
-                      and writes the figures compact. See HEAT_SKINS. */}
+                      values, same ranks, same walls either way. See HEAT_SKINS. */}
                   <DockField label="Skin">
                     <SegGroup
                       options={[
-                        { label: "CLASSIC", value: "classic" },
                         { label: "VIVID", value: "vivid" },
+                        { label: "CLASSIC", value: "classic" },
                       ]}
                       active={heatSkin}
                       onChange={(v) => changeHeatSkin(v as HeatSkin)}
                     />
+                  </DockField>
+                  {/* CB / CW / PW show-toggles. They used to be the three cards
+                      above each panel; those are gone, so they live here — one
+                      set for all four panels, exactly as the cards were. */}
+                  <DockField label="Levels">
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {([
+                        { k: "cb", on: showCB, title: "CB — Core Bullseye, highest |GEX| level" },
+                        { k: "cw", on: showCW, title: "CW — Call Wall, highest +GEX level" },
+                        { k: "pw", on: showPW, title: "PW — Put Wall, most −GEX level" },
+                      ] as const).map(x => (
+                        <DockButton
+                          key={x.k}
+                          onClick={() => toggleWall(x.k)}
+                          title={`${x.title} — click to ${x.on ? "hide" : "show"}`}
+                          style={{
+                            fontWeight: 900,
+                            // The level's own colour is the ON state, so the row
+                            // reads as the three markers themselves rather than
+                            // as three identical switches that happen to be lit.
+                            ...(x.on
+                              ? { background: LEVEL_COLORS[x.k], border: `1px solid ${LEVEL_COLORS[x.k]}`, color: LEVEL_COLORS.onSolid }
+                              : { color: LEVEL_COLORS[x.k], opacity: 0.5 }),
+                          }}
+                        >{x.k.toUpperCase()}</DockButton>
+                      ))}
+                    </div>
                   </DockField>
                 </>
               ),
@@ -3166,7 +3153,6 @@ export function MultGreekClient({
             showCB={showCB}
             showCW={showCW}
             showPW={showPW}
-            onToggleWall={toggleWall}
             getGexChange={getGexChange}
             deltaWindow={replayOn ? 0 : deltaWindow}
             onExpandChain={setChainTicker}
