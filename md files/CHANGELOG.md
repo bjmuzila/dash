@@ -1,1818 +1,295 @@
 # Changelog
 
-## 2026-08-25 - Replay: cards hold still on hover
-
-Edited: `components/pages/Replay.tsx`, `app/globals.css`.
-
-Every tab of `/replay` now leaves its cards where they are when the cursor
-crosses them. The dashboard-wide hover lift (`transform: translateY(-2px)`,
-applied both by `.card-hover` and by the `[style*="border-radius:16px"]`
-auto-rule) was making dense replay panels twitch under the mouse while a
-recording was scrubbing.
-
-- **`Replay.tsx`** tags both render branches with `replay-root` - the framed
-  branch via `<PageShell className="replay-root">`, the full branch on the
-  outer shell `<div>`. The full branch needs the class on the page ROOT, not on
-  a `<main>`, because Multi Greek and Options Chain mount their own `PageShell`
-  inside it.
-- **`globals.css`** adds one scoped block that zeroes `transform` on hover for
-  `.card-hover`, `.greek-card` and the rounded-16 auto-rule inside
-  `.replay-root`.
-
-Only the movement is killed. The hover shadow and the cyan border still answer
-the cursor, so a card is still visibly hovered - it just doesn't jump.
-
-Scoped, so nothing else changes: Multi Greek and Options Chain keep their normal
-lift at their own routes, and only the copies mounted inside `/replay` are held
-still.
-
-
-## 2026-08-25 - Condition Rail: read the rail back on a past session
-
-Edited: `components/scanner/ConditionRailTab.tsx`.
-Re-exported: `public/data/ib-ES.json`, `public/data/ib-NQ.json`.
-
-**New `Session` dropdown** beside Index / Outcome / Since. `Today - live tape` is
-the default and behaves exactly as before; picking a past date reads the rail
-back on that session.
-
-Two things change when a past session is selected, and both are the feature
-rather than side effects:
-
-- **The rail is re-seeded from that day's own classification.** Every criterion
-  is answered by `c.f(day)` off the stored `SlimDay`, so nothing sits PENDING -
-  the session is closed and the book already knows what it was. The chips keep
-  their exclusion and conflict rules; the PENDING mark and its legend line are
-  hidden, because on a closed session nothing is unanswered.
-- **The book is cut to sessions STRICTLY BEFORE that date.** Scoring a Tuesday
-  against a book that contains that Tuesday and everything after it is not "what
-  the stats were", it is hindsight wearing the same number. `Since` still applies
-  on top, so the window is [since, selected date).
-
-**The selected session's actual outcome is printed under the rate** - IT DID /
-IT DIDN'T / NO BREAK against the chosen Outcome metric. A past rate is only worth
-reading next to what the session then did.
-
-Smaller consequences:
-
-- Changing session (or index) hands the rail back: `touched` and the seed
-  signature reset, so the next classification seeds instead of leaving the
-  previous session's ticks on screen. The seed sentinel is no longer `""` - an
-  empty selection is a valid answer for a past day ("classified as nothing"), so
-  it cannot double as "never seeded".
-- The orange "today" marker on the last cell of *Matching sessions* is live-only
-  and suppressed while the book is stale - that square would be weeks old.
-- Header count line says `... before <date>` when a past session is selected.
-
-**BOOK ENDS badge.** The picker can only offer sessions the export contains, and
-`ib-ES.json` had stopped at **2026-07-10** while today is classified from the
-live tape - so the list jumped from "Today" straight to 7-10 with no explanation.
-An orange `BOOK ENDS <date>` badge now sits beside the Session picker whenever
-the newest stored session is more than 5 calendar days back, with the re-export
-path in its tooltip and in the footnote. Not a picker bug.
-
-**Books re-exported.** Both rebuilt from `Vanilla/ib-backtest-esu6.html`
-(window 60, 5m bars): ES and NQ now run **2023-12-18 -> 2026-08-24, 691
-sessions**. The badge no longer fires and the picker is continuous back to
-2023-12-18.
-
-Trade-off, since it is not visible in the UI: the previous ES book carried **2378
-sessions back to 2017-04-18**. The exporter is a full rebuild from whatever CSV
-is dropped, not an append, and the CSV used covered 2023-12-18 onward - so the
-book is current but ~3.5x shorter, and cohorts that used to have a workable
-sample will badge THIN.
-
-### Do NOT splice the old book back on
-
-The old file is recoverable from git (`public/data/*.json` is tracked) and was
-pulled to `generated/ib-{ES,NQ}.old.json` to try exactly that. It cannot be
-concatenated, and this is worth recording so nobody attempts it again.
-
-**The old book was built from 1-MINUTE bars (`barMinutes: 1`); the new one is
-5-minute.** Identical field schema, different measurement. A break is the first
-bar to CLOSE outside the IB, so on 5m it is a later and stricter event than on
-1m, and break-bar volume is not comparable across bar sizes at all. Measured on
-the 660 sessions the two books both cover - the same days, scored twice:
-
-| | 1m book | 5m book |
-|---|---|---|
-| ES - break failed <=30m | **75.4%** | **56.4%** |
-| NQ - break failed <=30m | 77.8% | 59.9% |
-
-Vol surge disagrees on 31% of days, break side on 2.9%, and the break minute is
-identical on only ~18%. A spliced file would sit at ~75% failed before
-2023-12-18 and ~56% after, from the bar interval rather than the market, and any
-cohort crossing the join would return a blend of two definitions. Worse: the
-seam is chronological, so the `Since` filter would silently swap definitions -
-"All history" and "Since 2024" would not be measuring the same thing.
-
-The only way to get the depth back honestly is to re-export the FULL range at
-5m: one CSV covering 2017-04-18 -> today per symbol, dropped into
-`ib-backtest-esu6.html` once. Decision on 2026-08-25 was to keep the consistent
-691-session 5m book rather than trade the definition for depth.
-
-No change to the data path, the criteria set, the metrics, or the honesty rules
-(sample sizes still unprinted, THIN under 30, CHECK FOR BIAS over 85%).
-
-## 2026-08-25 - Seasonality: election-cycle overlays, n= off the tiles, barometers open; + free-almanac email template
-
-Edited: `components/seasonality/SeasonalityView.tsx`,
-`components/seasonality/SeasonalityAlmanac.tsx`,
-`app/api/admin/email-templates/route.ts`.
-New: `lib/emails/seasonality-free.ts`.
-
-### Compare-any-year now takes election-cycle averages
-
-Four new chips in the Compare panel — **Midterm · Election · Post-election ·
-Pre-election**. Each is not a year but the average path across every year in
-that slot of the four-year cycle, built day by day from `YEAR_CURVES`.
-
-- `overlays` state went from `number[]` to `string[]` of ids: a year is
-  `"2008"`, a cycle is `"cycle:2"`. One ordered list, because the four slot
-  colors are assigned by position — two parallel lists would let a year and a
-  cycle claim the same hue. A cycle costs one of the four slots.
-- The cycle slot is `year % 4`, and the mapping is off by one from the obvious
-  guess: the election is the year divisible by 4, and year 1 of the term is the
-  year *after* it. So mod 1 = post-election, 2 = midterm, 3 = pre-election,
-  0 = election. Verified: the group sizes (25/24/24/25) and each averaged
-  curve's 31-Dec value reconcile to `ALMANAC.presidential` to the basis point.
-- **The live year is excluded from its own average.** 2026 is a midterm year and
-  its curve stops at today; averaging a part-finished year in would drag the
-  tail of the very line you are comparing against toward zero.
-- 2026 is also gone from the decade chip grid for the same reason — selecting it
-  redrew the orange line in a second color and ended mid-chart.
-- Chart end-labels and the hover readout print `short`/`label` instead of the
-  year number, so a cycle line reads "Midterm", not an id.
-
-### `n=` removed from the stat tiles
-
-Every `<Tile>` sub-line across the almanac drops the sample count; where the
-count was the only thing there it now reads "N years". **Tables keep their N
-column** — that is the page's standing promise and it is not what was asked to
-go.
-
-### Early-Year Barometers opens expanded
-
-That card's only content is one `<Collapse>`, so collapsed by default it
-rendered as a title over a closed bar with nothing under it. `Collapse` takes an
-`open` prop (a literal, never client state — a runtime-derived `open` would
-hydrate differently on the server and the client). The disclosure caret also
-rotates now, via `.sea-disc[open]` in `SHELL_CSS`; a static ▶ on an open section
-reads as closed.
-
-### New email template: `seasonality-free`
-
-Announces `/explore/seasonality` to the list — free, ungated, nothing to sign up
-for. Registered in `buildTemplates()`, so it loads into the owner composer at
-`/owner/admin/emails` with one click.
-
-- Leads with the calendar window we are actually in: Aug 24 → Sep 30 averages
-  −1.01% across 98 years, 46.9% positive — and, on the same card, the +2.16% /
-  70.4% rest-of-year counterweight, because one of those numbers without the
-  other is a half-truth.
-- Then four stats (Sep −1.12%, turn of month +8.9 bp/day, VIX +20% next session
-  +0.26%, October 25.2% vol), the contents list, and a secondary trial CTA.
-- Figures are a hardcoded snapshot of `seasonalityData.ts` as of 2026-08-21, on
-  purpose — an email is a point-in-time artifact and importing a 280KB data blob
-  into the email layer to render four numbers is the wrong trade. If it is ever
-  re-sent from a different part of the calendar, the "right now" card is dated
-  language and must be rewritten, not just re-pulled.
-- Keeps `{{UNSUBSCRIBE_URL}}`, table layout, inline styles, brand palette.
-
-
-### Em-dashes out of the copy
-
-Owner asked for them gone. Rewritten, not just swapped for another glyph:
-
-- **`components/landing/LandingClient.tsx`** — hero, receipts lede, feature
-  blurbs, free-tool strip and close. The paired construction ("prints — hit or
-  miss, no cherry-picking — and the scoreboard") became a colon and a full stop.
-  Also fixed a leftover `^GSPC` in the seasonality strip, which should have said
-  SPX like everywhere else.
-- **`app/explore/seasonality/page.tsx`** and the top card of
-  **`SeasonalityView.tsx`** — page title, hero CTA, the Compare panel's label
-  and both explainer paragraphs.
-- **`lib/emails/seasonality-free.ts`** — subject, hero, stat notes and both
-  bodies. The `— Bzila` sign-off stays; that is the convention across every
-  template and it is a signature, not punctuation.
-
-The chart readout's `—` for "no data on this day" also stays — it is a
-placeholder, not prose. Code comments were left alone.
-
-## 2026-08-24 (4) - Post-market §3: the missing morning was the fetch window, not the recorder
-
-Edited: `components/pages/premarket/postMarketData.ts`,
-`components/pages/premarket/PostMarketTab.tsx`.
-
-### "The ladder recorder only covers 11:57–16:00 today"
-
-It covered the whole session. 11:57 was the *client's* cutoff.
-
-`useIntradayLadder` had two paths: an explicit `date` asked the route for one
-exact day (`minutes=0`), and omitting it asked for a rolling **480-minute
-window** and picked the newest non-weekend day out of whatever came back.
-`PostMarketTab` passed `frozenDate`, which is undefined on the live path — so
-the recap of *today* always took the window.
-
-The window is measured from `Date.now()`. Open the tab at 19:57 ET and it starts
-at **11:57 ET**; the morning is not in the response at all. `evCover` then reads
-the truncated payload as the recorder's coverage, `activeBuckets` drops AM, and
-the panel prints a notice blaming the recorder for the caller's own clock. The
-later you opened the recap, the more of the session vanished — and nothing on
-screen could tell that apart from a recorder that genuinely started late.
-
-### Fix
-
-- **The window is gone.** There is no version of "a recap of one session" that
-  wants a range anchored to the wall clock. The hook resolves a date — the
-  caller's, or today in ET — and always requests `minutes=0&date=`, the route's
-  switch to `getOptionStrikeGexSlots(date, expiry, symbol)`.
-- **`PostMarketTab` passes `etDate`**, not `frozenDate`. That is the session the
-  tab is describing and it is correct on both paths: live it is today, frozen it
-  equals `frozenDate`.
-- **Weekends still resolve.** The recorder has no market-hours gate, so on a
-  Saturday "today" is a frozen copy of Friday stamped Saturday. The old code
-  found Friday by scanning the payload; there is nothing to scan now, so a
-  weekend date walks back to the previous session before the request goes out.
-- **Polling is keyed on the date**, not on whether the caller passed one — it
-  runs only while the day being shown is the day in progress. A settled session
-  no longer gets re-fetched whole every two minutes.
-- The notice is reworded: it names the date and says what the *ladder holds*,
-  without naming a culprit it cannot identify. A late recorder start and a
-  retention prune look identical from the client.
-
-Payload cost is a wash — both queries bucket to one minute, and the old window
-was unbounded by date, so 480 minutes late in the day already covered more
-wall-clock time than one RTH session does.
-
-
-## 2026-08-24 (3) - Post-market §3: "given back" removed, everything measured in board share
-
-Edited: `components/pages/premarket/PostMarketTab.tsx`.
-
-### Why the hatch had to go, not just be rescaled
-
-The previous pass narrowed the high-water mark to 15:00 and gave the power hour
-its own column. It made the bars legible, and the panel still read
-**"−100% pm"** on almost every row with a full-width hatch behind it.
-
-That number was correct and worthless. `γ ∝ 1/√T` piles gamma onto whatever is
-ATM into the bell and drains it from everything else, so by the last recorded
-column all but a handful of strikes sit at ~zero. Every strike ends ~100% off
-its own high **on every expiry session**. It cannot distinguish a level that was
-abandoned from one that merely expired, so it is not a measurement — it is a
-property of expiry. Removed: the hatch, the peak tick, the overflow chevron, and
-`peak` / `peakTs` / `offPeakPct` / `recClose` behind them.
-
-### What replaced it: share of the board
-
-    share_k(t) = |net_k(t)| / Σ_j |net_j(t)|
-
-The `1/√T` term is in the numerator and the denominator, so it divides straight
-out and what is left is the board changing hands. Σ is over the **whole ladder**,
-not the ±60 window — normalising over the window would make shares jump as it
-slid with spot and stop being comparable row to row.
-
-- **`15:00→close` column** is now the change in board share, in **percentage
-  points** (`+2.4pp` / `−0.8pp`), not a percentage of the strike's own 15:00
-  dollars. That old basis is what produced `+610%` on a strike that went from a
-  rounding error to a small number and `−100%` on the eighty strikes that simply
-  expired. Bounded by construction.
-- **Build buckets** (AM / MID / PM colour composition) are share moves too, so
-  the composition is no longer biased toward the last hour by decay alone.
-- A move under `0.02pp` reads **flat pm** and draws the zero line only — a 1px
-  stub on a row that did nothing is a mark that reads as a measurement.
-- A row where the recorder never reached 15:00 draws **no track at all**, so a
-  missing power hour can't be mistaken for a flat one.
-
-### Layout
-
-- The four-line 1/√T explanation above the ladder is **gone** — a caveat that
-  permanent is furniture. It lives on the legend chip's tooltip now, which also
-  says the column is not comparable in length to the bar.
-- Legend: dropped `peak to 15:00` and `given back`; the remaining chip reads
-  `15:00→close · board share · own scale`.
-- Row tooltip: close in dollars, share of the board at the close, and the
-  power-hour move as `15:00% → close%`.
-- Dropped the now-unused `CSSProperties` import and the `.chg` / `.openmk` /
-  `.ovf` rules.
-
-
-## 2026-08-24 (2) - Post-market §3: the power hour gets its own column and its own scale
-
-Edited: `components/pages/premarket/PostMarketTab.tsx`.
-
-### The bug: "everything was given back?"
-
-Every row of **How the book was built** drew a full-width hatch, every AM/MID/PM
-segment was invisible, and the `$4.02B` call wall rendered shorter than a
-`−$2.13B` strike. All one cause.
-
-Per-strike GEX is `γ × (OI+Vol) × S²`, and `γ ∝ 1/√T`. On an expiring book that
-means every strike's raw high-water mark lands in the **final minutes**, not
-where the positioning was: an ATM 0DTE strike with ~20k OI prices to roughly
-**$200–300B at 15:55** against a ~$2B settle. Two things then went wrong:
-
-1. `maxAbsBar` was `max(|net|, |peak|)` over all 121 rendered rows, so **one**
-   ATM strike's terminal mark set the scale for the whole ladder. Every real bar
-   collapsed to ~2px — which is where the 15:00–close data had gone. It was
-   being drawn, two pixels wide.
-2. `offPeakPct` was `1 − |net| / |peak|` with `net` from the **live chain** and
-   `peak` from the **recorder**. Two sources, and after the settle not
-   necessarily the same book. Every row read ≈ −99% off peak, which is a
-   statement about the clock, not about anyone's position.
-
-### The fix — three changes that only work together
-
-- **Bar scale is the biggest closing bar.** `|peak|` is out of `maxAbsBar`. The
-  earlier ±12-vs-±60 fix is kept and its note preserved; the artefact it was
-  guarding against (several peaks clamped onto one pixel, silently) is now
-  handled explicitly by a `›` chevron on rows whose peak overflows the track,
-  and only when the clamp is actually hiding something.
-- **Peak window ends at 15:00**, and off-peak is measured **series-vs-series** —
-  the recorder's own 15:00 high against the recorder's own last value. The hatch
-  is that *ratio* applied to the bar rather than a second absolute length, so it
-  stays true even when the live chain and the recorder sit at different absolute
-  levels.
-- **New `15:00→close` column, on its own scale.** Change in **magnitude**
-  (`|close| − |15:00|`), centred, amber right = the strike **added** gamma into
-  the bell, red left = it **bled out**. Magnitude and not signed value, so a put
-  wall going from −$1B to −$3B reads as growth, which is what it is. Normalised
-  over its own column only. Empty and unpainted when the recording never reached
-  15:00 — a missing power hour must not read as a flat one.
-
-### Supporting bits
-
-- `pmAnchor` guards the 15:00 column to **±10 min**. `idxAtMin` snaps to the
-  nearest column, so on a recorder that started at 15:40 the old behaviour would
-  have handed back a 20-minute number wearing an hour's label.
-- Legend: "day's peak" → **"peak to 15:00"**, plus a `15:00→close · own scale`
-  entry. An explanatory bar above the ladder says the two tracks are **not**
-  comparable in length and why — without it a reader would compare them.
-- `builtcol` shows the power-hour percentage when there is one (it is the
-  question the panel was failing to answer); the off-peak reading stays as the
-  hatch, the tick, and the row tooltip. Percentages are suppressed under a base
-  of 1% of the biggest bar, where "+1,900%" is true and useless.
-- A strike that ends **above** its own 15:00 high — routine on 0DTE — now reads
-  `past peak` instead of the old sign error, which printed it as "426% below".
-- Row `title` carries the close, the 15:00 peak and time, and the signed
-  power-hour move in dollars, flagged as not comparable to the bar.
-
-### What it now shows
-
-On a normal 0DTE the ATM band **grew** into the close and draws **no hatch at
-all**; the hatch appears only where a strike genuinely closed below its own
-15:00 high. So: no, everything was not given back — the panel was measuring
-time decay and calling it an unwind.
-
-
-## 2026-08-24 - Premarket: gap / prior close fixed, "Biggest GEX Changes" un-deadlocked
-
-Edited: `components/pages/Premarket.tsx`, `server-v2/premarket-baseline.js`.
-
-### 1. Gap, gap-fill and prior RTH close were blank every Monday
-
-`overnight` read `sessionCandles`, which `useEsCandles` clips to a rolling
-**30 hours**. On a Monday premarket the Friday 16:00 ES bar is ~64 hours old,
-so it simply was not in the array: `pdc` came back null and **Prior RTH close
-(ES)**, **Gap (4pm → 9:30)** and **Gap fill target** all printed `—`. Same
-every Tuesday after a Monday holiday. Nothing was wrong with the gap math — it
-never had a prior close to work from.
-
-Two changes:
-
-- `overnight` now reads a new `candlePool` = the hook's un-clipped `historical`
-  array plus the live session bars, instead of the 30-hour `sessionCandles`.
-  The chart above still gets `sessionCandles` — its window is unchanged. The
-  pool is deliberately not de-duplicated or sorted: every use is a min / max /
-  latest-timestamp scan, all idempotent under duplicates, so a Map+sort at the
-  feed's 4Hz would buy nothing.
-- The page asks `useEsCandles` for **8** history days instead of 3. `daysBack`
-  is CALENDAR days; the prior *trading* session is three calendar days back on
-  a Monday and four after a holiday, so 3 sat exactly on the Monday boundary
-  and fell off it entirely after a holiday. `withAverages` is already false
-  here, so the extra sessions cost one larger read and no recompute.
-
-`overnight` also now tracks **two** prior dates instead of one, because over a
-weekend they are different days:
-
-| | means | Monday |
-|---|---|---|
-| `pdDate` | last session that traded RTH — prior close, prior day range | **Friday** |
-| `evDate` | last date with a Globex evening (≥18:00) bar — where the overnight began | **Sunday** |
-
-The old single `pdDate` was "latest date before today with any bar". Inside a
-30-hour window that collapses to the same thing; over a weekend it landed on
-**Sunday**, which has no RTH bars at all. Pinning the overnight hi/lo scan to
-`evDate` also stops the now-wider pool folding *Friday* evening into a Monday
-overnight range.
-
-The **Prior RTH close (ES)** row now names its session (`Fri Aug 21`), because
-over a weekend "prior" is not "yesterday".
-
-### 2. "Biggest GEX Changes" has been dead since ThetaData was removed
-
-Root cause, one layer below where it looked: `premarket-baseline.js` builds its
-board from `eod-gex-recorder.computeHistoricalGexRows()`, which needs settled
-ThetaData history. ThetaData was removed **2026-08-18** and `tt-snapshot.js`
-now stubs `fetchIndexEodTheta` / `fetchStockEodTheta` / `fetchOiHistoryTheta` /
-`fetchGreeksEodHistoryTheta` / `fetchEodHistoryTheta` to empties — so that
-function throws `no settle spot for <date>` on **every** call. `buildBaseline`
-always threw, `getBaseline` walked back three sessions and returned `ok:false`,
-and the card showed its empty state permanently. Exactly the same
-silent-deadlock shape as the localStorage snapshot this module was written to
-replace.
-
-No existing table could stand in. `eod_gex` is scalars; `eod_strike_gex`
-collapses every expiry onto one strike and drops 0DTE; `option_strike_gex_history`
-is per-expiry but its SPX writer only ever writes the **front** expiry;
-`premarket_freeze` stores one expiry — the one the snapshot was rendering, i.e.
-that day's 0DTE. Nothing anywhere held "yesterday's ladder for today's expiry".
-
-So the board is now **recorded at the close** rather than reconstructed the
-next morning. New in `premarket-baseline.js`:
-
-- `captureSession()` — for each of `$SPX, SPY, QQQ`, takes the next **3** listed
-  expirations strictly after today, pulls the live TastyTrade chain through
-  `tt-snapshot` (OI + volume + greeks coalesce into ONE upstream fetch per
-  expiry), runs the same `computeGexRowsMultiExpiry` the rest of the app runs,
-  and writes it into the existing `premarket_baseline` / `premarket_baseline_meta`
-  tables keyed `date = today`, `source = 'tt-close'`. Next morning `readCached`
-  hits on the first try and no build is attempted at all.
-- `captureTick()` — 16:05 ET, catch-up window open to 22:00 ET so a late VPS
-  restart still gets the session. Latches only on a successful write; guarded
-  against re-entry so a slow chain cannot double every upstream pull.
-- One timer for both jobs (`startPremarketBaseline`), because capture writes at
-  the close and warm-up reads it back in the morning — non-overlapping windows,
-  and it stops `PREMARKET_BASELINE_WARMUP=0` silently disabling the capture,
-  which is now the load-bearing half.
-- Strikes that price to **exactly zero on both legs** are not stored. That means
-  "not priced on this pull" (missing gamma) or "no OI and no volume"; a stored
-  zero gets diffed next morning and prints the strike's whole live gamma as
-  overnight change, whereas an absent strike is correctly skipped by the page.
-
-Env knobs: `PREMARKET_BASELINE_CAPTURE=0`,
-`PREMARKET_BASELINE_CAPTURE_SYMBOLS`, `PREMARKET_BASELINE_CAPTURE_EXPIRIES`,
-`PREMARKET_BASELINE_CAPTURE_PACE_MS`.
-
-The Theta path is **kept** as a fallback and is untouched — if `DATA_SOURCE`
-goes back to theta it starts working again and can still backfill older dates.
-No proxy file was modified.
-
-**One-session cold start.** The first board is written at the next 16:05 ET
-close; nothing can recover a ladder that was never stored. The card's empty
-state now says that instead of implying it backfills itself, and the API's
-error string names the real cause.
-
-
-## 2026-08-24 - GEX Watch moved to its own live page (/gex-watch)
-
-Edited: `components/pages/GexWatch.tsx` (new), `app/app/gex-watch/route.ts`
-(new), `app-vite/src/App.tsx`, `components/shared/sectionNav.ts`,
-`components/shared/SectionSubStrip.tsx`, `server-v2/api-router.js`,
-`owner-vite/src/pages/Backtests.tsx`.
-
-### What moved
-
-GEX Watch was one `<Panel>` on the owner-vite **Backtests** page: press Run,
-it ran the whole study once, you read the result. It is now its own route,
-**/gex-watch**, pinned in the **Test Lab** sub-strip next to Flow Inventory and
-Prem Diff. The panel is gone from Backtests, replaced by a pointer comment —
-two renderers of one feed is two answers.
-
-### What "live" means here — two lanes, two cadences
-
-**Building now** polls `/api/gex-watch-live` (new, `auth: 'owner'`) on a
-selectable interval — off / 1m / 5m / 10m, default 1m — plus a manual refresh
-and an `updated HH:MM:SS ET` stamp. That endpoint calls the SAME exported
-`strikeGexBuildingNow()` the panel already used, so no second definition of the
-lane exists: one query over ~5 days of `strike_growth` for the latest recorded
-10-minute slot, judged against that symbol's own biggest build at the same slot
-on prior sessions. A failed poll keeps the last good rows on screen and says
-the read is the older one, rather than blanking the card.
-
-**Since last close** is the full study, still
-`/api/backtests?test=strike-gex-watch`, and is deliberately NOT polled: it is a
-169-ticker window-function calibration sweep plus the 400-session odds join,
-and its input only changes at the 16:40 ET recorder run. It runs once on mount
-and on **Run study**. Editing an input does not re-fire it.
-
-The untested warning is on the live card in full, not in a footnote:
-`strike_growth` is on a ~5-day retention sweep, so there is no outcome history
-to score that lane against, and lane-1 hit rates must never be read onto a
-lane-2 line. `feed_live` is filtered out of the study card's sections for the
-same reason — the live card above it is the same lane, fresher.
-
-### Owner gating
-
-Both endpoints are `auth: 'owner'` server-side. `SectionRoute` gained an
-`ownerOnly` flag (it already existed on `SectionTab`) and `SectionSubStrip` now
-honours it for split-out routes, so the pill is drawn for the owner only; the
-page itself shows an "owner only" card rather than an empty error. The
-customer-facing read of this data is unchanged: the GEX Watch box on
-**/premarket**, which reads the logged, graded, opex-filtered feed via
-`/api/gex-watch-feed` and never runs the sweep.
-
-### Route plumbing
-
-New page needs all three, per AGENTS.md: the client component, the `<Route>` in
-`app-vite/src/App.tsx`, and `app/app/gex-watch/route.ts` calling
-`serveSpaShell` so a hard refresh on `/app/gex-watch` boots the SPA instead of
-404ing. `/gex-watch` was also added to `TESTLAB_SECTION.paths` so the Test Lab
-strip stays on screen while you are on it.
-
-
-## 2026-08-24 - Seasonality: VIX-spike, month-end, opex studies + year overlays
-
-Edited: `components/seasonality/seasonalityData.ts` (regenerated),
-`SeasonalityView.tsx`, `SeasonalityAlmanac.tsx`,
-`app/explore/seasonality/page.tsx`.
-
-### New data
-
-^VIX and ^GSPC daily OHLC from Yahoo, 1990-01-02 -> 2026-08-21, joined on
-session date: 9,227 rows, zero drops. VIX does not exist before 1990, so that
-study is 36 years while everything else stays at 98.
-
-### Four new studies
-
-**After a VIX spike.** Sessions where ^VIX ran >= X% from its own OPEN to its
-own HIGH. Reports SPX same-day low -> next-day high, and next-day open ->
-close, each against an unconditional baseline over all 9,226 sessions — a
-number like "+1.84%" is meaningless until you know the baseline is +1.29%.
-The ladder is monotonic in the threshold, which is what a real effect looks
-like rather than a fluke: next-day open-to-close runs +0.11% at >=+10%, +0.36%
-at >=+20% (n=191, 61.3% positive) and +0.64% at >=+40%, against +0.03% / 53.5%
-unconditionally. Every +20% session is listed.
-
-**Last day of the month.** +8.6 bp against roughly +3 bp for an average
-session — and it is the NON-quarter ends carrying it (+10.2 bp vs +5.4 bp).
-Since 1985 the effect is essentially gone (+3.1 bp, 49.9% positive), the same
-arc the Monday effect took.
-
-**Opex week and the week after.** Opex = the third Friday, or the last session
-on or before it when that Friday is a holiday. Week = prior Friday's close ->
-opex Friday's close; after = opex close -> the following Friday's close. Opex
-week is positive and much more so since 1985 (+27.7 bp, 58.9%). The give-back
-concentrates after QUARTERLY expiration: -5.7 bp all history, -12.5 bp and only
-40.4% positive since 1985 (n=166). September's post-opex week is the worst on
-the calendar.
-
-**Year overlays on the seasonality chart.** Pick up to four past years to
-overlay on the live year — 1987, 2008, 2020 and 2022 read instantly. Each year
-is re-based to its own prior 31-Dec close so 1932 and 2026 sit on one axis.
-
-Capped at FOUR deliberately. With the seasonal average and the live year
-already drawn, six lines is where the palette validator's normal-vision floor
-fails, and that check is not one a legend buys you out of. So each overlay
-carries three encodings — hue, dash pattern, and a year label printed at the
-end of its own line, in its own gutter column past the price ticks. Want a
-fifth? Facet the chart, do not add a hue.
-
-98 years x 365 points is the biggest thing in the data file, so it ships as
-comma-joined integer hundredths parsed on FIRST USE, not at module load — most
-visitors never open the picker. The whole module is 260KB raw / 84KB gzipped.
-
-It is in the JS bundle rather than a fetched /public/*.json ON PURPOSE. The
-middleware matcher excludes ".js" but its `js(?!on)` lookahead does NOT exclude
-".json", so a fetched year file would be auth-gated and 307 to "/" for exactly
-the signed-out visitors /explore/seasonality exists to serve. Still no
-middleware change.
-
-### Presentation
-
-- **Method card removed** from the bottom of the page.
-- **All text is white.** Hierarchy now comes from size, weight and
-  letter-spacing; translucency is reserved for chrome (gridlines, hairline
-  borders, card fills). No `opacity` on a text node remains in any of the three
-  files.
-- **Heatmaps span the full card**: `width:100%` + `tableLayout:fixed` instead
-  of 42px fixed cells sitting in a narrow block with dead space beside them.
-  `minWidth:620` keeps them readable on a phone by scrolling rather than
-  crushing.
-- **Every data table is collapsed by default**, as a native `<details>` — 14 of
-  them. Native rather than React state on purpose: nothing to seed, so it cannot
-  desync between the server and the first client paint; keyboard and
-  screen-reader correct for free; and Ctrl+F still finds text inside a closed
-  `<details>`. Charts and stat tiles stay open — those are the scan layer, the
-  tables are the drill-down.
-
-### Verified before commit
-
-`tsc --strict` clean. Both surfaces (public page and Test Lab tab) rendered in a
-real browser at 1440px and 390px with zero console errors. On mobile, with all
-14 tables force-expanded, `document.scrollWidth == clientWidth` and no card
-overflows — the tables scroll inside their own wrappers.
-
-## 2026-08-24 - Fix: Vite build failed on tombstoned SeasonalityTab import
-
-Edited: `components/pages/TestLab.tsx`.
-
-The seasonality move left one importer behind. `app/test/page.tsx` (the Next
-copy) was updated to `@/components/seasonality/SeasonalityView`, but the SPA's
-Test Lab — `components/pages/TestLab.tsx`, the file the Vite build actually
-compiles — still did `import SeasonalityTab from "@/app/test/SeasonalityTab"`.
-That path now resolves to the tombstone, whose only export is `export {}`, so
-Rollup failed hard:
-
-    "default" is not exported by "../app/test/SeasonalityTab.tsx",
-    imported by "../components/pages/TestLab.tsx"
-
-Next's build passed (it never compiles TestLab.tsx), so the break only showed up
-at `RUN cd app-vite && npm run build` in the Dockerfile and took the whole VPS
-deploy with it.
-
-Fix: TestLab.tsx now imports `SeasonalityView` from
-`@/components/seasonality/SeasonalityView` and renders `<SeasonalityView />` for
-the `seasonality` tab — the same component `app/test/page.tsx` and
-`/explore/seasonality` mount. No behavior change; one import path.
-
-The three `app/test/Seasonality*` tombstones are now genuinely unimported and
-can be `git rm`'d as their headers say.
-
-
-## 2026-08-24 - Seasonality goes public at /explore/seasonality (free, no account)
-
-Added: `app/explore/seasonality/page.tsx`, `components/seasonality/` (View,
-Almanac, Data — moved out of `app/test/`).
-Edited: `app/test/page.tsx`, `components/landing/LandingClient.tsx`.
-Tombstoned: `app/test/SeasonalityTab.tsx`, `app/test/SeasonalityAlmanac.tsx`,
-`app/test/seasonalityData.ts` — see "Left to do" at the bottom.
-
-The seasonality tab shipped this morning is now also a free public page, meant
-to be posted on socials. Signed-out visitors get the whole thing — overlay
-chart, baseline selector, every almanac table — with the trial CTA sitting
-above it.
-
-### Why the components moved
-
-The same view is now mounted twice: Test Lab (signed in) and
-/explore/seasonality (signed out). A component under `app/test/` that a public
-marketing page depends on is a trap — deleting the test tab would break the
-public page, and the import would read as if the marketing page were part of
-the lab. It lives in `components/seasonality/` and reads no session, no cookie
-and no API. A component that quietly needs an auth context renders empty for
-exactly the visitors the public page exists to convert, and nothing in the
-signed-in view would ever show it.
-
-### Why /explore/seasonality and not a new top-level route
-
-`/^\/explore(\/.*)?$/` is ALREADY in `PUBLIC_PATTERNS`. **No middleware change
-was made and none is needed** — do not narrow that pattern without checking
-this page, it would gate it silently. The route is a STATIC segment, so Next
-resolves it ahead of `app/explore/[slug]/page.tsx`; it deliberately skips the
-EXPLORE content map, because the other explore pages are teasers built from a
-shared `{tagline, body, highlights, teaserStats}` shape and this page is the
-tool itself.
-
-Unlike its siblings it is **not** `force-dynamic`. Every number is compiled into
-`seasonalityData.ts` at build time — no DATABASE_URL, no proxy, no socket — so
-it prerenders and serves instantly to a cold visitor off a link.
-
-### One layout fix that mattered
-
-`SeasonalityView`'s root is a `grid` with `minmax(0, 1fr)`, not a flex column.
-As flex items the cards carry `min-width:auto`, so a wide table pushed its CARD
-past the viewport and the table's own `overflow-x:auto` wrapper never got to
-scroll — the whole page scrolled sideways instead. Verified at 390px: card 362,
-wrapper 320, table 562 scrolling inside it, document scrollWidth == clientWidth.
-This is a phone-first concern, since that is where a social link gets opened.
-
-### Landing page
-
-A full-width "Free · no account" strip under the six-cell feature grid, not a
-seventh cell in it. That grid is paid features; this is a giveaway, and putting
-it in the row would have it pretending to be part of the product.
-
-### Verified before commit
-
-`tsc --strict` clean. Both surfaces rendered in a real browser at 1440px and
-390px: zero console errors, zero horizontal overflow, no hydration-unsafe
-initial state (chart widths still start at 0 both sides; baseline starts from a
-constant).
-
-### Left to do
-
-The three `app/test/Seasonality*` files are tombstones (`export {}` plus a
-pointer) because this session could not delete files on the box. Run:
-
-    git rm "app/test/SeasonalityTab.tsx" "app/test/SeasonalityAlmanac.tsx" "app/test/seasonalityData.ts"
-
-Nothing imports them; the build is green either way.
-
-## 2026-08-24 - ES Candles: "Latest" moved onto the chart (TradingView-style)
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`.
-
-The "Latest" jump-back control was a `View` field inside the dock's **Chart**
-menu — two clicks deep, and always present whether or not you were near needing
-it. It is now a small round button floating over the **bottom-right corner of
-the plot**, and it only exists while the newest candle is scrolled off screen.
-
-### The condition
-
-`checkLatestOffscreen()` compares the time scale's visible logical range against
-the series length: the button shows when `range.to < barCount - 1.5`. The range
-edges are fractional indices, so the bar-and-a-half of slack is what stops the
-button flickering in and out when the live candle is merely half-clipped by the
-right axis gutter.
-
-It runs from two places:
-
-- a second `subscribeVisibleLogicalRangeChange` on the chart (kept separate from
-  `schedulePaint`, which is rAF-coalesced canvas work and can drop frames mid-
-  gesture — a React state flip must not be dropped with it), and
-- the candle-data effect, because a new bar appended while you are parked in
-  history extends the series **without moving the viewport**, so the last index
-  can cross out of range with no range event to announce it.
-
-State, not an imperative style write like the SPX price badges: this mounts and
-unmounts a node rather than nudging one, and it changes at most once per pan
-gesture. The setter early-returns on an unchanged value, so the hundreds of
-range events that do not flip it cost nothing.
-
-### The button
-
-`right: 70` clears the price scale gutter, `bottom: 34` clears the time scale, so
-it sits inside the drawing area where a leftward pan leaves the cursor. `z-20`
-puts it over the chart canvas (z-2) and the gamma overlay (z-1), and it is the
-one element in that corner that *wants* pointer events. Chevron-into-a-bar drawn
-as inline SVG rather than the `⇥` glyph, which sits low in Inter and would not
-centre in the circle. Colors from `HOME_THEME` / `DOCK_THEME`, no hardcoded hex.
-
-Click behavior is unchanged: `scrollToRealTime()` keeps your zoom, with the
-synchronous overlay + rail repaint. Double-click on the canvas still re-frames
-the whole session at the default zoom.
-
-## 2026-08-23 - GEX Watch box on /premarket (customer-facing)
-
-New: `components/pages/premarket/GexWatchFeed.tsx`.
-Edited: `components/pages/Premarket.tsx`, `server-v2/_lib-gex-watch.cjs`,
-`server-v2/api-router.js`.
-
-A box at the bottom of Premarket Prep: which strikes grew far more than normal
-at yesterday's close, in plain language.
-
-### It reads the LOG, never runs the scan
-
-New `/api/gex-watch-feed`, **`auth: 'subscriber'`** — this is a customer surface,
-not the owner panel. It serves rows `gex-watch-recorder.js` already wrote at
-16:40 ET: one indexed read plus a small rollup. The calibration sweep behind the
-owner panel is a 169-ticker window-function scan and must never fire on a page
-load. Reading yesterday's close is also exactly right for a premarket surface.
-
-The filter lives in `_lib-gex-watch.cjs` (`readSimpleFeed`) so the customer box
-and the owner panel can never disagree about what counts as flagged.
-
-### "Simple conditions" is a real filter
-
-Latest recorded session · at or above the cutoff the recorder used that day ·
-**opex excluded**. Owners see opex rows flagged; a customer must never be shown
-the calendar and told it is a signal.
-
-Two things that filter forced, both bugs the fixture caught:
-
-- **The session is the latest NON-OPEX one, not `MAX(date)`.** Otherwise the box
-  blanks once a month and a customer stares at "nothing unusual" on the one day
-  the chain changed most. It falls back to Thursday's, labelled with its own date.
-- **`COALESCE(is_opex, false)`, not `= false`.** NULL is not false in SQL, so a
-  legacy or partially-written row was being silently dropped.
-
-### Every optional field is guarded
-
-The fixture's partial rows rendered `gamma moved to $0M`, `Infinity% above spot`
-and the literal `null` for the side — an unguarded template, pointed at a
-customer page. Missing spot, side or level now shorten the sentence instead:
-"AAA 136 — gamma moved sharply, 3× a normal day." A test asserts no
-customer-facing string can contain `Infinity`, `NaN`, `null` or `undefined`, and
-another asserts the line still reads as a sentence with fields missing.
-
-### What it does NOT show
-
-No ×normal z-score arithmetic, no lift, no calibration table, no opex rows. The
-track record is forward-tested from the log's graded rows ("15 of the last 22
-like this moved") and is withheld entirely below 20 outcomes.
-
-Fails quiet: a quiet day, a stalled recorder and a missing table all render as
-one calm line. The route catches and returns `rows: []` rather than a stack —
-a customer page degrades to "nothing to show", never to an error.
-
-Mounted above `.footbar`, CSS appended to the existing `<style>` block alongside
-`POSTMARKET_CSS` / `HISTORICAL_CSS`. No new SPA route, so `check-routes.mjs` is
-unaffected.
-
-### Verified
-
-144 assertions. New: one-session-only, opex exclusion exercised against a fixture
-whose newest session IS opex, the non-opex fallback, NULL-safety, no jargon on
-the face, the track-record floor, the template-leak guard, and the
-missing-table path.
-
-
-## 2026-08-23 - FIX: feed_live rendered as empty boxes
-
-Edited: `server-v2/_lib-gex-watch.cjs`, `owner-vite/src/pages/Backtests.tsx`.
-
-`FEED_LIVE` drew ~22 empty styled rectangles. `FeedRows` looked up the row's
-sentence as `r.alert || r.logged`, but lane 2 names its text field `building` —
-so `text` was `""` and every row rendered as a box with nothing in it. The
-section that had no data at all looked identical to one that had plenty.
-
-### Two fixes, because one was not enough
-
-1. **`rowText()`** resolves `alert → building → logged`, then falls back to *any*
-   string field longer than 12 characters. That last clause is not paranoia: a
-   renderer that can silently produce nothing is worse than one that throws, and
-   a fourth lane added later must not be able to reintroduce this.
-2. **Lane 2 now carries the same structured fields as lane 1**, so one component
-   serves both instead of one lane being second-class.
-
-### Two things the fix exposed
-
-**Lane 2 was claiming a call/put side it cannot know.** `strike_growth` has no
-legs — `opt_type` is always `'NET'` — yet the sentence said "call side" inferred
-from the sign of `delta_abs`. That is the exact error corrected on the daily feed
-earlier today, still live on the intraday one. It now says "positive γ building"
-/ "negative γ building" and stops there. A test asserts lane 2 never emits the
-strings `call gamma` or `put gamma`.
-
-**Lane 2 rows deliberately have NO `alert` key.** They are not alerts and must
-never be picked up as one by the recorder, a Discord relay, or the log. A test
-pins that too.
-
-### Rendering
-
-Lane-2 rows show `HH:MM ET` and the expiry in the header, `—` instead of a
-multiple when the time-of-day baseline is too thin (never `0×`, which would read
-as "measured, and it's nothing"), the baseline depth in place of odds, and a
-standing UNTESTED footer rather than the per-band chip — the whole lane is
-untested, not this row's band.
-
-### Verified
-
-130 assertions. New: every row of every feed section has a canonical sentence AND
-symbol/strike, lane tagging, the absent-`alert` guard, the no-fake-side guard,
-and null-not-zero for a missing baseline.
-
-
-## 2026-08-23 - GEX watch: the feed renders as rows, not a table
-
-Edited: `server-v2/_lib-gex-watch.cjs`, `owner-vite/src/pages/Backtests.tsx`.
-
-The feed was an array of one-string objects, so the generic `DataTable` drew it
-as a single-column table — a wall of sentences with no scannable structure. It is
-now a real component: severity stripe, ×normal meter, chips, graded outcome.
-
-### The server hands over fields, not just prose
-
-Each feed row keeps **`alert` as its first key and its canonical form** — that is
-what the recorder freezes, what goes to Discord or an email, and what any consumer
-that knows nothing about the new fields will render. Everything else is ADDITIVE:
-`symbol`, `strike`, `zx`, `what`, `side`, `vsSpot`, `isCall`, `isAdded`, `flip`,
-`opex`, `histHit/Lift/N`, `staleDays`. `logged_feed` gets the same plus
-`graded` / `moveSigma` / `move3d` / `hit`.
-
-A test asserts the sentence and the fields cannot disagree — every row's `alert`
-must contain its own symbol, strike, ×normal and side. Two renderings of one row
-that drift apart is the failure this shape invites, so it is pinned.
-
-The log's `alert` stays the line the recorder wrote ON THE DAY and is never
-re-rendered from current data; a test checks it never contains `RESULT:`, because
-a log that rewrites its own history is not a log.
-
-### Encoding decisions
-
-- **CALL `#219EBC` / PUT `#C96A3E`.** Call is `OWNER_THEME.cyan`, already in the
-  app; the clay was picked to pair with it. They separate at ΔE 17.8 under
-  deuteranopia, where a blue/red pair typically collapses. Validated, not
-  eyeballed. If they move into `homeTheme.ts`, move them TOGETHER — re-picking
-  one alone breaks the separation.
-- **Added vs removed is fill-vs-outline, not a third colour**, so the whole
-  encoding survives for a colourblind reader.
-- **OPEX is a hatch, not a hue.** It is not a kind of build, it is contamination;
-  texture says "discount this" without competing with the call/put reading. FLIP
-  is an outline for the same reason.
-- The accent (`#7dd3fc`) stays chrome and never encodes data.
-
-### Panel
-
-New `FEED_SECTIONS` set routes `feed` / `feed_live` / `logged_feed` through
-`FeedRows` instead of `DataTable`, in both the primary and the collapsed
-secondary slot. `FeedRows` falls back to the plain sentence for any row lacking
-the structured fields — an older cached response, or a frozen recorder line — so
-it can never render blank. `primary` is now the three feeds; `by_symbol` moved
-into Calibration & diagnostics with the other tables.
-
-### Verified
-
-122 assertions. New: `alert` stays first, every field present, `isCall`/`isAdded`
-agree with the side text, flip/opex flags agree with the sentence, an untested
-band reports null rather than 0, the sentence-vs-fields consistency check, and
-the log's frozen-line guard.
-
-
-## 2026-08-23 - GEX watch: opex, flips, real legs, dollar floor, and an ALERT LOG
-
-Edited: `server-v2/api-router.js`, `server-v2/server-with-proxy.js`,
-`owner-vite/src/pages/Backtests.tsx`.
-New: `server-v2/_lib-gex-watch.cjs`, `server-v2/gex-watch-recorder.js`.
-
-A live board full of alerts turned out to be mostly wrong. Five things.
-
-### 0. The engines moved to a shared module
-
-`_lib-gex-watch.cjs` — pure functions over an injected `queryAll`, no pool, no
-schedule, no HTTP. api-router and the new recorder both require it. That is the
-point: the alerts the recorder logs and the odds the panel shows must be one
-definition. A copy-paste would drift within a week and neither would be worth
-reading. Do not inline this SQL anywhere else.
-
-### 1. OPEX was the whole board
-
-2026-08-21 was the third Friday. `eod_strike_gex` sums ALL expiries, so on opex
-the expiring tranche stops existing and every strike carrying it collapses:
-
-    WBD  28   −78%   $77.39M → $17.02M
-    UBER 80   −75%   $60.27M → $15.12M
-    FCX  70   −89%   $18.61M → $2.00M
-
-None of that is repositioning. It is the calendar, and it was the largest Δ in
-the table, so it dominated the board and poisoned the calibration. Detected as
-`DOW = 5 AND day-of-month BETWEEN 15 AND 21` (that can only be the third
-Friday), flagged in words on the line, and excluded from the calibration by
-default. `opex=1` puts them back.
-
-### 2. A sign flip is not a percentage
-
-    IEF  93   "+116%"   $-345.01M → $54.72M
-    RUT  2970 "−349%"   $118.48M  → $-295.09M
-
-Both crossed zero — a regime change, arguably the most interesting thing on the
-board, described as a growth rate. Flips are now detected in SQL and worded
-separately: `GEX FLIPPED −$345M → +$55M`. This failure mode was documented and
-guarded against in the ranking, then shipped anyway in the sentence.
-
-### 3. The side label was inferred from the sign, and was often backwards
-
-`CORZ 19: $-3.92M → $-0.61M` read as "call side". Δ is positive, but the strike
-still holds NEGATIVE gamma — what happened is put gamma came OFF. A positive Δ
-means calls added OR puts removed, and those are opposite events. `call_gex` /
-`put_gex` are carried through the spine now and the larger leg is described:
-"put gamma removed". NULL before 2026-08-18 → hedged wording, never a guess.
-
-### 4. ×normal had no dollar floor
-
-`WOLF $1.85M` and `BTDR $380K` scored 4× and 3.5× because those names normally
-carry almost no gamma. New `minAbs` (default $2M) gates the board AND the
-calibration. Applied with `COALESCE(MAX(zx) FILTER (…), 0)`, not a `WHERE`: a
-quiet ticker-day still belongs in the baseline scored 0, or the denominator
-silently becomes "days something moved" and every lift is against the wrong
-universe.
-
-Also `maxStale` (7d): a symbol whose last session is weeks old is held off a
-DAILY board entirely instead of sitting near the top forever.
-
-### 5. THE ALERT LOG — the panel was a view, not a log
-
-"When did this fire" had no answer, because nothing fired: the list was
-recomputed on every Run, and every hit rate was backtested. `gex-watch-recorder.js`
-runs daily at 16:40 ET (after eod-strike-gex-recorder writes the ladder — fire it
-earlier and it logs off yesterday's board, silently), writes
-`gex_watch_alerts`, and grades each row once its forward session exists.
-
-Three things that buys:
-
-- **Real fire times.** Every feed line is stamped `[2026-08-21]`, and the
-  rendered sentence is FROZEN in the row — if wording or the cutoff changes next
-  month, the log still shows what the reader was told on the day.
-- **Forward-tested odds.** "Of the alerts this rule ACTUALLY fired, N were
-  followed by a move" — nothing chosen after seeing the outcome. `track_record`
-  reports it against a live baseline. Where it disagrees with the calibration
-  sweep, believe the log.
-- **Survives retention.** `eod_strike_gex` has been stuck at ~8 sessions. This
-  table accrues forward on its own, so the record of what was flagged and what
-  happened next does not reset with it.
-
-Grading is strictly backward-looking: only once the forward bar exists, with
-sigma trailing and excluding the alert bar. Ungraded rows say so — they are
-waiting, not failing. 1095-day retention; rows are tiny. Manual fire:
-`POST /proxy/gex-watch-run`.
-
-### Verified
-
-112 assertions. New: the four fixes each tested where they bite (a fixture opex
-session, a planted sign flip, a sub-floor mover, NULL-leg fallback), opex
-exclusion actually changing the calibration n, the staleness cap, and the
-recorder end-to-end — writes, freezes the line, leaves the newest session
-ungraded (no forward bar yet), grades across many sessions once backdated, and
-does not mark everything a hit.
-
-
-## 2026-08-23 - FIX: absent query params silently defaulted to 0, not their default
-
-Edited: `server-v2/api-router.js` (`/api/backtests` dispatch helper).
-
-`strike-gex-watch` returned **0 ticker-days against a full 169-symbol table**.
-The data was fine, the SQL was fine, the deployed build was current. The bug was
-one line in the dispatch:
-
-```js
-const n = (k, d) => { const v = Number(q.get(k)); return Number.isFinite(v) ? v : d; };
-```
-
-`q.get(k)` returns **null** for an absent param. `Number(null)` is **0**, and 0
-is finite — so the default was never reached. Every knob the panel has no field
-for silently arrived as 0.
-
-`maxGap = 0` was the fatal one: the spine gates returns on
-`(date - LAG(date)) <= maxGap`, and consecutive sessions always differ by ≥1, so
-EVERY return went NULL → sigma NULL → every row filtered out. `minBucketN = 0`
-then suppressed the "⚠ SAMPLE TOO SMALL TO READ" warning that would have made
-this obvious, because `total < 5 * 0` is false for any total. The note therefore
-looked like an older build's, which cost a long detour through deploy forensics —
-rebuilding the container, checking git, fingerprinting the image — before the
-real cause turned up.
-
-Harmless for years because every earlier test's params were all panel fields. It
-only became lethal when handlers grew tunables the UI does not send.
-
-Fixed to distinguish absent from zero:
-
-```js
-const n = (k, d) => {
-  const raw = q.get(k);
-  if (raw === null || raw === '') return d;
-  const v = Number(raw);
-  return Number.isFinite(v) ? v : d;
-};
-```
-
-Applies to every test on `/api/backtests`, not just the new ones.
-
-### Regression coverage
-
-The helper is now sliced out of `api-router.js` by the test harness the same way
-the engines are, so the test tracks the real code and cannot drift from a copy.
-12 new assertions: every absent param takes its default, a blank string falls
-back, and an explicit `0` is still honoured rather than overridden (the fix must
-not swing too far the other way — `minZ=0` means AUTO and has to survive).
-
-85 assertions total, all green.
-
-
-## 2026-08-23 - Backtests page: six strike-GEX panels collapsed into one
-
-Edited: `owner-vite/src/pages/Backtests.tsx`, `server-v2/api-router.js`.
-
-The page had grown to six strike-GEX panels and a wall of always-visible prose.
-Three of the six were duplicates of work panel ① already did, and the docs — which
-you read once while calibrating and never again — were burying the numbers.
-
-### One panel: GEX Watch
-
-Panels ②–⑥ removed from the page. **Their handlers stay registered and callable**
-(`strike-gex-premove`, `-threshold`, `-move`, `-timeline`, `-move-intraday`) —
-this is a page-level removal, and re-adding any of them is ~20 lines. What went
-and why:
-
-- `strike-gex-threshold` — asked "at what growth do the odds shift" in % units;
-  ①'s `calibration` sweep asks it in ×normal units. Same question twice.
-- `strike-gex-move` — z-scored dollars vs forward move; ①'s `odds` table is the
-  same measurement. Same question twice.
-- `strike-gex-move-intraday` — has no data and will not until
-  `RETENTION_STRIKE_GROWTH_DAYS` is raised and weeks pass. Noise on the page.
-- `strike-gex-premove` and `-timeline` were NOT duplicates and were folded in
-  rather than dropped (below).
-
-### `withChecks` — the calibration panels, behind a checkbox
-
-Off by default, because each runs its own full-history query and making them
-automatic would double the cost of the one thing read every morning in service of
-two tables looked at once a month. Ticked, the response gains:
-
-- `premove_check` — the study run BACKWARDS (start from moves, look back),
-  printing move-days beside quiet-days. This is the honesty check and the reason
-  it is offered at all: **if those two rows look alike the earned cutoff is
-  describing noise**, however good its lift looks.
-- `timeline` — per-strike series, only when a ticker is set, since it is
-  per-ticker by design.
-
-### `primary` on the Panel component
-
-New optional prop naming the sections worth seeing without a click. Everything
-else the endpoint returns drops behind one "Calibration & diagnostics" toggle.
-GEX Watch shows `feed` and `by_symbol`; `calibration`, `odds`, `live`, `coverage`
-and the checks are one click away. Omitting the prop renders every section, so
-the four older panels are untouched.
-
-### Everything wordy is now collapsed by default
-
-`help` blocks, both intro cards, and the returned `note` — which now leads with
-its first sentence (on GEX Watch that is the earned cutoff, i.e. the answer) and
-hides the caveats behind "— more ▾". `details > summary::-webkit-details-marker`
-is suppressed so the ▸ glyph is the only marker.
-
-Page went from ~470 lines and 10 panels to 306 lines and 5.
-
-### Verified
-
-73 assertions, all green. New: `withChecks=false` adds no keys (the lean daily
-path), `withChecks=true` folds in a 2-row premove check, timeline appears only
-with a ticker, and `feed` stays the first key either way. esbuild parse clean,
-no orphaned imports, every remaining panel's `test=` resolves to a handler.
-
-
-## 2026-08-23 - The backtest now SETS the watch cutoff (and refuses to overfit)
-
-Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.
-
-`minZ` was a knob with a default I picked. That inverted the whole point: the
-backtest exists to DEFINE "higher than normal" — look at extreme GEX changes,
-see whether price follows, and let the answer set the threshold. Now it does.
-`minZ` defaults to **0 = AUTO**; the scan runs at whatever the sweep earned, and
-the note says which cutoff and why. A non-zero value is reported as a manual
-override.
-
-### Cumulative sweep, not bins
-
-The odds table was mutually-exclusive bands. Operationally wrong shape: a
-watchlist has ONE cutoff, so the question is always "everything at or above X".
-New `calibration` table sweeps 1 / 1.25 / 1.5 / 1.75 / 2 / 2.5 / 3 / 4 / 5 / 6 /
-8 cumulatively. The banded `odds` table stays, demoted to its real job —
-monotonicity. The HALF-1 query now returns raw ticker-days and all statistics are
-computed in JS, because a cutoff sweep cannot be done from pre-binned SQL counts.
-
-### The pick is on a Wilson lower bound, and this is the important part
-
-Ranking cutoffs on raw lift picks the most extreme one essentially every time,
-because the tail has the fewest events and the widest scatter. On the fixture
-that meant **≥4× (lift 1.86, n=24) beating ≥1.5× (lift 1.66, n=154)** — an edge
-built on twenty-four coin flips, i.e. precisely the overfit this panel exists to
-avoid.
-
-Each cutoff is now scored on the lower bound of a 95% Wilson interval around its
-hit rate (Wilson, not normal-approximation: it stays sane at small n and near
-0/1, which is exactly where the tail lives). The fixture now picks ≥1.5×
-(low 1.39) over ≥3× (low 1.36) and ≥4× (low 1.21). `lift (low)` is shown in the
-table so the choice is inspectable rather than magic.
-
-Two regression tests lock this in: one asserts the fixture still CONTAINS a
-tempting high-lift/small-n cutoff (so the guard is actually being exercised and
-cannot silently stop testing anything), the other asserts it is not chosen.
-
-### Monotonicity is now judged out loud
-
-A threshold is only believable if bigger changes keep doing better. The note
-reports how many band-to-band steps rise, and when lift jumps around it says so:
-"One bin got lucky; treat any cutoff below as a coincidence." A single popping
-bin next to neighbours at baseline is noise wearing a result's clothes, and the
-panel now names that rather than shipping it as a rule.
-
-### Also
-
-"⚠ Not live" moved out of the has-alerts branch — a quiet day was silently
-dropping the staleness warning, which is exactly the day a stalled recorder is
-indistinguishable from a quiet market.
-
-### Verified
-
-68 assertions, all green. New: cumulative-sweep shape, monotone n as the cutoff
-rises, untested-cutoff marking, that the feed's cutoff IS the swept one, the
-manual-override path, the anti-overfit guard (both halves), that the chosen
-cutoff fires ≥12×/yr, and that monotonicity is stated.
-
-
-## 2026-08-23 - Watch feed lane 2: "building now" (intraday), clearly separated
-
-Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.
-Follows this morning's watch-feed entry. The ΔGEX Board (`GexGrowth.tsx`) was
-deliberately NOT touched — the feed's eventual home is the premarket page, and
-one endpoint returning ready-made lines is what makes that a drop-in later.
-
-`strike-gex-watch` now returns two lanes off one call:
-
-- **`feed`** — *since last close*. `eod_strike_gex`, 400 sessions, so every line
-  carries a real historical hit rate. This is the premarket read.
-- **`feed_live`** — *building now*. `strike_growth` 1-minute rows, so it can flag
-  a strike stacking mid-session. Every line is marked **UNTESTED**.
-
-Separate keys, separate notes, separate baselines. `live_note` is also folded
-into `note` behind a `— LANE 2 —` separator, because the owner Panel renders only
-`note` and a second string key would have been silently invisible on screen.
-
-### The two things lane 2 gets right, both non-obvious
-
-1. **The baseline is TIME-OF-DAY MATCHED.** `delta_abs` is the build since the
-   open, so it grows monotonically through the session by construction. Judged
-   against a flat daily average, every ticker would flag every afternoon and
-   nothing in the morning. The denominator is that symbol's biggest build at the
-   SAME 10-minute slot on prior sessions — 11:20 is scored against other 11:20s.
-2. **It refuses to score off nothing.** Fewer than `minSess` (default 2) prior
-   sessions at that slot and the line says "no baseline yet — needs 2+, has 1"
-   instead of producing a confident multiple from n=1.
-
-### Why lane 2 has no odds and won't for a while
-
-`strike_growth` is on a ~5-day retention sweep, so there is no outcome history to
-score against. That is not a gap to paper over: raise
-`RETENTION_STRIKE_GROWTH_DAYS` and the sample accrues forward only — the table is
-the only record of those minutes. Until then the lane is a live signal with no
-track record, and it says so on every line. A regression test fails the suite if
-a lane-2 line ever quotes lane-1's "big-move next session" phrasing.
-
-### Verified
-
-55 assertions, all green. New: lane-2 feed shape, UNTESTED marking, the
-never-quote-lane-1-odds guard, "since the open" wording, time-of-day baseline,
-baseline-depth reporting, hottest-first ordering, the thin-baseline refusal path,
-and that `live_note` actually reaches the screen. The intraday fixture was
-widened from 2 sessions to 4 so the time-of-day baseline has something to average.
-
-
-## 2026-08-23 - Strike-GEX watch feed (the daily report) + normalizer fix
-
-Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.
-Third pass today; supersedes both earlier entries. The research panels stay, but
-they are now the calibration behind one operational report rather than the point.
-
-### What was actually wanted
-
-"Backtest if a strike grew before a big move, run a report of higher-than-normal
-GEX growth on ALL tickers, and have them on watch." That is a FEED, not a study:
-
-    MU 2000 strike — GEX grew +187%, way above normal (3.4× typical).
-    $4.2M → $12.1M, 3.1% vs spot, call side.
-    History: 51% big-move next session (1.8× base, n=64).
-
-New test `strike-gex-watch`, now panel ① of the page. Two halves, one definition:
-it scans every ticker's latest recorded session for outsized strike growth, and
-aggregates the same measure over `days` of history so every feed line carries the
-odds for its own band. Report and proof cannot drift apart because they are
-computed from one shared `NORM` CTE — do not fork them.
-
-`strike-gex-hot` is REMOVED; the watch report subsumes it (hot ranked on raw %
-with no odds attached, which is the part that made it unusable).
-
-### The normalizer bug the fixture caught, and it was fatal
-
-`×normal` was originally |Δ| ÷ the MEDIAN |Δ| across the session's strikes. That
-is wrong: eod_strike_gex keeps ±40 strikes, so most rows are dead wings holding
-near-zero gamma. The median sits near zero, every genuine build scored 50–90×,
-and **767 of 768 ticker-days landed in the top band**. A report that flags the
-entire roster flags nothing, and the odds table was a single row.
-
-The denominator is now the trailing average of that ticker's own **daily biggest
-|Δ|** — "what a large strike move looks like on an ordinary day for this name."
-So 1.0× is a normal day's hottest strike and 3× is three times that, which is
-also what makes the phrase "above average growth" literally true rather than
-decorative. Bands rescaled to <1× / 1–1.5× / 1.5–2× / 2–3× / 3–5× / ≥5×, default
-watch level 1.5×. Two regression assertions now fail the suite if the odds ladder
-ever piles back into one band.
-
-On the fixture the ladder spreads properly and the rule falls out:
-<1× → 0.83× lift, 1–1.5× → 0.97×, 1.5–2× → 1.72×, 2–3× → 1.52×, 3–5× → 1.66×.
-
-### Other decisions worth keeping
-
-- **Watch unit is (ticker, session), not (strike, session).** Odds aggregate on
-  each day's hottest strike. Five strikes lighting up on MU is ONE thing to
-  watch; counting it five times inflates n and makes a thin sample look robust.
-  The feed still lists strikes because you need to know which one.
-- **An empty feed says NOTHING ON WATCH and explains itself.** Most days are
-  quiet. A blank screen is indistinguishable from a broken query, so it says
-  which it is — and points at coverage, because a stalled recorder looks exactly
-  like a quiet market from here.
-- **`feed` is the first key in the payload** — the owner Panel renders sections
-  in key order, so the feed lands above its own justification.
-
-### Verified
-
-45 assertions against a local Postgres fixture with a planted signal, a sparse
-symbol (6 sessions 30 days apart) and a corrupt spot row. All green, including
-the three earlier regressions (median spot, calendar-gap guard, min-n
-suppression), both new normalizer-spread checks, feed-line shape, the quiet-day
-path, and per-ticker dedupe in by_symbol. `node --check` clean; esbuild parse
-clean with no orphaned imports; all 10 panel `test=` strings resolve to handlers.
-
-
-## 2026-08-23 - Strike-GEX ↔ move: rebuilt move-first, plus 4 fixes a live run exposed
-
-Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`.
-Supersedes the earlier entry today — the build-anchored engine described there
-still exists, but it is now panel 3 of six rather than the whole feature.
-
-### Why it was rebuilt
-
-The original brief was "when a ticker makes a significant move, is there a GEX
-level that grows significant" — that starts from the MOVE and looks back. What
-shipped this morning started from the BUILD and looked forward, and reported
-pooled z-score buckets. Statistically the stronger framing; operationally
-useless, because it hands you a bucket table instead of a number to watch.
-
-Six tests on `/api/backtests` now, and the page explains the reading order:
-
-| test | direction | answers |
-|---|---|---|
-| `strike-gex-premove` | move → back | "when it moved, had a strike grown first?" |
-| `strike-gex-threshold` | — | "at what % growth do the odds actually change?" |
-| `strike-gex-move` | build → forward | "how often does a big build lead nowhere?" |
-| `strike-gex-timeline` | — | the raw per-strike series for one ticker |
-| `strike-gex-hot` | — | latest session ranked by % growth, banded |
-| `strike-gex-move-intraday` | build → forward | the 1-minute version (see retention) |
-
-`strike-gex-premove` ALWAYS returns move days and quiet days side by side, and
-that is not decoration: "9 of 12 moves had a strike grow >100% first" is worth
-nothing if 200 quiet days did too. Do not drop the quiet row to shorten the table.
-
-`strike-gex-threshold` is the one that produces an actionable number. It buckets
-on RAW % growth (not z) and reports `lift` next to `per yr`, because a 3× lift
-that fires twice a year is a curiosity and a 1.5× that fires weekly is a tool.
-It names the winning band in the note, or says no band earned one.
-
-### Percent is now usable, via a denominator floor
-
-The z-score engine ranks on dollars because `net_gex` is signed and crosses zero,
-making an unguarded percent unbounded. The new tests DO rank on percent — it is
-the watchable number — and buy that back with `minBase` (default $1M): a strike
-gets a Δ% only if it had real gamma to start with. Below the floor Δ% is NULL,
-not Infinity. Do not lower it to "get more rows"; you get garbage rows.
-
-### FOUR FIXES, all found by one live SPX run
-
-That run returned 4 symbol-sessions with `avg |σ| 3d = 90.54` and `5d = 173.13`
-— impossible numbers — and a "strong (2–3)" bucket of n=1 rendered as
-"100% big move, lift 2×".
-
-1. **Session spot is a median, not `MAX(spot)`.** Every strike row of a session
-   carries the same spot, so one corrupt row used to become the whole session's
-   price, and the returns around it blew up to tens of sigma. Regression test
-   injects a 12× bad spot row: worst |σ| went from 90–173 to 4.1.
-2. **Forward moves are calendar-gap guarded (`maxGap`, default 5 days).** Row
-   order is not time. With holes in the table, "the next session on file" can be
-   three weeks later, and that is not a next-session move. Regression test adds a
-   sparse symbol with 6 sessions 30 days apart: it now yields ZERO events instead
-   of fabricated ones, while still appearing in coverage.
-3. **Buckets under `minBucketN` (20) are suppressed, and named in the note.**
-   n=1 at "100%, lift 2×" reads exactly like a finding. It is a coin landing heads.
-4. **Every test returns a `coverage` table** — the 20 THINNEST symbols for the
-   filter, with `days stale`. Sorted thinnest-first so the symbol that invalidates
-   the study is row 1, not buried in 169 rows. Thin samples now say
-   "⚠ SAMPLE TOO SMALL TO READ" instead of producing a plausible-looking study.
-
-### On that live run
-
-SPX came back with 4 usable sessions out of 180 days. The symbol string is right
-(`EOD_STRIKE_GEX_FLOW_SYMBOLS` defaults to `SPX,SPY,QQQ`), so this is a
-data-collection question, not a query one — run any panel with a blank ticker and
-read the coverage table to see whether it is SPX-specific or the table is thin
-across the board.
-
-### Verified
-
-33 assertions against a local Postgres fixture with a planted signal, a sparse
-symbol, and a corrupt spot row. All green. Highlights: the planted signal is
-recovered (>400% band at 2.28× baseline; extreme z-bucket 60% vs 29%), baseline
-`up %` lands at exactly 50 (no lookahead), every rendered bucket clears n≥20, the
-sparse symbol contributes 0 events, and the corrupt row no longer poisons the
-series. `node --check` clean; esbuild parse clean on Backtests.tsx with no
-orphaned imports; every panel's `test=` string has a matching handler.
-
-
-## 2026-08-23 - Strike-GEX growth → move backtest (daily + intraday)
-
-Edited: `server-v2/api-router.js`, `owner-vite/src/pages/Backtests.tsx`,
-`server-v2/state/retention-cleanup.js` (comment only).
-
-Answers "when a strike's GEX grows hard, does the ticker then move?" — the one
-thing the existing GEX-change panels never checked. `gex-change-summary` ranks
-what built and stops there; it never looks at what price did next.
-
-Two new owner-only tests on `/api/backtests`:
-
-- **`strike-gex-move`** (daily) — `eod_strike_gex`, 400 sessions retained.
-  Per symbol-session it takes the single biggest day-over-day |Δ net GEX| on the
-  ladder, z-scores it against that symbol's own trailing window, and joins the
-  forward 1/3/5-session move. Params: `days` (180), `win` (20), `hitSigma` (1),
-  `ticker` (blank = all roster).
-- **`strike-gex-move-intraday`** — same engine on `strike_growth`'s 1-minute
-  rows: build over `look` slots vs the move over `fwd` slots. Params: `days` (3),
-  `slotMin` (10), `look` (3), `fwd` (3), `ticker` (SPX; pass an empty ticker to
-  sweep the roster), `hitSigma` (1).
-
-Both return `buckets` (z-bucket → forward-move stats, with an ALL baseline row
-to compare against), `by_side`, and a per-event `detail` table. The daily one
-also returns `by_ticker` with a lift column.
-
-Three decisions that are load-bearing — do not "simplify" them:
-
-1. **Ranks on a z-score, not on percent change.** `net_gex` is a signed sum
-   (positive call leg + negative put leg) and crosses zero, so a percent change
-   with a near-flat denominator is unbounded: −2M → +1M reads as "−150%" and a
-   real build off a flat strike reads as ±∞. The raw `Δ %` IS still on every
-   detail row — that is the number that was asked for — it is just not what
-   anything sorts or buckets on.
-2. **Moves are divided by the ticker's own trailing return stdev (σ).** A 2% day
-   in a $30 name is not a 2% day in SPX. Without this the roster cannot pool and
-   the buckets are just a high-vol-ticker census.
-3. **Every scoring window is trailing and EXCLUDES the event bar**
-   (`ROWS BETWEEN n PRECEDING AND 1 PRECEDING`). Including the current bar leaks
-   the outcome into the score and manufactures an edge that is not there. Audit
-   check: the baseline `up %` should sit near 50.
-
-A strike only counts when it existed on both bars being differenced (`gap = 1`).
-`eod_strike_gex` keeps a ±40-strike window around the close, so strikes drift in
-and out as spot moves; differencing across a gap would book a strike's first
-appearance in the window as a giant build.
-
-Reads `net_gex` only and infers the side from the sign of Δ plus the strike's
-position vs spot. The `call_gex`/`put_gex` legs were added 2026-08-18 with no
-backfill, so joining them would silently drop a year of history.
-
-**The intraday panel is a wiring check, not a study.** `strike_growth` is on a
-5-day retention sweep, so it can only ever see a handful of sessions, and it
-cannot be backfilled — that table is the only record of those minutes. Retention
-was deliberately NOT raised here: the table writes ~320MB/session, so every extra
-day is ~0.3GB resident and that is a VPS-disk decision, not a code one. Raise
-`RETENTION_STRIKE_GROWTH_DAYS` (no redeploy needed) and the sample grows forward
-only; ~30 days ≈ 10GB and ≈ six weeks before the panel has a real n. A comment
-in `retention-cleanup.js` now says so at the constant.
-
-Verified against a local Postgres fixture with a planted signal (one strike gets
-a huge build, the next bar moves ~3x its usual size): the extreme z-bucket
-recovered it at 60% big-move rate vs a 29% baseline (2.0x lift), and the baseline
-`up %` came back at exactly 50 — i.e. no lookahead. `node --check` clean on
-api-router.js, esbuild parse clean on Backtests.tsx with no orphaned imports.
-
-Cost note: the daily test scans ~169 tickers × 81 strikes × `days` sessions with
-window functions. At `days=180` that is ~2.5M rows; pass a ticker when you can.
-
-
-## 2026-08-23 - Bigger earnings chips (30px → 42px)
-
-Edited: `components/pages/EconomicCalendar.tsx`.
-
-The week board's logo was 30px inside a track that resolves to ~57px on a
-five-column week, so every tile carried ~25px of dead air around a small mark
-and a column with two names was mostly empty box.
-
-`CHIP_LOGO = 42` (radius 7 → 10), ticker label 10px → 11px, tile gap 7 → 8.
-
-42 is not arbitrary — it is the largest logo that still clears the tile's 3px
-side padding at the **same four-across track**. Going wider would have reflowed
-the grid to three per row, which makes a nine-name Wednesday taller rather than
-denser: the opposite of the point. `CHIP_LOGO` and `CHIP_MIN` are now named
-constants next to each other with that constraint written down, because the two
-have to move together or the logo starts driving the column width.
-
-## 2026-08-23 - Earnings day cards lifted off the background
-
-Edited: `components/pages/EconomicCalendar.tsx`.
-
-The week board's day columns were `HT.panelBg` — `rgba(13,17,25,0.45)` over a
-near-black page. That is the right card fill on a page where a card is an island
-in open background, and the wrong one here: the earnings tab is five columns of
-card edge to edge, so a 45% dark panel over `#05060A` lands almost exactly on the
-background and the whole tab reads as one flat black rectangle. The cards were
-there; they had no luminance to separate them.
-
-New `BOARD` surface block at the top of the file. The cards are lifted with a
-**white alpha over the panel** rather than by picking a lighter hex — it keeps
-tracking `HT.panelBg` if the theme moves, it stays neutral instead of drifting
-blue, and it is the same rung system the rest of the app uses for hover/active.
-
-Three levels, and the gap between them is what makes the board readable:
-
-| rung | value | what it is |
-|---|---|---|
-| `card` | white .075 → .045 over `HT.panelBg` | a day column — the lightest thing on the page |
-| `head` | white .06 | its date strip, one rung UP so the date has a plate |
-| `tile` | white .035 | a ticker chip, one rung DOWN so chips sit ON the column |
-
-`edge` is white .16 rather than `HT.border` (white .10), which disappears at the
-new fill; `rule` (white .09) divides the PRE / AFTER / TBD blocks inside a
-column. Today keeps its cyan tint at the same three rungs, and the board's own
-branded header gets a deeper cyan ramp (`header`).
-
-Preview: `generated/2026-08-23-earnings-board-lighter.png`.
-
-## 2026-08-23 - Premarket / post-market cards moved onto the app's theme
-
-Edited: `components/pages/Premarket.tsx`,
-`components/pages/premarket/PostMarketTab.tsx`,
-`components/pages/premarket/HistoricalRecap.tsx`.
-
-`/premarket` was built from an approved mockup and shipped with the mockup's own
-colour ramp, scoped under `.pmk`. That scope kept it from leaking — and also kept
-it from ever being corrected. The page's cards sat on `#151b26` behind a solid
-`#242e3b` edge, a full step lighter than every other card in the dashboard, so
-the tab read as a different product.
-
-The fix is one token block, not 200 rules: `.pmk`'s custom properties are now
-**interpolated from `homeTheme`** instead of typed as hex, and every card on all
-three tabs inherits the change.
-
-| token | was | now |
-|---|---|---|
-| `--bg` / `--panel` | `#0a0d12` / `#11161f` | `HT.bg` / `HT.panel` |
-| `--panel2` (card fill) | `#151b26` | `HT.panelBg` |
-| `--line` / `--card` | `#242e3b` / white .20 | `HT.border` |
-| `--pos` / `--neg` | `#2ecc8f` / `#ff5c6c` | `ES_CANDLE_UP` / `ES_CANDLE_DOWN` |
-| `--blue` | `#4da3ff` | `LIGHT_BLUE` |
-| `--amber` | `#f5b942` | `HT.orange` |
-| `--r` | `10px` | `12px` (+ `--r2: 9px` for inner tiles) |
-
-So a green bar on the premarket ladder is now literally the same green as an
-up-candle two tabs over, and a level tile is the same surface as an earnings day
-column.
-
-### Alpha rungs, because three files share one scope
-
-Every wash, edge, glow and bar fill used to be a hand-typed `rgba(46,204,143,.4)`.
-`PostMarketTab.tsx` and `HistoricalRecap.tsx` are separate template literals with
-no access to the JS side, so those literals would have silently kept the OLD hue
-after the block above moved — a `.pill.cool` with a border one shade off its own
-text. They are now `--posWash` / `--posEdge` / `--posGlow` / `--blueFill1` … all
-derived by a local `hexA()` from the five accent tokens. A check confirms every
-`var()` used across the four `.pmk` files resolves, and that none are orphaned.
-
-### Also
-
-- **Active states are cyan** — tabs, segmented buttons, symbol chips, select
-  focus. They were a flat slate fill, which is why a selected tab here did not
-  look selected next to any other page.
-- **`.prep` / `.prep.is-post`** lost their coloured 1px ring (no other card in
-  the app has a second border) and gained the cyan top edge the glossy panels
-  use. The green / red / blue regime tint stays — it is semantic.
-- **`--plate`** is the one deliberately SOLID surface: bar tags, the ladder's
-  spot/flip labels and the footer sit on top of coloured bars, where a white
-  alpha would let the bar read through the text. The OS `<select>` popup uses it
-  too, since a native menu ignores alpha.
-- `--cw` / `--pw` were NOT re-pointed at `LEVEL_COLORS` (blue/red). That would
-  have undone the 2026-08-20 green/red wall decision as a side effect of a
-  re-theme.
-- Line endings: these files are CRLF in the repo. The four touched here are
-  written back as CRLF so the diff is the change, not the file.
-
-## 2026-08-23 - Mirrored the earnings names that were still rendering as text chips
-
-Added: 17 files in `public/logos/`.
-Edited: `scripts/fetch-ticker-logos.mjs`.
-
-Two thirds of this week's earnings board was ticker-TEXT chips — CRWD, VEEV,
-HPQ, OKTA, WSM, TCOM, DG, MRVL, ADSK, WDAY, AFRM, ZM, CM, BMO, BNS, HEI. None of
-them were broken: they were simply not in `public/logos/`, and the live
-`/proxy/ticker-logo` fallback is exactly what the snapshot engine STRIPS from a
-capture (it 302s off-site and taints the canvas), so a name without a mirrored
-file could never appear in a copied image no matter how many times it resolved
-in the browser.
-
-All 16 were available upstream and are now on disk. `HEI.A` gets the `PBR.A`
-treatment — a copy of `HEI.png`, added to `MANUAL` so no run overwrites it —
-because resolveLogo has nothing for a dotted class suffix: GitHub keys on the
-plain root symbol and Wikidata searches the company, not the share class. Both
-HEICO lines report on the same day, so that is not a hypothetical.
-
-### The seed list
-
-`SEED` in `scripts/fetch-ticker-logos.mjs` was ~190 mega-caps, which is why the
-gap kept reopening: a `$25B`–`$150B` name that reports every quarter was never
-going to be in it. It now carries ~490 symbols — the rest of the S&P 500 plus the
-mid-cap software / fintech / Canadian-bank names that actually populate an
-earnings week.
-
-Every added symbol was HEAD-verified against davidepalazzo/ticker-logos before
-being listed, so an "unresolved" line in the run tally now means the upstream
-repo dropped that file, not that the name was a guess.
-
-    node scripts/fetch-ticker-logos.mjs        # ~285 more, incremental
-
-Two names in this week's board resolve nowhere upstream — `P` and `UI` — and stay
-as text chips until a file is dropped in by hand.
-
-One trap worth naming: the seed is a template literal that gets
-whitespace-split straight into symbols, and `main()`'s filename guard
-(`/^[A-Z0-9.\-]{1,10}$/`) accepts a bare date. A `#` comment line inside the
-literal would have quietly seeded `2026-08-23` as a ticker. The prose lives
-above the literal for that reason.
-
-## 2026-08-23 - Earnings tab rebuilt as a week board; snapshot copies to the clipboard
-
-Edited: `components/pages/EconomicCalendar.tsx`.
-
-The `/economic-calendar` **Earnings** tab was the calendar's own row grid with
-the events removed: a full-width band per session, an 80px time gutter, chips
-flowing left. A week with four names on Tuesday spent a 2000px-wide row on four
-46px chips, so the tab was mostly empty background down the right-hand side, and
-five days of it stacked past the fold for ~25 names.
-
-### The board
-
-One **column per trading day**, `repeat(auto-fit, minmax(210px, 1fr))` — the
-width is divided between the days instead of being handed to one row, and the
-whole week lands in a single screen. `auto-fit` rather than `repeat(5)` on
-purpose: the feed decides how many days come back, and globals.css's GLOBAL GRID
-COLLAPSE flattens fixed `repeat(N)` counts on phones but deliberately re-exempts
-`auto-fit`/`auto-fill`.
-
-Inside a column: a day header, then a PRE / AFTER / TBD block per session, each
-with its own `repeat(auto-fill, minmax(52px, 1fr))` chip grid.
-
-- **Dates are white.** Every day, not just today — the cyan weekday and the TODAY
-  pill already carry the emphasis, and the old `#3a5570` made every other day
-  read as a disabled row.
-- **Chips are centered on their cell's axis.** The old chip centered a 34px logo
-  in a 46px column but let the ticker text start at the column's left edge, so
-  any symbol narrower or wider than the logo sat visibly off-axis. The fix is
-  `textAlign:center` + `width:100%` on the label — `align-items` centers the
-  span, not the text inside a span that stretches. Each chip also carries its
-  market cap on a second line.
-- **PRE and AFTER no longer share one cyan.** After-hours is now the theme
-  orange, so the two sessions are distinguishable at a glance (this also applies
-  to the earnings rows woven into the calendar tab).
-
-### CB Edge mark
-
-Two places: the page toolbar (replacing the 📅 emoji), and the **board's own
-header**, which also carries the week range, the name count and the active cap
-floor. `/cb-edge-logo.png` is a real same-origin file in `public/`, so unlike the
-302'd ticker logos the capture can actually draw it.
-
-### Snapshot → clipboard, earnings only
-
-The button copies now (`captureAndCopy` → `copyOrDownload`) instead of dropping a
-PNG in Downloads. A browser that refuses an image clipboard write still gets the
-file, and the button says which happened — **✓ Copied** vs **✓ Saved** — because
-a Firefox user staring at a bare ✓ has no way to know Ctrl+V will do nothing.
-
-What gets captured is now tab-dependent: on the earnings tab the target is the
-**board alone** (`earnRef`), not the toolbar, filter dropdowns or search box. The
-board carries its own header, so the pasted image is a self-contained card rather
-than a screenshot of an app. The calendar tab still captures the page shell, and
-keeps the scroll-container expansion dance it needs; the board is the scroller's
-content, so its own box is already the full height and it skips that entirely.
-
-## 2026-08-23 - Feedback became a ticket system (customer + owner, both ends of one thread)
-
-Added: `components/shared/FeedbackThread.tsx`, `app/owner/feedback/page.tsx`.
-Edited: `server-v2/api-router.js`, `app/feedback/page.tsx`,
-`components/shared/OwnerSidebar.tsx`, `components/shared/UserMenu.tsx`.
-
-`/feedback` used to be fire-and-forget: a form, a thank-you, silence. There was
-no way for a customer to see what happened to a note they sent, and no way to
-answer one. Every submission is now a **ticket** with a conversation on it.
-
-### The flow
-
-1. A customer opens a ticket at `/feedback` (same category tiles, same box). It
-   lands as **Open** and the page drops straight into the thread — that is the
-   confirmation, and it shows them where the reply will arrive.
-2. Both sides reply on the thread. The customer's tickets live under a "My
-   tickets" tab on the same page; unread owner replies carry a badge.
-3. The owner works the queue at **`/owner/feedback`** and hits **Mark complete**
-   when it's done. **Only the owner can change status** — enforced server-side,
-   not by hiding a button.
-4. A customer replying to a completed ticket **reopens it**. Otherwise the reply
-   lands in a thread nobody is watching any more.
-
-### Schema
-
-New `customer_feedback_messages (feedback_id → customer_feedback, author, body,
-created_at)` plus two read marks on `customer_feedback`: `user_read_at` and
-`owner_read_at`. Two of them, because "unread" means something different on each
-end — the customer wants to know about owner replies, the owner about customer
-ones. Opening a thread stamps the viewer's mark; that is the only read signal
-either surface has.
-
-Status stays the original two values, `'open'` and `'resolved'` (labelled
-"Complete"), so every row written before threads existed still reads correctly.
-
-Both are created **lazily in `api-router.js`**, with the same `ensureX(pool)`
-pattern `em_snapshots` and `es_stats` use — deliberately NOT in `lib/db.ts`. The
-checked-in `lib/db.ts` is behind `server-v2/_lib-db.cjs`, so regenerating that
-bundle to add a helper would drop unrelated hand-patches (the same reason
-`/api/strike-gex-series` uses raw SQL).
-
-### Routes
-
-| Route | Who |
-|-------|-----|
-| `GET /api/feedback` | owner: every ticket; customer: their own |
-| `POST /api/feedback` | any signed-in user — opens a ticket |
-| `GET /api/feedback/:id` | ticket + thread; also marks it read |
-| `PATCH /api/feedback/:id` | `{status}` owner-only, `{read:true}` either side |
-| `POST /api/feedback/:id/messages` | one reply, from whichever side is signed in |
-
-`GET /api/feedback` was owner-only and 403'd everyone else; it now scopes to the
-caller's own tickets instead. The legacy `PATCH /api/feedback {id,status}` body
-shape still works. The list returns `openCount` and `unreadCount` computed over
-the whole set, not the filtered page, so a status filter never moves a badge.
-
-### UI
-
-`components/shared/FeedbackThread.tsx` is the thread itself — bubbles, stamps,
-composer, status chip — and **both** pages render it, so a reply cannot read
-differently on the two ends. "Mine" is whichever side is looking: the owner sees
-their replies on the right, the customer sees theirs there. Enter sends,
-Shift+Enter breaks the line.
-
-The owner inbox is a two-pane split (queue left, thread right) with Open /
-Complete / All filters, polling the list every 30s and an open thread every 15s.
-Its breakpoint is declared in the page: globals.css's GLOBAL GRID COLLAPSE only
-rewrites `repeat(N…)` and `1fr 1fr` signatures, and this grid is neither.
-
-Sidebar gets **Owner → Feedback**. The account menu's "Send feedback" is now
-"Feedback & Support", because the reply comes back to the same place.
-
-
-## 2026-08-22 - Frozen sessions: the real Premarket / Post-Market tabs on a past date
-
-Added: `server-v2/premarket-freeze-recorder.js`,
-Edited: `server-v2/server-with-proxy.js`, `components/pages/Premarket.tsx`,
-`components/pages/premarket/PostMarketTab.tsx`,
-`components/pages/premarket/postMarketData.ts`.
-
-Picking Friday used to grey out both tabs. Now it opens them for real.
-
-### The recorder
-
-`premarket-freeze-recorder.js` captures the page's **inputs** twice a trading
-day into a new `premarket_freeze (date, symbol, slot, ts, payload JSONB)` table:
-
-- **`pre`** 09:10–09:29 ET — the premarket map, upserted each poll so it holds
-  the freshest pre-bell state right up to the open.
-- **`post`** 16:05–16:25 ET — the settle. 16:05, not the bell, for the same
-  reason the page's own `afterClose` gate uses it.
-
-The payload is the trimmed `/proxy/snapshot` the socket would have delivered —
-`gexRows`, spot, esFut, basis, expiry, walls, flip, totals. `flow`, the candle
-arrays and `status` are dropped; es_candles is already a per-date table and the
-frozen page reads that session's bars from `/api/snapshots/candles?date=`.
-
-**Inputs, never outputs.** The recorder does no arithmetic at all — it never
-computes a wall or a flip. This is the same pattern `home_static_snapshots` and
-`mult_greek_static_snapshots` already use, and it is why there is no second
-implementation of the page's math on the server to drift out of step with the
-client's.
-
-Server-side, not client-side: the page's old localStorage EOD snapshot only ran
-while mounted between 15:40 and 16:10, so nobody was ever on /premarket at
-3:40pm and it never wrote. That deadlock is documented in Premarket.tsx's header
-and is not being repeated.
-
-Retention 120 days (`PREMARKET_FREEZE_KEEP_DAYS`), pruned daily.
-
-### Proxy routes (additive — nothing existing altered)
-
-- `GET /proxy/premarket-freeze?date=&symbol=` — both slots in one answer, so
-  switching tabs costs no second request. `sessionCacheOpts()` lets the browser
-  keep a past session for a day; today stays `no-store` because today's `pre`
-  row is still being upserted until the bell.
-- `GET /proxy/premarket-freeze?dates=1&limit=` — flags only, no payloads. Feeds
-  the picker.
-- `POST /proxy/premarket-freeze-run { slot }` — owner-only via proxy-auth, for a
-  missed window or to seed today right after a deploy.
-- One boot line next to the other recorders.
-
-### The client swap
-
-Exactly one line changes what the page reads:
-
-```
-const gex = frozen && frozenGex ? frozenGex : liveGex;
-```
-
-Everything below it — every memo, both tabs, every panel — is untouched, so a
-frozen date renders the actual page off that day's actual book. Walls, CORE, max
-pain, expected move, DEX/vanna, premium and written-vs-traded are all recomputed
-now, by the live code, from old inputs.
-
-Three things had to start following the session instead of the clock: `viewDate`
-(the overnight window's idea of "today", the wall log, the journal, and the
-baseline's `today=` param — without which a frozen Tuesday would be diffed
-against last night's close), `viewMin` (a frozen day reads as just past the
-settle, which is what puts the Post-Market tab in its finished state), and the ES
-bars, which come from a dated pair — that session's and the prior session's,
-because the overnight range and the prior close live in the day before.
-
-`PostMarketTab` gained one optional `frozenDate` prop. It changes only the three
-things that reach outside the props: the intraday ladder is asked for by date,
-the accuracy log is not back-dated, and **Tomorrow's Map is suppressed** — that
-panel fetches the CURRENT next expiry, so on a past session it would staple next
-week's structure onto last Tuesday's recap.
-
-The picker marks capture-backed dates with a leading bullet, the header carries a
-violet FROZEN banner, and both tabs only go dead on a date with **no** capture,
-where HistoricalRecap still takes over. Frozen sessions are SPX only (the freeze
-captures the one symbol the socket carries), so stepping back onto a past date
-from a SPY/QQQ board snaps to SPX.
-
-### Limitation
-
-**No back-fill.** Nothing stores per-strike marks and volume for past sessions,
-so the freeze only covers dates from the day it deploys forward. Everything
-before that keeps the recorded-stores recap.
-
-
+## 2026-08-25 - Budget on a phone: the Amazon day entry, and why every field was fighting you
+
+New: `owner-vite/src/hooks/useIsMobile.ts`.
+Edited: `owner-vite/src/pages/Budget.tsx`,
+`owner-vite/src/pages/budget/RealMonth.tsx`, `owner-vite/src/index.css`.
+
+The Budget page is not read on a phone — it is TYPED INTO on a phone, and the
+Amazon tab most of all. So the entry path got the work, and the layout pass came
+along with it.
+
+### The thing that made every form a fight
+
+`field()` sets `fontSize: 14`. **iOS Safari zooms the page in whenever you focus
+an input under 16px, and does not zoom back out when you leave.** So the first
+tap on any field shunted the layout sideways and left it there for the rest of
+the session — every subsequent tap then landed slightly wrong. 16px is a
+threshold, not a preference: 15.9 still zooms.
+
+Fixed once, globally, in `index.css` at ≤820px, with `!important` — the one
+legitimate use of it here, because every one of these font sizes is an inline
+style and nothing else in CSS outranks that. The same block bumps vertical
+padding to 13px, putting targets over the 44px accessibility floor.
+
+That rule alone repairs data entry on every owner page, not just this one.
+
+### The Amazon day entry, rebuilt for a thumb
+
+New `AmazonEntry` component. Desktop keeps the four-across row exactly as it was
+— it was never the problem, and stacking it would be a downgrade with a mouse.
+The phone gets its own layout:
+
+- **Today / Yesterday chips.** It is nearly always one of the two, and
+  "yesterday" through a native date picker is four taps. The date also now
+  SURVIVES a save — entering a week of Flex days is the same date over and over,
+  and re-picking it every time was most of the work.
+- **Persistent labels.** "Pay" and "Gas" were placeholders, so they vanished the
+  instant you focused the field: a mis-tap meant typing gas into pay with
+  nothing on screen to say so.
+- **The right keyboard.** `type="number"` gives iOS its numeric pad;
+  `inputMode="decimal"` is what gives ANDROID the pad with a decimal point on it
+  — its default numeric keyboard has none, which is how `12.50` becomes `1250`.
+  `step="0.01"` lets cents through validation. Also applied to the Payments
+  tab's amount field.
+- **Live Net.** Flex pay only means something after gas comes out, and doing
+  that arithmetic in your head at the kerb is how a wrong number gets saved.
+- **Feedback.** A blank save used to return early and silently do nothing, and a
+  successful one looked identical to it. The button now says why it is disabled,
+  shows "Saving…", confirms "✓ Saved", and puts focus straight back on Pay —
+  because the next thing entered is always another day's pay.
+
+Pay and Gas stay side by side even on the phone: they are two halves of one
+number, and stacking them loses that.
+
+### The layout pass
+
+Thirty-six hard-coded grid templates rendered at desktop width on a 390px
+screen, so the page scrolled sideways and every card was clipped. A stylesheet
+could not fix it — owner-vite is inline-styled end to end, so there is nothing
+for a media query to hang on, and the blunt `[style*="grid"] { … !important }`
+version is exactly the "GLOBAL GRID COLLAPSE" trap AGENTS.md documents: it
+flattens the grids that must NOT collapse along with the ones that should.
+
+So: `useIsMobile()` + `gridCols()`, decided per grid, three different answers.
+
+- **Stack it** — card rows, entry forms, the category editor.
+- **Keep the columns, buy the room from padding and type** — the Bzila month
+  ledgers. Month + in + out + net side by side IS what you open a ledger for; at
+  10px padding and 12.5px type all four fit 358px.
+- **Scroll sideways inside the card** — the six-column Bzila detail (560px
+  floor), Recent Transactions (480), Amazon (460), RealMonth's six tables
+  (520–700, sized from their own column widths).
+
+`gridCols()` defaults the mobile side to `minmax(0, 1fr)`, never bare `1fr`.
+`1fr` is `minmax(auto, 1fr)`, and `auto` refuses to shrink below its content, so
+one long merchant name pushes the column past the viewport and takes the page's
+horizontal scroll with it — the most common way a "responsive" grid still
+overflows on a phone.
+
+**The calendar.** 7 × 104px = 758px, a two-screen swipe for one month, which
+defeats the point of drawing a calendar rather than a list. Phone cells are
+48 × 54 — 7 × 48 + gaps = 360px, a whole month inside a 390pt viewport.
+`DayCell` scales its own type from the width instead of being a clipped big
+cell, and shows `1.2k` where `$1,234.56` cannot fit. The overflow wrappers stay
+as the 320px backstop but now start-align: a centred child wider than its
+scroller has its left edge clipped UNREACHABLY in Chrome and Safari, which would
+have hidden the 1st of the month.
+
+**Tabs.** Seven pills wrapped to three ragged rows and ate a third of the first
+screen. One swipeable strip now, scrollbar hidden (it rendered straight across
+the pills), with end padding so the clipped last pill reads as "there's more".
+
+Breakpoint is 820px, not 768 — small tablets and landscape phones read far
+better stacked than squeezed into three 90px columns.
+
+Caught in review: a padding replacement scoped to `BzilaPanel` leaked past the
+end of the component into the shared `th()` helper, which has no `isMobile` in
+scope. esbuild compiles that happily (an unresolved identifier is assumed
+global) and it would have thrown at runtime on two tables. Reverted, then every
+`isMobile` reference in both files was checked against the component that owns
+it.
+## 2026-08-23 (d) - Short links: cbedge.net/x (no verb)
+
+New: `lib/shortLinks.ts`, `app/[source]/route.ts`.
+Edited: `app/[source]/[action]/route.ts`, `middleware.ts`,
+`owner-vite/src/components/CampaignLinkBuilder.tsx`.
+
+`cbedge.net/x` now works and is the link to paste in a post. It resolves to
+exactly what `/x/click` resolved to — `/?utm_source=x&utm_medium=social&utm_campaign=post`
+— byte for byte, so **the two-segment form still works and anything already
+posted keeps counting under the same campaign.** Same for `/youtube`,
+`/tiktok`, `/email`, `/newsletter`, `/discord`, `/reddit`, `/stocktwits`.
+
+`?c=` and `?to=` behave identically on the bare form.
+
+**The profile link stays `/x/profile` (or `/x/bio`).** The ask was for
+`/x/click` to become the profile link; that would have silently re-pointed
+every `/x/click` already in the wild from the post campaign to the profile one
+and put a seam through the middle of the x/post history. `/x/profile` already
+existed and does the job. A bio link and a post link have to stay tellable
+apart — one trickles forever from people who looked you up, the other spikes
+with what you wrote, and one number for both hides both.
+
+**Why the bare form is an allowlist.** `app/[source]/route.ts` is a root-level
+SINGLE dynamic segment, which unguarded swallows every unknown top-level path:
+a typo like `/pricng` would stop being a 404 and start being a 302 that logs a
+referral from a source called "pricng". So it answers only for sources that
+have a `<source>/click` row in PLACEMENTS, and 404s otherwise. Real routes were
+never at risk — Next resolves static segments before dynamic ones.
+
+**One table, three consumers.** The PLACEMENTS table, the action list, the slug
+rule and the `?to=` open-redirect guard moved into `lib/shortLinks.ts`, which
+both route handlers and `middleware.ts` now import. The middleware public
+pattern for the bare form is BUILT from that list rather than typed out —
+a link that 302s but is gated, or is public but 404s, is the same bug twice.
+It must stay an explicit alternation: `^\/[a-z0-9-]+$` would make every
+single-segment path public, which is every gated page on the site
+(`/es-candles`, `/scanner`, `/owner`).
+
+The link builder now offers the bare form for the standard placements and for
+any one-off source on the allowlist; an unknown one-off still gets `/click`,
+since the bare route would 404 on it.
+
+## 2026-08-23 (c) - Owner Overview: the two 2px "bars" at the bottom were collapsed cards
+
+Edited: `owner-vite/src/pages/ControlPanel.tsx`.
+
+Two thin horizontal lines sat at the bottom of the Overview page under the
+campaign link builder, 12px apart, with nothing between them. They are the
+**Flow · Ticker Visits** and **EM · Ticker Visits** cards, shrunk to zero
+height — each line is that card's top and bottom border with no content
+between.
+
+Cause: the scrollable page body is a **column flex container** with
+`height: 0; flex: 1; overflow-y: auto`, and flex items default to
+`flex-shrink: 1`. A card normally survives that because of its automatic
+minimum size — but that protection only applies while `overflow` is `visible`,
+and `TickerVisitsCard` sets `overflow: hidden` on its panel for the rounded
+clip. With the page content taller than the container, the shrink had to land
+somewhere, and those two were the only children free to absorb it.
+
+Fix: the scroll body now also carries `owner-page-body`, with one rule —
+`.owner-page-body > * { flex-shrink: 0; }`. Nothing in a scroll container
+should ever shrink; it scrolls. This covers every current and future card on
+the page rather than patching the two that happened to show it.
+
+Separately: those two cards are also **empty** — `/api/ticker-event?sinceDays=7`
+returns nothing for either source, so once they have height they read "No ticker
+visits recorded in this window."
+
+## 2026-08-23 (b) - Owner Overview: hourly heatmap removed, Campaigns is a bar list
+
+Edited: `owner-vite/src/pages/ControlPanel.tsx`, `owner-vite/src/components/AcquisitionPanel.tsx`.
+
+**Hourly load heatmap removed** from the Overview tab. `<HourlyHeatmap />` and
+its import are gone; `components/HourlyHeatmap.tsx` still exists on disk but is
+no longer mounted anywhere. Nothing was read off it that the Traffic card's
+live/daily buckets don't already say, and it cost its own fetch plus a 7x24 fold
+of the visit log.
+
+**Campaigns is now a ranked bar list, not a table** — same shape as "Pages being
+visited": name on the left with a magnitude bar under it, counts right-aligned
+in a matching column grid (`CAMPAIGN_COLS`). The bar encodes **sessions** (the
+clicks the link got).
+
+The sort moved with it, and had to: it was `paid → signups → sessions`, which
+answers "which push earned customers". A ranked bar list sorted on a column
+other than the one its bars draw reads as broken, so it is now
+`sessions → paid → signups`. Signups / Paid / Conv. stay as columns beside the
+bar, so the earnings question is still one glance away.
+
+## 2026-08-23 - Owner Overview: kill the Intl cost behind the traffic / pages-visited lag
+
+Edited: `owner-vite/src/pages/ControlPanel.tsx`.
+
+Still laggy after the 2026-08-22 re-render fix. That one stopped the work from
+running *every second*; it did nothing about how expensive one run is. Profiling
+the Overview tab put nearly all of it in one place: **`Date#toLocaleDateString` /
+`toLocaleString` called once per visit row.** Each of those calls constructs a
+fresh `Intl.DateTimeFormat` internally, and the construction — not the
+formatting — is the cost. `/api/page-visits?days=30&limit=20000` returns tens of
+thousands of rows, and six separate passes were formatting every one of them.
+
+**1. ET bucket keys are now arithmetic, not `Intl`.** America/New_York's UTC
+offset only changes at DST boundaries, and those land on an hour mark — so one
+`Intl` lookup per *UTC hour* answers for every row inside it. 30 days of visits
+touch ~720 cached buckets instead of 20,000 formats; every key after that is
+integer math on a shifted timestamp. New `etOffsetMs` / `etDayKeyMs` /
+`etHourKeyMs` / `etYearMs`; `etDayKey`/`etDayLabel` keep their signatures and
+delegate. Verified identical output against the old formatters over three years
+at 7-minute steps (225,463 samples, both DST switches, zero mismatches).
+Measured on one 20k-row pass: **1528ms → 51ms.**
+
+**2. `hourBuckets` formatted every timestamp twice.** It called `hourKey(t)` for
+the map read *and* again for the map write, doubling the cost of the hottest
+loop on the tab. Keyed once now.
+
+**3. `navLabelFor` rebuilt the nav table on every call.**
+`NAV_GROUPS.flatMap(g => g.items).find(...)` — allocated a flattened array and
+linear-scanned it, once per visit row, because `describePage()` calls it. Now a
+module-level `NAV_LABEL_BY_HREF` map built once. `labelFor` inside
+`overviewMetrics` had the same body and now shares it.
+
+**4. `describePage` is memoised.** Tens of thousands of rows, a few dozen
+distinct `(page_key, path, label)` triples — every row after the first for a
+page is a map hit instead of a regex plus a nav lookup.
+
+**5. `seriesFor` is memoised in both of its callers.** `KpiStrip` and
+`MetricsTabSection` each called it bare, so each re-bucketed the whole visit log
+on every render. `KpiStrip` is the worse of the two: its five `useLiveSeries`
+hooks append a point on every poll, so it re-renders on a timer regardless of
+whether `visits` changed. Both are `useMemo`d on `[gran, visits, signups]`.
+
+**6. `onToday` no longer formats per row.** The unique-visitors-today set
+compared `toLocaleDateString(...)` against today's date string for every row; it
+now compares the cheap ET day key. A plain timestamp cutoff would have been
+wrong — the ET day starts at a different UTC instant depending on DST — so the
+key comparison stays.
+
+Also trimmed the per-row `new Date()` allocations in the weekly/daily/monthly/
+yearly bucketers in favour of `Date.parse` plus one reused `Date`.
+
+No behavior change: same buckets, same labels, same numbers. Client-side only —
+no API, proxy or server change.
+
+## 2026-08-22 (b) - Owner Overview: fix the 1Hz re-render that made the page crawl
+
+Edited: `owner-vite/src/pages/ControlPanel.tsx`.
+
+The page had become very laggy. Four causes, all of them the same shape: a
+one-second interval that exists to move a clock was driving work that has
+nothing to do with a clock. The visit-log cards added yesterday didn't create
+any of this — they made an existing problem expensive enough to feel.
+
+**1. `overviewMetrics` was a bare IIFE.** A `setInterval` bumps
+`uptimeTick`/`setTick` every second so the sidebar's uptime and "Ns ago" stay
+live. That re-renders ControlPanel, and the metrics block re-ran on every tick:
+a full pass over `visits` for the unique-visitors-today set, three more for the
+daily/weekly series, a sort of `pageStatuses` — thousands of rows of work per
+second, to redraw a clock. It also returned a **fresh object** each time, so
+`OverviewSection` and every chart, bar list and table under it re-rendered at
+1Hz too. Now `useMemo`, keyed on the state the numbers actually come from.
+
+**2. The metrics object carried a per-second field.** `uptime: fmtUptime(…)`
+recomputed every tick and was the one thing in the object that could never be
+stable — so it alone would have defeated the memo. Nothing read it: the
+destructure in `OverviewSection` never included it. Removed from the object and
+the type.
+
+**3. `OverviewSection` is now `React.memo`.** Paired with (1), and both are
+needed: memoising the data alone still hands down a new object, memoising the
+component alone still receives one. Together a tick that changes nothing on the
+tab costs nothing on the tab.
+
+**4. `SidebarContent` was a component declared inside render.** A new function
+identity every render means React tears down and rebuilds the subtree whose type
+changed — so the mobile drawer was unmounting and remounting once per second,
+losing any focus or scroll inside it. Called as `{SidebarContent()}` now, which
+inlines the JSX into the parent's own tree where it reconciles normally.
+
+**Plus: the visit log no longer re-downloads every 60s.** `refresh()` runs on a
+one-minute timer and was re-pulling `/api/page-visits?days=30&limit=20000` with
+it. Every arrival replaces the array, which invalidates the memos in four
+consumers (metrics, Top pages, Acquisition, the link builder) and makes all of
+them re-derive from scratch — a visible hitch every minute, buying a fresher
+view of a log that is read in 24h/7d/30d windows. Throttled to 5 minutes via a
+ref that only advances on a SUCCESSFUL fetch, so a failed attempt retries on the
+next refresh instead of waiting out the window.
+
+The 1s interval itself is left alone — it is correct for what it was for, and
+the fix is that it can no longer reach anything else.
 ## 2026-08-22 - Session picker: wire it to the history that actually exists
 
 Edited: `components/pages/premarket/postMarketData.ts`,

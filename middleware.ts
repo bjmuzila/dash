@@ -1,5 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getUserFromMiddleware } from "@/lib/supabase/middleware";
+import { BARE_SOURCE_LIST } from "@/lib/shortLinks";
+
+/**
+ * The one-segment short links (`/x`, `/youtube`, …), built from the SAME list
+ * the route handler answers for. Written out by hand this would be a public
+ * pattern that drifts from the router — a link that 302s but is gated, or is
+ * public but 404s, is the same bug twice.
+ *
+ * It MUST stay an explicit alternation of known sources. `^\/[a-z0-9-]+$` would
+ * make every single-segment path public, which is every gated dashboard page on
+ * the site (`/es-candles`, `/scanner`, `/owner`).
+ */
+const BARE_SHORT_LINK_RE = new RegExp(`^\\/(${BARE_SOURCE_LIST.join("|")})$`);
 
 // Public routes: landing, auth pages, the waitlist API, the maintenance page,
 // and static/proxy assets. Everything else (the paid dashboard) requires a
@@ -42,6 +55,10 @@ const PUBLIC_PATTERNS: RegExp[] = [
   // they forward to is gated on its own terms. The verb suffix is what keeps
   // this pattern from accidentally opening a real two-segment route.
   /^\/[a-z0-9-]+\/(click|profile|bio|post|video|link)$/,
+  // …and the one-segment form of the same thing (`/x`), handled by
+  // app/[source]/route.ts. No verb to disambiguate it, so this is an explicit
+  // allowlist of known sources — see BARE_SHORT_LINK_RE above.
+  BARE_SHORT_LINK_RE,
   /^\/api\/stripe\/webhook$/,
   // Page-load beacon. Public because it fires on EVERY load including guests
   // and unpaid users — gating it silently drops visit logging for exactly the

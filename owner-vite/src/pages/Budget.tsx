@@ -6,6 +6,7 @@ import { ThemedSelect } from "../components/ThemedSelect";
 import { ThemedMonthPicker } from "../components/ThemedMonthPicker";
 import RealMonth from "./budget/RealMonth";
 import { CategoryBudgetSection } from "./budget/CategoryBudget";
+import { useIsMobile, gridCols, scrollX } from "../hooks/useIsMobile";
 
 type Bank = "coastal" | "truist" | "secu";
 type BudgetProfile = { id: number; name: string; currency: string };
@@ -108,6 +109,14 @@ function fmtMoney(amount: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(amount || 0);
 }
 // Short "M-D" like the screenshot (7-1).
+/** "1.2k" / "930" — for the 48px phone calendar cell, where the full
+ *  "$1,234.56" cannot fit and an ellipsed number says nothing at all. */
+function compactMoney(amount: number): string {
+  const n = Math.abs(amount);
+  if (n >= 1000) return `${(amount / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(Math.round(amount));
+}
+
 function shortDate(iso: string): string {
   const [, m, d] = iso.split("-").map(Number);
   return `${m}-${d}`;
@@ -180,6 +189,7 @@ export default function Budget() {
   const [weekAgoBalance, setWeekAgoBalance] = useState<DailyBalance | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"overview" | "register" | "real" | "categories" | "amazon" | "bzila" | "yearly">("overview");
+  const isMobile = useIsMobile();
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
   const [yearRows, setYearRows] = useState<RegisterRow[]>([]);
   /**
@@ -1121,11 +1131,15 @@ export default function Budget() {
   const updateRecurringRule = async (id: number, patch: Record<string, unknown>) =>
     post({ action: "recurringUpdate", id, ...patch });
   const deleteRecurringRule = async (id: number) => post({ action: "recurringDelete", id });
-  const saveAmazon = async () => {
-    if (azDate.trim() === "" || (azPay.trim() === "" && azGas.trim() === "")) return;
+  const saveAmazon = async (): Promise<boolean> => {
+    if (azDate.trim() === "" || (azPay.trim() === "" && azGas.trim() === "")) return false;
     await post({ action: "amazon", date: azDate, pay: Number(azPay || 0), gas: Number(azGas || 0) });
     setAzPay("");
     setAzGas("");
+    // The date deliberately survives: entering a week of Flex days is the same
+    // date over and over, or one tap on "Yesterday" — re-picking it every time
+    // was most of the work.
+    return true;
   };
   const deleteAz = async (id: number) => post({ action: "deleteAmazon", id });
   // Bzila ledger (prop + cbedge + contracts). Contracts can also arrive from the
@@ -1151,7 +1165,7 @@ export default function Budget() {
     <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: INK, backgroundImage: SHELL_GLOW_DEEP, color: HOME_THEME.text, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
       <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 14 }}>
         {/* Title banner */}
-        <div style={{ ...cardAccent(4), padding: "14px 18px", overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
+        <div style={{ ...cardAccent(4), padding: isMobile ? "12px 13px" : "14px 18px", overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.28em", color: HOME_THEME.muted, opacity: 0.75 }}>{monthLabel.toUpperCase()}</div>
             <div style={{ fontSize: "clamp(26px, 3.2vw, 38px)", fontWeight: 900, letterSpacing: "0.16em", lineHeight: 1.1, marginTop: 4, textShadow: "0 0 34px rgba(125,211,252,0.55), 0 0 80px rgba(33,158,188,0.35)" }}>BUDGET</div>
@@ -1162,8 +1176,20 @@ export default function Budget() {
           </div>
         </div>
 
-        {/* Tabs (top-level nav) */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {/* Tabs (top-level nav).
+            On a phone these seven pills wrap to three ragged rows and eat a
+            third of the first screen, so they become one swipeable strip
+            instead: nowrap + overflowX, with the row's own scrollbar hidden
+            (it would sit across the pills) and a little end padding so the last
+            pill doesn't look clipped. */}
+        <div
+          className={isMobile ? "budget-tabstrip" : undefined}
+          style={{
+            display: "flex", gap: 8, alignItems: "center",
+            flexWrap: isMobile ? "nowrap" : "wrap",
+            ...(isMobile ? { ...scrollX, paddingBottom: 2, paddingRight: 4 } : null),
+          }}
+        >
           {([["overview", "Overview"], ["register", "Payments"], ["real", "Real Month"], ["categories", "Categories"], ["amazon", "Amazon"], ["bzila", "Bzila"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} style={pill(tab === k)}>{l}</button>
           ))}
@@ -1220,7 +1246,7 @@ export default function Budget() {
         </div>
 
         {/* Cash flow (daily) + cashflow calendar */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.55fr 1fr", gap: 12, alignItems: "stretch" }}>
+        <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1.55fr 1fr"), gap: 12, alignItems: "stretch" }}>
           <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
               <div>
@@ -1246,14 +1272,14 @@ export default function Budget() {
         </div>
 
         {/* Alerts · banks · upcoming pay */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 1fr", gap: 12, alignItems: "stretch" }}>
+        <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1.1fr 1fr 1fr"), gap: 12, alignItems: "stretch" }}>
           <RentCountdown info={rentInfo} currency={currency} />
           <BankAccountsCard value={dailyBalance} currency={currency} onSave={saveDailyBalance} fallback={bankNow} />
           <UpcomingPayCard data={upcomingPay} pastDue={billsDue.filter((b) => b.days < 0)} currency={currency} onMarkPaid={markBillPaid} />
         </div>
 
         {/* Recent transactions · category spend */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1fr 1fr"), gap: 12, alignItems: "start" }}>
           <RecentTransactions rows={recentPaid} currency={currency} categories={categories} />
           <CategorySpendCard
             categories={categories}
@@ -1340,25 +1366,29 @@ export default function Budget() {
 
         {/* Composer */}
         {tab === "register" && (
-          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "140px 1fr 130px 120px 130px 110px", gap: 10, alignItems: "center", position: "relative", zIndex: 20 }}>
+          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: gridCols(isMobile, "140px 1fr 130px 120px 130px 110px"), gap: 10, alignItems: "center", position: "relative", zIndex: 20 }}>
             <input type="date" value={rwDate} onChange={(e) => setRwDate(e.target.value)} style={field()} />
             <input value={rwLabel} onChange={(e) => setRwLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRow()} placeholder="Item (RENT, H PAY, VENMO…)" style={field()} />
             <ThemedSelect value={rwBank} onChange={(v) => setRwBank(v as Bank)} options={BANKS.map((b) => ({ value: b, label: BANK_LABEL[b] }))} />
             <ThemedSelect value={rwSign} onChange={(v) => setRwSign(v as "-" | "+")} options={[{ value: "-", label: "− Pay" }, { value: "+", label: "+ Income" }]} />
-            <input value={rwAmount} onChange={(e) => setRwAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRow()} placeholder="Amount" type="number" style={field()} />
+            <input value={rwAmount} onChange={(e) => setRwAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRow()} placeholder="Amount" type="number" inputMode="decimal" step="0.01" enterKeyHint="done" autoComplete="off" style={field()} />
             <button onClick={addRow} style={primary()}>Add Row</button>
           </div>
         )}
         {tab === "amazon" && (
-          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "150px 1fr 1fr 110px", gap: 10, alignItems: "center" }}>
-            <input type="date" value={azDate} onChange={(e) => setAzDate(e.target.value)} style={field()} />
-            <input value={azPay} onChange={(e) => setAzPay(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveAmazon()} placeholder="Pay" type="number" style={field()} />
-            <input value={azGas} onChange={(e) => setAzGas(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveAmazon()} placeholder="Gas" type="number" style={field()} />
-            <button onClick={saveAmazon} style={primary()}>Add Day</button>
-          </div>
+          <AmazonEntry
+            date={azDate}
+            pay={azPay}
+            gas={azGas}
+            currency={currency}
+            onDate={setAzDate}
+            onPay={setAzPay}
+            onGas={setAzGas}
+            onSave={saveAmazon}
+          />
         )}
         {tab === "bzila" && (
-          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "140px 120px 120px 1fr 100px 120px 100px", gap: 10, alignItems: "center" }}>
+          <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: gridCols(isMobile, "140px 120px 120px 1fr 100px 120px 100px"), gap: 10, alignItems: "center" }}>
             {ppSource === "cbedge" ? (
               <input type="month" value={ppDate.slice(0, 7)} onChange={(e) => setPpDate(e.target.value ? `${e.target.value}-01` : "")} title="CB Edge is tracked by month" style={field()} />
             ) : (
@@ -1405,6 +1435,7 @@ function RecurringManager({
   onDelete: (id: number) => void;
   onClose: () => void;
 }) {
+  const isMobile = useIsMobile();
   const [label, setLabel] = useState("");
   const [bank, setBank] = useState<Bank>("secu");
   const [sign, setSign] = useState<"-" | "+">("-");
@@ -1436,7 +1467,7 @@ function RecurringManager({
           {rules.map((rule) => {
             const inc = rule.amount > 0;
             return (
-              <div key={rule.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.9fr 1fr auto auto", gap: 10, alignItems: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "8px 12px", opacity: rule.active ? 1 : 0.45 }}>
+              <div key={rule.id} style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1.4fr 1fr 0.9fr 1fr auto auto"), gap: 10, alignItems: "center", background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "8px 12px", opacity: rule.active ? 1 : 0.45 }}>
                 <span style={{ fontWeight: 800 }}>{rule.label}</span>
                 <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{FREQ_LABEL[rule.frequency]}</span>
                 <span style={{ fontSize: 14, color: HOME_THEME.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{BANK_LABEL[rule.bank]}</span>
@@ -1456,7 +1487,7 @@ function RecurringManager({
       )}
 
       {/* Add a new rule */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr 0.9fr 1fr 90px", gap: 10, alignItems: "end", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1.4fr 1fr 0.8fr 0.9fr 1fr 90px"), gap: 10, alignItems: "end", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
         <div><div style={labelCap()}>Item</div><input value={label} onChange={(e) => setLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="RENT, H PAY…" style={field()} /></div>
         <div><div style={labelCap()}>How often</div><ThemedSelect value={frequency} onChange={(v) => setFrequency(v as Frequency)} options={FREQS.map((f) => ({ value: f, label: FREQ_LABEL[f] }))} /></div>
         <div><div style={labelCap()}>Bank</div><ThemedSelect value={bank} onChange={(v) => setBank(v as Bank)} options={BANKS.map((b) => ({ value: b, label: BANK_LABEL[b] }))} /></div>
@@ -1482,6 +1513,11 @@ type DayGroup = { date: string; rows: ComputedRow[]; dailyNet: number; eod: numb
 // wide the window (or the card) gets. The grid is centred and the wrapper
 // scrolls horizontally on very narrow viewports instead of squashing cells.
 const CELL_W = 104, CELL_H = 78;
+// Phone sizes. 7 × 48 + 6 gaps of 4 = 360px, which fits a 390pt viewport inside
+// the page's 14px padding — so a whole month is visible without a swipe, which
+// is the only reason to draw a calendar rather than a list. The overflow-x
+// wrappers below stay regardless, as the backstop for a 320px screen.
+const CELL_W_SM = 48, CELL_H_SM = 54;
 
 function DayCell({ d, iso, g, currency, isSel, isToday, onSelect, w = CELL_W, h = CELL_H }: {
   d: number; iso: string; g: DayGroup | undefined; currency: string; isSel: boolean; isToday: boolean;
@@ -1489,23 +1525,27 @@ function DayCell({ d, iso, g, currency, isSel, isToday, onSelect, w = CELL_W, h 
 }) {
   const net = g?.dailyNet ?? 0;
   const pos = net > 0, neg = net < 0;
+  const tight = w < 70;
   const tint = neg ? "rgba(244,148,142,0.10)" : pos ? "rgba(142,202,230,0.08)" : "rgba(255,255,255,0.02)";
   return (
     <button
       onClick={() => g && onSelect(iso)}
       disabled={!g}
       style={{
-        textAlign: "left", width: w, height: h, boxSizing: "border-box", padding: "6px 7px", borderRadius: 9,
+        textAlign: "left", width: w, height: h, boxSizing: "border-box", padding: tight ? "4px 4px" : "6px 7px", borderRadius: tight ? 7 : 9,
         cursor: g ? "pointer" : "default", overflow: "hidden", background: tint,
         border: `1px solid ${isSel ? "#7dd3fc" : isToday ? "rgba(255,255,255,0.6)" : g ? HOME_THEME.border : "transparent"}`,
         boxShadow: isSel ? "0 0 0 1px rgba(126,211,252,0.4)" : isToday ? "0 0 0 1px rgba(255,255,255,0.25)" : "none",
         color: HOME_THEME.text, transition: "all 0.12s ease",
       }}
     >
-      <div style={{ fontSize: 17, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ fontSize: tight ? 13 : 17, fontWeight: 700, color: HOME_THEME.muted, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span>{d}</span>
       </div>
-      {g && <div style={{ fontSize: 13, fontWeight: 800, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
+      {/* At 48px there is no room for "$1,234.56", so the small cell drops the
+          cents and the thousands separator rather than ellipsing a number into
+          meaninglessness — "1.2k" still tells you the size of the day. */}
+      {g && <div style={{ fontSize: tight ? 10 : 13, fontWeight: 800, marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{tight ? compactMoney(net) : fmtMoney(net, currency)}</div>}
     </button>
   );
 }
@@ -1532,6 +1572,10 @@ function CalendarGrid({
   yearNet: Map<string, number>;
   year: number;
 }) {
+  const isMobile = useIsMobile();
+  const cw = isMobile ? CELL_W_SM : CELL_W;
+  const ch = isMobile ? CELL_H_SM : CELL_H;
+  const gap = isMobile ? 4 : 5;
   const byDate = new Map(groups.map((g) => [g.date, g]));
   const todayStr = todayIso();
 
@@ -1541,10 +1585,10 @@ function CalendarGrid({
     const sunday = addDays(todayStr, -now.getDay());
     const days = Array.from({ length: 7 }, (_, i) => addDays(sunday, i));
     return (
-      <div style={{ width: "100%", overflowX: "auto", display: "flex", justifyContent: "center" }}>
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(7, ${CELL_W}px)`, gap: 5, flex: "none" }}>
+      <div style={{ ...scrollX, width: "100%", display: "flex", justifyContent: isMobile ? "flex-start" : "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(7, ${cw}px)`, gap, flex: "none" }}>
           {WD.map((w, i) => (
-            <div key={i} style={{ width: CELL_W, boxSizing: "border-box", textAlign: "center", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
+            <div key={i} style={{ width: cw, boxSizing: "border-box", textAlign: "center", fontSize: isMobile ? 11 : 14, fontWeight: 800, letterSpacing: isMobile ? "0.02em" : "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
           ))}
           {days.map((iso) => (
             <DayCell
@@ -1556,7 +1600,8 @@ function CalendarGrid({
               isSel={selected === iso}
               isToday={iso === todayStr}
               onSelect={onSelect}
-              h={CELL_H + 14}
+              w={cw}
+              h={ch + 14}
             />
           ))}
         </div>
@@ -1621,14 +1666,14 @@ function CalendarGrid({
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
   return (
-    <div style={{ width: "100%", overflowX: "auto", display: "flex", justifyContent: "center" }}>
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(7, ${CELL_W}px)`, gap: 5, flex: "none" }}>
+    <div style={{ ...scrollX, width: "100%", display: "flex", justifyContent: isMobile ? "flex-start" : "center" }}>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(7, ${cw}px)`, gap, flex: "none" }}>
         {WD.map((w, i) => (
-          <div key={i} style={{ width: CELL_W, boxSizing: "border-box", textAlign: "center", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
+          <div key={i} style={{ width: cw, boxSizing: "border-box", textAlign: "center", fontSize: isMobile ? 11 : 14, fontWeight: 800, letterSpacing: isMobile ? "0.02em" : "0.08em", color: HOME_THEME.muted, padding: "2px 0 4px" }}>{w}</div>
         ))}
         {cells.map((d, i) =>
           d === null ? (
-            <div key={`e${i}`} style={{ width: CELL_W, height: CELL_H, boxSizing: "border-box" }} />
+            <div key={`e${i}`} style={{ width: cw, height: ch, boxSizing: "border-box" }} />
           ) : (
             <DayCell
               key={d}
@@ -1639,6 +1684,8 @@ function CalendarGrid({
               isSel={selected === iso(d)}
               isToday={d === todayDay}
               onSelect={onSelect}
+              w={cw}
+              h={ch}
             />
           )
         )}
@@ -1668,6 +1715,7 @@ function MonthlyRegister({
   onDelete: (id: number) => void;
   onMaterialize: (row: ComputedRow) => void;
 }) {
+  const isMobile = useIsMobile();
   const selRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (selectedDate && selRef.current) {
@@ -1708,7 +1756,7 @@ function MonthlyRegister({
                 // or past due once their date has passed without being logged.
                 const status: "paid" | "owed" | "pastdue" | null = r.amount < 0 ? (r.recurring ? (r.entry_date < todayIso() ? "pastdue" : "owed") : "paid") : null;
                 return (
-                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: 12, alignItems: "center", padding: "8px 12px", borderTop: `1px solid rgba(255,255,255,0.04)` }}>
+                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto auto auto", gap: isMobile ? 7 : 12, alignItems: "center", padding: isMobile ? "8px 9px" : "8px 12px", borderTop: `1px solid rgba(255,255,255,0.04)` }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                       {r.recurring ? (
                         <span style={{ fontWeight: 700, fontStyle: "italic" }}>🔁 {r.label}</span>
@@ -1720,10 +1768,10 @@ function MonthlyRegister({
                       )}
                       {status && <StatusPill status={status} />}
                     </div>
-                    <span style={{ fontWeight: 800, textAlign: "right", minWidth: 90, color: isIncome ? HOME_THEME.green : r.amount < 0 ? SOFT_RED : HOME_THEME.text }}>
+                    <span style={{ fontWeight: 800, textAlign: "right", minWidth: isMobile ? 62 : 90, color: isIncome ? HOME_THEME.green : r.amount < 0 ? SOFT_RED : HOME_THEME.text }}>
                       {r.recurring ? fmtMoney(r.amount, currency) : <EditableMoney value={r.amount} onCommit={(v) => onEdit(r.id, { amount: v })} />}
                     </span>
-                    <span style={{ textAlign: "right", minWidth: 100, fontWeight: 800, color: r.balance < 0 ? SOFT_RED : HOME_THEME.muted }}>{fmtMoney(r.balance, currency)}</span>
+                    <span style={{ textAlign: "right", minWidth: isMobile ? 66 : 100, fontWeight: 800, color: r.balance < 0 ? SOFT_RED : HOME_THEME.muted }}>{fmtMoney(r.balance, currency)}</span>
                     <span style={{ width: 30, textAlign: "center" }}>
                       {r.recurring
                         ? <EditButton title="Recurring entry — click to edit just this occurrence (amount changed or paid early)" onClick={() => onMaterialize(r)} />
@@ -2120,6 +2168,7 @@ function SpendPaceCard({ series, currency, importedMonths = [], onMonth }: { ser
  * halves always agree.
  */
 function CategoryDonutCard({ slices, currency, range, importedMonths = [] }: { slices: Intel["slices"]; currency: string; range: RangeMode; importedMonths?: string[] }) {
+  const isMobile = useIsMobile();
   const [hover, setHover] = useState<number | null>(null);
   const total = slices.reduce((s, x) => s + x.value, 0);
   const hasAvg = slices.some((x) => x.avg != null);
@@ -2165,7 +2214,7 @@ function CategoryDonutCard({ slices, currency, range, importedMonths = [] }: { s
           </div>
         </div>
       ) : (
-        <div style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 0, minWidth: 0 }}>
+        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: "center", gap: 12, minHeight: 0, minWidth: 0 }}>
           {/* 40/60, not 50/50. The pie is happy at any size — it is an
               aspect-ratio box that just scales — while the legend has a hard
               floor: swatch + amount + delta are fixed-width columns, and once
@@ -2173,7 +2222,7 @@ function CategoryDonutCard({ slices, currency, range, importedMonths = [] }: { s
               spills out of the card over the neighbouring one. Giving the
               words the larger share keeps that floor comfortably inside the
               card at every column width this grid produces. */}
-          <div style={{ flex: "0 1 36%", minWidth: 0, display: "grid", placeItems: "center" }}>
+          <div style={{ flex: isMobile ? "none" : "0 1 36%", width: isMobile ? "100%" : undefined, minWidth: 0, display: "grid", placeItems: "center" }}>
             <div style={{ position: "relative", width: "100%", maxWidth: 210, aspectRatio: "1 / 1" }}>
             <svg viewBox="0 0 120 120" width="100%" height="100%" onMouseLeave={() => setHover(null)} style={{ overflow: "visible", display: "block" }}>
               {arcs.map(({ sl, a0, a1 }, i) => {
@@ -2217,7 +2266,7 @@ function CategoryDonutCard({ slices, currency, range, importedMonths = [] }: { s
               the rows here — whose fixed columns cannot shrink — would widen
               the column past the card instead of ellipsising the label. This
               is the line that actually stops the overflow. */}
-          <div style={{ flex: "1 1 64%", minWidth: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 2, fontSize: 11.5, fontVariantNumeric: "tabular-nums", alignContent: "center" }} onMouseLeave={() => setHover(null)}>
+          <div style={{ flex: isMobile ? "none" : "1 1 64%", width: isMobile ? "100%" : undefined, minWidth: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 2, fontSize: isMobile ? 12.5 : 11.5, fontVariantNumeric: "tabular-nums", alignContent: "center" }} onMouseLeave={() => setHover(null)}>
             {slices.slice(0, 8).map((sl, i) => {
               const on = hover === i;
               return (
@@ -2666,6 +2715,7 @@ function UpcomingPayCard({
 
 /** Recent transactions — real logged rows, i.e. what has actually been paid. */
 function RecentTransactions({ rows, currency, categories = [] }: { rows: RegisterRow[]; currency: string; categories?: Category[] }) {
+  const isMobile = useIsMobile();
   const catById = new Map(categories.map((c) => [c.id, c]));
   return (
     <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
@@ -2673,7 +2723,10 @@ function RecentTransactions({ rows, currency, categories = [] }: { rows: Registe
         <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Recent Transactions</div>
         <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.55, marginTop: 2 }}>Logged this month · what has been paid</div>
       </div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+      {/* Date + merchant + category + amount. On a phone this scrolls sideways
+          rather than wrapping every merchant name onto four lines. */}
+      <div style={isMobile ? scrollX : undefined}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: isMobile ? 480 : undefined }}>
         <thead>
           <tr>
             <th style={th("left")}>Date</th>
@@ -2713,6 +2766,7 @@ function RecentTransactions({ rows, currency, categories = [] }: { rows: Registe
           })}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -2912,6 +2966,7 @@ function CategoriesPanel({
   onAssign: (rowId: number, categoryId: number | null) => void;
   onDeleteRow: (id: number) => void;
 }) {
+  const isMobile = useIsMobile();
   const [name, setName] = useState("");
   const [budget, setBudget] = useState("");
   const [color, setColor] = useState(CATEGORY_COLORS[0]);
@@ -2949,7 +3004,7 @@ function CategoriesPanel({
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {unsorted.map((r) => (
-              <div key={r.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr 150px 90px", gap: 8, alignItems: "center" }}>
+              <div key={r.id} style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "70px 1fr 150px 90px", "56px minmax(0, 1fr)"), gap: 8, alignItems: "center" }}>
                 <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
                 <span style={{ fontSize: 14, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
                 <ThemedSelect value="" onChange={(v) => onAssign(r.id, v ? Number(v) : null)} options={catOptions} />
@@ -3008,7 +3063,7 @@ function CategoriesPanel({
         })}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 140px auto auto", gap: 10, alignItems: "center", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1fr 140px auto auto"), gap: 10, alignItems: "center", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 12 }}>
         <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="New category (Groceries, Fun…)" style={field()} />
         <input value={budget} onChange={(e) => setBudget(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="Monthly budget" type="number" style={field()} />
         <div style={{ display: "flex", gap: 6 }}>
@@ -3038,7 +3093,7 @@ function CategoriesPanel({
                 <div style={{ padding: "24px 12px", textAlign: "center", color: HOME_THEME.muted, fontSize: 14 }}>No transactions in this category yet.</div>
               ) : (
                 (byCategory[openCat.id] || []).map((r) => (
-                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "60px 1fr 150px auto auto", gap: 8, alignItems: "center", padding: "8px 6px", borderBottom: `1px solid rgba(255,255,255,0.05)` }}>
+                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "60px 1fr 150px auto auto", "52px minmax(0, 1fr) auto"), gap: 8, alignItems: "center", padding: "8px 6px", borderBottom: `1px solid rgba(255,255,255,0.05)` }}>
                     <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
                     <span style={{ fontSize: 14, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.label}>{r.label}</span>
                     {/* Re-file a row that already has a category — pick another
@@ -3087,6 +3142,7 @@ function YearlyPanel({
   currency: string;
   loading: boolean;
 }) {
+  const isMobile = useIsMobile();
   const monthName = (m: number) => new Date(2000, m - 1, 1).toLocaleDateString("en-US", { month: "long" });
   const monthShort = (m: number) => new Date(2000, m - 1, 1).toLocaleDateString("en-US", { month: "narrow" });
 
@@ -3168,7 +3224,7 @@ function YearlyPanel({
       </div>
 
       {/* Spending donut + budget overview */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
+      <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1fr 1fr"), gap: 14, alignItems: "stretch" }}>
         <div style={{ ...dissolveCard(), padding: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", color: HOME_THEME.muted, marginBottom: 10 }}>SPENDING BREAKDOWN</div>
           {donutTotal <= 0 ? (
@@ -3291,6 +3347,7 @@ function BzilaPanel({
   onDelete: (id: number) => void;
   onOpenPayments: () => void;
 }) {
+  const isMobile = useIsMobile();
   // Scope toggle: the summary + stream cards either follow the month picker or
   // roll up the whole year. Ledger below always shows the year's months.
   const [scope, setScope] = useState<"month" | "year">("month");
@@ -3387,11 +3444,11 @@ function BzilaPanel({
 
       {/* Monthly All ledger — all three streams */}
       <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "12px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, padding: isMobile ? "11px 10px" : "12px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
           <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.12em", textTransform: "uppercase" }}>Monthly All</span>
           <span style={{ marginLeft: "auto", fontSize: 11, color: HOME_THEME.muted }}>{year} · all streams</span>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "11px 16px", background: HOME_THEME.panel, fontSize: 12, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: isMobile ? "10px 10px" : "11px 16px", background: HOME_THEME.panel, fontSize: isMobile ? 10 : 12, fontWeight: 900, letterSpacing: isMobile ? "0.04em" : "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
           <span>Month</span>
           <span style={{ textAlign: "right" }}>In</span>
           <span style={{ textAlign: "right" }}>Out</span>
@@ -3409,7 +3466,7 @@ function BzilaPanel({
             <div key={m.ym} style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
               <button
                 onClick={() => setOpen(isOpen ? null : m.ym)}
-                style={{ width: "100%", textAlign: "left", cursor: "pointer", background: isOpen ? "rgba(255,255,255,0.03)" : "transparent", border: "none", color: HOME_THEME.text, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", alignItems: "center", fontSize: 14 }}
+                style={{ width: "100%", textAlign: "left", cursor: "pointer", background: isOpen ? "rgba(255,255,255,0.03)" : "transparent", border: "none", color: HOME_THEME.text, display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: isMobile ? "11px 10px" : "12px 16px", alignItems: "center", fontSize: isMobile ? 12.5 : 14 }}
               >
                 <span style={{ fontWeight: 800 }}>{monthName(m.ym)}</span>
                 <span style={{ textAlign: "right", color: m.inAmt > 0 ? HOME_THEME.green : HOME_THEME.muted }}>{fmtMoney(m.inAmt, currency)}</span>
@@ -3419,15 +3476,15 @@ function BzilaPanel({
               </button>
 
               {isOpen && (
-                <div style={{ background: "rgba(0,0,0,0.18)", borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "7px 16px 7px 30px", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
+                <div style={{ background: "rgba(0,0,0,0.18)", borderTop: `1px solid ${HOME_THEME.border}`, ...(isMobile ? scrollX : null) }}>
+                  <div style={{ minWidth: isMobile ? 560 : undefined, display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "7px 16px 7px 30px", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6 }}>
                     <span>Date</span><span>Stream</span><span>Item</span><span style={{ textAlign: "center" }}>Accts</span><span style={{ textAlign: "right" }}>Amount</span><span />
                   </div>
                   {m.rows.map((r) => {
                     const isIn = r.inAmt > 0;
                     const c = STREAM_COLOR[r.stream];
                     return (
-                      <div key={r.key} style={{ display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "9px 16px 9px 30px", alignItems: "center", fontSize: 14, borderTop: `1px solid ${bRgba("#ffffff", 0.05)}` }}>
+                      <div key={r.key} style={{ minWidth: isMobile ? 560 : undefined, display: "grid", gridTemplateColumns: "0.9fr 0.8fr 1.3fr 0.5fr 1fr 26px", padding: "9px 16px 9px 30px", alignItems: "center", fontSize: 14, borderTop: `1px solid ${bRgba("#ffffff", 0.05)}` }}>
                         <span style={{ fontWeight: 700 }}>{r.stream === "cbedge" ? new Date(r.date + "T00:00:00").toLocaleDateString("en-US", { month: "long" }) : <>{shortDate(r.date)} <span style={{ color: HOME_THEME.muted, fontWeight: 400 }}>{weekday(r.date)}</span></>}</span>
                         <span>
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 999, color: c, background: bRgba(c, 0.10), border: `1px solid ${bRgba(c, 0.3)}` }}>
@@ -3450,7 +3507,7 @@ function BzilaPanel({
         })}
 
         {data.months.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: 14, fontWeight: 900 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 26px", padding: isMobile ? "11px 10px" : "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: isMobile ? 12.5 : 14, fontWeight: 900 }}>
             <span style={{ textTransform: "uppercase", letterSpacing: "0.12em", color: HOME_THEME.muted, fontSize: 12 }}>{year} Total</span>
             <span style={{ textAlign: "right", color: HOME_THEME.green }}>{fmtMoney(data.totalIn, currency)}</span>
             <span style={{ textAlign: "right", color: SOFT_RED }}>{fmtMoney(data.totalOut, currency)}</span>
@@ -3473,12 +3530,12 @@ function BzilaPanel({
         const t = data.streams.cbedge;
         return (
           <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "12px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: isMobile ? "11px 10px" : "12px 16px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
               <span style={{ width: 8, height: 8, borderRadius: 999, background: HOME_THEME.cyan }} />
               <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.12em", textTransform: "uppercase" }}>CB Edge · Monthly</span>
               <span style={{ marginLeft: "auto", fontSize: 11, color: HOME_THEME.muted }}>{year} · sales vs expenses</span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 16px", background: HOME_THEME.panel, fontSize: 12, fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: isMobile ? "9px 10px" : "10px 16px", background: HOME_THEME.panel, fontSize: isMobile ? 10 : 12, fontWeight: 900, letterSpacing: isMobile ? "0.04em" : "0.1em", textTransform: "uppercase", color: HOME_THEME.muted }}>
               <span>Month</span>
               <span style={{ textAlign: "right" }}>Sales</span>
               <span style={{ textAlign: "right" }}>Expenses</span>
@@ -3488,7 +3545,7 @@ function BzilaPanel({
               <div style={{ padding: "22px 16px", textAlign: "center", color: HOME_THEME.muted }}>No CB Edge activity in {year} yet.</div>
             )}
             {cbedgeMonths.map((m) => (
-              <div key={m.ym} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "11px 16px", alignItems: "center", fontSize: 14, borderTop: `1px solid ${HOME_THEME.border}` }}>
+              <div key={m.ym} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: isMobile ? "10px 10px" : "11px 16px", alignItems: "center", fontSize: isMobile ? 12.5 : 14, borderTop: `1px solid ${HOME_THEME.border}` }}>
                 <span style={{ fontWeight: 800 }}>{monthName(m.ym)}</span>
                 <span style={{ textAlign: "right", color: m.inAmt > 0 ? HOME_THEME.green : HOME_THEME.muted }}>{fmtMoney(m.inAmt, currency)}</span>
                 <span style={{ textAlign: "right", color: m.outAmt > 0 ? SOFT_RED : HOME_THEME.muted }}>{fmtMoney(m.outAmt, currency)}</span>
@@ -3496,7 +3553,7 @@ function BzilaPanel({
               </div>
             ))}
             {cbedgeMonths.length > 0 && (
-              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: 14, fontWeight: 900 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: isMobile ? "11px 10px" : "12px 16px", borderTop: `1px solid ${HOME_THEME.border}`, background: HOME_THEME.panel, fontSize: isMobile ? 12.5 : 14, fontWeight: 900 }}>
                 <span style={{ textTransform: "uppercase", letterSpacing: "0.12em", color: HOME_THEME.muted, fontSize: 12 }}>{year} Total</span>
                 <span style={{ textAlign: "right", color: HOME_THEME.green }}>{fmtMoney(t.inAmt, currency)}</span>
                 <span style={{ textAlign: "right", color: SOFT_RED }}>{fmtMoney(t.outAmt, currency)}</span>
@@ -3510,12 +3567,186 @@ function BzilaPanel({
   );
 }
 
+// ─── Amazon day entry ────────────────────────────────────────────────────────
+//
+// This is the one form on the page that gets filled in ON A PHONE, standing in
+// a driveway, several days at a time — so it is the one that gets a phone
+// layout of its own rather than a desktop row that collapses.
+//
+// What made the old row a fight, in order of how much it cost:
+//
+//  1. 14px inputs. iOS Safari zooms the page in on focus below 16px and never
+//     zooms back out, so the first tap threw the layout sideways for the rest
+//     of the session. Fixed globally in index.css; the phone card here also
+//     sets its own sizes so it does not depend on that rule alone.
+//  2. Re-picking the date every single time. It is nearly always today or
+//     yesterday, and "yesterday" through a native date picker is four taps.
+//     Two chips now, and the date SURVIVES a save.
+//  3. Placeholder-only labels. "Pay" and "Gas" vanish the moment you focus the
+//     field, so a mis-tap meant typing gas into pay with nothing on screen to
+//     say so. Persistent labels on the phone card.
+//  4. No feedback. A blank save silently did nothing (both amounts empty
+//     returns early), and a successful one looked identical.
+//
+// Desktop keeps the four-across row exactly as it was — it was never the
+// problem, and a stacked form would be a downgrade with a mouse.
+function AmazonEntry({
+  date, pay, gas, currency, onDate, onPay, onGas, onSave,
+}: {
+  date: string;
+  pay: string;
+  gas: string;
+  currency: string;
+  onDate: (v: string) => void;
+  onPay: (v: string) => void;
+  onGas: (v: string) => void;
+  onSave: () => Promise<boolean>;
+}) {
+  const isMobile = useIsMobile();
+  const payRef = useRef<HTMLInputElement | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const payNum = Number(pay || 0);
+  const gasNum = Number(gas || 0);
+  const net = payNum - gasNum;
+  const canSave = date.trim() !== "" && (pay.trim() !== "" || gas.trim() !== "");
+
+  const save = async () => {
+    if (!canSave || busy) return;
+    setBusy(true);
+    try {
+      const ok = await onSave();
+      if (ok) {
+        setSaved(true);
+        window.setTimeout(() => setSaved(false), 1800);
+        // Straight back to the first amount, because the next thing entered is
+        // always another day's pay — never the date, which is already right.
+        payRef.current?.focus();
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // type=number gives iOS its numeric keypad; inputMode=decimal gives Android
+  // the one WITH a decimal point (its default numeric pad has none, which is
+  // how "12.50" becomes "1250"). step allows cents through validation.
+  const moneyProps = {
+    type: "number" as const,
+    inputMode: "decimal" as const,
+    step: "0.01",
+    enterKeyHint: "done" as const,
+    autoComplete: "off",
+  };
+
+  if (!isMobile) {
+    return (
+      <div style={{ ...card(), padding: 14, display: "grid", gridTemplateColumns: "150px 1fr 1fr 110px", gap: 10, alignItems: "center" }}>
+        <input type="date" value={date} onChange={(e) => onDate(e.target.value)} style={field()} />
+        <input ref={payRef} value={pay} onChange={(e) => onPay(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="Pay" {...moneyProps} style={field()} />
+        <input value={gas} onChange={(e) => onGas(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} placeholder="Gas" {...moneyProps} style={field()} />
+        <button onClick={save} disabled={!canSave || busy} style={{ ...primary(), opacity: canSave && !busy ? 1 : 0.45 }}>Add Day</button>
+      </div>
+    );
+  }
+
+  const lbl: React.CSSProperties = {
+    fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.12em",
+    color: HOME_THEME.muted, marginBottom: 5, display: "block",
+  };
+  const chip = (on: boolean): React.CSSProperties => ({
+    padding: "9px 14px", fontSize: 13, fontWeight: 800, borderRadius: 9,
+    border: `1px solid ${on ? "rgba(33,158,188,0.55)" : HAIRLINE}`,
+    background: on ? "rgba(33,158,188,0.18)" : "rgba(255,255,255,0.04)",
+    color: on ? LIGHT_BLUE : HOME_THEME.text, cursor: "pointer", whiteSpace: "nowrap",
+  });
+
+  const today = todayIso();
+  const yesterday = addDays(today, -1);
+
+  return (
+    <div style={{ ...card(), padding: 14, display: "flex", flexDirection: "column", gap: 13 }}>
+      <div>
+        <span style={lbl}>Day</span>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <button onClick={() => onDate(today)} style={chip(date === today)}>Today</button>
+          <button onClick={() => onDate(yesterday)} style={chip(date === yesterday)}>Yesterday</button>
+        </div>
+        <input type="date" value={date} onChange={(e) => onDate(e.target.value)} style={{ ...field(), fontSize: 16 }} />
+      </div>
+
+      {/* Pay and Gas side by side: they are two halves of one number, and
+          entering them one under the other loses that. Both are thumb-width. */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div>
+          <span style={lbl}>Pay</span>
+          <input
+            ref={payRef}
+            value={pay}
+            onChange={(e) => onPay(e.target.value)}
+            placeholder="0.00"
+            {...moneyProps}
+            style={{ ...field(), fontSize: 19, fontWeight: 800, textAlign: "right" }}
+          />
+        </div>
+        <div>
+          <span style={lbl}>Gas</span>
+          <input
+            value={gas}
+            onChange={(e) => onGas(e.target.value)}
+            placeholder="0.00"
+            {...moneyProps}
+            style={{ ...field(), fontSize: 19, fontWeight: 800, textAlign: "right", color: HOME_THEME.orange }}
+          />
+        </div>
+      </div>
+
+      {/* Net, before you commit. Amazon Flex pay only means something after gas
+          comes out, and doing that arithmetic in your head at the kerb is how a
+          bad number gets saved. */}
+      <div style={{
+        display: "flex", alignItems: "baseline", justifyContent: "space-between",
+        padding: "9px 12px", borderRadius: 10,
+        background: "rgba(255,255,255,0.03)", border: `1px solid ${HAIRLINE}`,
+      }}>
+        <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.12em", color: HOME_THEME.muted }}>Net</span>
+        <span style={{ fontSize: 20, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: net < 0 ? SOFT_RED : net > 0 ? HOME_THEME.green : HOME_THEME.muted }}>
+          {fmtMoney(net, currency)}
+        </span>
+      </div>
+
+      <button
+        onClick={save}
+        disabled={!canSave || busy}
+        style={{
+          ...primary(),
+          width: "100%", minHeight: 50, fontSize: 15,
+          opacity: canSave && !busy ? 1 : 0.45,
+          ...(saved ? { borderColor: "rgba(142,202,230,0.7)", color: HOME_THEME.green } : null),
+        }}
+      >
+        {busy ? "Saving…" : saved ? "✓ Saved" : "Add Day"}
+      </button>
+
+      {/* Says why the button is dead instead of leaving you tapping it. */}
+      {!canSave && (
+        <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, textAlign: "center", marginTop: -4 }}>
+          Enter pay or gas to save this day.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: number })[]; currency: string; onDelete: (id: number) => void }) {
+  const isMobile = useIsMobile();
   const totalPay = rows.reduce((s, r) => s + r.pay, 0);
   const totalGas = rows.reduce((s, r) => s + r.gas, 0);
   const totalNet = totalPay - totalGas;
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+    <div style={isMobile ? scrollX : undefined}>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: isMobile ? 460 : undefined }}>
       <thead>
         <tr style={{ position: "sticky", top: 0, background: HOME_THEME.panel, backdropFilter: "blur(8px)", zIndex: 1 }}>
           <th style={th("left")}>Date</th>
@@ -3531,13 +3762,13 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
         )}
         {rows.map((r) => (
           <tr key={r.id} style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}>
-            <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
+            <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", whiteSpace: "nowrap" }}>
               <span style={{ fontWeight: 800 }}>{shortDate(r.work_date)}</span>
               <span style={{ color: HOME_THEME.muted, marginLeft: 8, fontSize: 14 }}>{weekday(r.work_date)}</span>
             </td>
-            <td style={{ padding: "10px 16px", textAlign: "right" }}>{fmtMoney(r.pay, currency)}</td>
-            <td style={{ padding: "10px 16px", textAlign: "right", color: HOME_THEME.orange }}>{fmtMoney(r.gas, currency)}</td>
-            <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 900, color: r.net >= 0 ? HOME_THEME.green : SOFT_RED }}>{fmtMoney(r.net, currency)}</td>
+            <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right" }}>{fmtMoney(r.pay, currency)}</td>
+            <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right", color: HOME_THEME.orange }}>{fmtMoney(r.gas, currency)}</td>
+            <td style={{ padding: isMobile ? "9px 10px" : "10px 16px", textAlign: "right", fontWeight: 900, color: r.net >= 0 ? HOME_THEME.green : SOFT_RED }}>{fmtMoney(r.net, currency)}</td>
             <td style={{ padding: "10px 12px", textAlign: "center" }}>
               <DeleteButton onClick={() => onDelete(r.id)} />
             </td>
@@ -3547,15 +3778,16 @@ function AmazonTable({ rows, currency, onDelete }: { rows: (AmazonRow & { net: n
       {rows.length > 0 && (
         <tfoot>
           <tr style={{ position: "sticky", bottom: 0, background: HOME_THEME.panel, backdropFilter: "blur(8px)" }}>
-            <td style={{ padding: "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 14, letterSpacing: "0.12em", color: HOME_THEME.muted }}>Total</td>
-            <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900 }}>{fmtMoney(totalPay, currency)}</td>
-            <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900, color: HOME_THEME.orange }}>{fmtMoney(totalGas, currency)}</td>
-            <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 900, color: totalNet >= 0 ? HOME_THEME.green : SOFT_RED }}>{fmtMoney(totalNet, currency)}</td>
+            <td style={{ padding: isMobile ? "11px 10px" : "12px 16px", fontWeight: 900, textTransform: "uppercase", fontSize: 14, letterSpacing: "0.12em", color: HOME_THEME.muted }}>Total</td>
+            <td style={{ padding: isMobile ? "11px 10px" : "12px 16px", textAlign: "right", fontWeight: 900 }}>{fmtMoney(totalPay, currency)}</td>
+            <td style={{ padding: isMobile ? "11px 10px" : "12px 16px", textAlign: "right", fontWeight: 900, color: HOME_THEME.orange }}>{fmtMoney(totalGas, currency)}</td>
+            <td style={{ padding: isMobile ? "11px 10px" : "12px 16px", textAlign: "right", fontWeight: 900, color: totalNet >= 0 ? HOME_THEME.green : SOFT_RED }}>{fmtMoney(totalNet, currency)}</td>
             <td />
           </tr>
         </tfoot>
       )}
     </table>
+    </div>
   );
 }
 

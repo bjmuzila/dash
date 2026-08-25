@@ -18,6 +18,7 @@ import {
   UNCATEGORIZED,
   type TrendPoint,
 } from "./CategoryBudget";
+import { useIsMobile, scrollX } from "../../hooks/useIsMobile";
 
 /**
  * Budget → Real Month.
@@ -277,6 +278,7 @@ export default function RealMonth({
   /** Called after a budget edit lands, so the page re-reads its categories. */
   onCategoriesChanged?: () => void | Promise<void>;
 }) {
+  const isMobile = useIsMobile();
   const [tx, setTx] = useState<StoredTx[]>([]);
   /**
    * Category edits are held here until Save, keyed by transaction id. Nothing
@@ -1037,7 +1039,7 @@ export default function RealMonth({
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Filter merchants…"
-                style={{ ...field(), width: 240, padding: "7px 10px", fontSize: 13 }}
+                style={{ ...field(), width: 240, maxWidth: "100%", padding: "7px 10px", fontSize: 13 }}
               />
               <button
                 onClick={() => setOnlyUncat((v) => !v)}
@@ -1088,7 +1090,8 @@ export default function RealMonth({
                 </div>
 
                 {!closed && (
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <div style={isMobile ? scrollX : undefined}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 520 : undefined }}>
                     <tbody>
                       {rows.map((m) => {
                         const share = totals.outflow > 0 ? (m.total / totals.outflow) * 100 : 0;
@@ -1167,6 +1170,7 @@ export default function RealMonth({
                       )}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </div>
             );
@@ -1202,7 +1206,7 @@ export default function RealMonth({
                 {k[0].toUpperCase() + k.slice(1)}{sortKey === k ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
               </button>
             ))}
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…" style={{ ...field(), width: 200, padding: "7px 10px", fontSize: 13 }} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…" style={{ ...field(), width: 200, maxWidth: "100%", padding: "7px 10px", fontSize: 13 }} />
             <button
               onClick={() => setOnlyUncat((v) => !v)}
               style={{ ...pill(onlyUncat), borderColor: onlyUncat ? rgba(WARN, 0.75) : HOME_THEME.border, color: onlyUncat ? WARN : HOME_THEME.text }}
@@ -1210,7 +1214,8 @@ export default function RealMonth({
               Needs a category ({totals.uncategorized})
             </button>
           </div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div style={isMobile ? scrollX : undefined}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 560 : undefined }}>
             <thead>
               <tr>
                 <SortTh label="Date" k="date" width={70} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -1251,6 +1256,7 @@ export default function RealMonth({
               )}
             </tbody>
           </table>
+          </div>
         </Card>
       )}
 
@@ -1273,7 +1279,8 @@ export default function RealMonth({
       {hasData && view === "categories" && (
         <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
           <SectionHead title="This month by category" sub="Just the loaded month, with a transaction count per category — the two cards above put it in context." />
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div style={isMobile ? scrollX : undefined}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 620 : undefined }}>
             <thead>
               <tr>
                 <th style={th("left")}>Category</th>
@@ -1311,6 +1318,7 @@ export default function RealMonth({
               })}
             </tbody>
           </table>
+          </div>
         </Card>
       )}
 
@@ -1324,7 +1332,8 @@ export default function RealMonth({
           {subRows.length === 0 ? (
             <div style={{ padding: 20, ...MUTED, fontSize: TYPE.body }}>Nothing in {monthLabel(month)} repeats at a steady amount.</div>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <div style={isMobile ? scrollX : undefined}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 700 : undefined }}>
               <thead>
                 <tr>
                   <th style={th("left")}>Merchant</th>
@@ -1371,6 +1380,7 @@ export default function RealMonth({
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </Card>
       )}
@@ -1405,7 +1415,7 @@ export default function RealMonth({
                 {sourceName && !parsing ? <> Last read: <span style={{ color: ACCENT }}>{sourceName}</span>.</> : null}
               </div>
             </div>
-            <div style={{ width: 150 }}>
+            <div style={{ width: 150, maxWidth: "100%" }}>
               <div style={labelCap()}>Bank</div>
               <ThemedSelect value={bank} onChange={(v) => setBank(v as Bank)} options={BANKS.map((b) => ({ value: b, label: BANK_LABEL[b] }))} />
             </div>
@@ -1453,7 +1463,8 @@ export default function RealMonth({
               {saving ? "Saving…" : `Save ${stagedIncluded.length} to Real Month`}
             </button>
           </div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div style={isMobile ? scrollX : undefined}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 640 : undefined }}>
             <thead>
               <tr>
                 <th style={{ ...th("center"), width: 44 }}>
@@ -1494,6 +1505,7 @@ export default function RealMonth({
               ))}
             </tbody>
           </table>
+          </div>
         </Card>
       )}
 
@@ -1521,6 +1533,7 @@ export default function RealMonth({
  * first click: the button arms, showing how many rows and what they sum to.
  */
 function UndoRegisterImport({ currency }: { currency: string }) {
+  const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [batches, setBatches] = useState<RegisterBatch[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1584,7 +1597,8 @@ function UndoRegisterImport({ currency }: { currency: string }) {
           {busy && !batches && <div style={{ fontSize: 13, ...MUTED }}>Reading write history…</div>}
           {batches && batches.length === 0 && <div style={{ fontSize: 13, ...MUTED }}>No register rows written in the last 90 days.</div>}
           {batches && batches.length > 0 && (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <div style={isMobile ? scrollX : undefined}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 560 : undefined }}>
               <thead>
                 <tr>
                   <th style={th("left")}>Written</th>
@@ -1629,6 +1643,7 @@ function UndoRegisterImport({ currency }: { currency: string }) {
                 })}
               </tbody>
             </table>
+            </div>
           )}
           <div style={{ fontSize: 11, ...MUTED, marginTop: 12, opacity: 0.6, lineHeight: 1.5 }}>
             Grouped by the minute each row was written, so one bulk import is one line and a hand-typed row is its own 1-row line.

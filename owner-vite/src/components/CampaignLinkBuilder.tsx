@@ -34,16 +34,30 @@ export interface CampaignSeedRow {
 const SITE = "cbedge.net";
 
 /** The placements worth having a permanent link for. Mirrors PLACEMENTS in
- *  app/[source]/[action]/route.ts — a link here with no row there still works,
- *  it just reports as a referral instead of social/email. */
+ *  lib/shortLinks.ts — a link here with no row there still works, it just
+ *  reports as a referral instead of social/email.
+ *
+ *  THE BARE FORM. A known source needs no verb: `cbedge.net/x` is the same link
+ *  as `/x/click`, and that is the one to paste in a post. The profile rows keep
+ *  their `/profile` suffix on purpose — a bio link trickles forever from people
+ *  who looked you up, a post link spikes with what you wrote, and one number for
+ *  both hides both. */
 const STANDARD: { path: string; label: string; note: string; tags: string }[] = [
-  { path: "x/click", label: "X post", note: "in a tweet", tags: "x · social · post" },
+  { path: "x", label: "X post", note: "in a tweet — the short one", tags: "x · social · post" },
   { path: "x/profile", label: "X profile", note: "the link in your bio", tags: "x · social · profile" },
-  { path: "youtube/click", label: "YouTube", note: "video description", tags: "youtube · social · video" },
-  { path: "tiktok/click", label: "TikTok", note: "bio or caption", tags: "tiktok · social · video" },
-  { path: "email/click", label: "Email", note: "pasted into a message by hand", tags: "email · email · link" },
-  { path: "newsletter/click", label: "Newsletter", note: "pasted into the letter by hand", tags: "newsletter · email · link" },
+  { path: "youtube", label: "YouTube", note: "video description", tags: "youtube · social · video" },
+  { path: "youtube/profile", label: "YouTube channel", note: "the About link", tags: "youtube · social · channel" },
+  { path: "tiktok", label: "TikTok", note: "bio or caption", tags: "tiktok · social · video" },
+  { path: "email", label: "Email", note: "pasted into a message by hand", tags: "email · email · link" },
+  { path: "newsletter", label: "Newsletter", note: "pasted into the letter by hand", tags: "newsletter · email · link" },
 ];
+
+/** Sources the bare `/x` form answers for — mirrors BARE_SOURCE_LIST in
+ *  lib/shortLinks.ts. The one-off row below checks it so it never offers a
+ *  short link that 404s: an unknown source is only valid with a verb. */
+const BARE_SOURCES = new Set([
+  "discord", "email", "newsletter", "reddit", "stocktwits", "tiktok", "x", "youtube",
+]);
 
 /** Where the link lands. "/" needs no ?to=, which is what keeps it short. */
 const DESTINATIONS: { path: string; label: string }[] = [
@@ -184,7 +198,13 @@ export default function CampaignLinkBuilder({ rows }: { rows: CampaignSeedRow[] 
     </div>
   );
 
-  const oneOffPath = `${slug(oneOffSource) || "somewhere"}/click`;
+  // A known source gets the bare form; anything else keeps the verb, because
+  // the one-segment route only answers for the allowlist and a link that 404s
+  // is worse than a link with four extra characters.
+  const oneOffSlug = slug(oneOffSource);
+  const oneOffPath = oneOffSlug
+    ? (BARE_SOURCES.has(oneOffSlug) ? oneOffSlug : `${oneOffSlug}/click`)
+    : "somewhere/click";
   const oneOffUrl = build(oneOffPath, oneOffCampaign || campaign, dest);
 
   return (
@@ -282,10 +302,15 @@ export default function CampaignLinkBuilder({ rows }: { rows: CampaignSeedRow[] 
       </div>
 
       <div style={{ fontSize: 11, color: T.textSecondary, opacity: 0.4, lineHeight: 1.6 }}>
-        Every link 302s through <span style={monoStyle}>app/[source]/[action]/route.ts</span>, which
-        attaches <span style={monoStyle}>utm_source</span> / <span style={monoStyle}>utm_medium</span> /
+        Every link 302s through <span style={monoStyle}>app/[source]/route.ts</span> (bare) or{" "}
+        <span style={monoStyle}>app/[source]/[action]/route.ts</span> (with a verb), which attaches{" "}
+        <span style={monoStyle}>utm_source</span> / <span style={monoStyle}>utm_medium</span> /
         {" "}<span style={monoStyle}>utm_campaign</span> and forwards. Reuse the same push name across
         platforms or one campaign becomes several rows that can't be compared.
+        <br />
+        <span style={monoStyle}>cbedge.net/x</span> and <span style={monoStyle}>cbedge.net/x/click</span>{" "}
+        are the same link — the older two-segment form still works, so anything already posted keeps
+        counting under the same campaign.
       </div>
     </div>
   );
