@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-08-25 - GEX Map (test lab): the wall emphasis is a summit ring, not a rule across the frame
+
+Edited: `app/test/GexMapTab.tsx`.
+
+First attempt at this was wrong and is reverted: call wall / put wall / magnet /
+gamma flip got a thick white casing on the terrain tab, which drew three heavy
+horizontal rules straight across the tape. A wall is a RIDGE on this surface -
+it drifts, thickens and fades through the session - and a rule across the frame
+says none of that. It also sits ON the terrain rather than describing it. Those
+four lines are hairline again on every tab, exactly as they were: they mark the
+strike the wall sits at, nothing more.
+
+The emphasis now comes off the FIELD instead. After the iso-GEX contours and the
+zero coastline, `TerrainField` scans the resampled grid for each side's peak and
+rings it with a contour at `SUMMIT_FRAC` (0.78) of that peak - the line that
+closes tightly around the summit rather than another iso level running the width
+of the tape. White, 3.4 over a 6.0 dark casing, against 2.4 over 4.0 for the
+index contours, so the highest gamma is the heaviest border on the map.
+
+Both sides ring. `signed` is scaled on the session max, so the dominant side
+rings at its true peak and the quieter one rings at its own; the ring says "top
+of this side" and the fill's brightness still says which of the two is bigger.
+`SUMMIT_MIN` (0.14) skips a side with no wall worth calling out - ringing 78% of
+a nothing peak would draw a confident outline around chop.
+
+Drawn from the same `F` grid the fill is painted from, so the ring cannot
+disagree with the terrain under it.
+
 ## 2026-08-25 - Budget on a phone: the Amazon day entry, and why every field was fighting you
 
 New: `owner-vite/src/hooks/useIsMobile.ts`.
@@ -100,6 +128,92 @@ scope. esbuild compiles that happily (an unresolved identifier is assumed
 global) and it would have thrown at runtime on two tables. Reverted, then every
 `isMobile` reference in both files was checked against the component that owns
 it.
+## 2026-08-24 (b) - Premarket: the Monday gap block, and a GEX baseline with no source
+
+Edited: `components/pages/Premarket.tsx`, `server-v2/premarket-baseline.js`.
+
+Two unrelated faults on the same card: one a date bug, one a data source that
+had not existed since 2026-08-18.
+
+### Prior close / prior day range / gap / gap-fill target were blank every Monday
+
+`overnight` read `sessionCandles`, which is `useEsCandles`'s rolling **30 HOUR**
+window — right for the chart, wrong for a prior RTH close. On a Monday
+premarket the Friday 16:00 bar is ~64h old and simply is not in there, so
+`pdDate` landed on **Sunday** (Globex reopen, no RTH bars at all), `pdc` and
+`pd` stayed null, and four rows printed `—`: Prior RTH close (ES), Prior day
+range (ES), Gap (4pm → 9:30), Gap fill target. Every Monday, and every day after
+a holiday.
+
+**Fix.** New `candlePool` = the same hook's un-clipped `historical` DB read
+unioned with `sessionCandles`; `historyDays` 3 → 8, because `daysBack` is
+CALENDAR days and the prior TRADING session is three of them back on a Monday
+and four after a holiday. Not de-duplicated and not sorted on purpose —
+everything `overnight` does with it is a min / max / latest-ts scan, all three
+idempotent under duplicates, so a Map+sort at the feed's 4Hz would buy nothing.
+The chart still reads `sessionCandles`; its window is unchanged.
+
+The memo now resolves **two** prior dates, which on a Monday are different days:
+
+- `pdDate` — the last session before today that actually **traded RTH**. Friday
+  on a Monday, Thursday after a Friday holiday. Prior close and prior day range
+  mean this one and nothing else.
+- `evDate` — the last date before today carrying a Globex evening (≥18:00) bar.
+  **Sunday** on a Monday, correctly. The overnight scan is now PINNED to it;
+  inside a 30h window the old `d < today && mins >= 18:00` test collapsed to the
+  same thing, but over a wider pool it would fold Friday evening into a Monday
+  overnight range.
+
+### Biggest GEX Changes: the settled sweep has returned zero rows since Theta came out
+
+Not a page bug. `premarket-baseline.js` built the prior-close board from
+`computeHistoricalGexRows`, which depends on `fetchOiHistoryTheta`,
+`fetchGreeksEodHistoryTheta` and `fetchEodHistoryTheta` — all three stubbed to
+benign empties in `tt-snapshot.js` when ThetaData was removed on 2026-08-18
+(TastyTrade has no per-option history equivalent). So it threw
+`no settle spot for <date>` on every call, `getBaseline()` walked back three
+sessions and returned `ok:false`, and the card has been permanently empty since
+— the same silent-deadlock shape as the localStorage snapshot it replaced, one
+layer down.
+
+Nothing else in the repo could stand in. `eod_gex` is scalars;
+`eod_strike_gex` collapses every expiry onto one strike and drops 0DTE;
+`option_strike_gex_history` is per-expiry but its SPX writer only ever writes
+the FRONT expiry (and retention-cleanup deletes non-front expiries nightly
+anyway); `premarket_freeze` stores exactly the one expiry the snapshot was
+rendering, i.e. that day's 0DTE. **There is no table anywhere holding
+"yesterday's ladder for today's expiry."**
+
+**So it is RECORDED now, not reconstructed.** `captureSession()` runs at 16:05
+ET — catch-up window open to 22:00 — pulls the live TastyTrade chain through
+`tt-snapshot` for the next few listed expirations, runs the SAME
+`computeGexRowsMultiExpiry` the rest of the app runs, and writes straight into
+`premarket_baseline` / `_meta` keyed `date = today`. Next morning
+`readCached()` hits on the first try and no build is attempted — same rows,
+same shape, same `basis=oi` semantics, no client edit.
+
+- Rides `startPremarketBaseline`'s existing 5-minute timer next to `warmTick`
+  (writes at the close, reads back in the morning; windows do not overlap, so
+  each tick is one clock check and at most one job). No new scheduler, no
+  `server-with-proxy.js` change.
+- `tt-snapshot` is required **lazily** — it pulls in `proxy-tastytrade`, and
+  this module is required by `api-router` at load time. Nothing in the read path
+  touches it.
+- Three symbols (`$SPX,SPY,QQQ`), three expirations forward, 400ms pacing
+  between chain pulls — all env-overridable. Three, not one, so a page on a
+  non-0DTE front expiry (holiday weeks) and a recorder that missed a session
+  both still have a board.
+- The Theta path is **kept unchanged** as a fallback. If `DATA_SOURCE` goes back
+  to theta it works again and can still backfill older dates.
+
+### One-session cold start, said out loud
+
+No amount of cleverness recovers a ladder nobody stored, so the card's empty
+state stopped claiming the board "is published overnight and backfills on its
+own" — it never did — and now names the recorder and the 16:05 capture, so a
+missed close reads as a missed close instead of a dash.
+
+
 ## 2026-08-23 (d) - Short links: cbedge.net/x (no verb)
 
 New: `lib/shortLinks.ts`, `app/[source]/route.ts`.

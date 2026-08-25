@@ -1040,25 +1040,6 @@ function NoDex({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
   );
 }
 
-/**
- * Level-line casing, for the TERRAIN field only.
- *
- * Call wall / put wall / magnet / gamma flip are drawn as thin coloured lines
- * across the field. Over the heatmap that reads fine — the cells are dark and
- * the line is the brightest thing on its row. Over the terrain it does not: the
- * hypsometric surface is at its brightest exactly where the walls are (a wall
- * IS a summit), so a 0.9-wide 50%-opacity green line lands on a bright green
- * ridge and vanishes into it.
- *
- * So on the terrain each level line gets a white casing painted under it, wide
- * enough to show as a border on both sides of the colour. The casing is what
- * separates the line from the surface; the colour on top is what says WHICH
- * level it is. Heatmap and GEX × DEX keep the bare line — a white border there
- * would be louder than the field it is drawn over.
- */
-const WALL_CASING_W = 4.4;   // white border under the line (≈1.4 each side)
-const WALL_LINE_W = 1.6;     // the coloured line that sits on top of it
-
 // ═════════════════════════════ TAPE FIELD ════════════════════════════════════
 function TapeField({ m, compact, field = "heat", intensity = 1, snap = false }: {
   m: MapModel; compact?: boolean; field?: FieldMode; intensity?: number;
@@ -1179,19 +1160,15 @@ function TapeField({ m, compact, field = "heat", intensity = 1, snap = false }: 
         <line key={`tg${label}`} x1={FX + f * FW} y1={FY} x2={FX + f * FW} y2={FY + FH} stroke={GRID} />
       ))}
 
-      {/* walls + flip. On the terrain they carry a white casing (see
-          WALL_CASING_W); on the cell fields they stay as they were. */}
+      {/* walls + flip. A wall is a RIDGE on this surface, not a rule across the
+          frame, so on the terrain the emphasis is drawn by TerrainField as a
+          ring around the summit itself (see SUMMIT_FRAC). These stay hairline
+          everywhere — they are the strike the wall sits at, nothing more. */}
       {([[m.callWall, GEX_POS_HEX, "CALL WALL"], [m.magnet, GOLD, "MAGNET"], [m.putWall, GEX_NEG_HEX, "PUT WALL"]] as [number | null, string, string][])
         .filter(([k]) => k != null).map(([k, col, label]) => (
           <g key={label}>
             <rect x={FX} y={yOf(k as number) - 4} width={FW} height={8} fill={col} opacity={0.11} />
-            {field === "terrain" && (
-              <line x1={FX} y1={yOf(k as number)} x2={FX + FW} y2={yOf(k as number)}
-                stroke="#ffffff" strokeWidth={WALL_CASING_W} opacity={0.9} />
-            )}
-            <line x1={FX} y1={yOf(k as number)} x2={FX + FW} y2={yOf(k as number)} stroke={col}
-              strokeWidth={field === "terrain" ? WALL_LINE_W : 0.9}
-              opacity={field === "terrain" ? 1 : 0.5} />
+            <line x1={FX} y1={yOf(k as number)} x2={FX + FW} y2={yOf(k as number)} stroke={col} strokeWidth={0.9} opacity={0.5} />
           </g>
         ))}
       {/* The "GAMMA FLIP 6350" caption that used to ride this line is gone, as
@@ -1201,17 +1178,7 @@ function TapeField({ m, compact, field = "heat", intensity = 1, snap = false }: 
           with the field for the same pixels. The lines and bands stay: those are
           positional information the strip cannot carry. */}
       {m.flip != null && (
-        <g>
-          {/* Same casing as the walls, dashed on the SAME pattern so the white
-              wraps each dash instead of running as a solid line under them. */}
-          {field === "terrain" && (
-            <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)}
-              stroke="#ffffff" strokeWidth={WALL_CASING_W} strokeDasharray="5 4" opacity={0.9} />
-          )}
-          <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)} stroke={FLIP_C}
-            strokeWidth={field === "terrain" ? WALL_LINE_W : 1.2} strokeDasharray="5 4"
-            opacity={field === "terrain" ? 1 : 0.75} />
-        </g>
+        <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)} stroke={FLIP_C} strokeWidth={1.2} strokeDasharray="5 4" opacity={0.75} />
       )}
 
       {/* Spot path.
@@ -1717,6 +1684,44 @@ function TerrainField({ m, L, TP, FWD, FHT, snap = false }: {
       }
     }
     contour(0, "rgba(125,211,252,0.95)", 3.2, [12, 8]);
+
+    // ── SUMMIT RINGS ─────────────────────────────────────────────────────────
+    // The call wall and the put wall ARE the two highest points on this
+    // surface. A horizontal rule across the frame is the wrong shape for them:
+    // a wall is a ridge that drifts, thickens and fades through the session,
+    // and a straight line says none of that — it also sits on top of the
+    // terrain rather than describing it.
+    //
+    // So the wall emphasis is a contour, not a rule: the ring at 78% of each
+    // side's own peak, which closes tightly around the summit instead of
+    // running the width of the tape. Drawn white and heavier than the index
+    // contours (3.4 over a 6.0 dark casing, vs 2.4 over 4.0), because the one
+    // thing this map has to answer at a glance is "where is the highest gamma"
+    // — and it is drawn from the SAME field the fill is painted from, so it
+    // cannot disagree with the terrain under it.
+    //
+    // Both sides are ringed. `signed` is scaled on the session max, so the
+    // dominant side rings at its true peak and the quieter one rings at its
+    // own — the ring says "this is the top of this side", and the fill's
+    // brightness still says which of the two is the bigger number.
+    const SUMMIT_FRAC = 0.78;
+    // Below this there is no wall on that side worth calling out, and ringing
+    // 78% of a nothing peak would draw a confident outline around chop.
+    const SUMMIT_MIN = 0.14;
+    let pkP = 0, pkN = 0;
+    for (let j = 0; j < NY; j++) {
+      for (let i = 0; i < NX; i++) {
+        const v = F[j][i];
+        if (v > pkP) pkP = v;
+        else if (v < pkN) pkN = v;
+      }
+    }
+    for (const pk of [pkP, pkN]) {
+      if (Math.abs(pk) < SUMMIT_MIN) continue;
+      const lv = pk * SUMMIT_FRAC;
+      contour(lv, "rgba(0,0,0,0.45)", 6.0, []);
+      contour(lv, "rgba(255,255,255,0.94)", 3.4, []);
+    }
 
     // Hand the finished bitmap to the capture. This runs at the END of the paint,
     // so what is read is the terrain at the capture layout's width. Setting bmp

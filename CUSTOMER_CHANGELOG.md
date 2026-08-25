@@ -2,6 +2,10 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Tuesday 8/25/2026
+
+* **The "Latest" button moved onto the ES Candles chart.** Scroll back into history and it appears in the bottom-right corner — one click snaps you to the newest candle, keeping your zoom.
+
 ## Sunday 8/23/2026
 
 * **The Earnings tab is a week at a glance.** One card per day, side by side, so the whole week fits on one screen instead of scrolling.
