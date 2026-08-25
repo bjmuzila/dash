@@ -1,152 +1,136 @@
 # Changelog
 
-## 2026-08-25 - Multi Greek: the ladder opens on CLASSIC again
+## 2026-08-25 - Condition Rail: dark palette finished, duplicated block removed
 
-Edited: `app/mult-greek/MultGreekClient.tsx`.
+Edited: `components/scanner/ConditionRailTab.tsx`.
 
-CLASSIC is the default skin the page ships on; VIVID is now the opt-in. Three
-places moved and they have to stay in step: the `heatSkin` initial state,
-the `intensity` initial state (each skin carries its own tuned position and
-ceiling - see `SkinDef.intensity`), and the `?? HEAT_SKINS.classic` fallback in
-the render. The cog's Skin toggle lists CLASSIC first to match.
+Cleanup of the previous pass, which had a bad slice in it.
 
-Persistence is unchanged: a saved `mg_heat_skin` still wins, applied in the
-hydration effect. Only a browser with nothing saved sees the new default.
+- **Removed a duplicated block.** The trim script sliced on two markers in the
+  wrong order, so instead of deleting the "Reading it" wall of text it
+  DUPLICATED the whole JOINED FROM / clustered / past-session stretch above
+  itself. Both the duplicate and the "Reading it" block are gone now (and the
+  `inWords` helper with them). File is ~26KB smaller.
+- **Palette applied everywhere it was still missed**: the group hint pills, the
+  rail's legend divider, the delta badge, and the inner member rows. No
+  `HOME_THEME.border` or `rgba(255,255,255,0.0x)` surfaces left on the page.
 
-## 2026-08-25 - Premarket gamma distribution: pan / zoom, same hands as the GEX chart
+Palette (page-scoped `P`, documented in the header block): app `#020304`,
+rail `#040507`, shell `#07080b`, card `#0f1117`, card-2 `#14171d`,
+card-hi `#191b22`. Bar troughs use `app` so fills read against them; chips and
+tiles use `card-2`; the pinned compare row uses `card-hi`. Accents (cyan,
+orange, red, green, LIGHT_BLUE) still come from homeTheme.
 
-Edited: `components/pages/premarket/GammaDistribution.tsx`.
+## 2026-08-25 - Condition Rail: reverted the family board, cut the prose, new dark palette
 
-Wheel zooms, drag pans, left-edge drag scales Y, double-click resets. The
-constants are COPIED from `components/dashboard/GexChart.tsx` on purpose -
-x1.16 / x0.86 per wheel notch, x1.003^dy for the y-scale, an 18px left gutter
-for the y-drag zone - so someone who has learned the GEX chart already knows
-this one. Same hint text in the corner, same wording.
+Edited: `components/scanner/ConditionRailTab.tsx`.
 
-Mechanics worth knowing:
+- **Reverted the family board.** It was a copy of the IB Stats rule-cluster
+  layout and that is not what the rail should be. "Each criterion on its own"
+  is back, tighter: criterion, its rate alone, its push on the headline, and a
+  dot when it is true of the session.
+- **Cut the word count hard.** Deleted the "Reading it" block entirely (the
+  JOINED FROM strip already carries it), and collapsed the clustered warning,
+  the failed-break lead, the compare footnote, the relax banner, the matching-
+  sessions caption and the page footer to one line each.
+- **Page-scoped dark palette** (`P` at the top of the file), same arrangement
+  /board uses: app `#020304`, rail `#040507`, shell `#07080b`, card `#0f1117`,
+  card-2 `#14171d`, card-hi `#191b22`. Cards, the rail, inner tiles, chips and
+  bar troughs all source from it. Accents still come from homeTheme, so only
+  the greys are local. Dropped `Card` / `classicCardAccentStyle` from this page
+  since both hardcode the old surface.
 
-- The wheel listener is bound NATIVELY with `{ passive: false }`. React's
-  `onWheel` prop is passive in React 18, so `preventDefault()` there is a no-op
-  and the page scrolls out from under the chart. Same note lives in GexChart.
-- Zoom is cursor-anchored: the strike under the pointer stays under the pointer.
-- The window is now `center +/- half` rather than "whatever bins survived the
-  filter", so panning is smooth instead of snapping bin to bin.
-- A manual view WINS over the Range tab until it is reset - the window must not
-  chase spot while someone is reading a zoomed wing. A `reset view` button
-  appears in the head whenever the view is pinned, and the footer says so.
-- Bars, the mass line and the fitted normal are drawn from a slightly wider set
-  than the window and clipped to the plot, so a pan or a y-scale drag cannot
-  spill them over the axes and labels.
-- Scales and stats fit to what is INSIDE the window, so zooming into a quiet
-  wing actually resolves it instead of leaving it flat under the peak.
-- Zoom floor is +/-14 points (about six 5-point strikes); the ceiling stays the
-  +/-3% board this card reads.
-- Pointer capture on the SVG, `touch-action:pan-y` kept so a vertical flick on
-  a phone still scrolls the page while a horizontal drag pans the chart.
+## 2026-08-25 - Condition Rail: the family board (what IB Stats does, but driven by the rail)
 
-## 2026-08-25 - Premarket gamma distribution: the cramping was HORIZONTAL
+Edited: `components/scanner/ConditionRailTab.tsx`.
 
-Edited: `components/pages/premarket/GammaDistribution.tsx`.
+The IB Stats rule-cluster board reads well because it collapses 14 correlated
+rules into 4 families so one bullish idea can't cast four votes. The Condition
+Rail wanted the same shape, with the left rail as the input. It now has it -
+and does the correlation part better, because it MEASURES it instead of
+hardcoding a `correlated: true` flag on a family someone decided was redundant.
 
-Making the card taller did not help because the problem was never vertical. A
-fixed +/-2.8% band is +/-215 points on a 7,670 SPX, and a 0DTE board has a
-1-sigma of ~25 points - so everything lived in the middle 12% of the axis and
-the other 88% was a flat line. No amount of height fixes that.
+"Each criterion on its own" is replaced by **What each family says**. The rail
+already sorts its criteria into four families (The open / IB shape / The break
+/ The clock), so each family is blended on its own ticked members using the
+same estimator as the headline. Per family:
 
-**AUTO range, and it is now the default.** Sigma is measured on a wide +/-3%
-pass (kept separate so the window cannot collapse onto itself on the next
-render), and the drawn window is spot +/- max(4.5 sigma, 0.35% of spot), then
-widened just enough to keep spot, flip and both walls on screen, then clamped
-to +/-3%. The peak fills the card. A `Range` switch pins it to a fixed +/-1% /
-+/-2% / +/-3% instead - useful for comparing two sessions on one scale - and
-persists on `cb-premarket-gdist-zoom-v1`. The head prints the actual drawn
-range and its % so the axis is never ambiguous.
+- Its joined read and how many points that sits off the book - direction and
+  conviction in one line (MORE LIKELY / LESS LIKELY / NEUTRAL).
+- A **CORRELATED - N%** badge showing the overlap check's lambda INSIDE that
+  family: the share of its stacked evidence that survived checking its own
+  picks against each other. Per family, per outcome, and it moves as you change
+  what is ticked. Tick ORB down + broke IB low + IB closed below mid and the
+  break family shows its own redundancy as a number.
+- Per member: its rate over the whole book, its **last 5 in-play sessions** as
+  green/red dots (oldest to newest - the last five times the market actually
+  put that rule in play), and its leave-one-out **push** on the headline.
 
-**Level labels fan out from the middle.** Spot, flip and both walls land within
-a few points of each other, which piled all four labels over the peak. Labels
-for strikes BELOW spot now hang left of their rule, ABOVE spot hang right, spot
-stays centred; whatever still overlaps drops to the next of three rows by a
-greedy first-fit, and each label keeps a leader line back to its own rule so a
-moved label is still unambiguously attached.
+Plus the thing a single blended number structurally cannot show: **FAMILIES
+DISAGREE**. When one family pushes toward the outcome and another pushes
+against it by 3+ points, the board says so instead of averaging it away, and
+points at the family whose members are least correlated - its evidence is the
+evidence that has not already been counted.
 
-Also:
-- Bars get a real 3px gap once the slot is wide enough, instead of a flat 0.7
-  width factor that dissolved into hairlines at one end and left gaps at the
-  other.
-- Head controls are labelled `Range` / `Basis` rather than one bare seg.
-- Height eased to width x 0.42 (clamp 430-620); the auto range does the work
-  now, so the card no longer needs to be enormous to breathe.
+## 2026-08-25 - Condition Rail: one joined number instead of a four-day anecdote
 
-## 2026-08-25 - Premarket gamma distribution: nothing floats over the plot any more
+New: `lib/ibBlend.ts`, `scripts/ib-blend-check.mjs`.
+Edited: `components/scanner/ConditionRailTab.tsx`.
 
-Edited: `components/pages/premarket/GammaDistribution.tsx`.
+Tick nine things that are true of the session and the book has four days
+matching all nine. Four days is not a rate. But the book knows hundreds or
+thousands of days about each of those nine conditions SEPARATELY, and throwing
+that away because the nine-way intersection is nearly empty is the problem,
+not the answer. The page now stacks the evidence instead of intersecting it.
 
-First pass was cramped, and on a 1500px-wide card it was worse than cramped -
-the floating stats card sat straight through the y-axis labels, and the hover
-tooltip then sat straight through the stats card. Three fixes:
+**The method** (full write-up in `lib/ibBlend.ts`):
 
-1. **Stats and legend moved OUT of the SVG.** The stats card is now a five-tile
-   KPI strip above the plot (center of mass with its distance from spot, 1-sigma
-   dispersion with the strike range, % inside +/-1 sigma with the shape verdict,
-   net GEX over the window, total mass). The legend rides in the head next to
-   the OI / VOL switch. The SVG owns its whole box; the tooltip is the only
-   floating thing left and has nothing to collide with.
-2. **Height now tracks width** (~0.46, clamped 440-660) instead of a fixed 430.
-   A 430px plot inside a 1500px card is a letterbox, and a distribution read on
-   SHAPE needs vertical room to have one.
-3. **Level labels staggered over two rows** in a taller top pad. Spot, flip and
-   both walls land within a few points of each other on a 0DTE board, and one
-   row of labels was a single unreadable smear ("Put wa...Spot 7,667...7,675").
+1. Each criterion's own rate is measured against the whole book, then pulled
+   toward the base rate in proportion to how little data stands behind it.
+2. Each becomes evidence in log-odds off the base rate, where evidence adds.
+3. The sum is DISCOUNTED for overlap - and the discount is MEASURED, not
+   guessed. "ORB down" and "broke IB low" are nearly the same statement, so
+   adding them raw triple-counts one fact and spits out 95%. For every pair of
+   ticked criteria with a real sample, the code compares what the stack
+   predicts for that pair against what the book actually did, and takes the
+   median ratio as lambda. Pairs are used because a pair still has a sample
+   when the nine-way does not.
+4. The exact-match cohort is blended back in BY ITS SIZE. At four sessions it
+   barely counts; at a few hundred it takes over entirely and the estimator
+   quietly turns back into a plain conditional rate. Nothing switches modes -
+   it slides.
 
-Also, and this one was a real bug: the bars used SEPARATE per-side scales, so a
--862M put bar drew as tall as a +3B call bar. Both sides now share ONE linear
-scale, which is why the put side is a thin strip - that is the truth. The mass
-line and the fitted normal keep their own shared factor (comparable to each
-other, never to the bars), and the y-axis labels are stated as belonging to the
-bars only.
+**Validated, not asserted.** `scripts/ib-blend-check.mjs` drives it against
+synthetic books where the true conditional rate is known by construction. On
+the case that matters - six criteria, four of them restating one latent
+condition, exact intersection of six days - truth is 79.6%, the joined read
+returns 81.0%, the four-day anecdote said 66.7% and undamped naive Bayes said
+95.2%. Also asserts the estimator gets out of the way on a fat cohort and does
+not double-count a duplicated pick.
 
-Tooltip is clamped with `clamp(76px, x, 100% - 76px)` so a bar at either end
-cannot push it outside the plot.
+**On the page:**
 
-## 2026-08-25 - Premarket: gamma distribution by strike, with an OI / VOL switch
-
-Added: `components/pages/premarket/GammaDistribution.tsx`.
-Edited: `components/pages/Premarket.tsx`.
-
-The ladder answers "how big is each strike". This answers the other question -
-where the gamma is actually CONCENTRATED and how tight it is. Net GEX bars on a
-STRIKE axis (calls +, puts -), the real gamma-mass curve (|call GEX| + |put
-GEX|) over the top, and a normal curve fitted to that mass. Sits full width
-under the three-column body, above GEX Watch, because the read is the SHAPE and
-that is unreadable in a third of the grid.
-
-The switch, which is the point of the card:
-
-- **OI** - gamma x OI x S^2. Positioning carried INTO the session. Computed as
-  `net - vol`, the same subtraction `oiLeg()` already uses on this page, so the
-  card and the Key Levels tiles can never disagree about what "OI" means.
-- **VOL** - gamma x Volume x S^2. Today's trading only; reads near-empty before
-  09:30 and says so in the footer instead of drawing an empty chart silently.
-
-Deliberately NOT wired to the page's `lvlBasis`: that switch has three legs and
-drives the levels tiles, so folding them together would mean changing the tiles
-to change this chart. Own state, own localStorage key
-(`cb-premarket-gdist-basis-v1`).
-
-Detail:
-- Mass line and fitted normal share ONE scale factor - the gap between them is
-  the read (a 0DTE board is usually far more peaked than the fit). Neither is
-  normalised to its own peak, and the y-axis labels belong to the bars only.
-- Stats overlay: center of gamma mass (mu), 1-sigma dispersion in points and as
-  a strike range, % of mass inside +/-1 sigma, net GEX over the window, total
-  gamma mass.
-- Spot / flip / call wall / put wall drawn as vertical rules; +/-1 sigma shaded.
-- Window is +/-2.8% of spot; above 150 strikes neighbours are folded into equal
-  buckets by SUM (never average) so the totals still match the ladder.
-- Pre-summed server rows (no per-side gamma) fall back to |net| for mass rather
-  than being dropped to zero.
-- Hover gives a per-strike readout (net, mass, distance from spot).
-- Every colour is a `.pmk` custom property - nothing hardcoded (AGENTS.md).
+- The headline is the joined number, badged JOINED. AUTO now ranks outcomes by
+  the JOINED gap off the book, so a 0%/100% four-day accident can no longer
+  win the headline.
+- New **"Joined from"** strip under it, every input visible: book base,
+  stacked, exact match (flagged when thin), and how much of the stacked
+  evidence survived the overlap check. Plus the deepest sub-combination the
+  book supports on plain history alone, as a sanity check the joined number
+  should sit near.
+- Compare rows: the BAR is now the joined read, the dark tick on it is the
+  exact cohort's own rate, the hairline is still the book. A four-day 100%
+  shows as a tick, not a full bar.
+- "Each criterion on its own" swaps "without it" for **PUSH** - leave-one-out
+  on the joined number. A push near zero means that pick is a passenger: it
+  shreds the cohort without adding evidence. Most of a nine-chip stack usually
+  is.
+- **CLUSTERED IN TIME** warning: if every matching session falls in one stretch
+  of one year while the book spans several, that is a regime, not a rule - and
+  a rate cannot show it (four-for-four looks identical whether the four span
+  six years or seven months of 2024). This is also the strongest argument for
+  the joined number, which reads each criterion's full history even when their
+  intersection is bunched.
 
 ## 2026-08-25 - Condition Rail: the failed-break split gets a base it can stand on
 

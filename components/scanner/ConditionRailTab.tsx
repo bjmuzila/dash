@@ -55,6 +55,10 @@
  * and leaves it one click to put back; the empty-combination strike is skipped
  * while the cohort is empty, so the rail can never lock itself again.
  *
+ * SURFACES. This page is on a local dark palette (`P` below), not homeTheme's
+ * card colors — the same arrangement /board uses while a look is trialled.
+ * Accents still come from homeTheme; only the greys are local.
+ *
  * NO OUTCOME PICKER (2026-08-25). There used to be an "Outcome" dropdown and it
  * was backwards: it made you name the outcome you cared about BEFORE the page
  * had shown you a single number, which is asking you to guess which one the
@@ -80,14 +84,38 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/shared/homeTheme";
-import { Card } from "@/components/shared/PageCard";
+import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { failOutcome, type IbDataset, type SlimDay } from "@/lib/ibStats";
 import { blendMasks, deepestSupported, makeMask } from "@/lib/ibBlend";
 import { backfillWidthBuckets, computeToday, type TodayFull } from "@/components/scanner/StatPrompterTab";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
+
+/* ── page palette ─────────────────────────────────────────────────────────────
+ * Page-scoped surfaces, deliberately NOT homeTheme — same arrangement /board
+ * uses while a darker look is being trialled. ACCENTS still come from homeTheme
+ * (cyan / orange / red / green / LIGHT_BLUE) so the rail reads as part of the
+ * app; only the greys are local. If this look sticks, these six move into
+ * homeTheme and this block goes away.
+ */
+const P = {
+  app: "#020304",
+  rail: "#040507",
+  shell: "#07080b",
+  card: "#0f1117",
+  card2: "#14171d",
+  cardHi: "#191b22",
+  line: "rgba(255,255,255,0.07)",
+  lineHi: "rgba(255,255,255,0.12)",
+} as const;
+
+/** Every card on this page. `hi` = the raised inner surface (tiles, pills). */
+const surface = (bg: string, border = P.line): React.CSSProperties => ({
+  background: bg,
+  border: `1px solid ${border}`,
+  borderRadius: 12,
+});
 
 /* ── helpers ──────────────────────────────────────────────────────────────── */
 
@@ -291,23 +319,6 @@ const PARTS = [
   { k: "to_mid" as const, label: "TO THE MID — gave the break back and reached the IB midpoint, no further", color: HOME_THEME.orange },
   { k: "full_rotation" as const, label: "FULL ROTATION — gave the break back and ran all the way to the opposite IB extreme", color: HOME_THEME.red },
 ];
-
-/**
- * Plain-English size words. The honesty rule says sample counts are never
- * printed — but "0%" and "100%" off a handful of sessions read as "never" and
- * "always", which is a bigger lie than the number would have been. So the page
- * says how many in words, and the THIN badge says the handful is a handful.
- */
-const inWords = (v: number | null): string => {
-  if (v == null) return "no reading";
-  if (v >= 0.999) return "every one of them";
-  if (v <= 0.001) return "not one of them";
-  if (v >= 0.8) return "nearly all of them";
-  if (v >= 0.6) return "most of them";
-  if (v >= 0.45) return "about half of them";
-  if (v >= 0.2) return "a minority of them";
-  return "a few of them";
-};
 
 /* ── component ────────────────────────────────────────────────────────────── */
 
@@ -625,77 +636,21 @@ export default function ConditionRailTab() {
   const medExt = med(broke.map((d) => d.fcb!.rExt));
   const medMin = med(broke.map((d) => d.fcb!.breakMin));
 
-  /**
-   * THE FAMILY BOARD — the rail's picks grouped the way they are already
-   * grouped on screen, each family read as ONE idea.
-   *
-   * Nine ticked chips are not nine opinions. "ORB down", "broke IB low" and
-   * "IB closed below mid" are one bearish idea said three ways, and a board
-   * that lets them cast three votes is lying about how much it knows. The rail
-   * already sorts its criteria into the four families it uses as rail headings,
-   * so each family is blended on its OWN — the same estimator as the headline,
-   * run on that family's ticked members only.
-   *
-   * What each family reports:
-   *   • its joined read for the focused outcome, and how far off the book that
-   *     sits — that is the family's direction and its conviction;
-   *   • the λ the overlap check measured INSIDE it. A CORRELATED badge is no
-   *     longer a hand-placed flag on a family someone thought was redundant:
-   *     the number says so, per family, per outcome, and it changes with what
-   *     is ticked;
-   *   • each member's own rate over the whole book, its last five in-play
-   *     sessions as hit/miss dots, and its leave-one-out push on the headline.
-   *
-   * And because the families are read separately, they can disagree — which is
-   * the one thing the single headline number can never show you. When two pull
-   * opposite ways, that is said out loud rather than averaged away.
-   */
-  const families = useMemo(() => {
-    const idxOf = new Map(conds.map((c, i) => [c.id, i]));
-    return GROUPS.map((g) => {
-      const mine = g.items.map((it) => idxOf.get(it.id)).filter((i): i is number => i != null);
-      if (!mine.length) return null;
-      const b = blendMasks(mine.map((i) => predMasks[i]), outMasks[focusIdx], allBroke.length);
-      const members = mine.map((i) => {
-        const c = conds[i];
-        // Sessions where this criterion held AND a break happened, oldest →
-        // newest — so the last five are the five most recent times the market
-        // actually put this rule in play.
-        const inPlay = allBroke.filter(c.f);
+  /** Each ticked criterion's own rate over the whole book. */
+  const perCond = useMemo(
+    () =>
+      conds.map((c) => {
+        const alone = allBroke.filter(c.f);
         return {
           id: c.id,
           label: c.label,
-          p: inPlay.length ? inPlay.filter(metric.f).length / inPlay.length : null,
-          thin: inPlay.length > 0 && inPlay.length < 30,
-          last5: inPlay.slice(-5).map((d) => metric.f(d)),
-          push: pushes[i] ?? 0,
+          alone: alone.length ? alone.filter(metric.f).length / alone.length : null,
+          thin: alone.length > 0 && alone.length < 30,
+          today: todayOf[c.id] === true,
         };
-      });
-      return {
-        key: g.name,
-        title: g.name,
-        sub: members.map((m) => m.label.toLowerCase()).join(" · "),
-        blend: b,
-        delta: (b.joined - b.p0) * 100,
-        // Measured, not declared: this family's own picks repeat each other
-        // enough that the overlap check threw most of their evidence away.
-        correlated: b.lambdaPairs > 0 && b.lambda < 0.7,
-        members,
-      };
-    }).filter(Boolean) as {
-      key: string; title: string; sub: string;
-      blend: ReturnType<typeof blendMasks>; delta: number; correlated: boolean;
-      members: { id: string; label: string; p: number | null; thin: boolean; last5: boolean[]; push: number }[];
-    }[];
-  }, [conds, predMasks, outMasks, focusIdx, allBroke, metric, pushes]);
-
-  /** Families pulling opposite ways — the thing one blended number hides. */
-  const CONFLICT_PTS = 3;
-  const conflict = useMemo(() => {
-    const up = families.filter((f) => f.delta >= CONFLICT_PTS);
-    const dn = families.filter((f) => f.delta <= -CONFLICT_PTS);
-    return up.length && dn.length ? { up, dn } : null;
-  }, [families]);
+      }),
+    [conds, allBroke, metric, todayOf],
+  );
 
   const selNotToday = sel.filter((id) => todayOf[id] === false);
   const selPending = sel.filter((id) => todayOf[id] == null);
@@ -705,13 +660,13 @@ export default function ConditionRailTab() {
 
   const sect: React.CSSProperties = { fontSize: 10.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 10, display: "flex", alignItems: "center", gap: 7 };
   const badge = (color: string): React.CSSProperties => ({ marginLeft: 8, fontSize: 10, fontWeight: 800, color, border: `1px solid ${color}66`, background: `${color}1A`, borderRadius: 4, padding: "1px 5px", letterSpacing: ".04em", whiteSpace: "nowrap" });
-  const tile: React.CSSProperties = { background: "rgba(255,255,255,0.03)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 10, padding: 12 };
+  const tile: React.CSSProperties = { ...surface(P.card2), borderRadius: 10, padding: 12 };
 
   const chipStyle = (on: boolean, isToday: boolean, dead: boolean): React.CSSProperties => ({
     fontSize: 12, fontWeight: 600, cursor: dead ? "not-allowed" : "pointer",
     display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 7,
-    border: `1px solid ${on ? LIGHT_BLUE : isToday ? `${LIGHT_BLUE}55` : HOME_THEME.border}`,
-    background: on ? `${LIGHT_BLUE}22` : "rgba(255,255,255,0.03)",
+    border: `1px solid ${on ? LIGHT_BLUE : isToday ? `${LIGHT_BLUE}55` : P.lineHi}`,
+    background: on ? `${LIGHT_BLUE}22` : P.card2,
     color: on ? LIGHT_BLUE : HOME_THEME.text,
     opacity: dead ? 0.28 : 1,
     textDecoration: dead ? "line-through" : "none",
@@ -721,23 +676,24 @@ export default function ConditionRailTab() {
 
   if (err) {
     return (
-      <Card title="Condition Rail">
+      <div style={{ ...surface(P.card), padding: 20 }}>
         <div style={{ color: HOME_THEME.red, fontSize: 14 }}>
           Couldn&apos;t load the IB datasets: {err}
           <div style={{ color: HOME_THEME.text, marginTop: 6 }}>
             Export them from <code>ib-backtest-esu6.html</code> → &quot;Export JSON for dashboard&quot; into <code>public/data/</code>.
           </div>
         </div>
-      </Card>
+      </div>
     );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <Card
-        title="Condition Rail"
-        subtitle="Tick what has happened in the session; the book re-reads itself for exactly that cohort."
-      >
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, background: P.shell, borderRadius: 14, padding: 14 }}>
+      <div style={{ ...surface(P.card), padding: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.text, marginBottom: 2 }}>Condition Rail</div>
+        <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.7, marginBottom: 12 }}>
+          Tick what has happened; the book re-reads itself for that cohort.
+        </div>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             <span style={{ ...sect, marginBottom: 0 }}>Index</span>
@@ -784,11 +740,11 @@ export default function ConditionRailTab() {
               : "loading ib-ES.json + ib-NQ.json…"}
           </div>
         </div>
-      </Card>
+      </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 320px) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
         {/* ── the rail ─────────────────────────────────────────────────── */}
-        <div style={{ ...classicCardAccentStyle, padding: 16, position: "sticky", top: 0 }}>
+        <div style={{ ...surface(P.rail), padding: 16, position: "sticky", top: 0 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
             <div style={{ fontSize: 13.5, fontWeight: 800, color: HOME_THEME.text }}>What has happened</div>
             <div style={{ display: "flex", gap: 6 }}>
@@ -811,7 +767,7 @@ export default function ConditionRailTab() {
               </button>
               <button
                 onClick={() => { touched.current = true; setWhy(""); setRelaxed([]); setSel([]); }}
-                style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".04em", padding: "4px 8px", borderRadius: 6, cursor: "pointer", border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.03)", color: HOME_THEME.text }}
+                style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".04em", padding: "4px 8px", borderRadius: 6, cursor: "pointer", border: `1px solid ${P.lineHi}`, background: P.card2, color: HOME_THEME.text }}
               >
                 CLEAR
               </button>
@@ -861,8 +817,8 @@ export default function ConditionRailTab() {
                 at all. Clicking one back on re-narrows and the banner drops it. */}
             {relaxed.length > 0 && (
               <div style={{ marginTop: 7, fontSize: 11, color: HOME_THEME.orange, lineHeight: 1.5 }}>
-                ⚠ Relaxed — no session in this book matched the full read. Dropped{" "}
-                <b>{relaxed.map((id) => BY[id]?.label.toLowerCase()).filter(Boolean).join(", ")}</b>. Click any of them back on to see it go empty again.
+                ⚠ Relaxed — nothing matched all of them. Dropped{" "}
+                <b>{relaxed.map((id) => BY[id]?.label.toLowerCase()).filter(Boolean).join(", ")}</b>.
               </div>
             )}
           </div>
@@ -872,7 +828,7 @@ export default function ConditionRailTab() {
               <div style={sect}>
                 {g.name}
                 {g.hint && (
-                  <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: ".03em", textTransform: "none", color: HOME_THEME.text, border: `1px solid ${HOME_THEME.border}`, borderRadius: 4, padding: "1px 4px" }}>
+                  <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: ".03em", textTransform: "none", color: HOME_THEME.text, border: `1px solid ${P.lineHi}`, borderRadius: 4, padding: "1px 4px" }}>
                     {g.hint}
                   </span>
                 )}
@@ -909,7 +865,7 @@ export default function ConditionRailTab() {
 
           {why && <div style={{ fontSize: 11, color: HOME_THEME.orange, lineHeight: 1.5, marginTop: 4 }}>⚠ {why}</div>}
 
-          <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 11, color: HOME_THEME.text, lineHeight: 1.8 }}>
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${P.line}`, fontSize: 11, color: HOME_THEME.text, lineHeight: 1.8 }}>
             <span style={{ color: LIGHT_BLUE }}>●</span> true of {isLive ? "today's session" : `the ${asOf} session`}<br />
             {isLive && (
               <>
@@ -929,7 +885,7 @@ export default function ConditionRailTab() {
 
         {/* ── the readout ──────────────────────────────────────────────── */}
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ ...classicCardAccentStyle, padding: 20 }}>
+          <div style={{ ...surface(P.card), padding: 20 }}>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 250px) minmax(0, 1fr)", gap: 22, alignItems: "center" }}>
               <div>
                 <div style={{ fontSize: 56, fontWeight: 800, lineHeight: 1, letterSpacing: "-0.035em", color: LIGHT_BLUE, fontVariantNumeric: "tabular-nums" }}>
@@ -946,7 +902,7 @@ export default function ConditionRailTab() {
                   {focus && (
                     <button
                       onClick={() => setFocus(null)}
-                      style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".04em", padding: "1px 5px", borderRadius: 4, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.03)", color: HOME_THEME.text }}
+                      style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".04em", padding: "1px 5px", borderRadius: 4, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${P.lineHi}`, background: P.card2, color: HOME_THEME.text }}
                     >
                       AUTO
                     </button>
@@ -969,8 +925,8 @@ export default function ConditionRailTab() {
                       display: "inline-flex", alignItems: "center", gap: 6, marginTop: 11, fontSize: 12, fontWeight: 800,
                       padding: "4px 9px", borderRadius: 7,
                       color: Math.abs(deltaPts) < 1.5 ? HOME_THEME.text : deltaPts > 0 ? HOME_THEME.green : HOME_THEME.red,
-                      border: `1px solid ${Math.abs(deltaPts) < 1.5 ? HOME_THEME.border : deltaPts > 0 ? `${HOME_THEME.green}66` : `${HOME_THEME.red}66`}`,
-                      background: Math.abs(deltaPts) < 1.5 ? "rgba(255,255,255,0.03)" : deltaPts > 0 ? `${HOME_THEME.green}1A` : `${HOME_THEME.red}1A`,
+                      border: `1px solid ${Math.abs(deltaPts) < 1.5 ? P.lineHi : deltaPts > 0 ? `${HOME_THEME.green}66` : `${HOME_THEME.red}66`}`,
+                      background: Math.abs(deltaPts) < 1.5 ? P.card2 : deltaPts > 0 ? `${HOME_THEME.green}1A` : `${HOME_THEME.red}1A`,
                     }}
                   >
                     {deltaPts > 0 ? "▲" : deltaPts < 0 ? "▼" : "●"} {Math.abs(deltaPts).toFixed(1)} pts vs the {pct0(baseline)} baseline
@@ -982,7 +938,7 @@ export default function ConditionRailTab() {
                     of that evidence survived the overlap check, and the exact
                     intersection's own rate — which is a passenger while it is
                     thin and takes the wheel once it is not. */}
-                <div style={{ marginTop: 11, fontSize: 11, color: HOME_THEME.text, lineHeight: 1.7, border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "9px 11px", background: "rgba(255,255,255,0.02)" }}>
+                <div style={{ marginTop: 11, fontSize: 11, color: HOME_THEME.text, lineHeight: 1.7, ...surface(P.card2, P.line), borderRadius: 8, padding: "9px 11px" }}>
                   <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 4 }}>
                     Joined from
                   </div>
@@ -1069,35 +1025,6 @@ export default function ConditionRailTab() {
                   {suspicious && <span style={badge(HOME_THEME.red)}>CHECK FOR BIAS</span>}
                 </div>
 
-                {/* ── say it in words ───────────────────────────────────────
-                    Percentages off a small cohort get read as certainties: 0%
-                    becomes "never", 100% becomes "always", and a stacked bar
-                    becomes a forecast. Three sentences that cannot be misread
-                    that way, stated every time rather than only when thin. */}
-                <div style={{ marginTop: 13, paddingTop: 11, borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.65 }}>
-                  <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, marginBottom: 5 }}>
-                    Reading it
-                  </div>
-                  <div>
-                    Given everything ticked at left, the book&apos;s history puts <b style={{ color: metric.color }}>{pct1(rate)}</b> on{" "}
-                    {metric.sentence}, against <b>{pct0(baseline)}</b> for an {sym} IB break with no conditions on it at all.
-                  </div>
-                  <div style={{ marginTop: 4 }}>
-                    That is <b>not</b> the rate of the handful of sessions matching every criterion at once — those went{" "}
-                    <b>{inWords(exactRate)}</b> ({pct0(exactRate)}), which is far too few days to quote. It is each criterion&apos;s own history,
-                    measured over the whole book, stacked and then discounted for how much the criteria repeat one another.
-                  </div>
-                  <div style={{ marginTop: 4 }}>
-                    Sessions that never broke the IB are not in any of it — every rate here is conditional on a break happening first.
-                  </div>
-                  {thin && (
-                    <div style={{ marginTop: 5, color: HOME_THEME.orange }}>
-                      ⚠ The exact-match cohort is a handful of sessions, so it barely moves the joined number — that is deliberate. Read its{" "}
-                      <b>0%</b> as &ldquo;not in these few&rdquo; and its <b>100%</b> as &ldquo;all of these few&rdquo;; neither is &ldquo;never&rdquo;
-                      or &ldquo;always&rdquo;. As matching sessions accumulate the joined number slides toward the cohort&apos;s own rate on its own.
-                    </div>
-                  )}
-                </div>
               </div>
 
               {/* Every outcome, this cohort against the unconditional book. Each
@@ -1117,14 +1044,14 @@ export default function ConditionRailTab() {
                         fontSize: 12, fontFamily: "inherit", textAlign: "left", cursor: "pointer",
                         padding: "3px 6px", margin: "-3px -6px", borderRadius: 7,
                         border: `1px solid ${on ? `${r.m.color}66` : "transparent"}`,
-                        background: on ? `${r.m.color}14` : "transparent",
+                        background: on ? P.cardHi : "transparent",
                       }}
                     >
                       <div style={{ color: HOME_THEME.text, textAlign: "right", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 5 }}>
                         {auto && <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: ".06em", color: r.m.color, border: `1px solid ${r.m.color}55`, borderRadius: 3, padding: "0 3px" }}>AUTO</span>}
                         {r.m.label}
                       </div>
-                      <div style={{ height: 16, background: "rgba(255,255,255,0.05)", borderRadius: 5, position: "relative", overflow: "hidden" }}>
+                      <div style={{ height: 16, background: P.app, borderRadius: 5, position: "relative", overflow: "hidden" }}>
                         {/* fill = the JOINED number. The exact cohort's own rate
                             is a tick, so a four-day 100% shows as a mark rather
                             than a full bar. */}
@@ -1146,115 +1073,53 @@ export default function ConditionRailTab() {
                   );
                 })}
                 <div style={{ fontSize: 10.5, color: HOME_THEME.text, textAlign: "right" }}>
-                  bar + first number = the JOINED read · hairline = the {sym} book · dark tick = the exact cohort&apos;s own rate · second number = that
-                  exact rate · last = points the joined read sits off the book · click a row to pin it
+                  bar = joined · hairline = {sym} book · tick + 2nd number = exact cohort · last = pts off book · click to pin
                   <br />
-                  every rate is measured on sessions that BROKE the IB — no-break days are not in the denominator
+                  all rates are of sessions that BROKE the IB
                 </div>
               </div>
             </div>
           </div>
 
-          {/* ── the family board ───────────────────────────────────────────
-              Nine chips are not nine opinions. Each rail family is blended on
-              its own and reports one direction, one conviction, and whether the
-              overlap check found its own members to be restatements of each
-              other. Families can disagree; that is the point. */}
-          <div style={{ ...classicCardAccentStyle, padding: 20 }}>
+          {/* each ticked criterion, its own rate, and its pull on the headline */}
+          <div style={{ ...surface(P.card), padding: 20 }}>
             <div style={sect}>
-              What each family says
+              Each criterion on its own
               <span style={{ textTransform: "none", letterSpacing: 0, fontWeight: 600, color: HOME_THEME.text }}>
-                — {metric.label.toLowerCase()}, book base {pct0(baseline)}
+                — {metric.label.toLowerCase()} · book {pct0(baseline)}
               </span>
             </div>
-
-            {conflict && (
-              <div style={{ fontSize: 11.5, color: HOME_THEME.orange, lineHeight: 1.6, border: `1px solid ${HOME_THEME.orange}44`, background: `${HOME_THEME.orange}0F`, borderRadius: 8, padding: "9px 11px", marginBottom: 13 }}>
-                <b>FAMILIES DISAGREE</b> — <b>{conflict.up.map((f) => f.title.toLowerCase()).join(", ")}</b> push toward{" "}
-                {metric.label.toLowerCase()} while <b>{conflict.dn.map((f) => f.title.toLowerCase()).join(", ")}</b> push against it. The headline
-                averages that out; the disagreement itself is the read. Trust the family whose members are least correlated with each other — its
-                evidence is the evidence that has not already been counted.
-              </div>
-            )}
-
-            {families.length ? (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(258px, 1fr))", gap: 12, alignItems: "start" }}>
-                {families.map((f) => {
-                  const strong = Math.abs(f.delta) >= CONFLICT_PTS;
-                  const col = !strong ? HOME_THEME.text : f.delta > 0 ? HOME_THEME.green : HOME_THEME.red;
-                  return (
-                    <div key={f.key} style={{ border: `1px solid ${strong ? `${col}44` : HOME_THEME.border}`, borderRadius: 10, padding: 13, background: "rgba(255,255,255,0.02)" }}>
-                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-                        <div style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.text }}>{f.title}</div>
-                        {f.correlated && (
-                          <span style={{ ...badge(HOME_THEME.orange), marginLeft: 0 }}
-                            title={`The overlap check kept only ${(100 * f.blend.lambda).toFixed(0)}% of this family's stacked evidence — its picks are largely restatements of each other.`}>
-                            CORRELATED · {(100 * f.blend.lambda).toFixed(0)}%
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 10.5, color: HOME_THEME.text, marginTop: 3, lineHeight: 1.45 }}>{f.sub}</div>
-
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 9, marginTop: 9 }}>
-                        <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em", color: col, fontVariantNumeric: "tabular-nums" }}>
-                          {pct0(f.blend.joined)}
-                        </span>
-                        <span style={{ fontSize: 11.5, fontWeight: 800, color: col }}>
-                          {!strong ? "NEUTRAL" : f.delta > 0 ? "MORE LIKELY ↑" : "LESS LIKELY ↓"}
-                        </span>
-                        <span style={{ fontSize: 11, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>
-                          {f.delta > 0 ? "+" : f.delta < 0 ? "−" : "±"}{Math.abs(f.delta).toFixed(1)} pts
-                        </span>
-                      </div>
-
-                      <div style={{ display: "grid", gap: 7, marginTop: 11 }}>
-                        {f.members.map((m) => (
-                          <div key={m.id} style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, padding: "7px 9px" }}>
-                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                              <span style={{ fontSize: 11.5, color: HOME_THEME.text }}>{m.label}</span>
-                              <span style={{ fontSize: 12.5, fontWeight: 800, color: m.thin ? HOME_THEME.orange : LIGHT_BLUE, fontVariantNumeric: "tabular-nums" }}>
-                                {pct0(m.p)}
-                              </span>
-                            </div>
-                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 5 }}>
-                              {/* oldest → newest: the last five times the market
-                                  actually put this rule in play */}
-                              {m.last5.length ? (
-                                <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
-                                  {m.last5.map((w, i) => (
-                                    <span key={i} title={w ? "it did" : "it didn't"} style={{ width: 9, height: 9, borderRadius: "50%", background: w ? HOME_THEME.green : HOME_THEME.red, opacity: w ? 1 : 0.55 }} />
-                                  ))}
-                                </span>
-                              ) : (
-                                <span style={{ fontSize: 10.5, color: HOME_THEME.text, opacity: 0.5 }}>no history</span>
-                              )}
-                              <span
-                                title="Points the headline moves if this pick comes off. Near zero = a passenger."
-                                style={{ fontSize: 10.5, fontWeight: 700, fontVariantNumeric: "tabular-nums",
-                                  color: Math.abs(m.push) < 1 ? "rgba(255,255,255,0.35)" : m.push > 0 ? HOME_THEME.green : HOME_THEME.red }}
-                              >
-                                push {m.push > 0 ? "+" : m.push < 0 ? "−" : "±"}{Math.abs(m.push).toFixed(1)}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+            {perCond.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) minmax(0, 1.5fr) 54px 62px", gap: 11, alignItems: "center", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.07em", textTransform: "uppercase", color: HOME_THEME.text }}>
+                  <div>Criterion</div>
+                  <div>Alone</div>
+                  <div style={{ textAlign: "right" }}>Rate</div>
+                  <div style={{ textAlign: "right" }}>Push</div>
+                </div>
+                {perCond.map((r, i) => (
+                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) minmax(0, 1.5fr) 54px 62px", gap: 11, alignItems: "center", fontSize: 12 }}>
+                    <div style={{ color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 5 }}>
+                      {r.today && <span title="true of this session" style={{ fontSize: 8, color: LIGHT_BLUE }}>●</span>}
+                      {r.label}
                     </div>
-                  );
-                })}
+                    <div style={{ height: 16, background: P.app, borderRadius: 5, position: "relative", overflow: "hidden" }}>
+                      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${(r.alone ?? 0) * 100}%`, background: r.thin ? HOME_THEME.orange : LIGHT_BLUE, opacity: 0.85, borderRadius: 5 }} />
+                      <div style={{ position: "absolute", top: -3, bottom: -3, left: `${baseline * 100}%`, width: 1.5, background: "rgba(255,255,255,0.45)" }} />
+                    </div>
+                    <div style={{ fontWeight: 800, textAlign: "right", color: r.thin ? HOME_THEME.orange : LIGHT_BLUE, fontVariantNumeric: "tabular-nums" }}>{pct0(r.alone)}</div>
+                    <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700,
+                      color: Math.abs(pushes[i] ?? 0) < 1 ? "rgba(255,255,255,0.35)" : (pushes[i] ?? 0) > 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                      {pushes[i] == null ? "—" : `${pushes[i] > 0 ? "+" : pushes[i] < 0 ? "−" : "±"}${Math.abs(pushes[i]).toFixed(1)}`}
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : (
-              <div style={{ fontSize: 12, color: HOME_THEME.text }}>Nothing ticked — the headline already is the whole book.</div>
+              <div style={{ fontSize: 12, color: HOME_THEME.text }}>Nothing ticked.</div>
             )}
-
-            <div style={{ fontSize: 10.5, color: HOME_THEME.text, marginTop: 12, lineHeight: 1.65 }}>
-              Each family is blended on its own picks only, so one idea said three ways counts once rather than three times. The big number is that
-              family&apos;s joined read; the pts beside it is how far that sits off the book&apos;s {pct0(baseline)}.{" "}
-              <b>CORRELATED</b> is measured, not declared — it is the share of the family&apos;s stacked evidence that survived checking its own picks
-              against each other on the book&apos;s pairs, and it moves as you change what is ticked. Per member: its own rate over the whole book, its
-              last five in-play sessions oldest → newest (<span style={{ color: HOME_THEME.green }}>green</span> = the outcome happened,{" "}
-              <span style={{ color: HOME_THEME.red }}>red</span> = it did not), and <b>push</b>, the points the headline moves if that pick comes off —
-              near zero means it is narrowing the cohort without adding evidence.
+            <div style={{ fontSize: 10.5, color: HOME_THEME.text, marginTop: 9 }}>
+              hairline = book · orange = thin · <b>push</b> = pts the headline moves if this comes off (≈0 = a passenger)
             </div>
           </div>
 
@@ -1264,16 +1129,12 @@ export default function ConditionRailTab() {
               split goes on top only when enough of its breaks failed to survive
               a four-way split — otherwise it is one session wearing a percent
               sign, which is what this card used to be. */}
-          <div style={{ ...classicCardAccentStyle, padding: 20 }}>
+          <div style={{ ...surface(P.card), padding: 20 }}>
             <div style={sect}>When a break fails — where the day ends up</div>
-            <div style={{ fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.65, marginTop: -4, marginBottom: 14 }}>
-              A failure is a break that closed back inside the IB within 30 minutes. This card is about what happened <i>after</i> that — it is not the
-              chance of failing, and it says nothing about whether <i>this</i> break will fail.
+            <div style={{ fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.6, marginTop: -4, marginBottom: 13 }}>
+              Where the day ended up <i>after</i> a failure — not the odds of failing.
               {failRate != null && bookFailRate != null && (
-                <div style={{ marginTop: 4 }}>
-                  This cohort&apos;s breaks failed <b style={{ color: HOME_THEME.red }}>{pct0(failRate)}</b> of the time against{" "}
-                  <b>{pct0(bookFailRate)}</b> for the {sym} book — that is the &ldquo;if&rdquo;, and it is the Failed ≤30m row above.
-                </div>
+                <> Failure rate: cohort <b style={{ color: HOME_THEME.red }}>{pct0(failRate)}</b> · book <b>{pct0(bookFailRate)}</b>.</>
               )}
             </div>
 
@@ -1307,11 +1168,7 @@ export default function ConditionRailTab() {
               </div>
             ) : (
               <div style={{ fontSize: 11.5, color: HOME_THEME.orange, lineHeight: 1.6, border: `1px solid ${HOME_THEME.orange}33`, background: `${HOME_THEME.orange}0F`, borderRadius: 8, padding: "9px 11px" }}>
-                {fails.length === 0
-                  ? `No break in this cohort has failed yet, so there is nothing of its own to split.`
-                  : `Too few of this cohort's breaks failed to split four ways — a bar here would be a couple of days, not a distribution.`}{" "}
-                Read the book&apos;s split above instead: it is what an {sym} break does after failing, and it is the honest answer until this cohort has
-                more failures behind it.
+                {fails.length === 0 ? "No failures in this cohort yet." : "Too few failures to split four ways."} Read the book&apos;s split above.
               </div>
             )}
 
@@ -1341,7 +1198,7 @@ export default function ConditionRailTab() {
           </div>
 
           {/* every matching session, oldest → newest */}
-          <div style={{ ...classicCardAccentStyle, padding: 20 }}>
+          <div style={{ ...surface(P.card), padding: 20 }}>
             <div style={sect}>
               Matching sessions, oldest → newest
               <span style={{ textTransform: "none", letterSpacing: 0, fontWeight: 600, color: HOME_THEME.text }}>
@@ -1379,48 +1236,20 @@ export default function ConditionRailTab() {
                 means far faster than any badge does. */}
             {broke.length > 0 && (
               <div style={{ fontSize: 10.5, color: HOME_THEME.text, marginTop: 9 }}>
-                one square = one matching session that broke the IB, oldest at left · filled = {metric.label.toLowerCase()} · count them, that is the
-                whole sample behind every number on this page
+                one square = one matching session, oldest left · filled = {metric.label.toLowerCase()} · this is the whole exact-match sample
               </div>
             )}
           </div>
         </div>
       </div>
 
-      <div style={{ fontSize: 12, color: HOME_THEME.text, lineHeight: 1.6 }}>
-        Reads <code>public/data/ib-{sym}.json</code> (slim export from <code>ib-backtest-esu6.html</code>) plus the live 5m tape for today&apos;s
-        classification. Break = first 5m CLOSE outside the 09:30–10:30 IB. Failed = closed back inside within 30m. Extension is in IB widths.
+      <div style={{ fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.65 }}>
+        Reads <code>public/data/ib-{sym}.json</code> + the live 5m tape. Break = first 5m CLOSE outside the 09:30–10:30 IB · failed = back inside ≤30m ·
+        extension in IB widths. No lookahead: every field was stamped at its own confirm bar.
         <br />
-        The rail only lets you describe a session that could exist: criteria in the same group swap rather than stack, criteria that contradict a pick are
-        struck out, and a combination with no session behind it is struck out too.
-        <br />
-        There is nothing to pick on the outcome side: every outcome is measured on every cohort and all of them are on screen. The headline is the one
-        whose JOINED read sits furthest from its rate in the unconditional book — the gap is the read, and an outcome on its baseline is the stack
-        telling you these conditions changed nothing. Click any row to pin it instead, or <b>AUTO</b> to hand the choice back.
-        <br />
-        <b>The joined read.</b> Ticking nine things leaves a handful of exact matches — an anecdote, not a rate — while the book knows hundreds of days
-        about each of those nine separately. So the number quoted is built from that: each criterion&apos;s own rate is pulled toward the base rate by
-        how little data stands behind it, converted to evidence in log-odds, summed, and then <i>discounted</i> by how much the picks repeat one another
-        — a discount measured on the book&apos;s own pairs rather than assumed. The exact-match cohort is blended in by its size, so it carries almost
-        no weight at four sessions and takes over entirely once it is large. Full method in <code>lib/ibBlend.ts</code>. It is a better-founded prior
-        than either the raw base rate or a four-day cohort — not a forecast, and not a number worth a decimal place of belief.
-        <br />
-        Every rate on this page is <b>conditional on a break</b>: the denominator is the cohort&apos;s sessions that closed a 5m bar outside the IB, not
-        the cohort. The failed-break split narrows that once more — it describes only the breaks that then failed, so a segment at 100% is where those
-        days ended up, never the odds of failing.
-        <br />
-        No lookahead: every field was stamped at its own confirm bar. Sample sizes aren&apos;t printed, but they still gate the read — a thin cohort is
-        badged THIN, any rate over 85% is flagged to check for bias rather than treated as an edge, and the &ldquo;matching sessions&rdquo; strip shows
-        one square per session so the sample is countable. On a thin cohort, 0% means &ldquo;not in these few&rdquo; and 100% means &ldquo;all of these
-        few&rdquo; — the hairline, the book&apos;s own rate, is the sturdier number.
-        <br />
-        The <b>Session</b> picker reads the rail back on a past day: the criteria are re-seeded from that session&apos;s own classification and the book is
-        cut to sessions <i>before</i> it, so the rate shown is the one the rail would have quoted that morning — not the same day scored with hindsight.
-        What the session then did is printed beside it.
-        <br />
-        The picker can only offer sessions the export contains. Today is classified from the live tape, so if <code>ib-{sym}.json</code> is behind, the list
-        jumps straight from today to the last exported session and a <b>BOOK ENDS</b> badge says where it stops — re-export from{" "}
-        <code>ib-backtest-esu6.html</code> → &quot;Export JSON for dashboard&quot; into <code>public/data/</code> to close the gap.
+        <b>Joined read</b> — nine picks leave a handful of exact matches, so the number quoted stacks each criterion&apos;s own history instead,
+        discounted by how much the picks repeat one another (measured on the book&apos;s pairs). The exact cohort blends in by its size and takes over
+        once it is large. Method: <code>lib/ibBlend.ts</code>, checked by <code>scripts/ib-blend-check.mjs</code>.
       </div>
     </div>
   );
