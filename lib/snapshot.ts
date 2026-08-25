@@ -227,6 +227,15 @@ export type SnapOptions = {
    * the error reaches the console, and onAfterCapture/restore paths run.
    */
   timeoutMs?: number;
+  /**
+   * Chart-only capture mode (ES Candles' Snap/Discord buttons): skip the
+   * framed band + DOM-clone pipeline entirely and bake these two labels
+   * straight onto the chart's OWN bitmap (from `takeScreenshot()`) instead —
+   * no toolbar, no stat row, no border, no title band. Only takes effect when
+   * the target exposes `__ltScreenshot`; every other capture site is
+   * untouched by this option.
+   */
+  cornerLabels?: { topLeft?: string; bottomLeft?: string };
 };
 
 /** Default whole-capture watchdog. Generous — real captures finish in <5s. */
@@ -729,6 +738,42 @@ async function captureToCanvasInner(
   // of the chart. Detect it via the __ltScreenshot hook.
   const ltProvider = (el as unknown as { __ltScreenshot?: LtProvider }).__ltScreenshot;
   const lt = ltProvider?.();
+
+  // ── Corner-label chart-only capture ───────────────────────────────────────
+  // See SnapOptions.cornerLabels. Returns straight from the chart's own
+  // bitmap — no html2canvas, no band, no chrome.
+  if (opts.cornerLabels && lt) {
+    const src = lt.canvas;
+    const rect = lt.target.getBoundingClientRect();
+    const cScale = rect.width > 0 ? src.width / rect.width : (opts.scale ?? snapScale());
+    const out = document.createElement("canvas");
+    out.width = src.width;
+    out.height = src.height;
+    const octx = out.getContext("2d")!;
+    octx.drawImage(src, 0, 0);
+    const drawCorner = (text: string | undefined, corner: "top" | "bottom") => {
+      if (!text) return;
+      const fontPx = Math.round(11 * cScale);
+      octx.font = `700 ${fontPx}px Inter, Arial, sans-serif`;
+      octx.textBaseline = "alphabetic";
+      const padX = Math.round(8 * cScale);
+      const padY = Math.round(6 * cScale);
+      const inset = Math.round(8 * cScale);
+      const tw = octx.measureText(text).width;
+      const boxW = tw + padX * 2;
+      const boxH = fontPx + padY * 2;
+      const x = inset;
+      const y = corner === "top" ? inset : out.height - boxH - inset;
+      octx.fillStyle = "rgba(6,12,20,0.55)";
+      octx.fillRect(x, y, boxW, boxH);
+      octx.fillStyle = "rgba(255,255,255,0.92)";
+      octx.fillText(text, x + padX, y + boxH - padY - Math.round(fontPx * 0.22));
+    };
+    drawCorner(opts.cornerLabels.topLeft, "top");
+    drawCorner(opts.cornerLabels.bottomLeft, "bottom");
+    return out;
+  }
+
   const inner = framed ? (el.querySelector("table") as HTMLElement | null) : null;
   // The fast path below is only valid when the element IS a canvas chart —
   // nothing but the bitmap plus maybe a hover tooltip. Merely *containing* a

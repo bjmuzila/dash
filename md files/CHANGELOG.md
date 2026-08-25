@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-08-25 - ES Candles snapshot: chart only, corner labels instead of a title band
+
+Edited: `lib/snapshot.ts`, `components/shared/DataBox.tsx`,
+        `components/dashboard/es-candles/EsChartCard.tsx`.
+
+ES Candles' Snap/Discord buttons no longer capture the whole card. They used
+to run through the shared `framed` html2canvas pipeline, which composited the
+toolbar, the CW/PW/Flip/CB stat row, and a "SPX GEX" title band + watermark on
+top of the chart. The PNG is now the chart's own bitmap only (candles + axes,
+straight off lightweight-charts' `takeScreenshot()`), no toolbar, no stat row,
+no border.
+
+Added a new opt-in `SnapOptions.cornerLabels` mode to `lib/snapshot.ts` (only
+takes effect when the target exposes `__ltScreenshot`, so no other capture
+site is affected): it bakes two small labels directly onto the chart bitmap's
+corners instead of a framed band. `BoxSnapBtn`/`BoxDiscordBtn` in `DataBox.tsx`
+now accept `framed` (default true, unchanged everywhere else) and
+`cornerLabels` and forward them through. ES Candles passes `framed={false}`
+and:
+- top-left: ticker + the expiration the overlays are drawn against + today's
+  date (ET), e.g. "SPY · Fri 8/28 exp · 8/25/2026"
+- bottom-left: "Data by cbedge.net"
+
 ## 2026-08-25 - Premarket gamma: one card, not two
 
 Edited: `components/pages/premarket/GammaBellCurve.tsx`,

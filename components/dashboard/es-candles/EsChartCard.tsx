@@ -5460,6 +5460,19 @@ function EsChartCard({
   // "AMD 1m Candles" while the image said "SPX GEX".
   const snapTitle = `${sym.label} ${INTERVAL_LABEL[interval]} Candles`;
 
+  // Snap/Discord capture: chart-only PNG (candles + axes, no toolbar/stat
+  // chrome, no border, no title band — see SnapOptions.cornerLabels). The
+  // top-left label carries the ticker, the expiration the overlays are
+  // actually drawn against, and today's date; the bottom-left is the fixed
+  // cbedge.net credit.
+  const todayEtLabel = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", month: "numeric", day: "numeric", year: "numeric",
+  }).format(new Date());
+  const snapCornerLabels = {
+    topLeft: `${sym.label} · ${heatmapExpiry ? dayDateOf(heatmapExpiry) : "Front"} exp · ${todayEtLabel}`,
+    bottomLeft: "Data by cbedge.net",
+  };
+
   /**
    * The cog's contents, as SECTIONS rather than a scrolling column.
    *
@@ -5888,8 +5901,8 @@ function EsChartCard({
               Without it every chart's snapshot was titled "SPX GEX" — the
               engine's default — so an AMD 1m capture claimed to be SPX. */}
           {!hideCapture && (<>
-            <span data-capture-hide><BoxSnapBtn targetRef={captureRef} title={snapTitle} label={snapTitle} /></span>
-            <span data-capture-hide><BoxDiscordBtn targetRef={captureRef} title={snapTitle} label={snapTitle} /></span>
+            <span data-capture-hide><BoxSnapBtn targetRef={captureRef} framed={false} cornerLabels={snapCornerLabels} label={snapTitle} /></span>
+            <span data-capture-hide><BoxDiscordBtn targetRef={captureRef} framed={false} cornerLabels={snapCornerLabels} label={snapTitle} /></span>
           </>)}
 
           <DockCogMenu

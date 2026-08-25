@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, type ReactNode, type CSSProperties, type RefObject } from "react";
 import { useIsOwner } from "@/components/auth/useIsOwner";
 import { shareToDiscord } from "@/lib/discord/share";
-import { captureToBlob, captureToDataUrl, copyOrDownload } from "@/lib/snapshot";
+import { captureToBlob, captureToDataUrl, copyOrDownload, type SnapOptions } from "@/lib/snapshot";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type BtnState = "idle" | "busy" | "ok" | "err";
@@ -80,7 +80,7 @@ function IconX({ size = 10 }: { size?: number }) {
 // ── Standalone exportable action buttons ──────────────────────────────────────
 
 /** Screenshot the target element and copy PNG to clipboard. */
-export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture, fitContent = false }: { targetRef: RefObject<HTMLElement | null>; label?: string; title?: string; onBeforeCapture?: () => void | Promise<void>; onAfterCapture?: () => void; /** Element hugs its content during capture — crop the PNG to the real content box. */ fitContent?: boolean }) {
+export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture, fitContent = false, framed = true, cornerLabels }: { targetRef: RefObject<HTMLElement | null>; label?: string; title?: string; onBeforeCapture?: () => void | Promise<void>; onAfterCapture?: () => void; /** Element hugs its content during capture — crop the PNG to the real content box. */ fitContent?: boolean; /** Set false to skip the title band + chrome entirely (see `cornerLabels`). */ framed?: boolean; /** Chart-only capture: bake these labels onto the chart's own bitmap instead of a framed band. See SnapOptions.cornerLabels. */ cornerLabels?: SnapOptions["cornerLabels"] }) {
   const [s, set] = useState<BtnState>("idle");
   const run = useCallback(async () => {
     if (s === "busy" || !targetRef.current) return;
@@ -96,7 +96,7 @@ export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture, 
         // the onBeforeCapture layout switch) hostage for html2canvas's 15s
         // default. The engine's own watchdog bounds the whole capture.
         blob = await captureToBlob(targetRef.current, {
-          framed: true, title, fitContent,
+          framed, title, fitContent, cornerLabels,
           allowTaint: false, imageTimeout: 4000,
         });
       } finally {
@@ -113,7 +113,7 @@ export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture, 
       set("ok");
     } catch (e) { console.error("[snap] capture failed:", e); set("err"); }
     finally { setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef, title, onBeforeCapture, onAfterCapture, fitContent]);
+  }, [s, targetRef, title, onBeforeCapture, onAfterCapture, fitContent, framed, cornerLabels]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
   const btnContent = s === "busy" ? "…" : s === "ok" ? "✓" : s === "err" ? "✕" : "📸";
@@ -135,6 +135,8 @@ export function BoxDiscordBtn({
   onBeforeCapture,
   onAfterCapture,
   fitContent = false,
+  framed = true,
+  cornerLabels,
 }: {
   targetRef: RefObject<HTMLElement | null>;
   label?: string;
@@ -148,6 +150,10 @@ export function BoxDiscordBtn({
   onAfterCapture?: () => void;
   /** Element hugs its content during capture — crop the PNG to the real content box. */
   fitContent?: boolean;
+  /** Set false to skip the title band + chrome entirely (see `cornerLabels`). */
+  framed?: boolean;
+  /** Chart-only capture: bake these labels onto the chart's own bitmap instead of a framed band. See SnapOptions.cornerLabels. */
+  cornerLabels?: SnapOptions["cornerLabels"];
 }) {
   const [s, set] = useState<BtnState>("idle");
   const isOwner = useIsOwner();
@@ -162,7 +168,7 @@ export function BoxDiscordBtn({
         // skip unreadable images rather than tainting, and don't wait 15s on a
         // stalled one.
         img = await captureToDataUrl(targetRef.current, {
-          framed: true, title, fitContent,
+          framed, title, fitContent, cornerLabels,
           allowTaint: false, imageTimeout: 4000,
         });
       } finally {
@@ -177,7 +183,7 @@ export function BoxDiscordBtn({
       set("ok");
     } catch (e) { console.error("[snap→discord] failed:", e); set("err"); }
     finally { setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef, label, message, title, onBeforeCapture, onAfterCapture, fitContent]);
+  }, [s, targetRef, label, message, title, onBeforeCapture, onAfterCapture, fitContent, framed, cornerLabels]);
 
   // Discord share is owner-only (cosmetic gate).
   if (!isOwner) return null;
