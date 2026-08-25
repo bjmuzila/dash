@@ -97,6 +97,80 @@ export type DgSummary = {
   breach: number;
 };
 
+// ── the graded half ──────────────────────────────────────────────────────────
+//
+// These mirror `daily_grades` / `daily_grade_days` column-for-column, snake_case
+// included, because they are handed straight through from Postgres and renaming
+// them here would only hide where they came from. Everything is nullable: a row
+// exists for every sealed ticker, graded or not.
+
+/** Per-level outcome strings the recorder writes. */
+export type DgOutcome =
+  | "tagged_held" | "untested_held" | "tagged_broke" | "gapped_through"
+  | "held_clean" | "held_after_test" | "flipped"
+  | "pinned" | "close" | "near" | "loose" | "far"
+  | "contained" | "one_side_out" | "both_out";
+
+export type DgStatus = "graded" | "no_candles" | "no_levels";
+
+export type DgGradeRow = {
+  symbol: string;
+  sealed_spot: number | null;
+  floor_lvl: number | null;
+  cap_lvl: number | null;
+  apex_lvl: number | null;
+  flip_lvl: number | null;
+  o: number | null;
+  h: number | null;
+  l: number | null;
+  c: number | null;
+  bars: number | null;
+  cap_outcome: DgOutcome | null;
+  floor_outcome: DgOutcome | null;
+  flip_outcome: DgOutcome | null;
+  apex_outcome: DgOutcome | null;
+  range_outcome: DgOutcome | null;
+  cap_pts: number | null;
+  floor_pts: number | null;
+  flip_pts: number | null;
+  apex_pts: number | null;
+  range_pts: number | null;
+  pts: number | null;
+  max_pts: number | null;
+  score: number | null;
+  grade: string | null;
+  reached_cap: boolean | null;
+  reached_floor: boolean | null;
+  reached_apex: boolean | null;
+  crossed_flip: boolean | null;
+  status: DgStatus;
+  graded_at: string | null;
+};
+
+export type DgDay = {
+  tickers: number | null;
+  graded: number | null;
+  ungraded: number | null;
+  pts: number | null;
+  max_pts: number | null;
+  score: number | null;
+  grade: string | null;
+  a_plus: number | null;
+  a: number | null;
+  b: number | null;
+  c: number | null;
+  d: number | null;
+  f: number | null;
+  cap_tested: number | null;
+  cap_held: number | null;
+  floor_tested: number | null;
+  floor_held: number | null;
+  flip_held: number | null;
+  apex_pinned: number | null;
+  range_contained: number | null;
+  graded_at: string | null;
+};
+
 /** A level is "near" once spot is within this much of it, in percent. */
 export const NEAR_PCT = 1.0;
 
@@ -311,16 +385,29 @@ export const DG_ENDPOINT = "/proxy/daily-grades";
  * template renderable while the TT / dxLink feed is being built — swap this
  * body (or just delete the fallback) once the endpoint is live.
  */
-export async function loadGrades(): Promise<{ payload: DgPayload; source: DgSource }> {
+export async function loadGrades(): Promise<{
+  payload: DgPayload;
+  source: DgSource;
+  grades: DgGradeRow[];
+  day: DgDay | null;
+}> {
   try {
     const r = await fetch(DG_ENDPOINT, { cache: "no-store" });
     if (r.ok) {
       const j = await r.json();
-      return { payload: parsePayload(j), source: "live" };
+      return {
+        payload: parsePayload(j),
+        source: "live",
+        // The grades ride along with the seal. They are absent until the
+        // session closes and the 16:20 run writes them, which is a normal
+        // state for most of the day — not an error, just an empty tab.
+        grades: Array.isArray(j?.grades) ? (j.grades as DgGradeRow[]) : [],
+        day: (j?.day as DgDay | null) ?? null,
+      };
     }
   } catch {
     /* endpoint not up yet — fall through to the sample */
   }
   const { SAMPLE_PAYLOAD } = await import("../pages/daily-grades/sample");
-  return { payload: SAMPLE_PAYLOAD, source: "sample" };
+  return { payload: SAMPLE_PAYLOAD, source: "sample", grades: [], day: null };
 }

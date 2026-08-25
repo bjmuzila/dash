@@ -17,6 +17,12 @@
 // or Sample board. Paste-JSON stays as the manual path for a board built
 // somewhere else.
 //
+// TWO TABS, ONE FETCH. LEVELS is the board as it was sealed; GRADES is what the
+// session did to it. `/proxy/daily-grades` returns the seal and the grades in
+// one response, so switching tabs is a re-render and never a refetch. The
+// grades are simply absent until the 16:20 ET run writes them — that is the
+// normal state for most of a trading day, not an error, and the tab says so.
+//
 // NAMING: the payload field is `apex`; the level is CB and the UI says CB. The
 // key is not renamed because it is the sealed board's own wire format — see the
 // glossary in lib/dailyGrades.ts.
@@ -55,6 +61,8 @@ import {
   type DgRow,
   type DgSource,
   type DgFlagKind,
+  type DgGradeRow,
+  type DgDay,
 } from "../lib/dailyGrades";
 
 const MONO = "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace";
@@ -91,6 +99,51 @@ const FLAG_ACCENT: Record<DgFlagKind, string> = {
   ungraded: T.purple,
   offroster: T.lightBlue,
 };
+
+/** Letter → accent. A+/A read as good, F as bad, the middle a ramp between. */
+const GRADE_ACCENT: Record<string, string> = {
+  "A+": T.green, A: T.green, B: T.cyan, C: T.gold, D: T.orange, F: T.red,
+};
+
+/**
+ * Outcome string → what it says on screen and how it reads. The recorder's
+ * vocabulary is deliberately narrow (see daily-grades-recorder.js); anything not
+ * in here renders as the raw string rather than silently vanishing, so a new
+ * outcome added server-side shows up as itself instead of a blank cell.
+ */
+const OUTCOME_META: Record<string, { label: string; accent: string }> = {
+  tagged_held: { label: "tagged · held", accent: T.green },
+  untested_held: { label: "untested", accent: T.lightBlue },
+  tagged_broke: { label: "tagged · broke", accent: T.red },
+  gapped_through: { label: "gapped through", accent: T.orange },
+  held_clean: { label: "held clean", accent: T.green },
+  held_after_test: { label: "held · tested", accent: T.gold },
+  flipped: { label: "flipped", accent: T.red },
+  pinned: { label: "pinned", accent: T.green },
+  close: { label: "close", accent: T.cyan },
+  near: { label: "near", accent: T.gold },
+  loose: { label: "loose", accent: T.orange },
+  far: { label: "far", accent: T.red },
+  contained: { label: "contained", accent: T.green },
+  one_side_out: { label: "one side out", accent: T.gold },
+  both_out: { label: "both out", accent: T.red },
+};
+
+/**
+ * The rubric, in the recorder's own words. Each level is worth 25 and is scored
+ * on two questions at once — did price REACH it, and did it close back on the
+ * side the seal left it on — because either answer alone is misleading.
+ */
+const GRADE_LEGEND: [string, string][] = [
+  ["Score", "Points ÷ points-available × 100. A name with no flip has 100 available instead of 125, so it is never punished for a component it never had."],
+  ["Grade", "A+ 85 · A 72 · B 58 · C 44 · D 28 · F — the same bands the picks board uses, so a B means the same thing on both."],
+  ["Cap / Floor", "tagged · held 25 (reached it and closed back inside) · untested 15 · tagged · broke 5 · gapped through 0."],
+  ["Flip", "held clean 25 · held after an intraday test 18 · flipped 5."],
+  ["CB", "A magnet, so it is scored on where the CLOSE landed: pinned ≤0.25% 25 · close ≤0.5% 21 · near ≤1% 15 · loose ≤2% 8 · far 0."],
+  ["Range", "Did the floor→cap band contain the session — contained 25 · one side out 12 · both out 0. Skipped when floor sits above cap."],
+  ["No grade", "no levels / no candles store a NULL grade, never an F. An F is a claim the board was wrong; no board is no claim."],
+  ["Session", "The day row sums points over points-available across every graded ticker — not the mean of their percentages."],
+];
 
 // ── small pieces ─────────────────────────────────────────────────────────────
 
@@ -139,6 +192,18 @@ function Tile({ value, label, accent }: { value: number | string; label: string;
   );
 }
 
+/** One level's verdict plus what it scored. Unknown strings render as-is. */
+function Outcome({ v, pts }: { v: string | null; pts: number | null }) {
+  if (!v) return <span style={{ color: T.text, fontFamily: MONO, fontSize: 13 }}>—</span>;
+  const meta = OUTCOME_META[v];
+  return (
+    <span style={{ whiteSpace: "nowrap" }}>
+      <Pill accent={meta?.accent || T.lightBlue}>{meta?.label || v}</Pill>
+      <span style={{ fontFamily: MONO, fontSize: TYPE.label, color: T.text }}>{pts ?? "—"}</span>
+    </span>
+  );
+}
+
 /** Where spot sits inside the floor→cap band. White tick = spot, gold line = flip. */
 function BandBar({ row }: { row: DgRow }) {
   if (row.pos == null) {
@@ -183,6 +248,10 @@ export default function DailyGrades() {
   const [source, setSource] = useState<DgSource>("sample");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [grades, setGrades] = useState<DgGradeRow[]>([]);
+  const [day, setDay] = useState<DgDay | null>(null);
+  const [tab, setTab] = useState<"levels" | "grades">("levels");
+  const [gradeFilter, setGradeFilter] = useState<"all" | "A+" | "A" | "B" | "C" | "D" | "F">("all");
 
   // The roster. Same universe the ΔGEX Board runs over.
   const { tickers, loading: rosterLoading, live: rosterLive } = useTickerUniverse();
@@ -202,9 +271,11 @@ export default function DailyGrades() {
     setLoading(true);
     setError(null);
     try {
-      const { payload: p, source: s } = await loadGrades();
+      const { payload: p, source: s, grades: g, day: d } = await loadGrades();
       setPayload(p);
       setSource(s);
+      setGrades(g);
+      setDay(d);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load grades.");
     } finally {
@@ -218,6 +289,10 @@ export default function DailyGrades() {
     try {
       setPayload(parsePayload(JSON.parse(text)));
       setSource("import");
+      // The grades on screen belong to the SEAL, not to a board pasted over it.
+      setGrades([]);
+      setDay(null);
+      setTab("levels");
       setImportError(null);
       setImportOpen(false);
       setImportText("");
@@ -271,6 +346,31 @@ export default function DailyGrades() {
       return (x - y) * dir;
     });
   }, [rows, query, filter, sortKey, sortAsc]);
+
+  /**
+   * The graded half. Sorted worst-first is tempting but wrong for a daily read:
+   * the top of this table should be the names the board CALLED, so it sorts by
+   * score descending with the ungraded sinking to the bottom either way.
+   */
+  const gradedRows = grades;
+  const visibleGrades = useMemo(() => {
+    const q = query.trim().toUpperCase();
+    return gradedRows
+      .filter((g) => {
+        if (q && !g.symbol.toUpperCase().includes(q)) return false;
+        if (gradeFilter !== "all" && g.grade !== gradeFilter) return false;
+        return true;
+      })
+      .slice()
+      .sort((a, b) => {
+        const x = a.score;
+        const y = b.score;
+        if (x == null && y == null) return a.symbol.localeCompare(b.symbol);
+        if (x == null) return 1;
+        if (y == null) return -1;
+        return y - x;
+      });
+  }, [gradedRows, query, gradeFilter]);
 
   const toggleSort = (k: SortKey) => {
     if (k === sortKey) setSortAsc((v) => !v);
@@ -419,131 +519,285 @@ export default function DailyGrades() {
         )}
       </Card>
 
-      {/* ── summary tiles ────────────────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))", gap: 10, flexShrink: 0 }}>
-        <Tile value={stats.total} label="on watchlist" accent={T.text} />
-        <Tile value={stats.graded} label="graded" accent={T.cyan} />
-        <Tile value={stats.ungraded} label="not graded" accent={T.purple} />
-        <Tile value={stats.above} label="above flip" accent={T.green} />
-        <Tile value={stats.below} label="below flip" accent={T.red} />
-        <Tile value={stats.near} label={`within ${NEAR_PCT}% of a level`} accent={T.gold} />
-        <Tile value={stats.breach} label="outside floor/cap" accent={T.orange} />
+      {/* ── tabs ─────────────────────────────────────────────────────────── */}
+      {/*
+        LEVELS is the board as it was sealed; GRADES is what the session did to
+        it. Two views of one payload — /proxy/daily-grades returns the seal and
+        the grades together, so switching tabs never refetches.
+      */}
+      <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+        {([
+          ["levels", `Levels · ${stats.total}`],
+          ["grades", `Grades${gradedRows.length ? ` · ${gradedRows.length}` : ""}`],
+        ] as const).map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)} style={chipStyle(tab === id, T.cyan)}>
+            {label}
+          </button>
+        ))}
+        {day?.grade && (
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: TYPE.label, color: T.text }}>Session</span>
+            <Pill accent={GRADE_ACCENT[day.grade] || T.text}>
+              {day.grade} · {Number(day.score ?? 0).toFixed(1)}
+            </Pill>
+          </div>
+        )}
       </div>
 
-      {/* ── board ────────────────────────────────────────────────────────── */}
-      <Card variant="classic" padding={0} style={{ ...CARD, overflow: "hidden", flexShrink: 0 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: 14, borderBottom: `1px solid ${T.border}` }}>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter ticker…"
-            style={{ ...homeInputStyle, background: SURFACE.card2, minWidth: 200, fontSize: TYPE.body }}
-          />
-          {FILTERS.map((f) => (
-            <button key={f.id} onClick={() => setFilter(f.id)} style={chipStyle(filter === f.id, T.cyan)}>
-              {f.label}
-            </button>
-          ))}
-          {offRosterCount > 0 && (
-            <button
-              onClick={() => setShowOffRoster((v) => !v)}
-              title="Graded names the watchlist doesn't carry"
-              style={chipStyle(showOffRoster, T.lightBlue)}
-            >
-              +{offRosterCount} off roster
-            </button>
-          )}
-          <span style={{ marginLeft: "auto", fontSize: TYPE.label, color: T.text, fontFamily: MONO }}>
-            {visible.length} / {rows.length}
-          </span>
+      {tab === "levels" && (
+        <>
+        {/* ── summary tiles ────────────────────────────────────────────────── */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))", gap: 10, flexShrink: 0 }}>
+          <Tile value={stats.total} label="on watchlist" accent={T.text} />
+          <Tile value={stats.graded} label="graded" accent={T.cyan} />
+          <Tile value={stats.ungraded} label="not graded" accent={T.purple} />
+          <Tile value={stats.above} label="above flip" accent={T.green} />
+          <Tile value={stats.below} label="below flip" accent={T.red} />
+          <Tile value={stats.near} label={`within ${NEAR_PCT}% of a level`} accent={T.gold} />
+          <Tile value={stats.breach} label="outside floor/cap" accent={T.orange} />
         </div>
 
-        {/*
-          The roster is ~169 names, so the board scrolls in its OWN box rather
-          than running the page down: vertical for the rows (head stays put),
-          horizontal for the columns on a narrow window. `.wall-scroll` is the
-          dashboard's own scrollbar (index.css) — cyan thumb on an inset track,
-          the same bar the Walls table and the ranked rail use. The default
-          white-wash bar reads as browser chrome sitting on the card.
+        {/* ── board ────────────────────────────────────────────────────────── */}
+        <Card variant="classic" padding={0} style={{ ...CARD, overflow: "hidden", flexShrink: 0 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: 14, borderBottom: `1px solid ${T.border}` }}>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter ticker…"
+              style={{ ...homeInputStyle, background: SURFACE.card2, minWidth: 200, fontSize: TYPE.body }}
+            />
+            {FILTERS.map((f) => (
+              <button key={f.id} onClick={() => setFilter(f.id)} style={chipStyle(filter === f.id, T.cyan)}>
+                {f.label}
+              </button>
+            ))}
+            {offRosterCount > 0 && (
+              <button
+                onClick={() => setShowOffRoster((v) => !v)}
+                title="Graded names the watchlist doesn't carry"
+                style={chipStyle(showOffRoster, T.lightBlue)}
+              >
+                +{offRosterCount} off roster
+              </button>
+            )}
+            <span style={{ marginLeft: "auto", fontSize: TYPE.label, color: T.text, fontFamily: MONO }}>
+              {visible.length} / {rows.length}
+            </span>
+          </div>
 
-          HEIGHT, not max-height, and `flexShrink: 0` on all four page blocks.
-          PageShell's <main> is a fixed-height column flex container, so its
-          children shrink by default when they overflow it — which collapsed this
-          box to three visible rows no matter what max-height said. The box owns
-          its height; the PAGE scrolls past it.
-        */}
-        <div className="wall-scroll" style={{ height: "clamp(420px, 64vh, 900px)", overflow: "auto" }}>
-          <table style={{ width: "100%", minWidth: 1060, borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={th("ticker", "left")} onClick={() => toggleSort("ticker")}>Ticker{caret("ticker")}</th>
-                <th style={th("spot")} onClick={() => toggleSort("spot")}>Spot{caret("spot")}</th>
-                <th style={th("floor")} onClick={() => toggleSort("floor")}>Floor{caret("floor")}</th>
-                <th style={th("dFloor")} onClick={() => toggleSort("dFloor")}>Δ{caret("dFloor")}</th>
-                <th style={th("apex")} onClick={() => toggleSort("apex")}>CB{caret("apex")}</th>
-                <th style={th("cap")} onClick={() => toggleSort("cap")}>Cap{caret("cap")}</th>
-                <th style={th("dCap")} onClick={() => toggleSort("dCap")}>Δ{caret("dCap")}</th>
-                <th style={th("flip")} onClick={() => toggleSort("flip")}>Flip{caret("flip")}</th>
-                <th style={th("dFlip")} onClick={() => toggleSort("dFlip")}>Δ{caret("dFlip")}</th>
-                <th style={{ ...th(undefined, "left"), minWidth: 150 }}>Floor → Cap</th>
-                <th style={th(undefined, "left")}>State</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((r) => (
-                <tr
-                  key={r.ticker}
-                  onMouseEnter={() => setHover(r.ticker)}
-                  onMouseLeave={() => setHover((h) => (h === r.ticker ? null : h))}
-                  style={{
-                    background: hover === r.ticker ? SURFACE.cardHi : "transparent",
-                    borderBottom: `1px solid ${T.border}`,
-                  }}
-                >
-                  <th
-                    scope="row"
-                    style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800, letterSpacing: "0.02em" }}
-                  >
-                    {r.ticker}
-                  </th>
-                  {priceCell(r.spot, true)}
-                  {priceCell(r.floor)}
-                  {deltaCell(r.dFloor)}
-                  {priceCell(r.apex)}
-                  {priceCell(r.cap)}
-                  {deltaCell(r.dCap)}
-                  {priceCell(r.flip)}
-                  {deltaCell(r.dFlip)}
-                  <td style={{ padding: "8px 10px", minWidth: 150 }}>
-                    <BandBar row={r} />
-                  </td>
-                  <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
-                    {!r.ungraded && (
-                      <Pill accent={r.regime === "above" ? T.green : r.regime === "below" ? T.red : T.lightBlue}>
-                        {r.regime === "above" ? "above flip" : r.regime === "below" ? "below flip" : "no flip"}
-                      </Pill>
-                    )}
-                    {r.flags.map((f, i) => (
-                      <Pill key={i} accent={FLAG_ACCENT[f.kind]}>{f.label}</Pill>
-                    ))}
-                  </td>
-                </tr>
-              ))}
-              {!visible.length && (
+          {/*
+            The roster is ~169 names, so the board scrolls in its OWN box rather
+            than running the page down: vertical for the rows (head stays put),
+            horizontal for the columns on a narrow window. `.wall-scroll` is the
+            dashboard's own scrollbar (index.css) — cyan thumb on an inset track,
+            the same bar the Walls table and the ranked rail use. The default
+            white-wash bar reads as browser chrome sitting on the card.
+
+            HEIGHT, not max-height, and `flexShrink: 0` on all four page blocks.
+            PageShell's <main> is a fixed-height column flex container, so its
+            children shrink by default when they overflow it — which collapsed this
+            box to three visible rows no matter what max-height said. The box owns
+            its height; the PAGE scrolls past it.
+          */}
+          <div className="wall-scroll" style={{ height: "clamp(420px, 64vh, 900px)", overflow: "auto" }}>
+            <table style={{ width: "100%", minWidth: 1060, borderCollapse: "collapse" }}>
+              <thead>
                 <tr>
-                  <td colSpan={11} style={{ ...td, textAlign: "center", padding: 34 }}>
-                    {loading || rosterLoading ? "Loading board…" : "Nothing matches that filter."}
-                  </td>
+                  <th style={th("ticker", "left")} onClick={() => toggleSort("ticker")}>Ticker{caret("ticker")}</th>
+                  <th style={th("spot")} onClick={() => toggleSort("spot")}>Spot{caret("spot")}</th>
+                  <th style={th("floor")} onClick={() => toggleSort("floor")}>Floor{caret("floor")}</th>
+                  <th style={th("dFloor")} onClick={() => toggleSort("dFloor")}>Δ{caret("dFloor")}</th>
+                  <th style={th("apex")} onClick={() => toggleSort("apex")}>CB{caret("apex")}</th>
+                  <th style={th("cap")} onClick={() => toggleSort("cap")}>Cap{caret("cap")}</th>
+                  <th style={th("dCap")} onClick={() => toggleSort("dCap")}>Δ{caret("dCap")}</th>
+                  <th style={th("flip")} onClick={() => toggleSort("flip")}>Flip{caret("flip")}</th>
+                  <th style={th("dFlip")} onClick={() => toggleSort("dFlip")}>Δ{caret("dFlip")}</th>
+                  <th style={{ ...th(undefined, "left"), minWidth: 150 }}>Floor → Cap</th>
+                  <th style={th(undefined, "left")}>State</th>
                 </tr>
+              </thead>
+              <tbody>
+                {visible.map((r) => (
+                  <tr
+                    key={r.ticker}
+                    onMouseEnter={() => setHover(r.ticker)}
+                    onMouseLeave={() => setHover((h) => (h === r.ticker ? null : h))}
+                    style={{
+                      background: hover === r.ticker ? SURFACE.cardHi : "transparent",
+                      borderBottom: `1px solid ${T.border}`,
+                    }}
+                  >
+                    <th
+                      scope="row"
+                      style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800, letterSpacing: "0.02em" }}
+                    >
+                      {r.ticker}
+                    </th>
+                    {priceCell(r.spot, true)}
+                    {priceCell(r.floor)}
+                    {deltaCell(r.dFloor)}
+                    {priceCell(r.apex)}
+                    {priceCell(r.cap)}
+                    {deltaCell(r.dCap)}
+                    {priceCell(r.flip)}
+                    {deltaCell(r.dFlip)}
+                    <td style={{ padding: "8px 10px", minWidth: 150 }}>
+                      <BandBar row={r} />
+                    </td>
+                    <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
+                      {!r.ungraded && (
+                        <Pill accent={r.regime === "above" ? T.green : r.regime === "below" ? T.red : T.lightBlue}>
+                          {r.regime === "above" ? "above flip" : r.regime === "below" ? "below flip" : "no flip"}
+                        </Pill>
+                      )}
+                      {r.flags.map((f, i) => (
+                        <Pill key={i} accent={FLAG_ACCENT[f.kind]}>{f.label}</Pill>
+                      ))}
+                    </td>
+                  </tr>
+                ))}
+                {!visible.length && (
+                  <tr>
+                    <td colSpan={11} style={{ ...td, textAlign: "center", padding: 34 }}>
+                      {loading || rosterLoading ? "Loading board…" : "Nothing matches that filter."}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        </>
+      )}
+
+      {/* ── grades ───────────────────────────────────────────────────────── */}
+      {tab === "grades" && (
+        <>
+          {/* Session roll-up. Points are SUMMED over points-available across
+              every graded ticker — not the mean of their percentages, which
+              would let a one-level ticker swing the day as hard as a
+              four-level one. See daily-grades-recorder.js rollUpDay(). */}
+          {day && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))", gap: 10, flexShrink: 0 }}>
+              <Tile
+                value={day.score == null ? "—" : Number(day.score).toFixed(1)}
+                label="session score"
+                accent={day.grade ? GRADE_ACCENT[day.grade] || T.text : T.text}
+              />
+              <Tile value={day.grade ?? "—"} label="session grade" accent={day.grade ? GRADE_ACCENT[day.grade] || T.text : T.text} />
+              <Tile value={`${day.pts ?? 0} / ${day.max_pts ?? 0}`} label="points" accent={T.cyan} />
+              <Tile value={day.graded ?? 0} label="graded" accent={T.text} />
+              <Tile value={`${day.cap_held ?? 0} / ${day.cap_tested ?? 0}`} label="cap held / tested" accent={T.green} />
+              <Tile value={`${day.floor_held ?? 0} / ${day.floor_tested ?? 0}`} label="floor held / tested" accent={T.green} />
+              <Tile value={day.flip_held ?? 0} label="flip held" accent={T.gold} />
+              <Tile value={day.range_contained ?? 0} label="range contained" accent={T.purple} />
+            </div>
+          )}
+
+          <Card variant="classic" padding={0} style={{ ...CARD, overflow: "hidden", flexShrink: 0 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: 14, borderBottom: `1px solid ${T.border}` }}>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Filter ticker…"
+                style={{ ...homeInputStyle, background: SURFACE.card2, minWidth: 200, fontSize: TYPE.body }}
+              />
+              {(["all", "A+", "A", "B", "C", "D", "F"] as const).map((g) => (
+                <button
+                  key={g}
+                  onClick={() => setGradeFilter(g)}
+                  style={chipStyle(gradeFilter === g, g === "all" ? T.cyan : GRADE_ACCENT[g] || T.cyan)}
+                >
+                  {g === "all" ? "All" : g}
+                </button>
+              ))}
+              {day && (
+                <span style={{ fontSize: TYPE.label, color: T.text }}>
+                  {day.a_plus ?? 0} A+ · {day.a ?? 0} A · {day.b ?? 0} B · {day.c ?? 0} C · {day.d ?? 0} D · {day.f ?? 0} F
+                </span>
               )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+              <span style={{ marginLeft: "auto", fontSize: TYPE.label, color: T.text, fontFamily: MONO }}>
+                {visibleGrades.length} / {gradedRows.length}
+              </span>
+            </div>
+
+            <div className="wall-scroll" style={{ height: "clamp(420px, 64vh, 900px)", overflow: "auto" }}>
+              <table style={{ width: "100%", minWidth: 1180, borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={th(undefined, "left")}>Ticker</th>
+                    <th style={th(undefined)}>Grade</th>
+                    <th style={th(undefined)}>Score</th>
+                    <th style={th(undefined)}>Pts</th>
+                    <th style={th(undefined, "left")}>Cap</th>
+                    <th style={th(undefined, "left")}>Floor</th>
+                    <th style={th(undefined, "left")}>Flip</th>
+                    <th style={th(undefined, "left")}>CB</th>
+                    <th style={th(undefined, "left")}>Range</th>
+                    <th style={th(undefined)}>O</th>
+                    <th style={th(undefined)}>H</th>
+                    <th style={th(undefined)}>L</th>
+                    <th style={th(undefined)}>C</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleGrades.map((g) => (
+                    <tr
+                      key={g.symbol}
+                      onMouseEnter={() => setHover(g.symbol)}
+                      onMouseLeave={() => setHover((h) => (h === g.symbol ? null : h))}
+                      style={{
+                        background: hover === g.symbol ? SURFACE.cardHi : "transparent",
+                        borderBottom: `1px solid ${T.border}`,
+                      }}
+                    >
+                      <th scope="row" style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800 }}>
+                        {g.symbol}
+                      </th>
+                      <td style={{ ...td, textAlign: "right" }}>
+                        {g.grade
+                          ? <Pill accent={GRADE_ACCENT[g.grade] || T.text}>{g.grade}</Pill>
+                          : <Pill accent={T.lightBlue}>{g.status === "no_candles" ? "no candles" : "no levels"}</Pill>}
+                      </td>
+                      <td style={{ ...td, fontWeight: 800 }}>{g.score == null ? "—" : Number(g.score).toFixed(1)}</td>
+                      <td style={td}>{g.max_pts ? `${g.pts} / ${g.max_pts}` : "—"}</td>
+                      <td style={{ ...td, textAlign: "left" }}><Outcome v={g.cap_outcome} pts={g.cap_pts} /></td>
+                      <td style={{ ...td, textAlign: "left" }}><Outcome v={g.floor_outcome} pts={g.floor_pts} /></td>
+                      <td style={{ ...td, textAlign: "left" }}><Outcome v={g.flip_outcome} pts={g.flip_pts} /></td>
+                      <td style={{ ...td, textAlign: "left" }}><Outcome v={g.apex_outcome} pts={g.apex_pts} /></td>
+                      <td style={{ ...td, textAlign: "left" }}><Outcome v={g.range_outcome} pts={g.range_pts} /></td>
+                      <td style={td}>{fmtPrice(g.o)}</td>
+                      <td style={td}>{fmtPrice(g.h)}</td>
+                      <td style={td}>{fmtPrice(g.l)}</td>
+                      <td style={{ ...td, fontWeight: 800 }}>{fmtPrice(g.c)}</td>
+                    </tr>
+                  ))}
+                  {!visibleGrades.length && (
+                    <tr>
+                      <td colSpan={13} style={{ ...td, textAlign: "center", padding: 34 }}>
+                        {loading
+                          ? "Loading…"
+                          : gradedRows.length
+                            ? "Nothing matches that filter."
+                            : "This session has not been graded yet — the board is graded at 16:20 ET."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </>
+      )}
+
 
       {/* ── legend ───────────────────────────────────────────────────────── */}
+      {/* Each tab gets the glossary it needs: what the levels ARE, or what the
+          verdicts on them MEAN. Both are the recorder's own vocabulary — keep
+          them in step with daily-grades-recorder.js if the rubric moves. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, flexShrink: 0 }}>
-        {[
+        {(tab === "grades" ? GRADE_LEGEND : [
           ["Roster", "The scanner watchlist from /proxy/scanner-tickers — the same universe the ΔGEX Board runs over."],
           ["Cap", "Where 80% of the call gamma ladder sits below — the empirical percentile of the settled-OI call GEX, not the single biggest strike."],
           ["Floor", "Where 20% of the put gamma ladder sits below — the same read from the other end."],
@@ -551,7 +805,7 @@ export default function DailyGrades() {
           ["Flip", "Gamma flip. Spot above it is the calmer regime; below it, the chop."],
           ["Δ columns", `How far spot has to travel to reach that level. Positive = the level is above spot; bold = inside ${NEAR_PCT}%.`],
           ["Floor → Cap", "Where spot sits between the two, in price. White tick = spot, gold line = flip. Blank when floor sits above cap — nothing to draw."],
-        ].map(([k, v]) => (
+        ]).map(([k, v]) => (
           <div key={k} style={{ ...INSET, borderRadius: 12, padding: "11px 14px" }}>
             <div style={{ fontSize: TYPE.label, fontWeight: 800, marginBottom: 3, color: T.text }}>{k}</div>
             <div style={{ fontSize: TYPE.label, color: T.text }}>{v}</div>

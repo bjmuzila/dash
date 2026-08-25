@@ -1,237 +1,591 @@
 # Changelog
 
-## 2026-08-25 - Condition Rail: dark palette finished, duplicated block removed
+## 2026-08-25 - Daily Grades: a Grades tab beside the Levels board
 
-Edited: `components/scanner/ConditionRailTab.tsx`.
+Edited: `owner-vite/src/pages/DailyGrades.tsx`, `owner-vite/src/lib/dailyGrades.ts`.
 
-Cleanup of the previous pass, which had a bad slice in it.
+`/proxy/daily-grades` was already returning `grades` and `day` alongside the
+seal and the page was throwing both away. Now it renders them.
 
-- **Removed a duplicated block.** The trim script sliced on two markers in the
-  wrong order, so instead of deleting the "Reading it" wall of text it
-  DUPLICATED the whole JOINED FROM / clustered / past-session stretch above
-  itself. Both the duplicate and the "Reading it" block are gone now (and the
-  `inWords` helper with them). File is ~26KB smaller.
-- **Palette applied everywhere it was still missed**: the group hint pills, the
-  rail's legend divider, the delta badge, and the inner member rows. No
-  `HOME_THEME.border` or `rgba(255,255,255,0.0x)` surfaces left on the page.
+**Two tabs, one fetch.** LEVELS is the board as it was sealed; GRADES is what
+the session did to it. Switching is a re-render, never a refetch. The session
+grade rides in the tab bar so it is visible from either side.
 
-Palette (page-scoped `P`, documented in the header block): app `#020304`,
-rail `#040507`, shell `#07080b`, card `#0f1117`, card-2 `#14171d`,
-card-hi `#191b22`. Bar troughs use `app` so fills read against them; chips and
-tiles use `card-2`; the pinned compare row uses `card-hi`. Accents (cyan,
-orange, red, green, LIGHT_BLUE) still come from homeTheme.
+**GRADES tab** - eight roll-up tiles (session score and letter, points over
+points-available, graded count, cap and floor held/tested, flip held, range
+contained), a letter filter (A+ through F), and one row per ticker: grade pill,
+score, points, the five level verdicts each with the points it earned, and the
+realized O/H/L/C. Sorted by score descending with the ungraded sinking to the
+bottom either way - the top of that table should be the names the board CALLED.
 
-## 2026-08-25 - Condition Rail: reverted the family board, cut the prose, new dark palette
+Verdict strings are mapped to readable labels in `OUTCOME_META`; anything not in
+the map renders as the raw string, so an outcome added server-side shows up as
+itself instead of a blank cell.
 
-Edited: `components/scanner/ConditionRailTab.tsx`.
+**The legend is now tab-aware** - what the levels ARE on one tab, what the
+verdicts on them MEAN on the other, including the two rules that are easy to
+misread: score is points ÷ points-AVAILABLE (a name with no flip has 100
+available, not 125), and no levels / no candles store a NULL grade rather than
+an F, because an F is a claim the board was wrong and there was no board.
 
-- **Reverted the family board.** It was a copy of the IB Stats rule-cluster
-  layout and that is not what the rail should be. "Each criterion on its own"
-  is back, tighter: criterion, its rate alone, its push on the headline, and a
-  dot when it is true of the session.
-- **Cut the word count hard.** Deleted the "Reading it" block entirely (the
-  JOINED FROM strip already carries it), and collapsed the clustered warning,
-  the failed-break lead, the compare footnote, the relax banner, the matching-
-  sessions caption and the page footer to one line each.
-- **Page-scoped dark palette** (`P` at the top of the file), same arrangement
-  /board uses: app `#020304`, rail `#040507`, shell `#07080b`, card `#0f1117`,
-  card-2 `#14171d`, card-hi `#191b22`. Cards, the rail, inner tiles, chips and
-  bar troughs all source from it. Accents still come from homeTheme, so only
-  the greys are local. Dropped `Card` / `classicCardAccentStyle` from this page
-  since both hardcode the old surface.
+**Empty is a state, not an error.** Before 16:20 ET there are no grades; the tab
+says "This session has not been graded yet" rather than looking broken. Pasting
+a board over the seal clears the grades and drops back to LEVELS - those grades
+belong to the seal, not to whatever was pasted on top of it.
 
-## 2026-08-25 - Condition Rail: the family board (what IB Stats does, but driven by the rail)
+`DgGradeRow` / `DgDay` mirror `daily_grades` / `daily_grade_days`
+column-for-column, snake_case included, because they are handed straight through
+from Postgres and renaming them here would only hide where they came from.
 
-Edited: `components/scanner/ConditionRailTab.tsx`.
+## 2026-08-25 - Daily Grades: the board builds itself from the API at 09:26 ET
 
-The IB Stats rule-cluster board reads well because it collapses 14 correlated
-rules into 4 families so one bullish idea can't cast four votes. The Condition
-Rail wanted the same shape, with the left rail as the input. It now has it -
-and does the correlation part better, because it MEASURES it instead of
-hardcoding a `correlated: true` flag on a family someone decided was redundant.
+Added: `server-v2/daily-grades-levels.js`.
+Edited: `server-v2/daily-grades-recorder.js`, `server-v2/server-with-proxy.js`,
+`owner-vite/src/lib/dailyGrades.ts`, `owner-vite/src/pages/DailyGrades.tsx`.
 
-"Each criterion on its own" is replaced by **What each family says**. The rail
-already sorts its criteria into four families (The open / IB shape / The break
-/ The clock), so each family is blended on its own ticked members using the
-same estimator as the headline. Per family:
+No more pasted JSON. `buildSeal()` composes the whole board server-side from
+data already in the API and seals it:
 
-- Its joined read and how many points that sits off the book - direction and
-  conviction in one line (MORE LIKELY / LESS LIKELY / NEUTRAL).
-- A **CORRELATED - N%** badge showing the overlap check's lambda INSIDE that
-  family: the share of its stacked evidence that survived checking its own
-  picks against each other. Per family, per outcome, and it moves as you change
-  what is ticked. Tick ORB down + broke IB low + IB closed below mid and the
-  break family shows its own redundancy as a number.
-- Per member: its rate over the whole book, its **last 5 in-play sessions** as
-  green/red dots (oldest to newest - the last five times the market actually
-  put that rule in play), and its leave-one-out **push** on the headline.
+| level | source |
+|---|---|
+| floor / cap | `daily-grades-levels.js` over `eod_strike_gex.oi_call_gex` / `oi_put_gex` |
+| apex (CB) | `scanner_snapshots.cb` |
+| flip | `scanner_snapshots.gex_flip` |
+| spot | live quote via `fetchUnderlyingQuotes`, falling back to the scanner spot |
 
-Plus the thing a single blended number structurally cannot show: **FAMILIES
-DISAGREE**. When one family pushes toward the outcome and another pushes
-against it by 3+ points, the board says so instead of averaging it away, and
-points at the family whose members are least correlated - its evidence is the
-evidence that has not already been counted.
+**Why 09:26 ET.** `eod-strike-gex-recorder.js` re-stamps the ladder with SETTLED
+overnight open interest at 09:25. Sealing a minute later means floor and cap are
+computed from settled OI, not from yesterday's intraday guess at it. The seal
+still locks at 09:30 like any other - after that only the note can change.
 
-## 2026-08-25 - Condition Rail: one joined number instead of a four-day anecdote
+**The level math** (`daily-grades-levels.js`, pure, no I/O). Each side's
+gamma x OI is treated as a mass distribution over strikes, and the level is read
+two ways:
 
-New: `lib/ibBlend.ts`, `scripts/ib-blend-check.mjs`.
-Edited: `components/scanner/ConditionRailTab.tsx`.
+- *empirical percentile* - walk the cumulative GEX from the low strike up and
+  interpolate where 80% (calls) / 20% (puts) of the mass has accrued.
+- *moment-matched bell* - `mu +/- 0.8416 * sd` of the same distribution.
 
-Tick nine things that are true of the session and the book has four days
-matching all nine. Four days is not a rate. But the book knows hundreds or
-thousands of days about each of those nine conditions SEPARATELY, and throwing
-that away because the nine-way intersection is nearly empty is the problem,
-not the answer. The page now stacks the evidence instead of intersecting it.
+**`cap` and `floor` are the EMPIRICAL pair.** All four values ship in the
+payload (`ceiling_emp`, `floor_emp`, `ceiling_bell`, `floor_bell`, plus mu/sd
+per side and the strike count), so a disagreement between the methods is
+inspectable instead of hidden - when they diverge, the ladder is not
+bell-shaped, and that is worth seeing rather than smoothing over.
 
-**The method** (full write-up in `lib/ibBlend.ts`):
+Z = 0.8416 is the inverse normal CDF at 0.80, so the two methods ask the same
+question of a distribution that IS normal. `DG_LEVEL_Z` and `DG_LEVEL_PCT` move
+together or the correspondence breaks - stated in the file header. Verified
+against the numpy reference on randomised ladders: max absolute error 1.4e-13.
 
-1. Each criterion's own rate is measured against the whole book, then pulled
-   toward the base rate in proportion to how little data stands behind it.
-2. Each becomes evidence in log-odds off the base rate, where evidence adds.
-3. The sum is DISCOUNTED for overlap - and the discount is MEASURED, not
-   guessed. "ORB down" and "broke IB low" are nearly the same statement, so
-   adding them raw triple-counts one fact and spits out 95%. For every pair of
-   ticked criteria with a real sample, the code compares what the stack
-   predicts for that pair against what the book actually did, and takes the
-   median ratio as lambda. Pairs are used because a pair still has a sample
-   when the nine-way does not.
-4. The exact-match cohort is blended back in BY ITS SIZE. At four sessions it
-   barely counts; at a few hundred it takes over entirely and the estimator
-   quietly turns back into a plain conditional rate. Nothing switches modes -
-   it slides.
+**The roster comes from the data**, not a second copy of the list: every symbol
+with an OI ladder or a scanner sweep. A name with a ladder but no sweep gets
+floor and cap with a null CB/flip; a name with neither is simply absent and the
+page shows it as "not graded" against the live watchlist.
 
-**Validated, not asserted.** `scripts/ib-blend-check.mjs` drives it against
-synthetic books where the true conditional rate is known by construction. On
-the case that matters - six criteria, four of them restating one latent
-condition, exact intersection of six days - truth is 79.6%, the joined read
-returns 81.0%, the four-day anecdote said 66.7% and undamped naive Bayes said
-95.2%. Also asserts the estimator gets out of the way on a fat cohort and does
-not double-count a duplicated pick.
+New route `POST /proxy/daily-grades-build[?date=&force=1]`. The scheduler now
+has two latches on one tick - seal in the morning, grade after the close - kept
+separate so a failed seal never blocks the grade (a board may have been POSTed
+from elsewhere).
 
-**On the page:**
+**The definitions changed, so the UI did too.** cap is no longer "the strongest
+positive GEX strike" - it is where 80% of the call gamma ladder sits below, and
+floor is the same read from the other end at 20%. Legend, glossary and the
+rubric header all say so now.
 
-- The headline is the joined number, badged JOINED. AUTO now ranks outcomes by
-  the JOINED gap off the book, so a 0%/100% four-day accident can no longer
-  win the headline.
-- New **"Joined from"** strip under it, every input visible: book base,
-  stacked, exact match (flagged when thin), and how much of the stacked
-  evidence survived the overlap check. Plus the deepest sub-combination the
-  book supports on plain history alone, as a sanity check the joined number
-  should sit near.
-- Compare rows: the BAR is now the joined read, the dark tick on it is the
-  exact cohort's own rate, the hairline is still the book. A four-day 100%
-  shows as a tick, not a full bar.
-- "Each criterion on its own" swaps "without it" for **PUSH** - leave-one-out
-  on the joined number. A push near zero means that pick is a passenger: it
-  shreds the cohort without adding evidence. Most of a nine-chip stack usually
-  is.
-- **CLUSTERED IN TIME** warning: if every matching session falls in one stretch
-  of one year while the book spans several, that is a regime, not a rule - and
-  a rate cannot show it (four-for-four looks identical whether the four span
-  six years or seven months of 2024). This is also the strongest argument for
-  the joined number, which reads each criterion's full history even when their
-  intersection is bunched.
+## 2026-08-25 - Daily Grades: the board card was collapsing to three rows
 
-## 2026-08-25 - Condition Rail: the failed-break split gets a base it can stand on
+Edited: `owner-vite/src/pages/DailyGrades.tsx`.
 
-Edited: `components/scanner/ConditionRailTab.tsx`.
+`PageShell`'s `<main>` is a FIXED-HEIGHT column flex container, so its children
+shrink by default the moment they overflow it. With four blocks on the page the
+board card lost the fight and squeezed the scroll box down to three visible rows
+- and `max-height` could not save it, because max-height never stops a flex item
+from shrinking.
 
-The card was split on the TICKED COHORT alone, which made it useless exactly
-when the rail is doing its job. Nine criteria leave four sessions, one of them
-failed, and the card drew a 100% RECOVERED bar off that one day. A four-way
-split needs a real sample or it is noise with a percent sign - and "100%
-recovered" off n=1 does not just fail to inform, it actively misleads.
+Two changes, and they go together: `flexShrink: 0` on all four page blocks
+(header, tiles, board, legend), and the scroll box takes `height` instead of
+`max-height` - `clamp(420px, 64vh, 900px)`. The box now owns its height and the
+PAGE scrolls past it, which is what the sticky header was always for. Commented
+in place, since removing either half silently reintroduces the collapse.
 
-The base is now the BOOK. "Every failed <sym> break in the window" is drawn
-first and always - thousands of days, a number that holds still. The ticked
-cohort's own split is drawn under it only when at least 20 of its breaks
-failed; below that the slot carries an orange note saying why there is no bar
-and pointing at the book's split as the honest answer until the cohort has
-more failures behind it.
+## 2026-08-25 - Daily Grades: the apex column is labelled CB
 
-Also:
-- Retitled "If the break fails" -> "When a break fails - where the day ends
-  up". The old title read as a forecast about the current break.
-- The lead now prints the cohort's failure rate against the book's side by
-  side and names it as the "if" (and as the Failed <=30m row above), so the
-  conditional structure is stated rather than implied.
-- The four segment legends are shared by both bars instead of being redrawn.
-- Dropped `failsThin` and the muted-bar treatment: not drawing a bar beats
-  drawing a dishonest one at 75% opacity.
+Edited: `owner-vite/src/pages/DailyGrades.tsx`, `owner-vite/src/lib/dailyGrades.ts`,
+`generated/2026-08-25-daily-grades.html`.
 
-## 2026-08-25 - Condition Rail: the numbers now say what they mean
+apex IS CB, so the column header and the legend now say CB. The payload key
+stays `apex` - it is the sealed board's own wire format and renaming it would
+break every seal already stored - so the mapping is stated once in the page
+header comment and once in the glossary at the top of `dailyGrades.ts`, which
+are the two places someone reading the code will hit it. The DB column
+(`apex_lvl`) and the rubric component name are unchanged for the same reason.
 
-Edited: `components/scanner/ConditionRailTab.tsx`.
+## 2026-08-25 - Daily Grades recorder: per-ticker grade after the close, plus the day
 
-Two real misreads on a live four-session cohort, both the page's fault:
+Added: `server-v2/daily-grades-recorder.js`.
+Edited: `server-v2/server-with-proxy.js`, `owner-vite/src/lib/dailyGrades.ts`.
 
-1. **"Hit 2.0x: 0%" reads as "it never does 2.0x."** It means "not one of these
-   four sessions did", and the hairline right beside it says the book does it
-   ~10% of the time. Same trap in reverse on the 100% rows.
-2. **"IF THE BREAK FAILS ... 100% RECOVERED" reads as "the break will
-   recover."** It is doubly conditional - only this cohort's breaks, and only
-   the ones that then failed - and with one failure behind it, "100%" is one
-   day, not a distribution.
+**Two halves, kept apart on purpose.** SEAL: a board is sealed BEFORE the open
+and stored verbatim in `daily_grade_seals`. The recorder does not compute levels
+- whatever produces them POSTs to `/proxy/daily-grades-seal`. Re-POSTing a date
+after 09:30 ET updates the NOTE ONLY and never the levels, because a board you
+can edit mid-session is not a sealed board and grading it proves nothing
+(`?force=1` exists for backfilling a session you have the original file for).
+GRADE: at 16:20 ET it pulls the session O/H/L/C per sealed ticker and scores it.
 
-No math changed. What changed is that the page now says the condition out loud
-before anyone reads a percentage off it.
+**The raw session is stored beside the grade.** `gradeTicker(sealed, ohlc)` is a
+PURE function - no clock, no fetch - so a rubric change is a REGRADE
+(`POST /proxy/daily-grades-regrade?date=`) over stored facts, instant and
+reproducible, not a refetch of 170 candle pulls. Keep it pure.
 
-- **New "Reading it" block** under the headline, on every cohort, not just thin
-  ones: the headline restated in words ("every one of them" / "not one of
-  them" / "most of them" ...), the book's own rate beside it, and the sentence
-  that was never on the page anywhere - **sessions that never broke the IB are
-  not in the denominator**. Every rate here is conditional on a break.
-- On a THIN cohort it adds the explicit gloss: read 0% as "not in these few"
-  and 100% as "all of these few", and trust the hairline over the bar.
-- **The failed-break card leads with its condition.** "25% of this cohort's
-  breaks failed - the bar splits only those days by where price finished. It
-  is not the chance of failing, and says nothing about whether this break will
-  fail." A THIN badge and a muted bar when only a handful of failures sit
-  behind the split. The empty case now says "it has not happened yet in these
-  sessions", not "it cannot".
-- **The four segment legends** were shorthand only I could parse. RECOVERED is
-  now "it failed back inside, then went on to a NEW extreme past where the
-  break had stalled", CHOP is "failed and stayed failed: never reached the IB
-  mid, never re-took its break extreme", and so on.
-- **The matching-sessions strip is the sample size**, shown rather than
-  printed: "one square = one matching session that broke the IB ... count them,
-  that is the whole sample behind every number on this page". Four squares
-  makes 100% mean what it means faster than any badge.
-- Compare-row footnote and the page footer both carry the break-conditional
-  rule now.
+**The rubric.** Each level is scored on two questions, because either alone
+lies. RESPECT: did price close back on the side the seal left it on? REACH: did
+price get to the level at all? A cap price never came near was not "respected",
+it was untested - and it scores BELOW one that got tagged and rejected. Tagged
+and broken scores below that.
 
-## 2026-08-25 - Condition Rail: the Outcome dropdown is gone, the headline picks itself
+- `cap` (strongest +GEX): tagged+held 25 / untested 15 / tagged+broke 5 / gapped through 0
+- `floor` (strongest -GEX): the same four, mirrored
+- `flip`: held clean 25 / held after an intraday test 18 / flipped 5
+- `apex` (CB): magnet - |close - apex| as % of close -> 25 / 21 / 15 / 8 / 0
+- `range`: floor->cap band contained the session 25 / one side out 12 / both out 0
+  (skipped when floor sits above cap - that is a legitimate board, not a range)
 
-Edited: `components/scanner/ConditionRailTab.tsx`.
+Score is points / points-AVAILABLE x 100, so a name with no flip is not punished
+for the missing component. Letter bands are the house bands from
+`_lib-pick-grade.cjs` - A+ 85 / A 72 / B 58 / C 44 / D 28 / F - deliberately, so
+a grade means the same thing on both boards. `max_pts = 0` stores as status
+`no_levels` with a NULL grade, never an F: an F is a claim about the board, and
+there was no board. A candle pull that comes back short stores `no_candles` the
+same way.
 
-The dropdown made you name the outcome you cared about BEFORE the page had
-shown you a single number - which is asking you to guess which outcome the
-cohort actually moved. And it was already redundant: the compare bars measured
-every outcome on every cohort regardless, so the dropdown only decided which
-one got to be the big number.
+**The day row is a SUM, not a mean.** `daily_grade_days` divides summed points
+by summed points-available across every graded ticker. Averaging the per-ticker
+percentages instead would let a one-level ticker swing the session as hard as a
+four-level one.
 
-It is deleted. All outcomes are measured every time and all of them are on
-screen. The headline is now CHOSEN: the outcome whose rate in this cohort sits
-furthest from its rate in the unconditional book. That gap is the read - a
-rate sitting on its baseline is the cohort telling you it changed nothing, and
-a big number that is also the book's big number is the base rate wearing a
-cohort's name.
+**Tables** (all `CREATE TABLE IF NOT EXISTS` in the recorder's `ensureSchema()`,
+the convention for a recorder-owned table): `daily_grade_seals`, `daily_grades`
+(PK date+symbol, carries the levels, the O/H/L/C, five outcome strings, five
+point columns, the reach booleans and the letter), `daily_grade_days`.
 
-- `METRICS` gained "Hit 0.5x" (it was a compare bar but not selectable) and a
-  color per outcome, and now drives the compare rows instead of a parallel
-  list that had drifted out of sync with it.
-- Each compare row is a button. Clicking one pins it as the headline (PINNED
-  badge + an AUTO button to hand the choice back); the rail's own pick carries
-  an AUTO tag on its row. Changing session or index un-pins.
-- New last column on every row: points off the book's baseline, green above /
-  red below, dash when the cohort has no breaks. That is the number the
-  automatic pick is ranking on, so it is visible rather than implied.
-- On a past session, "What <date> actually did" now prints a check or a cross
-  for EVERY outcome instead of one line about the selected one. A past read is
-  only worth anything beside every outcome it was quoting.
+**Session O/H/L/C** comes from `/proxy/candles-intraday` 1m bars filtered to
+09:30-16:00 ET of the target date, `DAILY_GRADES_CONCURRENCY` (default 4) at a
+time - dxLink opens a short-lived subscription per call, so that knob is what
+decides whether ~170 names is polite or a stampede. Index roots map to their `$`
+form (`SPX` -> `$SPX`), extendable with `DAILY_GRADES_STREAMER_MAP`.
 
-The math, the SlimDay fields, the no-lookahead rule and the THIN /
-CHECK FOR BIAS gates are unchanged.
+**Routes** (`server-with-proxy.js`, beside the gex-levels-history pair):
+`GET /proxy/daily-grades[?date=]` (seal + grades + day roll-up),
+`POST /proxy/daily-grades-seal`, `POST /proxy/daily-grades-run[?date=&force=1]`,
+`POST /proxy/daily-grades-regrade?date=`. The seal route reads a 2MB body -
+boards for ~170 tickers overrun `readJsonBody`'s 100KB default. The page's
+`DG_ENDPOINT` now points at `/proxy/daily-grades` instead of the unimplemented
+`/api/daily-grades`.
+
+**Line endings:** the earlier Daily Grades commits went out LF into a CRLF repo.
+All of those files are re-emitted CRLF here, so this entry carries a whitespace
+correction on `nav.ts`, `registry.ts`, `theme.ts`, `DailyGrades.tsx`,
+`dailyGrades.ts` and `daily-grades/sample.ts` alongside the real change.
+
+## 2026-08-25 - Daily Grades: level glossary corrected, dashboard scrollbar, no left accent
+
+Edited: `owner-vite/src/pages/DailyGrades.tsx`, `owner-vite/src/lib/dailyGrades.ts`,
+`generated/2026-08-25-daily-grades.html`.
+
+**The level glossary was WRONG and is now right.** It had been written as if the
+board were a support/resistance pair, which it is not:
+
+- **cap** - the strongest POSITIVE GEX strike (was "upper level / call wall")
+- **floor** - the strongest NEGATIVE GEX strike (was "lower level / put wall")
+- **apex** - CB (was "the single biggest level on the board")
+- **flip** - gamma flip, unchanged
+
+The consequence is spelled out in the header of `dailyGrades.ts` because it is
+easy to re-break: NOTHING assumes floor sits below cap in price. The strongest
+negative strike can print above the strongest positive one, so `cap < floor` is
+a legitimate board and not a data fault - it stays flagged, and the Floor->Cap
+bar goes blank rather than drawing itself backwards. The legend now says so on
+screen instead of leaving a blank bar unexplained.
+
+**Scrollbar is the dashboard's own.** The board box takes `.wall-scroll`
+(index.css) - cyan thumb on an inset track, the same bar the Walls table and the
+ranked rail use. The browser default is a white wash that reads as chrome
+sitting on top of the card. No new CSS; the class already existed.
+
+**Left accent removed** from the seal-note callout - it now sits flush on the
+inset surface like every other block on the page.
+
+## 2026-08-25 - Daily Grades: flat SURFACE ramp, white type, board scrolls in its own box
+
+Edited: `owner-vite/src/lib/theme.ts`, `owner-vite/src/pages/DailyGrades.tsx`,
+`generated/2026-08-25-daily-grades.html`.
+
+**New `SURFACE` export in `lib/theme.ts`** - a six-step flat surface ramp,
+darkest first, each step a plane further forward: `app` #020304, `rail` #040507,
+`shell` #07080b, `card` #0F1117, `card2` #14171D, `cardHi` #191B22. Additive
+only; every page still on `OWNER_THEME.panelBg` is untouched.
+
+The ramp is deliberately FLAT - opaque fills, no translucency. Daily Grades opts
+in and therefore also drops `backdropFilter` on the surfaces it repaints: a blur
+behind an opaque fill buys nothing but a compositor layer. Shell behind the page,
+`card` for each panel, `card2` for anything inset in a card (stat tiles, the
+sticky table head, the search box and the paste area), `cardHi` for row hover and
+the Floor->Cap track.
+
+**All type is white.** Every muted `ownerRgba(T.text, .28-.7)` is gone - column
+heads, tile labels, the seal line, the legend, the "-" in an empty cell. State is
+carried by the pills and the accent colours, never by dimming the type, so the
+0.55-opacity wash on ungraded rows is gone too: those rows now read at full
+strength with a `not graded` pill, which is what actually names the condition.
+
+**The board scrolls in its own box** - `max-height: clamp(360px, 64vh, 900px)`
+with `overflow: auto`, so ~169 watchlist names scroll under a sticky header
+instead of running the whole page down and leaving the column heads off-screen.
+The head needed an opaque fill of its own (`card2`) now that rows slide beneath
+it. Horizontal scroll for narrow windows lives in the same box.
+
+The standalone `generated/` copy of the board got the same three changes.
+
+## 2026-08-25 - Daily Grades board on the owner site (/owner/daily-grades)
+
+Added: `owner-vite/src/pages/DailyGrades.tsx`, `owner-vite/src/lib/dailyGrades.ts`,
+`owner-vite/src/pages/daily-grades/sample.ts`, `generated/2026-08-25-daily-grades.html`.
+Edited: `owner-vite/src/lib/nav.ts`, `owner-vite/src/pages/registry.ts`.
+
+A readable levels board - one row per ticker, floor / apex / cap / flip against
+spot. New page under **Market** in the owner rail.
+
+**The roster is the watchlist.** Rows come from `useTickerUniverse()`
+(`lib/tickers.ts` -> `GET /proxy/scanner-tickers`) - the same scanner universe
+the ΔGEX Board runs over - NOT `Object.keys(payload.boards)`. A watchlist name
+the seal didn't grade still gets a row, dimmed and flagged `not graded`, so a
+short board reads as a gap instead of a clean list. A graded name that isn't on
+the watchlist is off-roster and sits behind a `+N off roster` toggle rather than
+quietly padding the board. `deriveRows(payload, roster, includeOffRoster)` owns
+that merge.
+
+**This is the template.** The data is not wired yet: the page renders whatever
+`DgPayload` it is handed and there is exactly ONE seam for the live feed -
+`loadGrades()` in `lib/dailyGrades.ts`. It probes `/api/daily-grades` (not
+implemented server-side) and falls back to a bundled sealed board so the
+template renders real-shaped numbers. When TT / dxLink lands, swap that function
+body; for a streaming spot there is `applySpots(payload, quotes)`, which overlays
+live prices while the four levels stay frozen at their sealed values. Every
+delta, bar and flag recomputes off spot, so nothing in the component changes.
+A "Paste JSON" drop/paste box is the manual path until then, and the header
+badges say which source is on screen (Live / Imported / Sample) and whether the
+watchlist itself is live or cached.
+
+**What the board shows**
+
+- Delta columns: percent from spot to each level, signed - positive means the
+  level sits above spot. Bold inside 1%.
+- Floor -> Cap bar: where spot sits in the band, white tick = spot, gold line =
+  flip. Blank when the band is unusable (missing, or cap below floor).
+- State pills: above flip / below flip / no flip, plus flags for `near a level`,
+  `outside floor/cap`, `cap < floor` (seals really do ship inverted boards -
+  KLAC and VOO in the 08-25 sample), `not graded` and `off roster`.
+- Seven summary tiles, ticker search, six filters, every column sortable with
+  nulls sinking to the bottom either way.
+
+Colours all come from `lib/theme` (`OWNER_THEME`) - no hardcoded hex.
+
+## 2026-08-25 - CB / CW / PW can fill the whole cell, not just carry a badge
+
+Edited: `generated/2026-08-25-heatmap-tuner.html`, `app/mult-greek/MultGreekClient.tsx`.
+
+Three ways a level cell can now be painted, and they say different things:
+
+- **heat** - hue = SIGN, alpha = rank, exactly like every other cell; the badge
+  is the only thing naming the level. What both skins still ship with.
+- **level** - the whole cell takes the LEVEL's colour (gold / cyan / red) at its
+  own per-level alpha. Loudest, unmissable - but the fill stops saying which way
+  the gamma points, so a Put Wall and a negative-gamma cell become two different
+  reds for two unrelated reasons. The ± glyph is then the only direction cue.
+- **blend** - the level's colour laid OVER the heat at a low alpha. The sign
+  survives underneath and the level reads as a wash on top.
+
+Alpha is per level, because gold at full strength swamps a row in a way cyan and
+red do not.
+
+**Tuner:** a "Cell fill" select plus three alpha sliders in the CB · CW · PW
+section, with the trade-off spelled out under them.
+
+**App:** `SkinDef.levelFill` - `null` (both skins today, so the live board is
+unchanged) or `{ mode, alpha }`. `levelFillBg()` composites it; "blend" is a
+two-stop `linear-gradient` rather than a colour, which is the only way to lay one
+translucent layer over another in a single `background` without knowing what the
+layer underneath resolved to. The cell's `background` now computes the heat
+first and lets the skin paint over it, so levels-only mode and the ordinary ramp
+both feed the same override.
+
+## 2026-08-25 - Tuner: rank 1/2/3 and CB/CW/PW are fully adjustable; VIVID re-tuned
+
+Edited: `generated/2026-08-25-heatmap-tuner.html`, `app/mult-greek/MultGreekClient.tsx`.
+
+**Tuner - two new sections replace the old "Rank floors" block.**
+
+*Top 3 ranked cells* - the three biggest |GEX| strikes per column, which skip the
+ramp and paint at a fixed alpha. Per-rank fill alpha, per-rank font weight, and
+per-rank outline ring (so #2 and #3 can be marked independently of #1) with its
+own width and a colour that either follows the sign or is pinned. Plus a corner
+glyph per rank - star / #n / dot / none - with its own colour, size and corner.
+
+*CB · CW · PW levels* - per-level show toggle (honoured by the preview exactly
+as the live ladder honours its own), per-level colour, and an editable label for
+each. The badge is fully described rather than hardcoded: ink (white / the
+level's colour / dark), chip fill (dark / the level's colour / none), an
+optional ring in the level colour with its own width, size, weight, radius,
+padding, corner, and how far the figure clears it. The cell ring is separate,
+off by default, with its own width. A live three-up badge preview sits at the
+bottom of the section, each badge on the fill it usually lands on.
+
+The export snippet now emits a whole `HEAT_SKINS` entry rather than a loose
+style block, plus a marker summary.
+
+**VIVID re-tuned to the picked values** and is now the tuner's base preset, so
+what the tuner opens on IS what ships:
+
+- ramp `base .05 / span .25 / max 1 / ease 0.4` - the low ease is the point: the
+  curve rises steeply out of zero so the quiet two-thirds of a column still
+  differentiate instead of flooring, and only genuinely large strikes near the cap.
+- rank floors `0.95 / 0.62 / 0.40`; ranked weight steps 300 -> 600 only, because
+  at this ramp the FILL already shouts which strikes are big.
+- 3px radius, 0.5px inset, `2px 8px` padding, 9.5px, no tracking, white text,
+  `$1.23M` money figures (was compact).
+
+**Each skin now carries its own Intensity position and ceiling.** VIVID's ramp is
+a different curve, not a louder CLASSIC, so 1.75 on one is not 1.75 on the other.
+`SkinDef.intensity` holds `{ def, max }` - CLASSIC `1.75 / 3`, VIVID `3 / 4` - and
+switching skins (or restoring one from `mg_heat_skin`) moves the slider there
+instead of carrying a number across that nobody chose for that curve.
+
+`SkinDef.cell.inset` is a margin, not a grid gap, on purpose: it separates the
+tiles without moving the column tracks, so the header and totals rows stay
+aligned with the cells whatever it is set to.
+
+## 2026-08-25 - Delta stamp: white figure on a direction-coloured chip
+
+Edited: `app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`.
+
+Same fix as the level badges, applied to the OTHER marker in the cell.
+
+`DeltaStamp` was a green/red figure on a uniform dark plate. That puts a
+coloured 8px number inside a cell whose FILL is also coloured by sign - on a red
+cell a red chip is two reds meaning two unrelated things - and on a VIVID fill
+the dark plate was the only dark thing left on the row, so it read as a hole.
+
+The chip is now the direction (`#16a34a` / `#dc2626`) with a WHITE figure and a
+`rgba(4,8,16,.55)` inset ring. Direction moved from the ink to the chip, which
+is a stronger signal at this size than 8px coloured type ever was, and the ring
+is what keeps a green chip legible on a near-solid cyan wall. Rank still encodes
+nothing here - only the font weight changes for #1.
+
+The tuner's Δ chip was updated to match (it was dark ink on a saturated
+green/red fill, which is the least readable pairing of the three tried).
+
+## 2026-08-25 - CB / CW / PW badges: white text, ringed in the level colour
+
+Edited: `app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`.
+
+Third pass on these markers, because the first two both failed on the same cell.
+
+- A solid chip IN the level's colour (the original) put cyan CW on a cyan cell
+  and red PW on a red one - the badge vanished into the fill underneath, and
+  that fill is the one you most want the label on.
+- Level-coloured INK on a dark chip (yesterday's fix) stopped the vanishing but
+  left three different low-contrast label colours, and gold-on-black at 8px was
+  the weakest of the three.
+
+**Now: white text on a dark chip, with a 1px inset ring in the level's colour.**
+White is the same crisp read on all three badges and over any fill either skin
+can produce; the ring is what says WHICH level, and the ring is the part that
+can safely be gold. Nudged off the corner (`top 1 / right 2`, 3px radius, 0 3px
+padding, `.04em` tracking) so it stops being clipped by the cell's rounded edge,
+and the badged cell's figure clears 17px instead of 15.
+
+The tuner's badge was updated to match, so what it previews is what ships.
+
+## 2026-08-25 - VIVID skin: right-aligned figures, and the tuner made honest
+
+Edited: `app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`.
+
+**The skin now owns alignment and ink.** VIVID was shipping centred because
+`textAlign: "center"` was still hardcoded on the cell - so the one thing the
+14.5px padding was FOR (a shared right edge to compare magnitudes down) never
+happened. `SkinDef.cell` gains `align` and `text`:
+
+- CLASSIC - `center`, `#c3ccda` (unchanged).
+- VIVID - `right`, `#e8edf5`, as picked.
+
+Three places had to follow or the alignment would have been half-applied:
+the cell's `textAlign`; the cell's `justifyContent` when Δ stamps switch it to
+flex (where `textAlign` no longer places anything, so a right-aligned skin
+re-centred itself the moment Δ came on); and the column TOTAL row, which now
+takes the skin's padding and alignment so the total sits over the column it
+totals instead of floating in the middle of it.
+
+`HEAT_SKINS.classic.text` is the `#c3ccda` LITERAL, not `SOFT_WHITE`: the table
+is evaluated at module load, above where that const is declared, so referencing
+it there is a temporal-dead-zone crash on import.
+
+**The tuner was lying about the baseline.** Its "Current app" preset was the
+OPTION CHAIN cell (2x8 padding, right, 10px), never the ladder's - which is why
+the shipped ladder looked nothing like what came out of it. It now carries the
+two skins that actually ship, `Ladder · VIVID (live)` and `Ladder · CLASSIC`,
+transcribed from `HEAT_SKINS`, and opens on VIVID; the old baseline is still
+there, renamed `Chain default`. Its markers were brought in line too: the level
+ring is off by default behind a new `wallRing` toggle, the badge is level-colour
+ink on a dark chip, and a badged cell clears its figure out from under it.
+
+## 2026-08-25 - Multi Greek: CB / CW / PW lose the ring, keep the label
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+The level markers were a 2px outline in the level's colour PLUS a solid chip in
+that same colour. Both failed on the cell they matter most on: a CW border is
+cyan on a cyan (+GEX) cell and a PW border is red on a red one, so the ring read
+as a smudge rather than a marker, and the chip - dark ink on a solid CW/PW fill -
+disappeared into the cell behind it. On the VIVID skin, where the fill is near
+opaque, they closed the cell in on itself.
+
+- **The ring is gone.** No outline for CB / CW / PW. The badge names the level;
+  the fill still says sign and size. The ATM box, the click-selection ring and
+  the rank-1 hairline are untouched.
+- **The badge is the level's colour as INK on a dark chip**, not a solid chip in
+  the level's colour - legible on any fill either skin can produce. CB stays
+  gold (`LEVEL_COLORS.cb`), CW cyan, PW red.
+- **The value steps out of the badge's way.** A badged cell pads its figure 15px
+  on the right so the chip stops landing on the last digit. Only badged cells
+  pay it; every other cell keeps its full width for the number.
+
+## 2026-08-25 - Multi Greek: CLASSIC / VIVID heat skin toggle in the cog
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+The ladder's cell look is now DATA, not hardcoded. `HEAT_SKINS` holds two named
+answers to "how is a heat cell painted" and the cog's Heat section picks one.
+
+- **CLASSIC** - byte-for-byte what shipped: 0.02 -> 0.18 wash, rank floors
+  0.90 / 0.45 / 0.25, square 4px cells, `$1.23M` values, 700/800/900 weights.
+- **VIVID** - the tuner's export: ramp `base 0.07 / span 0.49 / max 1.00 /
+  ease 0.85`, rank floors `1.00 / 0.81 / 0.60`, 4.5px radius with a 2px column
+  gap so each cell is its own tile, `2px 14.5px` padding, 9px type tracked in
+  -0.05em at weight 300 (900 on rank 1) with a text shadow to survive a
+  near-opaque fill, and compact `1.2M` / `1.2B` figures so the wider padding
+  still fits the number.
+
+A skin only decides how strong the tint is, how the cell is shaped and how the
+figure is written. It never touches which strike is a wall, which is rank 1, or
+what the value is - both skins read the identical `ratio = |gex| / columnMax`.
+
+**What moved to be skin-driven:** `metricBg()` takes the skin instead of
+hardcoding the ramp; the local `skinRankBg()` replaces the imported `rankBg`
+so levels-only mode paints CB/CW/PW at the ACTIVE skin's floors rather than the
+option chain's fixed ones; `fmtCell()` writes the cell and the column TOTAL in
+the skin's number language; the rank-1 ring takes the skin's hue; and the
+header, totals and body grids all open the same `columnGap` so a skin with a
+gap cannot knock the columns out of alignment.
+
+**Slider ceiling follows the skin.** VIVID was tuned at 3.3x, past CLASSIC's 3x
+stop, so the Intensity slider's max is 4 on VIVID and 3 on CLASSIC; switching
+back to CLASSIC clamps a >3 value rather than leaving the handle off its track.
+
+Persisted per browser under `mg_heat_skin`. Server render always starts on
+CLASSIC and the saved value is applied in an effect, so hydration can't
+mismatch. The tuner's `colW: 94` was deliberately NOT carried over - the
+ladder's columns are `1fr` inside four side-by-side panels and a 94px floor per
+column overflows the row under ~1800px.
+
+CB/CW/PW badges, the peak star, EM badges and the delta stamp keep their own
+existing toggles - a skin does not silently switch a marker off.
+
+## 2026-08-25 - Standalone heat-cell tuner for the Multi Greek ladder + Option Chain grid
+
+New: `generated/2026-08-25-heatmap-tuner.html`. No app files touched.
+
+A self-contained HTML sandbox that reproduces both heat surfaces side by side -
+the Multi Greek GEX ladder and the Option Chain grid - against synthetic SPX
+data, with every knob that decides how a cell looks wired to a live control.
+
+It mirrors the real math rather than approximating it: the same
+`alpha = min(maxAlpha, baseAlpha + (ratio x max(intensity,1))^ease x spanAlpha)`
+ramp, the same three fixed rank floors for CB / CW / PW, and the same
+levels-only branch that switches the gamma wash off at the slider's bottom stop.
+
+Adjustable:
+
+- **Heat scale** - positive / negative color, alpha-vs-solid fill mode,
+  intensity, ease exponent, base alpha, alpha span, max alpha cap.
+- **Rank floors** - alpha per rank 1/2/3, levels-only toggle, rank-1 ring width.
+- **Cell shape** - corner radius, grid gap, cell inset, vertical / horizontal
+  padding, column min-width, row lines, ATM box.
+- **Type** - font family, size, weight, rank-1 weight bump, letter spacing,
+  value / empty / sign / strike-rail colors, alignment, text shadow, and an
+  auto-contrast option that flips text white over hot fills.
+- **Cell contents** - value format (compact $, compact, raw, % of column max,
+  rank, none), decimals, and independent toggles for the colored sign glyph,
+  the peak star, the CB/CW/PW badge, the delta stamp, % of column, an OI/Vol
+  second line, EM strike badges, the TOTAL row, the total column and the
+  mirrored right strike rail.
+
+Five presets (Current app / Bold / Soft / Solid fill / Minimal), a ramp
+inspector view showing every step of the scale in both signs, and reseedable
+sample data.
+
+**Export** emits either the settings as JSON or a paste-ready code snippet with
+the new `RANK_FLOOR_ALPHA`, `rankBg()` and `metricBg()` bodies for
+`lib/calculations/optionChain.ts` plus the cell style block for the grid cells
+in `components/pages/OptionsChain.tsx` and `app/mult-greek/MultGreekClient.tsx`.
+
+## 2026-08-25 - Comped access provisions the account instead of waiting for a signup
+
+Edited: `app/api/admin/comp-access/route.ts`, `app/api/auth/signup/route.ts`,
+`lib/db.ts`, `owner-vite/src/pages/Admin.tsx`. New: `lib/emails/comp-invite.ts`.
+
+Granting a comp used to write one `comp_access` row and stop there. If that
+email had no account yet the row just sat as "pending signup", and the person
+on the other end had to be told to go sign up - and to spell their email
+exactly the way it had been comped, or the grant pointed at nothing. Until they
+did, nothing in the system said they existed.
+
+**The grant now creates the account.** POST creates the `users` row up front
+with `password_hash = NULL`, then mails a tokenized `/auth/reset-password`
+link - the same one-shot token machinery `forgot-password` uses, with a 7-day
+TTL instead of 1 hour. They click, pick a password, and land in a full
+paid-tier account. There is no sign-up step for them at all, and no way to
+mistype the address, because they never type it.
+
+A passwordless row is not a hole: `login` verifies against a NULL hash and
+fails generically, so nobody can sign into one, and "Forgot password?" on the
+sign-in page reaches the same reset flow if the invite link ever expires. A
+bounced invite is a nuisance, never a dead end.
+
+**Re-comping never touches an existing account.** If a `users` row is already
+there - a real customer, or a re-grant - it is left exactly as it is, and no
+mail goes out. A paying subscriber must never get a "set your password" link
+because their comp was extended.
+
+**The mail is auth mail, not marketing.** `sendAuthEmail()`, so the new
+`comp-invite` template ships without the unsubscribe footer, without the
+List-Unsubscribe bulk headers, and without UTM params welded onto the token
+URL - all three of which push a tokenized credential link to spam. Same reasons
+spelled out in `lib/emails/send.ts`.
+
+**Panel.** An "email invite" checkbox (default on) next to Grant - unchecked,
+the account is still created and no mail goes out, for when you would rather
+tell them yourself. The grant result now reports the mail separately from the
+grant, because the comp being live says nothing about whether the email landed.
+The "pending signup" badge is replaced by "no password yet" (account exists,
+link unused) and "no account" (a pre-existing grant from before this change),
+each with a **Resend** that mints a fresh 7-day link. `listCompAccess` carries
+a `has_password` flag for it; new `PUT /api/admin/comp-access` does the resend.
+
+`signup`'s dead-end branch for a passwordless row said "that email was
+registered with Google sign-in, which has been retired" - which is now wrong
+for every comped account. It splits on `google_sub` and tells a comped user the
+truth: the account is already there, use "Forgot password?".
 
 ## 2026-08-25 - Condition Rail: the historical read came back empty every time
 
@@ -410,6 +764,92 @@ scope. esbuild compiles that happily (an unresolved identifier is assumed
 global) and it would have thrown at runtime on two tables. Reverted, then every
 `isMobile` reference in both files was checked against the component that owns
 it.
+## 2026-08-25 (b) - MobilePrep: the Monday gap bug, the gap block, ES/NQ/VIX, Biggest GEX Changes
+
+Edited: `components/mobile/pages/MobilePrep.tsx`.
+
+The phone's Premarket view was five cards and two of the numbers on it were
+blank every Monday. Same three faults the desktop page had, plus the things it
+never carried at all.
+
+### It had the Monday bug too
+
+`session` picked the prior session as "newest dated bar before today" out of a
+**2-day** `useEsCandles` window. That window is clipped to a rolling 30 HOURS,
+so on a Monday premarket the Friday 16:00 bar is ~64h old and is not in it —
+the scan landed on SUNDAY (Globex reopen, no RTH bars at all) and Prior close
+and Gap printed `—`. Every Monday, and every day after a holiday.
+
+Fixed the same way as the desktop: `candlePool` = the hook's un-clipped
+`historical` DB read ∪ `sessionCandles`, `historyDays` 2 → 8 (`daysBack` is
+CALENDAR days; the prior TRADING session is three back on a Monday, four after a
+holiday). Neither de-duplicated nor sorted — every use is a min / max /
+latest-ts scan, all idempotent under duplicates.
+
+Two prior dates now, not one: `pdDate` (last session that actually traded RTH —
+Friday on a Monday) and `evDate` (last date with a ≥18:00 Globex bar — Sunday).
+The overnight scan is PINNED to `evDate`; with eight sessions in the pool the
+old `d < today` test would have folded last Thursday evening into tonight's
+range.
+
+Prior close now names its day (`Prior close · Fri`).
+
+### The gap block, not just a gap number
+
+The card showed raw gap points and nothing else. It now carries what the desktop
+does, in its own card:
+
+- **PROJECTED** before 09:30 — pre-bell the front ES stands in for an open that
+  has not printed, and the row says so instead of looking like a fact.
+- **Fill target**, points remaining, and a **retrace bar**. "42% retraced" is a
+  number you have to hold in your head; a bar is a glance. Drawn only once the
+  open is printed, because before that there is no measurement to draw.
+- **✓ FILLED** when price traded back through the prior close after the open,
+  using the extreme in the fill direction rather than the last price, so a fill
+  that already reversed still reads as filled.
+- **INSIDE / OUTSIDE PD RANGE** — the read that changes how you trade it: a gap
+  opening beyond yesterday's range has no reference above or below it.
+- **Prior day range** as its own stat, which the phone never had.
+
+All of it computed in ES space (every input is an ES bar, `esFut` is ES), so the
+basis never enters the arithmetic; only the displayed target price is converted
+to SPX, and a constant offset leaves the points alone.
+
+### ES / NQ / VIX
+
+The phone had no futures or vol context whatsoever, which is most of "how did we
+get here" before the bell. A 3-up strip off `/api/quotes-batch` on the same 30s
+cadence the desktop uses, so the two cannot disagree.
+
+**VIX is coloured inverted** — up is red. A green VIX print would read as "good"
+while meaning the opposite for an equity book, and it is the one instrument on
+the screen where that flip is correct.
+
+The percent field is `percent-change`, hyphenated — that is the TastyTrade field
+name and what the desktop reads. `it.pct` is silently `undefined`.
+
+### Biggest GEX Changes
+
+Top five strike Δ vs the prior close, as a diverging bar list centred on the
+strike column — "gamma built above spot, drained below" in one look instead of
+five signed numbers to compare.
+
+Same `/api/premarket-baseline` fetch as the desktop, **`basis=oi`**, and the
+live side is the OI leg (`γ×OI×S²` = printed OI+Vol minus the volume leg). Both
+matter: premarket the live chain has ~no volume while a prior-close baseline
+carries yesterday's whole session, so on the OI+Vol basis every strike prints a
+large negative Δ that is just the volume leg falling off — an artifact of the
+basis, not a position change, and it would be the headline number on the card.
+
+Generation-guarded and cleared on expiry change: `expiry` moves at least twice
+on a cold mount, and a stale board for the previous expiry would diff today's
+chain against another session's strikes — same symbol, overlapping strikes,
+every number plausible, nothing on screen saying so.
+
+The card is only ever non-empty because the board is RECORDED at 16:05 ET
+(`server-v2/premarket-baseline.js`); a session with no capture says that rather
+than rendering empty, which would read as "no change".
+
 ## 2026-08-24 (b) - Premarket: the Monday gap block, and a GEX baseline with no source
 
 Edited: `components/pages/Premarket.tsx`, `server-v2/premarket-baseline.js`.
