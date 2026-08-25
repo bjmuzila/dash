@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-08-25 - Condition Rail: the historical read came back empty every time
+
+Edited: `components/scanner/ConditionRailTab.tsx`.
+
+Pick a closed session and the whole readout was blank - headline "-", every
+compare bar at zero, "No failed breaks in this cohort", "No sessions match -
+loosen a criterion", all four tiles on a dash. Nothing was wrong with the data.
+
+A closed session classifies on EIGHT OR NINE criteria at once (open type + IB
+width + where it closed + which extreme printed first + which side broke +
+break shape + surge + poke + the clock), and the rail seeded all of them. The
+book has a few thousand sessions in it; no single one of them has ever matched
+all nine, so the cohort was empty by construction. Then the second failure
+landed on top: `wouldBeEmpty()` strikes out any chip that would produce an
+empty cohort, and once the selection ALREADY matches nothing that is true of
+every chip - so the entire rail went dead and there was no way to click out of
+it. That is the "historical shows nothing" report.
+
+Three changes.
+
+**The seed relaxes.** `relaxToBook()` drops criteria in a fixed order - texture
+first (retest, FVG, poke, volume surge), then the clock, then break shape, then
+IB bias and ORB, then which side broke - until the book actually holds a
+session matching what is left. The open type and the IB width bucket are never
+dropped: they are what the rail is keyed on, and a read that has quietly
+stopped conditioning on them is not the read that was asked for. Both the
+auto-seed and the MATCH SESSION / MATCH TODAY button go through it.
+
+**What came off is said out loud.** An orange line under the session summary
+names every dropped criterion: "Relaxed - no session in this book matched the
+full read. Dropped poked <0.25 ib past, no surge, ...". Clicking any of them
+back on re-narrows and takes it out of the banner, so the over-specified read
+is still one click away - it is just no longer the default.
+
+**The rail can't lock itself again.** The empty-combination strike is now
+skipped whenever the current cohort is empty. Striking every chip because the
+selection already matches nothing is not information, it is a dead end.
+
+Plus the thing the empty cohort was hiding: **"Each criterion on its own"**, a
+new card under the headline. Every ticked criterion priced two ways - ALONE
+against the unconditional book (bar, with the book's own rate as the hairline),
+and WITHOUT IT, the ticked cohort with just that one removed. The gap between
+"without it" and the headline is what that pick is costing. Criteria that are
+thin on their own draw orange rather than blue. Sample sizes still are not
+printed - the THIN / CHECK FOR BIAS rules from the Stat Prompter are unchanged.
+
+No change to the math, to the SlimDay fields, or to the no-lookahead rule: the
+book is still cut to sessions strictly before the selected date.
+
 ## 2026-08-25 - GEX Map (test lab): the wall emphasis is a summit ring, not a rule across the frame
 
 Edited: `app/test/GexMapTab.tsx`.
@@ -128,6 +177,92 @@ scope. esbuild compiles that happily (an unresolved identifier is assumed
 global) and it would have thrown at runtime on two tables. Reverted, then every
 `isMobile` reference in both files was checked against the component that owns
 it.
+## 2026-08-25 (b) - MobilePrep: the Monday gap bug, the gap block, ES/NQ/VIX, Biggest GEX Changes
+
+Edited: `components/mobile/pages/MobilePrep.tsx`.
+
+The phone's Premarket view was five cards and two of the numbers on it were
+blank every Monday. Same three faults the desktop page had, plus the things it
+never carried at all.
+
+### It had the Monday bug too
+
+`session` picked the prior session as "newest dated bar before today" out of a
+**2-day** `useEsCandles` window. That window is clipped to a rolling 30 HOURS,
+so on a Monday premarket the Friday 16:00 bar is ~64h old and is not in it —
+the scan landed on SUNDAY (Globex reopen, no RTH bars at all) and Prior close
+and Gap printed `—`. Every Monday, and every day after a holiday.
+
+Fixed the same way as the desktop: `candlePool` = the hook's un-clipped
+`historical` DB read ∪ `sessionCandles`, `historyDays` 2 → 8 (`daysBack` is
+CALENDAR days; the prior TRADING session is three back on a Monday, four after a
+holiday). Neither de-duplicated nor sorted — every use is a min / max /
+latest-ts scan, all idempotent under duplicates.
+
+Two prior dates now, not one: `pdDate` (last session that actually traded RTH —
+Friday on a Monday) and `evDate` (last date with a ≥18:00 Globex bar — Sunday).
+The overnight scan is PINNED to `evDate`; with eight sessions in the pool the
+old `d < today` test would have folded last Thursday evening into tonight's
+range.
+
+Prior close now names its day (`Prior close · Fri`).
+
+### The gap block, not just a gap number
+
+The card showed raw gap points and nothing else. It now carries what the desktop
+does, in its own card:
+
+- **PROJECTED** before 09:30 — pre-bell the front ES stands in for an open that
+  has not printed, and the row says so instead of looking like a fact.
+- **Fill target**, points remaining, and a **retrace bar**. "42% retraced" is a
+  number you have to hold in your head; a bar is a glance. Drawn only once the
+  open is printed, because before that there is no measurement to draw.
+- **✓ FILLED** when price traded back through the prior close after the open,
+  using the extreme in the fill direction rather than the last price, so a fill
+  that already reversed still reads as filled.
+- **INSIDE / OUTSIDE PD RANGE** — the read that changes how you trade it: a gap
+  opening beyond yesterday's range has no reference above or below it.
+- **Prior day range** as its own stat, which the phone never had.
+
+All of it computed in ES space (every input is an ES bar, `esFut` is ES), so the
+basis never enters the arithmetic; only the displayed target price is converted
+to SPX, and a constant offset leaves the points alone.
+
+### ES / NQ / VIX
+
+The phone had no futures or vol context whatsoever, which is most of "how did we
+get here" before the bell. A 3-up strip off `/api/quotes-batch` on the same 30s
+cadence the desktop uses, so the two cannot disagree.
+
+**VIX is coloured inverted** — up is red. A green VIX print would read as "good"
+while meaning the opposite for an equity book, and it is the one instrument on
+the screen where that flip is correct.
+
+The percent field is `percent-change`, hyphenated — that is the TastyTrade field
+name and what the desktop reads. `it.pct` is silently `undefined`.
+
+### Biggest GEX Changes
+
+Top five strike Δ vs the prior close, as a diverging bar list centred on the
+strike column — "gamma built above spot, drained below" in one look instead of
+five signed numbers to compare.
+
+Same `/api/premarket-baseline` fetch as the desktop, **`basis=oi`**, and the
+live side is the OI leg (`γ×OI×S²` = printed OI+Vol minus the volume leg). Both
+matter: premarket the live chain has ~no volume while a prior-close baseline
+carries yesterday's whole session, so on the OI+Vol basis every strike prints a
+large negative Δ that is just the volume leg falling off — an artifact of the
+basis, not a position change, and it would be the headline number on the card.
+
+Generation-guarded and cleared on expiry change: `expiry` moves at least twice
+on a cold mount, and a stale board for the previous expiry would diff today's
+chain against another session's strikes — same symbol, overlapping strikes,
+every number plausible, nothing on screen saying so.
+
+The card is only ever non-empty because the board is RECORDED at 16:05 ET
+(`server-v2/premarket-baseline.js`); a session with no capture says that rather
+than rendering empty, which would read as "no change".
+
 ## 2026-08-24 (b) - Premarket: the Monday gap block, and a GEX baseline with no source
 
 Edited: `components/pages/Premarket.tsx`, `server-v2/premarket-baseline.js`.

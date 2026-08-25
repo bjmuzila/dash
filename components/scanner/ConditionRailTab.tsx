@@ -46,6 +46,20 @@
  * which is the only honest way to show a past read: the number it gave, and
  * what the session then did.
  *
+ * RELAXED SEEDING (2026-08-25). A closed session classifies on eight or nine
+ * criteria at once and the book has never seen a day matching all nine, so the
+ * seeded cohort came back empty — every rate "—", "No sessions match", and a
+ * rail struck out end to end because `wouldBeEmpty` is true of every chip once
+ * the selection already matches nothing. `relaxToBook()` now drops criteria in
+ * a fixed order until the book holds a matching session, names what came off,
+ * and leaves it one click to put back; the empty-combination strike is skipped
+ * while the cohort is empty, so the rail can never lock itself again.
+ *
+ * PER-CRITERION READ. The headline prices the whole stack. The "Each criterion
+ * on its own" card prices each pick two ways — ALONE against the unconditional
+ * book, and WITHOUT IT against the rest of the stack — so a thin cohort still
+ * says which condition is carrying the number and which is only narrowing it.
+ *
  * Data: public/data/ib-ES.json + ib-NQ.json (same slim exports the Stat
  * Prompter reads) plus the live 5m tape for today's classification.
  */
@@ -170,6 +184,64 @@ const GROUPS: Group[] = [
 const ALL: Cond[] = GROUPS.flatMap((g) => g.items);
 const BY: Record<string, Cond> = Object.fromEntries(ALL.map((c) => [c.id, c]));
 
+/* ── seeding against a book that has never seen the day ───────────────────── */
+
+/**
+ * A full session classification is EIGHT OR NINE criteria at once. The book has
+ * a few thousand sessions in it; the chance any one of them matched all nine is
+ * close to zero, so seeding the raw classification produced an empty cohort —
+ * every rate "—", "No sessions match", and (because `wouldBeEmpty` then strikes
+ * out every remaining chip) no way to click back out of it. That is the
+ * "historical shows nothing" bug: not missing data, an over-specified seed.
+ *
+ * So the seed relaxes. Criteria come off in the order below — texture first,
+ * then timing, then shape — until the book actually holds a session matching
+ * what is left. What came off is named on screen; nothing is silently ignored,
+ * and one click puts any of it back.
+ *
+ * Ids NOT listed here are never dropped: the open type and the IB width bucket
+ * are what the rail is keyed on, and a read that has quietly stopped
+ * conditioning on them is not the read that was asked for.
+ */
+const RELAX_ORDER = [
+  "retest",                          // never knowable live anyway
+  "fvgB", "fvgS",                    // 15m texture
+  "nopoke", "poke",                  // how far past the level it ran
+  "novs", "vs",                      // volume on the break bar
+  "inside", "midb", "early", "late", // the clock
+  "firstH", "firstL",                // which extreme printed first
+  "single", "both", "nobreak",       // break shape
+  "biasH", "biasL",                  // where the IB closed relative to its mid
+  "orbh", "orbl",                    // 9:45 ORB direction
+  "bh", "bl",                        // which side broke
+];
+
+/**
+ * Drop criteria until `days` holds at least one session matching all of them.
+ * Returns the kept set (in rail order) and what came off, first-dropped first.
+ * If even the undroppable core is empty, keep going in reverse rail order
+ * rather than hand back a cohort of nothing.
+ */
+function relaxToBook(ids: string[], days: SlimDay[]): { kept: string[]; dropped: string[] } {
+  const has = (list: string[]) => {
+    const cs = list.map((i) => BY[i]).filter(Boolean);
+    return days.some((d) => cs.every((c) => c.f(d)));
+  };
+  if (!days.length || has(ids)) return { kept: ids, dropped: [] };
+
+  const kept = ids.filter((i) => BY[i]);
+  const dropped: string[] = [];
+  const order = [...RELAX_ORDER, ...[...ids].reverse().filter((i) => !RELAX_ORDER.includes(i))];
+  for (const id of order) {
+    const at = kept.indexOf(id);
+    if (at < 0) continue;
+    kept.splice(at, 1);
+    dropped.push(id);
+    if (has(kept)) break;
+  }
+  return { kept: ALL.filter((c) => kept.includes(c.id)).map((c) => c.id), dropped };
+}
+
 /* ── the outcome being measured ───────────────────────────────────────────── */
 
 type Metric = { id: string; label: string; sentence: string; f: (d: SlimDay) => boolean };
@@ -203,6 +275,8 @@ export default function ConditionRailTab() {
   const [asOf, setAsOf] = useState("live");
   const [metricId, setMetricId] = useState("hit1");
   const [sel, setSel] = useState<string[]>([]);
+  /** Criteria relaxToBook() had to take off the seed to find a cohort at all. */
+  const [relaxed, setRelaxed] = useState<string[]>([]);
   const [why, setWhy] = useState("");
   const touched = useRef(false);
   // Signature of the classification the rail was last auto-seeded from. UNSEEDED
@@ -320,6 +394,7 @@ export default function ConditionRailTab() {
   useEffect(() => {
     touched.current = false;
     seeded.current = UNSEEDED;
+    setRelaxed([]);
     setWhy("");
   }, [asOf, sym, UNSEEDED]);
 
@@ -329,11 +404,16 @@ export default function ConditionRailTab() {
     // rather than clearing the rail. Past: empty is an ANSWER — that session
     // classified as nothing — and it seeds like any other.
     if (isLive && !todayTrue.length) return;
-    const sig = todayTrue.join("|");
+    // The window is part of the signature: narrowing `since` can empty a cohort
+    // the wider book had, so an untouched rail re-relaxes against the new book
+    // instead of sitting on a selection that now matches nothing.
+    const sig = `${todayTrue.join("|")}#${days.length}`;
     if (sig === seeded.current) return;
     seeded.current = sig;
-    setSel(todayTrue);
-  }, [todayTrue, isLive]);
+    const { kept, dropped } = relaxToBook(todayTrue, days);
+    setSel(kept);
+    setRelaxed(dropped);
+  }, [todayTrue, isLive, days]);
 
   /* ── selection mechanics: exclusion + conflicts ─────────────────────────── */
 
@@ -360,6 +440,9 @@ export default function ConditionRailTab() {
   const toggle = (id: string) => {
     touched.current = true;
     setWhy("");
+    // Putting a relaxed-away criterion back makes it the user's pick again, so
+    // it stops being something the page took off on their behalf.
+    setRelaxed((prev) => prev.filter((x) => x !== id));
     setSel((prev) => {
       if (prev.includes(id)) return prev.filter((x) => x !== id);
       const item = BY[id];
@@ -407,6 +490,32 @@ export default function ConditionRailTab() {
 
   const medExt = med(broke.map((d) => d.fcb!.rExt));
   const medMin = med(broke.map((d) => d.fcb!.breakMin));
+
+  /**
+   * Every ticked criterion priced on its own, and priced out.
+   *
+   * The headline is one number for the whole stack, which says nothing about
+   * WHICH condition is carrying it — and when the stack is thin it is the only
+   * number on the page. Two columns fix that: ALONE is the criterion against
+   * the unconditional book, WITHOUT IT is the ticked cohort with just that one
+   * removed. Together they say what each pick is worth and what it is costing.
+   */
+  const perCond = useMemo(
+    () =>
+      conds.map((c) => {
+        const alone = days.filter((d) => d.fcb != null && c.f(d));
+        const rest = conds.filter((x) => x.id !== c.id);
+        const without = days.filter((d) => d.fcb != null && rest.every((x) => x.f(d)));
+        return {
+          id: c.id,
+          label: c.label,
+          alone: alone.length ? alone.filter(metric.f).length / alone.length : null,
+          aloneThin: alone.length > 0 && alone.length < 30,
+          without: without.length ? without.filter(metric.f).length / without.length : null,
+        };
+      }),
+    [conds, days, metric],
+  );
 
   const selNotToday = sel.filter((id) => todayOf[id] === false);
   const selPending = sel.filter((id) => todayOf[id] == null);
@@ -507,7 +616,13 @@ export default function ConditionRailTab() {
             <div style={{ fontSize: 13.5, fontWeight: 800, color: HOME_THEME.text }}>What has happened</div>
             <div style={{ display: "flex", gap: 6 }}>
               <button
-                onClick={() => { touched.current = true; setWhy(""); setSel(todayTrue); }}
+                onClick={() => {
+                  touched.current = true;
+                  setWhy("");
+                  const { kept, dropped } = relaxToBook(todayTrue, days);
+                  setSel(kept);
+                  setRelaxed(dropped);
+                }}
                 disabled={!todayTrue.length}
                 style={{
                   fontSize: 10.5, fontWeight: 800, letterSpacing: ".04em", padding: "4px 8px", borderRadius: 6,
@@ -518,7 +633,7 @@ export default function ConditionRailTab() {
                 {isLive ? "MATCH TODAY" : "MATCH SESSION"}
               </button>
               <button
-                onClick={() => { touched.current = true; setWhy(""); setSel([]); }}
+                onClick={() => { touched.current = true; setWhy(""); setRelaxed([]); setSel([]); }}
                 style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".04em", padding: "4px 8px", borderRadius: 6, cursor: "pointer", border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.03)", color: HOME_THEME.text }}
               >
                 CLEAR
@@ -564,6 +679,15 @@ export default function ConditionRailTab() {
                 </>
               )}
             </div>
+            {/* Said out loud, never silent: the full classification described a
+                day this book has never seen, so these came off to get a cohort
+                at all. Clicking one back on re-narrows and the banner drops it. */}
+            {relaxed.length > 0 && (
+              <div style={{ marginTop: 7, fontSize: 11, color: HOME_THEME.orange, lineHeight: 1.5 }}>
+                ⚠ Relaxed — no session in this book matched the full read. Dropped{" "}
+                <b>{relaxed.map((id) => BY[id]?.label.toLowerCase()).filter(Boolean).join(", ")}</b>. Click any of them back on to see it go empty again.
+              </div>
+            )}
           </div>
 
           {GROUPS.map((g) => (
@@ -580,7 +704,11 @@ export default function ConditionRailTab() {
                 {g.items.map((c) => {
                   const on = selSet.has(c.id);
                   const blk = on ? null : blockedBy(c.id);
-                  const empty = !on && !blk && wouldBeEmpty(c.id);
+                  // The empty-combination strike only means anything while the
+                  // current selection HAS a cohort. Once it doesn't, every chip
+                  // "would be empty" and the whole rail goes dead — which is
+                  // how the page used to lock itself with nothing on screen.
+                  const empty = !on && !blk && cohort.length > 0 && wouldBeEmpty(c.id);
                   const dead = !!blk || empty;
                   const tv = todayOf[c.id];
                   const reason = blk ? `Ruled out by “${blk}”` : empty ? "No session in the book matches that combination" : "";
@@ -709,6 +837,43 @@ export default function ConditionRailTab() {
                   bar = this cohort · hairline = the unconditional {sym} book
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* every ticked criterion priced on its own, and priced out */}
+          <div style={{ ...classicCardAccentStyle, padding: 20 }}>
+            <div style={sect}>
+              Each criterion on its own
+              <span style={{ textTransform: "none", letterSpacing: 0, fontWeight: 600, color: HOME_THEME.text }}>
+                — {metric.label.toLowerCase()}, {sym} book
+              </span>
+            </div>
+            {perCond.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) minmax(0, 1.5fr) 54px 78px", gap: 11, alignItems: "center", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.07em", textTransform: "uppercase", color: HOME_THEME.text }}>
+                  <div>Criterion</div>
+                  <div>Alone, vs the book</div>
+                  <div style={{ textAlign: "right" }}>Rate</div>
+                  <div style={{ textAlign: "right" }}>Without it</div>
+                </div>
+                {perCond.map((r) => (
+                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) minmax(0, 1.5fr) 54px 78px", gap: 11, alignItems: "center", fontSize: 12 }}>
+                    <div style={{ color: HOME_THEME.text }}>{r.label}</div>
+                    <div style={{ height: 16, background: "rgba(255,255,255,0.05)", borderRadius: 5, position: "relative", overflow: "hidden" }}>
+                      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${(r.alone ?? 0) * 100}%`, background: r.aloneThin ? HOME_THEME.orange : LIGHT_BLUE, opacity: 0.85, borderRadius: 5 }} />
+                      <div style={{ position: "absolute", top: -3, bottom: -3, left: `${(baseline ?? 0) * 100}%`, width: 1.5, background: "rgba(255,255,255,0.45)" }} />
+                    </div>
+                    <div style={{ fontWeight: 800, textAlign: "right", color: r.aloneThin ? HOME_THEME.orange : LIGHT_BLUE, fontVariantNumeric: "tabular-nums" }}>{pct0(r.alone)}</div>
+                    <div style={{ textAlign: "right", color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{pct0(r.without)}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: HOME_THEME.text }}>Nothing ticked — the headline already is the whole book.</div>
+            )}
+            <div style={{ fontSize: 10.5, color: HOME_THEME.text, marginTop: 9 }}>
+              bar = that criterion on its own · hairline = the unconditional {sym} book · orange = thin on its own ·
+              &ldquo;without it&rdquo; = the ticked cohort with just that one removed, so the gap to the headline is what the pick costs.
             </div>
           </div>
 
