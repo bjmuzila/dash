@@ -88,6 +88,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Probe", href: "/owner/probe", glyph: "🔍", key: "Probe" },
       { label: "Greeks", href: "/greeks", glyph: "∇", key: "Greeks" },
       { label: "ΔGEX Board", href: "/owner/gex-growth", glyph: "Δ", key: "GexGrowth" },
+      { label: "FlowMonkey", href: "/owner/flowmonkey", glyph: "◆", key: "FlowMonkey" },
       { label: "Est. Moves BE", href: "/estimated-move", glyph: "⇄", key: "EstimatedMove" },
       { label: "Watchlists", href: "/owner/watchlists", glyph: "☰", key: "Watchlists" },
       { label: "Chart Types", href: "/owner/charts-ui", glyph: "▦", key: "ChartsUI" },

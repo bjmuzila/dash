@@ -55,6 +55,16 @@
  * and leaves it one click to put back; the empty-combination strike is skipped
  * while the cohort is empty, so the rail can never lock itself again.
  *
+ * NO OUTCOME PICKER (2026-08-25). There used to be an "Outcome" dropdown and it
+ * was backwards: it made you name the outcome you cared about BEFORE the page
+ * had shown you a single number, which is asking you to guess which one the
+ * cohort actually moved. Every outcome is measured every time — they were all
+ * on screen in the compare rows anyway — and the headline is now chosen: the
+ * outcome whose rate sits furthest from its rate in the unconditional book.
+ * That gap is the read; a rate sitting on its baseline is the cohort saying it
+ * changed nothing. Any row can be clicked to pin it, and clicking the pinned
+ * one hands the choice back.
+ *
  * PER-CRITERION READ. The headline prices the whole stack. The "Each criterion
  * on its own" card prices each pick two ways — ALONE against the unconditional
  * book, and WITHOUT IT against the rest of the stack — so a thin cohort still
@@ -244,13 +254,26 @@ function relaxToBook(ids: string[], days: SlimDay[]): { kept: string[]; dropped:
 
 /* ── the outcome being measured ───────────────────────────────────────────── */
 
-type Metric = { id: string; label: string; sentence: string; f: (d: SlimDay) => boolean };
+/**
+ * The outcomes. ALL of them are always measured — there is no "which one are
+ * you asking about" step, because the answer to that is always "all five, and
+ * then tell me which one moved".
+ *
+ * One of them is the HEADLINE, and the rail picks it: the outcome whose rate in
+ * this cohort sits furthest from its rate in the unconditional book. That is
+ * the only automatic choice that means anything — an outcome sitting on its
+ * baseline is the cohort telling you it changed nothing, and a big number that
+ * is ALSO the book's big number is not a read, it is the base rate wearing a
+ * cohort's name. Clicking any row overrides the pick; nothing hides it.
+ */
+type Metric = { id: string; label: string; sentence: string; color: string; f: (d: SlimDay) => boolean };
 const METRICS: Metric[] = [
-  { id: "hit1", label: "Reached 1.0× IB", sentence: "the break reached 1.0× the IB width", f: (d) => hit(d, "1") },
-  { id: "hit2", label: "Reached 2.0× IB", sentence: "the break reached 2.0× the IB width", f: (d) => hit(d, "2") },
-  { id: "failed", label: "Break failed", sentence: "the break closed back inside within 30m", f: (d) => d.fcb?.failed === true },
-  { id: "rot", label: "Full rotation", sentence: "the day rotated to the opposite IB extreme", f: (d) => d.fcb != null && failOutcome(d.fcb, d.width) === "full_rotation" },
-  { id: "nomid", label: "Never saw the mid", sentence: "price never returned to the IB midpoint", f: (d) => d.noMidReturn },
+  { id: "failed", label: "Failed ≤30m",       sentence: "the break closed back inside within 30m",        color: HOME_THEME.red,      f: (d) => d.fcb?.failed === true },
+  { id: "hit05",  label: "Hit 0.5×",          sentence: "the break reached 0.5× the IB width",            color: HOME_THEME.green,    f: (d) => hit(d, "0.5") },
+  { id: "hit1",   label: "Hit 1.0×",          sentence: "the break reached 1.0× the IB width",            color: LIGHT_BLUE,          f: (d) => hit(d, "1") },
+  { id: "hit2",   label: "Hit 2.0×",          sentence: "the break reached 2.0× the IB width",            color: HOME_THEME.cyan,     f: (d) => hit(d, "2") },
+  { id: "rot",    label: "Full rotation",     sentence: "the day rotated to the opposite IB extreme",     color: HOME_THEME.orange,   f: (d) => d.fcb != null && failOutcome(d.fcb, d.width) === "full_rotation" },
+  { id: "nomid",  label: "Never saw the mid", sentence: "price never returned to the IB midpoint",        color: "rgba(255,255,255,0.55)", f: (d) => d.noMidReturn },
 ];
 
 /** The failed-break partition — the one place a stacked bar is an honest claim. */
@@ -273,7 +296,8 @@ export default function ConditionRailTab() {
   const [since, setSince] = useState("all");
   /** "live" = today's tape. Otherwise a past session date (YYYY-MM-DD). */
   const [asOf, setAsOf] = useState("live");
-  const [metricId, setMetricId] = useState("hit1");
+  /** null = the rail picks the headline outcome. A click on a row pins one. */
+  const [focus, setFocus] = useState<string | null>(null);
   const [sel, setSel] = useState<string[]>([]);
   /** Criteria relaxToBook() had to take off the seed to find a cohort at all. */
   const [relaxed, setRelaxed] = useState<string[]>([]);
@@ -395,6 +419,7 @@ export default function ConditionRailTab() {
     touched.current = false;
     seeded.current = UNSEEDED;
     setRelaxed([]);
+    setFocus(null);
     setWhy("");
   }, [asOf, sym, UNSEEDED]);
 
@@ -464,12 +489,32 @@ export default function ConditionRailTab() {
   const broke = useMemo(() => cohort.filter((d) => d.fcb != null), [cohort]);
   const allBroke = useMemo(() => days.filter((d) => d.fcb != null), [days]);
 
-  const metric = METRICS.find((m) => m.id === metricId)!;
-  const rateK = broke.filter(metric.f).length;
+  // Every outcome, every time: this cohort's rate, the book's rate, the gap.
+  const rows = useMemo(
+    () =>
+      METRICS.map((m) => {
+        const k = broke.filter(m.f).length;
+        const v = broke.length ? k / broke.length : null;
+        const b = allBroke.length ? allBroke.filter(m.f).length / allBroke.length : null;
+        return { m, k, v, b, delta: v != null && b != null ? (v - b) * 100 : null };
+      }),
+    [broke, allBroke],
+  );
+
+  /** The headline the rail picks: furthest from the book. See METRICS above. */
+  const autoId = useMemo(() => {
+    const scored = rows.filter((r) => r.delta != null);
+    if (!scored.length) return "hit1";
+    return scored.reduce((a, b) => (Math.abs(b.delta!) > Math.abs(a.delta!) ? b : a)).m.id;
+  }, [rows]);
+
+  const metric = METRICS.find((m) => m.id === (focus ?? autoId)) ?? METRICS[0];
+  const row = rows.find((r) => r.m.id === metric.id)!;
+  const rateK = row.k;
   const rateN = broke.length;
-  const baseline = share(allBroke, metric.f);
-  const rate = rateN ? rateK / rateN : null;
-  const deltaPts = rate != null && baseline != null ? (rate - baseline) * 100 : null;
+  const baseline = row.b;
+  const rate = row.v;
+  const deltaPts = row.delta;
 
   const thin = rateN > 0 && rateN < 30;
   const suspicious = rate != null && rateN >= 30 && rate > 0.85;
@@ -479,14 +524,6 @@ export default function ConditionRailTab() {
     ...p,
     pct: fails.length ? (100 * fails.filter((d) => failOutcome(d.fcb!, d.width) === p.k).length) / fails.length : 0,
   }));
-
-  const compare: { label: string; v: number | null; b: number | null; color: string }[] = [
-    { label: "Failed ≤30m", v: share(broke, (d) => d.fcb!.failed), b: share(allBroke, (d) => d.fcb!.failed), color: HOME_THEME.red },
-    { label: "Hit 0.5×", v: share(broke, (d) => hit(d, "0.5")), b: share(allBroke, (d) => hit(d, "0.5")), color: HOME_THEME.green },
-    { label: "Hit 1.0×", v: share(broke, (d) => hit(d, "1")), b: share(allBroke, (d) => hit(d, "1")), color: LIGHT_BLUE },
-    { label: "Hit 2.0×", v: share(broke, (d) => hit(d, "2")), b: share(allBroke, (d) => hit(d, "2")), color: HOME_THEME.cyan },
-    { label: "Full rotation", v: share(broke, (d) => failOutcome(d.fcb!, d.width) === "full_rotation"), b: share(allBroke, (d) => failOutcome(d.fcb!, d.width) === "full_rotation"), color: HOME_THEME.orange },
-  ];
 
   const medExt = med(broke.map((d) => d.fcb!.rExt));
   const medMin = med(broke.map((d) => d.fcb!.breakMin));
@@ -520,10 +557,6 @@ export default function ConditionRailTab() {
   const selNotToday = sel.filter((id) => todayOf[id] === false);
   const selPending = sel.filter((id) => todayOf[id] == null);
   const isTodayCohort = sel.length > 0 && selNotToday.length === 0;
-
-  /** What the session being read back ACTUALLY did on the selected outcome. */
-  const pastOutcome: "yes" | "no" | "nobreak" | null =
-    pastDay == null ? null : pastDay.fcb == null ? "nobreak" : metric.f(pastDay) ? "yes" : "no";
 
   /* ── styles ─────────────────────────────────────────────────────────────── */
 
@@ -581,10 +614,11 @@ export default function ConditionRailTab() {
               </span>
             )}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            <span style={{ ...sect, marginBottom: 0 }}>Outcome</span>
-            <ThemedSelect width={180} value={metricId} onChange={setMetricId} options={METRICS.map((m) => ({ value: m.id, label: m.label }))} />
-          </div>
+          {/* No "Outcome" picker. Every outcome is measured every time and all of
+              them are on screen; the headline is whichever one sits furthest
+              from the book, and clicking a row pins a different one. Asking the
+              user to choose an outcome BEFORE seeing any of them was asking them
+              to guess which one the cohort moved. */}
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             <span style={{ ...sect, marginBottom: 0 }}>Since</span>
             <ThemedSelect
@@ -758,6 +792,22 @@ export default function ConditionRailTab() {
                 <div style={{ fontSize: 56, fontWeight: 800, lineHeight: 1, letterSpacing: "-0.035em", color: LIGHT_BLUE, fontVariantNumeric: "tabular-nums" }}>
                   {rate != null ? pctS(rateK, rateN) : "—"}
                 </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 6 }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: metric.color }}>
+                    {metric.label}
+                  </span>
+                  <span style={{ ...badge(focus ? HOME_THEME.orange : LIGHT_BLUE), marginLeft: 0 }}>
+                    {focus ? "PINNED" : "BIGGEST GAP"}
+                  </span>
+                  {focus && (
+                    <button
+                      onClick={() => setFocus(null)}
+                      style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".04em", padding: "1px 5px", borderRadius: 4, cursor: "pointer", fontFamily: "inherit", border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.03)", color: HOME_THEME.text }}
+                    >
+                      AUTO
+                    </button>
+                  )}
+                </div>
                 <div style={{ fontSize: 12, color: HOME_THEME.text, marginTop: 8, lineHeight: 1.5 }}>
                   {conds.length ? (
                     <>
@@ -785,16 +835,29 @@ export default function ConditionRailTab() {
 
                 {/* What the session being read back actually did. A past rate is
                     only worth anything next to the outcome it was quoting. */}
-                {pastOutcome && (
-                  <div style={{ marginTop: 11, fontSize: 12, color: HOME_THEME.text, lineHeight: 1.6 }}>
-                    <span style={badge(pastOutcome === "yes" ? HOME_THEME.green : pastOutcome === "no" ? HOME_THEME.red : HOME_THEME.orange)}>
-                      {pastOutcome === "yes" ? "IT DID" : pastOutcome === "no" ? "IT DIDN'T" : "NO BREAK"}
-                    </span>{" "}
-                    {pastOutcome === "nobreak"
-                      ? `${asOf} never broke the IB, so this outcome never came up.`
-                      : pastOutcome === "yes"
-                        ? `On ${asOf}, ${metric.sentence}.`
-                        : `On ${asOf}, ${metric.sentence} — it did not.`}
+                {pastDay && (
+                  <div style={{ marginTop: 11, fontSize: 11.5, color: HOME_THEME.text, lineHeight: 1.6 }}>
+                    <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.orange, marginBottom: 5 }}>
+                      What {asOf} actually did
+                    </div>
+                    {pastDay.fcb == null ? (
+                      <>
+                        <span style={{ ...badge(HOME_THEME.orange), marginLeft: 0 }}>NO BREAK</span> it never broke the IB, so none of these came up.
+                      </>
+                    ) : (
+                      // All of them, not just the headline: a past read is only
+                      // worth anything beside every outcome it was quoting.
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                        {METRICS.map((m) => {
+                          const did = m.f(pastDay);
+                          return (
+                            <span key={m.id} style={{ ...badge(did ? HOME_THEME.green : HOME_THEME.red), marginLeft: 0 }}>
+                              {did ? "✓" : "✕"} {m.label}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -821,20 +884,46 @@ export default function ConditionRailTab() {
                 </div>
               </div>
 
-              {/* the same cohort against the unconditional book */}
+              {/* Every outcome, this cohort against the unconditional book. Each
+                  row is a button: clicking it pins that outcome as the headline,
+                  clicking the pinned one hands the pick back to the rail. */}
               <div style={{ display: "grid", gap: 9 }}>
-                {compare.map((c) => (
-                  <div key={c.label} style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr) 54px", gap: 11, alignItems: "center", fontSize: 12 }}>
-                    <div style={{ color: HOME_THEME.text, textAlign: "right" }}>{c.label}</div>
-                    <div style={{ height: 16, background: "rgba(255,255,255,0.05)", borderRadius: 5, position: "relative", overflow: "hidden" }}>
-                      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${(c.v ?? 0) * 100}%`, background: c.color, opacity: 0.85, borderRadius: 5 }} />
-                      <div style={{ position: "absolute", top: -3, bottom: -3, left: `${(c.b ?? 0) * 100}%`, width: 1.5, background: "rgba(255,255,255,0.45)" }} />
-                    </div>
-                    <div style={{ fontWeight: 800, textAlign: "right", color: c.color, fontVariantNumeric: "tabular-nums" }}>{pct0(c.v)}</div>
-                  </div>
-                ))}
+                {rows.map((r) => {
+                  const on = r.m.id === metric.id;
+                  const auto = r.m.id === autoId;
+                  return (
+                    <button
+                      key={r.m.id}
+                      onClick={() => setFocus(focus === r.m.id ? null : r.m.id)}
+                      title={auto ? "The rail's pick — furthest from the book" : `Pin ${r.m.label} as the headline`}
+                      style={{
+                        display: "grid", gridTemplateColumns: "128px minmax(0,1fr) 54px 62px", gap: 11, alignItems: "center",
+                        fontSize: 12, fontFamily: "inherit", textAlign: "left", cursor: "pointer",
+                        padding: "3px 6px", margin: "-3px -6px", borderRadius: 7,
+                        border: `1px solid ${on ? `${r.m.color}66` : "transparent"}`,
+                        background: on ? `${r.m.color}14` : "transparent",
+                      }}
+                    >
+                      <div style={{ color: HOME_THEME.text, textAlign: "right", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 5 }}>
+                        {auto && <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: ".06em", color: r.m.color, border: `1px solid ${r.m.color}55`, borderRadius: 3, padding: "0 3px" }}>AUTO</span>}
+                        {r.m.label}
+                      </div>
+                      <div style={{ height: 16, background: "rgba(255,255,255,0.05)", borderRadius: 5, position: "relative", overflow: "hidden" }}>
+                        <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${(r.v ?? 0) * 100}%`, background: r.m.color, opacity: on ? 1 : 0.7, borderRadius: 5 }} />
+                        <div style={{ position: "absolute", top: -3, bottom: -3, left: `${(r.b ?? 0) * 100}%`, width: 1.5, background: "rgba(255,255,255,0.45)" }} />
+                      </div>
+                      <div style={{ fontWeight: 800, textAlign: "right", color: r.m.color, fontVariantNumeric: "tabular-nums" }}>{pct0(r.v)}</div>
+                      {/* The gap to the book IS the read. A rate on its baseline
+                          is the cohort saying it changed nothing. */}
+                      <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 11, fontWeight: 700,
+                        color: r.delta == null || Math.abs(r.delta) < 1.5 ? HOME_THEME.text : r.delta > 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                        {r.delta == null ? "—" : `${r.delta > 0 ? "+" : r.delta < 0 ? "−" : "±"}${Math.abs(r.delta).toFixed(0)}`}
+                      </div>
+                    </button>
+                  );
+                })}
                 <div style={{ fontSize: 10.5, color: HOME_THEME.text, textAlign: "right" }}>
-                  bar = this cohort · hairline = the unconditional {sym} book
+                  bar = this cohort · hairline = the unconditional {sym} book · last column = points off that baseline · click a row to pin it
                 </div>
               </div>
             </div>
@@ -962,6 +1051,10 @@ export default function ConditionRailTab() {
         <br />
         The rail only lets you describe a session that could exist: criteria in the same group swap rather than stack, criteria that contradict a pick are
         struck out, and a combination with no session behind it is struck out too.
+        <br />
+        There is nothing to pick on the outcome side: all five are measured on every cohort and all five are on screen. The headline is the one sitting
+        furthest from its rate in the unconditional book — the gap is the read, and an outcome on its baseline is the cohort telling you it changed
+        nothing. Click any row to pin it instead, or <b>AUTO</b> to hand the choice back.
         <br />
         No lookahead: every field was stamped at its own confirm bar. Sample sizes aren&apos;t printed, but they still gate the read — a thin cohort is
         badged THIN, and any rate over 85% is flagged to check for bias rather than treated as an edge.

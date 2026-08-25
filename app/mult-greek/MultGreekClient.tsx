@@ -9,7 +9,7 @@ import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { isCashOpen, isPlausibleBasis } from "@/components/dashboard/es-candles/chartMath";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS, classicCardAccentStyle, DOCK_THEME } from "@/components/shared/homeTheme";
-import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls } from "@/lib/calculations/heatLevels";
+import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls, type WallKind } from "@/lib/calculations/heatLevels";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockSlider, DockExpiryPicker, DockCogMenu, DockField } from "@/components/shared/DockToolbar";
 import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/MultiGreekLevelSnapshot";
@@ -75,13 +75,53 @@ type SkinDef = {
   /** Fixed alphas for ranks 1/2/3 — also what levels-only mode paints CB/CW/PW at. */
   rank: readonly [number, number, number];
   cell: {
-    radius: number; gap: number; padV: number; padH: number;
+    radius: number; gap: number; inset: number; padV: number; padH: number;
     fontSize: number; tracking: string; shadow?: string;
+    /** Where the figure sits in the cell. */
+    align: "center" | "right" | "left";
+    /** Ink for the value. */
+    text: string;
     /** weight by rank: [rank 1, ranks 2-3, unranked] */
     weight: readonly [number, number, number];
   };
+  /**
+   * How the ATM row is marked.
+   *
+   *   "box"  — a 2px white border around the whole row. Cheap when the cells
+   *            are square and flush, which is what CLASSIC is.
+   *   "chip" — an "ATM" chip beside the strike. One mark, on the one column
+   *            that identifies the row anyway. A box has to be drawn either on
+   *            every cell of the row or on the row itself, where it fights the
+   *            cells' own radius and inset — so a skin with rounded, inset
+   *            tiles wants the chip.
+   */
+  atm: "box" | "chip" | "both" | "none";
   /** money = "$1.23M" (2dp) · compact = "1.2M" (1dp) */
   fmt: "money" | "compact";
+  /**
+   * How a CB / CW / PW cell is FILLED.
+   *
+   *   null    — like every other cell: hue = SIGN, alpha = rank. The badge is
+   *             the only thing naming the level. What both skins ship with.
+   *   { … }   — the whole cell takes the LEVEL's colour instead.
+   *             `mode: "level"` replaces the heat fill outright — loudest, and
+   *             the level is unmissable, but the fill stops saying which way the
+   *             gamma points (a Put Wall and a negative-gamma cell become two
+   *             different reds for two different reasons; the ± glyph is then
+   *             the only direction cue). `mode: "blend"` lays the level colour
+   *             OVER the heat, so the sign survives underneath.
+   *             `alpha` is per level — CB usually wants less than CW/PW because
+   *             gold at full strength swamps a row.
+   */
+  levelFill: null | {
+    mode: "level" | "blend";
+    alpha: Record<WallKind, number>;
+  };
+  /** Where the Intensity slider is tuned to sit for this skin, and its ceiling.
+   *  Switching skins moves the slider there — the ramps are different shapes,
+   *  so the same number means a different picture on each and carrying one
+   *  skin's position over to the other lands somewhere nobody chose. */
+  intensity: { def: number; max: number };
 };
 
 const HEAT_SKINS: Record<HeatSkin, SkinDef> = {
@@ -91,22 +131,50 @@ const HEAT_SKINS: Record<HeatSkin, SkinDef> = {
     ramp: { base: 0.02, span: 0.16, max: 0.18, ease: 1.4 },
     rank: [0.90, 0.45, 0.25],
     cell: {
-      radius: 0, gap: 0, padV: 4, padH: 4,
-      fontSize: 9, tracking: "0", weight: [900, 800, 700],
+      radius: 0, gap: 0, inset: 0, padV: 4, padH: 4,
+      // SOFT_WHITE's literal, not the const: HEAT_SKINS is evaluated at module
+      // load, above where SOFT_WHITE is declared, so referencing it here is a
+      // temporal-dead-zone crash on import. Keep the two in step.
+      fontSize: 9, tracking: "0", align: "center", text: "#c3ccda",
+      weight: [900, 800, 700],
     },
+    atm: "box",
     fmt: "money",
+    levelFill: null,
+    intensity: { def: 1.75, max: 3 },
   },
   vivid: {
     label: "VIVID",
     pos: "41,182,246", neg: "255,71,87",
-    ramp: { base: 0.07, span: 0.49, max: 1, ease: 0.85 },
-    rank: [1, 0.81, 0.6],
+    // A LOW ease (0.4) with a modest span is what separates this from a simple
+    // "turn the alpha up": the curve rises steeply out of zero, so the quiet
+    // two-thirds of a column still differentiate instead of all sitting on the
+    // floor, and only the genuinely large strikes approach the cap.
+    ramp: { base: 0.05, span: 0.25, max: 1, ease: 0.4 },
+    rank: [0.95, 0.62, 0.4],
     cell: {
-      radius: 4.5, gap: 2, padV: 2, padH: 14.5,
-      fontSize: 9, tracking: "-0.05em", shadow: "0 1px 2px rgba(0,0,0,0.85)",
-      weight: [900, 400, 300],
+      // inset is a 0.5px margin rather than a grid gap: it separates the tiles
+      // without moving the column tracks, so the header and totals above stay
+      // aligned with the cells whatever this is set to.
+      radius: 3, gap: 0, inset: 0.5, padV: 2, padH: 8,
+      fontSize: 9.5, tracking: "0", shadow: "0 1px 2px rgba(0,0,0,0.85)",
+      // Right-aligned: the figures are the point of the column, and a shared
+      // right edge is what lets you compare magnitudes down it at a glance.
+      // Centred numbers ragged on both sides is CLASSIC's compromise, made when
+      // the padding was 4px and there was nothing to align against.
+      align: "right", text: "#ffffff",
+      // Ranked cells step up only one notch (300 -> 600). At this ramp the FILL
+      // already shouts which strikes are the big ones; a 900 on top of a
+      // near-solid tile was the same thing said twice.
+      weight: [600, 600, 300],
     },
-    fmt: "compact",
+    atm: "chip",
+    fmt: "money",
+    // The level's colour laid OVER the heat: CW and PW at full strength (the
+    // wall IS the colour), CB pulled back to .85 because gold at 1.0 swamps
+    // the row it sits in. The heat underneath still shows through CB.
+    levelFill: { mode: "blend", alpha: { cb: 0.85, cw: 1, pw: 1 } },
+    intensity: { def: 3, max: 4 },
   },
 };
 
@@ -361,6 +429,32 @@ function metricBg(value: number, maxValue: number, topRank: number, intensity: n
   const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), skin.ramp.ease);
   const alpha = Math.min(skin.ramp.max, skin.ramp.base + eased * skin.ramp.span);
   return `rgba(${n >= 0 ? skin.pos : skin.neg},${alpha.toFixed(2)})`;
+}
+
+/**
+ * Fill for a CB / CW / PW cell, when the skin asks for the level's colour
+ * rather than the sign's. Returns null when the skin doesn't (both do today),
+ * and the caller falls through to the ordinary heat.
+ *
+ * "blend" is a two-stop linear-gradient rather than a colour: it is the only
+ * way to composite one translucent layer over another in a single `background`
+ * without knowing what the layer underneath resolved to.
+ */
+function levelFillBg(kind: WallKind, skin: SkinDef, beneath: string): string | null {
+  const lf = skin.levelFill;
+  if (!lf) return null;
+  const a = lf.alpha[kind];
+  const c = hexToRgbTriplet(LEVEL_COLORS[kind]);
+  if (lf.mode === "level") return `rgba(${c},${a})`;
+  const over = `rgba(${c},${a})`;
+  return `linear-gradient(${over},${over}), ${beneath === "transparent" ? "rgba(0,0,0,0)" : beneath}`;
+}
+
+/** "#ffd600" → "255,214,0". The level colours are hex; the fills are rgba(). */
+function hexToRgbTriplet(hex: string): string {
+  const h = hex.replace("#", "");
+  const f = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+  return `${parseInt(f.slice(0, 2), 16)},${parseInt(f.slice(2, 4), 16)},${parseInt(f.slice(4, 6), 16)}`;
 }
 
 /** Heat fill for a cell painted at one of the skin's three fixed rank floors. */
@@ -725,10 +819,18 @@ function fmtDeltaChipFull(d: number): string {
 function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) {
   const text = fmtDeltaChip(d);
   const pos = d > 0;
-  // Uniform plate on every chip — HOME_THEME.panel. Opaque and darker than any
-  // cell metricBg() can produce, so the chip reads identically on a rank-1 wall
-  // (0.90 alpha, near-solid) and on a quiet far strike. Direction is carried by
-  // the number's colour alone; nothing here encodes rank.
+  // WHITE figure on a direction-coloured chip, ringed dark — the same treatment
+  // the CB/CW/PW badges settled on, and for the same reason.
+  //
+  // This used to be a green/red figure on a uniform dark plate, which put a
+  // coloured 8px number inside a cell whose FILL is also coloured by sign: on a
+  // red cell a red chip is two reds meaning two different things, and on a hot
+  // VIVID fill the dark plate was the only dark thing left on the row.
+  //
+  // Direction now lives in the chip, not the ink — a stronger signal at this
+  // size than 8px coloured type ever was — and the dark ring is what keeps a
+  // green chip off a near-solid cyan wall. Nothing here encodes rank.
+  const chip = pos ? "#16a34a" : "#dc2626";
   return (
     <span
       title={`Δ ${fmtDeltaChipFull(d)} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
@@ -738,8 +840,10 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
         fontSize: 8, fontWeight: rank === 1 ? 900 : 800,
         fontFamily: "var(--font-mono)", lineHeight: 1,
         padding: "0 3px", borderRadius: 3, whiteSpace: "nowrap",
-        background: "#0D1119",
-        color: pos ? "#4ade80" : "#f87171",
+        background: chip,
+        color: "#ffffff",
+        boxShadow: "inset 0 0 0 1px rgba(4,8,16,0.55)",
+        textShadow: "none",
         border: "none",
       }}
     >{text}</span>
@@ -1304,9 +1408,12 @@ function TickerPanel({
           const fmt = t != null ? fmtCell(v, SK) : { sign: "", value: "--" };
           return (
             <div key={c.date} title="Column NET GEX total · % of gross GEX that is positive" style={{
-              padding: "4px 4px", fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
+              // Padded and aligned like the cells under it — a centred total
+              // over a right-aligned column is the one figure that doesn't line
+              // up with anything, which is the opposite of what a total is for.
+              padding: `4px ${SK.cell.padH}px`, fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-              textAlign: "center",
+              textAlign: SK.cell.align,
               color: v > 0 ? "#29b6f6" : v < 0 ? "#ff4757" : "#94a3b8",
             }}>
               <span style={{ color: v > 0 ? "#22c55e" : v < 0 ? "#ef4444" : SOFT_WHITE }}>{fmt.sign}</span>{fmt.value}
@@ -1335,9 +1442,10 @@ function TickerPanel({
         ) : computed.rows.map(r => {
           const strikeColor = "#94a3b8";
           const rowBg = "transparent";
-          const atmOutline = r.isATM
+          const atmBoxed = r.isATM && (SK.atm === "box" || SK.atm === "both");
+          const atmOutline = atmBoxed
             ? { border: "2px solid rgba(255,255,255,.55)", position: "relative" as const, zIndex: 1 }
-            : { borderBottom: "1px solid rgba(30,48,80,.35)" };
+            : (SK.cell.gap || SK.cell.inset ? {} : { borderBottom: "1px solid rgba(30,48,80,.35)" });
           const is1x = emStrikes != null && (r.strike === emStrikes.d1 || r.strike === emStrikes.u1);
           const is2x = emStrikes != null && (r.strike === emStrikes.d2 || r.strike === emStrikes.u2);
           // EM is no longer drawn as a row line — the badge sits beside the strike.
@@ -1362,6 +1470,14 @@ function TickerPanel({
                   />
                 )}
                 <span>{Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}</span>
+                {/* ATM chip — the alternative to boxing the row. See SkinDef.atm. */}
+                {r.isATM && (SK.atm === "chip" || SK.atm === "both") && (
+                  <span title="At the money" style={{
+                    flex: "0 0 auto", fontSize: 8, fontWeight: 900, lineHeight: 1.3,
+                    letterSpacing: "0.04em", color: "#04121a", background: "#ffffff",
+                    borderRadius: 3, padding: "0 3px", pointerEvents: "none",
+                  }}>ATM</span>
+                )}
               </div>
               {computed.cols.map((e, ci) => {
                 const val = r.gex[e];
@@ -1412,6 +1528,7 @@ function TickerPanel({
                     }}
                     style={{
                     padding: `${SK.cell.padV}px ${SK.cell.padH}px`,
+                    ...(SK.cell.inset ? { margin: SK.cell.inset } : {}),
                     fontSize: SK.cell.fontSize, fontFamily: "var(--font-mono)",
                     letterSpacing: SK.cell.tracking,
                     borderRadius: SK.cell.radius,
@@ -1420,25 +1537,42 @@ function TickerPanel({
                     // The click card reads LIVE 15m/30m/open baselines, which
                     // say nothing about a rewound clock — so replay cells are
                     // not clickable rather than opening a card about now.
-                    textAlign: "center", color: SOFT_WHITE, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
+                    textAlign: SK.cell.align, color: SK.cell.text, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
                     // Δ mode only switches the cell to a flex row so the chip can
                     // sit beside the value. No minHeight, no padding change, no
                     // width change — the cell box is byte-identical to Δ-off.
-                    ...(dMode ? { display: "flex", alignItems: "center", gap: 3 } : {}),
+                    // In flex, textAlign no longer places the value — justify
+                    // does — so the skin's alignment has to be restated here or
+                    // a right-aligned skin re-centres itself the moment Δ is on.
+                    ...(dMode ? {
+                      display: "flex", alignItems: "center", gap: 3,
+                      justifyContent: SK.cell.align === "right" ? "flex-end"
+                        : SK.cell.align === "left" ? "flex-start" : "center",
+                    } : {}),
                     // Levels-only: no gamma wash at all. A CB/CW/PW cell is
                     // painted at the heat scale's rank floor (CB 1, CW 2, PW 3)
                     // so it still reads cyan for +GEX and red for −GEX; the
                     // badge, not the fill, is what names the level.
-                    background: levelsOnly
-                      ? (lvlShown && lvlKind && val != null ? skinRankBg(val, WALL_RANK[lvlKind], SK) : "transparent")
-                      : (val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity, SK)),
+                    // Heat first, then — only if the skin asks for it — the
+                    // level's own colour laid over or in place of it.
+                    background: (() => {
+                      const heat = levelsOnly
+                        ? (lvlShown && lvlKind && val != null ? skinRankBg(val, WALL_RANK[lvlKind], SK) : "transparent")
+                        : (val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity, SK));
+                      if (!lvlShown || !lvlKind) return heat;
+                      return levelFillBg(lvlKind, SK, heat) ?? heat;
+                    })(),
                     fontWeight: weight,
                     position: "relative",
                     // The rank-1 ring is part of the heat field, so it goes with
                     // it — otherwise "only the levels" still leaves a ring on
                     // every column's top strike.
                     ...(!levelsOnly && topRank === 1 && val != null ? { outline: `1px solid rgba(${val >= 0 ? SK.pos : SK.neg},.9)`, outlineOffset: "-1px", zIndex: 1 } : {}),
-                    ...(lvl ? { outline: `2px solid ${lvl.c}`, outlineOffset: "-2px", zIndex: 2 } : {}),
+                    // NO ring for a level. A 2px CW border on a cyan cell and a
+                    // 2px PW border on a red one are the same colour as the fill
+                    // they sit on — they read as a smudge, not a marker, and on
+                    // a hot skin they close the cell in on itself. The BADGE is
+                    // what names the level; the fill still says sign and size.
                     ...(isSel ? { outline: "2px solid #ffffff", outlineOffset: "-2px", zIndex: 3 } : {}),
                   }}>
                     {/* Non-front columns keep the plain gold peak star — but not
@@ -1450,12 +1584,26 @@ function TickerPanel({
                         color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)", pointerEvents: "none",
                       }}>★</span>
                     )}
+                    {/* Level badge — WHITE text on a dark chip, ringed in the
+                        level's colour.
+                        The two obvious designs both fail on the cell that
+                        matters most. A solid chip IN the level's colour puts
+                        cyan CW on a cyan cell and red PW on a red one, so the
+                        badge vanishes into the fill. Level-coloured INK on a
+                        dark chip fixes the vanishing but leaves three different
+                        low-contrast label colours, and gold-on-black at 8px is
+                        the weakest of them.
+                        White text is the same crisp read on all three; the 1px
+                        ring is what says WHICH level, and it is the part that
+                        can safely be gold. */}
                     {lvl && (
                       <span title={lvl.title} style={{
-                        position: "absolute", top: 0, right: 1, fontSize: 8, fontWeight: 900,
-                        lineHeight: 1.2, letterSpacing: "0.02em",
-                        color: "#04121a", background: lvl.c, borderRadius: 2, padding: "0 2px",
-                        pointerEvents: "none",
+                        position: "absolute", top: 1, right: 2, fontSize: 8, fontWeight: 900,
+                        lineHeight: 1.3, letterSpacing: "0.04em",
+                        color: "#ffffff", background: "rgba(4,8,16,0.92)",
+                        boxShadow: `inset 0 0 0 1px ${lvl.c}`,
+                        borderRadius: 3, padding: "0 3px",
+                        textShadow: "none", pointerEvents: "none",
                       }}>{lvl.t}</span>
                     )}
                     {/* No fixed-width slot: the value is right-aligned by marginLeft
@@ -1469,7 +1617,15 @@ function TickerPanel({
                     {dMode && isFront && dEntry && dEntry.rank <= 5
                       ? <DeltaStamp d={dEntry.d} pct={dEntry.pct} rank={dEntry.rank} />
                       : null}
-                    <span style={dMode ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>
+                    {/* A level badge is absolutely positioned in the top-right,
+                        so the value has to step out of its way — otherwise the
+                        chip lands on the last digit, which is the one that
+                        matters. Only the badged cells pay the 15px; every other
+                        cell in the column keeps its full width for the number. */}
+                    <span style={{
+                      ...(dMode ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : {}),
+                      ...(lvl ? { paddingRight: 17 } : {}),
+                    }}>
                       <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                     </span>
                   </div>
@@ -1872,16 +2028,17 @@ export function MultGreekClient({
     if (typeof window === "undefined") return;
     try {
       const saved = window.localStorage.getItem(HEAT_SKIN_KEY);
-      if (isHeatSkin(saved)) setHeatSkin(saved);
+      if (isHeatSkin(saved)) { setHeatSkin(saved); setIntensity(HEAT_SKINS[saved].intensity.def); }
     } catch { /* ignore */ }
   }, []);
-  // VIVID was tuned at 3.3x, past CLASSIC's 3x stop, so the slider's ceiling
-  // moves with the skin rather than CLASSIC's range being widened for it.
-  // Switching back down clamps, or the slider would sit off its own track.
-  const intensityMax = heatSkin === "vivid" ? 4 : 3;
+  // Each skin brings its own slider range AND its own tuned position — see
+  // SkinDef.intensity. VIVID's ramp is a different curve, not a louder version
+  // of CLASSIC's, so 1.75 on one is not 1.75 on the other and the slider has to
+  // move with the skin rather than carry a number across.
+  const intensityMax = HEAT_SKINS[heatSkin].intensity.max;
   const changeHeatSkin = useCallback((v: HeatSkin) => {
     setHeatSkin(v);
-    if (v !== "vivid") setIntensity(i => Math.min(i, 3));
+    setIntensity(HEAT_SKINS[v].intensity.def);
     try { window.localStorage.setItem(HEAT_SKIN_KEY, v); } catch { /* ignore */ }
   }, []);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>(

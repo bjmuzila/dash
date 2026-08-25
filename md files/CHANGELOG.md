@@ -1,5 +1,202 @@
 # Changelog
 
+## 2026-08-25 - ATM: a chip on the strike instead of a box round the row; VIVID walls fill
+
+Edited: `app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`.
+
+**ATM marker is now a skin choice** - `SkinDef.atm`: `box` | `chip` | `both` | `none`.
+
+The 2px white border has to be drawn either on every cell of the row or on the
+row itself, where it fights the cells' own radius and inset - so on VIVID it cut
+across the rounded tiles and boxed in the gaps between them. The chip is one
+mark, on the one column that identifies the row anyway.
+
+- CLASSIC keeps `box` (square, flush cells - the border costs nothing there).
+- VIVID takes `chip`: a white "ATM" chip beside the strike, same shape language
+  as the EM / 2×EM badges already on that rail.
+
+The row's fallback bottom hairline is also dropped when a skin has a gap or an
+inset - the tiles already separate themselves, and a line under floating tiles
+reads as a stray rule.
+
+**VIVID's walls now fill.** `levelFill: { mode: "blend", alpha: { cb: .85, cw: 1,
+pw: 1 } }` - the level's colour laid over the heat, CW and PW at full strength
+because the wall IS the colour, CB pulled back to .85 so gold doesn't swamp the
+row it sits in (and the heat still shows through it).
+
+Tuner: `atmBox` becomes an "ATM marker" select with a chip-colour picker, the
+chip renders on all three strike rails (ladder, chain left, chain mirrored), and
+the blend defaults match what ships.
+
+## 2026-08-25 - CB / CW / PW can fill the whole cell, not just carry a badge
+
+Edited: `generated/2026-08-25-heatmap-tuner.html`, `app/mult-greek/MultGreekClient.tsx`.
+
+Three ways a level cell can now be painted, and they say different things:
+
+- **heat** - hue = SIGN, alpha = rank, exactly like every other cell; the badge
+  is the only thing naming the level. What both skins still ship with.
+- **level** - the whole cell takes the LEVEL's colour (gold / cyan / red) at its
+  own per-level alpha. Loudest, unmissable - but the fill stops saying which way
+  the gamma points, so a Put Wall and a negative-gamma cell become two different
+  reds for two unrelated reasons. The ± glyph is then the only direction cue.
+- **blend** - the level's colour laid OVER the heat at a low alpha. The sign
+  survives underneath and the level reads as a wash on top.
+
+Alpha is per level, because gold at full strength swamps a row in a way cyan and
+red do not.
+
+**Tuner:** a "Cell fill" select plus three alpha sliders in the CB · CW · PW
+section, with the trade-off spelled out under them.
+
+**App:** `SkinDef.levelFill` - `null` (both skins today, so the live board is
+unchanged) or `{ mode, alpha }`. `levelFillBg()` composites it; "blend" is a
+two-stop `linear-gradient` rather than a colour, which is the only way to lay one
+translucent layer over another in a single `background` without knowing what the
+layer underneath resolved to. The cell's `background` now computes the heat
+first and lets the skin paint over it, so levels-only mode and the ordinary ramp
+both feed the same override.
+
+## 2026-08-25 - Tuner: rank 1/2/3 and CB/CW/PW are fully adjustable; VIVID re-tuned
+
+Edited: `generated/2026-08-25-heatmap-tuner.html`, `app/mult-greek/MultGreekClient.tsx`.
+
+**Tuner - two new sections replace the old "Rank floors" block.**
+
+*Top 3 ranked cells* - the three biggest |GEX| strikes per column, which skip the
+ramp and paint at a fixed alpha. Per-rank fill alpha, per-rank font weight, and
+per-rank outline ring (so #2 and #3 can be marked independently of #1) with its
+own width and a colour that either follows the sign or is pinned. Plus a corner
+glyph per rank - star / #n / dot / none - with its own colour, size and corner.
+
+*CB · CW · PW levels* - per-level show toggle (honoured by the preview exactly
+as the live ladder honours its own), per-level colour, and an editable label for
+each. The badge is fully described rather than hardcoded: ink (white / the
+level's colour / dark), chip fill (dark / the level's colour / none), an
+optional ring in the level colour with its own width, size, weight, radius,
+padding, corner, and how far the figure clears it. The cell ring is separate,
+off by default, with its own width. A live three-up badge preview sits at the
+bottom of the section, each badge on the fill it usually lands on.
+
+The export snippet now emits a whole `HEAT_SKINS` entry rather than a loose
+style block, plus a marker summary.
+
+**VIVID re-tuned to the picked values** and is now the tuner's base preset, so
+what the tuner opens on IS what ships:
+
+- ramp `base .05 / span .25 / max 1 / ease 0.4` - the low ease is the point: the
+  curve rises steeply out of zero so the quiet two-thirds of a column still
+  differentiate instead of flooring, and only genuinely large strikes near the cap.
+- rank floors `0.95 / 0.62 / 0.40`; ranked weight steps 300 -> 600 only, because
+  at this ramp the FILL already shouts which strikes are big.
+- 3px radius, 0.5px inset, `2px 8px` padding, 9.5px, no tracking, white text,
+  `$1.23M` money figures (was compact).
+
+**Each skin now carries its own Intensity position and ceiling.** VIVID's ramp is
+a different curve, not a louder CLASSIC, so 1.75 on one is not 1.75 on the other.
+`SkinDef.intensity` holds `{ def, max }` - CLASSIC `1.75 / 3`, VIVID `3 / 4` - and
+switching skins (or restoring one from `mg_heat_skin`) moves the slider there
+instead of carrying a number across that nobody chose for that curve.
+
+`SkinDef.cell.inset` is a margin, not a grid gap, on purpose: it separates the
+tiles without moving the column tracks, so the header and totals rows stay
+aligned with the cells whatever it is set to.
+
+## 2026-08-25 - Delta stamp: white figure on a direction-coloured chip
+
+Edited: `app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`.
+
+Same fix as the level badges, applied to the OTHER marker in the cell.
+
+`DeltaStamp` was a green/red figure on a uniform dark plate. That puts a
+coloured 8px number inside a cell whose FILL is also coloured by sign - on a red
+cell a red chip is two reds meaning two unrelated things - and on a VIVID fill
+the dark plate was the only dark thing left on the row, so it read as a hole.
+
+The chip is now the direction (`#16a34a` / `#dc2626`) with a WHITE figure and a
+`rgba(4,8,16,.55)` inset ring. Direction moved from the ink to the chip, which
+is a stronger signal at this size than 8px coloured type ever was, and the ring
+is what keeps a green chip legible on a near-solid cyan wall. Rank still encodes
+nothing here - only the font weight changes for #1.
+
+The tuner's Δ chip was updated to match (it was dark ink on a saturated
+green/red fill, which is the least readable pairing of the three tried).
+
+## 2026-08-25 - CB / CW / PW badges: white text, ringed in the level colour
+
+Edited: `app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`.
+
+Third pass on these markers, because the first two both failed on the same cell.
+
+- A solid chip IN the level's colour (the original) put cyan CW on a cyan cell
+  and red PW on a red one - the badge vanished into the fill underneath, and
+  that fill is the one you most want the label on.
+- Level-coloured INK on a dark chip (yesterday's fix) stopped the vanishing but
+  left three different low-contrast label colours, and gold-on-black at 8px was
+  the weakest of the three.
+
+**Now: white text on a dark chip, with a 1px inset ring in the level's colour.**
+White is the same crisp read on all three badges and over any fill either skin
+can produce; the ring is what says WHICH level, and the ring is the part that
+can safely be gold. Nudged off the corner (`top 1 / right 2`, 3px radius, 0 3px
+padding, `.04em` tracking) so it stops being clipped by the cell's rounded edge,
+and the badged cell's figure clears 17px instead of 15.
+
+The tuner's badge was updated to match, so what it previews is what ships.
+
+## 2026-08-25 - VIVID skin: right-aligned figures, and the tuner made honest
+
+Edited: `app/mult-greek/MultGreekClient.tsx`, `generated/2026-08-25-heatmap-tuner.html`.
+
+**The skin now owns alignment and ink.** VIVID was shipping centred because
+`textAlign: "center"` was still hardcoded on the cell - so the one thing the
+14.5px padding was FOR (a shared right edge to compare magnitudes down) never
+happened. `SkinDef.cell` gains `align` and `text`:
+
+- CLASSIC - `center`, `#c3ccda` (unchanged).
+- VIVID - `right`, `#e8edf5`, as picked.
+
+Three places had to follow or the alignment would have been half-applied:
+the cell's `textAlign`; the cell's `justifyContent` when Δ stamps switch it to
+flex (where `textAlign` no longer places anything, so a right-aligned skin
+re-centred itself the moment Δ came on); and the column TOTAL row, which now
+takes the skin's padding and alignment so the total sits over the column it
+totals instead of floating in the middle of it.
+
+`HEAT_SKINS.classic.text` is the `#c3ccda` LITERAL, not `SOFT_WHITE`: the table
+is evaluated at module load, above where that const is declared, so referencing
+it there is a temporal-dead-zone crash on import.
+
+**The tuner was lying about the baseline.** Its "Current app" preset was the
+OPTION CHAIN cell (2x8 padding, right, 10px), never the ladder's - which is why
+the shipped ladder looked nothing like what came out of it. It now carries the
+two skins that actually ship, `Ladder · VIVID (live)` and `Ladder · CLASSIC`,
+transcribed from `HEAT_SKINS`, and opens on VIVID; the old baseline is still
+there, renamed `Chain default`. Its markers were brought in line too: the level
+ring is off by default behind a new `wallRing` toggle, the badge is level-colour
+ink on a dark chip, and a badged cell clears its figure out from under it.
+
+## 2026-08-25 - Multi Greek: CB / CW / PW lose the ring, keep the label
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+The level markers were a 2px outline in the level's colour PLUS a solid chip in
+that same colour. Both failed on the cell they matter most on: a CW border is
+cyan on a cyan (+GEX) cell and a PW border is red on a red one, so the ring read
+as a smudge rather than a marker, and the chip - dark ink on a solid CW/PW fill -
+disappeared into the cell behind it. On the VIVID skin, where the fill is near
+opaque, they closed the cell in on itself.
+
+- **The ring is gone.** No outline for CB / CW / PW. The badge names the level;
+  the fill still says sign and size. The ATM box, the click-selection ring and
+  the rank-1 hairline are untouched.
+- **The badge is the level's colour as INK on a dark chip**, not a solid chip in
+  the level's colour - legible on any fill either skin can produce. CB stays
+  gold (`LEVEL_COLORS.cb`), CW cyan, PW red.
+- **The value steps out of the badge's way.** A badged cell pads its figure 15px
+  on the right so the chip stops landing on the last digit. Only badged cells
+  pay it; every other cell keeps its full width for the number.
+
 ## 2026-08-25 - Multi Greek: CLASSIC / VIVID heat skin toggle in the cog
 
 Edited: `app/mult-greek/MultGreekClient.tsx`.
