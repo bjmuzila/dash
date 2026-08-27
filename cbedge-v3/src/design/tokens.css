@@ -12,9 +12,10 @@
    outside this file. That is not a style preference — it is what stops v3
    drifting into v2, where every page invented its own palette.
 
-   VALUES BELOW ARE PLACEHOLDERS. They are a neutral dark scale chosen to be
-   obviously provisional. Replace them as you design; nothing downstream
-   hardcodes any of it.
+   Surfaces (2026-08-27) are the settled dark-slate palette. Text, semantic and
+   data-series values below are still placeholders — obviously provisional
+   until those get designed. Nothing downstream hardcodes any of it either
+   way, so replacing a value here is always a one-line change.
 
    ⚠ --color-bg and --color-fg are duplicated in index.html's inline <style>
    so the first paint is correct before this file loads. Change one, change
@@ -25,13 +26,24 @@
 
 @theme {
   /* ── Surfaces ──────────────────────────────────────────────────────────
-     bg      page background
-     surface cards, panels
-     raised  hovered / elevated surface
-     line    borders and dividers                                          */
-  --color-bg: #0a0b0d;
-  --color-surface: #121417;
-  --color-raised: #1a1d22;
+     Dark-slate ramp (2026-08-27), from the reference mockup
+     (20260818darkslatecardtheme.html): app → rail → shell → card → card-2
+     → card-hi, darkest to lightest.
+
+     bg       dashboard canvas — page background AND the top toolbar's band
+     rail     left icon rail — darker than bg, its own column
+     app      outermost tone, for a future floating-shell wrapper (unused
+              today — v3 is full-bleed, no outer app frame yet)
+     surface  cards, panels ("card")
+     surface2 nested rows / table headers ("card-2")
+     raised   hovered / elevated surface ("card-hi")
+     line     borders and dividers                                         */
+  --color-app: #020304;
+  --color-rail: #040507;
+  --color-bg: #07080b;
+  --color-surface: #0f1117;
+  --color-surface2: #14171d;
+  --color-raised: #191b22;
   --color-line: #23272e;
 
   /* ── Text ─────────────────────────────────────────────────────────────
