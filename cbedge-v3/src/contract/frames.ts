@@ -9,6 +9,7 @@
 //   - envelope + spot:  server-v2/websocket-server.js (msg(), the 'spot' push)
 //   - gex:              server-v2/websocket-server.js (the 'gex' push) +
 //                        server-v2/computation/gex-calculator.js (computeGexRows)
+//   - aux:              server-v2/websocket-server.js (the 'aux' push)
 //   - flow:             server-v2/websocket-server.js (the 'flow' push) +
 //                        server-v2/computation/flow-processor.js (FlowAggregator)
 //
@@ -29,6 +30,14 @@ export interface BaseFrame {
 export interface SpotData {
   spot: number
   prevClose: number
+  /**
+   * ⚠ esFut − spot, and NOT a usable ES/SPX basis. server-v2/es-spx-basis.js
+   * documents why: the broker's "SPX" quote really tracks ES, so this value
+   * collapses toward zero and then freezes on the expired contract across a
+   * quarterly roll. Anything converting SPX strikes to ES prices must use
+   * /proxy/es-spx-basis instead. Kept in the contract because it is on the
+   * wire, not because anything should read it.
+   */
   basis: number
 }
 export interface SpotFrame extends BaseFrame {
@@ -43,10 +52,15 @@ export interface SpotFrame extends BaseFrame {
 export interface GexRow {
   strike: number
   netGEX: number
+  netVolGEX: number
   callGEX: number
   putGEX: number
   callOI: number
   putOI: number
+  callVolume: number
+  putVolume: number
+  callGamma: number
+  putGamma: number
   dte: number
   [k: string]: unknown
 }
@@ -57,11 +71,27 @@ export interface GexData {
   gexFlip: number | null
   totalNetGex: number
   totals: unknown
+  expiry?: string
   updatedAt?: number
 }
 export interface GexFrame extends BaseFrame {
   type: 'gex'
   data: GexData
+}
+
+// ── aux ──────────────────────────────────────────────────────────────────────
+// The slow scalars that ride alongside spot. Same `basis` caveat as above.
+export interface AuxData {
+  vix: number
+  esFut: number
+  basis: number
+  vixPrevClose: number
+  esFutPrevClose: number
+  spotDisplay: number
+}
+export interface AuxFrame extends BaseFrame {
+  type: 'aux'
+  data: AuxData
 }
 
 // ── flow ─────────────────────────────────────────────────────────────────────
@@ -98,10 +128,6 @@ export interface FlowFrame extends BaseFrame {
 }
 
 // ── low-value scalar frames — shape not needed by any panel yet ─────────────
-export interface AuxFrame extends BaseFrame {
-  type: 'aux'
-  [k: string]: unknown
-}
 export interface StatusFrame extends BaseFrame {
   type: 'status'
   [k: string]: unknown

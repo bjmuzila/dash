@@ -1,5 +1,114 @@
 # Changelog
 
+## 2026-08-27 - v3 terminal: ES Candles rebuilt with GEX bubbles, Multi Greek, the six Key Levels tiles, the home Economic Calendar
+
+New: `cbedge-v3/src/board/esCandles/{symbols,settings,candles,gexHistory,bubbles,chart,controls,EsCandlesCard}`,
+`cbedge-v3/src/board/multiGreek/{mgMath,MultiGreekCard}`,
+`cbedge-v3/src/board/keyLevels/{levelsMath,KeyLevelsCard}`,
+`cbedge-v3/src/board/econCalendar/EconCalendarCard`.
+Edited: `cbedge-v3/src/board/catalog.tsx`, `cbedge-v3/src/contract/frames.ts`,
+`cbedge-v3/src/design/tokens.css`.
+Superseded: `cbedge-v3/src/board/lwChart.ts` (no longer imported; safe to delete).
+
+**The bubbles were drawing at SPX strike prices on an ES price axis.** That is
+why they never appeared: ES and SPX sit forty to sixty points apart, so
+`priceToCoordinate(strike)` put every mark clean off the bottom of the pane. The
+field names were never the problem - `strike` and `netGEX` were correct all
+along, confirmed against `computeGexRows` in
+`server-v2/computation/gex-calculator.js`, so the CSV readout was not needed.
+Every strike now converts as `ES price = SPX strike + basis`.
+
+The basis comes from `/proxy/es-spx-basis` and NOT off the socket. The
+`spot`/`aux` frames carry a `basis` field, but `server-v2/es-spx-basis.js`
+documents it as poisoned: the broker's "SPX" quote really tracks ES, so
+`esFut - spot` collapses toward zero and then freezes on the expired contract
+across a quarterly roll. v2's own EsChartCard demotes that value to a
+fourth-choice last resort. A missing basis now draws NO bubbles and says so -
+falling back to zero would bend every level by a whole basis silently, which is
+worse than a visibly absent overlay.
+
+**ES Candles is a real rebuild of the v2 chart, scoped to bubbles.** Same candle
+colours (`ES_CANDLE_UP`/`ES_CANDLE_DOWN` carried over verbatim, now the
+`--color-candle-up`/`--color-candle-down` tokens); RTH/ETH as a pure client-side
+row filter on 09:30-16:00 ET, exactly as v2 does it, because the scale is
+index-based and the overnight gap closes by itself; 1m/5m/15m/30m/1h with the
+roll-up anchored to 09:30 rather than the hour, so the cash open is always a bar
+boundary; the searchable watchlist dropdown with the curated fifteen, the server
+roster fetched lazily on first open, freeform tickers, and stars sharing v2's
+`es-candles-fav-symbols-v1` key so nobody loses their favourites; the full
+bubble panel (levels / size / top / intensity, Bar/1m/5m bucket, Vol+OI vs Vol
+basis); the forming-bar countdown top-right, written straight to the DOM on a
+1s interval rather than through React state; and the jump-to-current-candle
+button bottom-right, which appears only once the newest bar is more than 1.5
+bars off screen and keeps your zoom.
+
+Bubble geometry is v2's, including the part that matters most: **radius is a
+function of |net GEX| only.** Being the session's biggest wall changes a
+bubble's colour and gives it a glow, never its size - two strikes with the same
+gamma draw the same mark whether or not one of them ranks first. Strikes are
+ranked by their peak |GEX| SO FAR, so a level that mattered at 10:00 keeps its
+trail through the afternoon instead of vanishing the moment something outgrows
+it. The magnitude reference is the running session peak with a floor at 30% of
+the whole session's peak, without which the first column of the day is by
+definition the maximum and every bubble in it draws full size.
+
+Deliberately not carried over: the gamma heatmap, replay, EMA/Bollinger/RSI/
+volume, the profile and TPO overlays, the multi-chart dock and the screenshot
+pipeline. v2's `EsChartCard.tsx` is ~376KB of source against an 80kb brotli
+route ceiling in `budgets.json`; "only GEX bubbles" is what makes those two
+facts compatible.
+
+**Multi Chart is gone; Multi Greek took its slot.** Four ticker panels - SPX,
+SPY, QQQ and an editable fourth (IWM by default) - each a strike ladder read
+down with one column per upcoming expiry read across. The column count is one
+setting for the whole board, not one per panel, because four panels on
+different counts stop lining up and a board that does not line up cannot answer
+the question it exists to answer. It counts columns on screen, not expiries: at
+four, the last real expiry column is replaced by the synthetic ex-0DTE TOTAL
+(the expiry still feeds the sum), so 4 = three expiries plus a total and 3 =
+three expiries with no total. OI+VOL / VOL / OI basis, the heat wash with fixed
+alpha steps for the top three in a column, CB/CW/PW badges on the front expiry
+with the Core Bullseye excluded before the walls are picked, a totals row with
+the positive share, and auto-centring on the money. Not carried over: replay,
+the delta stamps, the cell click-through book, the chain overlay, capture and
+the second heat skin.
+
+**Key Levels is now the six premarket tiles** - Call Wall, 0DTE Magnet, Spot,
+Max Pain, Gamma Flip, Put Wall - in that order, with the same anatomy (label +
+chip, big number, ES sub-line, distance + pill, migration line) and the same
+arithmetic, transcribed into `levelsMath.ts` so the two surfaces cannot quietly
+disagree about what a level is. Max pain and the magnet are computed here
+because the server publishes neither. Max Pain carries no migration line on
+purpose: the baseline stores net GEX per strike, not per-side open interest, so
+a prior-close max pain cannot be derived and "unchanged" would be a claim rather
+than the gap it is. The put wall's `deepening` maps to the DOWN direction, not
+up - a put wall's gamma is negative, and getting that backwards paints the
+support tile green on the day support falls away.
+
+**Economic Calendar is the home-page panel** - the rolling seven-day ET window,
+day separators with the TODAY chip, impact colours as tokens, actual/forecast/
+previous, earnings woven into their day (pre-market first, after-hours before
+the first event past 16:00, time-unconfirmed last), and the dimmed tail of
+events more than thirty minutes past. A 60-second tick moves rows from ahead to
+past without touching the network; the calendar itself is a weekly file and is
+not polled.
+
+**Card code is now `lazy()`.** ES Candles, Multi Greek, Key Levels and the
+Economic Calendar are each a real module tree - ES Candles alone pulls
+lightweight-charts - and static imports would put all four in the board's route
+chunk so every user paid for the three cards not on their board.
+
+Colour tokens added rather than literals written: candle up/down, the four GEX
+bubble hues, the CB/CW/PW level palette, and the calendar's impact ramp. The
+"no hex outside tokens.css" rule holds, including inside the canvas code, which
+reads the tokens through `getComputedStyle` at mount and converts to rgba only
+where a per-mark alpha is needed.
+
+Not yet run: `npm run check`. Budgets are hard limits and four new cards is a
+real amount of code - if the route chunk is over, that is a deliberate
+`budgets.json` bump in its own diff, per the rule, not a workaround.
+
+
 ## 2026-08-27 - Multi Greek: pick how many expiry columns the board shows
 
 Edited: `app/mult-greek/MultGreekClient.tsx`.

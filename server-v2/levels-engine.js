@@ -12,8 +12,12 @@
  * Used by levels-auto-publish.js to compute weekly levels with no browser.
  */
 
-// Publish roster lives in em-tickers.js (edit the list there, not here).
-const { SYMBOLS, ZONE_SYMBOLS } = require('./em-tickers');
+// Publish roster lives in em-tickers.js (edit the list there, not here) — or,
+// live, on the owner Watchlists page's EM list. getActiveSymbols() resolves the
+// second over the first; SYMBOLS stays imported as the fallback and for the
+// display-label mapping. em-tickers' own header says to prefer the async form
+// anywhere an await is possible, and until 2026-08-27 this file did not.
+const { SYMBOLS, ZONE_SYMBOLS, getActiveSymbols } = require('./em-tickers');
 
 const DISPLAY_LABEL = { ESM: 'ESU', NQM: 'NQU', ESU6: 'ESU', NQM6: 'NQU' };
 // Roster ticker -> QUOTE-feed symbol. 'BRK.B' quotes as BRK-B on Yahoo (the dot
@@ -37,9 +41,27 @@ function zoneSymbol(ticker) {
 // NOTE: zoneSymbol()'s '/ESU6{=w}' resolves to Yahoo's CONTINUOUS "ES=F" series
 // (see historyYahooSymbol in proxy-tastytrade.js) — it is NOT the ESU6 contract.
 // It survives only for the long-history EM backfill map, never for zones.
-const QUOTE_SYMBOLS = Array.from(new Set([
-  ...SYMBOLS, ...Object.values(API_SYMBOL), '/ESU26', '/NQU26', 'VIX',
-]));
+/**
+ * Quote roster for one run: the publish roster plus the alias/futures symbols
+ * price resolution needs.
+ *
+ * A FUNCTION, not a module const. It was
+ * `const QUOTE_SYMBOLS = [...SYMBOLS, ...]`, evaluated at require time off
+ * em-tickers' static export — precisely what that file's own header warns
+ * against ("SYMBOLS is frozen at require time and will not see an edit"). A
+ * ticker added on the owner Watchlists page therefore never had a quote fetched
+ * for it, so it failed the EM calc and sat in failedEm forever, for a reason
+ * nothing on screen could explain.
+ *
+ * Falls back to SYMBOLS when handed nothing, so the entry points that do not
+ * resolve a roster (the historical evaluators) behave exactly as before.
+ */
+function quoteSymbolsFor(roster) {
+  return Array.from(new Set([
+    ...(roster && roster.length ? roster : SYMBOLS),
+    ...Object.values(API_SYMBOL), '/ESU26', '/NQU26', 'VIX',
+  ]));
+}
 
 // Headline ETFs that MUST price every run — the customer /em page and the
 // multi-greek / home EM bands read these. They sit contiguously in the roster,
@@ -257,7 +279,12 @@ function ifetch(url, opts = {}) {
 }
 
 function makeEngine(base) {
-  return { base, quoteCache: {}, quoteCacheTime: 0, directChainCache: {}, emClosesCache: null };
+  // `roster` is the run's resolved publish roster, set by computeAllLevels once
+  // it has awaited getActiveSymbols(). Null on the entry points that never
+  // resolve one (evaluateCompletedWeek, evaluateHistoricalWeeks), where
+  // quoteSymbolsFor falls back to the static list — those read history rather
+  // than publishing, so a roster edit does not apply to them.
+  return { base, roster: null, quoteCache: {}, quoteCacheTime: 0, directChainCache: {}, emClosesCache: null };
 }
 
 async function getJson(url) {
@@ -285,6 +312,7 @@ async function fetchAllQuotes(engine) {
   // query-string length limit. 40 symbols/request keeps the URL well under ~2KB.
   const CHUNK = 40;
   const map = {};
+  const QUOTE_SYMBOLS = quoteSymbolsFor(engine.roster);
   for (let i = 0; i < QUOTE_SYMBOLS.length; i += CHUNK) {
     const part = QUOTE_SYMBOLS.slice(i, i + CHUNK);
     try {
@@ -811,13 +839,18 @@ async function fetchNoShortNoLongZones(engine) {
  */
 async function computeAllLevels(base, opts = {}) {
   const engine = makeEngine(base);
+  // The LIVE publish roster — em-tickers' file list with the owner Watchlists
+  // page's EM overrides applied. Resolved once per run and stashed on the engine
+  // so fetchAllQuotes sweeps quotes for exactly the names this run will publish.
+  const full = await getActiveSymbols();
+  engine.roster = full;
   // Subset roster for retries. opts.only may contain raw symbols OR display
-  // labels (ESU/NQU). Keep a SYMBOLS row if its raw name OR its display label is
-  // in the wanted set — so a retry of "ESU" still maps to the raw ESM/ESU6 row.
-  let roster = SYMBOLS;
+  // labels (ESU/NQU). Keep a row if its raw name OR its display label is in the
+  // wanted set — so a retry of "ESU" still maps to the raw ESM/ESU6 row.
+  let roster = full;
   if (Array.isArray(opts.only) && opts.only.length) {
     const wanted = new Set(opts.only.map((s) => String(s || '').trim().toUpperCase()).filter(Boolean));
-    roster = SYMBOLS.filter((s) => wanted.has(s) || wanted.has(DISPLAY_LABEL[s] || s));
+    roster = full.filter((s) => wanted.has(s) || wanted.has(DISPLAY_LABEL[s] || s));
   }
   const failReasons = {}; // displayTicker -> reason
 

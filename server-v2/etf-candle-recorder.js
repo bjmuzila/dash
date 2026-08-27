@@ -50,7 +50,7 @@
 // /api/snapshots/etf-candles' live fallback); a recorder sweeping a roster wants
 // one connection, not one per name.
 const { fetchIntradayCandlesMulti } = require('./candle-history');
-const { CORE_TICKERS } = require('./far-cb-tickers');
+const { CORE_TICKERS, getActiveRoster } = require('./far-cb-tickers');
 
 const INTERVAL_MS = Number(process.env.ETF_CANDLE_RECORDER_INTERVAL_MS || 60_000);
 // ── HOT lane ─────────────────────────────────────────────────────────────────
@@ -81,19 +81,23 @@ const DEFAULT_CANDLE_SYMBOLS = [
 const SYMBOLS = String(process.env.ETF_CANDLE_SYMBOLS || DEFAULT_CANDLE_SYMBOLS.join(','))
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 
-// ── WIDE roster ──────────────────────────────────────────────────────────────
-// The far-CB core roster (far-cb-tickers.js CORE_TICKERS) minus whatever the hot
-// list already covers — 93 names as of today. Same cadence as the hot list;
-// this is a separate constant only so it can be overridden or switched off on
-// its own.
+// ── WIDE roster — LIVE, resolved per tick (2026-08-27) ──────────────────────
+// far-CB's ACTIVE roster: the owner Watchlists page's Scanner list (itself
+// falling back to scanner-tickers.js) ∪ customer-added far_cb_custom_tickers,
+// minus whatever the hot list already covers.
 //
-// CORE_TICKERS and not getActiveRoster(): the static array needs no Postgres
-// round trip at module load, and the active roster is the scanner universe plus
-// every customer-added ticker, which would let one person's watchlist edit add
-// permanent per-minute upstream load here. Same reasoning as the picker's own
-// lookup route. Override with ETF_CANDLE_WIDE_SYMBOLS; disable with
-// ETF_CANDLE_WIDE=0.
-const WIDE_SYMBOLS = (process.env.ETF_CANDLE_WIDE_SYMBOLS
+// It was CORE_TICKERS — the frozen file array — with a note about not letting a
+// watchlist edit add upstream load. That was the wrong trade: it made the
+// Watchlists page a half-truth, where a name added there showed up in the
+// scanners immediately and never got candles, with nothing on screen saying why.
+// The load worry is answered by WIDE_MAX below, not by ignoring the page.
+//
+// Cheaper here than in the GEX recorder, too: every symbol rides the SAME
+// dxLink subscription, so twenty more names is a longer subscribe list, not
+// twenty more connections.
+//
+// Override with ETF_CANDLE_WIDE_SYMBOLS; disable with ETF_CANDLE_WIDE=0.
+const WIDE_FALLBACK = (process.env.ETF_CANDLE_WIDE_SYMBOLS
   ? String(process.env.ETF_CANDLE_WIDE_SYMBOLS).split(',')
   : (Array.isArray(CORE_TICKERS) ? CORE_TICKERS : []))
   .map((s) => String(s).trim().toUpperCase())
@@ -101,10 +105,61 @@ const WIDE_SYMBOLS = (process.env.ETF_CANDLE_WIDE_SYMBOLS
   .filter((s, i, a) => a.indexOf(s) === i)
   .filter((s) => !SYMBOLS.includes(s));
 
-/** Everything recorded this tick — hot first, so the log reads in priority order. */
-function activeRoster() {
-  return process.env.ETF_CANDLE_WIDE === '0' ? SYMBOLS.slice() : [...SYMBOLS, ...WIDE_SYMBOLS];
+// Ceiling on the wide roster, whatever the page says. Past it the list is
+// TRUNCATED in place (stable order, so existing names keep their series rather
+// than the tail flapping in and out) and the recorder says so. A watchlist edit
+// can leave a name uncovered; it cannot silently double the recorder's work.
+const WIDE_MAX = Math.max(1, Math.min(600, Number(process.env.ETF_CANDLE_WIDE_MAX || 200)));
+let lastTruncatedAt = 0;
+
+/**
+ * Everything recorded this tick — hot first, so the log and the subscription
+ * both read in priority order.
+ *
+ * Async now, because the roster is live. roster-store caches for 15s and the
+ * far-CB layer sits on it, so on almost every tick this is a memory read.
+ */
+async function activeRoster() {
+  if (process.env.ETF_CANDLE_WIDE === '0') return SYMBOLS.slice();
+  let wide;
+  if (process.env.ETF_CANDLE_WIDE_SYMBOLS) {
+    wide = WIDE_FALLBACK;
+  } else {
+    try {
+      const live = [...new Set((await getActiveRoster()).map((s) => String(s).trim().toUpperCase()).filter(Boolean))];
+      wide = live.length ? live.filter((s) => !SYMBOLS.includes(s)) : WIDE_FALLBACK;
+    } catch (e) {
+      console.warn('[etf-candle] far-CB roster unavailable, using the file baseline:', e.message);
+      wide = WIDE_FALLBACK;
+    }
+  }
+  if (wide.length > WIDE_MAX) {
+    // On CHANGE only — this runs every tick, and a warning that repeats 960
+    // times a session is a warning nobody reads.
+    if (lastTruncatedAt !== wide.length) {
+      lastTruncatedAt = wide.length;
+      console.warn(
+        `[etf-candle] wide roster is ${wide.length} symbols, over the ${WIDE_MAX} cap — ` +
+        `recording the first ${WIDE_MAX}, SKIPPING ${wide.slice(WIDE_MAX).join(',')}. ` +
+        'Raise ETF_CANDLE_WIDE_MAX if the feed can take it.',
+      );
+    }
+    wide = wide.slice(0, WIDE_MAX);
+  }
+  return [...SYMBOLS, ...wide];
 }
+
+/**
+ * Symbols whose PRIOR sessions are already in the table.
+ *
+ * Seeded by the boot backfill and added to as the round goes on, so a name
+ * added on the Watchlists page at 10:15 gets its five sessions on its first
+ * tick rather than starting life with a stub of today. Without it that name
+ * would take the table branch in /api/snapshots/etf-candles — which only falls
+ * through to the live pull when the table is EMPTY — and the chart would show
+ * one partial session with no indication anything was missing.
+ */
+const historied = new Set();
 
 // Settle window and hard cap for the per-minute multi-symbol pull.
 //
@@ -282,6 +337,27 @@ async function upsertBars(p, symbol, candles) {
   return written;
 }
 
+/**
+ * Log the roster ONLY when it changes.
+ *
+ * The roster is live now, so "what is this recorder covering" is not answerable
+ * from the boot line — it can change at 10:15 because someone edited a page.
+ * On change it becomes an audit trail of watchlist edits, which is what you
+ * want when a ticker's series starts or stops.
+ */
+let lastRosterKey = '';
+function announceRoster(roster) {
+  const key = roster.join(',');
+  if (key === lastRosterKey) return;
+  const first = !lastRosterKey;
+  lastRosterKey = key;
+  console.log(
+    `[etf-candle] roster ${first ? 'resolved' : 'CHANGED'} — ${roster.length} symbols ` +
+    `(${SYMBOLS.length} hot + ${roster.length - SYMBOLS.length} far-CB)` +
+    (first ? '' : ' (owner Watchlists edit picked up)'),
+  );
+}
+
 // Overrun guard. setInterval does not care whether the last run finished —
 // without this, a slow feed turns into overlapping ticks that stack another
 // full-roster subscription onto a socket layer that is already struggling.
@@ -298,12 +374,26 @@ async function tick() {
   if (!p || !(await ensureSchema())) return;
   if (!isMarketNowET()) return; // outside 04:00–20:00 ET there is nothing to record
 
-  const roster = activeRoster();
+  const roster = await activeRoster();
   if (!roster.length) return;
+  announceRoster(roster);
 
   ticking = true;
   const t0 = Date.now();
   try {
+    // Names the Watchlists page added since boot. They need HISTORY, not just
+    // today, or the chart opens on a stub — see `historied`. Done first and on
+    // its own so the per-minute pull below stays one predictable-size request.
+    const fresh = BACKFILL_DAYS > 0 ? roster.filter((s) => !historied.has(s)) : [];
+    if (fresh.length) {
+      console.log(`[etf-candle] ${fresh.length} new symbol(s) on the roster — backfilling ${BACKFILL_DAYS}d: ${fresh.join(',')}`);
+      // Marked before the await, not after: a failed backfill must not put the
+      // symbol back in the queue on every tick for the rest of the session. It
+      // still records today from the normal pull, and the next restart retries.
+      fresh.forEach((s) => historied.add(s));
+      await backfill(BACKFILL_DAYS, fresh).catch((e) => console.warn('[etf-candle] new-symbol backfill failed:', e.message));
+    }
+
     // ONE connection, the whole roster, today's bars from ET midnight.
     //
     // Every symbol every minute — which is what the GEX bubble trail needs, since
@@ -366,9 +456,16 @@ async function tick() {
  * silently lose the four prior sessions the fallback had been giving it. The
  * backfill is what keeps the table out of that half-filled state.
  */
-async function backfill(days = BACKFILL_DAYS, symbols = activeRoster()) {
+async function backfill(days = BACKFILL_DAYS, symbolsArg = null) {
   const p = getPool();
   if (!p || !(await ensureSchema())) return [];
+  // Resolved INSIDE, not as a default parameter: activeRoster() is async now,
+  // and a default of `activeRoster()` would bind the Promise itself and iterate
+  // it as if it were an array — silently backfilling nothing.
+  const symbols = symbolsArg || await activeRoster();
+  // Whatever this run covers is history the table now has, so the per-tick
+  // new-symbol check must not queue it again.
+  symbols.forEach((s) => historied.add(s));
   const from = Date.now() - Math.max(1, days) * 24 * 60 * 60 * 1000;
   const out = [];
   for (let i = 0; i < symbols.length; i += BACKFILL_CHUNK) {
@@ -437,11 +534,15 @@ function startEtfCandleRecorder() {
   setTimeout(() => {
     tick().catch((e) => console.warn('[etf-candle] initial tick error:', e.message));
   }, 20_000);
-  const roster = activeRoster();
+  // No symbol COUNT here — it isn't known yet, and quoting a require-time list
+  // would be the one thing this change exists to stop: a number that looks
+  // authoritative and goes stale the moment someone edits the Watchlists page.
+  // announceRoster() prints the real one on the first tick and on every change.
   console.log(
-    `[etf-candle] recorder started — ${roster.length} symbols ` +
-    `(${SYMBOLS.length} hot + ${roster.length - SYMBOLS.length} far-CB) 1m EVERY ${INTERVAL_MS / 1000}s ` +
-    `on one dxLink connection (04:00-20:00 ET)` +
+    `[etf-candle] recorder started — 1m EVERY ${INTERVAL_MS / 1000}s on one dxLink connection ` +
+    `(04:00-20:00 ET), roster resolved per tick from the owner Watchlists page ` +
+    `(${SYMBOLS.length} hot` +
+    (process.env.ETF_CANDLE_WIDE === '0' ? ', wide lane off)' : ` + far-CB, cap ${WIDE_MAX})`) +
     (BACKFILL_DAYS > 0 ? `, ${BACKFILL_DAYS}d backfill on boot in chunks of ${BACKFILL_CHUNK}` : ''),
   );
 }
@@ -557,7 +658,8 @@ async function getEtfCandleHistory(symbol, daysBack = 5, interval = 5, limit = 5
 module.exports = {
   startEtfCandleRecorder, getEtfCandles, getEtfCandleHistory,
   backfill, ensureSchema, getPool,
-  // Exported so a health check / owner page can ask what is actually being
-  // recorded without re-deriving the two rosters from the env vars.
-  SYMBOLS, WIDE_SYMBOLS, tick,
+  // activeRoster is ASYNC now, because the roster is live. A health check asking
+  // "what is this actually recording" gets the same answer the next tick will
+  // use, rather than a frozen require-time list.
+  SYMBOLS, activeRoster, tick,
 };

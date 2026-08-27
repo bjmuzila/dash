@@ -59,6 +59,10 @@ function writePublishedWeek(wk) {
   } catch (e) { console.log('[levels-pub] could not persist week key:', e.message); }
 }
 const { computeAllLevels, seedUpcomingWeek, SYMBOLS } = require('./levels-engine');
+// The LIVE publish roster — em-tickers' file list with the owner Watchlists
+// page's EM overrides applied. SYMBOLS above stays as the fallback; see the
+// `expectedAll` line for why the frozen one was the wrong thing to diff against.
+const { getActiveSymbols } = require('./em-tickers');
 const { DISPLAY_LABEL } = (() => {
   // SYMBOLS are raw (ESM/NQM); the published rows use display labels (ESU/NQU).
   // Mirror the engine's mapping so the "missing EM" diff compares like-for-like.
@@ -142,7 +146,16 @@ async function publishOnce(base, reason, opts = {}) {
   const only = Array.isArray(opts.only) && opts.only.length ? opts.only : null;
   console.log(`[levels-pub] publishing (${reason})${only ? ` — retry ${only.length} not-found` : ''}…`);
   // Expected display tickers (so the "missing EM" diff matches the published rows).
-  const expectedAll = SYMBOLS.map((s) => DISPLAY_LABEL[s] || s);
+  //
+  // The LIVE roster, not the frozen `SYMBOLS`. computeAllLevels now publishes
+  // whatever the owner Watchlists page says, so diffing the result against the
+  // file list made the two disagree in both directions: a name added on the page
+  // published successfully and was never counted, and a name REMOVED there was
+  // reported as a permanent failure in `failedEm` that no retry could ever fix,
+  // because nothing was trying to price it any more.
+  let rosterSymbols = SYMBOLS;
+  try { rosterSymbols = await getActiveSymbols(); } catch { /* fall back to the file list */ }
+  const expectedAll = rosterSymbols.map((s) => DISPLAY_LABEL[s] || s);
   const emTotal = expectedAll.length;
   // The scope we're actually computing this run (full roster, or the retry subset).
   const expectedRun = only ? only.slice() : expectedAll;

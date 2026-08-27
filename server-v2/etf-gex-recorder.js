@@ -40,7 +40,8 @@
 const { fetchExpirations, fetchChainFull } = require('./proxy-tastytrade');
 const { writeGexSnapshot } = require('./gex-history-writer');
 const { SCANNER_HOT } = require('./scanner-tickers');
-const { CORE_TICKERS } = require('./far-cb-tickers');
+const { CORE_TICKERS, getActiveRoster } = require('./far-cb-tickers');
+const rosterStore = require('./roster-store');
 
 const INTERVAL_MS = Number(process.env.ETF_GEX_RECORDER_INTERVAL_MS || 60_000);
 
@@ -54,22 +55,55 @@ const INTERVAL_MS = Number(process.env.ETF_GEX_RECORDER_INTERVAL_MS || 60_000);
 // would hand each minute to whichever landed last. The ES-Candles "ES" and
 // "SPX" symbols both read $SPX and are already covered.
 //
-// ── HOT ─────────────────────────────────────────────────────────────────────
-// The scanner's MAIN lane (scanner-tickers.js) — indices + mega-caps. Every
-// tick, full ±STRIKE_SIDE ladder. Unchanged.
+// ── BOTH ROSTERS ARE RESOLVED PER TICK, NOT AT REQUIRE TIME (2026-08-27) ────
+// They used to be module consts read from the FILE lists, with a comment
+// justifying it: the owner Watchlists page can add fifty names without anyone
+// thinking about write volume, so the roster was "a reviewed, code-level
+// decision".
 //
-// Sourced from the FILE's MAIN list, deliberately NOT from roster-store. The
-// Watchlists page can add fifty names to the scanner roster without anyone
-// thinking about write volume; this recorder writes ~81 rows per symbol per
-// minute into the table that caused the 2026-07 disk incident, so its roster is
-// a reviewed, code-level decision. Override with ETF_GEX_SYMBOLS for a one-off.
+// That reasoning was backwards. An edit on owner.cbedge.net is a deliberate act
+// by the one person who runs this system, and every other recorder in the repo
+// — scanner, eod-strike-gex, oi-daily, strike-growth, multi-flow, far-cb —
+// already resolves per sweep so an edit is live in the next one. This recorder
+// silently ignoring it made the Watchlists page a half-truth: a name added there
+// appeared in the scanners immediately and never got a gamma trail, with nothing
+// on screen to say why.
+//
+// The write-volume worry was real; the answer is a CAP, not a frozen list. See
+// WIDE_MAX below — the roster follows the page, and the recorder refuses to be
+// silently 10x'd by it.
 const LIVE_FEED_SYMBOLS = new Set(['SPX', '$SPX']);
-const SYMBOLS = (process.env.ETF_GEX_SYMBOLS
+
+/** Env override → file baseline. Only used when the live roster is unavailable. */
+const FALLBACK_HOT = (process.env.ETF_GEX_SYMBOLS
   ? String(process.env.ETF_GEX_SYMBOLS).split(',')
   : SCANNER_HOT)
   .map((s) => String(s).trim().toUpperCase())
   .filter(Boolean)
   .filter((s) => !LIVE_FEED_SYMBOLS.has(s));
+
+const clean = (list) => [...new Set((list || [])
+  .map((s) => String(s).trim().toUpperCase())
+  .filter(Boolean)
+  .filter((s) => !LIVE_FEED_SYMBOLS.has(s)))];
+
+/**
+ * HOT: the scanner MAIN lane, live.
+ *
+ * ETF_GEX_SYMBOLS still wins outright — an env override exists to pin the
+ * roster for a one-off, and a roster edit quietly overriding the override would
+ * defeat the point.
+ */
+async function hotRoster() {
+  if (process.env.ETF_GEX_SYMBOLS) return FALLBACK_HOT;
+  try {
+    const live = clean(await rosterStore.getHotSymbols('scanner'));
+    if (live.length) return live;
+  } catch (e) {
+    console.warn('[etf-gex] scanner hot roster unavailable, using the file baseline:', e.message);
+  }
+  return FALLBACK_HOT;
+}
 
 // ── WIDE (2026-08-27) ───────────────────────────────────────────────────────
 // The far-CB core roster (far-cb-tickers.js CORE_TICKERS) minus the hot lane —
@@ -107,19 +141,51 @@ const SYMBOLS = (process.env.ETF_GEX_SYMBOLS
 // /es-candles only ever shows five sessions), ETF_GEX_WIDE_STRIKE_SIDE (25 → 15
 // takes off another 40%), then trimming ETF_GEX_WIDE_SYMBOLS.
 //
-// CORE_TICKERS and not getActiveRoster(), for the same reason the hot lane
-// reads the file: the active roster is the scanner universe plus every
-// customer-added ticker, so one person adding a name on a watchlist page would
-// silently add permanent per-minute write volume here. Override with
-// ETF_GEX_WIDE_SYMBOLS; disable the lane with ETF_GEX_WIDE=0.
-const WIDE_SYMBOLS = (process.env.ETF_GEX_WIDE_SYMBOLS
-  ? String(process.env.ETF_GEX_WIDE_SYMBOLS).split(',')
-  : (Array.isArray(CORE_TICKERS) ? CORE_TICKERS : []))
-  .map((s) => String(s).trim().toUpperCase())
-  .filter(Boolean)
-  .filter((s, i, a) => a.indexOf(s) === i)
-  .filter((s) => !LIVE_FEED_SYMBOLS.has(s))
-  .filter((s) => !SYMBOLS.includes(s));
+// ── The roster is far-CB's ACTIVE one, resolved per tick ───────────────────
+// getActiveRoster() = the owner Watchlists page's Scanner list (which itself
+// falls back to scanner-tickers.js) ∪ customer-added far_cb_custom_tickers. So
+// a name added on owner.cbedge.net has a gamma trail on the NEXT tick, with no
+// redeploy — which is what the page has always promised and what every other
+// recorder already does.
+//
+// The cap is what makes that safe. WIDE_MAX bounds the lane no matter what the
+// page says: past it the roster is TRUNCATED (stable order, so the same names
+// keep their trail rather than the tail flapping) and the recorder says so in
+// the log. A watchlist edit can therefore never silently 10x a table with this
+// one's history — the worst it can do is leave a name uncovered and complain
+// about it.
+//
+// 160 at ±25 strikes is ~11M rows steady state, comfortably above today's ~93.
+const WIDE_MAX = Math.max(1, Math.min(600, Number(process.env.ETF_GEX_WIDE_MAX || 160)));
+let lastTruncatedAt = 0;
+
+/** Env override → live far-CB roster → file baseline. Minus hot, minus $SPX. */
+async function wideRoster(hot) {
+  if (process.env.ETF_GEX_WIDE_SYMBOLS) {
+    return clean(String(process.env.ETF_GEX_WIDE_SYMBOLS).split(',')).filter((s) => !hot.includes(s));
+  }
+  let list;
+  try {
+    list = clean(await getActiveRoster());
+  } catch (e) {
+    console.warn('[etf-gex] far-CB roster unavailable, using the file baseline:', e.message);
+    list = clean(Array.isArray(CORE_TICKERS) ? CORE_TICKERS : []);
+  }
+  if (!list.length) list = clean(Array.isArray(CORE_TICKERS) ? CORE_TICKERS : []);
+  const wide = list.filter((s) => !hot.includes(s));
+  if (wide.length <= WIDE_MAX) return wide;
+  // Logged on CHANGE only. This fires every tick otherwise, and a warning that
+  // repeats 390 times a session is a warning nobody reads.
+  if (lastTruncatedAt !== wide.length) {
+    lastTruncatedAt = wide.length;
+    console.warn(
+      `[etf-gex] wide roster is ${wide.length} symbols, over the ${WIDE_MAX} cap — ` +
+      `recording the first ${WIDE_MAX} and SKIPPING ${wide.length - WIDE_MAX} ` +
+      `(${wide.slice(WIDE_MAX).join(',')}). Raise ETF_GEX_WIDE_MAX if the disk can take it.`,
+    );
+  }
+  return wide.slice(0, WIDE_MAX);
+}
 
 // How many chain fetches are in flight at once, per lane.
 //
@@ -381,6 +447,27 @@ async function sweep(list, strikeSide, concurrency) {
   await Promise.all(Array.from({ length: lanes }, (_, k) => worker(k)));
 }
 
+/**
+ * Log the roster ONLY when it changes.
+ *
+ * The rosters are live now, so "what is this recorder actually covering" is no
+ * longer answerable from the boot line — it can change at 10:15 because someone
+ * edited a page. Printing it every tick would be 390 identical lines a session;
+ * printing it on change turns the log into an audit trail of watchlist edits,
+ * which is exactly what you want when a name's gamma trail starts or stops.
+ */
+let lastRosterKey = '';
+function announceRoster(hot, wide) {
+  const key = `${hot.join(',')}|${wide.join(',')}`;
+  if (key === lastRosterKey) return;
+  const first = !lastRosterKey;
+  lastRosterKey = key;
+  console.log(
+    `[etf-gex] roster ${first ? 'resolved' : 'CHANGED'} — ${hot.length} hot, ${wide.length} wide` +
+    (first ? '' : ' (owner Watchlists edit picked up)'),
+  );
+}
+
 // Overrun guard. A tick is a long run of chain fetches and setInterval does not
 // care whether the last one finished — without this, a slow upstream turns into
 // overlapping ticks that pile more requests onto a feed that is already
@@ -401,15 +488,20 @@ async function tick() {
   ticking = true;
   const t0 = Date.now();
   try {
+    // Resolved HERE, every tick, not at require time — this is what makes an
+    // owner Watchlists edit live in the next minute. roster-store caches its
+    // scanner layer for 15s, so the expensive half is a memory read; what is
+    // left is one small indexed SELECT on far_cb_custom_tickers, once a minute.
+    const hot = await hotRoster();
+    const wide = process.env.ETF_GEX_WIDE === '0' ? [] : await wideRoster(hot);
+    announceRoster(hot, wide);
+
     // HOT first and in full, then WIDE in full. Sequential lanes rather than one
     // merged pool: the hot names are what the live pages are watching, and they
     // should not be queued behind ninety-three others for their first column of
     // the minute.
-    await sweep(SYMBOLS, STRIKE_SIDE, HOT_CONCURRENCY);
-
-    if (process.env.ETF_GEX_WIDE !== '0' && WIDE_SYMBOLS.length) {
-      await sweep(WIDE_SYMBOLS, WIDE_STRIKE_SIDE, WIDE_CONCURRENCY);
-    }
+    await sweep(hot, STRIKE_SIDE, HOT_CONCURRENCY);
+    if (wide.length) await sweep(wide, WIDE_STRIKE_SIDE, WIDE_CONCURRENCY);
   } finally {
     ticking = false;
     const ms = Date.now() - t0;
@@ -430,7 +522,6 @@ function startEtfGexRecorder() {
     console.log('[etf-gex] recorder disabled (ETF_GEX_RECORDER=0)');
     return;
   }
-  if (!SYMBOLS.length && !WIDE_SYMBOLS.length) return;
   _timer = setInterval(() => {
     tick().catch((e) => console.warn('[etf-gex] tick error:', e.message));
   }, INTERVAL_MS);
@@ -440,25 +531,26 @@ function startEtfGexRecorder() {
   setTimeout(() => {
     tick().catch((e) => console.warn('[etf-gex] initial tick error:', e.message));
   }, 25_000);
-  const wideOn = process.env.ETF_GEX_WIDE !== '0' && WIDE_SYMBOLS.length;
+  // No roster COUNTS here any more — they are not known yet. The rosters resolve
+  // on the first tick and announceRoster() prints them then, and again on every
+  // change. A boot line quoting a require-time list would be the one thing this
+  // change exists to stop: a number that looks authoritative and goes stale the
+  // moment someone edits the page.
+  //
+  // Also: no `if (!SYMBOLS.length) return` bail. An empty file baseline is no
+  // longer a reason not to start — the live roster may well have names in it.
   console.log(
-    `[etf-gex] recorder started — hot ${SYMBOLS.length} per-strike GEX (RTH), ` +
-    `±${STRIKE_SIDE} strikes, ${EXPIRY_DEPTH} expiry(s), every ${INTERVAL_MS / 1000}s, ` +
-    `${HOT_CONCURRENCY} concurrent, ${TICKER_DELAY_MS}ms apart: ${SYMBOLS.join(',')}`,
+    `[etf-gex] recorder started — per-strike GEX (RTH), hot ±${STRIKE_SIDE} / wide ±${WIDE_STRIKE_SIDE} strikes, ` +
+    `${EXPIRY_DEPTH} expiry(s), every ${INTERVAL_MS / 1000}s, ` +
+    `${HOT_CONCURRENCY}/${WIDE_CONCURRENCY} concurrent, ${TICKER_DELAY_MS}ms apart. ` +
+    `Rosters resolve per tick from the owner Watchlists page` +
+    (process.env.ETF_GEX_WIDE === '0' ? ' (wide lane off)' : ` (wide cap ${WIDE_MAX})`),
   );
-  if (wideOn) {
-    console.log(
-      `[etf-gex] wide lane — ${WIDE_SYMBOLS.length} far-CB symbols, FULL sweep every tick, ` +
-      `±${WIDE_STRIKE_SIDE} strikes, ${WIDE_CONCURRENCY} concurrent`,
-    );
-  } else {
-    console.log('[etf-gex] wide lane off');
-  }
 }
 
 module.exports = {
   startEtfGexRecorder, snapshotStrikes, resolveExpiries, tick,
-  // Exported so an owner/health page can report what is actually being recorded
-  // instead of re-deriving both rosters from the env vars.
-  SYMBOLS, WIDE_SYMBOLS,
+  // Async now, because the rosters are live. An owner/health page asking "what
+  // is this actually recording" gets the same answer the next tick will use.
+  hotRoster, wideRoster,
 };

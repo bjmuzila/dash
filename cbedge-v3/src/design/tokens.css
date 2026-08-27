@@ -78,6 +78,49 @@
   --color-series-5: #4fb8d4;
   --color-series-6: #e0645f;
 
+  /* ── Candles ──────────────────────────────────────────────────────────
+     Carried across from v2 VERBATIM (ES_CANDLE_UP / ES_CANDLE_DOWN in
+     components/shared/homeTheme.ts) because "the exact same candle colour"
+     was the requirement. Deliberately NOT --color-up/--color-down: those
+     are the UI's directional pair and are still provisional, and a candle
+     body is the one place where matching v2 pixel-for-pixel matters more
+     than internal consistency. Body, border and wick all take these.       */
+  --color-candle-up: #30d158;
+  --color-candle-down: #ff5b5b;
+
+  /* ── GEX bubbles ──────────────────────────────────────────────────────
+     Sign sets the hue, wall rank swaps base → hot. Same four values v2's
+     EsChartCard draws with. Read as hex here and converted to rgba() at
+     draw time by rgba() in board/esCandles/bubbles.ts — canvas needs an
+     alpha channel per bubble, which a token cannot carry.                  */
+  --color-gex-pos: #29b6f6;
+  --color-gex-pos-hot: #c8f5ff;
+  --color-gex-neg: #ff4757;
+  --color-gex-neg-hot: #ffcdd2;
+
+  /* ── Key levels ───────────────────────────────────────────────────────
+     The wall palette shared by the Key Levels tiles, the Multi Greek
+     ladder badges and any future levels rail. cb = Core Bullseye /
+     magnet, cw = call wall, pw = put wall.                                 */
+  --color-level-cb: #ffd600;
+  --color-level-cw: #29b6f6;
+  --color-level-pw: #ff4757;
+
+  /* ── Economic calendar ────────────────────────────────────────────────
+     Impact ramp + the actual/forecast/previous trio, matching v2's
+     EconCalendarPanel so a user moving between the two reads the same
+     colour as the same importance.                                         */
+  --color-impact-high: #ef4444;
+  --color-impact-medium: #f59e0b;
+  --color-impact-low: #3a5570;
+  --color-impact-holiday: #6b7280;
+  --color-impact-president: #a855f7;
+  --color-impact-faded: #1e2a38;
+  --color-cal-accent: #219ebc;
+  --color-cal-actual: #22c55e;
+  --color-cal-forecast: #f59e0b;
+  --color-cal-previous: #8a9ab8;
+
   /* ── Type scale ───────────────────────────────────────────────────────
      Numbers use the tabular font so columns do not jitter as prices tick.  */
   --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;

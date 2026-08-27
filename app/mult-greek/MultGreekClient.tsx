@@ -11,15 +11,9 @@ import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
 import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls, type WallKind } from "@/lib/calculations/heatLevels";
 import { Card } from "@/components/shared/PageCard";
-import { Dock, SegGroup, DockButton, DockSlider, DockExpiryPicker, DockCogMenu, DockField } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, ToggleTile, DockButton, DockSlider, DockExpiryPicker, DockCogMenu, DockField } from "@/components/shared/DockToolbar";
 import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/MultiGreekLevelSnapshot";
 
-// Double-clicking a panel header blows that ticker's chain up full screen. The
-// real /options-chain page is reused (same trick the home GEX card uses), so
-// the overlay is the actual chain — every column, greek and basis control — not
-// a second, drifting copy. lazy() keeps it out of this page's initial bundle:
-// nothing loads until the first double-click.
-const OptionsChainPage = lazy(() => import("@/components/pages/OptionsChain"));
 // The toolbar 🔍 opens the /analytics Ticker Lookup card — the SAME component
 // that page mounts. One page-level button (the card has its own symbol picker,
 // so any ticker can be entered inside it). Imported, never copied: a second
@@ -36,13 +30,19 @@ const BASE_TICKERS = ["SPX", "SPY", "QQQ"] as const;
 type Ticker = string;
 const CUSTOM_TICKER_KEY = "mg_custom_ticker";
 const HEAT_SKIN_KEY = "mg_heat_skin";
-// How many expiry columns the board shows, 1..MAX_EXP_COLS. ONE number for all
+// How many EXPIRY columns the board shows, 1..MAX_EXP_PICKS. ONE number for all
 // four panels — the columns are the same expiry ladder read across four
 // tickers, so a board where SPX showed four and SPY showed two would no longer
 // be comparable left to right, which is the whole point of the page. Persisted
 // per browser; missing = the full set, so nothing changes for anyone who never
 // touches the control (cog → Board → Columns).
 const COL_COUNT_KEY = "mg_col_count";
+// Whether the synthetic ex-0DTE TOTAL column is drawn after them. Independent
+// of the count on purpose: "how many expiries" and "and the total as well" are
+// two different questions, and folding them into one 1–4 picker meant the only
+// way to see the total was to also accept three expiry columns. On by default,
+// which with the default 3 expiries is the board exactly as it shipped.
+const SHOW_ALL_KEY = "mg_show_all";
 
 /* ───────────────────────────────────────────────────────────────────────────
  * HEAT SKINS — how a ladder cell is painted, as data.
@@ -92,15 +92,15 @@ type SkinDef = {
     weight: readonly [number, number, number];
   };
   /**
-   * How the ATM row is marked.
+   * Whether the ATM row also carries an "ATM" CHIP beside the strike.
    *
-   *   "box"  — a 2px white border around the whole row. Cheap when the cells
-   *            are square and flush, which is what CLASSIC is.
-   *   "chip" — an "ATM" chip beside the strike. One mark, on the one column
-   *            that identifies the row anyway. A box has to be drawn either on
-   *            every cell of the row or on the row itself, where it fights the
-   *            cells' own radius and inset — so a skin with rounded, inset
-   *            tiles wants the chip.
+   * The white RING around the ATM row is no longer a skin choice — every skin
+   * draws it, as the option chain page does, with an inset box-shadow (see the
+   * `atmOutline` note at the row). Which strike spot sits on is not cosmetic.
+   * This knob only decides the chip:
+   *
+   *   "chip" / "both" — chip beside the strike as well.
+   *   "box"  / "none" — ring only.
    */
   atm: "box" | "chip" | "both" | "none";
   /** money = "$1.23M" (2dp) · compact = "1.2M" (1dp) */
@@ -194,6 +194,10 @@ function isHeatSkin(v: unknown): v is HeatSkin {
 // SHOWN column is not the 4th expiry itself — it's the synthetic ex-0DTE TOTAL
 // (see EX0_KEY / withEx0Column) that the 4th expiry's data feeds into.
 const MAX_EXP_COLS = 4;
+// …of which at most 3 can be individual EXPIRY columns: the 4th slot belongs to
+// the ex-0DTE TOTAL. The picker offers 1/2/3, the ALL tile decides whether the
+// 4th is drawn, and the panel is never wider than MAX_EXP_COLS either way.
+const MAX_EXP_PICKS = MAX_EXP_COLS - 1;
 
 // ── Replay mode ───────────────────────────────────────────────────────────────
 // Rewinds ALL FOUR PANELS AT ONCE off one shared clock: every cell renders from
@@ -392,10 +396,17 @@ function isMarketOpen(): boolean {
   return mins >= 570 && mins < 960;
 }
 
-function fmtMoney(v: number): { sign: string; value: string } {
+/**
+ * `signed` = does a POSITIVE number get an explicit "+"?
+ *
+ * True for a CHANGE (the click card's 15m/30m/open rows), where "+1.2M" and
+ * "1.2M" mean different things and the plus is the reading. False for a LEVEL
+ * (a GEX figure), where the plus is just ink — same rule as fmtCell.
+ */
+function fmtMoney(v: number, signed = true): { sign: string; value: string } {
   const n = parseFloat(String(v));
   if (!isFinite(n) || n === 0) return { sign: "", value: "--" };
-  const s = n >= 0 ? "+" : "-";
+  const s = n < 0 ? "-" : signed ? "+" : "";
   const a = Math.abs(n);
   return { sign: s, value: "$" + (a / 1e6).toFixed(2) + "M" };
 }
@@ -473,7 +484,11 @@ function skinRankBg(value: number, rank: 1 | 2 | 3, skin: SkinDef): string {
 function fmtCell(v: number, skin: SkinDef): { sign: string; value: string } {
   const n = parseFloat(String(v));
   if (!isFinite(n) || n === 0) return { sign: "", value: "--" };
-  const sign = n >= 0 ? "+" : "-";
+  // Negative gets a "-"; positive gets NOTHING. A "+" on every positive figure
+  // is a whole column of ink saying what the absence of a minus already says,
+  // in the one place on the page with no room to spare — and the cell's own
+  // colour is what carries sign at a glance anyway.
+  const sign = n < 0 ? "-" : "";
   const a = Math.abs(n);
   if (skin.fmt === "money") return { sign, value: "$" + (a / 1e6).toFixed(2) + "M" };
   // compact: no $, one decimal, and it steps up to B rather than printing
@@ -858,8 +873,9 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
 }
 
 function TickerPanel({
-  ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, heatSkin, emLevels, showEm, captureWindow,
-  showCB, showCW, showPW, getGexChange, deltaWindow, onExpandChain,
+  ticker, strikesByExp, cols, totalCols = [], showTotal = false,
+  liveData, spot, contractMode, intensity, heatSkin, emLevels, showEm, captureWindow,
+  showCB, showCW, showPW, getGexChange, deltaWindow,
   replayFrame = null, replayStrikes = null, dteBase = null,
   editableTicker = false, tickerInput = "", onTickerInputChange, onCommitTicker,
 }: {
@@ -868,6 +884,11 @@ function TickerPanel({
   strikesByExp: Record<string, StrikeRow[]>;
   /** Column expiries (front → back), each rendered as a NET GEX column. */
   cols: Expiry[];
+  /** Every expiry this panel has data for, whether or not it gets a column.
+   *  The ALL column sums the non-0DTE ones — see `sumDates`. */
+  totalCols?: Expiry[];
+  /** Draw the synthetic ex-0DTE TOTAL column after the expiry columns. */
+  showTotal?: boolean;
   liveData: Record<string, LiveEntry>;
   spot: number;
   contractMode: ContractMode;
@@ -888,8 +909,6 @@ function TickerPanel({
   getGexChange: (ticker: string, expiry: string, strike: number) => GexChange;
   /** Δ stamp lookback in minutes; 0 = off. */
   deltaWindow: DeltaWindow;
-  /** Double-click on the panel header → open this ticker's full-screen chain. */
-  onExpandChain: (ticker: Ticker) => void;
   /** Replay: the recorded sweep to render instead of the live chain. Null = live.
    *  The panel keys off the FRAME, never off the page's replay toggle — a ticker
    *  with no recorded history shows its empty state rather than a blank grid. */
@@ -949,6 +968,25 @@ function TickerPanel({
 
   const colDates = useMemo(() => cols.map(c => c.date), [cols]);
 
+  // ── What the ALL column sums ───────────────────────────────────────────────
+  // Every expiry the panel HAS, except 0DTE — not just the ones with a column
+  // of their own. That is what the header claims ("EX-0DTE"), and it is what
+  // makes ALL worth its slot beside a 1- or 2-column board: the total is the
+  // book behind the columns, not a re-add of what is already on screen.
+  const sumDates = useMemo(
+    () => (showTotal ? totalCols : []).filter(c => c.daysTo !== 0).map(c => c.date),
+    [showTotal, totalCols],
+  );
+  // Rows are computed over the UNION of shown + summed dates: a hidden expiry
+  // still has to carry its per-strike GEX for the sum to be a sum. The extra
+  // dates are trimmed back out of `cols` below, so nothing draws a column for
+  // them — but a strike that only exists in a hidden expiry does gain a row,
+  // which is correct: it has an ALL value.
+  const computeDates = useMemo(
+    () => [...colDates, ...sumDates.filter(d => !colDates.includes(d))],
+    [colDates, sumDates],
+  );
+
   // Replay swaps the SOURCE of the rows and nothing else. Everything below —
   // the ex-0DTE total, the walls, the capture trim, the grid — reads the same
   // ComputedResult either way, so there is no second rendering path to keep in
@@ -957,28 +995,26 @@ function TickerPanel({
   const hasData = isReplay
     ? cols.length > 0 && (replayStrikes?.length ?? 0) > 0
     : cols.length > 0 && cols.some(c => (strikesByExp[c.date]?.length ?? 0) > 0);
-  const computedFull = !hasData
+  const computedWide = !hasData
     ? null
     : (replayFrame
-        ? computeReplayRows(replayFrame, colDates, replayStrikes ?? [], contractMode)
-        : computeRows(strikesByExp, colDates, liveData, spot, contractMode));
+        ? computeReplayRows(replayFrame, computeDates, replayStrikes ?? [], contractMode)
+        : computeRows(strikesByExp, computeDates, liveData, spot, contractMode));
+  // Back down to the columns that are actually DRAWN. `cols` is what the body,
+  // the header and the grid tracks all iterate, so a summed-but-hidden expiry
+  // left in here would render as a column. The per-date maxima / ranks it
+  // carries are left alone — nothing reads the ones for hidden dates.
+  const computedFull = computedWide ? { ...computedWide, cols: colDates } : null;
 
-  // Swap the 4th expiry column for the synthetic ex-0DTE TOTAL. Every expiration
-  // except 0DTE feeds the sum — at a full 4-column set the 4th expiry still
-  // contributes, it just no longer gets its own column.
+  // ── The ex-0DTE TOTAL column ───────────────────────────────────────────────
+  // Toggled by the user (cog → Board → the ALL tile) and always APPENDED — it
+  // no longer swaps itself in for the 4th expiry. Columns and total are now two
+  // independent choices: 1/2/3 expiries, ALL on or off, up to four columns.
   //
-  // REPLAY never reaches 4 columns: strike_growth records only
-  // EXPIRIES_PER_TICKER (3) expiries per sweep, so gating the total on exactly 4
-  // made the ALL column vanish the moment you rewound — even though the recorded
-  // rows support it (the /analytics Ticker Lookup builds the same "ALL
-  // EXPIRATIONS · EX-0DTE" ladder off this same history). So the total is gated
-  // on the SUM being meaningful, not on the column count: it needs 2+ non-0DTE
-  // expiries (a 1-expiry sum would just duplicate that expiry's own column), and
-  // it REPLACES the last column only when there is a 4th expiry to fold away —
-  // otherwise it is appended, so a rewound panel shows its 3 recorded expiries
-  // plus ALL and keeps the same 4-column width as live.
-  const ex0Dates = cols.filter(c => c.daysTo !== 0).map(c => c.date);
-  const ex0ReplacesLast = cols.length === MAX_EXP_COLS;
+  // Gated on the sum existing at all rather than on a column count: with no
+  // non-0DTE expiry there is nothing to add up, and an empty ALL column is
+  // worse than none.
+  const ex0Dates = sumDates;
   // How many expiries are in the total ON SCREEN. Which COLUMNS exist stays a
   // session-level decision (a column set that appears and disappears as you
   // scrub is unreadable), but the count the header reports is per-sweep: a sweep
@@ -987,16 +1023,15 @@ function TickerPanel({
   const ex0InProfile = replayFrame
     ? ex0Dates.filter(d => replayFrame.expiries.includes(d)).length
     : ex0Dates.length;
-  const showEx0 = ex0ReplacesLast || (isReplay && ex0Dates.length >= 2 && cols.length < MAX_EXP_COLS);
+  const showEx0 = showTotal && ex0Dates.length > 0;
   const computedAug = (computedFull && showEx0)
-    ? withEx0Column(computedFull, ex0Dates, ex0ReplacesLast)
+    ? withEx0Column(computedFull, ex0Dates, false)
     : computedFull;
 
-  // Header/totals column descriptors — the real expiries with the 4th swapped
-  // for the ex-0DTE TOTAL (or the total appended, in replay), mirroring
-  // computed.cols when data is present.
+  // Header/totals column descriptors — the drawn expiries, then the ex-0DTE
+  // TOTAL when it is on, mirroring computed.cols when data is present.
   const displayCols: { date: string; label: { dte: string; md: string } }[] =
-    ((showEx0 && ex0ReplacesLast) ? cols.slice(0, MAX_EXP_COLS - 1) : cols)
+    cols
       .map(c => ({ date: c.date, label: colLabel(c.date, dteBase) }))
       .concat(showEx0 ? [{ date: EX0_KEY, label: { dte: "ALL", md: "EX-0DTE" } }] : []);
 
@@ -1275,13 +1310,12 @@ function TickerPanel({
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
 
       {/* Panel header — ticker · spot.
-          Double-click anywhere on it opens this ticker's full-screen chain.
-          userSelect:none so the second click of the gesture doesn't leave the
-          header text highlighted behind the overlay. */}
+          The double-click-to-open-the-full-screen-chain gesture was removed:
+          it fired on any double-click anywhere on the bar (including one aimed
+          at the 4th slot's ticker box), and it hung a permanent tooltip over
+          the first column header. /options-chain is a click away in the nav. */}
       <div
-        onDoubleClick={() => onExpandChain(ticker)}
-        title={`Double-click for the full-screen ${ticker} option chain`}
-        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0, cursor: "zoom-in", userSelect: "none" }}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0, userSelect: "none" }}
       >
         {/* Ticker Lookup 🔍 moved to the page toolbar — one button for the
             whole page instead of one per panel.
@@ -1290,9 +1324,8 @@ function TickerPanel({
         {editableTicker ? (
           <div
             style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}
-            // The header's double-click opens the chain; typing in the box must
-            // not trigger it, and the input needs its own text selection back.
-            onDoubleClick={(e) => e.stopPropagation()}
+            // The header sets userSelect:none for its own label; the input
+            // needs its own text selection back.
             onMouseDown={(e) => e.stopPropagation()}
           >
             <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
@@ -1375,7 +1408,11 @@ function TickerPanel({
               textAlign: "center",
               color: v > 0 ? "#29b6f6" : v < 0 ? "#ff4757" : "#94a3b8",
             }}>
-              <span style={{ color: v > 0 ? "#22c55e" : v < 0 ? "#ef4444" : SOFT_WHITE }}>{fmt.sign}</span>{fmt.value}
+              {/* Sign and figure are ONE run of text in the cell's own colour.
+                  They used to be two spans in two colours (a green "+" ahead of
+                  a blue figure), which read as two facts rather than one
+                  number. */}
+              {fmt.sign}{fmt.value}
               {/* % of positive GEX — share of the column's gross |GEX| that is
                   positive. Green when positive GEX dominates, red otherwise. */}
               {t?.posPct != null && (
@@ -1401,9 +1438,22 @@ function TickerPanel({
         ) : computed.rows.map(r => {
           const strikeColor = "#94a3b8";
           const rowBg = "transparent";
-          const atmBoxed = r.isATM && (SK.atm === "box" || SK.atm === "both");
-          const atmOutline = atmBoxed
-            ? { border: "2px solid rgba(255,255,255,.55)", position: "relative" as const, zIndex: 1 }
+          // ATM ring — the same solid-white rule the option chain page draws,
+          // and drawn the same way: an INSET box-shadow, never a real border.
+          // A 2px border adds 4px to the row, so the ATM row stood 4px taller
+          // than every other one and the whole ladder shoved every time spot
+          // crossed a strike — the rule appeared to JUMP rather than move one
+          // row. Inset, it paints over the row and the geometry never changes.
+          //
+          // Universal, not skin-gated: which strike spot is sitting on is not a
+          // cosmetic preference. SkinDef.atm now only decides whether the "ATM"
+          // chip rides beside the strike as well.
+          const atmOutline = r.isATM
+            ? {
+                boxShadow: "inset 0 2px 0 #ffffff, inset 0 -2px 0 #ffffff, inset 2px 0 0 #ffffff, inset -2px 0 0 #ffffff",
+                position: "relative" as const,
+                zIndex: 1,
+              }
             : (SK.cell.gap || SK.cell.inset ? {} : { borderBottom: "1px solid rgba(30,48,80,.35)" });
           const is1x = emStrikes != null && (r.strike === emStrikes.d1 || r.strike === emStrikes.u1);
           const is2x = emStrikes != null && (r.strike === emStrikes.d2 || r.strike === emStrikes.u2);
@@ -1418,7 +1468,9 @@ function TickerPanel({
                 // The strike rail and the TOTAL row are the two things you read
                 // ACROSS the panel rather than down a column, so they keep their
                 // own size and stay centred whatever the skin does to the cells.
-                padding: "4px 4px", fontSize: 13, fontWeight: 800, fontFamily: "var(--font-mono)",
+                // 11px, down from 13: the rail is a label for the row, not the
+                // reading, and at 13 it outweighed the GEX figures beside it.
+                padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: "transparent",
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 3,
@@ -1447,7 +1499,6 @@ function TickerPanel({
                 const scaleMax = computed.maxAbs[e];
                 const weight = topRank === 1 ? SK.cell.weight[0] : topRank ? SK.cell.weight[1] : SK.cell.weight[2];
                 const formatted = val == null ? { sign: "", value: "--" } : fmtCell(val, SK);
-                const signColor = val == null ? SOFT_WHITE : val > 0 ? "#22c55e" : val < 0 ? "#ef4444" : SOFT_WHITE;
                 // CB / CW / PW level badges — only on the FRONT expiry column,
                 // each gated by its toolbar toggle. Strikes come from computeWalls
                 // (CB = max |GEX|, CW = top +GEX, PW = most −GEX; all distinct).
@@ -1611,7 +1662,9 @@ function TickerPanel({
                       ...(dMode ? { marginLeft: "auto" } : {}),
                       ...(lvl && showLvlBadge ? { paddingRight: 17 } : {}),
                     }}>
-                      <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
+                      {/* One run of text, in the cell's own colour — see the
+                          totals row above. */}
+                      {formatted.sign}{formatted.value}
                     </span>
                   </div>
                 );
@@ -1648,7 +1701,8 @@ function TickerPanel({
         const r15 = deltaFor(srv?.v15, ch.d15, 15 * 60_000);
         const r30 = deltaFor(srv?.v30, ch.d30, 30 * 60_000);
         const rOpen = deltaFor(srv?.vOpen, ch.dOpen, 0);
-        const nowFmt = fmtMoney(liveNow);
+        // A level, not a change — no "+". See fmtMoney's `signed`.
+        const nowFmt = fmtMoney(liveNow, false);
         const nowColor = liveNow > 0 ? "#22c55e" : liveNow < 0 ? "#ef4444" : SOFT_WHITE;
         const stat = (k: string, v: string, strong?: boolean) => (
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, lineHeight: 1.55 }}>
@@ -2078,30 +2132,42 @@ export function MultGreekClient({
     setCustomTicker(t);
     try { window.localStorage.setItem(CUSTOM_TICKER_KEY, t); } catch { /* ignore */ }
   }, [tickerInput, customTicker]);
-  // ── Expiry-column count — ONE setting for the whole board ──────────────────
-  // 1..MAX_EXP_COLS, set in the cog (Board → Columns) and applied to every
-  // panel. Deliberately not per-panel: the four ladders are read ACROSS, so
-  // panels on different column counts stop lining up and the board stops
-  // answering the question it exists to answer.
+  // ── Board columns — ONE setting for the whole board ────────────────────────
+  // Two independent choices, both in the cog (Board → Columns):
   //
-  // Note what "4" means, because it is not "4 expiries": at the full count the
-  // 4th column is the synthetic ex-0DTE TOTAL (see withEx0Column) and the 4th
-  // expiry folds into it. So this is a count of COLUMNS ON SCREEN — 3 is three
-  // expiries and no total, 4 is three expiries plus the total.
-  const [colCount, setColCount] = useState<number>(MAX_EXP_COLS);
+  //   colCount  1 | 2 | 3   how many individual EXPIRY columns every panel draws
+  //   showAll   on | off    whether the ex-0DTE TOTAL is drawn after them
+  //
+  // 3 + ALL is the default and is the board exactly as it shipped. Deliberately
+  // not per-panel: the four ladders are read ACROSS, so panels on different
+  // column counts stop lining up and the board stops answering the question it
+  // exists to answer.
+  const [colCount, setColCount] = useState<number>(MAX_EXP_PICKS);
+  const [showAll, setShowAll] = useState<boolean>(true);
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
       const n = Math.round(Number(window.localStorage.getItem(COL_COUNT_KEY)));
-      // Clamp on READ as well as on write: a stale or hand-edited entry must not
-      // be able to slice the board to 0 columns (or past MAX_EXP_COLS).
-      if (Number.isFinite(n) && n > 0) setColCount(Math.min(MAX_EXP_COLS, Math.max(1, n)));
+      // Clamp on READ as well as on write: a stale entry must not be able to
+      // slice the board to 0 columns — and the old key held 1..4, where 4 meant
+      // "3 expiries + the total", so it lands on 3 and the ALL flag carries the
+      // rest.
+      if (Number.isFinite(n) && n > 0) setColCount(Math.min(MAX_EXP_PICKS, Math.max(1, n)));
+      const a = window.localStorage.getItem(SHOW_ALL_KEY);
+      if (a === "0" || a === "1") setShowAll(a === "1");
     } catch { /* ignore */ }
   }, []);
   const changeColCount = useCallback((n: number) => {
-    const clamped = Math.min(MAX_EXP_COLS, Math.max(1, Math.round(n)));
+    const clamped = Math.min(MAX_EXP_PICKS, Math.max(1, Math.round(n)));
     setColCount(clamped);
     try { window.localStorage.setItem(COL_COUNT_KEY, String(clamped)); } catch { /* ignore */ }
+  }, []);
+  const toggleShowAll = useCallback(() => {
+    setShowAll(v => {
+      const next = !v;
+      try { window.localStorage.setItem(SHOW_ALL_KEY, next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
   }, []);
 
   // Embedded in the GEX drawer (?embed=1): keep the SPX/SPY/QQQ panels side by
@@ -2748,27 +2814,10 @@ export function MultGreekClient({
   const idFront = idFrontCol ? colLabel(idFrontCol.date, replayOn ? replayDate : null) : null;
   const idSession = replayOn ? (replayDate || "—") : todayETStr();
 
-  // ── Chain overlay ──────────────────────────────────────────────────────────
-  // Double-clicking a panel header sets this to that panel's ticker; the chain
-  // then covers the panels row — exactly the 4 cards, toolbar untouched. Esc
-  // closes. (No body scroll-lock: the overlay is inside the page's own layout,
-  // not a viewport-covering modal, so nothing can scroll out from under it.)
-  const [chainTicker, setChainTicker] = useState<string | null>(null);
-  const closeChain = useCallback(() => setChainTicker(null), []);
-  useEffect(() => {
-    if (!chainTicker) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setChainTicker(null); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [chainTicker]);
-  // A screenshot capture must never bake the overlay into the shot.
-  useEffect(() => { if (isCapturing) setChainTicker(null); }, [isCapturing]);
-
   // ── Ticker Lookup overlay (toolbar 🔍) ─────────────────────────────────────
   // Rendered through a portal to document.body, not inside the panels row: the
-  // chain overlay above can pin itself to that row because it is meant to cover
-  // exactly the four cards, but the lookup card is a tall document and the row
-  // is overflow:hidden, so it would be clipped.
+  // lookup card is a tall document and that row is overflow:hidden, so inside
+  // it the card would be clipped.
   const [lookupTicker, setLookupTicker] = useState<string | null>(null);
   const closeLookup = useCallback(() => setLookupTicker(null), []);
   useEffect(() => {
@@ -2847,9 +2896,11 @@ export function MultGreekClient({
           </span>
           <span style={{ fontSize: 10, fontWeight: 800, color: HT.text, letterSpacing: "0.1em", whiteSpace: "nowrap", opacity: 0.75 }}>
             {contractMode === "oivol" ? "OI+VOL" : contractMode === "vol" ? "VOL" : "OI"}
-            {/* Only when it isn't the full set — a bar that says "4 COL" on a
-                board nobody has narrowed is noise. */}
-            {colCount < MAX_EXP_COLS ? ` · ${colCount} COL` : ""}
+            {/* Only when it isn't the default 3 + ALL — a bar that repeats
+                the shipped board back at you is noise. */}
+            {(colCount !== MAX_EXP_PICKS || !showAll)
+              ? ` · ${colCount} EXP${showAll ? "+ALL" : ""}`
+              : ""}
             {deltaWindow ? ` · Δ${deltaWindow}M` : ""}
             {replayOn ? " · REPLAY" : ""}
           </span>
@@ -2898,23 +2949,31 @@ export function MultGreekClient({
             {
               id: "board",
               label: "Board",
-              summary: `${colCount} col${colCount === 1 ? "" : "s"} · ${contractMode === "oivol" ? "OI+VOL" : contractMode === "vol" ? "VOL" : "OI"}${deltaWindow ? ` · Δ${deltaWindow}m` : ""}`,
+              summary: `${colCount} exp${showAll ? " + ALL" : ""} · ${contractMode === "oivol" ? "OI+VOL" : contractMode === "vol" ? "VOL" : "OI"}${deltaWindow ? ` · Δ${deltaWindow}m` : ""}`,
               body: (
                 <>
-                  {/* How many expiry columns every panel draws. One setting for
-                      the board — see COL_COUNT_KEY for why it isn't per-panel.
-                      At 4 the last column is the ex-0DTE TOTAL, so the label
-                      says COLUMNS, not expiries. */}
-                  <DockField label="Columns">
+                  {/* Two independent choices — how many EXPIRY columns every
+                      panel draws (1/2/3), and whether the ex-0DTE TOTAL is
+                      drawn after them. One setting for the board; see
+                      COL_COUNT_KEY for why it isn't per-panel. ALL sums every
+                      expiry the panel has except 0DTE, INCLUDING the ones
+                      without a column of their own — which is why "1 + ALL" is
+                      a useful board and not a duplicated column. */}
+                  <DockField label="Columns" hint="Expiry columns per panel, plus the ex-0DTE total">
                     <SegGroup
                       options={[
                         { label: "1", value: "1" },
                         { label: "2", value: "2" },
                         { label: "3", value: "3" },
-                        { label: "4", value: "4" },
                       ]}
                       active={String(colCount)}
                       onChange={(v) => changeColCount(Number(v))}
+                    />
+                    <ToggleTile
+                      label="ALL"
+                      on={showAll}
+                      onClick={toggleShowAll}
+                      title="Total NET GEX per strike across every expiration except 0DTE"
                     />
                   </DockField>
                   {/* Contract basis toggle. OI is the apples-to-apples basis for
@@ -3191,16 +3250,18 @@ export function MultGreekClient({
           .mg-panels.mg-embed > div { flex: 1 1 0 !important; width: auto !important; min-height: 0 !important; }
         `}</style>
       )}
-      {/* position:relative so the chain overlay below can pin itself to EXACTLY
-          this box — the 4 cards and nothing else. The page toolbar above stays
-          live and visible while the chain is open. */}
+      {/* position:relative is kept as the panels row's own positioning
+          context — the ATM rings and click cards inside the cards are absolute
+          against their own boxes, and nothing here should escape this row. */}
       <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ position: "relative", flex: isCapturing ? "0 0 auto" : 1, display: "flex", alignItems: isCapturing ? "flex-start" : "stretch", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: 0 }}>
         {TICKERS.map((ticker, ti) => {
-          // The panel's available expiries, then this panel's own count over
-          // them. Sliced HERE, not inside TickerPanel: `cols` is what every
-          // downstream reader (rows, walls, totals, the ex-0DTE swap, the grid
-          // tracks) already keys off, so one slice moves all of them together
-          // and there is no second notion of "which columns" to keep in sync.
+          // Every expiry this panel has, then the board's count over them.
+          // Sliced HERE, not inside TickerPanel: `cols` is what every
+          // downstream reader (rows, walls, totals, the grid tracks) already
+          // keys off, so one slice moves all of them together and there is no
+          // second notion of "which columns" to keep in sync. The FULL list
+          // goes down as well — the ALL column sums the expiries that did not
+          // make the cut, so it cannot be rebuilt from the slice.
           const availCols = replayOn ? (replayColsByTicker[ticker] ?? []) : (colsByTicker[ticker] ?? []);
           return (
           <TickerPanel
@@ -3217,6 +3278,8 @@ export function MultGreekClient({
             // (or the replayed session) actually offers. A panel with fewer
             // expiries than the setting simply shows what it has.
             cols={availCols.slice(0, colCount)}
+            totalCols={availCols}
+            showTotal={showAll}
             liveData={liveDataRef.current}
             // Rewound, the header spot is the spot RECORDED at that sweep — the
             // live quote would put today's price on a three-day-old ladder.
@@ -3235,7 +3298,6 @@ export function MultGreekClient({
             showPW={showPW}
             getGexChange={getGexChange}
             deltaWindow={replayOn ? 0 : deltaWindow}
-            onExpandChain={setChainTicker}
             replayFrame={replayOn ? (replayFrameByTicker[ticker] ?? null) : null}
             replayStrikes={replayOn ? (replaySessions[ticker]?.strikes ?? null) : null}
             dteBase={replayOn ? replayDate : null}
@@ -3243,53 +3305,6 @@ export function MultGreekClient({
           );
         })}
 
-        {/* ── Option chain, overlaying the 4 cards ─────────────────────────────
-            Pinned to the panels row (inset 8 = this container's own padding),
-            so it lands on the exact footprint of the four cards — edge to edge,
-            top of the first card header to the bottom of the last row — and
-            nothing else on the page is covered. homeShellStyle is NOT applied:
-            OptionsChainPage brings its own shell (background, glow, font), and
-            doubling it just paints the same gradient twice. */}
-        {chainTicker && (
-          <div style={{
-            position: "absolute", inset: 8, zIndex: 40,
-            display: "flex", flexDirection: "column",
-            background: HT.bg,
-            borderRadius: 16, overflow: "hidden",
-            border: `1px solid ${HT.cyan}55`,
-            boxShadow: "0 18px 60px rgba(0,0,0,0.75)",
-          }}>
-            <div style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-              padding: "8px 12px", flexShrink: 0,
-              background: "rgba(33,158,188,0.06)", borderBottom: `1px solid ${HT.border}`,
-            }}>
-              <span style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
-                <span style={{ fontSize: 18, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{chainTicker}</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em", textTransform: "uppercase" }}>Option Chain</span>
-              </span>
-              <button
-                onClick={closeChain}
-                title="Close (Esc)"
-                style={{
-                  flexShrink: 0, cursor: "pointer",
-                  padding: "3px 12px", borderRadius: 8,
-                  border: `1px solid ${HT.cyan}55`, background: "rgba(33,158,188,0.10)",
-                  color: HT.cyan, fontSize: 13, fontWeight: 800, letterSpacing: "0.06em",
-                }}
-              >ESC ✕</button>
-            </div>
-            <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
-              <Suspense fallback={
-                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.55)", fontSize: 13, letterSpacing: "0.08em" }}>
-                  LOADING CHAIN…
-                </div>
-              }>
-                <OptionsChainPage ticker={chainTicker} />
-              </Suspense>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ── Ticker Lookup overlay ────────────────────────────────────────────

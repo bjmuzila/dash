@@ -4,6 +4,16 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Thursday 8/27/2026
 
+* **The Level Log has two new switches** — today's expiry vs all the other expirations, and OI+Volume GEX vs volume-only GEX. Four readings of the same day.
+
+* **Levels are now colour-coded**: gold CORE, green call wall, red put wall.
+
+* **CORE finally reads the same everywhere.** The migration chart used to show a different CORE number in the All view than in the Core view.
+
+* **Pop the wall migration chart out full size**, and flip it to the last 5 sessions to see where a level sat all week.
+
+* **Levels refresh every minute** instead of every five, so each 15-minute log entry is far fresher.
+
 * **Premarket and Post-Market now work for your whole main watchlist** — SPY, QQQ, NDX, VIX, AAPL, AMD, AMZN, GOOGL, META, MSFT, NVDA, SPCX and TSLA, not just SPX.
 
 * **Every ticker gets the full page**, not a stripped-down version: the regime strip, key levels, GEX profile, expected range, gamma bell curve and the complete post-market recap.

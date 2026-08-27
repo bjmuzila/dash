@@ -4830,37 +4830,48 @@ if (libDb) {
   // /api/es-candles/tickers — the ticker LOOKUP list for the ES Candles symbol
   // picker (components/dashboard/es-candles/symbols.tsx).
   //
-  // Deliberately the far-CB CORE_TICKERS array and not getActiveRoster():
+  // far-CB's ACTIVE roster — the owner Watchlists page's Scanner list ∪
+  // customer-added far_cb_custom_tickers — NOT the frozen CORE_TICKERS array.
   //
-  //   • CORE_TICKERS is a static list in the file, so this route answers without
-  //     touching Postgres. It is called on the first open of a dropdown, by up
-  //     to three cards on a row, on a page that already has a websocket and a
-  //     ~1.6MB heatmap backfill in flight — the last thing it should add is a
-  //     query.
-  //   • getActiveRoster() resolves the SCANNER universe plus every
-  //     customer-added ticker. That is the right list for a sweep and the wrong
-  //     one for a picker: it changes under the user, and a name someone else
-  //     added would appear in this menu.
+  // It was CORE_TICKERS, to spare this route a Postgres round trip on a page
+  // that already has a websocket and a ~1.6MB heatmap backfill in flight. Wrong
+  // trade: the picker was the ONE place a person looks to find out what this
+  // system covers, and it was showing a list that had not moved since the last
+  // deploy — so a ticker added on owner.cbedge.net was being recorded and was
+  // unfindable in the menu that lists what is recorded.
   //
-  // The picker is not limited to what comes back. It accepts any ticker typed
-  // into its search box, so this is a convenience list, not a whitelist — which
-  // is also why it needs no cache-busting beyond the 30s header.
+  // The round trip barely exists in practice: roster-store caches for 15s, the
+  // client fetches this ONCE per page load on the first dropdown open and shares
+  // it across all three cards, and the 30s Cache-Control sits on top of that.
+  //
+  // Still a convenience list, not a whitelist — the picker accepts any ticker
+  // typed into its search box, so a name missing here is findable, just not
+  // browsable. That is why a failure returns an empty list and a 200.
   register('/api/es-candles/tickers', {
     auth: 'subscriber', methods: ['GET'],
     async handler(req, res) {
+      const { CORE_TICKERS, getActiveRoster } = require('./far-cb-tickers');
+      const norm = (list) => [...new Set(
+        (Array.isArray(list) ? list : []).map((s) => String(s).trim().toUpperCase()).filter(Boolean),
+      )].sort();
       try {
-        const { CORE_TICKERS } = require('./far-cb-tickers');
-        const tickers = [...new Set(
-          (Array.isArray(CORE_TICKERS) ? CORE_TICKERS : [])
-            .map((s) => String(s).trim().toUpperCase())
-            .filter(Boolean),
-        )].sort();
-        send(res, 200, { ok: true, count: tickers.length, tickers }, { 'Cache-Control': CACHE_30 });
+        const live = norm(await getActiveRoster());
+        // An empty live roster means the DB answered with nothing, not that the
+        // universe is empty — fall back rather than hand the picker a blank menu.
+        const tickers = live.length ? live : norm(CORE_TICKERS);
+        send(res, 200, {
+          ok: true,
+          count: tickers.length,
+          source: live.length ? 'roster' : 'file',
+          tickers,
+        }, { 'Cache-Control': CACHE_30 });
       } catch (err) {
-        // An empty list is a working picker with a shorter menu, so this is a
-        // 200 rather than a 500 — the client treats a failure and an empty
-        // roster identically anyway.
-        send(res, 200, { ok: false, tickers: [], error: String(err) });
+        try {
+          const tickers = norm(CORE_TICKERS);
+          send(res, 200, { ok: true, count: tickers.length, source: 'file', tickers }, { 'Cache-Control': CACHE_30 });
+        } catch {
+          send(res, 200, { ok: false, tickers: [], error: String(err) });
+        }
       }
     },
   });
