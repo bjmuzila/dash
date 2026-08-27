@@ -8,6 +8,7 @@ import { useQuery } from '@/data/api'
 import type { GexFrame, FlowFrame } from '@/contract/frames'
 import type { BoardItem } from '@/design/primitives/Board'
 import { useCanvasRenderer, drawCandles, drawDivergingBars, drawLines, type Candle } from './chart-render'
+import { useLwChartRenderer } from './lwChart'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The board's card catalog — the "+ Add card" dropdown lists exactly this
@@ -44,22 +45,31 @@ interface CandlesResponse {
 
 function toCandles(rows: CandleRow[] | undefined): Candle[] {
   if (!rows) return []
-  return rows.map((r) => ({ t: r.timestamp, o: r.open, h: r.high, l: r.low, c: r.close }))
+  // Number(): the real endpoint sends timestamp as a numeric STRING
+  // ("1787716800000"), not a number — confirmed against the live API, not
+  // guessed. The plain canvas renderer never cared (it draws by index), but
+  // lightweight-charts is strict about `time` actually being a number.
+  return rows.map((r) => ({ t: Number(r.timestamp), o: r.open, h: r.high, l: r.low, c: r.close }))
 }
 
 function candlesUrl(symbol: string, daysBack = 1) {
   return `/api/snapshots/candles?symbol=${encodeURIComponent(symbol)}&interval=5&daysBack=${daysBack}`
 }
 
-// ── ES Candles ────────────────────────────────────────────────────────────────
+// ── ES Candles — real candlestick chart (lightweight-charts, lazy-loaded) with
+// GEX bubbles overlaid at each strike's real price coordinate. See lwChart.ts
+// for why this is a from-scratch v3-native chart and not a port of v2's
+// EsChartCard. ──
 function EsCandlesCard() {
   const { data, loading, error } = useQuery<CandlesResponse>(candlesUrl('ES'), { staleMs: 25_000 })
-  const { onMount, onResize, setDraw } = useCanvasRenderer()
+  const { onMount, setCandles, setGexRows } = useLwChartRenderer()
   const candles = useMemo(() => toCandles(data?.rows), [data])
 
   useEffect(() => {
-    setDraw((canvas, w, h) => drawCandles(canvas, w, h, candles))
-  }, [candles, setDraw])
+    setCandles(candles)
+  }, [candles, setCandles])
+
+  useEffect(() => watchFrame<GexFrame>('gex', (frame) => setGexRows(frame?.data.gexRows ?? [])), [setGexRows])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-1">
@@ -67,7 +77,7 @@ function EsCandlesCard() {
       {!error && candles.length === 0 && (
         <span className="shrink-0 text-xs text-muted">{loading ? 'Loading…' : 'No candles for today yet.'}</span>
       )}
-      <ChartFrame onMount={onMount} onResize={onResize} />
+      <ChartFrame onMount={onMount} />
     </div>
   )
 }
