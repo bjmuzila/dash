@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-08-27 - Wall migration: two roles instead of a mask, taller plot
+
+Edited: `components/pages/LevelLog.tsx` (`WallMigrationChart`).
+
+**The sign rule was right; masking was the wrong way to draw it.** Suppressing
+the matching wall per slot made green and red drop out mid-session and come
+back, and the eye reads that as a level vanishing rather than a role swapping.
+So the chart now uses the post-market recap's model (`PostMarketTab` ->
+`WallChart`): TWO ROLES, NOT THREE LEVELS. CORE is the heavier wall, OTHER is
+the lighter one, both lines run the whole session, and when dominance flips the
+lines swap.
+
+The one thing changed from the post-market version is colour. That chart paints
+OTHER a flat grey because it has no per-side identity to show; this page does,
+so OTHER is drawn in the colour of the wall it currently IS - green for the call
+wall, red for the put wall - as one polyline per contiguous same-side stretch,
+each joined to the next by the vertical edge of the swap. So a positive CORE
+still has no second green line and a negative CORE no second red one, but
+neither colour ever blinks out mid-run.
+
+Which wall the CORE is, in order: the strike itself when CORE is sitting on one
+(most slots), then the recorded `level_gex` sign, then the nearer wall for days
+whose `cb` rows predate that column. The last is never wrong by much and is
+stable slot to slot, which is the whole point - a role that flickers is what
+this model exists to stop.
+
+Falls back to the plain three-level drawing on the views with nothing to
+resolve: WALLS (no CORE) and CORE (no walls) look exactly as they always did. A
+wall that is the CORE all session no longer takes a legend chip that toggles
+nothing. The corridor is now the band between the two drawn lines, so it never
+collapses to zero width against a wall the CORE already is.
+
+**Plot height 190 -> 250.** At 190 a full session of steps sat within a few
+pixels of the tape all day.
+
 ## 2026-08-27 - v3 GEX Candles: bubbles auto-size to the space they actually have, and the grid is gone
 
 Edited: `cbedge-v3/src/board/gexCandles/bubbles.ts`,

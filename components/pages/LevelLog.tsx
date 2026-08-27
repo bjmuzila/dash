@@ -1202,11 +1202,12 @@ function WallRailChips({ marks }: { marks: RailMark[] }) {
 // ── Wall migration ───────────────────────────────────────────────────────────
 
 /**
- * Chart body height in px, and the breathing room inside it. Both are the
- * post-market recap's numbers (PostMarketTab → WallChart), so the two charts
- * sit at the same proportions rather than one reading squatter than the other.
+ * Chart body height in px, and the breathing room inside it. The pad is the
+ * post-market recap's (PostMarketTab → WallChart); the body is taller than its
+ * 190, because this chart draws a whole session of steps against a 1-minute
+ * tape and at 190 the walls sat within a few pixels of price all day.
  */
-const MIG_H = 190;
+const MIG_H = 250;
 const MIG_PAD = 8;
 
 /** ET minutes-since-midnight of the two anchors the slot grid is built on. */
@@ -1488,10 +1489,19 @@ type DaySlice = {
   price: SpotSample[];
 };
 
+/** Which wall a role-model line IS at a given slot. */
+type WallSide = "call" | "put";
+
 /** One day reduced to what the drawing needs. */
 type DaySeg = {
   date: string;
   series: Map<WallLevel, (number | null)[]>;
+  /**
+   * The two ROLES — CORE (the heavier wall) and OTHER (the lighter one), with
+   * the side OTHER currently is so it can be drawn in that wall's colour.
+   * Null on the views where there is nothing to resolve.
+   */
+  roles: { core: (number | null)[]; other: (number | null)[]; side: (WallSide | null)[] } | null;
   /**
    * The corridor's two edges, already resolved for the CORE-sign rule below —
    * so where a wall is suppressed the band closes on the CORE that replaced it
@@ -1602,20 +1612,27 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
       }
 
       /**
-       * THE CORE-SIGN RULE — one dominant node cannot be two levels.
+       * THE CORE-SIGN RULE, AS TWO ROLES — the post-market chart's model.
        *
-       * CORE is the single largest |net GEX| strike on the chain, so its SIGN
-       * says which wall it already is: positive gamma at the node makes it the
-       * call wall, negative makes it the put wall. Drawing the matching wall
-       * beside it is the same strike twice in two colours, and on the days the
-       * two do NOT coincide it is worse than redundant — it invites reading a
-       * secondary node as a boundary the dominant one has already overruled.
+       * CORE is the single largest |net GEX| node on the chain, so it IS one of
+       * the walls: positive gamma at that node makes it the call wall, negative
+       * makes it the put wall. Drawing the matching wall beside it is the same
+       * strike twice in two colours.
        *
-       * So: CORE positive → no call wall. CORE negative → no put wall. Per
-       * slot, off the forward-filled `level_gex` the recorder wrote on the cb
-       * rows, because dominance flips intraday and the mask has to flip with
-       * it. With no CORE gamma recorded (walls view, or a day whose cb rows
-       * predate the column) nothing is masked and both walls draw as before.
+       * The first cut of this masked the matching wall out per slot, which was
+       * right about the rule and wrong about the drawing: green and red kept
+       * dropping out mid-session and coming back, so the eye read a level that
+       * had vanished rather than a role that had swapped. PostMarketTab's
+       * WallChart solved this years-worth-of-squinting ago — TWO ROLES, NOT
+       * THREE LEVELS. CORE is the heavier wall, OTHER is the lighter one, both
+       * lines run the whole session, and when dominance flips the lines swap.
+       *
+       * The one change here is colour. The post-market chart paints OTHER a
+       * flat grey because it has no per-side identity to show; this page does,
+       * so OTHER is drawn in the colour of the wall it currently IS — green for
+       * the call wall, red for the put wall — in contiguous same-side runs. So
+       * a positive CORE has no second green line, a negative CORE has no second
+       * red one, and neither colour ever blinks out mid-run.
        */
       const coreG: (number | null)[] = new Array(WALL_SLOTS).fill(null);
       {
@@ -1629,19 +1646,49 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
           coreG[s] = cur;
         }
       }
+
+      const cwArr = series.get("call_wall");
+      const pwArr = series.get("put_wall");
       const cbArr = series.get("cb");
-      for (const [lt, arr] of series) {
-        if (lt !== "call_wall" && lt !== "put_wall") continue;
+
+      /**
+       * Roles only exist where the CORE and at least one wall are both in play.
+       * The WALLS view (no cb) and the CORE view (no walls) have nothing to
+       * resolve, so they fall through to the plain per-level drawing below and
+       * look exactly as they always did.
+       */
+      let roles: DaySeg["roles"] = null;
+      if (cbArr && (cwArr || pwArr)) {
+        const core: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+        const other: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+        const side: (WallSide | null)[] = new Array(WALL_SLOTS).fill(null);
         for (let s = 0; s <= lastSlot; s++) {
-          const g = coreG[s];
-          if (g == null || g === 0) continue;
-          if (lt === "call_wall" ? g > 0 : g < 0) arr[s] = null;
+          const c = cbArr[s];
+          if (c == null) continue;
+          const a = cwArr?.[s] ?? null;
+          const b = pwArr?.[s] ?? null;
+          /**
+           * WHICH WALL THE CORE IS. The strike itself answers it whenever CORE
+           * is sitting on one — which is most slots. Failing that the recorded
+           * gamma sign answers it. Failing that (a day whose cb rows predate
+           * `level_gex`) the nearer wall does, which is never wrong by much and
+           * is at least stable from slot to slot — a role that flickers is the
+           * thing this model exists to stop.
+           */
+          let coreSide: WallSide;
+          if (a != null && c === a) coreSide = "call";
+          else if (b != null && c === b) coreSide = "put";
+          else {
+            const g = coreG[s];
+            if (g != null && g !== 0) coreSide = g > 0 ? "call" : "put";
+            else if (a != null && b != null) coreSide = Math.abs(c - a) <= Math.abs(c - b) ? "call" : "put";
+            else coreSide = a != null ? "call" : "put";
+          }
+          core[s] = c;
+          const o = coreSide === "call" ? b : a;
+          if (o != null) { other[s] = o; side[s] = coreSide === "call" ? "put" : "call"; }
         }
-      }
-      // A wall masked away on every slot of every day is not a series — drop it
-      // so it takes no legend chip and no colour.
-      for (const [lt, arr] of Array.from(series.entries())) {
-        if (!arr.some((v) => v != null)) series.delete(lt);
+        if (core.some((v) => v != null)) roles = { core, other, side };
       }
 
       // Spot, from every capture that carried one. Events are written second so
@@ -1670,25 +1717,24 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
       const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }));
 
       /**
-       * The corridor is the room price had, so its edges are the levels that
-       * are actually bounding price — the wall where one is drawn, and the CORE
-       * where the sign rule suppressed it (the CORE IS that wall on those
-       * slots). Without this the band would disappear exactly when the rule
-       * fires, which is most of the session.
+       * The corridor is the room price had, so its edges are the two lines that
+       * are actually bounding it: CORE and OTHER under the role model, the two
+       * walls without it. Never CORE against the wall it already is, which
+       * would be a band of zero width.
        */
-      const cw = series.get("call_wall");
-      const pw = series.get("put_wall");
       const up: (number | null)[] = new Array(WALL_SLOTS).fill(null);
       const dn: (number | null)[] = new Array(WALL_SLOTS).fill(null);
       for (let s = 0; s <= lastSlot; s++) {
-        const g = coreG[s];
-        up[s] = cw?.[s] ?? (g != null && g > 0 ? cbArr?.[s] ?? null : null);
-        dn[s] = pw?.[s] ?? (g != null && g < 0 ? cbArr?.[s] ?? null : null);
+        const a = roles ? roles.core[s] : cwArr?.[s] ?? null;
+        const b = roles ? roles.other[s] : pwArr?.[s] ?? null;
+        if (a == null || b == null) continue;
+        up[s] = Math.max(a, b);
+        dn[s] = Math.min(a, b);
       }
       const band = up.some((v, s) => v != null && dn[s] != null) ? { up, lo: dn } : null;
 
       if (!series.size && !spotDrawn.length) continue;
-      segs.push({ date: day.date, series, band, spotPts, spotDrawn, dense, lastSlot, lastWrite });
+      segs.push({ date: day.date, series, roles, band, spotPts, spotDrawn, dense, lastSlot, lastWrite });
     }
     if (!segs.length) return null;
 
@@ -1708,17 +1754,24 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
     const padY = (hi - lo) * 0.08;
     lo -= padY; hi += padY;
 
-    // Recomputed AFTER the sign rule, not before: a wall the rule masked away
-    // on every session is not a level this chart has, and must not take a
-    // legend chip that toggles nothing.
-    const kept = levels.filter((lt) => segs.some((seg) => seg.series.has(lt)));
+    // What the LEGEND may offer. Under the role model a wall earns its chip by
+    // being the OTHER line somewhere — a wall that is the CORE all session is
+    // already on screen in gold and must not also take a green or red chip that
+    // toggles nothing.
+    const roled = segs.some((seg) => seg.roles);
+    const kept = levels.filter((lt) => {
+      if (!roled) return segs.some((seg) => seg.series.has(lt));
+      if (lt === "cb") return true;
+      const want: WallSide = lt === "call_wall" ? "call" : "put";
+      return segs.some((seg) => seg.roles?.side.some((v) => v === want));
+    });
     if (!kept.length) return null;
 
-    return { levels: kept, segs, lo, hi };
+    return { levels: kept, segs, lo, hi, roled };
   }, [days, view]);
 
   if (!model) return null;
-  const { levels, segs, lo, hi } = model;
+  const { levels, segs, lo, hi, roled } = model;
   const N = segs.length;
   const segW = 100 / N;
   const last = segs[N - 1];
@@ -1805,21 +1858,62 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
   };
 
   /**
-   * One stroke per RECORDED level per day, in the colour the rest of the page
-   * reads as that level — gold CORE, green call wall, red put wall. Walls first,
-   * CORE last, so where the CORE is sitting on a wall — common, it is usually
-   * the heavier of the two — the gold reads on top and the reader can see that
-   * they coincide rather than having one silently hidden under the other.
+   * THE TWO LINES.
+   *
+   * Under the role model (CORE plus at least one wall) there are exactly two:
+   * CORE in gold, thick, running the whole session; and OTHER, drawn as one
+   * polyline per contiguous same-side stretch so it carries the colour of the
+   * wall it currently is. Each stretch is joined to the next by the vertical
+   * edge of the swap, so the line is continuous through a role change — the
+   * swap reads as a colour change at a step, not as two levels disappearing.
+   *
+   * Without the role model (the WALLS view, the CORE view) it is the plain
+   * per-level drawing it always was: gold CORE, green call wall, red put wall,
+   * walls first so the gold reads on top of the wall it coincides with.
    */
   const drawOrder: WallLevel[] = ["put_wall", "call_wall", "cb"];
   const drawn = drawOrder.filter((lt) => levels.includes(lt));
   const paths: { key: string; d: string; color: string; w: number }[] = [];
-  for (const lt of drawn) {
-    if (off.has(lt)) continue;
+  if (roled) {
     for (let i = 0; i < N; i++) {
-      stepRuns(i, segs[i].series.get(lt)).forEach((d, k) => {
-        paths.push({ key: `${lt}-${i}-${k}`, d, color: LEVEL_COLOR[lt], w: lt === "cb" ? 2.2 : 1.8 });
-      });
+      const r = segs[i].roles;
+      if (!r) continue;
+      const L = segs[i].lastSlot;
+      let s = 0;
+      let k = 0;
+      while (s <= L) {
+        if (r.other[s] == null || r.side[s] == null) { s++; continue; }
+        const a = s;
+        const sd = r.side[s];
+        while (s <= L && r.other[s] != null && r.side[s] === sd) s++;
+        const b = s - 1;
+        const lt: WallLevel = sd === "call" ? "call_wall" : "put_wall";
+        if (!off.has(lt)) {
+          const pts = stepRun(i, r.other, a, b);
+          // Carry the run to the next slot's value, so consecutive runs meet at
+          // the vertical edge instead of leaving a slot-wide hole between them.
+          const nx = r.other[b + 1];
+          if (pts.length && nx != null && b + 1 <= L) {
+            pts.push(`${x(i, b + 1)},${y(r.other[b] as number)}`, `${x(i, b + 1)},${y(nx)}`);
+          }
+          if (pts.length) paths.push({ key: `other-${i}-${k}`, d: pts.join(" "), color: LEVEL_COLOR[lt], w: 1.8 });
+        }
+        k++;
+      }
+      if (!off.has("cb")) {
+        stepRuns(i, r.core).forEach((d, j) => {
+          paths.push({ key: `core-${i}-${j}`, d, color: LEVEL_COLOR.cb, w: 2.2 });
+        });
+      }
+    }
+  } else {
+    for (const lt of drawn) {
+      if (off.has(lt)) continue;
+      for (let i = 0; i < N; i++) {
+        stepRuns(i, segs[i].series.get(lt)).forEach((d, k) => {
+          paths.push({ key: `${lt}-${i}-${k}`, d, color: LEVEL_COLOR[lt], w: lt === "cb" ? 2.2 : 1.8 });
+        });
+      }
     }
   }
 
