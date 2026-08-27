@@ -1,22 +1,26 @@
 import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { ChartFrame } from '@/design/primitives/ChartFrame'
+import { Stat } from '@/design/primitives/Stat'
 import { Table } from '@/design/primitives/Table'
+import { useField, watchFrame } from '@/data/hooks'
+import { useQuery } from '@/data/api'
+import type { GexFrame, FlowFrame } from '@/contract/frames'
 import type { BoardItem } from '@/design/primitives/Board'
+import { useCanvasRenderer, drawCandles, drawDivergingBars, drawLines, type Candle } from './chart-render'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The board's card catalog — the "+ Add card" dropdown lists exactly this
 // array, in this order. Adding a card type to the terminal is one entry here;
 // BoardPage and Board never need to change.
 //
-// Real data (ES candles, GEX-by-strike, the multi-ticker chart, the flow tape)
-// isn't wired yet — v3's contract (src/contract/frames.ts) doesn't carry those
-// frame shapes yet, and AGENTS.md rule #4 ("charts are imperative, mounted
-// through ChartFrame") means those need a real chart-library integration, not
-// a placeholder div. Each of those renders a clearly-labelled pending state
-// instead of fake numbers, so nobody mistakes it for live data. Key Levels,
-// Econ Calendar/Earnings and Quick Links are plain data/UI, not charts, so
-// Quick Links is fully working today and the other two are stubbed the same
-// "pending" way pending their own REST wiring.
+// Wired to real server-v2 data (2026-08-27): ES Candles, GEX Chart, Multi
+// Chart and Flow Tape all read live/REST data now (see src/contract/frames.ts
+// for the transcribed wire shapes and src/board/chart-render.ts for the
+// canvas renderers — there's no chart library installed, so these are plain
+// canvas 2D, swappable later without touching the cards). Key Levels and
+// Economic Calendar & Earnings pull from the confirmed REST endpoints. Quick
+// Links remains local/editable, no backend involved.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CardDef {
@@ -27,27 +31,94 @@ export interface CardDef {
   render: () => ReactNode
 }
 
-function Pending({ note }: { note: string }) {
+interface CandleRow {
+  timestamp: number
+  open: number
+  high: number
+  low: number
+  close: number
+}
+interface CandlesResponse {
+  rows: CandleRow[]
+}
+
+function toCandles(rows: CandleRow[] | undefined): Candle[] {
+  if (!rows) return []
+  return rows.map((r) => ({ t: r.timestamp, o: r.open, h: r.high, l: r.low, c: r.close }))
+}
+
+function candlesUrl(symbol: string, daysBack = 1) {
+  return `/api/snapshots/candles?symbol=${encodeURIComponent(symbol)}&interval=5&daysBack=${daysBack}`
+}
+
+// ── ES Candles ────────────────────────────────────────────────────────────────
+function EsCandlesCard() {
+  const { data, loading, error } = useQuery<CandlesResponse>(candlesUrl('ES'), { staleMs: 25_000 })
+  const { onMount, onResize, setDraw } = useCanvasRenderer()
+  const candles = useMemo(() => toCandles(data?.rows), [data])
+
+  useEffect(() => {
+    setDraw((canvas, w, h) => drawCandles(canvas, w, h, candles))
+  }, [candles, setDraw])
+
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
-      <span className="text-xs text-faint">{note}</span>
+    <div className="flex min-h-0 flex-1 flex-col gap-1">
+      {error && <span className="shrink-0 text-xs text-down">{error.message}</span>}
+      {!error && candles.length === 0 && (
+        <span className="shrink-0 text-xs text-muted">{loading ? 'Loading…' : 'No candles for today yet.'}</span>
+      )}
+      <ChartFrame onMount={onMount} onResize={onResize} />
     </div>
   )
 }
 
-function EsCandlesCard() {
-  return <Pending note="ES candles — chart pending (needs the candle frame + a chart library mount)" />
+// ── GEX Chart ─────────────────────────────────────────────────────────────────
+function GexChartCard() {
+  const { onMount, onResize, setDraw } = useCanvasRenderer()
+
+  useEffect(() => {
+    return watchFrame<GexFrame>('gex', (frame) => {
+      const rows = [...(frame?.data.gexRows ?? [])].sort((a, b) => a.strike - b.strike)
+      setDraw((canvas, w, h) => drawDivergingBars(canvas, w, h, rows.map((r) => ({ label: String(r.strike), value: r.netGEX }))))
+    })
+  }, [setDraw])
+
+  return <ChartFrame onMount={onMount} onResize={onResize} />
 }
 
-function GexChartCard() {
-  return <Pending note="GEX by strike — chart pending (needs the gex frame + a chart library mount)" />
-}
+// ── Multi Chart — single ticker (candles) or multiple (normalized overlay) ──
+const CHART_SYMBOLS = ['ES', 'NQ']
 
 function MultiChartCard() {
   const [mode, setMode] = useState<'single' | 'multi'>('single')
+  const [symbol, setSymbol] = useState('ES')
+  const single = useQuery<CandlesResponse>(mode === 'single' ? candlesUrl(symbol) : null, { staleMs: 25_000 })
+  const multiA = useQuery<CandlesResponse>(mode === 'multi' ? candlesUrl('ES') : null, { staleMs: 25_000 })
+  const multiB = useQuery<CandlesResponse>(mode === 'multi' ? candlesUrl('NQ') : null, { staleMs: 25_000 })
+  const { onMount, onResize, setDraw } = useCanvasRenderer()
+
+  const singleCandles = useMemo(() => toCandles(single.data?.rows), [single.data])
+  const normalized = useMemo(() => {
+    const norm = (rows: CandleRow[] | undefined) => {
+      const first = rows?.[0]
+      if (!rows || !first) return []
+      const base = first.close || 1
+      return rows.map((r) => ((r.close - base) / base) * 100)
+    }
+    return [
+      { color: '--color-series-1', points: norm(multiA.data?.rows) },
+      { color: '--color-series-2', points: norm(multiB.data?.rows) },
+    ]
+  }, [multiA.data, multiB.data])
+
+  useEffect(() => {
+    if (mode === 'single') setDraw((canvas, w, h) => drawCandles(canvas, w, h, singleCandles))
+    else setDraw((canvas, w, h) => drawLines(canvas, w, h, normalized))
+  }, [mode, singleCandles, normalized, setDraw])
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="flex shrink-0 gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         {(['single', 'multi'] as const).map((m) => (
           <button
             key={m}
@@ -60,14 +131,74 @@ function MultiChartCard() {
             {m} ticker
           </button>
         ))}
+        {mode === 'single' && (
+          <select
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value)}
+            className="ml-auto rounded-sm border border-line bg-surface px-1.5 py-0.5 text-xs text-fg outline-none"
+          >
+            {CHART_SYMBOLS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        )}
+        {mode === 'multi' && <span className="ml-auto text-[10px] text-muted">ES vs NQ, % change</span>}
       </div>
-      <Pending note={`Chart pending — ${mode === 'single' ? 'one ticker' : 'overlaid tickers'} (needs a chart-library mount)`} />
+      <ChartFrame onMount={onMount} onResize={onResize} />
     </div>
   )
 }
 
+// ── Flow Tape (Net Premium) — live rolling chart + recent prints ────────────
+const FLOW_HISTORY_MAX = 120
+
 function FlowTapeCard() {
-  return <Pending note="Net premium / flow tape — chart pending (needs the flow frame + a chart library mount)" />
+  const { onMount, onResize, setDraw } = useCanvasRenderer()
+  const [snapshot, setSnapshot] = useState<{ netPremium: number; buyPct: number; prints: number } | null>(null)
+  const [tape, setTape] = useState<FlowFrame['data']['tape']>([])
+
+  useEffect(() => {
+    const history: number[] = []
+    return watchFrame<FlowFrame>('flow', (frame) => {
+      const d = frame?.data
+      if (!d) return
+      history.push(d.netPremium)
+      if (history.length > FLOW_HISTORY_MAX) history.shift()
+      setDraw((canvas, w, h) => drawLines(canvas, w, h, [{ color: '--color-accent', points: [...history] }]))
+      setSnapshot({ netPremium: d.netPremium, buyPct: d.buyPct, prints: d.prints })
+      setTape(d.tape ?? [])
+    })
+  }, [setDraw])
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <div className="grid shrink-0 grid-cols-3 gap-2">
+        <Stat
+          label="Net premium"
+          value={snapshot ? `$${(snapshot.netPremium / 1000).toFixed(0)}k` : undefined}
+          direction={snapshot ? (snapshot.netPremium >= 0 ? 'up' : 'down') : undefined}
+          size="sm"
+        />
+        <Stat label="Buy %" value={snapshot ? `${(snapshot.buyPct * 100).toFixed(0)}%` : undefined} size="sm" />
+        <Stat label="Prints" value={snapshot?.prints} size="sm" />
+      </div>
+      <div className="h-16 shrink-0">
+        <ChartFrame onMount={onMount} onResize={onResize} />
+      </div>
+      <Table
+        columns={[
+          { key: 'strike', header: 'Strike', cell: (r) => `${r.strike}${r.type === 'call' ? 'C' : 'P'}`, width: '64px' },
+          { key: 'side', header: 'Side', cell: (r) => r.side, width: '48px' },
+          { key: 'premium', header: 'Premium', cell: (r) => `$${(r.premium / 1000).toFixed(0)}k`, numeric: true },
+        ]}
+        rows={[...tape].slice(-25).reverse()}
+        rowKey={(r, i) => `${r.ts}-${i}`}
+        empty="No prints this window"
+      />
+    </div>
+  )
 }
 
 // ── Quick Links — fully functional today: user-editable, persisted locally. ──
@@ -151,10 +282,7 @@ function QuickLinksCard() {
           </div>
         </div>
       ) : (
-        <button
-          onClick={() => setEditing(true)}
-          className="shrink-0 self-start text-xs text-muted hover:text-fg"
-        >
+        <button onClick={() => setEditing(true)} className="shrink-0 self-start text-xs text-muted hover:text-fg">
           Edit links
         </button>
       )}
@@ -162,47 +290,80 @@ function QuickLinksCard() {
   )
 }
 
-// ── Key Levels — same shape as the premarket page's levels list. ──
-type Level = { label: string; strike: string; tag: string; direction: 'up' | 'down' | 'flat' }
-const PLACEHOLDER_LEVELS: Level[] = [
-  { label: 'Core Bullseye', strike: '—', tag: 'CB', direction: 'flat' },
-  { label: 'Call Wall', strike: '—', tag: 'CW', direction: 'up' },
-  { label: 'Put Wall', strike: '—', tag: 'PW', direction: 'down' },
-  { label: 'Gamma Flip', strike: '—', tag: 'GF', direction: 'flat' },
-]
-
+// ── Key Levels — real values off the live 'gex' frame. ──
 function KeyLevelsCard() {
+  const callWall = useField<GexFrame, number | null>('gex', (f) => f?.data.callWall ?? null)
+  const putWall = useField<GexFrame, number | null>('gex', (f) => f?.data.putWall ?? null)
+  const gexFlip = useField<GexFrame, number | null>('gex', (f) => f?.data.gexFlip ?? null)
+  const netGex = useField<GexFrame, number | null>('gex', (f) => f?.data.totalNetGex ?? null)
+
+  type Row = { tag: string; label: string; value: number | null }
+  const rows: Row[] = [
+    { tag: 'CW', label: 'Call Wall', value: callWall },
+    { tag: 'PW', label: 'Put Wall', value: putWall },
+    { tag: 'GF', label: 'Gamma Flip', value: gexFlip },
+    { tag: 'NG', label: 'Net GEX', value: netGex },
+  ]
+
   return (
-    <Table<Level>
-      stale
+    <Table<Row>
+      stale={rows.every((r) => r.value === null)}
       columns={[
         { key: 'tag', header: '', cell: (r) => <span className="text-xs text-faint">{r.tag}</span>, width: '32px' },
         { key: 'label', header: 'Level', cell: (r) => r.label },
-        { key: 'strike', header: 'Strike', cell: (r) => r.strike, numeric: true },
+        { key: 'value', header: 'Value', cell: (r) => (r.value === null ? '—' : r.value.toLocaleString()), numeric: true },
       ]}
-      rows={PLACEHOLDER_LEVELS}
+      rows={rows}
       rowKey={(r) => r.tag}
     />
   )
 }
 
-// ── Econ Calendar & Earnings — same shape as the home page's version. ──
-type EconRow = { time: string; event: string; impact: 'High' | 'Med' | 'Low' }
-const PLACEHOLDER_ECON: EconRow[] = [
-  { time: '—', event: 'Not wired yet — needs /api/calendar + /api/earnings via src/data/api.ts', impact: 'Low' },
-]
+// ── Econ Calendar & Earnings — real REST data, merged and sorted by time. ──
+interface CalEvent {
+  time: string
+  title: string
+  impact: string
+}
+interface CalendarResponse {
+  events: CalEvent[]
+}
+interface EarningsRow {
+  symbol: string
+  company: string
+  callTime: string
+}
+interface EarningsResponse {
+  earnings: EarningsRow[]
+}
+
+type EconRow = { time: string; label: string; impact: string }
 
 function EconCalendarCard() {
+  const cal = useQuery<CalendarResponse>('/api/calendar', { staleMs: 60_000 })
+  const earn = useQuery<EarningsResponse>('/api/earnings-today', { staleMs: 60_000 })
+
+  const rows = useMemo<EconRow[]>(() => {
+    const fromCal = (cal.data?.events ?? []).map((e) => ({ time: e.time, label: e.title, impact: e.impact }))
+    const fromEarn = (earn.data?.earnings ?? []).map((e) => ({
+      time: e.callTime,
+      label: `${e.symbol} earnings — ${e.company}`,
+      impact: 'Earnings',
+    }))
+    return [...fromCal, ...fromEarn].sort((a, b) => a.time.localeCompare(b.time))
+  }, [cal.data, earn.data])
+
   return (
     <Table<EconRow>
-      stale
+      stale={cal.loading || earn.loading}
       columns={[
         { key: 'time', header: 'Time', cell: (r) => r.time, width: '56px' },
-        { key: 'event', header: 'Event / Earnings', cell: (r) => r.event },
-        { key: 'impact', header: 'Impact', cell: (r) => r.impact, width: '56px' },
+        { key: 'label', header: 'Event / Earnings', cell: (r) => r.label },
+        { key: 'impact', header: 'Impact', cell: (r) => r.impact, width: '64px' },
       ]}
-      rows={PLACEHOLDER_ECON}
-      rowKey={(r, i) => i}
+      rows={rows}
+      rowKey={(r, i) => `${r.time}-${i}`}
+      empty={cal.error || earn.error ? 'Could not load calendar/earnings' : 'Nothing scheduled'}
     />
   )
 }
@@ -211,7 +372,7 @@ export const CARD_CATALOG: CardDef[] = [
   { id: 'es-candles', label: 'ES Candles', defaultSize: { w: 6, h: 9 }, render: () => <EsCandlesCard /> },
   { id: 'gex-chart', label: 'GEX Chart', defaultSize: { w: 6, h: 9 }, render: () => <GexChartCard /> },
   { id: 'multi-chart', label: 'Multi Chart', defaultSize: { w: 6, h: 9 }, render: () => <MultiChartCard /> },
-  { id: 'flow-tape', label: 'Flow Tape (Net Premium)', defaultSize: { w: 6, h: 7 }, render: () => <FlowTapeCard /> },
+  { id: 'flow-tape', label: 'Flow Tape (Net Premium)', defaultSize: { w: 6, h: 9 }, render: () => <FlowTapeCard /> },
   { id: 'quick-links', label: 'Quick Links', defaultSize: { w: 3, h: 6 }, render: () => <QuickLinksCard /> },
   { id: 'key-levels', label: 'Key Levels', defaultSize: { w: 3, h: 6 }, render: () => <KeyLevelsCard /> },
   { id: 'econ-calendar', label: 'Economic Calendar & Earnings', defaultSize: { w: 6, h: 6 }, render: () => <EconCalendarCard /> },

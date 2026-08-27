@@ -77,28 +77,35 @@ const SYMBOLS = (process.env.ETF_GEX_SYMBOLS
 // in its symbol picker, and a ticker that charts candles under a permanently
 // empty heatmap reads as a broken page rather than as "no gamma recorded here".
 //
-// Two things keep this from being the 2.9GB table again, and BOTH are load
-// bearing — do not raise one without recomputing the other:
+// ── EVERY MINUTE, not on a round-robin ──────────────────────────────────────
+// The first cut at this lane rationed it: 12 names a tick, so a wide symbol got
+// a column every ~8 minutes. That is wrong for the reader it exists for. The
+// GEX BUBBLE TRAIL buckets to ONE MINUTE (`BubbleBucket = 1 | 5 | 'bar'` in
+// slotStore.ts; `minuteColsRef` is keyed by the minute), so 8-minute spacing
+// does not give a coarse trail — it gives a trail with seven empty minutes
+// between every bubble, on a chart whose finest setting is one.
 //
-//   1. ROUND-ROBIN, not a full sweep. Each tick takes the next WIDE_BATCH
-//      names. At the default 12 that is ~8 minutes to cover 93, so a wide
-//      symbol writes ~49 columns a session instead of 390 — an eighth of the
-//      rows a hot symbol writes, for a lane seven times its size.
-//   2. A NARROWER LADDER. ±WIDE_STRIKE_SIDE (25) instead of ±40, so 51 rows a
-//      write rather than 81.
+// So the wide lane is swept IN FULL every tick, exactly like the hot lane. What
+// makes that fit in 60 seconds is CONCURRENCY (see sweep() and the two
+// *_CONCURRENCY knobs below), not a smaller roster: 106 serial chain fetches at
+// ~500ms each is ~80s; the same 106 six at a time is ~10s.
 //
-// Steady state at those numbers is roughly 0.8M rows against the hot lane's
-// 1.5M — the table grows by about half, not by ten times. (Sweeping all 93
-// every minute at the full ladder would have been ~10M on its own.) The nightly
-// prune (state/retention-cleanup.js) then thins everything past
-// RETENTION_GEX_FULLRES_DAYS to the 5-minute grid, which for this lane is most
-// of what it wrote.
+// ── The write volume, because this table has form ───────────────────────────
+// option_strike_gex_history is the 2.9GB table from the 2026-07 disk incident,
+// and per-minute × 93 names is genuinely a lot of rows. What holds it:
 //
-// The round-robin cadence is a real trade-off, stated plainly: a wide symbol's
-// heatmap has a column every ~8 minutes, not every minute. That is a coarse
-// gamma trail, and it is the honest price of covering ninety-three names on a
-// table with a history of eating the disk. Lower ETF_GEX_WIDE_BATCH to trade
-// coverage for resolution, raise it for the reverse.
+//   • A NARROWER LADDER for this lane — ±WIDE_STRIKE_SIDE (25) rather than the
+//     hot lane's 40, so 51 rows a write instead of 81. This is the lever that
+//     scales the whole thing linearly, and it is why the default is not 40.
+//   • The nightly prune (state/retention-cleanup.js): front expiry only, 5-min
+//     thinning outside RTH and past RETENTION_GEX_FULLRES_DAYS, everything
+//     dropped past RETENTION_GEX_HISTORY_DAYS.
+//
+// Steady state at those numbers is roughly 6.7M rows for this lane against the
+// hot lane's 1.5M. If that is more disk than the box has, the levers in order of
+// bluntness: RETENTION_GEX_HISTORY_DAYS (10 → 5 nearly halves it, and
+// /es-candles only ever shows five sessions), ETF_GEX_WIDE_STRIKE_SIDE (25 → 15
+// takes off another 40%), then trimming ETF_GEX_WIDE_SYMBOLS.
 //
 // CORE_TICKERS and not getActiveRoster(), for the same reason the hot lane
 // reads the file: the active roster is the scanner universe plus every
@@ -114,8 +121,19 @@ const WIDE_SYMBOLS = (process.env.ETF_GEX_WIDE_SYMBOLS
   .filter((s) => !LIVE_FEED_SYMBOLS.has(s))
   .filter((s) => !SYMBOLS.includes(s));
 
-const WIDE_BATCH = Math.max(1, Math.min(60, Number(process.env.ETF_GEX_WIDE_BATCH || 12)));
-let wideCursor = 0;
+// How many chain fetches are in flight at once, per lane.
+//
+// This is the number that makes a per-minute full sweep possible, and the one
+// that can hurt the upstream if it is set carelessly. Each worker still waits
+// TICKER_DELAY_MS between ITS OWN symbols, so the request rate is roughly
+// concurrency / (fetch + delay) — about 8/s at the defaults, against a REST API
+// the scanners already poll on their own cadence.
+//
+// The hot lane gets a smaller number because it is 13 names: there is nothing to
+// gain from six lanes for a list that finishes in seconds, and holding it back
+// leaves the connection budget to the 93-name sweep behind it.
+const HOT_CONCURRENCY = Math.max(1, Math.min(16, Number(process.env.ETF_GEX_HOT_CONCURRENCY || 4)));
+const WIDE_CONCURRENCY = Math.max(1, Math.min(24, Number(process.env.ETF_GEX_WIDE_CONCURRENCY || 6)));
 
 // ── Strike window ────────────────────────────────────────────────────────────
 // Strikes either side of spot, so one write is bounded at 2N+1 rows.
@@ -326,26 +344,52 @@ async function recordSymbol(symbol, strikeSide) {
   }
 }
 
-/** Walk a list serially, pausing between names, never throwing. */
-async function sweep(list, strikeSide) {
-  let first = true;
-  for (const symbol of list) {
-    if (!first && TICKER_DELAY_MS) await sleep(TICKER_DELAY_MS); // eslint-disable-line no-await-in-loop
-    first = false;
-    try {
-      await recordSymbol(symbol, strikeSide); // eslint-disable-line no-await-in-loop
-    } catch (e) {
-      console.warn(`[etf-gex] ${symbol} snapshot failed:`, e.message);
+/**
+ * Walk a list with bounded concurrency, pausing between names WITHIN each
+ * worker, never throwing.
+ *
+ * `concurrency` workers pull from one shared cursor, so a slow symbol delays
+ * only its own lane and the others keep draining the list — which is the whole
+ * point, and is why this is a worker pool rather than Promise.all over chunks
+ * (a chunked barrier runs at the speed of its slowest member, every chunk).
+ *
+ * The per-worker TICKER_DELAY_MS is deliberately kept from the serial version.
+ * It is what stops N workers becoming N-requests-per-instant: each lane paces
+ * itself, so the aggregate rate is bounded by concurrency/(fetch + delay)
+ * instead of by however fast the upstream can accept a burst. Worker k also
+ * starts k delays in, so the very first requests of a tick fan out rather than
+ * landing together.
+ */
+async function sweep(list, strikeSide, concurrency) {
+  if (!list.length) return;
+  let cursor = 0;
+  const lanes = Math.max(1, Math.min(concurrency, list.length));
+  const worker = async (lane) => {
+    if (lane && TICKER_DELAY_MS) await sleep(lane * TICKER_DELAY_MS);
+    for (;;) {
+      const idx = cursor++;
+      if (idx >= list.length) return;
+      const symbol = list[idx];
+      try {
+        await recordSymbol(symbol, strikeSide); // eslint-disable-line no-await-in-loop
+      } catch (e) {
+        console.warn(`[etf-gex] ${symbol} snapshot failed:`, e.message);
+      }
+      if (TICKER_DELAY_MS) await sleep(TICKER_DELAY_MS); // eslint-disable-line no-await-in-loop
     }
-  }
+  };
+  await Promise.all(Array.from({ length: lanes }, (_, k) => worker(k)));
 }
 
-// Overrun guard. A tick is a long serial run of chain fetches and setInterval
-// does not care whether the last one finished — without this, a slow upstream
-// turns into overlapping ticks that pile more requests onto a feed that is
-// already struggling. Skipping is the right response: the round-robin cursor
-// only advances on a run that actually happens, so nothing is skipped
-// permanently, it just slips a minute.
+// Overrun guard. A tick is a long run of chain fetches and setInterval does not
+// care whether the last one finished — without this, a slow upstream turns into
+// overlapping ticks that pile more requests onto a feed that is already
+// struggling, which is how a blip becomes an outage.
+//
+// Skipping costs one minute of columns for every symbol, and the alternative
+// costs more. It is also the signal to act on: if this fires regularly, the
+// concurrency is too low (or the upstream too slow) for a per-minute full
+// sweep, and the tick-duration warning below names the knobs.
 let ticking = false;
 
 async function tick() {
@@ -357,26 +401,23 @@ async function tick() {
   ticking = true;
   const t0 = Date.now();
   try {
-    // HOT first and in full. If a tick is going to run long, the names on the
-    // fast cadence are the ones that must not pay for it.
-    await sweep(SYMBOLS, STRIKE_SIDE);
+    // HOT first and in full, then WIDE in full. Sequential lanes rather than one
+    // merged pool: the hot names are what the live pages are watching, and they
+    // should not be queued behind ninety-three others for their first column of
+    // the minute.
+    await sweep(SYMBOLS, STRIKE_SIDE, HOT_CONCURRENCY);
 
-    // WIDE: the next WIDE_BATCH names, wrapping. The cursor advances by the
-    // batch regardless of per-symbol failures — a name whose chain cannot be
-    // fetched must not park the round-robin on itself and starve the rest.
     if (process.env.ETF_GEX_WIDE !== '0' && WIDE_SYMBOLS.length) {
-      const batch = [];
-      for (let i = 0; i < Math.min(WIDE_BATCH, WIDE_SYMBOLS.length); i++) {
-        batch.push(WIDE_SYMBOLS[(wideCursor + i) % WIDE_SYMBOLS.length]);
-      }
-      wideCursor = (wideCursor + batch.length) % WIDE_SYMBOLS.length;
-      await sweep(batch, WIDE_STRIKE_SIDE);
+      await sweep(WIDE_SYMBOLS, WIDE_STRIKE_SIDE, WIDE_CONCURRENCY);
     }
   } finally {
     ticking = false;
     const ms = Date.now() - t0;
     if (ms > INTERVAL_MS) {
-      console.warn(`[etf-gex] tick took ${Math.round(ms / 1000)}s (> ${INTERVAL_MS / 1000}s interval) — lower ETF_GEX_WIDE_BATCH`);
+      console.warn(
+        `[etf-gex] tick took ${Math.round(ms / 1000)}s (> ${INTERVAL_MS / 1000}s interval) — ` +
+        'raise ETF_GEX_WIDE_CONCURRENCY, or trim ETF_GEX_WIDE_SYMBOLS',
+      );
     }
   }
 }
@@ -403,17 +444,12 @@ function startEtfGexRecorder() {
   console.log(
     `[etf-gex] recorder started — hot ${SYMBOLS.length} per-strike GEX (RTH), ` +
     `±${STRIKE_SIDE} strikes, ${EXPIRY_DEPTH} expiry(s), every ${INTERVAL_MS / 1000}s, ` +
-    `${TICKER_DELAY_MS}ms apart: ${SYMBOLS.join(',')}`,
+    `${HOT_CONCURRENCY} concurrent, ${TICKER_DELAY_MS}ms apart: ${SYMBOLS.join(',')}`,
   );
   if (wideOn) {
-    // Logged separately, and with the COVERAGE PERIOD spelled out rather than
-    // the batch size alone — "12 per tick" does not tell anyone how stale a
-    // wide symbol's heatmap is allowed to be, and that is the number that gets
-    // questioned later.
     console.log(
-      `[etf-gex] wide lane — ${WIDE_SYMBOLS.length} far-CB symbols, round-robin ` +
-      `${WIDE_BATCH}/tick (~${Math.ceil(WIDE_SYMBOLS.length / WIDE_BATCH)}min coverage), ` +
-      `±${WIDE_STRIKE_SIDE} strikes`,
+      `[etf-gex] wide lane — ${WIDE_SYMBOLS.length} far-CB symbols, FULL sweep every tick, ` +
+      `±${WIDE_STRIKE_SIDE} strikes, ${WIDE_CONCURRENCY} concurrent`,
     );
   } else {
     console.log('[etf-gex] wide lane off');

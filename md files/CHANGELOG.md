@@ -1,5 +1,134 @@
 # Changelog
 
+## 2026-08-27 - ES Candles: the far-CB lanes go to 1-minute (and etf_candles gets a prune)
+
+Edited: `server-v2/candle-history.js`, `server-v2/etf-candle-recorder.js`,
+`server-v2/etf-gex-recorder.js`, `server-v2/state/retention-cleanup.js`.
+
+Reverses the round-robin from the entry below. It was the wrong call, for a
+concrete reason: **the GEX bubble trail buckets to ONE MINUTE**
+(`BubbleBucket = 1 | 5 | 'bar'` in slotStore.ts; `minuteColsRef` is keyed by the
+minute). An 8-minute column spacing does not give a coarse trail - it gives a
+trail with seven empty minutes between every bubble, on a chart whose finest
+setting is one. Both recorders now sweep their full roster every tick.
+
+**Candles: one connection for the whole roster.** The round-robin existed because
+`fetchIntradayCandles` opens a THROWAWAY dxLink connection per symbol - connect,
+auth, subscribe, settle, tear down - and a hundred of those do not fit in 60s.
+New `fetchIntradayCandlesMulti` subscribes the entire roster on ONE connection and
+demultiplexes by `eventSymbol`, so the per-symbol handshake (all the round-robin
+was ever rationing) disappears. The recorder now opens **one** websocket a minute
+for 106 symbols, against the fourteen it opened before any of this.
+
+The canonicalisation trap the single-symbol path documents at length applies
+here too and is handled the same way: subscribe to `SPY{=1m}` and events come
+back tagged `SPY{=m}`, so the demux maps canonical form -> plain ticker rather
+than comparing against the string it sent. The multi form is deliberately NOT
+cached - the single-symbol cache keys on `symbol|interval` with no fromTime, and
+seeding it from a recorder sweep would hand a browser's one-session request
+whatever window the recorder last asked for.
+
+The boot backfill goes through the same path in chunks of 25 (five sessions a
+symbol is ~5x the bars, so the whole roster in one subscription would be a very
+large burst), and it now covers the wide roster too - which retires the
+first-visit lazy backfill from the previous entry.
+
+**GEX: full sweep, bounded concurrency.** No multiplexing trick available here -
+each symbol is its own REST chain fetch - so the fix is parallelism: 106 serial
+fetches at ~500ms is ~80s, the same 106 six at a time is ~10s. `sweep()` is a
+worker pool over a shared cursor, not `Promise.all` over chunks, so one slow
+symbol delays its own lane instead of the whole batch. Each worker keeps the
+old per-symbol `TICKER_DELAY_MS`, so the aggregate request rate is bounded by
+concurrency/(fetch + delay) - ~8/s at the defaults - rather than by how fast the
+upstream can absorb a burst. Worker k starts k delays in so a tick's first
+requests fan out instead of landing together. Hot lane 4 concurrent, wide 6
+(`ETF_GEX_HOT_CONCURRENCY` / `ETF_GEX_WIDE_CONCURRENCY`).
+
+**What that costs, stated up front.** `option_strike_gex_history` is the 2.9GB
+table from the 2026-07 disk incident. Per-minute x 93 names at +/-25 strikes is
+~6.7M rows steady state for the wide lane, against the hot lane's ~1.5M. The
+narrow ladder is the one lever that scales it linearly and is why the wide
+default is 25 rather than 40. If that is more disk than the box has, in order of
+bluntness: `RETENTION_GEX_HISTORY_DAYS` (10 -> 5 nearly halves it, and
+/es-candles only ever shows five sessions), `ETF_GEX_WIDE_STRIKE_SIDE` (25 -> 15
+takes off another 40%), then trimming `ETF_GEX_WIDE_SYMBOLS`.
+
+**etf_candles had no retention at all.** Not a regression - it never had one.
+That was survivable at fourteen names (~13k rows a session, growing forever but
+slowly enough that nobody looked); at ~106 names x ~960 extended-session bars it
+is ~100k rows a session, ~25M a year, and "forever" became a real number. Added
+to the nightly prune at `RETENTION_ETF_CANDLES_DAYS` (30) and to the VACUUM list.
+
+Cut by the bar's own ET session `date`, NOT by a `created_at`: `date` is stamped
+per bar (`ymdEtOf`) precisely so a backfill's five sessions land under their own
+days, and a created_at cut would spare a week-old bar imported this morning while
+deleting nothing that needs deleting. 30 days is generous on purpose -
+`useEtfCandles` asks for 9 calendar days and the page plots 5 sessions - because
+the cutoff exists to bound the table, not to ration the chart. No thinning tier
+either: 1m bars ARE the resolution the page asks for, and the row is small.
+
+Both ticks keep their overrun guard. If either fires regularly the concurrency
+(or the feed) cannot sustain a per-minute full sweep, and the duration warning
+names the knob to turn.
+
+## 2026-08-27 - Premarket / Post-Market: the whole MAIN watchlist, and a wrong-symbol fix
+
+Edited: `components/pages/Premarket.tsx`,
+`components/pages/premarket/TickerBoard.tsx`,
+`components/pages/premarket/postMarketData.ts`,
+`components/pages/premarket/HistoricalRecap.tsx`.
+
+Both tabs of `/app/premarket` - Premarket Prep and Post-Market Recap - now run
+for every name in the **MAIN watchlist**, not just SPX/SPY/QQQ:
+
+    SPX  SPY  QQQ  NDX  VIX  AAPL  AMD  AMZN  GOOGL  META  MSFT  NVDA  SPCX  TSLA
+
+MAIN rather than an arbitrary list, because it is the roster the rest of the
+stack already treats as first-class and BOTH of this page's non-socket data
+sources follow it:
+
+- the scanner sweeps MAIN on the 2-minute HOT cadence, and `walls-recorder.js`
+  samples the latest scanner row *per symbol* - so Post-Market's **Level grades**
+  card reads a real recorded, server-classified verdict (reject / break / pin /
+  rolled over) for every symbol now offered, not just for the three that were.
+- `/api/expirations` + `/api/chains` were per-ticker already; `useTickerBoard`
+  has taken `ticker` as an argument since it was written.
+
+**Nothing about the boards themselves changed.** SPX is still the only live-socket
+board (ES basis, overnight range, the gap, the per-minute recorded ladder, replay);
+every other name is still the one-minute chain-poll board, still says so in the
+warnbar, and still renders only the panels that path can honestly fill. Listing a
+symbol in the picker is not a way to give it the SPX panels.
+
+**BUG FIXED IN THE SAME CHANGE - a SPY board was printing SPX's numbers.**
+`useNextExpiryStructure` had `ticker=SPX` baked into both of its URLs. It has two
+callers: the SPX tab (correct by accident) and `TickerBoard`, which renders it as
+Post-Market's *"Tomorrow - after the roll"* card. So a SPY or QQQ post-market
+board has been showing **SPX's** next-expiry call wall, put wall, flip and net GEX
+under a SPY heading since the card was added. Silent and entirely plausible - the
+numbers were real, they were just the wrong instrument's. The hook now takes a
+`ticker` argument (defaulting to `"SPX"`, so the SPX callers are untouched) and
+`TickerBoard` passes its own.
+
+**Picker is a select now, not a pill row.** Fourteen pills push the session picker
+and the pre/post tabs onto a second row on anything narrower than a wide desktop.
+It borrows the session picker's `.dsel` shell, so the head's two one-of-many
+controls look like one another. Frozen sessions stay SPX-only - the freeze
+captures the one symbol the socket carries - and the other options disable rather
+than render an SPX page under an NVDA label.
+
+**Why the list is static and not `useScannerTickers()`.** The live roster (with
+the owner Watchlists page's `roster_overrides` on top) comes from
+`GET /proxy/scanner-tickers`, which returns one flat de-duped array with *no group
+labels* - there is no runtime way to ask it which of those 169 are MAIN. The
+picker therefore imports `SCANNER_MAIN` from `lib/scannerTickers.ts`. If it should
+ever follow live overrides, the endpoint has to expose the buckets first. No
+server or proxy file was touched by this change.
+
+Also: `strikeDp` in `TickerBoard` is unchanged but its comment was SPY/QQQ-only;
+it reads the decimal place off the ladder itself, which is what makes a $25-wide
+NDX level and a half-dollar single-name strike both print correctly.
+
 ## 2026-08-27 - ES Candles: SPX candles recorded, and a WIDE far-CB gamma lane
 
 Edited: `server-v2/etf-candle-recorder.js`, `server-v2/etf-gex-recorder.js`.

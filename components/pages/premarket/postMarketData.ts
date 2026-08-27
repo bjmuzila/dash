@@ -812,7 +812,23 @@ export function structureFromChain(items: unknown[], expDate: string, spot: numb
   };
 }
 
-export function useNextExpiryStructure(enabled: boolean, todayExpiry: string, spot: number) {
+/**
+ * The NEXT expiry's structure for one ticker — what the board rolls to after
+ * today's contract dies. Used by the Post-Market tab.
+ *
+ * `ticker` was hardcoded to SPX until 2026-08-27, which was a real bug the
+ * moment this hook got a second caller: TickerBoard renders it under the
+ * SPY/QQQ (now any MAIN symbol) board, so a SPY post-market board printed
+ * SPX's next-expiry call wall, put wall, flip and net GEX as if they were
+ * SPY's. Silent and plausible — the numbers were real, they were just the
+ * wrong instrument's. It defaults to SPX so the SPX callers are unchanged.
+ */
+export function useNextExpiryStructure(
+  enabled: boolean,
+  todayExpiry: string,
+  spot: number,
+  ticker = "SPX",
+) {
   const [next, setNext] = useState<NextStructure | null>(null);
   const [state, setState] = useState<HistState>("loading");
   const doneRef = useRef("");
@@ -821,14 +837,18 @@ export function useNextExpiryStructure(enabled: boolean, todayExpiry: string, sp
     if (!enabled || !todayExpiry || !(spot > 0)) return;
     // One fetch per (expiry, tab-open). The next expiry's book does not move
     // fast enough after the close to justify polling it.
-    const key = `${todayExpiry}|${Math.round(spot)}`;
+    const key = `${ticker}|${todayExpiry}|${Math.round(spot)}`;
     if (doneRef.current === key) return;
     doneRef.current = key;
     let cancelled = false;
 
     const load = async () => {
       try {
-        const er = await dedupeFetch("/api/expirations?ticker=SPX", { cache: "no-store" }, 15_000);
+        const er = await dedupeFetch(
+          `/api/expirations?ticker=${encodeURIComponent(ticker)}`,
+          { cache: "no-store" },
+          15_000,
+        );
         if (!er.ok) { if (!cancelled) setState("error"); return; }
         const ej = await er.json();
         const dates: string[] = (ej?.data?.items ?? [])
@@ -839,7 +859,7 @@ export function useNextExpiryStructure(enabled: boolean, todayExpiry: string, sp
         if (!nextDate) { if (!cancelled) setState("empty"); return; }
 
         const cr = await dedupeFetch(
-          `/api/chains?ticker=SPX&expiration=${encodeURIComponent(nextDate)}&range=all`,
+          `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(nextDate)}&range=all`,
           { cache: "no-store" },
           25_000,
         );
@@ -858,7 +878,7 @@ export function useNextExpiryStructure(enabled: boolean, todayExpiry: string, sp
 
     void load();
     return () => { cancelled = true; };
-  }, [enabled, todayExpiry, spot]);
+  }, [enabled, todayExpiry, spot, ticker]);
 
   return { next, state };
 }
@@ -967,20 +987,25 @@ export function useRecordedWalls(date: string, symbol = "SPX") {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SPY / QQQ — the same board, off REST instead of the socket
+//  every non-SPX MAIN symbol — the same board, off REST instead of the socket
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * The live socket is SPX-only: lib/gexSocket carries one symbol's frames and
- * useMobileGex pins them to SPX's front expiry. SPY and QQQ therefore cannot
- * ride it, and pushing two more symbols through it is a server change, not a
- * page change.
+ * useMobileGex pins them to SPX's front expiry. No other symbol can ride it,
+ * and pushing more symbols through it is a server change, not a page change.
  *
  * What they CAN ride is the path the home heatmap's SPY/QQQ columns already use
  * (hooks/useDualTickerGex): /api/expirations to find the front contract, then
  * /api/chains for that contract, then the same gamma math on the raw legs. That
  * is a 60-second poll rather than a live tape — accurate, one cycle behind, and
  * clearly labelled as such in the UI.
+ *
+ * Nothing here was ever SPY/QQQ-specific — `useTickerBoard(ticker)` has taken
+ * the symbol as an argument since it was written — which is why the premarket
+ * picker could be opened up to the whole MAIN watchlist on 2026-08-27 without
+ * touching this hook. The one thing that WAS hardcoded, and had to be fixed in
+ * the same change, is useNextExpiryStructure above.
  *
  * Scale note: this uses gamma × (OI + volume) × S² × 0.01 × 100, which is the
  * optionChain.parseExpiration convention. 0.01 × 100 = 1, so it lands on exactly

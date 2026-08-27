@@ -99,6 +99,7 @@ import { useMobileGex } from "@/hooks/useMobileGex";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEconCalendar } from "@/hooks/useEconCalendar";
 import { isStale } from "@/lib/econCalendar";
+import { SCANNER_MAIN } from "@/lib/scannerTickers";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
@@ -533,13 +534,45 @@ const SESSION_COUNT = GEX_HISTORY_LIMIT;
 
 /**
  * SPX is the live board — it owns the socket, the ES basis, the overnight
- * window and the per-minute recorded ladder. SPY and QQQ ride /api/chains on a
- * poll and render through TickerBoard, which carries only the panels that path
- * can honestly fill. Adding a symbol here is one line plus whatever the chain
- * supports; it is NOT a way to give a new symbol the SPX panels.
+ * window and the per-minute recorded ladder. Every other symbol rides
+ * /api/chains on a one-minute poll and renders through TickerBoard, which
+ * carries only the panels that path can honestly fill and says so on the page.
+ * Listing a symbol here is NOT a way to give it the SPX panels.
+ *
+ * ── 2026-08-27: the MAIN watchlist, not three hand-typed names ─────────────
+ * This used to be ["SPX", "SPY", "QQQ"]. It is now SPX plus the MAIN group of
+ * the scanner universe (lib/scannerTickers → server-v2/scanner-tickers.js):
+ * SPY QQQ SPX NDX VIX AAPL AMD AMZN GOOGL META MSFT NVDA SPCX TSLA.
+ *
+ * MAIN rather than an arbitrary list, because MAIN is exactly the roster the
+ * rest of the stack already treats as first-class, and both of the boards'
+ * data sources follow it:
+ *   • the scanner sweeps MAIN on the 2-minute HOT cadence, and
+ *     server-v2/walls-recorder.js samples the latest scanner row PER SYMBOL —
+ *     so the Post-Market "Level grades" card reads a real recorded,
+ *     server-classified verdict for every name offered here, not just for the
+ *     three that used to be listed.
+ *   • /api/expirations + /api/chains are per-ticker already; useTickerBoard
+ *     took `ticker` from the start.
+ * A name outside MAIN would still render, but its wall log would be empty and
+ * its chain unswept — which is the reason this is a fixed list and not a free
+ * text box.
+ *
+ * The STATIC import is deliberate. The live roster (with the owner page's
+ * `roster_overrides` on top) comes from GET /proxy/scanner-tickers, but that
+ * endpoint returns one flat de-duped array with no group labels — there is no
+ * runtime way to ask it "which of these are MAIN". useScannerTickers() would
+ * therefore hand back 169 tickers, not 14. If the picker should ever follow
+ * live overrides, the endpoint has to expose the buckets first.
+ *
+ * SPX is pinned first because it is the only live-socket board; the rest keep
+ * MAIN's own order.
  */
-const SYMBOLS = ["SPX", "SPY", "QQQ"] as const;
-type Symbol_ = (typeof SYMBOLS)[number];
+const SYMBOLS: readonly string[] = [
+  "SPX",
+  ...SCANNER_MAIN.filter((t) => t !== "SPX"),
+];
+type Symbol_ = string;
 
 /** ET wall clock: calendar date + minutes since midnight. */
 function etWall(now = Date.now()): { date: string; minutes: number } {
@@ -799,11 +832,12 @@ export default function Premarket() {
   // ── SYMBOL ─────────────────────────────────────────────────────────────────
   // Remembered for the session like the tab. Only the MARKUP switches: this
   // component's hooks (useMobileGex / useEsCandles) run whatever symbol is
-  // selected, so the SPX feed keeps flowing while you read SPY and switching
+  // selected, so the SPX feed keeps flowing while you read NVDA and switching
   // back is instant with no reconnect. That costs nothing extra — gexSocket is
   // one refcounted connection shared with the toolbar and every other consumer,
   // and it would stay open for them anyway. TickerBoard's own poll only starts
-  // when it mounts, so at most one chain is being polled at a time.
+  // when it mounts and is keyed on `ticker`, so at most one chain is being
+  // polled at a time no matter how many symbols the picker offers.
   const [sym, setSym] = useState<Symbol_>("SPX");
   useEffect(() => {
     try {
@@ -891,8 +925,8 @@ export default function Premarket() {
     try { sessionStorage.setItem(DATE_KEY, v); } catch { /* nothing to do */ }
   }, []);
   // Frozen sessions are SPX only (the freeze captures the one symbol the socket
-  // carries), so stepping back onto a past date from a SPY/QQQ board lands on
-  // SPX rather than on a disabled button with the wrong page behind it. The
+  // carries), so stepping back onto a past date from any chain-poll board lands
+  // on SPX rather than on a disabled option with the wrong page behind it. The
   // sessionStorage choice is left alone: it is what today comes back to.
   useEffect(() => {
     if (sessionDate !== etDate && sym !== "SPX") setSym("SPX");
@@ -1678,24 +1712,33 @@ export default function Premarket() {
           <h1>
             {recapOnly ? "Session Recap" : tab === "post" ? "Post-Market Recap" : "Premarket Prep"}
           </h1>
-          <div className="tabs">
-            {/* SPX only on a frozen session: the freeze captures the one symbol
-                the socket carries, and TickerBoard's SPY/QQQ boards are a live
-                chain poll with no per-date form. Disabling beats rendering an
-                SPX page under a SPY button. */}
-            {SYMBOLS.map((s2) => (
-              <button
-                key={s2}
-                className={sym === s2 ? "on" : ""}
-                disabled={frozen && s2 !== "SPX"}
-                title={frozen && s2 !== "SPX" ? "Frozen sessions are SPX only" : undefined}
-                style={frozen && s2 !== "SPX" ? { opacity: .4, cursor: "not-allowed" } : undefined}
-                onClick={() => pickSym(s2)}
-              >
-                {s2}
-              </button>
-            ))}
-          </div>
+          {/* SYMBOL PICKER — a select, not the pill row it replaced. MAIN is
+              fourteen names; fourteen pills push the session picker and the
+              pre/post tabs onto a second row on anything narrower than a wide
+              desktop, and the head stops reading as one strip. It borrows the
+              session picker's `.dsel` shell for exactly that reason, so the two
+              one-of-many controls in this head look like one another.
+
+              SPX only on a frozen session: the freeze captures the one symbol
+              the socket carries, and TickerBoard's boards are a live chain poll
+              with no per-date form. Disabling the options beats rendering an SPX
+              page under an NVDA label. */}
+          <span className="dsel">
+            <select
+              value={sym}
+              onChange={(e) => pickSym(e.target.value)}
+              title={frozen
+                ? "Frozen sessions are SPX only"
+                : "Which symbol to show. SPX is the live-socket board; every other MAIN name is a one-minute chain poll."}
+              aria-label="Symbol"
+            >
+              {SYMBOLS.map((s2) => (
+                <option key={s2} value={s2} disabled={frozen && s2 !== "SPX"}>
+                  {s2}
+                </option>
+              ))}
+            </select>
+          </span>
           <span className="badge-concept">
             {recapOnly
               ? `${sym} · RECORDED · ${sessionLabel(sessionDate)}`

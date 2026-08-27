@@ -126,4 +126,116 @@ async function fetchIntradayCandles(symbol, interval, fromTime, opts = {}) {
   finally { _inflight.delete(key); }
 }
 
-module.exports = { fetchIntradayCandles };
+/**
+ * MANY symbols, ONE connection.
+ *
+ * fetchIntradayCandles opens a throwaway dxLink connection per call, which is
+ * the right shape for a browser asking about one ticker and completely the wrong
+ * shape for a recorder sweeping a hundred of them every minute: 106 connect /
+ * auth / subscribe / settle / teardown cycles a minute, most of the wall clock
+ * spent on handshakes rather than on data.
+ *
+ * dxLink has no problem with a multi-symbol candle subscription — the live feed
+ * already runs ES 5m, NQ 5m and ES 1m down one client — so this opens ONE
+ * connection, subscribes every symbol on it, and demultiplexes the events by
+ * eventSymbol on the way in. One handshake for the whole roster.
+ *
+ * Returns a Map of symbol → rows (oldest-first, same row shape as the
+ * single-symbol function). A symbol that produced no events is present with an
+ * empty array, so a caller can tell "nothing traded" from "not requested".
+ *
+ * DELIBERATELY NOT CACHED. Every caller is a recorder that wants the current
+ * state of a window it chose; the single-symbol cache is keyed
+ * `symbol|interval` with no fromTime in it and seeding it from here would hand
+ * a browser's one-session request whatever window the recorder last asked for.
+ *
+ * Timeouts: `quietMs` is the settle gap after the LAST event across ALL symbols
+ * — a hundred snapshot bursts interleave, so a per-symbol gap would be wrong —
+ * and `hardMs` is the absolute cap. Both default higher than the single-symbol
+ * version because there is proportionally more to deliver; a hard-capped result
+ * is TRUNCATED, not an error, so size them for the biggest roster you will pass.
+ *
+ * @param {string[]} symbols
+ * @param {string} interval e.g. '1m'
+ * @param {number} fromTime epoch ms
+ * @param {{quietMs?:number, hardMs?:number}} [opts]
+ * @returns {Promise<Map<string, Array<{time:number,open:number,high:number,low:number,close:number,volume:number}>>>}
+ */
+async function fetchIntradayCandlesMulti(symbols, interval, fromTime, opts = {}) {
+  const iv = String(interval || '1m').trim();
+  const list = [...new Set((symbols || []).map((s) => String(s || '').trim().toUpperCase()).filter(Boolean))];
+  const out = new Map(list.map((s) => [s, []]));
+  if (!list.length) return out;
+
+  const quietMs = Number(opts.quietMs) > 0 ? Number(opts.quietMs) : 3_000;
+  const hardMs = Number(opts.hardMs) > 0 ? Number(opts.hardMs) : 45_000;
+
+  const { token, url } = await getQuoteToken();
+
+  // Canonical eventSymbol → our plain ticker. The canonicalisation is the same
+  // trap the single-symbol path documents at length: subscribe to "SPY{=1m}"
+  // and every event comes back tagged "SPY{=m}", so comparing against the sent
+  // string silently discards everything.
+  const bySymbol = new Map(); // canon candle symbol → plain ticker
+  for (const sym of list) bySymbol.set(DxLinkClient.canonCandleSymbol(`${sym}{=${iv}}`), sym);
+
+  const bars = new Map(); // plain ticker → Map(barTime → bar)
+  for (const sym of list) bars.set(sym, new Map());
+
+  await new Promise((resolve) => {
+    let done = false, quietTimer = null, subscribed = false;
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (quietTimer) clearTimeout(quietTimer);
+      clearTimeout(hardTimer);
+      try { client.close(); } catch { /* noop */ }
+      resolve();
+    };
+
+    const client = new DxLinkClient({
+      url,
+      token,
+      onEvent: (ev) => {
+        if (ev.eventType !== 'Candle') return;
+        const sym = bySymbol.get(DxLinkClient.canonCandleSymbol(ev.eventSymbol));
+        if (!sym) return;
+        const t = Number(ev.time);
+        const close = Number(ev.close);
+        if (!(t > 0) || !(close > 0)) return;
+        let volume = Number(ev.volume);
+        if (!Number.isFinite(volume)) volume = 0;
+        const m = bars.get(sym);
+        const prev = m.get(t);
+        // Same reduction as the single-symbol path: dxFeed replays a bar as
+        // several updates, so last close wins, the range widens, and volume is
+        // the max (it is cumulative per bar) rather than a sum.
+        m.set(t, prev
+          ? { time: t, open: prev.open, high: Math.max(prev.high, Number(ev.high) || prev.high), low: Math.min(prev.low, Number(ev.low) || prev.low), close, volume: Math.max(prev.volume, volume) }
+          : { time: t, open: Number(ev.open) || close, high: Number(ev.high) || close, low: Number(ev.low) || close, close, volume });
+        if (quietTimer) clearTimeout(quietTimer);
+        quietTimer = setTimeout(finish, quietMs);
+      },
+      onStatus: (s) => {
+        // dxlinkConnected flips true at AUTH; the subscriptions queue in the
+        // client until the FEED channel opens, then flush. Subscribe exactly
+        // once — this fires again on any later status change.
+        if (s && s.dxlinkConnected && !subscribed) {
+          subscribed = true;
+          for (const sym of list) client.subscribeCandle(`${sym}{=${iv}}`, fromTime);
+        }
+      },
+    });
+
+    const hardTimer = setTimeout(finish, hardMs);
+    try { client.connect(); } catch { finish(); }
+  });
+
+  for (const sym of list) {
+    out.set(sym, [...bars.get(sym).values()].filter((b) => b.close > 0).sort((a, b) => a.time - b.time));
+  }
+  return out;
+}
+
+module.exports = { fetchIntradayCandles, fetchIntradayCandlesMulti };

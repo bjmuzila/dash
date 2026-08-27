@@ -310,7 +310,7 @@ export default function HistoricalRecap({ date, symbol = "SPX" }: { date: string
         {spxOnly && (
           <div className="warnbar" style={{ marginBottom: 11 }}>
             The per-day history is SPX only — the levels recorder is single-symbol. Everything below
-            describes SPX regardless of the {symbol} button above.
+            describes SPX regardless of the symbol picked above.
           </div>
         )}
 

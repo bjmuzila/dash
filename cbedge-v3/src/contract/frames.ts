@@ -5,44 +5,109 @@
 // here, v3 does not know about it. Nothing in src/ may reach for a field that
 // is not in this file.
 //
-// Fill these in as you wire each panel. Every entry should be transcribed from
-// what server-v2/websocket-server.js actually emits — read the emitter, do not
-// infer the shape from a console.log.
+// Transcribed from server-v2 source, not inferred from a log:
+//   - envelope + spot:  server-v2/websocket-server.js (msg(), the 'spot' push)
+//   - gex:              server-v2/websocket-server.js (the 'gex' push) +
+//                        server-v2/computation/gex-calculator.js (computeGexRows)
+//   - flow:             server-v2/websocket-server.js (the 'flow' push) +
+//                        server-v2/computation/flow-processor.js (FlowAggregator)
+//
+// There is NO 'chain' (options chain) topic on the socket — that data is REST
+// only (/api/chains, /api/gex — see src/data/api.ts callers). Don't invent one.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Every message off the socket is a tagged union on `type`. */
+/** Every message off the socket is `{ type, symbol, ts, data }` — msg() in
+ *  server-v2/websocket-server.js wraps every push this way. */
 export interface BaseFrame {
   type: string
+  symbol?: string
   /** Server-side timestamp, ms epoch, where the emitter provides one. */
   ts?: number
 }
 
-// ── Scalar frames ────────────────────────────────────────────────────────────
-// Small and high-frequency. Note these are NOT implicitly included when the
-// socket is topic-scoped — server-v2 drops them like any other frame unless
-// they are named. The topic derivation in src/data/socket.ts handles that
-// automatically because it derives from what is actually subscribed.
-
+// ── spot ─────────────────────────────────────────────────────────────────────
+export interface SpotData {
+  spot: number
+  prevClose: number
+  basis: number
+}
 export interface SpotFrame extends BaseFrame {
   type: 'spot'
-  // TODO(contract): transcribe real fields from server-v2/websocket-server.js
-  [k: string]: unknown
+  data: SpotData
 }
 
+// ── gex ──────────────────────────────────────────────────────────────────────
+// One row per strike, straight off computeGexRows(). Only the fields v3
+// actually reads are given real types; the rest ride along as unknown so a
+// future consumer isn't blocked on this file, but nothing here is invented.
+export interface GexRow {
+  strike: number
+  netGEX: number
+  callGEX: number
+  putGEX: number
+  callOI: number
+  putOI: number
+  dte: number
+  [k: string]: unknown
+}
+export interface GexData {
+  gexRows: GexRow[]
+  callWall: number | null
+  putWall: number | null
+  gexFlip: number | null
+  totalNetGex: number
+  totals: unknown
+  updatedAt?: number
+}
+export interface GexFrame extends BaseFrame {
+  type: 'gex'
+  data: GexData
+}
+
+// ── flow ─────────────────────────────────────────────────────────────────────
+export interface FlowTapePrint {
+  ts: number
+  underlying: string
+  expiration: string
+  strike: number
+  type: 'call' | 'put' | string
+  side: string
+  action: string
+  bucket: string
+  price: number
+  size: number
+  premium: number
+  isOtm: boolean
+}
+export interface FlowData {
+  symbol: string
+  windowMs: number
+  asOf: number
+  callBuyVol: number
+  callSellVol: number
+  putBuyVol: number
+  putSellVol: number
+  netPremium: number
+  buyPct: number
+  prints: number
+  tape: FlowTapePrint[]
+}
+export interface FlowFrame extends BaseFrame {
+  type: 'flow'
+  data: FlowData
+}
+
+// ── low-value scalar frames — shape not needed by any panel yet ─────────────
 export interface AuxFrame extends BaseFrame {
   type: 'aux'
   [k: string]: unknown
 }
-
 export interface StatusFrame extends BaseFrame {
   type: 'status'
   [k: string]: unknown
 }
 
-// ── Add real frames below as each panel is built ─────────────────────────────
-// export interface GexFrame extends BaseFrame { type: 'gex'; ... }
-
-export type KnownFrame = SpotFrame | AuxFrame | StatusFrame
+export type KnownFrame = SpotFrame | GexFrame | FlowFrame | AuxFrame | StatusFrame
 
 /**
  * Frames that server-v2 pushes via broadcastEvent(), which ignores topic

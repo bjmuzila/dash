@@ -54,6 +54,21 @@ const RETENTION = {
   // Older days survive, thinned to the 5-minute grid. See the thinning note on
   // the DELETE below — this is the number that pays for the multi-ticker roster.
   gex_history_fullres_days:   Number(process.env.RETENTION_GEX_FULLRES_DAYS || 2),
+  // etf_candles — 1-minute OHLC for the ES-Candles picker's roster.
+  //
+  // It had NO prune at all until 2026-08-27, which was survivable while the
+  // recorder wrote fourteen names: ~13k rows a session, growing forever but
+  // slowly enough that nobody noticed. The roster is now ~106 (the far-CB core,
+  // see etf-candle-recorder.js) at ~960 extended-session bars each — ~100k rows
+  // a session, ~25M a year — so "forever" became a real number and this table
+  // needed a cutoff like every other high-volume one here.
+  //
+  // 30 days is generous on purpose. useEtfCandles asks for 9 calendar days and
+  // /es-candles plots 5 sessions of it, so this is three weeks of headroom over
+  // anything that reads it; it exists to bound the table, not to ration the
+  // chart. Unlike option_strike_gex_history there is no thinning tier — 1m bars
+  // ARE the resolution the page asks for, and the row is small.
+  etf_candles_days:           Number(process.env.RETENTION_ETF_CANDLES_DAYS || 30),
   flow_prints:                Number(process.env.RETENTION_FLOW_PRINTS_DAYS || 5),    // ≥ big-premium prints kept this many session days (0–7DTE Combined lookback)
   flow_prints_big_premium:    Number(process.env.RETENTION_FLOW_BIG_PREMIUM || 500_000), // "big" = survives the full window regardless of expiry
   flow_prints_small_days:     Number(process.env.RETENTION_FLOW_SMALL_DAYS || 1),     // < big-premium prints: purged on expiry or after this many days (disk guard)
@@ -237,6 +252,14 @@ async function runDeletes(p) {
   await run('ticker_events',
     `DELETE FROM ticker_events WHERE created_at < NOW() - INTERVAL '${RETENTION.ticker_events_days} days'`);
 
+  // etf_candles — by the bar's own ET session date, NOT by a created_at.
+  // `date` is stamped per bar (ymdEtOf) precisely so a backfill's five sessions
+  // land under their own days rather than under the day they were written; a
+  // created_at cut would spare a week-old bar imported this morning and delete
+  // nothing that actually needs deleting.
+  await run('etf_candles',
+    `DELETE FROM etf_candles WHERE date::date < CURRENT_DATE - INTERVAL '${RETENTION.etf_candles_days} days'`);
+
   return results;
 }
 
@@ -245,6 +268,7 @@ const VACUUM_TABLES = [
   'greek_snapshots', 'ticker_wall_snapshots', 'scanner_snapshots',
   'watch_snapshots', 'preview_snapshots', 'home_static_snapshots',
   'mult_greek_static_snapshots', 'page_visits', 'ticker_events',
+  'etf_candles',
 ];
 
 /** Plain VACUUM (ANALYZE) only — NOT FULL. Safe under any disk condition;

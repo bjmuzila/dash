@@ -23,29 +23,33 @@
  * Read side: getEtfCandles(symbol, date) — available for a future read route;
  * the /test Condition card currently reads today live via /proxy/candles-intraday.
  *
- * ── TWO LANES (2026-08-27) ──────────────────────────────────────────────────
+ * ── THE WHOLE ROSTER, EVERY MINUTE, ON ONE CONNECTION (2026-08-27) ──────────
  * The ES-Candles picker is no longer a fixed fourteen names — it offers the
  * far-CB core roster and accepts any typed ticker — so the recorder roster grew
- * to match it. It could not simply grow in place: every symbol is a THROWAWAY
- * dxLink CONNECTION (connect, subscribe, settle, tear down — seconds, not
- * milliseconds), taken serially, and 106 of those do not fit in a 60s tick.
+ * to ~106 to match it.
  *
- *   HOT  — the scanner MAIN lane + SPX. Every tick. These are the charts people
- *          actually leave open, and they get a fresh forming bar every minute.
- *   WIDE — the rest of the far-CB core. ROUND-ROBIN: each tick takes the next
- *          WIDE_BATCH names, so a tick's cost is bounded and the roster is
- *          covered every ceil(n/batch) minutes.
+ * The first cut at that used fetchIntradayCandles per symbol, which opens a
+ * THROWAWAY dxLink CONNECTION each time: connect, auth, subscribe, settle, tear
+ * down. A hundred of those do not fit in a 60s tick, so it ran a round-robin and
+ * a wide symbol was visited every ~8 minutes.
  *
- * The wide lane's staleness is bounded and its HISTORY is not thin, which is the
- * part that is easy to get wrong: every fetch replays the whole day from ET
- * midnight, so a symbol visited once every 8 minutes still ends the session with
- * a complete, gapless 1-minute series — only the newest bar or two lag.
+ * That is gone. `fetchIntradayCandlesMulti` (candle-history.js) subscribes the
+ * ENTIRE roster on ONE connection and demultiplexes by eventSymbol, so the
+ * per-symbol handshake — which was all the round-robin was ever rationing —
+ * disappears. Every symbol is now recorded every minute, and the recorder opens
+ * ONE websocket a minute instead of the fourteen it opened before this change.
  *
- * See LAZY BACKFILL below for how a wide symbol gets its PRIOR sessions without
- * a 93-request burst at boot.
+ * The lanes remain as ROSTERS, not cadences: HOT is the scanner MAIN lane + SPX
+ * (the file's own list), WIDE is the rest of far-CB core. They are swept
+ * together in one call; the split survives only so either half can be disabled
+ * or overridden on its own.
  */
 
-const { fetchIntradayCandles } = require('./candle-history');
+// Only the MULTI form. The single-symbol fetchIntradayCandles is still the right
+// call for a route serving one browser one ticker (/proxy/candles-intraday, and
+// /api/snapshots/etf-candles' live fallback); a recorder sweeping a roster wants
+// one connection, not one per name.
+const { fetchIntradayCandlesMulti } = require('./candle-history');
 const { CORE_TICKERS } = require('./far-cb-tickers');
 
 const INTERVAL_MS = Number(process.env.ETF_CANDLE_RECORDER_INTERVAL_MS || 60_000);
@@ -66,9 +70,10 @@ const INTERVAL_MS = Number(process.env.ETF_CANDLE_RECORDER_INTERVAL_MS || 60_000
 // Here there is no second writer — nothing else records SPX bars — so recording
 // it is simply the missing half.
 //
-// A symbol dxLink will not serve 1m candles for (some indices) simply logs and
-// is skipped by the per-symbol try/catch in tick(); it costs one failed fetch
-// per visit and nothing else.
+// A symbol dxLink will not serve 1m candles for (some indices) simply comes
+// back with no events on the shared subscription and writes nothing. On the
+// multi-symbol path it costs nothing at all — it is not a failed request, just
+// a symbol that never speaks.
 const DEFAULT_CANDLE_SYMBOLS = [
   'SPX', 'SPY', 'QQQ', 'NDX', 'VIX',
   'AAPL', 'AMD', 'AMZN', 'GOOGL', 'META', 'MSFT', 'NVDA', 'SPCX', 'TSLA',
@@ -76,9 +81,11 @@ const DEFAULT_CANDLE_SYMBOLS = [
 const SYMBOLS = String(process.env.ETF_CANDLE_SYMBOLS || DEFAULT_CANDLE_SYMBOLS.join(','))
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 
-// ── WIDE lane ────────────────────────────────────────────────────────────────
+// ── WIDE roster ──────────────────────────────────────────────────────────────
 // The far-CB core roster (far-cb-tickers.js CORE_TICKERS) minus whatever the hot
-// lane already covers — 93 names as of today.
+// list already covers — 93 names as of today. Same cadence as the hot list;
+// this is a separate constant only so it can be overridden or switched off on
+// its own.
 //
 // CORE_TICKERS and not getActiveRoster(): the static array needs no Postgres
 // round trip at module load, and the active roster is the scanner universe plus
@@ -94,41 +101,34 @@ const WIDE_SYMBOLS = (process.env.ETF_CANDLE_WIDE_SYMBOLS
   .filter((s, i, a) => a.indexOf(s) === i)
   .filter((s) => !SYMBOLS.includes(s));
 
-// How many wide names per tick.
+/** Everything recorded this tick — hot first, so the log reads in priority order. */
+function activeRoster() {
+  return process.env.ETF_CANDLE_WIDE === '0' ? SYMBOLS.slice() : [...SYMBOLS, ...WIDE_SYMBOLS];
+}
+
+// Settle window and hard cap for the per-minute multi-symbol pull.
 //
-// 12 → the 93-name roster is covered every 8 minutes, and a tick adds ~12
-// sequential dxLink round trips (~20-25s) on top of the hot lane's 14. That is
-// the number to move if ticks start overrunning the interval — the overrun
-// guard below will say so in the log before anything is actually lost.
-const WIDE_BATCH = Math.max(1, Math.min(60, Number(process.env.ETF_CANDLE_WIDE_BATCH || 12)));
-let wideCursor = 0;
+// Sized for the WHOLE roster arriving down one socket: a hundred snapshot
+// bursts interleave, so the quiet gap is measured across all of them, and the
+// hard cap has to be generous enough that a slow session does not truncate the
+// tail of the roster. Both are well inside the 60s tick, and the overrun guard
+// below catches it if they ever aren't.
+const TICK_QUIET_MS = Math.max(500, Number(process.env.ETF_CANDLE_TICK_QUIET_MS || 3_000));
+const TICK_HARD_MS = Math.max(5_000, Number(process.env.ETF_CANDLE_TICK_HARD_MS || 40_000));
 
 // Sessions of 1-minute history pulled once on boot. dxFeed serves ~7 days of
 // 1m, so 5 is the practical ceiling that still returns in one request; 0 skips
 // the backfill entirely.
 const BACKFILL_DAYS = Math.max(0, Math.min(7, Number(process.env.ETF_CANDLE_BACKFILL_DAYS ?? 5)));
 
-// ── LAZY BACKFILL (wide lane) ────────────────────────────────────────────────
-// A wide symbol's FIRST visit pulls BACKFILL_DAYS of history instead of just
-// today; every visit after that is the normal today-only fetch.
+// Symbols per boot-backfill call.
 //
-// The boot backfill cannot be used for these. It is a serial loop with
-// cache:false and a 60s hard cap per symbol — fine for fourteen names, and up to
-// an hour and a half of solid upstream traffic for ninety-three, starting at the
-// exact moment the process is trying to come up.
-//
-// Doing it on first visit spreads the same work across the round-robin at one
-// symbol per slot, at no extra request: the visit was going to happen anyway,
-// it just asks for a wider window. The roster is fully backfilled about one
-// coverage period after boot.
-//
-// This matters more than it looks. `/api/snapshots/etf-candles` falls through to
-// its live dxLink pull only when the table is EMPTY for a symbol — so a wide
-// symbol recorded with today's bars ONLY would take the table branch and the
-// chart would silently lose the four prior sessions it used to get from the
-// fallback. First-visit backfill means the table is never in that half-filled
-// state.
-const wideBackfilled = new Set();
+// The backfill asks for five sessions rather than one, so each symbol carries
+// ~5x the bars of a normal tick and the whole roster in a single subscription
+// would be a very large burst on one socket. Chunked at 25 it is four or five
+// connections instead of one, each with a wide hard cap — still nothing next to
+// the 106 the per-symbol version would have opened.
+const BACKFILL_CHUNK = Math.max(1, Math.min(200, Number(process.env.ETF_CANDLE_BACKFILL_CHUNK || 25)));
 
 // ── PG pool ──────────────────────────────────────────────────────────────────
 let pool = null;
@@ -282,40 +282,11 @@ async function upsertBars(p, symbol, candles) {
   return written;
 }
 
-/**
- * Record one symbol.
- *
- * `wide` symbols get a MULTI-DAY window on their first visit (see the lazy
- * backfill note above) and today only thereafter. The multi-day pull needs
- * cache:false and wider timeouts for exactly the reason the boot backfill does:
- * the cache key is `symbol|interval` with no fromTime in it, and the default 7s
- * hard cap is sized for one session's ~390 bars, so a five-session request would
- * be silently truncated mid-stream and look like a successful backfill.
- */
-async function recordOne(p, symbol, { wide = false } = {}) {
-  const needsHistory = wide && BACKFILL_DAYS > 0 && !wideBackfilled.has(symbol);
-  const candles = needsHistory
-    ? await fetchIntradayCandles(symbol, '1m', Date.now() - BACKFILL_DAYS * 86_400_000, {
-      cache: false, quietMs: 2_500, hardMs: 60_000,
-    })
-    : await fetchIntradayCandles(symbol, '1m', etDayStartMs());
-  const n = await upsertBars(p, symbol, candles);
-  if (needsHistory) {
-    // Marked EVEN IF the pull came back empty. A symbol dxLink will not serve
-    // candles for must not re-request a 60s-capped five-session window on every
-    // pass through the round-robin for the rest of the process's life.
-    wideBackfilled.add(symbol);
-    console.log(`[etf-candle] wide backfill ${symbol}: ${n} 1m bars over ~${BACKFILL_DAYS}d`);
-  }
-  return n;
-}
-
-// Overrun guard. A tick is a long serial run of network round trips, and
-// setInterval does not care whether the last one finished — without this, a
-// slow upstream turns into overlapping ticks that queue more connections on an
-// already-struggling feed. Skipping is the right response: the next tick picks
-// up where this one left off (the round-robin cursor is only advanced by a run
-// that actually happens) and the forming bar is re-upserted anyway.
+// Overrun guard. setInterval does not care whether the last run finished —
+// without this, a slow feed turns into overlapping ticks that stack another
+// full-roster subscription onto a socket layer that is already struggling.
+// Skipping is the right response and costs nothing: the next tick re-fetches
+// the whole day anyway, so a missed minute is filled in a minute later.
 let ticking = false;
 
 async function tick() {
@@ -327,42 +298,49 @@ async function tick() {
   if (!p || !(await ensureSchema())) return;
   if (!isMarketNowET()) return; // outside 04:00–20:00 ET there is nothing to record
 
+  const roster = activeRoster();
+  if (!roster.length) return;
+
   ticking = true;
   const t0 = Date.now();
   try {
-    // HOT first, always, and in full. If the tick is going to run long, the
-    // names people have on screen are the ones that must not be the casualty.
-    for (const symbol of SYMBOLS) {
-      try {
-        await recordOne(p, symbol); // eslint-disable-line no-await-in-loop
-      } catch (e) {
-        console.warn(`[etf-candle] ${symbol} record failed:`, e.message);
-      }
-    }
+    // ONE connection, the whole roster, today's bars from ET midnight.
+    //
+    // Every symbol every minute — which is what the GEX bubble trail needs, since
+    // its finest bucket is one minute and a candle the bubbles have nothing to
+    // sit on is a hole in the chart.
+    const bySymbol = await fetchIntradayCandlesMulti(roster, '1m', etDayStartMs(), {
+      quietMs: TICK_QUIET_MS, hardMs: TICK_HARD_MS,
+    });
 
-    // WIDE: the next WIDE_BATCH names, wrapping. The cursor advances by the
-    // batch regardless of per-symbol failures — a name that cannot be fetched
-    // must not park the round-robin on itself and starve the rest.
-    if (process.env.ETF_CANDLE_WIDE !== '0' && WIDE_SYMBOLS.length) {
-      const batch = [];
-      for (let i = 0; i < Math.min(WIDE_BATCH, WIDE_SYMBOLS.length); i++) {
-        batch.push(WIDE_SYMBOLS[(wideCursor + i) % WIDE_SYMBOLS.length]);
-      }
-      wideCursor = (wideCursor + batch.length) % WIDE_SYMBOLS.length;
-      for (const symbol of batch) {
-        try {
-          await recordOne(p, symbol, { wide: true }); // eslint-disable-line no-await-in-loop
-        } catch (e) {
-          console.warn(`[etf-candle] ${symbol} record failed:`, e.message);
-        }
+    // Writes are per symbol so one bad ladder cannot lose the rest of the tick.
+    let wrote = 0;
+    let silent = 0;
+    for (const symbol of roster) {
+      const candles = bySymbol.get(symbol) || [];
+      if (!candles.length) { silent++; continue; }
+      try {
+        wrote += await upsertBars(p, symbol, candles); // eslint-disable-line no-await-in-loop
+      } catch (e) {
+        console.warn(`[etf-candle] ${symbol} write failed:`, e.message);
       }
     }
+    // A tick where MOST of the roster said nothing is the signature of a feed
+    // problem, not of a quiet tape, and it is otherwise completely silent —
+    // upsertBars simply has nothing to do and returns 0. Half the roster is a
+    // deliberately loose threshold: pre-market, plenty of these names genuinely
+    // do not print.
+    if (silent > roster.length / 2) {
+      console.warn(`[etf-candle] ${silent}/${roster.length} symbols returned no bars this tick (${wrote} rows written)`);
+    }
+  } catch (e) {
+    console.warn('[etf-candle] tick fetch failed:', e.message);
   } finally {
     ticking = false;
     const ms = Date.now() - t0;
     // Only when it actually overran. A tick that fits is not news.
     if (ms > INTERVAL_MS) {
-      console.warn(`[etf-candle] tick took ${Math.round(ms / 1000)}s (> ${INTERVAL_MS / 1000}s interval) — lower ETF_CANDLE_WIDE_BATCH`);
+      console.warn(`[etf-candle] tick took ${Math.round(ms / 1000)}s (> ${INTERVAL_MS / 1000}s interval) — lower ETF_CANDLE_TICK_HARD_MS or trim the roster`);
     }
   }
 }
@@ -371,34 +349,62 @@ async function tick() {
  * One-shot history backfill. The per-minute tick only ever reaches back to
  * today's ET midnight, so a freshly-deployed server has no prior sessions — and
  * the ES-Candles chart wants a multi-day window. dxFeed serves roughly a week of
- * 1-minute bars, so pulling `days` back on boot fills the gap in one request per
- * symbol. Idempotent: it goes through the same ON CONFLICT upsert as the tick.
+ * 1-minute bars, so pulling `days` back on boot fills the gap.
+ * Idempotent: it goes through the same ON CONFLICT upsert as the tick.
  *
  * Runs regardless of RTH — the request is historical, not a live subscription.
+ *
+ * Defaults to the WHOLE roster, hot and wide. The per-symbol version of this
+ * was a serial loop with a 60s hard cap each, which is fine for fourteen names
+ * and up to an hour and a half of solid upstream traffic for a hundred and six —
+ * starting at the exact moment the process is trying to come up. Chunked
+ * multi-symbol pulls make it four or five connections instead.
+ *
+ * This is not cosmetic. `/api/snapshots/etf-candles` falls through to its live
+ * dxLink pull only when the table is EMPTY for a symbol, so a symbol recorded
+ * with today's bars ONLY would take the table branch and the chart would
+ * silently lose the four prior sessions the fallback had been giving it. The
+ * backfill is what keeps the table out of that half-filled state.
  */
-async function backfill(days = BACKFILL_DAYS, symbols = SYMBOLS) {
+async function backfill(days = BACKFILL_DAYS, symbols = activeRoster()) {
   const p = getPool();
   if (!p || !(await ensureSchema())) return [];
   const from = Date.now() - Math.max(1, days) * 24 * 60 * 60 * 1000;
   const out = [];
-  for (const symbol of symbols) {
+  for (let i = 0; i < symbols.length; i += BACKFILL_CHUNK) {
+    const chunk = symbols.slice(i, i + BACKFILL_CHUNK);
     try {
-      // cache:false + wide timeouts. The default 7s hard cap is sized for one
-      // session (~390 bars); a five-session replay is several thousand and would
-      // be silently TRUNCATED mid-stream, leaving a partial history that looks
-      // like a successful backfill. cache:false because the cache key is
-      // symbol|interval with no fromTime in it.
+      // Wide timeouts. The tick's caps are sized for one session (~390 bars a
+      // symbol); a five-session replay is several thousand and would be silently
+      // TRUNCATED mid-stream, leaving a partial history that looks like a
+      // successful backfill.
       // eslint-disable-next-line no-await-in-loop
-      const candles = await fetchIntradayCandles(symbol, '1m', from, {
-        cache: false, quietMs: 2_500, hardMs: 60_000,
+      const bySymbol = await fetchIntradayCandlesMulti(chunk, '1m', from, {
+        quietMs: 4_000, hardMs: 120_000,
       });
-      const n = await upsertBars(p, symbol, candles); // eslint-disable-line no-await-in-loop
-      const dates = [...new Set(candles.map((c) => ymdEtOf(Number(c.time))))].sort();
-      out.push({ symbol, bars: n, dates });
-      console.log(`[etf-candle] backfill ${symbol}: ${n} 1m bars over ~${days}d (${dates.join(', ') || 'no sessions'})`);
+      for (const symbol of chunk) {
+        const candles = bySymbol.get(symbol) || [];
+        try {
+          const n = await upsertBars(p, symbol, candles); // eslint-disable-line no-await-in-loop
+          const dates = [...new Set(candles.map((c) => ymdEtOf(Number(c.time))))].sort();
+          out.push({ symbol, bars: n, dates });
+        } catch (e) {
+          out.push({ symbol, bars: 0, dates: [], error: e.message });
+          console.warn(`[etf-candle] ${symbol} backfill write failed:`, e.message);
+        }
+      }
+      // One line per CHUNK, not per symbol. A hundred and six "backfill AAPL:
+      // 1950 bars" lines is not a boot log anyone reads; the names that produced
+      // nothing are the only ones worth calling out.
+      const empty = chunk.filter((s) => !(bySymbol.get(s) || []).length);
+      const bars = out.slice(-chunk.length).reduce((a, r) => a + r.bars, 0);
+      console.log(
+        `[etf-candle] backfill ${i + 1}-${i + chunk.length}/${symbols.length}: ${bars} 1m bars over ~${days}d` +
+        (empty.length ? ` — no data: ${empty.join(',')}` : ''),
+      );
     } catch (e) {
-      out.push({ symbol, bars: 0, dates: [], error: e.message });
-      console.warn(`[etf-candle] ${symbol} backfill failed:`, e.message);
+      for (const symbol of chunk) out.push({ symbol, bars: 0, dates: [], error: e.message });
+      console.warn(`[etf-candle] backfill chunk ${i + 1}-${i + chunk.length} failed:`, e.message);
     }
   }
   return out;
@@ -410,14 +416,12 @@ function startEtfCandleRecorder() {
   if (_timer) return;
   // Backfill FIRST, before any tick has run.
   //
-  // fetchIntradayCandles caches on `symbol|interval` only — `fromTime` is NOT
-  // part of the key — so whichever call runs first owns the cache for the next
-  // 60s and the other is served its rows. Ordering the backfill after a tick
-  // means it gets handed that tick's today-only bars and writes no history at
-  // all, and because the periodic interval also fires at t=60s there is no safe
-  // gap to slot it into during RTH. Running it first inverts the race harmlessly:
-  // the first tick may be served the backfill's rows, which are a superset of
-  // what it wanted (the same 1m bars, reaching further back).
+  // The old reason for this ordering was the single-symbol cache: it keys on
+  // `symbol|interval` with no fromTime, so whichever call ran first owned the
+  // rows for the next 60s and a backfill scheduled after a tick was handed that
+  // tick's today-only bars. The multi-symbol path is not cached at all, so that
+  // particular race is gone — but the ordering is still right, because a chart
+  // opened in the first minute should find history rather than one session.
   if (BACKFILL_DAYS > 0) {
     setTimeout(() => {
       backfill().catch((e) => console.warn('[etf-candle] backfill error:', e.message));
@@ -427,20 +431,18 @@ function startEtfCandleRecorder() {
     tick().catch((e) => console.warn('[etf-candle] tick error:', e.message));
   }, INTERVAL_MS);
   if (_timer.unref) _timer.unref();
+  // 20s is now AFTER the backfill starts but very likely DURING it. That is
+  // fine: both write through the same idempotent upsert, and the tick's
+  // today-only rows are a subset of what the backfill is fetching.
   setTimeout(() => {
     tick().catch((e) => console.warn('[etf-candle] initial tick error:', e.message));
   }, 20_000);
-  const wideOn = process.env.ETF_CANDLE_WIDE !== '0' && WIDE_SYMBOLS.length;
+  const roster = activeRoster();
   console.log(
-    `[etf-candle] recorder started — hot ${SYMBOLS.length} (${SYMBOLS.join('/')}) 1m every ${INTERVAL_MS / 1000}s` +
-    (wideOn
-      // The coverage period is the number that actually describes the wide lane,
-      // so it is computed here rather than left for someone to work out from the
-      // batch size at 3am.
-      ? `; wide ${WIDE_SYMBOLS.length} round-robin ${WIDE_BATCH}/tick (~${Math.ceil(WIDE_SYMBOLS.length / WIDE_BATCH)}min coverage, ${BACKFILL_DAYS}d backfill on first visit)`
-      : '; wide lane off') +
-    ` (04:00-20:00 ET)` +
-    (BACKFILL_DAYS > 0 ? `, ${BACKFILL_DAYS}d hot backfill on boot` : ''),
+    `[etf-candle] recorder started — ${roster.length} symbols ` +
+    `(${SYMBOLS.length} hot + ${roster.length - SYMBOLS.length} far-CB) 1m EVERY ${INTERVAL_MS / 1000}s ` +
+    `on one dxLink connection (04:00-20:00 ET)` +
+    (BACKFILL_DAYS > 0 ? `, ${BACKFILL_DAYS}d backfill on boot in chunks of ${BACKFILL_CHUNK}` : ''),
   );
 }
 

@@ -1,7 +1,12 @@
 "use client";
 
 /**
- * TickerBoard — the premarket / post-market board for SPY and QQQ.
+ * TickerBoard — the premarket / post-market board for every non-SPX symbol on
+ * the premarket page. That was SPY and QQQ until 2026-08-27; it is now the
+ * whole MAIN watchlist (SPY QQQ NDX VIX AAPL AMD AMZN GOOGL META MSFT NVDA
+ * SPCX TSLA). Nothing in here changed to support that — the component took
+ * `ticker` as a prop from the first line — beyond passing that ticker down to
+ * useNextExpiryStructure, which had SPX baked into its two URLs.
  *
  * WHY THIS IS A SEPARATE COMPONENT AND NOT A PROP ON THE SPX PAGE
  *
@@ -9,18 +14,21 @@
  * and half the SPX panels (ES basis, overnight range, the gap, the per-minute
  * recorded ladder, the replay scrubber) exist only because that symbol has ES
  * futures behind it and a recorder writing its ladder every minute. None of
- * that is true for SPY or QQQ, so bolting a ticker prop onto Premarket.tsx
+ * that is true for any other name, so bolting a ticker prop onto Premarket.tsx
  * would have meant a page where a third of the cards render "—" forever.
  *
- * What these two DO have:
+ * What these DO have:
  *   /api/expirations + /api/chains   the same REST path the home heatmap's
  *                                    SPY/QQQ columns already use — front expiry,
  *                                    full chain, polled once a minute.
- *   /proxy/walls?symbol=SPY|QQQ      the walls recorder covers them (they are two
- *                                    of the three quick tickers on /level-log),
- *                                    so the post-market grade is the SAME saved,
- *                                    server-classified verdict SPX gets.
- *   the next expiry's chain          tomorrow's structure, same math.
+ *   /proxy/walls?symbol=<ticker>     the walls recorder samples the latest
+ *                                    scanner row PER SYMBOL, and MAIN is the
+ *                                    scanner's 2-minute hot lane — so the
+ *                                    post-market grade is the SAME saved,
+ *                                    server-classified verdict SPX gets, for
+ *                                    every symbol the picker offers.
+ *   the next expiry's chain          tomorrow's structure, same math, that
+ *                                    ticker's own book.
  *
  * So this board carries exactly the panels those three sources can honestly
  * fill, and says "SPX only" where it cannot. One cycle behind is stated on the
@@ -67,7 +75,12 @@ function fmtUsd(v: number | null | undefined, signed = true): string {
   return `${sign}$${abs.toFixed(0)}`;
 }
 
-/** SPY strikes are $1 wide and QQQ's are $1–$2.50 — 2dp on a level reads wrong. */
+/**
+ * Strike width varies across the watchlist — SPY is $1, QQQ $1–$2.50, NDX $25,
+ * a $30 single name $0.50 — so the decimal place is read off the ladder itself
+ * rather than assumed. 2dp on a $25-wide index level reads wrong; 0dp on a
+ * half-dollar strike loses the strike.
+ */
 const strikeDp = (rows: TickerRow[]) => {
   if (rows.length < 2) return 0;
   const step = Math.abs(rows[1].strike - rows[0].strike);
@@ -84,10 +97,14 @@ export default function TickerBoard({
   etDate: string;
 }) {
   const { board, state } = useTickerBoard(ticker, true);
+  // The 4th argument is load-bearing: without it this hook defaults to SPX and
+  // the "Tomorrow · after the roll" card prints SPX's next-expiry walls under
+  // whatever symbol is on screen. It did exactly that until 2026-08-27.
   const { next, state: nextState } = useNextExpiryStructure(
     view === "post" && !!board,
     board?.expiry ?? "",
     board?.spot ?? 0,
+    ticker,
   );
   const { byLevel: recorded, state: wallState, log: wallLog } = useRecordedWalls(etDate, ticker);
 
