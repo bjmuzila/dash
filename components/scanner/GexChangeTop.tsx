@@ -4,10 +4,16 @@
 // GEX Change — Hourly Top 5 (recorded history)
 //
 // Read-only viewer over gex_change_top: the top 5 "★ Very strong" strikes by
-// combined score, captured at the top of every RTH hour by
-// server-v2/gex-change-top-recorder.js. One section per hour (most recent
+// combined score, captured every 30 min during RTH by
+// server-v2/gex-change-top-recorder.js. One section per slot (most recent
 // first), each a ranked 5-row table — so you can scroll back through the day and
-// see which strikes were building hardest, hour by hour, without a live tab.
+// see which strikes were building hardest, without a live tab.
+//
+// LIVE TRIGGER SLOTS (2026-08-27): the recorder also scans every 60s and files a
+// strike the MINUTE it crosses into "★ Very strong", under its own exact-minute
+// slot marked live. Those sections carry a ⚡ LIVE TRIGGER badge and usually hold
+// one or two cards, not five — they are a crossing, not a leaderboard. The page
+// polls every 60s so a trigger shows up about as fast as it is recorded.
 //
 // CARD FLIP: every pick is auto-probed by the recorder the moment it is captured
 // (POST /api/watch → watch_options + a 60s snapshot loop), and the resulting
@@ -39,8 +45,13 @@ type Row = {
    *  point is that it records what was predicted in advance. */
   proj_grade?: string | null;
   proj_pts?: number | null;
+  /** TRUE when this row was written by the recorder's fast trigger scan the
+   *  minute the strike crossed into "★ Very strong", rather than by the
+   *  interval leaderboard. Its slot is the exact ET minute of the crossing. */
+  live?: boolean;
 };
-type SlotBucket = { slot: string; ts: string; rows: Row[] };
+/** `live` is true only when EVERY row in the bucket was trigger-written. */
+type SlotBucket = { slot: string; ts: string; live?: boolean; rows: Row[] };
 
 type PickPoint = { ts: number; mark: number | null; net_gex: number | null };
 type PickContract = { ticker: string; expiration: string; strike: number; side: string; added_price: number | null };
@@ -290,10 +301,15 @@ const ago = (ts: number | null | undefined): string => {
  * (owner-vite/src/pages/Probe.tsx): same 960-wide viewBox, 5 gridlines with
  * left-hand value ticks, first/last time labels along the bottom, cyan line over
  * a fading area fill. Kept deliberately identical so the two pages read the
- * same; the only additions are the dashed entry baseline on Price and the zero
- * line on Net GEX.
+ * same; the only additions are the dashed entry baseline on Price, the zero
+ * line on Net GEX, and the peak marker.
+ *
+ * peakTs: epoch-ms of the high the card headlines. Marked on the line so the
+ * number above and the shape below are visibly the same event — without it the
+ * card claims a +140% peak and the chart is just a squiggle. Price metric only;
+ * the caller passes null for Net GEX, where a "high" means nothing.
  */
-function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Metric; entry: number | null }) {
+function PickChart({ points, metric, entry, peakTs = null }: { points: PickPoint[]; metric: Metric; entry: number | null; peakTs?: number | null }) {
   // Index of the sample under the cursor — drives the crosshair readout.
   const [hover, setHover] = useState<number | null>(null);
   // The viewBox is set to the box's REAL pixel width at a FIXED pixel height, so
@@ -346,6 +362,21 @@ function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Met
   const line = pts.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
   const area = `${line} L${sx(n - 1).toFixed(1)},${H - PADB} L${sx(0).toFixed(1)},${H - PADB} Z`;
   const last = pts[n - 1].v;
+
+  // Nearest charted sample to the scorecard's peak timestamp. Nearest, not
+  // exact: the scorecard reads watch_snapshots straight, while these points are
+  // RTH-filtered client-side, so the two series can be off by a sample.
+  let peakIdx: number | null = null;
+  if (metric === "mark" && peakTs != null && Number.isFinite(peakTs)) {
+    let best = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const d = Math.abs(pts[i].ts - peakTs);
+      if (d < best) { best = d; peakIdx = i; }
+    }
+    // More than 5 minutes away is a different event — draw nothing rather than
+    // point at the wrong bar.
+    if (best > 5 * 60_000) peakIdx = null;
+  }
 
   const fmtY = (v: number) => (metric === "net_gex" ? fmtGex(v) : v.toFixed(2));
   const yTicks = [0, 0.5, 1].map((f) => minY + f * (maxY - minY));
@@ -410,6 +441,18 @@ function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Met
       )}
       <path d={area} fill="url(#gct-fill)" />
       <path d={line} fill="none" stroke={HOME_THEME.cyan} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
+      {peakIdx != null && (
+        <g>
+          <line
+            x1={sx(peakIdx)} y1={PADT} x2={sx(peakIdx)} y2={H - PADB}
+            stroke={tint(HOME_THEME.green, 0.35)} strokeWidth={1} strokeDasharray="2 3"
+          />
+          <circle
+            cx={sx(peakIdx)} cy={sy(pts[peakIdx].v)} r={3.2}
+            fill={HOME_THEME.green} stroke={HOME_THEME.bg} strokeWidth={1}
+          />
+        </g>
+      )}
       {hp ? (
         <g>
           {/* Crosshair: time chip on the x axis, value chip on the y axis. */}
@@ -520,11 +563,15 @@ export default function GexChangeTop() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadResults(date || undefined); }, [loadResults, date]);
+  // 60s, not 5 min. The recorder's trigger scan files a crossing within a minute
+  // of it happening; a 5-minute poll threw that away and put the card on screen
+  // up to five minutes stale, which is the whole problem the trigger scan was
+  // added to fix. Two small JSON reads a minute is cheap by comparison.
   useEffect(() => {
     const t = setInterval(() => {
       load(date || undefined);
       loadResults(date || undefined);
-    }, 5 * 60 * 1000);
+    }, 60 * 1000);
     return () => clearInterval(t);
   }, [load, loadResults, date]);
 
@@ -966,14 +1013,29 @@ export default function GexChangeTop() {
 
       {!err && slots.length === 0 && (
         <div style={{ color: HOME_THEME.text, fontSize: 14, padding: "16px 4px" }}>
-          {loading ? "Loading…" : "No very-strong picks recorded yet for this date. The recorder captures the top 5 every 30 min during RTH going forward."}
+          {loading ? "Loading…" : "No very-strong picks recorded yet for this date. The recorder files a strike the minute it crosses into ★ Very strong, and captures the top 5 every 30 min during RTH."}
         </div>
       )}
 
       {slots.map((hb) => (
         <div key={hb.slot} style={{ marginBottom: 22 }}>
           <div data-noshot="1" style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
-            <span style={{ color: HOME_THEME.orange, fontWeight: 800, fontSize: 15 }}>{slotLabel(hb.slot)}</span>
+            <span style={{ color: hb.live ? HOME_THEME.cyan : HOME_THEME.orange, fontWeight: 800, fontSize: 15 }}>{slotLabel(hb.slot)}</span>
+            {/* A live section is a CROSSING, not a leaderboard — it holds
+                however many strikes triggered in that minute, usually one. Say
+                so, or a one-card section reads as four missing picks. */}
+            {hb.live && (
+              <span
+                title="Filed the minute this strike crossed into ★ Very strong, by the recorder's 60s trigger scan — not a scheduled top-5 capture."
+                style={{
+                  fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", padding: "1px 6px", borderRadius: 4,
+                  color: HOME_THEME.cyan, background: tint(HOME_THEME.cyan, 0.12),
+                  border: `1px solid ${tint(HOME_THEME.cyan, 0.45)}`,
+                }}
+              >
+                ⚡ LIVE TRIGGER
+              </span>
+            )}
             <span style={{ color: HOME_THEME.text, fontSize: 12 }}>{hb.rows.length} pick{hb.rows.length === 1 ? "" : "s"}</span>
           </div>
           <div className="gct-grid" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
@@ -1018,8 +1080,45 @@ export default function GexChangeTop() {
               const lastMark = lastPt?.mark ?? null;
               const lastTs = [...pts].reverse().find((p) => Number.isFinite(p.ts))?.ts ?? null;
               const pnlPct = entry != null && entry !== 0 && lastMark != null ? ((lastMark - entry) / entry) * 100 : null;
-              const pnlDollars = entry != null && lastMark != null ? (lastMark - entry) * 100 : null;
               const pnlColor = pnlPct == null ? HOME_THEME.text : pnlPct > 0 ? HOME_THEME.green : pnlPct < 0 ? HOME_THEME.red : HOME_THEME.text;
+
+              // ── THE HEADLINE IS THE PEAK, NOT "NOW" ───────────────────────
+              // This card used to read "in $1.20 → now $0.35, −71%". That number
+              // is almost always bad and almost always beside the point: the
+              // pick is a flag on a strike, not a position anyone is still
+              // holding at 3:55 PM. What it has to answer is "was there a trade
+              // in it" — entry, WHEN it triggered, and the best mark that
+              // printed afterwards. That is max-favourable-excursion, which the
+              // scorecard has computed all along (max_mark / max_ts, measured
+              // from the first snapshot at/after the flag) and the card was
+              // simply not reading.
+              //
+              // "now" survives as a small muted line underneath, because where
+              // it sits relative to the peak is worth a glance — it just isn't
+              // the headline.
+              const res = (wid != null ? resultById.get(wid) : undefined) ?? null;
+              const entryTs = res?.entry_ts ?? null;
+              // The scorecard is the source of truth. Fall back to the charted
+              // series only for a pick it has no row for yet (freshly triggered,
+              // results not loaded) so a brand-new live card still says something.
+              let peakMark = res?.max_mark ?? null;
+              let peakTs = res?.max_ts ?? null;
+              if (peakMark == null) {
+                for (const p of pts) {
+                  if (p.mark == null || !Number.isFinite(p.mark)) continue;
+                  if (entryTs != null && p.ts < entryTs) continue; // never count a mark from before the flag
+                  if (peakMark == null || p.mark > peakMark) { peakMark = p.mark; peakTs = p.ts; }
+                }
+              }
+              const peakPct =
+                res?.max_pct ??
+                (entry != null && entry !== 0 && peakMark != null ? ((peakMark - entry) / entry) * 100 : null);
+              const peakDollars = entry != null && peakMark != null ? (peakMark - entry) * 100 : null;
+              const peakColor = peakPct == null ? HOME_THEME.text : peakPct > 0 ? HOME_THEME.green : HOME_THEME.red;
+              // Trigger time: the scorecard's entry snapshot when there is one,
+              // otherwise the slot itself — which for a live card IS the minute
+              // it crossed.
+              const trigLabel = entryTs != null ? fmtClock(entryTs) : slotLabel(hb.slot).replace(" ET", "");
               // Under the entry floor → the scorecard won't rank it. Dim it and
               // badge it rather than removing it: the slot would otherwise show
               // four cards, and the pick genuinely WAS captured.
@@ -1039,8 +1138,9 @@ export default function GexChangeTop() {
                     // card or reflows the grid.
                     position: "relative",
                     // Sized for the taller of the two faces: the chart side is
-                    // header + headline + toolbar + a fixed 96px chart + hint.
-                    minHeight: 244,
+                    // header + headline + the demoted "now" line + toolbar + a
+                    // fixed 96px chart + hint.
+                    minHeight: 260,
                     perspective: 1200,
                     cursor: wid == null ? "default" : "pointer",
                     // Reads as present-but-discounted, which is exactly its status.
@@ -1193,21 +1293,39 @@ export default function GexChangeTop() {
                       <div style={{ fontFamily: MONO, fontSize: 10, color: HOME_THEME.text, marginTop: 2 }}>
                         {r.expiry} · {capturedLabel(date, hb.slot)}
                       </div>
-                      {/* .op-bigrow — the headline move off the entry basis. */}
+                      {/* .op-bigrow — entry at the trigger, then the PEAK. See
+                          the "THE HEADLINE IS THE PEAK" note above. */}
                       <div style={{ margin: "6px 0 4px" }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                          <div style={{ fontFamily: MONO, fontSize: 18, fontWeight: 800, lineHeight: 1, color: pnlColor }}>
-                            {pnlPct == null ? "—" : `${pnlPct >= 0 ? "▲" : "▼"} ${Math.abs(pnlPct).toFixed(1)}%`}
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 4, minWidth: 0 }}>
+                            <div style={{ fontFamily: MONO, fontSize: 18, fontWeight: 800, lineHeight: 1, color: peakColor }}>
+                              {peakPct == null ? "—" : `${peakPct >= 0 ? "▲" : "▼"} ${Math.abs(peakPct).toFixed(1)}%`}
+                            </div>
+                            <span style={{ ...lblStyle, marginRight: 0 }}>peak</span>
                           </div>
                           <GradePill info={grade} provisional={!frozen} />
                         </div>
-                        <div style={{ fontFamily: MONO, fontSize: 11, color: HOME_THEME.text, marginTop: 4, whiteSpace: "nowrap" }}>
+                        {/* in @ trigger → high @ when it printed */}
+                        <div style={{ fontFamily: MONO, fontSize: 11, color: HOME_THEME.text, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           <span style={lblStyle}>in</span>{fmtPx(entry)}
+                          <span style={{ opacity: 0.65 }}>{` ${trigLabel}`}</span>
                           <span style={{ color: HOME_THEME.text, margin: "0 4px" }}>→</span>
+                          <span style={lblStyle}>high</span>
+                          <span style={{ fontWeight: 700, color: peakColor }}>{fmtPx(peakMark)}</span>
+                          {peakTs != null && <span style={{ opacity: 0.65 }}>{` ${fmtClock(peakTs)}`}</span>}
+                          {peakDollars != null && (
+                            <span style={{ fontWeight: 700, color: peakColor }}>
+                              {` · ${peakDollars >= 0 ? "+" : "−"}$${Math.abs(peakDollars).toFixed(0)}/ct`}
+                            </span>
+                          )}
+                        </div>
+                        {/* "now" demoted: useful as context against the peak,
+                            never as the number the card leads with. */}
+                        <div style={{ fontFamily: MONO, fontSize: 10, color: HOME_THEME.text, opacity: 0.7, marginTop: 2, whiteSpace: "nowrap" }}>
                           <span style={lblStyle}>now</span>{fmtPx(lastMark)}
-                          {pnlDollars != null && (
-                            <span style={{ fontWeight: 700, color: pnlColor }}>
-                              {` · ${pnlDollars >= 0 ? "+" : "−"}$${Math.abs(pnlDollars).toFixed(0)}/ct`}
+                          {pnlPct != null && (
+                            <span style={{ color: pnlColor }}>
+                              {` · ${pnlPct >= 0 ? "+" : "−"}${Math.abs(pnlPct).toFixed(0)}%`}
                             </span>
                           )}
                         </div>
@@ -1234,11 +1352,11 @@ export default function GexChangeTop() {
                       ) : h?.error ? (
                         <div style={{ fontFamily: MONO, fontSize: 10, color: HOME_THEME.red, textAlign: "center", padding: "26px 0" }}>{h.error}</div>
                       ) : (
-                        <PickChart points={pts} metric={metric} entry={entry} />
+                        <PickChart points={pts} metric={metric} entry={entry} peakTs={metric === "mark" ? peakTs : null} />
                       )}
                       {/* .op-charthint */}
                       <div style={{ marginTop: 4, fontFamily: MONO, fontSize: 9, color: HOME_THEME.text, letterSpacing: "0.03em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {metric === "mark" ? "price (mark)" : "net gex @ strike"} · RTH · entry @ {fmtPx(entry)} · {ago(lastTs)}
+                        {metric === "mark" ? "price (mark)" : "net gex @ strike"} · RTH · in {fmtPx(entry)} {trigLabel} · high {fmtPx(peakMark)}{peakTs != null ? ` ${fmtClock(peakTs)}` : ""} · {ago(lastTs)}
                       </div>
                     </div>
                     )}

@@ -1,5 +1,68 @@
 # Changelog
 
+## 2026-08-27 - GEX Change Top: live triggers, and the card leads with the peak
+
+Edited: `server-v2/gex-change-top-recorder.js`,
+`components/scanner/GexChangeTop.tsx`. No proxy/router changes - the trigger
+loop is started by `startGexChangeTopRecorder()` and reads through the existing
+`/proxy/gex-change-top*` endpoints unchanged.
+
+**Live triggers.** The interval capture is a leaderboard: every 30 minutes it
+asks "what are the five strongest strikes right now" and photographs the answer.
+That is the wrong shape for the thing you actually watch this tab for - a strike
+CROSSING into "* Very strong". A name that qualified at 10:31 and faded by 10:58
+never existed as far as the board was concerned, and one that qualified at 10:31
+and held showed up 29 minutes late, by which time the option had already made
+its move and the card's entry basis was nonsense.
+
+So the recorder now also runs a fast scan - `runLive()`, every
+`GEX_CHANGE_TOP_LIVE_SEC` (default 60s) - whose job is detection, not ranking.
+Any strike that qualifies and is not already on today's board is written the
+moment it is seen, under its own exact-minute slot (`10:37`), auto-probed like
+any other pick, and marked `live = TRUE` (new column, defaults FALSE so every
+existing row backfills as an interval capture).
+
+Dedupe is per (symbol, expiry, strike) per DAY, which is what keeps it cheap and
+honest: a trigger fires ONCE, on the crossing, and the entry basis is the mark at
+the crossing. Re-qualifying five minutes later is the same event, not a new one -
+including when the entry floor rejects it, or a nickel contract that stays
+qualified gets re-probed every 60s for the rest of the session. The seen-set and
+the daily counter are rebuilt from the DB on the first scan of a new session day,
+so a restart does not re-fire the morning's triggers.
+
+Caps, because each capture is a `watch_options` row snapshotted every 60s until
+expiry: `GEX_CHANGE_TOP_LIVE_MAX_PER_SCAN` (3) stops one violent tape from
+probing twenty names in a minute, `GEX_CHANGE_TOP_LIVE_MAX_PER_DAY` (40) is the
+hard ceiling. `GEX_CHANGE_TOP_LIVE=0` goes back to interval-only. The 30-minute
+leaderboard is untouched and still runs; both write to the same table and the
+same probe pipeline, and a strike first seen live keeps its live minute as
+`first_slot` in the scorecard (MIN(slot) is lexicographic on "HH:MM", so the
+earliest wall-clock minute wins, which is what the scorecard should anchor to).
+
+On the page: live sections carry a `* LIVE TRIGGER` badge and usually hold one or
+two cards, not five - said out loud, because a one-card section otherwise reads
+as four missing picks. The poll dropped from 5 minutes to 60s; a 5-minute poll
+threw away everything the trigger scan just bought.
+
+**The card headlines the peak, not "now".** The flip side used to read
+`in $1.20 -> now $0.35, -71%`. That number is almost always bad and almost always
+beside the point: the pick is a flag on a strike, not a position anyone is still
+holding at 3:55 PM. What the card has to answer is "was there a trade in it" -
+entry, WHEN it triggered, and the best mark that printed afterwards.
+
+That is max-favourable-excursion, which the scorecard has computed all along
+(`max_mark` / `max_ts`, measured from the first snapshot at/after the flag) and
+the card was simply not reading. The headline is now the peak %, the line under
+it is `in 1.20 10:31 -> high 2.45 11:42 - +$125/ct`, and `now` survives as a small
+muted line beneath - where price sits relative to the peak is worth a glance, it
+just is not the number the card leads with. Trigger time comes from the
+scorecard's entry snapshot, falling back to the slot itself, which for a live
+card IS the minute it crossed.
+
+The peak is marked on the chart too (green dot + dashed rule, price metric only,
+nearest sample within 5 minutes or nothing) so the number above and the shape
+below are visibly the same event. Cards grew 244 -> 260px for the extra line.
+
 ## 2026-08-27 - ES Candles: SPX, an RTH/ETH switch, no side panel, any ticker
 
 Edited: `components/pages/EsCandles.tsx`, `app/es-candles/page.tsx`,

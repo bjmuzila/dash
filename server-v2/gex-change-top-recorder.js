@@ -24,6 +24,14 @@
  * evenly — 5,10,15,20,30,60). Buckets are "HH:MM" ET slots so two captures in the
  * same hour never collide.
  *
+ * LIVE TRIGGERS (2026-08-27): alongside that leaderboard, a fast scan runs every
+ * GEX_CHANGE_TOP_LIVE_SEC (default 60s) and files any strike that has just
+ * CROSSED into "★ Very strong" and is not already on the board today — under its
+ * own exact-minute slot ("10:37"), probed like any other pick, marked live=TRUE.
+ * One trigger per strike per day, capped per scan and per day. The point is that
+ * the entry basis is the mark at the crossing instead of up to 30 minutes late.
+ * Off with GEX_CHANGE_TOP_LIVE=0. See the LIVE TRIGGERS block below.
+ *
  * Source of truth for scoring/thresholds mirrors app/scanner/page.tsx +
  * server-with-proxy.js '/proxy/strike-growth/scanner'. Reuses the shared PG pool
  * from strike-growth-recorder.js (reads strike_growth); owns its own table.
@@ -101,6 +109,38 @@ const CANDIDATE_MULT = Number(process.env.GEX_CHANGE_TOP_CANDIDATE_MULT || 4);
 // doubles the probe load. Set GEX_CHANGE_TOP_SHADOW_N=0 to turn the control
 // group off entirely (and lose the ability to ever answer the question).
 const SHADOW_N = Math.max(0, Number(process.env.GEX_CHANGE_TOP_SHADOW_N ?? 5));
+// ── LIVE TRIGGERS ────────────────────────────────────────────────────────────
+// The interval capture is a LEADERBOARD: every INTERVAL_MIN it asks "what are
+// the five strongest strikes right now" and photographs the answer. That is the
+// wrong shape for the thing you actually want to see — a strike CROSSING into
+// "★ Very strong". A name that qualifies at 10:31 and is back under the bar by
+// 10:58 never existed as far as the board was concerned, and one that qualifies
+// at 10:31 and holds shows up 29 minutes late, by which time the option has
+// already made its move and the card's entry is nonsense.
+//
+// So the recorder now also runs a FAST scan (LIVE_SEC, default 60s) whose job is
+// not ranking but DETECTION: any strike that qualifies and has not been captured
+// yet today is written the moment it is seen, into its own minute-precision slot
+// ("10:37"), probed like any other pick, and marked live = TRUE.
+//
+// Dedupe is per (symbol, expiry, strike) per DAY, which is what makes this cheap
+// and what keeps it honest: a trigger fires ONCE, on the crossing, and the entry
+// basis is the mark at the crossing. Re-qualifying five minutes later is the
+// same event, not a new one.
+//
+// The interval leaderboard is untouched and still runs — the two write to the
+// same table and the same probe pipeline, and a strike first seen live keeps its
+// live slot as first_slot in the scorecard (MIN(slot) is lexicographic on
+// "HH:MM", so the earliest wall-clock minute wins, which is exactly right).
+//
+// Caps exist because each capture is a watch_options row snapshotted every 60s
+// until expiry: LIVE_MAX_PER_SCAN stops one violent tape from probing 20 names in
+// a minute, LIVE_MAX_PER_DAY is the hard daily ceiling. Set
+// GEX_CHANGE_TOP_LIVE=0 to go back to interval-only.
+const LIVE_ON           = String(process.env.GEX_CHANGE_TOP_LIVE || '1') !== '0';
+const LIVE_SEC          = Math.max(20, Number(process.env.GEX_CHANGE_TOP_LIVE_SEC || 60));
+const LIVE_MAX_PER_SCAN = Math.max(1, Number(process.env.GEX_CHANGE_TOP_LIVE_MAX_PER_SCAN || 3));
+const LIVE_MAX_PER_DAY  = Math.max(1, Number(process.env.GEX_CHANGE_TOP_LIVE_MAX_PER_DAY || 40));
 const W_ABS = 0.6, W_PCT = 0.4;                                              // score blend weights
 // Auto-probe every captured pick into the /api/watch pipeline (see header).
 const AUTO_PROBE  = String(process.env.GEX_CHANGE_TOP_AUTOPROBE || '1') !== '0';
@@ -136,6 +176,12 @@ function etSlot(d = new Date()) {
   const { hour, minute } = etParts(d);
   const slotMin = Math.floor(minute / INTERVAL_MIN) * INTERVAL_MIN;
   return `${String(hour).padStart(2, '0')}:${String(slotMin).padStart(2, '0')}`;
+}
+// The exact "HH:MM" ET minute — the slot a LIVE trigger is filed under. Not
+// floored: the whole point of a trigger is the minute it crossed.
+function etSlotExact(d = new Date()) {
+  const { hour, minute } = etParts(d);
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 function isRTH() {
   const { hour, minute, weekday } = etParts();
@@ -213,6 +259,12 @@ async function _ensureSchemaOnce(p) {
     // armed, which is the shipping default.
     await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS proj_grade TEXT');
     await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS proj_pts REAL');
+    // live=TRUE marks a row written by the fast trigger scan the moment the
+    // strike crossed into "★ Very strong", rather than by the interval
+    // leaderboard. Its slot is the exact ET minute of the crossing. Defaulting
+    // to FALSE backfills every pre-live row correctly: they were all interval
+    // captures.
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS live BOOLEAN NOT NULL DEFAULT FALSE');
     await p.query(`CREATE INDEX IF NOT EXISTS idx_gct_watch ON gex_change_top(watch_id)`);
     // Frozen end-of-day scorecard — one row per pick per day. Survives the
     // pruning of auto-probed contracts (and their snapshots) at expiry.
@@ -609,10 +661,161 @@ async function runOnce({ force = false } = {}) {
   const probed = watchIds.filter((x) => x != null).length;
   await pruneExpiredProbes(p);
 
+  // Feed the live scan's dedupe set: anything the leaderboard just captured is
+  // no longer a NEW crossing, so the trigger scan must not fire on it a minute
+  // later and file a duplicate card under its own slot.
+  if (_liveDay === date) {
+    for (const item of [...picks, ...shadows]) noteSeen(item.row.symbol, item.row.expiry, item.row.strike);
+  }
+
   console.log(`[gex-change-top] ${date} ${slot}: recorded ${written} very-strong pick(s), ${probed} auto-probed`
     + `${shadows.length ? `, +${shadows.length} shadow control` : ''}`
     + `${rejected ? `, ${rejected} skipped under $${ENTRY_FLOOR.toFixed(2)}` : ''} @ ${now.toISOString()}`);
   return { ok: true, date, slot, written, probed, shadows: shadows.length, rejected, scanned };
+}
+
+// ── LIVE TRIGGER SCAN ─────────────────────────────────────────────────────────
+// Detection, not ranking. Runs every LIVE_SEC during RTH and writes any strike
+// that has crossed into "★ Very strong" and is not already on the board today,
+// stamped with the exact ET minute it was seen. See the LIVE TRIGGERS block at
+// the top of this file for why this exists alongside the interval capture.
+//
+// State is per-day and rebuilt from the DB on the first scan of a new session
+// day (and after a restart), so the daily cap and the once-per-strike rule
+// survive a process bounce instead of re-firing every trigger of the morning.
+
+/** Dedupe key for a pick within one session day. */
+function pickKey(symbol, expiry, strike) {
+  return `${String(symbol).toUpperCase()}|${String(expiry)}|${Number(strike)}`;
+}
+
+let _liveDay = null;          // ET date the sets below describe
+let _liveSeen = new Set();    // every (symbol, expiry, strike) already captured today
+let _liveCount = 0;           // live triggers written today (the LIVE_MAX_PER_DAY budget)
+let _liveBusy = false;        // a scan is in flight — probes are slow, ticks are not
+
+function noteSeen(symbol, expiry, strike) { _liveSeen.add(pickKey(symbol, expiry, strike)); }
+
+async function loadLiveState(p, date) {
+  const { rows } = await p.query(
+    'SELECT symbol, expiry, strike, COALESCE(live, FALSE) AS live FROM gex_change_top WHERE date = $1',
+    [date],
+  );
+  const seen = new Set();
+  let live = 0;
+  for (const r of rows) {
+    seen.add(pickKey(r.symbol, r.expiry, Number(r.strike)));
+    if (r.live) live += 1;
+  }
+  _liveSeen = seen;
+  _liveCount = live;
+  _liveDay = date;
+}
+
+async function runLive({ force = false } = {}) {
+  if (!LIVE_ON) return { skipped: 'live triggers off' };
+  if (!force && !isRTH()) return { skipped: 'outside RTH' };
+  // A scan can outlive its tick (each probe is an HTTP hop + a DB read), and two
+  // overlapping scans would both see the same strike as new and race to file it.
+  if (_liveBusy) return { skipped: 'scan already running' };
+  const p = sg.getPool();
+  if (!p) return { skipped: 'no DB' };
+  if (!(await ensureSchema())) return { skipped: 'no schema' };
+
+  _liveBusy = true;
+  try {
+    const date = etDateStr();
+    if (_liveDay !== date) await loadLiveState(p, date);
+    if (_liveCount >= LIVE_MAX_PER_DAY) return { ok: true, triggered: 0, capped: 'daily' };
+
+    let candidates;
+    try {
+      ({ rows: candidates } = await p.query(
+        SCAN_SQL,
+        [date, EXCLUDE, MIN_DOLLAR, MIN_PCT, MIN_OTM, DIR, Math.max(TOP_N, TOP_N * CANDIDATE_MULT)],
+      ));
+    } catch (e) {
+      console.warn('[gex-change-top] live scan error:', e.message);
+      return { skipped: 'scan error', error: e.message };
+    }
+
+    const fresh = candidates.filter((r) => !_liveSeen.has(pickKey(r.symbol, r.expiry, r.strike)));
+    if (!fresh.length) return { ok: true, triggered: 0 };
+
+    const room = Math.min(LIVE_MAX_PER_SCAN, LIVE_MAX_PER_DAY - _liveCount);
+    // Probe budget: a rejected candidate still costs a round trip, so cap the
+    // work per scan rather than walking the whole list looking for `room` keepers.
+    const budget = room * 3;
+    const slot = etSlotExact();
+    const now = new Date();
+
+    const taken = [];
+    let tried = 0, rejected = 0;
+    for (const r of fresh) {
+      if (taken.length >= room || tried >= budget) break;
+      tried += 1;
+      // Seen either way. A trigger fires ONCE per strike per day — including
+      // when the floor rejects it, otherwise a nickel contract that stays
+      // qualified gets re-probed every LIVE_SEC for the rest of the session.
+      noteSeen(r.symbol, r.expiry, r.strike);
+      const id = await autoProbe(p, r).catch(() => null);
+      const entry = await probedEntryPrice(p, id);
+      if (entry != null && entry <= ENTRY_FLOOR) {
+        rejected += 1;
+        await releaseRejectedProbe(p, id);
+        continue;
+      }
+      taken.push({ row: r, watchId: id });
+    }
+
+    if (!taken.length) return { ok: true, triggered: 0, rejected };
+
+    const client = await p.connect();
+    try {
+      await client.query('BEGIN');
+      for (let i = 0; i < taken.length; i++) {
+        const r = taken[i].row;
+        const rank = i + 1;
+        let proj = null;
+        try {
+          proj = PG.projectPick(PG.pickFeatures({ ...r, date, slot, rank }, { entry: null }));
+        } catch (e) { console.warn('[gex-change-top] live projection failed:', e.message); }
+        await client.query(
+          `INSERT INTO gex_change_top
+             (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, live, proj_grade, proj_pts)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE,TRUE,$15,$16)
+           ON CONFLICT (date, slot, symbol, expiry, strike) DO UPDATE SET
+             rank = EXCLUDED.rank, ts = EXCLUDED.ts, spot = EXCLUDED.spot,
+             latest_chg = EXCLUDED.latest_chg, pct_open = EXCLUDED.pct_open,
+             z_score = EXCLUDED.z_score, score = EXCLUDED.score,
+             proj_grade = EXCLUDED.proj_grade, proj_pts = EXCLUDED.proj_pts,
+             watch_id = COALESCE(EXCLUDED.watch_id, gex_change_top.watch_id)`,
+          [date, slot, now, rank, r.symbol, r.expiry, r.strike, r.spot,
+           r.latest_chg, r.pct_open, r.z_score, r.score, WINDOW_MIN, taken[i].watchId ?? null,
+           proj ? proj.grade : null, proj ? proj.pts : null],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.warn('[gex-change-top] live write error:', e.message);
+      // The strikes were marked seen before the write; un-mark them so the next
+      // scan can retry rather than silently dropping the trigger for the day.
+      for (const t of taken) _liveSeen.delete(pickKey(t.row.symbol, t.row.expiry, t.row.strike));
+      return { skipped: 'write error', error: e.message };
+    } finally {
+      client.release();
+    }
+
+    _liveCount += taken.length;
+    console.log(`[gex-change-top] LIVE ${date} ${slot}: ${taken.length} new trigger(s) — `
+      + taken.map((t) => `${t.row.symbol} ${t.row.strike}`).join(', ')
+      + `${rejected ? ` (${rejected} under $${ENTRY_FLOOR.toFixed(2)})` : ''}`
+      + ` · ${_liveCount}/${LIVE_MAX_PER_DAY} today`);
+    return { ok: true, date, slot, triggered: taken.length, rejected, today: _liveCount };
+  } finally {
+    _liveBusy = false;
+  }
 }
 
 // ── Read (feeds /proxy/gex-change-top + the viewer tab) ───────────────────────
@@ -624,16 +827,21 @@ async function getHistory({ date, limitSlots = 20 } = {}) {
     await ensureSchema(); // best-effort; surface the real error below if it or the read fails
     const { rows } = await p.query(
       `SELECT date, slot, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, ts, watch_id,
-              proj_grade, proj_pts
+              proj_grade, proj_pts, COALESCE(live, FALSE) AS live
          FROM gex_change_top WHERE date = $1 AND COALESCE(selected, TRUE)
         ORDER BY slot DESC, rank ASC`,
       [d],
     );
     // Group into time-slot buckets (most-recent slot first).
+    // A bucket is a LIVE bucket only when everything in it was trigger-written —
+    // an interval capture that happens to land on the same minute makes it an
+    // ordinary leaderboard slot again.
     const bySlot = new Map();
     for (const r of rows) {
-      if (!bySlot.has(r.slot)) bySlot.set(r.slot, { slot: r.slot, ts: r.ts, rows: [] });
-      bySlot.get(r.slot).rows.push(r);
+      if (!bySlot.has(r.slot)) bySlot.set(r.slot, { slot: r.slot, ts: r.ts, live: true, rows: [] });
+      const b = bySlot.get(r.slot);
+      if (!r.live) b.live = false;
+      b.rows.push(r);
     }
     const slots = [...bySlot.values()].slice(0, limitSlots);
     return { ok: true, date: d, slots };
@@ -1284,6 +1492,7 @@ async function getRuleState() {
 
 // ── Scheduler: fire on every INTERVAL_MIN boundary during RTH ─────────────────
 let _timer = null;
+let _liveTimer = null;
 let _eodTimer = null;
 let _lastEodDate = null;
 function startGexChangeTopRecorder(port) {
@@ -1302,6 +1511,18 @@ function startGexChangeTopRecorder(port) {
     }, STEP);
     if (_timer.unref) _timer.unref();
   }, msToBoundary);
+
+  // Live trigger scan — starts immediately (not on a boundary): a strike that is
+  // already qualified when the process comes up is a trigger we have not
+  // recorded yet, and waiting up to 30 minutes for the leaderboard to notice is
+  // the exact behaviour this loop exists to replace.
+  if (LIVE_ON) {
+    runLive().catch((e) => console.warn('[gex-change-top] live tick error:', e.message));
+    _liveTimer = setInterval(() => {
+      runLive().catch((e) => console.warn('[gex-change-top] live tick error:', e.message));
+    }, LIVE_SEC * 1000);
+    if (_liveTimer.unref) _liveTimer.unref();
+  }
 
   // EOD freeze — checks every 5 min and fires ONCE per session day at/after
   // 16:05 ET, giving the 60s watch recorder time to land the closing snapshot.
@@ -1333,12 +1554,13 @@ function startGexChangeTopRecorder(port) {
   // capture after a restart instead of waiting for the next EOD.
   loadStoredRule().catch(() => {});
 
+  console.log(`[gex-change-top] live triggers ${LIVE_ON ? `ON — scan every ${LIVE_SEC}s, max ${LIVE_MAX_PER_SCAN}/scan, ${LIVE_MAX_PER_DAY}/day` : 'OFF'}`);
   console.log(`[gex-change-top] recorder started — every ${INTERVAL_MIN}m, ${WINDOW_MIN}m window, top ${TOP_N} very-strong (>= $${MIN_DOLLAR.toLocaleString()} & >= ${MIN_PCT}%), auto-probe ${AUTO_PROBE ? 'ON' : 'OFF'}, EOD scorecard 16:05 ET, projection auto-fit ${AUTO_FIT ? `ON (${FIT_DAYS}d, needs ${PG.FIT.MIN_PICKS} graded picks)` : 'OFF'}, first fire in ${Math.round(msToBoundary / 60000)}m`);
 }
 
 module.exports = {
   getStudy, getCalibration,
   fitProjRule, getRuleState, storeRule, loadStoredRule,
-  startGexChangeTopRecorder, runOnce, getHistory, getPickHistory,
+  startGexChangeTopRecorder, runOnce, runLive, getHistory, getPickHistory,
   runResults, getResults, computeResults, ensureSchema,
 };
