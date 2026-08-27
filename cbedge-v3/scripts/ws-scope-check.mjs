@@ -91,7 +91,11 @@ async function waitForPort(url, timeoutMs = 30_000) {
 // ── boot the two servers ─────────────────────────────────────────────────────
 
 run('node', [join(ROOT, 'scripts/mock-server.mjs'), String(MOCK_PORT)])
-run('npx', ['vite', '--port', String(DEV_PORT), '--strictPort'], {
+// Run Vite's CLI entry directly with this same Node binary instead of
+// spawning `npx` — `npx` is a .cmd shim on Windows, and node's spawn() can't
+// exec a .cmd without `shell: true` (ENOENT). Resolving vite's own bin script
+// and running it with `process.execPath` works identically on every OS.
+run(process.execPath, [require.resolve('vite/bin/vite.js'), '--port', String(DEV_PORT), '--strictPort'], {
   VITE_BACKEND_ORIGIN: `http://localhost:${MOCK_PORT}`,
 })
 

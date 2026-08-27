@@ -1,5 +1,56 @@
 # Changelog
 
+## 2026-08-27 - Gamma bell curve: a percentage band is the wrong unit for a strike ladder
+
+Edited: `components/pages/premarket/gammaChartKit.ts`,
+`components/pages/premarket/GammaBellCurve.tsx`.
+
+**The bug, from an AMZN screenshot:** seven bars, and a "least-squares normal
+fit" drawn through them.
+
+Both gamma cards read a board of **±3% of spot**. On SPX that is ±230 points -
+about 92 five-wide strikes, plenty of chart. On a $257 AMZN it is
+**±7.70 DOLLARS**, and AMZN lists every $2.50: **seven strikes**, total. The
+window was never wrong in percent, it was wrong in *strikes* - SPX's grid is
+0.065% of spot per step and AMZN's is 0.97%, nearly fifteen times coarser in
+relative terms, so the same percentage buys fifteen times fewer bars.
+
+Everything downstream inherited it. AUTO is `spot ± 4.5σ`, but it is capped at
+the board, so on AMZN the cap was ~1.5σ - AUTO could never widen. The fit ran on
+seven points. `σ`, "mass inside 1σ" and "center of mass" were all measured
+through a slit.
+
+### The fix: express the floor in strikes
+
+New `wideHalfOf(chain, spot)` - the widest band the cards read:
+
+- ±3% of spot as the **base**, exactly as before;
+- widened, when that slice is too thin, to the distance of the
+  **60th-nearest strike** (`WIDE_MIN_STRIKES`);
+- never past **±30%** (`WIDE_MAX_BAND`) - nothing that far from spot is gamma
+  worth charting.
+
+It caps AUTO, the pan clamp and the wheel - all three of which were a flat
+`spot * MAX_BAND`.
+
+**SPX is untouched, by construction.** Its 60th-nearest strike is ~150 points
+against a 230-point base, so the base wins and every SPX number, window and
+gesture is what it was. This is a fix for coarse ladders, not a re-tune of the
+chart everyone already reads.
+
+### And the zoom floor
+
+`MIN_HALF` is a **14-point** constant ("about six 5-point strikes"). On a $257
+name that is ±5.5% - you could not zoom in at all. It is now a **cap** on a
+floor that follows the ladder: `min(MIN_HALF, 3 x gridStep)`. Three strikes
+across is the same read on any grid; on SPX's 5-wide grid that is
+`min(14, 15) = 14`, exactly what it always was.
+
+**Expected on AMZN:** the board goes from ~7 strikes to ~60 (clamped by the 30%
+ceiling), AUTO is free to pick a real `4.5σ` window inside it, and the fit,
+`σ`, "mass inside 1σ" and the center of mass are measured on the actual
+distribution instead of a seven-point slice.
+
 ## 2026-08-27 - Level Log: 0DTE/non-0DTE + OI+Vol/Vol-only switches, CORE means CORE, scanner sweeps every minute
 
 New: `server-v2/scanner-variants.js`.

@@ -10,7 +10,8 @@
  *
  *   - what "OI only" and "Volume only" mean per row,
  *   - what "gamma mass" means,
- *   - the ±3% board they read, the bin folding, the AUTO window rule,
+ *   - the board they read (±3% of spot, widened on a coarse ladder — see
+ *     `wideHalfOf`), the bin folding, the AUTO window rule,
  *   - the pan / zoom hands (wheel ×1.16 / ×0.86, drag-pan, left-gutter
  *     y-scale, double-click reset) copied from components/dashboard/GexChart.
  *
@@ -39,11 +40,37 @@ export type GammaBasis = "oi" | "vol";
 export type GammaZoom = "auto" | "1" | "2" | "3";
 export type Bin = { k: number; net: number; mass: number };
 
-/** The widest either card ever reads — the σ pass and the ±3% tab both use it. */
+/**
+ * The BASE band — and, on SPX, the only one that has ever applied.
+ *
+ * ±3% of a 7,670 SPX is ±230 points, which is ~92 five-wide strikes: plenty of
+ * chart. ±3% of a $257 AMZN is ±7.7 DOLLARS, which on a $2.50 ladder is SEVEN
+ * strikes — the card drew seven fat bars and a fitted bell that was really a
+ * quadratic through almost nothing. See `wideHalfOf`.
+ */
 export const MAX_BAND = 0.03;
+/**
+ * The floor that fixes that: however narrow ±3% turns out to be in dollars, the
+ * board reads at least this many strikes off the ladder. SPX's ±3% window
+ * already holds ~92, so SPX never reaches this branch and its charts are
+ * unchanged.
+ */
+export const WIDE_MIN_STRIKES = 60;
+/**
+ * ...and the ceiling on that widening. A cheap name with a coarse ladder could
+ * otherwise pull in the entire chain; nothing 30% away from spot is gamma worth
+ * charting.
+ */
+export const WIDE_MAX_BAND = 0.30;
 /** Above this many bars the axis is unreadable, so neighbours are folded. */
 export const MAX_BARS = 150;
-/** Zoom stops here — about six 5-point strikes across the card. */
+/**
+ * Zoom stops here — about six 5-point strikes across the card.
+ *
+ * A CAP, not a constant: the real floor is `min(MIN_HALF, 3 × gridStep)`, so a
+ * $2.50 ladder can zoom to ±7.50 while SPX still stops at ±14 exactly as it
+ * always has. A fixed 14 on a $257 name is ±5.5% — you could not zoom in at all.
+ */
 export const MIN_HALF = 14;
 /** GexChart's constants, on purpose — the charts must feel identical. */
 export const WHEEL_IN = 0.86;
@@ -68,7 +95,7 @@ export const ZOOM_META: Record<GammaZoom, { tab: string; hint: string }> = {
   auto: { tab: "AUTO", hint: "Spot ± 4.5σ of the gamma mass, widened to keep spot, flip and both walls on screen. The peak fills the card instead of hiding in the middle of a 400-point axis." },
   "1": { tab: "±1%", hint: "Fixed ±1% of spot." },
   "2": { tab: "±2%", hint: "Fixed ±2% of spot." },
-  "3": { tab: "±3%", hint: "Fixed ±3% of spot — the whole board these cards ever read." },
+  "3": { tab: "±3%", hint: "Fixed ±3% of spot. On SPX that is the whole board these cards read; on a name whose ±3% holds only a handful of strikes, AUTO reads wider (see wideHalfOf)." },
 };
 
 // ── formatting ───────────────────────────────────────────────────────────────
@@ -222,18 +249,56 @@ export function massInside(rows: Bin[], mu: number, sigma: number): number {
 
 // ── binning ──────────────────────────────────────────────────────────────────
 
-/** Every strike either card would ever read (±3% of spot), on `basis`. */
-export function useWideBins(chain: ChainRow[], spot: number, basis: GammaBasis): Bin[] {
+/**
+ * Half-width of the widest band these cards read — the pool the Range tabs and
+ * the AUTO window both draw from, and the clamp on pan/zoom.
+ *
+ * ±3% of spot, EXCEPT when that slice of the ladder is too thin to be a chart.
+ * The band is a percentage; a strike ladder is not. SPX lists every 5 points
+ * (0.065% of spot), so ±3% is ~92 strikes. AMZN lists every $2.50 (0.97% of
+ * spot) — nearly fifteen times coarser in relative terms — so the same ±3% is
+ * SEVEN strikes, and the bell card drew seven bars with a "least-squares fit"
+ * through them.
+ *
+ * So the floor is expressed the way the problem is: in STRIKES. Widen until the
+ * window holds `WIDE_MIN_STRIKES` of them (the distance to the Nth-nearest
+ * strike), never past `WIDE_MAX_BAND`.
+ *
+ * On SPX `dists[59]` is ~150 points against a 230-point base, so the base wins
+ * and nothing about the SPX cards moves. That is deliberate: this is a fix for
+ * coarse ladders, not a re-tune of the chart everyone already reads.
+ */
+export function wideHalfOf(chain: ChainRow[], spot: number): number {
+  const base = spot * MAX_BAND;
+  if (!(spot > 0) || !chain.length) return base;
+  const dists = chain
+    .map((r) => Math.abs(r.strike - spot))
+    .filter((d) => Number.isFinite(d))
+    .sort((a, b) => a - b);
+  if (!dists.length) return base;
+  const nth = dists[Math.min(WIDE_MIN_STRIKES, dists.length) - 1];
+  return Math.min(Math.max(base, nth), spot * WIDE_MAX_BAND);
+}
+
+/** `wideHalfOf`, memoised. */
+export function useWideHalf(chain: ChainRow[], spot: number): number {
+  return useMemo(() => wideHalfOf(chain, spot), [chain, spot]);
+}
+
+/** Every strike either card would ever read (spot ± `half`), on `basis`. */
+export function useWideBins(
+  chain: ChainRow[], spot: number, basis: GammaBasis, half: number,
+): Bin[] {
   return useMemo(() => {
-    if (!chain.length || !(spot > 0)) return [];
-    const lo = spot * (1 - MAX_BAND);
-    const hi = spot * (1 + MAX_BAND);
+    if (!chain.length || !(spot > 0) || !(half > 0)) return [];
+    const lo = spot - half;
+    const hi = spot + half;
     return chain
       .filter((r) => Number.isFinite(r.strike) && r.strike >= lo && r.strike <= hi)
       .map((r) => ({ k: r.strike, net: rowNet(r, basis, spot), mass: rowMass(r, basis, spot) }))
       .filter((b) => Number.isFinite(b.net) && Number.isFinite(b.mass))
       .sort((a, b) => a.k - b.k);
-  }, [chain, spot, basis]);
+  }, [chain, spot, basis, half]);
 }
 
 /** Typical strike spacing — the curve's integration step and the bar width. */
@@ -284,9 +349,12 @@ export function foldBins(raw: Bin[], maxBars = MAX_BARS): Bin[] {
 export function autoHalf(
   wide: Bin[], zoom: GammaZoom, spot: number,
   flip?: number | null, callWall?: number | null, putWall?: number | null,
+  /** The widest band available — `wideHalfOf`. Defaults to the flat ±3%. */
+  maxHalf?: number,
 ): number {
   if (!(spot > 0)) return 0;
-  if (zoom !== "auto") return spot * (Number(zoom) / 100);
+  const cap = maxHalf != null && maxHalf > 0 ? maxHalf : spot * MAX_BAND;
+  if (zoom !== "auto") return Math.min(spot * (Number(zoom) / 100), cap);
   const m = moments(wide);
   // No mass to measure (a vol board before the open): fall back to a band wide
   // enough to be a chart rather than a sliver.
@@ -297,7 +365,7 @@ export function autoHalf(
     if (lv != null && Number.isFinite(lv)) h = Math.max(h, Math.abs(lv - spot) * 1.12);
   }
   if (m) h = Math.max(h, Math.abs(m.mu - spot) + 2 * m.sigma);
-  return Math.min(h, spot * MAX_BAND);
+  return Math.min(h, cap);
 }
 
 // ── preferences ──────────────────────────────────────────────────────────────
@@ -350,8 +418,23 @@ export function useStrikeWindow(opts: {
   padL: number;
   plotW: number;
   svgRef: RefObject<SVGSVGElement | null>;
+  /**
+   * The widest band this chart may show — `wideHalfOf(chain, spot)`. It caps
+   * AUTO, the pan clamp and the wheel, all three of which used a flat
+   * `spot * MAX_BAND`. On SPX it IS `spot * MAX_BAND`.
+   */
+  maxHalf?: number;
+  /**
+   * The tightest half-width the wheel may reach. `MIN_HALF` is a 14-POINT
+   * constant, which is ±5.5% on a $257 name — i.e. no zoom at all. Callers pass
+   * `min(MIN_HALF, 3 × gridStep)` so the floor follows the ladder; on SPX's
+   * 5-wide grid that is min(14, 15) = 14, exactly what it always was.
+   */
+  minHalf?: number;
 }) {
   const { spot, wide, zoom, flip, callWall, putWall, W, padL, plotW, svgRef } = opts;
+  const maxHalf = opts.maxHalf != null && opts.maxHalf > 0 ? opts.maxHalf : spot * MAX_BAND;
+  const minHalf = opts.minHalf != null && opts.minHalf > 0 ? Math.min(opts.minHalf, MIN_HALF) : MIN_HALF;
 
   const [view, setView] = useState<{ c: number; h: number } | null>(null);
   const [yScale, setYScale] = useState(1);
@@ -361,8 +444,8 @@ export function useStrikeWindow(opts: {
   const reset = useCallback(() => { setView(null); setYScale(1); }, []);
 
   const tabHalf = useMemo(
-    () => autoHalf(wide, zoom, spot, flip, callWall, putWall),
-    [wide, zoom, spot, flip, callWall, putWall],
+    () => autoHalf(wide, zoom, spot, flip, callWall, putWall, maxHalf),
+    [wide, zoom, spot, flip, callWall, putWall, maxHalf],
   );
 
   const center = view ? view.c : spot;
@@ -372,14 +455,16 @@ export function useStrikeWindow(opts: {
 
   // Handlers read live geometry off a ref: the wheel listener is bound once
   // (natively, non-passive) and would otherwise close over a stale window.
-  const domRef = useRef({ k0, k1, W, padL, plotW, spot });
-  useEffect(() => { domRef.current = { k0, k1, W, padL, plotW, spot }; }, [k0, k1, W, padL, plotW, spot]);
+  const domRef = useRef({ k0, k1, W, padL, plotW, spot, maxHalf, minHalf });
+  useEffect(() => {
+    domRef.current = { k0, k1, W, padL, plotW, spot, maxHalf, minHalf };
+  }, [k0, k1, W, padL, plotW, spot, maxHalf, minHalf]);
 
   const clampWin = useCallback((c: number, h: number) => {
-    const s = domRef.current.spot;
+    const d = domRef.current;
     return {
-      c: clamp(c, s * (1 - MAX_BAND), s * (1 + MAX_BAND)),
-      h: clamp(h, MIN_HALF, s * MAX_BAND),
+      c: clamp(c, d.spot - d.maxHalf, d.spot + d.maxHalf),
+      h: clamp(h, Math.min(d.minHalf, d.maxHalf), d.maxHalf),
     };
   }, []);
 
@@ -394,7 +479,7 @@ export function useStrikeWindow(opts: {
     const frac = clamp((svgX - d.padL) / d.plotW, 0, 1);
     const anchor = d.k0 + frac * (d.k1 - d.k0);
     const curH = (d.k1 - d.k0) / 2;
-    const nextH = clamp(curH * (e.deltaY > 0 ? WHEEL_OUT : WHEEL_IN), MIN_HALF, d.spot * MAX_BAND);
+    const nextH = clamp(curH * (e.deltaY > 0 ? WHEEL_OUT : WHEEL_IN), Math.min(d.minHalf, d.maxHalf), d.maxHalf);
     if (Math.abs(nextH - curH) < 1e-6) return;
     // Keep the strike under the cursor under the cursor.
     setView(clampWin(anchor - (frac - 0.5) * 2 * nextH, nextH));

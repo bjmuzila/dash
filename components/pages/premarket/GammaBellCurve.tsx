@@ -52,7 +52,7 @@ import {
   MAX_BAND,
   fmtB,
   foldBins, layoutLevels, lsqGaussian, massInside, moments,
-  useGridStep, usePref, useStrikeWindow, useWideBins,
+  useGridStep, usePref, useStrikeWindow, useWideBins, useWideHalf,
   type Bin, type GammaBasis, type GammaZoom,
 } from "@/components/pages/premarket/gammaChartKit";
 
@@ -182,12 +182,24 @@ export default function GammaBellCurve({
   const botY0 = topY1 + GAP;        // top of the net pane
   const botY1 = botY0 + botH;       // bottom of the net pane
 
-  const wide = useWideBins(chain, spot, basis);
+  /**
+   * The board this card reads. ±3% of spot on SPX, as it always was — wider on
+   * a name whose ±3% is only a handful of strikes, because a percentage band is
+   * the wrong unit for a strike ladder. AMZN's ±3% was SEVEN strikes and the
+   * card drew seven bars with a bell fitted through them. See wideHalfOf.
+   */
+  const wideHalf = useWideHalf(chain, spot);
+  const wide = useWideBins(chain, spot, basis, wideHalf);
   const gridStep = useGridStep(wide);
 
   const win = useStrikeWindow({
     spot, wide, zoom, flip, callWall, putWall,
     W, padL: PAD.l, plotW, svgRef,
+    maxHalf: wideHalf,
+    // The zoom floor follows the ladder rather than a 14-point constant: three
+    // strikes across is the same read on any grid. min() inside the hook keeps
+    // SPX at its own 14.
+    minHalf: gridStep * 3,
   });
   const { k0, k1, yScale, dragging, touched, reset } = win;
 
@@ -327,7 +339,7 @@ export default function GammaBellCurve({
               ? "No volume on this board yet — the session has not traded. Switch to OI."
               : touched
                 ? "Nothing in this window — double-click to reset the view."
-                : `No gamma within ±${(MAX_BAND * 100).toFixed(0)}% of spot on this basis.`}
+                : `No gamma within ±${spot > 0 ? ((wideHalf / spot) * 100).toFixed(0) : (MAX_BAND * 100).toFixed(0)}% of spot on this basis.`}
         </div>
       </div>
     );
