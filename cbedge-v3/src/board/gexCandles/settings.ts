@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// ES Candles — persisted settings and the frozen bubble constants.
+// GEX Candles — persisted settings and the frozen bubble constants.
 //
 // v2 keeps these in a "slot" blob so three charts on one page can share a
-// toolbar. v3's ES Candles is a board CARD, and the board already gives each
+// toolbar. v3's chart is a board CARD, and the board already gives each
 // card its own identity, so this is one blob per card id — same idea, one less
 // level of indirection, and no shared/own mirror to keep in sync.
 //
@@ -10,6 +10,8 @@
 // components/dashboard/es-candles/slotStore.ts verbatim. They are the result
 // of a lot of looking at the thing; do not "tidy" them.
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { normalizeSymbol } from './symbols'
 
 export type Session = 'rth' | 'eth'
 export type GexMetric = 'voloi' | 'vol'
@@ -48,7 +50,7 @@ export interface ChartSettings {
 }
 
 export const DEFAULT_SETTINGS: ChartSettings = {
-  symbol: 'ES',
+  symbol: 'SPX',
   session: 'eth',
   interval: 5,
   bubblesOn: true,
@@ -104,7 +106,7 @@ export const GEX_HISTORY_MINUTES = 720
 
 // ── Persistence ──────────────────────────────────────────────────────────────
 
-const KEY_PREFIX = 'cb-v3-es-candles:'
+const KEY_PREFIX = 'cb-v3-gex-candles:'
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v))
@@ -116,7 +118,10 @@ function coerce(raw: unknown): ChartSettings {
   const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
   const interval = INTERVALS.includes(p.interval as Interval) ? (p.interval as Interval) : DEFAULT_SETTINGS.interval
   return {
-    symbol: typeof p.symbol === 'string' && p.symbol ? p.symbol.toUpperCase() : DEFAULT_SETTINGS.symbol,
+    // normalizeSymbol also retires ES/NQ onto SPX/NDX, so a blob saved before
+    // the futures were dropped reopens on a symbol that still has candles
+    // rather than on a dead one with an empty chart.
+    symbol: typeof p.symbol === 'string' && p.symbol ? normalizeSymbol(p.symbol) : DEFAULT_SETTINGS.symbol,
     session: p.session === 'rth' ? 'rth' : 'eth',
     interval,
     bubblesOn: p.bubblesOn !== false,

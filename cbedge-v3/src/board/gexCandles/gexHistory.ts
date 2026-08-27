@@ -100,7 +100,10 @@ export function strikeStep(columns: GexColumn[]): number {
   for (const col of columns) {
     const sorted = [...col.cells].sort((a, b) => a.strike - b.strike)
     for (let i = 1; i < sorted.length; i++) {
-      const d = sorted[i].strike - sorted[i - 1].strike
+      const hi = sorted[i]
+      const lo = sorted[i - 1]
+      if (!hi || !lo) continue
+      const d = hi.strike - lo.strike
       if (d > 0 && d < step) step = d
     }
     // One well-populated column is enough to learn the step; scanning the whole

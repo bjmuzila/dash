@@ -1,5 +1,130 @@
 # Changelog
 
+## 2026-08-27 - v3: mock server rewritten to match the rebuilt card catalog
+
+Edited: `cbedge-v3/scripts/mock-server.mjs`.
+
+`npm run check` got through typecheck, build and budgets (initial load 77.5kb
+brotli against a 109.4kb ceiling - no bump needed) and then died in
+`check:ws` with an ECONNREFUSED against the mock server on 4311.
+
+**The mock server still described the previous three endpoints.** It served
+`/api/snapshots/candles`, `/api/calendar` and `/api/earnings-today`; the rebuilt
+cards ask for `/api/snapshots/etf-candles`, `/api/expirations`,
+`/api/snapshots/option-strike-gex-history`, `/api/chains`,
+`/api/premarket-baseline` and `/proxy/earnings-week`. Every one of those fell
+through to the static handler, got `dist/index.html` back with a 200, and the
+card's `res.json()` threw a parse error into a caught promise - so `npm run
+mock` rendered a board of empty cards and said nothing about why.
+
+All of them are now served with shapes transcribed from the real routes:
+hyphenated keys and `strike-price` as a string on `/api/chains`, the
+`{ data: { items } }` envelope on `/api/expirations`, `slotTs` / `cells[].net` /
+`cells[].netVol` on the heatmap history. Verified by curl against a running
+instance, not by inspection.
+
+Three things make the next drift loud instead of silent:
+
+- **Unknown `/api/*` and `/proxy/*` paths now 404 with JSON** and log a line
+  naming the path, instead of quietly returning HTML. A missing mock is a
+  visible error in devtools now.
+- **The request handler is wrapped**, and `clientError`, `uncaughtException` and
+  `unhandledRejection` are handled. A throw in there previously took the whole
+  process down mid-run, which is what `ws-scope-check` reported several seconds
+  later as an unexplained ECONNREFUSED rather than as the request that failed.
+- A header note saying to keep the file in sync with `src/board/catalog.tsx`,
+  with this failure written down as the reason.
+
+The synthetic market is now ONE price universe shared by the candles, the chain
+and the GEX history, keyed by symbol (SPX 6800, SPY 680, NVDA 142, ...) with a
+per-symbol strike step. Before, candles were based on ES/NQ constants while the
+gex ladder was built off the socket's spot, so a preview drew bubbles nowhere
+near the candles - which defeats the point of previewing the overlay. The ladder
+is also shaped like a real skew rather than uniform noise, so the walls hold
+still between ticks instead of jumping strike every second.
+
+The `gex` frame now carries `expiry`, which Key Levels needs before it will
+request a premarket baseline, and `aux` now sends its fields under `data` to
+match the real envelope.
+
+Note for the next run: `ws-scope-check` documents its own flake mode in
+`cleanup()` - on Windows a killed vite/mock can survive as an orphan and squat
+on 4311, which shows up as EADDRINUSE or ECONNREFUSED on the following run. If
+it fails again in the same place, check for a stray `node` on 4311 before
+reading anything into it.
+
+
+## 2026-08-27 - v3: ES and NQ dropped, "ES Candles" becomes GEX Candles, chart re-frames on a ticker switch
+
+New: `cbedge-v3/src/board/gexCandles/*` (the old `esCandles/` module, renamed and
+simplified).
+Edited: `cbedge-v3/src/board/catalog.tsx`, `cbedge-v3/src/board/BoardPage.tsx`,
+`cbedge-v3/src/board/keyLevels/KeyLevelsCard.tsx`,
+`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`,
+`cbedge-v3/src/board/econCalendar/EconCalendarCard.tsx`.
+Emptied, ready to delete: the whole `cbedge-v3/src/board/esCandles/` folder and
+`cbedge-v3/src/board/lwChart.ts`.
+
+**Dropping the futures deleted a whole category of complexity, not just two
+rows in a list.** ES was the only symbol whose price axis and whose strikes were
+different things - futures against SPX cash, forty to sixty points apart - so
+every GEX bubble had to be converted through `/proxy/es-spx-basis` before it
+could be drawn. With ES gone every symbol charts against its own strikes, so a
+bubble goes at the strike price. Out with it: the basis fetch, the plausibility
+guard, the "bubbles hidden - no basis available" state, and the `basis` field
+threaded through the chart handle and the draw options.
+
+The candle path collapsed the same way. `/api/snapshots/candles` only ever
+looked at the symbol to choose between the ES and NQ tables - ask it for SPY and
+it silently returned ES bars - and it is now unreferenced by v3. Everything goes
+through `/api/snapshots/etf-candles`, whose values are real JSON numbers, so the
+columnar `lite=1` parser that existed purely to dodge the futures route's
+quoted-string BIGINT columns is gone too.
+
+Default symbol is **SPX**. Its cash candles are recorded by
+`server-v2/etf-candle-recorder.js` (hot lane, added today) and that route is the
+only thing that serves them, with a dxlink-live fallback while the table fills.
+A saved setting of `ES` or `NQ` is retired onto SPX/NDX by `normalizeSymbol`, so
+an old blob reopens on a symbol that has candles rather than on a dead one with
+an empty chart.
+
+**The card is now "GEX Candles"** - it names what makes it different from any
+other chart rather than a ticker it may not be showing. The folder went with it:
+`esCandles/` -> `gexCandles/`, because a folder named after a symbol v3 does not
+chart is exactly the kind of stale signpost this repo's AGENTS.md exists to
+prevent.
+
+Card ids changed with it, so **`BoardPage.loadLayout` now migrates before it
+filters.** A saved board is a list of ids and anything the catalog does not know
+gets dropped - correct for a deleted card, wrong for a renamed one, and the
+difference is a user opening the board to find their chart gone. `es-candles` ->
+`gex-candles` and `multi-chart` -> `multi-greek` are mapped in
+`migrateCardId()`; a genuinely deleted card still falls out.
+
+**Switching ticker now re-frames the chart.** lightweight-charts keeps whatever
+price window was showing when the series data swaps, so going from SPX at ~6,800
+to SPY at ~645 left the candles a mile off the top of the pane looking like an
+empty chart. `setBars` takes a `reframe` flag that calls `fitContent()` and -
+the part that actually matters - re-enables `autoScale` on the price scale,
+because any manual price drag turns it off permanently. The flag fires on a
+change of symbol, interval or session, and is latched only once real bars
+arrive: on a symbol change the query cache misses and the series is briefly
+empty, and latching on that empty set would spend the reframe on nothing.
+
+**Key Levels lost its ES sub-lines.** v2 prints "ES 6,880 - $1.24B" under each
+level because its charts are futures and its levels are cash; with no futures a
+level is quoted in the units it is already in. The Spot tile's sub-line is now
+the day change and percent, computed from the `prevClose` already riding on the
+socket's `spot` frame rather than from a `/api/quotes-batch` call.
+
+Files in `esCandles/` and `lwChart.ts` were emptied to a one-line tombstone
+rather than deleted, because this session had no way to remove files on the
+device (`device_bash` was unavailable all session). Nothing imports them.
+Delete the folder and the file.
+
+Still not run: `npm run check`.
+
+
 ## 2026-08-27 - v3 terminal: ES Candles rebuilt with GEX bubbles, Multi Greek, the six Key Levels tiles, the home Economic Calendar
 
 New: `cbedge-v3/src/board/esCandles/{symbols,settings,candles,gexHistory,bubbles,chart,controls,EsCandlesCard}`,

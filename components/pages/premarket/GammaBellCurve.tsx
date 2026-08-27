@@ -336,7 +336,7 @@ export default function GammaBellCurve({
           {chain.length === 0
             ? "Waiting for the chain…"
             : basis === "vol"
-              ? "No volume on this board yet — the session has not traded. Switch to OI."
+              ? "No volume on this board yet — nothing has traded. Switch to OI+VOL."
               : touched
                 ? "Nothing in this window — double-click to reset the view."
                 : `No gamma within ±${spot > 0 ? ((wideHalf / spot) * 100).toFixed(0) : (MAX_BAND * 100).toFixed(0)}% of spot on this basis.`}

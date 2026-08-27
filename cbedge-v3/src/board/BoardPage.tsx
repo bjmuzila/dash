@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
 import { Board, compactBoard, type BoardItem } from '@/design/primitives/Board'
-import { CARD_CATALOG, CARD_BY_ID, placeNewCard } from './catalog'
+import { CARD_CATALOG, CARD_BY_ID, migrateCardId, placeNewCard } from './catalog'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The terminal home: a customizable card board. Add cards from the catalog,
@@ -16,7 +16,7 @@ import { CARD_CATALOG, CARD_BY_ID, placeNewCard } from './catalog'
 // ─────────────────────────────────────────────────────────────────────────────
 
 const LAYOUT_KEY = 'cb-v3-board-layout'
-const DEFAULT_IDS = ['es-candles', 'key-levels', 'quick-links']
+const DEFAULT_IDS = ['gex-candles', 'key-levels', 'quick-links']
 
 function defaultLayout(): BoardItem[] {
   let items: BoardItem[] = []
@@ -29,13 +29,20 @@ function loadLayout(): BoardItem[] {
     const raw = localStorage.getItem(LAYOUT_KEY)
     const parsed = raw ? JSON.parse(raw) : null
     if (!Array.isArray(parsed) || parsed.length === 0) return defaultLayout()
-    // Drop any card id the catalog no longer has, so a shipped catalog change
-    // never leaves a dead tile on someone's saved board.
-    const kept = parsed.filter(
-      (i): i is BoardItem =>
-        i && typeof i.id === 'string' && CARD_BY_ID.has(i.id) &&
-        [i.x, i.y, i.w, i.h].every((n) => typeof n === 'number'),
-    )
+    const kept: BoardItem[] = []
+    const seen = new Set<string>()
+    for (const i of parsed) {
+      if (!i || typeof i.id !== 'string') continue
+      if (![i.x, i.y, i.w, i.h].every((n: unknown) => typeof n === 'number')) continue
+      // Rename BEFORE the catalog check. A renamed card is still the user's
+      // card — dropping it because its id changed would silently empty their
+      // board on an upgrade. A card that was genuinely deleted still falls out
+      // here, which is what should happen.
+      const id = migrateCardId(i.id)
+      if (!CARD_BY_ID.has(id) || seen.has(id)) continue
+      seen.add(id)
+      kept.push({ id, x: i.x, y: i.y, w: i.w, h: i.h })
+    }
     return kept.length ? compactBoard(kept) : defaultLayout()
   } catch {
     return defaultLayout()

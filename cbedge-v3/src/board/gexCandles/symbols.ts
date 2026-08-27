@@ -1,70 +1,79 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// The chart's symbol universe — a v3-native port of v2's
-// components/dashboard/es-candles/symbols.tsx, minus the dock chrome.
+// The chart's symbol universe.
 //
-// Three tiers, same as v2:
-//   1. a curated hardcoded list (below), always present, always first
+// ES AND NQ ARE DELIBERATELY ABSENT (2026-08-27). Dropping the futures is what
+// lets this whole module tree be simple:
+//
+//   · One candle endpoint. /api/snapshots/etf-candles serves every symbol here.
+//     The futures route, /api/snapshots/candles, only ever looked at the symbol
+//     to choose between the ES and NQ tables — asking it for SPY silently
+//     returned ES bars — and it is now unreferenced by v3.
+//   · No basis. An ES chart plots futures prices while its strikes are SPX
+//     cash, ~40-60 points apart, so every strike had to be converted through
+//     /proxy/es-spx-basis before a GEX bubble could be drawn at it. Every
+//     symbol below charts against its OWN strikes, so a bubble goes at the
+//     strike price and there is nothing to convert, nothing to fetch, and no
+//     "basis unavailable" state to design around.
+//
+// SPX cash candles are recorded by server-v2/etf-candle-recorder.js (its hot
+// lane, added 2026-08-27) and /api/snapshots/etf-candles is the only route that
+// serves them, with a dxlink-live fallback while the table fills.
+//
+// Three tiers of symbol, as in v2:
+//   1. the curated list below, always present, always first
 //   2. the server roster from /api/es-candles/tickers, fetched once, lazily,
 //      on the first time a picker opens — never on mount
 //   3. anything the user types that looks like a ticker
-//
-// A symbol carries THREE names because the backend keeps three:
-//   key/label      what the user sees and what we persist
-//   gexSymbol      what the gamma tables are keyed by ($SPX for both ES and SPX)
-//   candleSource   which candle endpoint knows about it — ES/NQ futures live in
-//                  es_candles, everything else in etf_candles
 // ─────────────────────────────────────────────────────────────────────────────
-
-export type CandleSource = 'es' | 'etf'
 
 export interface SymbolDef {
   key: string
   label: string
-  /** Key the GEX history tables use. ES and SPX share `$SPX`. */
-  gexSymbol: string
-  /** Which candle endpoint serves it. */
-  candleSource: CandleSource
-  /** Symbol to send to the candle endpoint, when it differs from `key`. */
-  candleSymbol?: string
   /**
-   * True when the price axis is ES futures and the GEX strikes are SPX cash —
-   * i.e. every strike needs the ES−SPX basis added before it can be drawn.
-   * Only ES is in this position: SPX charts cash against cash (basis 0), and
-   * SPY/QQQ/NVDA chart a symbol against its own strikes.
+   * Key the GEX history tables are keyed by. Only SPX differs from its own
+   * ticker — gamma is stored under `$SPX` while the candle feed knows `SPX`.
    */
-  needsBasis?: boolean
+  gexSymbol: string
 }
 
 export const SYMBOLS: SymbolDef[] = [
-  { key: 'ES', label: 'ES', gexSymbol: '$SPX', candleSource: 'es', needsBasis: true },
-  { key: 'SPX', label: 'SPX', gexSymbol: '$SPX', candleSource: 'etf', candleSymbol: 'SPX' },
-  { key: 'SPY', label: 'SPY', gexSymbol: 'SPY', candleSource: 'etf' },
-  { key: 'QQQ', label: 'QQQ', gexSymbol: 'QQQ', candleSource: 'etf' },
-  { key: 'NDX', label: 'NDX', gexSymbol: 'NDX', candleSource: 'etf' },
-  { key: 'VIX', label: 'VIX', gexSymbol: 'VIX', candleSource: 'etf' },
-  { key: 'AAPL', label: 'AAPL', gexSymbol: 'AAPL', candleSource: 'etf' },
-  { key: 'AMD', label: 'AMD', gexSymbol: 'AMD', candleSource: 'etf' },
-  { key: 'AMZN', label: 'AMZN', gexSymbol: 'AMZN', candleSource: 'etf' },
-  { key: 'GOOGL', label: 'GOOGL', gexSymbol: 'GOOGL', candleSource: 'etf' },
-  { key: 'META', label: 'META', gexSymbol: 'META', candleSource: 'etf' },
-  { key: 'MSFT', label: 'MSFT', gexSymbol: 'MSFT', candleSource: 'etf' },
-  { key: 'NVDA', label: 'NVDA', gexSymbol: 'NVDA', candleSource: 'etf' },
-  { key: 'SPCX', label: 'SPCX', gexSymbol: 'SPCX', candleSource: 'etf' },
-  { key: 'TSLA', label: 'TSLA', gexSymbol: 'TSLA', candleSource: 'etf' },
+  { key: 'SPX', label: 'SPX', gexSymbol: '$SPX' },
+  { key: 'SPY', label: 'SPY', gexSymbol: 'SPY' },
+  { key: 'QQQ', label: 'QQQ', gexSymbol: 'QQQ' },
+  { key: 'NDX', label: 'NDX', gexSymbol: 'NDX' },
+  { key: 'VIX', label: 'VIX', gexSymbol: 'VIX' },
+  { key: 'AAPL', label: 'AAPL', gexSymbol: 'AAPL' },
+  { key: 'AMD', label: 'AMD', gexSymbol: 'AMD' },
+  { key: 'AMZN', label: 'AMZN', gexSymbol: 'AMZN' },
+  { key: 'GOOGL', label: 'GOOGL', gexSymbol: 'GOOGL' },
+  { key: 'META', label: 'META', gexSymbol: 'META' },
+  { key: 'MSFT', label: 'MSFT', gexSymbol: 'MSFT' },
+  { key: 'NVDA', label: 'NVDA', gexSymbol: 'NVDA' },
+  { key: 'SPCX', label: 'SPCX', gexSymbol: 'SPCX' },
+  { key: 'TSLA', label: 'TSLA', gexSymbol: 'TSLA' },
 ]
 
 const BY_KEY = new Map(SYMBOLS.map((s) => [s.key, s]))
 
 export const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/
 
+/** Symbols v3 no longer charts, and what a saved setting for one becomes. */
+const RETIRED: Record<string, string> = { ES: 'SPX', '/ES': 'SPX', NQ: 'NDX', '/NQ': 'NDX' }
+
 export function normalizeSymbol(s: string): string {
-  return s.trim().toUpperCase()
+  const k = s.trim().toUpperCase()
+  return RETIRED[k] ?? k
 }
 
 /** A def for any symbol — curated, roster or freeform. Never returns null. */
 export function symbolDef(key: string): SymbolDef {
   const k = normalizeSymbol(key)
-  return BY_KEY.get(k) ?? { key: k, label: k, gexSymbol: k, candleSource: 'etf' }
+  return BY_KEY.get(k) ?? { key: k, label: k, gexSymbol: k }
+}
+
+/** The ticker the options-chain routes want, which never carries the `$`. */
+export function chainTicker(def: SymbolDef): string {
+  return def.gexSymbol.replace(/^\$/, '')
 }
 
 // ── The server roster ────────────────────────────────────────────────────────
@@ -106,8 +115,11 @@ export function loadRoster(): Promise<string[]> {
 }
 
 // ── Favourites ───────────────────────────────────────────────────────────────
-// Global across every chart, same key v2 uses, so a user's stars survive the
-// move between /app/es-candles and /v3.
+// Deliberately the SAME localStorage key v2 uses, so a user's stars survive the
+// move between /app/es-candles and /v3. It holds a plain string array and v3
+// only ever reads and rewrites that shape, so neither app can corrupt it for
+// the other. This is the one storage key v3 shares; everything else it invented
+// is namespaced `cb-v3-`.
 
 const FAV_KEY = 'es-candles-fav-symbols-v1'
 

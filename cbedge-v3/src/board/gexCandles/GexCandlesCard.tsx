@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { useQuery } from '@/data/api'
 import { SegGroup, Chip, Slider, Popover, PanelSection, SymbolPicker } from './controls'
-import { symbolDef } from './symbols'
+import { chainTicker, symbolDef } from './symbols'
 import {
   BUBBLE_CURVE_RANGE,
   BUBBLE_INTENSITY_RANGE,
@@ -23,34 +23,36 @@ import { buildBubbleModel } from './bubbles'
 import { mountEsChart, type EsChartHandle } from './chart'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ES Candles — v2's chart rebuilt for v3, scoped to GEX BUBBLES ONLY.
+// GEX Candles — v2's ES chart rebuilt for v3, scoped to GEX BUBBLES ONLY.
 //
-// What came across: the candle colours (the same two hex values, now tokens),
-// the RTH/ETH switch, the interval picker, the searchable watchlist dropdown
-// with favourites, the full bubble settings panel, the forming-bar countdown
+// What came across: the candle colours (the same two values, now tokens), the
+// RTH/ETH switch, the interval picker, the searchable watchlist dropdown with
+// favourites, the full bubble settings panel, the forming-bar countdown
 // top-right and the jump-to-current-candle button bottom-right.
 //
-// What deliberately did NOT: the gamma HEATMAP, the replay transport, EMAs,
-// Bollinger, RSI, volume, the profile/TPO overlays, the multi-chart dock and
-// the screenshot/Discord pipeline. v2's EsChartCard is ~376KB of source; this
-// card's whole route chunk has an 80kb brotli ceiling in budgets.json. "Only
-// GEX bubbles" is what makes the two facts compatible.
+// What deliberately did NOT: the gamma HEATMAP, replay, EMAs, Bollinger, RSI,
+// volume, the profile/TPO overlays, the multi-chart dock and the screenshot
+// pipeline. v2's EsChartCard is ~376KB of source; this card's whole route chunk
+// has an 80kb brotli ceiling in budgets.json. "Only GEX bubbles" is what makes
+// the two facts compatible.
 //
 // ── The data path, all fired in parallel at mount ────────────────────────────
-//   candles   /api/snapshots/candles (ES/NQ) or /api/snapshots/etf-candles
+//   candles   /api/snapshots/etf-candles — one route now that ES/NQ are gone
 //   expiry    /api/expirations — needed only to satisfy the history route's
-//             required `expiry` param, which is then overridden by anyExpiry=1
+//             required `expiry` param, which anyExpiry=1 then overrides
 //   bubbles   /api/snapshots/option-strike-gex-history?mode=heatmap
-//   basis     /proxy/es-spx-basis — ES only
 //
-// The bubble request depends on the expiry, which is the one genuine
-// dependency in the set and therefore the one place a second round trip is
-// unavoidable. It is a small cached call fired from this card's own effect —
-// not a child fetching after a parent resolved, which is the waterfall shape
-// AGENTS.md bans.
+// The bubble request depends on the expiry, which is the one genuine dependency
+// in the set and therefore the one place a second round trip is unavoidable. It
+// is a small cached call fired from this card's own effect — not a child
+// fetching after a parent resolved, which is the waterfall shape AGENTS.md
+// bans.
+//
+// There is no basis fetch: every symbol here charts against its own strikes, so
+// a bubble goes at the strike price. See the note at the top of symbols.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CARD_ID = 'es-candles'
+const CARD_ID = 'gex-candles'
 
 /**
  * The bucket control's values are strings because a segmented control's values
@@ -100,16 +102,8 @@ function useEsChart(onLatestOffscreen: (off: boolean) => void) {
 interface ExpirationsResponse {
   data?: { items?: Array<{ 'expiration-date'?: string }> }
 }
-interface BasisResponse {
-  basis?: number | null
-}
 
-/** ES carries a POSITIVE carry basis to SPX. Mirrors server-v2/es-spx-basis.js. */
-function isPlausibleBasis(b: unknown): b is number {
-  return typeof b === 'number' && Number.isFinite(b) && b > 0 && b < 250
-}
-
-export function EsCandlesCard() {
+export function GexCandlesCard() {
   const [settings, setSettings] = useState<ChartSettings>(() => loadSettings(CARD_ID))
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [latestOffscreen, setLatestOffscreen] = useState(false)
@@ -125,17 +119,13 @@ export function EsCandlesCard() {
   }, [])
 
   const def = useMemo(() => symbolDef(settings.symbol), [settings.symbol])
-  const chainTicker = def.gexSymbol.replace(/^\$/, '')
 
   // ── Fetches ────────────────────────────────────────────────────────────────
   const candlesQ = useQuery<unknown>(candlesUrl(def, settings.interval), { staleMs: 25_000 })
-  const expiryQ = useQuery<ExpirationsResponse>(`/api/expirations?ticker=${encodeURIComponent(chainTicker)}`, {
-    staleMs: 300_000,
-  })
-  // The true basis moves about a point a day, so a five-minute cache is
-  // generous. Only ES needs it: SPX charts cash against cash, and every other
-  // symbol charts itself against its own strikes — basis 0 by construction.
-  const basisQ = useQuery<BasisResponse>(def.needsBasis ? '/proxy/es-spx-basis' : null, { staleMs: 300_000 })
+  const expiryQ = useQuery<ExpirationsResponse>(
+    `/api/expirations?ticker=${encodeURIComponent(chainTicker(def))}`,
+    { staleMs: 300_000 },
+  )
 
   const expiry = expiryQ.data?.data?.items?.[0]?.['expiration-date'] ?? ''
   const gexQ = useQuery<unknown>(
@@ -147,9 +137,9 @@ export function EsCandlesCard() {
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const bars = useMemo(() => {
-    const raw = parseCandles(def.candleSource, candlesQ.data)
+    const raw = parseCandles(candlesQ.data)
     return filterSession(rollup(raw, settings.interval), settings.session)
-  }, [candlesQ.data, def.candleSource, settings.interval, settings.session])
+  }, [candlesQ.data, settings.interval, settings.session])
 
   barsRef.current = bars
 
@@ -168,16 +158,28 @@ export function EsCandlesCard() {
     [columns, bars, settings.bubbleBucket, settings.gexMetric, settings.bubbleLevels, settings.interval],
   )
 
-  const basis = def.needsBasis ? (isPlausibleBasis(basisQ.data?.basis) ? basisQ.data!.basis! : null) : 0
-  const basisMissing = def.needsBasis && basis == null && !basisQ.loading
-
   // ── Chart ──────────────────────────────────────────────────────────────────
   const { onMount, apply } = useEsChart(setLatestOffscreen)
 
-  useEffect(() => apply((h) => h.setBars(bars)), [bars, apply])
+  // Anything in this key changes the SCALE of the series, so the view has to be
+  // re-framed when it does — a symbol switch above all, since SPX at ~6,800 and
+  // SPY at ~645 share no price window at all and the old one would leave the
+  // new candles off the pane entirely.
+  //
+  // The key is latched only once real bars arrive. On a symbol change the query
+  // cache misses and `bars` is briefly empty; latching on that empty set would
+  // spend the reframe on nothing and leave the actual data unframed.
+  const viewKey = `${settings.symbol}|${settings.interval}|${settings.session}`
+  const framedRef = useRef('')
+
+  useEffect(() => {
+    const reframe = viewKey !== framedRef.current
+    apply((h) => h.setBars(bars, reframe))
+    if (bars.length) framedRef.current = viewKey
+  }, [bars, viewKey, apply])
+
   useEffect(() => apply((h) => h.setFrames(frames)), [frames, apply])
   useEffect(() => apply((h) => h.setStrikeStep(step)), [step, apply])
-  useEffect(() => apply((h) => h.setBasis(basis)), [basis, apply])
   useEffect(
     () =>
       apply((h) =>
@@ -207,7 +209,7 @@ export function EsCandlesCard() {
       const node = countdownRef.current
       if (!node) return
       const list = barsRef.current
-      const last = list.length ? list[list.length - 1].t : 0
+      const last = list[list.length - 1]?.t ?? 0
       if (!last) {
         node.textContent = ''
         return
@@ -353,13 +355,7 @@ export function EsCandlesCard() {
       {error && <span className="shrink-0 text-xs text-down">{error.message}</span>}
       {empty && (
         <span className="shrink-0 text-xs text-muted opacity-70">
-          {candlesQ.loading ? 'Loading…' : 'No candles for this symbol yet.'}
-        </span>
-      )}
-      {settings.bubblesOn && basisMissing && (
-        <span className="shrink-0 text-[10px] text-warn">
-          GEX bubbles hidden — no ES/SPX basis available. Drawing them at strike price would put every level a whole
-          basis out.
+          {candlesQ.loading ? 'Loading…' : `No candles recorded for ${def.label} yet.`}
         </span>
       )}
 

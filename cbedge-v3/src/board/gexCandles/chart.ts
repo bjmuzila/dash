@@ -12,24 +12,11 @@
 // the case where the stylesheet has not applied yet — they are not a second
 // palette and must never diverge from tokens.css.
 //
-// ── THE BASIS ────────────────────────────────────────────────────────────────
-// On an ES chart the strikes are SPX and the price axis is ES futures. They sit
-// ~40-60 points apart, so a bubble drawn at priceToCoordinate(strike) lands
-// nowhere near the level it describes — usually clean off the bottom of the
-// pane, which is exactly the "the bubbles don't show up" symptom.
-//
-//     ES price = SPX strike + basis          (basis = ES − SPX, always > 0)
-//
-// The basis comes from /proxy/es-spx-basis. It is deliberately NOT read off the
-// socket: the 'spot'/'aux' frame's `basis` is esFut − spot, which
-// server-v2/es-spx-basis.js documents as poisoned — the broker's "SPX" quote
-// really tracks ES, so that basis collapses toward zero and then freezes on the
-// expired contract across a quarterly roll. v2's EsChartCard demotes the socket
-// value to a fourth-choice last resort for the same reason.
-//
-// A missing basis draws NO bubbles. Falling back to zero would bend every level
-// by a whole basis silently, which is strictly worse than a visibly absent
-// overlay — the same rule es-spx-basis.js states for its own null return.
+// NO BASIS CONVERSION. Every symbol v3 charts is charted against its own
+// strikes, so a GEX bubble is drawn at the strike price directly. The whole
+// /proxy/es-spx-basis path existed for one symbol — ES, whose price axis was
+// futures while its strikes were SPX cash — and went with it when the futures
+// were dropped.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { IChartApi, ISeriesApi, UTCTimestamp } from 'lightweight-charts'
@@ -43,9 +30,9 @@ function cssVar(el: HTMLElement, name: string, fallback: string): string {
 
 /** '#rrggbb' → [r,g,b]. Canvas needs a per-mark alpha, which a token cannot carry. */
 function hexToRgb(hex: string, fallback: [number, number, number]): [number, number, number] {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
-  if (!m) return fallback
-  const n = parseInt(m[1], 16)
+  const digits = /^#?([0-9a-f]{6})$/i.exec(hex.trim())?.[1]
+  if (!digits) return fallback
+  const n = parseInt(digits, 16)
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
 }
 
@@ -57,12 +44,19 @@ export interface ChartDrawOpts {
 }
 
 export interface EsChartHandle {
-  setBars: (bars: Bar[]) => void
+  /**
+   * `reframe` re-fits the time scale AND re-enables price autoscale. Pass it
+   * whenever the series changes to data on a different scale — a symbol
+   * switch above all. Without it lightweight-charts keeps whatever price
+   * window was showing, so going from SPX at ~6,800 to SPY at ~645 leaves the
+   * candles a mile off the top of the pane looking like an empty chart.
+   * Autoscale has to be turned back ON explicitly, because any manual price
+   * drag turns it off for good.
+   */
+  setBars: (bars: Bar[], reframe?: boolean) => void
   setFrames: (frames: BubbleFrame[]) => void
   /** Strike step of the GEX ladder, for the bubble row-pitch cap. */
   setStrikeStep: (step: number) => void
-  /** ES−SPX. null hides the bubble layer entirely; 0 is valid for a cash chart. */
-  setBasis: (basis: number | null) => void
   setDrawOpts: (opts: ChartDrawOpts) => void
   /** Re-frame on the newest bar, keeping the user's zoom. */
   scrollToNow: () => void
@@ -152,7 +146,6 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   container.appendChild(overlay)
 
   let frames: BubbleFrame[] = []
-  let basis: number | null = null
   let step = 0
   let barCount = 0
   let drawOpts: ChartDrawOpts = { size: 1, curve: 1, intensity: 1, on: true }
@@ -193,7 +186,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     if (!ctx) return
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
-    if (!drawOpts.on || basis == null || !frames.length) return
+    if (!drawOpts.on || !frames.length) return
 
     let range: { from: number; to: number } | null = null
     let plotW = w
@@ -214,8 +207,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     if (step > 0) {
       const probe = frames[0]?.marks[0]?.strike
       if (probe != null) {
-        const a = series.priceToCoordinate(probe + basis)
-        const b = series.priceToCoordinate(probe + step + basis)
+        const a = series.priceToCoordinate(probe)
+        const b = series.priceToCoordinate(probe + step)
         if (a != null && b != null) rowPitch = Math.abs(a - b)
       }
     }
@@ -225,7 +218,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       frames,
       {
         xOfBar: (barT) => {
-          const x = ts.timeToCoordinate((Math.floor(barT / 1000) as UTCTimestamp))
+          const x = ts.timeToCoordinate(Math.floor(barT / 1000) as UTCTimestamp)
           return x == null ? null : (x as number)
         },
         yOfPrice: (price) => {
@@ -237,14 +230,14 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         width: w,
         height: h,
       },
-      { size: drawOpts.size, curve: drawOpts.curve, intensity: drawOpts.intensity, basis },
+      { size: drawOpts.size, curve: drawOpts.curve, intensity: drawOpts.intensity },
       palette,
     )
   }
   raf = requestAnimationFrame(draw)
 
   return {
-    setBars(bars) {
+    setBars(bars, reframe = false) {
       barCount = bars.length
       series.setData(
         bars.map((b) => ({
@@ -255,6 +248,18 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
           close: b.c,
         })),
       )
+      if (reframe && bars.length) {
+        try {
+          series.priceScale().applyOptions({ autoScale: true })
+        } catch {
+          /* the scale is gone; fitContent below still frames the time axis */
+        }
+        try {
+          ts.fitContent()
+        } catch {
+          /* nothing to frame */
+        }
+      }
       checkOffscreen()
     },
     setFrames(next) {
@@ -262,9 +267,6 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     },
     setStrikeStep(next) {
       step = next
-    },
-    setBasis(next) {
-      basis = next
     },
     setDrawOpts(next) {
       drawOpts = next

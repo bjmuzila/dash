@@ -25,10 +25,19 @@ const TickerLookupCard = lazy(() =>
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-// Fixed base tickers + one user-configurable 4th slot (persisted per browser).
-const BASE_TICKERS = ["SPX", "SPY", "QQQ"] as const;
+// Four SLOTS, every one of them user-configurable — each panel header carries
+// its own ticker box. These are only what an untouched board loads with.
+const DEFAULT_TICKERS = ["SPX", "SPY", "QQQ", "NDX"] as const;
+// The delayed/static snapshot recorder only carries these three, so static mode
+// ignores the slots entirely and is not editable.
+const STATIC_TICKERS = ["SPX", "SPY", "QQQ"] as const;
 type Ticker = string;
-const CUSTOM_TICKER_KEY = "mg_custom_ticker";
+// The whole line-up, as a JSON array of 4 symbols.
+const TICKERS_KEY = "mg_tickers";
+// Superseded by TICKERS_KEY: it held the ONE editable slot (the 4th) from when
+// the first three were fixed. Read once, to carry an existing user's choice
+// into the new key, then never written again.
+const LEGACY_CUSTOM_TICKER_KEY = "mg_custom_ticker";
 const HEAT_SKIN_KEY = "mg_heat_skin";
 // How many EXPIRY columns the board shows, 1..MAX_EXP_PICKS. ONE number for all
 // four panels — the columns are the same expiry ladder read across four
@@ -917,8 +926,9 @@ function TickerPanel({
   replayStrikes?: number[] | null;
   /** Replay: the session date the column DTE labels count from (see colLabel). */
   dteBase?: string | null;
-  /** 4th slot only: the ticker is user-editable, so the header renders the
-   *  symbol as an input instead of a label. The cog menu no longer carries it. */
+  /** The slot's ticker is user-editable, so the header renders the symbol AS
+   *  an input rather than as a label beside one. False in static/delayed mode
+   *  and when the caller pinned the line-up. */
   editableTicker?: boolean;
   /** Controlled value of that header input (uncommitted text). */
   tickerInput?: string;
@@ -1319,38 +1329,41 @@ function TickerPanel({
       >
         {/* Ticker Lookup 🔍 moved to the page toolbar — one button for the
             whole page instead of one per panel.
-            The 4th slot is user-configurable, so its symbol IS the input — it
-            sits right here on the card rather than behind the cog. */}
+            Every slot is user-configurable, so the symbol IS the input: one
+            control, at the size the label was, rather than a label with a
+            second little box beside it repeating it. Four panels' worth of
+            that duplication was most of the header. */}
         {editableTicker ? (
-          <div
-            style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}
+          <input
+            value={tickerInput}
+            onChange={(e) => onTickerInputChange?.(e.target.value.toUpperCase())}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") { e.preventDefault(); onCommitTicker?.(); (e.target as HTMLInputElement).blur(); }
+              // Abandon the edit: put the box back to what the panel is showing.
+              if (e.key === "Escape") { onTickerInputChange?.(ticker); (e.target as HTMLInputElement).blur(); }
+            }}
             // The header sets userSelect:none for its own label; the input
             // needs its own text selection back.
             onMouseDown={(e) => e.stopPropagation()}
-          >
-            <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
-            <input
-              value={tickerInput}
-              onChange={(e) => onTickerInputChange?.(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === "Enter") { e.preventDefault(); onCommitTicker?.(); (e.target as HTMLInputElement).blur(); }
-              }}
-              onBlur={() => onCommitTicker?.()}
-              placeholder="TICKER"
-              title="Change this panel's ticker — Enter to load"
-              maxLength={6}
-              spellCheck={false}
-              autoCapitalize="characters"
-              style={{
-                width: 74, padding: "2px 6px", fontSize: 11, fontWeight: 800,
-                letterSpacing: "0.08em", textTransform: "uppercase", textAlign: "center",
-                background: HT.panelBgStrong, color: HT.cyan,
-                border: `1px solid ${HT.border}`, borderRadius: 6, outline: "none",
-                fontFamily: "inherit", cursor: "text", userSelect: "text",
-              }}
-            />
-          </div>
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={() => onCommitTicker?.()}
+            placeholder="TICKER"
+            title="This panel's ticker — type a symbol and press Enter"
+            maxLength={6}
+            spellCheck={false}
+            autoCapitalize="characters"
+            style={{
+              // Sized and coloured as the label it replaces, on a hairline box
+              // so it still reads as something you can type in.
+              width: 92, flexShrink: 0,
+              padding: "1px 6px", fontSize: 17, fontWeight: 800,
+              letterSpacing: "0.1em", textTransform: "uppercase",
+              background: "rgba(0,0,0,0.22)", color: HT.cyan,
+              border: `1px solid ${HT.border}`, borderRadius: 7, outline: "none",
+              fontFamily: "inherit", cursor: "text", userSelect: "text",
+            }}
+          />
         ) : (
           <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
         )}
@@ -1804,7 +1817,7 @@ function TickerPanel({
 //     anchor they are not the same session, so the pair is refused.
 //
 // While cash is open the feed's own SPX print IS the index, so it wins outright
-// and no conversion happens. Only SPX is touched; SPY/QQQ/the 4th slot keep
+// and no conversion happens. Only SPX is touched; the other three slots keep
 // their chain price. `isPlausibleBasis` / `isCashOpen` are imported from
 // chartMath rather than re-implemented — one definition of what a real basis is.
 const MG_SPX_TOPICS = ["spot", "aux"] as const;
@@ -2039,13 +2052,12 @@ export function MultGreekClient({
    *  thing they navigated to. Initial state only — the toggle still works. */
   initialReplay?: boolean;
   /**
-   * Override the panel line-up. Omit (the page's own use) and it is the fixed
-   * SPX / SPY / QQQ plus the user's 4th slot; pass a list and those tickers are
-   * the panels, verbatim.
+   * Override the panel line-up. Omit (the page's own use) and it is the user's
+   * four saved slots; pass a list and those tickers are the panels, verbatim.
    *
    * Added for the /board "Multi Greek (one ticker)" card, which wants exactly
-   * one column. When set, the toolbar's 4TH input is hidden — it edits a slot
-   * that is no longer in the line-up.
+   * one column. When set, the panels' ticker inputs are hidden — they would be
+   * editing slots that are no longer in the line-up.
    *
    * Pass a MODULE-SCOPE array, not an inline literal: the value feeds the
    * chain-fetch effect's dependency key, so a fresh array each render would
@@ -2059,7 +2071,7 @@ export function MultGreekClient({
   const [contractMode, setContractMode] = useState<ContractMode>("oivol");
   const [intensity, setIntensity] = useState(HEAT_SKINS.classic.intensity.def);
   // Heat skin — cosmetic only (see HEAT_SKINS). Persisted per browser like the
-  // 4th ticker: it is a preference about the board, not part of a session.
+  // ticker slots: they are a preference about the board, not part of a session.
   // CLASSIC is the default the page ships on; VIVID is the opt-in. Server
   // render always starts on CLASSIC and any saved value is applied in the
   // effect below, so the markup can't mismatch on hydration.
@@ -2100,15 +2112,49 @@ export function MultGreekClient({
     else setShowPW(v => !v);
   }, []);
 
-  // User-configurable 4th ticker, persisted per browser (localStorage). Live
-  // mode only — the delayed snapshot recorder only carries SPX/SPY/QQQ.
-  const [customTicker, setCustomTicker] = useState<string>("IWM");
-  const [tickerInput, setTickerInput] = useState<string>("IWM");
+  // ── The four ticker slots ──────────────────────────────────────────────────
+  // Every panel is editable now, not just the 4th: each header carries its own
+  // ticker box. The line-up is persisted per browser as one array, so the board
+  // comes back the way it was left; DEFAULT_TICKERS is only the cold start.
+  const [slotTickers, setSlotTickers] = useState<string[]>(() => [...DEFAULT_TICKERS]);
+  // What is TYPED in each box — uncommitted until Enter or blur, which is why
+  // it is separate state from the line-up the page actually loads.
+  const [slotInputs, setSlotInputs] = useState<string[]>(() => [...DEFAULT_TICKERS]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      const saved = window.localStorage.getItem(CUSTOM_TICKER_KEY);
-      if (saved != null) { setCustomTicker(saved); setTickerInput(saved); }
+      const next = [...DEFAULT_TICKERS] as string[];
+      const raw = window.localStorage.getItem(TICKERS_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed)) {
+        // Per slot, not wholesale: a stored array that is short, long or has a
+        // junk entry still contributes the slots it got right, and the rest
+        // fall back to the default rather than the board coming up empty.
+        parsed.slice(0, DEFAULT_TICKERS.length).forEach((v, i) => {
+          const t = String(v ?? "").trim().toUpperCase();
+          if (t) next[i] = t;
+        });
+      } else {
+        // First run on the new key — carry the old single-slot choice into the
+        // 4th slot, which is where it used to live.
+        const legacy = window.localStorage.getItem(LEGACY_CUSTOM_TICKER_KEY);
+        const t = String(legacy ?? "").trim().toUpperCase();
+        if (t) next[DEFAULT_TICKERS.length - 1] = t;
+      }
+      // Two panels on one symbol would share a React key AND a `strikes[ticker]`
+      // entry — one board, two cards, one set of data. Drop a duplicate back to
+      // whatever that slot's default is, and if THAT collides too, leave the
+      // stored value: a visibly wrong slot the user can retype beats a silent
+      // swap of a symbol they chose.
+      const seen = new Set<string>();
+      for (let i = 0; i < next.length; i++) {
+        if (!seen.has(next[i])) { seen.add(next[i]); continue; }
+        const fallback = DEFAULT_TICKERS[i];
+        if (!seen.has(fallback)) { next[i] = fallback; seen.add(fallback); }
+        else seen.add(next[i]);
+      }
+      setSlotTickers(next);
+      setSlotInputs([...next]);
     } catch { /* ignore */ }
   }, []);
   // Normalised once so the memo below can key off a string rather than the
@@ -2117,21 +2163,48 @@ export function MultGreekClient({
     .map((t) => t.trim().toUpperCase())
     .filter(Boolean)
     .join(",");
+  // Same trick for the slots: the memo has to key off a STRING, or every render
+  // that rebuilt the array would hand a new identity to the dozen effects
+  // downstream that reload on a line-up change.
+  const slotKey = slotTickers.join(",");
   const TICKERS = useMemo(() => {
-    // Explicit line-up wins outright — no base tickers, no 4th slot.
+    // An explicit line-up from the caller wins outright — no slots at all.
     if (tickerOverrideKey) return tickerOverrideKey.split(",");
-    const base = [...BASE_TICKERS] as string[];
-    const t = customTicker.trim().toUpperCase();
-    if (!isStatic && t && !base.includes(t)) base.push(t);
-    return base;
-  }, [customTicker, isStatic, tickerOverrideKey]);
-  const commitTicker = useCallback(() => {
-    const t = tickerInput.trim().toUpperCase();
-    setTickerInput(t);
-    if (t === customTicker) return;
-    setCustomTicker(t);
-    try { window.localStorage.setItem(CUSTOM_TICKER_KEY, t); } catch { /* ignore */ }
-  }, [tickerInput, customTicker]);
+    // Static/delayed mode has only the three recorded tickers to show.
+    if (isStatic) return [...STATIC_TICKERS] as string[];
+    return slotKey.split(",");
+  }, [slotKey, isStatic, tickerOverrideKey]);
+  // Both halves are mirrored into refs so `commitSlot` can read the CURRENT
+  // line-up and the CURRENT box text without either being a dependency — it is
+  // handed to four panels as an onBlur/onEnter callback, and a commit that
+  // re-created itself on every keystroke would re-render all four.
+  const slotTickersRef = useRef<string[]>([...DEFAULT_TICKERS]);
+  const slotInputsRef = useRef<string[]>([...DEFAULT_TICKERS]);
+  useEffect(() => { slotTickersRef.current = slotTickers; }, [slotTickers]);
+  useEffect(() => { slotInputsRef.current = slotInputs; }, [slotInputs]);
+  const setSlotInput = useCallback((i: number, v: string) => {
+    setSlotInputs(prev => prev.map((x, j) => (j === i ? v : x)));
+  }, []);
+  /** Enter / blur on a slot's box. */
+  const commitSlot = useCallback((i: number) => {
+    const cur = slotTickersRef.current;
+    const typed = (slotInputsRef.current[i] ?? "").trim().toUpperCase();
+    // Empty box = "put it back", not "remove the panel". The board is four
+    // cards wide and stays that way.
+    const want = typed || DEFAULT_TICKERS[i];
+    // Refuse a symbol another slot already holds: two panels on one ticker
+    // would share a React key AND a `strikes[ticker]` entry — one board, two
+    // cards, one set of data.
+    const taken = cur.some((t, j) => j !== i && t === want);
+    const resolved = taken ? cur[i] : want;
+    // Snap the box to what the panel will actually SHOW, so a refused or
+    // defaulted commit can't leave text disagreeing with the card under it.
+    setSlotInputs(prev => (prev[i] === resolved ? prev : prev.map((x, j) => (j === i ? resolved : x))));
+    if (resolved === cur[i]) return;
+    const next = cur.map((t, j) => (j === i ? resolved : t));
+    setSlotTickers(next);
+    try { window.localStorage.setItem(TICKERS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  }, []);
   // ── Board columns — ONE setting for the whole board ────────────────────────
   // Two independent choices, both in the cog (Board → Columns):
   //
@@ -2242,7 +2315,7 @@ export function MultGreekClient({
   const [replayLoading, setReplayLoading] = useState(false);
   const [replayErr, setReplayErr] = useState("");
 
-  // Leaving replay — or changing the panel line-up (the 4th ticker slot) —
+  // Leaving replay — or changing the panel line-up (any ticker slot) —
   // drops the loaded session so the next entry can't paint one ticker set's
   // frames under another's labels.
   useEffect(() => {
@@ -2263,7 +2336,7 @@ export function MultGreekClient({
         } catch { return [] as string[]; }
       }));
       if (cancelled) return;
-      // UNION, not intersection. A session SPX recorded and the 4th ticker
+      // UNION, not intersection. A session SPX recorded and another slot
       // didn't is still worth replaying: three panels play and the fourth says
       // it has nothing. Intersecting would hide the day entirely.
       const ds = [...new Set(lists.flat())].sort().reverse();
@@ -2642,14 +2715,14 @@ export function MultGreekClient({
   // Auto-load when expirations are ready
   useEffect(() => {
     if (isStatic) return;
-    if (selectedExpiry && BASE_TICKERS.every(t => Object.keys(strikes[t] ?? {}).length === 0)) {
+    if (selectedExpiry && TICKERS.every(t => Object.keys(strikes[t] ?? {}).length === 0)) {
       loadAll(selectedExpiry);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStatic, selectedExpiry]);
 
   // Reload whenever any ticker's own expiration calendar (re)loads — covers the
-  // initial fill and switching the custom 4th ticker — so each panel's chain is
+  // initial fill and retyping any slot's ticker — so each panel's chain is
   // pulled for ITS own column dates, not a stale/SPX-aligned set.
   useEffect(() => {
     if (isStatic) return;
@@ -2804,12 +2877,12 @@ export function MultGreekClient({
 
   const isCapturing = captureWindow != null;
 
-  // ── Identity line ──────────────────────────────────────────────────────────
-  // Feeds the band that sits under the replay transport and directly on top of
-  // the four cards — the Multi Greek twin of the GEX-levels card's line. The
-  // front expiry is the first ticker's front column (every panel leads with its
-  // own calendar's front, and they agree far more often than not), labelled off
-  // the REPLAYED date while rewound so the DTE isn't counted from today.
+  // ── Identity line (screenshots only) ───────────────────────────────────────
+  // Feeds the band that renders ONLY while a capture is in flight — see its
+  // note at the render. The front expiry is the first ticker's front column
+  // (every panel leads with its own calendar's front, and they agree far more
+  // often than not), labelled off the REPLAYED date while rewound so the DTE
+  // isn't counted from today.
   const idFrontCol = (replayOn ? replayColsByTicker[TICKERS[0]] : colsByTicker[TICKERS[0]])?.[0] ?? null;
   const idFront = idFrontCol ? colLabel(idFrontCol.date, replayOn ? replayDate : null) : null;
   const idSession = replayOn ? (replayDate || "—") : todayETStr();
@@ -2878,7 +2951,7 @@ export function MultGreekClient({
 
       {/* Toolbar — one bar: status on the left, actions and the cog hard right.
           Everything that used to spread across this dock (expiry + GO, contract
-          basis, delta stamps, the 4th ticker, intensity, lookup, replay,
+          basis, delta stamps, intensity, lookup, replay,
           refresh) now lives inside the cog, matching /home. */}
       <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0 }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%" }}>
@@ -3004,9 +3077,9 @@ export function MultGreekClient({
                       onChange={(v) => setDeltaWindow(Number(v) as DeltaWindow)}
                     />
                   </DockField>
-                  {/* The 4th-ticker input used to live here. It is now ON the 4th
-                      panel's header, next to the symbol (see TickerPanel
-                      `editableTicker`). */}
+                  {/* The ticker input used to live here, for the 4th slot
+                      only. Every panel now carries its own — the symbol in the
+                      header IS the box (see TickerPanel `editableTicker`). */}
                 </>
               ),
             },
@@ -3213,35 +3286,35 @@ export function MultGreekClient({
         </div>
       )}
 
-      {/* ── Identity line ───────────────────────────────────────────────────
-          The GEX-levels card's line, for four tickers: the front expiry + DTE,
-          the session on screen and the replay clock.
+      {/* ── Identity line — CAPTURE ONLY ───────────────────────────────────
+          The front expiry + DTE and the session date used to sit here as a
+          permanent band under the toolbar. It came out: it is a second row of
+          chrome above the cards, and both facts are already on screen — the
+          expiry is the first column header of every panel, and the session is
+          today.
 
-          The page name, the per-ticker spot prices and the CB Edge mark were
-          removed (each panel header already carries its own ticker + spot), and
-          the CB / CW / PW toggles are now the cards sitting directly above each
-          ticker's panel, so this band is just the shared context line.
-
-          Under the replay transport and directly on top of the cards, for the
-          same reason it sits there on the lookup card — that band is what a
-          screen capture of the panels actually contains. Rendered in capture
-          mode too, so an exported PNG carries its own context. */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
-        padding: "0 10px 8px", borderBottom: `1px solid ${HT.border}`, flexShrink: 0,
-      }}>
-        <span style={{
-          fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
-          letterSpacing: "0.06em", textTransform: "uppercase", color: HT.text, opacity: 0.78,
+          It still renders while a screenshot is being taken, because an
+          exported PNG leaves the page behind and has nothing else to say WHICH
+          session and WHICH front expiry it is of. Same reason the lookup card
+          puts its band directly on top of the thing being captured. */}
+      {isCapturing && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+          padding: "0 10px 8px", borderBottom: `1px solid ${HT.border}`, flexShrink: 0,
         }}>
-          {[
-            idFront ? `${idFront.md} · ${idFront.dte}` : null,
-            idSession,
-            replayOn && replayClock != null ? `${fmtReplayClock(replayClock)} ET` : null,
-            replayOn ? "recorded walls only" : null,
-          ].filter(Boolean).join(" · ")}
-        </span>
-      </div>
+          <span style={{
+            fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
+            letterSpacing: "0.06em", textTransform: "uppercase", color: HT.text, opacity: 0.78,
+          }}>
+            {[
+              idFront ? `${idFront.md} · ${idFront.dte}` : null,
+              idSession,
+              replayOn && replayClock != null ? `${fmtReplayClock(replayClock)} ET` : null,
+              replayOn ? "recorded walls only" : null,
+            ].filter(Boolean).join(" · ")}
+          </span>
+        </div>
+      )}
 
       {/* Panels */}
       {embed && (
@@ -3267,12 +3340,13 @@ export function MultGreekClient({
           <TickerPanel
             key={ticker}
             ticker={ticker}
-            // Only the 4th slot is user-configurable, and only when the caller
-            // hasn't pinned the line-up (`tickers`) and we're on live data.
-            editableTicker={!isStatic && !tickerOverrideKey && ti === 3}
-            tickerInput={tickerInput}
-            onTickerInputChange={setTickerInput}
-            onCommitTicker={commitTicker}
+            // EVERY slot is user-configurable — as long as the caller hasn't
+            // pinned the line-up (`tickers`) and we're on live data (the
+            // delayed recorder only carries STATIC_TICKERS).
+            editableTicker={!isStatic && !tickerOverrideKey}
+            tickerInput={slotInputs[ti] ?? ticker}
+            onTickerInputChange={(v) => setSlotInput(ti, v)}
+            onCommitTicker={() => commitSlot(ti)}
             strikesByExp={strikes[ticker] ?? {}}
             // The board's column count, over whatever this ticker's calendar
             // (or the replayed session) actually offers. A panel with fewer

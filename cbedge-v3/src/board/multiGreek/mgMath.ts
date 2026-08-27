@@ -275,7 +275,8 @@ const RAMP = { base: 0.04, span: 0.55, max: 0.62, ease: 1.6 }
 
 export function cellAlpha(value: number, maxAbs: number, rank: number, intensity: number): number {
   if (!value) return 0
-  if (rank >= 0 && rank < RANK_ALPHA.length) return RANK_ALPHA[rank]
+  const fixed = rank >= 0 ? RANK_ALPHA[rank] : undefined
+  if (fixed !== undefined) return fixed
   if (maxAbs <= 0) return 0
   const ratio = Math.abs(value) / maxAbs
   return Math.min(RAMP.max, RAMP.base + Math.pow(ratio * Math.max(intensity, 1), RAMP.ease) * RAMP.span)

@@ -1492,13 +1492,21 @@ type DaySlice = {
 type DaySeg = {
   date: string;
   series: Map<WallLevel, (number | null)[]>;
-  band: { call: (number | null)[]; put: (number | null)[] } | null;
+  /**
+   * The corridor's two edges, already resolved for the CORE-sign rule below —
+   * so where a wall is suppressed the band closes on the CORE that replaced it
+   * rather than vanishing.
+   */
+  band: { up: (number | null)[]; lo: (number | null)[] } | null;
   spotPts: { s: number; v: number }[];
   spotDrawn: { s: number; v: number }[];
   dense: boolean;
   lastSlot: number;
   lastWrite: number;
 };
+
+/** What the legend can switch off — the three levels plus the price line. */
+type MigKey = WallLevel | "spot";
 
 function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
   days: DaySlice[];
@@ -1508,6 +1516,18 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
   /** Given only by the inline chart — the popout has nothing to expand into. */
   onExpand?: () => void;
 }) {
+  /**
+   * Legend switches. Click a chip to drop that series out of the plot; click it
+   * again to bring it back. Kept as the set of what is OFF so a level that only
+   * appears later (a week fetch landing, the view switching) arrives visible.
+   */
+  const [off, setOff] = useState<Set<MigKey>>(() => new Set());
+  const toggle = (k: MigKey) => setOff((prev) => {
+    const next = new Set(prev);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    return next;
+  });
+
   const model = useMemo(() => {
     const inSlot = (s: number) => Number.isFinite(s) && s >= 0 && s < WALL_SLOTS;
 
@@ -1581,6 +1601,49 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
         series.set(lt, out);
       }
 
+      /**
+       * THE CORE-SIGN RULE — one dominant node cannot be two levels.
+       *
+       * CORE is the single largest |net GEX| strike on the chain, so its SIGN
+       * says which wall it already is: positive gamma at the node makes it the
+       * call wall, negative makes it the put wall. Drawing the matching wall
+       * beside it is the same strike twice in two colours, and on the days the
+       * two do NOT coincide it is worse than redundant — it invites reading a
+       * secondary node as a boundary the dominant one has already overruled.
+       *
+       * So: CORE positive → no call wall. CORE negative → no put wall. Per
+       * slot, off the forward-filled `level_gex` the recorder wrote on the cb
+       * rows, because dominance flips intraday and the mask has to flip with
+       * it. With no CORE gamma recorded (walls view, or a day whose cb rows
+       * predate the column) nothing is masked and both walls draw as before.
+       */
+      const coreG: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+      {
+        const gRows = log
+          .filter((r) => r.level_type === "cb" && inSlot(r.slot) && r.level_gex != null && Number.isFinite(Number(r.level_gex)))
+          .sort((a, b) => a.slot - b.slot);
+        let cur: number | null = null;
+        let i = 0;
+        for (let s = 0; s <= lastSlot; s++) {
+          while (i < gRows.length && gRows[i].slot <= s) { cur = Number(gRows[i].level_gex); i++; }
+          coreG[s] = cur;
+        }
+      }
+      const cbArr = series.get("cb");
+      for (const [lt, arr] of series) {
+        if (lt !== "call_wall" && lt !== "put_wall") continue;
+        for (let s = 0; s <= lastSlot; s++) {
+          const g = coreG[s];
+          if (g == null || g === 0) continue;
+          if (lt === "call_wall" ? g > 0 : g < 0) arr[s] = null;
+        }
+      }
+      // A wall masked away on every slot of every day is not a series — drop it
+      // so it takes no legend chip and no colour.
+      for (const [lt, arr] of Array.from(series.entries())) {
+        if (!arr.some((v) => v != null)) series.delete(lt);
+      }
+
       // Spot, from every capture that carried one. Events are written second so
       // a tag's spot_at_hit wins over the level row at the same slot — the tag
       // is the more precise reading of where price actually was.
@@ -1606,9 +1669,23 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
       const dense = tape.length >= 20;
       const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }));
 
+      /**
+       * The corridor is the room price had, so its edges are the levels that
+       * are actually bounding price — the wall where one is drawn, and the CORE
+       * where the sign rule suppressed it (the CORE IS that wall on those
+       * slots). Without this the band would disappear exactly when the rule
+       * fires, which is most of the session.
+       */
       const cw = series.get("call_wall");
       const pw = series.get("put_wall");
-      const band = cw && pw ? { call: cw, put: pw } : null;
+      const up: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+      const dn: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+      for (let s = 0; s <= lastSlot; s++) {
+        const g = coreG[s];
+        up[s] = cw?.[s] ?? (g != null && g > 0 ? cbArr?.[s] ?? null : null);
+        dn[s] = pw?.[s] ?? (g != null && g < 0 ? cbArr?.[s] ?? null : null);
+      }
+      const band = up.some((v, s) => v != null && dn[s] != null) ? { up, lo: dn } : null;
 
       if (!series.size && !spotDrawn.length) continue;
       segs.push({ date: day.date, series, band, spotPts, spotDrawn, dense, lastSlot, lastWrite });
@@ -1631,7 +1708,13 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
     const padY = (hi - lo) * 0.08;
     lo -= padY; hi += padY;
 
-    return { levels, segs, lo, hi };
+    // Recomputed AFTER the sign rule, not before: a wall the rule masked away
+    // on every session is not a level this chart has, and must not take a
+    // legend chip that toggles nothing.
+    const kept = levels.filter((lt) => segs.some((seg) => seg.series.has(lt)));
+    if (!kept.length) return null;
+
+    return { levels: kept, segs, lo, hi };
   }, [days, view]);
 
   if (!model) return null;
@@ -1658,8 +1741,7 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
    * back over one DAY's fill; never across a day boundary, which would draw a
    * diagonal through an overnight the level did not travel.
    */
-  const step = (i: number, arr: (number | null)[] | undefined, reverse = false) => {
-    if (!arr) return "";
+  const stepRun = (i: number, arr: (number | null)[], a: number, b: number, reverse = false) => {
     const out: string[] = [];
     let prev: number | null = null;
     const push = (s: number) => {
@@ -1669,9 +1751,47 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
       out.push(`${x(i, s)},${y(v)}`);
       prev = v;
     };
-    if (reverse) for (let s = segs[i].lastSlot; s >= 0; s--) push(s);
-    else for (let s = 0; s <= segs[i].lastSlot; s++) push(s);
-    return out.join(" ");
+    if (reverse) for (let s = b; s >= a; s--) push(s);
+    else for (let s = a; s <= b; s++) push(s);
+    return out;
+  };
+
+  /**
+   * A level's day as one polyline PER CONTIGUOUS RUN. It used to be one
+   * polyline for the whole day, which was fine while the only gaps were
+   * before the first capture — but the CORE-sign rule punches holes mid-day,
+   * and a single polyline would bridge one with a diagonal through strikes the
+   * wall never held while it was suppressed.
+   */
+  const stepRuns = (i: number, arr: (number | null)[] | undefined): string[] => {
+    if (!arr) return [];
+    const out: string[] = [];
+    const L = segs[i].lastSlot;
+    let s = 0;
+    while (s <= L) {
+      if (arr[s] == null) { s++; continue; }
+      const a = s;
+      while (s <= L && arr[s] != null) s++;
+      const pts = stepRun(i, arr, a, s - 1);
+      if (pts.length) out.push(pts.join(" "));
+    }
+    return out;
+  };
+
+  /** The corridor, one polygon per stretch where BOTH edges exist. */
+  const bandRuns = (i: number, up: (number | null)[], dn: (number | null)[]): string[] => {
+    const out: string[] = [];
+    const L = segs[i].lastSlot;
+    let s = 0;
+    while (s <= L) {
+      if (up[s] == null || dn[s] == null) { s++; continue; }
+      const a = s;
+      while (s <= L && up[s] != null && dn[s] != null) s++;
+      const b = s - 1;
+      const poly = [...stepRun(i, up, a, b), ...stepRun(i, dn, a, b, true)];
+      if (poly.length > 2) out.push(poly.join(" "));
+    }
+    return out;
   };
 
   /** Last written value of a level across the whole span — the legend's number. */
@@ -1695,22 +1815,31 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
   const drawn = drawOrder.filter((lt) => levels.includes(lt));
   const paths: { key: string; d: string; color: string; w: number }[] = [];
   for (const lt of drawn) {
+    if (off.has(lt)) continue;
     for (let i = 0; i < N; i++) {
-      const d = step(i, segs[i].series.get(lt));
-      if (d) paths.push({ key: `${lt}-${i}`, d, color: LEVEL_COLOR[lt], w: lt === "cb" ? 2.2 : 1.8 });
+      stepRuns(i, segs[i].series.get(lt)).forEach((d, k) => {
+        paths.push({ key: `${lt}-${i}-${k}`, d, color: LEVEL_COLOR[lt], w: lt === "cb" ? 2.2 : 1.8 });
+      });
     }
   }
 
-  // The corridor between the two WALLS — the room price actually had. Per day,
-  // for the same reason the lines are.
-  const corridors = segs
-    .map((seg, i) => (seg.band ? `${step(i, seg.band.call)} ${step(i, seg.band.put, true)}` : null))
-    .map((d, i) => ({ key: `band-${i}`, d }))
-    .filter((c) => c.d);
+  // The corridor between the levels bounding price — the room it actually had.
+  // Per day, for the same reason the lines are. Switched off with either edge,
+  // because a band with one edge hidden is a shape with no second number.
+  const bandOn = !off.has("call_wall") && !off.has("put_wall") && !off.has("cb");
+  const corridors: { key: string; d: string }[] = [];
+  if (bandOn) {
+    segs.forEach((seg, i) => {
+      if (!seg.band) return;
+      bandRuns(i, seg.band.up, seg.band.lo).forEach((d, k) => corridors.push({ key: `band-${i}-${k}`, d }));
+    });
+  }
 
-  const spotLines = segs
-    .map((seg, i) => ({ key: `spot-${i}`, d: seg.spotDrawn.map((p) => `${x(i, p.s)},${y(p.v)}`).join(" ") }))
-    .filter((c) => c.d);
+  const spotLines = off.has("spot")
+    ? []
+    : segs
+      .map((seg, i) => ({ key: `spot-${i}`, d: seg.spotDrawn.map((p) => `${x(i, p.s)},${y(p.v)}`).join(" ") }))
+      .filter((c) => c.d);
 
   /** x of the last written slot on the LIVE day, only when it runs past it. */
   const heldFrom = last.lastWrite < last.lastSlot ? x(N - 1, last.lastWrite) : null;
@@ -1723,14 +1852,38 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
    * The post-market legend: a small square swatch, the level in sentence case,
    * and the strike it currently sits on. Not the old uppercase pill row — that
    * was a second title bar fighting the head above it.
+   *
+   * Each chip is also the series' SWITCH. Three levels, a price line and a
+   * shaded band inside 190px is a lot of ink for one question, and the question
+   * is usually about one of them — so the chip that names a series turns it
+   * off. Off reads as off: the swatch hollows out and the whole chip dims,
+   * rather than the row looking identical to a chart that simply had no data.
    */
-  const legendChip = (color: string, label: string, value: string) => (
-    <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: MUTED }}>
-      <span aria-hidden style={{ width: 9, height: 9, borderRadius: 2, background: color, flex: "0 0 auto" }} />
-      <span>{label}</span>
-      <span style={{ fontFamily: "var(--font-mono)", color: HOME_THEME.text }}>{value}</span>
-    </span>
-  );
+  const legendChip = (key: MigKey, color: string, label: string, value: string) => {
+    const on = !off.has(key);
+    return (
+      <button
+        key={key}
+        data-capture-hide
+        onClick={() => toggle(key)}
+        aria-pressed={on}
+        title={on ? `Hide ${label}` : `Show ${label}`}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11,
+          fontFamily: "inherit", cursor: "pointer", padding: "2px 6px", borderRadius: 6,
+          border: "1px solid transparent", background: "transparent",
+          color: MUTED, opacity: on ? 1 : 0.4,
+        }}
+      >
+        <span aria-hidden style={{
+          width: 9, height: 9, borderRadius: 2, flex: "0 0 auto",
+          background: on ? color : "transparent", border: `1px solid ${color}`,
+        }} />
+        <span>{label}</span>
+        <span style={{ fontFamily: "var(--font-mono)", color: on ? HOME_THEME.text : MUTED }}>{value}</span>
+      </button>
+    );
+  };
 
   const lastSpot = last.spotDrawn.length ? last.spotDrawn[last.spotDrawn.length - 1].v : null;
 
@@ -1766,8 +1919,8 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
           says nothing about these series — which is exactly how a CORE line
           reads as an unexplained squiggle. */}
       <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
-        {drawn.map((lt) => legendChip(LEVEL_COLOR[lt], LEVEL_LABEL[lt], wallStrike(lastOf(lt))))}
-        {lastSpot != null ? legendChip(HOME_THEME.text, "spot", wallNum(lastSpot)) : null}
+        {drawn.map((lt) => legendChip(lt, LEVEL_COLOR[lt], LEVEL_LABEL[lt], wallStrike(lastOf(lt))))}
+        {lastSpot != null ? legendChip("spot", HOME_THEME.text, "spot", wallNum(lastSpot)) : null}
       </div>
 
       {/* preserveAspectRatio="none" — the x axis is slots, the y axis is price,
@@ -1823,36 +1976,9 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
         </div>
       )}
 
-      <div style={{ fontSize: FS_META, marginTop: 6, lineHeight: 1.5, color: MUTED }}>
-        {segs.some((seg) => seg.band) ? (
-          <>
-            The shaded band is the corridor between the two walls — the room price had. CORE is the
-            recorded <b style={{ color: CORE_GOLD }}>cb</b> strike, the single largest |net GEX| node on the
-            chain, so it sits ON one of the walls whenever that wall is also the biggest node — which is
-            most days. That overlap is the reading, not a duplicate line.{" "}
-          </>
-        ) : null}
-        Each level holds its strike until the recorder writes a change, so the steps are the rolls. A level that
-        sits while price travels is the one to fade; one that moves with price is dealers chasing.{" "}
-        {N > 1 ? (
-          <>Every session gets an equal slice of the width and they all share ONE price scale, so a wall
-            holding the same strike across the week draws as one flat run — which is the read this view
-            exists for. Nothing is drawn across a session boundary: the levels reset at each solid divider
-            because the overnight is a gap the level did not travel through.{" "}</>
-        ) : null}
-        {anyDense ? (
-          <>Spot is the 1-minute tape; the level log&apos;s own {totalCaps} spot capture
-            {totalCaps === 1 ? "" : "s"} sit under it at the slots that wrote a row.</>
-        ) : (
-          <>No 1-minute tape for this ticker or date range, so spot is the {totalCaps} capture
-            {totalCaps === 1 ? "" : "s"} the log stored — its own samples, not a price path.</>
-        )}
-        {heldFrom != null ? (
-          <>{" "}The log&apos;s last write was <b style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{slotClock(last.lastWrite)}</b>{" "}
-            (dashed mark) — right of it the levels held, which is why nothing was written, and the
-            flat stretch against the tape is the read.</>
-        ) : null}
-      </div>
+      {/* No caption. The chart is the panel's own explanation — the legend
+          names every series and the page head carries the scope — and a
+          paragraph under a 190px plot was taller than the plot. */}
     </div>
   );
 }

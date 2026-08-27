@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@/data/api'
-import { Popover } from '../esCandles/controls'
+import { Popover } from '../gexCandles/controls'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Economic Calendar & Earnings — v2's home-page panel, as a board card.
@@ -209,13 +209,20 @@ function EventRow({ ev, faded }: { ev: CalEvent; faded: boolean }) {
   )
 }
 
-const EARN_KINDS: Array<{ key: EarnRow['session']; head: string; sub: string; title: string }> = [
-  { key: 'pre', head: 'PRE', sub: 'MKT', title: 'Premarket earnings' },
-  { key: 'after', head: 'AFTER', sub: 'HRS', title: 'After-hours earnings' },
-  { key: 'unknown', head: 'TIME', sub: 'TBD', title: 'Time unconfirmed' },
-]
+// Named rather than an array indexed by position. Under
+// `noUncheckedIndexedAccess` an index read is `T | undefined`, and reaching for
+// EARN_KINDS[1] and asserting it away would be pretending the compiler is wrong
+// about something it is right about. Three constants have no index to check.
+interface EarnKind {
+  head: string
+  sub: string
+  title: string
+}
+const EARN_PRE: EarnKind = { head: 'PRE', sub: 'MKT', title: 'Premarket earnings' }
+const EARN_AFTER: EarnKind = { head: 'AFTER', sub: 'HRS', title: 'After-hours earnings' }
+const EARN_TBD: EarnKind = { head: 'TIME', sub: 'TBD', title: 'Time unconfirmed' }
 
-function EarningsBlock({ rows, kind }: { rows: EarnRow[]; kind: (typeof EARN_KINDS)[number] }) {
+function EarningsBlock({ rows, kind }: { rows: EarnRow[]; kind: EarnKind }) {
   if (!rows.length) return null
   const col = `var(${EARN_VAR})`
   return (
@@ -363,18 +370,18 @@ export function EconCalendarCard() {
       const after = bySession('after')
       const tbd = bySession('unknown')
 
-      if (pre.length) out.push(<EarningsBlock key={`pre-${date}`} rows={pre} kind={EARN_KINDS[0]} />)
+      if (pre.length) out.push(<EarningsBlock key={`pre-${date}`} rows={pre} kind={EARN_PRE} />)
 
       let afterPlaced = after.length === 0
       dayEvents.forEach((ev, i) => {
         if (!afterPlaced && ev.time > '16:00') {
-          out.push(<EarningsBlock key={`after-${date}`} rows={after} kind={EARN_KINDS[1]} />)
+          out.push(<EarningsBlock key={`after-${date}`} rows={after} kind={EARN_AFTER} />)
           afterPlaced = true
         }
         out.push(<EventRow key={`${date}-${ev.time}-${i}-${faded ? 'p' : 'a'}`} ev={ev} faded={faded} />)
       })
-      if (!afterPlaced) out.push(<EarningsBlock key={`after-${date}`} rows={after} kind={EARN_KINDS[1]} />)
-      if (tbd.length) out.push(<EarningsBlock key={`tbd-${date}`} rows={tbd} kind={EARN_KINDS[2]} />)
+      if (!afterPlaced) out.push(<EarningsBlock key={`after-${date}`} rows={after} kind={EARN_AFTER} />)
+      if (tbd.length) out.push(<EarningsBlock key={`tbd-${date}`} rows={tbd} kind={EARN_TBD} />)
     }
     return out
   }

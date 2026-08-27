@@ -8,7 +8,7 @@
  * DIFFERENT pictures of the SAME numbers. Everything they must agree about
  * lives here and nowhere else:
  *
- *   - what "OI only" and "Volume only" mean per row,
+ *   - what "OI + Volume" and "Volume only" mean per row,
  *   - what "gamma mass" means,
  *   - the board they read (±3% of spot, widened on a coarse ladder — see
  *     `wideHalfOf`), the bin folding, the AUTO window rule,
@@ -96,14 +96,14 @@ export const YZONE = 18;
 
 export const BASIS_META: Record<GammaBasis, { tab: string; long: string; hint: string }> = {
   oi: {
-    tab: "OI",
-    long: "OI only",
-    hint: "γ × OI × S². Positioning carried into the session — the honest premarket read, since the volume leg is ~empty before 09:30.",
+    tab: "OI+VOL",
+    long: "OI + Volume",
+    hint: "γ × (OI + Volume) × S². The whole board: positioning carried into the session PLUS everything traded on top of it. SPX trades nearly around the clock, so the volume leg is never really empty and stripping it out understates the board.",
   },
   vol: {
     tab: "VOL",
     long: "Volume only",
-    hint: "γ × Volume × S². Today's trading only — near zero before 09:30, and the cleanest read on intraday repositioning once the session runs.",
+    hint: "γ × Volume × S². Today's trading only — the cleanest read on fresh repositioning, with the carried-in OI leg stripped out.",
   },
 };
 
@@ -133,14 +133,19 @@ export function fmtB(v: number, sign = true): string {
 /**
  * Net GEX for one row on `basis`.
  *
- * OI-only is `net − vol` — the SAME subtraction `oiLeg()` in Premarket.tsx
- * uses, which is why this card, the bell curve and the Key Levels tiles can
- * never disagree about what "OI" is. It is also correct for the server-summed
- * rows netGEXOf() falls back on (netGEX is the OI leg, netVolGEX the vol leg).
+ * The "oi" basis is the COMBINED board — `netGEXOf(r, "net")`, i.e. the OI leg
+ * plus the volume leg. It used to be `net − vol` (OI stripped bare), which made
+ * sense when the volume leg was genuinely empty before 09:30. SPX now trades
+ * nearly 24 hours, so by the time anyone opens /premarket there is real volume
+ * on the board and subtracting it out was throwing away half the picture. VOL
+ * stays the pure volume leg, so the two tabs are "everything" vs "today's
+ * trading only" and the difference between them IS the carried-in OI.
+ *
+ * Both legs come out of netGEXOf(), which is also correct for the server-summed
+ * rows it falls back on (netGEX is the OI leg, netVolGEX the vol leg).
  */
 export function rowNet(r: ChainRow, basis: GammaBasis, spot: number): number {
-  const vol = netGEXOf(r, "vol", spot);
-  return basis === "vol" ? vol : netGEXOf(r, "net", spot) - vol;
+  return basis === "vol" ? netGEXOf(r, "vol", spot) : netGEXOf(r, "net", spot);
 }
 
 /**
@@ -152,13 +157,8 @@ export function rowMass(r: ChainRow, basis: GammaBasis, spot: number): number {
   if (r.callGamma == null && r.putGamma == null && (r.netGEX != null || r.netVolGEX != null)) {
     return Math.abs(rowNet(r, basis, spot));
   }
-  const c = basis === "vol"
-    ? callGEXOf(r, "vol", spot)
-    : callGEXOf(r, "net", spot) - callGEXOf(r, "vol", spot);
-  const p = basis === "vol"
-    ? putGEXOf(r, "vol", spot)
-    : putGEXOf(r, "net", spot) - putGEXOf(r, "vol", spot);
-  return Math.abs(c) + Math.abs(p);
+  const leg = basis === "vol" ? "vol" : "net";
+  return Math.abs(callGEXOf(r, leg, spot)) + Math.abs(putGEXOf(r, leg, spot));
 }
 
 // ── distribution math ────────────────────────────────────────────────────────

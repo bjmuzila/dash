@@ -13,8 +13,8 @@ import { useCanvasRenderer, drawDivergingBars, drawLines } from './chart-render'
 // array, in this order. Adding a card type to the terminal is one entry here;
 // BoardPage and Board never need to change.
 //
-// THE BIG FOUR ARE lazy(). ES Candles, Multi Greek, Key Levels and the
-// Economic Calendar are each a real feature with its own module tree — ES
+// THE BIG FOUR ARE lazy(). GEX Candles, Multi Greek, Key Levels and the
+// Economic Calendar are each a real feature with its own module tree — GEX
 // Candles alone pulls lightweight-charts. Static imports would put all of them
 // in the board's route chunk and every user would pay for the three cards they
 // do not have on their board. lazy() means a card's code arrives when the card
@@ -25,7 +25,7 @@ import { useCanvasRenderer, drawDivergingBars, drawLines } from './chart-render'
 // few lines each and a chunk boundary would cost more than it saves.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const EsCandlesCard = lazy(() => import('./esCandles/EsCandlesCard').then((m) => ({ default: m.EsCandlesCard })))
+const GexCandlesCard = lazy(() => import('./gexCandles/GexCandlesCard').then((m) => ({ default: m.GexCandlesCard })))
 const MultiGreekCard = lazy(() => import('./multiGreek/MultiGreekCard').then((m) => ({ default: m.MultiGreekCard })))
 const KeyLevelsCard = lazy(() => import('./keyLevels/KeyLevelsCard').then((m) => ({ default: m.KeyLevelsCard })))
 const EconCalendarCard = lazy(() =>
@@ -201,12 +201,12 @@ function QuickLinksCard() {
 
 export const CARD_CATALOG: CardDef[] = [
   {
-    id: 'es-candles',
-    label: 'ES Candles',
+    id: 'gex-candles',
+    label: 'GEX Candles',
     defaultSize: { w: 8, h: 12 },
     render: () => (
       <Deferred>
-        <EsCandlesCard />
+        <GexCandlesCard />
       </Deferred>
     ),
   },
@@ -246,6 +246,28 @@ export const CARD_CATALOG: CardDef[] = [
 ]
 
 export const CARD_BY_ID = new Map(CARD_CATALOG.map((c) => [c.id, c]))
+
+/**
+ * Card ids that have been renamed, and what they are now.
+ *
+ * A saved board is a list of ids, and BoardPage drops any id the catalog does
+ * not know — which is right for a card that was deleted and wrong for one that
+ * was merely renamed: the user would open the board to find their chart gone
+ * and have to re-add and re-place it. Run every loaded id through here first.
+ *
+ * `es-candles` → `gex-candles`: the futures were dropped, so the card is no
+ * longer about ES.
+ * `multi-chart` → `multi-greek`: the ES-vs-NQ overlay was replaced outright by
+ * the Multi Greek ladder, which is what that slot is for now.
+ */
+const RENAMED: Record<string, string> = {
+  'es-candles': 'gex-candles',
+  'multi-chart': 'multi-greek',
+}
+
+export function migrateCardId(id: string): string {
+  return RENAMED[id] ?? id
+}
 
 /** A fresh grid item for a catalog entry, dropped at the bottom of `existing`. */
 export function placeNewCard(id: string, existing: BoardItem[]): BoardItem {

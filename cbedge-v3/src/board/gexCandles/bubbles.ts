@@ -65,7 +65,9 @@ function barIndexAt(barTimes: number[], ts: number): number {
   let ans = -1
   while (lo <= hi) {
     const mid = (lo + hi) >> 1
-    if (barTimes[mid] <= ts) {
+    const at = barTimes[mid]
+    if (at === undefined) break
+    if (at <= ts) {
       ans = mid
       lo = mid + 1
     } else {
@@ -86,11 +88,16 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleF
   //       it, because a mean of a gamma ladder is not a gamma ladder.
   const byBucket = new Map<number, GexColumn>()
   for (const col of columns) {
-    const key = bucketMs > 0 ? Math.floor(col.slotTs / bucketMs) * bucketMs : (() => {
-      const i = barIndexAt(barTimes, col.slotTs)
-      return i < 0 ? -1 : barTimes[i]
-    })()
-    if (key < 0) continue
+    let key: number
+    if (bucketMs > 0) {
+      key = Math.floor(col.slotTs / bucketMs) * bucketMs
+    } else {
+      // Whole-bar buckets key on the bar the snapshot falls in. A snapshot from
+      // before the first bar we hold has no bar to belong to and is dropped.
+      const barT = barTimes[barIndexAt(barTimes, col.slotTs)]
+      if (barT === undefined) continue
+      key = barT
+    }
     const prev = byBucket.get(key)
     if (!prev || col.slotTs >= prev.slotTs) byBucket.set(key, col)
   }
@@ -146,9 +153,8 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleF
     if (!marks.length) continue
     marks.sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
 
-    const bi = barIndexAt(barTimes, key)
-    if (bi < 0) continue
-    const barT = barTimes[bi]
+    const barT = barTimes[barIndexAt(barTimes, key)]
+    if (barT === undefined) continue
     const frac = bucketMs > 0 && intervalMs > 0 ? Math.min(0.999, Math.max(0, (key - barT) / intervalMs)) : 0
     frames.push({ barT, frac, marks })
   }
@@ -183,12 +189,6 @@ export interface DrawOpts {
   size: number
   curve: number
   intensity: number
-  /**
-   * ES−SPX basis, added to every strike before it is turned into a price.
-   * null means "no trustworthy basis" and the caller must not draw at all —
-   * see the note in chart.ts. Zero is a legitimate value for a cash chart.
-   */
-  basis: number
 }
 
 function rgba(c: [number, number, number], a: number): string {
@@ -226,7 +226,10 @@ export function drawBubbles(
     if (x < -20 || x > w + 20) continue
 
     for (const m of frame.marks) {
-      const y = geo.yOfPrice(m.strike + opts.basis)
+      // The strike IS the price. Every symbol v3 charts is charted against its
+      // own strikes, so there is no basis to add — that conversion existed only
+      // for the ES chart, whose axis was futures while its strikes were SPX.
+      const y = geo.yOfPrice(m.strike)
       if (y == null || y < -20 || y > h + 20) continue
 
       const shaped = opts.curve <= 1.001 ? m.ratio : Math.pow(m.ratio, opts.curve)

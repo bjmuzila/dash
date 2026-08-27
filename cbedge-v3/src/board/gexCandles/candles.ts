@@ -1,25 +1,24 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Candles for the ES Candles card: fetch, roll up, filter by session.
+// Candles for the GEX Candles card: fetch, roll up, filter by session.
 //
-// TWO ENDPOINTS, not one. The backend keeps futures and equities in different
-// tables and the routes are not interchangeable — /api/snapshots/candles only
-// looks at the symbol to decide ES vs NQ, so asking it for SPY silently hands
-// back ES bars. That silent-wrong-data failure is the reason the split lives
-// in one file with a comment on it.
+// ONE ENDPOINT, since ES and NQ were dropped:
 //
-//   es   → /api/snapshots/candles?daysBack&interval&limit&lite=1   (ES, NQ)
-//   etf  → /api/snapshots/etf-candles?symbol&days&interval         (everything else)
+//   /api/snapshots/etf-candles?symbol=&days=&interval=
+//     → { symbol, interval, days, source, rows: [{ timestamp, open, … }] }
 //
-// `lite=1` is not an optimisation flourish: the verbose form is SELECT * out of
-// Postgres, so BIGINT and REAL columns arrive as QUOTED STRINGS. The columnar
-// lite form is real JSON numbers, which is what lightweight-charts requires for
-// `time` and what every price comparison here assumes.
+// Every value on that route is a real JSON number (the handler coerces each
+// field). The futures route it replaced was SELECT * out of Postgres, so its
+// BIGINT and REAL columns arrived as QUOTED STRINGS and needed a columnar
+// `lite=1` mode to avoid them — none of which applies any more.
 //
-// Both endpoints return HTTP 200 on failure with an `error` key and no rows, so
-// nothing downstream may branch on res.ok alone.
+// The route returns HTTP 200 on failure, with an `error` key and no rows, so
+// nothing here may branch on res.ok alone.
+//
+// The recorder stores 1-minute bars and the route buckets to 1 or 5. Anything
+// coarser is rolled up client-side by rollup() below.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { CandleSource, SymbolDef } from './symbols'
+import type { SymbolDef } from './symbols'
 import type { Interval, Session } from './settings'
 
 export interface Bar {
@@ -32,7 +31,7 @@ export interface Bar {
   v: number
 }
 
-/** How many calendar days of history to pull. */
+/** How many calendar days of history to pull. The route clamps this to 1..30. */
 export const HISTORY_DAYS = 5
 
 // ── ET helpers ───────────────────────────────────────────────────────────────
@@ -75,13 +74,9 @@ export const RTH_CLOSE_MIN = 16 * 60 // 16:00 ET
 
 // ── Fetch ────────────────────────────────────────────────────────────────────
 
-interface LiteResponse {
-  lite?: number
-  cols?: string[]
-  rows?: unknown[][]
-}
-interface VerboseResponse {
+interface CandlesResponse {
   rows?: Array<Record<string, unknown>>
+  source?: string
   error?: string
 }
 
@@ -90,37 +85,8 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0
 }
 
-function fromLite(json: LiteResponse | null | undefined): Bar[] {
-  const cols = json?.cols ?? []
-  const idx = (name: string) => cols.indexOf(name)
-  const iT = idx('timestamp')
-  const iO = idx('open')
-  const iH = idx('high')
-  const iL = idx('low')
-  const iC = idx('close')
-  const iV = idx('volume')
-  if (iT < 0 || iC < 0) return []
-  const out: Bar[] = []
-  for (const r of json?.rows ?? []) {
-    const t = num(r[iT])
-    if (!t) continue
-    out.push({ t, o: num(r[iO]), h: num(r[iH]), l: num(r[iL]), c: num(r[iC]), v: iV >= 0 ? num(r[iV]) : 0 })
-  }
-  return out
-}
-
-function fromVerbose(json: VerboseResponse | null | undefined): Bar[] {
-  const out: Bar[] = []
-  for (const r of json?.rows ?? []) {
-    const t = num(r.timestamp)
-    if (!t) continue
-    out.push({ t, o: num(r.open), h: num(r.high), l: num(r.low), c: num(r.close), v: num(r.volume) })
-  }
-  return out
-}
-
 /**
- * The interval to ASK FOR. The recorders only store 1m and 5m; 15/30/60 are
+ * The interval to ASK FOR. The route only buckets to 1 or 5; 15/30/60 are
  * rolled up here. Everything above 5 pulls 5m bars — a 1h chart built from 1m
  * rows is twelve times the payload for an identical picture.
  */
@@ -129,13 +95,7 @@ export function nativeInterval(interval: Interval): 1 | 5 {
 }
 
 export function candlesUrl(def: SymbolDef, interval: Interval, days = HISTORY_DAYS): string {
-  const iv = nativeInterval(interval)
-  if (def.candleSource === 'es') {
-    const sym = def.key === 'NQ' ? '&symbol=%2FNQ' : ''
-    return `/api/snapshots/candles?daysBack=${days}&limit=20000&interval=${iv}&lite=1${sym}`
-  }
-  const sym = encodeURIComponent(def.candleSymbol ?? def.key)
-  return `/api/snapshots/etf-candles?symbol=${sym}&days=${days}&interval=${iv}`
+  return `/api/snapshots/etf-candles?symbol=${encodeURIComponent(def.key)}&days=${days}&interval=${nativeInterval(interval)}`
 }
 
 /**
@@ -145,17 +105,18 @@ export function candlesUrl(def: SymbolDef, interval: Interval, days = HISTORY_DA
  * empty series rather than throwing: the card is meant to render its frame,
  * toolbar and empty message while the data is still in the air.
  */
-export function parseCandles(source: CandleSource, json: unknown): Bar[] {
+export function parseCandles(json: unknown): Bar[] {
   if (!json || typeof json !== 'object') return []
-  const bars =
-    source === 'es' && (json as LiteResponse).lite
-      ? fromLite(json as LiteResponse)
-      : fromVerbose(json as VerboseResponse)
-  // The no-filter form of /api/snapshots/candles comes back DESC. Sorting is
-  // cheap on an already-sorted array and removes a whole class of "the chart
-  // drew backwards" bug.
-  bars.sort((a, b) => a.t - b.t)
-  return bars
+  const out: Bar[] = []
+  for (const r of (json as CandlesResponse).rows ?? []) {
+    const t = num(r.timestamp)
+    if (!t) continue
+    out.push({ t, o: num(r.open), h: num(r.high), l: num(r.low), c: num(r.close), v: num(r.volume) })
+  }
+  // Sorting an already-sorted array is cheap and removes a whole class of "the
+  // chart drew backwards" bug if the route's ordering ever changes.
+  out.sort((a, b) => a.t - b.t)
+  return out
 }
 
 // ── Roll-up ──────────────────────────────────────────────────────────────────
@@ -172,12 +133,10 @@ export function rollup(bars: Bar[], interval: Interval): Bar[] {
   let cur: Bar | null = null
   let curKey = ''
   for (const b of bars) {
-    const mins = etMinutesOfDay(b.t)
-    const offset = mins - RTH_OPEN_MIN
+    const offset = etMinutesOfDay(b.t) - RTH_OPEN_MIN
     // Math.floor, not a truncating divide: pre-market offsets are negative and
     // truncation would fold 09:25 and 09:35 into one bucket.
-    const bucket = Math.floor(offset / interval)
-    const key = `${etDateKey(b.t)}#${bucket}`
+    const key = `${etDateKey(b.t)}#${Math.floor(offset / interval)}`
     if (!cur || key !== curKey) {
       if (cur) out.push(cur)
       cur = { ...b }
@@ -198,8 +157,8 @@ export function rollup(bars: Bar[], interval: Interval): Bar[] {
  * as v2 does it: lightweight-charts' scale is index-based, so the 16:00 → 09:30
  * gap closes by itself and no session shading or timeScale surgery is needed.
  *
- * Falls back to the full series rather than to an empty chart — an overnight
- * symbol with no RTH rows yet should still draw something.
+ * Falls back to the full series rather than to an empty chart — a symbol with
+ * no RTH rows yet should still draw something.
  */
 export function filterSession(bars: Bar[], session: Session): Bar[] {
   if (session !== 'rth') return bars

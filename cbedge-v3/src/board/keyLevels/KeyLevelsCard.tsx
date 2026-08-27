@@ -25,22 +25,25 @@ import {
 //
 //   Call Wall · 0DTE Magnet · Spot · Max Pain · Gamma Flip · Put Wall
 //
-// Same order, same anatomy (label + chip / big number / ES sub-line / distance
-// + pill / migration line), same arithmetic — see levelsMath.ts, which is a
+// Same order, same anatomy (label + chip / big number / sub-line / distance +
+// pill / migration line), same arithmetic — see levelsMath.ts, which is a
 // straight transcription of Premarket.tsx's derivations so the two surfaces
 // cannot quietly disagree about what a level is.
 //
-// The one visible difference: v2's six tiles are all identical surfaces with no
-// per-tile accent (the `lvl call` / `lvl put` modifier classes it emits have no
-// CSS rule anywhere). This keeps that, because colour here would compete with
-// the only colour that carries meaning — the sign of the distance.
+// Two deliberate differences from v2:
+//
+//   · No ES sub-line. v2 prints "ES 6,880 · $1.24B" under each level because
+//     its charts are ES futures and its levels are SPX cash. v3 dropped the
+//     futures, so a level is quoted in the units it is already in and the whole
+//     /proxy/es-spx-basis path goes with it.
+//   · The tiles carry no per-level accent. v2's six emit `lvl call` / `lvl put`
+//     modifier classes that no CSS rule anywhere targets, so they render as
+//     identical surfaces — kept, because colour here would compete with the one
+//     colour that carries meaning: the sign of the distance.
 //
 // ── Where the numbers come from ──────────────────────────────────────────────
 //   the live `gex` frame     rows, callWall, putWall, gexFlip
-//   the live `spot` frame    spot
-//   /proxy/es-spx-basis      the ES sub-line's SPX→ES conversion. The socket's
-//                            own `basis` field is NOT usable — see the note on
-//                            SpotData in src/contract/frames.ts.
+//   the live `spot` frame    spot, prevClose
 //   /api/premarket-baseline  the "was → now" migration lines
 //
 // Max pain and the magnet are computed here rather than read: the server does
@@ -49,9 +52,6 @@ import {
 
 const BASIS_KEY = 'cb-v3-key-levels-basis'
 
-interface BasisResponse {
-  basis?: number | null
-}
 interface BaselineResponse {
   ok?: boolean
   date?: string
@@ -60,10 +60,6 @@ interface BaselineResponse {
   callWall?: number | null
   putWall?: number | null
   byStrike?: Record<string, number>
-}
-
-function isPlausibleBasis(b: unknown): b is number {
-  return typeof b === 'number' && Number.isFinite(b) && b > 0 && b < 250
 }
 
 function readBasisPref(): LevelBasis {
@@ -119,11 +115,16 @@ function Tile({
       <div className="tabular mt-1 truncate text-xl font-semibold tracking-tight text-fg">{value}</div>
       <div className="tabular truncate text-[10.5px] text-muted opacity-70">{sub}</div>
       <div className="mt-1.5 flex items-center justify-between gap-1.5 text-[11px]">
-        <span className={['tabular', distDir === 'up' ? 'text-up' : distDir === 'down' ? 'text-down' : 'text-muted opacity-70'].join(' ')}>
+        <span
+          className={[
+            'tabular',
+            distDir === 'up' ? 'text-up' : distDir === 'down' ? 'text-down' : 'text-muted opacity-70',
+          ].join(' ')}
+        >
           {dist}
         </span>
         {pill != null && (
-          <span className={['shrink-0 rounded-sm border px-1.5 py-px text-[10px] whitespace-nowrap', pillClass].join(' ')}>
+          <span className={['shrink-0 whitespace-nowrap rounded-sm border px-1.5 py-px text-[10px]', pillClass].join(' ')}>
             {pill}
           </span>
         )}
@@ -144,16 +145,14 @@ function MigLine({
   was,
   now,
   pct,
-  note,
 }: {
   tag?: string
   tone?: 'up' | 'down' | 'warn' | 'flip'
   was?: string
   now?: string
   pct?: string
-  note?: string
 }) {
-  if (!tag && !was && !note) return null
+  if (!tag && !was) return null
   const toneClass =
     tone === 'up'
       ? 'border-up text-up'
@@ -178,7 +177,6 @@ function MigLine({
           {pct ? ` · ${pct}` : ''}
         </span>
       )}
-      {note && <span className="tabular opacity-70">{note}</span>}
     </div>
   )
 }
@@ -190,10 +188,7 @@ export function KeyLevelsCard() {
 
   const gex = useField<GexFrame, GexData | null>('gex', (f) => f?.data ?? null)
   const spot = useField<SpotFrame, number>('spot', (f) => f?.data.spot ?? 0)
-
-  const basisQ = useQuery<BasisResponse>('/proxy/es-spx-basis', { staleMs: 300_000 })
-  const basis = isPlausibleBasis(basisQ.data?.basis) ? basisQ.data!.basis! : null
-  const es = (px: number | null | undefined) => (px == null || basis == null ? null : px + basis)
+  const prevClose = useField<SpotFrame, number>('spot', (f) => f?.data.prevClose ?? 0)
 
   const rows = gex?.gexRows ?? []
   const expiry = gex?.expiry ?? ''
@@ -228,6 +223,11 @@ export function KeyLevelsCard() {
   const distCall = callWall == null || !spot ? null : callWall - spot
   const distPut = putWall == null || !spot ? null : putWall - spot
   const distFlip = flip == null || !spot ? null : spot - flip
+
+  // Day change comes off the socket's own prevClose rather than a quotes call —
+  // it is already on the frame the spot arrives in.
+  const dayChange = spot && prevClose ? spot - prevClose : null
+  const dayPct = dayChange != null && prevClose ? (dayChange / prevClose) * 100 : null
 
   /** Prior-close gamma at a strike, on the baseline's basis. */
   const wasGexAt = (strike: number | null): number | null => {
@@ -283,12 +283,7 @@ export function KeyLevelsCard() {
           label="Call Wall"
           chip="resistance"
           value={fmtPx(callWall, kDp)}
-          sub={
-            <>
-              {es(callWall) != null && `ES ${fmtPx(es(callWall), 0)} · `}
-              {fmtUsd(wallGex.call, false)}
-            </>
-          }
+          sub={fmtUsd(wallGex.call, false)}
           dist={fmtPts(distCall)}
           distDir={distCall == null ? null : distCall >= 0 ? 'up' : 'down'}
           pill="untested o/n"
@@ -307,12 +302,7 @@ export function KeyLevelsCard() {
           label="0DTE Magnet"
           chip="max γ"
           value={magnet ? fmtPx(magnet.strike, kDp) : '—'}
-          sub={
-            <>
-              {es(magnet?.strike ?? null) != null && `ES ${fmtPx(es(magnet?.strike ?? null), 0)} · `}
-              {fmtUsd(magnet?.value ?? null, false)}
-            </>
-          }
+          sub={fmtUsd(magnet?.value ?? null, false)}
           dist={magnet && spot ? fmtPts(magnet.strike - spot) : '—'}
           distDir={null}
           pill={magnet && spot && Math.abs(magnet.strike - spot) <= pinEps ? 'pinning' : 'magnet'}
@@ -350,14 +340,28 @@ export function KeyLevelsCard() {
           label="Spot"
           chip="live"
           value={fmtPx(spot, pDp)}
-          sub={basis == null ? 'SPX cash' : `ES ${fmtPx(spot + basis, pDp)}`}
-          dist={gex?.updatedAt ? new Date(gex.updatedAt).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET' : '—'}
+          sub={
+            dayChange == null
+              ? 'waiting for the feed'
+              : `${dayChange >= 0 ? '+' : '−'}${Math.abs(dayChange).toFixed(pDp)} · ${fmtPct(dayPct)}`
+          }
+          dist={
+            gex?.updatedAt
+              ? `${new Date(gex.updatedAt).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' })} ET`
+              : '—'
+          }
           distDir={null}
           pill={null}
           mig={
             <MigLine
               tag={
-                spotMove == null ? undefined : Math.abs(spotMove) < pxEps ? 'flat o/n' : spotMove > 0 ? 'gap up' : 'gap down'
+                spotMove == null
+                  ? undefined
+                  : Math.abs(spotMove) < pxEps
+                    ? 'flat o/n'
+                    : spotMove > 0
+                      ? 'gap up'
+                      : 'gap down'
               }
               tone={spotMove == null || Math.abs(spotMove) < pxEps ? undefined : spotMove > 0 ? 'up' : 'down'}
               was={spotWas == null ? undefined : fmtPx(spotWas, pDp)}
@@ -375,7 +379,7 @@ export function KeyLevelsCard() {
           label="Max Pain"
           chip="front"
           value={fmtPx(maxPain, kDp)}
-          sub={es(maxPain) != null ? `ES ${fmtPx(es(maxPain), 0)}` : 'OI-weighted'}
+          sub="OI-weighted"
           dist={maxPain != null && spot ? fmtPts(maxPain - spot) : '—'}
           distDir={maxPain == null || !spot ? null : maxPain - spot >= 0 ? 'up' : 'down'}
           pill={maxPain != null && spot ? (maxPain >= spot ? 'drift ↑' : 'drift ↓') : null}
@@ -385,7 +389,7 @@ export function KeyLevelsCard() {
           label="Gamma Flip"
           chip="regime"
           value={fmtPx(flip, kDp)}
-          sub={es(flip) != null ? `ES ${fmtPx(es(flip), 0)} · zero γ` : 'zero γ'}
+          sub="zero γ"
           dist={fmtPts(distFlip)}
           distDir={distFlip == null ? null : distFlip >= 0 ? 'up' : 'down'}
           pill={distFlip == null ? null : distFlip >= 0 ? 'long γ' : 'short γ'}
@@ -412,12 +416,7 @@ export function KeyLevelsCard() {
           label="Put Wall"
           chip="support"
           value={fmtPx(putWall, kDp)}
-          sub={
-            <>
-              {es(putWall) != null && `ES ${fmtPx(es(putWall), 0)} · `}
-              {fmtUsd(wallGex.put, false)}
-            </>
-          }
+          sub={fmtUsd(wallGex.put, false)}
           dist={fmtPts(distPut)}
           distDir={distPut == null ? null : distPut >= 0 ? 'up' : 'down'}
           pill="untested"

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@/data/api'
-import { SegGroup, Slider, Popover, PanelSection, Chip } from '../esCandles/controls'
+import { SegGroup, Slider, Popover, PanelSection, Chip } from '../gexCandles/controls'
 import {
   BASIS_LABEL,
   EX0_KEY,
@@ -134,8 +134,9 @@ function TickerPanel({ ticker, anchor, colCount, basis, intensity, showLevels, o
   }, [display, valuesByCol, spot])
 
   const atm = useMemo(() => {
-    if (!spot || !rows.length) return null
-    return rows.reduce((best, s) => (Math.abs(s - spot) < Math.abs(best - spot) ? s : best), rows[0])
+    const first = rows[0]
+    if (!spot || first === undefined) return null
+    return rows.reduce((best, s) => (Math.abs(s - spot) < Math.abs(best - spot) ? s : best), first)
   }, [rows, spot])
 
   // Centre the ladder on the money whenever the ladder itself changes. Keyed on

@@ -53,7 +53,10 @@ export function fmtPct(v: number | null | undefined, dp = 2): string {
 export function strikeDp(rows: GexRow[], spot: number): number {
   let step = Infinity
   for (let i = 1; i < rows.length; i++) {
-    const d = Math.abs(rows[i].strike - rows[i - 1].strike)
+    const hi = rows[i]
+    const lo = rows[i - 1]
+    if (!hi || !lo) continue
+    const d = Math.abs(hi.strike - lo.strike)
     if (d > 0 && d < step) step = d
   }
   if (!Number.isFinite(step)) return spot >= 1000 ? 0 : 2
@@ -141,8 +144,8 @@ export function computeMagnet(rows: GexRow[], spot: number, basis: LevelBasis): 
     }
   })
   const window = sorted.slice(Math.max(0, nearest - NEAR_HALF), nearest + NEAR_HALF + 1)
-  if (!window.length) return null
   let best = window[0]
+  if (!best) return null
   let bestAbs = Math.abs(legValue(best, basis))
   for (const r of window) {
     const a = Math.abs(legValue(r, basis))
