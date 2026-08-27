@@ -14,10 +14,42 @@
  * Answers three questions before the open: what regime am I in, where are the
  * walls, what happened overnight.
  *
+ * ── ONE PAGE, EVERY SYMBOL (2026-08-27) ─────────────────────────────────────
+ * Every name on the picker — SPX plus the MAIN watchlist — renders THIS page,
+ * both tabs, all panels. There is no longer a reduced board for the non-socket
+ * symbols: components/pages/premarket/TickerBoard.tsx used to catch them and
+ * carried about a third of what is below, so SPY and QQQ silently lacked the
+ * regime strip, the level rail, the six Key Levels tiles and their prior-close
+ * migration lines, the scrolling profile, DEX/vanna, the expected-range track,
+ * the bell curve, the catalysts and the entire Post-Market recap. It is not
+ * mounted any more.
+ *
+ * What made that possible is that the swap below already existed for frozen
+ * sessions. A THIRD source now feeds the same destructuring:
+ *
+ *   useMobileGex   SPX, live socket.                      (sym === "SPX")
+ *   frozenGexOf    SPX, a captured past session.          (frozen)
+ *   useChainGex    any ticker, /api/chains on a 1m poll.  (everything else)
+ *
+ * All three hand over `{ chain, spot, flip, callWall, putWall, totalNetGex, … }`
+ * with RAW per-strike legs, and every memo and panel below reads only that. So
+ * a NVDA board is this page's own code computing NVDA's walls, CORE, max pain,
+ * expected move, DEX and playbook from NVDA's own chain — not a second
+ * implementation that can drift.
+ *
+ * The three things that are genuinely SPX-only are named as such on screen
+ * rather than faked: the ES basis and every "ES 6,812" sub-line (no future
+ * stands behind AAPL), frozen past sessions (the freeze captures the one symbol
+ * the socket carries), and the ES overnight window — for the other symbols the
+ * overnight panel reads that ticker's OWN recorded candles instead.
+ *
  * DATA SOURCES — all shared, none duplicated:
  *   useMobileGex        the one live-GEX layer (rides lib/gexSocket, refcounted,
  *                       pinned to today's 0DTE). Gives spot, prevClose, flip,
  *                       call/put wall, totalNetGex, esFut, basis and the chain.
+ *                       SPX only — the socket carries one symbol.
+ *   useChainGex         the same shape for any other ticker, off /api/chains on
+ *                       a 1-minute poll. See chainGex.ts.
  *   useEsCandles        5m ES bars incl. the overnight session → ON high/low and
  *                       the prior RTH close. Same socket.
  *   useEconCalendar     /api/calendar + /proxy/earnings-week → today's catalysts.
@@ -97,6 +129,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useMobileGex } from "@/hooks/useMobileGex";
 import { useEsCandles } from "@/hooks/useEsCandles";
+import { useEtfCandles } from "@/hooks/useEtfCandles";
 import { useEconCalendar } from "@/hooks/useEconCalendar";
 import { isStale } from "@/lib/econCalendar";
 import { SCANNER_MAIN } from "@/lib/scannerTickers";
@@ -104,7 +137,7 @@ import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/Post
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
 import GammaBellCurve, { GAMMA_BELL_CSS } from "@/components/pages/premarket/GammaBellCurve";
-import TickerBoard from "@/components/pages/premarket/TickerBoard";
+import { useChainGex } from "@/components/pages/premarket/chainGex";
 import {
   GEX_HISTORY_LIMIT,
   frozenGexOf,
@@ -533,11 +566,12 @@ const DATE_KEY = "cb-premarket-date-v1";
 const SESSION_COUNT = GEX_HISTORY_LIMIT;
 
 /**
- * SPX is the live board — it owns the socket, the ES basis, the overnight
- * window and the per-minute recorded ladder. Every other symbol rides
- * /api/chains on a one-minute poll and renders through TickerBoard, which
- * carries only the panels that path can honestly fill and says so on the page.
- * Listing a symbol here is NOT a way to give it the SPX panels.
+ * SPX is the live board — it owns the socket, the ES basis and the ES overnight
+ * window. Every other symbol rides /api/chains on a one-minute poll
+ * (useChainGex) and renders THIS SAME PAGE off it: same memos, same panels,
+ * both tabs. What a non-SPX board does not get is the handful of things that
+ * are physically SPX's, and those are named on screen rather than faked — the
+ * ES basis, the "ES 6,812" sub-lines, and frozen past sessions.
  *
  * ── 2026-08-27: the MAIN watchlist, not three hand-typed names ─────────────
  * This used to be ["SPX", "SPY", "QQQ"]. It is now SPX plus the MAIN group of
@@ -552,8 +586,8 @@ const SESSION_COUNT = GEX_HISTORY_LIMIT;
  *     so the Post-Market "Level grades" card reads a real recorded,
  *     server-classified verdict for every name offered here, not just for the
  *     three that used to be listed.
- *   • /api/expirations + /api/chains are per-ticker already; useTickerBoard
- *     took `ticker` from the start.
+ *   • /api/expirations + /api/chains are per-ticker already — that is what
+ *     useChainGex rides.
  * A name outside MAIN would still render, but its wall log would be empty and
  * its chain unswept — which is the reason this is a fixed list and not a free
  * text box.
@@ -835,9 +869,9 @@ export default function Premarket() {
   // selected, so the SPX feed keeps flowing while you read NVDA and switching
   // back is instant with no reconnect. That costs nothing extra — gexSocket is
   // one refcounted connection shared with the toolbar and every other consumer,
-  // and it would stay open for them anyway. TickerBoard's own poll only starts
-  // when it mounts and is keyed on `ticker`, so at most one chain is being
-  // polled at a time no matter how many symbols the picker offers.
+  // and it would stay open for them anyway. useChainGex's poll is keyed on
+  // `sym` and disabled entirely while SPX is on screen, so at most one chain is
+  // being polled at a time no matter how many symbols the picker offers.
   const [sym, setSym] = useState<Symbol_>("SPX");
   useEffect(() => {
     try {
@@ -945,6 +979,14 @@ export default function Premarket() {
   // on a frozen date are all recomputed here, now, by the same code that runs
   // live. Only the numbers going in are old.
   const liveGex = useMobileGex("oi-vol");
+  /**
+   * The chain-poll board — the third source, and the one that lets every
+   * non-SPX symbol render this page instead of a cut-down one. Disabled while
+   * SPX is on screen (the socket is already carrying it) and on a historical
+   * date (those are SPX-only), so at most one chain is being polled at a time.
+   * See chainGex.ts for why this is REST and not a second socket subscription.
+   */
+  const chainGex = useChainGex(sym, sym !== "SPX" && !isHistorical);
   const { pre: freezePre, post: freezePost, state: freezeState } =
     useSessionFreeze(sessionDate, isHistorical);
 
@@ -959,7 +1001,7 @@ export default function Premarket() {
   /** True when the chosen date has a capture the page can actually render. */
   const frozen = isHistorical && !!frozenGex;
 
-  const gex = frozen && frozenGex ? frozenGex : liveGex;
+  const gex = frozen && frozenGex ? frozenGex : sym === "SPX" ? liveGex : chainGex;
   const {
     chain, spot, flip, callWall, putWall, totalNetGex,
     esFut, basis, expiry, isZeroDte, connected, hasData, updatedAt, source,
@@ -981,6 +1023,18 @@ export default function Premarket() {
   const { sessionCandles: liveCandles, historical: liveHistory } =
     useEsCandles(true, 8, 5, false);
   const { rows: datedCandles } = useDatedEsCandles(sessionDate, frozen);
+  /**
+   * The non-SPX overnight series. Same record shape as the ES bars (that is the
+   * whole point of useEtfCandles), read from `etf_candles` — which since the
+   * 2026-08-27 recorder split covers the MAIN watchlist on the hot lane, with a
+   * live dxLink fallback server-side for anything the table has not written
+   * yet. Empty symbol = the hook is off, which is how SPX turns it off.
+   *
+   * 8 days, matching the ES call below and for the same reason: `daysBack` is
+   * CALENDAR days and the prior TRADING session is three of them back on a
+   * Monday, four after a holiday.
+   */
+  const { rows: symCandles } = useEtfCandles(sym === "SPX" ? "" : sym, 8, 5);
 
   /**
    * The pool `overnight` reads — deliberately NOT the hook's clipped
@@ -1005,8 +1059,9 @@ export default function Premarket() {
    */
   const candlePool = useMemo(
     () => (frozen ? datedCandles
-      : liveHistory.length ? [...liveHistory, ...liveCandles] : liveCandles),
-    [frozen, datedCandles, liveHistory, liveCandles]);
+      : sym !== "SPX" ? symCandles
+        : liveHistory.length ? [...liveHistory, ...liveCandles] : liveCandles),
+    [frozen, datedCandles, sym, symCandles, liveHistory, liveCandles]);
 
   /**
    * The session the page DESCRIBES. Live it is today; frozen it is the picked
@@ -1038,7 +1093,14 @@ export default function Premarket() {
       // "BROKE THE PUT WALL" card off a low SPX never traded. The route already
       // maps SPX → ^GSPC (server-v2/api-router.js), so this is one more symbol
       // on a call the page was making anyway — no new endpoint, no new poll.
-      const r = await fetch("/api/quotes-batch?symbols=SPX,/ES,/NQ,VIX", { cache: "no-store" });
+      // …and the SYMBOL ON SCREEN, for exactly the same reason: the recap needs
+      // that symbol's own prior close, and the Spot tile its day change. The
+      // route maps SPX → ^GSPC / VIX → ^VIX / NDX → ^NDX and passes an equity
+      // ticker straight through, so this stays one call however the picker
+      // moves. ES/NQ/VIX stay in the batch on every symbol — they are market
+      // context, not SPX trivia, and the panel that prints them is unchanged.
+      const extra = ["SPX", "/ES", "/NQ", "VIX"].includes(sym) ? "" : `,${sym}`;
+      const r = await fetch(`/api/quotes-batch?symbols=SPX,/ES,/NQ,VIX${extra}`, { cache: "no-store" });
       if (!r.ok) return;
       const j = await r.json();
       const items: any[] = j?.data?.items ?? [];
@@ -1054,7 +1116,7 @@ export default function Premarket() {
       }
       setQuotes(map);
     } catch { /* keep last good */ }
-  }, []);
+  }, [sym]);
 
   const loadMq = useCallback(async () => {
     try {
@@ -1109,12 +1171,13 @@ export default function Premarket() {
    * close, and the "vs prior close" chip would be measuring the wrong gap
    * entirely while looking perfectly normal.
    */
-  const loadBaseline = useCallback(async (exp: string, asOf?: string) => {
+  const loadBaseline = useCallback(async (exp: string, symbol: string, asOf?: string) => {
     const gen = ++baselineGen.current;
     setBaselineState("loading");
     try {
       const r = await fetch(
         `/api/premarket-baseline?expiry=${encodeURIComponent(exp)}&basis=oi` +
+          `&symbol=${encodeURIComponent(symbol)}` +
           (asOf ? `&today=${encodeURIComponent(asOf)}` : ""),
         { cache: "no-store" });
       if (gen !== baselineGen.current) return;
@@ -1136,11 +1199,12 @@ export default function Premarket() {
 
   useEffect(() => {
     if (!expiry) return;
-    // Clear first: a stale baseline for the PREVIOUS expiry would silently
-    // diff today's chain against the wrong session's board.
+    // Clear first: a stale baseline for the PREVIOUS expiry — or, now, the
+    // previous SYMBOL — would silently diff today's chain against the wrong
+    // board. Same strikes, plausible numbers, nothing on screen naming it.
     setBaseline(null);
-    void loadBaseline(expiry, frozen ? viewDate : undefined);
-  }, [expiry, loadBaseline, frozen, viewDate]);
+    void loadBaseline(expiry, sym, frozen ? viewDate : undefined);
+  }, [expiry, sym, loadBaseline, frozen, viewDate]);
 
   // ── derived from the chain ─────────────────────────────────────────────────
   const perStrike = useMemo(() => {
@@ -1150,6 +1214,46 @@ export default function Premarket() {
       .filter((r) => Number.isFinite(r.net))
       .sort((a, b) => a.strike - b.strike);
   }, [chain, spot]);
+
+  /**
+   * ── SCALE ──────────────────────────────────────────────────────────────────
+   * Everything below used to be written for SPX, where a level is a whole
+   * number, a "point" is ~0.015% of price and 10 points is a pin. None of that
+   * survives contact with a $180 name: `fmtPx(strike, 0)` turns a 187.50 strike
+   * into "188", and a 1-point threshold that means "noise" on SPX means 0.6% on
+   * NVDA — the difference between "flat overnight" and a real gap.
+   *
+   * So three values are derived from the board itself and used everywhere a
+   * literal used to be. On SPX they evaluate to exactly what was hard-coded, so
+   * the SPX page is unchanged to the digit.
+   */
+  /** Strike/level decimals — read off the ladder's own step. */
+  const kDp = useMemo(() => {
+    let step = Infinity;
+    for (let i = 1; i < perStrike.length; i++) {
+      const d = Math.abs(perStrike[i].strike - perStrike[i - 1].strike);
+      if (d > 0 && d < step) step = d;
+    }
+    if (!Number.isFinite(step)) return spot >= 1000 ? 0 : 2;
+    return step < 0.5 ? 2 : step < 1 ? 1 : 0;
+  }, [perStrike, spot]);
+  /** Traded-price decimals. SPX/NDX print whole; anything under 1000 prints cents. */
+  const pxDp = spot >= 1000 ? 0 : 2;
+  /**
+   * One "point" on THIS symbol, as a share of price rather than a literal.
+   * 0.015% of spot is 1.0 on a 6,800 SPX — i.e. the constant it replaces — and
+   * 0.03 on a $180 name, which is what "no move" actually looks like there.
+   */
+  const pxEps = Math.max(0.01, spot * 0.00015);
+  /** "Pinned to the magnet" distance. 0.15% of spot ≈ the 10 SPX points it replaces. */
+  const pinEps = Math.max(0.05, spot * 0.0015);
+  /**
+   * The live reference price for the gap and the overnight marker. SPX reads
+   * the ES future because cash SPX does not trade overnight; every other symbol
+   * trades its own extended session, so its own last IS the reference and
+   * running it through a basis would be inventing a price.
+   */
+  const livePx = sym === "SPX" ? esFut : spot;
 
   /**
    * TWO windows around spot, deliberately different sizes.
@@ -1446,19 +1550,24 @@ export default function Premarket() {
    * hard, while a gap inside the range is in known territory and fills far more
    * often.
    */
-  const GAP_EPS = 0.25; // ES ticks — below this there is no gap to talk about
+  /**
+   * Below this there is no gap to talk about. Was a flat 0.25 — one ES tick —
+   * which on a $30 name is a 0.8% move being called "flat". Scaled to price, it
+   * is still ~0.27 on SPX.
+   */
+  const gapEps = Math.max(0.01, spot * 0.00004);
 
   const gap = useMemo(() => {
     const pdc = overnight?.pdc;
     if (pdc == null || !(pdc > 0)) return null;
     const openPx = overnight?.openPx ?? null;
     const projected = openPx == null;
-    const ref = openPx ?? (esFut > 0 ? esFut : null);
+    const ref = openPx ?? (livePx > 0 ? livePx : null);
     if (ref == null) return null;
 
     const pts = ref - pdc;
     const pct = (pts / pdc) * 100;
-    const flat = Math.abs(pts) < GAP_EPS;
+    const flat = Math.abs(pts) < gapEps;
     const up = pts > 0;
 
     // Fill only counts from the RTH bars, and only once there is an open.
@@ -1477,14 +1586,14 @@ export default function Premarket() {
       : Math.max(0, Math.min(100, ((ref - extreme) / (ref - pdc)) * 100));
 
     // Distance from the LIVE price back to the close.
-    const last = esFut > 0 ? esFut : ref;
+    const last = livePx > 0 ? livePx : ref;
     const remaining = filled ? 0 : pdc - last;
 
     const pd = overnight?.pd ?? null;
     const outside = pd ? ref > pd.hi || ref < pd.lo : null;
 
     return { pts, pct, projected, flat, up, filled, retrace, remaining, outside, openPx, pdc, pd };
-  }, [overnight, esFut]);
+  }, [overnight, livePx, gapEps]);
 
   // ── catalysts for the session on screen ────────────────────────────────────
   // Keyed to viewDate, so a frozen date asks for THAT day's catalysts. The
@@ -1528,6 +1637,8 @@ export default function Premarket() {
         : viewMin < RTH_CLOSE_MIN ? "RTH open" : "after the close";
 
   const esQ = quotes["/ES"], nqQ = quotes["/NQ"], vixQ = quotes["VIX"], spxQ = quotes["SPX"];
+  /** The quote for the symbol on screen — SPX's own on the SPX board. */
+  const symQ = sym === "SPX" ? spxQ : quotes[sym];
 
   const onRange = overnight?.hi != null && overnight?.lo != null ? overnight.hi - overnight.lo : null;
 
@@ -1682,7 +1793,15 @@ export default function Premarket() {
     return { marks: placed, band, lo, hi, span };
   }, [putWall, callWall, flip, coreBullseye, spot]);
 
-  const feedLabel = source === "live" ? (connected ? "LIVE" : "RECONNECTING") : source === "rest" ? "REST FALLBACK" : "PAUSED";
+  /**
+   * "REST FALLBACK" is a warning on SPX — the socket went quiet and the page
+   * dropped to polling. On a chain-poll symbol the poll IS the design, so it is
+   * labelled as what it is rather than as a degraded socket.
+   */
+  const feedLabel = sym !== "SPX" && !frozen
+    ? (connected ? "CHAIN POLL · 1m" : "CHAIN POLL · retrying")
+    : source === "live" ? (connected ? "LIVE" : "RECONNECTING")
+      : source === "rest" ? "REST FALLBACK" : "PAUSED";
 
   /**
    * A past date with NO capture. This — not `isHistorical` — is what disables
@@ -1720,9 +1839,9 @@ export default function Premarket() {
               one-of-many controls in this head look like one another.
 
               SPX only on a frozen session: the freeze captures the one symbol
-              the socket carries, and TickerBoard's boards are a live chain poll
-              with no per-date form. Disabling the options beats rendering an SPX
-              page under an NVDA label. */}
+              the socket carries, and a chain poll has no per-date form — there
+              is no stored NVDA chain for last Tuesday to render. Disabling the
+              options beats rendering an SPX page under an NVDA label. */}
           <span className="dsel">
             <select
               value={sym}
@@ -1811,15 +1930,18 @@ export default function Premarket() {
              would have to invent the chain they render. HistoricalRecap shows
              the per-date stores that DO go back instead. */
           <HistoricalRecap date={sessionDate} symbol={sym} />
-        ) : sym !== "SPX" && !frozen ? (
-          <TickerBoard ticker={sym} view={tab} etDate={etDate} />
         ) : tab === "post" ? (
           <PostMarketTab
+            /* The recap runs for every symbol now — same component, same
+               panels, that symbol's own recorded ladder, price path and wall
+               log. `symbol` is what routes all three; it is not a label. */
+            symbol={sym}
             spot={spot}
-            /* SPX's own prior close. The recap is an SPX surface — it takes no
-               ES prop at all any more, so there is no path by which a futures
-               price can become an SPX one. See PostMarketTab's header. */
-            spxPrevClose={spxQ?.prevClose ?? null}
+            /* The symbol's OWN prior close, from /api/quotes-batch. The recap
+               takes no ES prop at all — a futures price run through a basis is
+               not a cash price, and doing that is what once graded a put wall
+               BROKEN off a low SPX never traded. See PostMarketTab's header. */
+            prevClose={symQ?.prevClose ?? null}
             flip={flip}
             callWall={callWall}
             putWall={putWall}
@@ -1872,7 +1994,7 @@ export default function Premarket() {
             <div className="kpi">
               <div className="k">Gamma Flip</div>
               <div className="v mono">
-                {fmtPx(flip, 0)}{" "}
+                {fmtPx(flip, kDp)}{" "}
                 <small className={distFlip == null ? undefined : distFlip >= 0 ? "chg-pos" : "chg-neg"}>
                   {distFlip == null ? "" : `${fmtPts(distFlip)} / ${fmtPct((distFlip / spot) * 100)}`}
                 </small>
@@ -1880,18 +2002,26 @@ export default function Premarket() {
             </div>
             <div className="vr" />
             <div className="kpi">
-              <div className="k">SPX / ES</div>
+              {/* ES only where an ES exists. On every other symbol this is the
+                  ticker's own last and its day change — not a futures price
+                  shifted by a basis, which would be a price that never traded. */}
+              <div className="k">{sym === "SPX" ? "SPX / ES" : sym}</div>
               <div className="v mono">
-                {fmtPx(spot, 0)} <small>· ES {fmtPx(esFut, 2)}</small>
+                {fmtPx(spot, pxDp)}{" "}
+                {sym === "SPX"
+                  ? <small>· ES {fmtPx(esFut, 2)}</small>
+                  : <small className={(symQ?.change ?? 0) >= 0 ? "chg-pos" : "chg-neg"}>
+                      {symQ?.pct != null ? fmtPct(symQ.pct) : "·"}
+                    </small>}
               </div>
             </div>
             <div className={`bias${posGamma ? "" : " neg"}`}>
               <div className="t">{posGamma ? "Range day — fade the walls" : "Trend day — follow the breaks"}</div>
               <div className="d">
                 {distFlip == null ? "Flip unavailable — no crossing in the current chain."
-                  : `${distFlip >= 0 ? "Above" : "Below"} flip by ${nf(Math.abs(distFlip), 0)} pts. ${posGamma
-                    ? `Suppression regime until ${fmtPx(flip, 0)} breaks.`
-                    : `Acceleration regime until ${fmtPx(flip, 0)} is reclaimed.`}`}
+                  : `${distFlip >= 0 ? "Above" : "Below"} flip by ${nf(Math.abs(distFlip), pxDp)} pts. ${posGamma
+                    ? `Suppression regime until ${fmtPx(flip, kDp)} breaks.`
+                    : `Acceleration regime until ${fmtPx(flip, kDp)} is reclaimed.`}`}
               </div>
             </div>
           </div>
@@ -1902,7 +2032,7 @@ export default function Premarket() {
               <h3>GEX Levels · one axis</h3>
               <span className="tiny">
                 {rail
-                  ? `${fmtPx(rail.lo, 0)} – ${fmtPx(rail.hi, 0)} · ${nf(rail.span, 0)} pts`
+                  ? `${fmtPx(rail.lo, kDp)} – ${fmtPx(rail.hi, kDp)} · ${nf(rail.span, pxDp)} pts`
                   : "waiting for the chain"}
               </span>
             </div>
@@ -1928,7 +2058,7 @@ export default function Premarket() {
                       <div className="n2" style={{ color: m.color }}>
                         {m.code}<span className="ln"> · {m.name}</span>
                       </div>
-                      <div className="v2 mono">{fmtPx(m.px, 0)}</div>
+                      <div className="v2 mono">{fmtPx(m.px, kDp)}</div>
                       <div className="d2 mono">
                         {m.code === "SPOT"
                           ? (es(m.px) != null ? `ES ${fmtPx(es(m.px), 0)}` : "live")
@@ -1980,7 +2110,7 @@ export default function Premarket() {
           <div className="levels">
             <div className="lvl call">
               <div className="name">Call Wall <em>resistance</em></div>
-              <div className="px mono">{fmtPx(callWall, 0)}</div>
+              <div className="px mono">{fmtPx(callWall, kDp)}</div>
               <div className="es mono">
                 {es(callWall) != null ? `ES ${fmtPx(es(callWall), 0)} · ` : ""}{fmtUsd(wallGex.call, false)}
               </div>
@@ -2004,8 +2134,8 @@ export default function Premarket() {
                     was={m.gex ? fmtUsd(m.gex.was, false) : null}
                     now={m.gex ? fmtUsd(m.gex.now, false) : null}
                     pct={m.gex?.pct != null ? fmtPct(m.gex.pct, 0) : null}
-                    note={m.px && Math.abs(m.px.move) >= 1
-                      ? `wall moved ${fmtPts(m.px.move)} from ${fmtPx(m.px.was, 0)}`
+                    note={m.px && Math.abs(m.px.move) >= pxEps
+                      ? `wall moved ${fmtPts(m.px.move)} from ${fmtPx(m.px.was, kDp)}`
                       : null}
                   />
                 );
@@ -2014,7 +2144,7 @@ export default function Premarket() {
 
             <div className="lvl magnet">
               <div className="name">0DTE Magnet <em>max γ</em></div>
-              <div className="px mono">{magnet ? fmtPx(magnet.strike, 0) : "—"}</div>
+              <div className="px mono">{magnet ? fmtPx(magnet.strike, kDp) : "—"}</div>
               <div className="es mono">
                 {magnet && es(magnet.strike) != null ? `ES ${fmtPx(es(magnet.strike), 0)} · ` : ""}
                 {/* Value on the SELECTED basis; the STRIKE stays the OI+Vol pick
@@ -2025,7 +2155,7 @@ export default function Premarket() {
               </div>
               <div className="dist">
                 <span className="mono">{magnet ? fmtPts(magnet.strike - spot) : "—"}</span>
-                <span className="pill">{magnet && Math.abs(magnet.strike - spot) <= 10 ? "pinning" : "magnet"}</span>
+                <span className="pill">{magnet && Math.abs(magnet.strike - spot) <= pinEps ? "pinning" : "magnet"}</span>
               </div>
               {/* A magnet that changed SIGN overnight is the single most useful
                   thing this tile can report: a +γ pin that went −γ stopped being
@@ -2047,19 +2177,23 @@ export default function Premarket() {
 
             <div className="lvl spot">
               <div className="name">Spot <em>live</em></div>
-              <div className="px mono">{fmtPx(spot, 0)}</div>
+              <div className="px mono">{fmtPx(spot, pxDp)}</div>
               <div className="es mono">
-                ES {fmtPx(esFut, 2)}{esQ?.pct != null ? ` · ${fmtPct(esQ.pct)}` : ""}
+                {sym === "SPX"
+                  ? <>ES {fmtPx(esFut, 2)}{esQ?.pct != null ? ` · ${fmtPct(esQ.pct)}` : ""}</>
+                  : <>{symQ?.change != null
+                        ? `${symQ.change >= 0 ? "+" : "−"}${Math.abs(symQ.change).toFixed(2)}`
+                        : "—"}{symQ?.pct != null ? ` · ${fmtPct(symQ.pct)}` : ""}</>}
               </div>
               <div className="dist"><span className="mono muted">{openLabel}</span></div>
               {/* The overnight gap, from the baseline's own settle — the number
                   every level on this row has re-priced against. */}
               {migration.spot && (
                 <MigLine
-                  tag={Math.abs(migration.spot.move) < 1 ? "flat o/n" : (migration.spot.move > 0 ? "gap up" : "gap down")}
-                  tagClass={Math.abs(migration.spot.move) < 1 ? "" : (migration.spot.move > 0 ? "up" : "down")}
-                  was={fmtPx(migration.spot.was, 0)}
-                  now={fmtPx(migration.spot.now, 0)}
+                  tag={Math.abs(migration.spot.move) < pxEps ? "flat o/n" : (migration.spot.move > 0 ? "gap up" : "gap down")}
+                  tagClass={Math.abs(migration.spot.move) < pxEps ? "" : (migration.spot.move > 0 ? "up" : "down")}
+                  was={fmtPx(migration.spot.was, pxDp)}
+                  now={fmtPx(migration.spot.now, pxDp)}
                   pct={fmtPts(migration.spot.move)}
                 />
               )}
@@ -2067,7 +2201,7 @@ export default function Premarket() {
 
             <div className="lvl pain">
               <div className="name">Max Pain <em>{isZeroDte ? "0DTE" : "front"}</em></div>
-              <div className="px mono">{fmtPx(maxPain, 0)}</div>
+              <div className="px mono">{fmtPx(maxPain, kDp)}</div>
               <div className="es mono">{es(maxPain) != null ? `ES ${fmtPx(es(maxPain), 0)}` : "OI-weighted"}</div>
               <div className="dist">
                 <span className={`mono ${maxPain != null && maxPain - spot >= 0 ? "chg-pos" : "chg-neg"}`}>
@@ -2083,7 +2217,7 @@ export default function Premarket() {
 
             <div className="lvl flip">
               <div className="name">Gamma Flip <em>regime</em></div>
-              <div className="px mono">{fmtPx(flip, 0)}</div>
+              <div className="px mono">{fmtPx(flip, kDp)}</div>
               <div className="es mono">{es(flip) != null ? `ES ${fmtPx(es(flip), 0)} · zero γ` : "zero γ"}</div>
               <div className="dist">
                 <span className={`mono ${distFlip != null && distFlip >= 0 ? "chg-pos" : "chg-neg"}`}>{fmtPts(distFlip)}</span>
@@ -2098,19 +2232,19 @@ export default function Premarket() {
                   is a LEVEL move and never labelled as a gamma Δ. */}
               {migration.flip && (
                 <MigLine
-                  tag={Math.abs(migration.flip.move) < 1
+                  tag={Math.abs(migration.flip.move) < pxEps
                     ? "held"
-                    : (migration.flip.move > 0 ? `rose ${nf(migration.flip.move, 0)}` : `fell ${nf(Math.abs(migration.flip.move), 0)}`)}
-                  tagClass={Math.abs(migration.flip.move) < 1 ? "" : "flipt"}
-                  was={fmtPx(migration.flip.was, 2)}
-                  now={fmtPx(migration.flip.now, 2)}
+                    : (migration.flip.move > 0 ? `rose ${nf(migration.flip.move, pxDp)}` : `fell ${nf(Math.abs(migration.flip.move), pxDp)}`)}
+                  tagClass={Math.abs(migration.flip.move) < pxEps ? "" : "flipt"}
+                  was={fmtPx(migration.flip.was, kDp)}
+                  now={fmtPx(migration.flip.now, kDp)}
                 />
               )}
             </div>
 
             <div className="lvl put">
               <div className="name">Put Wall <em>support</em></div>
-              <div className="px mono">{fmtPx(putWall, 0)}</div>
+              <div className="px mono">{fmtPx(putWall, kDp)}</div>
               <div className="es mono">
                 {es(putWall) != null ? `ES ${fmtPx(es(putWall), 0)} · ` : ""}{fmtUsd(wallGex.put, false)}
               </div>
@@ -2134,8 +2268,8 @@ export default function Premarket() {
                     was={m.gex ? fmtUsd(m.gex.was, false) : null}
                     now={m.gex ? fmtUsd(m.gex.now, false) : null}
                     pct={m.gex?.pct != null ? fmtPct(m.gex.pct, 0) : null}
-                    note={m.px && Math.abs(m.px.move) >= 1
-                      ? `wall moved ${fmtPts(m.px.move)} from ${fmtPx(m.px.was, 0)}`
+                    note={m.px && Math.abs(m.px.move) >= pxEps
+                      ? `wall moved ${fmtPts(m.px.move)} from ${fmtPx(m.px.was, kDp)}`
                       : null}
                   />
                 );
@@ -2168,7 +2302,7 @@ export default function Premarket() {
                   const tag = tagFor(b.strike);
                   return (
                     <div className={`row${tag ? " key" : ""}`} key={b.strike}>
-                      <div className="k mono">{nf(b.strike, 0)}</div>
+                      <div className="k mono">{nf(b.strike, kDp)}</div>
                       <div className="track">
                         <div
                           className={`bar ${pos ? "p" : "n"}${Math.abs(b.net) > bigCut ? "" : " dimmed"}`}
@@ -2209,12 +2343,12 @@ export default function Premarket() {
                 })}
                 {rowTop(spotStrike) != null && (
                   <div className="spotline" style={{ top: rowTop(spotStrike) as number }}>
-                    <span>SPOT {fmtPx(spot, 0)}</span>
+                    <span>SPOT {fmtPx(spot, pxDp)}</span>
                   </div>
                 )}
                 {rowTop(flipStrike) != null && (
                   <div className="flipline" style={{ top: rowTop(flipStrike) as number }}>
-                    <span>FLIP {fmtPx(flip, 0)}</span>
+                    <span>FLIP {fmtPx(flip, kDp)}</span>
                   </div>
                 )}
               </div>
@@ -2253,26 +2387,30 @@ export default function Premarket() {
 
             {/* OVERNIGHT */}
             <div className="col">
-              <div className="colhead"><h3>Overnight Context</h3><span className="tiny">ES · 18:00 → {String(Math.floor(etMin / 60)).padStart(2, "0")}:{String(etMin % 60).padStart(2, "0")} ET</span></div>
+              {/* SPX's overnight is the ES Globex session, 18:00 on. A stock's
+                  is its own extended session, which starts at 04:00 — same
+                  window logic (everything before today's 09:30), different
+                  instrument and a different hour, so the label says which. */}
+              <div className="colhead"><h3>Overnight Context</h3><span className="tiny">{sym === "SPX" ? "ES · 18:00" : `${sym} · ext`} → {String(Math.floor(etMin / 60)).padStart(2, "0")}:{String(etMin % 60).padStart(2, "0")} ET</span></div>
 
               <div className="onrange">
                 {overnight?.lo != null && overnight?.hi != null ? (
                   <>
-                    <div className="cap top" style={{ left: "12%", color: "var(--pos)" }}>ON low {fmtPx(overnight.lo, 0)}</div>
-                    <div className="cap top" style={{ left: "88%", color: "var(--neg)" }}>ON high {fmtPx(overnight.hi, 0)}</div>
+                    <div className="cap top" style={{ left: "12%", color: "var(--pos)" }}>ON low {fmtPx(overnight.lo, pxDp)}</div>
+                    <div className="cap top" style={{ left: "88%", color: "var(--neg)" }}>ON high {fmtPx(overnight.hi, pxDp)}</div>
                     <div className="bar2"><div className="fill" style={{ left: "12%", right: "12%" }} /></div>
                     <div className="mk" style={{ left: "12%", background: "var(--pw)" }} />
                     <div className="mk" style={{ left: "88%", background: "var(--cw)" }} />
-                    {onPos(esFut) != null && (
+                    {onPos(livePx) != null && (
                       <>
-                        <div className="mk" style={{ left: `${onPos(esFut)}%`, background: "#fff", height: 34, top: 9 }} />
-                        <div className="cap bot" style={{ left: `${onPos(esFut)}%`, color: "#fff" }}>ES {fmtPx(esFut, 0)}</div>
+                        <div className="mk" style={{ left: `${onPos(livePx)}%`, background: "#fff", height: 34, top: 9 }} />
+                        <div className="cap bot" style={{ left: `${onPos(livePx)}%`, color: "#fff" }}>{sym === "SPX" ? "ES" : sym} {fmtPx(livePx, pxDp)}</div>
                       </>
                     )}
                     {onPos(overnight.pdc) != null && (
                       <>
                         <div className="mk" style={{ left: `${onPos(overnight.pdc)}%`, background: "var(--dim2)" }} />
-                        <div className="cap bot" style={{ left: `${onPos(overnight.pdc)}%` }}>PDC {fmtPx(overnight.pdc, 0)}</div>
+                        <div className="cap bot" style={{ left: `${onPos(overnight.pdc)}%` }}>PDC {fmtPx(overnight.pdc, pxDp)}</div>
                       </>
                     )}
                   </>
@@ -2281,6 +2419,14 @@ export default function Premarket() {
                 )}
               </div>
 
+              {/* The symbol's own change first, then the two index futures.
+                  ES and NQ stay on every board: they are the market's context
+                  for the name, not SPX trivia. */}
+              {sym !== "SPX" && (
+                <div className="stat"><span className="l">{sym} change</span><span className={`r mono ${(symQ?.change ?? 0) >= 0 ? "chg-pos" : "chg-neg"}`}>
+                  {symQ?.change != null ? `${symQ.change >= 0 ? "+" : "−"}${Math.abs(symQ.change).toFixed(2)} (${fmtPct(symQ.pct)})` : "—"}
+                </span></div>
+              )}
               <div className="stat"><span className="l">ES change</span><span className={`r mono ${(esQ?.change ?? 0) >= 0 ? "chg-pos" : "chg-neg"}`}>
                 {esQ?.change != null ? `${esQ.change >= 0 ? "+" : "−"}${Math.abs(esQ.change).toFixed(2)} (${fmtPct(esQ.pct)})` : "—"}
               </span></div>
@@ -2288,15 +2434,15 @@ export default function Premarket() {
                 {nqQ?.change != null ? `${nqQ.change >= 0 ? "+" : "−"}${Math.abs(nqQ.change).toFixed(2)} (${fmtPct(nqQ.pct)})` : "—"}
               </span></div>
               <div className="stat"><span className="l">ON range</span><span className="r mono">
-                {onRange != null ? `${nf(onRange, 0)} pts` : "—"}
+                {onRange != null ? `${nf(onRange, pxDp)} pts` : "—"}
               </span></div>
               <div className="stat">
                 <span className="l">
-                  Prior RTH close (ES)
+                  Prior RTH close ({sym === "SPX" ? "ES" : sym})
                   {/* Named, because over a weekend it is FRIDAY, not "yesterday". */}
                   {overnight?.pdDate && <> <span className="muted">{sessionLabel(overnight.pdDate)}</span></>}
                 </span>
-                <span className="r mono">{fmtPx(overnight?.pdc, 2)}</span>
+                <span className="r mono">{fmtPx(overnight?.pdc, pxDp)}</span>
               </div>
               <div className="stat"><span className="l">VIX</span><span className="r mono">
                 {vixQ?.last != null ? vixQ.last.toFixed(2) : "—"}{" "}
@@ -2331,11 +2477,11 @@ export default function Premarket() {
                 <span className="r mono">
                   {!gap || gap.flat ? "—"
                     : gap.filled
-                      ? <span className="chg-pos">✓ filled at {fmtPx(gap.pdc, 2)}</span>
+                      ? <span className="chg-pos">✓ filled at {fmtPx(gap.pdc, pxDp)}</span>
                       : <>
-                          {fmtPx(gap.pdc, 2)}{" "}
+                          {fmtPx(gap.pdc, pxDp)}{" "}
                           <span className="muted">
-                            ({nf(Math.abs(gap.remaining), 0)} pts {gap.remaining >= 0 ? "up" : "down"}
+                            ({nf(Math.abs(gap.remaining), pxDp)} pts {gap.remaining >= 0 ? "up" : "down"}
                             {gap.retrace != null ? ` · ${gap.retrace.toFixed(0)}% retraced` : ""})
                           </span>
                         </>}
@@ -2349,9 +2495,9 @@ export default function Premarket() {
                   </span>
                 </div>
               )}
-              <div className="stat"><span className="l">Prior day range (ES)</span><span className="r mono">
+              <div className="stat"><span className="l">Prior day range ({sym === "SPX" ? "ES" : sym})</span><span className="r mono">
                 {overnight?.pd
-                  ? <>{fmtPx(overnight.pd.lo, 0)} – {fmtPx(overnight.pd.hi, 0)} <span className="muted">({nf(overnight.pd.hi - overnight.pd.lo, 0)})</span></>
+                  ? <>{fmtPx(overnight.pd.lo, pxDp)} – {fmtPx(overnight.pd.hi, pxDp)} <span className="muted">({nf(overnight.pd.hi - overnight.pd.lo, pxDp)})</span></>
                   : "—"}
               </span></div>
 
@@ -2369,7 +2515,7 @@ export default function Premarket() {
                     const pos = d.delta >= 0;
                     return (
                       <div className="d" key={d.strike}>
-                        <span className="s mono">{nf(d.strike, 0)}</span>
+                        <span className="s mono">{nf(d.strike, kDp)}</span>
                         <span className="t">
                           <i style={pos
                             ? { left: "50%", width: `${w}%`, background: "var(--pos)" }
@@ -2385,7 +2531,7 @@ export default function Premarket() {
                   {baselineState === "loading" || baselineState === "idle"
                     ? "Loading the prior-close board…"
                     : baselineState === "empty"
-                      ? `No prior-session board for ${expiry || "this expiry"} yet — server-v2/premarket-baseline.js records one at 16:05 ET each session, so this fills in after the next close.`
+                      ? `No prior-session board for ${sym} ${expiry || "this expiry"} yet — server-v2/premarket-baseline.js records one at 16:05 ET each session (and its ALLOWED_SYMBOLS list gates which symbols it will sweep), so this fills in after the next close.`
                       : "No strike moved against the prior close."}
                 </div>
               )}
@@ -2420,11 +2566,11 @@ export default function Premarket() {
               <div className="onrange" style={{ height: 58 }}>
                 {em != null && emLo != null && emHi != null ? (
                   <>
-                    <div className="cap top" style={{ left: "8%", color: "var(--dim)" }}>{fmtPx(emLo, 0)}</div>
+                    <div className="cap top" style={{ left: "8%", color: "var(--dim)" }}>{fmtPx(emLo, pxDp)}</div>
                     <div className="cap top" style={{ left: "50%", color: "#fff" }}>
-                      EM ±{((em / spot) * 100).toFixed(2)}% / ±{nf(em, 0)} pts
+                      EM ±{((em / spot) * 100).toFixed(2)}% / ±{nf(em, pxDp)} pts
                     </div>
-                    <div className="cap top" style={{ left: "92%", color: "var(--dim)" }}>{fmtPx(emHi, 0)}</div>
+                    <div className="cap top" style={{ left: "92%", color: "var(--dim)" }}>{fmtPx(emHi, pxDp)}</div>
                     <div className="bar2" style={{ top: 26 }}>
                       <div className="fill" style={{
                         left: "8%", right: "8%",
@@ -2455,11 +2601,11 @@ export default function Premarket() {
               </div>
 
               <div className="stat"><span className="l">IV-implied move</span><span className="r mono">
-                {em != null ? `±${nf(em, 0)} pts (${((em / spot) * 100).toFixed(2)}%)` : "—"}
+                {em != null ? `±${nf(em, pxDp)} pts (${((em / spot) * 100).toFixed(2)}%)` : "—"}
               </span></div>
               <div className="stat"><span className="l">GEX-implied range</span><span className="r mono">
                 {putWall != null && callWall != null
-                  ? `${fmtPx(putWall, 0)} – ${fmtPx(callWall, 0)} (${nf(Math.abs(callWall - putWall), 0)})`
+                  ? `${fmtPx(putWall, kDp)} – ${fmtPx(callWall, kDp)} (${nf(Math.abs(callWall - putWall), pxDp)})`
                   : "—"}
               </span></div>
               <div className="stat"><span className="l">Overlap / conviction</span><span className="r mono">
@@ -2471,7 +2617,7 @@ export default function Premarket() {
               </span></div>
               <div className="stat"><span className="l">Overnight range</span><span className="r mono">
                 {overnight?.lo != null && overnight?.hi != null
-                  ? `${fmtPx(overnight.lo, 0)} – ${fmtPx(overnight.hi, 0)}`
+                  ? `${fmtPx(overnight.lo, pxDp)} – ${fmtPx(overnight.hi, pxDp)}`
                   : "—"}
               </span></div>
               <div className="stat"><span className="l">Market quality</span><span className="r mono">
@@ -2489,12 +2635,12 @@ export default function Premarket() {
                     <>
                       {posGamma ? "Positive gamma" : "Negative gamma"}, flip{" "}
                       <span className="k">
-                        {distFlip == null ? "n/a" : `${nf(Math.abs(distFlip), 0)} pts ${distFlip >= 0 ? "below" : "above"}`}
-                      </span>, Call Wall <span className="r">{distCall == null ? "n/a" : `${nf(Math.abs(distCall), 0)} ${distCall >= 0 ? "above" : "below"}`}</span>,
-                      {" "}Put Wall <span className="g">{distPut == null ? "n/a" : `${nf(Math.abs(distPut), 0)} ${distPut >= 0 ? "above" : "below"}`}</span> —{" "}
+                        {distFlip == null ? "n/a" : `${nf(Math.abs(distFlip), pxDp)} pts ${distFlip >= 0 ? "below" : "above"}`}
+                      </span>, Call Wall <span className="r">{distCall == null ? "n/a" : `${nf(Math.abs(distCall), pxDp)} ${distCall >= 0 ? "above" : "below"}`}</span>,
+                      {" "}Put Wall <span className="g">{distPut == null ? "n/a" : `${nf(Math.abs(distPut), pxDp)} ${distPut >= 0 ? "above" : "below"}`}</span> —{" "}
                       <b>
                         {posGamma
-                          ? `fade extremes, scalp toward the ${magnet ? nf(magnet.strike, 0) : "magnet"} magnet.`
+                          ? `fade extremes, scalp toward the ${magnet ? nf(magnet.strike, kDp) : "magnet"} magnet.`
                           : "stand aside at the edges, trade continuation through the walls."}
                       </b>
                     </>
@@ -2502,13 +2648,13 @@ export default function Premarket() {
                 </p>
                 <div className="scen">
                   <div><span className="g">▲</span><span>
-                    <b>Above {fmtPx(callWall, 0)}</b> — call wall break. Chase only with DEX confirming; gamma thins out above.
+                    <b>Above {fmtPx(callWall, kDp)}</b> — call wall break. Chase only with DEX confirming; gamma thins out above.
                   </span></div>
                   <div><span className="k">◆</span><span>
-                    <b>{fmtPx(putWall, 0)}–{fmtPx(callWall, 0)}</b> — base case. {posGamma ? `Fade the edges, target ${magnet ? nf(magnet.strike, 0) : "the magnet"}.` : "Two-sided and fast; size down."}
+                    <b>{fmtPx(putWall, kDp)}–{fmtPx(callWall, kDp)}</b> — base case. {posGamma ? `Fade the edges, target ${magnet ? nf(magnet.strike, kDp) : "the magnet"}.` : "Two-sided and fast; size down."}
                   </span></div>
                   <div><span className="r">▼</span><span>
-                    <b>Below {fmtPx(flip, 0)}</b> — flip breached, regime turns negative. Stop fading; trend short toward {fmtPx(putWall, 0)}.
+                    <b>Below {fmtPx(flip, kDp)}</b> — flip breached, regime turns negative. Stop fading; trend short toward {fmtPx(putWall, kDp)}.
                   </span></div>
                 </div>
               </div>
@@ -2572,7 +2718,8 @@ export default function Premarket() {
 
           <div className="footbar">
             <span className="l mono">
-              {etDate} · {feedLabel} · spot {fmtPx(spot, 2)} · ES {fmtPx(esFut, 2)}
+              {etDate} · {sym} · {feedLabel} · spot {fmtPx(spot, 2)}
+              {sym === "SPX" ? ` · ES ${fmtPx(esFut, 2)}` : ""}
               {basis != null ? ` · basis ${basis >= 0 ? "+" : "−"}${Math.abs(basis).toFixed(2)}` : ""}
               {" · "}{chain.length} strikes
               {updatedAt ? ` · ${new Date(updatedAt).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET` : ""}

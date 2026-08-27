@@ -54,23 +54,33 @@
  *                  it. Magnitude-based, so a put wall going more negative reads
  *                  as growth, which is what it is.
  *
- * ── NOTHING ON THIS TAB IS ES ───────────────────────────────────────────────
- * Every price this tab prints is an SPX price from an SPX source. There is no
- * basis conversion left in the file and no prop that could supply one: `esFut`,
- * `basis`, `candles` and `overnight` are gone, and so is the ES-bar fallback
- * for the day's path. A futures print run through a basis is not an SPX print,
- * and the one time it was allowed to stand in for one it produced a session low
- * SPX never traded and graded the put wall BROKEN off it. Where SPX has no
- * source, the number renders "—" — same rule as everywhere else here.
+ * ── ONE RECAP, ANY SYMBOL (2026-08-27) ──────────────────────────────────────
+ * This used to be the SPX recap and only that; every other symbol got
+ * TickerBoard's much smaller post-market view instead. It now runs for every
+ * name on the picker, and the `symbol` prop is what makes that real rather than
+ * cosmetic: it routes the three server reads below, all of which were pinned to
+ * SPX. Everything else was already prop-driven off the caller's chain, so a
+ * NVDA recap is this file's own code reading NVDA's ladder, NVDA's wall log and
+ * NVDA's price path.
+ *
+ * ── NOTHING ON THIS TAB IS A FUTURE ─────────────────────────────────────────
+ * Every price this tab prints is a CASH price from that symbol's own source.
+ * There is no basis conversion left in the file and no prop that could supply
+ * one: `esFut`, `basis`, `candles` and `overnight` are gone, and so is the
+ * ES-bar fallback for the day's path. A futures print run through a basis is
+ * not an SPX print, and the one time it was allowed to stand in for one it
+ * produced a session low SPX never traded and graded the put wall BROKEN off
+ * it. Where a symbol has no source, the number renders "—" — same rule as
+ * everywhere else here.
  *
  * DATA SOURCES
  *   props                       everything the Premarket tab already computed off
  *                               the live chain — spot, walls, flip, CORE, max pain,
- *                               per-strike GEX, totals, and SPX's prior close.
+ *                               per-strike GEX, totals, and the symbol's prior close.
  *   /api/snapshots/option-strike-gex-history
  *                               the per-minute strike ladder the ES chart's bubble
  *                               trail already backfills from. It is what makes a
- *                               REAL recap possible: an intraday SPX spot path and
+ *                               REAL recap possible: an intraday cash spot path and
  *                               a 09:30 GEX profile, neither of which the live
  *                               socket keeps. Same endpoint, same guards as
  *                               hooks/useGexBubbleHistory (see its header: the
@@ -78,9 +88,11 @@
  *                               is the newest NON-WEEKEND day present, not
  *                               etDayKey(now) — the recorder has no market-hours
  *                               gate and rewrites a frozen copy all weekend).
- *   /proxy/walls?date&symbol=SPX
+ *   /proxy/walls?date&symbol=<symbol>
  *                               the SAVED grade. server-v2/walls-recorder.js
- *                               captures SPX's call wall / put wall / CORE at
+ *                               samples the newest scanner row PER SYMBOL, so it
+ *                               covers the whole MAIN watchlist, not just SPX:
+ *                               it captures the call wall / put wall / CORE at
  *                               09:29 and every 15 min to 16:00, writes only on
  *                               a change, and classifies every touch four slots
  *                               later (reject / break / pin / new wall / …). The
@@ -336,13 +348,27 @@ export const POSTMARKET_CSS = `
    that can turn a futures print into one. See the `path` comment. */
 
 export type PostMarketProps = {
+  /**
+   * The symbol this recap is OF. Added 2026-08-27, when /premarket stopped
+   * routing non-SPX symbols to a smaller board and started rendering this one
+   * for every name on the picker.
+   *
+   * It is not a label. It routes all three of this tab's own server reads —
+   * the per-minute strike ladder, the price path that comes with it, and the
+   * recorded wall log — every one of which was pinned to SPX. Left as a label,
+   * a TSLA recap would have printed SPX's ladder, SPX's intraday high and low
+   * and SPX's wall grades under a TSLA heading: plausible, self-consistent, and
+   * entirely the wrong instrument.
+   */
+  symbol: string;
   spot: number;
   /**
-   * SPX's own prior close, from /api/quotes-batch (Yahoo ^GSPC). NOT the ES
-   * prior close shifted by a basis — see the `path` comment for what that cost.
+   * The symbol's own prior close, from /api/quotes-batch (Yahoo ^GSPC for SPX,
+   * the plain ticker for everything else). NOT a futures close shifted by a
+   * basis — see the `path` comment for what that cost.
    * Null until the quote lands, and the day-change row renders "—" until then.
    */
-  spxPrevClose: number | null;
+  prevClose: number | null;
   flip: number | null;
   callWall: number | null;
   putWall: number | null;
@@ -436,11 +462,30 @@ type Grade = {
 
 export default function PostMarketTab(p: PostMarketProps) {
   const {
-    spot, spxPrevClose, flip, callWall, putWall, totalNetGex, perStrike, chain,
+    symbol, spot, prevClose, flip, callWall, putWall, totalNetGex, perStrike, chain,
     coreBullseye, maxPain, em, totals, expiry, etDate, etMin, hasData,
     frozenDate,
   } = p;
   const frozen = !!frozenDate;
+  const sym = (symbol || "SPX").trim().toUpperCase();
+
+  /**
+   * DECIMALS, read off this symbol's own ladder rather than assumed. On SPX
+   * both evaluate to 0, which is exactly what was hard-coded here before, so
+   * the SPX recap is unchanged to the digit. On a $180 name a level printed at
+   * 0dp turns a 187.50 strike into "188".
+   */
+  const kDp = useMemo(() => {
+    let step = Infinity;
+    for (let i = 1; i < perStrike.length; i++) {
+      const d = Math.abs(perStrike[i].strike - perStrike[i - 1].strike);
+      if (d > 0 && d < step) step = d;
+    }
+    if (!Number.isFinite(step)) return spot >= 1000 ? 0 : 2;
+    return step < 0.5 ? 2 : step < 1 ? 1 : 0;
+  }, [perStrike, spot]);
+  /** Traded-price decimals — SPX/NDX print whole, anything under 1000 prints cents. */
+  const pxDp = spot >= 1000 ? 0 : 2;
 
   // `etDate`, not `frozenDate`: this is the session the tab is DESCRIBING, and
   // it is the right answer on both paths (live it is today, frozen it equals
@@ -448,9 +493,9 @@ export default function PostMarketTab(p: PostMarketProps) {
   // the hook then fell back to a rolling 480-minute window anchored to the wall
   // clock — so opening the recap at 20:00 silently threw away the morning and
   // the panel blamed the recorder for it.
-  const { cols, state: histState } = useIntradayLadder(true, expiry, etDate);
-  const { next, state: nextState } = useNextExpiryStructure(!frozen, expiry, spot);
-  const { log: wallLog, byLevel: recorded, state: wallState } = useRecordedWalls(etDate, "SPX");
+  const { cols, state: histState } = useIntradayLadder(true, expiry, etDate, sym);
+  const { next, state: nextState } = useNextExpiryStructure(!frozen, expiry, spot, sym);
+  const { log: wallLog, byLevel: recorded, state: wallState } = useRecordedWalls(etDate, sym);
 
   // ── the day's price path, in SPX ───────────────────────────────────────────
   //
@@ -485,7 +530,7 @@ export default function PostMarketTab(p: PostMarketProps) {
   );
   // Prior close is a real SPX quote (Yahoo ^GSPC via /api/quotes-batch), not
   // the ES prior close shifted by a basis.
-  const pdcSpx = spxPrevClose ?? null;
+  const pdcSpx = prevClose ?? null;
   const dayChg = pdcSpx != null && closePx > 0 ? closePx - pdcSpx : null;
 
   // ── open vs now, off the recorded ladder ───────────────────────────────────
@@ -862,7 +907,10 @@ export default function PostMarketTab(p: PostMarketProps) {
 
   // ── level scorecard ────────────────────────────────────────────────────────
   const grades = useMemo<Grade[]>(() => {
-    const tol = Math.max(3, spot * 0.0005);          // ~4 pts on SPX
+    // Was Math.max(3, spot * 0.0005) — the 3 was an absolute SPX-points floor
+    // and on a $30 name it is a 10% tolerance. Relative on both sides now;
+    // still ~3.4 on a 6,800 SPX, which is what the constant produced there.
+    const tol = Math.max(0.01, spot * 0.0005);
     const pts = path.pts;
     const BUCKETS = 12;
 
@@ -927,7 +975,7 @@ export default function PostMarketTab(p: PostMarketProps) {
           ...base,
           tone: pinned ? "vio" : "",
           status: pinned ? "PINNED" : dist == null ? "—" : `${Math.abs(dist) < 25 ? "NEAR" : "MISSED"}`,
-          detail: `${touches ? `${mins(touches)} within ${nf(tol, 0)} pts` : "never reached"} · close ${fmtPts(dist)}`,
+          detail: `${touches ? `${mins(touches)} within ${nf(tol, pxDp)} pts` : "never reached"} · close ${fmtPts(dist)}`,
           taps,
           foot: pinned ? "price closed on it" : "gravity did not win",
         };
@@ -941,7 +989,7 @@ export default function PostMarketTab(p: PostMarketProps) {
           ? `${mins(beyond)} beyond · first break ${stamp(firstTs)}`
           : touches
             ? `tagged ${touches}× · first ${stamp(firstTs)} · last ${stamp(lastTs)}`
-            : `never within ${nf(tol, 0)} pts`,
+            : `never within ${nf(tol, pxDp)} pts`,
         taps,
         foot: broke
           ? (mode === "above" ? "resistance failed" : "support failed")
@@ -965,7 +1013,7 @@ export default function PostMarketTab(p: PostMarketProps) {
       const hits = rec.events.filter((e) => e.kind === "touch").length;
 
       const detail = [
-        moved ? `${nf(rec.open as number, 0)} → ${nf(rec.last as number, 0)}` : `held ${fmtPx(rec.last ?? g.px)} all day`,
+        moved ? `${nf(rec.open as number, kDp)} → ${nf(rec.last as number, kDp)}` : `held ${fmtPx(rec.last ?? g.px, kDp)} all day`,
         rec.moves ? `moved ${rec.moves}×` : "never moved",
         hits ? `${hits} tag${hits > 1 ? "s" : ""}` : "no tags",
       ].join(" · ");
@@ -1012,19 +1060,19 @@ export default function PostMarketTab(p: PostMarketProps) {
     const inside = !brokeCall && !brokePut && callWall != null && putWall != null;
 
     if (brokeCall && brokePut) {
-      return { t: "BOTH WALLS GAVE", d: `Range ${fmtPx(rthLo)}–${fmtPx(rthHi)} ran through both sides. The map was too narrow for the tape.`, neg: true };
+      return { t: "BOTH WALLS GAVE", d: `Range ${fmtPx(rthLo, pxDp)}–${fmtPx(rthHi, pxDp)} ran through both sides. The map was too narrow for the tape.`, neg: true };
     }
     if (brokeCall) {
-      return { t: "BROKE THE CALL WALL", d: `High ${fmtPx(rthHi)} cleared ${fmtPx(callWall)}. Fading resistance was the wrong trade.`, neg: true };
+      return { t: "BROKE THE CALL WALL", d: `High ${fmtPx(rthHi, pxDp)} cleared ${fmtPx(callWall, kDp)}. Fading resistance was the wrong trade.`, neg: true };
     }
     if (brokePut) {
-      return { t: "BROKE THE PUT WALL", d: `Low ${fmtPx(rthLo)} lost ${fmtPx(putWall)}. Support was not support.`, neg: true };
+      return { t: "BROKE THE PUT WALL", d: `Low ${fmtPx(rthLo, pxDp)} lost ${fmtPx(putWall, kDp)}. Support was not support.`, neg: true };
     }
     if (pinned) {
-      return { t: "PINNED", d: `Closed ${fmtPts(cb != null ? closePx - cb : null)} from CORE at ${fmtPx(cb)}, inside the wall band all day.`, neg: false };
+      return { t: "PINNED", d: `Closed ${fmtPts(cb != null ? closePx - cb : null)} from CORE at ${fmtPx(cb, kDp)}, inside the wall band all day.`, neg: false };
     }
     if (inside) {
-      return { t: "HELD THE RANGE", d: `Whole session between ${fmtPx(putWall)} and ${fmtPx(callWall)}. The morning map was the day.`, neg: false };
+      return { t: "HELD THE RANGE", d: `Whole session between ${fmtPx(putWall, kDp)} and ${fmtPx(callWall, kDp)}. The morning map was the day.`, neg: false };
     }
     return { t: "NO WALLS TO GRADE", d: "The chain never produced both walls today.", neg: false };
   }, [hasData, closePx, rthHi, rthLo, callWall, putWall, coreBullseye, spot]);
@@ -1053,7 +1101,7 @@ export default function PostMarketTab(p: PostMarketProps) {
     add("PW", "Put Wall", next.putWall, "var(--pw)");
     add("FLIP", "Gamma Flip", next.flip, "var(--amber)");
     add("CORE", "max γ strike", next.cb, "var(--violet)");
-    add("CLOSE", "SPX Close", closePx > 0 ? closePx : null, "#ffffff");
+    add("CLOSE", `${sym} Close`, closePx > 0 ? closePx : null, "#ffffff");
     add("CW", "Call Wall", next.callWall, "var(--cw)");
     if (marks.length < 2) return null;
     const lo = Math.min(...marks.map((m) => m.px)), hi = Math.max(...marks.map((m) => m.px));
@@ -1269,22 +1317,22 @@ export default function PostMarketTab(p: PostMarketProps) {
         <div className="sechead">
           <h3><span className="secn">1</span>Day Snapshot</h3>
           <span className="tiny right">
-            {path.pts.length ? "per-minute SPX recorder" : "no recorded path"} · {expiry || "—"}
+            {path.pts.length ? `per-minute ${sym} recorder` : "no recorded path"} · {expiry || "—"}
           </span>
         </div>
 
         <div className="snap">
           <div className="kpi">
-            <div className="k">SPX Close</div>
+            <div className="k">{sym} Close</div>
             <div className="v mono">
-              {fmtPx(closePx)}{" "}
+              {fmtPx(closePx, pxDp)}{" "}
               <small className={dayChg == null ? undefined : dayChg >= 0 ? "chg-pos" : "chg-neg"}>
                 {dayChg == null ? "vs prior close —" : `${fmtPts(dayChg)} / ${fmtPct(pdcSpx ? (dayChg / pdcSpx) * 100 : null)}`}
               </small>
             </div>
             <div className="tiny" style={{ marginTop: 4 }}>
-              H {fmtPx(rthHi)} · L {fmtPx(rthLo)} ·{" "}
-              {rthHi != null && rthLo != null ? `${nf(rthHi - rthLo, 0)} pt range` : "—"}
+              H {fmtPx(rthHi, pxDp)} · L {fmtPx(rthLo, pxDp)} ·{" "}
+              {rthHi != null && rthLo != null ? `${nf(rthHi - rthLo, pxDp)} pt range` : "—"}
             </div>
           </div>
 
@@ -1301,19 +1349,19 @@ export default function PostMarketTab(p: PostMarketProps) {
               {rPos(callWall) != null && <div className="mk3" style={{ left: `${rPos(callWall)}%`, background: "var(--cw)" }} />}
               {rPos(closePx) != null && <div className="mk3" style={{ left: `${rPos(closePx)}%`, background: "#fff" }} />}
               {rPos(putWall) != null && (
-                <div className="cp3" style={{ left: `${Math.max(9, rPos(putWall) as number)}%`, color: "var(--pw)" }}>PW {fmtPx(putWall)}</div>
+                <div className="cp3" style={{ left: `${Math.max(9, rPos(putWall) as number)}%`, color: "var(--pw)" }}>PW {fmtPx(putWall, kDp)}</div>
               )}
               {rPos(closePx) != null && (
-                <div className="cp3" style={{ left: `${Math.min(82, Math.max(28, rPos(closePx) as number))}%` }}>close {fmtPx(closePx)}</div>
+                <div className="cp3" style={{ left: `${Math.min(82, Math.max(28, rPos(closePx) as number))}%` }}>close {fmtPx(closePx, pxDp)}</div>
               )}
               {rPos(callWall) != null && (
-                <div className="cp3" style={{ left: `${Math.min(91, rPos(callWall) as number)}%`, color: "var(--cw)" }}>CW {fmtPx(callWall)}</div>
+                <div className="cp3" style={{ left: `${Math.min(91, rPos(callWall) as number)}%`, color: "var(--cw)" }}>CW {fmtPx(callWall, kDp)}</div>
               )}
             </div>
             <div className="rangelabs">
-              <span>L {fmtPx(rthLo)}</span>
-              <span>{todayWidth != null ? `${nf(todayWidth, 0)} pt wall band` : ""}</span>
-              <span>H {fmtPx(rthHi)}</span>
+              <span>L {fmtPx(rthLo, pxDp)}</span>
+              <span>{todayWidth != null ? `${nf(todayWidth, pxDp)} pt wall band` : ""}</span>
+              <span>H {fmtPx(rthHi, pxDp)}</span>
             </div>
           </div>
 
@@ -1334,7 +1382,7 @@ export default function PostMarketTab(p: PostMarketProps) {
               </span>
               <span className="tiny">
                 {netGexChg == null ? "no open snapshot" : `${fmtUsd(netGexChg)} on the day`}
-                {openFlip != null && flip != null ? ` · flip ${fmtPx(openFlip)} → ${fmtPx(flip)}` : ""}
+                {openFlip != null && flip != null ? ` · flip ${fmtPx(openFlip, kDp)} → ${fmtPx(flip, kDp)}` : ""}
               </span>
             </div>
           </div>
@@ -1353,7 +1401,7 @@ export default function PostMarketTab(p: PostMarketProps) {
         <div className="sechead">
           <h3><span className="secn">2</span>Level Performance Scorecard</h3>
           <span className="tiny right">
-            {wallState === "ok" ? "SPX wall log · 09:29 → 16:00" : wallState === "loading" ? "loading the wall log…" : "wall log unavailable"}
+            {wallState === "ok" ? `${sym} wall log · 09:29 → 16:00` : wallState === "loading" ? "loading the wall log…" : "wall log unavailable"}
             {path.pts.length ? ` · ${path.pts.length} price samples` : ""}
           </span>
         </div>
@@ -1367,7 +1415,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                   {g.status}
                 </span>
               </div>
-              <div className="px mono">{fmtPx(g.px)}</div>
+              <div className="px mono">{fmtPx(g.px, kDp)}</div>
               <div className="sub">{g.detail}</div>
               <div className="taps">
                 {g.taps.map((t, i) => <i key={i} className={t} />)}
@@ -1400,10 +1448,10 @@ export default function PostMarketTab(p: PostMarketProps) {
                       {LEVEL_LABEL[r.level_type]}
                     </span>
                     <span className="mono">
-                      {r.prev_strike != null ? `${nf(r.prev_strike, 0)} → ` : ""}{nf(r.strike, 0)}
+                      {r.prev_strike != null ? `${nf(r.prev_strike, kDp)} → ` : ""}{nf(r.strike, kDp)}
                       {r.delta != null ? <span className={r.delta >= 0 ? "chg-pos" : "chg-neg"}>{"  "}{fmtPts(r.delta)}</span> : null}
                     </span>
-                    <span className="tiny">spot {fmtPx(r.spot)}</span>
+                    <span className="tiny">spot {fmtPx(r.spot, pxDp)}</span>
                   </div>
                 ))}
               </div>
@@ -1412,7 +1460,7 @@ export default function PostMarketTab(p: PostMarketProps) {
         })()}
         {wallState === "empty" && (
           <div className="warnbar" style={{ marginTop: 10 }}>
-            Nothing recorded in the SPX wall log for {etDate} — the three wall cards above are graded
+            Nothing recorded in the {sym} wall log for {etDate} — the three wall cards above are graded
             from the price path instead of the recorder&apos;s own verdict.
           </div>
         )}
@@ -1535,7 +1583,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                     className={`evrow${tag ? " key" : ""}`}
                     key={r.strike}
                     title={[
-                      `${nf(r.strike, 0)} · ${fmtUsd(r.net, false)} at the close`,
+                      `${nf(r.strike, kDp)} · ${fmtUsd(r.net, false)} at the close`,
                       r.closeShare != null
                         ? `${r.closeShare.toFixed(1)}% of the board's gamma at the close`
                         : null,
@@ -1544,7 +1592,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                         : "15:00→close not recorded",
                     ].filter(Boolean).join("\n")}
                   >
-                    <div className="k mono">{nf(r.strike, 0)}</div>
+                    <div className="k mono">{nf(r.strike, kDp)}</div>
                     <div className={`sgn ${pos ? "p" : "n"}`}>{pos ? "+" : "−"}</div>
                     <div className="netcol mono" style={{ color: pos ? "var(--pos)" : "var(--neg)" }}>
                       {fmtUsd(r.net, false)}
@@ -1640,7 +1688,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                           background: "linear-gradient(270deg,var(--violet),rgba(167,139,250,.3))",
                         }} />
                       </div>
-                      <div className="mk3 mono">{nf(r.strike, 0)}</div>
+                      <div className="mk3 mono">{nf(r.strike, kDp)}</div>
                       <div>
                         <div className="mbar" style={{
                           width: `${(r.minutes / maxM) * 100}%`,
@@ -1724,7 +1772,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                 const maxN2 = Math.max(1, ...oiSplit.map((r) => Math.abs(r.net)));
                 return oiSplit.map((r) => (
                   <div className="srow" key={r.strike}>
-                    <div className="k mono">{nf(r.strike, 0)}</div>
+                    <div className="k mono">{nf(r.strike, kDp)}</div>
                     <div>
                       <div className="stack" style={{ width: `${(Math.abs(r.net) / maxN2) * 100}%` }}>
                         <i style={{ width: `${(r.oiShare ?? 0) * 100}%`, background: "linear-gradient(90deg,var(--blueFill2),var(--blue))" }} />
@@ -1802,7 +1850,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                   <div className={`mk2${m.code === "CLOSE" ? " spot" : ""}`} style={{ left: `${m.pos}%`, background: m.color }} />
                   <div className={`cap2 ${m.side}`} style={{ left: `${Math.max(4, Math.min(96, m.pos))}%` }}>
                     <div className="n2" style={{ color: m.color }}>{m.code}<span className="ln"> · {m.name}</span></div>
-                    <div className="v2 mono">{fmtPx(m.px)}</div>
+                    <div className="v2 mono">{fmtPx(m.px, kDp)}</div>
                     <div className="d2 mono">
                       {m.code === "CLOSE" ? "settled" : fmtPts(m.dist)}
                     </div>
@@ -1815,7 +1863,7 @@ export default function PostMarketTab(p: PostMarketProps) {
               <div className="tile">
                 <div className="n2">Wall band</div>
                 <div className="v2 mono">
-                  {todayWidth != null && nextWidth != null ? `${nf(todayWidth, 0)} → ${nf(nextWidth, 0)} pts` : nextWidth != null ? `${nf(nextWidth, 0)} pts` : "—"}
+                  {todayWidth != null && nextWidth != null ? `${nf(todayWidth, pxDp)} → ${nf(nextWidth, pxDp)} pts` : nextWidth != null ? `${nf(nextWidth, pxDp)} pts` : "—"}
                 </div>
                 <div className="m2">
                   {todayWidth != null && nextWidth != null
@@ -1825,7 +1873,7 @@ export default function PostMarketTab(p: PostMarketProps) {
               </div>
               <div className="tile">
                 <div className="n2">Flip moves to</div>
-                <div className="v2 mono">{fmtPx(next?.flip)}</div>
+                <div className="v2 mono">{fmtPx(next?.flip, kDp)}</div>
                 <div className="m2">{next?.flip != null && closePx > 0 ? `${fmtPts(next.flip - closePx)} from the close` : "—"}</div>
               </div>
               <div className="tile">
@@ -1839,8 +1887,8 @@ export default function PostMarketTab(p: PostMarketProps) {
               </div>
               <div className="tile">
                 <div className="n2">Overnight watch</div>
-                <div className="v2 mono">{fmtPx(rthHi)} / {fmtPx(rthLo)}</div>
-                <div className="m2">today&apos;s SPX RTH high / low · per-minute recorder</div>
+                <div className="v2 mono">{fmtPx(rthHi, pxDp)} / {fmtPx(rthLo, pxDp)}</div>
+                <div className="m2">today&apos;s {sym} RTH high / low · per-minute recorder</div>
               </div>
             </div>
 
@@ -1849,12 +1897,12 @@ export default function PostMarketTab(p: PostMarketProps) {
               {(next?.netGex ?? 0) >= 0 ? "Positive gamma into tomorrow" : "Negative gamma into tomorrow"}
               {nextWidth != null && todayWidth != null
                 ? nextWidth > todayWidth
-                  ? ` — but ${nf(nextWidth, 0)} pts of room versus ${nf(todayWidth, 0)} today, so the fade needs the edges, not the middle.`
-                  : ` — and tighter than today (${nf(nextWidth, 0)} vs ${nf(todayWidth, 0)} pts), so the walls should bind sooner.`
+                  ? ` — but ${nf(nextWidth, pxDp)} pts of room versus ${nf(todayWidth, pxDp)} today, so the fade needs the edges, not the middle.`
+                  : ` — and tighter than today (${nf(nextWidth, pxDp)} vs ${nf(todayWidth, pxDp)} pts), so the walls should bind sooner.`
                 : "."}
               {next?.flip != null && closePx > 0 && (
-                <> Watch <b>{fmtPx(next.flip)}</b>: {closePx > next.flip ? "below it the suppression is gone" : "above it the suppression comes back"}
-                  {next.putWall != null && closePx > next.flip ? ` and ${fmtPx(next.putWall)} becomes the target.` : "."}
+                <> Watch <b>{fmtPx(next.flip, kDp)}</b>: {closePx > next.flip ? "below it the suppression is gone" : "above it the suppression comes back"}
+                  {next.putWall != null && closePx > next.flip ? ` and ${fmtPx(next.putWall, kDp)} becomes the target.` : "."}
                 </>
               )}
             </div>
@@ -1930,7 +1978,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                     const color = r.side === "C" ? "var(--cw)" : "var(--pw)";
                     return (
                       <div className="premrow" key={r.key}>
-                        <div className="pl mono">{nf(r.strike, 0)}{r.side}</div>
+                        <div className="pl mono">{nf(r.strike, kDp)}{r.side}</div>
                         <div className="ptrack">
                           <i style={{ width: `${Math.max(2, w)}%`, background: color }} />
                         </div>
@@ -1952,8 +2000,8 @@ export default function PostMarketTab(p: PostMarketProps) {
 
       <div className="footbar">
         <span className="l">
-          {frozen ? "Frozen recap for " : "Recap for "}{etDate} · {expiry || "—"} · SPX {fmtPx(closePx, 2)}
-          {em != null ? ` · EM ±${nf(em, 0)}` : ""}
+          {frozen ? "Frozen recap for " : "Recap for "}{etDate} · {expiry || "—"} · {sym} {fmtPx(closePx, pxDp)}
+          {em != null ? ` · EM ±${nf(em, pxDp)}` : ""}
         </span>
         <span className="l">
           {histState === "ok" ? "intraday ladder: recorded" : "intraday ladder: unavailable"} ·{" "}

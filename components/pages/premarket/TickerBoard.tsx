@@ -1,12 +1,30 @@
 "use client";
 
 /**
- * TickerBoard — the premarket / post-market board for every non-SPX symbol on
- * the premarket page. That was SPY and QQQ until 2026-08-27; it is now the
- * whole MAIN watchlist (SPY QQQ NDX VIX AAPL AMD AMZN GOOGL META MSFT NVDA
- * SPCX TSLA). Nothing in here changed to support that — the component took
- * `ticker` as a prop from the first line — beyond passing that ticker down to
- * useNextExpiryStructure, which had SPX baked into its two URLs.
+ * TickerBoard — NO LONGER MOUNTED. Kept only so the diff that retired it is
+ * readable; nothing imports this file and deleting it changes nothing.
+ *
+ * ── WHY IT IS GONE (2026-08-27, later the same day) ─────────────────────────
+ * This was the reduced board every non-SPX symbol got: the walls, a profile, a
+ * level-grade card and tomorrow's structure. Against the real /premarket page
+ * that is about a third of it — no regime strip, no level rail, no six Key
+ * Levels tiles with their prior-close migration lines, no scrolling GEX profile
+ * with DEX/vanna, no expected-range track, no gamma bell curve, no catalysts,
+ * and a Post-Market recap that was a summary rather than the recap.
+ *
+ * The premise below — "bolting a ticker prop onto Premarket.tsx would have
+ * meant a page where a third of the cards render '—' forever" — turned out to
+ * be true of only THREE things, not a third of the page: the ES basis, the ES
+ * overnight window and frozen past sessions. Everything else the SPX page draws
+ * is computed client-side from the chain, or comes from an endpoint that took a
+ * `symbol` all along (/proxy/walls, the per-minute ladder, quotes, candles).
+ *
+ * So the page now takes the chain from useChainGex (components/pages/premarket/
+ * chainGex.ts) in the SAME shape useMobileGex hands over, renders itself
+ * unchanged for any symbol, reads that symbol's own recorded candles for the
+ * overnight panel, and says "SPX only" on the three things that really are.
+ *
+ * ── the original header, for the record ─────────────────────────────────────
  *
  * WHY THIS IS A SEPARATE COMPONENT AND NOT A PROP ON THE SPX PAGE
  *

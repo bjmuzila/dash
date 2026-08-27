@@ -1,5 +1,118 @@
 # Changelog
 
+## 2026-08-27 - Premarket / Post-Market: ONE page for every symbol (TickerBoard retired)
+
+Edited: `components/pages/Premarket.tsx`,
+`components/pages/premarket/chainGex.ts` (**new**),
+`components/pages/premarket/PostMarketTab.tsx`,
+`components/pages/premarket/postMarketData.ts`,
+`components/pages/premarket/GammaBellCurve.tsx`,
+`components/pages/premarket/TickerBoard.tsx` (tombstoned, no longer mounted).
+
+Follow-up to the picker change earlier today. Opening the picker to the MAIN
+watchlist exposed the real problem: **SPY and QQQ were never the same page.**
+They were routed to `TickerBoard`, a second, smaller board carrying roughly a
+third of what /premarket draws. Missing on every non-SPX symbol: the regime
+strip, the GEX level rail, the six Key Levels tiles and their prior-close
+migration lines, the scrolling GEX profile with DEX / vanna / call-put gamma,
+the expected-range track with conviction, the gamma bell curve, sector heat,
+catalysts, the playbook - and a Post-Market recap that was a summary rather
+than the recap.
+
+Now every symbol renders **the same page, both tabs, all panels.**
+
+### How, without duplicating anything
+
+The page was already built on ONE destructuring - `const { chain, spot, flip,
+callWall, putWall, … } = gex` - with two sources behind it (the live socket, and
+a frozen capture for past sessions). Everything below that line reads only those
+values and cannot tell which source it got. That is what made a frozen session
+the *real* page rather than a second implementation of it.
+
+So this adds a **third source** rather than a second page:
+
+| source | symbol | transport |
+|---|---|---|
+| `useMobileGex` | SPX | live socket (`lib/gexSocket`) |
+| `frozenGexOf`  | SPX | that session's captured chain |
+| **`useChainGex`** (new) | any ticker | `/api/expirations` + `/api/chains`, 1m poll |
+
+`chainGex.ts` returns the same shape with **raw per-strike legs** - gamma, delta,
+OI, volume, marks, IV - never a pre-summed `netGEX`. That is load bearing: the
+page's OI / OI+VOL / VOL switch recomputes every leg through `lib/calculations`,
+and a pre-summed row would have frozen one basis in and silently ignored the
+switch (see `netGEXOf`'s fallback branch). Scale and sign match the server
+calculator exactly: gamma x (OI+Vol) x S^2, calls +, puts -.
+
+Result: an NVDA board is *this page's own code* computing NVDA's walls, CORE,
+max pain, expected move, DEX and playbook from NVDA's own chain. There is no
+second rendering path left to drift.
+
+### The three server reads that were pinned to SPX
+
+`PostMarketTab` now takes a `symbol` prop, and it is not a label - it routes:
+
+- `useIntradayLadder(…, symbol)` - the per-minute strike ladder **and the price
+  path that comes with it**. The route resolves an absent `symbol` to `$SPX`
+  server-side, so a TSLA recap without it would have drawn SPX's ladder, SPX's
+  intraday high/low and SPX's close under a TSLA heading.
+- `useRecordedWalls(etDate, symbol)` - was hardcoded `"SPX"`.
+- `useNextExpiryStructure(…, symbol)` - the SPX-in-the-URL bug fixed earlier
+  today, now actually exercised by 13 more symbols.
+
+All three already have real per-symbol data: `walls-recorder` samples the newest
+scanner row per symbol, and `etf-gex-recorder` covers MAIN on its hot lane.
+
+### Scale - the quiet half of this change
+
+Everything on this page was written for SPX, where a level is a whole number and
+"1 point" means noise. That does not survive contact with a $180 name.
+`fmtPx(strike, 0)` turns a 187.50 strike into "188"; a 1-point "flat overnight"
+threshold is 0.6% on NVDA. Replaced with values derived from the board itself,
+each of which evaluates to **exactly the old constant on SPX**:
+
+- `kDp` - strike decimals, read off the ladder's own step.
+- `pxDp` - traded-price decimals (`spot >= 1000 ? 0 : 2`).
+- `pxEps` = 0.015% of spot (was a literal `1`) - the flat/held/wall-moved tests.
+- `pinEps` = 0.15% of spot (was `10`) - the magnet "pinning" pill.
+- `gapEps` = 0.004% of spot (was `0.25`, one ES tick) - the flat-gap test.
+- `tol` in PostMarketTab: `Math.max(3, spot*0.0005)` -> `Math.max(0.01, spot*0.0005)`;
+  that absolute `3` was a 10% tolerance on a $30 name.
+- `GammaBellCurve` printed every price through `nf0()` (whole numbers only) -
+  now a price formatter with the same decimals rule. GEX magnitudes still use
+  `fmtB`; only prices changed.
+
+### What is still SPX-only, and says so
+
+Named on screen rather than faked:
+
+1. **ES basis** and every "ES 6,812" sub-line. There is no future behind AAPL,
+   and a futures print run through a basis is not a cash price - that is exactly
+   how a "BROKE THE PUT WALL" card once printed a low SPX never traded. The KPI
+   reads `NVDA 182.40 +1.2%` instead, and the ES sub-lines simply do not render.
+2. **Frozen past sessions.** The freeze captures the one symbol the socket
+   carries. Picking a past date still snaps back to SPX.
+3. **The overnight window's instrument.** SPX reads the ES Globex session from
+   18:00; every other symbol reads **its own recorded candles** through
+   `useEtfCandles` (`etf_candles`, MAIN on the hot lane, live dxLink fallback
+   server-side) - the same window logic, that ticker's own extended session, and
+   the header says which. ES and NQ change stay on every board as market
+   context, with the symbol's own change added above them.
+
+### Known gap - needs a server decision
+
+**Prior-close baseline.** The page now sends `&symbol=` to
+`/api/premarket-baseline`, and the route already understands it - but
+`server-v2/premarket-baseline.js` has `ALLOWED_SYMBOLS = new Set(['$SPX','SPY','QQQ'])`.
+So the "vs prior close" chip, the Key Levels migration lines and the "Biggest GEX
+Changes" card fill in for SPX / SPY / QQQ and show their normal empty state on
+the other eleven. That allowlist exists on purpose - the miss path starts a full
+settled-chain ThetaData sweep per symbol and nothing coalesces a loop over them -
+so widening it is a deliberate cost decision, not a typo. **Not changed here.**
+
+`TickerBoard.tsx` is no longer imported by anything. Its header now explains why
+and the file can be deleted.
+
 ## 2026-08-27 - ES Candles: the far-CB lanes go to 1-minute (and etf_candles gets a prune)
 
 Edited: `server-v2/candle-history.js`, `server-v2/etf-candle-recorder.js`,

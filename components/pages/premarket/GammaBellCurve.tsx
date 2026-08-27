@@ -50,7 +50,7 @@ import type { ChainRow } from "@/lib/calculations/calculations";
 import {
   BASIS_META, ZOOM_META,
   MAX_BAND,
-  fmtB, nf0,
+  fmtB,
   foldBins, layoutLevels, lsqGaussian, massInside, moments,
   useGridStep, usePref, useStrikeWindow, useWideBins,
   type Bin, type GammaBasis, type GammaZoom,
@@ -139,6 +139,20 @@ export default function GammaBellCurve({
   /** A captured past session — the footer says so instead of implying live. */
   frozen?: boolean;
 }) {
+  /**
+   * PRICE DECIMALS. Every price on this card used to go through nfp(), which
+   * rounds to a whole number — correct for SPX and wrong for everything else
+   * the premarket picker now offers: on a $180 name it turns a 187.50 strike
+   * into "188", and a 1σ width of 2.4 into "±2 pts". nf0 is still the right
+   * formatter for the GEX magnitudes (fmtB handles those) — this one is only
+   * for prices, and on SPX it produces exactly what nf0 did.
+   */
+  const pxDp = spot >= 1000 ? 0 : 2;
+  const nfp = useCallback(
+    (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: pxDp, maximumFractionDigits: pxDp }),
+    [pxDp],
+  );
+
   const clipId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const [basis, pickBasis] = usePref<GammaBasis>(BASIS_KEY, "oi", BASIS_META);
   const [zoom, setZoomPref] = usePref<GammaZoom>(ZOOM_KEY, "auto", ZOOM_META);
@@ -346,10 +360,10 @@ export default function GammaBellCurve({
   const netTicks = [maxP, -maxN].filter((v) => Math.abs(v) > 0);
 
   const levels = layoutLevels([
-    { k: putWall, label: `Put wall ${nf0(putWall ?? 0)}`, color: "var(--pw)", dash: "3 3" },
-    { k: callWall, label: `Call wall ${nf0(callWall ?? 0)}`, color: "var(--cw)", dash: "3 3" },
-    { k: flip, label: `Flip ${nf0(flip ?? 0)}`, color: "var(--violet)", dash: "5 4" },
-    { k: spot, label: `Spot ${nf0(spot)}`, color: "var(--txt)", dash: "6 4" },
+    { k: putWall, label: `Put wall ${nfp(putWall ?? 0)}`, color: "var(--pw)", dash: "3 3" },
+    { k: callWall, label: `Call wall ${nfp(callWall ?? 0)}`, color: "var(--cw)", dash: "3 3" },
+    { k: flip, label: `Flip ${nfp(flip ?? 0)}`, color: "var(--violet)", dash: "5 4" },
+    { k: spot, label: `Spot ${nfp(spot)}`, color: "var(--txt)", dash: "6 4" },
   ], { k0, k1, spot, x, W, padL: PAD.l, padR: PAD.r });
 
   const sigmaL = x(Math.max(k0, mu - sigma));
@@ -362,13 +376,13 @@ export default function GammaBellCurve({
       <div className="gd-kpis">
         <div className="gd-kpi">
           <div className="n">Curve peak</div>
-          <div className="v">{nf0(mu)}</div>
-          <div className="m">{mu >= spot ? "+" : "−"}{nf0(Math.abs(mu - spot))} vs spot</div>
+          <div className="v">{nfp(mu)}</div>
+          <div className="m">{mu >= spot ? "+" : "−"}{nfp(Math.abs(mu - spot))} vs spot</div>
         </div>
         <div className="gd-kpi">
           <div className="n">Width 1σ</div>
-          <div className="v">±{nf0(sigma)} pts</div>
-          <div className="m">{nf0(mu - sigma)} – {nf0(mu + sigma)}</div>
+          <div className="v">±{nfp(sigma)} pts</div>
+          <div className="m">{nfp(mu - sigma)} – {nfp(mu + sigma)}</div>
         </div>
         <div className="gd-kpi">
           <div className="n">Mass inside 1σ</div>
@@ -384,8 +398,8 @@ export default function GammaBellCurve({
             their own run of tiles instead of being mixed into the first three. */}
         <div className="gd-kpi">
           <div className="n">Center of mass</div>
-          <div className="v">{nf0(com)}</div>
-          <div className="m">{com >= spot ? "+" : "−"}{nf0(Math.abs(com - spot))} vs spot</div>
+          <div className="v">{nfp(com)}</div>
+          <div className="m">{com >= spot ? "+" : "−"}{nfp(Math.abs(com - spot))} vs spot</div>
         </div>
         <div className="gd-kpi">
           <div className="n">Net GEX, window</div>
@@ -521,7 +535,7 @@ export default function GammaBellCurve({
           <line x1={PAD.l} x2={W - PAD.r} y1={botY1} y2={botY1} stroke="var(--line2)" strokeWidth={1} />
           {ticks.map((t) => (
             <text key={`x${t}`} x={x(t)} y={botY1 + 16} textAnchor="middle" fontSize={10}
-              fill="var(--dim2)" style={{ fontVariantNumeric: "tabular-nums" }}>{nf0(t)}</text>
+              fill="var(--dim2)" style={{ fontVariantNumeric: "tabular-nums" }}>{nfp(t)}</text>
           ))}
           <text x={PAD.l + plotW / 2} y={H - 5} textAnchor="middle" fontSize={9}
             fill="var(--dim2)" style={{ letterSpacing: ".1em", textTransform: "uppercase" }}>Strike</text>
@@ -533,7 +547,7 @@ export default function GammaBellCurve({
         {hv && !dragging && (
           <div className="gd-tip"
             style={{ left: `clamp(76px, ${((x(hv.k) / W) * 100).toFixed(2)}%, calc(100% - 76px))`, top: 4 }}>
-            <b>{nf0(hv.k)}</b>
+            <b>{nfp(hv.k)}</b>
             <div className="r"><span>mass</span><span>{fmtB(hv.mass, false)}</span></div>
             <div className="r"><span>net</span><span>{fmtB(hv.net)}</span></div>
             <div className="r"><span>fit</span><span>{fmtB(a * Math.exp(-((hv.k - mu) ** 2) / (2 * sigma * sigma)), false)}</span></div>
@@ -542,7 +556,7 @@ export default function GammaBellCurve({
       </div>
 
       <p className="gd-foot">
-        Bell peaks at <b>{nf0(mu)}</b> with a 1σ width of <b>±{nf0(sigma)}</b> pts
+        Bell peaks at <b>{nfp(mu)}</b> with a 1σ width of <b>±{nfp(sigma)}</b> pts
         ({((sigma / spot) * 100).toFixed(2)}% of spot); {insidePct.toFixed(0)}% of the mass
         is inside it, so the board is{" "}
         {insidePct >= 80 ? "far more concentrated than the fitted normal"

@@ -666,7 +666,22 @@ export function useSessionEsBars(date: string) {
  * That is a real "not recorded", not a failure, and the caller renders it as
  * one rather than filling the gap in.
  */
-export function useIntradayLadder(enabled: boolean, expiry: string, date?: string) {
+/**
+ * `symbol` was added 2026-08-27 and defaults to SPX so every existing caller is
+ * unchanged. Omitting it is not neutral on the server: the route runs
+ * `libDb.normGexSymbol(sp.get('symbol'))`, which resolves an absent value to
+ * `$SPX` — so a TSLA recap that did not pass one got SPX's ladder AND SPX's
+ * per-minute spot path back, and rendered both under a TSLA heading. The
+ * recorder writes `option_strike_gex_history` per symbol and covers the MAIN
+ * watchlist on its hot lane, so there is a real answer for every symbol the
+ * picker offers.
+ */
+export function useIntradayLadder(
+  enabled: boolean,
+  expiry: string,
+  date?: string,
+  symbol = "SPX",
+) {
   const [cols, setCols] = useState<Col[]>([]);
   const [state, setState] = useState<HistState>("loading");
 
@@ -688,7 +703,8 @@ export function useIntradayLadder(enabled: boolean, expiry: string, date?: strin
       try {
         const res = await dedupeFetch(
           `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=0` +
-            `&date=${encodeURIComponent(target)}&expiry=${encodeURIComponent(expiry)}`,
+            `&date=${encodeURIComponent(target)}&expiry=${encodeURIComponent(expiry)}` +
+            `&symbol=${encodeURIComponent(symbol)}`,
           { cache: "no-store" },
           20_000,
         );
@@ -738,7 +754,7 @@ export function useIntradayLadder(enabled: boolean, expiry: string, date?: strin
     if (target !== etDay(Date.now())) return () => { cancelled = true; };
     const id = setInterval(load, 120_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [enabled, expiry, target]);
+  }, [enabled, expiry, target, symbol]);
 
   return { cols, state };
 }
