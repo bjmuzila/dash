@@ -1,8 +1,21 @@
 import type { CSSProperties } from "react";
 
+/**
+ * Dark-slate surface ramp (v3, 2026-08-27) — six flat surface tokens, darkest
+ * to lightest, replacing the single blue-black bg/panel pair. `bg`/`panel`
+ * are kept as aliases (app/card) so every existing call site keeps working;
+ * new code should read `app`/`rail`/`shell`/`card`/`card2`/`cardHi` directly.
+ */
 export const HOME_THEME = {
-  bg: "#05060A",
-  panel: "#0D1119",
+  app:      "#020304", // page canvas behind everything
+  rail:     "#040507", // left icon rail
+  shell:    "#07080b", // dashboard shell / toolbar
+  card:     "#0f1117", // card surface
+  card2:    "#14171d", // nested rows / table headers
+  cardHi:   "#191b22", // hover state
+
+  bg: "#020304",     // alias → app
+  panel: "#0f1117",  // alias → card
   cyan: "#219EBC",
   purple: "#126783",
   orange: "#FB8501",
@@ -11,8 +24,8 @@ export const HOME_THEME = {
   muted: "#FFFFFF",
   text: "#FFFFFF",
   border: "rgba(255,255,255,0.10)",
-  panelBg: "rgba(13,17,25,0.45)",
-  panelBgStrong: "rgba(13,17,25,0.72)",
+  panelBg: "rgba(15,17,23,0.45)",
+  panelBgStrong: "rgba(15,17,23,0.72)",
   shellGlow:
     "radial-gradient(circle at 15% 50%, rgba(33,158,188,0.04) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(18,103,131,0.05) 0%, transparent 50%)",
 } as const;
@@ -259,7 +272,7 @@ export const DOCK_THEME = {
   // 2px top accent strip on menu panels
   cyanTop: themeRgba(HOME_THEME.cyan, 0.5),
   // panel background: top-down cyan glow over near-opaque dark
-  bg: `radial-gradient(circle at 50% 0%, ${themeRgba(HOME_THEME.cyan, 0.07)} 0%, transparent 55%), rgba(10,13,20,0.98)`,
+  bg: `radial-gradient(circle at 50% 0%, ${themeRgba(HOME_THEME.cyan, 0.07)} 0%, transparent 55%), rgba(15,17,23,0.98)`,
   // deep layered floating shadow
   shadow: "0 1px 0 rgba(255,255,255,0.06) inset, 0 20px 44px -14px rgba(0,0,0,0.75), 0 6px 16px rgba(0,0,0,0.45)",
   // active/selected tile gradient + its border + glow
