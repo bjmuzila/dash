@@ -47,12 +47,17 @@
   --color-line: #23272e;
 
   /* ── Text ─────────────────────────────────────────────────────────────
+     All white per Brandon 2026-08-27 — the grey secondary/faint tones read
+     too dim against the dark-slate surfaces. `muted`/`faint` stay as
+     separate tokens (still what card headers, axis ticks and disabled
+     copy point at) in case a step-down grey comes back later; today all
+     three resolve to the same white.
      fg      primary text
      muted   labels, axis ticks, secondary text
      faint   disabled, watermarks                                          */
-  --color-fg: #e6e8eb;
-  --color-muted: #8d949e;
-  --color-faint: #565c66;
+  --color-fg: #ffffff;
+  --color-muted: #ffffff;
+  --color-faint: #ffffff;
 
   /* ── Semantic ─────────────────────────────────────────────────────────
      Directional colour for a trading UI. Deliberately not red/green yet —

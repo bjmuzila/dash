@@ -87,22 +87,25 @@ function EtClock() {
 }
 
 function Toolbar() {
+  // Typeable now. There's no search backend wired yet (no ticker/strike/expiry
+  // lookup exists in src/data/api.ts), so this just holds what you type —
+  // Enter is the seam for wiring a real lookup in later.
+  const [query, setQuery] = useState('')
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
       <span className="text-sm font-semibold tracking-tight">CB Edge</span>
       <div className="flex-1" />
-      {/* Search — visual only for now; not wired to anything yet. */}
       <input
-        disabled
-        placeholder="Search ticker, strike, expiry… (coming soon)"
-        title="Search — coming soon"
-        className="w-64 shrink rounded-full border border-line bg-surface px-3 py-1 text-xs text-muted outline-none placeholder:text-faint disabled:cursor-not-allowed"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search ticker, strike, expiry…"
+        className="w-64 shrink rounded-full border border-line bg-surface px-3 py-1 text-xs text-fg outline-none placeholder:text-muted focus:border-accent"
       />
       <EtClock />
       {/* Account — decorative placeholder until v3 has its own auth/user menu. */}
       <div
         title="Account — coming soon"
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-raised text-xs font-bold text-muted"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-raised text-xs font-bold text-fg"
       >
         B
       </div>

@@ -1,5 +1,88 @@
 # Changelog
 
+## 2026-08-27 - ES Candles: SPX candles recorded, and a WIDE far-CB gamma lane
+
+Edited: `server-v2/etf-candle-recorder.js`, `server-v2/etf-gex-recorder.js`.
+
+Follow-up to the ES Candles work earlier today. The picker now offers the far-CB
+core roster and accepts any typed ticker, but the two recorders behind it still
+covered exactly the fourteen names the picker used to have - so most symbols
+charted candles under a permanently empty heatmap, and SPX had no recorded
+candles at all.
+
+Both recorders now run TWO LANES. Neither could simply grow its roster in place:
+each symbol is a serial network round trip (a throwaway dxLink connection for
+candles, a chain fetch for gamma), and 106 of those do not fit in a 60s tick.
+
+- **HOT** - the scanner MAIN lane. Every tick, full ladder. Unchanged.
+- **WIDE** - the rest of far-CB `CORE_TICKERS`, 93 names, ROUND-ROBIN: each tick
+  takes the next `WIDE_BATCH` (default 12), so a tick's cost is bounded and the
+  roster is covered every ~8 minutes.
+
+**SPX is now a recorded candle symbol.** It was excluded on the grounds that
+"SPX stays on the ES-basis pipeline", which was true while ES was the only way to
+look at SPX gamma. It isn't any more. Without a recorded series every SPX chart
+load fell through to the live dxLink fallback added this morning - a websocket
+round trip per card per 60s poll, forever.
+
+Note the deliberate asymmetry: `etf-gex-recorder` still excludes SPX and MUST.
+There, `$SPX` already has a writer (proxy-tastytrade, every 30s off the streamed
+chain) and a second one on the same key would fight it for the heatmap's
+`DISTINCT ON (minute_bucket, strike) ... timestamp DESC`. For candles there is no
+second writer, so recording it is simply the missing half.
+
+**The write-volume arithmetic, because this table has form.** `etf-gex-recorder`
+writes into `option_strike_gex_history` - the 2.9GB table from the 2026-07 disk
+incident. Sweeping 93 extra names every minute at +/-40 strikes would have been
+~10M rows on its own. Two things hold it to ~0.8M against the hot lane's ~1.5M
+(so the table grows by about half, not by ten times), and BOTH are load bearing:
+
+1. Round-robin, not a full sweep - a wide symbol writes ~49 columns a session
+   instead of 390.
+2. A narrower ladder - `ETF_GEX_WIDE_STRIKE_SIDE` 25 instead of 40, so 51 rows a
+   write rather than 81.
+
+The nightly prune then thins everything past `RETENTION_GEX_FULLRES_DAYS` to the
+5-minute grid, which for this lane is most of what it wrote.
+
+The trade-off, stated plainly rather than discovered later: **a wide symbol's
+heatmap has a column every ~8 minutes, not every minute.** That is a coarse gamma
+trail, and it is the price of covering 93 names on that table.
+`ETF_GEX_WIDE_BATCH` trades coverage against resolution in either direction.
+
+**Candles do NOT pay that cost**, which is the part that is easy to get wrong the
+other way: every candle fetch replays the whole day from ET midnight, so a symbol
+visited once every 8 minutes still ends the session with a complete, gapless
+1-minute series. Only the newest bar or two lag.
+
+**Lazy backfill.** A wide symbol's first visit pulls 5 days instead of today,
+then reverts. The boot backfill could not be used - it is a serial loop with a
+60s hard cap per symbol, which is fine for fourteen names and up to an hour and a
+half of solid upstream traffic for ninety-three, starting exactly when the
+process is trying to come up. First-visit backfill spreads the same work across
+the round-robin at no extra request. It also closes a real hole:
+`/api/snapshots/etf-candles` falls through to its live pull only when the table is
+EMPTY, so a wide symbol recorded with today's bars only would have taken the
+table branch and silently lost the four prior sessions the fallback was giving it.
+
+**Two smaller things.**
+
+- **Overrun guard on both ticks.** `setInterval` does not care whether the last
+  run finished; without a guard a slow upstream turns into overlapping ticks
+  piling requests onto a feed that is already struggling. A skipped tick loses
+  nothing - the round-robin cursor only advances on a run that happens, and the
+  forming bar is re-upserted next pass. Both log the overrun with the env var to
+  turn down.
+- **Expiration cache in `etf-gex-recorder`** - 30 min TTL, keyed by (symbol,
+  depth) AND by ET date so a 15:50 entry cannot serve yesterday's front expiry at
+  09:35. 13 hot names a minute was ~780 upstream calls an hour to re-learn the
+  same string. An empty result is deliberately not cached, so a name that failed
+  retries next visit instead of being written off for half an hour.
+
+Env knobs: `ETF_GEX_WIDE=0` / `ETF_CANDLE_WIDE=0` kill either wide lane;
+`ETF_*_WIDE_BATCH`, `ETF_GEX_WIDE_STRIKE_SIDE`, `ETF_*_WIDE_SYMBOLS`,
+`ETF_GEX_EXPIRY_TTL_MS`.
+
 ## 2026-08-27 - GEX Change Top: live triggers, and the card leads with the peak
 
 Edited: `server-v2/gex-change-top-recorder.js`,
