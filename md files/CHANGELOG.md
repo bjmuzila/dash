@@ -1,137 +1,6 @@
 # Changelog
 
-## 2026-08-27 - GEX Profile by Strike: actually centres on spot when it loads
-
-Edited: `components/pages/Premarket.tsx`.
-
-The profile panel is supposed to open with the spot row in the middle of the
-card. It often opened parked at the bottom of the ladder instead.
-
-**Cause: the centring was arithmetic, not measurement.**
-
-```
-el.scrollTop = i * 19 + 9.5 - el.clientHeight / 2;
-```
-
-Two assumptions, both of which can be wrong on a cold load:
-
-1. `el.clientHeight` is **0** until the panel has been laid out. A 0 there makes
-   the target `i * 19 + 9.5`, which the browser clamps to the maximum scroll -
-   so the card opened at the BOTTOM of the ladder and stayed there.
-2. `19` is `.pmk .row`'s height *today*. The literal and the stylesheet have to
-   be edited together and nothing said so.
-
-On the live SPX socket this was survivable by accident: a frame lands about once
-a second, `bars` changes identity, the effect re-runs, and the second or third
-attempt happens after layout. **On a chain-poll symbol the next attempt is sixty
-seconds away**, so the first bad centre is what you sit and look at - which is
-why this surfaced now that the picker offers the whole watchlist.
-
-There was also a race in the un-pin guard. `centerOnSpot` set
-`progScrollRef = true` and cleared it in a `requestAnimationFrame`; on a slow
-frame the rAF could win against the scroll event it caused, the panel read its
-OWN write as a hand on the wheel, un-pinned itself, and never re-centred again.
-
-### Fixed
-
-- **Measure the row.** `el.querySelectorAll(".row")[i]`, then
-  `row.offsetTop - (el.clientHeight - row.offsetHeight) / 2`. No magic 19, no
-  assumption about the panel's height.
-- **Report "not ready".** `centerOnSpot()` now returns a boolean instead of
-  writing a nonsense scrollTop, and the effect retries on `requestAnimationFrame`
-  for up to ~20 frames until the panel can be measured.
-- **A ResizeObserver** re-centres on any box change while pinned - the panel is
-  in a responsive grid, so a window resize (or the first paint settling) moves
-  the middle without `bars` changing at all.
-- **Second un-pin guard:** a scroll that lands exactly where we put it is ours,
-  not the user's, whichever way the rAF race goes.
-- **Switching symbol re-pins.** A new ladder is a new board; scrolling away on
-  SPX and then picking NVDA used to leave the new board parked at the old one's
-  offset.
-- No write when it is already centred, so a stationary pinned panel never flags
-  a programmatic scroll it did not perform.
-
-## 2026-08-27 - Gamma bell curve: AUTO now guarantees 20 strikes a side
-
-Edited: `components/pages/premarket/gammaChartKit.ts`.
-
-Follow-up to the entry above - widening the BOARD was necessary but not
-sufficient, because AUTO was never hitting the board's edge. It was hitting its
-own sigma.
-
-AUTO is `spot +/- 4.5 sigma` of the gamma mass. That is a statement about the
-distribution and says nothing about how many BARS it works out to. On a $352
-name with a $2.50 ladder and a mass sigma of ~2.3, `4.5 sigma` is +/-10 dollars:
-eight strikes a side, eleven bars on the card. Exactly the same complaint as
-before, one layer further in.
-
-**Fix: state the floor in the unit the eye is counting.** New
-`AUTO_MIN_STRIKES = 20` and `strikesHalf(wide, spot, n)` - the half-width that
-puts at least `n` strikes on **both** sides of spot, measured per side off the
-un-folded per-strike bins and then symmetrised (the window is symmetric, so the
-hungrier side wins). AUTO takes it as one more `Math.max` alongside the sigma
-term, the level term and the mu-offset term, still capped by `wideHalfOf`.
-
-Sigma still decides the window whenever sigma asks for more, which on SPX it
-essentially always does: 20 five-wide strikes is +/-100 points against a 0DTE
-`4.5 sigma` of ~110. So this is a floor for coarse ladders and a no-op on SPX in
-normal conditions; on an unusually tight SPX board it can now widen slightly to
-keep 41 bars on screen, which is the same rule doing the same job.
-
-Result on a $2.50 ladder: 41 bars instead of 11.
-
-## 2026-08-27 - Gamma bell curve: a percentage band is the wrong unit for a strike ladder
-
-Edited: `components/pages/premarket/gammaChartKit.ts`,
-`components/pages/premarket/GammaBellCurve.tsx`.
-
-**The bug, from an AMZN screenshot:** seven bars, and a "least-squares normal
-fit" drawn through them.
-
-Both gamma cards read a board of **±3% of spot**. On SPX that is ±230 points -
-about 92 five-wide strikes, plenty of chart. On a $257 AMZN it is
-**±7.70 DOLLARS**, and AMZN lists every $2.50: **seven strikes**, total. The
-window was never wrong in percent, it was wrong in *strikes* - SPX's grid is
-0.065% of spot per step and AMZN's is 0.97%, nearly fifteen times coarser in
-relative terms, so the same percentage buys fifteen times fewer bars.
-
-Everything downstream inherited it. AUTO is `spot ± 4.5σ`, but it is capped at
-the board, so on AMZN the cap was ~1.5σ - AUTO could never widen. The fit ran on
-seven points. `σ`, "mass inside 1σ" and "center of mass" were all measured
-through a slit.
-
-### The fix: express the floor in strikes
-
-New `wideHalfOf(chain, spot)` - the widest band the cards read:
-
-- ±3% of spot as the **base**, exactly as before;
-- widened, when that slice is too thin, to the distance of the
-  **60th-nearest strike** (`WIDE_MIN_STRIKES`);
-- never past **±30%** (`WIDE_MAX_BAND`) - nothing that far from spot is gamma
-  worth charting.
-
-It caps AUTO, the pan clamp and the wheel - all three of which were a flat
-`spot * MAX_BAND`.
-
-**SPX is untouched, by construction.** Its 60th-nearest strike is ~150 points
-against a 230-point base, so the base wins and every SPX number, window and
-gesture is what it was. This is a fix for coarse ladders, not a re-tune of the
-chart everyone already reads.
-
-### And the zoom floor
-
-`MIN_HALF` is a **14-point** constant ("about six 5-point strikes"). On a $257
-name that is ±5.5% - you could not zoom in at all. It is now a **cap** on a
-floor that follows the ladder: `min(MIN_HALF, 3 x gridStep)`. Three strikes
-across is the same read on any grid; on SPX's 5-wide grid that is
-`min(14, 15) = 14`, exactly what it always was.
-
-**Expected on AMZN:** the board goes from ~7 strikes to ~60 (clamped by the 30%
-ceiling), AUTO is free to pick a real `4.5σ` window inside it, and the fit,
-`σ`, "mass inside 1σ" and the center of mass are measured on the actual
-distribution instead of a seven-point slice.
-
-## 2026-08-27 - Level Log: 0DTE/non-0DTE + OI+Vol/Vol-only switches, CORE means CORE, scanner sweeps every minute
+## 2026-08-27 - Level Log: 0DTE/non-0DTE + OI+Vol/Vol-only switches, CORE means CORE, a pop-out week chart, scanner sweeps every minute
 
 New: `server-v2/scanner-variants.js`.
 Edited: `server-v2/scanner-recorder.js`, `server-v2/walls-recorder.js`,
@@ -152,6 +21,40 @@ it sits ON a wall (usual: the biggest node on the chain is normally also the
 biggest node on one side of spot) the blue reads on top instead of one line
 silently hiding under another. The 5m gamma series the roles were computed from
 is no longer read by the chart.
+
+**1b. Level colours.** CORE is gold, the call wall green, the put wall red —
+everywhere the page draws a level: the rail column heads and cells, the capture
+rail, the migration chart and its legend, and the timeline badges. Sourced from
+`homeTheme`, not hardcoded: CORE and the put wall take `LEVEL_COLORS.cb` / `.pw`
+(the same gold and red Multi Greek and the level snapshot renderer use), and the
+call wall takes `ES_CANDLE_UP`. Deliberately not `LEVEL_COLORS.cw` (blue) or
+`HOME_THEME.green` (which is the status palette's light blue, `#8ECAE6`) —
+neither reads as GREEN beside a red put wall, which is the entire point of the
+pairing.
+
+**1c. Wall migration pops out, and does a week.** An `⤢ Expand` button in the
+chart's header opens it full width at ~2.2x the height, over a scrim, Esc or
+click-outside to close. Inside it, a range switch: **Today** (reuses the session
+already loaded — no refetch for what is already on screen) or **5 sessions**,
+which walks back weekdays from the selected date and draws the last five that
+actually recorded rows.
+
+Same component either way. `WallMigrationChart` now takes an ARRAY of day slices
+instead of one day's log — one entry is the inline chart, five is the week — so
+there is no second implementation to drift. Each session gets an equal slice of
+the width and they all share **one** price scale, which is the point: a wall
+holding its strike across the week draws as one flat run. Nothing is drawn across
+a session boundary (solid divider per day) because the overnight is a gap the
+level did not travel through.
+
+`useWallDays` fetches in two waves and is best-effort throughout: the small level
+logs go out for more candidate weekdays than needed, the newest five that came
+back with rows are kept, and only THOSE get a 1-minute tape request — so a
+holiday never costs a candle fetch. Levels render as soon as the logs land; the
+tape sharpens the price line on a second pass rather than behind a spinner. The
+popout honours the page's WALLS/CORE/ALL view and both variant switches, and is
+mounted only while open, so the 5-session fetch never runs for a reader who did
+not ask for it.
 
 **2. Two new switches on the Level Log — four recorded variants.**
 

@@ -230,7 +230,16 @@ export function Board({
               touchAction: locked ? undefined : 'none',
             }}
           >
-            <div className="relative h-full w-full overflow-hidden">
+            {/*
+              Must be a flex column, not just a sized box: Card (and every
+              card body under it) fills its space via `flex-1`/`min-h-0`,
+              which only takes effect inside a flex parent. Without `flex
+              flex-col` here, Card has no layout instruction to obey and
+              shrinks to its header's content height instead of the pixel
+              height this tile was just given — the card LOOKS unsized even
+              though `box.height` above is correct.
+            */}
+            <div className="relative flex h-full w-full flex-col overflow-hidden">
               {render(it.id)}
               {!locked && (
                 <div

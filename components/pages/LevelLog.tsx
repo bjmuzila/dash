@@ -54,6 +54,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import { HOME_THEME, LIGHT_BLUE, LEVEL_COLORS, ES_CANDLE_UP, homeInputStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { PageShell } from "@/components/shared/PageCard";
@@ -693,6 +694,16 @@ export default function LevelLog() {
   const spot = selRow?.spot ?? null;
 
   const empty = !sel || !(log.length || events.length);
+  /** Is the full-size chart open? */
+  const [popout, setPopout] = useState(false);
+  /**
+   * The day already on screen, in the chart's array shape. The popout's "Today"
+   * range reuses this rather than re-fetching what the page just loaded.
+   */
+  const todayDays = useMemo<DaySlice[]>(
+    () => [{ date, log, events, price }],
+    [date, log, events, price],
+  );
   /** The contract tag, once, for the card header / copy text / PNG title. */
   const expTag = useMemo(() => expiryTag(expiry, date), [expiry, date]);
   const vTag = useMemo(() => variantTag(scope, basis), [scope, basis]);
@@ -943,7 +954,7 @@ export default function LevelLog() {
           {/* The same session as a picture. Sits ABOVE the scroll body on
               purpose: framed capture expands that body without reflowing its
               siblings, so anything under it gets drawn over in the PNG. */}
-          <WallMigrationChart log={log} events={events} view={view} price={price} />
+          <WallMigrationChart days={todayDays} view={view} onExpand={() => setPopout(true)} />
 
           {/* A variant with nothing in it is almost always "not recorded yet"
               rather than "nothing happened": the non-0DTE and vol-only legs
@@ -982,6 +993,21 @@ export default function LevelLog() {
           </div>
         </div>
       </div>
+
+      {/* Full-size chart. Mounted only while open, so the 5-session fetch never
+          runs for a reader who did not ask for it. */}
+      {popout ? (
+        <WallMigrationPopout
+          symbol={sel}
+          date={date}
+          view={view}
+          scope={scope}
+          basis={basis}
+          today={todayDays}
+          nonce={nonce}
+          onClose={() => setPopout(false)}
+        />
+      ) : null}
     </PageShell>
   );
 }
@@ -1449,126 +1475,154 @@ function useWallSeries(
  * continuous stroke, and the legend as swatch chips under the head. Three
  * stamps under the plot say what span you are looking at.
  */
-function WallMigrationChart({ log, events, view, price }: {
-  log: WallLogRow[]; events: WallEventRow[]; view: LogView;
-  /** The 1-minute tape, when there is one. Empty falls back to the captures. */
+/**
+ * ONE DAY of the chart's input: the change-only level log, the classified
+ * events, and the 1-minute tape if there was one. The chart takes an ARRAY of
+ * these — one entry is the inline single-session chart, five entries is the
+ * week view in the popout — so both are the same drawing code and cannot drift.
+ */
+type DaySlice = {
+  date: string;
+  log: WallLogRow[];
+  events: WallEventRow[];
   price: SpotSample[];
+};
+
+/** One day reduced to what the drawing needs. */
+type DaySeg = {
+  date: string;
+  series: Map<WallLevel, (number | null)[]>;
+  band: { call: (number | null)[]; put: (number | null)[] } | null;
+  spotPts: { s: number; v: number }[];
+  spotDrawn: { s: number; v: number }[];
+  dense: boolean;
+  lastSlot: number;
+  lastWrite: number;
+};
+
+function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
+  days: DaySlice[];
+  view: LogView;
+  /** Plot height in px. The popout draws the same model twice as tall. */
+  height?: number;
+  /** Given only by the inline chart — the popout has nothing to expand into. */
+  onExpand?: () => void;
 }) {
   const model = useMemo(() => {
     const inSlot = (s: number) => Number.isFinite(s) && s >= 0 && s < WALL_SLOTS;
 
-    // How much session the LOG wrote. Same definition the rail's fill uses, so
-    // the two never disagree about where the last capture was.
-    let lastWrite = 0;
-    for (const r of log) if (inSlot(r.slot) && r.slot > lastWrite) lastWrite = r.slot;
-    for (const e of events) if (inSlot(e.hit_slot) && e.hit_slot > lastWrite) lastWrite = e.hit_slot;
-
-    /**
-     * HOW FAR THE CHART DRAWS — the session, not the log.
-     *
-     * The x axis used to end at the last row `walls_log` wrote, and walls_log is
-     * change-only. So a ticker whose walls stopped rolling at 10:00 drew a
-     * half-hour chart and threw away the six hours of tape that were already in
-     * hand — and that is precisely backwards, because "the level sat while price
-     * travelled all day" is the single most tradeable thing this panel can show.
-     * A day with no rolls after the open was the day it drew the least.
-     *
-     * So the extent is the TAPE, which useIntradaySpot already pulls for the
-     * whole 09:30→16:00 window off /proxy/candles-intraday. No new fetch, no new
-     * recorder write, no clock read: mid-session the tape ends at the last
-     * closed minute, so the chart ends at now; on a past date it ends at 16:00.
-     * When there is no tape (index with no 1m bars, or a date outside dxFeed's
-     * window) `tapeEnd` is 0 and the extent falls back to the log exactly as
-     * before.
-     *
-     * Past `lastWrite` the levels are the forward fill — which is not an
-     * invention, it is what a level with no rows MEANS: it held. The render
-     * marks that boundary so the held stretch is never mistaken for captures.
-     */
-    const tapeAll = price
-      .map((p) => ({ s: slotAtMins(p.mins), v: p.px }))
-      .filter((p) => Number.isFinite(p.s) && p.s >= 0 && p.s <= WALL_SLOTS - 1 && p.v > 0);
-    let tapeEnd = 0;
-    for (const p of tapeAll) if (p.s > tapeEnd) tapeEnd = p.s;
-    const lastSlot = Math.min(WALL_SLOTS - 1, Math.max(lastWrite, Math.ceil(tapeEnd)));
-
-    // Only level types this view covers AND that actually have rows today.
-    const levels = VIEW_LEVELS[view].filter((lt) => log.some((r) => r.level_type === lt));
+    // Level types this view covers AND that have rows on at least one of the
+    // days. Union, not intersection: a level that only exists on three of five
+    // sessions should draw on those three, not be dropped from the week.
+    const levels = VIEW_LEVELS[view].filter((lt) => days.some((d) => d.log.some((r) => r.level_type === lt)));
     if (!levels.length) return null;
 
-    // Forward-fill: at slot s a level is whatever it was last written as.
-    const series = new Map<WallLevel, (number | null)[]>();
-    for (const lt of levels) {
-      const rows = log
-        .filter((r) => r.level_type === lt && inSlot(r.slot) && Number.isFinite(Number(r.strike)))
-        .sort((a, b) => a.slot - b.slot);
-      const out: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-      let cur: number | null = null;
-      let i = 0;
-      for (let s = 0; s <= lastSlot; s++) {
-        while (i < rows.length && rows[i].slot <= s) {
-          cur = Number(rows[i].strike);
-          i++;
+    const segs: DaySeg[] = [];
+    for (const day of days) {
+      // Scoped to the view here rather than by the caller, so the inline chart
+      // (which is handed already-filtered rows) and the popout's week fetch
+      // (which is handed the raw day) count the same captures and draw the same
+      // lines. Idempotent on rows that were already filtered.
+      const log = day.log.filter((r) => inView(view, r.level_type));
+      const events = day.events.filter((e) => inView(view, e.level_type));
+      const price = day.price;
+
+      // How much session the LOG wrote. Same definition the rail's fill uses, so
+      // the two never disagree about where the last capture was.
+      let lastWrite = 0;
+      for (const r of log) if (inSlot(r.slot) && r.slot > lastWrite) lastWrite = r.slot;
+      for (const e of events) if (inSlot(e.hit_slot) && e.hit_slot > lastWrite) lastWrite = e.hit_slot;
+
+      /**
+       * HOW FAR THE DAY DRAWS — the session, not the log.
+       *
+       * The x axis used to end at the last row `walls_log` wrote, and walls_log
+       * is change-only. So a ticker whose walls stopped rolling at 10:00 drew a
+       * half-hour chart and threw away the six hours of tape that were already
+       * in hand — and that is precisely backwards, because "the level sat while
+       * price travelled all day" is the single most tradeable thing this panel
+       * can show. A day with no rolls after the open was the day it drew least.
+       *
+       * So the extent is the TAPE, which useIntradaySpot already pulls for the
+       * whole 09:30→16:00 window off /proxy/candles-intraday. No new fetch, no
+       * new recorder write, no clock read: mid-session the tape ends at the last
+       * closed minute, so the chart ends at now; on a past date it ends at
+       * 16:00. When there is no tape (index with no 1m bars, or a date outside
+       * dxFeed's window) `tapeEnd` is 0 and the extent falls back to the log.
+       *
+       * Past `lastWrite` the levels are the forward fill — which is not an
+       * invention, it is what a level with no rows MEANS: it held. The render
+       * marks that boundary so the held stretch is never mistaken for captures.
+       */
+      const tapeAll = price
+        .map((p) => ({ s: slotAtMins(p.mins), v: p.px }))
+        .filter((p) => Number.isFinite(p.s) && p.s >= 0 && p.s <= WALL_SLOTS - 1 && p.v > 0);
+      let tapeEnd = 0;
+      for (const p of tapeAll) if (p.s > tapeEnd) tapeEnd = p.s;
+      const lastSlot = Math.min(WALL_SLOTS - 1, Math.max(lastWrite, Math.ceil(tapeEnd)));
+
+      // Forward-fill: at slot s a level is whatever it was last written as.
+      const series = new Map<WallLevel, (number | null)[]>();
+      for (const lt of levels) {
+        const rows = log
+          .filter((r) => r.level_type === lt && inSlot(r.slot) && Number.isFinite(Number(r.strike)))
+          .sort((a, b) => a.slot - b.slot);
+        if (!rows.length) continue;
+        const out: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+        let cur: number | null = null;
+        let i = 0;
+        for (let s = 0; s <= lastSlot; s++) {
+          while (i < rows.length && rows[i].slot <= s) {
+            cur = Number(rows[i].strike);
+            i++;
+          }
+          out[s] = cur;
         }
-        out[s] = cur;
+        series.set(lt, out);
       }
-      series.set(lt, out);
-    }
 
-    // Spot, from every capture that carried one. Events are written second so a
-    // tag's spot_at_hit wins over the level row at the same slot — the tag is
-    // the more precise reading of where price actually was.
-    const spot: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-    for (const r of log) {
-      if (inSlot(r.slot) && Number.isFinite(Number(r.spot)) && Number(r.spot) > 0) spot[r.slot] = Number(r.spot);
-    }
-    for (const e of events) {
-      if (inSlot(e.hit_slot) && Number.isFinite(Number(e.spot_at_hit)) && Number(e.spot_at_hit) > 0) {
-        spot[e.hit_slot] = Number(e.spot_at_hit);
+      // Spot, from every capture that carried one. Events are written second so
+      // a tag's spot_at_hit wins over the level row at the same slot — the tag
+      // is the more precise reading of where price actually was.
+      const spot: (number | null)[] = new Array(WALL_SLOTS).fill(null);
+      for (const r of log) {
+        if (inSlot(r.slot) && Number.isFinite(Number(r.spot)) && Number(r.spot) > 0) spot[r.slot] = Number(r.spot);
       }
-    }
-    const spotPts = spot.map((v, s) => ({ s, v })).filter((p) => p.v != null) as { s: number; v: number }[];
+      for (const e of events) {
+        if (inSlot(e.hit_slot) && Number.isFinite(Number(e.spot_at_hit)) && Number(e.spot_at_hit) > 0) {
+          spot[e.hit_slot] = Number(e.spot_at_hit);
+        }
+      }
+      const spotPts = spot.map((v, s) => ({ s, v })).filter((p) => p.v != null) as { s: number; v: number }[];
 
-    /**
-     * THE CORRIDOR — the room price actually had, drawn as the band between the
-     * put wall and the call wall. It is a shaded polygon, not a third line.
-     *
-     * WHAT USED TO BE HERE (removed 2026-08-27): a "role" model that drew two
-     * lines — CORE = whichever WALL carried more gamma at that slot, OTHER = the
-     * lighter one — instead of the recorded levels. It was defensible on its own
-     * terms and wrong in practice, because the page says CORE in five other
-     * places and every one of them means the recorded `cb` strike. On MSFT that
-     * read CORE 505 in the ALL view (the call wall) and CORE 500 in the CORE view
-     * (the actual CORE), one page, same day, same word, two numbers. A chart that
-     * disagrees with the rail above it is not a reading, it is a bug. CORE is now
-     * the cb level everywhere, drawn in the same gold the rest of the page uses
-     * for it, and the walls are the walls.
-     */
-    const band = (() => {
+      /**
+       * WHICH PRICE GETS DRAWN. The 1-minute tape when it arrived, the log's own
+       * captures when it did not — never the two spliced together, which would
+       * put a smooth stretch next to a stepped one and read as the tape going
+       * quiet rather than the data running out. Decided PER DAY, so one session
+       * missing its tape does not downgrade the other four.
+       */
+      const tape = tapeAll.filter((p) => p.s <= lastSlot);
+      const dense = tape.length >= 20;
+      const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }));
+
       const cw = series.get("call_wall");
       const pw = series.get("put_wall");
-      if (!cw || !pw) return null;
-      return { call: cw, put: pw };
-    })();
+      const band = cw && pw ? { call: cw, put: pw } : null;
 
-    /**
-     * WHICH PRICE GETS DRAWN. The 1-minute tape when it arrived, the log's own
-     * captures when it did not — never the two spliced together, which would
-     * put a smooth stretch next to a stepped one and read as the tape going
-     * quiet rather than the data running out.
-     *
-     * Clipped to `lastSlot` — which the tape itself now sets, so this only ever
-     * trims a stray bar past 16:00 or a sample beyond the slot grid.
-     */
-    const tape = tapeAll.filter((p) => p.s <= lastSlot);
-    const dense = tape.length >= 20;
-    const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }));
+      if (!series.size && !spotDrawn.length) continue;
+      segs.push({ date: day.date, series, band, spotPts, spotDrawn, dense, lastSlot, lastWrite });
+    }
+    if (!segs.length) return null;
 
-    // The y range is bounded by what is DRAWN — every level series in this view,
-    // plus the price line.
+    // ONE y range across every day drawn. Per-day scaling would make a week of
+    // levels look flat by rescaling each session to its own range — the whole
+    // point of the week view is seeing a wall hold its strike ACROSS days.
     const vals: number[] = [];
-    for (const arr of series.values()) for (const v of arr) if (v != null) vals.push(v);
-    for (const p of spotDrawn) vals.push(p.v);
+    for (const seg of segs) {
+      for (const arr of seg.series.values()) for (const v of arr) if (v != null) vals.push(v);
+      for (const p of seg.spotDrawn) vals.push(p.v);
+    }
     if (vals.length < 2) return null;
 
     let lo = Math.min(...vals);
@@ -1577,65 +1631,96 @@ function WallMigrationChart({ log, events, view, price }: {
     const padY = (hi - lo) * 0.08;
     lo -= padY; hi += padY;
 
-    return { levels, series, band, spotPts, spotDrawn, dense, lo, hi, lastSlot, lastWrite };
-  }, [log, events, view, price]);
+    return { levels, segs, lo, hi };
+  }, [days, view]);
 
   if (!model) return null;
-  const { levels, series, band, spotPts, spotDrawn, dense, lo, hi, lastSlot, lastWrite } = model;
+  const { levels, segs, lo, hi } = model;
+  const N = segs.length;
+  const segW = 100 / N;
+  const last = segs[N - 1];
 
-  /** Index across what was recorded, edge to edge — the post-market geometry. */
-  const x = (s: number) => (s / Math.max(1, lastSlot)) * 100;
-  const y = (v: number) => MIG_PAD + (1 - (v - lo) / (hi - lo)) * (MIG_H - MIG_PAD * 2);
+  /**
+   * Index across what was recorded, edge to edge — the post-market geometry,
+   * generalised. Each day owns an equal slice of the 100-wide viewBox and its
+   * own slots run edge to edge inside that slice. With one day this is exactly
+   * the single-session geometry it always was.
+   *
+   * Equal WIDTH per day, not equal minutes: a half-recorded session and a full
+   * one get the same slice, because the comparison the week view exists for is
+   * "where did the levels sit each day", not "how long was each day".
+   */
+  const x = (i: number, s: number) => i * segW + (s / Math.max(1, segs[i].lastSlot)) * segW;
+  const y = (v: number) => MIG_PAD + (1 - (v - lo) / (hi - lo)) * (height - MIG_PAD * 2);
 
-  /** Step, not slope — see the header. Walk forward or back over the fill. */
-  const step = (arr: (number | null)[], reverse = false) => {
+  /**
+   * Step, not slope — a level holds its strike until it rolls. Walk forward or
+   * back over one DAY's fill; never across a day boundary, which would draw a
+   * diagonal through an overnight the level did not travel.
+   */
+  const step = (i: number, arr: (number | null)[] | undefined, reverse = false) => {
+    if (!arr) return "";
     const out: string[] = [];
     let prev: number | null = null;
     const push = (s: number) => {
       const v = arr[s];
       if (v == null) return;
-      if (prev != null && v !== prev) out.push(`${x(s)},${y(prev)}`);
-      out.push(`${x(s)},${y(v)}`);
+      if (prev != null && v !== prev) out.push(`${x(i, s)},${y(prev)}`);
+      out.push(`${x(i, s)},${y(v)}`);
       prev = v;
     };
-    if (reverse) for (let s = lastSlot; s >= 0; s--) push(s);
-    else for (let s = 0; s <= lastSlot; s++) push(s);
+    if (reverse) for (let s = segs[i].lastSlot; s >= 0; s--) push(s);
+    else for (let s = 0; s <= segs[i].lastSlot; s++) push(s);
     return out.join(" ");
   };
 
-  const lastOf = (arr: (number | null)[]) => {
-    for (let s = lastSlot; s >= 0; s--) if (arr[s] != null) return arr[s] as number;
+  /** Last written value of a level across the whole span — the legend's number. */
+  const lastOf = (lt: WallLevel) => {
+    for (let i = N - 1; i >= 0; i--) {
+      const arr = segs[i].series.get(lt);
+      if (!arr) continue;
+      for (let s = segs[i].lastSlot; s >= 0; s--) if (arr[s] != null) return arr[s] as number;
+    }
     return null;
   };
 
   /**
-   * One stroke per RECORDED level, in the colour the rest of the page reads as
-   * that level — gold CORE, green call wall, red put wall. Walls first, CORE
-   * last, so where the CORE is sitting on
-   * a wall — which is common, it is usually the heavier of the two — the blue
-   * reads on top and the reader can see that they coincide rather than having
-   * one silently hidden under the other.
+   * One stroke per RECORDED level per day, in the colour the rest of the page
+   * reads as that level — gold CORE, green call wall, red put wall. Walls first,
+   * CORE last, so where the CORE is sitting on a wall — common, it is usually
+   * the heavier of the two — the gold reads on top and the reader can see that
+   * they coincide rather than having one silently hidden under the other.
    */
   const drawOrder: WallLevel[] = ["put_wall", "call_wall", "cb"];
-  const paths: { key: string; d: string; color: string; w: number }[] = drawOrder
-    .filter((lt) => levels.includes(lt))
-    .map((lt) => ({
-      key: lt,
-      d: step(series.get(lt) ?? []),
-      color: LEVEL_COLOR[lt],
-      w: lt === "cb" ? 2.2 : 1.8,
-    }))
-    .filter((p) => p.d);
+  const drawn = drawOrder.filter((lt) => levels.includes(lt));
+  const paths: { key: string; d: string; color: string; w: number }[] = [];
+  for (const lt of drawn) {
+    for (let i = 0; i < N; i++) {
+      const d = step(i, segs[i].series.get(lt));
+      if (d) paths.push({ key: `${lt}-${i}`, d, color: LEVEL_COLOR[lt], w: lt === "cb" ? 2.2 : 1.8 });
+    }
+  }
 
-  // The corridor between the two WALLS — the room price actually had.
-  const corridor = band ? `${step(band.call)} ${step(band.put, true)}` : null;
-  const spotLine = spotDrawn.map((p) => `${x(p.s)},${y(p.v)}`).join(" ");
+  // The corridor between the two WALLS — the room price actually had. Per day,
+  // for the same reason the lines are.
+  const corridors = segs
+    .map((seg, i) => (seg.band ? `${step(i, seg.band.call)} ${step(i, seg.band.put, true)}` : null))
+    .map((d, i) => ({ key: `band-${i}`, d }))
+    .filter((c) => c.d);
 
-  /** x of the last written slot, only when the chart runs past it. */
-  const heldFrom = lastWrite < lastSlot ? x(lastWrite) : null;
+  const spotLines = segs
+    .map((seg, i) => ({ key: `spot-${i}`, d: seg.spotDrawn.map((p) => `${x(i, p.s)},${y(p.v)}`).join(" ") }))
+    .filter((c) => c.d);
+
+  /** x of the last written slot on the LIVE day, only when it runs past it. */
+  const heldFrom = last.lastWrite < last.lastSlot ? x(N - 1, last.lastWrite) : null;
+
+  const totalMins = segs.reduce((n, seg) => n + (seg.dense ? seg.spotDrawn.length : 0), 0);
+  const totalCaps = segs.reduce((n, seg) => n + seg.spotPts.length, 0);
+  const anyDense = segs.some((seg) => seg.dense);
 
   /**
-   * The post-market legend: a small square swatch, the role in sentence case,
+   * The post-market legend: a small square swatch, the level in sentence case,
    * and the strike it currently sits on. Not the old uppercase pill row — that
    * was a second title bar fighting the head above it.
    */
@@ -1647,6 +1732,8 @@ function WallMigrationChart({ log, events, view, price }: {
     </span>
   );
 
+  const lastSpot = last.spotDrawn.length ? last.spotDrawn[last.spotDrawn.length - 1].v : null;
+
   return (
     <div style={{ padding: "13px 18px 12px", borderBottom: `1px solid ${C.border}` }}>
       <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap", marginBottom: 6 }}>
@@ -1654,37 +1741,55 @@ function WallMigrationChart({ log, events, view, price }: {
           Wall migration
         </span>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, color: MUTED }}>
-          recorded levels · {dense
-            ? `${spotDrawn.length} min of price`
-            : `${spotPts.length} spot capture${spotPts.length === 1 ? "" : "s"}`}
+          {N > 1 ? `${N} sessions · ` : ""}recorded levels · {anyDense
+            ? `${totalMins} min of price`
+            : `${totalCaps} spot capture${totalCaps === 1 ? "" : "s"}`}
         </span>
+        {onExpand ? (
+          <button
+            data-capture-hide
+            onClick={onExpand}
+            title="Open this chart full size — and over the last 5 sessions"
+            style={{
+              marginLeft: "auto", padding: "3px 9px", borderRadius: 7, cursor: "pointer",
+              fontFamily: "inherit", fontSize: FS_LABEL, fontWeight: 800, letterSpacing: "0.08em",
+              textTransform: "uppercase", border: `1px solid ${C.border}`,
+              background: "rgba(255,255,255,0.03)", color: C.label,
+            }}
+          >
+            ⤢ Expand
+          </button>
+        ) : null}
       </div>
 
       {/* Its own legend, under the head and above the plot. The section head
           says nothing about these series — which is exactly how a CORE line
           reads as an unexplained squiggle. */}
       <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
-        {paths.map((p) => legendChip(
-          p.color,
-          LEVEL_LABEL[p.key as WallLevel] ?? p.key,
-          wallStrike(lastOf(series.get(p.key as WallLevel) ?? [])),
-        ))}
-        {spotDrawn.length ? legendChip(HOME_THEME.text, "spot", wallNum(spotDrawn[spotDrawn.length - 1].v)) : null}
+        {drawn.map((lt) => legendChip(LEVEL_COLOR[lt], LEVEL_LABEL[lt], wallStrike(lastOf(lt))))}
+        {lastSpot != null ? legendChip(HOME_THEME.text, "spot", wallNum(lastSpot)) : null}
       </div>
 
       {/* preserveAspectRatio="none" — the x axis is slots, the y axis is price,
           and the two have no business sharing a scale. Every stroke carries
           vectorEffect so the squash never thickens a line, and there is no
           <text> or <circle> inside for the same reason. */}
-      <svg viewBox={`0 0 100 ${MIG_H}`} height={MIG_H} preserveAspectRatio="none"
+      <svg viewBox={`0 0 100 ${height}`} height={height} preserveAspectRatio="none"
         style={{ width: "100%", display: "block" }}>
-        {/* The corridor between the two, so the room price actually had is readable. */}
-        {corridor ? <polygon points={corridor} fill={rgba(C.cyan, 0.06)} /> : null}
+        {/* The corridor between the two walls, so the room price had is readable. */}
+        {corridors.map((c) => <polygon key={c.key} points={c.d as string} fill={rgba(C.cyan, 0.06)} />)}
+        {/* Session boundaries. Solid, unlike the dashed "log stopped writing"
+            mark, because they are a different kind of edge: one is a gap in the
+            clock, the other is a gap in the rows. */}
+        {segs.slice(1).map((seg, k) => (
+          <line key={`div-${seg.date}`} x1={(k + 1) * segW} x2={(k + 1) * segW} y1={0} y2={height}
+            stroke={rgba(HOME_THEME.text, 0.22)} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        ))}
         {/* Where the log stopped writing. Everything right of it is the forward
             fill — the levels held, which is why there are no rows — and the
             reader is entitled to see which half is captures and which is hold. */}
         {heldFrom != null ? (
-          <line x1={heldFrom} x2={heldFrom} y1={0} y2={MIG_H}
+          <line x1={heldFrom} x2={heldFrom} y1={0} y2={height}
             stroke={rgba(HOME_THEME.text, 0.16)} strokeWidth={1} strokeDasharray="3 3"
             vectorEffect="non-scaling-stroke" />
         ) : null}
@@ -1693,23 +1798,33 @@ function WallMigrationChart({ log, events, view, price }: {
             vectorEffect="non-scaling-stroke" strokeLinejoin="miter" />
         ))}
         {/* Spot last, so it reads on top of the levels it is being compared with. */}
-        {spotLine ? (
-          <polyline points={spotLine} fill="none" stroke={HOME_THEME.text} strokeWidth={1.5}
+        {spotLines.map((c) => (
+          <polyline key={c.key} points={c.d} fill="none" stroke={HOME_THEME.text} strokeWidth={1.5}
             vectorEffect="non-scaling-stroke" />
-        ) : null}
+        ))}
       </svg>
 
-      <div style={{
-        display: "flex", justifyContent: "space-between", marginTop: 5,
-        fontFamily: "var(--font-mono)", fontSize: 10, color: MUTED,
-      }} aria-hidden>
-        <span>{slotClock(0)}</span>
-        <span>{slotClock(Math.round(lastSlot / 2))}</span>
-        <span>{slotClock(lastSlot)}</span>
-      </div>
+      {/* One clock rail for a single session; one date stamp per slice for a
+          week, because 09:29/12:45/16:00 repeated five times says nothing. */}
+      {N === 1 ? (
+        <div style={{
+          display: "flex", justifyContent: "space-between", marginTop: 5,
+          fontFamily: "var(--font-mono)", fontSize: 10, color: MUTED,
+        }} aria-hidden>
+          <span>{slotClock(0)}</span>
+          <span>{slotClock(Math.round(last.lastSlot / 2))}</span>
+          <span>{slotClock(last.lastSlot)}</span>
+        </div>
+      ) : (
+        <div style={{ display: "flex", marginTop: 5, fontFamily: "var(--font-mono)", fontSize: 10, color: MUTED }} aria-hidden>
+          {segs.map((seg) => (
+            <span key={seg.date} style={{ flex: `0 0 ${segW}%`, textAlign: "center" }}>{mmdd(seg.date)}</span>
+          ))}
+        </div>
+      )}
 
       <div style={{ fontSize: FS_META, marginTop: 6, lineHeight: 1.5, color: MUTED }}>
-        {band ? (
+        {segs.some((seg) => seg.band) ? (
           <>
             The shaded band is the corridor between the two walls — the room price had. CORE is the
             recorded <b style={{ color: CORE_GOLD }}>cb</b> strike, the single largest |net GEX| node on the
@@ -1719,15 +1834,21 @@ function WallMigrationChart({ log, events, view, price }: {
         ) : null}
         Each level holds its strike until the recorder writes a change, so the steps are the rolls. A level that
         sits while price travels is the one to fade; one that moves with price is dealers chasing.{" "}
-        {dense ? (
-          <>Spot is the 1-minute tape; the level log&apos;s own {spotPts.length} spot capture
-            {spotPts.length === 1 ? "" : "s"} sit under it at the slots that wrote a row.</>
+        {N > 1 ? (
+          <>Every session gets an equal slice of the width and they all share ONE price scale, so a wall
+            holding the same strike across the week draws as one flat run — which is the read this view
+            exists for. Nothing is drawn across a session boundary: the levels reset at each solid divider
+            because the overnight is a gap the level did not travel through.{" "}</>
+        ) : null}
+        {anyDense ? (
+          <>Spot is the 1-minute tape; the level log&apos;s own {totalCaps} spot capture
+            {totalCaps === 1 ? "" : "s"} sit under it at the slots that wrote a row.</>
         ) : (
-          <>No 1-minute tape for this ticker or date, so spot is the {spotPts.length} capture
-            {spotPts.length === 1 ? "" : "s"} the log stored — its own samples, not a price path.</>
+          <>No 1-minute tape for this ticker or date range, so spot is the {totalCaps} capture
+            {totalCaps === 1 ? "" : "s"} the log stored — its own samples, not a price path.</>
         )}
         {heldFrom != null ? (
-          <>{" "}The log&apos;s last write was <b style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{slotClock(lastWrite)}</b>{" "}
+          <>{" "}The log&apos;s last write was <b style={{ color: HOME_THEME.text, fontFamily: "var(--font-mono)" }}>{slotClock(last.lastWrite)}</b>{" "}
             (dashed mark) — right of it the levels held, which is why nothing was written, and the
             flat stretch against the tape is the read.</>
         ) : null}
@@ -1735,6 +1856,225 @@ function WallMigrationChart({ log, events, view, price }: {
     </div>
   );
 }
+
+/** "08/25" from "2026-08-25". The week view's per-slice stamp. */
+function mmdd(date: string): string {
+  const [, mm, dd] = date.split("-");
+  return mm && dd ? `${mm}/${dd}` : date;
+}
+
+/**
+ * The last `n` weekday dates on or before `end`, newest last.
+ *
+ * Weekends only — market holidays are not enumerated here on purpose. A holiday
+ * simply has no rows, and useWallDays drops empty days after the fetch, which
+ * handles a half-day, an unscheduled close and a ticker that was not in the
+ * scanner universe yet with the same rule and no calendar to keep in sync.
+ */
+function lastWeekdays(end: string, n: number): string[] {
+  const out: string[] = [];
+  const t = Date.parse(`${end}T12:00:00Z`);
+  if (!Number.isFinite(t)) return out;
+  for (let k = 0; out.length < n && k < n * 3 + 10; k++) {
+    const d = new Date(t - k * 86_400_000);
+    const dow = d.getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out.reverse();
+}
+
+/**
+ * MULTI-SESSION FETCH for the popout's week view.
+ *
+ * Two waves, deliberately. The level logs are small and cheap, so it asks for
+ * more candidate weekdays than it needs (holidays, days before the ticker
+ * entered the scanner universe) and keeps the newest `count` that came back with
+ * rows. Only THOSE days then get a tape request, so a bank holiday never costs a
+ * 1-minute candle fetch.
+ *
+ * Everything is best-effort: a failed day resolves to empty and is dropped, and
+ * the chart draws whatever sessions did arrive rather than nothing.
+ */
+function useWallDays(
+  symbol: string | null, endDate: string, count: number, nonce: number,
+  scope: ExpScope, basis: GexBasis,
+): { days: DaySlice[]; loading: boolean } {
+  const [state, setState] = useState<{ days: DaySlice[]; loading: boolean }>({ days: [], loading: false });
+  useEffect(() => {
+    if (!symbol || count < 1) { setState({ days: [], loading: false }); return; }
+    let alive = true;
+    setState((prev) => ({ days: prev.days, loading: true }));
+    (async () => {
+      const candidates = lastWeekdays(endDate, count + 3);
+      const logs = await Promise.all(candidates.map(async (d) => {
+        try {
+          const r = await fetch(
+            `/proxy/walls?date=${encodeURIComponent(d)}&symbol=${encodeURIComponent(symbol)}${variantQuery(scope, basis)}`,
+            { cache: "no-store" },
+          );
+          const j = await r.json();
+          if (!j?.ok) return null;
+          const log: WallLogRow[] = Array.isArray(j.log) ? j.log : [];
+          const events: WallEventRow[] = Array.isArray(j.events) ? j.events : [];
+          return log.length || events.length ? { date: d, log, events } : null;
+        } catch { return null; }
+      }));
+      const kept = logs.filter(Boolean).slice(-count) as { date: string; log: WallLogRow[]; events: WallEventRow[] }[];
+      if (!alive) return;
+      if (!kept.length) { setState({ days: [], loading: false }); return; }
+
+      // Show the levels immediately; the tape is the slow half and only sharpens
+      // the price line, so it lands as a second render rather than a spinner.
+      setState({ days: kept.map((k) => ({ ...k, price: [] })), loading: true });
+
+      const tapes = await Promise.all(kept.map(async (k) => {
+        const from = etMsOn(k.date, 9, 30);
+        const to = etMsOn(k.date, 16, 0);
+        if (!Number.isFinite(from) || !Number.isFinite(to)) return [] as SpotSample[];
+        try {
+          const r = await fetch(
+            `/proxy/candles-intraday?symbol=${encodeURIComponent(symbol)}&interval=1m&fromMs=${Math.round(from)}`,
+            { cache: "no-store" },
+          );
+          const j = await r.json();
+          const cs: unknown[] = Array.isArray(j?.candles) ? j.candles : [];
+          const out: SpotSample[] = [];
+          for (const c of cs) {
+            const row = c as { time?: unknown; close?: unknown };
+            const t = Number(row?.time);
+            const px = Number(row?.close);
+            if (!Number.isFinite(t) || !(px > 0)) continue;
+            if (t < from || t > to) continue;
+            out.push({ mins: 570 + (t - from) / 60_000, px });
+          }
+          out.sort((a, b) => a.mins - b.mins);
+          return out;
+        } catch { return [] as SpotSample[]; }
+      }));
+      if (!alive) return;
+      setState({ days: kept.map((k, i) => ({ ...k, price: tapes[i] })), loading: false });
+    })();
+    return () => { alive = false; };
+  }, [symbol, endDate, count, nonce, scope, basis]);
+  return state;
+}
+
+/**
+ * POPOUT — the same chart, full width and twice as tall, with a session-range
+ * switch the inline card has no room for.
+ *
+ * Deliberately the SAME component underneath (`WallMigrationChart`), not a
+ * second implementation: a popout that draws its own version of a chart is two
+ * charts that agree until one of them is edited.
+ *
+ * "Today" reuses the day already loaded by the page — no refetch for the range
+ * that is already on screen. "5 sessions" pulls its own days through
+ * useWallDays. Both honour the page's WALLS/CORE/ALL view and both variant
+ * switches, because a popout that quietly showed a different reading than the
+ * card it came from would be the CORE-505 bug all over again.
+ */
+function WallMigrationPopout({ symbol, date, view, scope, basis, today, nonce, onClose }: {
+  symbol: string | null;
+  date: string;
+  view: LogView;
+  scope: ExpScope;
+  basis: GexBasis;
+  /** The already-loaded single session, so "Today" costs nothing. */
+  today: DaySlice[];
+  nonce: number;
+  onClose: () => void;
+}) {
+  const [range, setRange] = useState<1 | 5>(5);
+  const week = useWallDays(range === 5 ? symbol : null, date, 5, nonce, scope, basis);
+  const days = range === 1 ? today : week.days;
+
+  // Esc closes, like every other overlay in the app.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const chip = (on: boolean): CSSProperties => ({
+    padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+    border: `1px solid ${on ? C.cyan : C.border}`,
+    background: on ? rgba(C.cyan, 0.16) : "rgba(255,255,255,0.03)",
+    color: on ? C.cyan : C.label, fontSize: 13, fontWeight: 800,
+    letterSpacing: "0.08em", textTransform: "uppercase",
+  });
+
+  return (
+    <ModalPortal>
+      {/* The scrim closes on click; the panel stops the bubble so a click inside
+          never dismisses it mid-read. */}
+      <div
+        onClick={onClose}
+        style={{
+          position: "fixed", inset: 0, zIndex: 9998, background: "rgba(0,0,0,0.72)",
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+        }}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            ...CARD, width: "min(1400px, 96vw)", maxHeight: "92vh", overflow: "auto",
+            display: "flex", flexDirection: "column",
+          }}
+        >
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", padding: "14px 18px", borderBottom: `1px solid ${C.border}` }}>
+            <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.cyan }}>
+              {symbol ?? "—"} — Wall migration
+            </span>
+            <span style={{ fontSize: FS_META, fontFamily: "var(--font-mono)", color: MUTED }}>
+              {variantTag(scope, basis)} · {VIEW_SCOPE[view]} view
+            </span>
+            <div style={{ display: "flex", gap: 8, marginLeft: 12 }}>
+              <button onClick={() => setRange(1)} style={chip(range === 1)} title={`Just ${date}`}>Today</button>
+              <button onClick={() => setRange(5)} style={chip(range === 5)} title="The last 5 recorded sessions ending on the selected date">5 sessions</button>
+            </div>
+            {range === 5 && week.loading ? (
+              <span style={{ fontSize: FS_META, color: MUTED }}>loading…</span>
+            ) : null}
+            <button
+              onClick={onClose}
+              style={{
+                marginLeft: "auto", padding: "6px 12px", borderRadius: 8, cursor: "pointer",
+                fontFamily: "inherit", fontSize: 13, fontWeight: 800, letterSpacing: "0.08em",
+                textTransform: "uppercase", border: `1px solid ${C.border}`,
+                background: "rgba(255,255,255,0.03)", color: C.label,
+              }}
+            >
+              ✕ Close
+            </button>
+          </div>
+
+          {days.length ? (
+            <WallMigrationChart days={days} view={view} height={MIG_H * 2.2} />
+          ) : (
+            <div style={{ padding: 28, fontSize: FS_BODY, color: MUTED }}>
+              {week.loading
+                ? "Loading sessions…"
+                : `No recorded sessions for ${symbol ?? "—"} in the 5 weekdays ending ${date} on ${variantTag(scope, basis)}.`}
+            </div>
+          )}
+        </div>
+      </div>
+    </ModalPortal>
+  );
+}
+
+/**
+ * Renders into <body>, so an overlay is never clipped by a card's `overflow`
+ * or trapped under a sibling's stacking context. Mounted lazily because
+ * document does not exist during SSR/prerender.
+ */
+function ModalPortal({ children }: { children: ReactNode }) {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  useEffect(() => { setHost(document.body); }, []);
+  return host ? createPortal(children, host) : null;
+}
+
 
 /**
  * Which side price came from. A CORE tag at 7772.97 on the 7775 level was
