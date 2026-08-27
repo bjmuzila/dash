@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-08-27 - Fix: /premarket blank-screened on a stray backtick in the replay CSS
+
+Edited: `components/pages/Premarket.tsx`.
+
+`TypeError: ....pagehead is not a function` at page load, on every build of the
+replay change.
+
+The replay bar's CSS comment explained where the transport lives by naming the
+head's class in backticks - inside the `const CSS = ` template literal. The
+first backtick CLOSED the literal, `.pagehead` became a member access on the
+resulting string, and the next backtick opened a fresh template - so the rest
+of the stylesheet parsed as a **tagged template call** on a property that does
+not exist. It is valid JavaScript, which is why esbuild and the Docker build
+were both perfectly happy and it only failed in the browser.
+
+Backticks removed from the comment. Also verified by walking the literal
+character by character (skipping `${...}` interpolations) that it now closes
+where it should - at the `;` that ends the constant, not 270 lines early.
+
+Rule for this file: no backticks inside CSS, POSTMARKET_CSS, HISTORICAL_CSS,
+GEX_WATCH_CSS or GAMMA_BELL_CSS, comments included.
+
 ## 2026-08-27 - /premarket is replayable: the whole page, minute by minute
 
 Added: `server-v2/premarket-replay-recorder.js`,

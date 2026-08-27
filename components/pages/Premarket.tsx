@@ -338,7 +338,7 @@ const CSS = `
    a control strip rather than as another disclosure.
 
    The transport lives in its own bar under the head instead of in the head,
-   because it is five controls and a scrubber: pushed into `.pagehead` it wraps
+   because it is five controls and a scrubber: pushed into .pagehead it wraps
    onto a second row on anything narrower than a wide desktop and the head stops
    reading as one strip (the same reason the symbol picker became a select). */
 .pmk .rplbtn{background:transparent;border:1px solid var(--line2);color:var(--dim);
