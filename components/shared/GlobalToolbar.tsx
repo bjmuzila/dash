@@ -179,7 +179,7 @@ function LogoTrigger({
             height: compact ? 15 : 19,
             borderRadius: "50%",
             border: `2px solid ${HOME_THEME.orange}`,
-            background: "rgba(7,8,11,0.96)",
+            background: "rgba(10,13,20,0.96)",
             overflow: "hidden",
             boxSizing: "border-box",
             animation: "bzila-ring 1.6s ease-in-out infinite",
@@ -318,8 +318,8 @@ function orangeA(a: number) { return `rgba(251,133,1,${a})`; } // #FB8501 — "n
 
 // Left-side nav strip contents. `href` doubles as the stable id used for the
 // saved drag order. `ownerOnly` items only render for the owner.
-export type NavItem = { href: string; label: string; emoji: string; ownerOnly?: boolean; comingSoon?: boolean; extHref?: string };
-export const NAV_ITEMS: NavItem[] = [
+type NavItem = { href: string; label: string; emoji: string; ownerOnly?: boolean; comingSoon?: boolean; extHref?: string };
+const NAV_ITEMS: NavItem[] = [
   { href: "/home",              label: "Home",          emoji: "🏠" },
   { href: "/mult-greek",        label: "Multi Greek",   emoji: "🧮" },
   // Levels (/levels) left the toolbar on 2026-08-21 — the whole scanner
@@ -649,7 +649,7 @@ export default function GlobalToolbar() {
             padding: isMobile ? "0 8px" : "0 16px",
             borderRadius: 998,
             minWidth: 0,
-            background: "rgba(7,8,11,0.96)",
+            background: "rgba(10,13,20,0.96)",
             backdropFilter: "blur(16px)",
             boxSizing: "border-box",
           }}
@@ -749,10 +749,7 @@ export default function GlobalToolbar() {
               phone blows the pill far past the viewport and pushes the ticker,
               clock and user menu off-screen. Every one of these routes is
               already in the hamburger (NavMenu), so nothing is lost. ── */}
-          {/* v3: the icon nav strip moved into GlobalRail (left rail, mockup
-              parity) — kept here disabled rather than deleted, since the
-              drag-order/localStorage logic still backs the rail's ordering. */}
-          {false && !isMobile && <GexGroupNav isOwner={isOwner} onNavItemClick={onNavItemClick} />}
+          {!isMobile && <GexGroupNav isOwner={isOwner} onNavItemClick={onNavItemClick} />}
 
           {/* flexible gap — opens the center and pushes the quotes + clock
               cluster to the right ── */}

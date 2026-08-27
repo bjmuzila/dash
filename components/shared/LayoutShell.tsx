@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import GlobalToolbar from "./GlobalToolbar";
-import GlobalRail from "./GlobalRail";
 import PublicNav from "@/components/landing/PublicNav";
 import { useAuth } from "@/components/auth/AuthProvider";
 import OwnerSidebar, { isOwnerChromePath } from "./OwnerSidebar";
@@ -15,7 +14,6 @@ import { MobileNavProvider } from "./MobileNavContext";
 import { NotesPanelProvider } from "./NotesPanelContext";
 import { GexPanelProvider } from "./GexPanelContext";
 import { usePageLoadStatus } from "@/lib/pageStatus";
-import { isMobilePath } from "@/components/mobile/mobileNav";
 
 // Routes that render full-bleed without the dashboard chrome.
 const BARE_ROUTES = ["/", "/sign-in", "/sign-up", "/explore", "/pricing", "/terms", "/risk-disclosure", "/privacy", "/disclaimer"];
@@ -56,9 +54,6 @@ function ShellInner({ children }: { children: React.ReactNode }) {
   // Owner + backend routes get the shared left rail here (single mount point), so
   // root-level backend pages (/database, /logs, …) no longer lose it.
   const showOwnerRail = isOwnerChromePath(pathname);
-  // The icon rail is desktop-chrome-only: the phone build (/m/*) has its own
-  // bottom tab bar (mobileNav.ts) and owner routes keep OwnerSidebar instead.
-  const showGlobalRail = !isMobilePath(pathname) && !showOwnerRail;
 
   return (
     <div
@@ -73,12 +68,10 @@ function ShellInner({ children }: { children: React.ReactNode }) {
         backgroundImage: HOME_THEME.shellGlow,
       }}
     >
-      {/* Top toolbar spans the full window width. Navigation now lives in the
-          left icon rail (GlobalRail, v3) below; the hamburger (NavMenu) is
-          the overflow / everything-else menu. */}
+      {/* Top toolbar spans the full window width. Navigation lives in its
+          hamburger dropdown (NavMenu) — there is no persistent sidebar. */}
       <GlobalToolbar />
       <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0, position: "relative" }}>
-        {showGlobalRail && <GlobalRail />}
         {showOwnerRail && (
           <Suspense fallback={null}>
             <OwnerSidebar />

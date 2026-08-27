@@ -1,33 +1,5 @@
 # Changelog
 
-## 2026-08-27 - Dark-slate rail + toolbar theme (v3)
-
-Edited: `components/shared/homeTheme.ts`, `components/shared/GlobalToolbar.tsx`,
-`components/shared/LayoutShell.tsx`. Added: `components/shared/GlobalRail.tsx`.
-
-Repainted the global chrome to the dark-slate palette (`--app #020304`,
-`--rail #040507`, `--shell #07080b`, `--card #0f1117`, `--card-2 #14171d`,
-`--card-hi #191b22`), matching the reference mockup
-(`20260818darkslatecardtheme.html`). `HOME_THEME.bg`/`.panel` now alias
-`app`/`card` so every existing call site repaints without edits; the six new
-tokens are also exported directly for future use. `DOCK_THEME.bg` (menus,
-dropdowns) and the top toolbar pill both moved off their old hardcoded
-`rgba(10,13,20,…)` literal onto the new surfaces.
-
-Added a persistent left icon rail (`GlobalRail.tsx`, mounted by
-`LayoutShell`) styled after the mockup's `.rail` - a 64px column on
-`--rail` with one icon+label per route, reusing `GlobalToolbar`'s
-`NAV_ITEMS` so the two can't drift apart. It replaces the old horizontal
-icon strip that lived inside the top pill (`GexGroupNav`, left disabled in
-place rather than deleted - its drag-order/localStorage logic still exists
-if that strip comes back). Shown on desktop chrome routes only; hidden on
-`/m/*` phone routes (own bottom tab bar) and owner routes (keeps
-`OwnerSidebar`).
-
-Not touched: Schwab-related code (dead, per standing instructions) and the
-vanilla prototype under `Vanilla/`.
-
-
 ## 2026-08-25 - Daily Grades: the grader was 401ing on every candle pull
 
 Edited: `server-v2/daily-grades-recorder.js`.
