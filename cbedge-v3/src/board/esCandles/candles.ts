@@ -90,8 +90,8 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0
 }
 
-function fromLite(json: LiteResponse): Bar[] {
-  const cols = json.cols ?? []
+function fromLite(json: LiteResponse | null | undefined): Bar[] {
+  const cols = json?.cols ?? []
   const idx = (name: string) => cols.indexOf(name)
   const iT = idx('timestamp')
   const iO = idx('open')
@@ -101,7 +101,7 @@ function fromLite(json: LiteResponse): Bar[] {
   const iV = idx('volume')
   if (iT < 0 || iC < 0) return []
   const out: Bar[] = []
-  for (const r of json.rows ?? []) {
+  for (const r of json?.rows ?? []) {
     const t = num(r[iT])
     if (!t) continue
     out.push({ t, o: num(r[iO]), h: num(r[iH]), l: num(r[iL]), c: num(r[iC]), v: iV >= 0 ? num(r[iV]) : 0 })
@@ -109,9 +109,9 @@ function fromLite(json: LiteResponse): Bar[] {
   return out
 }
 
-function fromVerbose(json: VerboseResponse): Bar[] {
+function fromVerbose(json: VerboseResponse | null | undefined): Bar[] {
   const out: Bar[] = []
-  for (const r of json.rows ?? []) {
+  for (const r of json?.rows ?? []) {
     const t = num(r.timestamp)
     if (!t) continue
     out.push({ t, o: num(r.open), h: num(r.high), l: num(r.low), c: num(r.close), v: num(r.volume) })
@@ -138,9 +138,17 @@ export function candlesUrl(def: SymbolDef, interval: Interval, days = HISTORY_DA
   return `/api/snapshots/etf-candles?symbol=${sym}&days=${days}&interval=${iv}`
 }
 
+/**
+ * `json` is whatever useQuery currently holds, which is `undefined` on the very
+ * first render — before the request has resolved — and stays undefined if the
+ * fetch fails. Both are normal states, not error states, so this returns an
+ * empty series rather than throwing: the card is meant to render its frame,
+ * toolbar and empty message while the data is still in the air.
+ */
 export function parseCandles(source: CandleSource, json: unknown): Bar[] {
+  if (!json || typeof json !== 'object') return []
   const bars =
-    source === 'es' && (json as LiteResponse)?.lite
+    source === 'es' && (json as LiteResponse).lite
       ? fromLite(json as LiteResponse)
       : fromVerbose(json as VerboseResponse)
   // The no-filter form of /api/snapshots/candles comes back DESC. Sorting is
