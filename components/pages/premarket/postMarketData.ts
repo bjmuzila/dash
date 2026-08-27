@@ -303,6 +303,149 @@ export function useFreezeDates(limit = 120) {
   return { rows, byDate, state };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  THE SESSION REPLAY — the whole page stepped through a day
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * server-v2/premarket-replay-recorder.js takes the SAME capture the freeze
+ * takes, every 5 minutes from 04:00 to 16:25 ET, into premarket_replay.
+ *
+ * So a replay is not a new rendering path — it is the freeze swap fed a SERIES
+ * of payloads. `frozenGexOf` above converts each frame exactly as it converts a
+ * frozen slot, the page re-renders as that minute, and every wall, CORE, max
+ * pain, expected move and DEX total is recomputed by the same memos the live
+ * page runs. That is the whole design, and it is why there is so little code
+ * here.
+ *
+ * ── THE TRIM, AND SAYING SO ─────────────────────────────────────────────────
+ * A frame's `gexRows` is trimmed to `trimmedSide` listed strikes each side of
+ * that frame's spot (20 by default) — an untrimmed SPX 0DTE board is ~100KB and
+ * a whole session of them would not fit in one request, which is what lets the
+ * scrubber run with no per-frame round trip.
+ *
+ * `callWall`, `putWall`, `gexFlip`, `totalNetGex` and `totalFlowGex` are the
+ * SERVER's full-board numbers and survive the trim untouched, so the headline
+ * levels on a replayed frame are what the live page showed at that minute.
+ * Anything the PAGE scans the chain for — max pain, DEX/vanna totals, the
+ * profile's extent, the bell curve's wings — is over the ±N window on a
+ * replayed frame. The replay bar discloses that; it is not left to be inferred.
+ */
+export type ReplayPayload = FreezePayload & {
+  /** Strikes kept each side of spot. 0 / absent = the frame is the full board. */
+  trimmedSide?: number;
+  /** Strikes the untrimmed board carried, for the disclosure. */
+  fullStrikes?: number;
+};
+
+export type ReplayFrame = {
+  /** ET minutes since midnight — the frame's slot, and the page's clock. */
+  minute: number;
+  /** When the capture was written (epoch ms). */
+  ts: number;
+  payload: ReplayPayload;
+};
+
+/** ET minutes-since-midnight → "09:35". The replay clock. */
+export function etClockOf(minute: number): string {
+  if (!Number.isFinite(minute) || minute < 0) return "—";
+  const h = Math.floor(minute / 60) % 24;
+  const m = Math.floor(minute % 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * Every recorded frame for one session, oldest first.
+ *
+ * One request for the whole day, held in memory — playback and scrubbing must
+ * not fire a fetch per step, and a trimmed session is small enough that they
+ * do not have to (same call shape MultGreekClient's replay makes for its four
+ * panels). Frames with no chain are dropped here rather than downstream: a
+ * frame the page cannot render is a hole in the timeline, and the scrubber
+ * should not have a position that paints nothing.
+ */
+export function usePremarketReplay(date: string, enabled: boolean, symbol = "SPX") {
+  const [frames, setFrames] = useState<ReplayFrame[]>([]);
+  const [state, setState] = useState<HistState>("loading");
+
+  useEffect(() => {
+    if (!enabled || !date) { setFrames([]); setState("empty"); return; }
+    let alive = true;
+    setState("loading"); setFrames([]);
+    (async () => {
+      try {
+        const r = await dedupeFetch(
+          `/proxy/premarket-replay?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(symbol)}`,
+          { cache: "no-store" },
+          30_000,
+        );
+        const j = await r.json();
+        if (!alive) return;
+        if (!j?.ok || !Array.isArray(j.frames)) { setState("error"); return; }
+        const out: ReplayFrame[] = (j.frames as Record<string, unknown>[])
+          .map((f) => ({
+            minute: num(f.minute),
+            ts: num(f.ts),
+            payload: f.payload as ReplayPayload,
+          }))
+          .filter((f) => f.payload && Array.isArray(f.payload.gexRows) && f.payload.gexRows.length > 0)
+          .sort((a, b) => a.minute - b.minute);
+        setFrames(out);
+        setState(out.length ? "ok" : "empty");
+      } catch {
+        if (alive) setState("error");
+      }
+    })();
+    return () => { alive = false; };
+  }, [date, enabled, symbol]);
+
+  return { frames, state };
+}
+
+/**
+ * Which sessions have frames, and how many. Flags only — no payloads — so the
+ * date picker can mark the replayable dates without pulling a day of chains
+ * down to find out. Same one-small-request shape as useFreezeDates.
+ */
+export type ReplayDay = { date: string; frames: number; firstMin: number; lastMin: number };
+
+export function useReplayDates(limit = 120, symbol = "SPX") {
+  const [rows, setRows] = useState<ReplayDay[]>([]);
+  const [state, setState] = useState<HistState>("loading");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await dedupeFetch(
+          `/proxy/premarket-replay?dates=1&limit=${limit}&symbol=${encodeURIComponent(symbol)}`,
+          { cache: "no-store" },
+          60_000,
+        );
+        const j = await r.json();
+        if (!alive) return;
+        if (!j?.ok || !Array.isArray(j.rows)) { setState("error"); return; }
+        const out: ReplayDay[] = (j.rows as Record<string, unknown>[])
+          .map((x) => ({
+            date: String(x.date ?? "").slice(0, 10),
+            frames: num(x.frames),
+            firstMin: num(x.first_min),
+            lastMin: num(x.last_min),
+          }))
+          .filter((x) => x.date && x.frames > 0);
+        setRows(out);
+        setState(out.length ? "ok" : "empty");
+      } catch {
+        if (alive) setState("error");
+      }
+    })();
+    return () => { alive = false; };
+  }, [limit, symbol]);
+
+  const byDate = useMemo(() => new Map(rows.map((r) => [r.date, r])), [rows]);
+  return { rows, byDate, state };
+}
+
 /**
  * A named session's ES 5m bars PLUS the prior session's, in the shape
  * useEsCandles' `sessionCandles` returns.

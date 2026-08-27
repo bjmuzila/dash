@@ -121,6 +121,41 @@
  * live rolling window. Everything else needed no change at all, which is the
  * clearest sign the swap is in the right place.
  *
+ * ── REPLAYING A SESSION (2026-08-27) ────────────────────────────────────────
+ * The freeze is two captures a day. server-v2/premarket-replay-recorder.js
+ * takes the SAME capture every 5 minutes from 04:00 to 16:25 ET, so the page
+ * can be PLAYED BACK rather than only looked up — and because the frames are
+ * the same shape, replay is a FOURTH source through the SAME swap:
+ *
+ *   useMobileGex   SPX, live socket.                      (sym === "SPX")
+ *   frozenGexOf    SPX, a captured past session.          (frozen)
+ *   frozenGexOf    SPX, ONE FRAME of a recorded session.  (replay)  ← new
+ *   useChainGex    any ticker, /api/chains on a 1m poll.  (everything else)
+ *
+ * There is no replay rendering path. Moving the scrubber moves an index; the
+ * whole page — the regime strip, the level rail, the six Key Levels tiles and
+ * their prior-close lines, the scrolling profile, DEX/vanna, the expected-range
+ * track, the bell curve, the playbook, both tabs — re-renders as that minute,
+ * recomputed here and now by the memos the live page runs.
+ *
+ * `viewMin` takes the FRAME's minute, which is what rewinds everything
+ * time-relative with it ("22 min to open", the RTH-open / after-the-close
+ * label, the Post-Market tab's in-progress vs finished state). A replay whose
+ * clock stayed on the wall time would show 10:05's chain under "after the
+ * close" — the same class of lie as showing today's numbers under a past date.
+ *
+ * THE TRIM, SAID OUT LOUD. A frame keeps ±20 listed strikes around that
+ * minute's spot: an untrimmed SPX 0DTE board is ~100KB and a session of them
+ * would not fit in one request, and one request is what lets the scrubber run
+ * with no per-frame round trip. The walls, gamma flip and total net GEX are the
+ * server's FULL-BOARD values and pass through the trim untouched; anything this
+ * page scans the chain for (max pain, DEX/vanna totals, the profile's and bell
+ * curve's wings) is over that window on a replayed frame, and the replay bar
+ * says so rather than letting a narrower number pass as the full-board one.
+ *
+ * Replay is SPX-only and cannot be back-filled, for the same two reasons the
+ * freeze is and cannot.
+ *
  * Styling: the approved mockup's CSS, scoped under `.pmk` (custom properties on
  * `.pmk`, not `:root`) so its generic class names cannot leak into the app.
  */
@@ -143,9 +178,12 @@ import {
   frozenGexOf,
   recentSessions,
   sessionLabel,
+  etClockOf,
   useDatedEsCandles,
   useFreezeDates,
   useGexLevelsHistory,
+  usePremarketReplay,
+  useReplayDates,
   useSessionFreeze,
 } from "@/components/pages/premarket/postMarketData";
 import {
@@ -292,6 +330,45 @@ const CSS = `
   border:1px solid rgba(167,139,250,.3);background:rgba(167,139,250,.07);
   font-size:12px;color:var(--dim)}
 .pmk .frozenbar b{color:var(--violet)}
+
+/* ── REPLAY ───────────────────────────────────────────────────────────────
+   Cyan, not violet: violet on this page means "a finished day, rendered
+   correctly" (the frozen banner) and this is the opposite — a session you are
+   DRIVING. Cyan is the app's action colour everywhere else, so the bar reads as
+   a control strip rather than as another disclosure.
+
+   The transport lives in its own bar under the head instead of in the head,
+   because it is five controls and a scrubber: pushed into `.pagehead` it wraps
+   onto a second row on anything narrower than a wide desktop and the head stops
+   reading as one strip (the same reason the symbol picker became a select). */
+.pmk .rplbtn{background:transparent;border:1px solid var(--line2);color:var(--dim);
+  font:inherit;font-size:11.5px;letter-spacing:.04em;padding:5px 12px;border-radius:9px;
+  cursor:pointer;align-self:center;white-space:nowrap}
+.pmk .rplbtn:hover{background:var(--active)}
+.pmk .rplbtn.on{border-color:var(--cyanEdge);background:var(--cyanWash);color:var(--cyan);font-weight:600}
+.pmk .rplbtn:disabled{opacity:.4;cursor:not-allowed}
+
+.pmk .rplbar{margin-bottom:12px;padding:10px 13px;border-radius:var(--r);
+  border:1px solid var(--cyanEdge);background:var(--cyanWash)}
+.pmk .rplrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pmk .rplrow+.rplrow{margin-top:9px}
+.pmk .rpltag{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--cyan);white-space:nowrap}
+/* Transport buttons. Square-ish and monospaced so ▶ / ❚❚ do not change the
+   button's width when the state flips — a play control that resizes as you use
+   it is the one place a 2px shift is genuinely annoying. */
+.pmk .rplt{background:var(--sunken);border:1px solid var(--line2);color:var(--txt);
+  font:inherit;font-size:12px;min-width:34px;padding:4px 9px;border-radius:var(--r2);
+  cursor:pointer;font-variant-numeric:tabular-nums}
+.pmk .rplt:hover:not(:disabled){background:var(--active)}
+.pmk .rplt:disabled{opacity:.35;cursor:not-allowed}
+.pmk .rplt.play{min-width:74px;border-color:var(--cyanEdge);color:var(--cyan);font-weight:600}
+.pmk .rplclock{font-size:14px;font-weight:650;color:var(--txt);font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.pmk .rplclock small{font-size:10.5px;font-weight:500;color:var(--dim2);letter-spacing:.06em}
+.pmk .rplscrub{flex:1;min-width:180px;accent-color:${HT.cyan}}
+.pmk .rplbar .note{font-size:11px;color:var(--dim2);line-height:1.55;max-width:110ch}
+.pmk .rplbar .note b{color:var(--dim);font-weight:650}
 
 /* OUTER SHELL — the app's card, with a regime tint on top.
    The tint is semantic (green = positive gamma, red = negative) so it stays,
@@ -564,6 +641,15 @@ const DATE_KEY = "cb-premarket-date-v1";
  * the SAME URL and dedupeFetch collapses them into one request.
  */
 const SESSION_COUNT = GEX_HISTORY_LIMIT;
+
+/**
+ * REPLAY TRANSPORT. Deliberately the same numbers ChainReplay and
+ * MultGreekClient's replay use — 700ms a frame at 1×, 0.5× to 8× — so the three
+ * replays on this site feel like one control rather than three opinions about
+ * how fast a session should run.
+ */
+const REPLAY_SPEEDS = [0.5, 1, 2, 4, 8] as const;
+const REPLAY_BASE_MS = 700;
 
 /**
  * SPX is the live board — it owns the socket, the ES basis and the ES overnight
@@ -1001,7 +1087,83 @@ export default function Premarket() {
   /** True when the chosen date has a capture the page can actually render. */
   const frozen = isHistorical && !!frozenGex;
 
-  const gex = frozen && frozenGex ? frozenGex : sym === "SPX" ? liveGex : chainGex;
+  // ── REPLAY: the whole page stepped through a recorded session ──────────────
+  //
+  // server-v2/premarket-replay-recorder.js takes the SAME capture the freeze
+  // takes, every 5 minutes from 04:00 to 16:25 ET. So this is not a second
+  // rendering path either — it is the swap below fed a SERIES of payloads
+  // through the SAME frozenGexOf(). Move the index and the entire page — the
+  // regime strip, the six Key Levels tiles, the profile, DEX/vanna, the
+  // expected-range track, the bell curve, both tabs — re-renders as that
+  // minute, recomputed here and now by the memos the live page runs.
+  //
+  // THE CLOCK MOVES TOO. `viewMin` below takes the FRAME's minute rather than
+  // the wall clock, which is what makes "22 min to open", the pre/post gating
+  // and every other time-relative line on the page read as that moment instead
+  // of as now. That is the whole difference between a replay and a slideshow.
+  //
+  // SPX only, and for the same reason a freeze is: the recorder captures the
+  // one symbol the socket carries, and a chain poll has no per-minute stored
+  // form. Turning replay on therefore snaps the picker back to SPX rather than
+  // rendering an SPX board under an NVDA label.
+  const [replayOn, setReplayOn] = useState(false);
+  /** Flags only — which dates have frames — so the button can say when it is
+   *  pointless to press. One small request, cached for a minute. */
+  const { byDate: replayByDate } = useReplayDates(SESSION_COUNT);
+  const { frames: replayFrames, state: replayState } =
+    usePremarketReplay(sessionDate, replayOn, "SPX");
+  const [replayIdx, setReplayIdx] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState<number>(1);
+
+  useEffect(() => {
+    if (replayOn && sym !== "SPX") setSym("SPX");
+  }, [replayOn, sym]);
+
+  // A newly loaded session lands on its LAST frame: entering replay from the
+  // live page should show the session as it ENDED, not as it looked at 04:00,
+  // and the scrubber is then dragged backwards to find the moment you want.
+  // (ChainReplay lands on frame 0 because it is a standalone player you press
+  // Play on; this one is the page, and the page's default is "now".)
+  useEffect(() => {
+    setReplayIdx(Math.max(0, replayFrames.length - 1));
+    setReplayPlaying(false);
+  }, [replayFrames]);
+  useEffect(() => { if (!replayOn) setReplayPlaying(false); }, [replayOn]);
+
+  useEffect(() => {
+    if (!replayPlaying || !replayFrames.length) return;
+    const id = setInterval(() => {
+      setReplayIdx((i) => (i >= replayFrames.length - 1 ? i : i + 1));
+    }, REPLAY_BASE_MS / replaySpeed);
+    return () => clearInterval(id);
+  }, [replayPlaying, replaySpeed, replayFrames.length]);
+  // Stop at the end. Deliberately NOT inside the updater above: updaters must be
+  // pure (StrictMode runs them twice) and setting state from one double-fires
+  // the pause. Same note lives in ChainReplay.
+  useEffect(() => {
+    if (replayPlaying && replayFrames.length && replayIdx >= replayFrames.length - 1) {
+      setReplayPlaying(false);
+    }
+  }, [replayPlaying, replayIdx, replayFrames.length]);
+
+  const replayFrame = replayOn && replayFrames.length
+    ? replayFrames[Math.min(replayIdx, replayFrames.length - 1)]
+    : null;
+  const replayGex = useMemo(
+    () => frozenGexOf(replayFrame?.payload ?? null, sessionDate),
+    [replayFrame, sessionDate],
+  );
+  /** True when replay is on AND a frame is actually on screen. */
+  const replay = replayOn && !!replayGex;
+  /** Strikes each side of spot the frame kept, 0 when it is the full board. */
+  const replayTrim = replayFrame?.payload?.trimmedSide ?? 0;
+
+  // THE SWAP. Replay wins over a frozen slot on the same date — you asked to
+  // drive the session, so the two-a-day capture stops being what is on screen.
+  const gex = replay && replayGex
+    ? replayGex
+    : frozen && frozenGex ? frozenGex : sym === "SPX" ? liveGex : chainGex;
   const {
     chain, spot, flip, callWall, putWall, totalNetGex,
     esFut, basis, expiry, isZeroDte, connected, hasData, updatedAt, source,
@@ -1022,7 +1184,11 @@ export default function Premarket() {
   // recompute at all.
   const { sessionCandles: liveCandles, historical: liveHistory } =
     useEsCandles(true, 8, 5, false);
-  const { rows: datedCandles } = useDatedEsCandles(sessionDate, frozen);
+  // Replaying a PAST date needs that session's bars for the same reason a
+  // frozen date does. Replaying TODAY does not — the live rolling window
+  // already covers it and is fresher.
+  const datedSession = frozen || (replay && isHistorical);
+  const { rows: datedCandles } = useDatedEsCandles(sessionDate, datedSession);
   /**
    * The non-SPX overnight series. Same record shape as the ES bars (that is the
    * whole point of useEtfCandles), read from `etf_candles` — which since the
@@ -1058,10 +1224,10 @@ export default function Premarket() {
    * sessions of bars for no benefit at all.
    */
   const candlePool = useMemo(
-    () => (frozen ? datedCandles
+    () => (datedSession ? datedCandles
       : sym !== "SPX" ? symCandles
         : liveHistory.length ? [...liveHistory, ...liveCandles] : liveCandles),
-    [frozen, datedCandles, sym, symCandles, liveHistory, liveCandles]);
+    [datedSession, datedCandles, sym, symCandles, liveHistory, liveCandles]);
 
   /**
    * The session the page DESCRIBES. Live it is today; frozen it is the picked
@@ -1069,13 +1235,21 @@ export default function Premarket() {
    * the wall log, the journal, the baseline — keys off this rather than the
    * clock, which is the one change that lets a past session render correctly.
    */
-  const viewDate = frozen ? sessionDate : etDate;
+  const viewDate = replay || frozen ? sessionDate : etDate;
   /**
    * ...and the minute of that session. A frozen day is over, so it reads as
    * just past the settle: that is what puts the Post-Market tab into its
    * finished state instead of a mid-session one.
+   *
+   * A REPLAYED session reads as the FRAME's own minute. That is what rewinds
+   * everything time-relative on the page — "22 min to open", the RTH-open /
+   * after-the-close label, the Post-Market tab's in-progress vs finished state
+   * — to the moment being replayed instead of leaving them on the wall clock.
+   * Without it the page would show 10:05's chain under "after the close".
    */
-  const viewMin = frozen ? RTH_CLOSE_MIN + 10 : etMin;
+  const viewMin = replay && replayFrame
+    ? replayFrame.minute
+    : frozen ? RTH_CLOSE_MIN + 10 : etMin;
 
   // ── catalysts ──────────────────────────────────────────────────────────────
   const { events, earnByDate, now: calNow } = useEconCalendar({ withQuote: false });
@@ -1203,8 +1377,11 @@ export default function Premarket() {
     // previous SYMBOL — would silently diff today's chain against the wrong
     // board. Same strikes, plausible numbers, nothing on screen naming it.
     setBaseline(null);
-    void loadBaseline(expiry, sym, frozen ? viewDate : undefined);
-  }, [expiry, sym, loadBaseline, frozen, viewDate]);
+    // A replayed session asks for the SAME prior-close baseline a frozen one
+    // does — the baseline is per SESSION, not per frame, so it is fetched once
+    // for the day being replayed and stays put as the scrubber moves.
+    void loadBaseline(expiry, sym, frozen || replay ? viewDate : undefined);
+  }, [expiry, sym, loadBaseline, frozen, replay, viewDate]);
 
   // ── derived from the chain ─────────────────────────────────────────────────
   const perStrike = useMemo(() => {
@@ -1905,10 +2082,12 @@ export default function Premarket() {
    * dropped to polling. On a chain-poll symbol the poll IS the design, so it is
    * labelled as what it is rather than as a degraded socket.
    */
-  const feedLabel = sym !== "SPX" && !frozen
-    ? (connected ? "CHAIN POLL · 1m" : "CHAIN POLL · retrying")
-    : source === "live" ? (connected ? "LIVE" : "RECONNECTING")
-      : source === "rest" ? "REST FALLBACK" : "PAUSED";
+  const feedLabel = replay
+    ? `REPLAY ${etClockOf(viewMin)} ET`
+    : sym !== "SPX" && !frozen
+      ? (connected ? "CHAIN POLL · 1m" : "CHAIN POLL · retrying")
+      : source === "live" ? (connected ? "LIVE" : "RECONNECTING")
+        : source === "rest" ? "REST FALLBACK" : "PAUSED";
 
   /**
    * A past date with NO capture. This — not `isHistorical` — is what disables
@@ -1919,8 +2098,15 @@ export default function Premarket() {
    * flashing the recap: `freezeState === "loading"` is not yet an answer, and
    * rendering the fallback for 200ms and then swapping to the real tabs looks
    * exactly like a bug.
+   *
+   * A REPLAY of that date is a capture too — a much better one — so a date with
+   * frames but no freeze row drives the real tabs while replay is on, and the
+   * recap is only what it falls back to when replay is off. The same
+   * still-in-flight rule applies to the frames request.
    */
-  const recapOnly = isHistorical && !frozen && freezeState !== "loading";
+  const recapOnly = isHistorical && !frozen && !replay
+    && freezeState !== "loading"
+    && !(replayOn && replayState === "loading");
 
   /** Said out loud when the tab on screen is not the slot it asked for. */
   const slotNote =
@@ -1953,13 +2139,15 @@ export default function Premarket() {
             <select
               value={sym}
               onChange={(e) => pickSym(e.target.value)}
-              title={frozen
-                ? "Frozen sessions are SPX only"
-                : "Which symbol to show. SPX is the live-socket board; every other MAIN name is a one-minute chain poll."}
+              title={replay
+                ? "Replayed sessions are SPX only"
+                : frozen
+                  ? "Frozen sessions are SPX only"
+                  : "Which symbol to show. SPX is the live-socket board; every other MAIN name is a one-minute chain poll."}
               aria-label="Symbol"
             >
               {SYMBOLS.map((s2) => (
-                <option key={s2} value={s2} disabled={frozen && s2 !== "SPX"}>
+                <option key={s2} value={s2} disabled={(frozen || replayOn) && s2 !== "SPX"}>
                   {s2}
                 </option>
               ))}
@@ -1968,9 +2156,11 @@ export default function Premarket() {
           <span className="badge-concept">
             {recapOnly
               ? `${sym} · RECORDED · ${sessionLabel(sessionDate)}`
-              : frozen
-                ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · FROZEN ${sessionLabel(sessionDate)}`
-                : sym === "SPX"
+              : replay
+                ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · ${feedLabel} · ${sessionLabel(sessionDate)}`
+                : frozen
+                  ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · FROZEN ${sessionLabel(sessionDate)}`
+                  : sym === "SPX"
                   ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · ${feedLabel} · ${openLabel}`
                   : `${sym} · CHAIN POLL · ${openLabel}`}
           </span>
@@ -1978,22 +2168,38 @@ export default function Premarket() {
             <select
               value={sessionDate}
               onChange={(e) => pickDate(e.target.value)}
-              title="Which session to show. Today is live; a dot marks the dates whose captured chain can drive the full Premarket and Post-Market tabs."
+              title="Which session to show. Today is live; • marks a captured session that drives the full tabs, ▸ one that can also be replayed minute by minute."
               aria-label="Session date"
             >
               {sessions.map((d) => (
                 <option key={d} value={d}>
-                  {/* A leading dot marks a session with a capture, so the list
-                      says which dates open the real tabs before you click one.
-                      A plain bullet rather than an icon: the OS draws this menu
-                      and nothing but text survives the trip. */}
+                  {/* A leading mark says what the date can do before you click
+                      it: ▸ replayable (frames recorded through the session), •
+                      captured (the two-a-day freeze, so the tabs open for real),
+                      blank = recorded-stores recap only. Text, not icons: the OS
+                      draws this menu and nothing else survives the trip. */}
                   {d === etDate
                     ? `Today · ${sessionLabel(d)}`
-                    : `${freezeByDate.has(d) ? "• " : "  "}${sessionLabel(d)}`}
+                    : `${replayByDate.has(d) ? "▸ " : freezeByDate.has(d) ? "• " : "  "}${sessionLabel(d)}`}
                 </option>
               ))}
             </select>
           </span>
+          {/* REPLAY toggle. Sits with the session picker rather than in the tab
+              group because it selects a WAY OF READING the chosen session, not
+              a tab of it — both tabs replay. */}
+          <button
+            type="button"
+            className={`rplbtn${replayOn ? " on" : ""}`}
+            aria-pressed={replayOn}
+            disabled={!replayOn && !replayByDate.has(sessionDate)}
+            title={replayByDate.has(sessionDate)
+              ? `Step ${sessionLabel(sessionDate)} through its recorded frames — the whole page, minute by minute`
+              : "No frames recorded for this session. The replay recorder captures the page every 5 minutes from 04:00 ET and cannot back-fill a day it was not running for."}
+            onClick={() => setReplayOn((v) => !v)}
+          >
+            {replayOn ? "■ Exit replay" : "▶ Replay"}
+          </button>
           <div className="tabs">
             {/* Both tabs stay LIVE on a frozen date — that is the whole point of
                 the capture. They only go dead on a date with no capture, where
@@ -2020,7 +2226,99 @@ export default function Premarket() {
           </div>
         </div>
 
-        {frozen && (
+        {/* ── REPLAY TRANSPORT ────────────────────────────────────────────
+            Play / step / scrub, plus the frame's own clock. Shown whenever
+            replay is ON — including while the frames request is in flight and
+            when a session turns out to have none — because a toggle that
+            silently does nothing is worse than one that says why. */}
+        {replayOn && (
+          <div className="rplbar">
+            <div className="rplrow">
+              <span className="rpltag">Replay · {sessionLabel(sessionDate)}</span>
+              <button
+                type="button" className="rplt"
+                disabled={replayIdx <= 0}
+                title="Back one frame"
+                onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }}
+              >◀</button>
+              <button
+                type="button" className="rplt play"
+                disabled={!replayFrames.length}
+                onClick={() => {
+                  // Pressing Play on the last frame restarts from the open —
+                  // otherwise the button appears dead at exactly the position
+                  // the page always lands on.
+                  if (replayIdx >= replayFrames.length - 1) setReplayIdx(0);
+                  setReplayPlaying((p) => !p);
+                }}
+              >{replayPlaying ? "❚❚ Pause" : "▶ Play"}</button>
+              <button
+                type="button" className="rplt"
+                disabled={replayIdx >= replayFrames.length - 1}
+                title="Forward one frame"
+                onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayFrames.length - 1, i + 1)); }}
+              >▶</button>
+              <div className="seg" role="group" aria-label="Replay speed">
+                {REPLAY_SPEEDS.map((sp) => (
+                  <button
+                    key={sp} type="button"
+                    className={replaySpeed === sp ? "on" : ""}
+                    aria-pressed={replaySpeed === sp}
+                    onClick={() => setReplaySpeed(sp)}
+                  >{sp}×</button>
+                ))}
+              </div>
+              <span className="rplclock" style={{ marginLeft: "auto" }}>
+                {replayFrame ? etClockOf(replayFrame.minute) : "—:—"} <small>ET</small>
+                {replayFrame ? <small> · spot {fmtPx(replayFrame.payload.spot, 2)}</small> : null}
+                {replayFrames.length
+                  ? <small> · frame {Math.min(replayIdx, replayFrames.length - 1) + 1}/{replayFrames.length}</small>
+                  : null}
+              </span>
+            </div>
+
+            <div className="rplrow">
+              <input
+                type="range" className="rplscrub"
+                min={0} max={Math.max(0, replayFrames.length - 1)}
+                value={Math.min(replayIdx, Math.max(0, replayFrames.length - 1))}
+                disabled={!replayFrames.length}
+                aria-label="Replay position"
+                onChange={(e) => { setReplayPlaying(false); setReplayIdx(Number(e.target.value)); }}
+              />
+            </div>
+
+            <div className="rplrow">
+              <p className="note" style={{ margin: 0 }}>
+                {replayState === "loading" ? <>Loading this session&apos;s frames…</>
+                  : replayState === "error" ? <>Could not load this session&apos;s frames.</>
+                    : !replayFrames.length ? (
+                      <>No frames recorded for this session. The recorder captures the page every
+                        5 minutes from 04:00 ET and cannot back-fill a day it was not running for.</>
+                    ) : (
+                      <>
+                        <b>The page IS the replay.</b> Every level, tile and panel below is
+                        recomputed from that minute&apos;s own captured chain by the same code the
+                        live page runs, and the page&apos;s clock is rewound with it. Nothing driven
+                        by the chain is live. (The GEX-watch strip at the bottom is not
+                        date-scoped and still shows the latest recorded close.)
+                        {replayTrim > 0 && (
+                          <>
+                            {" "}Frames keep <b>±{replayTrim} strikes</b> around spot, so the walls,
+                            gamma flip and total net GEX are that minute&apos;s full-board values,
+                            while anything scanned off the chain here — max pain, the DEX and vanna
+                            totals, the profile&apos;s and bell curve&apos;s wings — is over that
+                            window.
+                          </>
+                        )}
+                      </>
+                    )}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {frozen && !replay && (
           <div className="frozenbar">
             <b>Frozen session — {sessionLabel(sessionDate)}.</b> Every number below is computed from
             that day&apos;s captured chain by the same code the live page runs
@@ -2063,7 +2361,10 @@ export default function Premarket() {
             etDate={viewDate}
             etMin={viewMin}
             hasData={hasData}
-            frozenDate={frozen ? sessionDate : undefined}
+            /* A replayed PAST session is a captured session too, so the recap
+               labels itself the same way. Replaying TODAY is not: the date is
+               today and the tab should read as the live recap it is. */
+            frozenDate={frozen || (replay && isHistorical) ? sessionDate : undefined}
           />
         ) : (
         <section className={`prep${posGamma ? "" : " is-neg"}`}>
@@ -2813,7 +3114,9 @@ export default function Premarket() {
             flip={flip}
             callWall={callWall}
             putWall={putWall}
-            frozen={frozen}
+            /* Says "captured session, not live" in the card footer — true of a
+               replayed frame for exactly the same reason. */
+            frozen={frozen || replay}
           />
 
           {/* Which strikes grew far more than normal at yesterday's close.
@@ -2825,7 +3128,9 @@ export default function Premarket() {
 
           <div className="footbar">
             <span className="l mono">
-              {etDate} · {sym} · {feedLabel} · spot {fmtPx(spot, 2)} · ES {fmtPx(footEs, 2)}
+              {/* viewDate, not etDate: on a frozen or replayed session the footer
+                  must stamp the session on screen, not the wall-clock day. */}
+              {viewDate} · {sym} · {feedLabel} · spot {fmtPx(spot, 2)} · ES {fmtPx(footEs, 2)}
               {basis != null ? ` · basis ${basis >= 0 ? "+" : "−"}${Math.abs(basis).toFixed(2)}` : ""}
               {" · "}{chain.length} strikes
               {updatedAt ? ` · ${new Date(updatedAt).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET` : ""}

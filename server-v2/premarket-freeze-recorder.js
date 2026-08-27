@@ -320,6 +320,12 @@ function startPremarketFreezeRecorder(port) {
 module.exports = {
   startPremarketFreezeRecorder,
   collectPremarketFreeze,
+  // Exported for premarket-replay-recorder.js, which takes the SAME capture at
+  // a session-long cadence. It calls this rather than re-deriving the shape:
+  // two definitions of "the page's inputs" would drift the first time one of
+  // them was fixed, and a replayed frame would then quietly disagree with a
+  // frozen slot of the same session.
+  shapePayload,
   readFreeze,
   freezeDates,
   prune,

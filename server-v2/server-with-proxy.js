@@ -1571,6 +1571,64 @@ async function main() {
         })();
         return;
       }
+      // ── /premarket session REPLAY ─────────────────────────────────────────
+      //   GET /proxy/premarket-replay?date=YYYY-MM-DD[&symbol=SPX]
+      //   GET /proxy/premarket-replay?dates=1[&limit=120][&symbol=SPX]
+      //
+      // The freeze above is two captures a day; this is the SAME capture taken
+      // every few minutes from 04:00 to 16:25 ET, so /premarket can be PLAYED
+      // BACK. The page swaps one frame in at the single line where the live
+      // hook is destructured, exactly as a frozen session does, so replay is
+      // the real page stepped through the day — not a second rendering path.
+      //
+      // A whole session comes back in ONE answer on purpose: frames are trimmed
+      // to ±20 strikes (~10KB each), so ~150 of them gzip small enough to hand
+      // over at once, and holding the day in memory is what lets the client's
+      // scrubber and playback run with no per-frame round trip. `?dates=1` is
+      // the flags-only list the picker marks replayable dates with.
+      //
+      // Read-only, subscriber-gated by proxy-auth like every other GET here.
+      // sessionCacheOpts() lets the browser keep a PAST session for a day —
+      // those frames never change again — while today's stays no-store, since
+      // today's timeline is still growing a frame every POLL_MINS.
+      if (pathname === '/proxy/premarket-replay' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { readFrames, replayDates } = require('./premarket-replay-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || 'SPX').trim().replace(/^\$/, '');
+            if (u.searchParams.get('dates') === '1') {
+              const limit = Number(u.searchParams.get('limit') || 120);
+              const rows = await replayDates(limit, symbol);
+              sendJson(res, 200, { ok: true, rows: rows ?? [] }, req);
+              return;
+            }
+            const date = (u.searchParams.get('date') || '').trim();
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+              sendJson(res, 400, { ok: false, error: 'date=YYYY-MM-DD required' });
+              return;
+            }
+            const rows = await readFrames(date, symbol);
+            if (rows == null) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            sendJson(res, 200, { ok: true, date, symbol, frames: rows }, req, sessionCacheOpts(date));
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manually fire one replay frame — seeds today's timeline right after a
+      // deploy instead of waiting out the poll.
+      // POST /proxy/premarket-replay-run
+      // OWNER-only via proxy-auth, which gates every non-GET on /proxy/*.
+      if (pathname === '/proxy/premarket-replay-run' && req.method === 'POST') {
+        (async () => {
+          try {
+            const { collectPremarketReplayFrame } = require('./premarket-replay-recorder');
+            const r = await collectPremarketReplayFrame(`http://localhost:${PORT}`, { force: true });
+            sendJson(res, 200, { ok: true, result: r ?? null });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // ── Per-strike net GEX across expirations (all + ex-0DTE) ─────────────
       //   GET /proxy/gex-by-strike-multi?symbol=$SPX
       //
@@ -4213,6 +4271,13 @@ async function main() {
     // date renders the real Premarket / Post-Market tabs instead of a reduced
     // recap. Stores inputs, never derived values — see the recorder's header.
     require('./premarket-freeze-recorder').startPremarketFreezeRecorder(PORT);
+    // /premarket session replay: the SAME capture every 5 minutes from 04:00 to
+    // 16:25 ET, trimmed to ±20 strikes, into premarket_replay — so the page can
+    // be played back minute by minute, not only looked up. Frames are the
+    // page's inputs (it calls the freeze recorder's own shaper), so a replayed
+    // frame is the real page recomputed, not a stored screenshot of it.
+    try { require('./premarket-replay-recorder').startPremarketReplayRecorder(PORT); }
+    catch (e) { console.warn('[premarket-replay] start failed:', e.message); }
     // Earnings calendar: Sat 09:00 ET scrape of next Mon–Fri from Nasdaq,
     // mcap ≥ $100B → earnings_calendar (feeds /economic-calendar bottom strip).
     require('./earnings-calendar-recorder').startEarningsCalendarRecorder();
