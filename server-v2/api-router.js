@@ -4827,6 +4827,44 @@ if (libDb) {
     },
   });
 
+  // /api/es-candles/tickers — the ticker LOOKUP list for the ES Candles symbol
+  // picker (components/dashboard/es-candles/symbols.tsx).
+  //
+  // Deliberately the far-CB CORE_TICKERS array and not getActiveRoster():
+  //
+  //   • CORE_TICKERS is a static list in the file, so this route answers without
+  //     touching Postgres. It is called on the first open of a dropdown, by up
+  //     to three cards on a row, on a page that already has a websocket and a
+  //     ~1.6MB heatmap backfill in flight — the last thing it should add is a
+  //     query.
+  //   • getActiveRoster() resolves the SCANNER universe plus every
+  //     customer-added ticker. That is the right list for a sweep and the wrong
+  //     one for a picker: it changes under the user, and a name someone else
+  //     added would appear in this menu.
+  //
+  // The picker is not limited to what comes back. It accepts any ticker typed
+  // into its search box, so this is a convenience list, not a whitelist — which
+  // is also why it needs no cache-busting beyond the 30s header.
+  register('/api/es-candles/tickers', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const { CORE_TICKERS } = require('./far-cb-tickers');
+        const tickers = [...new Set(
+          (Array.isArray(CORE_TICKERS) ? CORE_TICKERS : [])
+            .map((s) => String(s).trim().toUpperCase())
+            .filter(Boolean),
+        )].sort();
+        send(res, 200, { ok: true, count: tickers.length, tickers }, { 'Cache-Control': CACHE_30 });
+      } catch (err) {
+        // An empty list is a working picker with a shorter menu, so this is a
+        // 200 rather than a 500 — the client treats a failure and an empty
+        // roster identically anyway.
+        send(res, 200, { ok: false, tickers: [], error: String(err) });
+      }
+    },
+  });
+
   // /api/journal — per-user trading journal CRUD ('user' — signed-in, own data).
   register('/api/journal', {
     auth: 'user', methods: ['GET', 'POST', 'PATCH', 'DELETE'],
@@ -5419,9 +5457,99 @@ if (libDb) {
   // feed either into the same chart.
   //
   // ?symbol=SPY  ?days=5  ?interval=1|5  ?limit=5000
+  //
+  // ── LIVE FALLBACK ──────────────────────────────────────────────────────────
+  // The recorder writes a fixed roster (etf-candle-recorder.js's
+  // DEFAULT_CANDLE_SYMBOLS). The ES Candles picker no longer is one: it offers
+  // the far-CB core list and accepts any typed ticker, so most symbols reaching
+  // this route now have no recorded rows at all — and an empty 200 renders as a
+  // chart that loads forever with nothing on it and no reason given.
+  //
+  // So a miss falls through to the same on-demand dxLink pull the recorder
+  // itself uses (candle-history.js), aggregated here to the requested bucket.
+  // Two things about it worth knowing before touching it:
+  //
+  //   • It is a WEBSOCKET round trip — a throwaway dxLink connection, a
+  //     subscription, a settle window. Seconds, not milliseconds, which is why
+  //     it is a fallback and not the primary path. `cache: false` is required
+  //     for a multi-day window (the cache key ignores fromTime), and both
+  //     timeouts are raised because the defaults are tuned for ~390 bars.
+  //   • dxFeed serves roughly 7 days of 1m, so the window is clamped there
+  //     regardless of ?days. Asking for 30 does not fail, it just returns a
+  //     week.
+  //
+  // `source` in the response says which path answered, so a thin chart can be
+  // diagnosed without reading this comment.
   register('/api/snapshots/etf-candles', {
     auth: 'subscriber', methods: ['GET'],
     async handler(req, res) {
+      // ET wall-clock parts for a bar timestamp — the row shape below is ET,
+      // matching lib/snapdb's es_candles rows so the chart's merge-by-slotKey
+      // works against either source. Same formatting the recorder does.
+      const ET_HM = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
+      });
+      const ET_YMD = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' });
+
+      /** Live 1m bars from dxLink, bucketed to `interval` and shaped like the DB rows. */
+      const liveRows = async (symbol, days, interval, limit) => {
+        const { fetchIntradayCandles } = require('./candle-history');
+        // 7 days is dxFeed's practical 1m ceiling; a larger ?days silently gets
+        // a week rather than an error.
+        const from = Date.now() - Math.min(7, Math.max(1, days)) * 86_400_000;
+        const raw = await fetchIntradayCandles(symbol, '1m', from, {
+          cache: false, quietMs: 1200, hardMs: 20_000,
+        });
+        if (!Array.isArray(raw) || !raw.length) return [];
+        const bucketMs = interval * 60_000;
+        // Aggregate: first open, max high, min low, last close, summed volume —
+        // the same reduction getEtfCandleHistory does in SQL. Input is
+        // oldest-first, so "first"/"last" are just order of arrival.
+        const buckets = new Map();
+        for (const c of raw) {
+          const t = Number(c.time);
+          const close = Number(c.close);
+          if (!(t > 0) || !(close > 0)) continue;
+          const key = Math.floor(t / bucketMs) * bucketMs;
+          const prev = buckets.get(key);
+          if (!prev) {
+            buckets.set(key, {
+              t: key,
+              open: Number(c.open) || close,
+              high: Number(c.high) || close,
+              low: Number(c.low) || close,
+              close,
+              volume: Number(c.volume) || 0,
+            });
+          } else {
+            prev.high = Math.max(prev.high, Number(c.high) || close);
+            prev.low = Math.min(prev.low, Number(c.low) || close);
+            prev.close = close;
+            prev.volume += Number(c.volume) || 0;
+          }
+        }
+        // Newest `limit` buckets, then back to oldest-first for the chart.
+        const ordered = [...buckets.values()].sort((a, b) => a.t - b.t);
+        const kept = ordered.length > limit ? ordered.slice(ordered.length - limit) : ordered;
+        return kept.map((b) => {
+          const parts = ET_HM.formatToParts(new Date(b.t));
+          const get = (ty) => parts.find((x) => x.type === ty)?.value ?? '00';
+          const hhmm = `${get('hour')}:${get('minute')}`;
+          const date = ET_YMD.format(new Date(b.t));
+          return {
+            timestamp: b.t,
+            date,
+            slotKey: `${date}T${hhmm}`,
+            time: `${hhmm}:00`,
+            symbol,
+            intervalMinutes: interval,
+            source: 'dxlink-live',
+            open: b.open, high: b.high, low: b.low, close: b.close,
+            volume: b.volume,
+          };
+        });
+      };
+
       try {
         const sp = new URL(req.url || '/', 'http://localhost').searchParams;
         const symbol = String(sp.get('symbol') ?? '').trim().toUpperCase();
@@ -5430,8 +5558,23 @@ if (libDb) {
         const interval = Number(sp.get('interval') ?? 5) === 1 ? 1 : 5;
         const limit = Math.max(1, Math.min(50_000, Number(sp.get('limit') ?? 5000)));
         const { getEtfCandleHistory } = require('./etf-candle-recorder');
-        const rows = await getEtfCandleHistory(symbol, days, interval, limit);
-        send(res, 200, { symbol, interval, days, rows });
+        let rows = await getEtfCandleHistory(symbol, days, interval, limit);
+        let source = 'etf_candles';
+        if (!rows.length) {
+          // A recorded symbol with a momentarily empty table takes this path
+          // too, which is fine — it returns the same bars the recorder would
+          // have written.
+          try {
+            rows = await liveRows(symbol, days, interval, limit);
+            source = rows.length ? 'dxlink-live' : 'none';
+          } catch (e) {
+            // The fallback failing is not the request failing: an empty series
+            // is still a valid answer for a ticker that does not trade.
+            console.warn('[etf-candles] live fallback failed for', symbol, '-', e.message);
+            source = 'none';
+          }
+        }
+        send(res, 200, { symbol, interval, days, source, rows });
       } catch (err) { send(res, 200, { rows: [], error: String(err) }); }
     },
   });

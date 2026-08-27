@@ -97,7 +97,7 @@ import {
   CHART_INTERVALS, INTERVAL_LABEL, intervalMs, isChartInterval, nativeIntervalFor, rollupCandles,
   type ChartInterval,
 } from "./interval";
-import { SymbolListDropdown, symbolDef, isChartSymbol, type ChartSymbol } from "./symbols";
+import { SymbolListDropdown, symbolDef, candleSymbolOf, isChartSymbol, normalizeSymbol, type ChartSymbol } from "./symbols";
 import { PanelSection, PanelChip, SLIDER_LABEL_W } from "./panelUi";
 import {
   BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_REF_START_MIN, BUBBLE_REF_CUTOFF_MIN,
@@ -407,10 +407,14 @@ function EsChartCard({
   // ── Active chart symbol ────────────────────────────────────────────────────
   const [symbol, setSymbolState] = useState<ChartSymbol>("ES");
   const setSymbol = useCallback((s: ChartSymbol) => {
-    setSymbolState(s);
+    // Normalised at the door. The picker can now hand over a ticker somebody
+    // typed, and "spy " and "SPY" must not become two different cards.
+    const next = normalizeSymbol(s);
+    if (!next) return;
+    setSymbolState(next);
     // `slot`, never cfgSlot — the symbol is the one setting that stays per card
     // when the toolbar is shared. That is the whole point of three charts.
-    writeSlot(slot, { symbol: s });
+    writeSlot(slot, { symbol: next });
   }, [slot]);
   const sym = symbolDef(symbol);
   // The one predicate the rest of the page branches on. ES is the futures chart
@@ -437,6 +441,41 @@ function EsChartCard({
   const candleMsRef = useRef(candleMs);
   candleMsRef.current = candleMs;
 
+  // ── Session: which hours the chart plots ───────────────────────────────────
+  /**
+   *   eth — everything the feed has. ES trades nearly around the clock and the
+   *         overnight is where the gap sets up, so this stays the default.
+   *   rth — 09:30–16:00 ET only. The New York cash session.
+   *
+   * A FILTER on the plotted bars, applied at the last possible moment (`rows`
+   * below) rather than at the source. That placement is the whole design:
+   *
+   *   • `rows5` stays whole, so the ES−SPX basis reconstruction — which walks
+   *     the finest series it can find for a close at a given instant — never
+   *     loses the overnight prints it needs to price a wall before the open.
+   *   • The roll-up to 15m/30m/1h happens first and its buckets are anchored to
+   *     09:30, so filtering after it cuts on real bucket boundaries. Filtering
+   *     first would build the 09:30 bucket out of whatever survived and quietly
+   *     mis-stamp every bar of the day.
+   *   • Everything downstream reads `rows` — the candle series, EMAs, volume,
+   *     the replay frame grid, the session levels — so one filter moves all of
+   *     them and none of them needed to learn about sessions.
+   *
+   * Deliberately NOT lightweight-charts' own session support: there isn't any.
+   * Its time scale plots the points it is given, so "hide the overnight" IS
+   * "don't hand it the overnight bars", and the gap between 16:00 and the next
+   * 09:30 closes by itself because the scale is index-based, not clock-based.
+   *
+   * Shares the rth/eth spelling with the replay transport's own session switch
+   * and with the `session` param on the levels route, so the three cannot come
+   * to mean different things.
+   */
+  const [chartSession, setChartSessionState] = useState<"rth" | "eth">("eth");
+  const setChartSession = useCallback((v: "rth" | "eth") => {
+    setChartSessionState(v);
+    saveSetting({ session: v });
+  }, [saveSetting]);
+
   // historyDays = HISTORY_SESSIONS, not the hook's default 20. The 20-day pull
   // was ~114KB / 250ms on every load to feed avg5/avg14 (which this page never
   // destructured) and the VSA baseline (since removed), so it stays trimmed —
@@ -461,7 +500,10 @@ function EsChartCard({
   const { sessionCandles: liveRows, historical: esHistorical, connected: esConnected, refresh: esRefresh } = useEsCandles(isEs, HISTORY_FETCH_DAYS, nativeInterval, false);
   // ETF bars come over HTTP from the etf_candles recorder, not /ws/gex. Passing
   // "" when ES is active keeps the hook completely idle — no fetch, no interval.
-  const { rows: etfRows, connected: etfConnected, refresh: etfRefresh } = useEtfCandles(isEs ? "" : sym.gexSymbol, HISTORY_FETCH_DAYS, nativeInterval);
+  //
+  // candleSymbolOf, not gexSymbol: SPX's gamma is stored under '$SPX' and its
+  // candles under 'SPX'. Every other symbol answers the same string to both.
+  const { rows: etfRows, connected: etfConnected, refresh: etfRefresh } = useEtfCandles(isEs ? "" : candleSymbolOf(sym), HISTORY_FETCH_DAYS, nativeInterval);
 
   // History feed for the derived layers (prior-session levels, the ES basis
   // anchor). Both sides pull HISTORY_FETCH_DAYS calendar days and are trimmed
@@ -595,9 +637,18 @@ function EsChartCard({
   // bar IS a session start, so there is no partial bucket to drop and passing a
   // cutoff would just eat a real bar off the left edge.
   const rows = useMemo(() => {
-    if (interval <= 5) return rows5;
-    return rollupCandles(rows5, interval);
-  }, [rows5, interval]);
+    const base = interval <= 5 ? rows5 : rollupCandles(rows5, interval);
+    if (chartSession !== "rth") return base;
+    const rth = base.filter((r) => {
+      const m = etMinutesOfDay(r.timestamp);
+      return m >= RTH_OPEN_MIN && m < RTH_CLOSE_MIN;
+    });
+    // Fall back to the full series rather than to an empty chart. The only way
+    // to filter everything away is a window that holds no cash-session bars at
+    // all — a symbol whose recorder has only ever run overnight — and "no
+    // candles" is a much worse answer to that than "here they are, unfiltered".
+    return rth.length ? rth : base;
+  }, [rows5, interval, chartSession]);
   /**
    * Content fingerprint of the plotted bars.
    *
@@ -1568,6 +1619,11 @@ function EsChartCard({
   // expiry — see below.
   const applySettings = useCallback((p: SlotBlob, opts: { initial?: boolean } = {}) => {
     if (isChartInterval(p.interval)) setIntervalState(p.interval);
+    // RTH/ETH. Rides the shared blob like the timeframe does, so on a 2–3 up row
+    // the switch on the hoisted dock moves every chart — which is the point:
+    // comparing ES against SPY across two different sets of hours is not a
+    // comparison.
+    if (p.session === "rth" || p.session === "eth") setChartSessionState(p.session);
     // ── THE DTE PICK IS NOT RESTORED. Every load starts on Front (live). ─────
     // Every other setting here is a preference — how the chart looks, what is
     // drawn on it — and should come back exactly as you left it. An expiry is
@@ -5679,8 +5735,8 @@ function EsChartCard({
     own.push({
       id: "chart",
       label: "Chart",
-      hint: "Timeframe and where the view sits",
-      summary: INTERVAL_LABEL[interval],
+      hint: "Timeframe, session, and where the view sits",
+      summary: `${INTERVAL_LABEL[interval]} · ${chartSession.toUpperCase()}`,
       body: (
         <>
           {/* 1m is its own server stream; 5m is the native feed; 15m/30m/1h
@@ -5690,6 +5746,20 @@ function EsChartCard({
               options={CHART_INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
               active={String(interval)}
               onChange={(v) => { const n = Number(v); if (isChartInterval(n)) setInterval_(n); }}
+            />
+          </DockField>
+          {/* Also ON the bar (see the dock below). It is here as well because a
+              narrow card culls the bar's controls down to the cog, and losing
+              the session switch on a three-up row is exactly where you want it
+              — that is the layout with no room for the overnight anyway. */}
+          <DockField label="Session">
+            <SegGroup
+              options={[
+                { label: "RTH", value: "rth" },
+                { label: "ETH", value: "eth" },
+              ]}
+              active={chartSession}
+              onChange={(v) => setChartSession(v === "rth" ? "rth" : "eth")}
             />
           </DockField>
           {/* The "Latest" jump-back control used to sit here as a View field. It
@@ -5871,12 +5941,38 @@ function EsChartCard({
               and live in the cog's rail with everything else. */}
           {toolbarExtras}
 
-          {/* Symbol picker — ES / SPY / QQQ, favorites persisted per browser.
-              ON THE BAR, not in the cog. It is the single most-changed control
-              on this page and the one that renames everything else on it, so
-              burying it two clicks deep behind a gear made the toolbar read as
-              a chart that could only ever be one ticker. Everything else in the
-              cog is set-and-forget; this isn't.
+          {/* Session switch — RTH is 09:30–16:00 ET, ETH is everything the feed
+              carries. ON THE BAR for the same reason the ticker is: it changes
+              what every other control on the toolbar is describing, and it is a
+              thing you flip mid-read ("what did this look like without the
+              overnight?") rather than set once. Kept out of `dockCompact`,
+              where the bar has no room for it and the cog's Chart tab carries
+              it instead.
+
+              Rendered whenever a dock is (not just at `dockMode === "full"`),
+              because unlike the ticker the session is a SHARED setting — on a
+              2–3 up row the hoisted dock's switch moves all three charts through
+              the slot blob, which is what makes them comparable. */}
+          {!dockCompact && (
+            <span style={{ flexShrink: 0 }} title="Session — RTH is the New York cash session (9:30am–4:00pm ET); ETH adds the overnight">
+              <SegGroup
+                options={[
+                  { label: "RTH", value: "rth" },
+                  { label: "ETH", value: "eth" },
+                ]}
+                active={chartSession}
+                onChange={(v) => setChartSession(v === "rth" ? "rth" : "eth")}
+              />
+            </span>
+          )}
+
+          {/* Symbol picker — the curated rows, the far-CB roster, and any ticker
+              typed into its search box (see symbols.tsx). Favorites persisted
+              per browser. ON THE BAR, not in the cog. It is the single
+              most-changed control on this page and the one that renames
+              everything else on it, so burying it two clicks deep behind a gear
+              made the toolbar read as a chart that could only ever be one
+              ticker. Everything else in the cog is set-and-forget; this isn't.
 
               `dockMode === "full"` only. A SHARED dock drives every chart in a
               2–3 up row, and the ticker is the one setting that must stay

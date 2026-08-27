@@ -56,23 +56,33 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import EsChartCard from "@/components/dashboard/es-candles/EsChartCard";
 import {
   MAX_CARDS, SHARED_SLOT, ensureMigrated,
-  readCardCount, writeCardCount, readSidePanel, writeSidePanel,
-  readChainGreek, writeChainGreek,
+  readCardCount, writeCardCount,
   readIndicators, writeIndicators, broadcastReplayCmd, subscribeReplayCmd,
   INDICATORS_DEFAULT, MAX_EMAS,
-  type SidePanelKind, type IndicatorCfg,
+  type IndicatorCfg,
 } from "@/components/dashboard/es-candles/slotStore";
 import { EMA_COLORS } from "@/components/dashboard/es-candles/indicators";
-import { CHAIN_GREEKS, GREEK_LABEL, isChainGreek, type ChainGreek } from "@/components/dashboard/es-candles/ChainRail";
 import { DockButton, SegGroup } from "@/components/shared/DockToolbar";
 import { Card } from "@/components/shared/PageCard";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 
-const PANEL_OPTIONS: Array<{ label: string; value: SidePanelKind }> = [
-  { label: "None", value: "none" },
-  { label: "Rail", value: "rail" },
-  { label: "0DTE", value: "chain" },
-];
+/**
+ * ── The side panel is GONE from this page ───────────────────────────────────
+ *
+ * The GEX rail and the 0DTE chain used to ride the right edge of every card,
+ * chosen by a "Panel" segment in the Charts popover. Both are off, and the
+ * control with them: the cards now pass `sidePanel="none"`.
+ *
+ * The reason is width. The panel's own spec reserves 58–76px plus a 340px floor
+ * for what's left of the chart, and on the layout this page exists for — two or
+ * three charts side by side — that floor is most of the way to the whole
+ * column. The rail was answering a question the heatmap already answers, on the
+ * same screen, in the same price space, using the pixels the candles wanted.
+ *
+ * `SidePanel` itself is untouched and still wired through EsChartCard: the home
+ * dashboard's embedded card keeps its rail (see the `embedded` branch below),
+ * which is a single full-width chart where the width was never the problem.
+ */
 
 /** Which popover is open. Exactly one at a time — two hovering panels would overlap. */
 type Popover = "charts" | "replay" | "indicators" | null;
@@ -295,8 +305,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // The first paint is therefore always 1 card / rail / no indicators, which is
   // also the sensible default for a new user.
   const [cards, setCards] = useState(1);
-  const [sidePanel, setSidePanelState] = useState<SidePanelKind>("rail");
-  const [chainGreek, setChainGreekState] = useState<ChainGreek>("gex");
   const [indicators, setIndicatorsState] = useState<IndicatorCfg>(INDICATORS_DEFAULT);
   const [popover, setPopover] = useState<Popover>(null);
   // Mirrored so the []-dep toggleReplay can read the current panel without
@@ -325,10 +333,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // before parent effects, so this one can't be relied on to run first.)
     ensureMigrated();
     setCards(readCardCount());
-    setSidePanelState(readSidePanel());
     setIndicatorsState(readIndicators());
-    const g = readChainGreek();
-    if (isChainGreek(g)) setChainGreekState(g);
   }, []);
 
   // Keep `replayActiveRef` honest — a card can end a replay by itself via the
@@ -385,14 +390,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     const clamped = Math.min(MAX_CARDS, Math.max(1, n));
     setCards(clamped);
     writeCardCount(clamped);
-  }, []);
-  const setSidePanel = useCallback((v: SidePanelKind) => {
-    setSidePanelState(v);
-    writeSidePanel(v);
-  }, []);
-  const setChainGreek = useCallback((v: ChainGreek) => {
-    setChainGreekState(v);
-    writeChainGreek(v);
   }, []);
   // One updater for the whole indicator blob: every control is a patch over the
   // current value, so no control needs to know about any other.
@@ -477,7 +474,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     >
       <DockButton
         onClick={() => togglePopover("charts")}
-        title="Chart count and side panel"
+        title="How many charts in the row"
         style={popover === "charts" ? { color: LIGHT_BLUE, borderColor: LIGHT_BLUE } : undefined}
       >
         <span>Charts</span>
@@ -564,8 +561,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               // render a dock) but it is a duplicate set waiting for the first
               // layout change that gives those cards one.
               toolbarExtras={i === 0 ? toolbarButtons : undefined}
-              sidePanel={sidePanel}
-              chainGreek={chainGreek}
+              // No rail, no 0DTE chain — the whole card width is candles. See
+              // the note at the top of this file.
+              sidePanel="none"
               indicators={indicators}
             />
           </CardSlot>
@@ -618,36 +616,20 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             overflowY: "auto",
           }}
         >
+          {/* One control now. The Panel and Greek groups that used to sit beside
+              it went with the side panel — see the note at the top of this file.
+              Left as a popover rather than folded back onto the bar because the
+              Replay and Indicators buttons still need one, and a lone segment
+              hanging off the dock next to two popover buttons reads as a fourth
+              thing that failed to open. */}
           {popover === "charts" && (
-            <>
-              <Group label="Charts">
-                <SegGroup
-                  options={Array.from({ length: MAX_CARDS }, (_, i) => ({ label: String(i + 1), value: String(i + 1) }))}
-                  active={String(cards)}
-                  onChange={(v) => setCardCount(Number(v))}
-                />
-              </Group>
-              <Group label="Panel">
-                <SegGroup
-                  options={PANEL_OPTIONS.map((o) => ({ label: o.label, value: o.value }))}
-                  active={sidePanel}
-                  onChange={(v) => setSidePanel(v as SidePanelKind)}
-                />
-              </Group>
-              {/* The chain's greek lives up here rather than in the panel itself for
-                  a structural reason, not a cosmetic one: ChainRail's box has to be
-                  exactly the chart container's box or its rows stop matching the
-                  chart's prices, so nothing may sit above its canvas. */}
-              {sidePanel === "chain" && (
-                <Group label="Greek">
-                  <SegGroup
-                    options={CHAIN_GREEKS.map((g) => ({ label: GREEK_LABEL[g], value: g }))}
-                    active={chainGreek}
-                    onChange={(v) => setChainGreek(v as ChainGreek)}
-                  />
-                </Group>
-              )}
-            </>
+            <Group label="Charts">
+              <SegGroup
+                options={Array.from({ length: MAX_CARDS }, (_, i) => ({ label: String(i + 1), value: String(i + 1) }))}
+                active={String(cards)}
+                onChange={(v) => setCardCount(Number(v))}
+              />
+            </Group>
           )}
 
           {/* Card 0 portals the transport in here. Always mounted while the

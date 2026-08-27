@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-08-27 - ES Candles: SPX, an RTH/ETH switch, no side panel, any ticker
+
+Edited: `components/pages/EsCandles.tsx`, `app/es-candles/page.tsx`,
+`components/dashboard/es-candles/EsChartCard.tsx`,
+`components/dashboard/es-candles/symbols.tsx`, `server-v2/api-router.js`.
+
+Four changes to the ES Candles route. Both page copies were edited - the SPA
+serves `components/pages/EsCandles.tsx` (that is what `app-vite/src/App.tsx`
+lazy-imports at `/es-candles`), and `app/es-candles/page.tsx` is the older Next
+copy of the same screen; leaving one behind is how they drift.
+
+**SPX is a symbol now.** Not a rename of the ES row - a second arrangement of
+the same gamma. ES is the future: it trades nearly around the clock and every
+strike drawn on it goes through the ES-SPX basis first, which is a live number
+that drifts and freezes across a contract roll. SPX is the index the options are
+actually written on, so `candles: "etf"` makes `isEs` false, `effectiveBasis()`
+returns 0, and a wall at 6500 is drawn at 6500. The trade-off is the tape: the
+index only prints 09:30-16:00 ET, so there is no overnight on this symbol.
+
+`SymbolDef` grew `candleSymbol` for it and nothing else - SPX gamma is stored
+under `$SPX` and its candles under `SPX`, and passing `$SPX` to the candle route
+returns an empty series with no error, which is the kind of miss that reads as a
+broken chart.
+
+**RTH / ETH switch.** On the toolbar beside the ticker, and in the cog's Chart
+tab for when a narrow card culls the bar. RTH is 09:30-16:00 ET. It is a filter
+on the plotted bars, applied at the very last step (`rows`), and the placement is
+the design:
+
+- `rows5` stays whole, so the ES-SPX basis reconstruction still has the
+  overnight prints it needs to price a wall before the open.
+- The roll-up to 15m/30m/1h runs FIRST - its buckets are anchored to 09:30, so
+  filtering after it cuts on real bucket boundaries. Filtering first would build
+  the 09:30 bucket out of the survivors and mis-stamp every bar of the day.
+- Everything downstream reads `rows` - candles, EMAs, volume, the replay frame
+  grid - so one filter moves all of them and none of them learned about sessions.
+
+Not lightweight-charts' session support, because there isn't any: its scale is
+index-based, so "hide the overnight" IS "don't hand it the overnight bars", and
+the 16:00 -> 09:30 gap closes by itself. Persists in the slot blob as `session`,
+so on a 2-3 up row the hoisted dock's switch moves every chart - comparing ES
+against SPY across two different sets of hours is not a comparison.
+
+**The side panel is gone from the route.** The GEX rail and the 0DTE chain no
+longer ride the right edge, and the Panel and Greek controls went with them; the
+cards pass `sidePanel="none"`. Width was the reason - `SIDE_PANEL_SPEC` reserves
+58-76px AND demands 340px of chart survive it, which on a three-up row is most of
+a column, to answer a question the heatmap already answers on the same screen in
+the same price space. `SidePanel`/`ChainRail` and the `sidePanel` prop are
+untouched, and the /home and /board EMBEDS keep their rail toggle: one chart in a
+fixed box, where width was never the problem.
+
+**Any ticker, from the far-CB core list.** `ChartSymbol` was a closed union of
+fourteen names, which is what made the picker a fixed list - a symbol not in the
+type could not be selected, stored or restored. It is now `string`; `symbolDef`
+synthesises the plain SPY/QQQ-shaped definition for anything it does not
+recognise, so no other branch anywhere had to learn about it.
+
+The dropdown lists the curated rows, then the far-CB `CORE_TICKERS` roster over
+the new `GET /api/es-candles/tickers`, and accepts a typed ticker on Enter or via
+a "chart it" row for names on no list at all. The roster is fetched once per page
+load, on first open, and shared by all three cards; a failure degrades to the
+curated list rather than to a broken menu.
+
+`CORE_TICKERS` and not `getActiveRoster()` deliberately: the static array answers
+without touching Postgres, and the active roster is the scanner universe plus
+every customer-added ticker - right for a sweep, wrong for a picker that would
+then change under you and show names someone else added.
+
+**`/api/snapshots/etf-candles` gained a live fallback.** The recorder writes a
+fixed roster, and the picker is no longer one, so most symbols now reaching that
+route have no recorded rows - and an empty 200 renders as a chart that loads
+forever with no reason given. A miss falls through to the same on-demand dxLink
+pull the recorder itself uses (`candle-history.js`), aggregated here to the
+requested bucket, clamped to dxFeed's ~7 days of 1m. It is a websocket round trip
+measured in seconds, which is why it is the fallback and not the path. The
+response carries `source` (`etf_candles` / `dxlink-live` / `none`) so a thin
+chart can be diagnosed without reading this entry.
+
 ## 2026-08-25 - Daily Grades: the grader was 401ing on every candle pull
 
 Edited: `server-v2/daily-grades-recorder.js`.

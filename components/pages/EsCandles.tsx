@@ -65,9 +65,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import EsChartCard from "@/components/dashboard/es-candles/EsChartCard";
 import {
   MAX_CARDS, SHARED_SLOT, ensureMigrated,
-  readCardCount, writeCardCount, readSidePanel, writeSidePanel,
+  readCardCount, writeCardCount,
   readEmbedSidePanel, writeEmbedSidePanel,
-  readChainGreek, writeChainGreek,
   readIndicators, writeIndicators, broadcastReplayCmd, subscribeReplayCmd,
   readKeepLive, writeKeepLive,
   INDICATORS_DEFAULT, MAX_EMAS,
@@ -75,17 +74,32 @@ import {
 } from "@/components/dashboard/es-candles/slotStore";
 import { useKeepWsAlive } from "@/hooks/useWsLifecycle";
 import { EMA_COLORS } from "@/components/dashboard/es-candles/indicators";
-import { CHAIN_GREEKS, GREEK_LABEL, isChainGreek, type ChainGreek } from "@/components/dashboard/es-candles/ChainRail";
 import { DockButton, SegGroup, type DockCogSection } from "@/components/shared/DockToolbar";
 import { Card } from "@/components/shared/PageCard";
 import LayoutPresetButton from "@/components/dashboard/es-candles/LayoutPresetButton";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 
-const PANEL_OPTIONS: Array<{ label: string; value: SidePanelKind }> = [
-  { label: "None", value: "none" },
-  { label: "Rail", value: "rail" },
-  { label: "0DTE", value: "chain" },
-];
+/**
+ * ── The side panel is GONE from this ROUTE ──────────────────────────────────
+ *
+ * The GEX rail and the 0DTE chain used to ride the right edge of every card on
+ * /es-candles, chosen by a "Panel" segment (and, for the chain, a "Greek" one)
+ * in the cog's Page tab. Both are off, and the two controls with them: the
+ * route's cards now pass `sidePanel="none"`.
+ *
+ * The reason is width. SIDE_PANEL_SPEC reserves 58–76px for the panel AND
+ * demands 340px of chart survive it, and on the layout this route exists for —
+ * two or three charts side by side — that floor is most of a column. The rail
+ * was answering a question the heatmap already answers, on the same screen, in
+ * the same price space, using the pixels the candles wanted.
+ *
+ * What is deliberately NOT removed:
+ *   • `SidePanel` / `ChainRail` themselves, and EsChartCard's `sidePanel` prop.
+ *   • The EMBED's rail (`embedPanel`, its own storage key, the "Rail" button in
+ *     `embedToolbarExtras`). The /home GEX card and the /board ES tile are a
+ *     single chart in a fixed box where the width was never the problem, and
+ *     that toggle is a decision about those tiles — see `embedPanel` below.
+ */
 
 // ── Popover metrics ──────────────────────────────────────────────────────────
 // Every control in the menu is laid out against these three numbers so the boxes
@@ -302,7 +316,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // The first paint is therefore always 1 card / rail / no indicators, which is
   // also the sensible default for a new user.
   const [cards, setCards] = useState(1);
-  const [sidePanel, setSidePanelState] = useState<SidePanelKind>("rail");
   /**
    * The EMBEDDED card's side panel — the right-edge GEX rail, on or off.
    *
@@ -317,7 +330,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
    */
   const [embedPanel, setEmbedPanel] = useState<SidePanelKind>("rail");
   const embedPanelRef = useRef<SidePanelKind>("rail");
-  const [chainGreek, setChainGreekState] = useState<ChainGreek>("gex");
   /**
    * Keep the live feed up while this route is open, even with no interaction.
    *
@@ -363,13 +375,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // before parent effects, so this one can't be relied on to run first.)
     ensureMigrated();
     setCards(readCardCount());
-    setSidePanelState(readSidePanel());
     const ep = readEmbedSidePanel();
     embedPanelRef.current = ep;
     setEmbedPanel(ep);
     setIndicatorsState(readIndicators());
-    const g = readChainGreek();
-    if (isChainGreek(g)) setChainGreekState(g);
     const kl = readKeepLive();
     keepLiveRef.current = kl;
     setKeepLiveState(kl);
@@ -406,14 +415,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     const clamped = Math.min(MAX_CARDS, Math.max(1, n));
     setCards(clamped);
     writeCardCount(clamped);
-  }, []);
-  const setSidePanel = useCallback((v: SidePanelKind) => {
-    setSidePanelState(v);
-    writeSidePanel(v);
-  }, []);
-  const setChainGreek = useCallback((v: ChainGreek) => {
-    setChainGreekState(v);
-    writeChainGreek(v);
   }, []);
   // Mirrored into a ref for the same reason `embedPanelRef` is: the toggle has
   // to read the current value to invert it, and the localStorage write is a side
@@ -539,7 +540,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       {
         id: "page",
         label: "Page",
-        hint: "How many charts, and what rides their right edge",
+        // No longer "…and what rides their right edge" — nothing does. See the
+        // note at the top of this file.
+        hint: "How many charts, and whether the feed stays up",
         summary: `${cards} chart${cards > 1 ? "s" : ""}`,
         body: (
           <>
@@ -548,13 +551,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 options={Array.from({ length: MAX_CARDS }, (_, i) => ({ label: String(i + 1), value: String(i + 1) }))}
                 active={String(cards)}
                 onChange={(v) => setCardCount(Number(v))}
-              />
-            </Group>
-            <Group label="Panel">
-              <SegGroup
-                options={PANEL_OPTIONS.map((o) => ({ label: o.label, value: o.value }))}
-                active={sidePanel}
-                onChange={(v) => setSidePanel(v as SidePanelKind)}
               />
             </Group>
             {/* Not a display setting — a lifecycle one, and it belongs on the
@@ -571,19 +567,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 Keep live
               </Toggle>
             </Group>
-            {/* The chain's greek lives up here rather than in the panel itself for
-                a structural reason, not a cosmetic one: ChainRail's box has to be
-                exactly the chart container's box or its rows stop matching the
-                chart's prices, so nothing may sit above its canvas. */}
-            {sidePanel === "chain" && (
-              <Group label="Greek">
-                <SegGroup
-                  options={CHAIN_GREEKS.map((g) => ({ label: GREEK_LABEL[g], value: g }))}
-                  active={chainGreek}
-                  onChange={(v) => setChainGreek(v as ChainGreek)}
-                />
-              </Group>
-            )}
           </>
         ),
       },
@@ -681,7 +664,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         body: <LayoutPresetButton inline />,
       },
     ];
-  }, [cards, sidePanel, chainGreek, keepLive, indicators, setCardCount, setSidePanel, setChainGreek, toggleKeepLive, patchIndicators, patchEma]);
+  }, [cards, keepLive, indicators, setCardCount, toggleKeepLive, patchIndicators, patchEma]);
 
   // The GEX rail toggle, injected into the embedded card's own dock. Declared
   // with the other hooks, above the early return — a useMemo after a conditional
@@ -771,8 +754,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               // layout change that gives those cards one.
               toolbarExtras={i === 0 ? toolbarButtons : undefined}
               pageSections={i === 0 ? pageSections : undefined}
-              sidePanel={sidePanel}
-              chainGreek={chainGreek}
+              // No rail, no 0DTE chain — the whole card width is candles. See
+              // the note at the top of this file.
+              sidePanel="none"
               indicators={indicators}
             />
           </CardSlot>
