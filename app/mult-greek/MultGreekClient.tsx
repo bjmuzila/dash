@@ -36,6 +36,11 @@ const BASE_TICKERS = ["SPX", "SPY", "QQQ"] as const;
 type Ticker = string;
 const CUSTOM_TICKER_KEY = "mg_custom_ticker";
 const HEAT_SKIN_KEY = "mg_heat_skin";
+// Per-ticker expiry-column count (1..MAX_EXP_COLS), persisted per browser as
+// `{ SPX: 4, SPY: 2, … }`. A panel with no entry shows the full MAX_EXP_COLS
+// set, so an existing user sees exactly what they saw before this control
+// existed. See the −/+ stepper in the panel header.
+const COL_COUNT_KEY = "mg_col_counts";
 
 /* ───────────────────────────────────────────────────────────────────────────
  * HEAT SKINS — how a ladder cell is painted, as data.
@@ -850,11 +855,26 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
   );
 }
 
+/** −/+ button in the panel header's expiry-column stepper. */
+function colStepBtnStyle(disabled: boolean): CSSProperties {
+  return {
+    width: 16, height: 16, lineHeight: "14px", padding: 0,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    borderRadius: 5, border: `1px solid ${disabled ? HT.border : `${HT.cyan}55`}`,
+    background: disabled ? "transparent" : "rgba(33,158,188,0.10)",
+    color: disabled ? HT.muted : HT.cyan,
+    opacity: disabled ? 0.35 : 1,
+    fontSize: 12, fontWeight: 800, fontFamily: "inherit",
+    cursor: disabled ? "default" : "pointer",
+  };
+}
+
 function TickerPanel({
   ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, heatSkin, emLevels, showEm, captureWindow,
   showCB, showCW, showPW, getGexChange, deltaWindow, onExpandChain,
   replayFrame = null, replayStrikes = null, dteBase = null,
   editableTicker = false, tickerInput = "", onTickerInputChange, onCommitTicker,
+  colCount = MAX_EXP_COLS, maxColCount = MAX_EXP_COLS, onColCountChange,
 }: {
   ticker: Ticker;
   /** Per-expiry strike rows for this ticker. */
@@ -899,6 +919,14 @@ function TickerPanel({
   onTickerInputChange?: (v: string) => void;
   /** Commit on Enter / blur — the page swaps the slot's ticker. */
   onCommitTicker?: () => void;
+  /** How many expiry columns THIS panel shows (1..maxColCount). `cols` is
+   *  already sliced to it by the page — this is only what the stepper reads. */
+  colCount?: number;
+  /** Upper stop for the stepper: MAX_EXP_COLS, or fewer when the ticker's own
+   *  calendar (or the replayed session) simply has no more expiries to show. */
+  maxColCount?: number;
+  /** −/+ in the panel header. Absent = stepper hidden (screenshot capture). */
+  onColCountChange?: (n: number) => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
@@ -1317,6 +1345,40 @@ function TickerPanel({
         {/* No CB/CW/PW readout here or above the panel any more — the ladder
             paints and badges those cells itself. */}
         <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: HT.text, flexShrink: 0 }}>
+          {/* Expiry-column stepper — 1..maxColCount, this panel only. Every
+              pointer event stops here: the header's double-click opens the
+              full-screen chain, and a double-tap on "+" must not. */}
+          {onColCountChange && (
+            <div
+              onDoubleClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              title={`Expiry columns shown for ${ticker} (1–${maxColCount})`}
+              style={{
+                display: "flex", alignItems: "center", gap: 2,
+                padding: "1px 2px", borderRadius: 7,
+                border: `1px solid ${HT.border}`, background: HT.panelBgStrong,
+                cursor: "default", userSelect: "none",
+              }}
+            >
+              <button
+                onClick={(e) => { e.stopPropagation(); onColCountChange(colCount - 1); }}
+                disabled={colCount <= 1}
+                title="One fewer expiry column"
+                style={colStepBtnStyle(colCount <= 1)}
+              >−</button>
+              <span style={{
+                minWidth: 26, textAlign: "center",
+                fontSize: 10, fontWeight: 800, letterSpacing: "0.04em",
+                color: HT.muted, fontFamily: "var(--font-mono)",
+              }}>{colCount}c</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); onColCountChange(colCount + 1); }}
+                disabled={colCount >= maxColCount}
+                title="One more expiry column"
+                style={colStepBtnStyle(colCount >= maxColCount)}
+              >+</button>
+            </div>
+          )}
           {spot > 0 && (
             <span style={{ color: HT.cyan, fontWeight: 700 }}>{spot.toFixed(2)}</span>
           )}
@@ -2071,6 +2133,49 @@ export function MultGreekClient({
     setCustomTicker(t);
     try { window.localStorage.setItem(CUSTOM_TICKER_KEY, t); } catch { /* ignore */ }
   }, [tickerInput, customTicker]);
+  // ── Per-panel expiry-column count ──────────────────────────────────────────
+  // Each panel picks how many of its closest expiries it shows, 1..MAX_EXP_COLS.
+  // Kept HERE rather than inside TickerPanel so it survives the panel remount a
+  // ticker swap causes, and so it can be persisted for the whole board in one
+  // localStorage entry keyed by ticker.
+  //
+  // Note what "4" means, because it is not "4 expiries": at the full count the
+  // 4th column is the synthetic ex-0DTE TOTAL (see withEx0Column) and the 4th
+  // expiry folds into it. So the stepper is a count of COLUMNS ON SCREEN, which
+  // is what the number in the header claims — 3 columns is three expiries and
+  // no total, 4 is three expiries plus the total.
+  const [colCounts, setColCounts] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(COL_COUNT_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+      const out: Record<string, number> = {};
+      Object.entries(parsed as Record<string, unknown>).forEach(([k, v]) => {
+        const n = Math.round(Number(v));
+        // Clamp on READ as well as on write: a hand-edited or older entry must
+        // not be able to slice a panel to 0 columns (or past MAX_EXP_COLS).
+        if (Number.isFinite(n)) out[k.toUpperCase()] = Math.min(MAX_EXP_COLS, Math.max(1, n));
+      });
+      setColCounts(out);
+    } catch { /* ignore */ }
+  }, []);
+  const setColCount = useCallback((ticker: string, n: number) => {
+    const clamped = Math.min(MAX_EXP_COLS, Math.max(1, Math.round(n)));
+    setColCounts(prev => {
+      const next = { ...prev, [ticker.toUpperCase()]: clamped };
+      try { window.localStorage.setItem(COL_COUNT_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+  /** This panel's count, defaulted to the full set and clamped to MAX_EXP_COLS. */
+  const colCountFor = useCallback(
+    (ticker: string) => Math.min(MAX_EXP_COLS, Math.max(1, colCounts[ticker.toUpperCase()] ?? MAX_EXP_COLS)),
+    [colCounts],
+  );
+
   // Embedded in the GEX drawer (?embed=1): keep the SPX/SPY/QQQ panels side by
   // side even though the iframe viewport is below the mobile stack breakpoint.
   const [embed, setEmbed] = useState(false);
@@ -3143,10 +3248,29 @@ export function MultGreekClient({
           this box — the 4 cards and nothing else. The page toolbar above stays
           live and visible while the chain is open. */}
       <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ position: "relative", flex: isCapturing ? "0 0 auto" : 1, display: "flex", alignItems: isCapturing ? "flex-start" : "stretch", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: 0 }}>
-        {TICKERS.map((ticker, ti) => (
+        {TICKERS.map((ticker, ti) => {
+          // The panel's available expiries, then this panel's own count over
+          // them. Sliced HERE, not inside TickerPanel: `cols` is what every
+          // downstream reader (rows, walls, totals, the ex-0DTE swap, the grid
+          // tracks) already keys off, so one slice moves all of them together
+          // and there is no second notion of "which columns" to keep in sync.
+          const availCols = replayOn ? (replayColsByTicker[ticker] ?? []) : (colsByTicker[ticker] ?? []);
+          // The stepper's ceiling is what actually EXISTS. A ticker on weeklies
+          // near a holiday, or a replayed session (the recorder keeps 3 expiries
+          // a sweep), can offer fewer than MAX_EXP_COLS — a "+" that adds
+          // nothing is worse than a disabled one. Floor of 1 so an empty
+          // pre-load panel doesn't render a 0-stop stepper.
+          const maxCols = Math.max(1, Math.min(MAX_EXP_COLS, availCols.length || MAX_EXP_COLS));
+          const colCount = Math.min(colCountFor(ticker), maxCols);
+          return (
           <TickerPanel
             key={ticker}
             ticker={ticker}
+            colCount={colCount}
+            maxColCount={maxCols}
+            // Hidden while a screenshot is being captured — the stepper is
+            // chrome, and it would land in the shot.
+            onColCountChange={captureWindow == null ? (n) => setColCount(ticker, n) : undefined}
             // Only the 4th slot is user-configurable, and only when the caller
             // hasn't pinned the line-up (`tickers`) and we're on live data.
             editableTicker={!isStatic && !tickerOverrideKey && ti === 3}
@@ -3154,7 +3278,7 @@ export function MultGreekClient({
             onTickerInputChange={setTickerInput}
             onCommitTicker={commitTicker}
             strikesByExp={strikes[ticker] ?? {}}
-            cols={replayOn ? (replayColsByTicker[ticker] ?? []) : (colsByTicker[ticker] ?? [])}
+            cols={availCols.slice(0, colCount)}
             liveData={liveDataRef.current}
             // Rewound, the header spot is the spot RECORDED at that sweep — the
             // live quote would put today's price on a three-day-old ladder.
@@ -3178,7 +3302,8 @@ export function MultGreekClient({
             replayStrikes={replayOn ? (replaySessions[ticker]?.strikes ?? null) : null}
             dteBase={replayOn ? replayDate : null}
           />
-        ))}
+          );
+        })}
 
         {/* ── Option chain, overlaying the 4 cards ─────────────────────────────
             Pinned to the panels row (inset 8 = this container's own padding),
