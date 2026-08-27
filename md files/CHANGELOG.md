@@ -1,34 +1,35 @@
 # Changelog
 
-## 2026-08-27 - Multi Greek: each panel picks how many expiry columns it shows
+## 2026-08-27 - Multi Greek: pick how many expiry columns the board shows
 
 Edited: `app/mult-greek/MultGreekClient.tsx`.
 
-**Per-panel expiry-column count, 1-4.** Every Multi Greek panel drew the same
-fixed four columns. A `- Nc +` stepper now sits in each panel header, beside the
-spot price, and sets that panel's count on its own - SPX can stay at four while
-SPY sits at two. Saved per browser in `localStorage` under `mg_col_counts`
-(`{ SPX: 4, SPY: 2, ... }`), clamped to 1..4 on read as well as on write, and
-defaulted to the full four, so a panel that has never been touched looks exactly
-as it did before.
+**Expiry columns are now 1-4, set once for the whole board.** Multi Greek always
+drew a fixed four columns. Cog -> Board -> **Columns** now takes 1, 2, 3 or 4 and
+every panel follows it. Saved per browser in `localStorage` under
+`mg_col_count`, clamped to 1..4 on read as well as on write, defaulting to the
+full four - a user who never opens the control sees exactly what they saw
+before. The bar's state readout adds `- N COL` only when it is NOT the full set,
+and the cog's Board row leads with it (`3 cols - OI+VOL`), so a narrowed board
+says so with the menu shut.
+
+One setting, not one per panel: the four ladders are read ACROSS - the same
+expiry column on SPX, SPY, QQQ and the 4th slot - so panels on different counts
+would stop lining up and the board would stop answering the question it exists
+to answer.
 
 The number counts COLUMNS ON SCREEN, not expiries, because at the full count the
 4th column is the synthetic ex-0DTE TOTAL and the 4th expiry folds into it
 (`withEx0Column`). So 4 = three expiries plus the total; 3 = three expiries and
-no total. The stepper's ceiling is what actually exists rather than a hardcoded
-4: a ticker whose own calendar is short, or a replayed session (the recorder
-keeps three expiries a sweep), disables `+` at its real limit instead of
-offering a column that would come back empty.
+no total. A panel whose own calendar is short (or a replayed session - the
+recorder keeps three expiries a sweep) just shows what it has.
 
 Sliced once, at the panel call site, into the `cols` prop - so the rows, the
 walls, the totals row, the ex-0DTE swap and the grid tracks all follow from the
 same place and there is no second notion of "which columns" to keep in sync.
 Nothing about data loading changed: the chain fetches and socket subscriptions
-still cover the full expiry set, so stepping the count up or down repaints
-immediately with no refetch. The stepper is hidden while a screenshot is being
-captured (it is chrome, and it would land in the shot), and its pointer events
-stop at the control so a double-click on `+` does not open the panel's
-full-screen option chain.
+still cover the full expiry set, so changing the count repaints immediately with
+no refetch.
 
 ## 2026-08-27 - Level Log: 0DTE/non-0DTE + OI+Vol/Vol-only switches, CORE means CORE, a pop-out week chart, scanner sweeps every minute
 

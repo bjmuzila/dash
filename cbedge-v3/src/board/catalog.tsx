@@ -64,15 +64,28 @@ function EsCandlesCard() {
   const { data, loading, error } = useQuery<CandlesResponse>(candlesUrl('ES'), { staleMs: 25_000 })
   const { onMount, setCandles, setGexRows } = useLwChartRenderer()
   const candles = useMemo(() => toCandles(data?.rows), [data])
+  // TEMP DEBUG — remove once bubbles are confirmed live. Shows whether the
+  // 'gex' frame is arriving at all and, if so, what shape its rows actually
+  // have (the real backend's field names, not our assumed contract).
+  const [gexDebug, setGexDebug] = useState<string>('gex: waiting…')
 
   useEffect(() => {
     setCandles(candles)
   }, [candles, setCandles])
 
-  useEffect(() => watchFrame<GexFrame>('gex', (frame) => setGexRows(frame?.data.gexRows ?? [])), [setGexRows])
+  useEffect(
+    () =>
+      watchFrame<GexFrame>('gex', (frame) => {
+        const rows = frame?.data.gexRows ?? []
+        setGexRows(rows)
+        setGexDebug(rows.length ? `gex: ${rows.length} rows, keys=${Object.keys(rows[0]).join(',')}` : 'gex: 0 rows')
+      }),
+    [setGexRows],
+  )
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-1">
+      <span className="shrink-0 text-[10px] text-faint">{gexDebug}</span>
       {error && <span className="shrink-0 text-xs text-down">{error.message}</span>}
       {!error && candles.length === 0 && (
         <span className="shrink-0 text-xs text-muted">{loading ? 'Loading…' : 'No candles for today yet.'}</span>
