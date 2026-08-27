@@ -78,7 +78,8 @@ function EsCandlesCard() {
       watchFrame<GexFrame>('gex', (frame) => {
         const rows = frame?.data.gexRows ?? []
         setGexRows(rows)
-        setGexDebug(rows.length ? `gex: ${rows.length} rows, keys=${Object.keys(rows[0]).join(',')}` : 'gex: 0 rows')
+        const first = rows[0]
+        setGexDebug(first ? `gex: ${rows.length} rows, keys=${Object.keys(first).join(',')}` : 'gex: 0 rows')
       }),
     [setGexRows],
   )
