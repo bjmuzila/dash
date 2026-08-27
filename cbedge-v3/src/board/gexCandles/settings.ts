@@ -75,24 +75,26 @@ export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 }
 export const BUBBLE_STYLE = {
   /** How many top-ranked strikes go hot + glow. */
   highlight: 1,
-  /** Absolute radius cap, px. */
+  /** Absolute radius cap, px — the ceiling on an otherwise empty column. */
   maxPx: 20,
-  /** Cap as a fraction of the ROW (strike) pitch. */
-  maxPxRowFrac: 0.42,
-  /** Cap as a fraction of the COLUMN (time) pitch. */
-  maxPxColFrac: 0.45,
-  /** Floor under the column term, so a zoomed-out chart still shows marks. */
-  colBoundFloorPx: 7,
   /** Hard radius floor, px. */
   minPx: 0.8,
   glowTopFactor: 0.75,
-  glowMinFactor: 0.35,
   glowMaxPx: 9,
   /** The weakest row fades to 1 − fade. */
   fade: 0.55,
-  /** Gap kept between adjacent marks before they are allowed to touch. */
+  /** Hairline kept between adjacent marks, so "not overlapping" reads as
+   *  separate rather than as tangent. */
   colGapPx: 0.8,
 } as const
+
+// Removed 2026-08-27: maxPxRowFrac / maxPxColFrac / colBoundFloorPx. They
+// derived the radius cap from the LADDER's strike step, which is not the
+// spacing the marks are actually drawn at — with `levels: 5` the drawn strikes
+// are usually tens of strikes apart. The cap is now measured per column from
+// the nearest vertical neighbour among the marks being drawn; see capFor() in
+// bubbles.ts. Nothing replaced them because nothing needs to be guessed any
+// more.
 
 /**
  * How many strikes to ASK the server for per column. Deliberately a constant

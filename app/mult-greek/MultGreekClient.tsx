@@ -271,7 +271,9 @@ const emBadgeCache = new Map<string, string>();
 function emBadgeDataUri(label: "EM" | "2× EM"): string {
   const cached = emBadgeCache.get(label);
   if (cached) return cached;
-  const w = label === "EM" ? 16 : 30, h = 10;
+  // 15 / 26, down from 16 / 30: the rail also has to fit a 6-character
+  // strike ("242.50") and, on the ATM row, the ATM chip.
+  const w = label === "EM" ? 15 : 26, h = 10;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" rx="2" fill="rgba(255,255,255,0.92)"/><text x="${w / 2}" y="${h / 2 + 2.8}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="7" font-weight="800" fill="#0b0f1a">${label}</text></svg>`;
   const uri = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   emBadgeCache.set(label, uri);
@@ -1053,9 +1055,11 @@ function TickerPanel({
   // track size here: toggling Δ must not resize a single cell.
   // Sized off displayCols, not cols: replay APPENDS the ALL column, so the two
   // lengths differ there and a cols-sized track list would leave it unpainted.
+  // 76px rail, up from 64: an EM / 2x EM badge sits in it beside the strike,
+  // and at 64 the pair did not fit — the strike was the half that got clipped.
   const gridCols = (
-    `64px ${displayCols.map(() => "1fr").join(" ")}`
-  ).trim() || "64px";
+    `76px ${displayCols.map(() => "1fr").join(" ")}`
+  ).trim() || "76px";
 
   // The active skin, resolved once per render. Every cell style below reads
   // from SK — nothing about the cell's look is hardcoded past this line.
@@ -1486,23 +1490,36 @@ function TickerPanel({
                 padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: "transparent",
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 3,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 2,
                 whiteSpace: "nowrap", overflow: "hidden",
               }}>
                 {(is1x || is2x) && (
+                  // The BADGE is what gives way when the rail is tight. It used
+                  // to be flex 0 0 auto with the number unset, so a "2x EM"
+                  // strike lost its last digits ("242.5(") — the one thing the
+                  // rail exists to say was the thing that got clipped.
                   <img
                     src={emBadgeDataUri(is1x ? "EM" : "2× EM")}
                     alt={is1x ? "EM" : "2× EM"}
-                    style={{ display: "block", flex: "0 0 auto", pointerEvents: "none" }}
+                    style={{ display: "block", flex: "0 1 auto", minWidth: 0, pointerEvents: "none" }}
                   />
                 )}
-                <span>{Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}</span>
+                <span style={{ flex: "0 0 auto" }}>{Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}</span>
                 {/* ATM chip — the alternative to boxing the row. See SkinDef.atm. */}
                 {r.isATM && (SK.atm === "chip" || SK.atm === "both") && (
+                  // A flex box with a FIXED height, not a padded inline span:
+                  // inline text sits on its baseline, and 8px over lineHeight
+                  // 1.3 leaves uneven room above and below — the word rode high
+                  // in its own chip, and a rasteriser shifts the baseline again,
+                  // so an exported PNG showed it crushed against one edge.
+                  // Centred both ways here, at a height the chip actually owns.
                   <span title="At the money" style={{
-                    flex: "0 0 auto", fontSize: 8, fontWeight: 900, lineHeight: 1.3,
+                    flex: "0 0 auto",
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    height: 11, padding: "0 4px", lineHeight: 1,
+                    fontSize: 8, fontWeight: 900,
                     letterSpacing: "0.04em", color: "#04121a", background: "#ffffff",
-                    borderRadius: 3, padding: "0 3px", pointerEvents: "none",
+                    borderRadius: 3, pointerEvents: "none",
                   }}>ATM</span>
                 )}
               </div>
@@ -2953,7 +2970,12 @@ export function MultGreekClient({
           Everything that used to spread across this dock (expiry + GO, contract
           basis, delta stamps, intensity, lookup, replay,
           refresh) now lives inside the cog, matching /home. */}
-      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0 }}>
+      {/* Not rendered into a screenshot. Every control on it is dead in a
+          static image, and the bar is built out of `clamp(_, vw, _)` type and
+          padding — rasterised at a width that is not the viewport's, those
+          resolve to different numbers and the row collapses into overlapping
+          text. The capture band below carries the same facts as plain text. */}
+      <div style={{ display: isCapturing ? "none" : "flex", padding: "6px 10px 2px", flexShrink: 0 }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%" }}>
 
         {/* Status dot */}
@@ -3296,7 +3318,13 @@ export function MultGreekClient({
           It still renders while a screenshot is being taken, because an
           exported PNG leaves the page behind and has nothing else to say WHICH
           session and WHICH front expiry it is of. Same reason the lookup card
-          puts its band directly on top of the thing being captured. */}
+          puts its band directly on top of the thing being captured.
+
+          It is also where the TOOLBAR's context goes during a capture (the
+          line-up, the contract basis, the column setting), since the toolbar
+          itself is hidden for the shot — as plain text at a fixed size, which
+          is exactly what the clamp()-sized bar could not survive being
+          rasterised as. */}
       {isCapturing && (
         <div style={{
           display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
@@ -3307,6 +3335,9 @@ export function MultGreekClient({
             letterSpacing: "0.06em", textTransform: "uppercase", color: HT.text, opacity: 0.78,
           }}>
             {[
+              TICKERS.join(" · "),
+              contractMode === "oivol" ? "OI+VOL" : contractMode === "vol" ? "VOL" : "OI",
+              `${colCount} EXP${showAll ? "+ALL" : ""}`,
               idFront ? `${idFront.md} · ${idFront.dte}` : null,
               idSession,
               replayOn && replayClock != null ? `${fmtReplayClock(replayClock)} ET` : null,

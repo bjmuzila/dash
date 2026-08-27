@@ -85,7 +85,10 @@ interface PanelProps {
 }
 
 function TickerPanel({ ticker, anchor, colCount, basis, intensity, showLevels, onTickerChange }: PanelProps) {
-  const q = useQuery<unknown>(ticker ? chainsUrl(ticker) : null, { staleMs: 15_000 })
+  // 15s, matching v2's auto-refresh. staleMs alone would never refetch — it is
+  // a cache TTL, not an interval — so the ladder would freeze at whatever it
+  // loaded with.
+  const q = useQuery<unknown>(ticker ? chainsUrl(ticker) : null, { staleMs: 15_000, pollMs: 15_000 })
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const [draft, setDraft] = useState(ticker)
   useEffect(() => setDraft(ticker), [ticker])
@@ -295,7 +298,7 @@ export function MultiGreekCard() {
   const [cogOpen, setCogOpen] = useState(false)
 
   // SPX's front expiry anchors every panel's column pick. Deduped against the
-  // SPX panel's own request, so this costs nothing extra.
+  // SPX panel's own request — including its poll — so this costs nothing extra.
   const spxQ = useQuery<unknown>(chainsUrl('SPX'), { staleMs: 15_000 })
   const anchor = useMemo(() => {
     const parsed = parseChain(spxQ.data)

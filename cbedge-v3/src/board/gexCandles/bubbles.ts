@@ -179,8 +179,6 @@ export interface BubbleGeometry {
   yOfPrice: (price: number) => number | null
   /** Pixel distance between two adjacent bars. */
   barPitch: number
-  /** Pixel distance between two adjacent strikes. */
-  rowPitch: number
   width: number
   height: number
 }
@@ -195,6 +193,35 @@ function rgba(c: [number, number, number], a: number): string {
   return `rgba(${c[0]},${c[1]},${c[2]},${a})`
 }
 
+/**
+ * The largest radius a column may use without its marks touching.
+ *
+ * MEASURED FROM WHAT IS ACTUALLY DRAWN, not from the ladder's strike step. That
+ * distinction is the whole fix: with `levels: 5` only five strikes draw per
+ * column and they are usually tens of strikes apart, so a cap derived from the
+ * step made every bubble collapse to the floor; and on a column whose top
+ * strikes happen to be adjacent, the same cap was far too generous and they
+ * smeared into each other. The nearest vertical neighbour among the marks being
+ * drawn is the only number that answers "how big can these be".
+ *
+ * Vertical bound is half the closest gap; horizontal bound is half the column
+ * pitch, since the neighbours left and right are the next columns. Minus a
+ * hairline so "not overlapping" reads as separate rather than as tangent.
+ */
+function capFor(ys: number[], barPitch: number): number {
+  let minGap = Infinity
+  for (let i = 1; i < ys.length; i++) {
+    const hi = ys[i]
+    const lo = ys[i - 1]
+    if (hi === undefined || lo === undefined) continue
+    const gap = hi - lo
+    if (gap > 0 && gap < minGap) minGap = gap
+  }
+  const vertical = Number.isFinite(minGap) ? minGap / 2 - BUBBLE_STYLE.colGapPx : BUBBLE_STYLE.maxPx
+  const horizontal = barPitch / 2 - BUBBLE_STYLE.colGapPx
+  return Math.max(BUBBLE_STYLE.minPx, Math.min(BUBBLE_STYLE.maxPx, vertical, horizontal))
+}
+
 export function drawBubbles(
   ctx: CanvasRenderingContext2D,
   frames: BubbleFrame[],
@@ -202,22 +229,12 @@ export function drawBubbles(
   opts: DrawOpts,
   palette: BubblePalette,
 ): void {
-  const { width: w, height: h, barPitch, rowPitch } = geo
+  const { width: w, height: h, barPitch } = geo
   if (!frames.length || w <= 0 || h <= 0) return
 
   const layerAlpha = Math.max(0.05, Math.min(1, opts.intensity))
   const minOpacity = Math.max(0.1, 1 - Math.max(0, Math.min(1, BUBBLE_STYLE.fade)))
   const sizeMul = opts.size
-
-  // The radius cap is the tightest of three bounds: an absolute ceiling, the
-  // row pitch and the column pitch. Row and column both matter — a chart zoomed
-  // out in time and in on price needs the column bound; the reverse needs the
-  // row bound; either alone produces a smear at some zoom level.
-  const colBound = Math.max(barPitch * BUBBLE_STYLE.maxPxColFrac, BUBBLE_STYLE.colBoundFloorPx)
-  const rowBound = rowPitch > 0 ? rowPitch * BUBBLE_STYLE.maxPxRowFrac : BUBBLE_STYLE.maxPx
-  const maxPx = Math.max(1.2, sizeMul * Math.min(BUBBLE_STYLE.maxPx, rowBound, colBound))
-  const rxCap = Math.max(0.35, sizeMul * Math.max(barPitch / 2 - BUBBLE_STYLE.colGapPx, BUBBLE_STYLE.colBoundFloorPx / 2))
-  const ryCap = Math.max(0.35, sizeMul * Math.max(rowPitch / 2 - BUBBLE_STYLE.colGapPx, 1))
 
   for (const frame of frames) {
     const xBar = geo.xOfBar(frame.barT)
@@ -225,48 +242,54 @@ export function drawBubbles(
     const x = xBar + frame.frac * barPitch
     if (x < -20 || x > w + 20) continue
 
+    // Resolve every mark to a pixel first. The cap cannot be known until the
+    // column's marks have y coordinates, because it is a function of how far
+    // apart they landed at THIS zoom.
+    //
+    // The strike IS the price: every symbol v3 charts is charted against its
+    // own strikes, so there is no basis to add — that conversion existed only
+    // for the ES chart, whose axis was futures while its strikes were SPX.
+    const placed: Array<{ y: number; value: number; ratio: number; isWall: boolean }> = []
     for (const m of frame.marks) {
-      // The strike IS the price. Every symbol v3 charts is charted against its
-      // own strikes, so there is no basis to add — that conversion existed only
-      // for the ES chart, whose axis was futures while its strikes were SPX.
       const y = geo.yOfPrice(m.strike)
       if (y == null || y < -20 || y > h + 20) continue
+      placed.push({ y, value: m.value, ratio: m.ratio, isWall: m.wallRank >= 0 })
+    }
+    if (!placed.length) continue
 
-      const shaped = opts.curve <= 1.001 ? m.ratio : Math.pow(m.ratio, opts.curve)
-      const r = Math.max(BUBBLE_STYLE.minPx, maxPx * shaped)
+    // `size` at 1.00x means exactly "as large as the spacing allows", so the
+    // biggest node in a column fills its slot and nothing touches. Above 1.00x
+    // marks are allowed to overlap — that is the documented trade for bigger
+    // marks on a tight chart, not an accident.
+    const cap =
+      capFor(
+        placed.map((p) => p.y).sort((a, b) => a - b),
+        barPitch,
+      ) * sizeMul
+
+    for (const p of placed) {
+      const shaped = opts.curve <= 1.001 ? p.ratio : Math.pow(p.ratio, opts.curve)
+      const r = Math.max(BUBBLE_STYLE.minPx, cap * shaped)
       if (r < 0.12) continue
 
-      const isWall = m.wallRank >= 0
-      const positive = m.value >= 0
+      const positive = p.value >= 0
       const base = positive ? palette.pos : palette.neg
-      const hot = positive ? palette.posHot : palette.negHot
-      const col = isWall ? hot : base
-      const opacity = (isWall ? 1 : minOpacity + m.ratio * (1 - minOpacity)) * layerAlpha
-
-      const rx = Math.min(r, rxCap)
-      const ry = Math.min(r, ryCap)
+      const col = p.isWall ? (positive ? palette.posHot : palette.negHot) : base
+      const opacity = (p.isWall ? 1 : minOpacity + p.ratio * (1 - minOpacity)) * layerAlpha
 
       ctx.beginPath()
-      ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2)
-      if (isWall) {
+      ctx.arc(x, p.y, r, 0, Math.PI * 2)
+      if (p.isWall) {
         // The glow is what separates "the wall" from "a big strike" at a glance.
         // Drawn with the canvas shadow rather than a cached sprite: only
         // BUBBLE_STYLE.highlight marks per column take this path, so the sprite
         // atlas v2 needs for a full heatmap would be machinery for nothing here.
-        const hiT = 0
         ctx.shadowColor = rgba(base, 0.95)
-        ctx.shadowBlur = Math.min(
-          BUBBLE_STYLE.glowMaxPx,
-          Math.max(
-            1.5,
-            Math.max(rx, ry) *
-              (BUBBLE_STYLE.glowTopFactor - (BUBBLE_STYLE.glowTopFactor - BUBBLE_STYLE.glowMinFactor) * hiT),
-          ),
-        )
+        ctx.shadowBlur = Math.min(BUBBLE_STYLE.glowMaxPx, Math.max(1.5, r * BUBBLE_STYLE.glowTopFactor))
       }
       ctx.fillStyle = rgba(col, opacity)
       ctx.fill()
-      if (isWall) {
+      if (p.isWall) {
         ctx.shadowBlur = 0
         ctx.shadowColor = 'transparent'
       }

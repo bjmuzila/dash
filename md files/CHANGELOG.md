@@ -1,5 +1,111 @@
 # Changelog
 
+## 2026-08-27 - v3 GEX Candles: bubbles auto-size to the space they actually have, and the grid is gone
+
+Edited: `cbedge-v3/src/board/gexCandles/bubbles.ts`,
+`cbedge-v3/src/board/gexCandles/chart.ts`,
+`cbedge-v3/src/board/gexCandles/settings.ts`,
+`cbedge-v3/src/board/gexCandles/gexHistory.ts`,
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
+
+**The overlap cap was measured off the wrong thing.** It came from the LADDER's
+strike step - the gap between two adjacent strikes in the chain - which is not
+the spacing the marks are drawn at. With `levels: 5` only five strikes draw per
+column and they are usually tens of strikes apart, so a cap of 0.42x one strike
+step crushed every bubble to the 0.8px floor; and on a column whose top strikes
+happened to land adjacent, the same cap was far too generous and they smeared
+together. Both failures, from one number that was never the right number.
+
+The cap is now computed **per column, from the nearest vertical neighbour among
+the marks actually being drawn**, after they have been resolved to pixels. The
+vertical bound is half that gap; the horizontal bound is half the column pitch,
+since a mark's left and right neighbours are the adjacent columns. Minus a
+hairline so "not overlapping" reads as separate rather than as tangent.
+
+This makes the `size` slider mean what its tooltip has always claimed: at or
+below **1.00x nothing can touch**, because 1.00x IS the largest radius the
+spacing allows; above it marks may overlap, which is the documented trade for
+bigger marks on a tight chart. Radius still tracks |net GEX| alone - being the
+session's biggest wall changes a bubble's colour and gives it a glow, never its
+size.
+
+Three constants went with the old approach: `maxPxRowFrac`, `maxPxColFrac` and
+`colBoundFloorPx` in `BUBBLE_STYLE`. Nothing replaced them, because nothing has
+to be guessed any more. `strikeStep()` and the `setStrikeStep` plumbing that fed
+them are deleted too - the spacing is measured, not derived. Marks are also
+plain circles now rather than ellipses: the x and y caps were only ever
+different because the row and column bounds were computed separately.
+
+**No lines on the chart.** Grid vertical and horizontal lines are off, and so is
+the candle series' dashed last-price line (`priceLineVisible`) and its base
+line. A ruled background competes directly with what the bubbles are for - a
+horizontal line through a column of marks reads as a level, which is the exact
+signal the overlay carries. The price is still on the axis label, which is where
+it gets read anyway.
+
+Kept: the price and time axis borders, which frame the plot without crossing it,
+and the crosshair, which is interaction rather than chart furniture. Say the
+word if either should go too.
+
+
+## 2026-08-27 - v3: the price is live - forming bar off the spot frame, and real polling for the REST cards
+
+Edited: `cbedge-v3/src/data/api.ts`,
+`cbedge-v3/src/board/gexCandles/chart.ts`,
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
+`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`.
+
+**`staleMs` was doing nothing like what its use sites assumed.** It is a cache
+TTL - how long a cached value may be served WITHOUT a refetch - and it never
+causes a refetch on its own. A card that mounts once and never remounts sits on
+its first response forever regardless of how small it is. So GEX Candles with
+`staleMs: 25_000` looked like it refreshed every 25 seconds and was in fact
+frozen at whatever it loaded with, and Multi Greek's ladder never moved at all.
+The Key Levels spot tile was always live - it reads the socket - which is what
+made the difference hard to see.
+
+`useQuery` now takes **`pollMs`**, separate from `staleMs`, and the distinction
+is written into the file's header so the next person does not re-learn it:
+
+- The poll bypasses the cache window (`staleMs: 0`), because going and asking
+  again is the entire point.
+- **Nothing polls while the tab is hidden**, and a poll fires immediately on
+  return rather than waiting out the suppressed interval. A background tab
+  refetching a chain every 15 seconds is pure egress nobody is looking at, and
+  Cloudflare bills for it.
+- **A failed poll keeps the last good value on screen.** Blanking a chart
+  because one refresh 502'd mid-session is worse than a number thirty seconds
+  old.
+
+Cadences: candles 30s, GEX bubble history 60s (the recorder writes one column a
+minute, so asking faster returns the same ladder twice and it is the heaviest
+request the card makes), Multi Greek chains 15s to match v2.
+
+**The chart now ticks between polls.** The candle feed only ever hands over
+CLOSED bars, so the last candle sat still even with polling on. The socket's
+`spot` frame is the live print, and `setLivePrice()` pushes it into the forming
+bar - extending its close, high and low through `series.update()`.
+
+Two constraints on that, both deliberate:
+
+- It **extends the last bar and never invents a new one.** Bars above 5m are
+  anchored to 09:30 ET, so guessing the next boundary would misplace a bar on
+  exactly the intervals where that is most visible. Once the last bar's window
+  has elapsed it goes quiet and lets the poll bring the real next bar.
+- **SPX only.** The socket carries one underlying; quietly painting SPX's price
+  onto an NVDA chart would be worse than a chart that steps on its poll. The
+  subscription is also what puts `spot` into the socket's derived topic scope
+  while the card is mounted.
+
+The tick reaches the chart through `watchFrame` and the imperative handle, never
+through React state - AGENTS.md rule 4. A price arriving at 10Hz must not
+re-render the card, or every memo above the chart re-runs and it hands the
+series a freshly-built bar array ten times a second.
+
+Not changed: the Economic Calendar still does not poll. It reads a weekly file
+and its 60-second tick only moves rows into the dimmed past section.
+
+
 ## 2026-08-27 - v3: mock server rewritten to match the rebuilt card catalog
 
 Edited: `cbedge-v3/scripts/mock-server.mjs`.

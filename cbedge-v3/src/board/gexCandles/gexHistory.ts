@@ -88,27 +88,3 @@ export function parseGexHistory(json: unknown): GexColumn[] {
 export function valueOf(cell: GexCell, metric: GexMetric): number {
   return metric === 'vol' ? cell.netVol : cell.net
 }
-
-/**
- * The strike step of the ladder — the smallest positive gap between adjacent
- * strikes anywhere in the data. Drives the bubble's row-pitch cap, so a 5-wide
- * SPX ladder and a 1-wide SPY ladder both get marks that sit between their own
- * rows instead of over them.
- */
-export function strikeStep(columns: GexColumn[]): number {
-  let step = Infinity
-  for (const col of columns) {
-    const sorted = [...col.cells].sort((a, b) => a.strike - b.strike)
-    for (let i = 1; i < sorted.length; i++) {
-      const hi = sorted[i]
-      const lo = sorted[i - 1]
-      if (!hi || !lo) continue
-      const d = hi.strike - lo.strike
-      if (d > 0 && d < step) step = d
-    }
-    // One well-populated column is enough to learn the step; scanning the whole
-    // session for a number that never changes is wasted work on every repaint.
-    if (Number.isFinite(step) && sorted.length > 8) break
-  }
-  return Number.isFinite(step) ? step : 0
-}

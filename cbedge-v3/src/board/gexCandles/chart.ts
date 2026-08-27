@@ -54,9 +54,21 @@ export interface EsChartHandle {
    * drag turns it off for good.
    */
   setBars: (bars: Bar[], reframe?: boolean) => void
+  /**
+   * Push a live trade price into the bar that is still forming. This is what
+   * makes the price move between candle refreshes — the REST feed only ever
+   * hands over closed bars.
+   *
+   * It EXTENDS the last bar, and never invents a new one. Bars above 5m are
+   * anchored to 09:30 ET, so guessing the next boundary here would put a bar in
+   * the wrong place on exactly the intervals where that is most visible; once
+   * the last bar's window has elapsed this goes quiet and waits for the poll to
+   * bring the real next bar.
+   */
+  setLivePrice: (price: number) => void
+  /** Bar width in ms — needed to know when the last bar has stopped forming. */
+  setIntervalMs: (ms: number) => void
   setFrames: (frames: BubbleFrame[]) => void
-  /** Strike step of the GEX ladder, for the bubble row-pitch cap. */
-  setStrikeStep: (step: number) => void
   setDrawOpts: (opts: ChartDrawOpts) => void
   /** Re-frame on the newest bar, keeping the user's zoom. */
   scrollToNow: () => void
@@ -88,7 +100,11 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       textColor: muted,
       fontSize: 11,
     },
-    grid: { vertLines: { color: line }, horzLines: { color: line } },
+    // No grid. The bubble layer is the thing being read against price, and a
+    // ruled background competes with it — a horizontal line through a column of
+    // marks reads as a level, which is exactly the signal the bubbles carry.
+    // The axis borders stay: they frame the plot, they do not cross it.
+    grid: { vertLines: { visible: false }, horzLines: { visible: false } },
     rightPriceScale: { visible: true, borderColor: line },
     leftPriceScale: { visible: false },
     timeScale: {
@@ -135,6 +151,11 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     borderDownColor: down,
     wickUpColor: up,
     wickDownColor: down,
+    // The dashed last-price line runs the full width of the plot and would be
+    // the one remaining rule across the bubbles. The price is still on the
+    // axis label, which is where it is read anyway.
+    priceLineVisible: false,
+    baseLineVisible: false,
   })
 
   // A transparent canvas over the chart's own canvas for the bubbles.
@@ -146,10 +167,15 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   container.appendChild(overlay)
 
   let frames: BubbleFrame[] = []
-  let step = 0
   let barCount = 0
   let drawOpts: ChartDrawOpts = { size: 1, curve: 1, intensity: 1, on: true }
   let raf = 0
+  // The forming bar, kept here so a live tick can extend it without going back
+  // through React. `openMs` is its wall-clock open, which is what decides
+  // whether it is still forming; `time` is the seconds value the series is
+  // keyed by.
+  let live: { time: UTCTimestamp; openMs: number; open: number; high: number; low: number; close: number } | null = null
+  let intervalMs = 5 * 60_000
 
   const ts = chart.timeScale()
 
@@ -200,19 +226,6 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     const barPitch = span > 0 ? plotW / span : 0
     if (barPitch <= 0) return
 
-    // Row pitch is measured, not assumed: it is the pixel gap between two
-    // adjacent strikes AT THE CURRENT ZOOM, so the same code caps a 5-wide SPX
-    // ladder and a 1-wide SPY ladder correctly.
-    let rowPitch = 0
-    if (step > 0) {
-      const probe = frames[0]?.marks[0]?.strike
-      if (probe != null) {
-        const a = series.priceToCoordinate(probe)
-        const b = series.priceToCoordinate(probe + step)
-        if (a != null && b != null) rowPitch = Math.abs(a - b)
-      }
-    }
-
     drawBubbles(
       ctx,
       frames,
@@ -226,7 +239,6 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
           return y == null ? null : (y as number)
         },
         barPitch,
-        rowPitch,
         width: w,
         height: h,
       },
@@ -248,6 +260,10 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
           close: b.c,
         })),
       )
+      const last = bars[bars.length - 1]
+      live = last
+        ? { time: Math.floor(last.t / 1000) as UTCTimestamp, openMs: last.t, open: last.o, high: last.h, low: last.l, close: last.c }
+        : null
       if (reframe && bars.length) {
         try {
           series.priceScale().applyOptions({ autoScale: true })
@@ -262,11 +278,22 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       }
       checkOffscreen()
     },
+    setLivePrice(price) {
+      if (!live || !Number.isFinite(price) || price <= 0) return
+      // Only while the bar is genuinely still open. Past that, a REST poll owns
+      // the next bar — see the note on this method in EsChartHandle.
+      if (Date.now() >= live.openMs + intervalMs) return
+      if (price === live.close) return
+      live.close = price
+      if (price > live.high) live.high = price
+      if (price < live.low) live.low = price
+      series.update({ time: live.time, open: live.open, high: live.high, low: live.low, close: live.close })
+    },
+    setIntervalMs(ms) {
+      if (ms > 0) intervalMs = ms
+    },
     setFrames(next) {
       frames = next
-    },
-    setStrikeStep(next) {
-      step = next
     },
     setDrawOpts(next) {
       drawOpts = next

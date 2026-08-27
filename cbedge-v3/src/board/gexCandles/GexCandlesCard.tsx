@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { useQuery } from '@/data/api'
+import { watchFrame } from '@/data/hooks'
+import type { SpotFrame } from '@/contract/frames'
 import { SegGroup, Chip, Slider, Popover, PanelSection, SymbolPicker } from './controls'
 import { chainTicker, symbolDef } from './symbols'
 import {
@@ -18,7 +20,7 @@ import {
   type Interval,
 } from './settings'
 import { candlesUrl, filterSession, fmtCountdown, parseCandles, rollup, type Bar } from './candles'
-import { gexHistoryUrl, parseGexHistory, strikeStep } from './gexHistory'
+import { gexHistoryUrl, parseGexHistory } from './gexHistory'
 import { buildBubbleModel } from './bubbles'
 import { mountEsChart, type EsChartHandle } from './chart'
 
@@ -121,7 +123,10 @@ export function GexCandlesCard() {
   const def = useMemo(() => symbolDef(settings.symbol), [settings.symbol])
 
   // ── Fetches ────────────────────────────────────────────────────────────────
-  const candlesQ = useQuery<unknown>(candlesUrl(def, settings.interval), { staleMs: 25_000 })
+  // `pollMs`, not just `staleMs`. staleMs is a cache TTL and never causes a
+  // refetch on its own, so without a poll this card would sit on the bars it
+  // loaded with for as long as it stayed mounted.
+  const candlesQ = useQuery<unknown>(candlesUrl(def, settings.interval), { staleMs: 25_000, pollMs: 30_000 })
   const expiryQ = useQuery<ExpirationsResponse>(
     `/api/expirations?ticker=${encodeURIComponent(chainTicker(def))}`,
     { staleMs: 300_000 },
@@ -132,7 +137,10 @@ export function GexCandlesCard() {
     settings.bubblesOn && expiry
       ? gexHistoryUrl(def.gexSymbol, expiry, GEX_HISTORY_MINUTES, BUBBLE_LADDER_REQUEST)
       : null,
-    { staleMs: 30_000 },
+    // The recorder writes a column a minute, so asking more often than that
+    // returns the same ladder twice — and it is the heaviest request the card
+    // makes.
+    { staleMs: 30_000, pollMs: 60_000 },
   )
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -144,7 +152,6 @@ export function GexCandlesCard() {
   barsRef.current = bars
 
   const columns = useMemo(() => parseGexHistory(gexQ.data), [gexQ.data])
-  const step = useMemo(() => strikeStep(columns), [columns])
 
   const frames = useMemo(
     () =>
@@ -179,7 +186,29 @@ export function GexCandlesCard() {
   }, [bars, viewKey, apply])
 
   useEffect(() => apply((h) => h.setFrames(frames)), [frames, apply])
-  useEffect(() => apply((h) => h.setStrikeStep(step)), [step, apply])
+  useEffect(() => apply((h) => h.setIntervalMs(settings.interval * 60_000)), [settings.interval, apply])
+
+  // ── The live price ─────────────────────────────────────────────────────────
+  // The candle feed only ever hands over CLOSED bars, so between polls the last
+  // candle would sit still. The socket's `spot` frame is the live print, and
+  // pushing it into the forming bar is what makes the chart tick.
+  //
+  // SPX ONLY, deliberately: the socket carries one underlying, and quietly
+  // painting SPX's price onto an NVDA chart would be worse than a chart that
+  // steps on its poll. Subscribing here is also what puts `spot` into the
+  // socket's derived topic scope while this card is mounted.
+  //
+  // watchFrame, not useField: a price tick must reach the chart's imperative
+  // API without re-rendering this component. Rule 4 in AGENTS.md.
+  const livePrice = def.gexSymbol === '$SPX'
+  useEffect(() => {
+    if (!livePrice) return
+    return watchFrame<SpotFrame>('spot', (f) => {
+      const px = f?.data.spot
+      if (typeof px === 'number') apply((h) => h.setLivePrice(px))
+    })
+  }, [livePrice, apply])
+
   useEffect(
     () =>
       apply((h) =>
