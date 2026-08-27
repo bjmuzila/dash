@@ -379,7 +379,13 @@ export type PostMarketProps = {
   coreBullseye: { strike: number; net: number } | null;
   maxPain: number | null;
   em: number | null;
-  totals: { dex: number; vanna: number; callGex: number; putGex: number };
+  /**
+   * `vanna` is nullable: it is published per strike by the server and cannot be
+   * recomputed from the chain, so a feed that does not carry a per-contract
+   * vanna has NO vanna rather than a vanna of zero. See Premarket.tsx's totals
+   * memo. Null renders "—", like every other underivable number here.
+   */
+  totals: { dex: number; vanna: number | null; callGex: number; putGex: number };
   expiry: string;
   etDate: string;
   etMin: number;
@@ -1725,7 +1731,11 @@ export default function PostMarketTab(p: PostMarketProps) {
           <div className="tile">
             <div className="n2">Net Vanna</div>
             <div className="v2 mono">{fmtUsd(totals.vanna)}</div>
-            <div className="m2">{totals.vanna >= 0 ? "vol down helps the tape" : "vol down pressures the tape"}</div>
+            <div className="m2">
+              {totals.vanna == null
+                ? "no per-contract vanna on this feed"
+                : totals.vanna >= 0 ? "vol down helps the tape" : "vol down pressures the tape"}
+            </div>
           </div>
           <div className="tile">
             <div className="n2">Net GEX on the day</div>

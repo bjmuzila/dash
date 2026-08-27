@@ -28,8 +28,17 @@
  *
  * Reactions: reject | break_lt5 | break_5 | consolidated | new_wall | pin.
  *
+ * FOUR VARIANTS (2026-08-27). Every slot is now recorded four times over — the
+ * two expiry scopes ('0dte' = the nearest listed contract, 'agg' = every other
+ * listed expiration summed per strike) crossed with the two GEX bases ('oivol'
+ * = OI + today's volume, 'vol' = today's volume alone). See scanner-variants.js.
+ * walls_log and wall_events carry `expiry_scope` / `basis` columns defaulting to
+ * the historical pair, so every row written before this change is correctly
+ * labelled '0dte'/'oivol' and every reader that does not ask for a variant still
+ * gets exactly that one.
+ *
  * Wiring:      startWallsRecorder() in server-with-proxy.js
- * Read API:    GET  /proxy/walls[?date=&symbol=]
+ * Read API:    GET  /proxy/walls[?date=&symbol=&scope=&basis=]
  * Manual fire: POST /proxy/walls-run   { slot?: number, force?: true }
  */
 
@@ -95,6 +104,17 @@ const HOLD_SAMPLES = 3;
 const RESOLVE_SLOTS = 4;
 
 const LEVEL_TYPES = ['call_wall', 'put_wall', 'cb'];
+
+const V = require('./scanner-variants');
+
+/**
+ * The aggregate leg is written on its own sub-cadence by scanner-recorder (it
+ * moves on open interest, not on the tape), so its freshest sample is routinely
+ * older than the 0DTE one. Judging it by MAX_SAMPLE_AGE_MINS would drop it from
+ * every slot.
+ */
+const AGG_SAMPLE_AGE_MINS = Number(process.env.WALLS_AGG_SAMPLE_AGE_MINS || 40);
+const sampleAgeMins = (variant) => (variant.scope === 'agg' ? AGG_SAMPLE_AGE_MINS : MAX_SAMPLE_AGE_MINS);
 
 // Keep in sync with scanner-recorder.js / gex-levels-history-recorder.js
 const MARKET_HOLIDAYS = new Set([
@@ -197,6 +217,58 @@ async function ensureSchema() {
       -- Net GEX at THIS level's strike, per slot. walls_log.gex_value is the
       -- whole-symbol total and cannot answer "did this wall thicken".
       ALTER TABLE walls_log ADD COLUMN IF NOT EXISTS level_gex DOUBLE PRECISION;
+
+      -- ── The four variants (2026-08-27) ─────────────────────────────────────
+      -- expiry_scope: '0dte' = chain.expirations[0], the nearest listed
+      --               contract — what every row before this change was.
+      --               'agg'  = every OTHER listed expiration, summed per strike.
+      -- basis:        'oivol' = netGEX + netVolGEX (OI + today's volume).
+      --               'vol'   = netVolGEX alone (today's volume only).
+      -- The defaults are the historical pair on purpose: existing rows are
+      -- already correctly labelled by them, and a reader that asks for nothing
+      -- gets the same log it always got.
+      ALTER TABLE walls_log   ADD COLUMN IF NOT EXISTS expiry_scope TEXT NOT NULL DEFAULT '0dte';
+      ALTER TABLE walls_log   ADD COLUMN IF NOT EXISTS basis        TEXT NOT NULL DEFAULT 'oivol';
+      ALTER TABLE wall_events ADD COLUMN IF NOT EXISTS expiry_scope TEXT NOT NULL DEFAULT '0dte';
+      ALTER TABLE wall_events ADD COLUMN IF NOT EXISTS basis        TEXT NOT NULL DEFAULT 'oivol';
+    `);
+
+    // The old uniqueness was (date, symbol, level_type, slot) — one row per
+    // level per slot, full stop. With four variants that is now one row per
+    // level per slot PER VARIANT, so the narrow constraint has to go or three
+    // of the four writes are silently swallowed by ON CONFLICT DO NOTHING.
+    //
+    // Dropped by COLUMN SET rather than by name: the constraint was created
+    // inline by CREATE TABLE, so its name is whatever Postgres generated, and
+    // that differs between a database created before and after a rename.
+    await p.query(`
+      DO $$
+      DECLARE r record;
+      BEGIN
+        FOR r IN
+          SELECT con.conname, con.conrelid::regclass::text AS tbl
+            FROM pg_constraint con
+           WHERE con.conrelid IN ('walls_log'::regclass, 'wall_events'::regclass)
+             AND con.contype = 'u'
+             AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
+                    FROM unnest(con.conkey) k
+                    JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k)
+                 IN (ARRAY['date','level_type','slot','symbol'],
+                     ARRAY['date','hit_slot','level_type','strike','symbol'])
+        LOOP
+          EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', r.tbl, r.conname);
+        END LOOP;
+      END $$;
+    `);
+    await p.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS walls_log_variant_key
+        ON walls_log (date, symbol, level_type, slot, expiry_scope, basis);
+      CREATE UNIQUE INDEX IF NOT EXISTS wall_events_variant_key
+        ON wall_events (date, symbol, level_type, strike, hit_slot, expiry_scope, basis);
+      CREATE INDEX IF NOT EXISTS walls_log_variant_day
+        ON walls_log (date, symbol, expiry_scope, basis);
+      CREATE INDEX IF NOT EXISTS wall_events_variant_day
+        ON wall_events (date, symbol, expiry_scope, basis);
     `);
     _schemaReady = true;
     return true;
@@ -255,31 +327,54 @@ function dueSlot(d = new Date()) {
 // ── Sampling ─────────────────────────────────────────────────────────────────
 
 /**
- * Latest scanner row per symbol for `date`, no older than MAX_SAMPLE_AGE_MINS.
- * scanner-recorder writes every 5m, so at a 15m slot this is a fresh read.
+ * Latest scanner row per symbol for `date`, no older than the variant's
+ * freshness window. scanner-recorder writes the 0DTE legs every minute, so at a
+ * 15m slot this is a very fresh read; the aggregate legs ride a slower
+ * sub-cadence and get a wider window (sampleAgeMins).
+ *
+ * THE DEFAULT VARIANT STILL READS scanner_snapshots. That table is the one
+ * guaranteed to be populated — it predates the variant split and is written on
+ * every sweep regardless of whether variants are enabled — so the log this page
+ * has always shown cannot regress on a deploy where scanner_variants is empty.
+ * The other three read scanner_variants, which is the only place they exist.
  */
-async function sampleUniverse(p, date) {
+async function sampleUniverse(p, date, variant) {
+  const age = sampleAgeMins(variant);
+  if (V.isDefault(variant)) {
+    const { rows } = await p.query(
+      `SELECT DISTINCT ON (symbol)
+              symbol, ts, spot, call_wall, put_wall, cb, total_net_gex,
+              call_wall_gex, put_wall_gex, cb_gex
+         FROM scanner_snapshots
+        WHERE date = $1
+          AND ts >= NOW() - make_interval(mins => $2::int)
+        ORDER BY symbol, ts DESC`,
+      [date, age],
+    );
+    return rows;
+  }
   const { rows } = await p.query(
     `SELECT DISTINCT ON (symbol)
             symbol, ts, spot, call_wall, put_wall, cb, total_net_gex,
             call_wall_gex, put_wall_gex, cb_gex
-       FROM scanner_snapshots
+       FROM scanner_variants
       WHERE date = $1
+        AND expiry_scope = $3 AND basis = $4
         AND ts >= NOW() - make_interval(mins => $2::int)
       ORDER BY symbol, ts DESC`,
-    [date, MAX_SAMPLE_AGE_MINS],
+    [date, age, variant.scope, variant.basis],
   );
   return rows;
 }
 
-/** Last recorded strike per (symbol, level_type) for the day. */
-async function lastLevels(p, date) {
+/** Last recorded strike per (symbol, level_type) for the day, within a variant. */
+async function lastLevels(p, date, variant) {
   const { rows } = await p.query(
     `SELECT DISTINCT ON (symbol, level_type) symbol, level_type, strike, slot
        FROM walls_log
-      WHERE date = $1
+      WHERE date = $1 AND expiry_scope = $2 AND basis = $3
       ORDER BY symbol, level_type, slot DESC`,
-    [date],
+    [date, variant.scope, variant.basis],
   );
   const m = new Map();
   for (const r of rows) m.set(`${r.symbol}|${r.level_type}`, r);
@@ -300,8 +395,32 @@ async function runSlot({ slot = null, force = false } = {}) {
   if (!force && !isTradingDay(now)) return { skipped: 'not a trading day' };
 
   const date = etDateStr(now);
-  const [samples, last] = await Promise.all([sampleUniverse(p, date), lastLevels(p, date)]);
-  if (!samples.length) return { skipped: 'no scanner samples', slot: s, date };
+
+  // One pass per variant. The default is written first and its result is what
+  // the caller sees, so a failure on a variant that did not exist yesterday can
+  // never look like a failure of the log that did.
+  const variants = V.VARIANTS_ENABLED
+    ? V.VARIANTS
+    : V.VARIANTS.filter((v) => V.isDefault(v));
+
+  let head = null;
+  const extras = [];
+  for (const variant of variants) {
+    const res = await runSlotVariant(p, date, s, now, variant); // eslint-disable-line no-await-in-loop
+    if (V.isDefault(variant)) head = res;
+    else extras.push({ variant: variant.key, ...res });
+  }
+  if (!head) return { skipped: 'no default variant', slot: s, date };
+  return { ...head, variants: extras };
+}
+
+/** One variant's pass over the universe for one slot. */
+async function runSlotVariant(p, date, s, now, variant) {
+  const [samples, last] = await Promise.all([
+    sampleUniverse(p, date, variant),
+    lastLevels(p, date, variant),
+  ]);
+  if (!samples.length) return { skipped: 'no scanner samples', slot: s, date, variant: variant.key };
 
   let written = 0;
   let hits = 0;
@@ -337,14 +456,15 @@ async function runSlot({ slot = null, force = false } = {}) {
         try {
           await p.query( // eslint-disable-line no-await-in-loop
             `INSERT INTO walls_log
-               (date, ts, slot, symbol, level_type, strike, prev_strike, delta, spot, gex_value, reason, level_gex)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-             ON CONFLICT (date, symbol, level_type, slot) DO NOTHING`,
+               (date, ts, slot, symbol, level_type, strike, prev_strike, delta, spot, gex_value, reason, level_gex,
+                expiry_scope, basis)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+             ON CONFLICT (date, symbol, level_type, slot, expiry_scope, basis) DO NOTHING`,
             [date, now, s, row.symbol, lt, strike,
               isOpen ? null : Number(prev.strike),
               isOpen ? null : strike - Number(prev.strike),
               spot, num(row.total_net_gex), isOpen ? 'open' : 'change',
-              levelGex[lt]],
+              levelGex[lt], variant.scope, variant.basis],
           );
           written++;
           last.set(`${row.symbol}|${lt}`, { symbol: row.symbol, level_type: lt, strike, slot: s });
@@ -370,26 +490,29 @@ async function runSlot({ slot = null, force = false } = {}) {
             await p.query( // eslint-disable-line no-await-in-loop
               `DELETE FROM wall_events
                 WHERE date = $1 AND symbol = $2 AND level_type = $3
-                  AND strike = $4 AND kind = 'approach' AND reaction IS NULL`,
-              [date, row.symbol, lt, strike],
+                  AND strike = $4 AND kind = 'approach' AND reaction IS NULL
+                  AND expiry_scope = $5 AND basis = $6`,
+              [date, row.symbol, lt, strike, variant.scope, variant.basis],
             );
           }
           const r = await p.query( // eslint-disable-line no-await-in-loop
             `INSERT INTO wall_events
                (date, hit_ts, hit_slot, symbol, level_type, strike, spot_at_hit,
-                kind, was_core, gex_at_hit)
+                kind, was_core, gex_at_hit, expiry_scope, basis)
              SELECT $1::date, $2::timestamptz, $3::smallint, $4::text, $5::text,
                     $6::double precision, $7::double precision,
-                    $9::text, $10::boolean, $11::double precision
+                    $9::text, $10::boolean, $11::double precision,
+                    $12::text, $13::text
               WHERE NOT EXISTS (
                     SELECT 1 FROM wall_events
                      WHERE date = $1::date AND symbol = $4::text
                        AND level_type = $5::text AND strike = $6::double precision
+                       AND expiry_scope = $12::text AND basis = $13::text
                        AND (reaction IS NULL OR hit_slot > $3::int - $8::int))
              ON CONFLICT DO NOTHING
              RETURNING id`,
             [date, now, s, row.symbol, lt, strike, spot, RESOLVE_SLOTS,
-              kind, isCore, levelGex[lt]],
+              kind, isCore, levelGex[lt], variant.scope, variant.basis],
           );
           if (r.rowCount && kind === 'touch') hits++;
           if (r.rowCount && kind === 'approach') approaches++;
@@ -400,12 +523,15 @@ async function runSlot({ slot = null, force = false } = {}) {
     }
   }
 
-  const resolved = await resolveOpenEvents(p, date, s).catch((e) => {
+  const resolved = await resolveOpenEvents(p, date, s, variant).catch((e) => {
     console.warn('[walls] resolve error:', e.message); return 0;
   });
 
-  console.log(`[walls] slot ${s} (${slotLabel(s)}) — ${samples.length} tickers · ${written} level rows · ${hits} new hits · ${approaches} approaches · ${resolved} resolved`);
-  return { ok: true, date, slot: s, at: slotLabel(s), tickers: samples.length, written, hits, approaches, resolved };
+  console.log(`[walls] slot ${s} (${slotLabel(s)}) [${variant.key}] — ${samples.length} tickers · ${written} level rows · ${hits} new hits · ${approaches} approaches · ${resolved} resolved`);
+  return {
+    ok: true, date, slot: s, at: slotLabel(s), variant: variant.key,
+    tickers: samples.length, written, hits, approaches, resolved,
+  };
 }
 
 /**
@@ -621,19 +747,24 @@ function classifyApproach(levelType, strike, path, dirHint = 0) {
  * Resolve every open event whose watch window has elapsed. At the closing slot
  * everything still open is forced to a verdict — nothing carries overnight.
  */
-async function resolveOpenEvents(p, date, currentSlot) {
+async function resolveOpenEvents(p, date, currentSlot, variant = V.normalize()) {
   const cutoff = currentSlot >= SLOT_COUNT - 1 ? SLOT_COUNT : currentSlot - RESOLVE_SLOTS;
   const { rows: open } = await p.query(
     `SELECT id, symbol, level_type, strike, hit_ts, hit_slot, kind, gex_at_hit, spot_at_hit
        FROM wall_events
-      WHERE date = $1 AND reaction IS NULL AND hit_slot <= $2`,
-    [date, cutoff],
+      WHERE date = $1 AND reaction IS NULL AND hit_slot <= $2
+        AND expiry_scope = $3 AND basis = $4`,
+    [date, cutoff, variant.scope, variant.basis],
   );
   if (!open.length) return 0;
 
   let n = 0;
   for (const ev of open) {
     try {
+      // scanner_snapshots regardless of variant, deliberately: this reads SPOT,
+      // and spot is spot whichever expiry or basis the level was ranked on. It
+      // is also the densest price series on the box (every sweep, every symbol),
+      // so the classification path is finest-grained there.
       const { rows: path } = await p.query( // eslint-disable-line no-await-in-loop
         `SELECT ts, spot FROM scanner_snapshots
           WHERE date = $1 AND symbol = $2 AND ts >= $3
@@ -644,8 +775,9 @@ async function resolveOpenEvents(p, date, currentSlot) {
       const { rows: moved } = await p.query( // eslint-disable-line no-await-in-loop
         `SELECT strike FROM walls_log
           WHERE date = $1 AND symbol = $2 AND level_type = $3 AND slot > $4
+            AND expiry_scope = $5 AND basis = $6
           ORDER BY slot ASC LIMIT 1`,
-        [date, ev.symbol, ev.level_type, ev.hit_slot],
+        [date, ev.symbol, ev.level_type, ev.hit_slot, variant.scope, variant.basis],
       );
       const strike = Number(ev.strike);
       const rolled = moved.length
@@ -672,10 +804,15 @@ async function resolveOpenEvents(p, date, currentSlot) {
       // Was this strike still the CORE when the window closed, and what is the
       // level's GEX now? gex_at_hit -> gex_at_resolve is the build/bleed.
       const { rows: after } = await p.query( // eslint-disable-line no-await-in-loop
-        `SELECT cb, call_wall_gex, put_wall_gex, cb_gex FROM scanner_snapshots
-          WHERE date = $1 AND symbol = $2 AND spot > 0
-          ORDER BY ts DESC LIMIT 1`,
-        [date, ev.symbol],
+        V.isDefault(variant)
+          ? `SELECT cb, call_wall_gex, put_wall_gex, cb_gex FROM scanner_snapshots
+              WHERE date = $1 AND symbol = $2 AND spot > 0
+              ORDER BY ts DESC LIMIT 1`
+          : `SELECT cb, call_wall_gex, put_wall_gex, cb_gex FROM scanner_variants
+              WHERE date = $1 AND symbol = $2 AND spot > 0
+                AND expiry_scope = $3 AND basis = $4
+              ORDER BY ts DESC LIMIT 1`,
+        V.isDefault(variant) ? [date, ev.symbol] : [date, ev.symbol, variant.scope, variant.basis],
       );
       const last = after[0] || {};
       const coreHeld = last.cb == null ? null : Number(last.cb) === strike;
@@ -718,7 +855,12 @@ async function reclassifyDay(date, symbol = null) {
       WHERE date = $1 ${symbol ? 'AND symbol = $2' : ''}`,
     args,
   );
-  const n = await resolveOpenEvents(p, date, SLOT_COUNT - 1);
+  // Every variant, because the clear above is not scoped to one — leaving three
+  // of the four permanently NULL would read as "still open" forever.
+  let n = 0;
+  for (const variant of V.VARIANTS) {
+    n += await resolveOpenEvents(p, date, SLOT_COUNT - 1, variant); // eslint-disable-line no-await-in-loop
+  }
   console.log(`[walls] reclassify ${date}${symbol ? `/${symbol}` : ''} — ${rowCount} cleared, ${n} re-scored`);
   return { ok: true, date, symbol, cleared: rowCount, resolved: n };
 }
@@ -730,10 +872,14 @@ async function reclassifyDay(date, symbol = null) {
  * change count, last event, latest reaction) + session totals. With `symbol`:
  * that ticker's full ordered level log and every hit event.
  */
-async function getWalls({ date, symbol } = {}) {
+async function getWalls({ date, symbol, scope, basis } = {}) {
   const p = getPool();
   if (!p || !(await ensureSchema())) return { ok: false, error: 'no DB' };
   const day = date || etDateStr();
+  // Anything unrecognised falls back to the historical pair, so a stale client
+  // or a hand-typed URL gets the log it has always got rather than an error.
+  const variant = V.normalize(scope, basis);
+  const vArgs = [variant.scope, variant.basis];
 
   if (symbol) {
     const sym = String(symbol).toUpperCase();
@@ -741,7 +887,8 @@ async function getWalls({ date, symbol } = {}) {
       p.query(
         `SELECT slot, ts, level_type, strike, prev_strike, delta, spot, reason, level_gex
            FROM walls_log WHERE date = $1 AND symbol = $2
-          ORDER BY slot ASC, level_type ASC`, [day, sym]),
+            AND expiry_scope = $3 AND basis = $4
+          ORDER BY slot ASC, level_type ASC`, [day, sym, ...vArgs]),
       p.query(
         `SELECT hit_slot, hit_ts, level_type, strike, spot_at_hit, reaction,
                 excursion_pts, reclaim_min, note, resolved_ts,
@@ -751,10 +898,11 @@ async function getWalls({ date, symbol } = {}) {
                 COUNT(*) FILTER (WHERE kind = 'touch')
                   OVER (PARTITION BY level_type, strike) AS attempts
            FROM wall_events WHERE date = $1 AND symbol = $2
-          ORDER BY hit_slot ASC`, [day, sym]),
+            AND expiry_scope = $3 AND basis = $4
+          ORDER BY hit_slot ASC`, [day, sym, ...vArgs]),
     ]);
     return {
-      ok: true, date: day, symbol: sym,
+      ok: true, date: day, symbol: sym, scope: variant.scope, basis: variant.basis,
       log: log.rows.map((r) => ({ ...r, at: slotLabel(r.slot) })),
       events: events.rows.map((r) => ({ ...r, at: slotLabel(r.hit_slot) })),
     };
@@ -764,28 +912,34 @@ async function getWalls({ date, symbol } = {}) {
   const cur = await p.query(
     `SELECT DISTINCT ON (symbol, level_type)
             symbol, level_type, strike, slot, spot
-       FROM walls_log WHERE date = $1
-      ORDER BY symbol, level_type, slot DESC`, [day]);
+       FROM walls_log WHERE date = $1 AND expiry_scope = $2 AND basis = $3
+      ORDER BY symbol, level_type, slot DESC`, [day, ...vArgs]);
   const open = await p.query(
     `SELECT DISTINCT ON (symbol, level_type)
             symbol, level_type, strike
        FROM walls_log WHERE date = $1 AND reason = 'open'
-      ORDER BY symbol, level_type, slot ASC`, [day]);
+        AND expiry_scope = $2 AND basis = $3
+      ORDER BY symbol, level_type, slot ASC`, [day, ...vArgs]);
   const chg = await p.query(
     `SELECT symbol, COUNT(*)::int AS n FROM walls_log
-      WHERE date = $1 AND reason = 'change' GROUP BY symbol`, [day]);
+      WHERE date = $1 AND reason = 'change' AND expiry_scope = $2 AND basis = $3
+      GROUP BY symbol`, [day, ...vArgs]);
   const evs = await p.query(
     `SELECT symbol, level_type, strike, hit_slot, reaction, reclaim_min, kind, was_core
-       FROM wall_events WHERE date = $1 AND kind = 'touch' ORDER BY hit_slot ASC`, [day]);
+       FROM wall_events WHERE date = $1 AND kind = 'touch'
+        AND expiry_scope = $2 AND basis = $3
+      ORDER BY hit_slot ASC`, [day, ...vArgs]);
   // Approaches are a separate story from hits — a level price respected without
   // ever tagging is not a "hit" and must not inflate the hit column.
   const apps = await p.query(
     `SELECT symbol, COUNT(*)::int AS n,
             COUNT(*) FILTER (WHERE reaction = 'rolled_over')::int AS rolled
        FROM wall_events WHERE date = $1 AND kind = 'approach'
-      GROUP BY symbol`, [day]);
+        AND expiry_scope = $2 AND basis = $3
+      GROUP BY symbol`, [day, ...vArgs]);
   const tot = await p.query(
-    'SELECT COUNT(*)::int AS n FROM walls_log WHERE date = $1', [day]);
+    `SELECT COUNT(*)::int AS n FROM walls_log
+      WHERE date = $1 AND expiry_scope = $2 AND basis = $3`, [day, ...vArgs]);
 
   const bySym = new Map();
   const get = (s) => {
@@ -825,7 +979,7 @@ async function getWalls({ date, symbol } = {}) {
     .sort((a, b) => a.symbol.localeCompare(b.symbol));
   const counts = (rx) => evs.rows.filter((r) => r.reaction === rx).length;
   return {
-    ok: true, date: day, slots: SLOT_COUNT,
+    ok: true, date: day, slots: SLOT_COUNT, scope: variant.scope, basis: variant.basis,
     totals: {
       tickers: tickers.length,
       changes: chg.rows.reduce((n, r) => n + r.n, 0),
@@ -883,7 +1037,7 @@ function startWallsRecorder() {
 }
 
 module.exports = {
-  startWallsRecorder, runSlot, getWalls, ensureSchema, getPool, reclassifyDay,
+  startWallsRecorder, runSlot, runSlotVariant, getWalls, ensureSchema, getPool, reclassifyDay,
   // exported for tests / manual poking
   classify, classifyApproach, approachDir, isTouched, isApproaching, dueSlot, slotLabel,
   breakThreshold, touchBand, SLOT_COUNT, LEVEL_TYPES, TOUCH_PCT, APPROACH_PCT, CORE_TOUCH_PTS,

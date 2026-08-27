@@ -104,6 +104,8 @@ const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: 
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, runContractBackfill: runFarCbBackfill, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls-recorder');
+// The four (expiry_scope × basis) level variants /proxy/walls can serve.
+const scannerVariants = require('./scanner-variants');
 const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
   getWatch, runWatchAlerts, getAlerts, startWallsWatch } = require('./walls-reach');
 const { startForwardScanner, runForwardSweep, getForward } = require('./forward-scanner-recorder');
@@ -2913,6 +2915,16 @@ async function main() {
       // GET /proxy/walls?date=YYYY-MM-DD          → day summary, one row/ticker
       // GET /proxy/walls?date=…&symbol=SPX        → that ticker's level log +
       //                                             every classified hit event
+      //
+      // VARIANTS (2026-08-27) — &scope= and &basis= pick which of the four
+      // recorded readings comes back. Both are OPT-IN and both fall back to the
+      // historical pair, so a request that names neither is byte-for-byte the
+      // response this endpoint always gave.
+      //   scope=0dte  the nearest listed contract      (default)
+      //   scope=agg   every OTHER listed expiration, summed per strike
+      //   basis=oivol netGEX + netVolGEX               (default)
+      //   basis=vol   netVolGEX alone — today's volume, no book
+      // See server-v2/scanner-variants.js.
       // Levels are stored change-only, so the day summary carries the last
       // written value forward per level type; `open` holds the 09:29 baseline
       // so the client can show the session delta without re-reading the log.
@@ -2943,30 +2955,50 @@ async function main() {
           try {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const symbol = u.searchParams.get('symbol') || undefined;
+            const wallVariant = scannerVariants.normalize(
+              u.searchParams.get('scope'), u.searchParams.get('basis'),
+            );
 
             if (symbol && u.searchParams.get('series') === '1') {
               if (!(await scannerEnsureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
               const p = scannerGetPool();
               const seriesDate = u.searchParams.get('date')
                 || new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+              const isDefaultVariant = scannerVariants.isDefault(wallVariant);
               const { rows } = await p.query(
                 // `expiry` rides along (2026-08-23) so a reader can say WHICH
-                // contract the levels came from. scanner-recorder writes
+                // contract the levels came from. On the default variant that is
                 // chain.expirations[0] — the nearest listed expiry — so it is
                 // 0DTE for the daily-expiry indices and the front weekly for
                 // most single names. Pre-migration rows hold '' (the column is
                 // NOT NULL DEFAULT ''), so treat empty as unknown, not as a
-                // date. Additive column only: no filter, no join, no change to
-                // which rows come back.
-                `SELECT ts, spot, call_wall, put_wall, cb, gex_flip, total_net_gex,
-                        call_wall_gex, put_wall_gex, cb_gex, expiry
-                   FROM scanner_snapshots
-                  WHERE date = $1 AND symbol = $2
-                  ORDER BY ts ASC`,
-                [seriesDate, String(symbol).toUpperCase()],
+                // date.
+                //
+                // The DEFAULT variant reads scanner_snapshots, which predates
+                // the variant split and is written on every sweep — so this
+                // branch cannot regress on a box where scanner_variants is
+                // still empty. The other three read scanner_variants, which is
+                // the only place they exist, and carry `expiries` so a reader
+                // can tell a 1-expiry aggregate from a 4-expiry one.
+                isDefaultVariant
+                  ? `SELECT ts, spot, call_wall, put_wall, cb, gex_flip, total_net_gex,
+                            call_wall_gex, put_wall_gex, cb_gex, expiry, 1 AS expiries
+                       FROM scanner_snapshots
+                      WHERE date = $1 AND symbol = $2
+                      ORDER BY ts ASC`
+                  : `SELECT ts, spot, call_wall, put_wall, cb, gex_flip, total_net_gex,
+                            call_wall_gex, put_wall_gex, cb_gex, expiry, expiries
+                       FROM scanner_variants
+                      WHERE date = $1 AND symbol = $2
+                        AND expiry_scope = $3 AND basis = $4
+                      ORDER BY ts ASC`,
+                isDefaultVariant
+                  ? [seriesDate, String(symbol).toUpperCase()]
+                  : [seriesDate, String(symbol).toUpperCase(), wallVariant.scope, wallVariant.basis],
               );
               sendJson(res, 200, {
-                ok: true, date: seriesDate, symbol: String(symbol).toUpperCase(), series: rows,
+                ok: true, date: seriesDate, symbol: String(symbol).toUpperCase(),
+                scope: wallVariant.scope, basis: wallVariant.basis, series: rows,
               });
               return;
             }
@@ -2974,6 +3006,8 @@ async function main() {
             const out = await getWalls({
               date: u.searchParams.get('date') || undefined,
               symbol,
+              scope: wallVariant.scope,
+              basis: wallVariant.basis,
             });
             // Only the universe view carries a ranking — the per-symbol view is
             // a log, not a leaderboard.

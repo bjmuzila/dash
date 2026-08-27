@@ -15,11 +15,24 @@
  * Fetch-on-load + an explicit refresh — no polling, so an open tab never
  * hammers the recorder.
  *
- * ONE EXPIRATION, ALWAYS. scanner-recorder.js snapshots `chain.expirations[0]`
- * — the nearest listed contract — and the walls and the CORE are all picked off
- * that single chain; nothing aggregates across the board. The `…&series=1` read
- * carries that `expiry` back, and the log card tags it (`exp 08/25 · 2DTE`), so
- * a 0DTE SPX log and a front-weekly single-name log can be told apart on sight.
+ * WHICH CONTRACTS, WHICH GEX — two switches, four recorded variants.
+ *   0DTE / Non-0DTE  0DTE is `chain.expirations[0]`, the nearest listed
+ *                    contract, which is what this page showed for its whole
+ *                    life. Non-0DTE is every OTHER listed expiration summed per
+ *                    strike (bounded server-side to the nearest few inside ~45
+ *                    DTE) — the board with today's contract taken out of it.
+ *   OI+Vol / Vol     OI+Vol is netGEX + netVolGEX, the historical basis and the
+ *                    one the dashboard chart / heatmap / MVC read. Vol is
+ *                    netVolGEX alone: today's flow, no book.
+ * All four are RECORDED, by scanner-recorder.js into scanner_variants and by
+ * walls-recorder.js into walls_log / wall_events under `expiry_scope` + `basis`.
+ * Switching either pill re-fetches /proxy/walls with ?scope=&basis=; nothing is
+ * derived client-side, because a different basis is a different argmax, not a
+ * rescaling of the one already on screen. Defaults are 0DTE + OI+Vol, so a
+ * first load is byte-for-byte the log this page always gave.
+ * The `…&series=1` read carries the `expiry` back, and the log card tags it
+ * (`exp 08/25 · 2DTE`) alongside the variant, so two readings of the same
+ * ticker on the same day can be told apart on sight.
  *
  * Three views, switched by the WALLS / CORE / ALL pills:
  *   WALLS — call wall + put wall entries only.
@@ -170,6 +183,47 @@ const VIEW_META: { id: LogView; label: string; color: string; blurb: string }[] 
 /** Short scope word for headers, filenames and the copied text. */
 const VIEW_SCOPE: Record<LogView, string> = { walls: "wall", core: "core", all: "level" };
 const inView = (v: LogView, lt: WallLevel) => VIEW_LEVELS[v].includes(lt);
+
+// ── the two variant switches ─────────────────────────────────────────────────
+/**
+ * WHICH CONTRACTS, and WHICH GEX. Both are recorded server-side four ways over
+ * (server-v2/scanner-variants.js) and pulled through /proxy/walls?scope=&basis=,
+ * so switching either one is a re-fetch of an already-recorded log — not a
+ * re-computation, and never an interpolation of the variant you are not looking
+ * at.
+ *
+ * expiry scope
+ *   0dte  the nearest listed contract, chain.expirations[0]. What this page has
+ *         always shown. Same-day for SPX/SPY/QQQ, the front weekly for most
+ *         single names.
+ *   agg   every OTHER listed expiration, summed per strike — the board with
+ *         today's contract taken out of it. Bounded server-side to the nearest
+ *         few expirations inside ~45 DTE, because "all" on a name with twenty
+ *         listed expiries is twenty chain fetches a sweep.
+ *
+ * basis
+ *   oivol netGEX + netVolGEX — open interest AND today's volume. The historical
+ *         default and what the dashboard chart / heatmap / MVC read.
+ *   vol   netVolGEX alone — today's volume, no book. Same gamma weighting, so
+ *         it answers "where is today's flow building" rather than "where is the
+ *         gamma that is on the book". It moves much faster than OI does.
+ */
+type ExpScope = "0dte" | "agg";
+type GexBasis = "oivol" | "vol";
+
+const SCOPE_META: { id: ExpScope; label: string; blurb: string }[] = [
+  { id: "0dte", label: "0DTE", blurb: "Nearest listed contract only — chain.expirations[0]" },
+  { id: "agg", label: "Non-0DTE", blurb: "Every OTHER listed expiration, summed per strike" },
+];
+const BASIS_META: { id: GexBasis; label: string; blurb: string }[] = [
+  { id: "oivol", label: "OI + Vol", blurb: "netGEX + netVolGEX — open interest and today's volume" },
+  { id: "vol", label: "Vol only", blurb: "netVolGEX alone — today's volume, no open interest" },
+];
+/** Compact tag for headers, the copied text and the PNG filename. */
+const variantTag = (scope: ExpScope, basis: GexBasis) =>
+  `${scope === "agg" ? "non-0DTE" : "0DTE"} · ${basis === "vol" ? "vol-only GEX" : "OI+vol GEX"}`;
+/** The query both variant switches contribute to every /proxy/walls read. */
+const variantQuery = (scope: ExpScope, basis: GexBasis) => `&scope=${scope}&basis=${basis}`;
 
 /**
  * Quick-select rail in the control bar. The ticker list runs ~150 roots deep and
@@ -333,6 +387,7 @@ const missPts = (strike: number | null | undefined, spot: number | null | undefi
 function buildLogText(
   symbol: string, spot: number | null, date: string, view: LogView,
   log: WallLogRow[], events: WallEventRow[], expiry: string | null,
+  variant: string,
 ): string {
   const L = (lt: WallLevel) => LEVEL_LABEL[lt];
   const out: string[] = [];
@@ -344,6 +399,10 @@ function buildLogText(
   out.push(
     `${symbol} — ${scope} · ${date}${exp ? ` · ${exp}` : ""}${spot != null ? ` · spot ${wallNum(spot)}` : ""}`,
   );
+  // Which of the four recorded readings this is. Without it a pasted non-0DTE
+  // or vol-only log is indistinguishable from the default one, and the strikes
+  // are genuinely different numbers.
+  out.push(`basis: ${variant}`);
 
   const opens = log.filter((r) => r.reason === "open");
   if (opens.length) {
@@ -502,6 +561,15 @@ export default function LevelLog() {
   // level types, so ALL is the view that shows everything that loaded — WALLS
   // and CORE are the narrowing, not the starting point.
   const [view, setView] = useState<LogView>("all");
+  /**
+   * WHICH CONTRACTS and WHICH GEX. Both default to what this page has always
+   * shown — the nearest listed expiry on the OI+Vol basis — so a first load is
+   * the log it has always been. Changing either re-fetches; nothing is derived
+   * client-side, because the walls under a different basis are a different
+   * argmax, not a rescaling of the same one.
+   */
+  const [scope, setScope] = useState<ExpScope>("0dte");
+  const [basis, setBasis] = useState<GexBasis>("oivol");
   const [tickers, setTickers] = useState<WallTicker[]>([]);
   const [sel, setSel] = useState<string | null>(null);
   const [detail, setDetail] = useState<{ symbol: string; log: WallLogRow[]; events: WallEventRow[] } | null>(null);
@@ -517,7 +585,10 @@ export default function LevelLog() {
   const loadDay = useCallback(async () => {
     setErr(null); setLoaded(false);
     try {
-      const r = await fetch(`/proxy/walls?date=${encodeURIComponent(date)}`, { cache: "no-store" });
+      const r = await fetch(
+        `/proxy/walls?date=${encodeURIComponent(date)}${variantQuery(scope, basis)}`,
+        { cache: "no-store" },
+      );
       const j = await r.json();
       if (!j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       const rows: WallTicker[] = Array.isArray(j.tickers) ? j.tickers : [];
@@ -525,7 +596,7 @@ export default function LevelLog() {
       setSel((prev) => prev ?? rows[0]?.symbol ?? null);
     } catch (e) { setErr(String(e)); setTickers([]); }
     setLoaded(true);
-  }, [date]);
+  }, [date, scope, basis]);
 
   useEffect(() => { void loadDay(); }, [loadDay]);
 
@@ -540,21 +611,24 @@ export default function LevelLog() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch(`/proxy/walls?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(sel)}`, { cache: "no-store" });
+        const r = await fetch(
+          `/proxy/walls?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(sel)}${variantQuery(scope, basis)}`,
+          { cache: "no-store" },
+        );
         const j = await r.json();
         if (alive && j?.ok) setDetail({ symbol: j.symbol, log: j.log ?? [], events: j.events ?? [] });
       } catch { if (alive) setDetail(null); }
     })();
     return () => { alive = false; };
-  }, [sel, date, nonce]);
+  }, [sel, date, nonce, scope, basis]);
 
   /** The real tape for the selected ticker/date — best-effort, see the hook. */
   const price = useIntradaySpot(sel, date, nonce);
   /** The 5m wall/gamma history the change-only log was distilled from — and,
    *  riding along on the same rows, the expiration those levels came from. */
-  const series = useWallSeries(sel, date, nonce);
-  const snaps = series.samples;
+  const series = useWallSeries(sel, date, nonce, scope, basis);
   const expiry = series.expiry;
+  const expiries = series.expiries;
 
   // ── the view switch, applied once ──────────────────────────────────────────
   // Everything downstream (rail, timeline, copy text, PNG) reads these, so the
@@ -601,12 +675,13 @@ export default function LevelLog() {
   const empty = !sel || !(log.length || events.length);
   /** The contract tag, once, for the card header / copy text / PNG title. */
   const expTag = useMemo(() => expiryTag(expiry, date), [expiry, date]);
+  const vTag = useMemo(() => variantTag(scope, basis), [scope, basis]);
   const logText = useMemo(
-    () => buildLogText(sel ?? "—", spot, date, view, log, events, expiry),
-    [sel, spot, date, view, log, events, expiry],
+    () => buildLogText(sel ?? "—", spot, date, view, log, events, expiry, vTag),
+    [sel, spot, date, view, log, events, expiry, vTag],
   );
-  const snapTitle = `${sel ?? "—"} — ${view === "core" ? "CORE" : view === "all" ? "Level" : "Wall"} log · ${date}`;
-  const snapFile = `${(sel ?? "walls").toLowerCase()}-${view}-log-${date}.png`;
+  const snapTitle = `${sel ?? "—"} — ${view === "core" ? "CORE" : view === "all" ? "Level" : "Wall"} log · ${date} · ${vTag}`;
+  const snapFile = `${(sel ?? "walls").toLowerCase()}-${view}-${scope}-${basis}-log-${date}.png`;
 
   const chipStyle = (on: boolean, color: string = C.cyan): CSSProperties => ({
     padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
@@ -637,7 +712,7 @@ export default function LevelLog() {
           Level Log
         </span>
         <span style={{ fontSize: 13, color: C.label }}>
-          {viewMeta.blurb} — 09:29 open + every 15m to 16:00 ET, change-only
+          {viewMeta.blurb} — 09:29 open + every 15m to 16:00 ET, change-only · {vTag}
         </span>
 
         {/* WALLS / CORE / ALL — the whole page is scoped by this. Defaults to
@@ -645,6 +720,36 @@ export default function LevelLog() {
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 4 }}>
           {VIEW_META.map((v) => (
             <button key={v.id} onClick={() => setView(v.id)} style={chipStyle(view === v.id, v.color)} title={v.blurb}>
+              {v.label}
+            </button>
+          ))}
+        </div>
+
+        {/* WHICH CONTRACTS / WHICH GEX. Two independent switches over the four
+            variants the recorder writes — see SCOPE_META / BASIS_META. Both
+            re-fetch; neither is a client-side filter, because the walls under a
+            different scope or basis are a different argmax, not a re-slice of
+            the rows already loaded. */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", paddingLeft: 12, borderLeft: `1px solid ${C.border}` }}>
+          {SCOPE_META.map((v) => (
+            <button
+              key={v.id}
+              onClick={() => setScope(v.id)}
+              style={{ ...chipStyle(scope === v.id, GREEN), padding: "6px 10px", letterSpacing: "0.06em" }}
+              title={v.blurb}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", paddingLeft: 12, borderLeft: `1px solid ${C.border}` }}>
+          {BASIS_META.map((v) => (
+            <button
+              key={v.id}
+              onClick={() => setBasis(v.id)}
+              style={{ ...chipStyle(basis === v.id, AMBER), padding: "6px 10px", letterSpacing: "0.06em" }}
+              title={v.blurb}
+            >
               {v.label}
             </button>
           ))}
@@ -770,14 +875,18 @@ export default function LevelLog() {
               {sel ?? "—"} — {VIEW_SCOPE[view]} log
             </span>
             <span style={{ fontSize: FS_META, fontFamily: "var(--font-mono)" }}>{wallNum(spot)}</span>
-            {/* WHICH CONTRACT. Every level here comes from one expiration — the
-                nearest listed one at capture — so the log is 0DTE for the daily
-                names and a front weekly for most single names. Deliberately NOT
+            {/* WHICH CONTRACT(S). On the 0DTE scope every level comes from one
+                expiration — the nearest listed one at capture — so the log is
+                same-day for the daily names and a front weekly for most single
+                names. On the non-0DTE scope it is the nearest of the summed
+                expirations, and the count rides beside it. Deliberately NOT
                 data-capture-hide: the PNG should carry it too, or a shared
                 screenshot is a set of levels with no board attached. */}
             {expTag ? (
               <span
-                title={`Levels computed from the ${expiry} expiration — the nearest listed contract at capture. Walls and CORE all come from that one chain; nothing is aggregated across expirations.`}
+                title={scope === "agg"
+                  ? `Levels summed across ${expiries} expiration${expiries === 1 ? "" : "s"} starting ${expiry} — today's contract excluded. Each expiry's ladder is computed on its own and the exposures are added per strike.`
+                  : `Levels computed from the ${expiry} expiration — the nearest listed contract at capture. Walls and CORE all come from that one chain; nothing is aggregated across expirations.`}
                 style={{
                   fontSize: FS_META, fontFamily: "var(--font-mono)", fontWeight: 800,
                   padding: "2px 7px", borderRadius: 6, whiteSpace: "nowrap",
@@ -785,9 +894,23 @@ export default function LevelLog() {
                   border: `1px solid ${rgba(LIGHT_BLUE, 0.35)}`,
                 }}
               >
-                {expTag}
+                {expTag}{scope === "agg" && expiries > 1 ? ` +${expiries - 1}` : ""}
               </span>
             ) : null}
+            {/* The reading, spelled out. Two switches deep, "CORE 500" with no
+                label on it is four different numbers wearing one name. */}
+            <span
+              style={{
+                fontSize: FS_META, fontFamily: "var(--font-mono)", fontWeight: 800,
+                padding: "2px 7px", borderRadius: 6, whiteSpace: "nowrap",
+                color: basis === "vol" ? AMBER : MUTED,
+                background: basis === "vol" ? rgba(AMBER, 0.12) : "rgba(255,255,255,0.04)",
+                border: `1px solid ${basis === "vol" ? rgba(AMBER, 0.35) : C.border}`,
+              }}
+              title={`${SCOPE_META.find((v) => v.id === scope)?.blurb} · ${BASIS_META.find((v) => v.id === basis)?.blurb}`}
+            >
+              {vTag}
+            </span>
             {/* data-capture-hide: live-page chrome, dropped from the screenshot. */}
             <div data-capture-hide style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
               <CopyLogButton disabled={empty} text={logText} />
@@ -800,7 +923,25 @@ export default function LevelLog() {
           {/* The same session as a picture. Sits ABOVE the scroll body on
               purpose: framed capture expands that body without reflowing its
               siblings, so anything under it gets drawn over in the PNG. */}
-          <WallMigrationChart log={log} events={events} view={view} price={price} snaps={snaps} />
+          <WallMigrationChart log={log} events={events} view={view} price={price} />
+
+          {/* A variant with nothing in it is almost always "not recorded yet"
+              rather than "nothing happened": the non-0DTE and vol-only legs
+              started being written on 2026-08-27, so any earlier date has only
+              the default pair. Say so, instead of showing an empty log that
+              reads as a quiet session. */}
+          {empty && sel && !(scope === "0dte" && basis === "oivol") ? (
+            <div style={{ padding: "12px 18px", fontSize: FS_BODY, color: MUTED, borderTop: `1px solid ${C.border}` }}>
+              Nothing recorded for {sel} on <b style={{ color: C.label }}>{vTag}</b> for {date}. The non-0DTE
+              and vol-only legs are recorded forward only — nothing reconstructs them for past sessions.{" "}
+              <button
+                onClick={() => { setScope("0dte"); setBasis("oivol"); }}
+                style={{ ...chipStyle(false), padding: "3px 8px", fontSize: FS_LABEL }}
+              >
+                Back to 0DTE · OI+Vol
+              </button>
+            </div>
+          ) : null}
 
           {/* Header + capture rail stay pinned; only the entries scroll. The
               snapshot expands past this (framed mode), so the PNG is the whole
@@ -1138,10 +1279,15 @@ type SnapSample = {
  * front weekly, so the same page can be showing a 0DTE log and a 4DTE log
  * depending on which ticker is selected. Unlabelled, the two read identically.
  */
-type SnapSeries = { samples: SnapSample[]; expiry: string | null };
+type SnapSeries = {
+  samples: SnapSample[];
+  expiry: string | null;
+  /** How many expirations the aggregate scope summed. 1 on the 0DTE scope. */
+  expiries: number;
+};
 
 /** Stable empty value — a fresh object literal would re-run every consumer's memo. */
-const EMPTY_SERIES: SnapSeries = { samples: [], expiry: null };
+const EMPTY_SERIES: SnapSeries = { samples: [], expiry: null, expiries: 1 };
 
 /** Finite number or null — the series columns are nullable all the way down. */
 function fin(v: unknown): number | null {
@@ -1179,7 +1325,10 @@ function etMinsOfTs(ts: string): number {
  * symbol outside the scanner universe all resolve to [], and the chart falls
  * back to the log's own change-row gamma — which is what it used before.
  */
-function useWallSeries(symbol: string | null, date: string, nonce: number): SnapSeries {
+function useWallSeries(
+  symbol: string | null, date: string, nonce: number,
+  scope: ExpScope, basis: GexBasis,
+): SnapSeries {
   const [rows, setRows] = useState<SnapSeries>(EMPTY_SERIES);
   useEffect(() => {
     if (!symbol) { setRows(EMPTY_SERIES); return; }
@@ -1187,7 +1336,7 @@ function useWallSeries(symbol: string | null, date: string, nonce: number): Snap
     (async () => {
       try {
         const r = await fetch(
-          `/proxy/walls?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(symbol)}&series=1`,
+          `/proxy/walls?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(symbol)}&series=1${variantQuery(scope, basis)}`,
           { cache: "no-store" },
         );
         const j = await r.json();
@@ -1199,12 +1348,15 @@ function useWallSeries(symbol: string | null, date: string, nonce: number): Snap
         // expirations[0]), so the newest labelled row is the honest answer for
         // where the levels ended the day.
         let exp: string | null = null;
+        let nExp = 1;
         for (const row of src) {
           const rec = row as Record<string, unknown>;
           const mins = etMinsOfTs(String(rec?.ts ?? ""));
           if (!Number.isFinite(mins)) continue;
           const e = typeof rec.expiry === "string" ? rec.expiry.trim() : "";
           if (/^\d{4}-\d{2}-\d{2}$/.test(e)) exp = e;
+          const k = Number(rec.expiries);
+          if (Number.isFinite(k) && k > 0) nExp = k;
           out.push({
             s: slotAtMins(mins),
             callWall: fin(rec.call_wall), putWall: fin(rec.put_wall),
@@ -1212,11 +1364,11 @@ function useWallSeries(symbol: string | null, date: string, nonce: number): Snap
           });
         }
         out.sort((a, b) => a.s - b.s);
-        if (alive) setRows({ samples: out, expiry: exp });
+        if (alive) setRows({ samples: out, expiry: exp, expiries: nExp });
       } catch { if (alive) setRows(EMPTY_SERIES); }
     })();
     return () => { alive = false; };
-  }, [symbol, date, nonce]);
+  }, [symbol, date, nonce, scope, basis]);
   return rows;
 }
 
@@ -1225,29 +1377,32 @@ function useWallSeries(symbol: string | null, date: string, nonce: number): Snap
  * against the price captured with them.
  *
  * Ported from the post-market recap's chart (components/pages/premarket/
- * PostMarketTab.tsx → WallChart), and it now carries that chart's ROLE model
- * too:
+ * PostMarketTab.tsx → WallChart).
  *
- *   TWO ROLES, NOT THREE LEVELS. Drawing call wall, put wall and CORE as three
- *   series always drew CORE on top of one of the other two, because CORE IS one
- *   of them — whichever is carrying more gamma. The chart spent a colour, a
- *   dashed stroke and a legend entry saying the same thing twice, and the reader
- *   still had to work out which wall was hiding underneath. So the two series
- *   are ROLES: CORE is the HEAVIER wall at that slot, OTHER is the lighter one.
- *   When they swap, the lines swap — the day's dominant level changing sides,
- *   which is the event worth seeing, and it is legible precisely because there
- *   are only two lines.
+ *   ONE LINE PER RECORDED LEVEL. Call wall, put wall and CORE, each in the
+ *   colour the rest of the page already reads as that level, with the corridor
+ *   between the two walls shaded. CORE is the recorded `cb` strike — the same
+ *   number the ticker rail, the timeline and the copied text show — and it
+ *   frequently sits ON one of the walls, because the biggest node on the chain
+ *   is usually also the biggest node on one side of spot. That overlap IS the
+ *   reading; it is drawn last so the blue is visible on top of the wall it
+ *   coincides with.
+ *
+ *   (Removed 2026-08-27: a two-line "role" model where CORE meant the heavier
+ *   WALL rather than the cb level. It made the ALL view report a different CORE
+ *   than the CORE view for the same ticker on the same day — MSFT read 505 here
+ *   and 500 everywhere else — and one word cannot mean two numbers on one page.)
  *
  * The difference from the post-market version is the source. That one has no
  * recorded level series to read: it reconstructs the walls out of the per-minute
  * strike ladder and labels itself a "net-basis proxy" — and that ladder is
  * SPX-only, which is why the chart could not travel as written. Here the levels
- * ARE recorded, per symbol, by server-v2/walls-recorder.js, with the level's own
- * gamma stored on each row. So the roles come off the recorder's numbers rather
- * than a proxy, it works for every ticker on the rail, and it needs none of the
- * post-market version's mode-smoother: a recorded level only moves when the
- * recorder writes a change, where the ladder's extreme strike alternates from
- * sample to sample and had to be de-flickered.
+ * ARE recorded, per symbol, by server-v2/walls-recorder.js. So the lines are the
+ * recorder's own numbers rather than a proxy, they work for every ticker on the
+ * rail, and they need none of the post-market version's mode-smoother: a
+ * recorded level only moves when the recorder writes a change, where the
+ * ladder's extreme strike alternates from sample to sample and had to be
+ * de-flickered.
  *
  * Two honest consequences of reading the log instead of a ladder:
  *
@@ -1265,8 +1420,7 @@ function useWallSeries(symbol: string | null, date: string, nonce: number): Snap
  * and the whole panel disappears rather than render an empty frame.
  *
  * It reads the same view-filtered `log` / `events` as the rail and the timeline,
- * so the WALLS / CORE switch scopes it along with everything else — the CORE
- * view has no walls to compare and so still draws the cb level on its own.
+ * so the WALLS / CORE switch scopes it along with everything else.
  *
  * The DRAWING is the post-market chart's, deliberately: same 190px body, same
  * 8px pad, x spanning the recorded samples edge to edge (not the fixed
@@ -1275,16 +1429,10 @@ function useWallSeries(symbol: string | null, date: string, nonce: number): Snap
  * continuous stroke, and the legend as swatch chips under the head. Three
  * stamps under the plot say what span you are looking at.
  */
-/** The role colours. CORE keeps the cb blue the rest of the page reads as CORE. */
-const ROLE_CORE_COLOR = LIGHT_BLUE;
-const ROLE_OTHER_COLOR = rgba(HOME_THEME.text, 0.42);
-
-function WallMigrationChart({ log, events, view, price, snaps }: {
+function WallMigrationChart({ log, events, view, price }: {
   log: WallLogRow[]; events: WallEventRow[]; view: LogView;
   /** The 1-minute tape, when there is one. Empty falls back to the captures. */
   price: SpotSample[];
-  /** The 5m wall/gamma series. Empty falls back to the log's change-row gamma. */
-  snaps: SnapSample[];
 }) {
   const model = useMemo(() => {
     const inSlot = (s: number) => Number.isFinite(s) && s >= 0 && s < WALL_SLOTS;
@@ -1328,31 +1476,23 @@ function WallMigrationChart({ log, events, view, price, snaps }: {
     const levels = VIEW_LEVELS[view].filter((lt) => log.some((r) => r.level_type === lt));
     if (!levels.length) return null;
 
-    // Forward-fill: at slot s a level is whatever it was last written as. The
-    // level's gamma rides along on the same fill, because that is what decides
-    // which wall is wearing the CORE role.
+    // Forward-fill: at slot s a level is whatever it was last written as.
     const series = new Map<WallLevel, (number | null)[]>();
-    const gexes = new Map<WallLevel, (number | null)[]>();
     for (const lt of levels) {
       const rows = log
         .filter((r) => r.level_type === lt && inSlot(r.slot) && Number.isFinite(Number(r.strike)))
         .sort((a, b) => a.slot - b.slot);
       const out: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-      const outG: (number | null)[] = new Array(WALL_SLOTS).fill(null);
       let cur: number | null = null;
-      let curG: number | null = null;
       let i = 0;
       for (let s = 0; s <= lastSlot; s++) {
         while (i < rows.length && rows[i].slot <= s) {
           cur = Number(rows[i].strike);
-          curG = Number.isFinite(Number(rows[i].level_gex)) ? Number(rows[i].level_gex) : null;
           i++;
         }
         out[s] = cur;
-        outG[s] = curG;
       }
       series.set(lt, out);
-      gexes.set(lt, outG);
     }
 
     // Spot, from every capture that carried one. Events are written second so a
@@ -1370,111 +1510,26 @@ function WallMigrationChart({ log, events, view, price, snaps }: {
     const spotPts = spot.map((v, s) => ({ s, v })).filter((p) => p.v != null) as { s: number; v: number }[];
 
     /**
-     * THE ROLES — only when BOTH walls are on the chart, since a role is a
-     * comparison. CORE is the wall carrying more gamma at that slot. Where the
-     * recorder stored no gamma for one of them, the recorded cb strike breaks
-     * the tie (CORE sits ON a wall by definition, so a strike match names the
-     * side); failing that the previous slot's side carries forward, because
-     * "we can't tell" must not draw as a swap.
+     * THE CORRIDOR — the room price actually had, drawn as the band between the
+     * put wall and the call wall. It is a shaded polygon, not a third line.
+     *
+     * WHAT USED TO BE HERE (removed 2026-08-27): a "role" model that drew two
+     * lines — CORE = whichever WALL carried more gamma at that slot, OTHER = the
+     * lighter one — instead of the recorded levels. It was defensible on its own
+     * terms and wrong in practice, because the page says CORE in five other
+     * places and every one of them means the recorded `cb` strike. On MSFT that
+     * read CORE 505 in the ALL view (the call wall) and CORE 500 in the CORE view
+     * (the actual CORE), one page, same day, same word, two numbers. A chart that
+     * disagrees with the rail above it is not a reading, it is a bug. CORE is now
+     * the cb level everywhere, drawn in the same blue the rest of the page uses
+     * for it, and the walls are the walls.
      */
-    /**
-     * PER-SLOT GAMMA FROM THE 5m SERIES, forward-filled onto the slot grid the
-     * same way the levels are. `snaps` carries the wall STRIKE it measured that
-     * gamma on, which is the guard below: a gamma is only used when its strike
-     * matches the wall actually drawn at that slot, so a mid-slot roll the log
-     * did not record can never attach its gamma to the wrong level.
-     */
-    const snapCallG: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-    const snapPutG: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-    const snapCallK: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-    const snapPutK: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-    if (snaps.length) {
-      let i = 0;
-      let cg: number | null = null, pg: number | null = null;
-      let ck: number | null = null, pk: number | null = null;
-      for (let s = 0; s <= lastSlot; s++) {
-        while (i < snaps.length && snaps[i].s <= s + 1e-6) {
-          const r = snaps[i];
-          if (r.callG != null) cg = r.callG;
-          if (r.putG != null) pg = r.putG;
-          if (r.callWall != null) ck = r.callWall;
-          if (r.putWall != null) pk = r.putWall;
-          i++;
-        }
-        snapCallG[s] = cg; snapPutG[s] = pg;
-        snapCallK[s] = ck; snapPutK[s] = pk;
-      }
-    }
-
-    const bothWalls = series.has("call_wall") && series.has("put_wall");
-    let roles: {
-      core: (number | null)[]; other: (number | null)[];
-      side: ("call" | "put" | null)[]; callShare: number;
-      /** How many times the two lines changed places over the drawn day. */
-      swaps: number;
-      /** True when at least one slot's side came off the 5m gamma. */
-      fine: boolean;
-    } | null = null;
-    if (bothWalls) {
-      const cw = series.get("call_wall") as (number | null)[];
-      const pw = series.get("put_wall") as (number | null)[];
-      const cwG = gexes.get("call_wall") as (number | null)[];
-      const pwG = gexes.get("put_wall") as (number | null)[];
-      const cb = series.get("cb") ?? null;
-      const core: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-      const other: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-      const side: ("call" | "put" | null)[] = new Array(WALL_SLOTS).fill(null);
-      /**
-       * The gamma to judge slot `s` by: the 5m series when it measured the same
-       * strike that is drawn here, the log's own change-row value otherwise.
-       * Never a blend — a gamma read off a different strike is not this level's.
-       */
-      const gAt = (s: number, sideName: "call" | "put", strike: number): { g: number | null; fine: boolean } => {
-        const k = sideName === "call" ? snapCallK[s] : snapPutK[s];
-        const g = sideName === "call" ? snapCallG[s] : snapPutG[s];
-        if (g != null && k != null && k === strike) return { g, fine: true };
-        return { g: (sideName === "call" ? cwG : pwG)[s], fine: false };
-      };
-
-      let prev: "call" | "put" = "call";
-      let callN = 0;
-      let n = 0;
-      let swaps = 0;
-      let fine = false;
-      let prevSeen: "call" | "put" | null = null;
-      for (let s = 0; s <= lastSlot; s++) {
-        const a = cw[s];
-        const b = pw[s];
-        if (a == null || b == null) continue;
-        // BOTH sides or neither. Comparing a fresh 5m gamma against the other
-        // wall's stale change-row value is not a comparison — it would invent
-        // swaps out of the two numbers being from different clocks.
-        const A = gAt(s, "call", a);
-        const B = gAt(s, "put", b);
-        const bothFine = A.fine && B.fine;
-        const ga = bothFine ? A.g : cwG[s];
-        const gb = bothFine ? B.g : pwG[s];
-        if (bothFine) fine = true;
-        let sd: "call" | "put" | null = null;
-        if (ga != null && gb != null && Math.abs(ga) !== Math.abs(gb)) {
-          sd = Math.abs(ga) > Math.abs(gb) ? "call" : "put";
-        }
-        if (sd == null && cb) {
-          const k = cb[s];
-          if (k != null) sd = k === a ? "call" : k === b ? "put" : null;
-        }
-        if (sd == null) sd = prev;
-        side[s] = sd;
-        prev = sd;
-        if (prevSeen != null && sd !== prevSeen) swaps++;
-        prevSeen = sd;
-        core[s] = sd === "call" ? a : b;
-        other[s] = sd === "call" ? b : a;
-        n++;
-        if (sd === "call") callN++;
-      }
-      if (n) roles = { core, other, side, callShare: callN / n, swaps, fine };
-    }
+    const band = (() => {
+      const cw = series.get("call_wall");
+      const pw = series.get("put_wall");
+      if (!cw || !pw) return null;
+      return { call: cw, put: pw };
+    })();
 
     /**
      * WHICH PRICE GETS DRAWN. The 1-minute tape when it arrived, the log's own
@@ -1489,15 +1544,10 @@ function WallMigrationChart({ log, events, view, price, snaps }: {
     const dense = tape.length >= 20;
     const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }));
 
-    // The y range is bounded by what is DRAWN. With roles in play the cb series
-    // is not a third line, so letting its strike stretch the axis would leave
-    // dead space no line ever reaches.
+    // The y range is bounded by what is DRAWN — every level series in this view,
+    // plus the price line.
     const vals: number[] = [];
-    if (roles) {
-      for (const arr of [roles.core, roles.other]) for (const v of arr) if (v != null) vals.push(v);
-    } else {
-      for (const arr of series.values()) for (const v of arr) if (v != null) vals.push(v);
-    }
+    for (const arr of series.values()) for (const v of arr) if (v != null) vals.push(v);
     for (const p of spotDrawn) vals.push(p.v);
     if (vals.length < 2) return null;
 
@@ -1507,11 +1557,11 @@ function WallMigrationChart({ log, events, view, price, snaps }: {
     const padY = (hi - lo) * 0.08;
     lo -= padY; hi += padY;
 
-    return { levels, series, roles, spotPts, spotDrawn, dense, lo, hi, lastSlot, lastWrite };
-  }, [log, events, view, price, snaps]);
+    return { levels, series, band, spotPts, spotDrawn, dense, lo, hi, lastSlot, lastWrite };
+  }, [log, events, view, price]);
 
   if (!model) return null;
-  const { levels, series, roles, spotPts, spotDrawn, dense, lo, hi, lastSlot, lastWrite } = model;
+  const { levels, series, band, spotPts, spotDrawn, dense, lo, hi, lastSlot, lastWrite } = model;
 
   /** Index across what was recorded, edge to edge — the post-market geometry. */
   const x = (s: number) => (s / Math.max(1, lastSlot)) * 100;
@@ -1539,34 +1589,29 @@ function WallMigrationChart({ log, events, view, price, snaps }: {
   };
 
   /**
-   * With roles, exactly two strokes: the lighter wall first so the CORE reads on
-   * top of it when the two are sitting on the same strike. Without them (the
-   * CORE-only view, or a day where one wall never recorded) it falls back to the
-   * plain per-level lines — no dashes, because nothing is overlapping.
+   * One stroke per RECORDED level, in the colour the rest of the page already
+   * reads as that level. Walls first, CORE last, so where the CORE is sitting on
+   * a wall — which is common, it is usually the heavier of the two — the blue
+   * reads on top and the reader can see that they coincide rather than having
+   * one silently hidden under the other.
    */
-  const paths: { key: string; d: string; color: string; w: number }[] = roles
-    ? [
-        { key: "other", d: step(roles.other), color: ROLE_OTHER_COLOR, w: 1.4 },
-        { key: "core", d: step(roles.core), color: ROLE_CORE_COLOR, w: 2 },
-      ].filter((p) => p.d)
-    : [...levels]
-        .map((lt) => ({ key: lt, d: step(series.get(lt) ?? []), color: LEVEL_COLOR[lt], w: 2 }))
-        .filter((p) => p.d);
+  const drawOrder: WallLevel[] = ["put_wall", "call_wall", "cb"];
+  const paths: { key: string; d: string; color: string; w: number }[] = drawOrder
+    .filter((lt) => levels.includes(lt))
+    .map((lt) => ({
+      key: lt,
+      d: step(series.get(lt) ?? []),
+      color: LEVEL_COLOR[lt],
+      w: lt === "cb" ? 2.2 : 1.8,
+    }))
+    .filter((p) => p.d);
 
-  // The corridor between the two roles — the room price actually had. It is the
-  // wall band either way: the roles are the same two walls, relabelled.
-  const corridor = roles && paths.length === 2
-    ? `${step(roles.core)} ${step(roles.other, true)}`
-    : null;
+  // The corridor between the two WALLS — the room price actually had.
+  const corridor = band ? `${step(band.call)} ${step(band.put, true)}` : null;
   const spotLine = spotDrawn.map((p) => `${x(p.s)},${y(p.v)}`).join(" ");
 
   /** x of the last written slot, only when the chart runs past it. */
   const heldFrom = lastWrite < lastSlot ? x(lastWrite) : null;
-
-  /** Which wall is wearing the CORE right now — the legend says so by name. */
-  const coreSideNow = roles
-    ? (() => { for (let s = lastSlot; s >= 0; s--) if (roles.side[s]) return roles.side[s]; return null; })()
-    : null;
 
   /**
    * The post-market legend: a small square swatch, the role in sentence case,
@@ -1598,14 +1643,11 @@ function WallMigrationChart({ log, events, view, price, snaps }: {
           says nothing about these series — which is exactly how a CORE line
           reads as an unexplained squiggle. */}
       <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
-        {roles ? (
-          <>
-            {legendChip(ROLE_CORE_COLOR, `CORE — the heavier wall (${coreSideNow === "put" ? "put" : "call"})`, wallStrike(lastOf(roles.core)))}
-            {legendChip(ROLE_OTHER_COLOR, "the other wall", wallStrike(lastOf(roles.other)))}
-          </>
-        ) : (
-          paths.map((p) => legendChip(p.color, LEVEL_LABEL[p.key as WallLevel] ?? p.key, wallStrike(lastOf(series.get(p.key as WallLevel) ?? []))))
-        )}
+        {paths.map((p) => legendChip(
+          p.color,
+          LEVEL_LABEL[p.key as WallLevel] ?? p.key,
+          wallStrike(lastOf(series.get(p.key as WallLevel) ?? [])),
+        ))}
         {spotDrawn.length ? legendChip(HOME_THEME.text, "spot", wallNum(spotDrawn[spotDrawn.length - 1].v)) : null}
       </div>
 
@@ -1646,18 +1688,12 @@ function WallMigrationChart({ log, events, view, price, snaps }: {
       </div>
 
       <div style={{ fontSize: FS_META, marginTop: 6, lineHeight: 1.5, color: MUTED }}>
-        {roles ? (
+        {band ? (
           <>
-            CORE is whichever wall carries more gamma at that slot, so the two lines SWAP when the dominant
-            side changes — today the call wall held it{" "}
-            <b style={{ color: HOME_THEME.text }}>{Math.round(roles.callShare * 100)}%</b> of the
-            session{roles.swaps
-              ? <>, changing hands <b style={{ color: HOME_THEME.text }}>{roles.swaps}×</b></>
-              : null}.{" "}
-            {roles.fine ? (
-              <>Dominance is read off the 5-minute scanner gamma, so the CORE can change sides on a
-                gamma build alone — no strike has to move.{" "}</>
-            ) : null}
+            The shaded band is the corridor between the two walls — the room price had. CORE is the
+            recorded <b style={{ color: LIGHT_BLUE }}>cb</b> strike, the single largest |net GEX| node on the
+            chain, so it sits ON one of the walls whenever that wall is also the biggest node — which is
+            most days. That overlap is the reading, not a duplicate line.{" "}
           </>
         ) : null}
         Each level holds its strike until the recorder writes a change, so the steps are the rolls. A level that

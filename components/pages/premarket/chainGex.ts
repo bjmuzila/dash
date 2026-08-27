@@ -56,6 +56,17 @@
  * — the exact failure PostMarketTab's header documents at length. The page
  * hides every ES-derived line when `basis` is null, which is already how it
  * behaves whenever the live pair cannot be trusted.
+ *
+ * VANNA is the one greek that is carried through only if the payload actually
+ * has it. The server publishes `netVanna` / `netVolVanna` per strike from
+ * server-v2/computation/vex-chex.js, and the rows below reproduce that formula
+ * EXACTLY — vanna × OI × spot × 100, calls +, puts − — but only when a per-side
+ * `vanna` comes back on the chain. It is deliberately NOT reconstructed from
+ * Black-Scholes here: the server's own bsGreeks returns zero for T = 0, so a
+ * client-side rebuild would print a vanna on a 0DTE board that the SPX board
+ * beside it does not, and the two tiles would be on different scales while
+ * looking like the same number. Where it is absent the page prints "—", which
+ * is what it does for every other underivable number.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -164,6 +175,15 @@ export function chainRowsOf(items: unknown[], expDate: string, spot: number): Ch
       // scan and the bar window.
       if (!callOI && !putOI && !callVolume && !putVolume) continue;
 
+      // VANNA EXPOSURE, verbatim from server-v2/computation/vex-chex.js
+      // (computeVexChexRow): vanna × contracts × spot × 100, calls +, puts −.
+      // Left undefined — not zero — when the payload carries no vanna, so the
+      // page can tell "no vanna in this feed" from "vanna nets to zero".
+      const cVanna = num(c?.vanna);
+      const pVanna = num(p?.vanna);
+      const hasVanna = cVanna !== 0 || pVanna !== 0;
+      const vMult = spot * 100;
+
       rows.push({
         strike,
         spot,
@@ -179,6 +199,10 @@ export function chainRowsOf(items: unknown[], expDate: string, spot: number): Ch
         putMark: markOf(p),
         callIV: ivOf(c),
         putIV: ivOf(p),
+        ...(hasVanna ? {
+          netVanna: cVanna * callOI * vMult - pVanna * putOI * vMult,
+          netVolVanna: cVanna * callVolume * vMult - pVanna * putVolume * vMult,
+        } : {}),
       });
     }
   }

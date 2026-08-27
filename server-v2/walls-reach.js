@@ -155,6 +155,14 @@ function getPool() {
   }
 }
 
+/**
+ * walls_log / wall_events carry `expiry_scope` + `basis` since 2026-08-27, and
+ * walls-recorder.js owns that migration. Required lazily so this module keeps no
+ * load-order dependency on the recorder.
+ */
+const wallVariants = require('./scanner-variants');
+const wallsRecorderSchema = () => require('./walls-recorder').ensureSchema().catch(() => false);
+
 async function ensureSchema() {
   const p = getPool();
   if (!p) return false;
@@ -957,9 +965,22 @@ async function getWatch({ date, maxAtr = IN_PLAY_ATR } = {}) {
   ]);
 
   // Today's events, so a row can carry "tested twice, held both times".
+  //
+  // PINNED TO THE DEFAULT VARIANT (2026-08-27). wall_events is now written four
+  // times over — 0DTE/non-0DTE crossed with OI+Vol/vol-only, see
+  // scanner-variants.js — and this watchlist is built off scanner_snapshots,
+  // which is the 0DTE + OI+Vol reading. Without the filter every attempt count
+  // here would be summed across four different readings of the day and a level
+  // tested once would report four tests. ensureSchema() first because those two
+  // columns are added by the walls recorder and this route can be hit before its
+  // first slot has run.
+  await wallsRecorderSchema();
   const { rows: evs } = await p.query(
     `SELECT symbol, level_type, strike, kind, reaction, reclaim_min, hit_slot
-       FROM wall_events WHERE date = $1 ORDER BY hit_slot ASC`, [day]);
+       FROM wall_events
+      WHERE date = $1 AND expiry_scope = $2 AND basis = $3
+      ORDER BY hit_slot ASC`,
+    [day, wallVariants.DEFAULT_SCOPE, wallVariants.DEFAULT_BASIS]);
   const hist = new Map();
   for (const e of evs) {
     const k = `${e.symbol}|${e.level_type}|${Number(e.strike)}`;

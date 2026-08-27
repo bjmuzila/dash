@@ -1381,15 +1381,35 @@ export default function Premarket() {
     };
   }, [baseline, lvlBasis, lvlByStrike, callWall, putWall, flip, spot, magnet]);
 
+  /**
+   * DEX / vanna / call-put gamma, summed over the chain on screen.
+   *
+   * `vanna` is NULLABLE and that is the point. It is the one greek the page
+   * cannot recompute: netVanna/netVolVanna are published per strike by
+   * server-v2/computation/vex-chex.js off a per-contract vanna, and a chain
+   * that does not carry one has no vanna — not a vanna of zero. Summing
+   * `?? 0` across such a chain printed a confident "$0" that read as "vanna
+   * nets out here" when it meant "we were never told". Null renders "—", the
+   * same as every other underivable number on this page.
+   *
+   * DEX needs no such caveat: netDEXOf falls back to calculateNetDEX, which
+   * rebuilds it from the raw signed deltas by the same formula the server uses
+   * (delta × contracts × spot × 100, put deltas already negative), so it is the
+   * same number either way.
+   */
   const totals = useMemo(() => {
     let dex = 0, vanna = 0, cg = 0, pg = 0;
+    let anyVanna = false;
     for (const r of chain) {
       dex += netDEXOf(r, "net", spot);
-      vanna += (r.netVanna ?? 0) + (r.netVolVanna ?? 0);
+      if (r.netVanna != null || r.netVolVanna != null) {
+        anyVanna = true;
+        vanna += (r.netVanna ?? 0) + (r.netVolVanna ?? 0);
+      }
       cg += callGEXOf(r, "net", spot);
       pg += putGEXOf(r, "net", spot);
     }
-    return { dex, vanna, callGex: cg, putGex: pg };
+    return { dex, vanna: anyVanna ? vanna : null, callGex: cg, putGex: pg };
   }, [chain, spot]);
 
   /** Expected move: ATM straddle × 0.85, else ATM IV × √(1 trading day). */
@@ -1639,6 +1659,13 @@ export default function Premarket() {
   const esQ = quotes["/ES"], nqQ = quotes["/NQ"], vixQ = quotes["VIX"], spxQ = quotes["SPX"];
   /** The quote for the symbol on screen — SPX's own on the SPX board. */
   const symQ = sym === "SPX" ? spxQ : quotes[sym];
+  /**
+   * The ES print for the footbar. `esFut` rides the socket's `aux` frame and is
+   * therefore 0 on the poll path; /api/quotes-batch is already pulling /ES on
+   * every board for the "ES change" row, so the footer reads that rather than
+   * printing a dash and making the strip a different shape per symbol.
+   */
+  const footEs = sym === "SPX" ? esFut : (esQ?.last ?? 0);
 
   const onRange = overnight?.hi != null && overnight?.lo != null ? overnight.hi - overnight.lo : null;
 
@@ -2368,8 +2395,12 @@ export default function Premarket() {
                 </div>
                 <div className="g">
                   <div className="n">Vanna</div>
-                  <div className={`v mono ${totals.vanna >= 0 ? "chg-pos" : "chg-neg"}`}>{fmtUsd(totals.vanna)}</div>
-                  <div className="m">{totals.vanna >= 0 ? "vol down helps ↑" : "vol down helps ↓"}</div>
+                  <div className={`v mono ${totals.vanna == null ? "" : totals.vanna >= 0 ? "chg-pos" : "chg-neg"}`}>{fmtUsd(totals.vanna)}</div>
+                  <div className="m">
+                    {totals.vanna == null
+                      ? "no per-contract vanna on this feed"
+                      : totals.vanna >= 0 ? "vol down helps ↑" : "vol down helps ↓"}
+                  </div>
                 </div>
                 <div className="g">
                   <div className="n">Call / Put γ</div>
@@ -2419,14 +2450,10 @@ export default function Premarket() {
                 )}
               </div>
 
-              {/* The symbol's own change first, then the two index futures.
-                  ES and NQ stay on every board: they are the market's context
-                  for the name, not SPX trivia. */}
-              {sym !== "SPX" && (
-                <div className="stat"><span className="l">{sym} change</span><span className={`r mono ${(symQ?.change ?? 0) >= 0 ? "chg-pos" : "chg-neg"}`}>
-                  {symQ?.change != null ? `${symQ.change >= 0 ? "+" : "−"}${Math.abs(symQ.change).toFixed(2)} (${fmtPct(symQ.pct)})` : "—"}
-                </span></div>
-              )}
+              {/* ES and NQ stay on EVERY board, in the same two slots they
+                  occupy on SPX. They are the market's context for whatever name
+                  is on screen, not SPX trivia — and the row count of this
+                  column does not change with the symbol. */}
               <div className="stat"><span className="l">ES change</span><span className={`r mono ${(esQ?.change ?? 0) >= 0 ? "chg-pos" : "chg-neg"}`}>
                 {esQ?.change != null ? `${esQ.change >= 0 ? "+" : "−"}${Math.abs(esQ.change).toFixed(2)} (${fmtPct(esQ.pct)})` : "—"}
               </span></div>
@@ -2718,8 +2745,7 @@ export default function Premarket() {
 
           <div className="footbar">
             <span className="l mono">
-              {etDate} · {sym} · {feedLabel} · spot {fmtPx(spot, 2)}
-              {sym === "SPX" ? ` · ES ${fmtPx(esFut, 2)}` : ""}
+              {etDate} · {sym} · {feedLabel} · spot {fmtPx(spot, 2)} · ES {fmtPx(footEs, 2)}
               {basis != null ? ` · basis ${basis >= 0 ? "+" : "−"}${Math.abs(basis).toFixed(2)}` : ""}
               {" · "}{chain.length} strikes
               {updatedAt ? ` · ${new Date(updatedAt).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false })} ET` : ""}

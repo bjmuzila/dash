@@ -1,5 +1,139 @@
 # Changelog
 
+## 2026-08-27 - Level Log: 0DTE/non-0DTE + OI+Vol/Vol-only switches, CORE means CORE, scanner sweeps every minute
+
+New: `server-v2/scanner-variants.js`.
+Edited: `server-v2/scanner-recorder.js`, `server-v2/walls-recorder.js`,
+`server-v2/server-with-proxy.js`, `components/pages/LevelLog.tsx`.
+
+**1. CORE said two different numbers on one page.** On MSFT the Wall Migration
+chart read CORE 505 under the ALL view and CORE 500 under the CORE view, same
+ticker, same day. Not a data bug: the chart carried a "role" model where CORE
+meant *whichever WALL carried more gamma at that slot* (505 was the call wall),
+while the ticker rail, the timeline, the copied text and the CORE view all mean
+the recorded `cb` strike (500). Defensible on its own terms, wrong on a page
+where one word has to be one number.
+
+The role model is gone. The chart now draws one line per RECORDED level - put
+wall, call wall, CORE - each in the colour the rest of the page already uses for
+it, with the corridor between the two walls shaded. CORE is drawn last, so where
+it sits ON a wall (usual: the biggest node on the chain is normally also the
+biggest node on one side of spot) the blue reads on top instead of one line
+silently hiding under another. The 5m gamma series the roles were computed from
+is no longer read by the chart.
+
+**2. Two new switches on the Level Log — four recorded variants.**
+
+| switch | values | meaning |
+|---|---|---|
+| expiry scope | `0DTE` / `Non-0DTE` | `chain.expirations[0]` alone, vs every OTHER listed expiration summed per strike |
+| GEX basis | `OI + Vol` / `Vol only` | `netGEX + netVolGEX`, vs `netVolGEX` alone - today's flow with the book removed |
+
+Both default to the historical pair (0DTE + OI+Vol), so a first load is the log
+this page always gave. Switching either one **re-fetches**; nothing is derived
+client-side, because a different basis is a different argmax, not a re-slice of
+the rows already on screen.
+
+Recording, not computing. `scanner-recorder.js` now writes all four readings per
+ticker per sweep into a **new `scanner_variants` table**, and `walls-recorder.js`
+runs its whole slot pass once per variant, tagging `walls_log` / `wall_events`
+with `expiry_scope` + `basis`.
+
+`scanner_snapshots` is UNTOUCHED and still gets exactly one row per symbol per
+sweep on the default variant. That was deliberate and is the same reasoning
+`forward-scanner-recorder.js` documents for its own separate table: every
+existing reader of that table (`walls-recorder.sampleUniverse`,
+`walls-reach.getWatch` / `buildSessionRows`, `/proxy/scanner`, the forward sweep)
+does `SELECT DISTINCT ON (symbol) ... ORDER BY ts DESC` and would have been
+handed an arbitrary one of four rows. Nothing that worked yesterday reads
+anything new.
+
+The two bases are free - same computed rows, different wall metric. Only the
+aggregate leg costs upstream calls, so it rides its own sub-cadence and is
+bounded: `SCANNER_AGG_MAX_EXPIRIES` (4), `SCANNER_AGG_MAX_DTE` (45),
+`SCANNER_AGG_EVERY_N_SWEEPS` (5). `SCANNER_VARIANTS_ENABLED=0` writes the legacy
+row only.
+
+**3. `/proxy/walls` takes `&scope=` and `&basis=`.** Both opt-in, both falling
+back to the historical pair, on the day view, the per-symbol log and the
+`&series=1` read. A request naming neither returns byte-for-byte what it always
+returned. The `series=1` branch reads `scanner_snapshots` for the default variant
+and `scanner_variants` for the other three, so it cannot regress on a box where
+the new table is still empty.
+
+**4. Scanner sweep 5m -> 1m.** `SCANNER_INTERVAL_MINS` defaults to 1. The walls
+grid still writes on its own 15-minute slot clock - this is how FRESH the sample
+under each slot is, and a 5-minute-old wall on a 15-minute grid meant a third of
+the slot could already be stale. A sweep that outruns the interval is **skipped,
+not queued**: the next tick is 60s away and carries fresher numbers than the one
+that was dropped.
+
+**Schema, all additive and idempotent:** `scanner_variants` (new);
+`walls_log` / `wall_events` gain `expiry_scope TEXT DEFAULT '0dte'` and
+`basis TEXT DEFAULT 'oivol'`, so every pre-existing row is correctly labelled as
+the reading it always was. The old narrow UNIQUE constraints on both tables are
+dropped **by column set, not by name** (they were created inline by CREATE TABLE,
+so the name is whatever Postgres generated) and replaced by variant-aware unique
+indexes - without that, three of every four writes would be swallowed by
+`ON CONFLICT DO NOTHING`.
+
+Non-0DTE and vol-only logs are recorded **forward only**; nothing reconstructs
+them for past sessions, and the page says so rather than showing an empty log
+that reads as a quiet session.
+
+## 2026-08-27 - Premarket: same layout on every ticker, and Vanna stops lying
+
+Edited: `components/pages/Premarket.tsx`,
+`components/pages/premarket/chainGex.ts`,
+`components/pages/premarket/PostMarketTab.tsx`.
+
+Tightening of the "one page for every symbol" change above. Two things were
+still not *the same page*, just a close relative of it.
+
+**1. A non-SPX board had an extra row.** The overnight column grew a
+`{SYM} change` stat that SPX does not have, so the column was a different height
+and the card below it started at a different place depending on which symbol was
+picked. Removed. The symbol's own change already has two slots on this page -
+the regime KPI and the Spot tile's sub-line - and both are the ES slot on SPX
+and this symbol's slot everywhere else. Same shape, different number, which is
+the whole rule.
+
+`ES change` and `NQ change` stay on **every** board, in the same two slots they
+occupy on SPX. They are the market's context for whatever name is on screen.
+
+The footer strip likewise no longer drops its ES segment on non-SPX symbols.
+`gex.esFut` rides the socket's `aux` frame and is 0 on the poll path, which was
+the reason for the conditional - but `/api/quotes-batch` is already pulling `/ES`
+on every board for the row above, so the footer reads that instead. Identical
+strip, real number.
+
+**2. Vanna was printing a confident `$0` on any chain-poll symbol.**
+`netVanna` / `netVolVanna` are published PER STRIKE by
+`server-v2/computation/vex-chex.js` off a per-contract vanna. A chain that does
+not carry one has **no vanna** - not a vanna of zero - and `?? 0` summed across
+such a chain into a tidy `$0` that reads as "vanna nets out here" when it means
+"we were never told".
+
+- `chainGex` now reproduces `computeVexChexRow` exactly - vanna x contracts x
+  spot x 100, calls +, puts - - **when** the payload carries a per-side `vanna`,
+  and leaves the legs undefined when it does not.
+- `totals.vanna` is `number | null`; the tile renders `—` with "no per-contract
+  vanna on this feed" underneath, on both the Premarket and Post-Market tabs.
+
+It is deliberately NOT rebuilt from Black-Scholes. The server's own `bsGreeks`
+returns zero for T = 0, so a client-side rebuild would print a vanna on a 0DTE
+board that the SPX board beside it does not - two tiles, same label, different
+scales. DEX needs no such caveat: `netDEXOf` falls back to `calculateNetDEX`,
+which rebuilds it from the raw signed deltas by the same formula the server uses,
+so it is the same number either way.
+
+**Unchanged and confirmed:** the gamma bell curve renders on every symbol - it
+reads the raw legs through `rowMass`/`rowNet`, and its price labels went through
+the decimals fix in the entry above. The only per-symbol difference left on the
+page is content, not structure: the ES basis lines (which do not render when
+`basis` is null, exactly as they already behaved), the overnight window's
+instrument, and the prior-close baseline's server-side symbol allowlist.
+
 ## 2026-08-27 - Premarket / Post-Market: ONE page for every symbol (TickerBoard retired)
 
 Edited: `components/pages/Premarket.tsx`,
