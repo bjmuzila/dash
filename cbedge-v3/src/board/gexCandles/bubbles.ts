@@ -3,40 +3,52 @@
 //
 // Split in two on purpose:
 //
-//   buildBubbleModel()  bucketing, session ranking, magnitude → ratio.
-//                       Pure, no pixels, memoised by the card against the
-//                       inputs that actually change it.
+//   buildBubbleModel()  bucketing, selection, magnitude → ratio. Pure, no
+//                       pixels, memoised by the card against the inputs that
+//                       actually change it.
 //   drawBubbles()       ratio → radius → arc. Runs inside the chart's rAF and
 //                       does no allocation-heavy work, because the price axis
 //                       moves on every pan, zoom and autoscale and this has to
 //                       keep up with it.
 //
-// THE SIZE LAW, carried over from v2 verbatim because it is the whole feel of
-// the thing: radius is a function of |net GEX| ONLY. Being the session's
-// biggest wall changes a bubble's COLOUR and gives it a glow; it never changes
-// its size. Two strikes with the same gamma are the same mark whether or not
-// one of them happens to be ranked first, which is what makes the ladder
-// readable as a ladder instead of as a ranking.
+// ── WHAT A BUBBLE MEANS ──────────────────────────────────────────────────────
 //
-// The reference a ratio is measured against is the running session peak with a
-// floor under it (BUBBLE_REF_FLOOR_FRAC of the whole session's peak). Without
-// the floor, the first column of the day is by definition the session maximum
-// and every bubble in it draws at full size; with it, a quiet open looks quiet.
+// Per column (one time bucket):
+//
+//   SELECTION   the strongest `perSide` strikes ABOVE spot and the strongest
+//               `perSide` BELOW it, by |net GEX| in that bucket. Three a side
+//               by default. Splitting on spot is the point: the top six strikes
+//               overall are frequently all on one side, and a picture of only
+//               the resistance above you is not a picture of the gamma you are
+//               trading inside of.
+//
+//   THE CORE    the single strongest of the selected strikes. It always draws
+//               at the largest radius the column's spacing allows — full size,
+//               every bucket, regardless of whether the whole session is quiet
+//               or busy. It also takes the hot colour and the glow.
+//
+//   EVERYTHING  radius = core radius × (its |GEX| ÷ the core's |GEX|). So a
+//   ELSE        strike carrying half the core's gamma is half the core's
+//               radius, and a bubble's size reads directly as "how much of this
+//               column's gamma is here".
+//
+// That normalisation is PER COLUMN, not across the session. It means every
+// bucket has one full-size mark, which is what makes the ladder readable at any
+// point in the day — the trade is that you cannot compare 10:00's core against
+// 15:00's by size alone. Sizes answer "where is the gamma right now", and the
+// answer to "is there more of it than there was" is on the Key Levels tiles.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { BUBBLE_STYLE, type BubbleBucket, type GexMetric } from './settings'
 import { valueOf, type GexColumn } from './gexHistory'
 
-/** The running reference never falls below this fraction of the session peak. */
-const REF_FLOOR_FRAC = 0.3
-
 export interface BubbleMark {
   strike: number
   value: number
-  /** |value| ÷ the bucket's reference, 0..1. This is what sets the radius. */
+  /** |value| ÷ the column's core, 0..1. This is what sets the radius. */
   ratio: number
-  /** 0-based rank among the session's strongest strikes, or -1 for a plain mark. */
-  wallRank: number
+  /** True for the column's single strongest strike — the core. */
+  isCore: boolean
 }
 
 export interface BubbleFrame {
@@ -51,7 +63,8 @@ export interface BubbleFrame {
 export interface BuildOpts {
   bucket: BubbleBucket
   metric: GexMetric
-  levels: number
+  /** How many strikes to draw on EACH side of spot. */
+  perSide: number
   /** Bar open times, ascending. */
   barTimes: number[]
   /** Chart interval in ms — how wide one bar is in clock time. */
@@ -78,8 +91,8 @@ function barIndexAt(barTimes: number[], ts: number): number {
 }
 
 export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleFrame[] {
-  const { bucket, metric, levels, barTimes, intervalMs } = opts
-  if (!columns.length || !barTimes.length || levels <= 0) return []
+  const { bucket, metric, perSide, barTimes, intervalMs } = opts
+  if (!columns.length || !barTimes.length || perSide <= 0) return []
 
   const bucketMs = bucket === 'bar' ? 0 : bucket * 60_000
 
@@ -101,57 +114,65 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleF
     const prev = byBucket.get(key)
     if (!prev || col.slotTs >= prev.slotTs) byBucket.set(key, col)
   }
-  const keys = [...byBucket.keys()].sort((a, b) => a - b)
-  if (!keys.length) return []
 
-  // ── 2. Session peak, for the reference floor. One pass over everything.
-  let sessionMax = 0
-  for (const key of keys) {
-    for (const cell of byBucket.get(key)!.cells) {
-      const a = Math.abs(valueOf(cell, metric))
-      if (a > sessionMax) sessionMax = a
-    }
-  }
-  if (sessionMax <= 0) return []
-  const floor = sessionMax * REF_FLOOR_FRAC
-
-  // ── 3. Walk forward. `peak` is each strike's biggest |value| SO FAR, which is
-  //       what decides which strikes are drawn — so a level that mattered at
-  //       10:00 keeps its trail through the afternoon instead of vanishing the
-  //       moment something else outgrows it.
-  const peak = new Map<number, number>()
-  let runMax = 0
   const frames: BubbleFrame[] = []
-  const highlight = Math.max(0, BUBBLE_STYLE.highlight)
 
-  for (const key of keys) {
-    const col = byBucket.get(key)!
-    for (const cell of col.cells) {
-      const a = Math.abs(valueOf(cell, metric))
-      if (a > (peak.get(cell.strike) ?? 0)) peak.set(cell.strike, a)
-      if (a > runMax) runMax = a
+  for (const key of [...byBucket.keys()].sort((a, b) => a - b)) {
+    const col = byBucket.get(key)
+    if (!col) continue
+
+    // Spot decides which side a strike is on. The history route sends it per
+    // snapshot; legacy rows carry 0, and the midpoint of the ladder is the
+    // honest fallback — the recorder centres the ladder on spot, so the middle
+    // of it is where spot was.
+    let spot = col.spot
+    if (!(spot > 0)) {
+      let lo = Infinity
+      let hi = -Infinity
+      for (const c of col.cells) {
+        if (c.strike < lo) lo = c.strike
+        if (c.strike > hi) hi = c.strike
+      }
+      if (!Number.isFinite(lo) || !Number.isFinite(hi)) continue
+      spot = (lo + hi) / 2
     }
 
-    const ranked = [...peak.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0])
-    const shown = new Set(ranked.slice(0, levels))
-    const wallRank = new Map<number, number>()
-    ranked.slice(0, highlight).forEach((s, i) => wallRank.set(s, i))
-
-    const ref = Math.max(runMax, floor)
-    const marks: BubbleMark[] = []
+    const above: Array<{ strike: number; value: number }> = []
+    const below: Array<{ strike: number; value: number }> = []
     for (const cell of col.cells) {
-      if (!shown.has(cell.strike)) continue
-      const v = valueOf(cell, metric)
-      if (v === 0) continue
-      marks.push({
-        strike: cell.strike,
-        value: v,
-        ratio: Math.min(Math.abs(v) / ref, 1),
-        wallRank: wallRank.get(cell.strike) ?? -1,
-      })
+      const value = valueOf(cell, metric)
+      if (value === 0) continue
+      ;(cell.strike >= spot ? above : below).push({ strike: cell.strike, value })
     }
-    if (!marks.length) continue
-    marks.sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+
+    const strongest = (list: Array<{ strike: number; value: number }>) =>
+      list.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, perSide)
+
+    const picked = [...strongest(above), ...strongest(below)]
+    if (!picked.length) continue
+
+    // The core is the strongest of what was picked, and it is the denominator
+    // for everything else in this column.
+    let core = 0
+    for (const p of picked) core = Math.max(core, Math.abs(p.value))
+    if (core <= 0) continue
+
+    const marks: BubbleMark[] = picked
+      .map((p) => ({
+        strike: p.strike,
+        value: p.value,
+        ratio: Math.min(1, Math.abs(p.value) / core),
+        isCore: Math.abs(p.value) === core,
+      }))
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+
+    // A tie on |value| would mark two cores. Keep the first — the sort above
+    // already put it in front — so exactly one mark per column glows.
+    let seenCore = false
+    for (const m of marks) {
+      if (m.isCore && seenCore) m.isCore = false
+      else if (m.isCore) seenCore = true
+    }
 
     const barT = barTimes[barIndexAt(barTimes, key)]
     if (barT === undefined) continue
@@ -165,7 +186,7 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleF
 // ── Drawing ──────────────────────────────────────────────────────────────────
 
 export interface BubblePalette {
-  /** [r,g,b] for a positive-gamma mark, and its hot variant for a wall. */
+  /** [r,g,b] for a positive-gamma mark, and its hot variant for the core. */
   pos: [number, number, number]
   posHot: [number, number, number]
   neg: [number, number, number]
@@ -194,19 +215,21 @@ function rgba(c: [number, number, number], a: number): string {
 }
 
 /**
- * The largest radius a column may use without its marks touching.
+ * The radius the column's CORE gets — the largest that keeps different strikes
+ * visually apart.
  *
- * MEASURED FROM WHAT IS ACTUALLY DRAWN, not from the ladder's strike step. That
- * distinction is the whole fix: with `levels: 5` only five strikes draw per
- * column and they are usually tens of strikes apart, so a cap derived from the
- * step made every bubble collapse to the floor; and on a column whose top
- * strikes happen to be adjacent, the same cap was far too generous and they
- * smeared into each other. The nearest vertical neighbour among the marks being
- * drawn is the only number that answers "how big can these be".
+ * VERTICAL IS A HARD BOUND. Two different strikes running into each other is a
+ * misread level, so the cap is half the closest gap between the marks actually
+ * being drawn, measured in pixels at the current zoom. It is measured, not
+ * derived from the ladder's strike step: with three marks a side those strikes
+ * are usually tens of strikes apart, and a cap built from the step crushed
+ * every bubble to the floor.
  *
- * Vertical bound is half the closest gap; horizontal bound is half the column
- * pitch, since the neighbours left and right are the next columns. Minus a
- * hairline so "not overlapping" reads as separate rather than as tangent.
+ * HORIZONTAL IS A SOFT BOUND. Neighbours left and right are the SAME strike one
+ * bucket earlier and later, so letting those merge is not a collision — it is
+ * the trail, and it is how a level that has held all session reads as a band.
+ * Hence the floor: on a chart zoomed out to where bars are two pixels apart,
+ * clamping to half a bar would leave nothing to see.
  */
 function capFor(ys: number[], barPitch: number): number {
   let minGap = Infinity
@@ -217,8 +240,8 @@ function capFor(ys: number[], barPitch: number): number {
     const gap = hi - lo
     if (gap > 0 && gap < minGap) minGap = gap
   }
-  const vertical = Number.isFinite(minGap) ? minGap / 2 - BUBBLE_STYLE.colGapPx : BUBBLE_STYLE.maxPx
-  const horizontal = barPitch / 2 - BUBBLE_STYLE.colGapPx
+  const vertical = Number.isFinite(minGap) ? minGap / 2 - BUBBLE_STYLE.gapPx : BUBBLE_STYLE.maxPx
+  const horizontal = Math.max(barPitch / 2 - BUBBLE_STYLE.gapPx, BUBBLE_STYLE.horizFloorPx)
   return Math.max(BUBBLE_STYLE.minPx, Math.min(BUBBLE_STYLE.maxPx, vertical, horizontal))
 }
 
@@ -234,7 +257,6 @@ export function drawBubbles(
 
   const layerAlpha = Math.max(0.05, Math.min(1, opts.intensity))
   const minOpacity = Math.max(0.1, 1 - Math.max(0, Math.min(1, BUBBLE_STYLE.fade)))
-  const sizeMul = opts.size
 
   for (const frame of frames) {
     const xBar = geo.xOfBar(frame.barT)
@@ -242,54 +264,55 @@ export function drawBubbles(
     const x = xBar + frame.frac * barPitch
     if (x < -20 || x > w + 20) continue
 
-    // Resolve every mark to a pixel first. The cap cannot be known until the
-    // column's marks have y coordinates, because it is a function of how far
-    // apart they landed at THIS zoom.
+    // Resolve every mark to a pixel first: the cap is a function of how far
+    // apart they landed at THIS zoom, so it cannot be known until they have
+    // coordinates.
     //
-    // The strike IS the price: every symbol v3 charts is charted against its
+    // The strike IS the price. Every symbol v3 charts is charted against its
     // own strikes, so there is no basis to add — that conversion existed only
     // for the ES chart, whose axis was futures while its strikes were SPX.
-    const placed: Array<{ y: number; value: number; ratio: number; isWall: boolean }> = []
+    const placed: Array<{ y: number; value: number; ratio: number; isCore: boolean }> = []
     for (const m of frame.marks) {
       const y = geo.yOfPrice(m.strike)
       if (y == null || y < -20 || y > h + 20) continue
-      placed.push({ y, value: m.value, ratio: m.ratio, isWall: m.wallRank >= 0 })
+      placed.push({ y, value: m.value, ratio: m.ratio, isCore: m.isCore })
     }
     if (!placed.length) continue
 
-    // `size` at 1.00x means exactly "as large as the spacing allows", so the
-    // biggest node in a column fills its slot and nothing touches. Above 1.00x
-    // marks are allowed to overlap — that is the documented trade for bigger
-    // marks on a tight chart, not an accident.
+    // `size` at 1.00× means exactly "the core fills its slot and nothing
+    // touches". Above 1.00× marks may overlap — the documented trade for
+    // bigger marks on a tight chart, not an accident.
     const cap =
       capFor(
         placed.map((p) => p.y).sort((a, b) => a - b),
         barPitch,
-      ) * sizeMul
+      ) * opts.size
 
     for (const p of placed) {
+      // The core has ratio 1, so it draws at exactly `cap` on every curve
+      // setting — `curve` only changes how fast the ones BELOW it fall away.
       const shaped = opts.curve <= 1.001 ? p.ratio : Math.pow(p.ratio, opts.curve)
       const r = Math.max(BUBBLE_STYLE.minPx, cap * shaped)
       if (r < 0.12) continue
 
       const positive = p.value >= 0
       const base = positive ? palette.pos : palette.neg
-      const col = p.isWall ? (positive ? palette.posHot : palette.negHot) : base
-      const opacity = (p.isWall ? 1 : minOpacity + p.ratio * (1 - minOpacity)) * layerAlpha
+      const col = p.isCore ? (positive ? palette.posHot : palette.negHot) : base
+      const opacity = (p.isCore ? 1 : minOpacity + p.ratio * (1 - minOpacity)) * layerAlpha
 
       ctx.beginPath()
       ctx.arc(x, p.y, r, 0, Math.PI * 2)
-      if (p.isWall) {
-        // The glow is what separates "the wall" from "a big strike" at a glance.
-        // Drawn with the canvas shadow rather than a cached sprite: only
-        // BUBBLE_STYLE.highlight marks per column take this path, so the sprite
-        // atlas v2 needs for a full heatmap would be machinery for nothing here.
+      if (p.isCore) {
+        // The glow is what separates the core from "a big strike" at a glance.
+        // Drawn with the canvas shadow rather than a cached sprite: exactly one
+        // mark per column takes this path, so the sprite atlas v2 needs for a
+        // full heatmap would be machinery for nothing here.
         ctx.shadowColor = rgba(base, 0.95)
         ctx.shadowBlur = Math.min(BUBBLE_STYLE.glowMaxPx, Math.max(1.5, r * BUBBLE_STYLE.glowTopFactor))
       }
       ctx.fillStyle = rgba(col, opacity)
       ctx.fill()
-      if (p.isWall) {
+      if (p.isCore) {
         ctx.shadowBlur = 0
         ctx.shadowColor = 'transparent'
       }

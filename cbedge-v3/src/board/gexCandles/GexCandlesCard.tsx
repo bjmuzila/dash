@@ -158,7 +158,7 @@ export function GexCandlesCard() {
       buildBubbleModel(columns, {
         bucket: settings.bubbleBucket,
         metric: settings.gexMetric,
-        levels: settings.bubbleLevels,
+        perSide: settings.bubbleLevels,
         barTimes: bars.map((b) => b.t),
         intervalMs: settings.interval * 60_000,
       }),
@@ -308,14 +308,14 @@ export function GexCandlesCard() {
                 <>
                   <PanelSection title="Bubbles">
                     <Slider
-                      label="levels"
+                      label="per side"
                       value={settings.bubbleLevels}
                       min={BUBBLE_LEVELS_RANGE.min}
                       max={BUBBLE_LEVELS_RANGE.max}
                       step={1}
-                      format={(v) => v.toFixed(0)}
+                      format={(v) => `${v.toFixed(0)}\u00d72`}
                       onChange={(v) => patch({ bubbleLevels: Math.round(v) })}
-                      title="How many strikes draw per column, ranked by their peak |GEX| across the whole session — so a level keeps its trail even after it drops out of the current top N"
+                      title="How many strikes draw ABOVE spot and how many BELOW, strongest first. Split on spot on purpose \u2014 the top strikes overall are often all on one side, and the resistance above you alone is not a picture of the gamma you are trading inside of"
                     />
                     <Slider
                       label="size"
@@ -325,7 +325,7 @@ export function GexCandlesCard() {
                       step={0.05}
                       format={(v) => `${v.toFixed(2)}×`}
                       onChange={(v) => patch({ bubbleSize: v })}
-                      title="Scales the whole ladder at once — the ratio between the wall and the smallest strike is identical at every setting. At or below 1.00× marks never touch; above it they may overlap, which is the trade for bigger marks on a tight chart"
+                      title="Scales the whole ladder at once — every mark's share of the core is identical at every setting. At 1.00× the core is exactly as large as the spacing allows and nothing touches; above it marks may overlap, which is the trade for bigger marks on a tight chart"
                     />
                     <Slider
                       label="top"
@@ -335,7 +335,7 @@ export function GexCandlesCard() {
                       step={0.05}
                       format={(v) => (v <= 1.001 ? 'flat' : v.toFixed(2))}
                       onChange={(v) => patch({ bubbleCurve: v })}
-                      title="How hard the biggest levels pull away from the rest. At 'flat' the radius is straight proportional to |net GEX|"
+                      title="How fast the smaller strikes fall away from the core. The core always draws full size; at 'flat' every other mark is straight proportional to its share of the core's gamma"
                     />
                     <Slider
                       label="intensity"

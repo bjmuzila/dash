@@ -1958,7 +1958,6 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
     return (
       <button
         key={key}
-        data-capture-hide
         onClick={() => toggle(key)}
         aria-pressed={on}
         title={on ? `Hide ${label}` : `Show ${label}`}
@@ -2063,9 +2062,15 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
           <span>{slotClock(last.lastSlot)}</span>
         </div>
       ) : (
-        <div style={{ display: "flex", marginTop: 5, fontFamily: "var(--font-mono)", fontSize: 10, color: MUTED }} aria-hidden>
+        <div style={{ display: "flex", marginTop: 5, color: MUTED }} aria-hidden>
           {segs.map((seg) => (
-            <span key={seg.date} style={{ flex: `0 0 ${segW}%`, textAlign: "center" }}>{mmdd(seg.date)}</span>
+            <span key={seg.date} style={{ flex: `0 0 ${segW}%`, textAlign: "center", display: "block" }}>
+              <span style={{
+                display: "block", fontSize: 10, fontWeight: 800, letterSpacing: "0.1em",
+                textTransform: "uppercase", color: C.label,
+              }}>{dowName(seg.date)}</span>
+              <span style={{ display: "block", fontFamily: "var(--font-mono)", fontSize: 10 }}>{mdShort(seg.date)}</span>
+            </span>
           ))}
         </div>
       )}
@@ -2081,6 +2086,24 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
 function mmdd(date: string): string {
   const [, mm, dd] = date.split("-");
   return mm && dd ? `${mm}/${dd}` : date;
+}
+
+/**
+ * "MONDAY" from "2026-08-24". Parsed at NOON UTC and read back in UTC, so the
+ * name never slips a day on a browser west of Greenwich — the date string is a
+ * calendar date, not an instant, and midnight-parsing it is how "Monday" turns
+ * into "Sunday" for anyone in America.
+ */
+function dowName(date: string): string {
+  const t = Date.parse(`${date}T12:00:00Z`);
+  if (!Number.isFinite(t)) return "";
+  return new Date(t).toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }).toUpperCase();
+}
+
+/** "8/21" from "2026-08-21" — the axis stamp under the weekday, no zero pad. */
+function mdShort(date: string): string {
+  const [, mm, dd] = date.split("-");
+  return mm && dd ? `${Number(mm)}/${Number(dd)}` : date;
 }
 
 /**
@@ -2209,6 +2232,17 @@ function WallMigrationPopout({ symbol, date, view, scope, basis, today, nonce, o
   const week = useWallDays(range === 5 ? symbol : null, date, 5, nonce, scope, basis);
   const days = range === 1 ? today : week.days;
 
+  /**
+   * The snapshot target is the PANEL, not the chart — the head carries the
+   * ticker, the variant and the range, and a PNG of the plot alone is a picture
+   * of some lines with no idea what they are of. Same `SnapLogButton` and same
+   * lib/snapshot.ts pipeline as the log card, so there is still exactly one
+   * html2canvas call site in the app (scripts/audit-ui.mjs --strict).
+   */
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const snapFile = `${(symbol ?? "walls").toLowerCase()}-wall-migration-${view}-${scope}-${basis}-${date}${range === 5 ? "-5d" : ""}.png`;
+  const snapTitle = `${symbol ?? "—"} — Wall migration · ${range === 5 ? "5 sessions to " : ""}${date} · ${variantTag(scope, basis)}`;
+
   // Esc closes, like every other overlay in the app.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -2236,10 +2270,11 @@ function WallMigrationPopout({ symbol, date, view, scope, basis, today, nonce, o
         }}
       >
         <div
+          ref={panelRef}
           onClick={(e) => e.stopPropagation()}
           style={{
             ...CARD, width: "min(1400px, 96vw)", maxHeight: "92vh", overflow: "auto",
-            display: "flex", flexDirection: "column",
+            display: "flex", flexDirection: "column", position: "relative",
           }}
         >
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", padding: "14px 18px", borderBottom: `1px solid ${C.border}` }}>
@@ -2249,28 +2284,52 @@ function WallMigrationPopout({ symbol, date, view, scope, basis, today, nonce, o
             <span style={{ fontSize: FS_META, fontFamily: "var(--font-mono)", color: MUTED }}>
               {variantTag(scope, basis)} · {VIEW_SCOPE[view]} view
             </span>
-            <div style={{ display: "flex", gap: 8, marginLeft: 12 }}>
+            <div data-capture-hide style={{ display: "flex", gap: 8, marginLeft: 12 }}>
               <button onClick={() => setRange(1)} style={chip(range === 1)} title={`Just ${date}`}>Today</button>
               <button onClick={() => setRange(5)} style={chip(range === 5)} title="The last 5 recorded sessions ending on the selected date">5 sessions</button>
             </div>
             {range === 5 && week.loading ? (
               <span style={{ fontSize: FS_META, color: MUTED }}>loading…</span>
             ) : null}
-            <button
-              onClick={onClose}
-              style={{
-                marginLeft: "auto", padding: "6px 12px", borderRadius: 8, cursor: "pointer",
-                fontFamily: "inherit", fontSize: 13, fontWeight: 800, letterSpacing: "0.08em",
-                textTransform: "uppercase", border: `1px solid ${C.border}`,
-                background: "rgba(255,255,255,0.03)", color: C.label,
-              }}
-            >
-              ✕ Close
-            </button>
+            {/* Live-page chrome — dropped from the PNG, which should be the
+                chart and its head and nothing a reader cannot click. */}
+            <div data-capture-hide style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+              <SnapLogButton
+                disabled={!days.length}
+                targetRef={panelRef}
+                filename={snapFile}
+                title={snapTitle}
+              />
+              <button
+                onClick={onClose}
+                style={{
+                  padding: "6px 12px", borderRadius: 8, cursor: "pointer",
+                  fontFamily: "inherit", fontSize: 13, fontWeight: 800, letterSpacing: "0.08em",
+                  textTransform: "uppercase", border: `1px solid ${C.border}`,
+                  background: "rgba(255,255,255,0.03)", color: C.label,
+                }}
+              >
+                ✕ Close
+              </button>
+            </div>
           </div>
 
           {days.length ? (
-            <WallMigrationChart days={days} view={view} height={MIG_H * 2.2} />
+            <div style={{ position: "relative" }}>
+              <WallMigrationChart days={days} view={view} height={MIG_H * 2.2} />
+              {/* Bottom-right watermark. Same-origin PNG so it never taints the
+                  canvas, `pointer-events: none` so it cannot eat a click, and
+                  NOT data-capture-hide — the whole point is that it rides along
+                  into the screenshot. */}
+              <img
+                src="/cb-edge-logo.png"
+                alt="CB Edge"
+                style={{
+                  position: "absolute", right: 18, bottom: 16, height: 34, width: "auto",
+                  opacity: 0.32, pointerEvents: "none", userSelect: "none",
+                }}
+              />
+            </div>
           ) : (
             <div style={{ padding: 28, fontSize: FS_BODY, color: MUTED }}>
               {week.loading

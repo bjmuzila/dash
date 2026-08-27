@@ -33,7 +33,7 @@ export interface ChartSettings {
   interval: Interval
   /** Master on/off for the whole bubble layer. */
   bubblesOn: boolean
-  /** How many strikes draw per column, ranked by peak |GEX| across the session. */
+  /** How many strikes draw on EACH side of spot, strongest first. */
   bubbleLevels: number
   /** Scales the whole ladder at once. */
   bubbleSize: number
@@ -54,7 +54,9 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   session: 'eth',
   interval: 5,
   bubblesOn: true,
-  bubbleLevels: 5,
+  // Three a side. Six marks is enough to see the corridor you are trading
+  // inside without the ladder turning into a wall of circles.
+  bubbleLevels: 3,
   bubbleSize: 1,
   bubbleCurve: 1,
   bubbleIntensity: 1,
@@ -63,7 +65,8 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   countdown: true,
 }
 
-export const BUBBLE_LEVELS_RANGE = { min: 1, max: 15 }
+/** Per SIDE of spot, so the drawn count is up to 2× this. */
+export const BUBBLE_LEVELS_RANGE = { min: 1, max: 8 }
 export const BUBBLE_SIZE_RANGE = { min: 0.4, max: 4 }
 export const BUBBLE_CURVE_RANGE = { min: 1, max: 3 }
 export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 }
@@ -73,28 +76,31 @@ export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 }
  * preference — the four sliders above are the preferences.
  */
 export const BUBBLE_STYLE = {
-  /** How many top-ranked strikes go hot + glow. */
-  highlight: 1,
-  /** Absolute radius cap, px — the ceiling on an otherwise empty column. */
-  maxPx: 20,
+  /** Sanity ceiling on the core's radius, px, for a nearly-empty column where
+   *  the spacing bound would otherwise allow an absurd blob. */
+  maxPx: 34,
   /** Hard radius floor, px. */
   minPx: 0.8,
+  /** Floor under the HORIZONTAL bound. Left and right neighbours are the same
+   *  strike one bucket either side, so they are allowed to merge into a trail;
+   *  without this floor a chart zoomed out to 2px bars would show nothing. */
+  horizFloorPx: 7,
   glowTopFactor: 0.75,
   glowMaxPx: 9,
-  /** The weakest row fades to 1 − fade. */
+  /** The weakest mark fades to 1 − fade. */
   fade: 0.55,
-  /** Hairline kept between adjacent marks, so "not overlapping" reads as
-   *  separate rather than as tangent. */
-  colGapPx: 0.8,
+  /** Hairline kept between marks, so "not overlapping" reads as separate
+   *  rather than as tangent. */
+  gapPx: 0.8,
 } as const
 
-// Removed 2026-08-27: maxPxRowFrac / maxPxColFrac / colBoundFloorPx. They
-// derived the radius cap from the LADDER's strike step, which is not the
-// spacing the marks are actually drawn at — with `levels: 5` the drawn strikes
-// are usually tens of strikes apart. The cap is now measured per column from
-// the nearest vertical neighbour among the marks being drawn; see capFor() in
-// bubbles.ts. Nothing replaced them because nothing needs to be guessed any
-// more.
+// Removed 2026-08-27: maxPxRowFrac / maxPxColFrac / colBoundFloorPx derived the
+// radius cap from the LADDER's strike step, which is not the spacing the marks
+// are drawn at; the cap is now measured per column from the nearest vertical
+// neighbour among the marks actually drawn (capFor() in bubbles.ts). `highlight`
+// went with the switch to per-column normalisation: the glow belongs to the
+// column's core, which is by definition exactly one mark, so there is no count
+// left to configure.
 
 /**
  * How many strikes to ASK the server for per column. Deliberately a constant
