@@ -55,7 +55,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
-import { HOME_THEME, LIGHT_BLUE, homeInputStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, LEVEL_COLORS, ES_CANDLE_UP, homeInputStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { PageShell } from "@/components/shared/PageCard";
 import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
@@ -74,6 +74,26 @@ const RED = HOME_THEME.red;
 const AMBER = HOME_THEME.orange;
 const MUTED = HOME_THEME.muted;
 const CARD = classicCardAccentStyle;
+
+/**
+ * THE THREE LEVEL COLOURS — gold CORE, green call wall, red put wall.
+ *
+ * Sourced, not invented (AGENTS.md: never hardcode hex):
+ *   CORE      LEVEL_COLORS.cb — the same gold Multi Greek's CB toggle, header
+ *             readout and front-column marks use, and the level snapshot
+ *             renderer. CORE is sign-blind, which is why it gets a hue of its
+ *             own rather than borrowing a directional one.
+ *   put wall  LEVEL_COLORS.pw — the same red, from the same set.
+ *   call wall ES_CANDLE_UP, NOT LEVEL_COLORS.cw. The shared set paints the call
+ *             wall blue, and HOME_THEME.green is the status palette's light blue
+ *             (#8ECAE6) — neither of them reads as GREEN next to a red put wall,
+ *             which is the whole point of the pairing. ES_CANDLE_UP is the
+ *             repo's saturated trading green, already the up-colour on ES
+ *             Candles and the gain colour on the scanner's probe card.
+ */
+const CORE_GOLD = LEVEL_COLORS.cb;
+const CALL_GREEN = ES_CANDLE_UP;
+const PUT_RED = LEVEL_COLORS.pw;
 
 function rgba(hex: string, a: number) {
   const h = hex.replace("#", "");
@@ -177,7 +197,7 @@ const VIEW_LEVELS: Record<LogView, WallLevel[]> = {
 };
 const VIEW_META: { id: LogView; label: string; color: string; blurb: string }[] = [
   { id: "walls", label: "Walls", color: AMBER, blurb: "Call wall + put wall only" },
-  { id: "core", label: "Core", color: LIGHT_BLUE, blurb: "CORE level only" },
+  { id: "core", label: "Core", color: CORE_GOLD, blurb: "CORE level only" },
   { id: "all", label: "All", color: C.cyan, blurb: "Walls + CORE on one timeline" },
 ];
 /** Short scope word for headers, filenames and the copied text. */
@@ -263,7 +283,7 @@ const RAIL_CHIP_H = 24;
 const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
 /** Column-head width version of the same three. */
 const LEVEL_SHORT: Record<WallLevel, string> = { call_wall: "Call", put_wall: "Put", cb: "CORE" };
-const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: AMBER, put_wall: GREEN, cb: LIGHT_BLUE };
+const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: CALL_GREEN, put_wall: PUT_RED, cb: CORE_GOLD };
 /** Ticker-rail column order — price order, so ALL adds a column, not a reshuffle. */
 const LEVEL_COL_ORDER: WallLevel[] = ["put_wall", "call_wall", "cb"];
 
@@ -1379,9 +1399,9 @@ function useWallSeries(
  * Ported from the post-market recap's chart (components/pages/premarket/
  * PostMarketTab.tsx → WallChart).
  *
- *   ONE LINE PER RECORDED LEVEL. Call wall, put wall and CORE, each in the
- *   colour the rest of the page already reads as that level, with the corridor
- *   between the two walls shaded. CORE is the recorded `cb` strike — the same
+ *   ONE LINE PER RECORDED LEVEL. Call wall (green), put wall (red) and CORE
+ *   (gold), each in the colour the rest of the page reads as that level, with
+ *   the corridor between the two walls shaded. CORE is the recorded `cb` strike — the same
  *   number the ticker rail, the timeline and the copied text show — and it
  *   frequently sits ON one of the walls, because the biggest node on the chain
  *   is usually also the biggest node on one side of spot. That overlap IS the
@@ -1521,7 +1541,7 @@ function WallMigrationChart({ log, events, view, price }: {
      * read CORE 505 in the ALL view (the call wall) and CORE 500 in the CORE view
      * (the actual CORE), one page, same day, same word, two numbers. A chart that
      * disagrees with the rail above it is not a reading, it is a bug. CORE is now
-     * the cb level everywhere, drawn in the same blue the rest of the page uses
+     * the cb level everywhere, drawn in the same gold the rest of the page uses
      * for it, and the walls are the walls.
      */
     const band = (() => {
@@ -1589,8 +1609,9 @@ function WallMigrationChart({ log, events, view, price }: {
   };
 
   /**
-   * One stroke per RECORDED level, in the colour the rest of the page already
-   * reads as that level. Walls first, CORE last, so where the CORE is sitting on
+   * One stroke per RECORDED level, in the colour the rest of the page reads as
+   * that level — gold CORE, green call wall, red put wall. Walls first, CORE
+   * last, so where the CORE is sitting on
    * a wall — which is common, it is usually the heavier of the two — the blue
    * reads on top and the reader can see that they coincide rather than having
    * one silently hidden under the other.
@@ -1691,7 +1712,7 @@ function WallMigrationChart({ log, events, view, price }: {
         {band ? (
           <>
             The shaded band is the corridor between the two walls — the room price had. CORE is the
-            recorded <b style={{ color: LIGHT_BLUE }}>cb</b> strike, the single largest |net GEX| node on the
+            recorded <b style={{ color: CORE_GOLD }}>cb</b> strike, the single largest |net GEX| node on the
             chain, so it sits ON one of the walls whenever that wall is also the biggest node — which is
             most days. That overlap is the reading, not a duplicate line.{" "}
           </>

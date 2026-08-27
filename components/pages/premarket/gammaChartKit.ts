@@ -62,6 +62,22 @@ export const WIDE_MIN_STRIKES = 60;
  * charting.
  */
 export const WIDE_MAX_BAND = 0.30;
+/**
+ * The AUTO window never shows fewer than this many strikes EACH SIDE of spot.
+ *
+ * AUTO is `spot ± 4.5σ`, which is a statement about the gamma distribution and
+ * says nothing about how many bars that works out to. On a coarse ladder it
+ * works out to very few: a σ of ~2.3 on a $2.50 grid is ±10 dollars — eight
+ * strikes a side, eleven bars on the card. Widening the BOARD (`wideHalfOf`)
+ * did not fix that, because AUTO was never hitting the board's edge; it was
+ * hitting its own σ.
+ *
+ * So the floor is stated in the unit the eye is counting: strikes. σ still
+ * decides the window whenever σ asks for MORE than this — which on SPX it
+ * essentially always does (20 five-wide strikes is ±100 points against a 0DTE
+ * 4.5σ of ~110), so this is a floor for coarse ladders and a no-op for SPX.
+ */
+export const AUTO_MIN_STRIKES = 20;
 /** Above this many bars the axis is unreadable, so neighbours are folded. */
 export const MAX_BARS = 150;
 /**
@@ -92,7 +108,7 @@ export const BASIS_META: Record<GammaBasis, { tab: string; long: string; hint: s
 };
 
 export const ZOOM_META: Record<GammaZoom, { tab: string; hint: string }> = {
-  auto: { tab: "AUTO", hint: "Spot ± 4.5σ of the gamma mass, widened to keep spot, flip and both walls on screen. The peak fills the card instead of hiding in the middle of a 400-point axis." },
+  auto: { tab: "AUTO", hint: "Spot ± 4.5σ of the gamma mass, widened to keep spot, flip and both walls on screen and to show at least 20 strikes each side. The peak fills the card instead of hiding in the middle of a 400-point axis." },
   "1": { tab: "±1%", hint: "Fixed ±1% of spot." },
   "2": { tab: "±2%", hint: "Fixed ±2% of spot." },
   "3": { tab: "±3%", hint: "Fixed ±3% of spot. On SPX that is the whole board these cards read; on a name whose ±3% holds only a handful of strikes, AUTO reads wider (see wideHalfOf)." },
@@ -346,6 +362,28 @@ export function foldBins(raw: Bin[], maxBars = MAX_BARS): Bin[] {
  * the rest is a flat line — the chart reads as cramped no matter how tall the
  * card is, because the problem is horizontal. AUTO fixes that.
  */
+/**
+ * Half-width that puts at least `n` strikes on BOTH sides of spot.
+ *
+ * Measured per side and then symmetrised (the window is symmetric, so the
+ * hungrier side wins), off the un-folded per-strike bins. Returns 0 when the
+ * board has nothing to count, which makes it a no-op inside a Math.max.
+ */
+export function strikesHalf(wide: Bin[], spot: number, n: number): number {
+  if (!(spot > 0) || !wide.length || n < 1) return 0;
+  const below: number[] = [];
+  const above: number[] = [];
+  for (const b of wide) {
+    if (!Number.isFinite(b.k)) continue;
+    if (b.k <= spot) below.push(spot - b.k);
+    if (b.k >= spot) above.push(b.k - spot);
+  }
+  below.sort((a, b) => a - b);
+  above.sort((a, b) => a - b);
+  const nth = (arr: number[]) => (arr.length ? arr[Math.min(n, arr.length) - 1] : 0);
+  return Math.max(nth(below), nth(above));
+}
+
 export function autoHalf(
   wide: Bin[], zoom: GammaZoom, spot: number,
   flip?: number | null, callWall?: number | null, putWall?: number | null,
@@ -365,6 +403,9 @@ export function autoHalf(
     if (lv != null && Number.isFinite(lv)) h = Math.max(h, Math.abs(lv - spot) * 1.12);
   }
   if (m) h = Math.max(h, Math.abs(m.mu - spot) + 2 * m.sigma);
+  // ...and never fewer than AUTO_MIN_STRIKES a side. A window is only a chart
+  // if there are bars in it; σ alone does not guarantee any.
+  h = Math.max(h, strikesHalf(wide, spot, AUTO_MIN_STRIKES));
   return Math.min(h, cap);
 }
 

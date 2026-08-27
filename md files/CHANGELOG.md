@@ -1,5 +1,85 @@
 # Changelog
 
+## 2026-08-27 - GEX Profile by Strike: actually centres on spot when it loads
+
+Edited: `components/pages/Premarket.tsx`.
+
+The profile panel is supposed to open with the spot row in the middle of the
+card. It often opened parked at the bottom of the ladder instead.
+
+**Cause: the centring was arithmetic, not measurement.**
+
+```
+el.scrollTop = i * 19 + 9.5 - el.clientHeight / 2;
+```
+
+Two assumptions, both of which can be wrong on a cold load:
+
+1. `el.clientHeight` is **0** until the panel has been laid out. A 0 there makes
+   the target `i * 19 + 9.5`, which the browser clamps to the maximum scroll -
+   so the card opened at the BOTTOM of the ladder and stayed there.
+2. `19` is `.pmk .row`'s height *today*. The literal and the stylesheet have to
+   be edited together and nothing said so.
+
+On the live SPX socket this was survivable by accident: a frame lands about once
+a second, `bars` changes identity, the effect re-runs, and the second or third
+attempt happens after layout. **On a chain-poll symbol the next attempt is sixty
+seconds away**, so the first bad centre is what you sit and look at - which is
+why this surfaced now that the picker offers the whole watchlist.
+
+There was also a race in the un-pin guard. `centerOnSpot` set
+`progScrollRef = true` and cleared it in a `requestAnimationFrame`; on a slow
+frame the rAF could win against the scroll event it caused, the panel read its
+OWN write as a hand on the wheel, un-pinned itself, and never re-centred again.
+
+### Fixed
+
+- **Measure the row.** `el.querySelectorAll(".row")[i]`, then
+  `row.offsetTop - (el.clientHeight - row.offsetHeight) / 2`. No magic 19, no
+  assumption about the panel's height.
+- **Report "not ready".** `centerOnSpot()` now returns a boolean instead of
+  writing a nonsense scrollTop, and the effect retries on `requestAnimationFrame`
+  for up to ~20 frames until the panel can be measured.
+- **A ResizeObserver** re-centres on any box change while pinned - the panel is
+  in a responsive grid, so a window resize (or the first paint settling) moves
+  the middle without `bars` changing at all.
+- **Second un-pin guard:** a scroll that lands exactly where we put it is ours,
+  not the user's, whichever way the rAF race goes.
+- **Switching symbol re-pins.** A new ladder is a new board; scrolling away on
+  SPX and then picking NVDA used to leave the new board parked at the old one's
+  offset.
+- No write when it is already centred, so a stationary pinned panel never flags
+  a programmatic scroll it did not perform.
+
+## 2026-08-27 - Gamma bell curve: AUTO now guarantees 20 strikes a side
+
+Edited: `components/pages/premarket/gammaChartKit.ts`.
+
+Follow-up to the entry above - widening the BOARD was necessary but not
+sufficient, because AUTO was never hitting the board's edge. It was hitting its
+own sigma.
+
+AUTO is `spot +/- 4.5 sigma` of the gamma mass. That is a statement about the
+distribution and says nothing about how many BARS it works out to. On a $352
+name with a $2.50 ladder and a mass sigma of ~2.3, `4.5 sigma` is +/-10 dollars:
+eight strikes a side, eleven bars on the card. Exactly the same complaint as
+before, one layer further in.
+
+**Fix: state the floor in the unit the eye is counting.** New
+`AUTO_MIN_STRIKES = 20` and `strikesHalf(wide, spot, n)` - the half-width that
+puts at least `n` strikes on **both** sides of spot, measured per side off the
+un-folded per-strike bins and then symmetrised (the window is symmetric, so the
+hungrier side wins). AUTO takes it as one more `Math.max` alongside the sigma
+term, the level term and the mu-offset term, still capped by `wideHalfOf`.
+
+Sigma still decides the window whenever sigma asks for more, which on SPX it
+essentially always does: 20 five-wide strikes is +/-100 points against a 0DTE
+`4.5 sigma` of ~110. So this is a floor for coarse ladders and a no-op on SPX in
+normal conditions; on an unusually tight SPX board it can now widen slightly to
+keep 41 bars on screen, which is the same rule doing the same job.
+
+Result on a $2.50 ladder: 41 bars instead of 11.
+
 ## 2026-08-27 - Gamma bell curve: a percentage band is the wrong unit for a strike ladder
 
 Edited: `components/pages/premarket/gammaChartKit.ts`,

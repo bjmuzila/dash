@@ -1716,26 +1716,95 @@ export default function Premarket() {
   const chartRef = useRef<HTMLDivElement | null>(null);
   const pinnedRef = useRef(true);
   const progScrollRef = useRef(false);
+  /** The scrollTop WE last wrote — see onChartScroll. */
+  const progTopRef = useRef(-1);
   const [pinned, setPinned] = useState(true);
 
-  const centerOnSpot = useCallback(() => {
+  /**
+   * Put the spot row in the middle of the panel. Returns FALSE when the layout
+   * is not ready to be measured yet, so the caller can try again next frame.
+   *
+   * ── WHY THIS IS MEASURED AND NOT ARITHMETIC (2026-08-27) ───────────────────
+   * It used to be `el.scrollTop = i * 19 + 9.5 - el.clientHeight / 2` — the row
+   * height as a literal, and the panel's height read at the moment of the call.
+   * Both are assumptions, and on a cold load both can be wrong:
+   *
+   *   · `el.clientHeight` is 0 until the panel has been laid out. A 0 there
+   *     makes the target `i * 19 + 9.5`, which the browser clamps to the
+   *     maximum scroll — so the card opened scrolled to the BOTTOM of the
+   *     ladder instead of the middle of it, and stayed there.
+   *   · 19 is `.pmk .row`'s height today. The two numbers have to be edited
+   *     together and nothing says so.
+   *
+   * On the live SPX socket that was survivable: a new frame arrives about once
+   * a second, `bars` changes identity, the effect below re-runs and the second
+   * or third attempt lands after layout. On a CHAIN-POLL symbol the next
+   * attempt is SIXTY SECONDS away, so the first bad centre is what you look at.
+   * That is why this surfaced when the picker opened up to the watchlist.
+   *
+   * Now it reads the row element and centres on its real box, and reports
+   * "not ready" instead of writing a nonsense scrollTop.
+   */
+  const centerOnSpot = useCallback((): boolean => {
     const el = chartRef.current;
-    if (!el) return;
+    if (!el) return false;
     const i = bars.findIndex((b) => b.strike === spotStrike);
-    if (i < 0) return;
+    if (i < 0) return false;
+    const row = el.querySelectorAll<HTMLElement>(".row")[i];
+    if (!row || el.clientHeight <= 0 || el.scrollHeight <= 0) return false;
+    const target = Math.max(0, row.offsetTop - (el.clientHeight - row.offsetHeight) / 2);
+    // Already there — do not write, so a stationary pinned panel never marks a
+    // programmatic scroll it did not perform.
+    if (Math.abs(el.scrollTop - target) <= 1) return true;
     progScrollRef.current = true;
-    el.scrollTop = Math.max(0, i * 19 + 9.5 - el.clientHeight / 2);
+    progTopRef.current = target;
+    el.scrollTop = target;
     // The scroll event lands on the next frame, so the flag is cleared there.
     requestAnimationFrame(() => { progScrollRef.current = false; });
+    return true;
   }, [bars, spotStrike]);
 
+  /**
+   * Centre while pinned — and keep trying until the panel can actually be
+   * measured, rather than assuming the first attempt lands after layout.
+   *
+   * A ResizeObserver re-centres on every box change too: the panel is inside a
+   * responsive grid, so a window resize (or the first paint settling) moves the
+   * middle without changing `bars` at all.
+   */
   useEffect(() => {
     if (!pinnedRef.current) return;
-    centerOnSpot();
+    let raf = 0;
+    let tries = 0;
+    const tick: () => void = () => {
+      raf = 0;
+      if (!pinnedRef.current) return;
+      // ~20 frames is a third of a second — long enough for a cold mount, short
+      // enough that a genuinely empty ladder stops asking.
+      if (!centerOnSpot() && tries++ < 20) raf = requestAnimationFrame(tick);
+    };
+    tick();
+
+    const el = chartRef.current;
+    const ro = el && typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(() => { if (pinnedRef.current) centerOnSpot(); })
+      : null;
+    if (el && ro) ro.observe(el);
+
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      ro?.disconnect();
+    };
   }, [centerOnSpot]);
 
   const onChartScroll = useCallback(() => {
     if (progScrollRef.current) return;
+    // Second guard, because the rAF above can win the race against the scroll
+    // event on a slow frame: a scroll that lands exactly where WE put it is
+    // ours, not a hand on the wheel. Without this the panel un-pinned itself on
+    // its own centring write and never re-centred again.
+    const el = chartRef.current;
+    if (el && progTopRef.current >= 0 && Math.abs(el.scrollTop - progTopRef.current) <= 1) return;
     if (pinnedRef.current) { pinnedRef.current = false; setPinned(false); }
   }, []);
 
@@ -1744,6 +1813,17 @@ export default function Premarket() {
     setPinned(true);
     centerOnSpot();
   }, [centerOnSpot]);
+
+  /**
+   * A new SYMBOL is a new ladder, so the panel goes back to centred on spot.
+   * Without this, scrolling away on SPX and then picking NVDA left the new
+   * board parked at whatever offset the old one was read at.
+   */
+  useEffect(() => {
+    pinnedRef.current = true;
+    setPinned(true);
+    progTopRef.current = -1;
+  }, [sym]);
 
   const rowTop = (strike: number | null) => {
     if (strike == null) return null;
