@@ -69,6 +69,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
+  BUBBLE_AUTO,
   BUBBLE_STYLE,
   BUBBLE_MIN_PER_SIDE,
   autoCutoffPct,
@@ -90,24 +91,6 @@ import { valueOf, type GexColumn } from './gexHistory'
  * be ~5,400 draw calls per frame at six marks, sixty times a second.
  */
 const MAX_SEGMENTS = 320
-
-/**
- * Half-width, in snapshots, of the centred mean applied to every row's series.
- *
- * A strike's gamma wobbles minute to minute, and at this scale that wobble is
- * drawn as a one-pixel slice of a row — so it reads as lumpiness and nothing
- * else. Two either side (five minutes on a 1m history) is enough to flatten it
- * while leaving the shape that carries meaning — the build through the morning,
- * the bleed into the close — completely intact.
- */
-const SMOOTH_WINDOW = 2
-
-/**
- * Rank slack for a strike already being drawn. See the selection loop: it is
- * what stops a row breaking into dashes when it trades places with its
- * neighbour for a minute.
- */
-const HYST = 2
 
 // Removed 2026-08-28: DUST, a fixed 4%-of-the-core floor. It was doing the
 // cutoff's job with the wrong denominator — 4% of the biggest strike says
@@ -195,6 +178,10 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
   }
   if (levels <= 0) return []
 
+  // Read here, not captured at module scope: the lab mutates BUBBLE_AUTO live,
+  // and a `const` snapshot taken at import time would ignore it.
+  const { smoothWindow, hyst } = BUBBLE_AUTO
+
   const cols = [...columns].sort((a, b) => a.slotTs - b.slotTs)
 
   // ── TOP N AT EVERY MOMENT, AND THE HISTORY IS KEPT ────────────────────────
@@ -246,7 +233,7 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
     // Incumbents first, in their current order, then fill from the ranking — a
     // newcomer only takes a slot an incumbent has vacated.
     const keep = [...prevShown]
-      .filter((k) => (rankOf.get(k) ?? Infinity) < levels + HYST)
+      .filter((k) => (rankOf.get(k) ?? Infinity) < levels + hyst)
       .sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0))
     const set = new Set<number>(keep.slice(0, levels))
     for (const x of scored) {
@@ -316,7 +303,7 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
     for (let i = 0; i < raw.length; i++) {
       let sum = 0
       let n = 0
-      for (let j = i - SMOOTH_WINDOW; j <= i + SMOOTH_WINDOW; j++) {
+      for (let j = i - smoothWindow; j <= i + smoothWindow; j++) {
         if (j < 0 || j >= raw.length) continue
         sum += raw[j]!
         n++

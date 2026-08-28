@@ -253,6 +253,25 @@ export const BUBBLE_AUTO = {
   curveMax: 2.2,
   dimPerRow: 0.05,
   dimFloor: 0.7,
+  /**
+   * Half-width, in snapshots, of the centred mean applied to every row's series.
+   *
+   * A strike's gamma wobbles minute to minute, and at this scale that wobble is
+   * drawn as a one-pixel slice of a row — so it reads as lumpiness and nothing
+   * else. Two either side (five minutes of a 1m history) flattens it while
+   * leaving the shape that carries meaning — the build through the morning, the
+   * bleed into the close — completely intact.
+   */
+  smoothWindow: 2,
+  /**
+   * Rank slack for a strike already being drawn.
+   *
+   * A hard top-N boundary is a coin flip for the strikes sitting on it: ranks N
+   * and N+1 swap for a minute, both rows break, and the trail comes out as
+   * dashes. An incumbent keeps its place while it stays inside N + this, so it
+   * takes a real fall out of the ladder to end a row.
+   */
+  hyst: 2,
 } as const
 
 function clampTo(v: number, lo: number, hi: number) {

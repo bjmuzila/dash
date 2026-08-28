@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Bubble Lab — GEX Candles</title>
+<style>
+  :root {
+    --bg: #05070b;
+    --panel: #0b1017;
+    --line: rgba(255,255,255,.10);
+    --fg: #e6edf3;
+    --muted: rgba(230,237,243,.55);
+    --accent: #29b6f6;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+  }
+  /* ── Controls ───────────────────────────────────────────────────────────── */
+  aside {
+    width: 340px; flex: 0 0 340px; height: 100vh; overflow-y: auto;
+    background: var(--panel); border-right: 1px solid var(--line); padding: 14px 14px 40px;
+  }
+  aside h1 { font-size: 13px; margin: 0 0 2px; letter-spacing: .02em; }
+  aside .sub { color: var(--muted); font-size: 11px; margin-bottom: 14px; }
+  fieldset { border: 0; border-top: 1px solid var(--line); margin: 0 0 12px; padding: 10px 0 0; }
+  legend {
+    font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); padding: 0 6px 0 0;
+  }
+  .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+  .row label { flex: 0 0 96px; color: var(--muted); font-size: 11px; }
+  .row input[type=range] { flex: 1; min-width: 0; height: 3px; accent-color: var(--accent); }
+  .row .val {
+    flex: 0 0 52px; text-align: right; font-variant-numeric: tabular-nums;
+    color: var(--accent); font-size: 11px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+  button {
+    background: rgba(255,255,255,.05); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 5px; padding: 4px 9px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  button:hover { background: rgba(255,255,255,.10); }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  /* ── Sheet ──────────────────────────────────────────────────────────────── */
+  main { flex: 1; min-width: 0; height: 100vh; overflow: auto; padding: 14px 16px 60px; }
+  .sess { margin-bottom: 20px; }
+  .sess h2 { font-size: 12px; margin: 0 0 1px; font-weight: 700; }
+  .sess .meta { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+  .cells { display: flex; gap: 10px; flex-wrap: wrap; }
+  .cell { border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: #04060a; }
+  .cell .cap {
+    font-size: 10px; color: var(--muted); padding: 3px 7px; border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; gap: 10px;
+  }
+  .cell canvas { display: block; }
+  .empty { color: var(--muted); padding: 40px 4px; max-width: 640px; }
+  code { background: rgba(255,255,255,.06); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Bubble Lab</h1>
+  <div class="sub">The live <code>bubbles.ts</code>, drawn against frozen sessions. Every cell is the same code the card runs.</div>
+
+  <fieldset>
+    <legend>Mode</legend>
+    <div class="chips">
+      <button id="autoBtn" class="on">Auto</button>
+      <button id="metricBtn">Vol+OI</button>
+      <button id="rebuildBtn">Redraw</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label>levels (manual)</label>
+      <input type="range" id="mLevels" min="1" max="12" step="1" value="4" />
+      <span class="val" id="mLevelsV">4</span>
+    </div>
+    <div class="row">
+      <label>cutoff % (manual)</label>
+      <input type="range" id="mCutoff" min="0" max="3" step="0.05" value="0.4" />
+      <span class="val" id="mCutoffV">0.40</span>
+    </div>
+  </fieldset>
+
+  <fieldset id="autoFields">
+    <legend>Auto policy</legend>
+  </fieldset>
+
+  <fieldset id="styleFields">
+    <legend>Frozen style</legend>
+  </fieldset>
+
+  <fieldset>
+    <legend>Export</legend>
+    <div class="chips">
+      <button id="copyBtn">Copy constants</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+    <div class="sub" style="margin:8px 0 0">Paste into <code>settings.ts</code>. Nothing here writes to the app.</div>
+  </fieldset>
+</aside>
+
+<main id="sheet"></main>
+
+<script src="./lab.bundle.js"></script>
+<script src="./fixtures.js"></script>
+<script>
+(() => {
+  const L = window.BubbleLab
+  const fixtures = window.__BUBBLE_FIXTURES || []
+  const sheet = document.getElementById('sheet')
+
+  if (!L) {
+    sheet.innerHTML = '<div class="empty">No <code>lab.bundle.js</code>. Run <code>node tools/bubble-lab/build.mjs</code> first.</div>'
+    return
+  }
+  if (!fixtures.length) {
+    sheet.innerHTML = '<div class="empty">No fixtures yet.<br><br>' +
+      'Capture one: <code>node tools/bubble-lab/capture.mjs --name fri-pin --symbol SPX</code><br>' +
+      'then <code>node tools/bubble-lab/build.mjs</code> and reload this page.</div>'
+    return
+  }
+
+  // The card's palette, from tokens.css. Hardcoded here rather than read off a
+  // CSS var so the lab renders the same colours whatever this page's theme is.
+  const palette = {
+    pos: [41, 182, 246], posHot: [200, 245, 255],
+    neg: [255, 71, 87], negHot: [255, 205, 210],
+  }
+
+  const state = {
+    auto: true,
+    metric: 'voloi',
+    levels: 4,
+    cutoff: 0.4,
+  }
+
+  // The three zooms are the whole reason this is a grid. Sizing rules that look
+  // fine across a full session fall apart at 30 minutes, where the rows are far
+  // apart and the marks have room to bloat — and the other way round. Judging
+  // one zoom at a time is how this layer kept shipping half-right.
+  const ZOOMS = [
+    { label: 'full session', minutes: 0 },
+    { label: 'last 2h', minutes: 120 },
+    { label: 'last 30m', minutes: 30 },
+  ]
+  const CELL_W = 468
+  const CELL_H = 236
+
+  // ── The geometry ─────────────────────────────────────────────────────────
+  // A linear stand-in for lightweight-charts' scales. It answers the same four
+  // questions `drawBubbles` asks, with the same null-outside-the-plot contract —
+  // including the price-scale gutter on the right, which is what `timeWindow()`
+  // probes for. If the layer looks right through this it looks right through the
+  // real one, because the layer never sees anything else.
+  const GUTTER = 56, PAD_T = 8, PAD_B = 16
+  function makeGeo(w, h, tMin, tMax, pLo, pHi) {
+    const x0 = 0, x1 = w - GUTTER
+    const y0 = PAD_T, y1 = h - PAD_B
+    const span = Math.max(1, tMax - tMin)
+    const prange = Math.max(1e-6, pHi - pLo)
+    return {
+      width: w,
+      height: h,
+      xOfTime: (ms) => x0 + ((ms - tMin) / span) * (x1 - x0),
+      timeAtX: (x) => (x < x0 || x > x1 ? null : tMin + ((x - x0) / (x1 - x0)) * span),
+      yOfPrice: (p) => y1 - ((p - pLo) / prange) * (y1 - y0),
+      _x0: x0, _x1: x1, _y0: y0, _y1: y1, _tMin: tMin, _tMax: tMax, _pLo: pLo, _pHi: pHi,
+    }
+  }
+
+  function drawCandles(ctx, bars, geo) {
+    if (!bars.length) return
+    const n = bars.length
+    const bw = Math.max(1, Math.min(6, ((geo._x1 - geo._x0) / n) * 0.7))
+    for (const b of bars) {
+      const x = geo.xOfTime(b.t)
+      if (x < geo._x0 - 4 || x > geo._x1 + 4) continue
+      const up = b.c >= b.o
+      ctx.strokeStyle = up ? 'rgba(38,166,154,.85)' : 'rgba(239,83,80,.85)'
+      ctx.fillStyle = ctx.strokeStyle
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(x, geo.yOfPrice(b.h))
+      ctx.lineTo(x, geo.yOfPrice(b.l))
+      ctx.stroke()
+      const yo = geo.yOfPrice(b.o), yc = geo.yOfPrice(b.c)
+      const top = Math.min(yo, yc)
+      ctx.fillRect(x - bw / 2, top, bw, Math.max(1, Math.abs(yc - yo)))
+    }
+  }
+
+  function drawCell(canvas, fx, zoom) {
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.round(CELL_W * dpr)
+    canvas.height = Math.round(CELL_H * dpr)
+    canvas.style.width = CELL_W + 'px'
+    canvas.style.height = CELL_H + 'px'
+    const ctx = canvas.getContext('2d')
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, CELL_W, CELL_H)
+
+    const tMax = fx.to
+    const tMin = zoom.minutes ? Math.max(fx.from, tMax - zoom.minutes * 60_000) : fx.from
+    const bars = fx.bars.filter((b) => b.t >= tMin && b.t <= tMax)
+    const src = bars.length ? bars : fx.bars
+    let lo = Infinity, hi = -Infinity
+    for (const b of src) { if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h }
+    if (!Number.isFinite(lo)) return { drew: false, rows: 0 }
+    // The real chart autoscales to the CANDLES, so a level far from price is
+    // off-pane there too. Same here — 6% of the range as breathing room.
+    const pad = Math.max(1, (hi - lo) * 0.06)
+    const geo = makeGeo(CELL_W, CELL_H, tMin, tMax, lo - pad, hi + pad)
+
+    // Price gridlines, so the gutter reads as a chart rather than dead space.
+    ctx.strokeStyle = 'rgba(255,255,255,.05)'
+    ctx.fillStyle = 'rgba(230,237,243,.30)'
+    ctx.font = '9px ui-monospace, monospace'
+    const steps = 5
+    for (let i = 0; i <= steps; i++) {
+      const p = geo._pLo + ((geo._pHi - geo._pLo) * i) / steps
+      const y = geo.yOfPrice(p)
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(geo._x1, y); ctx.stroke()
+      ctx.fillText(p.toFixed(0), geo._x1 + 6, y + 3)
+    }
+
+    drawCandles(ctx, bars, geo)
+
+    // THE REAL MODEL, THE REAL DRAW.
+    const columns = fx.columns.filter((c) => c.slotTs >= fx.from && c.slotTs <= tMax)
+    const snaps = L.buildBubbleModel(columns, {
+      metric: state.metric,
+      levels: state.levels,
+      cutoffPct: state.cutoff,
+      auto: state.auto,
+    })
+    const drew = L.drawBubbles(ctx, snaps, geo, {
+      size: 1, floorPx: 1.5, variance: 1.5, intensity: 1, auto: state.auto,
+    }, palette)
+
+    const rows = snaps.length ? snaps[snaps.length - 1].marks.length : 0
+    // How many DISTINCT strikes the whole trail holds. The number that matters:
+    // `levels` is what a vertical slice shows, this is what the eye counts.
+    const distinct = new Set()
+    for (const s of snaps) for (const m of s.marks) distinct.add(m.strike)
+    return { drew, rows, distinct: distinct.size, snaps: snaps.length }
+  }
+
+  // ── The sheet ────────────────────────────────────────────────────────────
+  const cells = []
+  for (const fx of fixtures) {
+    const sec = document.createElement('section')
+    sec.className = 'sess'
+    const days = Math.round((fx.to - fx.from) / 60000)
+    sec.innerHTML =
+      `<h2>${fx.name}${fx.note ? ` — ${fx.note}` : ''}</h2>` +
+      `<div class="meta">${fx.symbol} · exp ${fx.expiry} · ${fx.columns.length} columns · ${days}m span · captured ${String(fx.capturedAt).slice(0, 16).replace('T', ' ')}</div>`
+    const wrap = document.createElement('div')
+    wrap.className = 'cells'
+    for (const z of ZOOMS) {
+      const cell = document.createElement('div')
+      cell.className = 'cell'
+      const cap = document.createElement('div')
+      cap.className = 'cap'
+      cap.innerHTML = `<span>${z.label}</span><span class="stat"></span>`
+      const cv = document.createElement('canvas')
+      cell.appendChild(cap)
+      cell.appendChild(cv)
+      wrap.appendChild(cell)
+      cells.push({ canvas: cv, fx, zoom: z, stat: cap.querySelector('.stat') })
+    }
+    sec.appendChild(wrap)
+    sheet.appendChild(sec)
+  }
+
+  let raf = 0
+  function redraw() {
+    if (raf) return
+    raf = requestAnimationFrame(() => {
+      raf = 0
+      for (const c of cells) {
+        let r
+        try {
+          r = drawCell(c.canvas, c.fx, c.zoom)
+        } catch (e) {
+          c.stat.textContent = 'error'
+          c.stat.style.color = '#ff6b6b'
+          console.error(c.fx.name, c.zoom.label, e)
+          continue
+        }
+        c.stat.style.color = ''
+        c.stat.textContent = r && r.drew
+          ? `${r.rows} rows · ${r.distinct} strikes`
+          : 'nothing drawn'
+      }
+    })
+  }
+
+  // ── Control building ─────────────────────────────────────────────────────
+  // Generated from the objects themselves, so a constant added to BUBBLE_AUTO
+  // shows up here on the next build with nothing to wire.
+  const RANGES = {
+    levelShare: [0, 0.3, 0.005], minLevels: [1, 8, 1], maxLevels: [1, 12, 1],
+    cutoffOfTop: [0, 0.3, 0.005], cutoffMinPct: [0, 2, 0.05], cutoffMaxPct: [0, 5, 0.05],
+    topFrac: [0.002, 0.05, 0.001], topMinPx: [0.5, 10, 0.5], topMaxPx: [2, 30, 0.5],
+    crowdTrim: [0, 0.2, 0.01], floorOfTop: [0, 0.5, 0.01], floorMinPx: [0, 3, 0.1],
+    floorMaxPx: [0.5, 6, 0.1], spreadGain: [0, 3, 0.05], curveMin: [0.3, 2, 0.05],
+    curveMax: [1, 4, 0.05], dimPerRow: [0, 0.2, 0.01], dimFloor: [0.2, 1, 0.05],
+    smoothWindow: [0, 10, 1], hyst: [0, 8, 1],
+    minPx: [0.2, 4, 0.1], heightFrac: [0.005, 0.12, 0.001], glowTopFactor: [0, 2, 0.05],
+    glowMaxPx: [0, 20, 0.5], fade: [0, 0.95, 0.05], gapPx: [0, 4, 0.1],
+  }
+  const initial = { auto: { ...L.BUBBLE_AUTO }, style: { ...L.BUBBLE_STYLE } }
+
+  function buildFields(target, obj, host) {
+    for (const key of Object.keys(obj)) {
+      const v = obj[key]
+      if (typeof v !== 'number') continue
+      const [min, max, step] = RANGES[key] ?? [0, Math.max(1, v * 3), v > 3 ? 1 : 0.01]
+      const row = document.createElement('div')
+      row.className = 'row'
+      const dec = String(step).includes('.') ? String(step).split('.')[1].length : 0
+      row.innerHTML =
+        `<label title="${key}">${key}</label>` +
+        `<input type="range" min="${min}" max="${max}" step="${step}" value="${v}" />` +
+        `<span class="val">${Number(v).toFixed(dec)}</span>`
+      const input = row.querySelector('input')
+      const out = row.querySelector('.val')
+      input.addEventListener('input', () => {
+        const n = Number(input.value)
+        target[key] = n
+        out.textContent = n.toFixed(dec)
+        redraw()
+      })
+      host.appendChild(row)
+      row._reset = () => { input.value = obj[key]; out.textContent = Number(obj[key]).toFixed(dec) }
+    }
+  }
+  buildFields(L.BUBBLE_AUTO, initial.auto, document.getElementById('autoFields'))
+  buildFields(L.BUBBLE_STYLE, initial.style, document.getElementById('styleFields'))
+
+  const autoBtn = document.getElementById('autoBtn')
+  autoBtn.addEventListener('click', () => {
+    state.auto = !state.auto
+    autoBtn.classList.toggle('on', state.auto)
+    redraw()
+  })
+  const metricBtn = document.getElementById('metricBtn')
+  metricBtn.addEventListener('click', () => {
+    state.metric = state.metric === 'voloi' ? 'vol' : 'voloi'
+    metricBtn.textContent = state.metric === 'voloi' ? 'Vol+OI' : 'Vol'
+    redraw()
+  })
+  document.getElementById('rebuildBtn').addEventListener('click', redraw)
+
+  const bind = (id, key, dec) => {
+    const el = document.getElementById(id)
+    const out = document.getElementById(id + 'V')
+    el.addEventListener('input', () => {
+      state[key] = Number(el.value)
+      out.textContent = Number(el.value).toFixed(dec)
+      redraw()
+    })
+  }
+  bind('mLevels', 'levels', 0)
+  bind('mCutoff', 'cutoff', 2)
+
+  document.getElementById('copyBtn').addEventListener('click', () => {
+    const fmt = (o) => Object.entries(o)
+      .map(([k, v]) => `  ${k}: ${typeof v === 'number' ? Number(v.toFixed(4)) : JSON.stringify(v)},`)
+      .join('\n')
+    const text =
+      `export const BUBBLE_AUTO = {\n${fmt(L.BUBBLE_AUTO)}\n} as const\n\n` +
+      `export const BUBBLE_STYLE = {\n${fmt(L.BUBBLE_STYLE)}\n} as const\n`
+    navigator.clipboard?.writeText(text)
+    console.log(text)
+    const b = document.getElementById('copyBtn')
+    b.textContent = 'copied — also in console'
+    setTimeout(() => { b.textContent = 'Copy constants' }, 1600)
+  })
+
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    Object.assign(L.BUBBLE_AUTO, initial.auto)
+    Object.assign(L.BUBBLE_STYLE, initial.style)
+    document.querySelectorAll('#autoFields .row, #styleFields .row').forEach((r) => r._reset && r._reset())
+    redraw()
+  })
+
+  redraw()
+})()
+</script>
+</body>
+</html>
