@@ -117,6 +117,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { findGEXFlip, netGEXOf, type ChainRow } from "@/lib/calculations/calculations";
 import {
+  etClockOf,
   etHm,
   RTH_CLOSE_MIN,
   RTH_OPEN_MIN,
@@ -549,9 +550,42 @@ export default function PostMarketTab(p: PostMarketProps) {
   // the hook then fell back to a rolling 480-minute window anchored to the wall
   // clock — so opening the recap at 20:00 silently threw away the morning and
   // the panel blamed the recorder for it.
-  const { cols, state: histState } = useIntradayLadder(true, expiry, etDate, sym);
+  const { cols: allCols, state: histState } = useIntradayLadder(true, expiry, etDate, sym);
   const { next, state: nextState } = useNextExpiryStructure(!frozen, expiry, spot, sym);
-  const { log: wallLog, byLevel: recorded, state: wallState } = useRecordedWalls(etDate, sym);
+  // `etMin` cuts the wall log at the minute on screen for the same reason it
+  // cuts the ladder below — see that comment.
+  const { log: wallLog, byLevel: recorded, state: wallState } = useRecordedWalls(etDate, sym, etMin);
+
+  /**
+   * THE LADDER, CUT AT THE MINUTE ON SCREEN. This is what makes this tab
+   * replay, and it is one line because everything downstream already derives
+   * from `cols` and nothing else.
+   *
+   * `useIntradayLadder` returns the WHOLE recorded session for `etDate`. Every
+   * quantity in section 3 is a function of it: the per-strike series, the
+   * AM/MID/PM build buckets and their colours, the board totals, the
+   * 15:00→close share column, and outside it the day's price path, the RTH
+   * high/low and open-vs-now net GEX. So on a REPLAYED session the chain
+   * rewound frame by frame while this whole side of the tab kept printing the
+   * finished day — the share column read the same "+36.1pp" at 09:35 as at
+   * 16:00. Nothing was stale; the right data was being asked the wrong
+   * question, which is worse, because it looks correct.
+   *
+   * Cutting the columns fixes all of it at once and honestly: buckets that have
+   * not happened yet drop out of `activeBuckets` (and are named in the legend
+   * as not recorded), `pmAnchor` is null before ~15:00 so the power-hour column
+   * renders "—" instead of a number from the future, and the build bars GROW as
+   * the scrubber moves — which is the whole point of replaying this tab.
+   *
+   * No new prop, because it is a no-op on every other path: live, `etMin` is
+   * the wall clock and the recorder cannot be ahead of it; frozen, `etMin` is
+   * the settle + 10 and the ladder stops at 16:00. Only a replay ever moves it
+   * backwards.
+   */
+  const cols = useMemo(
+    () => (allCols.length ? allCols.filter((c) => etMinutes(c.ts) <= etMin) : allCols),
+    [allCols, etMin],
+  );
 
   // ── the day's price path, in SPX ───────────────────────────────────────────
   //
@@ -1402,8 +1436,19 @@ export default function PostMarketTab(p: PostMarketProps) {
     centerEv();
   }, [centerEv]);
 
+  /**
+   * The recorder answered fine, but the minute on screen is BEFORE the first
+   * recorded column — a replay scrubbed back into the premarket, where the RTH
+   * ladder has not started. Said out loud, because otherwise section 3 draws an
+   * empty frame that reads as "the recorder is broken" rather than "the session
+   * has not begun".
+   */
+  const beforeLadder = histState === "ok" && !cols.length && allCols.length > 0;
+
   const histNote =
-    histState === "ok" ? null
+    beforeLadder
+      ? `Nothing recorded yet at ${etClockOf(etMin)} ET — the per-minute ladder starts at the 09:30 open. Scrub forward and the build bars fill in from there.`
+      : histState === "ok" ? null
       : histState === "loading" ? "Loading today's recorded ladder…"
         : histState === "empty" ? "No per-minute ladder recorded for today — the build-time bars, the wall path and the written-vs-traded read all need it. Everything else below is live."
           : "The intraday recorder did not answer, so section 3 and the wall path have nothing to read. Everything above and below them is live.";

@@ -71,6 +71,7 @@ type Surface = {
   spots?: (number | null)[];
   strikes?: number[];
   grid?: (number | null)[][];
+  window?: { lo: number; hi: number } | null;
   capturedAt?: string | null;
   clipped?: boolean;
 };
@@ -86,6 +87,14 @@ const WINDOWS = [
   { value: "20", label: "20 sessions" },
   { value: "45", label: "45 sessions" },
   { value: "90", label: "90 sessions" },
+];
+// How far either side of the price path to draw, as a PERCENTAGE of spot — the
+// only unit that means the same thing on SPY at 770 and SPX at 7700.
+const WIDTHS = [
+  { value: "2", label: "±2% strikes" },
+  { value: "5", label: "±5% strikes" },
+  { value: "10", label: "±10% strikes" },
+  { value: "20", label: "±20% strikes" },
 ];
 
 /* ── colour ──────────────────────────────────────────────────────────────── */
@@ -138,6 +147,7 @@ export default function GexSurface() {
   const [symbol, setSymbol] = useState("SPY");
   const [basis, setBasis] = useState("oivol");
   const [days, setDays] = useState("45");
+  const [sidePct, setSidePct] = useState("5");
   const [data, setData] = useState<Surface | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -148,7 +158,8 @@ export default function GexSurface() {
     setLoading(true); setErr(null);
     try {
       const res = await fetch(
-        `/api/eod-strike-gex-surface?symbol=${encodeURIComponent(symbol)}&days=${days}&basis=${basis}`,
+        `/api/eod-strike-gex-surface?symbol=${encodeURIComponent(symbol)}`
+        + `&days=${days}&basis=${basis}&sidePct=${sidePct}`,
         { cache: "no-store" },
       );
       const j: Surface = await res.json();
@@ -165,7 +176,7 @@ export default function GexSurface() {
     } finally {
       if (id === reqId.current) setLoading(false);
     }
-  }, [symbol, basis, days]);
+  }, [symbol, basis, days, sidePct]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -215,6 +226,7 @@ export default function GexSurface() {
           symbol={symbol} setSymbol={setSymbol}
           basis={basis} setBasis={setBasis}
           days={days} setDays={setDays}
+          sidePct={sidePct} setSidePct={setSidePct}
           onReload={load} loading={loading}
         />
 
@@ -244,8 +256,12 @@ export default function GexSurface() {
               dates={dates} strikes={strikes} grid={grid} spots={spots} max={vmax} withSpot
             />
             <SectionLabel n="" title="Δ vs prior session" sub="same axes" small />
+            {/* The oldest session has no prior, so its column is all null. Dropped
+                rather than drawn: an empty leading column reads as "nothing
+                happened that day", which is not what it means. */}
             <SurfaceChart
-              dates={dates} strikes={strikes} grid={dgrid} spots={spots} max={dmax} withSpot
+              dates={dates.slice(1)} strikes={strikes} grid={dgrid.slice(1)}
+              spots={spots.slice(1)} max={dmax} withSpot
             />
             <Legend max={vmax} />
 
@@ -282,11 +298,12 @@ const noteStyle: CSSProperties = {
 };
 
 function Controls({
-  symbol, setSymbol, basis, setBasis, days, setDays, onReload, loading,
+  symbol, setSymbol, basis, setBasis, days, setDays, sidePct, setSidePct, onReload, loading,
 }: {
   symbol: string; setSymbol: (v: string) => void;
   basis: string; setBasis: (v: string) => void;
   days: string; setDays: (v: string) => void;
+  sidePct: string; setSidePct: (v: string) => void;
   onReload: () => void; loading: boolean;
 }) {
   const [typed, setTyped] = useState(symbol);
@@ -321,7 +338,10 @@ function Controls({
         <ThemedSelect value={basis} options={BASES} onChange={setBasis} ariaLabel="Basis" />
       </div>
       <div style={{ width: 148 }}>
-        <ThemedSelect value={days} options={WINDOWS} onChange={setDays} ariaLabel="Window" />
+        <ThemedSelect value={days} options={WINDOWS} onChange={setDays} ariaLabel="Lookback" />
+      </div>
+      <div style={{ width: 152 }}>
+        <ThemedSelect value={sidePct} options={WIDTHS} onChange={setSidePct} ariaLabel="Strike range" />
       </div>
       <button
         type="button" onClick={onReload} disabled={loading}
@@ -343,7 +363,10 @@ function Meta({ data, loading }: { data: Surface | null; loading: boolean }) {
     }}>
       <span style={{ color: T.cyan }}>{data.symbol}</span>
       <span>{n} sessions · {data.dates?.[0]} → {data.dates?.[n - 1]}</span>
-      <span>{data.strikes?.length} strikes</span>
+      <span>
+        {data.strikes?.length} strikes
+        {data.window ? ` · ${Math.round(data.window.lo)}–${Math.round(data.window.hi)}` : ""}
+      </span>
       {data.capturedAt ? <span>run {fmtEtStamp(data.capturedAt)}</span> : null}
       {data.clipped ? (
         <span
@@ -419,13 +442,26 @@ function SurfaceChart({
   // column order has to stay aligned with `strikes` for the tooltips.
   const y = (i: number) => TP + (strikes.length - 1 - i) * CH;
 
+  // Spot is mapped onto the STRIKE axis and then CLAMPED to the plot box.
+  //
+  // The server sizes the window off the spot path so this should not bite, but
+  // "should not" is not a guarantee: the 240-row ceiling can tighten the window
+  // past an old session's close, and a symbol whose ladder is finer than its
+  // range will hit that. An unclamped point becomes a line running off the top
+  // or bottom of the chart into the margin — which is exactly how this looked
+  // on SPX with a fixed ±45-point window. Clamped, an out-of-frame session
+  // pins to the edge and is flagged below the chart instead.
+  const loK = strikes[0], hiK = strikes[strikes.length - 1];
+  const yTop = TP + CH / 2;
+  const yBot = TP + (strikes.length - 1) * CH + CH / 2;
   const yPrice = (p: number) => {
-    const lo = strikes[0], hi = strikes[strikes.length - 1];
-    if (hi === lo) return TP;
-    return TP + (hi - p) * ((strikes.length - 1) * CH) / (hi - lo) + CH / 2;
+    if (hiK === loK) return yTop;
+    return TP + (hiK - p) * ((strikes.length - 1) * CH) / (hiK - loK) + CH / 2;
   };
+  const clampY = (v: number) => Math.min(yBot, Math.max(yTop, v));
+  const offFrame = spots.filter((p) => p != null && (p < loK || p > hiK)).length;
   const spotPts = spots
-    .map((p, d) => (p == null ? null : `${(x(d) + cw / 2).toFixed(1)},${yPrice(p).toFixed(1)}`))
+    .map((p, d) => (p == null ? null : `${(x(d) + cw / 2).toFixed(1)},${clampY(yPrice(p)).toFixed(1)}`))
     .filter(Boolean).join(" ");
 
   const strikeTicks = useMemo(() => {
@@ -471,6 +507,12 @@ function SurfaceChart({
           {shortDate(dates[dates.length - 1])}
         </text>
       </svg>
+      {withSpot && offFrame > 0 ? (
+        <div style={{ fontFamily: MONO, fontSize: 9.5, color: T.gold, marginTop: 4 }}>
+          {offFrame} session{offFrame === 1 ? "'s" : "s'"} close sits outside the drawn strike range — the price
+          line is pinned to the edge there. Widen the window or shorten the lookback.
+        </div>
+      ) : null}
     </div>
   );
 }

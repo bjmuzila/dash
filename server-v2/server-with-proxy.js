@@ -2191,7 +2191,8 @@ async function main() {
       // behind the Labs page's GEX surface and scrub. Deliberately NOT N calls
       // to -change: that is N round trips and N copies of the window
       // arithmetic, and the two consumers would drift.
-      //   GET /proxy/eod-strike-gex-surface?symbol=SPY[&days=45][&basis][&leg][&side]
+      //   GET /proxy/eod-strike-gex-surface?symbol=SPY[&days=45][&basis][&leg]
+      //                                     [&sidePct=5][&side=<abs points>]
       // Returns { ok, symbol, basis, leg, dates[], spots[], strikes[],
       // grid[date][strike], capturedAt, clipped }. grid cells are null (never
       // 0) where a strike has no row for that session.
@@ -2205,6 +2206,7 @@ async function main() {
               basis: u.searchParams.get('basis'),
               leg: u.searchParams.get('leg'),
               side: u.searchParams.get('side'),
+              sidePct: u.searchParams.get('sidePct'),
             });
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }

@@ -1097,9 +1097,29 @@ export type RecordedLevel = {
   events: WallEventRow[];   // every classified touch, oldest first
 };
 
-export function useRecordedWalls(date: string, symbol = "SPX") {
-  const [log, setLog] = useState<WallLogRow[]>([]);
-  const [events, setEvents] = useState<WallEventRow[]>([]);
+/**
+ * A walls_log slot back to its ET minute-of-day. Mirrors slotMins() in
+ * server-v2/walls-recorder.js — slot 0 is the 09:29 open capture, then one slot
+ * every 15 minutes on the inclusive 09:45…16:00 grid. It is here so a caller
+ * can cut the log at a minute (see `throughMin`) without parsing `at`, which
+ * the route does not guarantee.
+ */
+export function wallSlotMins(slot: number): number {
+  return slot === 0 ? 9 * 60 + 29 : 9 * 60 + 45 + (slot - 1) * 15;
+}
+
+/**
+ * @param throughMin  Optional ET minute-of-day to cut the session at: rows
+ *   recorded after it are dropped, before `byLevel` is built, so `last` and
+ *   `moves` describe the session AS OF that minute rather than at the close.
+ *   This is what lets a REPLAYED session's scorecard move with the scrubber
+ *   instead of printing the finished day under a 10:15 clock. Undefined (live,
+ *   frozen) keeps the whole log — the recorder cannot be ahead of the wall
+ *   clock, so there is nothing to cut.
+ */
+export function useRecordedWalls(date: string, symbol = "SPX", throughMin?: number) {
+  const [allLog, setLog] = useState<WallLogRow[]>([]);
+  const [allEvents, setEvents] = useState<WallEventRow[]>([]);
   const [state, setState] = useState<HistState>("loading");
 
   useEffect(() => {
@@ -1124,6 +1144,18 @@ export function useRecordedWalls(date: string, symbol = "SPX") {
     })();
     return () => { alive = false; };
   }, [date, symbol]);
+
+  // The session as of `throughMin`. Cut here rather than in each consumer so
+  // `byLevel` below — which is what the three wall cards read — can never
+  // disagree with the move list about how far into the day it is.
+  const log = useMemo(
+    () => (throughMin == null ? allLog : allLog.filter((r) => wallSlotMins(r.slot) <= throughMin)),
+    [allLog, throughMin],
+  );
+  const events = useMemo(
+    () => (throughMin == null ? allEvents : allEvents.filter((r) => wallSlotMins(r.hit_slot) <= throughMin)),
+    [allEvents, throughMin],
+  );
 
   const byLevel = useMemo(() => {
     const out = new Map<WallLevel, RecordedLevel>();

@@ -3607,7 +3607,7 @@ register('/api/eod-strike-gex-dates', {
   },
 });
 
-// /api/eod-strike-gex-surface?symbol&days&basis&leg&side — the whole recorded
+// /api/eod-strike-gex-surface?symbol&days&basis&leg&sidePct|side — the recorded
 // window as one strike × session grid. Backs the Labs page's surface and scrub.
 // Forwarder only, same shape as the four above: the query itself lives in
 // getStrikeGexSurface() in eod-strike-gex-recorder.js.
@@ -3626,6 +3626,10 @@ register('/api/eod-strike-gex-surface', {
     // nonsense string out of the query string; it is not the validation.
     const days = Number(sp.get('days') || 45);
     if (Number.isFinite(days) && days > 0) q.set('days', String(Math.floor(days)));
+    // sidePct is the normal control (a % of spot, so it means the same thing on
+    // SPY at 770 and SPX at 7700); `side` is the absolute-points override.
+    const sidePct = Number(sp.get('sidePct') || 0);
+    if (Number.isFinite(sidePct) && sidePct > 0) q.set('sidePct', String(sidePct));
     const side = Number(sp.get('side') || 0);
     if (Number.isFinite(side) && side > 0) q.set('side', String(Math.floor(side)));
     const basis = basisParam(sp);

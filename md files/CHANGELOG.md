@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-08-28 - Premarket replay: the Post-Market build column was showing the finished day at every frame
+
+Edited: `components/pages/premarket/PostMarketTab.tsx`,
+`components/pages/premarket/postMarketData.ts`.
+
+Scrubbing the replay moved the chain but section 3's share column did not: the
+same `81% PM +36.1pp` at 09:35 as at 16:00. Nothing was stale. `useIntradayLadder`
+returns the WHOLE recorded session for `etDate`, and every quantity in that
+section is a function of that array - the per-strike series, the AM/MID/PM build
+buckets and their colours, the board totals, the 15:00->close share column, and
+outside it the day's price path, the RTH high/low and open-vs-now net GEX. The
+right data was being asked the wrong question, which is worse than stale,
+because it looks correct.
+
+**The ladder is now cut at `etMin`** - the minute on screen, which on a replay
+is the frame's own minute. One filter, and everything downstream follows,
+because everything downstream already derived from `cols` and nothing else:
+buckets that have not happened yet drop out of `activeBuckets` (and are named in
+the legend as not recorded), `pmAnchor` returns null before ~15:00 so the
+power-hour column reads "-" instead of a number from the future, and the build
+bars grow as the scrubber moves. No new prop: it is a no-op live (`etMin` is the
+wall clock, the recorder cannot be ahead of it) and frozen (`etMin` is the settle
++10, the ladder stops at 16:00). Only a replay ever moves it backwards.
+
+**The wall log is cut the same way.** `useRecordedWalls` takes an optional
+`throughMin` and filters log + events BEFORE `byLevel` is built, so the three
+wall cards and the move list can never disagree about how far into the day it
+is. Slot -> minute is `wallSlotMins()`, mirroring `slotMins()` in
+`server-v2/walls-recorder.js` (slot 0 = 09:29, then the 15-minute 09:45-16:00
+grid) - the route does not guarantee `at`, so the slot is the reliable key.
+
+**Scrubbed back before the open**, the RTH ladder has no columns at all, so
+section 3 now says so ("Nothing recorded yet at 08:15 ET - the per-minute ladder
+starts at the 09:30 open") rather than drawing an empty frame that reads as a
+broken recorder.
+
+No proxy, server, recorder or endpoint change.
+
 ## 2026-08-28 - Premarket: the replay transport is docked to the bottom of the page
 
 Edited: `components/pages/Premarket.tsx`.

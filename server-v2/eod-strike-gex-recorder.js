@@ -1498,17 +1498,25 @@ async function listStrikeGexDates(limit = 90, { basis = 'oivol', leg = 'net' } =
  * elsewhere, and drawing that as a zero would paint a hard edge across the
  * middle of the surface that is an artefact of the window, not of the book.
  *
- * WHY IT IS CLIPPED. Over 45 sessions spot can travel a long way, so the union
- * of every window is much wider than any single session's ±40. Returning all of
- * it makes a mostly-empty picture. The grid is clipped to ±`side` around the
- * MOST RECENT session's spot — the strikes a reader is actually looking at —
- * and `clipped` reports whether anything was dropped.
+ * WHY IT IS CLIPPED, AND HOW. Over 45 sessions spot can travel a long way, so
+ * the union of every session's ±40 strikes is much wider than any one of them
+ * and returning all of it draws a mostly-empty picture. The window is derived
+ * from the SPOT PATH — min to max across the window, padded by `sidePct` per
+ * cent of the latest close either side — for one reason: the client draws spot
+ * on this grid, and the whole reading ("did the wall build, or did it just
+ * follow price") is impossible if part of the price line is off the chart.
+ *
+ * The padding is a PERCENTAGE, not a point offset, because a point offset does
+ * not survive a change of underlying: a fixed ±45 is ±5.8% on SPY at 770 and
+ * ±0.58% on SPX at 7700. `side` overrides it with absolute points when a caller
+ * really wants that. A hard 240-row ceiling then tightens the window around the
+ * latest close if the ladder is fine enough to blow past it.
  *
  * Returns { ok, symbol, basis, leg, dates[], spots[], strikes[], grid[][],
- * capturedAt, clipped }. spots[d] is that session's recorded close.
+ * window:{lo,hi}, capturedAt, clipped }. spots[d] is that session's close.
  */
 async function getStrikeGexSurface(symbol, {
-  days = 45, basis = 'oivol', leg = 'net', side = 45,
+  days = 45, basis = 'oivol', leg = 'net', side = null, sidePct = 5,
 } = {}) {
   if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
   const p = getPool();
@@ -1520,7 +1528,16 @@ async function getStrikeGexSurface(symbol, {
   // Same security boundary as every other read here: the basis and leg become
   // SQL identifiers only after norm*, so LVL is always one of twelve literals.
   const LVL = levelCol(bas, lg);
-  const SIDE = Math.max(5, Math.min(200, Number(side) || 45));
+  // Window sizing is a PERCENTAGE by default, never a fixed number of points.
+  // A fixed ±45 is ±5.8% on SPY at 770 and ±0.58% on SPX at 7700 — the same
+  // literal produces a usable picture on one name and a sliver on the other,
+  // with the price line running clean off the top and bottom of the chart.
+  // `side` (absolute points) stays available as an explicit override.
+  const PCT = Math.max(0.5, Math.min(40, Number(sidePct) || 5));
+  const ABS = Number(side) > 0 ? Math.min(20000, Number(side)) : null;
+  // Hard ceiling on rows so a wide window on a 1-point ladder cannot return a
+  // 2000-row grid the browser then has to draw.
+  const MAX_ROWS = 240;
 
   // The date list is scoped to THIS basis (`LVL IS NOT NULL`) for the same
   // reason listStrikeGexDates is: the newer columns start at their migration
@@ -1565,11 +1582,37 @@ async function getStrikeGexSurface(symbol, {
 
   const last = dates[dates.length - 1];
   const allStrikes = [...new Set(rows.map((r) => Number(r.strike)))].sort((a, b) => a - b);
-  // Anchor on the newest session's spot. Falls back to the middle of the union
-  // when that session recorded no spot, so a missing close narrows the picture
-  // rather than emptying it.
-  const anchor = spotByDate.get(last) ?? allStrikes[Math.floor(allStrikes.length / 2)];
-  const strikes = allStrikes.filter((s) => Math.abs(s - anchor) <= SIDE);
+
+  // ── THE WINDOW MUST CONTAIN THE PRICE PATH ────────────────────────────────
+  //
+  // The point of this grid is that spot is drawn ON it: "the wall built while
+  // price sat still" and "the wall followed price" are the two readings, and
+  // both need the price line inside the frame. So the window is derived from
+  // the spot path across the window — its min and max — with padding either
+  // side, rather than from the newest close alone. A session whose spot fell
+  // outside would draw a line running off the chart, which is what a fixed
+  // point-offset produced on SPX.
+  const spotVals = dates.map((d) => spotByDate.get(d)).filter((v) => Number.isFinite(v));
+  const anchor = spotByDate.get(last)
+    ?? (spotVals.length ? spotVals[spotVals.length - 1] : allStrikes[Math.floor(allStrikes.length / 2)]);
+  const pad = ABS != null ? ABS : Math.max(1, (anchor * PCT) / 100);
+  const loSpot = spotVals.length ? Math.min(...spotVals) : anchor;
+  const hiSpot = spotVals.length ? Math.max(...spotVals) : anchor;
+  let lo = loSpot - pad;
+  let hi = hiSpot + pad;
+  let strikes = allStrikes.filter((k) => k >= lo && k <= hi);
+
+  // Over the row ceiling, tighten symmetrically around the LATEST close — the
+  // strikes a reader is looking at now — and accept that the oldest part of the
+  // price path may leave the frame. The client clamps the line to the edge and
+  // says so rather than drawing it into the margin.
+  if (strikes.length > MAX_ROWS) {
+    const sorted = [...strikes].sort((a, b) => Math.abs(a - anchor) - Math.abs(b - anchor));
+    const keep = new Set(sorted.slice(0, MAX_ROWS));
+    strikes = strikes.filter((k) => keep.has(k));
+    lo = strikes[0];
+    hi = strikes[strikes.length - 1];
+  }
   const clipped = strikes.length < allStrikes.length;
 
   const grid = dates.map((d) => {
@@ -1588,6 +1631,9 @@ async function getStrikeGexSurface(symbol, {
     spots: dates.map((d) => spotByDate.get(d) ?? null),
     strikes,
     grid,
+    // The drawn strike range, so the client can say whether a session's spot
+    // fell outside it instead of silently drawing the line off the chart.
+    window: { lo, hi },
     // The newest session's per-basis stamp, so the page can print the same
     // "run at" the ΔGEX Board prints rather than inventing its own.
     capturedAt: stampByDate.get(last) ? new Date(stampByDate.get(last)).toISOString() : null,
