@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
 import { useMemo } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
+import { LevelsAxis, type AxisMark } from './LevelsAxis'
 import { useField } from '@/data/hooks'
 import { useQuery } from '@/data/api'
 import type { GexData, GexFrame, SpotFrame } from '@/contract/frames'
@@ -22,36 +22,55 @@ import {
 } from './levelsMath'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Key Levels — the six tiles off v2's premarket page, as a board card.
+// Key Levels — every level on ONE horizontal price axis.
 //
-//   Call Wall · 0DTE Magnet · Spot · Max Pain · Gamma Flip · Put Wall
+//   Put Wall · Gamma Flip · Max Pain · Core (max γ) · Spot · Call Wall
+//   … plus this week's estimated-move band when it is close enough to matter.
 //
-// Same order, same anatomy (label + chip / big number / sub-line / distance +
-// pill / migration line), same arithmetic — see levelsMath.ts, which is a
-// straight transcription of Premarket.tsx's derivations so the two surfaces
-// cannot quietly disagree about what a level is.
+// Was six tiles in a row. Tiles answer "what is the call wall" one at a time,
+// and the question actually being asked is "where is price sitting inside the
+// gamma" — which is a question about the DISTANCES BETWEEN the levels, and six
+// boxes cannot show a distance at all. On one axis the gap between spot and the
+// wall above it is a gap you can see. See LevelsAxis.tsx for the rail itself.
 //
-// Two deliberate differences from v2:
+// Nothing was dropped in the move: every tile's level is a mark, and each tile's
+// migration line ("building", "deepening", "rose 4.00") survives as the note
+// under its price. The arithmetic is untouched — levelsMath.ts is still a
+// straight transcription of Premarket.tsx's derivations, so v2 and v3 cannot
+// quietly disagree about what a level is.
 //
-//   · No ES sub-line. v2 prints "ES 6,880 · $1.24B" under each level because
-//     its charts are ES futures and its levels are SPX cash. v3 dropped the
-//     futures, so a level is quoted in the units it is already in and the whole
-//     /proxy/es-spx-basis path goes with it.
-//   · The tiles carry no per-level accent. v2's six emit `lvl call` / `lvl put`
-//     modifier classes that no CSS rule anywhere targets, so they render as
-//     identical surfaces — kept, because colour here would compete with the one
-//     colour that carries meaning: the sign of the distance.
+// One deliberate difference from v2: no ES sub-line. v2 prints "ES 6,880" under
+// each level because its charts are ES futures and its levels are SPX cash. v3
+// dropped the futures, so a level is quoted in the units it is already in and
+// the whole /proxy/es-spx-basis path went with it.
 //
 // ── Where the numbers come from ──────────────────────────────────────────────
 //   the live `gex` frame     rows, callWall, putWall, gexFlip
 //   the live `spot` frame    spot, prevClose
-//   /api/premarket-baseline  the "was → now" migration lines
+//   /api/premarket-baseline  the "was → now" migration notes
+//   /api/em-tracker          this week's estimated-move band (Postgres)
 //
 // Max pain and the magnet are computed here rather than read: the server does
 // not publish either, and both are a few lines over a chain we already have.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BASIS_KEY = 'cb-v3-key-levels-basis'
+
+/**
+ * `/api/em-tracker` — one row per (ticker, week), owner-gated, Postgres-backed.
+ *
+ * `up` / `down` are the band's PRICES and are what goes on the axis. `em` is the
+ * magnitude and `ref_close` the price it was struck from; together they are the
+ * fallback for a row imported before the bounds were being stored.
+ */
+interface EmTrackerRow {
+  week_label?: string | null
+  week_start?: string | null
+  em?: number | null
+  ref_close?: number | null
+  up?: number | null
+  down?: number | null
+}
 
 interface BaselineResponse {
   ok?: boolean
@@ -70,116 +89,6 @@ function readBasisPref(): LevelBasis {
   } catch {
     return 'oi'
   }
-}
-
-// ── Tile chrome ──────────────────────────────────────────────────────────────
-
-function Tile({
-  label,
-  chip,
-  value,
-  sub,
-  dist,
-  distDir,
-  pill,
-  pillTone = 'plain',
-  mig,
-}: {
-  label: string
-  chip: string
-  value: string
-  sub: ReactNode
-  dist: string
-  /** null suppresses the up/down colouring — the Spot tile has no direction. */
-  distDir: 'up' | 'down' | null
-  pill: ReactNode
-  pillTone?: 'plain' | 'hot' | 'cool' | 'warn'
-  mig?: ReactNode
-}) {
-  const pillClass =
-    pillTone === 'hot'
-      ? 'border-down text-down'
-      : pillTone === 'cool'
-        ? 'border-up text-up'
-        : pillTone === 'warn'
-          ? 'border-warn text-warn'
-          : 'border-line text-muted opacity-70'
-
-  return (
-    <div className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-surface2 px-2.5 pb-2.5 pt-2">
-      <div className="flex items-center justify-between gap-1.5 text-[10px] uppercase tracking-[0.07em] text-muted opacity-70">
-        <span className="truncate">{label}</span>
-        <span className="shrink-0 rounded-sm border border-line bg-surface px-1.5 py-px text-[9px] normal-case tracking-normal">
-          {chip}
-        </span>
-      </div>
-      <div className="tabular mt-1 truncate text-xl font-semibold tracking-tight text-fg">{value}</div>
-      <div className="tabular truncate text-[10.5px] text-muted opacity-70">{sub}</div>
-      <div className="mt-1.5 flex items-center justify-between gap-1.5 text-[11px]">
-        <span
-          className={[
-            'tabular',
-            distDir === 'up' ? 'text-up' : distDir === 'down' ? 'text-down' : 'text-muted opacity-70',
-          ].join(' ')}
-        >
-          {dist}
-        </span>
-        {pill != null && (
-          <span className={['shrink-0 whitespace-nowrap rounded-sm border px-1.5 py-px text-[10px]', pillClass].join(' ')}>
-            {pill}
-          </span>
-        )}
-      </div>
-      {mig}
-    </div>
-  )
-}
-
-/**
- * The "was → now" line. Returns null rather than a row of dashes when there is
- * nothing to say — a migration line that always renders trains the eye to skip
- * it, and then it is useless on the day it matters.
- */
-function MigLine({
-  tag,
-  tone,
-  was,
-  now,
-  pct,
-}: {
-  tag?: string
-  tone?: 'up' | 'down' | 'warn' | 'flip'
-  was?: string
-  now?: string
-  pct?: string
-}) {
-  if (!tag && !was) return null
-  const toneClass =
-    tone === 'up'
-      ? 'border-up text-up'
-      : tone === 'down'
-        ? 'border-down text-down'
-        : tone === 'warn'
-          ? 'border-warn text-warn'
-          : tone === 'flip'
-            ? 'border-accent text-accent'
-            : 'border-line text-muted opacity-70'
-  return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 border-t border-dashed border-line pt-1.5 text-[10.5px] text-muted opacity-80">
-      {tag && (
-        <span className={['rounded-full border px-1.5 py-px text-[9px] uppercase tracking-[0.06em]', toneClass].join(' ')}>
-          {tag}
-        </span>
-      )}
-      {was && (
-        <span className="tabular">
-          was {was}
-          {now ? ` → ${now}` : ''}
-          {pct ? ` · ${pct}` : ''}
-        </span>
-      )}
-    </div>
-  )
 }
 
 // ── The card ─────────────────────────────────────────────────────────────────
@@ -258,13 +167,147 @@ export function KeyLevelsCard() {
 
   const flipWas = typeof baseline?.flip === 'number' ? baseline.flip : null
   const flipMove = flipWas != null && flip != null ? flip - flipWas : null
-  const spotWas = typeof baseline?.spot === 'number' ? baseline.spot : null
-  const spotMove = spotWas != null && spot ? spot - spotWas : null
-
   const emptyFeed = rows.length === 0 && !spot
 
+  // ── This week's estimated move ─────────────────────────────────────────────
+  // Rows come back newest-first (ORDER BY week_start DESC), so [0] is the
+  // current week once it has been struck. `up` / `down` are the band's prices
+  // and are what the axis wants; `ref_close ± em` is the fallback for a row
+  // imported before the bounds were being stored.
+  //
+  // Ten minutes of cache and no poll: this is a weekly number.
+  const emQ = useQuery<{ rows?: EmTrackerRow[] }>('/api/em-tracker?ticker=SPX', { staleMs: 600_000 })
+  const weeklyEm = useMemo(() => {
+    const row = emQ.data?.rows?.[0]
+    if (!row) return null
+    const ref = typeof row.ref_close === 'number' ? row.ref_close : null
+    const em = typeof row.em === 'number' ? row.em : null
+    const up = typeof row.up === 'number' ? row.up : ref != null && em != null ? ref + em : null
+    const down = typeof row.down === 'number' ? row.down : ref != null && em != null ? ref - em : null
+    if (up == null || down == null || !(up > 0) || !(down > 0)) return null
+    return { up, down, label: row.week_label ?? '' }
+  }, [emQ.data])
+
+  const marks = useMemo(() => {
+    const out: AxisMark[] = []
+    const add = (
+      key: string,
+      code: string,
+      name: string,
+      price: number | null | undefined,
+      colourVar: string,
+      note: string,
+      sub?: string,
+      dp = kDp,
+    ) => {
+      if (price == null || !Number.isFinite(price) || price <= 0) return
+      out.push({ key, code, name, price, text: fmtPx(price, dp), colourVar, note, sub })
+    }
+
+    // A wall's migration is the same word its tile carried; it is the most
+    // useful thing that can sit under a price in one line, so it goes there
+    // rather than being lost with the tile.
+    const withMig = (pts: string, was: number | null, mig: { text: string }) =>
+      was == null ? pts : `${pts} · ${mig.text}`
+
+    add(
+      'pw',
+      'PW',
+      'Put Wall',
+      putWall,
+      '--color-level-pw',
+      withMig(fmtPts(distPut), putWas, putMig),
+      fmtUsd(wallGex.put, false),
+    )
+    add(
+      'flip',
+      'FLIP',
+      'Gamma Flip',
+      flip,
+      '--color-accent',
+      flipMove == null || Math.abs(flipMove) < pxEps
+        ? fmtPts(distFlip)
+        : `${fmtPts(distFlip)} · ${flipMove > 0 ? 'rose' : 'fell'} ${Math.abs(flipMove).toFixed(pDp)}`,
+    )
+    add(
+      'pain',
+      'PAIN',
+      'Max Pain',
+      maxPain,
+      '--color-muted',
+      maxPain != null && spot ? fmtPts(maxPain - spot) : 'oi-weighted',
+    )
+    add(
+      'core',
+      'CORE',
+      'Max γ Strike',
+      magnet?.strike ?? null,
+      '--color-level-cb',
+      magnet && spot
+        ? withMig(
+            Math.abs(magnet.strike - spot) <= pinEps ? `${fmtPts(magnet.strike - spot)} · pinning` : fmtPts(magnet.strike - spot),
+            magnetWas,
+            wallState(magnetPct, 'building', 'eroding'),
+          )
+        : 'magnet',
+      fmtUsd(magnet?.value ?? null, false),
+    )
+    add(
+      'spot',
+      'SPOT',
+      'Spot',
+      spot || null,
+      '--color-fg',
+      dayChange == null
+        ? 'live'
+        : `${dayChange >= 0 ? '+' : '−'}${Math.abs(dayChange).toFixed(pDp)} · ${fmtPct(dayPct)}`,
+      undefined,
+      pDp,
+    )
+    add(
+      'cw',
+      'CW',
+      'Call Wall',
+      callWall,
+      '--color-level-cw',
+      withMig(fmtPts(distCall), callWas, callMig),
+      fmtUsd(wallGex.call, false),
+    )
+
+    // ── The EM band, and only when it is close enough to be worth an axis ─────
+    // The gamma levels set the scale. A weekly band on a quiet week sits inside
+    // them and is the most useful thing on the card; on a wide week it can be
+    // fifty points outside the put wall, and putting it on the axis would
+    // squash every level that matters into the middle third to make room for a
+    // number nobody is trading against today. So it is drawn only if it already
+    // fits the picture the gamma drew.
+    if (weeklyEm && out.length) {
+      let lo = Infinity
+      let hi = -Infinity
+      for (const m of out) {
+        if (m.price < lo) lo = m.price
+        if (m.price > hi) hi = m.price
+      }
+      const fits = (v: number) => v >= lo && v <= hi
+      const note = weeklyEm.label ? `wk ${weeklyEm.label}` : 'weekly em'
+      if (fits(weeklyEm.down)) add('emd', 'EM', 'Weekly EM Low', weeklyEm.down, '--color-warn', note)
+      if (fits(weeklyEm.up)) add('emu', 'EM', 'Weekly EM High', weeklyEm.up, '--color-warn', note)
+    }
+
+    return out
+  }, [
+    putWall, distPut, putWas, putMig,
+    flip, distFlip, flipMove, pxEps, pDp,
+    maxPain, spot,
+    magnet, pinEps, magnetWas, magnetPct,
+    dayChange, dayPct,
+    callWall, distCall, callWas, callMig,
+    kDp, wallGex.call, wallGex.put,
+    weeklyEm,
+  ])
+
   return (
-    <div className={['flex min-h-0 flex-1 flex-col gap-2', emptyFeed ? 'stale' : ''].join(' ')}>
+    <div className={['flex min-h-0 flex-1 flex-col', emptyFeed ? 'stale' : ''].join(' ')}>
       {/* The baseline caption is this card's whole toolbar, so it belongs in the
           Card header beside the title rather than on a row of its own. */}
       <CardToolbar>
@@ -281,160 +324,7 @@ export function KeyLevelsCard() {
         </span>
       </CardToolbar>
 
-      <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3 xl:grid-cols-6">
-        <Tile
-          label="Call Wall"
-          chip="resistance"
-          value={fmtPx(callWall, kDp)}
-          sub={fmtUsd(wallGex.call, false)}
-          dist={fmtPts(distCall)}
-          distDir={distCall == null ? null : distCall >= 0 ? 'up' : 'down'}
-          pill="untested o/n"
-          mig={
-            <MigLine
-              tag={callWas == null ? undefined : callMig.text}
-              tone={callMig.dir === 'flat' ? undefined : callMig.dir}
-              was={callWas == null ? undefined : fmtUsd(callWas, false)}
-              now={wallGex.call == null ? undefined : fmtUsd(wallGex.call, false)}
-              pct={callPct == null ? undefined : fmtPct(callPct, 0)}
-            />
-          }
-        />
-
-        <Tile
-          label="0DTE Magnet"
-          chip="max γ"
-          value={magnet ? fmtPx(magnet.strike, kDp) : '—'}
-          sub={fmtUsd(magnet?.value ?? null, false)}
-          dist={magnet && spot ? fmtPts(magnet.strike - spot) : '—'}
-          distDir={null}
-          pill={magnet && spot && Math.abs(magnet.strike - spot) <= pinEps ? 'pinning' : 'magnet'}
-          pillTone={magnet && spot && Math.abs(magnet.strike - spot) <= pinEps ? 'warn' : 'plain'}
-          mig={
-            <MigLine
-              tag={
-                magnetWas == null || magnet == null
-                  ? undefined
-                  : Math.sign(magnetWas) !== Math.sign(magnet.value)
-                    ? magnet.value >= 0
-                      ? 'flipped +γ'
-                      : 'flipped −γ'
-                    : (magnetPct ?? 0) >= 0
-                      ? 'building'
-                      : 'eroding'
-              }
-              tone={
-                magnetWas == null || magnet == null
-                  ? undefined
-                  : Math.sign(magnetWas) !== Math.sign(magnet.value)
-                    ? 'flip'
-                    : (magnetPct ?? 0) >= 0
-                      ? 'up'
-                      : 'warn'
-              }
-              was={magnetWas == null ? undefined : fmtUsd(magnetWas, false)}
-              now={magnet == null ? undefined : fmtUsd(magnet.value, false)}
-              pct={magnetPct == null ? undefined : fmtPct(magnetPct, 0)}
-            />
-          }
-        />
-
-        <Tile
-          label="Spot"
-          chip="live"
-          value={fmtPx(spot, pDp)}
-          sub={
-            dayChange == null
-              ? 'waiting for the feed'
-              : `${dayChange >= 0 ? '+' : '−'}${Math.abs(dayChange).toFixed(pDp)} · ${fmtPct(dayPct)}`
-          }
-          dist={
-            gex?.updatedAt
-              ? `${new Date(gex.updatedAt).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' })} ET`
-              : '—'
-          }
-          distDir={null}
-          pill={null}
-          mig={
-            <MigLine
-              tag={
-                spotMove == null
-                  ? undefined
-                  : Math.abs(spotMove) < pxEps
-                    ? 'flat o/n'
-                    : spotMove > 0
-                      ? 'gap up'
-                      : 'gap down'
-              }
-              tone={spotMove == null || Math.abs(spotMove) < pxEps ? undefined : spotMove > 0 ? 'up' : 'down'}
-              was={spotWas == null ? undefined : fmtPx(spotWas, pDp)}
-              now={spot ? fmtPx(spot, pDp) : undefined}
-              pct={spotMove == null ? undefined : fmtPts(spotMove)}
-            />
-          }
-        />
-
-        {/* Max Pain carries NO migration line, deliberately: the baseline stores
-            net GEX per strike, not per-side open interest, so a prior-close max
-            pain cannot be derived from it. "unchanged" would be a claim rather
-            than the gap it actually is. */}
-        <Tile
-          label="Max Pain"
-          chip="front"
-          value={fmtPx(maxPain, kDp)}
-          sub="OI-weighted"
-          dist={maxPain != null && spot ? fmtPts(maxPain - spot) : '—'}
-          distDir={maxPain == null || !spot ? null : maxPain - spot >= 0 ? 'up' : 'down'}
-          pill={maxPain != null && spot ? (maxPain >= spot ? 'drift ↑' : 'drift ↓') : null}
-        />
-
-        <Tile
-          label="Gamma Flip"
-          chip="regime"
-          value={fmtPx(flip, kDp)}
-          sub="zero γ"
-          dist={fmtPts(distFlip)}
-          distDir={distFlip == null ? null : distFlip >= 0 ? 'up' : 'down'}
-          pill={distFlip == null ? null : distFlip >= 0 ? 'long γ' : 'short γ'}
-          pillTone={distFlip == null ? 'plain' : distFlip >= 0 ? 'cool' : 'hot'}
-          mig={
-            <MigLine
-              tag={
-                flipMove == null
-                  ? undefined
-                  : Math.abs(flipMove) < pxEps
-                    ? 'held'
-                    : flipMove > 0
-                      ? `rose ${fmtPx(Math.abs(flipMove), pDp)}`
-                      : `fell ${fmtPx(Math.abs(flipMove), pDp)}`
-              }
-              tone={flipMove == null || Math.abs(flipMove) < pxEps ? undefined : 'flip'}
-              was={flipWas == null ? undefined : fmtPx(flipWas, kDp)}
-              now={flip == null ? undefined : fmtPx(flip, kDp)}
-            />
-          }
-        />
-
-        <Tile
-          label="Put Wall"
-          chip="support"
-          value={fmtPx(putWall, kDp)}
-          sub={fmtUsd(wallGex.put, false)}
-          dist={fmtPts(distPut)}
-          distDir={distPut == null ? null : distPut >= 0 ? 'up' : 'down'}
-          pill="untested"
-          pillTone="cool"
-          mig={
-            <MigLine
-              tag={putWas == null ? undefined : putMig.text}
-              tone={putMig.dir === 'flat' ? undefined : putMig.dir}
-              was={putWas == null ? undefined : fmtUsd(putWas, false)}
-              now={wallGex.put == null ? undefined : fmtUsd(wallGex.put, false)}
-              pct={putPct == null ? undefined : fmtPct(putPct, 0)}
-            />
-          }
-        />
-      </div>
+      <LevelsAxis marks={marks} spotPrice={spot || null} />
     </div>
   )
 }

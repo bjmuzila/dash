@@ -1,33 +1,159 @@
 # Changelog
 
-## 2026-08-28 - /whats-new is public: allowlisted in middleware, and guests get the marketing toolbar instead of the paid chrome
+## 2026-08-28 - v3: Multi Greek cells open a detail card
 
-Edited: `middleware.ts`, `components/shared/LayoutShell.tsx`.
+Edited: `cbedge-v3/src/board/multiGreek/CellCard.tsx` (new),
+`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`,
+`cbedge-v3/src/board/multiGreek/mgMath.ts`,
+`cbedge-v3/scripts/mock-server.mjs`.
 
-**1. The changelog page was paywalled.** `/whats-new` was in neither
-`PUBLIC_PATTERNS` nor `PAID_EXEMPT`, so a signed-out visitor was 307'd to `/` and
-a signed-in-but-unpaid user was redirected to `/home`. Only paid subscribers and
-the owner ever saw it - which is backwards for a page whose whole job is to show
-prospects that the product ships every week. Added an anchored `/^\/whats-new$/`
-to `PUBLIC_PATTERNS`. The page already renders correctly with no session:
-`getServerUserId()` returns null, `isOwner` is false, and the hidden-bullet list
-is withheld, so a guest sees exactly what a paying customer sees and nothing more.
+Clicking a cell opens v2's click card where you clicked: ticker + strike, the
+expiry and its DTE, CALLS and PUTS boxes (volume / OI / net premium), Net Prem
+(C-P), NET GEX, and the delta stamps.
 
-**2. A guest would have landed on it wearing the dashboard's chrome.**
-`LayoutShell` only bares out for `BARE_ROUTES` plus the signed-out `/docs` case,
-so opening the page public would have mounted `GlobalToolbar`, `GexDock` and
-`NotesDock` for someone with no account - a hamburger full of paywalled links
-that all bounce to `/`, plus the live-feed docks. Generalised the existing
-`isPublicDocs` branch: `isGuest` + `isPublicDocs` + `isPublicWhatsNew` feed one
-`isPublicChrome` flag that drives the bare shell and `PublicNav`. `/docs` still
-passes `active="Docs"`; `/whats-new` is not one of the `PUBLIC_NAV` pills, so it
-passes `undefined` and no pill reads as current. Docs behaviour is byte-for-byte
-unchanged, including its `overflow: auto` (the changelog scrolls inside its own
-`PageShell`, so it keeps `hidden`).
+**Above the divider costs nothing.** Volume, open interest and net premium all
+come from the chain the ladder was already drawn from - the cell you clicked
+already had every one of them, the ladder just has room to print one number. Net
+premium is `volume x mark x 100`, which is the formula v2's card uses. `mark` is
+new on `Leg` in mgMath (with `(bid+ask)/2` as the FALLBACK, not the primary -
+`mark` survives a one-sided book that would make a midpoint meaningless); the
+chain response was already carrying it and the parser was throwing it away.
 
-**Not changed:** no `What's New` entry was added to `PUBLIC_NAV` - the page is
-reachable by direct link (X, Discord, email) but is still not advertised in the
-marketing toolbar. Say the word if it should be a pill.
+**Below the divider is history, which a chain cannot supply** - a chain is a
+photograph of now. The deltas come from `/api/mult-greek-gex-change`, already
+registered in server-v2, which returns the recorder's stored NET GEX for this
+cell at -5 / -15 / -30 minutes and at the open; the card diffs its live value
+against them, as v2 does.
+
+Three delta states, and they are NOT the same thing: a number (the recorder has a
+reading that far back), `building` (the recorder is up but has not reached that
+far back), and `no baseline` (the recorder is not running, or this ticker/expiry
+is outside the set it records). v2 collapses the last two into "building...",
+which reads as "wait a bit" on a board that is never going to fill in.
+
+The ex-0DTE TOTAL column is inert: it has no single expiry behind it, so there is
+no chain row to open and no baseline to diff, and a card there could only say
+"-". Clicking the cell that is already open closes it, so one gesture is both
+"look" and "put it away". The card is `position: fixed`, because the Card it
+lives in has `overflow-hidden` and an absolutely-positioned one is clipped at
+every edge; it owns ONE piece of board-level state rather than one per panel,
+since only one can be open at a time.
+
+`scripts/mock-server.mjs` gained `/api/mult-greek-gex-change`, returning `vOpen:
+null` on purpose so the `building` branch is exercised every time the mock is
+opened (AGENTS.md trap 3).
+
+Verified: typecheck, build, budgets (initial load 77.9kb / 109.4kb, Multi Greek's
+chunk 4.7kb -> 5.9kb) and all 8 ws-scope assertions green, plus a screenshot of
+the card open over the board.
+
+## 2026-08-28 - v3: Key Levels is one horizontal axis, with this week's EM on it
+
+Edited: `cbedge-v3/src/board/keyLevels/LevelsAxis.tsx` (new),
+`cbedge-v3/src/board/keyLevels/KeyLevelsCard.tsx`,
+`cbedge-v3/scripts/mock-server.mjs`.
+
+**Six tiles became one axis.** Tiles answer "what is the call wall" one at a
+time. The question actually being asked is "where is price sitting inside the
+gamma" - which is a question about the DISTANCES BETWEEN the levels, and six
+boxes in a row cannot show a distance at all. Now: one horizontal price rail with
+Put Wall, Gamma Flip, Max Pain, Core (max gamma strike), Spot and Call Wall as
+ticks on it, labels alternating above and below.
+
+**Nothing was dropped in the move.** Every tile's level is a mark; each tile's
+distance is the note under its price; each tile's migration word ("building",
+"deepening", "rose 15") is on that same line; each wall's dollar gamma is the
+dim fourth line. The arithmetic is untouched - `levelsMath.ts` is still a
+straight transcription of Premarket.tsx's derivations.
+
+**The rail's PW -> CW span is tinted** red at the floor, through grey, to
+level-blue at the ceiling. That tinted span is the corridor: the part of the axis
+gamma is actually defending. The rest of the rail stays grey. Spot's tick is
+taller and drawn over everything - "where price is" must never be the ambiguous
+mark on this card.
+
+**Labels are spread, never dropped.** Alternating above/below in price order,
+then a collision pass per band that nudges each label clear of its neighbour and
+off the ends. Only the LABEL moves; the tick stays on the price, so a nudged
+label is still unambiguous. The minimum gap is measured against the real
+container width through a ResizeObserver rather than a guessed percentage - at
+w:12 this card is ~1400px and at w:6 it is ~700px.
+
+**This week's estimated move, from `/api/em-tracker`** (Postgres, owner-gated -
+which /v3 already is). `up` / `down` are the band's PRICES and are what goes on
+the axis; `ref_close ± em` is the fallback for a row imported before the bounds
+were stored. Ten minutes of cache, no poll: it is a weekly number.
+
+It is drawn ONLY IF IT ALREADY FITS the range the gamma levels drew. On a quiet
+week the band sits inside them and is the most useful thing on the card; on a
+wide week it can be fifty points outside the put wall, and putting it on the axis
+would squash every level that matters into the middle third to make room for a
+number nobody is trading against today.
+
+The axis's domain readout ("6,766.70 - 6,828.30 - 61.60 PTS") went in the Card's
+header rather than on a title row of its own. The Card already says "Key Levels";
+a second heading inside it is the two-toolbar problem in a different costume.
+
+`scripts/mock-server.mjs` gained `/api/em-tracker` - AGENTS.md trap 3, it has to
+stay in sync with the catalog or the card falls through to the static handler and
+throws into a caught promise. Struck at 0.4% so the LOW lands inside the gamma
+levels and the HIGH lands outside, exercising both sides of the "too far away"
+test every time the mock is opened.
+
+Verified: typecheck, build, budgets (initial load 77.8kb / 109.4kb) and all 8
+ws-scope assertions green, plus a screenshot against the mock showing the EM low
+drawn and the EM high correctly withheld.
+
+## 2026-08-28 - v3: the GEX Chart card is a real chart
+
+Edited: `cbedge-v3/src/board/gexChart/gexChartRender.ts` (new),
+`cbedge-v3/src/board/gexChart/GexChartCard.tsx` (new),
+`cbedge-v3/src/board/catalog.tsx`.
+
+The `gex-chart` card was a four-line placeholder: `drawDivergingBars()` over
+`netGEX`, no labels, no levels, no spot, no settings. Replaced in place - SAME
+CARD ID, so anyone with it on their board keeps it and nothing has to be
+re-added - with v2's chart cut down to its core.
+
+**What it draws.** Diverging net-GEX bars by strike, strike labels, value labels,
+the call wall, the put wall, the gamma flip, and the live spot price interpolated
+BETWEEN the two strikes that bracket it rather than snapped to the nearest rung
+(on a 5-point grid, snapping puts the line up to 2.5 points from the price
+written on it).
+
+**Two switches, both in the card's one toolbar.**
+- `OI+VOL` / `VOL` - and this costs NO REQUEST. Every `gex` frame already carries
+  both bases per strike (`netGEX` and `netVolGEX`); the switch redraws a canvas
+  and touches no network.
+- `HORIZ` / `VERT` - which way the bars run. HORIZ is strikes down the left edge
+  with bars growing sideways, the ladder you read against a price axis; VERT is
+  strikes along the bottom with bars up and down, a gamma profile across the
+  range. Both persist per browser.
+
+**Deliberately NOT carried over from v2's 60KB GexChart.tsx:** the options
+overlay, the expiry picker, zoom, replay. Each is its own feature. The card's
+chunk is 2.5kb brotli.
+
+Canvas, not DOM: a hundred strikes x (bar + strike label + value label) is three
+hundred nodes re-laid-out per frame. Every colour is read from a CSS custom
+property off the canvas element at draw time, since a `<canvas>` cannot take a
+className for its pixels. Both frames go through `watchFrame`, not `useField` -
+the model lands in a ref and the canvas redraws, so a tick never re-renders the
+component (AGENTS.md rule 4). The only value that leaves that path is the board
+total printed in the toolbar, and it moves once per frame.
+
+Labels sit on opaque chips and spot is drawn at the opposite end of the card from
+the level tags - in the strike gutter horizontally, in the bottom gutter
+vertically. The first pass stacked them together and the flip, the call wall and
+the price overlapped every time they were near each other, which is most of the
+time.
+
+The card moved from static to `lazy()` in the catalog now that it has a real
+renderer behind it. Entry chunk 20.8kb -> 20.5kb brotli as a result.
+
+Verified: typecheck, build, budgets (initial load 77.9kb / 109.4kb) and all 8
+ws-scope assertions green, plus screenshots of both orientations against
+`scripts/mock-server.mjs`.
 
 ## 2026-08-28 - v3: Multi Greek's core matched to v2 exactly, Economic Calendar cut to today
 

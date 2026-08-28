@@ -236,6 +236,61 @@ function mockChain(ticker) {
   return { context: 'mock', data: { items, underlyingPrice: spot, rootSymbol: ticker, symbol: ticker } }
 }
 
+/**
+ * /api/mult-greek-gex-change — the click card's Δ 5/15/30m and Δ Open.
+ *
+ * The real route reads the recorder's ring buffer; the client diffs its LIVE
+ * value against these, so the mock returns values a little OFF the live one and
+ * leaves `vOpen` null — that is the shape the card's "building…" branch has to
+ * handle, and a mock where every field is populated never exercises it.
+ */
+function mockGexChange(ticker, strike) {
+  const { price: spot } = universe(ticker === 'SPX' ? '$SPX' : ticker)
+  const base = ladder(ticker === 'SPX' ? '$SPX' : ticker, spot, 24).find((r) => Math.abs(r.strike - strike) < 0.001)
+  const now = base ? base.value : 0
+  return {
+    data: {
+      vNow: Math.round(now),
+      v5: Math.round(now * 0.97),
+      v15: Math.round(now * 0.92),
+      v30: Math.round(now * 0.8),
+      vOpen: null,
+    },
+  }
+}
+
+/**
+ * /api/em-tracker — this week's estimated-move band, for the Key Levels axis.
+ *
+ * The real route is Postgres and owner-gated; the shape is what matters here:
+ * newest week first, `up` / `down` as PRICES. Struck deliberately INSIDE the
+ * gamma levels so the card's "too far away, do not draw it" branch is not the
+ * one that always runs in the mock.
+ */
+function mockEmTracker(ticker) {
+  const { price: spot } = universe(ticker === 'SPX' ? '$SPX' : ticker)
+  // 0.4%: with the mock ladder that puts the LOW inside the gamma levels and the
+  // HIGH outside, so both sides of the card's "too far away" test get exercised
+  // every time the mock is opened rather than only when the numbers happen to
+  // line up.
+  const em = spot * 0.004
+  const monday = etDate(Date.now() - 86_400_000 * 3)
+  return {
+    rows: [
+      {
+        ticker,
+        week_label: monday.slice(5),
+        week_start: monday,
+        em: Number(em.toFixed(2)),
+        ref_close: Number(spot.toFixed(2)),
+        up: Number((spot + em).toFixed(2)),
+        down: Number((spot - em).toFixed(2)),
+        result: null,
+      },
+    ],
+  }
+}
+
 /** /api/premarket-baseline — the Key Levels "was → now" lines. */
 function mockBaseline(symbol, expiry) {
   const { price: spot, step } = universe(symbol)
@@ -326,6 +381,12 @@ function api(req, res, path, params) {
   }
   if (path === '/api/chains') {
     return json(res, mockChain((params.get('ticker') || 'SPX').toUpperCase())), true
+  }
+  if (path === '/api/mult-greek-gex-change') {
+    return json(res, mockGexChange((params.get('ticker') || 'SPX').toUpperCase(), Number(params.get('strike')))), true
+  }
+  if (path === '/api/em-tracker') {
+    return json(res, mockEmTracker((params.get('ticker') || 'SPX').toUpperCase())), true
   }
   if (path === '/api/premarket-baseline') {
     return json(res, mockBaseline(params.get('symbol') || '$SPX', params.get('expiry') || '')), true

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
 import { useQuery } from '@/data/api'
 import { SegGroup, Slider, Popover, PanelSection, Chip } from '../gexCandles/controls'
+import { CellCard } from './CellCard'
 import {
   BASIS_LABEL,
   EX0_KEY,
@@ -16,6 +17,7 @@ import {
   withEx0Column,
   type Basis,
   type ParsedChain,
+  type StrikeRow,
 } from './mgMath'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +140,20 @@ interface PanelProps {
   showLevels: boolean
   /** Returns false when the symbol was refused (a duplicate), so the box snaps back. */
   onCommitTicker: (next: string) => boolean
+  /** A cell was clicked — the card opens above the whole board, not per panel. */
+  onOpenCell: (cell: OpenCell) => void
+}
+
+/** What the click card needs, resolved at click time from the panel's own chain. */
+export interface OpenCell {
+  ticker: string
+  strike: number
+  expiry: string
+  daysTo: number
+  row: StrikeRow | undefined
+  netGex: number
+  x: number
+  y: number
 }
 
 function TickerPanel({
@@ -149,6 +165,7 @@ function TickerPanel({
   intensity,
   showLevels,
   onCommitTicker,
+  onOpenCell,
 }: PanelProps) {
   // 15s, matching v2's auto-refresh. staleMs alone would never refetch — it is
   // a cache TTL, not an interval — so the ladder would freeze at whatever it
@@ -171,9 +188,10 @@ function TickerPanel({
     return withEx0Column(all, colCount, showEx0)
   }, [chain.expiries, anchor, colCount, showEx0])
 
+  const byExp = useMemo(() => new Map(chain.expiries.map((e) => [e.expiration, e])), [chain.expiries])
+
   /** strike → value, per displayed column. The total column sums its sources. */
   const valuesByCol = useMemo(() => {
-    const byExp = new Map(chain.expiries.map((e) => [e.expiration, e]))
     const out = new Map<string, Map<number, number>>()
     for (const col of display) {
       const m = new Map<number, number>()
@@ -188,7 +206,7 @@ function TickerPanel({
       out.set(col.key, m)
     }
     return out
-  }, [chain.expiries, display, ex0Source, spot, basis])
+  }, [byExp, display, ex0Source, spot, basis])
 
   const rows = useMemo(() => {
     const all = new Set<number>()
@@ -400,12 +418,34 @@ function TickerPanel({
                 const isFront = front != null && c.key === front.key
                 const isCb = level === 'cb'
                 const f = fmtGex(v)
+                // The ex-0DTE TOTAL has no single expiry behind it, so there is
+                // no chain row to open and no baseline to diff — it stays inert
+                // rather than opening a card that could only say "—".
+                const clickable = c.key !== EX0_KEY
                 return (
                   <div
                     key={c.key}
+                    onClick={
+                      clickable
+                        ? (ev) => {
+                            ev.stopPropagation()
+                            onOpenCell({
+                              ticker,
+                              strike,
+                              expiry: c.expiration,
+                              daysTo: c.daysTo,
+                              row: byExp.get(c.expiration)?.byStrike.get(strike),
+                              netGex: v,
+                              x: ev.clientX,
+                              y: ev.clientY,
+                            })
+                          }
+                        : undefined
+                    }
                     className={[
                       'tabular relative min-w-0 truncate rounded-[2px] px-1 text-center font-mono text-[10px] text-fg',
                       isCb ? 'mg-cb-glow font-extrabold' : '',
+                      clickable ? 'cursor-pointer' : '',
                     ].join(' ')}
                     style={
                       isCb
@@ -502,6 +542,11 @@ export function MultiGreekCard() {
   const [intensity, setIntensity] = useState(1.75)
   const [showLevels, setShowLevels] = useState(true)
   const [cogOpen, setCogOpen] = useState(false)
+  // The click card lives at BOARD level, not inside a panel: it is positioned
+  // in viewport coordinates and only one can be open at a time, so a panel
+  // owning it would mean four independent copies and four ways to leave one
+  // behind when another opens.
+  const [openCell, setOpenCell] = useState<OpenCell | null>(null)
 
   // SPX's front expiry anchors every panel's column pick. Deduped against the
   // SPX panel's own request — including its poll — so this costs nothing extra.
@@ -624,9 +669,33 @@ export function MultiGreekCard() {
             intensity={intensity}
             showLevels={showLevels}
             onCommitTicker={(next) => commitTicker(i, next)}
+            onOpenCell={(cell) =>
+              // Clicking the cell that is already open closes it, so the same
+              // gesture is both "look" and "put it away".
+              setOpenCell((prev) =>
+                prev && prev.ticker === cell.ticker && prev.strike === cell.strike && prev.expiry === cell.expiry
+                  ? null
+                  : cell,
+              )
+            }
           />
         ))}
       </div>
+
+      {openCell && (
+        <CellCard
+          ticker={openCell.ticker}
+          strike={openCell.strike}
+          expiry={openCell.expiry}
+          daysTo={openCell.daysTo}
+          call={openCell.row?.call ?? null}
+          put={openCell.row?.put ?? null}
+          netGex={openCell.netGex}
+          x={openCell.x}
+          y={openCell.y}
+          onClose={() => setOpenCell(null)}
+        />
+      )}
     </div>
   )
 }

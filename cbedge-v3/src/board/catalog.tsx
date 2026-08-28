@@ -4,25 +4,30 @@ import { ChartFrame } from '@/design/primitives/ChartFrame'
 import { Stat } from '@/design/primitives/Stat'
 import { Table } from '@/design/primitives/Table'
 import { watchFrame } from '@/data/hooks'
-import type { GexFrame, FlowFrame } from '@/contract/frames'
+import type { FlowFrame } from '@/contract/frames'
 import type { BoardItem } from '@/design/primitives/Board'
-import { useCanvasRenderer, drawDivergingBars, drawLines } from './chart-render'
+import { useCanvasRenderer, drawLines } from './chart-render'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The board's card catalog — the "+ Add card" dropdown lists exactly this
 // array, in this order. Adding a card type to the terminal is one entry here;
 // BoardPage and Board never need to change.
 //
-// THE BIG FOUR ARE lazy(). GEX Candles, Multi Greek, Key Levels and the
-// Economic Calendar are each a real feature with its own module tree — GEX
-// Candles alone pulls lightweight-charts. Static imports would put all of them
-// in the board's route chunk and every user would pay for the three cards they
-// do not have on their board. lazy() means a card's code arrives when the card
-// does. The Suspense fallback is a blank fill, not a spinner: the card frame is
-// already drawn around it, and a spinner inside a frame reads as an error.
+// THE BIG ONES ARE lazy(). GEX Candles, Multi Greek, Key Levels, the Economic
+// Calendar and now the GEX Chart are each a real feature with its own module
+// tree — GEX Candles alone pulls lightweight-charts. Static imports would put
+// all of them in the board's route chunk and every user would pay for the cards
+// they do not have on their board. lazy() means a card's code arrives when the
+// card does. The Suspense fallback is a blank fill, not a spinner: the card
+// frame is already drawn around it, and a spinner inside a frame reads as an
+// error.
 //
-// The small ones (GEX Chart, Flow Tape, Quick Links) stay static — they are a
-// few lines each and a chunk boundary would cost more than it saves.
+// GEX Chart joined the list when it stopped being four lines of
+// drawDivergingBars and became a real chart with its own renderer, two axes and
+// a basis switch.
+//
+// The small ones (Flow Tape, Quick Links) stay static — they are a few lines
+// each and a chunk boundary would cost more than it saves.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GexCandlesCard = lazy(() => import('./gexCandles/GexCandlesCard').then((m) => ({ default: m.GexCandlesCard })))
@@ -31,6 +36,7 @@ const KeyLevelsCard = lazy(() => import('./keyLevels/KeyLevelsCard').then((m) =>
 const EconCalendarCard = lazy(() =>
   import('./econCalendar/EconCalendarCard').then((m) => ({ default: m.EconCalendarCard })),
 )
+const GexChartCard = lazy(() => import('./gexChart/GexChartCard').then((m) => ({ default: m.GexChartCard })))
 
 function Deferred({ children }: { children: ReactNode }) {
   return <Suspense fallback={<div className="min-h-0 flex-1" />}>{children}</Suspense>
@@ -42,22 +48,6 @@ export interface CardDef {
   /** Default footprint in grid units when first added to a board. */
   defaultSize: { w: number; h: number }
   render: () => ReactNode
-}
-
-// ── GEX Chart — the live chain as diverging bars ─────────────────────────────
-function GexChartCard() {
-  const { onMount, onResize, setDraw } = useCanvasRenderer()
-
-  useEffect(() => {
-    return watchFrame<GexFrame>('gex', (frame) => {
-      const rows = [...(frame?.data.gexRows ?? [])].sort((a, b) => a.strike - b.strike)
-      setDraw((canvas, w, h) =>
-        drawDivergingBars(canvas, w, h, rows.map((r) => ({ label: String(r.strike), value: r.netGEX }))),
-      )
-    })
-  }, [setDraw])
-
-  return <ChartFrame onMount={onMount} onResize={onResize} />
 }
 
 // ── Flow Tape (Net Premium) — live rolling chart + recent prints ────────────
@@ -210,7 +200,16 @@ export const CARD_CATALOG: CardDef[] = [
       </Deferred>
     ),
   },
-  { id: 'gex-chart', label: 'GEX Chart', defaultSize: { w: 6, h: 9 }, render: () => <GexChartCard /> },
+  {
+    id: 'gex-chart',
+    label: 'GEX Chart',
+    defaultSize: { w: 6, h: 12 },
+    render: () => (
+      <Deferred>
+        <GexChartCard />
+      </Deferred>
+    ),
+  },
   {
     id: 'multi-greek',
     label: 'Multi Greek',

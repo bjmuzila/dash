@@ -43,6 +43,9 @@ interface RawLeg {
   gamma?: unknown
   'open-interest'?: unknown
   volume?: unknown
+  mark?: unknown
+  bid?: unknown
+  ask?: unknown
 }
 interface RawStrike {
   'strike-price'?: unknown
@@ -61,6 +64,12 @@ export interface Leg {
   gamma: number
   oi: number
   vol: number
+  /**
+   * Per-contract mark. The ladder never shows it; the cell click card needs it
+   * to price today's traded premium (`vol × mark × 100`), and it rides along on
+   * the chain response the ladder was already parsing.
+   */
+  mark: number
 }
 export interface StrikeRow {
   strike: number
@@ -83,7 +92,13 @@ const num = (v: unknown): number => {
 
 function leg(raw: RawLeg | undefined): Leg | null {
   if (!raw) return null
-  return { gamma: num(raw.gamma), oi: num(raw['open-interest']), vol: num(raw.volume) }
+  // The midpoint is the fallback, not the primary: `mark` is what the upstream
+  // considers the leg worth, and it survives a one-sided book that would make a
+  // (bid+ask)/2 meaningless.
+  const bid = num(raw.bid)
+  const ask = num(raw.ask)
+  const mark = num(raw.mark) || (bid > 0 && ask > 0 ? (bid + ask) / 2 : 0)
+  return { gamma: num(raw.gamma), oi: num(raw['open-interest']), vol: num(raw.volume), mark }
 }
 
 export function parseChain(json: unknown): ParsedChain {
