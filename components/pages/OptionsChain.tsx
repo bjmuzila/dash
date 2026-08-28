@@ -54,10 +54,16 @@ const CHAIN_DEFAULT_SKIN: HeatSkin = "vivid";
 const CHAIN_CELL: Record<HeatSkin, {
   radius: number; inset: number; fontSize: number; shadow?: string;
   text: string; weight: readonly [number, number, number]; signColors: boolean;
+  /** "+$1.23M" (the chain's own convention) vs Multi Greek's "$1.23M". */
+  plusSign: boolean;
+  /** Multi Greek pins every figure to its cell's middle; the chain's classic
+   *  cells sit on a shared baseline. */
+  align: "center" | "baseline";
 }> = {
   classic: {
     radius: 0, inset: 0, fontSize: 10,
     text: SOFT_WHITE, weight: [400, 400, 400], signColors: true,
+    plusSign: true, align: "baseline",
   },
   vivid: {
     // 0.5px margin, not a grid gap: it separates the tiles without moving the
@@ -69,8 +75,18 @@ const CHAIN_CELL: Record<HeatSkin, {
     // case. Direction is carried by the tint, exactly as the count tabs' ⅀
     // cells already do it.
     text: "#ffffff", weight: [600, 600, 300], signColors: false,
+    // A "+" on every positive figure is a whole column of ink saying what the
+    // absence of a minus already says, in the one place with no room to spare —
+    // and the cell's own colour carries sign at a glance anyway. Multi Greek's
+    // rule, so the two grids print the same figure.
+    plusSign: false, align: "center",
   },
 };
+
+/** The figure, written the way the skin writes it — Multi Greek drops the "+". */
+function skinFig(text: string, plusSign: boolean): string {
+  return plusSign ? text : text.replace(/^\+/, "");
+}
 
 /** A value's 1/2/3 standing in its column (0 = unranked) — the skin ramp's
  *  rank floors key off this. Same test the old metricBg() made internally. */
@@ -1573,6 +1589,10 @@ const ChainMatrix = memo(function ChainMatrix({
               // 1/2/3 standing in this column, for the skin's rank floors and
               // its per-rank font weight (0 = unranked).
               const cellRank = value == null ? 0 : rankOf(value, cellScale.top3);
+              // Which level this cell is FILLED as, on a skin that fills levels
+              // (CLASSIC does not). Levels-only marks CB/CW/PW; every other
+              // slider position marks the CORE level only — the ★ strike.
+              const cellLevel = !SK.levelFill ? null : (cellWall ?? (isMvc ? "cb" as const : null));
               return (
                 <div
                   key={`${strike}-${colIdx}`}
@@ -1580,7 +1600,7 @@ const ChainMatrix = memo(function ChainMatrix({
                   onClick={isClickable ? (e) => onCellHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
                   title={isClickable ? "Click for volume / OI / net premium" : undefined}
                   style={{
-                    padding: isCountMode ? "3px 6px" : "2px 8px", fontSize: CELL.fontSize, fontFamily: "var(--font-mono)", textAlign: "right",
+                    padding: isCountMode ? "3px 6px" : "2px 8px", fontSize: CELL.fontSize, fontFamily: "var(--font-mono)", textAlign: "right", letterSpacing: "0",
                     fontWeight: value == null ? 400 : CELL.weight[cellRank === 1 ? 0 : cellRank ? 1 : 2],
                     color: value == null ? "#3a4a5e" : CELL.text,
                     ...(CELL.shadow && value != null ? { textShadow: CELL.shadow } : {}),
@@ -1598,18 +1618,32 @@ const ChainMatrix = memo(function ChainMatrix({
                       const heat = levelsOnly
                         ? (cellWall && value != null ? skinRankBg(value, WALL_RANK[cellWall], SK) : "transparent")
                         : (value != null ? skinMetricBg(value, cellScale.max, cellRank, intensity, SK) : "transparent");
-                      if (!cellWall) return heat;
-                      return levelFillBg(cellWall, SK, heat) ?? heat;
+                      // The CORE level takes the level's own colour — gold —
+                      // laid OVER the heat, exactly as the Multi Greek ladder
+                      // paints its CB cell. Outside levels-only the chain's CB
+                      // is the ★ strike (highest |net| in the column), which is
+                      // what mvcByCol already names, so the fill and the star
+                      // can never land on two different strikes.
+                      if (!cellLevel) return heat;
+                      return levelFillBg(cellLevel, SK, heat) ?? heat;
                     })(),
                     boxShadow: atmShadow,
                     whiteSpace: "nowrap", overflow: "hidden",
-                    display: "flex", alignItems: isCountMode ? "center" : "baseline", justifyContent: "flex-end", gap: 5,
+                    // relative so the ★ can be pinned to the cell's corner the
+                    // way Multi Greek pins it, instead of sitting in the flex
+                    // row and pushing the figure off its right edge.
+                    ...(SK.levelFill ? { position: "relative" as const } : {}),
+                    display: "flex", alignItems: isCountMode ? "center" : CELL.align, justifyContent: "flex-end", gap: 5,
                     cursor: isClickable ? "pointer" : undefined,
                     // Focus dimming: a cell stays lit only if BOTH its column
                     // and its row survive the selection.
                     opacity: (strikeDim || (selMode && !(col != null && selExps.has(col.expiration)))) ? 0.13 : 1,
                     transition: "opacity .12s",
-                    ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
+                    // No amber ring once the cell itself is gold: on Multi
+                    // Greek that ring is deliberately absent for a filled level
+                    // (a 2px amber border on a gold tile reads as a smudge, not
+                    // a marker). CLASSIC keeps it — nothing else marks CB there.
+                    ...(isMvc && !SK.levelFill ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
                   }}
                 >
                   {/* OI tab renders the day-over-day CHANGE only — one line
@@ -1618,12 +1652,26 @@ const ChainMatrix = memo(function ChainMatrix({
                       background, ATM box, EM row border — is unchanged, and the
                       background now tracks that same change through valueAt(),
                       so the tint and the number always agree. */}
-                  {isMvc && (
+                  {isMvc && (SK.levelFill ? (
+                    // Multi Greek's star: pinned to the cell's top-left corner,
+                    // and — because the cell underneath it is now GOLD — drawn
+                    // in the ink that colour was chosen to carry, with its halo
+                    // in the opposite direction. A gold star on a gold tile is
+                    // an invisible star.
+                    <span
+                      title="CB - Core Bullseye — highest |net GEX|"
+                      style={{
+                        position: "absolute", top: 1, left: 2, fontSize: 10, lineHeight: 1,
+                        color: "#04121a", textShadow: "0 0 2px rgba(255,255,255,.55)",
+                        pointerEvents: "none",
+                      }}
+                    >★</span>
+                  ) : (
                     <span
                       title="CB - Core Bullseye — highest |net GEX|"
                       style={{ color: "#ffd600", lineHeight: 1, ...MARKER_EDGE }}
                     >★</span>
-                  )}
+                  ))}
                   {isVolMvc && (
                     <span
                       title={`Highest volume GEX${volMvcVal == null ? "" : ` (${fmtMoney(volMvcVal)})`} — ${volMvcPos ? "positive" : "negative"} gamma`}
@@ -1665,7 +1713,7 @@ const ChainMatrix = memo(function ChainMatrix({
                     <span style={dEntry ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>
                       {CELL.signColors
                         ? <SignVal text={value == null ? "·" : fmtMoney(value)} />
-                        : (value == null ? "·" : fmtMoney(value))}
+                        : (value == null ? "·" : skinFig(fmtMoney(value), CELL.plusSign))}
                     </span>
                   )}
                 </div>
@@ -1705,7 +1753,7 @@ const ChainMatrix = memo(function ChainMatrix({
                       unreadable case. White figure, direction from the tint. */}
                   {isCountMode || !CELL.signColors
                     ? <span style={{ color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.96)", textShadow: tot === 0 ? undefined : "0 1px 2px rgba(0,0,0,0.85)" }}>
-                        {tot === 0 ? "·" : fmtVal(tot)}
+                        {tot === 0 ? "·" : (isCountMode ? fmtVal(tot) : skinFig(fmtVal(tot), CELL.plusSign))}
                       </span>
                     : <SignVal text={tot === 0 ? "·" : fmtVal(tot)} />}
                 </div>
@@ -1774,7 +1822,6 @@ export default function OptionsChainPage({
   expirySelection = "sequential",
   expiryCount,
   ticker: externalTicker,
-  showGrandTotal = true,
   initialReplay = false,
   initialReplayScope = "all",
 }: {
@@ -1791,8 +1838,9 @@ export default function OptionsChainPage({
   // the page-level TickerSwitcher drives it. Uncontrolled (own ticker input)
   // when omitted, same as the standalone route.
   ticker?: string;
-  // Hide the toolbar's "Total <greek>" readout. The /home embed passes false so
-  // the compact chain panel doesn't show a per-ticker grand-total GEX.
+  // INERT since the TOTAL stat row was removed (2026-08-28): there is no
+  // grand-total readout left to hide. Still accepted so the /home embed, which
+  // passes false, keeps type-checking; it simply has nothing to switch off.
   showGrandTotal?: boolean;
   // Mount already rewound. /replay mounts this page as its Options Chain tab,
   // where making the user press ▶ Replay first is asking them to confirm the
@@ -1965,7 +2013,9 @@ export default function OptionsChainPage({
   const [emLevels, setEmLevels] = useState<{ close: number; em: number } | null>(null);
   // Prior-session close for the ACTIVE ticker, for the stat bar's spot %.
   // Same source TopBar seeds from (`prev-close` on the batch quote).
-  const [prevClose, setPrevClose] = useState<number>(0);
+  // Write-only since the stat bar's day-% readout went: the fetch still records
+  // the prior close, nothing on the page prints it any more.
+  const [, setPrevClose] = useState<number>(0);
 
   // ── Focus selection ────────────────────────────────────────────────────────
   // Click an expiry header or a strike to toggle it into the selection; every
@@ -3033,62 +3083,10 @@ export default function OptionsChainPage({
   );
   const anyCurrentWeek = colIsCurrentWeek.some(Boolean);
 
-  const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
-
-  // ── Stat bar figures ───────────────────────────────────────────────────────
-  // Everything the TOTAL row prints, computed once over the VISIBLE strike
-  // window and honouring the focus selection (empty selection = whole chain):
-  //   total     — every rendered expiration, 0DTE included
-  //   totalEx0  — the ⅀ Total column's rule: 0DTE excluded
-  //   cb        — per-expiry Core Bullseye (largest |value|) for the first 3
-  //               columns, or the first 3 SELECTED columns
-  // "0DTE" is relative to the SESSION being shown, not literally today, so a
-  // replayed Tuesday excludes Tuesday's front expiry.
-  const chainStats = useMemo(() => {
-    const zeroDteOnly = !!replayFrame && replayScope === "0dte";
-    const todayKey = replayFrame ? replayDate : etDateKey(etToday());
-    const valueOf = (col: ExpColumn, s: number): number | null => {
-      if (greekMode === "oi") {
-        const snap = oiSnapshot.map.get(`${col.expiration}|${s}`);
-        return snap ? oiSideChange(snap, s, nearestStrike) : null;
-      }
-      const cell = col.cells.get(s);
-      if (!cell) return null;
-      if (greekMode === "vol") return volSideValue(cell, s, nearestStrike);
-      return cell[greekMode];
-    };
-    const strikes = visibleStrikes.filter((s): s is number => s != null);
-    const rows = selStrikes.size > 0 ? strikes.filter(s => selStrikes.has(s)) : strikes;
-    const cols = selExps.size > 0 ? columns.filter(c => selExps.has(c.expiration)) : columns;
-
-    let total = 0, totalEx0 = 0;
-    for (const col of cols) {
-      // In replay's 0DTE scope the only column on screen IS 0DTE, so excluding
-      // it would leave a permanent 0 beside a grid full of numbers.
-      const isZero = !zeroDteOnly && col.expiration === todayKey;
-      for (const s of rows) {
-        const v = valueOf(col, s);
-        if (v == null) continue;
-        total += v;
-        if (!isZero) totalEx0 += v;
-      }
-    }
-
-    const cb = cols.slice(0, 3).map(col => {
-      let k: number | null = null, v = 0;
-      for (const s of rows) {
-        const x = valueOf(col, s);
-        if (x == null) continue;
-        if (k == null || Math.abs(x) > Math.abs(v)) { k = s; v = x; }
-      }
-      return { expiration: col.expiration, strike: k, value: v };
-    }).filter(c => c.strike != null);
-
-    return { total, totalEx0, cb, zeroDteOnly };
-  }, [columns, visibleStrikes, greekMode, nearestStrike, oiSnapshot, replayFrame, replayDate, replayScope, selExps, selStrikes]);
-
-  // Day change against the prior session close. Null when there is no baseline.
-  const spotPct = prevClose > 0 && spot > 0 ? ((spot - prevClose) / prevClose) * 100 : null;
+  // The stat bar these fed (chainStats / spotPct / the "Auto N%" note) was
+  // removed with the TOTAL row — see the note at the toolbar. Nothing else read
+  // them, so they are gone rather than left computing every render for no
+  // reader.
 
   // Toolbar button styled to match the right-side SegGroup tiles (height 34,
   // radius 8, fontSize 11–12, weight 700) so GO + Recent line up with them.
@@ -3152,6 +3150,40 @@ export default function OptionsChainPage({
               {replayFrame ? "REPLAY" : "LIVE"}
             </span>
           </div>
+          {/* Focus readout — and the only way OUT of a selection, so it moved
+              here when the stat row it used to ride on was removed. Renders
+              only while something is actually selected. */}
+          {hasSel && (
+            <button
+              onClick={clearSel}
+              title="Clear the focus selection"
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6, height: 20, padding: "0 8px",
+                borderRadius: 999, cursor: "pointer", flexShrink: 0,
+                border: `1px solid ${rgba(HT.cyan, 0.5)}`, background: rgba(HT.cyan, 0.14),
+                color: HT.cyan, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.06em",
+                whiteSpace: "nowrap",
+              }}
+            >
+              FOCUS: {[
+                selExps.size ? `${selExps.size} exp` : null,
+                selStrikes.size ? `${selStrikes.size} strike${selStrikes.size > 1 ? "s" : ""}` : null,
+              ].filter(Boolean).join(" + ")} ✕
+            </button>
+          )}
+          {/* OI provenance: the Δ column only means anything once TWO daily
+              snapshots exist, so say which two days are being compared — and say
+              so just as plainly when there is no baseline yet, rather than
+              letting a column of "—" look like a bug. */}
+          {greekMode === "oi" && (
+            <span style={{ fontSize: 9.5, fontWeight: 700, whiteSpace: "nowrap", color: oiSnapshot.prevDate ? HT.cyan : HT.muted, opacity: 0.9 }}>
+              {oiSnapshot.prevDate
+                ? `ΔOI ${oiSnapshot.date} vs ${oiSnapshot.prevDate}`
+                : oiSnapshot.date
+                  ? `OI ${oiSnapshot.date} · no prior snapshot yet`
+                  : "OI snapshot not recorded"}
+            </span>
+          )}
         </div>
 
         {/* Ticker selection is its OWN toolbar control, not a cog setting.
@@ -3338,157 +3370,13 @@ export default function OptionsChainPage({
           ]}
         />
       </Dock>
-      {/* ── Row 2 — the TOTAL row, now a stat bar ─────────────────────────────
-          Spot · Total Net {greek} · the same total ex-0DTE · the weekly EM
-          band · the Core Bullseye of each of the first three expirations.
-          Every figure honours the focus selection, so clicking expiries or
-          strikes in the grid re-reads this whole row. */}
-      {showGrandTotal && (() => {
-        const fmtTot = (v: number) =>
-          greekMode === "oi" ? fmtChg(v) : greekMode === "vol" ? fmtCount(v) : fmtMoney(v);
-        const label = greekMode === "oi" ? "ΔOI" : `Net ${greekMode.toUpperCase()}`;
-        const kStyle: React.CSSProperties = {
-          fontSize: 8.5, fontWeight: 800, letterSpacing: "0.12em",
-          textTransform: "uppercase", color: HT.text,
-        };
-        const vStyle: React.CSSProperties = {
-          fontFamily: "var(--font-mono)", fontWeight: 800, fontSize: 13, lineHeight: 1.15,
-        };
-        const subStyle: React.CSSProperties = {
-          fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 9, color: HT.text,
-        };
-        // Top-aligned, not centered: tiles carry different numbers of lines
-        // (some have a sub-line, some don't) and centering each one puts their
-        // titles on different rows. Aligning to the top lands every title on
-        // one line across the bar.
-        const cellStyle: React.CSSProperties = {
-          display: "flex", flexDirection: "column", justifyContent: "flex-start", gap: 1,
-          padding: "5px 12px", whiteSpace: "nowrap", flex: "0 0 auto",
-          borderRight: "1px solid rgba(255,255,255,0.06)",
-        };
-        // EM band edges print like price levels, not money.
-        const fmtLvl = (v: number) =>
-          v.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-        return (
-          <div style={{
-            display: "flex", alignItems: "stretch", padding: "0 2px",
-            overflowX: "auto", scrollbarWidth: "none", minWidth: 0,
-          }}>
-            {/* Spot + day % */}
-            <div style={cellStyle}>
-              <span style={kStyle}>Spot</span>
-              <span style={{ ...vStyle, color: HT.cyan }}>
-                {spot > 0 ? spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
-                {spotPct != null && (
-                  <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 4, color: spotPct >= 0 ? HT.green : HT.red }}>
-                    {spotPct >= 0 ? "+" : ""}{spotPct.toFixed(2)}%
-                  </span>
-                )}
-              </span>
-            </div>
-
-            {/* Total (every expiration, 0DTE included) */}
-            <div style={{ ...cellStyle, background: `linear-gradient(180deg,${rgba(HT.cyan, 0.10)},${rgba(HT.cyan, 0.02)})` }}>
-              <span style={kStyle}>{`Total ${label}`}</span>
-              <span style={{ ...vStyle, color: chainStats.total >= 0 ? HT.green : HT.red }}>
-                {fmtTot(chainStats.total)}
-              </span>
-            </div>
-
-            {/* Same total with the session's 0DTE column dropped — the figure
-                the ⅀ Total column adds up. In replay's 0DTE scope there is no
-                "ex-0DTE" set to speak of, so the tile is dropped rather than
-                printing the same number twice under a contradictory label. */}
-            {!chainStats.zeroDteOnly && (
-              <div style={cellStyle}>
-                <span style={kStyle}>{`${label} ex-0DTE`}</span>
-                <span style={{ ...vStyle, color: chainStats.totalEx0 >= 0 ? HT.green : HT.red }}>
-                  {fmtTot(chainStats.totalEx0)}
-                </span>
-                <span style={subStyle}>⅀ Total column</span>
-              </div>
-            )}
-
-            {/* Weekly EM — the move, then the down / up levels it lands on. */}
-            <div style={cellStyle}>
-              <span style={kStyle}>Weekly EM</span>
-              <span style={{ ...vStyle, color: emLevels ? HT.orange : HT.muted }}>
-                {emLevels ? `±${emLevels.em.toFixed(2)}` : "—"}
-              </span>
-              {emLevels && (
-                <span style={subStyle}>
-                  {fmtLvl(emLevels.close - emLevels.em)} · {fmtLvl(emLevels.close + emLevels.em)}
-                </span>
-              )}
-            </div>
-
-            {/* Core Bullseye of each of the first three expirations, expiry
-                directly under its own strike. */}
-            {chainStats.cb.length > 0 && (
-              <div style={cellStyle}>
-                <span style={kStyle}>CB · 1st 3 exp</span>
-                <span style={{ display: "flex", alignItems: "flex-start" }}>
-                  {chainStats.cb.map((c, i) => (
-                    <span key={c.expiration} style={{ display: "flex", alignItems: "flex-start" }}>
-                      {i > 0 && <span style={{ ...vStyle, color: HT.text, margin: "0 6px" }}>·</span>}
-                      <span style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.15 }}>
-                        <span style={{ ...vStyle, color: c.value >= 0 ? HT.green : HT.red }}>
-                          {c.strike!.toLocaleString("en-US")}
-                        </span>
-                        <span style={subStyle}>{fmtExpHeader(c.expiration)}</span>
-                      </span>
-                    </span>
-                  ))}
-                </span>
-              </div>
-            )}
-
-            <span style={{ flex: "1 1 auto" }} />
-
-            {/* Focus readout — also the way out of a selection. */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", fontSize: 10, color: HT.text, whiteSpace: "nowrap", flex: "0 0 auto" }}>
-              {hasSel && (
-                <button
-                  onClick={clearSel}
-                  title="Clear the focus selection"
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 6, height: 20, padding: "0 8px",
-                    borderRadius: 999, cursor: "pointer",
-                    border: `1px solid ${rgba(HT.cyan, 0.5)}`, background: rgba(HT.cyan, 0.14),
-                    color: HT.cyan, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.06em",
-                  }}
-                >
-                  FOCUS: {[
-                    selExps.size ? `${selExps.size} exp` : null,
-                    selStrikes.size ? `${selStrikes.size} strike${selStrikes.size > 1 ? "s" : ""}` : null,
-                  ].filter(Boolean).join(" + ")} ✕
-                </button>
-              )}
-              <span style={{ opacity: 0.75 }}>
-                {activeTicker} · {replayFrame ? "all recorded strikes" : `${displayPercent}% strikes${autoPercentNote ? ` · ${autoPercentNote}` : ""}`}
-              </span>
-              {/* OI tab provenance. The Δ column is only meaningful once TWO
-                  daily snapshots exist, so say plainly which two days are being
-                  compared — and say so just as plainly when there is no
-                  baseline yet, rather than letting a column of "—" look like a
-                  bug. */}
-              {greekMode === "oi" && (
-                <>
-                  <span style={{ color: HT.border }}>·</span>
-                  <span style={{ color: oiSnapshot.prevDate ? HT.cyan : HT.muted, opacity: 0.9 }}>
-                    {oiSnapshot.prevDate
-                      ? `ΔOI ${oiSnapshot.date} vs ${oiSnapshot.prevDate}`
-                      : oiSnapshot.date
-                        ? `OI ${oiSnapshot.date} · no prior snapshot yet`
-                        : "OI snapshot not recorded for this ticker"}
-                  </span>
-                </>
-              )}
-            </div>
-          </div>
-        );
-      })()}
-
+      {/* The TOTAL stat row that used to sit here (Spot · Total Net GEX ·
+          ex-0DTE · Weekly EM · CB of the first three expiries) is GONE, and with
+          it the "TICKER · N% strikes" readout beside it. One toolbar: everything
+          the page is set to is on the Dock above or a click into its cog, and
+          the grid gets the ~44px back. The figures were all re-readable from the
+          grid itself — the column headers carry each expiry's total, the ⅀
+          header carries the ex-0DTE total, and ★ marks each column's CB. */}
       {/* ── Row 3 — replay transport ────────────────────────────────────────
           Deliberately NOT inside the captureHide Dock: a screen-grab of a
           rewound grid that doesn't say WHEN it is reads as a live chain, which

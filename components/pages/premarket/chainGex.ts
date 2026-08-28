@@ -352,3 +352,160 @@ export function useChainGex(
 
   return state;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  THE WHOLE BOARD, AND THE BOARD WITHOUT 0DTE
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * useMultiExpiryGex — the per-strike ladder summed across EVERY listed
+ * expiration, and the same ladder with the 0DTE tranche removed.
+ *
+ * ── WHY THE PAGE NEEDS IT ───────────────────────────────────────────────────
+ * Everything else on /premarket is the FRONT expiry. That is the right board
+ * for the open and the wrong one for the week: on an expiry session the front
+ * tranche is most of the gamma on screen and all of it disappears at the bell,
+ * so a wall that looks like the level of the day can be gone tomorrow. The
+ * ex-0DTE ladder is the standing book underneath it — the levels that are still
+ * there on Monday — and the READ is the comparison between the two, which is
+ * why the page mounts them side by side.
+ *
+ * ── WHY THE SERVER COMPUTES IT ──────────────────────────────────────────────
+ * It is one upstream chain fetch PER EXPIRATION (~50 on SPX). That is a sweep,
+ * not a page load, so it lives behind /proxy/gex-by-strike-multi, which caches
+ * it per (symbol, session) for a minute — the same endpoint and the same cache
+ * every other surface reading a whole-board ladder uses. This hook is a poll on
+ * top of that cache, so N readers cost one sweep.
+ *
+ * ── PRE-SUMMED ROWS, AND WHY THAT IS FINE HERE ──────────────────────────────
+ * The route returns `{ strike, netGEX, netVolGEX, ... }` per strike — already
+ * summed across expiries, no raw legs. That would be wrong for the page's basis
+ * switch (see chainRowsOf's header) but it is exactly right for a LADDER, which
+ * only ever draws one number per strike: OI + Vol net, `netGEX + netVolGEX`,
+ * the same leg the front-expiry ladder beside it draws.
+ *
+ * LIVE ONLY. The sweep reads the live chain, so there is no per-date form of
+ * it — a frozen or replayed session must pass `enabled: false` rather than
+ * showing today's standing book under a past date's headline.
+ */
+export type MultiLadder = {
+  rows: { strike: number; net: number }[];
+  totalNetGex: number | null;
+  gexFlip: number | null;
+  callWall: number | null;
+  putWall: number | null;
+};
+
+export type MultiGexState = {
+  all: MultiLadder | null;
+  ex0dte: MultiLadder | null;
+  expiryCount: number;
+  updatedAt: number | null;
+  state: "idle" | "loading" | "ok" | "empty" | "error";
+};
+
+const MULTI_IDLE: MultiGexState = {
+  all: null, ex0dte: null, expiryCount: 0, updatedAt: null, state: "idle",
+};
+
+type RawMultiRow = { strike?: unknown; netGEX?: unknown; netVolGEX?: unknown };
+
+const numOrNull = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+
+function ladderOf(raw: unknown): MultiLadder | null {
+  const o = raw as {
+    rows?: RawMultiRow[]; totalNetGex?: unknown; gexFlip?: unknown;
+    callWall?: unknown; putWall?: unknown;
+  } | null;
+  if (!o || !Array.isArray(o.rows)) return null;
+  const rows = o.rows
+    .map((r) => ({
+      strike: num(r.strike),
+      // OI + Vol, the leg the front-expiry ladder beside this one draws.
+      net: num(r.netGEX) + num(r.netVolGEX),
+    }))
+    .filter((r) => Number.isFinite(r.strike) && r.strike > 0 && Number.isFinite(r.net));
+  return {
+    rows,
+    totalNetGex: numOrNull(o.totalNetGex),
+    gexFlip: numOrNull(o.gexFlip),
+    callWall: numOrNull(o.callWall),
+    putWall: numOrNull(o.putWall),
+  };
+}
+
+export function useMultiExpiryGex(
+  symbol: string,
+  spot: number,
+  enabled: boolean,
+  refreshMs = 60_000,
+): MultiGexState {
+  const sym = (symbol || "").trim().toUpperCase();
+  const [state, setState] = useState<MultiGexState>(MULTI_IDLE);
+  const seqRef = useRef(0);
+  /**
+   * Spot rides a REF, not the effect's deps. It ticks several times a second on
+   * the socket board, and re-running the effect on each tick would restart the
+   * poll (and defeat the server's per-minute cache) for a number the sweep
+   * barely uses. `ready` below is what actually gates the first fetch.
+   */
+  const spotRef = useRef(spot);
+  spotRef.current = spot;
+  const ready = spot > 0;
+
+  useEffect(() => { setState(MULTI_IDLE); }, [sym, enabled]);
+
+  useEffect(() => {
+    if (!enabled || !sym || !ready) return;
+    let cancelled = false;
+    const ctrl = new AbortController();
+
+    const load = async () => {
+      const seq = ++seqRef.current;
+      const stale = () => cancelled || seq !== seqRef.current;
+      const s = spotRef.current;
+      if (!(s > 0)) return;
+      try {
+        // SPX is '$SPX' upstream and everything else passes straight through —
+        // chainUnderlying() in the recorder maps it back. Spot is explicit so a
+        // non-SPX board is not swept against the live SPX price.
+        const q = sym === "SPX" ? "$SPX" : sym;
+        const r = await fetch(
+          `/proxy/gex-by-strike-multi?symbol=${encodeURIComponent(q)}&spot=${s.toFixed(2)}`,
+          { cache: "no-store", signal: ctrl.signal },
+        );
+        if (stale()) return;
+        const j = await r.json();
+        if (stale()) return;
+        if (!j?.ok) { setState((p) => ({ ...p, state: p.all ? p.state : "error" })); return; }
+        const all = ladderOf(j.all);
+        const ex0dte = ladderOf(j.ex0dte);
+        setState({
+          all,
+          ex0dte,
+          expiryCount: num(j.expiryCount),
+          updatedAt: num(j.updatedAt) || Date.now(),
+          state: ex0dte?.rows.length || all?.rows.length ? "ok" : "empty",
+        });
+      } catch {
+        // An abort on unmount lands here too. Either way the last good board
+        // stays on screen — a poll that failed is not new information.
+        if (!cancelled && !ctrl.signal.aborted) {
+          setState((p) => (p.all ? p : { ...MULTI_IDLE, state: "error" }));
+        }
+      }
+    };
+
+    setState((p) => (p.all ? p : { ...MULTI_IDLE, state: "loading" }));
+    void load();
+    const id = setInterval(load, refreshMs);
+    return () => { cancelled = true; ctrl.abort(); clearInterval(id); };
+  }, [sym, enabled, ready, refreshMs]);
+
+  return state;
+}

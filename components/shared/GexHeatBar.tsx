@@ -97,10 +97,7 @@ function hexToRgb(hex: string): [number, number, number] {
 }
 
 /** Diverging ramp across three THEME anchors — no literals. */
-// Exported: GexChurnFeed paints its own edge and legend from the same ramp.
-// Rollup (the Vite build) fails the whole app-vite build on an import of a
-// non-exported binding, which is exactly how this broke the deploy.
-export function buildShareColor(share: number, alpha = 1): string {
+function buildShareColor(share: number, alpha = 1): string {
   const s = Number.isFinite(share) ? Math.max(-1, Math.min(1, share)) : 0;
   const from = s < 0 ? hexToRgb(SOFT_RED) : hexToRgb(HOME_THEME.purple);
   const to = s < 0 ? hexToRgb(HOME_THEME.purple) : hexToRgb(LIGHT_BLUE);
@@ -382,15 +379,15 @@ export function GexChurnHistory({ symbol, rows, note, loading, limit = 12, style
         <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.text }}>
           Gamma book churn
         </span>
-        <span style={{ fontSize: 11, color: themeRgba(HOME_THEME.muted, 0.5) }}>
+        <span style={{ fontSize: 11, color: HOME_THEME.text }}>
           {symbol ? `how much of ${symbol}'s book rewrote itself, session by session` : "pick a ticker"}
         </span>
       </div>
 
       {loading ? (
-        <div style={{ fontSize: 12, color: themeRgba(HOME_THEME.muted, 0.5) }}>Loading…</div>
+        <div style={{ fontSize: 12, color: HOME_THEME.text }}>Loading…</div>
       ) : !symbol ? null : !shown.length ? (
-        <div style={{ fontSize: 12, lineHeight: 1.6, color: themeRgba(HOME_THEME.muted, 0.5) }}>
+        <div style={{ fontSize: 12, lineHeight: 1.6, color: HOME_THEME.text }}>
           {note || `Nothing on file for ${symbol}.`}
         </div>
       ) : (
@@ -406,7 +403,7 @@ export function GexChurnHistory({ symbol, rows, note, loading, limit = 12, style
                     style={{
                       fontSize: 11,
                       fontFamily: "var(--font-mono)",
-                      color: themeRgba(HOME_THEME.muted, 0.5),
+                      color: HOME_THEME.text,
                       width: 46,
                       flex: "0 0 auto",
                     }}
@@ -465,7 +462,7 @@ export function GexChurnHistory({ symbol, rows, note, loading, limit = 12, style
                       letterSpacing: 0.5,
                       width: 34,
                       flex: "0 0 auto",
-                      color: themeRgba(HOME_THEME.muted, 0.45),
+                      color: HOME_THEME.text,
                     }}
                   >
                     {flag || ""}
@@ -476,7 +473,7 @@ export function GexChurnHistory({ symbol, rows, note, loading, limit = 12, style
           </div>
 
           {note && (
-            <div style={{ fontSize: 10, lineHeight: 1.5, color: themeRgba(HOME_THEME.muted, 0.38) }}>{note}</div>
+            <div style={{ fontSize: 10, lineHeight: 1.5, color: HOME_THEME.text }}>{note}</div>
           )}
         </>
       )}

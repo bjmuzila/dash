@@ -73,9 +73,18 @@ const FLIP = "#7dd3fc";
 
 export default function GexWatchFeed({ limit = 8 }: { limit?: number }) {
   const [rows, setRows] = useState<Row[]>([]);
+  /**
+   * The server's prose blurb. Kept as state and NOT rendered any more — the
+   * card sits in a two-column row now and four lines of standing explanation
+   * under the title pushed the rows off the fold every session, whether or not
+   * there was anything to explain. The rows already say what they mean in
+   * plain language; that was the point of the format. It is still read so the
+   * failure path below can put a real reason on screen.
+   */
   const [note, setNote] = useState("");
   const [asOf, setAsOf] = useState<string | null>(null);
   const [state, setState] = useState<"load" | "done">("load");
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -88,7 +97,7 @@ export default function GexWatchFeed({ limit = 8 }: { limit?: number }) {
         setNote(typeof j.note === "string" ? j.note : "");
         setAsOf(j.asOf ?? null);
       } catch {
-        if (alive) { setRows([]); setNote("Feed unavailable right now."); }
+        if (alive) { setRows([]); setNote("Feed unavailable right now."); setFailed(true); }
       } finally {
         if (alive) setState("done");
       }
@@ -111,10 +120,8 @@ export default function GexWatchFeed({ limit = 8 }: { limit?: number }) {
         <span className="gwf-t">GEX Watch</span>
         {asOf && <span className="gwf-as">at the {asOf} close</span>}
       </div>
-      {note && <p className="gwf-note">{note}</p>}
-
       {rows.length === 0 ? (
-        <div className="gwf-empty">Nothing unusual to flag.</div>
+        <div className="gwf-empty">{failed && note ? note : "Nothing unusual to flag."}</div>
       ) : (
         <div className="gwf-rows">
           {rows.map((r, i) => {

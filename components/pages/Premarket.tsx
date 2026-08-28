@@ -50,6 +50,12 @@
  *                       SPX only — the socket carries one symbol.
  *   useChainGex         the same shape for any other ticker, off /api/chains on
  *                       a 1-minute poll. See chainGex.ts.
+ *   useMultiExpiryGex   the per-strike ladder summed across EVERY listed
+ *                       expiration, and the same ladder without the 0DTE
+ *                       tranche, off /proxy/gex-by-strike-multi on a 1-minute
+ *                       poll (server-cached, so N readers cost one sweep).
+ *                       Feeds the second ladder in row 3. LIVE only — the sweep
+ *                       reads the live chain and has no per-date form.
  *   useEsCandles        5m ES bars incl. the overnight session → ON high/low and
  *                       the prior RTH close. Same socket.
  *   useEconCalendar     /api/calendar + /proxy/earnings-week → today's catalysts.
@@ -156,12 +162,32 @@
  * Replay is SPX-only and cannot be back-filled, for the same two reasons the
  * freeze is and cannot.
  *
+ * ── THE LAYOUT BELOW THE LEVEL RAIL (2026-08-28) ────────────────────────────
+ * Three two-column rows instead of one three-column one:
+ *
+ *   3  the FRONT-expiry ladder | the same ladder EX-0DTE (the standing book)
+ *   4  overnight context       | expected range + playbook
+ *   -  the gamma bell curve, full width
+ *   5  GEX watch               | biggest GEX changes
+ *
+ * Row 3 is the point of the change. Everything else on this page is the front
+ * expiry, which is the right board for the open and the wrong one for the week:
+ * on an expiry session most of the gamma on screen leaves at the bell, so a
+ * wall that looks like the level of the day can be gone tomorrow. The right
+ * ladder is what is still there, and the read is the GAP between the two — so
+ * they sit in one row, drawn by ONE component mounted twice
+ * (premarket/GexProfile.tsx). Two copies of the same JSX would have let the two
+ * charts drift, and then the comparison would be between the charts rather than
+ * between the boards.
+ *
+ * Row 5 pairs the two "what changed in the book" readings that used to be a
+ * column and a card apart.
+ *
  * Styling: the approved mockup's CSS, scoped under `.pmk` (custom properties on
  * `.pmk`, not `:root`) so its generic class names cannot leak into the app.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import { useMobileGex } from "@/hooks/useMobileGex";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEtfCandles } from "@/hooks/useEtfCandles";
@@ -171,9 +197,9 @@ import { SCANNER_MAIN } from "@/lib/scannerTickers";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
-import GexChurnFeed, { GEX_CHURN_CSS } from "@/components/pages/premarket/GexChurnFeed";
 import GammaBellCurve, { GAMMA_BELL_CSS } from "@/components/pages/premarket/GammaBellCurve";
-import { useChainGex } from "@/components/pages/premarket/chainGex";
+import GexProfile, { PROFILE_ROW_H } from "@/components/pages/premarket/GexProfile";
+import { useChainGex, useMultiExpiryGex } from "@/components/pages/premarket/chainGex";
 import {
   GEX_HISTORY_LIMIT,
   frozenGexOf,
@@ -222,47 +248,9 @@ function hexA(hex: string, a: number): string {
 /** White alpha — the app's neutral surface rung (borders, sunken tracks, hover). */
 const ink = (a: number) => `rgba(255,255,255,${a})`;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  THE GEX PROFILE'S GEOMETRY — three numbers, one source
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Row pitch of the scrolling GEX profile, in px. Interpolated into the
- * stylesheet below AND used by rowTop() for the spot / flip rules, so the CSS
- * and the arithmetic cannot drift. They were a literal 19 in each place and
- * this file's own centring comment already flagged that as a trap.
- */
-const PROFILE_ROW_H = 19;
-/**
- * The profile's viewport height. FIXED, not a max — see PROFILE_PAD.
- */
-const PROFILE_VIEW_H = 440;
-/**
- * Half a viewport of empty room above the first strike and below the last.
- *
- * ── WHY (2026-08-28) ────────────────────────────────────────────────────────
- * The panel is supposed to open with SPOT in the middle of the card, and it
- * could not always do that. Centring is `scrollTop = rowTop - (view - row)/2`,
- * and scrollTop cannot go below 0 or above scrollHeight - clientHeight — so
- * whenever spot sat within ~11 rows of either END of the ladder the write was
- * clamped and spot rendered high or low in the card instead of in the middle.
- *
- * That is not an edge case once the picker covers the whole watchlist: the
- * window is spot ±60 STRIKES of whatever the chain actually lists, clamped to
- * the ends of that chain (see windowAt), so a name whose board thins out a few
- * strikes above the money opens with spot near the top and nothing to scroll.
- * Sizing the box to its content instead of a fixed height made the same thing
- * happen from the other direction: a short ladder is a short card, and spot is
- * wherever it lands in it.
- *
- * Half a viewport of padding at each end removes the clamp entirely: the first
- * and last rows can both reach the middle, so the target is exactly
- * `i * PROFILE_ROW_H` for every row on every ticker — never 0, never the
- * maximum, no special cases. The cost is empty space at the two ends of the
- * scroll, which is what every price ladder does and what makes the middle of
- * the card mean something.
- */
-const PROFILE_PAD = (PROFILE_VIEW_H - PROFILE_ROW_H) / 2;
+// PROFILE_ROW_H is imported from GexProfile — the ladder owns its own geometry
+// now, and the stylesheet below interpolates the row pitch from it so the CSS
+// and the component's scroll maths cannot drift.
 
 const CSS = `
 .pmk{
@@ -532,6 +520,11 @@ const CSS = `
 .pmk .pill.warn{border-color:var(--amberEdge);color:var(--amber);background:var(--amberWash)}
 
 .pmk .body{display:grid;grid-template-columns:1.55fr 1fr 1fr;gap:0}
+/* Two equal columns. A CLASS, not an inline style: an inline
+   grid-template-columns outranks the stylesheet, so the narrow-screen rule
+   at the bottom of this block could never collapse it and a phone got two
+   scrolling ladders side by side. */
+.pmk .body.two{grid-template-columns:1fr 1fr}
 .pmk .col{padding:14px 18px;border-right:1px solid var(--line);min-width:0}
 .pmk .col:last-child{border-right:0}
 .pmk .colhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px}
@@ -647,7 +640,7 @@ const CSS = `
 .pmk .chip{font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--line2);color:var(--dim);cursor:pointer;background:transparent;font:inherit;font-size:10px}
 .pmk .chip.on{background:var(--cyanWash);color:var(--cyan);border-color:var(--cyanEdge)}
 
-@media (max-width:1180px){ .pmk .body{grid-template-columns:1fr} .pmk .col{border-right:0;border-bottom:1px solid var(--line)}
+@media (max-width:1180px){ .pmk .body,.pmk .body.two{grid-template-columns:1fr} .pmk .col{border-right:0;border-bottom:1px solid var(--line)}
   .pmk .levels{grid-template-columns:repeat(3,1fr)} .pmk .regime{grid-template-columns:1fr;gap:12px} .pmk .vr{display:none} .pmk .bias{justify-self:start;text-align:left;max-width:none}
   /* Five caps on a narrow rail: keep the code, drop the long name. */
   .pmk .rail .cap2 .ln{display:none} }
@@ -750,6 +743,9 @@ function etWall(now = Date.now()): { date: string; minutes: number } {
 
 const nf = (v: number, dp = 0) =>
   v.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+
+/** Stable empty ladder, so an absent ex-0DTE board never churns the memos. */
+const EMPTY_BARS: { strike: number; net: number }[] = [];
 
 /** $1.92B / $840M / $12.4K, signed. */
 function fmtUsd(v: number | null | undefined, signed = true): string {
@@ -1476,20 +1472,15 @@ export default function Premarket() {
   const livePx = sym === "SPX" ? esFut : spot;
 
   /**
-   * TWO windows around spot, deliberately different sizes.
+   * The near window: the ±12 strikes (~25 rows) that decide the open, and where
+   * the 0DTE MAGNET is looked for. A magnet picked off the whole ladder would be
+   * stolen by a single monster strike 200 points out.
    *
-   * `nearBars` (±12) is the ~25 strikes that decide the open. It is what the bar
-   * WIDTHS are scaled against and where the 0DTE magnet is looked for — both of
-   * those must keep meaning what they meant when the chart showed 25 rows, or a
-   * single monster strike 200 points out would flatten every bar near the money
-   * and steal the magnet tag.
-   *
-   * `bars` (±60) is what actually RENDERS. The panel scrolls, so the extra rows
-   * cost nothing until you go looking for them, and the walls almost always sit
-   * outside ±12 — which is exactly when you want to scroll to one.
+   * The ±60 RENDER window went into GexProfile with the ladder itself — it is a
+   * property of how the chart draws, not of what the page knows, and both
+   * ladders in the row have to agree about it.
    */
   const NEAR_HALF = 12;
-  const VIEW_HALF = 60;
 
   const spotIdx = useMemo(() => {
     if (!perStrike.length) return -1;
@@ -1505,7 +1496,6 @@ export default function Premarket() {
   }, [perStrike, spotIdx]);
 
   const nearBars = useMemo(() => windowAt(NEAR_HALF), [windowAt]);
-  const bars = useMemo(() => windowAt(VIEW_HALF), [windowAt]);
 
   const maxPain = useMemo(() => computeMaxPain(chain), [chain]);
 
@@ -1918,156 +1908,12 @@ export default function Premarket() {
     return (ov / (emHi - emLo)) * 100;
   }, [emLo, emHi, callWall, putWall]);
 
-  // Scaled on the NEAR window, not the scrolled one — see the bars comment.
-  const maxP = Math.max(1, ...nearBars.filter((b) => b.net > 0).map((b) => b.net));
-  const maxN = Math.max(1, ...nearBars.filter((b) => b.net < 0).map((b) => -b.net));
-  const bigCut = Math.max(maxP, maxN) * 0.55;
-
-  const spotStrike = nearestStrike(bars.map((b) => b.strike), spot);
-  const flipStrike = flip ? nearestStrike(bars.map((b) => b.strike), flip) : null;
   /**
-   * Keep spot in view without fighting the user. The panel centres on the spot
-   * row while it is "pinned" — the state it loads in and returns to via the
-   * button — and un-pins the moment the user scrolls it themselves, so reading
-   * the 7,900 wall is never yanked back to the money by the next frame.
-   * `progScrollRef` marks our own scrollTo writes so the onScroll they fire is
-   * not mistaken for the user's hand.
+   * The listed strike nearest the gamma flip — what the GAMMA FLIP tag lands
+   * on. Off `perStrike` (the whole ladder) rather than a render window, so it
+   * does not change as the panel scrolls.
    */
-  const chartRef = useRef<HTMLDivElement | null>(null);
-  const pinnedRef = useRef(true);
-  const progScrollRef = useRef(false);
-  /** The scrollTop WE last wrote — see onChartScroll. */
-  const progTopRef = useRef(-1);
-  const [pinned, setPinned] = useState(true);
-
-  /**
-   * Put the spot row in the middle of the panel. Returns FALSE when the layout
-   * is not ready to be measured yet, so the caller can try again next frame.
-   *
-   * ── WHY THIS IS MEASURED AND NOT ARITHMETIC (2026-08-27) ───────────────────
-   * It used to be `el.scrollTop = i * 19 + 9.5 - el.clientHeight / 2` — the row
-   * height as a literal, and the panel's height read at the moment of the call.
-   * Both are assumptions, and on a cold load both can be wrong:
-   *
-   *   · `el.clientHeight` is 0 until the panel has been laid out. A 0 there
-   *     makes the target `i * 19 + 9.5`, which the browser clamps to the
-   *     maximum scroll — so the card opened scrolled to the BOTTOM of the
-   *     ladder instead of the middle of it, and stayed there.
-   *   · 19 is `.pmk .row`'s height today. The two numbers have to be edited
-   *     together and nothing says so.
-   *
-   * On the live SPX socket that was survivable: a new frame arrives about once
-   * a second, `bars` changes identity, the effect below re-runs and the second
-   * or third attempt lands after layout. On a CHAIN-POLL symbol the next
-   * attempt is SIXTY SECONDS away, so the first bad centre is what you look at.
-   * That is why this surfaced when the picker opened up to the watchlist.
-   *
-   * Now it reads the row element and centres on its real box, and reports
-   * "not ready" instead of writing a nonsense scrollTop.
-   *
-   * ── AND IT CAN NO LONGER BE CLAMPED (2026-08-28) ───────────────────────────
-   * The Math.max(0, ...) below used to bite: with the box sized to its content
-   * and no room past the ends of the ladder, a spot within ~11 rows of either
-   * end had no scroll position that would centre it, so the write was clamped
-   * and spot rendered high or low in the card. The panel now carries half a
-   * viewport of padding at each end (PROFILE_PAD), which makes the target
-   * exactly i * PROFILE_ROW_H for every row — always inside [0, max]. The
-   * clamp stays as a guard, but nothing reaches it.
-   */
-  const centerOnSpot = useCallback((): boolean => {
-    const el = chartRef.current;
-    if (!el) return false;
-    const i = bars.findIndex((b) => b.strike === spotStrike);
-    if (i < 0) return false;
-    const row = el.querySelectorAll<HTMLElement>(".row")[i];
-    if (!row || el.clientHeight <= 0 || el.scrollHeight <= 0) return false;
-    const target = Math.max(0, row.offsetTop - (el.clientHeight - row.offsetHeight) / 2);
-    // Already there — do not write, so a stationary pinned panel never marks a
-    // programmatic scroll it did not perform.
-    if (Math.abs(el.scrollTop - target) <= 1) return true;
-    progScrollRef.current = true;
-    progTopRef.current = target;
-    el.scrollTop = target;
-    // The scroll event lands on the next frame, so the flag is cleared there.
-    requestAnimationFrame(() => { progScrollRef.current = false; });
-    return true;
-  }, [bars, spotStrike]);
-
-  /**
-   * Centre while pinned — and keep trying until the panel can actually be
-   * measured, rather than assuming the first attempt lands after layout.
-   *
-   * A ResizeObserver re-centres on every box change too: the panel is inside a
-   * responsive grid, so a window resize (or the first paint settling) moves the
-   * middle without changing `bars` at all.
-   */
-  useEffect(() => {
-    if (!pinnedRef.current) return;
-    let raf = 0;
-    let tries = 0;
-    const tick: () => void = () => {
-      raf = 0;
-      if (!pinnedRef.current) return;
-      // ~20 frames is a third of a second — long enough for a cold mount, short
-      // enough that a genuinely empty ladder stops asking.
-      if (!centerOnSpot() && tries++ < 20) raf = requestAnimationFrame(tick);
-    };
-    tick();
-
-    const el = chartRef.current;
-    const ro = el && typeof ResizeObserver !== "undefined"
-      ? new ResizeObserver(() => { if (pinnedRef.current) centerOnSpot(); })
-      : null;
-    if (el && ro) ro.observe(el);
-
-    return () => {
-      if (raf) cancelAnimationFrame(raf);
-      ro?.disconnect();
-    };
-  }, [centerOnSpot]);
-
-  const onChartScroll = useCallback(() => {
-    if (progScrollRef.current) return;
-    // Second guard, because the rAF above can win the race against the scroll
-    // event on a slow frame: a scroll that lands exactly where WE put it is
-    // ours, not a hand on the wheel. Without this the panel un-pinned itself on
-    // its own centring write and never re-centred again.
-    const el = chartRef.current;
-    if (el && progTopRef.current >= 0 && Math.abs(el.scrollTop - progTopRef.current) <= 1) return;
-    if (pinnedRef.current) { pinnedRef.current = false; setPinned(false); }
-  }, []);
-
-  const repin = useCallback(() => {
-    pinnedRef.current = true;
-    setPinned(true);
-    centerOnSpot();
-  }, [centerOnSpot]);
-
-  /**
-   * A new SYMBOL is a new ladder, so the panel goes back to centred on spot.
-   * Without this, scrolling away on SPX and then picking NVDA left the new
-   * board parked at whatever offset the old one was read at.
-   */
-  useEffect(() => {
-    pinnedRef.current = true;
-    setPinned(true);
-    progTopRef.current = -1;
-  }, [sym]);
-
-  /**
-   * Vertical centre of a strike's row, in the .chart box's own coordinates —
-   * what the spot and flip rules are pinned to.
-   *
-   * PROFILE_PAD is added because the rules are absolutely positioned, and an
-   * absolutely positioned child is placed from the PADDING edge while the rows
-   * begin after the padding. Without it both rules sit half a viewport above
-   * the row they name.
-   */
-  const rowTop = (strike: number | null) => {
-    if (strike == null) return null;
-    const i = bars.findIndex((b) => b.strike === strike);
-    return i < 0 ? null : PROFILE_PAD + i * PROFILE_ROW_H + PROFILE_ROW_H / 2;
-  };
+  const flipStrike = flip ? nearestStrike(perStrike.map((b) => b.strike), flip) : null;
 
   const tagFor = (strike: number): { text: string; color: string } | null => {
     if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--cw)" };
@@ -2075,6 +1921,39 @@ export default function Premarket() {
     if (magnet && strike === magnet.strike) return { text: "0DTE MAGNET", color: "var(--violet)" };
     if (maxPain != null && strike === maxPain) return { text: "MAX PAIN", color: "var(--blue)" };
     if (flipStrike != null && strike === flipStrike) return { text: "GAMMA FLIP", color: "var(--amber)" };
+    return null;
+  };
+
+  /**
+   * THE STANDING BOOK — every listed expiration with the 0DTE tranche removed,
+   * drawn as a second ladder beside the front one.
+   *
+   * The front board is the right map for the open and the wrong one for the
+   * week: on an expiry session most of the gamma on screen leaves at the bell,
+   * so a wall that looks like the level of the day can be gone tomorrow. This
+   * is what is still there on Monday, and the READ is the gap between the two —
+   * which is why they sit in one row rather than one above the other.
+   *
+   * LIVE ONLY. The sweep reads the live chain and has no per-date form, so a
+   * frozen or replayed session gets an empty panel that says so rather than
+   * today's standing book under a past date's headline.
+   */
+  const multiGex = useMultiExpiryGex(sym, spot, !frozen && !replay);
+  const ex0 = multiGex.ex0dte;
+  const exRows = ex0?.rows ?? EMPTY_BARS;
+  /**
+   * The ex-0DTE ladder wears ITS OWN walls and flip — the ones the server
+   * computed on that ladder, not the front board's. Reading the front expiry's
+   * pin against the standing book's bars is the exact mistake this panel
+   * exists to make impossible, so its tags are never borrowed.
+   */
+  const exFlipStrike = ex0?.gexFlip != null
+    ? nearestStrike(exRows.map((b) => b.strike), ex0.gexFlip)
+    : null;
+  const tagForEx = (strike: number): { text: string; color: string } | null => {
+    if (ex0?.callWall != null && strike === ex0.callWall) return { text: "CALL WALL", color: "var(--cw)" };
+    if (ex0?.putWall != null && strike === ex0.putWall) return { text: "PUT WALL", color: "var(--pw)" };
+    if (exFlipStrike != null && strike === exFlipStrike) return { text: "GAMMA FLIP", color: "var(--amber)" };
     return null;
   };
 
@@ -2178,7 +2057,7 @@ export default function Premarket() {
 
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
-      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GEX_CHURN_CSS + GAMMA_BELL_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GAMMA_BELL_CSS }} />
       <div className="wrap">
 
         <div className="pagehead">
@@ -2746,101 +2625,30 @@ export default function Premarket() {
             </div>
           </div>
 
-          {/* ── 3 / 4 / 5 ─────────────────────────────────────────────────── */}
-          <div className="body">
+          {/* ── 3 · THE TWO LADDERS ───────────────────────────────────────
+              LEFT  the front expiry (0DTE on SPX) — the map for the open.
+              RIGHT every listed expiration with that tranche removed — the
+                    standing book, the levels that are still there tomorrow.
 
-            {/* GEX PROFILE */}
-            <div className="col">
-              <div className="colhead">
-                <h3>GEX Profile by Strike</h3>
-                <span className="tiny">
-                  {isZeroDte ? "0DTE" : "front"} · OI + Vol · {bars.length} strikes · scroll
-                </span>
-              </div>
-
-              <div style={{ position: "relative" }}>
-              {/* Fixed height + half a viewport of padding at each end, so the
-                  centring write below is never clamped and SPOT lands dead centre
-                  on every ticker. See PROFILE_PAD. Skipped while the ladder is
-                  empty — 210px of padding over "Waiting for the chain..." is just
-                  a hole. */}
-              <div
-                className="chart"
-                ref={chartRef}
-                onScroll={onChartScroll}
-                style={bars.length
-                  ? { height: PROFILE_VIEW_H, paddingTop: PROFILE_PAD, paddingBottom: PROFILE_PAD }
-                  : undefined}
-              >
-                {bars.length === 0 && (
-                  <div style={{ padding: "40px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
-                    Waiting for the chain…
-                  </div>
-                )}
-                {bars.map((b) => {
-                  const pos = b.net >= 0;
-                  const w = (Math.abs(b.net) / (pos ? maxP : maxN)) * 50;
-                  const tag = tagFor(b.strike);
-                  return (
-                    <div className={`row${tag ? " key" : ""}`} key={b.strike}>
-                      <div className="k mono">{nf(b.strike, kDp)}</div>
-                      <div className="track">
-                        <div
-                          className={`bar ${pos ? "p" : "n"}${Math.abs(b.net) > bigCut ? "" : " dimmed"}`}
-                          style={{ width: `${w}%` }}
-                        />
-                        {tag && (() => {
-                          // A tagged strike is usually the widest bar in the
-                          // window, so hanging the label off its end pushes it
-                          // out of the track — over the next column on the call
-                          // side, over the strike gutter on the put side. Wide
-                          // bars take the label INSIDE, flush to the bar's end.
-                          //
-                          // Anchored with left/right only (no transform): the
-                          // bar's outer edge sits (50 − w)% from the far side,
-                          // so pinning the tag's matching edge there right-
-                          // aligns it inside the bar and can never exceed the
-                          // track, whatever w is.
-                          const inside = w >= 22;
-                          const style: CSSProperties = inside
-                            ? pos
-                              ? { right: `calc(50% - ${w}% + 4px)` }
-                              : { left: `calc(50% - ${w}% + 4px)` }
-                            : pos
-                              ? { left: `calc(50% + ${w}% + 6px)` }
-                              : { right: `calc(50% + ${w}% + 6px)` };
-                          return (
-                            <span
-                              className={`tag${inside ? " inside" : ""}`}
-                              style={{ ...style, color: tag.color, border: `1px solid ${tag.color}` }}
-                            >
-                              {tag.text}
-                            </span>
-                          );
-                        })()}
-                      </div>
-                    </div>
-                  );
-                })}
-                {rowTop(spotStrike) != null && (
-                  <div className="spotline" style={{ top: rowTop(spotStrike) as number }}>
-                    <span>SPOT {fmtPx(spot, pxDp)}</span>
-                  </div>
-                )}
-                {rowTop(flipStrike) != null && (
-                  <div className="flipline" style={{ top: rowTop(flipStrike) as number }}>
-                    <span>FLIP {fmtPx(flip, kDp)}</span>
-                  </div>
-                )}
-              </div>
-              {!pinned && bars.length > 0 && (
-                <button type="button" className="recenter" onClick={repin}>⤒ back to spot</button>
-              )}
-              </div>
-              <div className="axis">
-                <span>{fmtUsd(-maxN, false)}</span><span>0</span><span>{fmtUsd(maxP, false)}</span>
-              </div>
-
+              One component mounted twice (premarket/GexProfile.tsx), never two
+              copies of the same JSX: the read is the COMPARISON between the two
+              boards, and it only works if the two charts are pixel-identical.
+              Each wears its OWN walls and flip — see tagForEx. */}
+          <div className="body two">
+            <GexProfile
+              title="GEX Profile by Strike"
+              sub={`${isZeroDte ? "0DTE" : "front"}${expiry ? ` ${expiry}` : ""} · OI + Vol · scroll`}
+              rows={perStrike}
+              spot={spot}
+              flip={flip}
+              kDp={kDp}
+              pxDp={pxDp}
+              tagFor={tagFor}
+              resetKey={`${sym}|front`}
+              fmtUsd={fmtUsd}
+              nf={nf}
+              fmtPx={fmtPx}
+            >
               <div className="greeks">
                 <div className="g">
                   <div className="n">DEX</div>
@@ -2868,7 +2676,74 @@ export default function Premarket() {
                   </div>
                 </div>
               </div>
-            </div>
+            </GexProfile>
+
+            <GexProfile
+              title="GEX Profile · ex-0DTE"
+              sub={multiGex.expiryCount
+                ? `all ${multiGex.expiryCount} expirations less 0DTE · OI + Vol · scroll`
+                : "all expirations less 0DTE · OI + Vol"}
+              rows={exRows}
+              spot={spot}
+              flip={ex0?.gexFlip ?? null}
+              kDp={kDp}
+              pxDp={pxDp}
+              tagFor={tagForEx}
+              resetKey={`${sym}|ex0dte`}
+              empty={frozen || replay
+                ? "The whole-board sweep reads the live chain, so there is no version of it for a past session."
+                : multiGex.state === "error"
+                  ? "The whole-board sweep did not answer."
+                  : multiGex.state === "empty"
+                    ? "Nothing but 0DTE listed on this board."
+                    : "Sweeping every expiration…"}
+              fmtUsd={fmtUsd}
+              nf={nf}
+              fmtPx={fmtPx}
+            >
+              {/* Three totals, same shape as the greeks strip opposite so the
+                  row reads as one object: what the whole board nets, what is
+                  left once today's tranche expires, and the difference — which
+                  IS the front tranche's contribution, stated as the subtraction
+                  it is rather than as an invented percentage of it. (A share of
+                  ABSOLUTE gamma cannot be recovered from two signed nets, so
+                  this does not pretend to print one.) */}
+              <div className="greeks">
+                <div className="g">
+                  <div className="n">Net GEX · whole board</div>
+                  <div className={`v mono ${(multiGex.all?.totalNetGex ?? 0) >= 0 ? "chg-pos" : "chg-neg"}`}>
+                    {fmtUsd(multiGex.all?.totalNetGex)}
+                  </div>
+                  <div className="m">every listed expiration</div>
+                </div>
+                <div className="g">
+                  <div className="n">Net GEX · ex-0DTE</div>
+                  <div className={`v mono ${(ex0?.totalNetGex ?? 0) >= 0 ? "chg-pos" : "chg-neg"}`}>
+                    {fmtUsd(ex0?.totalNetGex)}
+                  </div>
+                  <div className="m">
+                    {ex0?.totalNetGex == null ? "no standing book yet"
+                      : ex0.totalNetGex >= 0 ? "the book underneath dampens" : "the book underneath amplifies"}
+                  </div>
+                </div>
+                <div className="g">
+                  <div className="n">Leaves at the bell</div>
+                  <div className="v mono">
+                    {multiGex.all?.totalNetGex != null && ex0?.totalNetGex != null
+                      ? fmtUsd(multiGex.all.totalNetGex - ex0.totalNetGex)
+                      : "—"}
+                  </div>
+                  <div className="m">the front tranche&apos;s share of the net</div>
+                </div>
+              </div>
+            </GexProfile>
+          </div>
+
+          {/* ── 4 · CONTEXT ─────────────────────────────────────────────────
+              Overnight beside the expected range: what the tape already did,
+              beside what the board says it can do. */}
+          <div className="body two">
+
 
             {/* OVERNIGHT */}
             <div className="col">
@@ -2981,41 +2856,6 @@ export default function Premarket() {
                   ? <>{fmtPx(overnight.pd.lo, pxDp)} – {fmtPx(overnight.pd.hi, pxDp)} <span className="muted">({nf(overnight.pd.hi - overnight.pd.lo, pxDp)})</span></>
                   : "—"}
               </span></div>
-
-              <div className="colhead" style={{ margin: "16px 0 6px" }}>
-                <h3>Biggest GEX Changes</h3>
-                <span className="tiny">
-                  {baseline ? `vs ${baseline.date} close · OI basis` : "vs prior close"}
-                </span>
-              </div>
-              {strikeDeltas.length ? (
-                <div className="deltas">
-                  {strikeDeltas.map((d) => {
-                    const mx = Math.max(...strikeDeltas.map((x) => Math.abs(x.delta)));
-                    const w = (Math.abs(d.delta) / mx) * 50;
-                    const pos = d.delta >= 0;
-                    return (
-                      <div className="d" key={d.strike}>
-                        <span className="s mono">{nf(d.strike, kDp)}</span>
-                        <span className="t">
-                          <i style={pos
-                            ? { left: "50%", width: `${w}%`, background: "var(--pos)" }
-                            : { right: "50%", width: `${w}%`, background: "var(--neg)" }} />
-                        </span>
-                        <span className={`v mono ${pos ? "chg-pos" : "chg-neg"}`}>{fmtUsd(d.delta)}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div style={{ fontSize: 11, color: "var(--dim)" }}>
-                  {baselineState === "loading" || baselineState === "idle"
-                    ? "Loading the prior-close board…"
-                    : baselineState === "empty"
-                      ? `No prior-session board for ${sym} ${expiry || "this expiry"} yet — server-v2/premarket-baseline.js records one at 16:05 ET each session (and its ALLOWED_SYMBOLS list gates which symbols it will sweep), so this fills in after the next close.`
-                      : "No strike moved against the prior close."}
-                </div>
-              )}
 
               <div className="colhead" style={{ margin: "16px 0 6px" }}>
                 <h3>Sector Heat</h3><span className="tiny">Market Quality · 5d %</span>
@@ -3197,16 +3037,53 @@ export default function Premarket() {
               and opex sessions are filtered out server-side, so this never
               shows the calendar and calls it a signal. Sits at the bottom
               because it is context for the session, not a number to trade off. */}
-          <GexWatchFeed />
+          {/* ── 5 · WHAT CHANGED IN THE BOOK ────────────────────────────────
+              Two readings of the same question, side by side: what moved on THIS
+              board against its own prior close, and which strikes across the
+              watchlist grew far more than normal at yesterday's close. They were
+              a column apart and a card apart; together they are one row. */}
+          <div className="body two">
+            <div className="col">
+              <GexWatchFeed />
+            </div>
 
-          {/* The question GEX Watch immediately raises: was that strike an
-              outlier inside a quiet book, or did the whole book rewrite itself?
-              Reads the same recorder pattern via /api/gex-gross-feed — the
-              gex_gross_daily rollup, one indexed read, no live scan. Opex and
-              earnings rows are KEPT here and badged, unlike the watch feed
-              above: a churn row only claims the book changed, which on those
-              sessions is true and worth seeing. It just never sets the scale. */}
-          <GexChurnFeed />
+            <div className="col">
+              <div className="colhead">
+                <h3>Biggest GEX Changes</h3>
+                <span className="tiny">
+                  {baseline ? `vs ${baseline.date} close · OI basis` : "vs prior close"}
+                </span>
+              </div>
+              {strikeDeltas.length ? (
+                <div className="deltas">
+                  {strikeDeltas.map((d) => {
+                    const mx = Math.max(...strikeDeltas.map((x) => Math.abs(x.delta)));
+                    const w = (Math.abs(d.delta) / mx) * 50;
+                    const pos = d.delta >= 0;
+                    return (
+                      <div className="d" key={d.strike}>
+                        <span className="s mono">{nf(d.strike, kDp)}</span>
+                        <span className="t">
+                          <i style={pos
+                            ? { left: "50%", width: `${w}%`, background: "var(--pos)" }
+                            : { right: "50%", width: `${w}%`, background: "var(--neg)" }} />
+                        </span>
+                        <span className={`v mono ${pos ? "chg-pos" : "chg-neg"}`}>{fmtUsd(d.delta)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: "var(--dim)" }}>
+                  {baselineState === "loading" || baselineState === "idle"
+                    ? "Loading the prior-close board…"
+                    : baselineState === "empty"
+                      ? `No prior-session board for ${sym} ${expiry || "this expiry"} yet — server-v2/premarket-baseline.js records one at 16:05 ET each session (and its ALLOWED_SYMBOLS list gates which symbols it will sweep), so this fills in after the next close.`
+                      : "No strike moved against the prior close."}
+                </div>
+              )}
+            </div>
+          </div>
 
           <div className="footbar">
             <span className="l mono">
