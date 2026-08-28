@@ -1,25 +1,12 @@
+import type { ReactNode } from 'react'
 import { useMemo } from 'react'
-import { CardToolbar } from '@/design/primitives/Card'
 import { LevelsAxis, type AxisMark } from './LevelsAxis'
 import { useField } from '@/data/hooks'
 import { useQuery } from '@/data/api'
-import type { GexData, GexFrame, SpotFrame } from '@/contract/frames'
-import {
-  BASIS_LABEL,
-  computeMagnet,
-  computeMaxPain,
-  fmtPct,
-  fmtPts,
-  fmtPx,
-  fmtUsd,
-  legValue,
-  pinEpsilon,
-  priceDp,
-  pxEpsilon,
-  strikeDp,
-  wallState,
-  type LevelBasis,
-} from './levelsMath'
+import { isSocketSymbol, usePageSymbol } from '@/data/symbol'
+import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
+import { chainGexUrl, chainToGex, findCallWall, findPutWall } from '../chainGex'
+import { computeMagnet, computeMaxPain, fmtPts, fmtPx, priceDp, strikeDp } from './levelsMath'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Key Levels — every level on ONE horizontal price axis.
@@ -27,17 +14,21 @@ import {
 //   Put Wall · Gamma Flip · Max Pain · Core (max γ) · Spot · Call Wall
 //   … plus this week's estimated-move band when it is close enough to matter.
 //
+// Each mark is a label, a price and its distance from spot. Nothing else.
+//
+// The core and a wall never share a strike: when they collide the core keeps the
+// top node and the wall steps down to the second on its own side. See the block
+// on that in LevelsBody.
+//
 // Was six tiles in a row. Tiles answer "what is the call wall" one at a time,
 // and the question actually being asked is "where is price sitting inside the
 // gamma" — which is a question about the DISTANCES BETWEEN the levels, and six
 // boxes cannot show a distance at all. On one axis the gap between spot and the
 // wall above it is a gap you can see. See LevelsAxis.tsx for the rail itself.
 //
-// Nothing was dropped in the move: every tile's level is a mark, and each tile's
-// migration line ("building", "deepening", "rose 4.00") survives as the note
-// under its price. The arithmetic is untouched — levelsMath.ts is still a
-// straight transcription of Premarket.tsx's derivations, so v2 and v3 cannot
-// quietly disagree about what a level is.
+// The arithmetic is untouched — levelsMath.ts is still a straight transcription
+// of Premarket.tsx's derivations, so v2 and v3 cannot quietly disagree about
+// what a level is.
 //
 // One deliberate difference from v2: no ES sub-line. v2 prints "ES 6,880" under
 // each level because its charts are ES futures and its levels are SPX cash. v3
@@ -45,16 +36,23 @@ import {
 // the whole /proxy/es-spx-basis path went with it.
 //
 // ── Where the numbers come from ──────────────────────────────────────────────
-//   the live `gex` frame     rows, callWall, putWall, gexFlip
-//   the live `spot` frame    spot, prevClose
-//   /api/premarket-baseline  the "was → now" migration notes
+//   the live `gex` frame     rows, callWall, putWall, gexFlip — SPX ONLY
+//   the live `spot` frame    spot — SPX ONLY
+//   /api/chains              the same, derived, for every other page symbol
+//                            (board/chainGex.ts). The socket streams one
+//                            underlying, so this is what lets the card follow
+//                            the toolbar's ticker at all.
 //   /api/em-tracker          this week's estimated-move band (Postgres)
+//
+// The `/api/premarket-baseline` fetch went with the migration notes. A level's
+// note is now its DISTANCE and nothing else — "building", "eroding",
+// "deepening", "rose 15" are gone, and with them the only thing that request
+// fed. A word that says a wall is thickening is a second reading laid on top of
+// a price, and this card is the price.
 //
 // Max pain and the magnet are computed here rather than read: the server does
 // not publish either, and both are a few lines over a chain we already have.
 // ─────────────────────────────────────────────────────────────────────────────
-
-const BASIS_KEY = 'cb-v3-key-levels-basis'
 
 /**
  * `/api/em-tracker` — one row per (ticker, week), owner-gated, Postgres-backed.
@@ -72,101 +70,107 @@ interface EmTrackerRow {
   down?: number | null
 }
 
-interface BaselineResponse {
-  ok?: boolean
-  date?: string
-  spot?: number
-  flip?: number | null
-  callWall?: number | null
-  putWall?: number | null
-  byStrike?: Record<string, number>
-}
-
-function readBasisPref(): LevelBasis {
-  try {
-    const v = localStorage.getItem(BASIS_KEY)
-    return v === 'oivol' || v === 'vol' ? v : 'oi'
-  } catch {
-    return 'oi'
-  }
-}
-
 // ── The card ─────────────────────────────────────────────────────────────────
 
-export function KeyLevelsCard() {
-  const basisPref: LevelBasis = readBasisPref()
+/** What the body needs, whichever source produced it. */
+interface LevelsSource {
+  rows: GexRow[]
+  callWall: number | null
+  putWall: number | null
+  flip: number | null
+  spot: number
+}
 
-  const gex = useField<GexFrame, GexData | null>('gex', (f) => f?.data ?? null)
+/**
+ * ── SPX: the socket ────────────────────────────────────────────────────────
+ * A COMPONENT rather than a branch inside the card, because `useField` cannot
+ * be called conditionally and subscribing to a frame the board is not showing
+ * is not free: the socket derives its `?topics=` from what is actually
+ * subscribed, so an unconditional useField('gex') would keep pulling SPX frames
+ * across the wire on a board that is looking at AMZN. Not mounting the
+ * component is what unsubscribes.
+ */
+function SocketLevels({ render }: { render: (s: LevelsSource) => ReactNode }) {
+  const frame = useField<GexFrame, GexData | null>('gex', (f) => f?.data ?? null)
   const spot = useField<SpotFrame, number>('spot', (f) => f?.data.spot ?? 0)
-  const prevClose = useField<SpotFrame, number>('spot', (f) => f?.data.prevClose ?? 0)
-
-  const rows = gex?.gexRows ?? []
-  const expiry = gex?.expiry ?? ''
-  const baselineQ = useQuery<BaselineResponse>(
-    expiry ? `/api/premarket-baseline?expiry=${encodeURIComponent(expiry)}&basis=oi&symbol=%24SPX` : null,
-    { staleMs: 300_000 },
+  return (
+    <>
+      {render({
+        rows: frame?.gexRows ?? [],
+        callWall: frame?.callWall ?? null,
+        putWall: frame?.putWall ?? null,
+        flip: frame?.gexFlip ?? null,
+        spot,
+      })}
+    </>
   )
-  const baseline = baselineQ.data?.ok ? baselineQ.data : null
+}
 
+/** Every other symbol: the same ladder, derived from its option chain. */
+function ChainLevels({ symbol, render }: { symbol: string; render: (s: LevelsSource) => ReactNode }) {
+  // 15s, the cadence Multi Greek polls its ladders on. `staleMs` alone would
+  // never refetch — it is a cache TTL, not an interval.
+  const q = useQuery<unknown>(chainGexUrl(symbol), { staleMs: 15_000, pollMs: 15_000 })
+  const chain = useMemo(() => chainToGex(q.data), [q.data])
+  return <>{render(chain)}</>
+}
+
+export function KeyLevelsCard() {
+  const { symbol } = usePageSymbol()
+  const onSocket = isSocketSymbol(symbol)
+  const body = (s: LevelsSource) => <LevelsBody symbol={symbol} {...s} />
+  // Keyed by symbol so a source swap remounts rather than carrying the previous
+  // ticker's rows into the next one's first render.
+  return onSocket ? (
+    <SocketLevels key={symbol} render={body} />
+  ) : (
+    <ChainLevels key={symbol} symbol={symbol} render={body} />
+  )
+}
+
+function LevelsBody({
+  symbol,
+  rows,
+  callWall: rawCallWall,
+  putWall: rawPutWall,
+  flip,
+  spot,
+}: LevelsSource & { symbol: string }) {
   const kDp = useMemo(() => strikeDp(rows, spot), [rows, spot])
   const pDp = priceDp(spot)
-  const pxEps = pxEpsilon(spot)
-  const pinEps = pinEpsilon(spot)
 
-  const callWall = gex?.callWall ?? null
-  const putWall = gex?.putWall ?? null
-  const flip = gex?.gexFlip ?? null
   const maxPain = useMemo(() => computeMaxPain(rows), [rows])
   const magnet = useMemo(() => computeMagnet(rows, spot, 'oivol'), [rows, spot])
 
-  const byStrike = useMemo(() => {
-    const m = new Map<number, number>()
-    for (const r of rows) m.set(r.strike, legValue(r, basisPref))
-    return m
-  }, [rows, basisPref])
-
-  const wallGex = {
-    call: callWall == null ? null : (byStrike.get(callWall) ?? null),
-    put: putWall == null ? null : (byStrike.get(putWall) ?? null),
-  }
+  // ── The core and a wall must never be the same strike ──────────────────────
+  //
+  // They land on one strike often: the CORE is the biggest |OI+VOL| node near
+  // spot, and the biggest node near spot is frequently also the biggest on one
+  // SIDE of it. When that happens the axis drew one level where there should be
+  // two — and the price that is lost is the one that actually has to get
+  // through AFTER the core, which is the more useful of the pair.
+  //
+  // So the core keeps the top node and the wall steps down to the SECOND on its
+  // own side: second-largest positive above spot for the call wall,
+  // second-most-negative below spot for the put wall.
+  //
+  // Only on a collision. When they already differ the value is passed through
+  // untouched — that matters on the SPX path, where the wall was computed
+  // server-side and silently replacing it with a local re-derivation would be a
+  // way for the two to drift apart without anyone noticing. Here the local
+  // re-pick runs only in the one case the server's own findCallWall() has an
+  // `exclude` parameter for and this caller never passes.
+  //
+  // Null is a legitimate answer: if the core was the ONLY qualifying strike on
+  // that side, there is no second wall, and no mark is better than a wrong one.
+  const core = magnet?.strike ?? null
+  const callWall = core != null && rawCallWall === core ? findCallWall(rows, spot, core) : rawCallWall
+  const putWall = core != null && rawPutWall === core ? findPutWall(rows, spot, core) : rawPutWall
 
   const distCall = callWall == null || !spot ? null : callWall - spot
   const distPut = putWall == null || !spot ? null : putWall - spot
   const distFlip = flip == null || !spot ? null : spot - flip
 
-  // Day change comes off the socket's own prevClose rather than a quotes call —
-  // it is already on the frame the spot arrives in.
-  const dayChange = spot && prevClose ? spot - prevClose : null
-  const dayPct = dayChange != null && prevClose ? (dayChange / prevClose) * 100 : null
-
-  /** Prior-close gamma at a strike, on the baseline's basis. */
-  const wasGexAt = (strike: number | null): number | null => {
-    if (strike == null || !baseline?.byStrike) return null
-    const v = baseline.byStrike[String(strike)]
-    return typeof v === 'number' && Number.isFinite(v) ? v : null
-  }
-
-  /** A percent change only survives when the base is big enough to mean one. */
-  const pctOf = (was: number | null, now: number | null): number | null => {
-    if (was == null || now == null || Math.abs(was) <= 1e6) return null
-    return ((now - was) / Math.abs(was)) * 100
-  }
-
-  const callWas = wasGexAt(callWall)
-  const putWas = wasGexAt(putWall)
-  const magnetWas = wasGexAt(magnet?.strike ?? null)
-  const callPct = pctOf(callWas, wallGex.call)
-  const putPct = pctOf(putWas, wallGex.put)
-  const magnetPct = pctOf(magnetWas, magnet?.value ?? null)
-
-  const callMig = wallState(callPct, 'building', 'eroding')
-  // A put wall's gamma is negative, so a bigger number is a SHALLOWER wall:
-  // 'deepening' is the down direction, not the up one. Getting this backwards
-  // paints the support tile green on the day support is falling away.
-  const putMig = wallState(putPct, 'easing', 'deepening')
-
-  const flipWas = typeof baseline?.flip === 'number' ? baseline.flip : null
-  const flipMove = flipWas != null && flip != null ? flip - flipWas : null
   const emptyFeed = rows.length === 0 && !spot
 
   // ── This week's estimated move ─────────────────────────────────────────────
@@ -176,7 +180,9 @@ export function KeyLevelsCard() {
   // imported before the bounds were being stored.
   //
   // Ten minutes of cache and no poll: this is a weekly number.
-  const emQ = useQuery<{ rows?: EmTrackerRow[] }>('/api/em-tracker?ticker=SPX', { staleMs: 600_000 })
+  const emQ = useQuery<{ rows?: EmTrackerRow[] }>(`/api/em-tracker?ticker=${encodeURIComponent(symbol)}`, {
+    staleMs: 600_000,
+  })
   const weeklyEm = useMemo(() => {
     const row = emQ.data?.rows?.[0]
     if (!row) return null
@@ -204,75 +210,19 @@ export function KeyLevelsCard() {
       out.push({ key, code, name, price, text: fmtPx(price, dp), colourVar, note, sub })
     }
 
-    // A wall's migration is the same word its tile carried; it is the most
-    // useful thing that can sit under a price in one line, so it goes there
-    // rather than being lost with the tile.
-    const withMig = (pts: string, was: number | null, mig: { text: string }) =>
-      was == null ? pts : `${pts} · ${mig.text}`
-
-    add(
-      'pw',
-      'PW',
-      'Put Wall',
-      putWall,
-      '--color-level-pw',
-      withMig(fmtPts(distPut), putWas, putMig),
-      fmtUsd(wallGex.put, false),
-    )
-    add(
-      'flip',
-      'FLIP',
-      'Gamma Flip',
-      flip,
-      '--color-accent',
-      flipMove == null || Math.abs(flipMove) < pxEps
-        ? fmtPts(distFlip)
-        : `${fmtPts(distFlip)} · ${flipMove > 0 ? 'rose' : 'fell'} ${Math.abs(flipMove).toFixed(pDp)}`,
-    )
-    add(
-      'pain',
-      'PAIN',
-      'Max Pain',
-      maxPain,
-      '--color-muted',
-      maxPain != null && spot ? fmtPts(maxPain - spot) : 'oi-weighted',
-    )
+    add('pw', 'PW', 'Put Wall', putWall, '--color-level-pw', fmtPts(distPut))
+    add('flip', 'FLIP', 'Gamma Flip', flip, '--color-accent', fmtPts(distFlip))
+    add('pain', 'PAIN', 'Max Pain', maxPain, '--color-muted', maxPain != null && spot ? fmtPts(maxPain - spot) : '')
     add(
       'core',
       'CORE',
       'Max γ Strike',
       magnet?.strike ?? null,
       '--color-level-cb',
-      magnet && spot
-        ? withMig(
-            Math.abs(magnet.strike - spot) <= pinEps ? `${fmtPts(magnet.strike - spot)} · pinning` : fmtPts(magnet.strike - spot),
-            magnetWas,
-            wallState(magnetPct, 'building', 'eroding'),
-          )
-        : 'magnet',
-      fmtUsd(magnet?.value ?? null, false),
+      magnet && spot ? fmtPts(magnet.strike - spot) : '',
     )
-    add(
-      'spot',
-      'SPOT',
-      'Spot',
-      spot || null,
-      '--color-fg',
-      dayChange == null
-        ? 'live'
-        : `${dayChange >= 0 ? '+' : '−'}${Math.abs(dayChange).toFixed(pDp)} · ${fmtPct(dayPct)}`,
-      undefined,
-      pDp,
-    )
-    add(
-      'cw',
-      'CW',
-      'Call Wall',
-      callWall,
-      '--color-level-cw',
-      withMig(fmtPts(distCall), callWas, callMig),
-      fmtUsd(wallGex.call, false),
-    )
+    add('spot', 'SPOT', 'Spot', spot || null, '--color-fg', 'live', undefined, pDp)
+    add('cw', 'CW', 'Call Wall', callWall, '--color-level-cw', fmtPts(distCall))
 
     // ── The EM band, and only when it is close enough to be worth an axis ─────
     // The gamma levels set the scale. A weekly band on a quiet week sits inside
@@ -290,40 +240,15 @@ export function KeyLevelsCard() {
       }
       const fits = (v: number) => v >= lo && v <= hi
       const note = weeklyEm.label ? `wk ${weeklyEm.label}` : 'weekly em'
-      if (fits(weeklyEm.down)) add('emd', 'EM', 'Weekly EM Low', weeklyEm.down, '--color-warn', note)
-      if (fits(weeklyEm.up)) add('emu', 'EM', 'Weekly EM High', weeklyEm.up, '--color-warn', note)
+      if (fits(weeklyEm.down)) add('emd', 'EM', 'Weekly EM Low', weeklyEm.down, '--color-warn', note, undefined, pDp)
+      if (fits(weeklyEm.up)) add('emu', 'EM', 'Weekly EM High', weeklyEm.up, '--color-warn', note, undefined, pDp)
     }
 
     return out
-  }, [
-    putWall, distPut, putWas, putMig,
-    flip, distFlip, flipMove, pxEps, pDp,
-    maxPain, spot,
-    magnet, pinEps, magnetWas, magnetPct,
-    dayChange, dayPct,
-    callWall, distCall, callWas, callMig,
-    kDp, wallGex.call, wallGex.put,
-    weeklyEm,
-  ])
+  }, [putWall, distPut, flip, distFlip, maxPain, spot, magnet, callWall, distCall, kDp, pDp, weeklyEm])
 
   return (
     <div className={['flex min-h-0 flex-1 flex-col', emptyFeed ? 'stale' : ''].join(' ')}>
-      {/* The baseline caption is this card's whole toolbar, so it belongs in the
-          Card header beside the title rather than on a row of its own. */}
-      <CardToolbar>
-        <span className="text-[10px] uppercase tracking-[0.1em] text-muted opacity-60">
-          {baseline ? (
-            <>
-              vs <span className="font-bold text-fg">{baseline.date}</span> close · {BASIS_LABEL[basisPref]} basis
-            </>
-          ) : baselineQ.loading || !expiry ? (
-            'prior-close baseline loading…'
-          ) : (
-            'no prior-close baseline — levels only'
-          )}
-        </span>
-      </CardToolbar>
-
       <LevelsAxis marks={marks} spotPrice={spot || null} />
     </div>
   )

@@ -46,6 +46,8 @@ export interface ChartSettings {
   countdown: boolean
   /** The strike ladder down the right-hand side, pinned to the price axis. */
   railOn: boolean
+  /** TESTING PHASE ONLY — reach back 48h so yesterday's bubbles draw too. */
+  prevDay: boolean
 }
 
 export const DEFAULT_SETTINGS: ChartSettings = {
@@ -64,6 +66,10 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   // On by default: the rail is the numbers behind the bubbles, and a bubble
   // layer with no way to read the figure it is drawn from is half a feature.
   railOn: true,
+  // ON for the testing phase, so the layer has something to draw at any hour.
+  // The default flips to false when this is retired — see the note on
+  // GEX_HISTORY_MINUTES_PREV_DAY.
+  prevDay: true,
 }
 
 /** Per SIDE of spot, so the drawn count is up to 2× this. */
@@ -111,6 +117,25 @@ export const BUBBLE_LADDER_REQUEST = 30
 /** How far back the bubble history reaches, minutes. One full session + pre. */
 export const GEX_HISTORY_MINUTES = 720
 
+/**
+ * ── TESTING PHASE ONLY ───────────────────────────────────────────────────────
+ * 48 hours, so the bubble layer carries YESTERDAY's ladder as well as today's.
+ *
+ * This exists to give the layer something to draw outside market hours and to
+ * make a day's worth of gamma migration visible while the card is being built.
+ * It is not what the card is for: the finished version shows the CURRENT /
+ * closest expiration over the current session, which is `GEX_HISTORY_MINUTES`
+ * above with `anyExpiry` off.
+ *
+ * To retire it: delete this constant and the `prevDay` setting, drop the
+ * `Prev day` chip from GexCandlesCard's Layers panel, and — separately, because
+ * it is the other half of the same eventual change — stop passing `anyExpiry=1`
+ * in gexHistoryUrl().
+ *
+ * The route clamps `minutes` to 5760, so this is well inside what it will serve.
+ */
+export const GEX_HISTORY_MINUTES_PREV_DAY = 2880
+
 // ── Persistence ──────────────────────────────────────────────────────────────
 
 const KEY_PREFIX = 'cb-v3-gex-candles:'
@@ -145,6 +170,7 @@ function coerce(raw: unknown): ChartSettings {
     gexMetric: p.gexMetric === 'vol' ? 'vol' : 'voloi',
     countdown: p.countdown !== false,
     railOn: p.railOn !== false,
+    prevDay: p.prevDay !== false,
   }
 }
 

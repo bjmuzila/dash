@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
 import { useQuery } from '@/data/api'
+import { usePageSymbol } from '@/data/symbol'
 import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
-import { SegGroup, Chip, Slider, Popover, PanelSection, SymbolPicker } from './controls'
+import { SegGroup, Chip, Slider, Popover, PanelSection } from './controls'
 import { chainTicker, symbolDef } from './symbols'
 import {
   BUBBLE_CURVE_RANGE,
@@ -13,6 +14,7 @@ import {
   BUBBLE_LEVELS_RANGE,
   BUBBLE_SIZE_RANGE,
   GEX_HISTORY_MINUTES,
+  GEX_HISTORY_MINUTES_PREV_DAY,
   INTERVALS,
   INTERVAL_LABEL,
   loadSettings,
@@ -30,9 +32,14 @@ import { mountEsChart, type EsChartHandle } from './chart'
 // GEX Candles — v2's ES chart rebuilt for v3, scoped to GEX BUBBLES ONLY.
 //
 // What came across: the candle colours (the same two values, now tokens), the
-// RTH/ETH switch, the interval picker, the searchable watchlist dropdown with
-// favourites, the full bubble settings panel, the forming-bar countdown
-// top-right and the jump-to-current-candle button bottom-right.
+// RTH/ETH switch, the interval picker, the full bubble settings panel, the
+// forming-bar countdown top-right and the jump-to-current-candle button
+// bottom-right.
+//
+// NOT the watchlist dropdown. The board has ONE ticker and the toolbar search
+// sets it — see src/data/symbol.tsx. A per-card picker is a second place to
+// change the same thing and a way to end up reading two symbols side by side
+// without noticing.
 //
 // What deliberately did NOT: the gamma HEATMAP, replay, EMAs, Bollinger, RSI,
 // volume, the profile/TPO overlays, the multi-chart dock and the screenshot
@@ -114,7 +121,12 @@ export function GexCandlesCard() {
     })
   }, [])
 
-  const def = useMemo(() => symbolDef(settings.symbol), [settings.symbol])
+  // THE PAGE SYMBOL, not a per-card one. The searchable dropdown that used to
+  // live in this toolbar is gone: the board has one ticker and the toolbar
+  // search is where it is set. `settings.symbol` stays in the stored blob so an
+  // older saved setting is not destroyed, but nothing reads it any more.
+  const { symbol } = usePageSymbol()
+  const def = useMemo(() => symbolDef(symbol), [symbol])
 
   // ── Fetches ────────────────────────────────────────────────────────────────
   // `pollMs`, not just `staleMs`. staleMs is a cache TTL and never causes a
@@ -130,9 +142,13 @@ export function GexCandlesCard() {
   // Either layer keeps this alive: the rail reads the newest column of the same
   // history the bubbles are drawn from, so turning the bubbles off with the
   // rail on must not take the request — and its data — away with them.
+  // TESTING PHASE: 48h instead of the session's 12, so the layer carries
+  // yesterday's ladder too. See GEX_HISTORY_MINUTES_PREV_DAY for what has to go
+  // when this is retired.
+  const historyMinutes = settings.prevDay ? GEX_HISTORY_MINUTES_PREV_DAY : GEX_HISTORY_MINUTES
   const gexQ = useQuery<unknown>(
     (settings.bubblesOn || settings.railOn) && expiry
-      ? gexHistoryUrl(def.gexSymbol, expiry, GEX_HISTORY_MINUTES, BUBBLE_LADDER_REQUEST)
+      ? gexHistoryUrl(def.gexSymbol, expiry, historyMinutes, BUBBLE_LADDER_REQUEST)
       : null,
     // The recorder writes a column a minute, so asking more often than that
     // returns the same ladder twice — and it is the heaviest request the card
@@ -173,7 +189,7 @@ export function GexCandlesCard() {
   // The key is latched only once real bars arrive. On a symbol change the query
   // cache misses and `bars` is briefly empty; latching on that empty set would
   // spend the reframe on nothing and leave the actual data unframed.
-  const viewKey = `${settings.symbol}|${settings.interval}|${settings.session}`
+  const viewKey = `${symbol}|${settings.interval}|${settings.session}`
   const framedRef = useRef('')
 
   useEffect(() => {
@@ -258,7 +274,6 @@ export function GexCandlesCard() {
           right under that header, so the board showed two bars stacked and the
           chart lost the height of both. */}
       <CardToolbar>
-        <SymbolPicker active={settings.symbol} onSelect={(s) => patch({ symbol: s })} />
         <SegGroup
           title="Bar interval"
           options={INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
@@ -304,6 +319,12 @@ export function GexCandlesCard() {
                     on={settings.countdown}
                     onClick={() => patch({ countdown: !settings.countdown })}
                     title="Time left in the forming bar"
+                  />
+                  <Chip
+                    label="Prev day"
+                    on={settings.prevDay}
+                    onClick={() => patch({ prevDay: !settings.prevDay })}
+                    title="TESTING PHASE — reach 48h back so yesterday's GEX ladder draws alongside today's. The finished card shows the current session on the closest expiration only; this chip and the constant behind it come out then"
                   />
                 </div>
               </PanelSection>

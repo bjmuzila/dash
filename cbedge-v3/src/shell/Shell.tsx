@@ -2,6 +2,7 @@ import type { DragEvent as ReactDragEvent, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { preload } from '@/data/api'
+import { PAGE_TICKER_RE, PageSymbolProvider, usePageSymbol } from '@/data/symbol'
 
 // The persistent frame: mounts once and never unmounts, so the socket, the
 // store and any dock state survive navigation. Routes render inside it.
@@ -210,19 +211,50 @@ function EtClock() {
 }
 
 function Toolbar() {
-  // Typeable now. There's no search backend wired yet (no ticker/strike/expiry
-  // lookup exists in src/data/api.ts), so this just holds what you type —
-  // Enter is the seam for wiring a real lookup in later.
+  // The search is THE ticker control for the whole board. Every card that can
+  // follow a symbol follows this one, which is why no card carries its own
+  // dropdown — see src/data/symbol.tsx for which cards can and which cannot.
+  //
+  // Enter commits. Escape puts back what is actually showing, so a half-typed
+  // symbol never becomes the board's state by walking away from the box.
+  const { symbol, setSymbol } = usePageSymbol()
   const [query, setQuery] = useState('')
+  const commit = () => {
+    const next = query.trim().toUpperCase()
+    if (!next) return
+    if (!PAGE_TICKER_RE.test(next)) return
+    setSymbol(next)
+    setQuery('')
+  }
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
       <span className="text-sm font-semibold tracking-tight">CB Edge</span>
       <div className="flex-1" />
+      {/* What the board is actually showing, beside the box you change it with.
+          An empty search input cannot say which symbol is loaded, and "which
+          symbol am I looking at" is the one question a board-wide ticker has to
+          answer at a glance. */}
+      <span
+        title="The board's symbol — every card that can follow a ticker is showing this one"
+        className="tabular shrink-0 rounded-full border border-accent bg-raised px-2.5 py-0.5 text-xs font-bold tracking-wide text-fg"
+      >
+        {symbol}
+      </span>
       <input
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search ticker, strike, expiry…"
-        className="w-64 shrink rounded-full border border-line bg-surface px-3 py-1 text-xs text-fg outline-none placeholder:text-muted focus:border-accent"
+        onChange={(e) => setQuery(e.target.value.toUpperCase())}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+          if (e.key === 'Escape') {
+            setQuery('')
+            e.currentTarget.blur()
+          }
+        }}
+        onBlur={() => setQuery('')}
+        placeholder="Search ticker…"
+        spellCheck={false}
+        autoCapitalize="characters"
+        className="w-52 shrink rounded-full border border-line bg-surface px-3 py-1 text-xs uppercase text-fg outline-none placeholder:normal-case placeholder:text-muted focus:border-accent"
       />
       <EtClock />
       {/* Account — decorative placeholder until v3 has its own auth/user menu. */}
@@ -237,13 +269,17 @@ function Toolbar() {
 }
 
 export function Shell({ children }: { children: ReactNode }) {
+  // The provider wraps BOTH the toolbar and the page: the search sets the
+  // symbol and the cards read it, and they have to be looking at one value.
   return (
-    <div className="cb-viewport flex overflow-hidden bg-bg text-fg">
-      <Rail />
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <Toolbar />
-        {children}
+    <PageSymbolProvider>
+      <div className="cb-viewport flex overflow-hidden bg-bg text-fg">
+        <Rail />
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <Toolbar />
+          {children}
+        </div>
       </div>
-    </div>
+    </PageSymbolProvider>
   )
 }

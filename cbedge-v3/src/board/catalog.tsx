@@ -4,6 +4,8 @@ import { ChartFrame } from '@/design/primitives/ChartFrame'
 import { Stat } from '@/design/primitives/Stat'
 import { Table } from '@/design/primitives/Table'
 import { watchFrame } from '@/data/hooks'
+import { CardToolbar } from '@/design/primitives/Card'
+import { SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import type { FlowFrame } from '@/contract/frames'
 import type { BoardItem } from '@/design/primitives/Board'
 import { useCanvasRenderer, drawLines } from './chart-render'
@@ -51,10 +53,18 @@ export interface CardDef {
 }
 
 // ── Flow Tape (Net Premium) — live rolling chart + recent prints ────────────
+//
+// THE ONE CARD THAT CANNOT FOLLOW THE PAGE TICKER. The `flow` frame is SPX
+// prints and there is no per-ticker source for options flow anywhere in
+// server-v2 — unlike the gex cards, which have /api/chains to fall back on.
+// So it says SPX on its face when the board is on something else, rather than
+// quietly showing SPX's tape under an AMZN heading.
 const FLOW_HISTORY_MAX = 120
 
 function FlowTapeCard() {
   const { onMount, onResize, setDraw } = useCanvasRenderer()
+  const { symbol } = usePageSymbol()
+  const following = isSocketSymbol(symbol)
   const [snapshot, setSnapshot] = useState<{ netPremium: number; buyPct: number; prints: number } | null>(null)
   const [tape, setTape] = useState<FlowFrame['data']['tape']>([])
 
@@ -73,6 +83,16 @@ function FlowTapeCard() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
+      {!following && (
+        <CardToolbar>
+          <span
+            title={`Options flow is only recorded for ${SOCKET_SYMBOL}. This card does not follow the board's ticker`}
+            className="rounded-sm border border-warn px-1.5 py-px text-[9px] font-bold uppercase tracking-[0.08em] text-warn"
+          >
+            {SOCKET_SYMBOL} only
+          </span>
+        </CardToolbar>
+      )}
       <div className="grid shrink-0 grid-cols-3 gap-2">
         <Stat
           label="Net premium"

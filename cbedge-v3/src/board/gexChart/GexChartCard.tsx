@@ -1,26 +1,36 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
+import { useQuery } from '@/data/api'
 import { watchFrame } from '@/data/hooks'
-import type { GexFrame, SpotFrame } from '@/contract/frames'
+import { isSocketSymbol, usePageSymbol } from '@/data/symbol'
+import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
 import { SegGroup } from '../gexCandles/controls'
 import { useCanvasRenderer } from '../chart-render'
+import { chainGexUrl, chainToGex, EMPTY_CHAIN_GEX } from '../chainGex'
 import { drawGexChart, fmtGexShort, type GexBar, type GexChartModel, type GexOrientation } from './gexChartRender'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX Chart — net gamma by strike, live off the socket.
 //
-// ── No fetch at all ──────────────────────────────────────────────────────────
-// Everything on this card is already on the `gex` frame: one row per strike with
-// BOTH bases on it (`netGEX` = OI + today's volume, `netVolGEX` = volume only),
-// plus the call wall, the put wall and the gamma flip. So the basis switch is a
-// toggle over data that has already arrived, not a second request — flipping it
-// redraws a canvas and touches no network.
+// ── Two sources, one shape ───────────────────────────────────────────────────
+// SPX comes off the socket: every `gex` frame already carries both bases per
+// strike plus the walls and the flip, so nothing is fetched and the basis switch
+// is a redraw, not a request. Any OTHER page symbol comes from /api/chains
+// through board/chainGex.ts, which produces the identical row shape — so the
+// only thing that differs below is where `frameRef` is filled from.
 //
-// Spot comes from the `spot` frame, which is the live print; the gex frame does
-// not carry one.
+// Spot follows the same split: the `spot` frame for SPX (the live print, which
+// the gex frame does not carry), the chain's own underlyingPrice otherwise.
 //
-// ── Both frames go through watchFrame, not useField ──────────────────────────
+// ── netGEX IS NOT OI+VOL ─────────────────────────────────────────────────────
+// From server-v2/computation/gex-calculator.js: `netGEX` is the OI-ONLY net and
+// `netVolGEX` is the VOLUME-ONLY net, and the OI+VOL basis every other surface
+// uses is the two SUMMED (`oiVolNet()`). The first cut of this card mapped
+// OI+VOL straight onto `netGEX`, which drew the OI-only ladder under a label
+// promising both. Fixed; the sum is what `OI+VOL` now shows.
+//
+// ── The socket path goes through watchFrame, not useField ────────────────────
 // AGENTS.md rule 4. A frame lands, the model goes into a ref and the canvas is
 // redrawn — this component does not re-render for a tick. Only the two toolbar
 // switches are React state, because those are the only things a user changes.
@@ -48,8 +58,16 @@ function write(key: string, value: string): void {
 
 const EMPTY: GexChartModel = { bars: [], spot: null, callWall: null, putWall: null, flip: null }
 
+/** OI+VOL is the two summed; VOL is the volume term alone. */
+function valueOfRow(r: GexRow, basis: Basis): number {
+  const vol = Number(r.netVolGEX) || 0
+  return basis === 'vol' ? vol : (Number(r.netGEX) || 0) + vol
+}
+
 export function GexChartCard() {
   const { onMount, onResize, setDraw } = useCanvasRenderer()
+  const { symbol } = usePageSymbol()
+  const onSocket = isSocketSymbol(symbol)
 
   const [basis, setBasis] = useState<Basis>(() => (readStored(BASIS_KEY, 'oivol') === 'vol' ? 'vol' : 'oivol'))
   const [orientation, setOrientation] = useState<GexOrientation>(() =>
@@ -60,7 +78,7 @@ export function GexChartCard() {
 
   // The last frame, kept raw so the basis switch can re-derive the bars without
   // waiting for another frame to land.
-  const frameRef = useRef<GexFrame['data'] | null>(null)
+  const frameRef = useRef<GexData | null>(null)
   const spotRef = useRef<number | null>(null)
   const optsRef = useRef({ basis, orientation })
   optsRef.current = { basis, orientation }
@@ -72,7 +90,7 @@ export function GexChartCard() {
       ? {
           bars: [...d.gexRows]
             .sort((x, y) => x.strike - y.strike)
-            .map<GexBar>((r) => ({ strike: r.strike, value: b === 'vol' ? r.netVolGEX : r.netGEX })),
+            .map<GexBar>((r) => ({ strike: r.strike, value: valueOfRow(r, b) })),
           spot: spotRef.current,
           callWall: d.callWall,
           putWall: d.putWall,
@@ -82,40 +100,85 @@ export function GexChartCard() {
     setDraw((canvas, w, h) => drawGexChart(canvas, w, h, { ...model, orientation: o }))
   }, [setDraw])
 
-  useEffect(
-    () =>
-      watchFrame<GexFrame>('gex', (frame) => {
-        const d = frame?.data
-        if (!d) return
-        frameRef.current = d
-        // The total is the only value that leaves the imperative path, and it
-        // moves once per frame rather than once per tick.
-        const b = optsRef.current.basis
-        let sum = 0
-        for (const r of d.gexRows) sum += b === 'vol' ? r.netVolGEX : r.netGEX
-        setTotal(sum)
-        redraw()
-      }),
+  const publish = useCallback(
+    (d: GexData | null) => {
+      frameRef.current = d
+      // The total is the only value that leaves the imperative path, and it
+      // moves once per frame rather than once per tick.
+      let sum: number | null = null
+      if (d) {
+        sum = 0
+        for (const r of d.gexRows) sum += valueOfRow(r, optsRef.current.basis)
+      }
+      setTotal(sum)
+      redraw()
+    },
     [redraw],
   )
 
-  useEffect(
-    () =>
-      watchFrame<SpotFrame>('spot', (frame) => {
-        const px = frame?.data.spot
-        if (typeof px !== 'number' || !(px > 0)) return
-        spotRef.current = px
-        redraw()
-      }),
-    [redraw],
-  )
+  // ── SPX: the socket ────────────────────────────────────────────────────────
+  // Returning undefined when off-socket is what UNSUBSCRIBES on a symbol
+  // change, which is also what narrows the socket's derived topic scope — the
+  // card stops asking for `gex` the moment it stops reading it.
+  useEffect(() => {
+    if (!onSocket) return
+    return watchFrame<GexFrame>('gex', (frame) => {
+      const d = frame?.data
+      if (d) publish(d)
+    })
+  }, [onSocket, publish])
+
+  useEffect(() => {
+    if (!onSocket) return
+    return watchFrame<SpotFrame>('spot', (frame) => {
+      const px = frame?.data.spot
+      if (typeof px !== 'number' || !(px > 0)) return
+      spotRef.current = px
+      redraw()
+    })
+  }, [onSocket, redraw])
+
+  // ── Everything else: the chain ─────────────────────────────────────────────
+  // 15s, the same cadence Multi Greek polls its ladders on. `staleMs` alone
+  // would never refetch — it is a cache TTL, not an interval — so this card
+  // would sit on the ladder it loaded with.
+  const chainQ = useQuery<unknown>(onSocket ? null : chainGexUrl(symbol), { staleMs: 15_000, pollMs: 15_000 })
+  const chainGex = useMemo(() => (onSocket ? EMPTY_CHAIN_GEX : chainToGex(chainQ.data)), [onSocket, chainQ.data])
+
+  useEffect(() => {
+    if (onSocket) return
+    spotRef.current = chainGex.spot || null
+    publish(
+      chainGex.rows.length
+        ? {
+            gexRows: chainGex.rows,
+            callWall: chainGex.callWall,
+            putWall: chainGex.putWall,
+            gexFlip: chainGex.flip,
+            totalNetGex: 0,
+            totals: null,
+            expiry: chainGex.expiry,
+          }
+        : null,
+    )
+  }, [onSocket, chainGex, publish])
+
+  // A symbol change must not leave the previous one's ladder on screen while
+  // the next source warms up — that is the failure where an AMZN heading sits
+  // over SPX's strikes.
+  useEffect(() => {
+    frameRef.current = null
+    spotRef.current = null
+    setTotal(null)
+    redraw()
+  }, [symbol, redraw])
 
   // A switch changed: re-derive from the frame already in hand.
   useEffect(() => {
     const d = frameRef.current
     if (d) {
       let sum = 0
-      for (const r of d.gexRows) sum += basis === 'vol' ? r.netVolGEX : r.netGEX
+      for (const r of d.gexRows) sum += valueOfRow(r, basis)
       setTotal(sum)
     }
     redraw()
@@ -133,7 +196,16 @@ export function GexChartCard() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <CardToolbar>
-        <span className="text-[10px] uppercase tracking-[0.1em] text-muted opacity-60">Net GEX</span>
+        <span
+          title={
+            onSocket
+              ? 'Live off the WebSocket — SPX is the one underlying it streams'
+              : `Derived from ${symbol}'s option chain, polled every 15s. The socket only streams SPX`
+          }
+          className="text-[10px] uppercase tracking-[0.1em] text-muted opacity-60"
+        >
+          Net GEX{onSocket ? '' : ' · chain'}
+        </span>
         <span
           className={[
             'tabular font-mono text-[11px] font-extrabold',
@@ -143,7 +215,7 @@ export function GexChartCard() {
           {total == null ? '—' : fmtGexShort(total)}
         </span>
         <SegGroup
-          title="OI+VOL is open interest plus today's volume; VOL drops the open-interest term. Both are already on every frame — this switch redraws, it does not refetch"
+          title="OI+VOL is the open-interest net PLUS today's volume net — the two summed, which is the basis every other GEX surface uses. VOL is the volume term alone. Both are already in hand, so this switch redraws and does not refetch"
           options={[
             { label: 'OI+VOL', value: 'oivol' },
             { label: 'VOL', value: 'vol' },
@@ -165,7 +237,9 @@ export function GexChartCard() {
       <div className="relative min-h-0 flex-1">
         <ChartFrame onMount={onMount} onResize={onResize} className="absolute inset-0" />
         {total == null && (
-          <span className="absolute left-1 top-1 text-[10px] text-muted opacity-50">Waiting for the chain…</span>
+          <span className="absolute left-1 top-1 text-[10px] text-muted opacity-50">
+            {onSocket ? 'Waiting for the feed…' : `Loading ${symbol}'s chain…`}
+          </span>
         )}
       </div>
     </div>
