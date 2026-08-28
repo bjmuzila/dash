@@ -301,10 +301,21 @@ export const POSTMARKET_CSS = `
    The fixed row pitch is what keeps this cheap: a taller viewport is more rows
    on screen and no re-layout of anything inside them. */
 .pmk .col.evcol{display:flex;flex-direction:column;min-height:0}
-/* min-height is the OLD cap, so a session where the right column happens to be
-   short (both its panels needing the recorded ladder, say) never shows LESS
-   than it did before this change. */
-.pmk .col.evcol .evchart{flex:1 1 auto;min-height:440px;max-height:none}
+/* flex-basis MUST be 0, not auto.
+   With basis:auto the flex item's base size is its CONTENT — all 121 rows,
+   ~2,500px — and a column flex container reports that as its max-content
+   height, so the auto-sized grid row grew to fit the whole ladder, the
+   overflow scroller had nothing to scroll, and the section became a page four
+   screens tall with the close nowhere near the middle. basis:0 makes the
+   ladder claim no height of its own and take only what is left over, which is
+   the whole point: it ends up exactly as tall as the wall-migration and
+   written-vs-traded column beside it, ~30 strikes.
+
+   min-height is the OLD 440 cap, so a session where the right column happens
+   to be short (both its panels needing the recorded ladder, say) never shows
+   LESS than it did before this change. It is also the flex item's hypothetical
+   size, so it — not the content — is what the grid row falls back to. */
+.pmk .col.evcol .evchart{flex:1 1 0;min-height:440px;max-height:none}
 /* ...but only while there IS a column to fill. Below 1180px .body collapses to
    one column (see the Premarket stylesheet), the column's height becomes its
    own content, and a flex child with an indefinite parent height ignores

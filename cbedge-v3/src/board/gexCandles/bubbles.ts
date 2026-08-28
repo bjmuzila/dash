@@ -15,12 +15,18 @@
 // same settings drew a dotted line on 5m and a solid neon slab on 1m, and the
 // only fix available was a per-timeframe fudge factor.
 //
-// So: a strike's row is stamped every STEP_PX CSS pixels, from the pixel where
-// its history starts to the pixel where it ends. Switching timeframe changes
-// `timeToX` and nothing else — the same 6px cadence produces the same band at
-// 1m, 5m, 15m and 1h, and zooming just fills the wider gap with more stamps at
-// the same thickness. No timeframe is passed in, because nothing here needs to
-// know one.
+// So: a strike's row is drawn ACROSS PIXELS, from the pixel where its history
+// starts to the pixel where it ends. Switching timeframe changes `timeToX` and
+// nothing else. No timeframe is passed in, because nothing here needs to know
+// one.
+//
+// The row is a round-capped STROKE, not a series of stamped circles. Stamping
+// every N pixels only merges into a band while the radius is bigger than N: a
+// wall at r=9 looked solid at a 6px cadence and a 15%-of-core strike at r=1.4
+// broke into a dotted line right next to it, at the same zoom, from the same
+// code. A stroke of width 2r with round caps is the limit of that stamping loop
+// as the step goes to zero — genuinely per-pixel, at a fraction of the cost, and
+// solid at every magnitude.
 //
 // The GEX behind each stamp is looked up by TIME, so the band still carries the
 // session's history — a wall that built through the afternoon still visibly
@@ -50,8 +56,15 @@
 import { BUBBLE_STYLE, type GexMetric } from './settings'
 import { valueOf, type GexColumn } from './gexHistory'
 
-/** One stamp every this many CSS pixels along x. The whole TF-invariance. */
-const STEP_PX = 6
+/**
+ * How many segments the band is cut into across its pixel span. Not a stamp
+ * spacing — each segment is STROKED across its full width, so a row is solid at
+ * every radius. See the note on discrete stamps in drawBubbles().
+ *
+ * Bounded rather than "every pixel" purely for cost: an 900px band at 1px would
+ * be ~5,400 draw calls per frame at six marks, sixty times a second.
+ */
+const MAX_SEGMENTS = 320
 
 /** Below this share of the core, a strike is dust and is not drawn. */
 const DUST = 0.04
@@ -260,12 +273,22 @@ export function drawBubbles(
   const layerAlpha = Math.max(0.05, Math.min(1, opts.intensity))
   const minOpacity = Math.max(0.1, 1 - Math.max(0, Math.min(1, BUBBLE_STYLE.fade)))
 
-  // One cap per snapshot, not per stamp: the same snapshot is hit by many x
-  // steps and its geometry does not change between them.
+  // Segment width is derived from the band's PIXEL span, so it is the same on
+  // every timeframe and adapts to zoom. Each segment is stroked across its own
+  // width, which is what keeps a thin row solid instead of dotted.
+  const segW = Math.max(1, (x1 - x0) / MAX_SEGMENTS)
+
+  // One cap per snapshot, not per segment: the same snapshot is hit by many
+  // segments and its geometry does not change between them.
   const capBySnap = new Map<number, number>()
 
-  for (let x = x0; x <= x1; x += STEP_PX) {
-    const t = geo.timeAtX(x)
+  ctx.lineCap = 'round'
+
+  for (let x = x0; x < x1; x += segW) {
+    // Sample the gamma at the MIDDLE of the segment. Sampling at the leading
+    // edge shifts the whole band half a segment early, which is visible as a
+    // level appearing before the candle that made it.
+    const t = geo.timeAtX(x + segW / 2)
     if (t == null) continue
     const idx = nearestIndex(snaps, t)
     const snap = snaps[idx]
@@ -282,6 +305,7 @@ export function drawBubbles(
       capBySnap.set(idx, placed)
     }
     const cap = placed * opts.size
+    const xEnd = Math.min(x1, x + segW)
 
     for (const m of snap.marks) {
       const y = geo.yOfPrice(m.strike)
@@ -297,17 +321,23 @@ export function drawBubbles(
       const col = m.isCore ? (positive ? palette.posHot : palette.negHot) : base
       const opacity = (m.isCore ? 1 : minOpacity + m.ratio * (1 - minOpacity)) * layerAlpha
 
-      ctx.beginPath()
       // Plain CSS pixels: the caller has already applied a devicePixelRatio
       // transform to the context, so multiplying by dpr here would scale it
       // twice and make a retina panel draw a band twice as fat as a normal one.
-      ctx.arc(x, y, r, 0, Math.PI * 2)
+      //
+      // lineWidth 2r + round caps == a circle of radius r swept from x to xEnd.
+      // A zero-length stroke still paints a full circle, which is what draws the
+      // single newest snapshot when the band is one segment wide.
+      ctx.beginPath()
+      ctx.lineWidth = r * 2
+      ctx.strokeStyle = rgba(col, opacity)
       if (m.isCore) {
         ctx.shadowColor = rgba(base, 0.95)
         ctx.shadowBlur = Math.min(BUBBLE_STYLE.glowMaxPx, Math.max(1.5, r * BUBBLE_STYLE.glowTopFactor))
       }
-      ctx.fillStyle = rgba(col, opacity)
-      ctx.fill()
+      ctx.moveTo(x, y)
+      ctx.lineTo(xEnd, y)
+      ctx.stroke()
       if (m.isCore) {
         ctx.shadowBlur = 0
         ctx.shadowColor = 'transparent'
