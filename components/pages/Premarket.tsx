@@ -168,7 +168,7 @@
  *   3  the FRONT-expiry ladder | the same ladder EX-0DTE (the standing book)
  *   4  overnight context       | expected range + playbook
  *   -  the gamma bell curve, full width
- *   5  GEX watch               | biggest GEX changes
+ *   5  GEX watch               | gamma book churn
  *
  * Row 3 is the point of the change. Everything else on this page is the front
  * expiry, which is the right board for the open and the wrong one for the week:
@@ -180,8 +180,11 @@
  * charts drift, and then the comparison would be between the charts rather than
  * between the boards.
  *
- * Row 5 pairs the two "what changed in the book" readings that used to be a
- * column and a card apart.
+ * Row 5 pairs the two "what changed" readings: which strikes across the
+ * watchlist grew far more than normal at yesterday's close, and how much of the
+ * symbol's whole book has been rewriting itself session by session. The churn
+ * panel is the level log's own component (components/shared/GexHeatBar), keyed
+ * to the picker instead of to a clicked row, so the two pages cannot disagree.
  *
  * Styling: the approved mockup's CSS, scoped under `.pmk` (custom properties on
  * `.pmk`, not `:root`) so its generic class names cannot leak into the app.
@@ -197,6 +200,7 @@ import { SCANNER_MAIN } from "@/lib/scannerTickers";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
+import { GexChurnHistory, useGexChurnHistory } from "@/components/shared/GexHeatBar";
 import GammaBellCurve, { GAMMA_BELL_CSS } from "@/components/pages/premarket/GammaBellCurve";
 import GexProfile, { PROFILE_ROW_H } from "@/components/pages/premarket/GexProfile";
 import { useChainGex, useMultiExpiryGex } from "@/components/pages/premarket/chainGex";
@@ -1957,6 +1961,14 @@ export default function Premarket() {
     return null;
   };
 
+  /**
+   * GAMMA BOOK CHURN for the symbol on screen — how much of its book rewrote
+   * itself, session by session. Same hook and same component the level log
+   * mounts (components/shared/GexHeatBar), keyed to the picker instead of to a
+   * clicked row, so the two pages can never disagree about a ticker's churn.
+   */
+  const { rows: churnRows, note: churnNote, loading: churnLoading } = useGexChurnHistory(sym);
+
   const sectorRows = useMemo(() => {
     if (!sectors?.length) return [];
     const withVal = sectors.filter((s) => Number.isFinite(s.chg5d as number)) as Required<SectorBar>[];
@@ -2858,6 +2870,41 @@ export default function Premarket() {
               </span></div>
 
               <div className="colhead" style={{ margin: "16px 0 6px" }}>
+                <h3>Biggest GEX Changes</h3>
+                <span className="tiny">
+                  {baseline ? `vs ${baseline.date} close · OI basis` : "vs prior close"}
+                </span>
+              </div>
+              {strikeDeltas.length ? (
+                <div className="deltas">
+                  {strikeDeltas.map((d) => {
+                    const mx = Math.max(...strikeDeltas.map((x) => Math.abs(x.delta)));
+                    const w = (Math.abs(d.delta) / mx) * 50;
+                    const pos = d.delta >= 0;
+                    return (
+                      <div className="d" key={d.strike}>
+                        <span className="s mono">{nf(d.strike, kDp)}</span>
+                        <span className="t">
+                          <i style={pos
+                            ? { left: "50%", width: `${w}%`, background: "var(--pos)" }
+                            : { right: "50%", width: `${w}%`, background: "var(--neg)" }} />
+                        </span>
+                        <span className={`v mono ${pos ? "chg-pos" : "chg-neg"}`}>{fmtUsd(d.delta)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: "var(--dim)" }}>
+                  {baselineState === "loading" || baselineState === "idle"
+                    ? "Loading the prior-close board…"
+                    : baselineState === "empty"
+                      ? `No prior-session board for ${sym} ${expiry || "this expiry"} yet — server-v2/premarket-baseline.js records one at 16:05 ET each session (and its ALLOWED_SYMBOLS list gates which symbols it will sweep), so this fills in after the next close.`
+                      : "No strike moved against the prior close."}
+                </div>
+              )}
+
+              <div className="colhead" style={{ margin: "16px 0 6px" }}>
                 <h3>Sector Heat</h3><span className="tiny">Market Quality · 5d %</span>
               </div>
               {sectorRows.length ? (
@@ -3038,50 +3085,33 @@ export default function Premarket() {
               shows the calendar and calls it a signal. Sits at the bottom
               because it is context for the session, not a number to trade off. */}
           {/* ── 5 · WHAT CHANGED IN THE BOOK ────────────────────────────────
-              Two readings of the same question, side by side: what moved on THIS
-              board against its own prior close, and which strikes across the
-              watchlist grew far more than normal at yesterday's close. They were
-              a column apart and a card apart; together they are one row. */}
+              Two readings of the same question, side by side: which strikes
+              across the watchlist grew far more than normal at yesterday's
+              close, and how much of THIS ticker's whole book has been rewriting
+              itself session by session. */}
           <div className="body two">
             <div className="col">
               <GexWatchFeed />
             </div>
 
             <div className="col">
-              <div className="colhead">
-                <h3>Biggest GEX Changes</h3>
-                <span className="tiny">
-                  {baseline ? `vs ${baseline.date} close · OI basis` : "vs prior close"}
-                </span>
-              </div>
-              {strikeDeltas.length ? (
-                <div className="deltas">
-                  {strikeDeltas.map((d) => {
-                    const mx = Math.max(...strikeDeltas.map((x) => Math.abs(x.delta)));
-                    const w = (Math.abs(d.delta) / mx) * 50;
-                    const pos = d.delta >= 0;
-                    return (
-                      <div className="d" key={d.strike}>
-                        <span className="s mono">{nf(d.strike, kDp)}</span>
-                        <span className="t">
-                          <i style={pos
-                            ? { left: "50%", width: `${w}%`, background: "var(--pos)" }
-                            : { right: "50%", width: `${w}%`, background: "var(--neg)" }} />
-                        </span>
-                        <span className={`v mono ${pos ? "chg-pos" : "chg-neg"}`}>{fmtUsd(d.delta)}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div style={{ fontSize: 11, color: "var(--dim)" }}>
-                  {baselineState === "loading" || baselineState === "idle"
-                    ? "Loading the prior-close board…"
-                    : baselineState === "empty"
-                      ? `No prior-session board for ${sym} ${expiry || "this expiry"} yet — server-v2/premarket-baseline.js records one at 16:05 ET each session (and its ALLOWED_SYMBOLS list gates which symbols it will sweep), so this fills in after the next close.`
-                      : "No strike moved against the prior close."}
-                </div>
-              )}
+              {/* GAMMA BOOK CHURN — the SAME component the level log mounts
+                  (components/shared/GexHeatBar), keyed to the symbol on screen
+                  instead of to a clicked row. GEX Watch says which strikes grew
+                  far more than normal at yesterday's close; this says how much
+                  of this ticker's whole book rewrote itself, session by
+                  session. Two answers to "what changed", so they share a row.
+
+                  The component draws its own card padding and top rule for the
+                  log page's layout; inside a .col both are already there, so
+                  they are zeroed rather than doubled. */}
+              <GexChurnHistory
+                symbol={sym}
+                rows={churnRows}
+                note={churnNote}
+                loading={churnLoading}
+                style={{ padding: 0, borderTop: "none" }}
+              />
             </div>
           </div>
 

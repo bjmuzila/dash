@@ -1,260 +1,77 @@
 # Changelog
 
-## 2026-08-28 - GEX bubbles: one sizing model, a floor, and a cap that never deletes a level
+## 2026-08-27 - ΔGEX Board: a green/gold/red trust chip on the run stamp, and the EOD sweep no longer crosses the feed roll
 
-Edited: `cbedge-v3/src/board/gexCandles/bubbles.ts`,
-`cbedge-v3/src/board/gexCandles/settings.ts`,
-`cbedge-v3/src/board/gexCandles/chart.ts`,
-`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
-Prototype: `generated/2026-08-28-gex-bubble-sizing.html` (real 08-28 ladder).
+Edited: `server-v2/eod-strike-gex-recorder.js`, `owner-vite/src/pages/GexGrowth.tsx`.
 
-The bubbles have been wrong for weeks because there was no single answer to
-"what does the size of this circle mean". There is one now:
+Tonight's board carried `run 2026-08-27 20:01:52 ET`. That stamp was real - it is
+`captured_at`, taken before the first chain fetch - but it was not the 16:05
+slot. The scheduler fires at `RUN_AT_MIN` (965 = 16:05) **or on any later boot the
+same evening**, and the catch-up window ran to 22:00 ET. The 16:05 run did not
+land, something restarted around 20:00, the 45s post-boot check fired, and the
+session was recorded four hours late.
 
-    r = floor + (top - floor) x ratio^variance
+The old comment said capturing at 19:40 after a restart is "just as correct as
+16:05". That is true of the OI half and false of the volume half. The upstream
+feed rolls its trading day at 20:00 ET and the roll zeroes the chain's
+day-volume field, so a sweep starting at 20:01 writes `OI(T-1) + Vol(empty)` as
+session T's close: `vol_gex` zeroed, `net_gex` silently reduced to the OI-only
+number, and the oivol delta against T-1 wrong by a full session of volume.
 
-`floor` is the minimum any drawn mark gets, `top` is what the strongest strike
-gets, `ratio` is that strike's |GEX| over the strongest strike's. Nothing else
-moves a radius, so a bubble can be read off the GEX table and back again.
+**1. The catch-up window now closes before the roll.** `WINDOW_CLOSE_MIN`
+1320 -> 1185 (19:45 ET), fifteen minutes of margin. The cost of closing early is
+"no session recorded", which the board shows; the cost of staying open was a
+quietly wrong session, which it could not. Anything later is now a deliberate
+`POST /proxy/eod-strike-gex-run`, not something the scheduler does on its own.
 
-WHAT CHANGED, and why each piece:
+**2. A zero-volume guard, as the second line.** A board carrying open interest
+and no volume anywhere is not a quiet session - a strike with 40k OI traded
+something. `runSweep()` now detects that shape and writes `vol_*` as NULL rather
+than as zero, so the `vol` basis reports "nothing recorded for this session"
+(the read path already branches on `hasBasis`) instead of a flat zero board a
+reader would take at face value. It triggers on the DATA, not the clock, so it
+also catches a roll at an hour nobody expected. `net_gex` is left as computed -
+it is the legacy series and never NULL, and breaking a year of level continuity
+to patch a row `WINDOW_CLOSE_MIN` should have prevented is the wrong trade.
 
-FLOOR (new setting, 1.5px default). Every level that survives the gates starts
-here and grows. Whether a level is ON the chart is now the cutoff's decision
-and never the size slider's - previously a small level just faded into a
-sub-pixel speck and you could not tell "tiny" from "absent".
+**3. Catch-up sweeps say so in the log.** Any run more than 30 minutes past the
+16:05 slot logs `CATCH-UP sweep at HH:MM ET (Nm past the 16:05 slot)`. Healthy
+path, never the intended one, and somebody will ask why the stamp is off.
 
-CUTOFF (new setting, 0.40% default) replaces the hard-coded `DUST` constant,
-which dropped anything under 4% OF THE BIGGEST STRIKE. That was the wrong
-denominator: 4% of the largest wall says nothing about whether a level matters,
-and it was not adjustable. `BubbleMark` now carries `share` - the strike's
-|GEX| over Sigma|GEX| for the WHOLE column, taken before any selection - which
-is the same percentage the GEX table prints. So "0.40%" means the same thing on
-a quiet morning and a busy afternoon, on SPX and on a $30 name.
+**4. The run stamp says which phase of the day it is in, and one chip says
+whether that matters - the actual ask.** A clock alone does not tell you if the
+data is premarket, live, after hours or past the roll. The stamp now reads
+`run 2026-08-27 20:01:52 ET - overnight`, with the phase in words from
+`capturePhase()` on the US equity day in ET: 04:00-09:30 premarket, 09:30-16:00
+live session, 16:00-20:00 after hours, 20:00-04:00 overnight, plus weekend.
 
-VARIANCE (renamed from `top`/`curve`, range now 0.3-3, default 1.5). At 1.00
-half the gamma is half the bubble. Above it only the real walls stay big; below
-1 - newly allowed - the ladder flattens so the small levels stay readable. The
-old range started at 1, so flattening was impossible. Default is 1.5 because on
-a typical ladder the top strikes sit within a few percent of each other and
-straight linear draws six near-identical circles.
+A first pass coloured that phase directly and it read as noise, because the
+phase is not the verdict. Whether "premarket" is fine or alarming depends on the
+BASIS: the OI basis is *supposed* to be stamped premarket - that is the 09:25
+settled-OCC re-stamp doing its job - while on any basis carrying volume the same
+stamp means the number came off a session that had not traded. So the chip is
+now a traffic light and one word, from `captureVerdict(iso, basis)`:
 
-THE CAP IS NOW ON THE LADDER, NOT ON EACH MARK - this is the part that fixes
-the overlapping. Two strikes 13px apart cannot both be 26px bubbles, whatever
-the slider says, and the old code resolved that by DROPPING a mark: a wall
-vanished because a bigger wall happened to sit next to it, with nothing on
-screen to say so. Now the TOP radius is capped, measured from the tightest pair
-actually on screen (and still by the pane height, so a sparse tall pane cannot
-turn into all circle). Every mark scales by the same factor, so the picture
-stays proportional to the numbers and just gets smaller when the pane is
-crowded - and the size slider takes full effect again the moment the price axis
-opens up or the gates thin the ladder. Nothing is ever deleted to make room.
-Removing a level is `per side` and `cutoff`'s job, decided on the DATA before
-any pixel maths runs. The pairwise fit pass survives as a local backstop for
-two marks the cap could not separate, and it shrinks - it never drops.
+| | meaning |
+|---|---|
+| green `good` | captured where this basis is meant to be captured - 16:05 +/-55m for volume bases, the 09:25 re-stamp for `oi` |
+| gold `late` | off-slot, but nothing about the number is damaged. Something did not run on time; the value still holds |
+| red `suspect` | off-slot in a way that eats the number - volume read mid-session, before the open, or past the 20:00 feed roll |
 
-Layers panel: `size` (retitled - it is the TOP radius now, not a scale factor),
-`floor`, `cutoff`, `variance`, `intensity`. Old saved settings coerce forward;
-`bubbleCurve` keeps its key so a stored blob is not destroyed.
+`oi` can never be worse than `late`: the settled file does not move again until
+tonight, so no capture time damages it, and "not re-stamped yet" is already
+stated outright by the SETTLED / PROVISIONAL chip beside it. Every other basis
+carries volume, which is a live accruing field, so its window is narrow.
 
-Verified against the mock: no overlap at any price-axis zoom, the redraw guard
-still passes (idle 0 repaints, pan and zoom still repaint), budgets ok,
-ws-scope-check ok.
+The hover carries the whole story - the stamp, the phase, how many minutes past
+16:05, and what specifically is wrong with the number. Tonight's row reads
+red `suspect`. The prior-session tooltip gained the same phase suffix via
+`fmtStampWithPhase()`, so a delta between two differently-phased captures is
+visible without opening anything. `toneChip` gained a fourth tone, `info`
+(`LIGHT_BLUE`), for states that are a fact rather than a verdict.
 
-## 2026-08-28 - Fix: the ladder un-pinned itself on the symbol switch, so a new ticker opened uncentred
-
-Edited: `components/pages/premarket/GexProfile.tsx`,
-`components/pages/premarket/chainGex.ts`.
-
-Bring up AMD and both ladders opened sixty strikes above the money - 730 at the
-top with 469.35 nowhere on screen - and "back to spot" already showing. That
-last detail is the whole diagnosis: the panel was UN-PINNED before the new board
-ever arrived, so the centring code was working perfectly and being skipped.
-
-**What un-pinned it.** The panel un-pins on a scroll the reader performed and
-must not un-pin on one the browser performed, and a scroll event says nothing
-about which it was. It tried to tell them apart by remembering the scrollTop it
-had written - which broke on exactly the case that matters:
-
-  switch symbol -> the old ladder's 121 rows are replaced by an empty one ->
-  the browser CLAMPS scrollTop from 1,140 to 0 and fires a scroll event ->
-  that event matches neither guard -> un-pinned -> the new symbol's board loads
-  and is never centred.
-
-Content collapsing, a resize, a zoom and our own centring write all produce the
-same "unexplained" scroll event, so this was one bug in a family of them.
-
-**The fix asks the question the other way round.** A scroll only counts as the
-reader's if a wheel, a drag, a touch or a key happened in the last 700ms
-(`gestureAtRef`, fed by onWheel / onTouchMove / onPointerDown / onKeyDown).
-Nothing else can un-pin the panel, which makes every one of those cases safe by
-construction rather than by a guard per case. The two scrollTop-matching guards
-are gone with it - the write no longer needs to hide from anything.
-
-**Also:** the ResizeObserver was attached INSIDE the `if (!pinned) return` early
-exit, so a panel that happened to be un-pinned when the effect ran got no
-observer at all and never re-centred once re-pinned. It is attached
-unconditionally now; the pinned check moved into the callback.
-
-**And the cancelled sweep in the waterfall.** `useMultiExpiryGex` re-ran on the
-render where `sym` became AMD but `spot` was still the previous symbol's - so it
-fired a full multi-expiry sweep for AMD against a 771.43 spot, which the next
-render aborted and re-issued at 469.35. Two sweeps per picker move, one of them
-nonsense. The first fetch is now on a 400ms timer: the stale render is followed
-within a frame or two by the one where spot is 0, which tears the effect down
-before the timer fires, so it spends one sweep instead of two.
-
-## 2026-08-28 - Premarket: two ladders in a row, a second one for the standing book
-
-Added: `components/pages/premarket/GexProfile.tsx`.
-Edited: `components/pages/Premarket.tsx`,
-`components/pages/premarket/chainGex.ts`,
-`components/pages/premarket/GexWatchFeed.tsx`.
-
-**The ladder is a component now.** Everything about how the GEX Profile behaves
-- the +/-12 scale window, the +/-60 render window, the spot and flip rules, the
-scroll and the centring - moved out of Premarket.tsx into `GexProfile.tsx`. Not
-tidying: the page mounts TWO of them and the read is the comparison between the
-two boards, which only works if the two charts are pixel-identical. Two copies
-of the same JSX would have drifted.
-
-**A second ladder: all expirations EXCLUDING 0DTE.** Everything else on this
-page is the front expiry, which is the right board for the open and the wrong
-one for the week - on an expiry session most of the gamma on screen leaves at
-the bell, so a wall that looks like the level of the day can be gone tomorrow.
-The new right-hand ladder is the standing book underneath it.
-
-- `useMultiExpiryGex` in chainGex.ts polls `/proxy/gex-by-strike-multi` (existing
-  route, existing server-side per-minute cache, so N readers cost one sweep) and
-  returns both the whole-board and the ex-0DTE ladders. Rows come pre-summed
-  per strike, which would be wrong for the page's basis switch and is exactly
-  right for a ladder that only ever draws OI+Vol net.
-- Spot rides a ref rather than the effect deps: it ticks several times a second
-  on the socket board, and re-running the effect on each tick would restart the
-  poll and defeat the cache.
-- **It wears its OWN walls and flip**, the ones the server computed on that
-  ladder. Reading the front expiry's pin against the standing book's bars is the
-  exact mistake this panel exists to make impossible.
-- LIVE only. The sweep reads the live chain and has no per-date form, so a
-  frozen or replayed session gets a panel that says so rather than today's
-  standing book under a past date's headline.
-- Under it: whole-board net GEX, ex-0DTE net GEX, and the difference - the front
-  tranche's share of the net, stated as the subtraction it is. A share of
-  ABSOLUTE gamma cannot be recovered from two signed nets, so it does not
-  pretend to print one.
-
-**Layout.** Three two-column rows instead of one three-column one: the two
-ladders; overnight context beside expected range; then the bell curve full
-width; then GEX Watch beside Biggest GEX Changes - the two "what changed in the
-book" readings, which were a column and a card apart.
-
-- The two-column rows use a `.body.two` CLASS, not an inline
-  `grid-template-columns`. An inline value outranks the stylesheet, so the
-  narrow-screen rule could never collapse it and a phone would have got two
-  scrolling ladders side by side.
-
-**GEX Watch: the standing explanation under the title is gone.** Four lines of
-prose ran every session whether or not there was anything to explain, and in a
-half-width column it pushed the rows off the fold. The rows already say what
-they mean in plain language - that was the point of the format. The server's
-note is still read, and now surfaces only on the failure path, where it is a
-real reason instead of a preamble.
-
-**Centring, again.** The retry loop gave up after 20 frames (a third of a
-second). A tab that mounts in the background, a font that settles late or a slow
-first paint can all push the first measurable frame past that, and on a
-chain-poll symbol giving up means sixty seconds of a ladder scrolled to the
-wrong place. It now tries for ~90 frames, and the target is additionally clamped
-to `scrollHeight - clientHeight` rather than only at 0.
-
-## 2026-08-28 - Gamma Bell Curve: bars sized off the strikes in view, and capped
-
-Edited: `components/pages/premarket/GammaBellCurve.tsx`,
-`components/pages/premarket/gammaChartKit.ts`.
-
-A sparse board - the VOL basis before the session has traded, or any +/-1% window
-on a coarse ladder - drew as a colour field with a curve on top rather than a
-distribution: nine 160px slabs edge to edge, the net pane a solid green block
-with its "0" and "-2M" tick labels printed on top of each other.
-
-- **Bar width now comes from the tightest gap between the bins ACTUALLY IN
-  VIEW**, not from `gridStep`. gridStep is the median gap over the whole board
-  this card reads, and that board is widened to at least `WIDE_MIN_STRIKES` - so
-  on a ladder listed every 0.50 near the money and every 2.50 in the wings, the
-  median IS the wing's spacing and every near-the-money bar was drawn five times
-  its own slot, straight over its neighbours. The tightest in-view gap is the
-  only width that cannot overlap anywhere on screen.
-- **`MAX_BAR_W` (48px) caps it** for the opposite failure. A bar that tiles its
-  slot is right on a full board and absurd on a board with nine strikes in it.
-  A full SPX board draws ~12px bars and is nowhere near the cap, so nothing
-  about it changes.
-- **Tick labels no longer stack on the zero label.** Both panes drop a tick
-  whose label would land within 11px of the baseline. On a one-sided net pane -
-  +346M of long gamma against -2M of short - the zero line sits two pixels off
-  the floor and the "-2M" tick was being printed straight through the "0".
-- **Pane labels get a halo.** The bars run underneath "GAMMA MASS", "LONG GAMMA"
-  and "SHORT GAMMA", and 9px uppercase over a solid green block is unreadable.
-  `paint-order:stroke` puts the panel colour behind the glyphs instead of over
-  them.
-
-## 2026-08-28 - Premarket: spot opens dead centre on every ticker; put wall must be negative GEX
-
-Edited: `components/pages/Premarket.tsx`,
-`components/pages/premarket/chainGex.ts`.
-
-**1. GEX Profile by Strike opens with spot in the middle of the card.**
-
-Centring is `scrollTop = rowTop - (view - row)/2`, and scrollTop cannot go below
-0 or above `scrollHeight - clientHeight`. So whenever spot sat within ~11 rows of
-either END of the ladder the write was clamped and spot rendered high or low in
-the card instead of in the middle. That stopped being an edge case when the
-picker opened up to the whole watchlist: the window is spot +/-60 STRIKES of
-whatever the chain actually lists, clamped to the ends of that chain, so a name
-whose board thins out a few strikes above the money opened with spot near the
-top and nothing to scroll. Sizing the box to its content made the same thing
-happen from the other side - a short ladder is a short card, and spot lands
-wherever it lands in it.
-
-- The panel is now a FIXED 440px viewport with **half a viewport of padding at
-  each end** (`PROFILE_PAD`). The first and last rows can both reach the middle,
-  so the centring target is exactly `i * PROFILE_ROW_H` for every row on every
-  ticker - never 0, never the maximum, no special cases. The clamp stays as a
-  guard and nothing reaches it.
-- `rowTop()` adds the padding, because the spot and flip rules are absolutely
-  positioned (placed from the PADDING edge) while the rows begin after it -
-  otherwise both rules would sit half a viewport above the row they name.
-- The padding is skipped while the ladder is empty; 210px of nothing over
-  "Waiting for the chain" is just a hole.
-- The 19px row pitch was a literal in the stylesheet AND in `rowTop` - the
-  file's own centring comment already flagged that as a trap. It is one
-  `PROFILE_ROW_H` const now, interpolated into the CSS.
-
-**2. A put wall must be negative GEX.**
-
-`wallsOf()` in chainGex.ts - the walls for every non-SPX symbol - ranked the two
-sides by RAW PER-SIDE GAMMA MAGNITUDE, with no sign and no side-of-spot test. On
-a 0DTE board the ATM strike carries the most call gamma AND the most put gamma,
-so the page printed **"Call wall 770.00 / Put wall 770.00"** on a strike whose
-net gamma was strongly POSITIVE. A put wall is a floor - the strike where
-dealers are short gamma - so a put wall on positive net GEX is not a wall, and
-one sitting on top of the call wall says nothing.
-
-It now reproduces the SERVER's definition exactly
-(`findCallWall` / `findPutWall` in `server-v2/computation/gex-calculator.js`),
-so SPX (socket) and every other symbol (this hook) cannot mean different things
-by the word:
-
-- call wall = the strike ABOVE spot with the most POSITIVE net OI+Vol GEX
-- put wall = the strike BELOW spot with the most NEGATIVE net OI+Vol GEX
-
-Net rather than per-side magnitude is what makes the sign mean anything:
-`netGEXOf` returns calls positive and puts negative, so "most negative" IS
-"heaviest put gamma net of the calls written against it". Null for a side with
-no qualifying strike - the honest answer on a one-sided board, and what the
-server returns too; the page already renders a null level as "-".
-
-No server change: the server was already correct. This was the client copy
-drifting.
+Holidays are not detected - the page has no calendar - so a holiday capture
+reads as whatever its clock says, with the date beside it.
 
 ## 2026-08-27 - Fix: section 3's ladder rendered all 121 strikes instead of filling the column
 

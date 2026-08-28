@@ -454,29 +454,12 @@ const fmtEtStamp = (iso?: string | null) => {
  */
 type CapturePhase = "premarket" | "live" | "afterhours" | "overnight" | "weekend";
 
-const PHASE_COPY: Record<CapturePhase, {
-  label: string; tone: "pos" | "neg" | "warn" | "info"; title: string;
-}> = {
-  afterhours: {
-    label: "after hours", tone: "pos",
-    title: "Captured after the close and before the 20:00 ET feed roll — the window the sweep is scheduled for (16:05). Volume is the settled full session; open interest is last night's file until the 09:25 re-stamp.",
-  },
-  premarket: {
-    label: "premarket", tone: "info",
-    title: "Captured before the open. This is where the 09:25 settled-OI re-stamp lands, so it is the expected phase for the OI basis. On any basis that includes volume it means the read came from a session that had not started trading.",
-  },
-  live: {
-    label: "live session", tone: "warn",
-    title: "Captured during regular hours — a mid-session read, not an end-of-day one. Volume is partial and the board will not match the close.",
-  },
-  overnight: {
-    label: "overnight", tone: "neg",
-    title: "Captured past the 20:00 ET feed roll (or before 04:00). The chain's day-volume field resets at the roll, so the volume half of this row can be zero or partial even though the session traded normally. Open interest is unaffected.",
-  },
-  weekend: {
-    label: "weekend", tone: "info",
-    title: "Captured on a Saturday or Sunday. Nothing traded between this read and the session it is filed under.",
-  },
+const PHASE_LABEL: Record<CapturePhase, string> = {
+  premarket: "premarket",
+  live: "live session",
+  afterhours: "after hours",
+  overnight: "overnight",
+  weekend: "weekend",
 };
 
 /** ET weekday + minute-of-day for an instant, independent of the browser's TZ. */
@@ -506,11 +489,97 @@ const capturePhase = (iso?: string | null): CapturePhase | null => {
   return "overnight";
 };
 
-/** "2026-08-27 20:01:52 ET · overnight" — for tooltips, where a chip cannot go. */
+/** "2026-08-27 20:01:52 ET · overnight" — the clock and the phase, one string. */
 const fmtStampWithPhase = (iso?: string | null) => {
   if (!iso) return "";
   const p = capturePhase(iso);
-  return `${fmtEtStamp(iso)}${p ? ` · ${PHASE_COPY[p].label}` : ""}`;
+  return `${fmtEtStamp(iso)}${p ? ` · ${PHASE_LABEL[p]}` : ""}`;
+};
+
+/**
+ * ONE WORD FOR "CAN I TRUST THIS ROW".
+ *
+ * The phase alone does not answer that, which is why it is not the chip. Whether
+ * "premarket" is fine or alarming depends entirely on which basis you are
+ * looking at: the OI basis is SUPPOSED to be stamped premarket (that is the
+ * 09:25 settled-OCC re-stamp doing its job), and on any basis carrying volume
+ * the same stamp means the number came off a session that had not traded yet.
+ * A chip that says "premarket" makes the reader do that lookup every time. A
+ * chip that says GOOD or SUSPECT has already done it.
+ *
+ * Three states, and the ladder is about the NUMBER, not the schedule:
+ *
+ *   GOOD    — captured where this basis is meant to be captured.
+ *   LATE    — off-slot, but nothing about the number is damaged by it. Worth
+ *             knowing (something did not run on time); not worth distrusting.
+ *   SUSPECT — off-slot in a way that eats the number. Volume read before the
+ *             session traded, mid-session, or after the 20:00 ET feed roll
+ *             zeroed the day-volume field.
+ *
+ * The clock and the phase stay in the stamp beside it, so "when" is still one
+ * glance away — this chip only answers "and does that matter".
+ */
+type CaptureVerdict = { word: "good" | "late" | "suspect"; tone: ChipTone; title: string };
+
+const captureVerdict = (iso: string | null | undefined, basis: Basis): CaptureVerdict | null => {
+  const phase = capturePhase(iso);
+  if (!iso || !phase) return null;
+  const when = `Captured ${fmtEtStamp(iso)} — ${PHASE_LABEL[phase]}.`;
+  const clock = etClock(iso);
+
+  // The OI basis is read twice: provisionally at the 16:05 sweep, then rewritten
+  // at 09:25 off the settled OCC file. The settled read is the one that makes
+  // its Δ a real ΔOI, so premarket is its GOOD. And because that file does not
+  // move again until tonight, NO capture time damages an OI number — the worst
+  // an off-slot stamp means here is "the re-stamp has not happened yet", which
+  // the SETTLED/PROVISIONAL chip next to this one already states outright.
+  if (basis === "oi") {
+    if (phase === "premarket") {
+      return {
+        word: "good", tone: "pos",
+        title: `${when} This is the 09:25 ET re-stamp off the settled OCC file — exactly where the OI basis is supposed to be read, and what makes its Δ a true session-over-session change in open interest.`,
+      };
+    }
+    return {
+      word: "late", tone: "warn",
+      title: `${when} Open interest is a settled file that does not move again until tonight, so the read itself is sound whatever the clock says. Off-slot here only means the 09:25 re-stamp has not run for this row yet — see the SETTLED / PROVISIONAL chip beside this one.`,
+    };
+  }
+
+  // Every other basis carries VOLUME, and volume is a live field: it accrues
+  // through the session and resets at the 20:00 ET feed roll. So the capture
+  // time is load-bearing, and the window is narrow on purpose.
+  if (phase === "afterhours") {
+    const late = clock ? clock.minutes - 965 : 0; // minutes past the 16:05 slot
+    if (late <= 55) {
+      return {
+        word: "good", tone: "pos",
+        title: `${when} The 16:05 ET slot — after the closing print is in and hours before the 20:00 feed roll. Volume is the settled full session.`,
+      };
+    }
+    const h = Math.floor(late / 60);
+    const m = late % 60;
+    return {
+      word: "late", tone: "warn",
+      title: `${when} That is ${h ? `${h}h ` : ""}${m}m past the 16:05 sweep, so something did not run on time — but it is still inside the window, before the 20:00 ET feed roll, and the volume field had not reset yet. The number is sound; the schedule is not.`,
+    };
+  }
+  if (phase === "overnight") {
+    return {
+      word: "suspect", tone: "neg",
+      title: `${when} Past the 20:00 ET feed roll (or before 04:00), where the chain's day-volume field resets for the new day. The volume half of this row can be zero or short even though the session traded normally, which drags the OI+Volume level down with it. Open interest is unaffected. Cross-check against the OI-only basis before trusting this.`,
+    };
+  }
+  if (phase === "live") {
+    return {
+      word: "suspect", tone: "neg",
+      title: `${when} A mid-session read, not an end-of-day one — volume was still accruing when this was taken, so the row is a partial day and will not match the close.`,
+    };
+  }
+  return {
+    word: "suspect", tone: "neg",
+    title: `${when} The volume half of this row was read when nothing was trading, so it is not this session's turnover. Open interest is unaffected.`,
+  };
 };
 
 /** ET wall clock for the "as of" stamp — the table's own timezone. */
@@ -2853,25 +2922,24 @@ export default function GexGrowth() {
                 border: `1px solid ${T.border}`, borderRadius: 999, padding: "2px 8px",
               }}
             >
-              run {fmtEtStamp(detail.capturedAt)}
+              run {fmtStampWithPhase(detail.capturedAt)}
             </span>
           ) : null}
 
-          {/* WHICH PHASE OF THE DAY THAT CLOCK IS IN. Beside the stamp, never
-              inside it: the timestamp is the fact and the phase is what it
-              MEANS, and the second one is what a reader is actually checking.
-              Green on the 16:05 window, red once a read is past the 20:00 feed
-              roll — see capturePhase() for why that inversion is on purpose. */}
+          {/* AND DOES THAT CLOCK MATTER — one dot, one word, everything else on
+              hover. The stamp beside it already says WHEN (including the phase,
+              in words); this says whether the number survived being read then,
+              which is the question and is basis-dependent. See captureVerdict. */}
           {(() => {
-            const ph = capturePhase(detail?.capturedAt);
-            if (!ph) return null;
-            const c = PHASE_COPY[ph];
+            const v = captureVerdict(detail?.capturedAt, basis);
+            if (!v) return null;
             return (
               <span
-                title={c.title}
-                style={{ ...toneChip(c.tone), fontSize: 9.5, padding: "2px 7px", flexShrink: 0 }}
+                title={v.title}
+                style={{ ...toneChip(v.tone), fontSize: 9.5, padding: "2px 8px", gap: 4, flexShrink: 0 }}
               >
-                {c.label}
+                <span aria-hidden style={{ fontSize: 8, lineHeight: 1 }}>●</span>
+                {v.word}
               </span>
             );
           })()}

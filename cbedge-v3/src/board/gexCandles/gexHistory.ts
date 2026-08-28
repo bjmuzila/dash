@@ -97,3 +97,72 @@ export function parseGexHistory(json: unknown): GexColumn[] {
 export function valueOf(cell: GexCell, metric: GexMetric): number {
   return metric === 'vol' ? cell.netVol : cell.net
 }
+
+// ── Which SESSION DAY a column belongs to ────────────────────────────────────
+// TESTING PHASE companion to GEX_HISTORY_MINUTES_PREV_DAY. With the 48h reach
+// on, the history spans two sessions and the bubble layer draws both at once
+// with nothing on screen saying so — a Thursday wall and a Friday wall look
+// identical. These split the columns by ET calendar date so the card can NAME
+// the days it is holding and draw one of them.
+//
+// ET CALENDAR DATE, not a session window: the recorder's overnight columns
+// already carry the date of the session they lead into, so the calendar date IS
+// the session day and there is no 18:00 roll to get wrong.
+//
+// Retire with the rest of the testing phase — one session means one day, the
+// picker never renders, and this block has no callers left.
+
+const ET_DAY = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+const ET_WEEKDAY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' })
+
+/** `YYYY-MM-DD` in New York for a column's timestamp. */
+export function etDay(ts: number): string {
+  return ET_DAY.format(new Date(ts))
+}
+
+/** `Fri` — the weekday a `YYYY-MM-DD` day key falls on. */
+export function etDayShort(day: string): string {
+  // Noon UTC, so neither the ET offset nor a DST edge can move the date.
+  const t = Date.parse(`${day}T12:00:00Z`)
+  return Number.isFinite(t) ? ET_WEEKDAY.format(new Date(t)) : day
+}
+
+/** `Fri 8/28` — what the picker's tooltip spells out. */
+export function etDayLong(day: string): string {
+  const [, m, d] = day.split('-')
+  return m && d ? `${etDayShort(day)} ${Number(m)}/${Number(d)}` : day
+}
+
+/** Distinct ET days present in the history, OLDEST first. */
+export function sessionDays(columns: GexColumn[]): string[] {
+  const seen = new Set<string>()
+  for (const c of columns) seen.add(etDay(c.slotTs))
+  return [...seen].sort()
+}
+
+/**
+ * Which day the bubbles draw.
+ *
+ * Semantic, never a stored date: 'latest' has to keep meaning the newest
+ * session in the data after a rollover, and — the case this was built for — the
+ * newest session is FRIDAY when the card is opened on a Saturday, so anything
+ * anchored to the wall clock draws an empty layer all weekend.
+ */
+export type GexDay = 'latest' | 'prev' | 'both'
+
+/**
+ * The columns for `day`. A no-op unless the history actually spans two
+ * sessions, so with the 48h reach off this returns its input untouched.
+ */
+export function filterByDay(columns: GexColumn[], day: GexDay, days: string[]): GexColumn[] {
+  if (day === 'both' || days.length < 2) return columns
+  const pick = day === 'latest' ? days[days.length - 1] : days[days.length - 2]
+  if (!pick) return columns
+  return columns.filter((c) => etDay(c.slotTs) === pick)
+}

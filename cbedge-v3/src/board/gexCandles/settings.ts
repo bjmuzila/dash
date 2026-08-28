@@ -11,6 +11,7 @@
 // of a lot of looking at the thing; do not "tidy" them.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { GexDay } from './gexHistory'
 import { normalizeSymbol } from './symbols'
 
 export type Session = 'rth' | 'eth'
@@ -56,6 +57,17 @@ export interface ChartSettings {
   /** TESTING PHASE ONLY — reach back 48h so yesterday's bubbles draw too. */
   prevDay: boolean
   /**
+   * TESTING PHASE ONLY — which of the days the 48h reach returned actually
+   * draws. `prevDay` is the REACH (how far back the request asks); this is the
+   * DISPLAY (which of what came back is on the chart), and the toolbar's day
+   * picker is where it is set. Two controls because they answer two questions
+   * and only one of them costs a request.
+   *
+   * Semantic rather than a date — see GexDay. With `prevDay` off there is only
+   * one session in the data, the picker does not render and this is inert.
+   */
+  bubbleDay: GexDay
+  /**
    * Which expiry the bubbles draw. '' follows the NEAREST, which is the
    * default and the eventual permanent behaviour; a value pins it, which is
    * what the toolbar dropdown is for.
@@ -96,6 +108,10 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   // The default flips to false when this is retired — see the note on
   // GEX_HISTORY_MINUTES_PREV_DAY.
   prevDay: true,
+  // BOTH days while the layer is being tuned — the point of the 48h reach is
+  // seeing a whole day of gamma migration at once. The finished card has one
+  // session and no picker; 'latest' is what that collapses to.
+  bubbleDay: 'both',
   expiry: '',
 }
 
@@ -163,10 +179,11 @@ export const GEX_HISTORY_MINUTES = 720
  * payload and parse — of the 720 default. If the bubbles feel slow, this is the
  * first thing to turn off.
  *
- * To retire it: delete this constant and the `prevDay` setting and drop the
- * `Prev day` chip from GexCandlesCard's Layers panel. (The other half of that
- * eventual change — one expiry instead of `anyExpiry=1` — is already done; the
- * toolbar's expiry dropdown names it.)
+ * To retire it: delete this constant, the `prevDay` and `bubbleDay` settings,
+ * the `Prev day` chip in GexCandlesCard's Layers panel, the day picker beside
+ * the expiry dropdown, and the session-day block at the foot of gexHistory.ts.
+ * (The other half of that eventual change — one expiry instead of
+ * `anyExpiry=1` — is already done; the toolbar's expiry dropdown names it.)
  *
  * The route clamps `minutes` to 5760, so this is well inside what it will serve.
  */
@@ -213,6 +230,7 @@ function coerce(raw: unknown): ChartSettings {
     countdown: p.countdown !== false,
     railOn: p.railOn !== false,
     prevDay: p.prevDay !== false,
+    bubbleDay: p.bubbleDay === 'latest' || p.bubbleDay === 'prev' ? p.bubbleDay : 'both',
     expiry: typeof p.expiry === 'string' ? p.expiry : '',
   }
 }
