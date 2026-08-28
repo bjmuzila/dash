@@ -312,20 +312,29 @@ export function useWideHalf(chain: ChainRow[], spot: number): number {
   return useMemo(() => wideHalfOf(chain, spot), [chain, spot]);
 }
 
-/** Every strike either card would ever read (spot ± `half`), on `basis`. */
+/**
+ * Every strike either card would ever read (`center` ± `half`), on `basis`.
+ *
+ * `center` defaults to spot and is separate from it on purpose. The gamma MATH
+ * is a function of spot and must stay on the real one — `rowNet`/`rowMass` price
+ * the board where it actually is. The WINDOW is a viewport, and a caller
+ * replaying a session pins it so the bars stop sliding under the cursor every
+ * frame (see GammaBellCurve's `axisAnchor`).
+ */
 export function useWideBins(
-  chain: ChainRow[], spot: number, basis: GammaBasis, half: number,
+  chain: ChainRow[], spot: number, basis: GammaBasis, half: number, center?: number,
 ): Bin[] {
   return useMemo(() => {
     if (!chain.length || !(spot > 0) || !(half > 0)) return [];
-    const lo = spot - half;
-    const hi = spot + half;
+    const mid = center != null && center > 0 ? center : spot;
+    const lo = mid - half;
+    const hi = mid + half;
     return chain
       .filter((r) => Number.isFinite(r.strike) && r.strike >= lo && r.strike <= hi)
       .map((r) => ({ k: r.strike, net: rowNet(r, basis, spot), mass: rowMass(r, basis, spot) }))
       .filter((b) => Number.isFinite(b.net) && Number.isFinite(b.mass))
       .sort((a, b) => a.k - b.k);
-  }, [chain, spot, basis, half]);
+  }, [chain, spot, basis, half, center]);
 }
 
 /** Typical strike spacing — the curve's integration step and the bar width. */
@@ -483,10 +492,34 @@ export function useStrikeWindow(opts: {
    * 5-wide grid that is min(14, 15) = 14, exactly what it always was.
    */
   minHalf?: number;
+  /**
+   * WHERE THE WINDOW SITS, when it is not sitting on spot.
+   *
+   * The default centre is spot, and on a live chart that is right: the board
+   * moves a point at a time and the window following it is invisible. On a
+   * REPLAY it is wrong. Spot jumps every frame, so the whole axis re-centres
+   * every frame and all the bars slide sideways under the cursor — the page
+   * looks like it is shaking, and the one thing you are trying to watch (which
+   * strike grew) is the one thing that will not hold still.
+   *
+   * A caller replaying a session passes a centre that does NOT depend on the
+   * frame, and spot becomes what it should have been all along: a marker moving
+   * across a fixed axis.
+   */
+  center?: number;
+  /**
+   * A lower bound on the auto/Range half-width. A replay anchor uses it to
+   * guarantee the window is wide enough to hold the WHOLE session's spot travel,
+   * so pinning the axis can never push spot off the side of its own chart.
+   */
+  floorHalf?: number;
 }) {
   const { spot, wide, zoom, flip, callWall, putWall, W, padL, plotW, svgRef } = opts;
-  const maxHalf = opts.maxHalf != null && opts.maxHalf > 0 ? opts.maxHalf : spot * MAX_BAND;
+  /** The window's centre of gravity — the anchor when there is one, else spot. */
+  const anchor = opts.center != null && opts.center > 0 ? opts.center : spot;
+  const maxHalf = opts.maxHalf != null && opts.maxHalf > 0 ? opts.maxHalf : anchor * MAX_BAND;
   const minHalf = opts.minHalf != null && opts.minHalf > 0 ? Math.min(opts.minHalf, MIN_HALF) : MIN_HALF;
+  const floorHalf = opts.floorHalf != null && opts.floorHalf > 0 ? Math.min(opts.floorHalf, maxHalf) : 0;
 
   const [view, setView] = useState<{ c: number; h: number } | null>(null);
   const [yScale, setYScale] = useState(1);
@@ -495,22 +528,27 @@ export function useStrikeWindow(opts: {
 
   const reset = useCallback(() => { setView(null); setYScale(1); }, []);
 
+  // Sized off the ANCHOR too: autoHalf measures distances to the walls and the
+  // flip, and taking them from a spot that moves every frame would re-size the
+  // window on every frame — the vertical twin of the sideways slide.
   const tabHalf = useMemo(
-    () => autoHalf(wide, zoom, spot, flip, callWall, putWall, maxHalf),
-    [wide, zoom, spot, flip, callWall, putWall, maxHalf],
+    () => autoHalf(wide, zoom, anchor, flip, callWall, putWall, maxHalf),
+    [wide, zoom, anchor, flip, callWall, putWall, maxHalf],
   );
 
-  const center = view ? view.c : spot;
-  const half = view ? view.h : tabHalf;
+  const center = view ? view.c : anchor;
+  const half = view ? view.h : Math.max(tabHalf, floorHalf);
   const k0 = center - half;
   const k1 = center + half;
 
   // Handlers read live geometry off a ref: the wheel listener is bound once
   // (natively, non-passive) and would otherwise close over a stale window.
-  const domRef = useRef({ k0, k1, W, padL, plotW, spot, maxHalf, minHalf });
+  // `spot` here is the window's anchor, not the traded price: it is only ever
+  // read as the centre the pan/zoom clamp is measured from.
+  const domRef = useRef({ k0, k1, W, padL, plotW, spot: anchor, maxHalf, minHalf });
   useEffect(() => {
-    domRef.current = { k0, k1, W, padL, plotW, spot, maxHalf, minHalf };
-  }, [k0, k1, W, padL, plotW, spot, maxHalf, minHalf]);
+    domRef.current = { k0, k1, W, padL, plotW, spot: anchor, maxHalf, minHalf };
+  }, [k0, k1, W, padL, plotW, anchor, maxHalf, minHalf]);
 
   const clampWin = useCallback((c: number, h: number) => {
     const d = domRef.current;

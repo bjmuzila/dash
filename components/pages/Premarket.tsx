@@ -212,6 +212,9 @@ import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/Post
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
 import { GexChurnHistory, useGexChurnHistory } from "@/components/shared/GexHeatBar";
+// The replay transport is /es-candles' transport, part for part — see the
+// comment on the docked bar at the bottom of this file.
+import { DockButton, DockSlider, SegGroup } from "@/components/shared/DockToolbar";
 import GammaBellCurve, { GAMMA_BELL_CSS } from "@/components/pages/premarket/GammaBellCurve";
 import GexProfile, { PROFILE_ROW_H } from "@/components/pages/premarket/GexProfile";
 import { useChainGex, useMultiExpiryGex } from "@/components/pages/premarket/chainGex";
@@ -416,10 +419,23 @@ const CSS = `
   box-shadow:0 -14px 34px rgba(0,0,0,.34)}
 /* Same centred column as .wrap, so the transport lines up with the page. */
 .pmk .rplwrap{max-width:1560px;margin:0 auto}
-.pmk .rplrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pmk .rplrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .pmk .rplrow+.rplrow{margin-top:9px}
-.pmk .rpltag{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+.pmk .rpltag{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
   color:var(--cyan);white-space:nowrap}
+/* One cluster of keys — /es-candles groups its transport the same way, so the
+   bar reads as three controls rather than nine buttons. */
+.pmk .rplgrp{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.pmk .rpldate{font-size:12px;font-weight:800;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  color:var(--cyan);min-width:78px;text-align:center;white-space:nowrap}
+.pmk .rplsp{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2)}
+/* Close, pinned right. Same shape and reason as /es-candles' ✕: the
+   no-frames branch renders one sentence and no transport, so without this the
+   bar could be opened and not closed. */
+.pmk .rplx{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  background:${ink(0.04)};border:1px solid ${HT.border};color:var(--dim2);cursor:pointer;
+  font:inherit;font-size:15px;line-height:1;font-weight:700;flex-shrink:0}
+.pmk .rplx:hover{background:var(--active);color:var(--txt)}
 /* Transport buttons. Square-ish and monospaced so ▶ / ❚❚ do not change the
    button's width when the state flips — a play control that resizes as you use
    it is the one place a 2px shift is genuinely annoying. */
@@ -432,7 +448,8 @@ const CSS = `
 .pmk .rplclock{font-size:14px;font-weight:650;color:var(--txt);font-variant-numeric:tabular-nums;
   white-space:nowrap}
 .pmk .rplclock small{font-size:10.5px;font-weight:500;color:var(--dim2);letter-spacing:.06em}
-.pmk .rplscrub{flex:1;min-width:160px;accent-color:${HT.cyan}}
+/* The scrub is a DockSlider now (width:"auto" → it flexes), so the old bare
+   <input type=range> rule is gone rather than left to rot. */
 /* Coverage toggle. Square, so ⓘ never changes the row's height. */
 .pmk .rplt.info{min-width:30px;padding:4px 8px}
 .pmk .rplt.info.on{border-color:var(--cyanEdge);color:var(--cyan)}
@@ -1200,6 +1217,36 @@ export default function Premarket() {
    *  this toggle rather than spending three lines of viewport permanently. */
   const [replayNoteOpen, setReplayNoteOpen] = useState(false);
 
+  /**
+   * The recorded sessions, newest first — the only dates the ◀ / ▶ stepper may
+   * land on. Stepping onto a date with no frames would be a control that turns
+   * its own transport off.
+   */
+  const replayDates = useMemo(
+    () => [...replayByDate.keys()].sort().reverse(),
+    [replayByDate],
+  );
+  /** "Fri, 8/28" — /es-candles' day-picker format, so the two bars read alike. */
+  const replayDayLabel = useCallback((d: string) => {
+    if (!d) return "—";
+    const [y, m, day] = d.split("-").map(Number);
+    if (!y || !m || !day) return d;
+    return new Date(y, m - 1, day, 12).toLocaleDateString("en-US", {
+      weekday: "short", month: "numeric", day: "numeric",
+    });
+  }, []);
+  /** −1 = the session before the one on screen, +1 = the one after. */
+  const stepReplayDate = useCallback((dir: -1 | 1) => {
+    if (!replayDates.length) return;
+    const i = replayDates.indexOf(sessionDate);
+    // Not on a recorded date at all (replay was just switched on over a live
+    // day): step to the newest recording rather than doing nothing.
+    const next = i < 0 ? replayDates[0] : replayDates[i - dir];
+    if (!next || next === sessionDate) return;
+    setReplayPlaying(false);
+    setSessionDate(next);
+  }, [replayDates, sessionDate]);
+
   useEffect(() => {
     if (replayOn && sym !== "SPX") setSym("SPX");
   }, [replayOn, sym]);
@@ -1242,6 +1289,37 @@ export default function Premarket() {
   const replay = replayOn && !!replayGex;
   /** Strikes each side of spot the frame kept, 0 when it is the full board. */
   const replayTrim = replayFrame?.payload?.trimmedSide ?? 0;
+
+  /**
+   * THE BELL CURVE'S FIXED AXIS, for the length of a replay.
+   *
+   * Every chart on this page centres its strike window on spot, and on a live
+   * board that is invisible — spot moves a point at a time. Stepped through a
+   * recorded session it is the opposite: spot jumps every frame, the window
+   * re-centres every frame, and every bar slides sideways under the cursor. The
+   * page reads as SHAKING, and the one thing a replay exists to show — which
+   * strike grew — is the one thing that will not hold still long enough to be
+   * watched.
+   *
+   * So while replay is on, the gamma card gets an axis anchored to the MIDPOINT
+   * of the whole session's spot range, plus that range's half-width as a floor
+   * on the window. The bars then stay put and SPOT is what moves across them,
+   * which is the right way round; and because the floor covers the day's whole
+   * travel, pinning the axis can never push spot off the side of its own chart.
+   *
+   * Computed off every frame, not the current one, so it does not move as the
+   * scrubber does. Null when replay is off — the live chart still follows spot.
+   */
+  const replayAxisAnchor = useMemo(() => {
+    if (!replayOn || !replayFrames.length) return null;
+    let lo = Infinity, hi = -Infinity;
+    for (const f of replayFrames) {
+      const s2 = Number(f.payload?.spot);
+      if (Number.isFinite(s2) && s2 > 0) { lo = Math.min(lo, s2); hi = Math.max(hi, s2); }
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+    return { center: (lo + hi) / 2, halfSpan: (hi - lo) / 2 };
+  }, [replayOn, replayFrames]);
 
   // THE SWAP. Replay wins over a frozen slot on the same date — you asked to
   // drive the session, so the two-a-day capture stops being what is on screen.
@@ -3026,6 +3104,9 @@ export default function Premarket() {
             /* Says "captured session, not live" in the card footer — true of a
                replayed frame for exactly the same reason. */
             frozen={frozen || replay}
+            /* Pins the strike axis for the length of a replay so the bars stop
+               sliding and spot moves across them instead. See the memo. */
+            axisAnchor={replayAxisAnchor}
           />
 
           {/* Which strikes grew far more than normal at yesterday's close.
@@ -3097,86 +3178,126 @@ export default function Premarket() {
           on the Post-Market tab — is nowhere near the top. A transport you have
           to scroll back up to reach is a transport you stop using.
 
+          ── THE CONTROLS ARE /es-candles' ──────────────────────────────────
+          Same components, same order, same language: DockButton for every
+          transport key, SegGroup for the speed strip, DockSlider for the
+          scrub, ● Live to leave and ✕ to close. That page's replay is the one
+          people learn first, and two replays on one site that look different
+          read as two features with two sets of rules. The ◀ date ▶ stepper is
+          from there too — it beats going back up to the session picker to
+          answer "what did yesterday look like".
+
           Shown whenever replay is ON — including while the frames request is in
           flight and when a session turns out to have none — because a toggle
-          that silently does nothing is worse than one that says why.
-
-          ONE row now, not three. A docked bar spends viewport permanently: the
-          transport, the scrubber and the clock earn that, the coverage caveats
-          do not, so they moved behind the ⓘ. */}
+          that silently does nothing is worse than one that says why. The
+          coverage caveats are behind the ⓘ: a docked bar spends viewport
+          permanently, and the transport is what earns it. */}
       {replayOn && (
         <div className="rplbar">
           <div className="rplwrap">
             <div className="rplrow">
-              <span className="rpltag">Replay · {sessionLabel(sessionDate)}</span>
-              <button
-                type="button" className="rplt"
-                disabled={replayIdx <= 0}
-                title="Back one frame"
-                onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }}
-              >◀</button>
-              <button
-                type="button" className="rplt play"
-                disabled={!replayFrames.length}
-                onClick={() => {
-                  // Pressing Play on the last frame restarts from the open —
-                  // otherwise the button appears dead at exactly the position
-                  // the page always lands on.
-                  if (replayIdx >= replayFrames.length - 1) setReplayIdx(0);
-                  setReplayPlaying((p) => !p);
-                }}
-              >{replayPlaying ? "❚❚ Pause" : "▶ Play"}</button>
-              <button
-                type="button" className="rplt"
-                disabled={replayIdx >= replayFrames.length - 1}
-                title="Forward one frame"
-                onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayFrames.length - 1, i + 1)); }}
-              >▶</button>
-              <div className="seg" role="group" aria-label="Replay speed">
-                {REPLAY_SPEEDS.map((sp) => (
-                  <button
-                    key={sp} type="button"
-                    className={replaySpeed === sp ? "on" : ""}
-                    aria-pressed={replaySpeed === sp}
-                    onClick={() => setReplaySpeed(sp)}
-                  >{sp}×</button>
-                ))}
+              <span className="rpltag">Replay</span>
+
+              {/* DATE STEPPER — across the sessions that actually have frames,
+                  not every session on the picker. Stepping onto a date with no
+                  recording would be a control that turns itself off. */}
+              <div className="rplgrp">
+                <DockButton
+                  onClick={() => stepReplayDate(-1)}
+                  title="Previous recorded session"
+                ><span>◀</span></DockButton>
+                <span className="rpldate">{replayDayLabel(sessionDate)}</span>
+                <DockButton
+                  onClick={() => stepReplayDate(1)}
+                  title="Next recorded session"
+                ><span>▶</span></DockButton>
               </div>
 
-              {/* The scrubber shares the row now. With no frames it would be a
-                  dead track taking the whole width, so the reason takes its
-                  place instead — the bar never goes quiet. */}
-              {replayFrames.length ? (
-                <input
-                  type="range" className="rplscrub"
-                  min={0} max={Math.max(0, replayFrames.length - 1)}
-                  value={Math.min(replayIdx, Math.max(0, replayFrames.length - 1))}
-                  aria-label="Replay position"
-                  onChange={(e) => { setReplayPlaying(false); setReplayIdx(Number(e.target.value)); }}
-                />
-              ) : (
+              {!replayFrames.length ? (
                 <span className="rplmsg">
                   {replayState === "loading" ? "Loading this session’s frames…"
                     : replayState === "error" ? "Could not load this session’s frames."
-                      : "No frames recorded for this session."}
+                      : "No frames recorded for this session — step ◀ / ▶ to another."}
                 </span>
+              ) : (
+                <>
+                  <div className="rplgrp">
+                    <DockButton
+                      onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }}
+                      title="Step back one frame"
+                    ><span>⏮</span></DockButton>
+                    <DockButton
+                      onClick={() => {
+                        // Play on the last frame restarts from the open —
+                        // otherwise the button looks dead at exactly the
+                        // position the page always lands on.
+                        if (replayIdx >= replayFrames.length - 1) setReplayIdx(0);
+                        setReplayPlaying((p) => !p);
+                      }}
+                      title={replayPlaying ? "Pause" : "Play"}
+                    ><span style={{ minWidth: 12, display: "inline-block", textAlign: "center" }}>{replayPlaying ? "⏸" : "▶"}</span></DockButton>
+                    <DockButton
+                      onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayFrames.length - 1, i + 1)); }}
+                      title="Step forward one frame"
+                    ><span>⏭</span></DockButton>
+                  </div>
+
+                  <DockSlider
+                    label="min"
+                    value={Math.min(replayIdx, replayFrames.length - 1)}
+                    min={0}
+                    max={Math.max(0, replayFrames.length - 1)}
+                    step={1}
+                    width="auto"
+                    title="Scrub through the session"
+                    format={(v) => etClockOf(replayFrames[Math.min(Math.round(v), replayFrames.length - 1)]?.minute ?? 0)}
+                    onChange={(v) => { setReplayPlaying(false); setReplayIdx(Math.round(v)); }}
+                  />
+
+                  <span className="rplclock">
+                    {replayFrame ? etClockOf(replayFrame.minute) : "—:—"} <small>ET</small>
+                    {replayFrames.length
+                      ? <small> · {Math.min(replayIdx, replayFrames.length - 1) + 1}/{replayFrames.length}</small>
+                      : null}
+                    {replayFrame ? <small> · spot {fmtPx(replayFrame.payload.spot, 2)}</small> : null}
+                  </span>
+
+                  <div className="rplgrp">
+                    <span className="rplsp">Speed</span>
+                    <SegGroup
+                      options={REPLAY_SPEEDS.map((sp) => ({ label: `${sp}×`, value: String(sp) }))}
+                      active={String(replaySpeed)}
+                      onChange={(v) => setReplaySpeed(Number(v))}
+                    />
+                  </div>
+
+                  <DockButton
+                    onClick={() => setReplayOn(false)}
+                    title="Exit replay — back to the live page"
+                    style={{ color: HT.cyan }}
+                  ><span>● Live</span></DockButton>
+                </>
               )}
 
-              <span className="rplclock">
-                {replayFrame ? etClockOf(replayFrame.minute) : "—:—"} <small>ET</small>
-                {replayFrame ? <small> · spot {fmtPx(replayFrame.payload.spot, 2)}</small> : null}
-                {replayFrames.length
-                  ? <small> · frame {Math.min(replayIdx, replayFrames.length - 1) + 1}/{replayFrames.length}</small>
-                  : null}
-              </span>
-
+              {/* ⓘ and ✕ pinned right. ✕ is OUTSIDE the frames branch for the
+                  same reason /es-candles keeps its own outside: on a session
+                  with nothing recorded the bar is one sentence, and a dock you
+                  can open and not close is a trap. */}
               <button
                 type="button"
                 className={`rplt info${replayNoteOpen ? " on" : ""}`}
+                style={{ marginLeft: "auto" }}
                 aria-expanded={replayNoteOpen}
                 title={replayNoteOpen ? "Hide what this replay covers" : "What this replay covers"}
                 onClick={() => setReplayNoteOpen((v) => !v)}
               >ⓘ</button>
+              <button
+                type="button"
+                className="rplx"
+                title="Close replay — back to live"
+                aria-label="Close replay"
+                onClick={() => setReplayOn(false)}
+              >✕</button>
             </div>
 
             {replayNoteOpen && (

@@ -127,7 +127,7 @@ export const GAMMA_BELL_CSS = `
 `;
 
 export default function GammaBellCurve({
-  chain, spot, expiry, isZeroDte, flip, callWall, putWall, frozen,
+  chain, spot, expiry, isZeroDte, flip, callWall, putWall, frozen, axisAnchor,
 }: {
   chain: ChainRow[];
   spot: number;
@@ -138,6 +138,19 @@ export default function GammaBellCurve({
   putWall?: number | null;
   /** A captured past session — the footer says so instead of implying live. */
   frozen?: boolean;
+  /**
+   * PIN THE AXIS. `center` is the strike the window sits on and `halfSpan` the
+   * least half-width it must cover.
+   *
+   * Passed by a caller stepping through a recorded session. Spot jumps every
+   * frame, so an axis centred on spot re-centres every frame and every bar
+   * slides sideways under the cursor — the card, and the page around it, reads
+   * as shaking, and "which strike grew" becomes unwatchable. Anchored, the bars
+   * hold still and SPOT moves across them, which is the right way round; the
+   * `halfSpan` floor is what keeps spot inside its own chart for the whole
+   * session. Null/absent = follow spot, which is correct live.
+   */
+  axisAnchor?: { center: number; halfSpan: number } | null;
 }) {
   /**
    * PRICE DECIMALS. Every price on this card used to go through nfp(), which
@@ -188,13 +201,30 @@ export default function GammaBellCurve({
    * the wrong unit for a strike ladder. AMZN's ±3% was SEVEN strikes and the
    * card drew seven bars with a bell fitted through them. See wideHalfOf.
    */
-  const wideHalf = useWideHalf(chain, spot);
-  const wide = useWideBins(chain, spot, basis, wideHalf);
+  /**
+   * The centre everything about the VIEW is measured from. It is spot on a live
+   * board and the replay anchor while a session is being stepped through — see
+   * the `axisAnchor` prop. The gamma MATH below never uses it: `useWideBins`
+   * still prices every strike off the real spot, because that is what gamma is
+   * a function of. This only decides where the window sits.
+   */
+  const axisMid = axisAnchor && axisAnchor.center > 0 ? axisAnchor.center : spot;
+  /** The day's spot travel, so the pinned window is wide enough to hold it. */
+  const axisFloor = axisAnchor && axisAnchor.halfSpan > 0 ? axisAnchor.halfSpan : 0;
+
+  const wideBase = useWideHalf(chain, axisMid);
+  // Anchored, the pool has to reach the ends of the session's travel as well as
+  // the usual band — otherwise panning could not follow spot to its extremes.
+  const wideHalf = wideBase + axisFloor;
+  const wide = useWideBins(chain, spot, basis, wideHalf, axisMid);
   const gridStep = useGridStep(wide);
 
   const win = useStrikeWindow({
     spot, wide, zoom, flip, callWall, putWall,
     W, padL: PAD.l, plotW, svgRef,
+    center: axisMid,
+    // A margin of three strikes past the travel, so spot never rides the edge.
+    floorHalf: axisFloor > 0 ? axisFloor + gridStep * 3 : 0,
     maxHalf: wideHalf,
     // The zoom floor follows the ladder rather than a 14-point constant: three
     // strikes across is the same read on any grid. min() inside the hook keeps
@@ -230,6 +260,39 @@ export default function GammaBellCurve({
       totalMass: binsIn.reduce((s, b) => s + b.mass, 0),
       netTotal: binsIn.reduce((s, b) => s + b.net, 0),
     };
+  }, [binsIn]);
+
+  /**
+   * ONE BELL PER SIDE, on the net pane.
+   *
+   * The top pane fits a normal through gamma MASS, which is unsigned and has
+   * one hump. Net GEX has two, and they are different questions: where the
+   * long-gamma block is centred and how wide it is, and the same for the short
+   * one. A single curve through the signed series would answer neither — it
+   * would be a line through a shape that changes sign.
+   *
+   * So each side is fitted on its own, by handing `lsqGaussian` the same rows
+   * with `mass` set to that side's magnitude (the positive part for long, the
+   * negative part's absolute value for short). Zero-mass strikes drop out, so
+   * each fit sees only its own side's bars — the other side is not "flat data"
+   * dragging the width out, it is simply absent.
+   *
+   * Under five bars a side gets no curve at all rather than a fitted line
+   * through three points: that is `lsqGaussian`'s own floor before it falls
+   * back to the moment fit, and on a one-sided 0DTE board it fires often.
+   */
+  const sideFits = useMemo(() => {
+    const sideOf = (sign: 1 | -1) => {
+      if (!binsIn.length) return null;
+      const rows: Bin[] = binsIn
+        .map((b) => ({ k: b.k, net: b.net, mass: Math.max(0, sign * b.net) }))
+        .filter((b) => b.mass > 0);
+      if (rows.length < 5) return null;
+      const g = lsqGaussian(rows);
+      if (!g || !(g.a > 0) || !(g.sigma > 0)) return null;
+      return { ...g, total: rows.reduce((acc, b) => acc + b.mass, 0) };
+    };
+    return { long: sideOf(1), short: sideOf(-1) };
   }, [binsIn]);
 
   // ── scales ────────────────────────────────────────────────────────────────
@@ -388,6 +451,25 @@ export default function GammaBellCurve({
     }
     return pts.join(" ");
   })();
+
+  /**
+   * The two side bells, drawn on the net pane's own scale and at their own
+   * amplitude — same rule as the mass curve above. `sign` puts the short one
+   * below the zero line, where its bars are.
+   */
+  const sideCurve = (f: { a: number; mu: number; sigma: number } | null, sign: 1 | -1) => {
+    if (!f) return null;
+    const N = 220;
+    const pts: string[] = [];
+    for (let i = 0; i <= N; i++) {
+      const k = k0 + ((k1 - k0) * i) / N;
+      const v = f.a * Math.exp(-((k - f.mu) ** 2) / (2 * f.sigma * f.sigma));
+      pts.push(`${i === 0 ? "M" : "L"}${x(k).toFixed(2)},${yNet(sign * v).toFixed(2)}`);
+    }
+    return pts.join(" ");
+  };
+  const longPath = sideCurve(sideFits.long, 1);
+  const shortPath = sideCurve(sideFits.short, -1);
 
   const rawStep = (k1 - k0) / 6;
   const mag = 10 ** Math.floor(Math.log10(Math.max(rawStep, 1)));
@@ -554,16 +636,36 @@ export default function GammaBellCurve({
                   opacity={hv == null || hv.k === b.k ? 0.92 : 0.5} />
               );
             })}
+            {/* ONE BELL PER SIDE. Amber on this card means "the fitted normal"
+                — the mass curve above is amber for the same reason — so the
+                three curves read as one idea applied three times rather than
+                three unrelated overlays. Thinner than the mass fit (1.8 vs
+                2.2) because these two sit ON their bars rather than over a
+                single histogram, and a heavy stroke there hides the bars it is
+                describing. */}
+            {longPath && (
+              <path d={longPath} fill="none" stroke="var(--amber)" strokeWidth={1.8}
+                strokeLinejoin="round" opacity={0.95} />
+            )}
+            {shortPath && (
+              <path d={shortPath} fill="none" stroke="var(--amber)" strokeWidth={1.8}
+                strokeLinejoin="round" opacity={0.95} />
+            )}
           </g>
           {/* The two sides named on the pane itself, so "green/red" never has
-              to be looked up in a legend. */}
+              to be looked up in a legend — and each side's own fit printed
+              beside its name, because a curve with no numbers is a decoration.
+              A side with too few bars to fit says nothing extra rather than
+              printing a width nobody should trust. */}
           <text x={PAD.l + 6} y={botY0 + 11} fontSize={9} fill="var(--pos)" className="gd-pane-l"
             stroke="var(--panel)" strokeWidth={3} paintOrder="stroke">
             long gamma · dealers dampen
+            {sideFits.long ? ` · peak ${nfp(sideFits.long.mu)} · σ ${nfp(sideFits.long.sigma)}` : ""}
           </text>
           <text x={PAD.l + 6} y={botY1 - 4} fontSize={9} fill="var(--neg)" className="gd-pane-l"
             stroke="var(--panel)" strokeWidth={3} paintOrder="stroke">
             short gamma · dealers amplify
+            {sideFits.short ? ` · peak ${nfp(sideFits.short.mu)} · σ ${nfp(sideFits.short.sigma)}` : ""}
           </text>
 
           {/* ── shared: level rules across both panes ──────────────────────── */}
