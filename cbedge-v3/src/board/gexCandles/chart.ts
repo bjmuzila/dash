@@ -37,8 +37,12 @@ function hexToRgb(hex: string, fallback: [number, number, number]): [number, num
 }
 
 export interface ChartDrawOpts {
+  /** Top radius, as a multiple of the pane-height cap. */
   size: number
-  curve: number
+  /** Minimum radius in CSS pixels for anything that is drawn at all. */
+  floorPx: number
+  /** Exponent on a mark's ratio. 1 = linear in |GEX|. */
+  variance: number
   intensity: number
   on: boolean
 }
@@ -193,7 +197,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
 
   let snaps: BubbleSnapshot[] = []
   let barCount = 0
-  let drawOpts: ChartDrawOpts = { size: 1, curve: 1, intensity: 1, on: true }
+  let drawOpts: ChartDrawOpts = { size: 1, floorPx: 1.5, variance: 1, intensity: 1, on: true }
   let railSink: RailSink | null = null
   let raf = 0
   // The forming bar, kept here so a live tick can extend it without going back
@@ -391,7 +395,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         width: w,
         height: h,
       },
-      { size: drawOpts.size, curve: drawOpts.curve, intensity: drawOpts.intensity },
+      { size: drawOpts.size, floorPx: drawOpts.floorPx, variance: drawOpts.variance, intensity: drawOpts.intensity },
       palette,
     )
     reportOutOfRange(!drew)

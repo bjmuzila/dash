@@ -34,8 +34,15 @@ export interface ChartSettings {
   bubblesOn: boolean
   /** How many strikes draw on EACH side of spot, strongest first. */
   bubbleLevels: number
-  /** Scales the whole ladder at once. */
+  /** The TOP radius, as a multiple of the pane-height cap. */
   bubbleSize: number
+  /** The smallest a drawn mark may be, in CSS pixels. */
+  bubbleFloor: number
+  /**
+   * Drop any strike holding under this PERCENT of the board's total |GEX|.
+   * A number you can read straight off the GEX table.
+   */
+  bubbleCutoff: number
   /** How hard the biggest levels pull away from the rest. 1 = straight linear. */
   bubbleCurve: number
   /** Overall opacity of the layer. */
@@ -69,7 +76,16 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   // inside without the ladder turning into a wall of circles.
   bubbleLevels: 3,
   bubbleSize: 1,
-  bubbleCurve: 1,
+  // ~1.5px. Every level that survives the gates is visible; whether a level is
+  // ON the chart is the cutoff's decision, never the size slider's.
+  bubbleFloor: 1.5,
+  // 0.4% of the board. Low enough to keep a real secondary level, high enough
+  // that the long tail of sub-1% strikes does not speckle the pane.
+  bubbleCutoff: 0.4,
+  // Above 1 by default: on a typical ladder the top strikes sit within a few
+  // percent of each other, and straight linear makes six near-identical
+  // circles. 1.5 separates the walls without flattening everything below them.
+  bubbleCurve: 1.5,
   bubbleIntensity: 1,
   gexMetric: 'voloi',
   countdown: true,
@@ -86,7 +102,12 @@ export const DEFAULT_SETTINGS: ChartSettings = {
 /** Per SIDE of spot, so the drawn count is up to 2× this. */
 export const BUBBLE_LEVELS_RANGE = { min: 1, max: 8 }
 export const BUBBLE_SIZE_RANGE = { min: 0.4, max: 4 }
-export const BUBBLE_CURVE_RANGE = { min: 1, max: 3 }
+export const BUBBLE_FLOOR_RANGE = { min: 0, max: 8 }
+/** Percent of the board's total |GEX|. */
+export const BUBBLE_CUTOFF_RANGE = { min: 0, max: 5 }
+// Below 1 is now allowed: it FLATTENS the ladder, which is what you want when
+// the small levels are the ones being read.
+export const BUBBLE_CURVE_RANGE = { min: 0.3, max: 3 }
 export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 }
 
 /**
@@ -94,7 +115,7 @@ export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 }
  * preference — the four sliders above are the preferences.
  */
 export const BUBBLE_STYLE = {
-  /** Hard radius floor, px. */
+  /** Hard radius floor, px — the absolute limit under the user's own floor. */
   minPx: 0.8,
   /** The core may not exceed this fraction of the pane's height. Spacing alone
    *  would let six marks on a tall, sparse pane grow until the ladder was
@@ -176,6 +197,12 @@ function coerce(raw: unknown): ChartSettings {
       clamp(num(p.bubbleLevels, DEFAULT_SETTINGS.bubbleLevels), BUBBLE_LEVELS_RANGE.min, BUBBLE_LEVELS_RANGE.max),
     ),
     bubbleSize: clamp(num(p.bubbleSize, DEFAULT_SETTINGS.bubbleSize), BUBBLE_SIZE_RANGE.min, BUBBLE_SIZE_RANGE.max),
+    bubbleFloor: clamp(num(p.bubbleFloor, DEFAULT_SETTINGS.bubbleFloor), BUBBLE_FLOOR_RANGE.min, BUBBLE_FLOOR_RANGE.max),
+    bubbleCutoff: clamp(
+      num(p.bubbleCutoff, DEFAULT_SETTINGS.bubbleCutoff),
+      BUBBLE_CUTOFF_RANGE.min,
+      BUBBLE_CUTOFF_RANGE.max,
+    ),
     bubbleCurve: clamp(num(p.bubbleCurve, DEFAULT_SETTINGS.bubbleCurve), BUBBLE_CURVE_RANGE.min, BUBBLE_CURVE_RANGE.max),
     bubbleIntensity: clamp(
       num(p.bubbleIntensity, DEFAULT_SETTINGS.bubbleIntensity),

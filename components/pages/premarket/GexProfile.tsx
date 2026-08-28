@@ -144,9 +144,29 @@ export default function GexProfile({
   // ── scroll + centring ──────────────────────────────────────────────────────
   const chartRef = useRef<HTMLDivElement | null>(null);
   const pinnedRef = useRef(true);
-  const progScrollRef = useRef(false);
-  /** The scrollTop WE last wrote — see onChartScroll. */
-  const progTopRef = useRef(-1);
+  /**
+   * When a real INPUT GESTURE last touched this panel.
+   *
+   * The panel un-pins on a scroll the reader performed and must NOT un-pin on
+   * one the browser performed — and a scroll event says nothing about which it
+   * was. It used to try to tell them apart by remembering the scrollTop it had
+   * written, and that broke on the case that matters most:
+   *
+   *   switch symbol → the old ladder's 121 rows are replaced by an empty one
+   *   → the browser CLAMPS scrollTop from 1,140 to 0 and fires a scroll event
+   *   → that event matches neither guard, so the panel un-pinned itself
+   *   → the new symbol's board then loaded and was never centred, opening
+   *     sixty strikes above the money with "back to spot" already showing.
+   *
+   * Which is exactly what AMD did. Content collapsing, a resize, a zoom and our
+   * own centring write all produce that same "unexplained" scroll event.
+   *
+   * So the question is asked the other way round: a scroll only counts as the
+   * reader's if a wheel, a drag, a touch or a key happened just before it.
+   * Nothing else can un-pin the panel, which makes every one of those cases
+   * safe by construction rather than by a guard per case.
+   */
+  const gestureAtRef = useRef(0);
   const [pinned, setPinned] = useState(true);
 
   /**
@@ -178,14 +198,7 @@ export default function GexProfile({
         el.scrollHeight - el.clientHeight,
       ),
     );
-    // Already there — do not write, so a stationary pinned panel never marks a
-    // programmatic scroll it did not perform.
-    if (Math.abs(el.scrollTop - target) <= 1) return true;
-    progScrollRef.current = true;
-    progTopRef.current = target;
-    el.scrollTop = target;
-    // The scroll event lands on the next frame, so the flag is cleared there.
-    requestAnimationFrame(() => { progScrollRef.current = false; });
+    if (Math.abs(el.scrollTop - target) > 1) el.scrollTop = target;
     return true;
   }, [bars, spotStrike]);
 
@@ -203,7 +216,6 @@ export default function GexProfile({
    * middle without changing `bars` at all.
    */
   useEffect(() => {
-    if (!pinnedRef.current) return;
     let raf = 0;
     let tries = 0;
     const tick: () => void = () => {
@@ -211,8 +223,12 @@ export default function GexProfile({
       if (!pinnedRef.current) return;
       if (!centerOnSpot() && tries++ < 90) raf = requestAnimationFrame(tick);
     };
-    tick();
+    if (pinnedRef.current) tick();
 
+    // The observer is attached UNCONDITIONALLY — outside the pinned check. It
+    // used to sit behind it, so a panel that happened to be un-pinned when the
+    // effect ran got no observer at all and then never re-centred once it was
+    // re-pinned, because nothing was watching the box any more.
     const el = chartRef.current;
     const ro = el && typeof ResizeObserver !== "undefined"
       ? new ResizeObserver(() => { if (pinnedRef.current) centerOnSpot(); })
@@ -225,14 +241,14 @@ export default function GexProfile({
     };
   }, [centerOnSpot]);
 
+  /** A wheel, a drag, a touch or a key — see gestureAtRef. */
+  const markGesture = useCallback(() => { gestureAtRef.current = Date.now(); }, []);
+
   const onChartScroll = useCallback(() => {
-    if (progScrollRef.current) return;
-    // Second guard, because the rAF above can win the race against the scroll
-    // event on a slow frame: a scroll that lands exactly where WE put it is
-    // ours, not a hand on the wheel. Without this the panel un-pinned itself on
-    // its own centring write and never re-centred again.
-    const el = chartRef.current;
-    if (el && progTopRef.current >= 0 && Math.abs(el.scrollTop - progTopRef.current) <= 1) return;
+    // Only a scroll the READER caused un-pins the panel. 700ms is comfortably
+    // longer than the smooth-scroll a single wheel notch produces and far
+    // shorter than any gap between a gesture and an unrelated reflow.
+    if (Date.now() - gestureAtRef.current > 700) return;
     if (pinnedRef.current) { pinnedRef.current = false; setPinned(false); }
   }, []);
 
@@ -246,7 +262,7 @@ export default function GexProfile({
   useEffect(() => {
     pinnedRef.current = true;
     setPinned(true);
-    progTopRef.current = -1;
+    gestureAtRef.current = 0;
   }, [resetKey]);
 
   /**
@@ -280,6 +296,10 @@ export default function GexProfile({
           className="chart"
           ref={chartRef}
           onScroll={onChartScroll}
+          onWheel={markGesture}
+          onTouchMove={markGesture}
+          onPointerDown={markGesture}
+          onKeyDown={markGesture}
           style={bars.length
             ? { height: PROFILE_VIEW_H, paddingTop: PROFILE_PAD, paddingBottom: PROFILE_PAD }
             : undefined}

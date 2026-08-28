@@ -73,14 +73,28 @@ import { valueOf, type GexColumn } from './gexHistory'
  */
 const MAX_SEGMENTS = 320
 
-/** Below this share of the core, a strike is dust and is not drawn. */
-const DUST = 0.04
+// Removed 2026-08-28: DUST, a fixed 4%-of-the-core floor. It was doing the
+// cutoff's job with the wrong denominator — 4% of the biggest strike says
+// nothing about whether a level matters, and it was not adjustable. `cutoffPct`
+// in BuildOpts replaces it, measured against the whole board.
 
 export interface BubbleMark {
   strike: number
   value: number
   /** |value| ÷ the snapshot's core, 0..1. This is what sets the radius. */
   ratio: number
+  /**
+   * |value| ÷ Σ|value| ACROSS THE WHOLE LADDER, 0..1 — this strike's share of
+   * the board, the same number the GEX table prints as a percentage.
+   *
+   * `ratio` says how a strike compares to the biggest one; `share` says how
+   * much of the day's gamma is actually parked there. They are different
+   * questions and the layer needs both: ratio sizes the bubble, share decides
+   * whether it is worth drawing at all. A 3% strike next to a 30% wall has
+   * ratio 0.1 either way, but on a quiet board that 3% is a level and on a
+   * lopsided one it is noise — only share can tell those apart.
+   */
+  share: number
   /** True for the snapshot's single strongest strike. */
   isCore: boolean
 }
@@ -96,6 +110,16 @@ export interface BuildOpts {
   metric: GexMetric
   /** How many strikes to keep on EACH side of spot. */
   perSide: number
+  /**
+   * Drop any strike holding less than this share of the board, as a PERCENT.
+   * 0 keeps everything the perSide gate let through.
+   *
+   * Two gates, deliberately, because they answer different questions: perSide
+   * is "how busy do I want the chart", cutoff is "below what does a level stop
+   * mattering at all". A single knob doing both is how the old DUST constant
+   * ended up meaning neither.
+   */
+  cutoffPct: number
 }
 
 /**
@@ -104,7 +128,7 @@ export interface BuildOpts {
  * and a timeframe change without being rebuilt.
  */
 export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleSnapshot[] {
-  const { metric, perSide } = opts
+  const { metric, perSide, cutoffPct } = opts
   if (!columns.length || perSide <= 0) return []
 
   const out: BubbleSnapshot[] = []
@@ -125,6 +149,13 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
       if (!Number.isFinite(lo) || !Number.isFinite(hi)) continue
       spot = (lo + hi) / 2
     }
+
+    // Σ|GEX| over EVERY strike in the column, taken before any selection — the
+    // denominator has to be the whole board or "share of total" would silently
+    // mean "share of the handful I decided to draw", and would jump every time
+    // the perSide slider moved.
+    let totalAbs = 0
+    for (const cell of col.cells) totalAbs += Math.abs(valueOf(cell, metric))
 
     const above: Array<{ strike: number; value: number }> = []
     const below: Array<{ strike: number; value: number }> = []
@@ -149,12 +180,14 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
         strike: p.strike,
         value: p.value,
         ratio: Math.min(1, Math.abs(p.value) / core),
+        share: totalAbs > 0 ? Math.abs(p.value) / totalAbs : 0,
         isCore: Math.abs(p.value) === core,
       }))
-      // The relative cutoff replaces every per-timeframe "minimum GEX" input
-      // there has ever been: it is a share of the core, so it means the same
-      // thing on a quiet morning and a busy afternoon.
-      .filter((m) => m.ratio >= DUST)
+      // The cutoff is a share of the BOARD, which is the figure on the GEX
+      // table — so a setting of 0.4 means "drop anything under 0.4% of today's
+      // gamma" and means the same thing on a quiet morning and a busy
+      // afternoon, on SPX and on a $30 name.
+      .filter((m) => m.share * 100 >= cutoffPct)
       .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
 
     if (!marks.length) continue
@@ -197,8 +230,23 @@ export interface BubbleGeometry {
 }
 
 export interface DrawOpts {
+  /**
+   * The TOP radius, as a multiple of the pane-height cap. The strongest strike
+   * on the board draws at this; everything else is a fraction of it.
+   */
   size: number
-  curve: number
+  /**
+   * The smallest a drawn mark may be, in CSS pixels. Every mark that survives
+   * the gates starts here and grows — so a level that is on the chart is always
+   * visible, and "on the chart" is the cutoff's decision, not the size slider's.
+   */
+  floorPx: number
+  /**
+   * How hard the top strikes pull away from the rest. 1 is straight linear in
+   * ratio — half the gamma, half the bubble. Above 1 only the real walls stay
+   * big; below 1 the ladder flattens and the small levels stay readable.
+   */
+  variance: number
   intensity: number
 }
 
@@ -231,47 +279,79 @@ const FIT_PASSES = 6
 /**
  * Every mark in a snapshot, placed and sized so that NO TWO ROWS TOUCH.
  *
- * Two stages, and the order is the whole point:
+ * ── The size of a bubble means one thing ────────────────────────────────────
  *
- *   WANT   each radius from its ratio alone — a fraction of the pane height,
- *          scaled by the size slider, shaped by `curve`. This is the picture the
- *          settings ask for, before geometry gets a say.
- *   FIT    walk the marks in y order and shrink any ADJACENT PAIR whose radii
- *          plus the hairline do not fit the gap between them, proportionally so
- *          the pair keeps its relative weight.
+ *   r = floor + (top − floor) × ratio^variance
  *
- * This replaces a single per-snapshot cap taken from the tightest gap on the
- * ladder. That had two faults. The size slider was applied AFTER it, so anything
- * above 1× drew straight through the bound and merged rows — which is the bug
- * this fixes. And being global, one tight pair shrank every mark in the
- * snapshot, including marks with all the room in the world.
+ * `floor` is the minimum every drawn mark gets, `top` is what the strongest
+ * strike gets, and `ratio` is that strike's |GEX| over the strongest strike's.
+ * Nothing else moves a radius. You can read a bubble off the GEX table and back
+ * again, which is the property the layer never had before.
  *
- * VERTICAL SPACING IS THE ONLY BOUND, measured from the marks actually drawn at
- * the current zoom — never from the ladder's strike step, which with three marks
- * a side is tens of strikes away from the real gap. There is deliberately NO
- * horizontal bound: a mark's left and right neighbours are the same strike a few
- * pixels earlier and later, and those merging is not a collision, it is the band.
- * That is the whole reason the layer can step in pixels.
+ * ── Why the top is CAPPED, and why that is the whole trick ──────────────────
  *
- * The pane's height is the second term of WANT. Spacing alone would let six
+ * Two strikes 13px apart cannot both be 26px bubbles, whatever the slider says.
+ * Something has to give. The old code gave by DROPPING a mark, which is the
+ * wrong answer in the most expensive way: a wall vanished from the chart
+ * because a bigger wall happened to be next to it, and there was nothing on
+ * screen to say so.
+ *
+ * So the LADDER'S TOP RADIUS is capped instead, measured from the tightest pair
+ * actually being drawn at the current zoom. Every mark then scales by the same
+ * factor, so the picture stays proportional to the numbers — it just gets
+ * smaller when the pane is crowded, and the size slider takes full effect again
+ * the moment the price axis opens up or the gates thin the ladder. Nothing is
+ * ever deleted to make room. Removing a level is `perSide` and `cutoffPct`'s
+ * job, decided on the DATA, before any of this runs.
+ *
+ * The pane's height is the second bound on the top. Spacing alone would let six
  * marks on a tall, sparse pane grow until the ladder was mostly circle; a
  * fraction of the pane height keeps the band proportionate to the chart it is
  * drawn on, at every window size, with no per-layout pixel number to tune.
+ *
+ * VERTICAL SPACING IS THE ONLY BOUND. There is deliberately NO horizontal one:
+ * a mark's left and right neighbours are the same strike a few pixels earlier
+ * and later, and those merging is not a collision, it is the band. That is the
+ * whole reason the layer can step in pixels.
  */
 function placeMarks(snap: BubbleSnapshot, geo: BubbleGeometry, opts: DrawOpts): PlacedMark[] {
-  const base = Math.max(BUBBLE_STYLE.minPx, geo.height * BUBBLE_STYLE.heightFrac * opts.size)
-
-  const placed: PlacedMark[] = []
+  const rows: Array<{ mark: BubbleMark; y: number }> = []
   for (const mark of snap.marks) {
     const y = geo.yOfPrice(mark.strike)
     if (y == null) continue
-    // The core has ratio 1, so it draws at exactly `base` on every curve
-    // setting — `curve` only changes how fast the ones BELOW it fall away.
-    const shaped = opts.curve <= 1.001 ? mark.ratio : Math.pow(mark.ratio, opts.curve)
-    placed.push({ mark, y, r: Math.max(BUBBLE_STYLE.minPx, base * shaped) })
+    rows.push({ mark, y })
   }
-  placed.sort((a, b) => a.y - b.y)
+  if (!rows.length) return []
+  rows.sort((a, b) => a.y - b.y)
 
+  // The tightest pair ON SCREEN — not the ladder's strike step, which with
+  // three marks a side is tens of strikes away from the real gap.
+  let tightest = Infinity
+  for (let i = 1; i < rows.length; i++) {
+    const gap = rows[i]!.y - rows[i - 1]!.y
+    if (gap < tightest) tightest = gap
+  }
+
+  const paneCap = geo.height * BUBBLE_STYLE.heightFrac * opts.size
+  const spacingCap = Number.isFinite(tightest) ? tightest / 2 - BUBBLE_STYLE.gapPx / 2 : paneCap
+  const top = Math.max(BUBBLE_STYLE.minPx, Math.min(paneCap, spacingCap))
+  // The floor cannot exceed the top, or a crowded pane would draw every mark at
+  // the same size and the layer would stop saying anything.
+  const floor = Math.max(HAIRLINE_PX, Math.min(opts.floorPx, top * 0.85))
+  const span = Math.max(0, top - floor)
+
+  const placed: PlacedMark[] = rows.map(({ mark, y }) => {
+    const shaped = opts.variance <= 1.001 && opts.variance >= 0.999 ? mark.ratio : Math.pow(mark.ratio, opts.variance)
+    return { mark, y, r: floor + span * shaped }
+  })
+
+  // A second, local pass. The cap above is global to the snapshot and sized off
+  // the tightest pair, so it is already enough in the ordinary case — but a
+  // pane can put two marks nearly on top of each other (a price scale squeezed
+  // by autoscale, two strikes a fraction apart) faster than the cap can absorb.
+  // Walk neighbours in y and shrink any pair that still does not fit,
+  // proportionally, so the pair keeps its relative weight. It SHRINKS: no mark
+  // is ever removed here.
   for (let pass = 0; pass < FIT_PASSES; pass++) {
     let tightened = false
     for (let i = 1; i < placed.length; i++) {

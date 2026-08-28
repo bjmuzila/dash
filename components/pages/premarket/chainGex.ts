@@ -502,9 +502,25 @@ export function useMultiExpiryGex(
     };
 
     setState((p) => (p.all ? p : { ...MULTI_IDLE, state: "loading" }));
-    void load();
+    /**
+     * The first fetch is DELAYED, and that is not a nicety.
+     *
+     * On a symbol switch this effect re-runs on the very render where `sym`
+     * became AMD but `spot` is still the OLD symbol's price — useChainGex has
+     * not cleared its state yet. Firing immediately kicked off a full
+     * multi-expiry SWEEP for AMD against a 771.43 spot, which the next render
+     * then aborted and re-issued at 469.35. Two sweeps, one of them nonsense,
+     * every time the picker moved (it is visible as a cancelled request in the
+     * network waterfall).
+     *
+     * The stale render is followed within a frame or two by the one where spot
+     * is 0 — which flips `ready` and tears this effect down before the timer
+     * fires — so a short delay costs nothing and spends one sweep instead of
+     * two.
+     */
+    const first = setTimeout(() => { void load(); }, 400);
     const id = setInterval(load, refreshMs);
-    return () => { cancelled = true; ctrl.abort(); clearInterval(id); };
+    return () => { cancelled = true; ctrl.abort(); clearTimeout(first); clearInterval(id); };
   }, [sym, enabled, ready, refreshMs]);
 
   return state;

@@ -13,6 +13,8 @@ import {
   BUBBLE_LADDER_REQUEST,
   BUBBLE_LEVELS_RANGE,
   BUBBLE_SIZE_RANGE,
+  BUBBLE_FLOOR_RANGE,
+  BUBBLE_CUTOFF_RANGE,
   GEX_HISTORY_MINUTES,
   GEX_HISTORY_MINUTES_PREV_DAY,
   INTERVALS,
@@ -217,8 +219,13 @@ export function GexCandlesCard() {
   // function of the GEX history now, so a candle poll or a timeframe change no
   // longer rebuilds it.
   const snapshots = useMemo(
-    () => buildBubbleModel(columns, { metric: settings.gexMetric, perSide: settings.bubbleLevels }),
-    [columns, settings.gexMetric, settings.bubbleLevels],
+    () =>
+      buildBubbleModel(columns, {
+        metric: settings.gexMetric,
+        perSide: settings.bubbleLevels,
+        cutoffPct: settings.bubbleCutoff,
+      }),
+    [columns, settings.gexMetric, settings.bubbleLevels, settings.bubbleCutoff],
   )
 
   // Same history, second view: the bubbles say how the ladder got here across
@@ -280,11 +287,19 @@ export function GexCandlesCard() {
         h.setDrawOpts({
           on: settings.bubblesOn,
           size: settings.bubbleSize,
-          curve: settings.bubbleCurve,
+          floorPx: settings.bubbleFloor,
+          variance: settings.bubbleCurve,
           intensity: settings.bubbleIntensity,
         }),
       ),
-    [settings.bubblesOn, settings.bubbleSize, settings.bubbleCurve, settings.bubbleIntensity, apply],
+    [
+      settings.bubblesOn,
+      settings.bubbleSize,
+      settings.bubbleFloor,
+      settings.bubbleCurve,
+      settings.bubbleIntensity,
+      apply,
+    ],
   )
 
   // ── Countdown ──────────────────────────────────────────────────────────────
@@ -423,17 +438,37 @@ export function GexCandlesCard() {
                       step={0.05}
                       format={(v) => `${v.toFixed(2)}×`}
                       onChange={(v) => patch({ bubbleSize: v })}
-                      title="Scales the whole ladder at once — every mark's share of the core is identical at every setting. At 1.00× the core is exactly as large as the spacing allows and nothing touches; above it marks may overlap, which is the trade for bigger marks on a tight chart"
+                      title="The TOP radius — what the strongest strike draws at. Every other mark is a fraction of it, so the whole ladder scales together and their relative sizes never change. Capped by the tightest pair on screen, so nothing can overlap: zoom the price axis out and the cap does the limiting instead of this"
                     />
                     <Slider
-                      label="top"
+                      label="floor"
+                      value={settings.bubbleFloor}
+                      min={BUBBLE_FLOOR_RANGE.min}
+                      max={BUBBLE_FLOOR_RANGE.max}
+                      step={0.5}
+                      format={(v) => (v <= 0 ? 'none' : `${v.toFixed(1)}px`)}
+                      onChange={(v) => patch({ bubbleFloor: v })}
+                      title="The smallest a drawn mark may be. Every level that survives the gates starts here and grows from it — so if a level is on the chart at all you can see it, and whether it is on the chart is the cutoff's decision, not this one's"
+                    />
+                    <Slider
+                      label="cutoff"
+                      value={settings.bubbleCutoff}
+                      min={BUBBLE_CUTOFF_RANGE.min}
+                      max={BUBBLE_CUTOFF_RANGE.max}
+                      step={0.05}
+                      format={(v) => (v <= 0 ? 'off' : `${v.toFixed(2)}%`)}
+                      onChange={(v) => patch({ bubbleCutoff: v })}
+                      title="Drop any strike holding under this percent of the board's total gamma — the same figure the GEX table prints. 'per side' decides how busy the chart is; this decides where a level stops mattering at all"
+                    />
+                    <Slider
+                      label="variance"
                       value={settings.bubbleCurve}
                       min={BUBBLE_CURVE_RANGE.min}
                       max={BUBBLE_CURVE_RANGE.max}
                       step={0.05}
-                      format={(v) => (v <= 1.001 ? 'flat' : v.toFixed(2))}
+                      format={(v) => (v >= 0.999 && v <= 1.001 ? 'linear' : v.toFixed(2))}
                       onChange={(v) => patch({ bubbleCurve: v })}
-                      title="How fast the smaller strikes fall away from the core. The core always draws full size; at 'flat' every other mark is straight proportional to its share of the core's gamma"
+                      title="How hard the walls pull away from the rest. At 'linear' half the gamma is half the bubble. Above it only the real walls stay big and everything else falls toward the floor; below it the ladder flattens so the small levels stay readable"
                     />
                     <Slider
                       label="intensity"
