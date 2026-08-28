@@ -4970,7 +4970,27 @@ function EsChartCard({
               // The floor is inert wherever there is real room (it only binds
               // below ~15px of column pitch) and the ROW bound is untouched, so
               // the one guarantee that matters still holds exactly.
-              const colBound = Math.max(colPitch * BUBBLE_STYLE.maxPxColFrac, BUBBLE_STYLE.colBoundFloorPx);
+              //
+              // ── …AND THE FLOOR IS OFF WHEN THE BUCKET IS AUTO ──────────────
+              // On Auto the column pitch IS the bar spacing, and a 1m session
+              // fitted to the pane puts the bars ~4px apart. The floor then
+              // handed every mark a 7px radius inside a 4px slot — nearly 4x
+              // overlap — and the whole layer fused into the solid horizontal
+              // rails this bucket exists to prevent. That is the state the
+              // screenshot showed.
+              //
+              // The floor was written for the MANUAL 1m/5m buckets, where the
+              // columns are deliberately denser than the candles and the user
+              // has asked for sub-bar detail and accepted fused rows to get it.
+              // On Auto nobody asked for that: one column per candle is exactly
+              // as much detail as the chart itself carries, so the pitch is a
+              // real constraint and marks shrink to fit it. Zoom in and they
+              // grow back, which is the honest behaviour — a 1m chart squeezed
+              // into a session's width has ~4px per bar and a bubble cannot
+              // truthfully be wider than its own bar.
+              const colBound = isAutoBucket(bubbleMinsRef.current)
+                ? Math.max(0.6, colPitch * BUBBLE_STYLE.maxPxColFrac)
+                : Math.max(colPitch * BUBBLE_STYLE.maxPxColFrac, BUBBLE_STYLE.colBoundFloorPx);
               const maxPx = Math.max(1.2, sizeMul * Math.min(
                 BUBBLE_STYLE.maxPx,
                 rowPitch * BUBBLE_STYLE.maxPxRowFrac,
@@ -4985,7 +5005,15 @@ function EsChartCard({
               // collapses with the column pitch is not a rail, it is the clip
               // that made the marks disappear. At a 2px column pitch the old
               // expression evaluated to ~0.2px.
-              const rxCap = Math.max(0.35, sizeMul * Math.max(colPitch / 2 - COL_GAP_PX, BUBBLE_STYLE.colBoundFloorPx / 2));
+              //
+              // On Auto the rail is a REAL cap, not a rescue: half the column
+              // pitch less the gap, with no floor under it, so two neighbouring
+              // columns are guaranteed to clear each other however tight the
+              // bars are. Same reasoning as `colBound` above — see the note
+              // there for why the floor is a manual-bucket concession.
+              const rxCap = isAutoBucket(bubbleMinsRef.current)
+                ? Math.max(0.35, sizeMul * Math.max(0.6, colPitch / 2 - COL_GAP_PX))
+                : Math.max(0.35, sizeMul * Math.max(colPitch / 2 - COL_GAP_PX, BUBBLE_STYLE.colBoundFloorPx / 2));
               // ── The vertical bound is a SAFETY RAIL, not a size policy ─────
               // It used to be `rowPitch / 2`, a hard clip at half the strike
               // spacing, and the walls sat ON it — so the size scale was

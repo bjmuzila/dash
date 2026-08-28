@@ -1,113 +1,51 @@
 # Changelog
 
-## 2026-08-28 - Labs page rebuilt: Strike × Days + Wall migration, everything else removed
+## 2026-08-28 - Bubbles: no fused rails on Auto/1m, top 4 strikes actually lands, and the same rule on v3 GEX Candles
 
-Rewrote: `owner-vite/src/pages/GexSurface.tsx`.
+Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
+`components/dashboard/es-candles/slotStore.ts`,
+`cbedge-v3/src/board/gexCandles/bubbles.ts`,
+`cbedge-v3/src/board/gexCandles/settings.ts`,
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
 
-The surface/scrub/strike-strip experiments are gone. `/owner/labs` is now two
-panels and nothing else.
+**1. v2: Auto + 1m drew solid rails.** `colBoundFloorPx` (7px) was floored UNDER
+the column-pitch cap, so on a 1m session fitted to the pane - bars ~4px apart -
+every mark got a 7px radius inside a 4px slot and the rows fused into the
+horizontal bars the bucket exists to prevent.
 
-**1 · Strike × Days.** Strike up the side, sessions across, price drawn over the
-top, with two colour modes off the same numbers:
+The floor was written for the MANUAL 1m/5m buckets, where the columns are
+deliberately denser than the candles and the user has asked for sub-bar detail
+and accepted fusing to get it. On Auto nobody asked for that: one column per
+candle is exactly as much detail as the chart carries, so the pitch is now a
+real constraint - `colBound` and `rxCap` both drop the floor when the bucket
+follows the candle. Marks shrink to fit the bar and grow back on zoom, which is
+the honest answer: a bubble cannot truthfully be wider than its own bar.
 
-- `|GEX| magnitude` - black -> orange -> white, **sequential**. How much gamma
-  sits at a strike with sign ignored. A band brightening left-to-right is the
-  thing the page exists to catch, and sign only gets in the way of seeing it.
-  Unsigned, so a wall and an acceleration zone look identical - the footer says
-  so, and says to read it beside the signed view.
-- `signed net` - green/red **diverging** with a near-black midpoint.
+**2. v2: the top-4 default now reaches existing charts.** `topStrikes` 5 -> 4
+did nothing on any browser that had opened the chart once, because `bLevels` is
+persisted per slot and a saved value wins. Added a bubble-DEFAULTS stamp
+(`BUBBLE_DEFAULTS_V`, `es-candles-bubble-defaults-v`): when it moves, the keys
+in `BUBBLE_DEFAULT_KEYS` are DELETED from every slot blob once and the card falls
+back to the constant. Deleting rather than overwriting is what keeps it honest -
+the blob goes back to "never set", so the next default change reaches it too.
+Runs from `readSlot` (self-healing, like `ensureMigrated`), after the migration
+and before the shared seed so a stale key cannot be copied forward. Nothing else
+in the blob is touched; this is not a settings reset.
 
-Zero is the panel floor rather than a grey, which is what lets the surface glow
-out of the dark instead of looking like wet cement. Colour bar on the right,
-hover for the number and that session's spot.
+**3. v3 GEX Candles: same selection rule.** `bubbleLevels` changed from PER SIDE
+to a TOTAL, default 4, with `BUBBLE_MIN_PER_SIDE = 1` guaranteed. `buildBubbleModel`
+now ranks the whole board once and takes the top N, then - only if a side came
+out empty - swaps the weakest picked strike for the strongest one on the missing
+side. One swap deep, skipped below 2 levels.
 
-**2 · Wall migration.** Deliberately the SAME DRAWING as `WallMigrationChart` in
-`components/pages/LevelLog.tsx`, one scale up - that chart's x is 15-minute
-slots inside a session, this one's is sessions. Two rules copied rather than
-re-derived:
-
-- **Steps, never slopes.** A wall holds its strike until the book rolls it, so a
-  diagonal between two sessions would draw the level at prices it never
-  occupied. Spot is the one exception and stays a continuous stroke: price does
-  move between closes.
-- **The CORE-sign rule as two roles.** CORE is the largest |GEX| node, so it IS
-  one of the walls - drawing the matching wall beside it is the same strike
-  twice in two colours. CORE (gold) is the heavier wall, OTHER is the lighter
-  one, both run the full window, and OTHER is drawn in the colour of the wall it
-  currently IS in contiguous same-side runs, so neither colour blinks out
-  mid-run. LevelLog reached this after the per-slot masking version made the eye
-  read "a level vanished" instead of "a role swapped"; no reason to re-learn it.
-
-Same swatch-chip legend (click to hide a series), the corridor shaded between the
-two walls, `preserveAspectRatio="none"` with no text or circles inside the plot
-and both axes as DOM outside it, and three stamps underneath - CORE rolls,
-corridor range, current pair.
-
-`CORE_GOLD` / `CALL_GREEN` / `PUT_RED` are copied VALUES from `LEVEL_COLORS` +
-`ES_CANDLE_UP` in `components/shared/homeTheme.ts`, not invented ones: owner-vite
-is a separate Vite app and cannot import across, and the whole point of matching
-that chart is that a CORE line is the same gold on both surfaces. If those
-tokens move they must move here too.
-
-**No server change.** Both panels read the existing
-`GET /api/eod-strike-gex-surface`, and panel 2 derives its levels from the same
-grid panel 1 paints - call wall = heaviest +GEX strike, put wall = heaviest -GEX,
-CORE = heaviest |GEX| - so the two cannot disagree about where a wall was.
-
-## 2026-08-28 - Sales page: force a password reset for a customer who can't sign in
-
-New: `app/api/admin/force-password-reset/route.ts`.
-Edited: `owner-vite/src/pages/Sales.tsx`, `lib/emails/reset-password.ts`,
-`lib/db.ts`.
-
-**Why.** Google sign-in was retired on 2026-08-20. An account that only ever
-signed in through Google has `password_hash = NULL`, so `/api/auth/login`
-fails generically and a paying customer is locked out with no self-evident way
-back in. There was no owner-side control for this: Comped Access's "resend"
-button refuses any account that already has a password, and nothing at all
-covered a real Stripe subscriber.
-
-**The button.** Every row of the Sales page's Active Subscriptions table gained
-an "Account" column with a `Reset pw` button. It is two-step (first click arms
-it to "Sure?", auto-disarming after 5s) rather than a `window.confirm` - the
-action is destructive and nothing else in owner-vite opens a modal.
-
-**What it does**, in this order, deliberately:
-
-1. `password_hash -> NULL`, so any existing password stops working immediately.
-2. Every `sessions` row for that user is deleted, so a live cookie can't
-   outlive the reset.
-3. A `password_resets` token is minted with a **7-day** TTL (not
-   forgot-password's 1 hour) and mailed. Step 1 locks them out, so the link has
-   to survive a weekend and an unread inbox - same reasoning as the comp invite.
-
-Blanking the credential BEFORE sending is the safe failure direction: if the
-mail throws, the account is still in the intended state and the owner can click
-again. The reverse would mail a live link for an account whose old password
-still works. When the send fails the panel says "password cleared, but the
-email failed" rather than reading as a no-op.
-
-A bounced invite is never a dead end - a NULL hash still satisfies
-`/api/auth/forgot-password` (it only needs the `users` row), so "Forgot
-password?" reaches the same place.
-
-Unlike forgot-password, this route DOES report whether the email exists. The
-caller is the owner looking at their own customer list, so there is nothing to
-enumerate, and "no CB Edge account for that email" is the useful answer when
-the Stripe email and the sign-up email differ.
-
-**Supporting changes.** `resetPasswordEmail` / `resetPasswordText` gained
-`expiresLabel` (a 7-day link reads as "7 days", not "10080 minutes") and
-`adminInitiated`, which swaps two lines: the customer did not request this, and
-"ignore this and your password won't change" would be a lie once step 1 has
-run. `updateUserPasswordHash` widened to `string | null` - null is a real
-state, not an error.
-
-**Gating.** Owner-only, fails closed on unset/mismatched `OWNER_USER_ID`, same
-posture as the sibling `/api/admin/*` routes. Deliberately NOT wired to the
-`INTERNAL_API_TOKEN` bypass: nothing automated should be able to blank a
-customer's password. The route is not registered in `server-v2/api-router.js`,
-so it falls through to Next like `/api/admin/comp-access` does.
+Per-side could not express "the top four": on a lopsided board the
+fourth-strongest strike is often the third one above spot, and a fixed count each
+way drew as many rows below spot as above whether or not they were worth drawing.
+The floor keeps what the split was actually for - never a picture of only the
+resistance overhead - at the cost of one mark, and only when a side would be
+blank. Range is now 1-16 (the old per-side 8 in marks), the slider reads "levels"
+instead of "per side", and a `SETTINGS_V` stamp in the stored blob pushes the new
+default past saved values the same way v2's does.
 
 ## 2026-08-28 - ES Candles bubbles: the bucket follows the candle, and the ladder always has a side under price
 

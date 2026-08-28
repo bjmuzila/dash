@@ -1876,6 +1876,8 @@ async function main() {
       // The board is sealed BEFORE the open and graded AFTER the close; see
       // daily-grades-recorder.js for the rubric. Backs /owner/daily-grades.
       //   GET  /proxy/daily-grades[?date=]   seal + per-ticker grades + day roll-up
+      //   GET  /proxy/daily-grades-history?symbol=&days=  one ticker, session by session
+      //   GET  /proxy/daily-grades-days[?days=]           the running day table
       //   POST /proxy/daily-grades-build     compute + seal the board now
       //   POST /proxy/daily-grades-seal      store a board built elsewhere (body = payload)
       //   POST /proxy/daily-grades-run       grade now (manual fire)
@@ -1887,6 +1889,35 @@ async function main() {
             const out = await require('./daily-grades-recorder').readSession(date || null);
             if (!out) { sendJson(res, 404, { error: 'no sealed board' }, req); return; }
             sendJson(res, 200, out, req, sessionCacheOpts(out.sealed_for_session));
+          } catch (e) { sendJson(res, 502, { error: String(e?.message || e) }, req); }
+        })();
+        return;
+      }
+      // Read-only history. Both hang off the same tables /proxy/daily-grades
+      // already reads — nothing new is written, and neither route touches the
+      // seal. `days` is clamped server-side (see historyLimit()).
+      if (pathname === '/proxy/daily-grades-history' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url || '/', 'http://localhost');
+            const symbol = (u.searchParams.get('symbol') || '').trim().toUpperCase();
+            if (!symbol) { sendJson(res, 400, { error: 'symbol required' }, req); return; }
+            const out = await require('./daily-grades-recorder')
+              .readTickerHistory(symbol, u.searchParams.get('days'));
+            if (!out) { sendJson(res, 404, { error: 'no database' }, req); return; }
+            sendJson(res, 200, out, req);
+          } catch (e) { sendJson(res, 502, { error: String(e?.message || e) }, req); }
+        })();
+        return;
+      }
+      if (pathname === '/proxy/daily-grades-days' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url || '/', 'http://localhost');
+            const out = await require('./daily-grades-recorder')
+              .readDayHistory(u.searchParams.get('days'));
+            if (!out) { sendJson(res, 404, { error: 'no database' }, req); return; }
+            sendJson(res, 200, out, req);
           } catch (e) { sendJson(res, 502, { error: String(e?.message || e) }, req); }
         })();
         return;

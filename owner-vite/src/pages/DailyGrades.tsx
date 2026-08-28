@@ -23,6 +23,18 @@
 // grades are simply absent until the 16:20 ET run writes them — that is the
 // normal state for most of a trading day, not an error, and the tab says so.
 //
+// THE THIRD TAB IS THE BACK CATALOGUE, and it is the one thing here that DOES
+// fetch on its own. SESSIONS is `daily_grade_days` — every graded session, newest
+// first — read through `/proxy/daily-grades-days`. It loads the first time that
+// tab is opened and not before: the session on screen needs no history to render,
+// and most visits never leave the board.
+//
+// CLICK A TICKER, ON EITHER BOARD. Every ticker opens its own record —
+// `/proxy/daily-grades-history?symbol=`, one row per session it was sealed for,
+// ungraded sessions included. The modal fetches on open and drops the rows on
+// close rather than caching a table that goes stale the moment the 16:20 run
+// lands. A "not graded" gap in that table is a real state, not a hole.
+//
 // NAMING: the payload field is `apex`; the level is CB and the UI says CB. The
 // key is not renamed because it is the sealed board's own wire format — see the
 // glossary in lib/dailyGrades.ts.
@@ -53,9 +65,13 @@ import {
   summarize,
   parsePayload,
   loadGrades,
+  loadTickerHistory,
+  loadDayHistory,
   fmtPrice,
   fmtPct,
   fmtSealed,
+  fmtDay,
+  fmtWeekday,
   NEAR_PCT,
   type DgPayload,
   type DgRow,
@@ -63,6 +79,8 @@ import {
   type DgFlagKind,
   type DgGradeRow,
   type DgDay,
+  type DgTickerHistory,
+  type DgDayHistory,
 } from "../lib/dailyGrades";
 
 const MONO = "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace";
@@ -143,6 +161,17 @@ const GRADE_LEGEND: [string, string][] = [
   ["Range", "Did the floor→cap band contain the session — contained 25 · one side out 12 · both out 0. Skipped when floor sits above cap."],
   ["No grade", "no levels / no candles store a NULL grade, never an F. An F is a claim the board was wrong; no board is no claim."],
   ["Session", "The day row sums points over points-available across every graded ticker — not the mean of their percentages."],
+];
+
+/** The running record's own glossary — what a row of `daily_grade_days` means. */
+const SESSION_LEGEND: [string, string][] = [
+  ["Sessions", "One row per graded session from daily_grade_days, newest first. The seal is immutable once its session opens, so a row here never changes except by an explicit regrade."],
+  ["Score", "That session's points ÷ points-available × 100, summed across every graded ticker — not the mean of their percentages."],
+  ["Average", "The same sum applied over the whole window, so the tile and a single day row are the same kind of number."],
+  ["Graded", "Graded tickers out of tickers sealed. The gap is names with no levels or no candles — never counted as failures."],
+  ["Spread", "The letter distribution for that session. Only letters that occurred are drawn."],
+  ["Held / tested", "Cap and floor: how many were reached, and how many of those closed back inside. Untested levels are not in either count."],
+  ["Window", "How far back to read — 30, 60, 120 or 250 sessions. Clamped server-side at 500."],
 ];
 
 // ── small pieces ─────────────────────────────────────────────────────────────
@@ -241,6 +270,324 @@ function BandBar({ row }: { row: DgRow }) {
   );
 }
 
+/**
+ * The ticker cell on both boards. A real <button> rather than a click handler on
+ * the row: the history is the row's one action, and this way it is keyboard
+ * reachable and reads as a control instead of a table cell that happens to move
+ * when you touch it.
+ */
+function TickerButton({ ticker, onOpen }: { ticker: string; onOpen: (t: string) => void }) {
+  const [over, setOver] = useState(false);
+  return (
+    <button
+      onClick={() => onOpen(ticker)}
+      onMouseEnter={() => setOver(true)}
+      onMouseLeave={() => setOver(false)}
+      title={`${ticker} — grade history`}
+      style={{
+        width: "100%",
+        padding: "8px 10px",
+        border: "none",
+        background: "transparent",
+        color: over ? T.cyan : T.text,
+        font: "inherit",
+        fontWeight: 800,
+        letterSpacing: "0.02em",
+        textAlign: "left",
+        cursor: "pointer",
+        textDecoration: over ? "underline" : "none",
+        textUnderlineOffset: 3,
+      }}
+    >
+      {ticker}
+    </button>
+  );
+}
+
+/** How many sessions back the history views ask for. */
+const HISTORY_WINDOWS = [30, 60, 120, 250] as const;
+type HistoryWindow = (typeof HISTORY_WINDOWS)[number];
+
+/**
+ * Score over time, oldest → newest. Deliberately unlabelled: the table under it
+ * carries every number, and this only has to answer "is it trending". The 58/72
+ * guides are the B and A bands, so the shape reads against the rubric rather
+ * than against its own min/max — a fixed 0–100 scale for the same reason.
+ */
+function ScoreSpark({ scores, accent }: { scores: (number | null)[]; accent: string }) {
+  const pts = scores.map((s, i) => ({ s, i })).filter((p) => p.s != null) as { s: number; i: number }[];
+  const W = 100;
+  const H = 30;
+  if (pts.length < 2) {
+    return <div style={{ height: H, borderRadius: 6, background: SURFACE.cardHi }} />;
+  }
+  const n = scores.length - 1;
+  const x = (i: number) => (n === 0 ? 0 : (i / n) * W);
+  const y = (s: number) => H - (Math.max(0, Math.min(100, s)) / 100) * H;
+  const d = pts.map((p, k) => `${k ? "L" : "M"}${x(p.i).toFixed(2)} ${y(p.s).toFixed(2)}`).join(" ");
+  const last = pts[pts.length - 1];
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      style={{ width: "100%", height: H, display: "block", borderRadius: 6, background: SURFACE.cardHi }}
+    >
+      {[58, 72].map((band) => (
+        <line
+          key={band}
+          x1={0} x2={W} y1={y(band)} y2={y(band)}
+          stroke={ownerRgba(band === 72 ? T.green : T.cyan, 0.28)}
+          strokeWidth={0.6}
+          strokeDasharray="3 3"
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+      <path d={d} fill="none" stroke={accent} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+      <circle cx={x(last.i)} cy={y(last.s)} r={2.2} fill={accent} />
+    </svg>
+  );
+}
+
+/**
+ * One ticker's record, session by session — `/proxy/daily-grades-history`.
+ *
+ * Rows arrive newest-first and stay that way; the spark below reverses them so
+ * time runs left → right. Ungraded sessions are kept in the table on purpose: a
+ * name the board couldn't grade is part of how the board did on that name.
+ */
+function TickerHistoryModal({
+  symbol,
+  onClose,
+  windowDays,
+  onWindow,
+}: {
+  symbol: string;
+  onClose: () => void;
+  windowDays: HistoryWindow;
+  onWindow: (d: HistoryWindow) => void;
+}) {
+  const [hist, setHist] = useState<DgTickerHistory | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    setError(null);
+    loadTickerHistory(symbol, windowDays)
+      .then((h) => { if (live) setHist(h); })
+      .catch((e) => { if (live) setError(e instanceof Error ? e.message : "Could not load history."); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [symbol, windowDays]);
+
+  // Escape closes. Bound on the document because the dialog owns the screen
+  // while it is open and focus may sit anywhere inside it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const s = hist?.summary;
+  const accent = s?.grade ? GRADE_ACCENT[s.grade] || T.cyan : T.cyan;
+  const scores = useMemo(
+    () => (hist ? hist.rows.slice().reverse().map((r) => (r.score == null ? null : Number(r.score))) : []),
+    [hist],
+  );
+
+  const hTh: React.CSSProperties = {
+    position: "sticky",
+    top: 0,
+    zIndex: 2,
+    background: SURFACE.card2,
+    padding: "9px 10px",
+    textAlign: "right",
+    fontSize: TYPE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.09em",
+    textTransform: "uppercase",
+    color: T.text,
+    borderBottom: `1px solid ${T.borderStrong}`,
+    whiteSpace: "nowrap",
+  };
+  const hTd: React.CSSProperties = {
+    padding: "8px 10px",
+    textAlign: "right",
+    fontFamily: MONO,
+    fontSize: 13,
+    fontVariantNumeric: "tabular-nums",
+    whiteSpace: "nowrap",
+    color: T.text,
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${symbol} grade history`}
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 60,
+        background: ownerRgba("#000000", 0.66),
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: SURFACE.card,
+          border: `1px solid ${T.borderStrong}`,
+          borderRadius: 16,
+          width: "min(1080px, 100%)",
+          maxHeight: "88vh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        {/* header */}
+        <div style={{ padding: "16px 18px", borderBottom: `1px solid ${T.border}`, display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+              <span style={{ fontSize: TYPE.title, fontWeight: 800, letterSpacing: "0.1em" }}>{symbol}</span>
+              {s?.grade && <Pill accent={accent}>{s.grade} · {Number(s.score ?? 0).toFixed(1)}</Pill>}
+              {!!s?.sessions && <Pill accent={T.lightBlue}>{s.sessions} sessions</Pill>}
+            </div>
+            <div style={{ marginTop: 5, fontSize: TYPE.label, color: T.text }}>
+              Grade history — every session this name was sealed for, newest first.
+            </div>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {HISTORY_WINDOWS.map((d) => (
+              <button
+                key={d}
+                onClick={() => onWindow(d)}
+                style={{
+                  padding: "6px 11px",
+                  borderRadius: 999,
+                  border: `1px solid ${d === windowDays ? T.cyan : T.border}`,
+                  background: d === windowDays ? ownerRgba(T.cyan, 0.16) : SURFACE.card2,
+                  color: d === windowDays ? T.cyan : T.text,
+                  fontSize: TYPE.micro,
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                {d}
+              </button>
+            ))}
+            <button style={homeSecondaryButtonStyle} onClick={onClose}>Close</button>
+          </div>
+        </div>
+
+        {/* body */}
+        <div className="wall-scroll" style={{ overflow: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+          {error && <div style={{ fontSize: TYPE.label, color: T.red }}>{error}</div>}
+
+          {s && s.sessions > 0 && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(132px, 1fr))", gap: 10 }}>
+                <Tile value={s.score == null ? "—" : Number(s.score).toFixed(1)} label="avg score" accent={accent} />
+                <Tile value={s.grade ?? "—"} label="avg grade" accent={accent} />
+                <Tile value={`${s.pts} / ${s.max_pts}`} label="points" accent={T.cyan} />
+                <Tile value={s.graded} label="graded" accent={T.text} />
+                <Tile value={s.ungraded} label="not graded" accent={T.purple} />
+                <Tile value={s.best == null ? "—" : Number(s.best).toFixed(1)} label="best" accent={T.green} />
+                <Tile value={s.worst == null ? "—" : Number(s.worst).toFixed(1)} label="worst" accent={T.red} />
+              </div>
+
+              <div style={{ ...INSET, borderRadius: 12, padding: "12px 14px" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 9 }}>
+                  <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.09em", textTransform: "uppercase", color: T.text }}>
+                    Score over time
+                  </span>
+                  <span style={{ marginLeft: "auto", display: "flex", gap: 5 }}>
+                    {(["A+", "A", "B", "C", "D", "F"] as const).map((g) =>
+                      s.counts[g] ? <Pill key={g} accent={GRADE_ACCENT[g]}>{s.counts[g]} {g}</Pill> : null,
+                    )}
+                  </span>
+                </div>
+                <ScoreSpark scores={scores} accent={accent} />
+              </div>
+            </>
+          )}
+
+          <div style={{ ...INSET, borderRadius: 12, overflow: "hidden" }}>
+            <table style={{ width: "100%", minWidth: 900, borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ ...hTh, textAlign: "left" }}>Date</th>
+                  <th style={hTh}>Grade</th>
+                  <th style={hTh}>Score</th>
+                  <th style={hTh}>Pts</th>
+                  <th style={{ ...hTh, textAlign: "left" }}>Cap</th>
+                  <th style={{ ...hTh, textAlign: "left" }}>Floor</th>
+                  <th style={{ ...hTh, textAlign: "left" }}>Flip</th>
+                  <th style={{ ...hTh, textAlign: "left" }}>CB</th>
+                  <th style={{ ...hTh, textAlign: "left" }}>Range</th>
+                  <th style={hTh}>Close</th>
+                  <th style={hTh}>Board</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hist?.rows.map((r) => (
+                  <tr key={r.date} style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <th scope="row" style={{ ...hTd, textAlign: "left", fontFamily: "inherit", fontWeight: 800 }}>
+                      {fmtDay(r.date)}
+                      <span style={{ marginLeft: 6, fontSize: TYPE.micro, fontWeight: 600, color: T.text, opacity: 0.7 }}>
+                        {fmtWeekday(r.date)}
+                      </span>
+                    </th>
+                    <td style={hTd}>
+                      {r.grade
+                        ? <Pill accent={GRADE_ACCENT[r.grade] || T.text}>{r.grade}</Pill>
+                        : <Pill accent={T.lightBlue}>{r.status === "no_candles" ? "no candles" : "no levels"}</Pill>}
+                    </td>
+                    <td style={{ ...hTd, fontWeight: 800 }}>{r.score == null ? "—" : Number(r.score).toFixed(1)}</td>
+                    <td style={hTd}>{r.max_pts ? `${r.pts} / ${r.max_pts}` : "—"}</td>
+                    <td style={{ ...hTd, textAlign: "left" }}><Outcome v={r.cap_outcome} pts={r.cap_pts} /></td>
+                    <td style={{ ...hTd, textAlign: "left" }}><Outcome v={r.floor_outcome} pts={r.floor_pts} /></td>
+                    <td style={{ ...hTd, textAlign: "left" }}><Outcome v={r.flip_outcome} pts={r.flip_pts} /></td>
+                    <td style={{ ...hTd, textAlign: "left" }}><Outcome v={r.apex_outcome} pts={r.apex_pts} /></td>
+                    <td style={{ ...hTd, textAlign: "left" }}><Outcome v={r.range_outcome} pts={r.range_pts} /></td>
+                    <td style={{ ...hTd, fontWeight: 800 }}>{fmtPrice(r.c)}</td>
+                    {/* What the whole board scored that day — the yardstick for the
+                        row beside it. A C on a 48 board is not a C on an 84 board. */}
+                    <td style={hTd}>
+                      {r.day_score == null
+                        ? "—"
+                        : <Pill accent={r.day_grade ? GRADE_ACCENT[r.day_grade] || T.text : T.text}>
+                            {r.day_grade ?? ""} {Number(r.day_score).toFixed(0)}
+                          </Pill>}
+                    </td>
+                  </tr>
+                ))}
+                {!hist?.rows.length && (
+                  <tr>
+                    <td colSpan={11} style={{ ...hTd, textAlign: "center", padding: 34 }}>
+                      {loading
+                        ? "Loading history…"
+                        : error
+                          ? "History could not be read."
+                          : `No graded session on record for ${symbol} yet.`}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── page ─────────────────────────────────────────────────────────────────────
 
 export default function DailyGrades() {
@@ -250,8 +597,19 @@ export default function DailyGrades() {
   const [error, setError] = useState<string | null>(null);
   const [grades, setGrades] = useState<DgGradeRow[]>([]);
   const [day, setDay] = useState<DgDay | null>(null);
-  const [tab, setTab] = useState<"levels" | "grades">("levels");
+  const [tab, setTab] = useState<"levels" | "grades" | "sessions">("levels");
   const [gradeFilter, setGradeFilter] = useState<"all" | "A+" | "A" | "B" | "C" | "D" | "F">("all");
+
+  // ── history ────────────────────────────────────────────────────────────────
+  // The modal is keyed on the symbol and owns its own fetch; this only holds
+  // which name is open. The window is shared with the sessions tab so a switch
+  // to 250 stays put when the modal is closed and reopened.
+  const [histSym, setHistSym] = useState<string | null>(null);
+  const [histWindow, setHistWindow] = useState<HistoryWindow>(60);
+
+  const [days, setDays] = useState<DgDayHistory | null>(null);
+  const [daysLoading, setDaysLoading] = useState(false);
+  const [daysError, setDaysError] = useState<string | null>(null);
 
   // The roster. Same universe the ΔGEX Board runs over.
   const { tickers, loading: rosterLoading, live: rosterLive } = useTickerUniverse();
@@ -284,6 +642,28 @@ export default function DailyGrades() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  /**
+   * The running day table. Loaded the FIRST time the sessions tab is opened and
+   * whenever the window changes — never on mount, because the board on screen
+   * does not need it and most visits never open that tab.
+   */
+  const loadDays = useCallback(async (windowDays: HistoryWindow) => {
+    setDaysLoading(true);
+    setDaysError(null);
+    try {
+      setDays(await loadDayHistory(windowDays));
+    } catch (e) {
+      setDaysError(e instanceof Error ? e.message : "Could not load session history.");
+    } finally {
+      setDaysLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab !== "sessions") return;
+    void loadDays(histWindow);
+  }, [tab, histWindow, loadDays]);
 
   const applyImport = useCallback((text: string) => {
     try {
@@ -529,6 +909,7 @@ export default function DailyGrades() {
         {([
           ["levels", `Levels · ${stats.total}`],
           ["grades", `Grades${gradedRows.length ? ` · ${gradedRows.length}` : ""}`],
+          ["sessions", `Sessions${days?.rows.length ? ` · ${days.rows.length}` : ""}`],
         ] as const).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} style={chipStyle(tab === id, T.cyan)}>
             {label}
@@ -629,9 +1010,9 @@ export default function DailyGrades() {
                   >
                     <th
                       scope="row"
-                      style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800, letterSpacing: "0.02em" }}
+                      style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800, letterSpacing: "0.02em", padding: 0 }}
                     >
-                      {r.ticker}
+                      <TickerButton ticker={r.ticker} onOpen={setHistSym} />
                     </th>
                     {priceCell(r.spot, true)}
                     {priceCell(r.floor)}
@@ -752,8 +1133,8 @@ export default function DailyGrades() {
                         borderBottom: `1px solid ${T.border}`,
                       }}
                     >
-                      <th scope="row" style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800 }}>
-                        {g.symbol}
+                      <th scope="row" style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800, padding: 0 }}>
+                        <TickerButton ticker={g.symbol} onOpen={setHistSym} />
                       </th>
                       <td style={{ ...td, textAlign: "right" }}>
                         {g.grade
@@ -792,13 +1173,161 @@ export default function DailyGrades() {
       )}
 
 
+      {/* ── sessions ─────────────────────────────────────────────────────── */}
+      {/*
+        The running record: `daily_grade_days`, one row per graded session,
+        newest first. This is the ONLY tab that fetches — /proxy/daily-grades-days
+        — and it does so the first time it is opened, not on mount.
+
+        The summary tiles sum points over points-available across the window, the
+        same arithmetic a single day row uses, so the window average and a day
+        score are the same kind of number and can be read side by side.
+      */}
+      {tab === "sessions" && (
+        <>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", flexShrink: 0 }}>
+            <span style={{ fontSize: TYPE.label, color: T.text }}>Window</span>
+            {HISTORY_WINDOWS.map((d) => (
+              <button key={d} onClick={() => setHistWindow(d)} style={chipStyle(histWindow === d, T.cyan)}>
+                {d}
+              </button>
+            ))}
+            <button
+              style={homeSecondaryButtonStyle}
+              onClick={() => void loadDays(histWindow)}
+              disabled={daysLoading}
+            >
+              {daysLoading ? "Loading…" : "Refresh"}
+            </button>
+            {daysError && <span style={{ fontSize: TYPE.label, color: T.red }}>{daysError}</span>}
+          </div>
+
+          {days && days.rows.length > 0 && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))", gap: 10, flexShrink: 0 }}>
+                <Tile
+                  value={days.summary.score == null ? "—" : Number(days.summary.score).toFixed(1)}
+                  label={`average over ${days.rows.length} sessions`}
+                  accent={days.summary.grade ? GRADE_ACCENT[days.summary.grade] || T.text : T.text}
+                />
+                <Tile
+                  value={days.summary.grade ?? "—"}
+                  label="average grade"
+                  accent={days.summary.grade ? GRADE_ACCENT[days.summary.grade] || T.text : T.text}
+                />
+                <Tile value={`${days.summary.pts} / ${days.summary.max_pts}`} label="points" accent={T.cyan} />
+                <Tile value={days.summary.best == null ? "—" : Number(days.summary.best).toFixed(1)} label="best session" accent={T.green} />
+                <Tile value={days.summary.worst == null ? "—" : Number(days.summary.worst).toFixed(1)} label="worst session" accent={T.red} />
+              </div>
+
+              <Card variant="classic" padding={14} style={{ ...CARD, flexShrink: 0 }}>
+                <div style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.09em", textTransform: "uppercase", color: T.text, marginBottom: 9 }}>
+                  Session score over time
+                </div>
+                <ScoreSpark
+                  scores={days.rows.slice().reverse().map((d) => (d.score == null ? null : Number(d.score)))}
+                  accent={days.summary.grade ? GRADE_ACCENT[days.summary.grade] || T.cyan : T.cyan}
+                />
+              </Card>
+            </>
+          )}
+
+          <Card variant="classic" padding={0} style={{ ...CARD, overflow: "hidden", flexShrink: 0 }}>
+            <div className="wall-scroll" style={{ height: "clamp(420px, 64vh, 900px)", overflow: "auto" }}>
+              <table style={{ width: "100%", minWidth: 1080, borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={th(undefined, "left")}>Date</th>
+                    <th style={th(undefined)}>Grade</th>
+                    <th style={th(undefined)}>Score</th>
+                    <th style={th(undefined)}>Pts</th>
+                    <th style={th(undefined)}>Graded</th>
+                    <th style={{ ...th(undefined, "left"), minWidth: 180 }}>Spread</th>
+                    <th style={th(undefined)}>Cap held</th>
+                    <th style={th(undefined)}>Floor held</th>
+                    <th style={th(undefined)}>Flip held</th>
+                    <th style={th(undefined)}>CB pinned</th>
+                    <th style={th(undefined)}>Range</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {days?.rows.map((d) => (
+                    <tr
+                      key={d.date}
+                      onMouseEnter={() => setHover(d.date)}
+                      onMouseLeave={() => setHover((h) => (h === d.date ? null : h))}
+                      style={{
+                        background: hover === d.date ? SURFACE.cardHi : "transparent",
+                        borderBottom: `1px solid ${T.border}`,
+                      }}
+                    >
+                      <th scope="row" style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800 }}>
+                        {fmtDay(d.date)}
+                        <span style={{ marginLeft: 6, fontSize: TYPE.micro, fontWeight: 600, color: T.text, opacity: 0.7 }}>
+                          {fmtWeekday(d.date)}
+                        </span>
+                      </th>
+                      <td style={td}>
+                        {d.grade
+                          ? <Pill accent={GRADE_ACCENT[d.grade] || T.text}>{d.grade}</Pill>
+                          : <Pill accent={T.lightBlue}>no grade</Pill>}
+                      </td>
+                      <td style={{ ...td, fontWeight: 800 }}>{d.score == null ? "—" : Number(d.score).toFixed(1)}</td>
+                      <td style={td}>{d.max_pts ? `${d.pts} / ${d.max_pts}` : "—"}</td>
+                      <td style={td}>{d.graded ?? 0} / {d.tickers ?? 0}</td>
+                      {/* The letter spread for that session, in rubric order. Only
+                          the letters that occurred are drawn — an empty band is
+                          noise, not information. */}
+                      <td style={{ padding: "8px 10px", minWidth: 180 }}>
+                        {(["A+", "A", "B", "C", "D", "F"] as const).map((g) => {
+                          const n = g === "A+" ? d.a_plus : g === "A" ? d.a : g === "B" ? d.b
+                            : g === "C" ? d.c : g === "D" ? d.d : d.f;
+                          return n ? <Pill key={g} accent={GRADE_ACCENT[g]}>{n} {g}</Pill> : null;
+                        })}
+                      </td>
+                      <td style={td}>{d.cap_held ?? 0} / {d.cap_tested ?? 0}</td>
+                      <td style={td}>{d.floor_held ?? 0} / {d.floor_tested ?? 0}</td>
+                      <td style={td}>{d.flip_held ?? 0}</td>
+                      <td style={td}>{d.apex_pinned ?? 0}</td>
+                      <td style={td}>{d.range_contained ?? 0}</td>
+                    </tr>
+                  ))}
+                  {!days?.rows.length && (
+                    <tr>
+                      <td colSpan={11} style={{ ...td, textAlign: "center", padding: 34 }}>
+                        {daysLoading
+                          ? "Loading sessions…"
+                          : daysError
+                            ? "Session history could not be read."
+                            : "No graded session on record yet — the first row lands after a 16:20 ET run."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </>
+      )}
+
+      {/* ── ticker history ───────────────────────────────────────────────── */}
+      {histSym && (
+        <TickerHistoryModal
+          symbol={histSym}
+          onClose={() => setHistSym(null)}
+          windowDays={histWindow}
+          onWindow={setHistWindow}
+        />
+      )}
+
       {/* ── legend ───────────────────────────────────────────────────────── */}
       {/* Each tab gets the glossary it needs: what the levels ARE, or what the
           verdicts on them MEAN. Both are the recorder's own vocabulary — keep
           them in step with daily-grades-recorder.js if the rubric moves. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, flexShrink: 0 }}>
-        {(tab === "grades" ? GRADE_LEGEND : [
+        {(tab === "sessions" ? SESSION_LEGEND : tab === "grades" ? GRADE_LEGEND : [
           ["Roster", "The scanner watchlist from /proxy/scanner-tickers — the same universe the ΔGEX Board runs over."],
+          ["Click a ticker", "Opens its grade history — every session that name was sealed for, with what each level did and what the whole board scored that day."],
           ["Cap", "Where 80% of the call gamma ladder sits below — the empirical percentile of the settled-OI call GEX, not the single biggest strike."],
           ["Floor", "Where 20% of the put gamma ladder sits below — the same read from the other end."],
           ["CB", "The CB print. Carried as `apex` in the payload — the column is the same number under the name it is actually called."],

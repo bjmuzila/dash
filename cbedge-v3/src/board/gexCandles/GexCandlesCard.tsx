@@ -266,7 +266,7 @@ export function GexCandlesCard() {
     () =>
       buildBubbleModel(columns, {
         metric: settings.gexMetric,
-        perSide: settings.bubbleLevels,
+        levels: settings.bubbleLevels,
         cutoffPct: settings.bubbleCutoff,
       }),
     [columns, settings.gexMetric, settings.bubbleLevels, settings.bubbleCutoff],
@@ -471,14 +471,14 @@ export function GexCandlesCard() {
                 <>
                   <PanelSection title="Bubbles">
                     <Slider
-                      label="per side"
+                      label="levels"
                       value={settings.bubbleLevels}
                       min={BUBBLE_LEVELS_RANGE.min}
                       max={BUBBLE_LEVELS_RANGE.max}
                       step={1}
-                      format={(v) => `${v.toFixed(0)}\u00d72`}
+                      format={(v) => v.toFixed(0)}
                       onChange={(v) => patch({ bubbleLevels: Math.round(v) })}
-                      title="How many strikes draw ABOVE spot and how many BELOW, strongest first. Split on spot on purpose \u2014 the top strikes overall are often all on one side, and the resistance above you alone is not a picture of the gamma you are trading inside of"
+                      title="How many strikes draw in total, strongest first across the whole board \u2014 always with at least one of them on each side of spot. The ranking picks the levels actually holding gamma; the per-side floor stops the chart being a picture of only the resistance overhead, which the top strikes often all are"
                     />
                     <Slider
                       label="size"

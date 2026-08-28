@@ -363,7 +363,58 @@ function readJson(key: string): Record<string, unknown> | null {
   } catch { return null; } // private mode / bad blob
 }
 
+/**
+ * ── Bubble DEFAULTS version ─────────────────────────────────────────────────
+ *
+ * A default only reaches anyone who has never touched the control. `bLevels` is
+ * persisted per slot, so every existing card was pinned to whatever it had —
+ * changing `BUBBLE_STYLE.topStrikes` did nothing on a browser that had opened
+ * the chart even once, which is every browser that matters. The new value has
+ * to be pushed, not just declared.
+ *
+ * So: a stamp. When it moves, the keys listed in `BUBBLE_DEFAULT_KEYS` are
+ * DELETED from every slot blob, once, and the card falls back to the constant.
+ * Deleting rather than overwriting is what keeps this honest — the blob goes
+ * back to "never set", so the next default change reaches it too.
+ *
+ * Bump this ONLY when a bubble default is meant to override what people already
+ * have. Everything else about a slot blob (symbol, overlays, timeframe) is
+ * untouched: this is not a settings reset, and it must never become one.
+ */
+export const BUBBLE_DEFAULTS_V = 2;
+const BUBBLE_DEFAULTS_V_KEY = "es-candles-bubble-defaults-v";
+/** Only `bLevels` so far — the 5 -> 4 top-strikes change on 2026-08-28. */
+const BUBBLE_DEFAULT_KEYS = ["bLevels"] as const;
+
 let sharedSeeded = false;
+let bubbleDefaultsChecked = false;
+
+/**
+ * Apply the pending bubble-default bump, once per tab. Self-healing like
+ * ensureMigrated and for the same reason: child effects run before parent ones,
+ * so nothing can be relied on to call it first.
+ */
+function ensureBubbleDefaults(): void {
+  if (typeof window === "undefined" || bubbleDefaultsChecked) return;
+  bubbleDefaultsChecked = true;
+  let stored = 0;
+  try { stored = Number(window.localStorage.getItem(BUBBLE_DEFAULTS_V_KEY)) || 0; } catch { return; }
+  if (stored >= BUBBLE_DEFAULTS_V) return;
+  const slots: SlotId[] = [...Array.from({ length: MAX_CARDS }, (_, i) => i), SHARED_SLOT, "embed"];
+  for (const slot of slots) {
+    const blob = readJson(slotStorageKey(slot));
+    if (!blob) continue;
+    let touched = false;
+    for (const k of BUBBLE_DEFAULT_KEYS) {
+      if (k in blob) { delete blob[k]; touched = true; }
+    }
+    if (!touched) continue;
+    try { window.localStorage.setItem(slotStorageKey(slot), JSON.stringify(blob)); } catch { /* ignore */ }
+  }
+  // Stamped even when nothing was touched, so this walk happens once and not on
+  // every readSlot of every card for the rest of time.
+  try { window.localStorage.setItem(BUBBLE_DEFAULTS_V_KEY, String(BUBBLE_DEFAULTS_V)); } catch { /* ignore */ }
+}
 
 /**
  * First time the row goes multi-chart, the shared blob doesn't exist yet — and
@@ -392,6 +443,10 @@ export function readSlot(slot: SlotId): SlotBlob {
   // the one load where it matters. ensureMigrated is idempotent and returns
   // immediately once slot 0 exists, so paying for it here costs one getItem.
   ensureMigrated();
+  // AFTER the migration (which may have just written these blobs) and BEFORE
+  // the shared seed, or slot 0's stale key would be copied into the shared blob
+  // a moment after being deleted from slot 0.
+  ensureBubbleDefaults();
   if (String(slot) === SHARED_SLOT) ensureSharedSeeded();
   return readJson(slotStorageKey(slot)) ?? {};
 }

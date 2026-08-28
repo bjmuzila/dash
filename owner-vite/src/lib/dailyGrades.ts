@@ -411,3 +411,122 @@ export async function loadGrades(): Promise<{
   const { SAMPLE_PAYLOAD } = await import("../pages/daily-grades/sample");
   return { payload: SAMPLE_PAYLOAD, source: "sample", grades: [], day: null };
 }
+
+// ── history ──────────────────────────────────────────────────────────────────
+//
+// The grades have always been stored per session — `daily_grades` keyed on
+// (date, symbol), `daily_grade_days` on date — so the back catalogue was there
+// long before anything read it. These are the two read paths: one ticker across
+// sessions, and the running day table.
+//
+// Neither has a sample fallback, deliberately. A history that can't be served is
+// an empty history and says so on screen; bundling a placeholder here would put
+// invented sessions in a table whose whole job is to be the record.
+
+/** One session of one ticker: its grade row plus how the whole board did that day. */
+export type DgHistoryRow = DgGradeRow & {
+  date: string;
+  day_score: number | null;
+  day_grade: string | null;
+};
+
+export type DgHistorySummary = {
+  sessions: number;
+  graded: number;
+  ungraded: number;
+  pts: number;
+  max_pts: number;
+  /** Summed points ÷ summed points-available × 100 — not the mean of the rows. */
+  score: number | null;
+  grade: string | null;
+  best: number | null;
+  worst: number | null;
+  counts: Record<string, number>;
+};
+
+export type DgTickerHistory = {
+  symbol: string;
+  days: number;
+  rows: DgHistoryRow[];
+  summary: DgHistorySummary;
+};
+
+/** One graded session, board-wide — the day roll-up with the date it belongs to. */
+export type DgDayRow = DgDay & { date: string };
+
+export type DgDayHistory = {
+  days: number;
+  rows: DgDayRow[];
+  summary: Omit<DgHistorySummary, "graded" | "ungraded" | "counts">;
+};
+
+export const DG_HISTORY_ENDPOINT = "/proxy/daily-grades-history";
+export const DG_DAYS_ENDPOINT = "/proxy/daily-grades-days";
+
+const emptyTickerHistory = (symbol: string): DgTickerHistory => ({
+  symbol,
+  days: 0,
+  rows: [],
+  summary: {
+    sessions: 0, graded: 0, ungraded: 0, pts: 0, max_pts: 0,
+    score: null, grade: null, best: null, worst: null, counts: {},
+  },
+});
+
+/** Every stored session for one ticker, newest first. Ungraded sessions included. */
+export async function loadTickerHistory(
+  symbol: string,
+  days = 60,
+): Promise<DgTickerHistory> {
+  const sym = symbol.trim().toUpperCase();
+  const r = await fetch(
+    `${DG_HISTORY_ENDPOINT}?symbol=${encodeURIComponent(sym)}&days=${days}`,
+    { cache: "no-store" },
+  );
+  // 404 is "no database / nothing recorded" — an empty history, not a failure.
+  if (r.status === 404) return emptyTickerHistory(sym);
+  if (!r.ok) throw new Error(`History unavailable (${r.status}).`);
+  const j = await r.json();
+  if (!j || !Array.isArray(j.rows)) throw new Error("Malformed history payload.");
+  return { ...emptyTickerHistory(sym), ...j } as DgTickerHistory;
+}
+
+/** The running day table — one row per graded session, newest first. */
+export async function loadDayHistory(days = 90): Promise<DgDayHistory> {
+  const empty: DgDayHistory = {
+    days: 0,
+    rows: [],
+    summary: { sessions: 0, pts: 0, max_pts: 0, score: null, grade: null, best: null, worst: null },
+  };
+  const r = await fetch(`${DG_DAYS_ENDPOINT}?days=${days}`, { cache: "no-store" });
+  if (r.status === 404) return empty;
+  if (!r.ok) throw new Error(`Session history unavailable (${r.status}).`);
+  const j = await r.json();
+  if (!j || !Array.isArray(j.rows)) throw new Error("Malformed session history payload.");
+  return { ...empty, ...j } as DgDayHistory;
+}
+
+/**
+ * "Aug 25" for this year, "Aug 25 '25" for any other. Parsed as UTC on purpose:
+ * the string is already an ET session date and must not be shifted by the
+ * viewer's zone.
+ */
+export function fmtDay(date: string | null | undefined): string {
+  if (!date) return "—";
+  const [y, m, d] = date.slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return String(date);
+  const label = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
+    month: "short", day: "numeric", timeZone: "UTC",
+  });
+  return y === new Date().getUTCFullYear() ? label : `${label} '${String(y).slice(2)}`;
+}
+
+/** Weekday for a session date — "Mon". Same UTC-parse reasoning as fmtDay. */
+export function fmtWeekday(date: string | null | undefined): string {
+  if (!date) return "";
+  const [y, m, d] = date.slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return "";
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
+    weekday: "short", timeZone: "UTC",
+  });
+}

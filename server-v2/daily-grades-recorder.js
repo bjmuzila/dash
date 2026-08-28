@@ -59,6 +59,8 @@
  *          16:20 ET, trading days only.
  * Wiring:  startDailyGradesRecorder(PORT) in server-with-proxy.js.
  * Routes:  GET  /proxy/daily-grades[?date=]      seal + grades + day roll-up
+ *          GET  /proxy/daily-grades-history      one ticker, session by session
+ *          GET  /proxy/daily-grades-days         the running day table
  *          POST /proxy/daily-grades-build        build + seal the board now
  *          POST /proxy/daily-grades-seal         store a board built elsewhere
  *          POST /proxy/daily-grades-run          grade now (manual fire)
@@ -911,6 +913,114 @@ async function readSession(date) {
   };
 }
 
+// ── history ──────────────────────────────────────────────────────────────────
+//
+// The grade tables have always been keyed by date — `daily_grades` on
+// (date, symbol), `daily_grade_days` on date — so every session ever graded is
+// still on disk. Nothing below writes; these are the two READ paths the board
+// was missing, and they are why the tables are keyed that way in the first
+// place.
+
+/** Ceiling on a history window, so a hand-typed `?days=99999` can't scan the table. */
+const HISTORY_MAX_DAYS = 500;
+const HISTORY_DEFAULT_DAYS = 60;
+
+function historyLimit(days) {
+  const n = Number(days);
+  if (!Number.isFinite(n) || n <= 0) return HISTORY_DEFAULT_DAYS;
+  return Math.min(Math.floor(n), HISTORY_MAX_DAYS);
+}
+
+/**
+ * One ticker's grade, session by session, newest first. Rides
+ * `idx_daily_grades_symbol`.
+ *
+ * Ungraded sessions (no levels, no candles) come back too — a gap in the record
+ * IS part of the record, and dropping them would make a name look better
+ * attended than it was. `day_score` / `day_grade` ride along from the roll-up so
+ * a row reads against the session it sat in: a C on a day the whole board scored
+ * 48 is not the same C as one on a day the board scored 84.
+ */
+async function readTickerHistory(symbol, days) {
+  if (!(await ensureSchema())) return null;
+  const sym = String(symbol || '').trim().toUpperCase();
+  if (!sym) throw new Error('symbol required');
+  const p = getPool();
+  const limit = historyLimit(days);
+
+  const { rows } = await p.query(
+    `SELECT g.*, d.score AS day_score, d.grade AS day_grade
+       FROM daily_grades g
+       LEFT JOIN daily_grade_days d ON d.date = g.date
+      WHERE g.symbol = $1
+      ORDER BY g.date DESC
+      LIMIT $2`,
+    [sym, limit],
+  );
+  const out = rows.map((r) => ({ ...r, date: etDateStr(new Date(r.date)) }));
+
+  // Summed over the graded rows only — an ungraded session has no score and
+  // must not drag the average down.
+  const scored = out.filter((r) => r.score != null);
+  const pts = out.reduce((a, r) => a + (r.pts || 0), 0);
+  const maxPts = out.reduce((a, r) => a + (r.max_pts || 0), 0);
+  const counts = {};
+  for (const r of out) if (r.grade) counts[r.grade] = (counts[r.grade] || 0) + 1;
+
+  return {
+    symbol: sym,
+    days: limit,
+    rows: out,
+    summary: {
+      sessions: out.length,
+      graded: scored.length,
+      ungraded: out.length - scored.length,
+      pts,
+      max_pts: maxPts,
+      // Same arithmetic rollUpDay() uses: summed points over summed
+      // points-available, NOT the mean of the per-session percentages.
+      score: maxPts > 0 ? (pts / maxPts) * 100 : null,
+      grade: maxPts > 0 ? GRADE_BANDS((pts / maxPts) * 100) : null,
+      best: scored.length ? Math.max(...scored.map((r) => r.score)) : null,
+      worst: scored.length ? Math.min(...scored.map((r) => r.score)) : null,
+      counts,
+    },
+  };
+}
+
+/**
+ * The running session table: one row per graded date, newest first.
+ * `daily_grade_days` was already exactly this — it just had no route out.
+ */
+async function readDayHistory(days) {
+  if (!(await ensureSchema())) return null;
+  const p = getPool();
+  const limit = historyLimit(days);
+  const { rows } = await p.query(
+    `SELECT * FROM daily_grade_days ORDER BY date DESC LIMIT $1`,
+    [limit],
+  );
+  const out = rows.map((r) => ({ ...r, date: etDateStr(new Date(r.date)) }));
+
+  const pts = out.reduce((a, r) => a + (r.pts || 0), 0);
+  const maxPts = out.reduce((a, r) => a + (r.max_pts || 0), 0);
+  const scored = out.filter((r) => r.score != null);
+
+  return {
+    days: limit,
+    rows: out,
+    summary: {
+      sessions: out.length,
+      pts,
+      max_pts: maxPts,
+      score: maxPts > 0 ? (pts / maxPts) * 100 : null,
+      grade: maxPts > 0 ? GRADE_BANDS((pts / maxPts) * 100) : null,
+      best: scored.length ? Math.max(...scored.map((r) => r.score)) : null,
+      worst: scored.length ? Math.min(...scored.map((r) => r.score)) : null,
+    },
+  };
+}
+
 // ── scheduler ────────────────────────────────────────────────────────────────
 
 let _timer = null;
@@ -962,6 +1072,8 @@ module.exports = {
   gradeSession,
   regradeSession,
   readSession,
+  readTickerHistory,
+  readDayHistory,
   sealBoard,
   getSeal,
   gradeTicker,

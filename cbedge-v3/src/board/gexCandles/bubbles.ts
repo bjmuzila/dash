@@ -37,11 +37,21 @@
 //
 // Per snapshot:
 //
-//   SELECTION   the strongest `perSide` strikes ABOVE spot and the strongest
-//               `perSide` BELOW it. Splitting on spot is the point: the top
-//               strikes overall are frequently all on one side, and a picture
-//               of only the resistance above you is not a picture of the gamma
-//               you are trading inside of.
+//   SELECTION   the strongest `levels` strikes on the WHOLE board, with at
+//               least BUBBLE_MIN_PER_SIDE of them on each side of spot.
+//
+//               The ranking picks the levels that are actually holding gamma —
+//               which is the question — and the per-side floor stops the
+//               answer from being a picture of only the resistance overhead,
+//               which the top strikes frequently all are. It is a floor and
+//               not a split: on a genuinely one-sided board the remaining rows
+//               still all sit on the heavy side, so the guarantee costs the
+//               single weakest mark and only when a side would be empty.
+//
+//               This was `perSide` — a fixed count each way. It drew as many
+//               levels below spot as above whether or not they were worth
+//               drawing, and it could not reach the fourth-strongest strike on
+//               the board when that strike was the third one above spot.
 //
 //   THE CORE    the strongest of them. Draws at the largest radius the pane and
 //               its neighbours allow, so it is findable at a glance whether the
@@ -60,7 +70,7 @@
 // its say, pairwise between vertical neighbours in pixels.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { BUBBLE_STYLE, type GexMetric } from './settings'
+import { BUBBLE_STYLE, BUBBLE_MIN_PER_SIDE, type GexMetric } from './settings'
 import { valueOf, type GexColumn } from './gexHistory'
 
 /**
@@ -108,13 +118,16 @@ export interface BubbleSnapshot {
 
 export interface BuildOpts {
   metric: GexMetric
-  /** How many strikes to keep on EACH side of spot. */
-  perSide: number
+  /**
+   * How many strikes to keep in TOTAL, strongest first across the board — with
+   * at least BUBBLE_MIN_PER_SIDE of them on each side of spot.
+   */
+  levels: number
   /**
    * Drop any strike holding less than this share of the board, as a PERCENT.
-   * 0 keeps everything the perSide gate let through.
+   * 0 keeps everything the levels gate let through.
    *
-   * Two gates, deliberately, because they answer different questions: perSide
+   * Two gates, deliberately, because they answer different questions: levels
    * is "how busy do I want the chart", cutoff is "below what does a level stop
    * mattering at all". A single knob doing both is how the old DUST constant
    * ended up meaning neither.
@@ -128,8 +141,8 @@ export interface BuildOpts {
  * and a timeframe change without being rebuilt.
  */
 export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleSnapshot[] {
-  const { metric, perSide, cutoffPct } = opts
-  if (!columns.length || perSide <= 0) return []
+  const { metric, levels, cutoffPct } = opts
+  if (!columns.length || levels <= 0) return []
 
   const out: BubbleSnapshot[] = []
 
@@ -153,23 +166,43 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
     // Σ|GEX| over EVERY strike in the column, taken before any selection — the
     // denominator has to be the whole board or "share of total" would silently
     // mean "share of the handful I decided to draw", and would jump every time
-    // the perSide slider moved.
+    // the levels slider moved.
     let totalAbs = 0
     for (const cell of col.cells) totalAbs += Math.abs(valueOf(cell, metric))
 
-    const above: Array<{ strike: number; value: number }> = []
-    const below: Array<{ strike: number; value: number }> = []
+    // ONE ranking over the whole board, then the per-side floor applied to it.
+    // Not two rankings merged: the point of the change is that the drawn rows
+    // are the strongest strikes there are, and a per-side split cannot express
+    // "the top four" whenever three of the four are on one side.
+    const ranked: Array<{ strike: number; value: number }> = []
     for (const cell of col.cells) {
       const value = valueOf(cell, metric)
       if (value === 0) continue
-      ;(cell.strike >= spot ? above : below).push({ strike: cell.strike, value })
+      ranked.push({ strike: cell.strike, value })
     }
+    ranked.sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
 
-    const strongest = (list: Array<{ strike: number; value: number }>) =>
-      list.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, perSide)
-
-    const picked = [...strongest(above), ...strongest(below)]
+    const picked = ranked.slice(0, levels)
     if (!picked.length) continue
+
+    // ── The min-per-side swap ────────────────────────────────────────────────
+    // One swap deep, and only when a side is short: the weakest picked strike
+    // (which is on the crowded side by construction) gives up its place to the
+    // STRONGEST strike on the missing side — so the row that appears is the
+    // best gamma over there, never a nearest-strike stand-in.
+    //
+    // Skipped below 2 × the floor, where honouring it would mean drawing more
+    // rows than `levels` says.
+    if (levels >= 2 * BUBBLE_MIN_PER_SIDE && picked.length >= 2 * BUBBLE_MIN_PER_SIDE) {
+      let nAbove = 0
+      for (const p of picked) if (p.strike >= spot) nAbove++
+      const nBelow = picked.length - nAbove
+      if (nAbove < BUBBLE_MIN_PER_SIDE || nBelow < BUBBLE_MIN_PER_SIDE) {
+        const wantAbove = nAbove < BUBBLE_MIN_PER_SIDE
+        const swapIn = ranked.find((r) => (wantAbove ? r.strike >= spot : r.strike < spot))
+        if (swapIn) picked[picked.length - 1] = swapIn
+      }
+    }
 
     let core = 0
     for (const p of picked) core = Math.max(core, Math.abs(p.value))
@@ -301,7 +334,7 @@ const FIT_PASSES = 6
  * factor, so the picture stays proportional to the numbers — it just gets
  * smaller when the pane is crowded, and the size slider takes full effect again
  * the moment the price axis opens up or the gates thin the ladder. Nothing is
- * ever deleted to make room. Removing a level is `perSide` and `cutoffPct`'s
+ * ever deleted to make room. Removing a level is `levels` and `cutoffPct`'s
  * job, decided on the DATA, before any of this runs.
  *
  * The pane's height is the second bound on the top. Spacing alone would let six

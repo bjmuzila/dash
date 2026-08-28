@@ -33,7 +33,18 @@ export interface ChartSettings {
   interval: Interval
   /** Master on/off for the whole bubble layer. */
   bubblesOn: boolean
-  /** How many strikes draw on EACH side of spot, strongest first. */
+  /**
+   * How many strikes draw IN TOTAL, strongest first across the whole board —
+   * with at least `BUBBLE_MIN_PER_SIDE` of them on each side of spot.
+   *
+   * Was per-side. A fixed count each way drew as many levels below spot as
+   * above whether or not the ones below were worth drawing, and it could not
+   * answer "show me the four that matter": on a lopsided board the
+   * fourth-strongest strike is often the third one above spot, and per-side had
+   * no way to reach it. Ranking the whole board and then guaranteeing one row a
+   * side gets both — the strikes that actually hold the gamma, and never a
+   * picture of only the resistance overhead.
+   */
   bubbleLevels: number
   /** The TOP radius, as a multiple of the pane-height cap. */
   bubbleSize: number
@@ -84,9 +95,12 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   session: 'eth',
   interval: 5,
   bubblesOn: true,
-  // Three a side. Six marks is enough to see the corridor you are trading
-  // inside without the ladder turning into a wall of circles.
-  bubbleLevels: 3,
+  // The top four on the board, one of them guaranteed on each side of spot.
+  // Four marks is enough to see the corridor you are trading inside without the
+  // ladder turning into a wall of circles, and ranking them across the whole
+  // board rather than three-and-three means the four drawn are the four that
+  // are actually holding gamma.
+  bubbleLevels: 4,
   bubbleSize: 1,
   // ~1.5px. Every level that survives the gates is visible; whether a level is
   // ON the chart is the cutoff's decision, never the size slider's.
@@ -115,8 +129,26 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   expiry: '',
 }
 
-/** Per SIDE of spot, so the drawn count is up to 2× this. */
-export const BUBBLE_LEVELS_RANGE = { min: 1, max: 8 }
+/**
+ * TOTAL strikes drawn, not per side — the top of the range is what the old
+ * per-side 8 came to in marks, so nobody loses reach.
+ */
+export const BUBBLE_LEVELS_RANGE = { min: 1, max: 16 }
+/**
+ * How many of the drawn strikes must sit on EACH side of spot.
+ *
+ * The selection is a ranking of the whole board, and gamma is routinely lopsided
+ * enough to put every drawn row above price — at which point the chart says
+ * nothing about what is underneath it, which is half the read. If a side comes
+ * out empty the weakest drawn strike is swapped for the strongest one over
+ * there.
+ *
+ * A FLOOR, not a split: with genuinely one-sided gamma the remaining rows still
+ * all land on the heavy side, so the guarantee costs one mark and only when a
+ * side would otherwise be blank. Inert below 2 × this, where honouring it would
+ * mean drawing more rows than the slider says.
+ */
+export const BUBBLE_MIN_PER_SIDE = 1
 /**
  * A multiple of `BUBBLE_STYLE.heightFrac` of the pane — so on a ~950px pane
  * 1.00× is a ~33px radius and the old 0.40× floor was still ~13px, which on a
@@ -201,6 +233,25 @@ export const GEX_HISTORY_MINUTES_PREV_DAY = 2880
 
 const KEY_PREFIX = 'cb-v3-gex-candles:'
 
+/**
+ * Blob version, written alongside the settings and checked on load.
+ *
+ * A default only reaches someone who has never touched the control, and
+ * `bubbleLevels` is persisted — so changing DEFAULT_SETTINGS did nothing on any
+ * browser that had opened the card once. When a stored blob is older than this,
+ * the keys listed in `STALE_ON_UPGRADE` fall back to the default instead of to
+ * what was saved.
+ *
+ * v2 (2026-08-28): `bubbleLevels` stopped meaning "per side" and became a total.
+ * A saved 3 was six marks and would silently have become three, and it was the
+ * wrong number either way — the default moved to 4.
+ *
+ * Bump this ONLY to push a default onto people who already have a value.
+ * Everything else in the blob is untouched: this is not a settings reset.
+ */
+const SETTINGS_V = 2
+const STALE_ON_UPGRADE = ['bubbleLevels'] as const
+
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v))
 }
@@ -208,6 +259,11 @@ function clamp(v: number, lo: number, hi: number) {
 /** Coerce an unknown parsed blob into a complete, in-range settings object. */
 function coerce(raw: unknown): ChartSettings {
   const p = (raw ?? {}) as Partial<Record<keyof ChartSettings, unknown>>
+  // An older blob hands back `undefined` for the upgraded keys, so the `num()`
+  // fallbacks below take the new default without any per-key special casing.
+  if ((raw as { v?: unknown } | null)?.v !== SETTINGS_V) {
+    for (const k of STALE_ON_UPGRADE) delete p[k]
+  }
   const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback)
   const interval = INTERVALS.includes(p.interval as Interval) ? (p.interval as Interval) : DEFAULT_SETTINGS.interval
   return {
@@ -254,7 +310,9 @@ export function loadSettings(cardId: string): ChartSettings {
 
 export function saveSettings(cardId: string, s: ChartSettings): void {
   try {
-    localStorage.setItem(KEY_PREFIX + cardId, JSON.stringify(s))
+    // `v` rides along in the blob rather than in ChartSettings: it is a storage
+    // concern, and nothing that reads settings should have to know about it.
+    localStorage.setItem(KEY_PREFIX + cardId, JSON.stringify({ ...s, v: SETTINGS_V }))
   } catch {
     /* best-effort — the in-memory settings still drive this session */
   }
