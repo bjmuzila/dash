@@ -19,9 +19,9 @@
 // were dropped.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { IChartApi, ISeriesApi, UTCTimestamp } from 'lightweight-charts'
+import type { Coordinate, IChartApi, ISeriesApi, UTCTimestamp } from 'lightweight-charts'
 import type { Bar } from './candles'
-import { drawBubbles, type BubbleFrame, type BubblePalette } from './bubbles'
+import { drawBubbles, type BubbleSnapshot, type BubblePalette } from './bubbles'
 
 function cssVar(el: HTMLElement, name: string, fallback: string): string {
   const v = getComputedStyle(el).getPropertyValue(name).trim()
@@ -68,7 +68,7 @@ export interface EsChartHandle {
   setLivePrice: (price: number) => void
   /** Bar width in ms — needed to know when the last bar has stopped forming. */
   setIntervalMs: (ms: number) => void
-  setFrames: (frames: BubbleFrame[]) => void
+  setSnapshots: (snaps: BubbleSnapshot[]) => void
   setDrawOpts: (opts: ChartDrawOpts) => void
   /** Re-frame on the newest bar, keeping the user's zoom. */
   scrollToNow: () => void
@@ -166,7 +166,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   overlay.style.pointerEvents = 'none'
   container.appendChild(overlay)
 
-  let frames: BubbleFrame[] = []
+  let snaps: BubbleSnapshot[] = []
   let barCount = 0
   let drawOpts: ChartDrawOpts = { size: 1, curve: 1, intensity: 1, on: true }
   let raf = 0
@@ -212,33 +212,27 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     if (!ctx) return
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
-    if (!drawOpts.on || !frames.length) return
-
-    let range: { from: number; to: number } | null = null
-    let plotW = w
-    try {
-      range = ts.getVisibleLogicalRange()
-      plotW = ts.width() || w
-    } catch {
-      range = null
-    }
-    const span = range ? range.to - range.from : 0
-    const barPitch = span > 0 ? plotW / span : 0
-    if (barPitch <= 0) return
+    if (!drawOpts.on || !snaps.length) return
 
     drawBubbles(
       ctx,
-      frames,
+      snaps,
       {
-        xOfBar: (barT) => {
-          const x = ts.timeToCoordinate(Math.floor(barT / 1000) as UTCTimestamp)
+        xOfTime: (ms) => {
+          const x = ts.timeToCoordinate(Math.floor(ms / 1000) as UTCTimestamp)
           return x == null ? null : (x as number)
+        },
+        // The inverse. This is what lets the layer step in PIXELS and then ask
+        // "what was the gamma here", instead of walking bars — the one change
+        // that makes the band look the same on 1m and 5m.
+        timeAtX: (x) => {
+          const t = ts.coordinateToTime(x as Coordinate)
+          return typeof t === 'number' ? t * 1000 : null
         },
         yOfPrice: (price) => {
           const y = series.priceToCoordinate(price)
           return y == null ? null : (y as number)
         },
-        barPitch,
         width: w,
         height: h,
       },
@@ -292,8 +286,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     setIntervalMs(ms) {
       if (ms > 0) intervalMs = ms
     },
-    setFrames(next) {
-      frames = next
+    setSnapshots(next) {
+      snaps = next
     },
     setDrawOpts(next) {
       drawOpts = next

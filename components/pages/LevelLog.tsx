@@ -280,6 +280,8 @@ const ROW_LEAD_H = 20;
  * rode high in the PNG.
  */
 const RAIL_CHIP_H = 24;
+/** Same idea for the wall-migration legend chips — see `legendChip`. */
+const LEGEND_CHIP_H = 16;
 
 const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
 /** Column-head width version of the same three. */
@@ -1518,13 +1520,22 @@ type DaySeg = {
 /** What the legend can switch off — the three levels plus the price line. */
 type MigKey = WallLevel | "spot";
 
-function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
+function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }: {
   days: DaySlice[];
   view: LogView;
   /** Plot height in px. The popout draws the same model twice as tall. */
   height?: number;
   /** Given only by the inline chart — the popout has nothing to expand into. */
   onExpand?: () => void;
+  /**
+   * Brand mark, over the bottom-right of the PLOT. Inside the chart rather than
+   * bolted on by the caller, because "bottom right of the chart" is a position
+   * only this component knows: a wrapper outside it can only aim at the bottom
+   * of the head + legend + plot + axis stack, which is how the mark ended up
+   * sitting in the date rail. The popout asks for it; the inline card does not
+   * — a watermark on a 250px card in the page is just clutter.
+   */
+  watermark?: boolean;
 }) {
   /**
    * Legend switches. Click a chip to drop that series out of the plot; click it
@@ -1952,6 +1963,13 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
    * is usually about one of them — so the chip that names a series turns it
    * off. Off reads as off: the swatch hollows out and the whole chip dims,
    * rather than the row looking identical to a chart that simply had no data.
+   *
+   * Inline-BLOCK, not inline-flex — the same reason WallCaptureRail's chips are:
+   * `align-items:center` is a line-box trick html2canvas does not implement, so
+   * a flex chip that reads centred on the page draws its swatch off the label's
+   * middle in the PNG. Fixed height + matching line-height + `data-cap-center`
+   * is the idiom lib/snapshot.ts knows how to rewrite for the clone, and the
+   * flex `gap` becomes explicit right-margins.
    */
   const legendChip = (key: MigKey, color: string, label: string, value: string) => {
     const on = !off.has(key);
@@ -1961,19 +1979,22 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
         onClick={() => toggle(key)}
         aria-pressed={on}
         title={on ? `Hide ${label}` : `Show ${label}`}
+        data-cap-center
         style={{
-          display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11,
-          fontFamily: "inherit", cursor: "pointer", padding: "2px 6px", borderRadius: 6,
-          border: "1px solid transparent", background: "transparent",
+          display: "inline-block", boxSizing: "border-box", whiteSpace: "nowrap",
+          height: LEGEND_CHIP_H, lineHeight: `${LEGEND_CHIP_H}px`,
+          padding: 0, borderRadius: 6, border: "1px solid transparent", background: "transparent",
+          fontFamily: "inherit", fontSize: 11, cursor: "pointer",
           color: MUTED, opacity: on ? 1 : 0.4,
         }}
       >
         <span aria-hidden style={{
-          width: 9, height: 9, borderRadius: 2, flex: "0 0 auto",
+          display: "inline-block", verticalAlign: "middle", marginRight: 6,
+          width: 9, height: 9, borderRadius: 2,
           background: on ? color : "transparent", border: `1px solid ${color}`,
         }} />
-        <span>{label}</span>
-        <span style={{ fontFamily: "var(--font-mono)", color: on ? HOME_THEME.text : MUTED }}>{value}</span>
+        <span style={{ verticalAlign: "middle", marginRight: 6 }}>{label}</span>
+        <span style={{ verticalAlign: "middle", fontFamily: "var(--font-mono)", color: on ? HOME_THEME.text : MUTED }}>{value}</span>
       </button>
     );
   };
@@ -2020,6 +2041,7 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
           and the two have no business sharing a scale. Every stroke carries
           vectorEffect so the squash never thickens a line, and there is no
           <text> or <circle> inside for the same reason. */}
+      <div style={{ position: "relative" }}>
       <svg viewBox={`0 0 100 ${height}`} height={height} preserveAspectRatio="none"
         style={{ width: "100%", display: "block" }}>
         {/* The corridor between the two walls, so the room price had is readable. */}
@@ -2049,6 +2071,20 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand }: {
             vectorEffect="non-scaling-stroke" />
         ))}
       </svg>
+      {/* Same-origin PNG, so it never taints the canvas the way a /proxy/ image
+          would; `pointer-events:none` so it cannot eat a click; and NOT
+          data-capture-hide — riding into the screenshot is the whole point. */}
+      {watermark ? (
+        <img
+          src="/cb-edge-logo.png"
+          alt="CB Edge"
+          style={{
+            position: "absolute", right: 16, bottom: 12, height: 58, width: "auto",
+            opacity: 0.4, pointerEvents: "none", userSelect: "none",
+          }}
+        />
+      ) : null}
+      </div>
 
       {/* One clock rail for a single session; one date stamp per slice for a
           week, because 09:29/12:45/16:00 repeated five times says nothing. */}
@@ -2277,7 +2313,11 @@ function WallMigrationPopout({ symbol, date, view, scope, basis, today, nonce, o
             display: "flex", flexDirection: "column", position: "relative",
           }}
         >
-          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", padding: "14px 18px", borderBottom: `1px solid ${C.border}` }}>
+          {/* The WHOLE head is live-page chrome in the PNG: snapshot.ts already
+              bakes a title band carrying the ticker, the range and the variant,
+              so this row came out as the same sentence twice — once in the band
+              and once in cyan under it. */}
+          <div data-capture-hide style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", padding: "14px 18px", borderBottom: `1px solid ${C.border}` }}>
             <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.cyan }}>
               {symbol ?? "—"} — Wall migration
             </span>
@@ -2315,21 +2355,7 @@ function WallMigrationPopout({ symbol, date, view, scope, basis, today, nonce, o
           </div>
 
           {days.length ? (
-            <div style={{ position: "relative" }}>
-              <WallMigrationChart days={days} view={view} height={MIG_H * 2.2} />
-              {/* Bottom-right watermark. Same-origin PNG so it never taints the
-                  canvas, `pointer-events: none` so it cannot eat a click, and
-                  NOT data-capture-hide — the whole point is that it rides along
-                  into the screenshot. */}
-              <img
-                src="/cb-edge-logo.png"
-                alt="CB Edge"
-                style={{
-                  position: "absolute", right: 18, bottom: 16, height: 34, width: "auto",
-                  opacity: 0.32, pointerEvents: "none", userSelect: "none",
-                }}
-              />
-            </div>
+            <WallMigrationChart days={days} view={view} height={MIG_H * 2.2} watermark />
           ) : (
             <div style={{ padding: 28, fontSize: FS_BODY, color: MUTED }}>
               {week.loading

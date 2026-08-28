@@ -158,6 +158,24 @@
   transition: opacity 120ms ease-out;
 }
 
+/* The Multi Greek ladder's Core Bullseye cell. A slow white pulse rather than a
+   static ring: the CB moves strike during the session, and a mark that breathes
+   is findable in peripheral vision on a board of four ladders in a way a fixed
+   outline is not. Lives here because @keyframes cannot be scoped to a component
+   without a CSS module, and this file is already where .stale and .tabular are. */
+@keyframes cb-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 3px color-mix(in srgb, var(--color-fg) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 10px color-mix(in srgb, var(--color-fg) 85%, transparent);
+  }
+}
+.mg-cb-glow {
+  animation: cb-glow 2.4s ease-in-out infinite;
+}
+
 /* 100dvh where supported; see the note in index.html. */
 .cb-viewport {
   height: 100vh;

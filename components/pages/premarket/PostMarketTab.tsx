@@ -136,6 +136,17 @@ import {
 //  CSS — appended to the Premarket tab's block, same .pmk scope
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Row pitch of section 3's build-time ladder, in px.
+ *
+ * Interpolated into the stylesheet below AND used by centerEv's scroll maths,
+ * so the two cannot drift. They were a literal 21 in each place, and the
+ * centring is off by (rows x delta) the moment one of them moves — a one-pixel
+ * edit to the CSS would have parked the close a row and a half off centre at
+ * the bottom of a 121-row ladder with nothing on screen explaining why.
+ */
+const EV_ROW_H = 21;
+
 export const POSTMARKET_CSS = `
 .pmk .tabs{display:inline-flex;border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden}
 .pmk .tabs button{background:transparent;border:0;border-right:1px solid var(--line2);color:var(--dim);
@@ -227,7 +238,7 @@ export const POSTMARKET_CSS = `
    Sign now lives in its own two columns — a +/− chip and the signed dollar
    value — so length always means the same thing. */
 .pmk .evrow{display:grid;grid-template-columns:54px 13px 60px 1fr 78px 112px 76px;
-  align-items:center;height:21px;gap:7px}
+  align-items:center;height:${EV_ROW_H}px;gap:7px}
 .pmk .evrow .sgn{font-size:11px;font-weight:800;text-align:center;line-height:1}
 .pmk .evrow .sgn.p{color:var(--pos)}
 .pmk .evrow .sgn.n{color:var(--neg)}
@@ -274,6 +285,34 @@ export const POSTMARKET_CSS = `
 .pmk .evlegend{display:flex;gap:14px;flex-wrap:wrap;font-size:9.5px;letter-spacing:.05em;
   text-transform:uppercase;color:var(--dim2)}
 .pmk .evlegend i{display:inline-block;width:9px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+/* ── THE LADDER FILLS ITS COLUMN ────────────────────────────────────────────
+   .chart caps every ladder on the page at 440px, which is right for the short
+   ones on the Premarket tab and wrong for this one: section 3's other column
+   carries the wall-migration chart AND the written-vs-traded rows, so the grid
+   row is far taller than 440 and the ladder stopped halfway down with several
+   hundred pixels of empty card under it — while the strikes it could not show
+   were a scroll away.
+
+   The column is a grid item and is therefore ALREADY stretched to the row's
+   height; making it a flex column and letting the ladder grow is what hands
+   that height to the ladder. min-height:0 is what actually lets the flex child
+   scroll rather than growing to fit all 121 rows.
+
+   The fixed row pitch is what keeps this cheap: a taller viewport is more rows
+   on screen and no re-layout of anything inside them. */
+.pmk .col.evcol{display:flex;flex-direction:column;min-height:0}
+/* min-height is the OLD cap, so a session where the right column happens to be
+   short (both its panels needing the recorded ladder, say) never shows LESS
+   than it did before this change. */
+.pmk .col.evcol .evchart{flex:1 1 auto;min-height:440px;max-height:none}
+/* ...but only while there IS a column to fill. Below 1180px .body collapses to
+   one column (see the Premarket stylesheet), the column's height becomes its
+   own content, and a flex child with an indefinite parent height ignores
+   flex-grow — so max-height:none would render all 121 rows and turn section 3
+   into a page. The cap comes back. */
+@media (max-width:1180px){
+  .pmk .col.evcol .evchart{flex:0 1 auto;max-height:440px}
+}
 /* Written vs traded — two bars growing away from a centred strike label. */
 .pmk .mrow{display:grid;grid-template-columns:1fr 52px 1fr;align-items:center;height:18px;gap:6px}
 .pmk .mrow .mleft{display:flex;justify-content:flex-end}
@@ -1270,33 +1309,76 @@ export default function PostMarketTab(p: PostMarketProps) {
   };
 
   /**
-   * The ladder renders ±60 strikes, so without this it opens at 7,955 — sixty
-   * strikes above the money, where every bar is a sliver. It centres on the spot
-   * row while pinned and un-pins the moment the reader scrolls, so a far wall
-   * stays put once you go looking at it. Our own scrollTop writes are flagged so
-   * the scroll event they fire is not read as the user's hand.
+   * The ladder renders ±60 strikes, so without this it opens sixty strikes above
+   * the money, where every bar is a sliver. It centres on THE CLOSE while pinned
+   * and un-pins the moment the reader scrolls, so a far wall stays put once you
+   * go looking at it. Our own scrollTop writes are flagged so the scroll event
+   * they fire is not read as the user's hand.
+   *
+   * ── THE CLOSE, NOT THE NEAREST STRIKE ──────────────────────────────────────
+   * This used to find the listed strike nearest spot and centre that ROW, which
+   * on a coarse ladder parks the viewport up to half a strike off: with the
+   * close at 355.20 on a 2.50 grid the middle of the card is 355, and on a name
+   * whose close lands between strikes the price the whole section is graded
+   * against is simply not where the eye goes.
+   *
+   * The position is now the CONTINUOUS row index of closePx, interpolated
+   * between the two strikes that bracket it, so the CLOSING PRICE — not a
+   * strike near it — sits in the middle of the space given. closePx is the
+   * captured close on a frozen or replayed session and the live spot on a
+   * running one, which is what every other grade in this tab already uses.
    */
   const evChartRef = useRef<HTMLDivElement | null>(null);
   const evPinnedRef = useRef(true);
   const evProgRef = useRef(false);
   const [evPinned, setEvPinned] = useState(true);
 
-  const evSpotStrike = useMemo(() => {
-    if (!evRows.length || !(spot > 0)) return null;
-    return evRows.reduce((b, r) => (Math.abs(r.strike - spot) < Math.abs(b.strike - spot) ? r : b), evRows[0]).strike;
-  }, [evRows, spot]);
-
   const centerEv = useCallback(() => {
     const el = evChartRef.current;
-    if (!el || evSpotStrike == null) return;
-    const i = evRows.findIndex((r) => r.strike === evSpotStrike);
-    if (i < 0) return;
+    const n = evRows.length;
+    if (!el || !n || !(closePx > 0)) return;
+
+    // Written for either sort order rather than assuming high-to-low: a
+    // reversed sort upstream would otherwise silently scroll to the wrong end
+    // instead of failing where someone would notice.
+    const desc = evRows[0].strike >= evRows[n - 1].strike;
+    let i = 0;
+    while (i < n && (desc ? evRows[i].strike > closePx : evRows[i].strike < closePx)) i++;
+    let pos: number;
+    if (i === 0) pos = 0;                      // the close is off the top of the ladder
+    else if (i >= n) pos = n - 1;              // ...or off the bottom
+    else {
+      const a = evRows[i - 1].strike, b = evRows[i].strike;
+      pos = (i - 1) + (a === b ? 0 : (closePx - a) / (b - a));
+    }
+
+    // EV_ROW_H must equal the .pmk .evrow height in this file's stylesheet.
+    // There is no row gap, so index x height is the row's top exactly.
+    const want = pos * EV_ROW_H + EV_ROW_H / 2 - el.clientHeight / 2;
     evProgRef.current = true;
-    el.scrollTop = Math.max(0, i * 21 + 10.5 - el.clientHeight / 2);
+    el.scrollTop = Math.max(0, Math.min(want, el.scrollHeight - el.clientHeight));
     requestAnimationFrame(() => { evProgRef.current = false; });
-  }, [evRows, evSpotStrike]);
+  }, [evRows, closePx]);
 
   useEffect(() => { if (evPinnedRef.current) centerEv(); }, [centerEv]);
+
+  /**
+   * Re-centre when the viewport itself changes height.
+   *
+   * The ladder no longer has a fixed 440px cap — it fills whatever height its
+   * column is given (.evcol in the stylesheet), and that height is not known
+   * until the sibling column beside it has laid out. Centring once on mount
+   * would therefore measure the WRONG clientHeight and leave the close half a
+   * card high. Only fires while pinned, so it can never yank a reader who has
+   * scrolled off to look at a wall.
+   */
+  useEffect(() => {
+    const el = evChartRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => { if (evPinnedRef.current) centerEv(); });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [centerEv]);
 
   const onEvScroll = useCallback(() => {
     if (evProgRef.current) return;
@@ -1533,7 +1615,7 @@ export default function PostMarketTab(p: PostMarketProps) {
             it was taking four lines off the ladder every session. */}
 
         <div className="body" style={{ gridTemplateColumns: "1.35fr 1fr" }}>
-          <div className="col" style={{ position: "relative" }}>
+          <div className="col evcol" style={{ position: "relative" }}>
             <div className="chart evchart" ref={evChartRef} onScroll={onEvScroll}>
               {evRows.length === 0 && (
                 <div style={{ padding: "30px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
@@ -1638,7 +1720,7 @@ export default function PostMarketTab(p: PostMarketProps) {
               })}
             </div>
             {!evPinned && evRows.length > 0 && (
-              <button type="button" className="recenter" onClick={repinEv}>⤒ back to spot</button>
+              <button type="button" className="recenter" onClick={repinEv}>⤒ back to close</button>
             )}
           </div>
 

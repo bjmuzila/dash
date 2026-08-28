@@ -15,7 +15,6 @@ import { normalizeSymbol } from './symbols'
 
 export type Session = 'rth' | 'eth'
 export type GexMetric = 'voloi' | 'vol'
-export type BubbleBucket = 1 | 5 | 'bar'
 export type Interval = 1 | 5 | 15 | 30 | 60
 
 export const INTERVALS: Interval[] = [1, 5, 15, 30, 60]
@@ -41,8 +40,6 @@ export interface ChartSettings {
   bubbleCurve: number
   /** Overall opacity of the layer. */
   bubbleIntensity: number
-  /** Time bucket a bubble column covers. */
-  bubbleBucket: BubbleBucket
   /** Which GEX quantity a bubble is sized by. */
   gexMetric: GexMetric
   /** The forming-bar countdown in the top-right corner. */
@@ -60,7 +57,6 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   bubbleSize: 1,
   bubbleCurve: 1,
   bubbleIntensity: 1,
-  bubbleBucket: 'bar',
   gexMetric: 'voloi',
   countdown: true,
 }
@@ -76,15 +72,13 @@ export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 }
  * preference — the four sliders above are the preferences.
  */
 export const BUBBLE_STYLE = {
-  /** Sanity ceiling on the core's radius, px, for a nearly-empty column where
-   *  the spacing bound would otherwise allow an absurd blob. */
-  maxPx: 34,
   /** Hard radius floor, px. */
   minPx: 0.8,
-  /** Floor under the HORIZONTAL bound. Left and right neighbours are the same
-   *  strike one bucket either side, so they are allowed to merge into a trail;
-   *  without this floor a chart zoomed out to 2px bars would show nothing. */
-  horizFloorPx: 7,
+  /** The core may not exceed this fraction of the pane's height. Spacing alone
+   *  would let six marks on a tall, sparse pane grow until the ladder was
+   *  mostly circle; this keeps the band proportionate to the chart at every
+   *  window size, with no per-layout pixel number to tune. */
+  heightFrac: 0.035,
   glowTopFactor: 0.75,
   glowMaxPx: 9,
   /** The weakest mark fades to 1 − fade. */
@@ -143,7 +137,6 @@ function coerce(raw: unknown): ChartSettings {
       BUBBLE_INTENSITY_RANGE.min,
       BUBBLE_INTENSITY_RANGE.max,
     ),
-    bubbleBucket: p.bubbleBucket === 1 || p.bubbleBucket === 5 ? p.bubbleBucket : 'bar',
     gexMetric: p.gexMetric === 'vol' ? 'vol' : 'voloi',
     countdown: p.countdown !== false,
   }

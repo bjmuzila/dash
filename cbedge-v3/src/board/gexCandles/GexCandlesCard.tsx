@@ -56,14 +56,6 @@ import { mountEsChart, type EsChartHandle } from './chart'
 
 const CARD_ID = 'gex-candles'
 
-/**
- * The bucket control's values are strings because a segmented control's values
- * are strings; the SETTING is `1 | 5 | 'bar'` because a bucket is a duration.
- * The two conversions live here rather than inline so the union stays typed at
- * both ends instead of collapsing to `string` at the widget boundary.
- */
-type BucketOpt = 'bar' | '1' | '5'
-
 /** Wires an EsChartHandle to a <ChartFrame>, buffering setters until it mounts. */
 function useEsChart(onLatestOffscreen: (off: boolean) => void) {
   const handleRef = useRef<EsChartHandle | null>(null)
@@ -153,16 +145,12 @@ export function GexCandlesCard() {
 
   const columns = useMemo(() => parseGexHistory(gexQ.data), [gexQ.data])
 
-  const frames = useMemo(
-    () =>
-      buildBubbleModel(columns, {
-        bucket: settings.bubbleBucket,
-        metric: settings.gexMetric,
-        perSide: settings.bubbleLevels,
-        barTimes: bars.map((b) => b.t),
-        intervalMs: settings.interval * 60_000,
-      }),
-    [columns, bars, settings.bubbleBucket, settings.gexMetric, settings.bubbleLevels, settings.interval],
+  // No bars, no interval, no bucket in these deps: the bubble model is a pure
+  // function of the GEX history now, so a candle poll or a timeframe change no
+  // longer rebuilds it.
+  const snapshots = useMemo(
+    () => buildBubbleModel(columns, { metric: settings.gexMetric, perSide: settings.bubbleLevels }),
+    [columns, settings.gexMetric, settings.bubbleLevels],
   )
 
   // ── Chart ──────────────────────────────────────────────────────────────────
@@ -185,7 +173,7 @@ export function GexCandlesCard() {
     if (bars.length) framedRef.current = viewKey
   }, [bars, viewKey, apply])
 
-  useEffect(() => apply((h) => h.setFrames(frames)), [frames, apply])
+  useEffect(() => apply((h) => h.setSnapshots(snapshots)), [snapshots, apply])
   useEffect(() => apply((h) => h.setIntervalMs(settings.interval * 60_000)), [settings.interval, apply])
 
   // ── The live price ─────────────────────────────────────────────────────────
@@ -253,8 +241,6 @@ export function GexCandlesCard() {
 
   const error = candlesQ.error
   const empty = !error && bars.length === 0
-  const bucketValue: BucketOpt =
-    settings.bubbleBucket === 'bar' ? 'bar' : settings.bubbleBucket === 1 ? '1' : '5'
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col gap-1">
@@ -349,18 +335,6 @@ export function GexCandlesCard() {
                     />
                   </PanelSection>
 
-                  <PanelSection title="Bucket">
-                    <SegGroup<BucketOpt>
-                      title="How much clock time one column of bubbles covers"
-                      options={[
-                        { label: 'Bar', value: 'bar' },
-                        { label: '1m', value: '1' },
-                        { label: '5m', value: '5' },
-                      ]}
-                      value={bucketValue}
-                      onChange={(v) => patch({ bubbleBucket: v === 'bar' ? 'bar' : v === '1' ? 1 : 5 })}
-                    />
-                  </PanelSection>
 
                   <PanelSection title="GEX basis">
                     <SegGroup
