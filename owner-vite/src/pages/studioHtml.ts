@@ -120,6 +120,10 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
   </div>
   <p class="empty" style="margin:2px 0 0">Saved templates keep layout, text and colors — image slots reset to empty so you can drop new screenshots in each time.</p>
 
+  <h3>Auto-fill</h3>
+  <div class="row"><button id="autofill" class="pri" style="flex:1">Read the screenshots</button></div>
+  <p class="empty" id="afmsg" style="margin:2px 0 0">Drop your shots into the image slots, then this reads the numbers off them and fills the text layers.</p>
+
   <h3>Canvas</h3>
   <label>Size</label>
   <select id="size">
@@ -223,6 +227,10 @@ function accent(){return document.getElementById('ac').value}
 function mkLayer(o){
   var d=document.createElement('div');
   d.className='ly'; d.dataset.t=o.t;
+  // k = the field this layer stands for ("entry", "peak", …). Auto-fill writes
+  // by key, so a layer can be moved, restyled or resized without breaking it.
+  // Survives save/restore for free — those round-trip stage.innerHTML.
+  if(o.k) d.dataset.k=o.k;
   d.style.left=px(o.x); d.style.top=px(o.y);
   d.style.width=px(o.w); if(o.h) d.style.height=px(o.h);
 
@@ -765,23 +773,23 @@ var TPL={
     // ── left column: the rendered story ──────────────────────────────────
     {t:'logo',x:80,y:52,w:320,h:106},
     {t:'text',x:80,y:184,w:720,html:'0DTE ALERT · RESULT',fs:22,fw:700,col:C.mut,ls:3},
-    {t:'text',x:80,y:222,w:760,html:'SPXW 7750C',fs:62,fw:800},
-    {t:'text',x:80,y:300,w:760,html:'<span style="color:'+accent()+'">+440.9%</span> to the peak',fs:44,fw:800},
+    {t:'text',x:80,y:222,w:760,html:'SPXW 7750C',fs:62,fw:800,k:'contract'},
+    {t:'text',x:80,y:300,w:760,html:'<span style="color:'+accent()+'">+440.9%</span> to the peak',fs:44,fw:800,k:'pct'},
     {t:'box',x:80,y:392,w:720,h:158},
     {t:'text',x:112,y:420,w:200,html:'ENTRY',fs:17,fw:700,col:C.mut,ls:2},
-    {t:'text',x:112,y:452,w:200,html:'$4.65',fs:44,fw:800},
+    {t:'text',x:112,y:452,w:200,html:'$4.65',fs:44,fw:800,k:'entry'},
     {t:'text',x:352,y:420,w:200,html:'PEAK',fs:17,fw:700,col:C.mut,ls:2},
-    {t:'text',x:352,y:452,w:200,html:'$25.15',fs:44,fw:800,col:accent()},
+    {t:'text',x:352,y:452,w:200,html:'$25.15',fs:44,fw:800,col:accent(),k:'peak'},
     {t:'text',x:592,y:420,w:200,html:'PER CONTRACT',fs:17,fw:700,col:C.mut,ls:2},
-    {t:'text',x:592,y:452,w:200,html:'+$2,050',fs:40,fw:800,col:accent()},
-    {t:'list',x:80,y:586,w:720,fs:25,items:['Called 10:30 AM · peak 11:01 AM','Three alerts fired — all three ran','Posted live, tracked to the tick after']},
+    {t:'text',x:592,y:452,w:200,html:'+$2,050',fs:40,fw:800,col:accent(),k:'perContract'},
+    {t:'list',x:80,y:586,w:720,fs:25,items:['Called 10:30 AM · peak 11:01 AM','Three alerts fired — all three ran','Posted live, tracked to the tick after'],k:'bullets'},
     {t:'text',x:80,y:834,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim},
 
     // ── right column: the two screenshot slots + CTA ─────────────────────
     {t:'text',x:860,y:56,w:660,html:'THE ALERTS THAT FIRED',fs:18,fw:700,col:C.mut,ls:2},
-    {t:'image',x:860,y:90,w:660,h:128,label:'Alerts table screenshot · wide strip'},
+    {t:'image',x:860,y:90,w:660,h:128,label:'Alerts table screenshot · wide strip',k:'shot-table'},
     {t:'text',x:860,y:258,w:660,html:'THE 7750C, ALL SESSION',fs:18,fw:700,col:C.mut,ls:2},
-    {t:'image',x:860,y:292,w:660,h:406,label:'Option price chart screenshot'},
+    {t:'image',x:860,y:292,w:660,h:406,label:'Option price chart screenshot',k:'shot-chart'},
     {t:'box',x:860,y:732,w:660,h:112,bgc:C.panelUp},
     {t:'text',x:892,y:756,w:600,html:'Every alert tracked to the tick.',fs:26,fw:800,col:C.pale},
     {t:'text',x:892,y:794,w:600,html:'cbedge.net · free 2-day trial',fs:22,fw:700,col:C.dim}
@@ -886,6 +894,70 @@ document.getElementById('dl').onclick=function(){
     stage.classList.remove('exp'); Z=pz; applyZoom();
     alert('Export failed: '+e);
   });
+};
+
+// ── Auto-fill ───────────────────────────────────────────────────────────────
+// The image slots already hold the screenshots as data: URLs, so "read the
+// numbers off them" is just: POST those bytes to /api/post-studio/read-shots
+// and write what comes back into the layers by their data-k key.
+//
+// The Anthropic key lives on the server and only on the server — this document
+// is a plain iframe and would hand it to anyone who viewed source. The route is
+// registered auth:'owner' in server-v2/api-router.js, and the srcdoc iframe
+// inherits the site origin, so the session cookie rides along same-origin.
+function afmsg(t,bad){
+  var p=document.getElementById('afmsg');
+  p.textContent=t; p.style.color=bad?'#f4948e':'';
+}
+function fillK(k,html){
+  if(html==null||html==='') return 0;
+  var d=stage.querySelector('.ly[data-k="'+k+'"]'); if(!d) return 0;
+  var e=d.querySelector('.ed'); if(!e) return 0;
+  e.innerHTML=html; return 1;
+}
+function shotsOnStage(){
+  var out=[];
+  stage.querySelectorAll('.ly[data-t=image] img').forEach(function(im){
+    var m=/^data:(image\/[a-z+.-]+);base64,(.+)$/i.exec(im.dataset.url||im.getAttribute('src')||'');
+    if(!m) return;                       // logo default and stale slots aren't screenshots
+    out.push({mediaType:m[1],data:m[2],slot:im.parentNode.dataset.k||''});
+  });
+  return out.slice(0,2);                 // the template has two slots; cap the bill
+}
+document.getElementById('autofill').onclick=function(){
+  var btn=this, shots=shotsOnStage();
+  if(!shots.length){ afmsg('No screenshots loaded yet — double-click an image slot to add one.',1); return; }
+  btn.disabled=true;
+  afmsg('Reading '+shots.length+' screenshot'+(shots.length>1?'s':'')+'…');
+  fetch('/api/post-studio/read-shots',{
+    method:'POST',credentials:'same-origin',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({shots:shots})
+  }).then(function(r){
+    return r.json().catch(function(){return {}}).then(function(j){
+      if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+      return j;
+    });
+  }).then(function(j){
+    var f=j.fields||{}, n=0;
+    n+=fillK('contract',f.contract);
+    if(f.pct) n+=fillK('pct','<span style="color:'+accent()+'">'+f.pct+'</span> to the peak');
+    n+=fillK('entry',f.entry);
+    n+=fillK('peak',f.peak);
+    n+=fillK('perContract',f.perContract);
+    var list=stage.querySelector('.ly[data-k="bullets"]');
+    if(list && f.bullets && f.bullets.length){
+      var eds=list.querySelectorAll('.ed');
+      f.bullets.slice(0,eds.length).forEach(function(b,i){ eds[i].innerHTML=b; n++; });
+    }
+    if(!n){ afmsg('Nothing to fill — load the “Alert result” template first.',1); return; }
+    // Never let this read as finished. It is OCR on a screenshot, and a misread
+    // digit here becomes a public claim about a trade.
+    var miss=(j.missing||[]).length ? ' Could not read: '+j.missing.join(', ')+'.' : '';
+    afmsg('Filled '+n+' field'+(n>1?'s':'')+'.'+miss+' Check every number against the screenshot before you post.',!!miss);
+  }).catch(function(e){
+    afmsg('Auto-fill failed: '+e.message,1);
+  }).then(function(){ btn.disabled=false; });
 };
 
 function serialize(){

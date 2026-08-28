@@ -4726,67 +4726,99 @@ function EsChartCard({
                 : 0;
               autoCurve = autoBubbleCurve(median);
             }
-            // ── ONE ROW SET FOR THE WHOLE SESSION ────────────────────────
+            // ── TOP N AT EVERY MOMENT, AND THE HISTORY IS KEPT ───────────
             //
-            // Strikes ranked by their PEAK |GEX| across the loaded session, and
-            // the top N drawn in EVERY bucket. `levels` then means what it says:
-            // that many rows on the chart, from the first pixel to the last.
+            // The selection is made PER BUCKET, and a strike is drawn only over
+            // the stretch where it was actually in the top N. So a vertical
+            // slice anywhere on the chart holds exactly N rows — never the
+            // union of everything that was ever a level — while a wall that
+            // dominated the 11:00 high keeps its trail up at the high, where it
+            // happened, instead of being deleted because the afternoon's book
+            // is bigger.
             //
-            // This was an EXPANDING ranking — each bucket drew the top N as of
-            // itself. Every bucket obeyed the count and the CHART did not, since
-            // what you see is the union over the session: "4" drew eight or ten
-            // bands, and the ones that entered late started mid-chart, which
-            // reads as a rendering fault rather than as information.
+            // This is what a session-wide ranking cannot do, and why the one
+            // tried before this failed: ranked over the whole day, gamma's own
+            // growth into the bell (~4.7x, see gexTodScale) meant the afternoon
+            // won every comparison it was in, an entire morning of levels ranked
+            // below a mediocre 15:00 strike, and the chart quietly became "the
+            // last hour, drawn wide". Ranking WITHIN a bucket never makes that
+            // comparison at all: 11:00's strikes are ranked against 11:00's.
             //
-            // Peak, not sum or mean: a wall that built for twenty minutes and
-            // was taken off is a level that mattered, and averaging it against a
-            // quiet session erases it.
-            const peakAll = new Map<number, number>();
-            for (const m of pMins) {
-              for (const c of m.cells) {
-                const a = Math.abs(valOf(c));
-                if (a > 0 && a > (peakAll.get(c.strike) ?? 0)) peakAll.set(c.strike, a);
-              }
-            }
-            const rankedAll = [...peakAll.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
-            const chosen = rankedAll.slice(0, nLevels);
-            // ── The min-per-side swap ──────────────────────────────────────
-            // Decided against the NEWEST bucket's spot: which side a row is on
-            // is a question about where price is now, not where it was at 09:31.
-            // One swap deep, and only when a side is empty — the weakest chosen
-            // strike (on the crowded side by construction) gives its place to
-            // the strongest strike over there, so the row that appears is real
-            // gamma and not a nearest-strike stand-in.
-            const spotLive = pMins.length ? spotKAt(pMins[pMins.length - 1].slotTs) : null;
-            if (spotLive != null && nLevels >= 2 * BUBBLE_MIN_PER_SIDE && chosen.length >= 2 * BUBBLE_MIN_PER_SIDE) {
-              let nAbove = 0;
-              for (const k of chosen) if (k >= spotLive) nAbove++;
-              const nBelow = chosen.length - nAbove;
-              if (nAbove < BUBBLE_MIN_PER_SIDE || nBelow < BUBBLE_MIN_PER_SIDE) {
-                const wantAbove = nAbove < BUBBLE_MIN_PER_SIDE;
-                const swapIn = rankedAll.find((k) => (wantAbove ? k >= spotLive : k < spotLive));
-                if (swapIn != null) chosen[chosen.length - 1] = swapIn;
-              }
-            }
-            // ONE Set and ONE wall map, shared by every bucket — so a bucket
-            // costs a pointer rather than a rebuilt Set, and no row can appear
-            // or vanish part way along the chart.
-            const shownAll: Set<number> = new Set(chosen);
-            const wallAll: Map<number, number> = new Map();
-            chosen.slice(0, Math.max(0, BUBBLE_STYLE.highlight)).forEach((s, i) => wallAll.set(s, i));
+            // ── INCUMBENTS GET HYSTERESIS ─────────────────────────────────
+            // A hard top-N boundary is a coin flip for the strikes sitting on
+            // it: rank N and N+1 swap for a minute, both rows break, and the
+            // trail comes out as dashes — which is exactly what the wings looked
+            // like. A strike already being drawn keeps its place while it stays
+            // inside N + HYST, so it takes a real fall out of the ladder, not a
+            // tick of noise, to end a row.
+            const HYST = 2;
             const pShownAt = new Map<number, Set<number>>();
             const pWallAt = new Map<number, Map<number, number>>();
             const pOrderAt = new Map<number, GexCell[]>();
+            let prevShown: Set<number> = new Set();
             for (const m of pMins) {
-              pShownAt.set(m.slotTs, shownAll);
-              pWallAt.set(m.slotTs, wallAll);
+              // Raw |GEX|: every strike here shares one bucket, so the
+              // time-of-day scale would divide the whole list by one constant
+              // and change no order. It belongs on the SIZE reference, which
+              // does compare across time, and it is applied there.
+              const scored: Array<{ strike: number; a: number }> = [];
+              for (const c of m.cells) {
+                const a = Math.abs(valOf(c));
+                if (a > 0) scored.push({ strike: c.strike, a });
+              }
+              scored.sort((x, y) => y.a - x.a);
+              const rankOf = new Map<number, number>();
+              scored.forEach((x, i) => rankOf.set(x.strike, i));
+
+              // Incumbents first, in their current order, then fill from the
+              // ranking. A newcomer only takes a slot an incumbent has vacated.
+              const keep = [...prevShown]
+                .filter((k) => (rankOf.get(k) ?? Infinity) < nLevels + HYST)
+                .sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0));
+              const set = new Set<number>(keep.slice(0, nLevels));
+              for (const x of scored) {
+                if (set.size >= nLevels) break;
+                set.add(x.strike);
+              }
+
+              // ── The min-per-side swap, against THIS bucket's spot ────────
+              // Where price was at 11:00 is what decides which side an 11:00
+              // row is on. Using the live spot would rewrite the morning's
+              // sides every time the afternoon moved.
+              const spotK = nLevels >= 2 * BUBBLE_MIN_PER_SIDE ? spotKAt(m.slotTs) : null;
+              if (spotK != null && set.size >= 2 * BUBBLE_MIN_PER_SIDE) {
+                const inSet = [...set].sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0));
+                let nAbove = 0;
+                for (const k of inSet) if (k >= spotK) nAbove++;
+                const nBelow = inSet.length - nAbove;
+                if (nAbove < BUBBLE_MIN_PER_SIDE || nBelow < BUBBLE_MIN_PER_SIDE) {
+                  const wantAbove = nAbove < BUBBLE_MIN_PER_SIDE;
+                  const swapIn = scored.find((x) => (wantAbove ? x.strike >= spotK : x.strike < spotK) && !set.has(x.strike));
+                  if (swapIn) {
+                    set.delete(inSet[inSet.length - 1]!);
+                    set.add(swapIn.strike);
+                  }
+                }
+              }
+
+              prevShown = set;
+              pShownAt.set(m.slotTs, set);
+              // The wall is this bucket's own leader among the drawn rows —
+              // which is the point of a glow on a trail: it shows WHEN a level
+              // was the one running the board.
+              const wall = new Map<number, number>();
+              [...set]
+                .sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0))
+                .slice(0, Math.max(0, BUBBLE_STYLE.highlight))
+                .forEach((k, i) => wall.set(k, i));
+              pWallAt.set(m.slotTs, wall);
               // Biggest first, so a mark that grows toward the strike pitch lets
               // the smaller rows land ON TOP of it rather than disappearing
               // underneath.
               pOrderAt.set(
                 m.slotTs,
                 m.cells
-                  .filter((c) => shownAll.has(c.strike))
+                  .filter((c) => set.has(c.strike))
                   .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a))),
               );
             }

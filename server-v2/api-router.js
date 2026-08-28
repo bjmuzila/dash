@@ -2868,6 +2868,111 @@ Rules:
   },
 });
 
+// /api/post-studio/read-shots — owner-only. Reads the screenshots the Post
+// Studio already has in its image slots and hands back the numbers, so the
+// "Alert result" template fills itself instead of being retyped by hand.
+//
+// Body: { shots: [{ data: <base64, no data: prefix>, mediaType, slot }] } — 1-2,
+//   slot is 'shot-table' | 'shot-chart' | '' (the studio's data-k for the slot).
+// Returns: { fields: {...formatted strings, ready to drop into a layer...},
+//            raw: {...the numbers...}, missing: [field names it could not read] }
+//
+// The arithmetic is deliberately NOT the model's job: it reads entry, peak and
+// the clock times off the pixels, and this handler derives the percent and the
+// per-contract dollars from those. A vision model doing mental math is where a
+// wrong number that reads plausible comes from, and these end up in a public
+// post about a trade.
+register('/api/post-studio/read-shots', {
+  auth: 'owner', methods: ['POST'],
+  async handler(req, res) {
+    const MODEL = 'claude-sonnet-4-6';
+    const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+    const SYSTEM = `You read screenshots from the CB Edge 0DTE alert tracker and report the numbers printed on them.
+
+You get one or two images. They may be either of:
+- ALERTS TABLE — columns DATE, TIME, CONTRACT, ENTRY, PEAK. One row per alert that fired; the PEAK cell shows a price followed by the clock time that price printed.
+- CONTRACT DETAIL — one contract: its name and date across the top, a large percent gain, an "IN $x -> SOLD $y" line, then labelled ENTRY / PEAK / LOW / CLOSE / P/L values above a price chart.
+
+Return ONLY a JSON object. No prose, no code fences:
+{"contract":string|null,"date":"YYYY-MM-DD"|null,"entry":number|null,"entryTime":string|null,"peak":number|null,"peakTime":string|null,"alertCount":number|null}
+
+Rules:
+- contract is the option exactly as written, e.g. "SPXW 7750C". If both images show one, prefer the CONTRACT DETAIL card's.
+- entry and peak are plain numbers read off the ENTRY and PEAK labels: no $, no commas. Do not compute anything.
+- entryTime and peakTime stay as printed, e.g. "10:30 AM". On the table, entryTime is the row's TIME column.
+- If you are given only a table, use the row with the largest gain and set alertCount to the number of data rows. Otherwise alertCount is null.
+- Report null for anything you cannot actually read. Never infer, estimate or calculate a value that is not printed on the image.`;
+
+    const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+    const str = (v) => { const s = String(v ?? '').trim(); return s && s !== 'null' ? s.slice(0, 60) : null; };
+    const money = (n) => '$' + n.toFixed(2);
+    const withCommas = (n) => Math.round(n).toLocaleString('en-US');
+
+    try {
+      if (!process.env.ANTHROPIC_API_KEY) { send(res, 503, { error: "Auto-fill isn't configured (missing ANTHROPIC_API_KEY)." }); return; }
+      // Two base64 PNGs blow past the 1MB default.
+      const body = await readJson(req, 20_000_000);
+      const shots = Array.isArray(body?.shots) ? body.shots.slice(0, 2) : [];
+      if (!shots.length) { send(res, 400, { error: 'No screenshots provided.' }); return; }
+
+      const content = [];
+      for (const s of shots) {
+        const data = String(s?.data ?? '');
+        if (!data) continue;
+        if (s?.slot) content.push({ type: 'text', text: `Next image is the ${s.slot === 'shot-chart' ? 'CONTRACT DETAIL card' : s.slot === 'shot-table' ? 'ALERTS TABLE' : 'screenshot'}.` });
+        content.push({ type: 'image', source: { type: 'base64', media_type: String(s?.mediaType || 'image/png'), data } });
+      }
+      if (!content.length) { send(res, 400, { error: 'No screenshots provided.' }); return; }
+      content.push({ type: 'text', text: 'Read these and return only the JSON object.' });
+
+      let r;
+      try {
+        r = await fetch(ANTHROPIC_URL, {
+          method: 'POST',
+          headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+          body: JSON.stringify({ model: MODEL, max_tokens: 1000, system: SYSTEM, messages: [{ role: 'user', content }] }),
+        });
+      } catch (err) { send(res, 502, { error: `anthropic request failed: ${String(err?.message || err)}` }); return; }
+      if (!r.ok) { const detail = await r.text().catch(() => ''); send(res, 502, { error: `anthropic ${r.status}`, detail: detail.slice(0, 500) }); return; }
+
+      const text = (await r.json())?.content?.[0]?.text ?? '';
+      const a = text.indexOf('{'), b = text.lastIndexOf('}');
+      let p = null;
+      if (a !== -1 && b > a) { try { p = JSON.parse(text.slice(a, b + 1)); } catch { p = null; } }
+      if (!p) { send(res, 502, { error: 'Could not read the screenshots — try a cleaner crop.', raw: text.slice(0, 300) }); return; }
+
+      const raw = {
+        contract: str(p.contract), date: str(p.date),
+        entry: num(p.entry), entryTime: str(p.entryTime),
+        peak: num(p.peak), peakTime: str(p.peakTime),
+        alertCount: num(p.alertCount),
+      };
+
+      // Derived here, never by the model. A peak below entry means it misread
+      // one of the two, so publish neither rather than a negative "gain".
+      const usable = raw.entry > 0 && raw.peak > 0 && raw.peak >= raw.entry;
+      const pct = usable ? (raw.peak / raw.entry - 1) * 100 : null;
+      const per = usable ? (raw.peak - raw.entry) * 100 : null;
+
+      const bullets = [];
+      if (raw.entryTime && raw.peakTime) bullets.push(`Called ${raw.entryTime} · peak ${raw.peakTime}`);
+      if (raw.alertCount > 0) bullets.push(`${raw.alertCount} alert${raw.alertCount === 1 ? '' : 's'} fired${raw.date ? ` on ${raw.date}` : ''}`);
+
+      const fields = {
+        contract: raw.contract,
+        entry: raw.entry > 0 ? money(raw.entry) : null,
+        peak: raw.peak > 0 ? money(raw.peak) : null,
+        pct: pct == null ? null : `+${pct.toFixed(1)}%`,
+        perContract: per == null ? null : `+$${withCommas(per)}`,
+        bullets,
+      };
+
+      const missing = ['contract', 'entry', 'peak', 'pct', 'perContract'].filter((k) => fields[k] == null);
+      send(res, 200, { fields, raw, missing }, { 'Cache-Control': NO_STORE });
+    } catch (err) { send(res, 500, { error: 'Auto-fill failed', detail: String(err?.message || err) }); }
+  },
+});
+
 // /api/budget/parse-statement — owner-only statement import (PDF or screenshot).
 // One Claude call does three jobs at once: OCR/extract the transaction rows,
 // normalize the noisy bank descriptor into a clean merchant name, and file each

@@ -35,40 +35,37 @@
 //
 // ── WHAT A BUBBLE MEANS ──────────────────────────────────────────────────────
 //
-// ONE ROW SET, ONE NORMALISER, FOR THE WHOLE SESSION. Everything below is
-// decided once per model build and then holds from the first pixel to the last.
-// That is not an optimisation, it is the design: anything decided per snapshot
-// is a thing the chart does on its own while you are reading it.
+//   SELECTION   the strongest `levels` strikes IN EACH COLUMN, with at least
+//               BUBBLE_MIN_PER_SIDE of them on each side of that column's spot,
+//               and a rank of hysteresis so a row does not break when two
+//               strikes trade places for a minute.
 //
-//   SELECTION   the strongest `levels` strikes over the LOADED SESSION, ranked
-//               by each strike's peak |GEX|, with at least BUBBLE_MIN_PER_SIDE
-//               of them on each side of the CURRENT spot.
+//               Per column, so a vertical slice holds exactly `levels` rows and
+//               a level that ran the board at the 11:00 high keeps its trail up
+//               at the high, where it happened. A session-wide ranking cannot
+//               do that: gamma grows into the bell, so the afternoon wins every
+//               comparison it is in and the chart becomes the last hour drawn
+//               wide.
 //
-//               Per-snapshot selection is what made "4" draw eleven bands: every
-//               column obeyed the count and the chart did not, because what you
-//               see is the union over the session — and half of those bands were
-//               dashed, from strikes dropping out of their column's top four for
-//               a few minutes and coming back.
-//
-//   RADIUS      |GEX| over the SESSION's biggest, not the snapshot's own.
-//               Per-snapshot normalisation renormalises every quiet minute back
-//               up to full size, which is what made the rows bulge and pinch
-//               like caterpillars instead of tapering. One denominator means a
-//               row is comparable to itself an hour ago and to the row above it.
+//   RADIUS      |GEX| over the SESSION's biggest drawn value, not the
+//               snapshot's own core. Per-snapshot normalisation renormalises
+//               every quiet minute back up to full size, which is what made the
+//               rows bulge and pinch like caterpillars instead of tapering. One
+//               denominator means a row is comparable to itself an hour ago and
+//               to the row above it.
 //
 //   SMOOTHING   a centred mean over SMOOTH_WINDOW snapshots, so a row carries
 //               the session's shape without the minute-to-minute noise.
 //
-//   THE CORE    the session's dominant level. One row glows, for its whole
-//               length, instead of the glow hopping between rows minute by
-//               minute.
+//   THE CORE    the column's own leader among the drawn rows — the glow shows
+//               WHEN a level was the one running the board.
 //
 // ── ROWS NEVER TOUCH ─────────────────────────────────────────────────────────
 //
 // Two strikes' rows merging into one slab is the failure this layer is most
-// prone to, and it is a lie: it draws two levels as one. placeMarks() below
-// makes non-overlap a HARD constraint applied LAST, after every setting has had
-// its say, pairwise between vertical neighbours in pixels.
+// prone to, and it is a lie: it draws two levels as one. planSizes() below caps
+// the top radius at half the tightest on-screen gap, once for the whole frame,
+// so two neighbours at full size cannot reach each other by construction.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
@@ -105,6 +102,13 @@ const MAX_SEGMENTS = 320
  */
 const SMOOTH_WINDOW = 2
 
+/**
+ * Rank slack for a strike already being drawn. See the selection loop: it is
+ * what stops a row breaking into dashes when it trades places with its
+ * neighbour for a minute.
+ */
+const HYST = 2
+
 // Removed 2026-08-28: DUST, a fixed 4%-of-the-core floor. It was doing the
 // cutoff's job with the wrong denominator — 4% of the biggest strike says
 // nothing about whether a level matters, and it was not adjustable. `cutoffPct`
@@ -127,7 +131,7 @@ export interface BubbleMark {
    * lopsided one it is noise — only share can tell those apart.
    */
   share: number
-  /** True for the snapshot's single strongest strike. */
+  /** True for the strongest DRAWN strike in this snapshot. */
   isCore: boolean
 }
 
@@ -157,9 +161,9 @@ export interface BuildOpts {
   cutoffPct: number
   /**
    * Ignore both numbers above and take them from the board instead — see
-   * BUBBLE_AUTO. Read ONCE, off the newest column, and then held for the whole
-   * trail: re-deciding per column would make rows blink in and out as the
-   * session scrolled past, which is not a thing the chart should do on its own.
+   * BUBBLE_AUTO. Read ONCE, off the newest column: `levels` and `cutoffPct` are
+   * the SHAPE of the chart, and a shape that changed column by column would
+   * make the row count breathe as the session scrolled past.
    */
   auto?: boolean
 }
@@ -191,94 +195,111 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
   }
   if (levels <= 0) return []
 
-  // ── ONE ROW SET FOR THE WHOLE SESSION ─────────────────────────────────────
-  //
-  // This used to be chosen per snapshot: each column ranked its own board and
-  // drew its own top N. Every column obeyed `levels` and the CHART did not —
-  // the rows you see are the UNION over the session, so "4" drew eleven bands,
-  // half of them broken into dashes where a strike dropped out of its column's
-  // top four for a few minutes and came back.
-  //
-  // So the set is picked ONCE, from the whole loaded history, by each strike's
-  // PEAK |GEX| over the session. `levels` then means what it says: that many
-  // rows on the chart, from the first pixel to the last, unbroken.
-  //
-  // Peak, not sum or mean: a wall that built for twenty minutes and got taken
-  // off is a level that mattered, and averaging it against a quiet session
-  // erases it.
-  const peak = new Map<number, number>()
-  for (const col of columns) {
-    for (const cell of col.cells) {
-      const a = Math.abs(valueOf(cell, metric))
-      if (a > 0 && a > (peak.get(cell.strike) ?? 0)) peak.set(cell.strike, a)
-    }
-  }
-  if (!peak.size) return []
-
-  // Spot, from the newest column — which side a row is on is a question about
-  // where price is NOW, not where it was at 09:31.
-  let spot = live?.spot ?? 0
-  if (!(spot > 0) && live) {
-    let lo = Infinity
-    let hi = -Infinity
-    for (const c of live.cells) {
-      if (c.strike < lo) lo = c.strike
-      if (c.strike > hi) hi = c.strike
-    }
-    spot = Number.isFinite(lo) && Number.isFinite(hi) ? (lo + hi) / 2 : 0
-  }
-
-  const ranked = [...peak.entries()].sort((a, b) => b[1] - a[1]).map(([strike]) => strike)
-  const chosen = ranked.slice(0, levels)
-
-  // ── The min-per-side swap ──────────────────────────────────────────────────
-  // One swap deep, and only when a side is empty: the weakest chosen strike
-  // (on the crowded side by construction) gives up its place to the STRONGEST
-  // strike on the missing side, so the row that appears is the best gamma over
-  // there and never a nearest-strike stand-in.
-  if (spot > 0 && levels >= 2 * BUBBLE_MIN_PER_SIDE && chosen.length >= 2 * BUBBLE_MIN_PER_SIDE) {
-    let nAbove = 0
-    for (const k of chosen) if (k >= spot) nAbove++
-    const nBelow = chosen.length - nAbove
-    if (nAbove < BUBBLE_MIN_PER_SIDE || nBelow < BUBBLE_MIN_PER_SIDE) {
-      const wantAbove = nAbove < BUBBLE_MIN_PER_SIDE
-      const swapIn = ranked.find((k) => (wantAbove ? k >= spot : k < spot))
-      if (swapIn != null) chosen[chosen.length - 1] = swapIn
-    }
-  }
-
-  // The cutoff drops a chosen row for the whole session or not at all. Applied
-  // per snapshot it was a hole-punch: the row vanished for the minutes it dipped
-  // under the bar and came back after, which is the dashed-line look.
-  const sessionTotal = live ? live.cells.reduce((s, c) => s + Math.abs(valueOf(c, metric)), 0) : 0
-  const kept = sessionTotal > 0
-    ? chosen.filter((k) => ((peak.get(k) ?? 0) / sessionTotal) * 100 >= cutoffPct)
-    : chosen
-  const strikes = (kept.length ? kept : chosen.slice(0, 1)).slice()
-  if (!strikes.length) return []
-  const shown = new Set(strikes)
-
-  // ── ONE NORMALISER FOR THE WHOLE SESSION ──────────────────────────────────
-  // Radius is |GEX| over the session's biggest, not over the snapshot's own —
-  // per-snapshot normalisation renormalises every quiet minute back up to full
-  // size, which is what made the rows bulge and pinch like caterpillars instead
-  // of tapering. One denominator means a row's thickness is comparable to
-  // itself an hour ago and to the row above it, which is the entire read.
-  let sessionCore = 0
-  for (const k of strikes) sessionCore = Math.max(sessionCore, peak.get(k) ?? 0)
-  if (sessionCore <= 0) return []
-  const coreStrike = strikes.reduce((best, k) => ((peak.get(k) ?? 0) > (peak.get(best) ?? 0) ? k : best), strikes[0]!)
-
   const cols = [...columns].sort((a, b) => a.slotTs - b.slotTs)
 
-  // Raw per-column value for each chosen strike, in time order. Built as a
-  // dense series per strike so the smoothing pass below is a plain window.
+  // ── TOP N AT EVERY MOMENT, AND THE HISTORY IS KEPT ────────────────────────
+  //
+  // The selection is made PER COLUMN, and a strike is drawn only over the
+  // stretch where it was actually in the top N. A vertical slice anywhere on
+  // the chart therefore holds exactly N rows — never the union of everything
+  // that was ever a level — while a wall that dominated the 11:00 high keeps
+  // its trail up at the high, where it happened.
+  //
+  // A SESSION-WIDE ranking was tried and is wrong: gamma grows into the bell,
+  // so the afternoon wins every comparison it is in, an entire morning of
+  // levels ranks below a mediocre 15:00 strike, and the chart becomes "the last
+  // hour, drawn wide". Ranking within a column never makes that comparison.
+  //
+  // ── INCUMBENTS GET HYSTERESIS ─────────────────────────────────────────────
+  // A hard top-N boundary is a coin flip for the strikes sitting on it: ranks N
+  // and N+1 swap for a minute, both rows break, and the trail comes out as
+  // dashes. A strike already being drawn keeps its place while it stays inside
+  // N + HYST, so it takes a real fall out of the ladder — not a tick of noise —
+  // to end a row.
+  const shownAt: Array<Set<number>> = []
+  const leaderAt: number[] = []
+  const union = new Set<number>()
+  let prevShown: Set<number> = new Set()
+  for (const col of cols) {
+    let spot = col.spot
+    if (!(spot > 0)) {
+      let lo = Infinity
+      let hi = -Infinity
+      for (const c of col.cells) {
+        if (c.strike < lo) lo = c.strike
+        if (c.strike > hi) hi = c.strike
+      }
+      spot = Number.isFinite(lo) && Number.isFinite(hi) ? (lo + hi) / 2 : 0
+    }
+
+    let totalAbs = 0
+    const scored: Array<{ strike: number; a: number }> = []
+    for (const cell of col.cells) {
+      const a = Math.abs(valueOf(cell, metric))
+      totalAbs += a
+      if (a > 0) scored.push({ strike: cell.strike, a })
+    }
+    scored.sort((x, y) => y.a - x.a)
+    const rankOf = new Map<number, number>()
+    scored.forEach((x, i) => rankOf.set(x.strike, i))
+
+    // Incumbents first, in their current order, then fill from the ranking — a
+    // newcomer only takes a slot an incumbent has vacated.
+    const keep = [...prevShown]
+      .filter((k) => (rankOf.get(k) ?? Infinity) < levels + HYST)
+      .sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0))
+    const set = new Set<number>(keep.slice(0, levels))
+    for (const x of scored) {
+      if (set.size >= levels) break
+      // The cutoff is a share of THIS column's board — the same figure the GEX
+      // table prints — and it only ever blocks a NEWCOMER. An incumbent dipping
+      // under it keeps its row, or the gate would punch holes in a trail.
+      if (totalAbs > 0 && (x.a / totalAbs) * 100 < cutoffPct) continue
+      set.add(x.strike)
+    }
+
+    // ── The min-per-side swap, against THIS column's spot ──────────────────
+    // Where price was at 11:00 is what decides which side an 11:00 row is on.
+    if (spot > 0 && levels >= 2 * BUBBLE_MIN_PER_SIDE && set.size >= 2 * BUBBLE_MIN_PER_SIDE) {
+      const inSet = [...set].sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0))
+      let nAbove = 0
+      for (const k of inSet) if (k >= spot) nAbove++
+      const nBelow = inSet.length - nAbove
+      if (nAbove < BUBBLE_MIN_PER_SIDE || nBelow < BUBBLE_MIN_PER_SIDE) {
+        const wantAbove = nAbove < BUBBLE_MIN_PER_SIDE
+        const swapIn = scored.find((x) => (wantAbove ? x.strike >= spot : x.strike < spot) && !set.has(x.strike))
+        if (swapIn) {
+          set.delete(inSet[inSet.length - 1]!)
+          set.add(swapIn.strike)
+        }
+      }
+    }
+
+    prevShown = set
+    shownAt.push(set)
+    for (const k of set) union.add(k)
+    // This column's own leader among the drawn rows — which is the point of a
+    // glow on a trail: it shows WHEN a level was the one running the board.
+    let leader = -1
+    let leaderRank = Infinity
+    for (const k of set) {
+      const r = rankOf.get(k) ?? Infinity
+      if (r < leaderRank) { leaderRank = r; leader = k }
+    }
+    leaderAt.push(leader)
+  }
+  if (!union.size) return []
+
+  // Dense per-strike series over the union, so the smoothing pass below is a
+  // plain window. A strike is only DRAWN where shownAt says, but it is smoothed
+  // over its whole history — otherwise the two ends of a row would be smoothed
+  // against zeros and taper to nothing for no reason.
   const series = new Map<number, number[]>()
-  for (const k of strikes) series.set(k, new Array(cols.length).fill(0))
+  for (const k of union) series.set(k, new Array(cols.length).fill(0))
   cols.forEach((col, i) => {
     for (const cell of col.cells) {
-      if (!shown.has(cell.strike)) continue
-      series.get(cell.strike)![i] = valueOf(cell, metric)
+      const arr = series.get(cell.strike)
+      if (arr) arr[i] = valueOf(cell, metric)
     }
   })
 
@@ -289,7 +310,7 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
   // carries meaning is the build and the bleed across the session, and that
   // survives the window untouched.
   const smoothed = new Map<number, number[]>()
-  for (const k of strikes) {
+  for (const k of union) {
     const raw = series.get(k)!
     const outSeries = new Array<number>(raw.length)
     for (let i = 0; i < raw.length; i++) {
@@ -305,20 +326,33 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
     smoothed.set(k, outSeries)
   }
 
+  // ── ONE NORMALISER FOR THE WHOLE SESSION ──────────────────────────────────
+  // Radius is |GEX| over the biggest DRAWN value of the session, not over the
+  // snapshot's own core — per-snapshot normalisation renormalises every quiet
+  // minute back up to full size, which is what made the rows bulge and pinch
+  // like caterpillars instead of tapering. One denominator means a row is
+  // comparable to itself an hour ago and to the row above it.
+  let sessionCore = 0
+  shownAt.forEach((set, i) => {
+    for (const k of set) sessionCore = Math.max(sessionCore, Math.abs(smoothed.get(k)![i]!))
+  })
+  if (sessionCore <= 0) return []
+
   const out: BubbleSnapshot[] = []
   cols.forEach((col, i) => {
+    const set = shownAt[i]!
+    let totalAbs = 0
+    for (const cell of col.cells) totalAbs += Math.abs(valueOf(cell, metric))
     const marks: BubbleMark[] = []
-    for (const k of strikes) {
+    for (const k of set) {
       const value = smoothed.get(k)![i]!
       if (value === 0) continue
       marks.push({
         strike: k,
         value,
         ratio: Math.min(1, Math.abs(value) / sessionCore),
-        share: sessionTotal > 0 ? Math.abs(value) / sessionTotal : 0,
-        // The core is the session's dominant level and it does not move from
-        // snapshot to snapshot. One row glows, for its whole length.
-        isCore: k === coreStrike,
+        share: totalAbs > 0 ? Math.abs(value) / totalAbs : 0,
+        isCore: k === leaderAt[i],
       })
     }
     if (!marks.length) return
@@ -462,13 +496,24 @@ interface SizePlan {
  * strike's own |GEX| at that minute — which is the whole point of drawing it as
  * a trail rather than a straight line.
  *
- * The reference is the NEWEST snapshot, because the row set is session-stable
- * (see buildBubbleModel) so it holds every row that will be drawn anywhere.
+ * The variance and the crowd trim read the NEWEST snapshot — how busy the chart
+ * is right now — while the spacing cap reads every strike drawn anywhere, since
+ * that is the pair that actually has to fit.
  */
-function planSizes(ref: BubbleSnapshot, geo: BubbleGeometry, opts: DrawOpts): SizePlan {
+function planSizes(
+  ref: BubbleSnapshot,
+  allStrikes: number[],
+  geo: BubbleGeometry,
+  opts: DrawOpts,
+): SizePlan {
+  // The spacing cap is measured over EVERY strike drawn anywhere on the chart,
+  // not just the newest column's. Rows come and go through the session, and two
+  // that sat a point apart at 11:00 are the pair that has to fit — sizing off
+  // the current column alone would let them overlap back there, which is the
+  // one thing this layer must never do.
   const ys: number[] = []
-  for (const mark of ref.marks) {
-    const y = geo.yOfPrice(mark.strike)
+  for (const strike of allStrikes) {
+    const y = geo.yOfPrice(strike)
     if (y != null) ys.push(y)
   }
   ys.sort((a, b) => a - b)
@@ -485,8 +530,10 @@ function planSizes(ref: BubbleSnapshot, geo: BubbleGeometry, opts: DrawOpts): Si
   // answers "how big SHOULD it be" from the window and the row count. The
   // spacing cap is untouched either way — it is the non-overlap guarantee and
   // neither of them is allowed to argue with it.
+  // The crowd trim reads the LIVE row count, not the union: how busy the chart
+  // looks right now is a question about what is on it now.
   const paneCap = opts.auto
-    ? autoTopPx(geo.height, ys.length)
+    ? autoTopPx(geo.height, ref.marks.length)
     : geo.height * BUBBLE_STYLE.heightFrac * opts.size
   const spacingCap = Number.isFinite(tightest) ? tightest / 2 - BUBBLE_STYLE.gapPx / 2 : paneCap
   const top = Math.max(BUBBLE_STYLE.minPx, Math.min(paneCap, spacingCap))
@@ -505,7 +552,7 @@ function planSizes(ref: BubbleSnapshot, geo: BubbleGeometry, opts: DrawOpts): Si
     variance = autoVariance(ratios.length ? ratios[Math.floor(ratios.length / 2)]! : 0)
   }
 
-  return { floor, span: Math.max(0, top - floor), variance, rows: ys.length }
+  return { floor, span: Math.max(0, top - floor), variance, rows: ref.marks.length }
 }
 
 /**
@@ -739,7 +786,9 @@ export function drawBubbles(
   const stride = Math.max(1, Math.ceil(snaps.length / MAX_SEGMENTS))
 
   // ONE size plan for the frame. See planSizes.
-  const plan = planSizes(last, geo, opts)
+  const allStrikes = new Set<number>()
+  for (const snap of snaps) for (const m of snap.marks) allStrikes.add(m.strike)
+  const plan = planSizes(last, [...allStrikes], geo, opts)
 
   const placedBySnap = new Map<number, PlacedMark[]>()
 

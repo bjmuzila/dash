@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-08-28 - Bubbles: top N AT EVERY MOMENT, so a level that ran the 11:00 high keeps its trail
+
+Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
+`cbedge-v3/src/board/gexCandles/bubbles.ts`.
+
+The session-wide row set fixed the eleven-band union and broke something worse:
+7770 was the top GEX strike at the day's high and vanished off the chart
+entirely, leaving seven rows stacked around the close.
+
+**Ranking across the whole session cannot work, and the reason is in this repo's
+own calibration.** Gamma at the top strike grows ~4.7x from the open to the bell
+(`gexTodScale`, measured off six sessions of per-strike history). Rank a day's
+strikes against each other on the raw number and the afternoon wins every
+comparison it is in: an entire morning of real levels ranks below a mediocre
+15:00 strike, and the chart quietly becomes "the last hour, drawn wide".
+
+**So the selection is per bucket again — but only the selection.** A strike is
+drawn over the stretch where it was actually in the top N, so a vertical slice
+anywhere holds exactly N rows (never the union), and a wall that dominated the
+11:00 high keeps its trail up at the high where it happened. Ranking within a
+bucket never makes the cross-time comparison at all, so no detrend is needed for
+it — 11:00's strikes are ranked against 11:00's.
+
+**Hysteresis is what makes per-bucket selection viable.** It is the thing the
+first per-snapshot version was missing: a hard top-N boundary is a coin flip for
+the strikes sitting on it, ranks N and N+1 swap for a minute, both rows break,
+and the trail comes out as dashes — which is exactly what the wings looked like.
+An incumbent now keeps its place while it stays inside N + 2, so it takes a real
+fall out of the ladder, not a tick of noise, to end a row. On v3 the cutoff also
+only ever blocks a NEWCOMER, for the same reason: an incumbent dipping under the
+bar for a minute would punch a hole in its own trail.
+
+The min-per-side swap is likewise decided against THAT bucket's spot — where
+price was at 11:00 is what decides which side an 11:00 row is on. And the glow is
+the bucket's own leader among the drawn rows, so it shows *when* a level was the
+one running the board.
+
+Everything from the previous pass that was right is untouched: one session-wide
+normaliser for the radius (rows taper instead of bulging), the smoothing pass,
+one size plan per frame, thin rows. One correction to the size plan — its spacing
+cap now measures every strike drawn ANYWHERE on the chart, not just the newest
+column's rows. Rows come and go through the session, and two that sat a point
+apart at 11:00 are the pair that actually has to fit.
+
 ## 2026-08-28 - Bubbles: one row set for the session, thin rows, smoothed. The three reasons it looked wrong
 
 Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
