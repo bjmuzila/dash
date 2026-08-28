@@ -1,5 +1,66 @@
 # Changelog
 
+## 2026-08-27 - Labs page: the GEX surface + scrub, on a new /api/eod-strike-gex-surface
+
+New: `owner-vite/src/pages/GexSurface.tsx`.
+Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,
+`server-v2/api-router.js`, `owner-vite/src/lib/nav.ts`,
+`owner-vite/src/pages/registry.ts`.
+
+The ΔGEX Board diffs two closes. That cannot answer "where is positioning
+BUILDING over time", and more importantly it cannot separate two things that
+look identical on a ladder: a wall thickening at a fixed strike while spot
+wanders (positioning being ADDED) versus a wall holding its distance as spot
+moves (positioning FOLLOWING). Telling those apart needs a time axis and price
+in the same frame. That is this page.
+
+**New sidebar entry: System → Labs (`/owner/labs`).** Deliberately not folded
+into Chart Types (`/owner/charts-ui`), whose header states it is static pictures
+with no data fetching; everything on Labs talks to a real endpoint. owner-vite
+builds its router from `OWNER_ROUTES`, so the nav link plus the `registry.ts`
+key is the whole wiring.
+
+**Two views, one payload.**
+
+- *Surface* - strike up the side, sessions across, colour is the level, spot
+  drawn over the top. No occlusion, so it takes 90 sessions as easily as 7. A Δ
+  surface on the same axes sits under it.
+- *Scrub* - one profile at full size, a slider through the same sessions, the
+  previous five as fading ghosts, and a play button.
+
+Both read the same fetch, so they cannot disagree, and the Δ grid is derived
+client-side from the levels rather than fetched separately.
+
+**`GET /api/eod-strike-gex-surface?symbol&days&basis&leg&side`** - forwarder in
+`api-router.js` to a new `/proxy/eod-strike-gex-surface` in
+`server-with-proxy.js`, backed by `getStrikeGexSurface()` in the recorder.
+Read-only SELECT over `eod_strike_gex`; no writes, no existing route touched.
+Returns the rectangle already assembled: `{ dates[], spots[], strikes[],
+grid[date][strike], capturedAt, clipped }`.
+
+Three decisions worth recording:
+
+1. **A dedicated endpoint rather than N calls to `-change`.** The obvious build
+   is one request per session in the window - 45 round trips per symbol, and
+   each view rebuilding the strike x session rectangle itself, which is exactly
+   how two views of "the same" data end up drawing different pictures. The
+   rectangle is built once, server-side.
+2. **Null is not zero.** The recorder writes +/-40 strikes around each session's
+   close, so over a long window the far strikes genuinely have no reading on
+   sessions where spot was elsewhere. Those come back `null` and draw as EMPTY.
+   Painting them as the neutral middle would put a hard edge across the surface
+   that is an artefact of the recording window, not a fact about the book - and
+   it would be the most confident-looking wrong thing on the page.
+3. **Clipped to the live window.** The union of every session's +/-40 is far
+   wider than any single session's, so the grid is clipped to +/-`side` (default
+   45) around the most recent close and `clipped` reports whether anything was
+   dropped. The page says so in the meta line rather than silently narrowing.
+
+Basis and leg reach SQL only through `normBasis`/`normLeg` -> `levelCol()`, the
+same identifier boundary every other read in that file uses. Date list is
+basis-scoped (`LVL IS NOT NULL`) so oi/vol/flow do not offer a month of blank
+sessions from before their migration date.
+
 ## 2026-08-27 - ΔGEX Board: a green/gold/red trust chip on the run stamp, and the EOD sweep no longer crosses the feed roll
 
 Edited: `server-v2/eod-strike-gex-recorder.js`, `owner-vite/src/pages/GexGrowth.tsx`.

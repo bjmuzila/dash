@@ -3607,6 +3607,36 @@ register('/api/eod-strike-gex-dates', {
   },
 });
 
+// /api/eod-strike-gex-surface?symbol&days&basis&leg&side — the whole recorded
+// window as one strike × session grid. Backs the Labs page's surface and scrub.
+// Forwarder only, same shape as the four above: the query itself lives in
+// getStrikeGexSurface() in eod-strike-gex-recorder.js.
+register('/api/eod-strike-gex-surface', {
+  auth: 'owner', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+    const symbol = String(sp.get('symbol') || '').trim();
+    if (!symbol) {
+      send(res, 400, { ok: false, error: 'symbol required' }, { 'Cache-Control': NO_STORE });
+      return;
+    }
+    const q = new URLSearchParams();
+    q.set('symbol', symbol);
+    // Bounds are enforced again in the read helper — this pass only keeps a
+    // nonsense string out of the query string; it is not the validation.
+    const days = Number(sp.get('days') || 45);
+    if (Number.isFinite(days) && days > 0) q.set('days', String(Math.floor(days)));
+    const side = Number(sp.get('side') || 0);
+    if (Number.isFinite(side) && side > 0) q.set('side', String(Math.floor(side)));
+    const basis = basisParam(sp);
+    if (basis) q.set('basis', basis);
+    const leg = legParam(sp);
+    if (leg) q.set('leg', leg);
+    const r = await forwardGet(ctx, `/proxy/eod-strike-gex-surface?${q}`);
+    send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
+  },
+});
+
 // /api/dxlink/candles?symbol&interval — weekly OHLC forwarder to the proxy's
 // TT history endpoint. Ported verbatim from app/api/dxlink/candles/route.ts.
 register('/api/dxlink/candles', {

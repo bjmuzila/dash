@@ -144,6 +144,17 @@
  * track, the bell curve, the playbook, both tabs — re-renders as that minute,
  * recomputed here and now by the memos the live page runs.
  *
+ * THE TRANSPORT IS DOCKED (2026-08-28). Play / step / scrub / speed / clock sit
+ * in a bar stuck to the BOTTOM of the page while replay is on, not under the
+ * head. `.pmk` is this page's own scroll container, so the bar is its LAST CHILD
+ * with position:sticky; bottom:0 — pinned to the viewport edge for the whole
+ * scroll, and at rest in flow at the very end, so it covers nothing
+ * permanently. The page is five screens tall and the thing most worth watching
+ * build is the book on the POST-MARKET tab, well below the fold: a transport you
+ * have to scroll back up to reach is one you stop using. The coverage caveats
+ * that used to be that bar's third row are behind its ⓘ toggle now — a docked
+ * bar spends viewport permanently, and the transport is what earns it.
+ *
  * `viewMin` takes the FRAME's minute, which is what rewinds everything
  * time-relative with it ("22 min to open", the RTH-open / after-the-close
  * label, the Post-Market tab's in-progress vs finished state). A replay whose
@@ -372,10 +383,24 @@ const CSS = `
    DRIVING. Cyan is the app's action colour everywhere else, so the bar reads as
    a control strip rather than as another disclosure.
 
-   The transport lives in its own bar under the head instead of in the head,
-   because it is five controls and a scrubber: pushed into .pagehead it wraps
-   onto a second row on anything narrower than a wide desktop and the head stops
-   reading as one strip (the same reason the symbol picker became a select). */
+   The transport is DOCKED TO THE BOTTOM of the page, not carried in the head.
+   Two reasons, and the second is the real one:
+
+     • It is five controls, a scrubber and a clock. Pushed into .pagehead it
+       wraps onto a second row on anything narrower than a wide desktop and the
+       head stops reading as one strip (the same reason the symbol picker
+       became a select).
+     • The page IS the replay and the page is five screens tall. A transport
+       that scrolls away above the fold is one you have to scroll back up to
+       reach, and the panel most worth watching build — the book, on the
+       Post-Market tab — is nowhere near the top. Docked, it stays under the
+       cursor wherever you are reading.
+
+   `.pmk` is the scroll container (height:100%; overflow:auto), so the bar is
+   the LAST CHILD of it with position:sticky; bottom:0 — pinned to the viewport
+   edge for the whole scroll, then at rest in flow at the very end, so it never
+   permanently covers anything. It needs an OPAQUE plate under the cyan wash for
+   the same reason: page content runs underneath it. */
 .pmk .rplbtn{background:transparent;border:1px solid var(--line2);color:var(--dim);
   font:inherit;font-size:11.5px;letter-spacing:.04em;padding:5px 12px;border-radius:9px;
   cursor:pointer;align-self:center;white-space:nowrap}
@@ -383,8 +408,14 @@ const CSS = `
 .pmk .rplbtn.on{border-color:var(--cyanEdge);background:var(--cyanWash);color:var(--cyan);font-weight:600}
 .pmk .rplbtn:disabled{opacity:.4;cursor:not-allowed}
 
-.pmk .rplbar{margin-bottom:12px;padding:10px 13px;border-radius:var(--r);
-  border:1px solid var(--cyanEdge);background:var(--cyanWash)}
+.pmk .rplbar{position:sticky;bottom:0;z-index:30;
+  padding:9px 20px 10px;border-top:1px solid var(--cyanEdge);
+  /* Cyan wash OVER the app's opaque plate: the wash alone is translucent and
+     the page scrolls beneath this bar. */
+  background:linear-gradient(var(--cyanWash),var(--cyanWash)), var(--plate);
+  box-shadow:0 -14px 34px rgba(0,0,0,.34)}
+/* Same centred column as .wrap, so the transport lines up with the page. */
+.pmk .rplwrap{max-width:1560px;margin:0 auto}
 .pmk .rplrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .pmk .rplrow+.rplrow{margin-top:9px}
 .pmk .rpltag{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
@@ -401,7 +432,14 @@ const CSS = `
 .pmk .rplclock{font-size:14px;font-weight:650;color:var(--txt);font-variant-numeric:tabular-nums;
   white-space:nowrap}
 .pmk .rplclock small{font-size:10.5px;font-weight:500;color:var(--dim2);letter-spacing:.06em}
-.pmk .rplscrub{flex:1;min-width:180px;accent-color:${HT.cyan}}
+.pmk .rplscrub{flex:1;min-width:160px;accent-color:${HT.cyan}}
+/* Coverage toggle. Square, so ⓘ never changes the row's height. */
+.pmk .rplt.info{min-width:30px;padding:4px 8px}
+.pmk .rplt.info.on{border-color:var(--cyanEdge);color:var(--cyan)}
+/* Takes the scrubber's place when a session has no frames — a dead track
+   spanning the bar reads as "loading forever" rather than "nothing recorded". */
+.pmk .rplmsg{flex:1;min-width:160px;font-size:11.5px;color:var(--dim2)}
+.pmk .rplnote{border-top:1px solid var(--line);padding-top:8px}
 .pmk .rplbar .note{font-size:11px;color:var(--dim2);line-height:1.55;max-width:110ch}
 .pmk .rplbar .note b{color:var(--dim);font-weight:650}
 
@@ -1158,6 +1196,9 @@ export default function Premarket() {
   const [replayIdx, setReplayIdx] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState<number>(1);
+  /** The docked bar is always on screen, so the coverage caveats live behind
+   *  this toggle rather than spending three lines of viewport permanently. */
+  const [replayNoteOpen, setReplayNoteOpen] = useState(false);
 
   useEffect(() => {
     if (replayOn && sym !== "SPX") setSym("SPX");
@@ -2178,98 +2219,6 @@ export default function Premarket() {
           </div>
         </div>
 
-        {/* ── REPLAY TRANSPORT ────────────────────────────────────────────
-            Play / step / scrub, plus the frame's own clock. Shown whenever
-            replay is ON — including while the frames request is in flight and
-            when a session turns out to have none — because a toggle that
-            silently does nothing is worse than one that says why. */}
-        {replayOn && (
-          <div className="rplbar">
-            <div className="rplrow">
-              <span className="rpltag">Replay · {sessionLabel(sessionDate)}</span>
-              <button
-                type="button" className="rplt"
-                disabled={replayIdx <= 0}
-                title="Back one frame"
-                onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }}
-              >◀</button>
-              <button
-                type="button" className="rplt play"
-                disabled={!replayFrames.length}
-                onClick={() => {
-                  // Pressing Play on the last frame restarts from the open —
-                  // otherwise the button appears dead at exactly the position
-                  // the page always lands on.
-                  if (replayIdx >= replayFrames.length - 1) setReplayIdx(0);
-                  setReplayPlaying((p) => !p);
-                }}
-              >{replayPlaying ? "❚❚ Pause" : "▶ Play"}</button>
-              <button
-                type="button" className="rplt"
-                disabled={replayIdx >= replayFrames.length - 1}
-                title="Forward one frame"
-                onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayFrames.length - 1, i + 1)); }}
-              >▶</button>
-              <div className="seg" role="group" aria-label="Replay speed">
-                {REPLAY_SPEEDS.map((sp) => (
-                  <button
-                    key={sp} type="button"
-                    className={replaySpeed === sp ? "on" : ""}
-                    aria-pressed={replaySpeed === sp}
-                    onClick={() => setReplaySpeed(sp)}
-                  >{sp}×</button>
-                ))}
-              </div>
-              <span className="rplclock" style={{ marginLeft: "auto" }}>
-                {replayFrame ? etClockOf(replayFrame.minute) : "—:—"} <small>ET</small>
-                {replayFrame ? <small> · spot {fmtPx(replayFrame.payload.spot, 2)}</small> : null}
-                {replayFrames.length
-                  ? <small> · frame {Math.min(replayIdx, replayFrames.length - 1) + 1}/{replayFrames.length}</small>
-                  : null}
-              </span>
-            </div>
-
-            <div className="rplrow">
-              <input
-                type="range" className="rplscrub"
-                min={0} max={Math.max(0, replayFrames.length - 1)}
-                value={Math.min(replayIdx, Math.max(0, replayFrames.length - 1))}
-                disabled={!replayFrames.length}
-                aria-label="Replay position"
-                onChange={(e) => { setReplayPlaying(false); setReplayIdx(Number(e.target.value)); }}
-              />
-            </div>
-
-            <div className="rplrow">
-              <p className="note" style={{ margin: 0 }}>
-                {replayState === "loading" ? <>Loading this session&apos;s frames…</>
-                  : replayState === "error" ? <>Could not load this session&apos;s frames.</>
-                    : !replayFrames.length ? (
-                      <>No frames recorded for this session. The recorder captures the page every
-                        5 minutes from 04:00 ET and cannot back-fill a day it was not running for.</>
-                    ) : (
-                      <>
-                        <b>The page IS the replay.</b> Every level, tile and panel below is
-                        recomputed from that minute&apos;s own captured chain by the same code the
-                        live page runs, and the page&apos;s clock is rewound with it. Nothing driven
-                        by the chain is live. (The GEX-watch strip at the bottom is not
-                        date-scoped and still shows the latest recorded close.)
-                        {replayTrim > 0 && (
-                          <>
-                            {" "}Frames keep <b>±{replayTrim} strikes</b> around spot, so the walls,
-                            gamma flip and total net GEX are that minute&apos;s full-board values,
-                            while anything scanned off the chain here — max pain, the DEX and vanna
-                            totals, the profile&apos;s and bell curve&apos;s wings — is over that
-                            window.
-                          </>
-                        )}
-                      </>
-                    )}
-              </p>
-            </div>
-          </div>
-        )}
-
         {frozen && !replay && (
           <div className="frozenbar">
             <b>Frozen session — {sessionLabel(sessionDate)}.</b> Every number below is computed from
@@ -3134,6 +3083,136 @@ export default function Premarket() {
         </section>
         )}
       </div>
+
+      {/* ── REPLAY TRANSPORT — DOCKED ───────────────────────────────────────
+          OUTSIDE `.wrap`, on purpose, and last. `.pmk` is this page's own
+          scroll container (height:100%; overflow:auto), so a
+          `position:sticky; bottom:0` last child of it is pinned to the bottom
+          edge of the viewport for the whole scroll and comes to rest in flow at
+          the very end — nothing is ever permanently covered.
+
+          It used to sit under the head, inside `.wrap`, and that was wrong for
+          what this replay actually is: the page IS the replay, the page is five
+          screens tall, and the thing most worth watching build — the book, over
+          on the Post-Market tab — is nowhere near the top. A transport you have
+          to scroll back up to reach is a transport you stop using.
+
+          Shown whenever replay is ON — including while the frames request is in
+          flight and when a session turns out to have none — because a toggle
+          that silently does nothing is worse than one that says why.
+
+          ONE row now, not three. A docked bar spends viewport permanently: the
+          transport, the scrubber and the clock earn that, the coverage caveats
+          do not, so they moved behind the ⓘ. */}
+      {replayOn && (
+        <div className="rplbar">
+          <div className="rplwrap">
+            <div className="rplrow">
+              <span className="rpltag">Replay · {sessionLabel(sessionDate)}</span>
+              <button
+                type="button" className="rplt"
+                disabled={replayIdx <= 0}
+                title="Back one frame"
+                onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }}
+              >◀</button>
+              <button
+                type="button" className="rplt play"
+                disabled={!replayFrames.length}
+                onClick={() => {
+                  // Pressing Play on the last frame restarts from the open —
+                  // otherwise the button appears dead at exactly the position
+                  // the page always lands on.
+                  if (replayIdx >= replayFrames.length - 1) setReplayIdx(0);
+                  setReplayPlaying((p) => !p);
+                }}
+              >{replayPlaying ? "❚❚ Pause" : "▶ Play"}</button>
+              <button
+                type="button" className="rplt"
+                disabled={replayIdx >= replayFrames.length - 1}
+                title="Forward one frame"
+                onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayFrames.length - 1, i + 1)); }}
+              >▶</button>
+              <div className="seg" role="group" aria-label="Replay speed">
+                {REPLAY_SPEEDS.map((sp) => (
+                  <button
+                    key={sp} type="button"
+                    className={replaySpeed === sp ? "on" : ""}
+                    aria-pressed={replaySpeed === sp}
+                    onClick={() => setReplaySpeed(sp)}
+                  >{sp}×</button>
+                ))}
+              </div>
+
+              {/* The scrubber shares the row now. With no frames it would be a
+                  dead track taking the whole width, so the reason takes its
+                  place instead — the bar never goes quiet. */}
+              {replayFrames.length ? (
+                <input
+                  type="range" className="rplscrub"
+                  min={0} max={Math.max(0, replayFrames.length - 1)}
+                  value={Math.min(replayIdx, Math.max(0, replayFrames.length - 1))}
+                  aria-label="Replay position"
+                  onChange={(e) => { setReplayPlaying(false); setReplayIdx(Number(e.target.value)); }}
+                />
+              ) : (
+                <span className="rplmsg">
+                  {replayState === "loading" ? "Loading this session’s frames…"
+                    : replayState === "error" ? "Could not load this session’s frames."
+                      : "No frames recorded for this session."}
+                </span>
+              )}
+
+              <span className="rplclock">
+                {replayFrame ? etClockOf(replayFrame.minute) : "—:—"} <small>ET</small>
+                {replayFrame ? <small> · spot {fmtPx(replayFrame.payload.spot, 2)}</small> : null}
+                {replayFrames.length
+                  ? <small> · frame {Math.min(replayIdx, replayFrames.length - 1) + 1}/{replayFrames.length}</small>
+                  : null}
+              </span>
+
+              <button
+                type="button"
+                className={`rplt info${replayNoteOpen ? " on" : ""}`}
+                aria-expanded={replayNoteOpen}
+                title={replayNoteOpen ? "Hide what this replay covers" : "What this replay covers"}
+                onClick={() => setReplayNoteOpen((v) => !v)}
+              >ⓘ</button>
+            </div>
+
+            {replayNoteOpen && (
+              <div className="rplrow rplnote">
+                <p className="note" style={{ margin: 0 }}>
+                  {replayState === "loading" ? <>Loading this session&apos;s frames…</>
+                    : replayState === "error" ? <>Could not load this session&apos;s frames.</>
+                      : !replayFrames.length ? (
+                        <>No frames recorded for this session. The recorder captures the page every
+                          5 minutes from 04:00 ET and cannot back-fill a day it was not running for.</>
+                      ) : (
+                        <>
+                          <b>The page IS the replay.</b> Every level, tile and panel above is
+                          recomputed from that minute&apos;s own captured chain by the same code the
+                          live page runs, and the page&apos;s clock is rewound with it — both tabs,
+                          so the Post-Market side rebuilds the book frame by frame too. Nothing
+                          driven by the chain is live. (The GEX-watch strip in the last row is not
+                          date-scoped and still shows the latest recorded close.)
+                          {replayTrim > 0 && (
+                            <>
+                              {" "}Frames keep <b>±{replayTrim} strikes</b> around spot, so the walls,
+                              gamma flip and total net GEX are that minute&apos;s full-board values,
+                              while anything scanned off the chain here — max pain, the DEX and vanna
+                              totals, the profile&apos;s and bell curve&apos;s wings — is over that
+                              window.
+                            </>
+                          )}
+                        </>
+                      )}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

@@ -117,7 +117,15 @@ export const DEFAULT_SETTINGS: ChartSettings = {
 
 /** Per SIDE of spot, so the drawn count is up to 2× this. */
 export const BUBBLE_LEVELS_RANGE = { min: 1, max: 8 }
-export const BUBBLE_SIZE_RANGE = { min: 0.4, max: 4 }
+/**
+ * A multiple of `BUBBLE_STYLE.heightFrac` of the pane — so on a ~950px pane
+ * 1.00× is a ~33px radius and the old 0.40× floor was still ~13px, which on a
+ * SPARSE ladder (1 or 2 a side, where nothing else bounds the top) is a 27px
+ * blob and the smallest the slider could make it. Hence 0.10× ≈ 3px: the low
+ * end has to be able to draw a DOT, because the spacing cap only kicks in once
+ * the ladder is busy enough to crowd itself.
+ */
+export const BUBBLE_SIZE_RANGE = { min: 0.1, max: 4 }
 export const BUBBLE_FLOOR_RANGE = { min: 0, max: 8 }
 /** Percent of the board's total |GEX|. */
 export const BUBBLE_CUTOFF_RANGE = { min: 0, max: 5 }

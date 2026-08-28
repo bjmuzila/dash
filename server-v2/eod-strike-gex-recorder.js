@@ -1481,6 +1481,121 @@ async function listStrikeGexDates(limit = 90, { basis = 'oivol', leg = 'net' } =
 }
 
 /**
+ * THE SURFACE — every strike × the last N sessions, as one rectangular grid.
+ *
+ * getStrikeGexChange answers "this session vs the one before it". This answers
+ * "the whole book, every session, at once", which is a different question and
+ * cannot be built by calling that one N times without N round trips and N
+ * copies of the same window arithmetic.
+ *
+ * WHY A GRID AND NOT ROWS. The caller draws a picture whose x is time and whose
+ * y is strike; handing it a flat row list means it rebuilds the rectangle in the
+ * browser every render, and every consumer would rebuild it slightly
+ * differently. So the rectangle is built ONCE, here, and `grid[d][i]` is the
+ * level at `dates[d]`, `strikes[i]`. A strike that has no row for a session
+ * comes back as **null, never 0** — the recorded window follows spot, so the
+ * far strikes genuinely have no reading on the sessions where spot was
+ * elsewhere, and drawing that as a zero would paint a hard edge across the
+ * middle of the surface that is an artefact of the window, not of the book.
+ *
+ * WHY IT IS CLIPPED. Over 45 sessions spot can travel a long way, so the union
+ * of every window is much wider than any single session's ±40. Returning all of
+ * it makes a mostly-empty picture. The grid is clipped to ±`side` around the
+ * MOST RECENT session's spot — the strikes a reader is actually looking at —
+ * and `clipped` reports whether anything was dropped.
+ *
+ * Returns { ok, symbol, basis, leg, dates[], spots[], strikes[], grid[][],
+ * capturedAt, clipped }. spots[d] is that session's recorded close.
+ */
+async function getStrikeGexSurface(symbol, {
+  days = 45, basis = 'oivol', leg = 'net', side = 45,
+} = {}) {
+  if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
+  const p = getPool();
+  const sym = String(symbol || '').toUpperCase().trim();
+  if (!sym) return { ok: false, error: 'symbol required' };
+  const n = Math.max(2, Math.min(180, Number(days) || 45));
+  const bas = normBasis(basis);
+  const lg = normLeg(leg);
+  // Same security boundary as every other read here: the basis and leg become
+  // SQL identifiers only after norm*, so LVL is always one of twelve literals.
+  const LVL = levelCol(bas, lg);
+  const SIDE = Math.max(5, Math.min(200, Number(side) || 45));
+
+  // The date list is scoped to THIS basis (`LVL IS NOT NULL`) for the same
+  // reason listStrikeGexDates is: the newer columns start at their migration
+  // date, and an unscoped window would return a month of blank sessions on
+  // oi/vol/flow and call it history.
+  const { rows } = await p.query(
+    `WITH d AS (
+       SELECT date FROM eod_strike_gex
+        WHERE symbol = $1 AND ${LVL} IS NOT NULL
+        GROUP BY date ORDER BY date DESC LIMIT $2
+     )
+     SELECT to_char(g.date, 'YYYY-MM-DD')  AS d,
+            g.strike::float8               AS strike,
+            g.${LVL}::float8               AS lvl,
+            g.spot::float8                 AS spot,
+            ${stampExpr(bas, 'g')}         AS captured_at
+       FROM eod_strike_gex g
+       JOIN d ON d.date = g.date
+      WHERE g.symbol = $1
+      ORDER BY g.date ASC, g.strike ASC`,
+    [sym, n],
+  );
+  if (!rows.length) {
+    return {
+      ok: true, symbol: sym, basis: bas, leg: lg,
+      dates: [], spots: [], strikes: [], grid: [], capturedAt: null, clipped: false,
+    };
+  }
+
+  // Dates ascending — oldest at the left, which is the direction a surface is
+  // read. The SQL already sorts, so this preserves rather than re-sorts.
+  const dates = [];
+  const spotByDate = new Map();
+  const stampByDate = new Map();
+  const byDate = new Map();
+  for (const r of rows) {
+    if (!byDate.has(r.d)) { byDate.set(r.d, new Map()); dates.push(r.d); }
+    byDate.get(r.d).set(Number(r.strike), numOrNull(r.lvl));
+    if (!spotByDate.has(r.d) && r.spot != null) spotByDate.set(r.d, Number(r.spot));
+    if (!stampByDate.has(r.d) && r.captured_at) stampByDate.set(r.d, r.captured_at);
+  }
+
+  const last = dates[dates.length - 1];
+  const allStrikes = [...new Set(rows.map((r) => Number(r.strike)))].sort((a, b) => a - b);
+  // Anchor on the newest session's spot. Falls back to the middle of the union
+  // when that session recorded no spot, so a missing close narrows the picture
+  // rather than emptying it.
+  const anchor = spotByDate.get(last) ?? allStrikes[Math.floor(allStrikes.length / 2)];
+  const strikes = allStrikes.filter((s) => Math.abs(s - anchor) <= SIDE);
+  const clipped = strikes.length < allStrikes.length;
+
+  const grid = dates.map((d) => {
+    const m = byDate.get(d);
+    // null, not 0 — see the note above. The difference is the whole reason the
+    // surface can be trusted at its edges.
+    return strikes.map((s) => (m.has(s) ? m.get(s) : null));
+  });
+
+  return {
+    ok: true,
+    symbol: sym,
+    basis: bas,
+    leg: lg,
+    dates,
+    spots: dates.map((d) => spotByDate.get(d) ?? null),
+    strikes,
+    grid,
+    // The newest session's per-basis stamp, so the page can print the same
+    // "run at" the ΔGEX Board prints rather than inventing its own.
+    capturedAt: stampByDate.get(last) ? new Date(stampByDate.get(last)).toISOString() : null,
+    clipped,
+  };
+}
+
+/**
  * Per-strike GEX for one symbol as of a session, with the day-over-day change.
  *
  * `date` (optional, YYYY-MM-DD) is an AS-OF, not an exact match: the two most
@@ -2467,6 +2582,7 @@ module.exports = {
   getStrikeGexLive,
   getStrikeGexBoard,
   getStrikeGexBadges,
+  getStrikeGexSurface,
   getFlowLadder,
   listStrikeGexDates,
   ensureSchema,

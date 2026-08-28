@@ -2187,6 +2187,30 @@ async function main() {
         })();
         return;
       }
+      // Every strike × the last N sessions as one rectangular grid — the read
+      // behind the Labs page's GEX surface and scrub. Deliberately NOT N calls
+      // to -change: that is N round trips and N copies of the window
+      // arithmetic, and the two consumers would drift.
+      //   GET /proxy/eod-strike-gex-surface?symbol=SPY[&days=45][&basis][&leg][&side]
+      // Returns { ok, symbol, basis, leg, dates[], spots[], strikes[],
+      // grid[date][strike], capturedAt, clipped }. grid cells are null (never
+      // 0) where a strike has no row for that session.
+      if (pathname === '/proxy/eod-strike-gex-surface' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { getStrikeGexSurface } = require('./eod-strike-gex-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const out = await getStrikeGexSurface(u.searchParams.get('symbol'), {
+              days: u.searchParams.get('days'),
+              basis: u.searchParams.get('basis'),
+              leg: u.searchParams.get('leg'),
+              side: u.searchParams.get('side'),
+            });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // The same per-strike ladder, but with the "now" side computed LIVE off
       // the chain instead of read out of eod_strike_gex. Prior side is the
       // symbol's most recent RECORDED close. Backs the ΔGEX Board's Live toggle

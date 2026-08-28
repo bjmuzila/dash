@@ -104,6 +104,10 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     links: [
       { label: "Dev", href: "/owner/dev", glyph: "⚙", key: "Dev" },
       { label: "Database", href: "/database", glyph: "⛁", key: "Database" },
+      // Labs — live-data experiments that are not board features yet. Distinct
+      // from Chart Types (/owner/charts-ui), which is deliberately static
+      // pictures with no fetching; anything here talks to a real endpoint.
+      { label: "Labs", href: "/owner/labs", glyph: "⌬", key: "Labs" },
     ],
   },
   {
