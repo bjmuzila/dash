@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
     <title>CB Edge</title>
+    <!-- Inline, not a file: without SOME icon the browser requests /favicon.ico
+         on every load and logs a 404 in the console of a page that has no other
+         errors, which trains you to ignore the console. A data: URI costs one
+         line and no request. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2307080b'/%3E%3Ctext x='16' y='22' font-family='system-ui,sans-serif' font-size='15' font-weight='700' fill='%235b8cff' text-anchor='middle'%3ECB%3C/text%3E%3C/svg%3E"
+    />
 
     <!-- ───────────────────────────────────────────────────────────────────
          PAINT TOKENS — inlined so the background and text color are correct

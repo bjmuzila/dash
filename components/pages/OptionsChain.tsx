@@ -15,7 +15,11 @@ import { dedupeFetch } from "@/lib/dedupeFetch";
 import { etDateKey, etToday, isSessionLive, isSpxFeedLive, isTradingDay } from "@/lib/marketSession";
 // Chain math (GreekCell, parseExpiration, metricBg) moved to lib/ so the ES
 // Candles page's 0DTE side panel can share it without importing this route.
-import { metricBg, rankBg, parseExpiration, type GreekCell, type DataMode } from "@/lib/calculations/optionChain";
+import { parseExpiration, type GreekCell, type DataMode } from "@/lib/calculations/optionChain";
+// Heat SKIN — how a cell is PAINTED (ramp, rank floors, level fill), shared
+// with the Multi Greek ladder so "vivid" means the identical picture on both.
+// See lib/calculations/heatSkins.
+import { HEAT_SKINS, isHeatSkin, skinMetricBg, skinRankBg, levelFillBg, type HeatSkin } from "@/lib/calculations/heatSkins";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -32,6 +36,47 @@ function SignVal({ text }: { text: string }) {
   const rest = s ? text.slice(1) : text;
   const c = s === "+" ? "#22c55e" : s === "-" ? "#ef4444" : SOFT_WHITE;
   return <>{s && <span style={{ color: c }}>{s}</span>}{rest}</>;
+}
+
+// ── Heat skin, as this grid wears it ────────────────────────────────────────
+// The RAMP, the rank floors and the level fill come straight from HEAT_SKINS —
+// that is what makes "vivid on the chain" the same vivid as Multi Greek. What
+// does NOT carry over is the skin's `cell` block: Multi Greek's cells are 9px
+// figures in four side-by-side panels, this grid's are 10px mono in a much
+// denser table with sticky rails, so the geometry is stated here per skin.
+// CLASSIC's entry is byte-for-byte the chain as it shipped — switching skins
+// must be reversible to exactly the old page.
+/** Saved skin choice, per browser. */
+const CHAIN_HEAT_SKIN_KEY = "chain_heat_skin";
+/** What an untouched chain loads with. */
+const CHAIN_DEFAULT_SKIN: HeatSkin = "vivid";
+
+const CHAIN_CELL: Record<HeatSkin, {
+  radius: number; inset: number; fontSize: number; shadow?: string;
+  text: string; weight: readonly [number, number, number]; signColors: boolean;
+}> = {
+  classic: {
+    radius: 0, inset: 0, fontSize: 10,
+    text: SOFT_WHITE, weight: [400, 400, 400], signColors: true,
+  },
+  vivid: {
+    // 0.5px margin, not a grid gap: it separates the tiles without moving the
+    // column tracks, so the sticky header and the strike rails stay aligned.
+    radius: 3, inset: 0.5, fontSize: 9.5,
+    shadow: "0 1px 2px rgba(0,0,0,0.85)",
+    // White on a near-opaque fill, and NO coloured +/−: at this ramp a cell can
+    // be a full-strength red tile, and a green "+" on it is the unreadable
+    // case. Direction is carried by the tint, exactly as the count tabs' ⅀
+    // cells already do it.
+    text: "#ffffff", weight: [600, 600, 300], signColors: false,
+  },
+};
+
+/** A value's 1/2/3 standing in its column (0 = unranked) — the skin ramp's
+ *  rank floors key off this. Same test the old metricBg() made internally. */
+function rankOf(value: number, topValues: number[]): number {
+  const i = topValues.indexOf(Math.abs(value));
+  return i >= 0 && i < 3 ? i + 1 : 0;
 }
 
 // ── Cell markers ────────────────────────────────────────────────────────────
@@ -1058,6 +1103,9 @@ interface ChainMatrixProps {
   greekMode: GreekMode;
   dataMode: DataMode;
   intensity: number; // parent passes the DEFERRED intensity
+  /** Which HEAT_SKINS entry paints the cells. Cosmetic only — same values,
+   *  same ranks, same walls either way. See lib/calculations/heatSkins. */
+  heatSkin: HeatSkin;
   colScales: { max: number; top3: number[] }[];
   volMvcByCol: (number | null)[];
   mvcByCol: (number | null)[];
@@ -1129,7 +1177,7 @@ interface ChainMatrixProps {
 // the parent's useMemo/useCallback, is exactly "when the chain data changed."
 const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
-  intensity, colScales, volMvcByCol, mvcByCol, delta15, delta15Exp, valueAt, isStandalone,
+  intensity, heatSkin, colScales, volMvcByCol, mvcByCol, delta15, delta15Exp, valueAt, isStandalone,
   changeMode, sessionDate, showTotalCol, layoutExpCols, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
   emLevels, activeTicker, atmRowRef, oiChangeMap,
   selExps, selStrikes, onToggleExp, onToggleStrike, onCellClick, onCellHover,
@@ -1147,6 +1195,10 @@ const ChainMatrix = memo(function ChainMatrix({
   // — is true of both tabs, so it keys off this rather than isOiMode alone.
   const isCountMode = isOiMode || isVolMode;
   const fmtVal = isOiMode ? fmtChg : isVolMode ? fmtCount : fmtMoney;
+  // The skin: ramp / rank floors / level fill from the shared table, cell
+  // geometry from this grid's own CHAIN_CELL entry.
+  const SK = HEAT_SKINS[heatSkin] ?? HEAT_SKINS.classic;
+  const CELL = CHAIN_CELL[heatSkin] ?? CHAIN_CELL.classic;
   // Δ15 stickers ride the GEX view only — OI mode's cells are already a change,
   // and a second, differently-sourced change beside them reads as a conflict.
   const hasDelta15 = !isCountMode && greekMode === "gex" && !!delta15Exp && delta15.size > 0;
@@ -1518,6 +1570,9 @@ const ChainMatrix = memo(function ChainMatrix({
               const cellWall = levelsOnly && !isChangeCol && col != null
                 ? wallAt(wallsByCol[colIdx], strike)
                 : null;
+              // 1/2/3 standing in this column, for the skin's rank floors and
+              // its per-rank font weight (0 = unranked).
+              const cellRank = value == null ? 0 : rankOf(value, cellScale.top3);
               return (
                 <div
                   key={`${strike}-${colIdx}`}
@@ -1525,15 +1580,27 @@ const ChainMatrix = memo(function ChainMatrix({
                   onClick={isClickable ? (e) => onCellHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
                   title={isClickable ? "Click for volume / OI / net premium" : undefined}
                   style={{
-                    padding: isCountMode ? "3px 6px" : "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
-                    color: value == null ? "#3a4a5e" : SOFT_WHITE,
+                    padding: isCountMode ? "3px 6px" : "2px 8px", fontSize: CELL.fontSize, fontFamily: "var(--font-mono)", textAlign: "right",
+                    fontWeight: value == null ? 400 : CELL.weight[cellRank === 1 ? 0 : cellRank ? 1 : 2],
+                    color: value == null ? "#3a4a5e" : CELL.text,
+                    ...(CELL.shadow && value != null ? { textShadow: CELL.shadow } : {}),
+                    borderRadius: CELL.radius || undefined,
+                    // A 0.5px margin makes each cell its own tile. NOT on the
+                    // ATM row: that rule is an inset box-shadow on every cell in
+                    // the row, and a margin would break it into dashes.
+                    ...(CELL.inset && !isATM ? { margin: CELL.inset } : {}),
                     // Levels-only: no gamma wash. CB/CW/PW paint at the heat
                     // scale's rank floors (CB 1, CW 2, PW 3) so the fill still
                     // carries the sign; every other cell — and every change
-                    // column — is bare.
-                    background: levelsOnly
-                      ? (cellWall && value != null ? rankBg(value, WALL_RANK[cellWall]) : "transparent")
-                      : (value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent"),
+                    // column — is bare. Then, only on a skin that asks for it,
+                    // the level's own colour is laid OVER that heat.
+                    background: (() => {
+                      const heat = levelsOnly
+                        ? (cellWall && value != null ? skinRankBg(value, WALL_RANK[cellWall], SK) : "transparent")
+                        : (value != null ? skinMetricBg(value, cellScale.max, cellRank, intensity, SK) : "transparent");
+                      if (!cellWall) return heat;
+                      return levelFillBg(cellWall, SK, heat) ?? heat;
+                    })(),
                     boxShadow: atmShadow,
                     whiteSpace: "nowrap", overflow: "hidden",
                     display: "flex", alignItems: isCountMode ? "center" : "baseline", justifyContent: "flex-end", gap: 5,
@@ -1596,7 +1663,9 @@ const ChainMatrix = memo(function ChainMatrix({
                     // same column give all their width to the number and every
                     // value still ends on the same right edge.
                     <span style={dEntry ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>
-                      <SignVal text={value == null ? "·" : fmtMoney(value)} />
+                      {CELL.signColors
+                        ? <SignVal text={value == null ? "·" : fmtMoney(value)} />
+                        : (value == null ? "·" : fmtMoney(value))}
                     </span>
                   )}
                 </div>
@@ -1611,11 +1680,17 @@ const ChainMatrix = memo(function ChainMatrix({
                 : undefined;
               return (
                 <div style={{
-                  padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
+                  padding: "2px 8px", fontSize: CELL.fontSize, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
                   color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.92)",
-                  background: levelsOnly
-                    ? (totWall && tot !== 0 ? rankBg(tot, WALL_RANK[totWall]) : "transparent")
-                    : (tot !== 0 ? metricBg(tot, totalScale.max, intensity, totalScale.top3) : "transparent"),
+                  ...(CELL.shadow && tot !== 0 ? { textShadow: CELL.shadow } : {}),
+                  borderRadius: CELL.radius || undefined,
+                  background: (() => {
+                    const heat = levelsOnly
+                      ? (totWall && tot !== 0 ? skinRankBg(tot, WALL_RANK[totWall], SK) : "transparent")
+                      : (tot !== 0 ? skinMetricBg(tot, totalScale.max, rankOf(tot, totalScale.top3), intensity, SK) : "transparent");
+                    if (!totWall) return heat;
+                    return levelFillBg(totWall, SK, heat) ?? heat;
+                  })(),
                   borderLeft: `2px solid ${rgba(HT.cyan, selMode ? 0.8 : 0.35)}`,
                   boxShadow: atmTotShadow,
                   whiteSpace: "nowrap", overflow: "hidden",
@@ -1628,7 +1703,7 @@ const ChainMatrix = memo(function ChainMatrix({
                   {/* The count tabs drop SignVal's colored +/−: this cell can be
                       a full-strength red heat tile, and a red sign on it is the
                       unreadable case. White figure, direction from the tint. */}
-                  {isCountMode
+                  {isCountMode || !CELL.signColors
                     ? <span style={{ color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.96)", textShadow: tot === 0 ? undefined : "0 1px 2px rgba(0,0,0,0.85)" }}>
                         {tot === 0 ? "·" : fmtVal(tot)}
                       </span>
@@ -1799,7 +1874,31 @@ export default function OptionsChainPage({
     })();
     return () => { cancelled = true; };
   }, [activeTicker, refreshSeed]);
-  const [intensity, setIntensity] = useState(1.75);
+  // Heat skin — cosmetic only (see lib/calculations/heatSkins). VIVID is what
+  // this grid ships on now; CLASSIC is one click away in the cog and is
+  // byte-for-byte the old chain. Persisted per browser: it is a preference
+  // about the board, not part of a session. The first render always uses the
+  // page default and any saved value is applied in the effect below, so the
+  // markup can't mismatch on hydration.
+  const [heatSkin, setHeatSkin] = useState<HeatSkin>(CHAIN_DEFAULT_SKIN);
+  const [intensity, setIntensity] = useState(HEAT_SKINS[CHAIN_DEFAULT_SKIN].intensity.def);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = window.localStorage.getItem(CHAIN_HEAT_SKIN_KEY);
+      if (isHeatSkin(saved)) { setHeatSkin(saved); setIntensity(HEAT_SKINS[saved].intensity.def); }
+    } catch { /* ignore */ }
+  }, []);
+  // Each skin brings its own slider range AND its own tuned position: VIVID's
+  // ramp is a different CURVE, not a louder CLASSIC, so 1.75 on one is not 1.75
+  // on the other and the slider has to move with the skin rather than carry a
+  // number across.
+  const intensityMax = HEAT_SKINS[heatSkin].intensity.max;
+  const changeHeatSkin = useCallback((v: HeatSkin) => {
+    setHeatSkin(v);
+    setIntensity(HEAT_SKINS[v].intensity.def);
+    try { window.localStorage.setItem(CHAIN_HEAT_SKIN_KEY, v); } catch { /* ignore */ }
+  }, []);
   // Grid colors read this deferred copy so dragging the Intensity slider stays
   // responsive — React commits the slider urgently and repaints the ~560-cell
   // matrix on a lower-priority pass it can interrupt.
@@ -3160,21 +3259,36 @@ export default function OptionsChainPage({
             {
               id: "heat",
               label: "Heat",
-              summary: intensity <= INTENSITY_MIN.chain ? "levels" : `${intensity.toFixed(2)}x`,
+              summary: `${HEAT_SKINS[heatSkin].label.toLowerCase()} · ${intensity <= INTENSITY_MIN.chain ? "levels" : `${intensity.toFixed(2)}x`}`,
               body: (
-                <DockField label="Intensity" hint="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked.">
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <input
-                      type="range" min={0.5} max={5} step={0.01}
-                      value={intensity}
-                      onChange={(event) => setIntensity(Number(event.target.value))}
-                      style={{ width: 110, height: 3, accentColor: "#219EBC" }}
+                <>
+                  <DockField label="Intensity" hint="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked.">
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        type="range" min={0.5} max={intensityMax} step={0.01}
+                        value={intensity}
+                        onChange={(event) => setIntensity(Number(event.target.value))}
+                        style={{ width: 110, height: 3, accentColor: "#219EBC" }}
+                      />
+                      <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 44, fontFamily: "var(--font-mono)" }}>
+                        {intensity <= INTENSITY_MIN.chain ? "LEVELS" : `${intensity.toFixed(2)}x`}
+                      </span>
+                    </div>
+                  </DockField>
+                  {/* Skin — how the cell is PAINTED, not what it says. Same
+                      values, same ranks, same walls either way, and the same two
+                      skins the Multi Greek ladder wears. */}
+                  <DockField label="Skin">
+                    <SegGroup
+                      options={[
+                        { label: "CLASSIC", value: "classic" },
+                        { label: "VIVID", value: "vivid" },
+                      ]}
+                      active={heatSkin}
+                      onChange={(v) => changeHeatSkin(v as HeatSkin)}
                     />
-                    <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 44, fontFamily: "var(--font-mono)" }}>
-                      {intensity <= INTENSITY_MIN.chain ? "LEVELS" : `${intensity.toFixed(2)}x`}
-                    </span>
-                  </div>
-                </DockField>
+                  </DockField>
+                </>
               ),
             },
             {
@@ -3585,6 +3699,7 @@ export default function OptionsChainPage({
             oiChangeMap={oiSnapshot.map}
             dataMode={dataMode}
             intensity={deferredIntensity}
+            heatSkin={heatSkin}
             colScales={colScales}
             volMvcByCol={volMvcByCol}
             mvcByCol={mvcByCol}

@@ -171,6 +171,7 @@ import { SCANNER_MAIN } from "@/lib/scannerTickers";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
+import GexChurnFeed, { GEX_CHURN_CSS } from "@/components/pages/premarket/GexChurnFeed";
 import GammaBellCurve, { GAMMA_BELL_CSS } from "@/components/pages/premarket/GammaBellCurve";
 import { useChainGex } from "@/components/pages/premarket/chainGex";
 import {
@@ -2177,7 +2178,7 @@ export default function Premarket() {
 
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
-      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GAMMA_BELL_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GEX_CHURN_CSS + GAMMA_BELL_CSS }} />
       <div className="wrap">
 
         <div className="pagehead">
@@ -3197,6 +3198,15 @@ export default function Premarket() {
               shows the calendar and calls it a signal. Sits at the bottom
               because it is context for the session, not a number to trade off. */}
           <GexWatchFeed />
+
+          {/* The question GEX Watch immediately raises: was that strike an
+              outlier inside a quiet book, or did the whole book rewrite itself?
+              Reads the same recorder pattern via /api/gex-gross-feed — the
+              gex_gross_daily rollup, one indexed read, no live scan. Opex and
+              earnings rows are KEPT here and badged, unlike the watch feed
+              above: a churn row only claims the book changed, which on those
+              sessions is true and worth seeing. It just never sets the scale. */}
+          <GexChurnFeed />
 
           <div className="footbar">
             <span className="l mono">

@@ -58,6 +58,7 @@ import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import { HOME_THEME, LIGHT_BLUE, LEVEL_COLORS, ES_CANDLE_UP, homeInputStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { PageShell } from "@/components/shared/PageCard";
+import { GexChurnHistory, useGexChurnHistory } from "@/components/shared/GexHeatBar";
 import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { captureAndCopy } from "@/lib/snapshot";
@@ -595,6 +596,10 @@ export default function LevelLog() {
   const [basis, setBasis] = useState<GexBasis>("oivol");
   const [tickers, setTickers] = useState<WallTicker[]>([]);
   const [sel, setSel] = useState<string | null>(null);
+  // Gross gamma churn for the selected ticker. The hook lives in the shared
+  // module and the PAGE owns when it fires — keyed on `sel` alone, so switching
+  // date or view does not re-request a series that is the same either way.
+  const { rows: churnRows, note: churnNote, loading: churnLoading } = useGexChurnHistory(sel);
   const [detail, setDetail] = useState<{ symbol: string; log: WallLogRow[]; events: WallEventRow[] } | null>(null);
   const [q, setQ] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -957,6 +962,23 @@ export default function LevelLog() {
               purpose: framed capture expands that body without reflowing its
               siblings, so anything under it gets drawn over in the PNG. */}
           <WallMigrationChart days={todayDays} view={view} onExpand={() => setPopout(true)} />
+
+          {/* GAMMA BOOK CHURN for the selected ticker — how much of its gross
+              gamma book (|call| + |put|, absolute at the leg so a put build
+              cannot cancel a call build) rewrote itself, session by session.
+              The wall log says WHERE the levels moved; this says how much of
+              the book moved with them, and whether that gamma was added,
+              rotated or pulled off.
+
+              data-capture-hide, deliberately. The migration chart above sits on
+              top of the scroll body because framed capture expands that body
+              WITHOUT reflowing its siblings — so anything rendered between the
+              two gets drawn over in the PNG. Rather than reopen that, this strip
+              is live-page only. Read the note on WallMigrationChart above before
+              moving it. */}
+          <div data-capture-hide>
+            <GexChurnHistory symbol={sel} rows={churnRows} note={churnNote} loading={churnLoading} />
+          </div>
 
           {/* A variant with nothing in it is almost always "not recorded yet"
               rather than "nothing happened": the non-0DTE and vol-only legs

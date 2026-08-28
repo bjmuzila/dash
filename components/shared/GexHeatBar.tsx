@@ -51,6 +51,7 @@
  * Colors and surfaces come from homeTheme. Never hardcode hex here.
  */
 
+import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle } from "./homeTheme";
 
@@ -111,7 +112,7 @@ function themeRgba(hex: string, a: number): string {
 }
 
 /** Fill fraction plus whether it came from a real baseline or the fallback. */
-export function heatFill(row: GexGrossRow): { frac: number; provisional: boolean } {
+export function heatFill(row: { churnPct: number; heat?: number | null }): { frac: number; provisional: boolean } {
   const heat = row.heat;
   if (heat == null || !Number.isFinite(heat)) {
     return { frac: clamp01(row.churnPct / PROVISIONAL_MAX_PCT), provisional: true };
@@ -281,6 +282,198 @@ export function GexHeatBoard({ rows, asOf, note, title = "Gamma book churn", sty
 
           {note && (
             <div style={{ fontSize: 10, lineHeight: 1.5, color: themeRgba(HOME_THEME.muted, 0.4) }}>{note}</div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * PER-TICKER HISTORY — the same encoding, one row per session.
+ *
+ * The board answers "who moved today". This answers "what does this ticker's
+ * book normally do", which is the question a log page is already asking. Same
+ * fill, same color ramp, same provisional rule — imported, not re-derived, so
+ * the two surfaces cannot drift on what a bar means.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** One row of /api/gex-gross-feed?symbol=X — no `symbol`, it is on the envelope. */
+export type GexChurnHistoryRow = {
+  date: string;
+  grossM?: number | null;
+  churnPct: number;
+  buildPct?: number | null;
+  buildShare: number;
+  callShare?: number | null;
+  heat?: number | null;
+  isOpex?: boolean;
+  isEarnings?: boolean;
+  clean?: boolean;
+};
+
+/**
+ * Fetches one ticker's churn series. A hook rather than a fetch inside the
+ * component, so the PAGE owns the request policy — how often, on what
+ * dependency, and whether to fire at all. A component that fetches on mount is
+ * a component that fires on every re-render someone later introduces.
+ */
+export function useGexChurnHistory(symbol: string | null, days = 45) {
+  const [rows, setRows] = useState<GexChurnHistoryRow[]>([]);
+  const [note, setNote] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!symbol) { setRows([]); setNote(""); return; }
+    let alive = true;
+    setLoading(true);
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/gex-gross-feed?symbol=${encodeURIComponent(symbol)}&days=${days}`,
+          { cache: "no-store" },
+        );
+        const j = await r.json();
+        if (!alive) return;
+        setRows(Array.isArray(j.rows) ? j.rows : []);
+        setNote(typeof j.note === "string" ? j.note : "");
+      } catch {
+        if (alive) { setRows([]); setNote("Churn history unavailable right now."); }
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [symbol, days]);
+
+  return { rows, note, loading };
+}
+
+export type GexChurnHistoryProps = {
+  symbol: string | null;
+  rows: GexChurnHistoryRow[];
+  note?: string;
+  loading?: boolean;
+  /** Cap the rows drawn. The series only goes back to 2026-08-18 for now. */
+  limit?: number;
+  style?: CSSProperties;
+};
+
+export function GexChurnHistory({ symbol, rows, note, loading, limit = 12, style }: GexChurnHistoryProps) {
+  // Newest first: on a log page the reader is looking at a selected session and
+  // works backwards from it, not forwards from three weeks ago.
+  const shown = [...rows].reverse().slice(0, limit);
+
+  return (
+    <div
+      style={{
+        padding: "12px 18px",
+        borderTop: `1px solid ${HOME_THEME.border}`,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        ...style,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.text }}>
+          Gamma book churn
+        </span>
+        <span style={{ fontSize: 11, color: themeRgba(HOME_THEME.muted, 0.5) }}>
+          {symbol ? `how much of ${symbol}'s book rewrote itself, session by session` : "pick a ticker"}
+        </span>
+      </div>
+
+      {loading ? (
+        <div style={{ fontSize: 12, color: themeRgba(HOME_THEME.muted, 0.5) }}>Loading…</div>
+      ) : !symbol ? null : !shown.length ? (
+        <div style={{ fontSize: 12, lineHeight: 1.6, color: themeRgba(HOME_THEME.muted, 0.5) }}>
+          {note || `Nothing on file for ${symbol}.`}
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {shown.map((r) => {
+              const { frac, provisional } = heatFill(r);
+              const color = buildShareColor(r.buildShare);
+              const flag = r.isOpex ? "OPEX" : r.isEarnings ? "ERN" : null;
+              return (
+                <div key={r.date} style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontFamily: "var(--font-mono)",
+                      color: themeRgba(HOME_THEME.muted, 0.5),
+                      width: 46,
+                      flex: "0 0 auto",
+                    }}
+                  >
+                    {r.date.slice(5)}
+                  </span>
+
+                  <div
+                    title={
+                      `${r.date} — ${Math.round(r.churnPct)}% of the book changed` +
+                      (r.heat != null ? `, ${r.heat.toFixed(1)}× a normal day` : " (no baseline yet)") +
+                      ` · build share ${r.buildShare.toFixed(2)}` +
+                      (flag ? ` · ${flag}` : "")
+                    }
+                    style={{
+                      position: "relative",
+                      flex: 1,
+                      height: 8,
+                      borderRadius: 8,
+                      overflow: "hidden",
+                      background: themeRgba(HOME_THEME.muted, 0.06),
+                      backgroundImage: provisional
+                        ? `repeating-linear-gradient(135deg, ${themeRgba(HOME_THEME.muted, 0.05)} 0 4px, transparent 4px 8px)`
+                        : undefined,
+                      // A dirty session is dimmed rather than dropped: it still
+                      // happened, it just never sets the scale.
+                      opacity: r.clean === false ? 0.45 : 1,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${frac * 100}%`,
+                        height: "100%",
+                        background: `linear-gradient(90deg, ${buildShareColor(r.buildShare, 0.55)}, ${color})`,
+                      }}
+                    />
+                  </div>
+
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontFamily: "var(--font-mono)",
+                      fontWeight: 700,
+                      color,
+                      width: 54,
+                      textAlign: "right",
+                      flex: "0 0 auto",
+                    }}
+                  >
+                    {r.heat != null ? `${r.heat.toFixed(1)}×` : `${Math.round(r.churnPct)}%`}
+                  </span>
+
+                  <span
+                    style={{
+                      fontSize: 9,
+                      letterSpacing: 0.5,
+                      width: 34,
+                      flex: "0 0 auto",
+                      color: themeRgba(HOME_THEME.muted, 0.45),
+                    }}
+                  >
+                    {flag || ""}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {note && (
+            <div style={{ fontSize: 10, lineHeight: 1.5, color: themeRgba(HOME_THEME.muted, 0.38) }}>{note}</div>
           )}
         </>
       )}

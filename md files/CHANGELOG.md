@@ -1,19 +1,116 @@
 # Changelog
 
-## 2026-08-28 - GEX gross-gamma churn: a daily heat bar the calendar cannot fake
+## 2026-08-28 - v3 GEX Candles: the bubble layer only repaints when the view moves, and it no longer vanishes
+
+Edited: `cbedge-v3/src/board/gexCandles/chart.ts`,
+`cbedge-v3/src/board/gexCandles/bubbles.ts`, `cbedge-v3/index.html`.
+New: `cbedge-v3/perf.mjs`.
+
+Chrome was logging `'requestAnimationFrame' handler took 52ms` and
+`Forced reflow while executing JavaScript took 47ms` on a chart that was sitting
+still. The rAF loop worked every frame whether or not anything had changed: it
+read `getBoundingClientRect()` and `ts.height()` (two forced layouts per frame),
+repositioned every rail row, and redrew the whole bubble band - up to 320
+segments x six marks, each with its own `priceToCoordinate()` and `stroke()`.
+
+Three changes, in order of what they cost:
+
+1. The container size comes from a `ResizeObserver` now, not from a per-frame
+   layout read, and the plot height (container minus the time axis) is cached
+   with it.
+2. Nothing is drawn unless the VIEW ACTUALLY MOVED. `viewSignature()` samples
+   the time scale's visible logical range and two prices through
+   `priceToCoordinate()` - pure scale arithmetic, no layout - and the frame is
+   skipped when the value matches the previous one. A `version` counter that
+   every setter bumps guarantees a DATA change always redraws even when the
+   view has not moved a pixel.
+3. `setLivePrice()` no longer bumps that counter. The bubbles and the rail are
+   drawn from the snapshot history and the price scale, never from the forming
+   bar, so a quote is not a reason to repaint them; if a tick DOES move the
+   scale (a new high autoscales the pane) the signature sees it on its own.
+   Before this, every quote forced a full-band redraw several times a second.
+
+Measured on the mock: idle went from ~120 repaints per 2s (one per frame) to 0,
+with pan and zoom still repainting on every move. No long tasks, no violations.
+
+While verifying that, two bugs turned up that the guard had been masking.
+
+FIXED - the bubble layer could vanish entirely. `drawBubbles()` established the
+band's pixel extent with `timeToCoordinate()` on the first and last snapshot.
+That call answers only for timestamps that are IN the series - it does not
+interpolate - and the GEX history is per MINUTE while the candles are 5m or
+coarser. On any timeframe above 1m both ends almost never land on a bar, both
+calls returned null, and the function bailed out before drawing anything. The
+layer was appearing or not appearing depending on nothing more than whether the
+history's endpoints happened to coincide with bar boundaries. The extent is now
+found by binary search over `coordinateToTime()`, which is defined across the
+plot and monotonic in x, inside a window located by scanning for the pixels the
+scale can actually answer for (the overlay spans the whole card; the plot does
+not - the price scale owns the right ~60px, and probing the canvas edges gets
+null at both ends).
+
+FIXED - the redraw guard was blind to sideways pan. Its first version probed the
+time axis with `timeToCoordinate()` on two snapshot timestamps, which fails for
+exactly the reason above: both probes returned null, the horizontal half of the
+signature was the constant "n|n", and a pure horizontal pan never repainted. It
+now uses the visible logical range, which is always defined and moves on both
+pan and zoom.
+
+Also: `index.html` carries an inline data-URI favicon, which kills the
+`favicon.ico 404` in the console. HTML budget 1.9kb -> 2.2kb, limit 4.0kb.
+
+New harness `cbedge-v3/perf.mjs` drives a real browser against
+`scripts/mock-server.mjs` and asserts both halves of the guard - quiet at idle,
+still painting on pan and zoom - plus zero long tasks, violations and 404s. Its
+header documents the two ways this measurement lies: hooking lightweight-charts'
+own canvas instead of the bubble overlay (the overlay is the one with inline
+`pointerEvents:none`), and measuring before the history fetch lands, when an
+empty overlay is quiet under every condition and looks like a total regression.
+
+## 2026-08-28 - Option chain wears the VIVID heat skin
+
+New: `lib/calculations/heatSkins.ts`.
+Edited: `components/pages/OptionsChain.tsx`, `app/mult-greek/MultGreekClient.tsx`.
+
+The Multi Greek skin table (CLASSIC / VIVID) moved out of `MultGreekClient.tsx`
+into `lib/calculations/heatSkins.ts` and the option chain grid now paints from
+it. "Vivid on the chain" is therefore the SAME vivid: the identical ramp
+(`base .05 / span .25 / max 1 / ease .4`), the identical rank floors
+(`.95 / .62 / .40`), the identical CB/CW/PW blend fill, and the same 3.00x
+default on a slider that now tops out at the skin's own ceiling (4x vivid, 3x
+classic). Multi Greek re-exports `HeatSkin` / `HEAT_SKINS`, so nothing that
+imported them from that file had to change.
+
+What is NOT shared is the skin's `cell` block — Multi Greek's 9px figures in
+four side-by-side panels are not this grid's 10px mono in a dense table with
+sticky rails — so cell geometry per skin lives in `CHAIN_CELL` inside
+`OptionsChain.tsx`. VIVID there: 9.5px, 3px radius, a 0.5px margin so every cell
+is its own tile (skipped on the ATM row, whose white rule is an inset shadow a
+margin would break into dashes), a text shadow to survive a hot fill, weight
+300 -> 600 by rank, and white figures with NO coloured +/- (a green "+" on a
+full-strength red tile is the unreadable case — the count tabs' totals already
+solved it this way). CLASSIC's entry is byte-for-byte the chain as it shipped.
+
+Skin picker: cog -> Heat -> Skin, beside Intensity, and the section summary now
+reads "vivid - 3.00x". Saved per browser under `chain_heat_skin`; the grid ships
+on VIVID and CLASSIC is one click back. Values, ranks and walls are identical
+either way — a skin only decides how a cell is painted.
+
+## 2026-08-28 - Gross gamma churn: a daily heat bar the calendar cannot fake
 
 New: `server-v2/_lib-gex-gross.cjs`, `server-v2/gex-gross-recorder.js`,
-`components/shared/GexHeatBar.tsx`. Edited: `server-v2/server-with-proxy.js`,
-`server-v2/api-router.js`.
+`components/shared/GexHeatBar.tsx`, `components/pages/premarket/GexChurnFeed.tsx`.
+Edited: `server-v2/server-with-proxy.js`, `server-v2/api-router.js`,
+`components/pages/Premarket.tsx`, `components/pages/LevelLog.tsx`.
 
-**The question this answers:** how much gamma came in today relative to what was
-already on the board — tracked daily, per ticker, as a bar that fills.
+**The question:** how much gamma came in today relative to what was already on
+the board — tracked daily, per ticker, as a bar that fills.
 
 **Why net_gex could not answer it.** A net sum cancels. `net_gex` is a positive
 call leg plus a negative put leg, so a session where $500M of call gamma was
 added and $500M of put gamma was added nets to roughly nothing and reads as a
-quiet day. Every quantity here therefore takes its absolute value at the LEG,
-before any sum:
+quiet day. Every quantity here takes its absolute value at the LEG, before any
+sum:
 
 ```
 gross  = Σ ( |call_gex|  + |put_gex|  )   the board's total gamma
@@ -25,8 +122,8 @@ build  = gross_now − gross_prev           net growth of the book
 `build_share = build / churn` is bounded to [−1, +1] and reads as "what fraction
 of today's churn was net new gamma": +1 pure addition, 0 pure rotation, −1 pure
 unwind. FILL is churn, COLOR is build_share. Churn alone cannot tell a giant roll
-apart from a giant build — on 2026-08-27 NVDA churned 312% at build_share 0.90
-while MSTR churned 129% at 0.29.
+from a giant build — on 2026-08-27 NVDA churned 312% at build_share 0.90 while
+MSTR churned 129% at 0.29.
 
 **The fill scale is NOT 0–100%.** Measured across the roster, the median ticker
 churns 16–19% of its book on an ordinary session and p90 sits near 40% — but
@@ -51,7 +148,9 @@ roster-wide percentage ranks by ticker size, not by what happened.
 Both are still RECORDED and still DISPLAYED with a badge — "the book
 restructured after the print" is worth seeing, it is just not repositioning.
 `clean = NOT opex AND NOT earnings AND gross_prev ≥ floor` is a stored column,
-so the flag a row was scored under survives a later retune.
+so the flag a row was scored under survives a later retune. Verified on the
+first live run: 169/169 flagged opex on 08-21 with `clean = 0`, and NVDA / CRM /
+CRWD correctly flagged on 08-27 off their 08-26 after-the-bell prints.
 
 **The earnings window is two sessions, anchored on the session spine** — `after`
 → {anchor, anchor+1}, `pre` → {anchor−1, anchor}, `unknown` → both. Never
@@ -68,18 +167,80 @@ ladder — the baseline keeps deepening whatever happens upstream. Same bet
 
 **A $25M gross floor**, mirroring MIN_BASE/MIN_ABS in the watch engine: WEN sits
 at a $3.7M book where a couple of contracts swing churn_pct by tens of points.
+It removes 27–35 tickers a day; `GEX_GROSS_MIN_GROSS` lowers it without a code
+change.
 
 **Legs start 2026-08-18.** `call_gex`/`put_gex` were added with no backfill —
 the chains are gone and the split is exactly what net_gex threw away — so there
-is no gross history before that date and the feed says so instead of inventing
-one. Tickers below the minimum clean-session count render on a hatched
-provisional track rather than quoting a ratio against three days.
+is no gross history before that date. Below `GEX_GROSS_MIN_SESS` clean sessions
+a ticker renders on a HATCHED provisional track showing raw churn %, never a
+ratio quoted against an average of three days.
+
+**Where it shows.**
+- `/premarket`, under GEX Watch (`GexChurnFeed`, the page's CSS-string
+  convention). It answers the question the watch card raises: was that strike an
+  outlier inside a quiet book, or did the whole ladder rewrite itself? CRWD's
+  230 strike read 8.3× normal on 08-27 — and its entire book churned 153%.
+  Unlike the watch feed, opex/earnings rows are KEPT and badged here: a churn row
+  only claims the book changed, which on those sessions is true.
+- `/level-log`, under the migration chart (`GexChurnHistory`, per-ticker series
+  keyed on the selected symbol). Marked `data-capture-hide` deliberately — the
+  migration chart sits above the scroll body because framed capture expands that
+  body WITHOUT reflowing its siblings, so anything rendered between the two gets
+  drawn over in the PNG. Read that component's note before moving it.
+
+The fill math and colour ramp (`heatFill`, `buildShareColor`) are imported from
+`components/shared/GexHeatBar` by both surfaces, not re-derived, so they cannot
+drift on what a bar means. Colours come from homeTheme (SOFT_RED → purple →
+LIGHT_BLUE); no hex is hardcoded.
 
 Recorder fires 16:50 ET (after the 16:05 ladder and the 16:40 watch, both of
 which it reads). `GEX_GROSS_RECORDER=0` disables; `POST /proxy/gex-gross-run`
-fires manually. Feed: `GET /api/gex-gross-feed` (board) and
-`?symbol=NVDA` (series), subscriber auth. One definition in
-`_lib-gex-gross.cjs` so the recorder and the panel cannot drift.
+fires manually (owner-only — use the `x-internal-token` header server-side).
+Feed: `GET /api/gex-gross-feed` (board) and `?symbol=NVDA&days=45` (series),
+subscriber auth. One definition in `_lib-gex-gross.cjs` so the recorder and both
+panels cannot drift.
+
+## 2026-08-28 - v3 GEX Candles: an expiry dropdown, and the reason the bubbles were slow
+
+Edited: `cbedge-v3/src/board/gexCandles/{GexCandlesCard.tsx,gexHistory.ts,settings.ts,controls.tsx}`.
+
+**Expiry dropdown in the toolbar.** Lists the symbol's expirations as `0DTE`,
+`1DTE`, `2DTE` … with the date beside each, and names the one the bubbles are
+drawn from. Persisted. A pinned expiry only applies if the CURRENT symbol lists
+it — otherwise every ticker change would pin the chart to a date that symbol does
+not trade — so it falls back to the nearest, which is also the default.
+
+New `Dropdown` in controls.tsx: a button plus a Popover list rather than a native
+`<select>`, whose option list is drawn by the OS, ignores the app's palette, and
+cannot carry two lines per row.
+
+**`anyExpiry=1` is gone, and that is the performance fix.** The history route
+returns ONE COLUMN PER MINUTE and has no server-side sampling to ask for, so the
+cost is linear in the window — and `anyExpiry=1` made the server merge EVERY
+recorded expiry's ladder into each of those columns, on every poll. The card now
+asks for the single expiry the dropdown names. This is also the change AGENTS.md's
+"current / closest expiration" note was pointing at, so half of the prevDay
+retirement is already done.
+
+Behaviour change worth knowing: the bubbles are now ONE expiry's gamma, not the
+whole board merged.
+
+**The other lever is `Prev day`**, and it is mine from earlier today: 48h instead
+of the session's 12h is four times the columns, four times the payload and four
+times the parse. It is a testing-phase switch and it is now documented as the
+first thing to turn off if the layer feels slow — the note lives on
+GEX_HISTORY_MINUTES_PREV_DAY and in the card's header comment.
+
+**Not a bug: the 1m/5m picker.** It is there, and has been — it moved into the
+Card HEADER when the two-toolbars-per-card change landed, so it now sits beside
+RTH/ETH and the cog instead of on a row underneath. Confirmed by reading the
+rendered header: `0DTE ▾ | 1m 5m 15m 30m 1h | RTH ETH | ⚙ Layers`.
+
+Verified in a real browser: the dropdown opens with the symbol's five expiries,
+picking 2DTE switches the request to `expiry=2026-08-30`, the choice survives a
+reload, and the request no longer carries `anyExpiry`. Plus typecheck, build,
+budgets and the 8 ws-scope assertions.
 
 ## 2026-08-28 - v3: the GEX Chart is v2's home-page chart, pan/zoom and all
 

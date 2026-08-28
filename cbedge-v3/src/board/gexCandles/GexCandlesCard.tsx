@@ -5,7 +5,7 @@ import { useQuery } from '@/data/api'
 import { usePageSymbol } from '@/data/symbol'
 import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
-import { SegGroup, Chip, Slider, Popover, PanelSection } from './controls'
+import { SegGroup, Chip, Slider, Popover, PanelSection, Dropdown } from './controls'
 import { chainTicker, symbolDef } from './symbols'
 import {
   BUBBLE_CURVE_RANGE,
@@ -47,23 +47,50 @@ import { mountEsChart, type EsChartHandle } from './chart'
 // has an 80kb brotli ceiling in budgets.json. "Only GEX bubbles" is what makes
 // the two facts compatible.
 //
-// ── The data path, all fired in parallel at mount ────────────────────────────
+// ── The data path ────────────────────────────────────────────────────────────
 //   candles   /api/snapshots/etf-candles — one route now that ES/NQ are gone
-//   expiry    /api/expirations — needed only to satisfy the history route's
-//             required `expiry` param, which anyExpiry=1 then overrides
+//   expiry    /api/expirations — the dropdown's list, and the default
 //   bubbles   /api/snapshots/option-strike-gex-history?mode=heatmap
 //
 // The bubble request depends on the expiry, which is the one genuine dependency
-// in the set and therefore the one place a second round trip is unavoidable. It
-// is a small cached call fired from this card's own effect — not a child
-// fetching after a parent resolved, which is the waterfall shape AGENTS.md
-// bans.
+// in the set and therefore the one place a second round trip is unavoidable —
+// the expiry IS the parameter. Both are fired from this card's own effect, not
+// by a child mounting after a parent resolved, which is the waterfall shape
+// AGENTS.md bans.
+//
+// ── WHAT MAKES THE BUBBLES SLOW, IF THEY ARE ────────────────────────────────
+// The history route returns ONE COLUMN PER MINUTE of the window, so the cost is
+// linear in `minutes` and there is no server-side sampling to ask for. Two
+// levers, in the order they matter:
+//
+//   1. `Prev day` (48h vs the session's 12h) — 4× the columns, 4× the payload
+//      and 4× the parse. It is a testing-phase switch; turning it off is the
+//      first thing to try.
+//   2. The expiry. This card used to pass `anyExpiry=1`, which merged EVERY
+//      recorded expiry's ladder into each column and made the server walk all
+//      of them for the whole window on every poll. It now asks for the one
+//      expiry the dropdown names.
 //
 // There is no basis fetch: every symbol here charts against its own strikes, so
 // a bubble goes at the strike price. See the note at the top of symbols.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CARD_ID = 'gex-candles'
+
+const ET_DATE = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+/** `0DTE` / `3DTE` for a YYYY-MM-DD expiry, counted from today ET. */
+function dteLabel(expiry: string): string {
+  const a = Date.parse(`${ET_DATE.format(new Date())}T12:00:00Z`)
+  const b = Date.parse(`${expiry}T12:00:00Z`)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return expiry
+  return `${Math.max(0, Math.round((b - a) / 86_400_000))}DTE`
+}
 
 /** Wires an EsChartHandle to a <ChartFrame>, buffering setters until it mounts. */
 function useEsChart(onLatestOffscreen: (off: boolean) => void) {
@@ -138,7 +165,19 @@ export function GexCandlesCard() {
     { staleMs: 300_000 },
   )
 
-  const expiry = expiryQ.data?.data?.items?.[0]?.['expiration-date'] ?? ''
+  // ── Which expiry the bubbles draw ──────────────────────────────────────────
+  // A stored expiry only applies if the CURRENT symbol actually lists it —
+  // otherwise every symbol change would pin the chart to a date that symbol
+  // does not trade. Falling back to the nearest is both the safe answer and the
+  // default.
+  const expiries = useMemo(
+    () =>
+      (expiryQ.data?.data?.items ?? [])
+        .map((i) => i['expiration-date'] ?? '')
+        .filter((e): e is string => Boolean(e)),
+    [expiryQ.data],
+  )
+  const expiry = settings.expiry && expiries.includes(settings.expiry) ? settings.expiry : (expiries[0] ?? '')
   // Either layer keeps this alive: the rail reads the newest column of the same
   // history the bubbles are drawn from, so turning the bubbles off with the
   // rail on must not take the request — and its data — away with them.
@@ -177,6 +216,11 @@ export function GexCandlesCard() {
   // Same history, second view: the bubbles say how the ladder got here across
   // the session, the rail says where it stands right now. No extra request.
   const railModel = useMemo(() => buildRail(columns, settings.gexMetric), [columns, settings.gexMetric])
+
+  const expiryOptions = useMemo(
+    () => expiries.map((e) => ({ value: e, label: dteLabel(e), sub: e.slice(5) })),
+    [expiries],
+  )
 
   // ── Chart ──────────────────────────────────────────────────────────────────
   const { onMount, apply } = useEsChart(setLatestOffscreen)
@@ -274,6 +318,13 @@ export function GexCandlesCard() {
           right under that header, so the board showed two bars stacked and the
           chart lost the height of both. */}
       <CardToolbar>
+        <Dropdown
+          title="Which expiry the GEX bubbles are drawn from. Defaults to the nearest; pinning one keeps it until the symbol changes"
+          value={expiry}
+          options={expiryOptions}
+          onChange={(v) => patch({ expiry: v })}
+          empty="expiry"
+        />
         <SegGroup
           title="Bar interval"
           options={INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}

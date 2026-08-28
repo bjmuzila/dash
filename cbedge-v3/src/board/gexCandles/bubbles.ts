@@ -304,6 +304,93 @@ function placeMarks(snap: BubbleSnapshot, geo: BubbleGeometry, opts: DrawOpts): 
   return placed
 }
 
+/** The pixel window of the pane that the time scale can actually answer for. */
+interface TimeWindow {
+  xLo: number
+  xHi: number
+  tLo: number
+  tHi: number
+}
+
+/**
+ * Find the sub-range of [0, width] where timeAtX() returns a time.
+ *
+ * It is NOT the whole canvas. The overlay spans the card, the chart's PLOT does
+ * not — the price scale owns the right ~60px — and coordinateToTime() answers
+ * null outside the plot and outside the data. Probing the canvas edges gets
+ * null at both ends, which is exactly how the first version of this helper
+ * managed to fail on every single frame.
+ *
+ * A coarse scan finds a valid pixel, then each end is walked in by halving.
+ * ~48 calls, all pure scale arithmetic, once per drawn frame.
+ */
+function timeWindow(geo: BubbleGeometry): TimeWindow | null {
+  const w = geo.width
+  const STEPS = 24
+  let firstValid = -1
+  let lastValid = -1
+  for (let i = 0; i <= STEPS; i++) {
+    const x = (w * i) / STEPS
+    if (geo.timeAtX(x) != null) {
+      if (firstValid < 0) firstValid = x
+      lastValid = x
+    }
+  }
+  if (firstValid < 0 || lastValid < 0) return null
+
+  // Refine outward: the true edge lies between the last invalid probe and the
+  // first valid one, one coarse step apart.
+  const step = w / STEPS
+  const refine = (valid: number, invalid: number) => {
+    let v = valid
+    let n = invalid
+    for (let i = 0; i < 8; i++) {
+      const mid = (v + n) / 2
+      if (geo.timeAtX(mid) != null) v = mid
+      else n = mid
+    }
+    return v
+  }
+  const xLo = firstValid > 0 ? refine(firstValid, Math.max(0, firstValid - step)) : 0
+  const xHi = lastValid < w ? refine(lastValid, Math.min(w, lastValid + step)) : w
+
+  const tLo = geo.timeAtX(xLo)
+  const tHi = geo.timeAtX(xHi)
+  if (tLo == null || tHi == null || !(tHi > tLo)) return null
+  return { xLo, xHi, tLo, tHi }
+}
+
+/**
+ * Where an instant sits on the pane, in pixels.
+ *
+ * NOT xOfTime(). lightweight-charts' timeToCoordinate() answers only for
+ * timestamps that are IN the series — it does not interpolate — while the GEX
+ * history is per MINUTE and the candles are 5m or coarser. Above 1m the band's
+ * first and last snapshot almost never land on a bar, both calls returned null,
+ * and drawBubbles bailed out before drawing anything: the whole layer vanished,
+ * intermittently, on nothing more than whether the history's endpoints happened
+ * to fall on a bar boundary.
+ *
+ * timeAtX() (coordinateToTime) IS defined across the plot and is monotonic in
+ * x, so the inverse is a binary search over the window found above. A time off
+ * either end clamps to that edge, which is what the band wants: a history that
+ * starts before the visible range starts at the plot's left edge.
+ */
+function xAtTime(win: TimeWindow, geo: BubbleGeometry, ms: number): number {
+  if (ms <= win.tLo) return win.xLo
+  if (ms >= win.tHi) return win.xHi
+  let lo = win.xLo
+  let hi = win.xHi
+  for (let i = 0; i < 20; i++) {
+    const mid = (lo + hi) / 2
+    const t = geo.timeAtX(mid)
+    if (t == null) break
+    if (t < ms) lo = mid
+    else hi = mid
+  }
+  return (lo + hi) / 2
+}
+
 export function drawBubbles(
   ctx: CanvasRenderingContext2D,
   snaps: BubbleSnapshot[],
@@ -321,12 +408,13 @@ export function drawBubbles(
   // Extent comes from the DATA's own time range, clamped to the pane — not from
   // a lookback in bars. This is why the band starts where the session's gamma
   // history starts on every timeframe, with nothing to configure.
-  const xFirst = geo.xOfTime(first.ts)
-  const xLast = geo.xOfTime(last.ts)
-  if (xFirst == null || xLast == null) return
+  const win = timeWindow(geo)
+  if (!win) return
+  const xFirst = xAtTime(win, geo, first.ts)
+  const xLast = xAtTime(win, geo, last.ts)
   const x0 = Math.max(0, Math.min(xFirst, xLast))
   const x1 = Math.min(w, Math.max(xFirst, xLast))
-  if (x1 < x0) return
+  if (x1 <= x0) return
 
   const layerAlpha = Math.max(0.05, Math.min(1, opts.intensity))
   const minOpacity = Math.max(0.1, 1 - Math.max(0, Math.min(1, BUBBLE_STYLE.fade)))

@@ -154,6 +154,65 @@ export function Popover({
   )
 }
 
+/**
+ * A compact value picker: a button showing the current choice, a list under it.
+ *
+ * Not a native <select>. A styled one is unreliable across browsers for the
+ * option list itself — the popup is drawn by the OS and ignores the app's dark
+ * palette — and this list needs two lines per row (the label and its date).
+ */
+export function Dropdown<T extends string>({
+  value,
+  options,
+  onChange,
+  title,
+  empty = 'none',
+}: {
+  value: T
+  options: Array<{ label: string; sub?: string; value: T }>
+  onChange: (v: T) => void
+  title?: string
+  empty?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const current = options.find((o) => o.value === value)
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={title}
+        disabled={options.length === 0}
+        className="flex items-center gap-1 rounded-sm border border-line px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg disabled:opacity-40"
+      >
+        {current?.label ?? empty}
+        <span className="text-[8px] opacity-50">▾</span>
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)}>
+        <div className="flex max-h-64 w-36 flex-col overflow-y-auto">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => {
+                onChange(o.value)
+                setOpen(false)
+              }}
+              className={[
+                'flex items-baseline justify-between gap-2 rounded-sm px-1.5 py-1 text-left hover:bg-raised',
+                o.value === value ? 'text-fg' : 'text-muted',
+              ].join(' ')}
+            >
+              <span className="text-[11px] font-semibold">{o.label}</span>
+              {o.sub && <span className="tabular font-mono text-[9px] opacity-60">{o.sub}</span>}
+            </button>
+          ))}
+        </div>
+      </Popover>
+    </div>
+  )
+}
+
 export function PanelSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5 border-t border-line pt-2 first:border-t-0 first:pt-0">

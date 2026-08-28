@@ -51,12 +51,21 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0
 }
 
+/**
+ * ONE EXPIRY, not the whole board.
+ *
+ * `anyExpiry=1` is gone. It merged every recorded expiry's ladder into one
+ * column per minute, which is not what this card is about — the bubbles are the
+ * gamma of the expiry being traded — and it made the server walk every expiry's
+ * rows for the whole window on every poll. The expiry dropdown in the card's
+ * toolbar now names the one to draw, which is the same change AGENTS.md's
+ * "current / closest expiration" note was pointing at.
+ */
 export function gexHistoryUrl(gexSymbol: string, expiry: string, minutes: number, top: number): string {
   return (
     `/api/snapshots/option-strike-gex-history?mode=heatmap` +
     `&minutes=${minutes}` +
     `&expiry=${encodeURIComponent(expiry)}` +
-    `&anyExpiry=1` +
     `&symbol=${encodeURIComponent(gexSymbol)}` +
     (top > 0 ? `&top=${top}` : '')
   )

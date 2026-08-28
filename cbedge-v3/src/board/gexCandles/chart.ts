@@ -212,20 +212,120 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   }
   ts.subscribeVisibleLogicalRangeChange(checkOffscreen)
 
-  // A steady rAF redraw rather than chasing every event that can move the price
-  // axis — pan, zoom, autoscale and resize all qualify, and enumerating them
-  // one at a time is how an overlay ends up half a pixel behind its chart.
+  // A steady rAF loop rather than chasing every event that can move the price
+  // axis — pan, zoom, autoscale and resize all qualify, and enumerating them one
+  // at a time is how an overlay ends up half a pixel behind its chart.
+  //
+  // ── But the loop must not WORK every frame ─────────────────────────────────
+  // It used to. Sixty times a second it read getBoundingClientRect() and
+  // ts.height() (two forced layouts), positioned every rail row, and redrew the
+  // whole bubble band — up to 320 segments × six marks, each with its own
+  // priceToCoordinate() and stroke(). Chrome logged it as a 52ms rAF handler and
+  // a 47ms forced reflow, on a chart that was sitting still.
+  //
+  // Three changes, in order of what they cost:
+  //   1. The size comes from a ResizeObserver, not a per-frame layout read.
+  //   2. ts.height() is cached and refreshed with it.
+  //   3. Nothing is drawn unless the VIEW ACTUALLY MOVED. viewSignature() probes
+  //      the two scales at four fixed reference points — pure scale arithmetic,
+  //      no layout — and the frame is skipped when it matches the last one.
+  //
+  // Two points per axis, not one: a zoom anchored on a point leaves that point
+  // where it was, so a single probe cannot see it.
   const yOfPrice = (price: number): number | null => {
     const y = series.priceToCoordinate(price)
     return y == null ? null : (y as number)
   }
 
+  // ── Size, observed rather than measured every frame ─────────────────────────
+  let boxW = Math.max(1, Math.round(container.clientWidth))
+  let boxH = Math.max(1, Math.round(container.clientHeight))
+  let plotH = boxH
+  const measure = () => {
+    boxW = Math.max(1, Math.round(container.clientWidth))
+    boxH = Math.max(1, Math.round(container.clientHeight))
+    try {
+      plotH = Math.max(1, boxH - ts.height())
+    } catch {
+      plotH = boxH
+    }
+  }
+  measure()
+  const ro = new ResizeObserver(measure)
+  ro.observe(container)
+
+  /**
+   * Bumped by every setter, so a DATA change always redraws even when the view
+   * has not moved a pixel.
+   */
+  let version = 0
+
+  /**
+   * Two PRICES to probe the vertical scale with. Any two distinct prices work —
+   * priceToCoordinate answers for arbitrary values, not just ones in the series
+   * — so these are picked from the drawn ladder purely to sit inside the pane,
+   * where a scale change moves them the most.
+   */
+  let probeP0 = 0
+  let probeP1 = 0
+  function pickProbes() {
+    const first = snaps[0]
+    if (first) {
+      const m0 = first.marks[0]
+      const m1 = first.marks[first.marks.length - 1]
+      probeP0 = m0?.strike ?? 0
+      probeP1 = m1?.strike ?? probeP0
+    }
+    if (!(probeP0 > 0) && live) {
+      probeP0 = live.low
+      probeP1 = live.high
+    }
+  }
+
+  let lastSig = ''
+  function viewSignature(): string {
+    const px = (v: number | null) => (v == null ? 'n' : Math.round(v * 10) / 10)
+    let from: number | null = null
+    let to: number | null = null
+    let y0: number | null = null
+    let y1: number | null = null
+    try {
+      // The TIME axis is probed with the visible LOGICAL RANGE, not with
+      // timeToCoordinate() on a pair of timestamps.
+      //
+      // That was the first attempt and it was silently broken:
+      // timeToCoordinate() answers only for times that are IN the series — it
+      // does not interpolate — and the probe times came from the per-MINUTE GEX
+      // history while the candles are 5m or coarser. Both probes returned null
+      // on nearly every load, so the horizontal half of the signature was the
+      // constant "n|n" and a pure sideways pan never redrew the layer.
+      //
+      // The logical range is always defined, is pure scale state (no layout),
+      // and moves on both pan and zoom.
+      const r = ts.getVisibleLogicalRange()
+      if (r) {
+        from = Math.round(r.from * 1000) / 1000
+        to = Math.round(r.to * 1000) / 1000
+      }
+      if (probeP0) y0 = series.priceToCoordinate(probeP0) as number | null
+      if (probeP1) y1 = series.priceToCoordinate(probeP1) as number | null
+    } catch {
+      // Mid-teardown. Return a value that will not match, so the frame draws and
+      // the next one finds the loop cancelled.
+      return `${version}:torn:${Math.random()}`
+    }
+    return `${version}|${boxW}|${boxH}|${from}|${to}|${px(y0)}|${px(y1)}`
+  }
+
   function draw() {
     raf = requestAnimationFrame(draw)
-    const rect = container.getBoundingClientRect()
+    const sig = viewSignature()
+    if (sig === lastSig) return
+    lastSig = sig
+
     const dpr = window.devicePixelRatio || 1
-    const w = Math.max(1, Math.round(rect.width))
-    const h = Math.max(1, Math.round(rect.height))
+    const w = boxW
+    const h = boxH
 
     // BEFORE the bubble early-returns below. The rail is a separate layer with
     // its own on/off switch — it must keep tracking the price scale on a chart
@@ -238,16 +338,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     // alignment the rail exists to not do. The bubble canvas below still uses
     // the full container height, because it is drawing INSIDE the chart's own
     // box and lightweight-charts clips it.
-    if (railSink) {
-      let plotH = h
-      try {
-        plotH = Math.max(1, h - ts.height())
-      } catch {
-        /* the scale is gone mid-teardown; the container height is close enough
-           for the frame that is about to be cancelled */
-      }
-      railSink(yOfPrice, plotH)
-    }
+    if (railSink) railSink(yOfPrice, plotH)
 
     if (overlay.width !== w * dpr || overlay.height !== h * dpr) {
       overlay.width = w * dpr
@@ -289,6 +380,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   return {
     setBars(bars, reframe = false) {
       barCount = bars.length
+      version++
       series.setData(
         bars.map((b) => ({
           time: Math.floor(b.t / 1000) as UTCTimestamp,
@@ -302,6 +394,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       live = last
         ? { time: Math.floor(last.t / 1000) as UTCTimestamp, openMs: last.t, open: last.o, high: last.h, low: last.l, close: last.c }
         : null
+      pickProbes()
       if (reframe && bars.length) {
         try {
           series.priceScale().applyOptions({ autoScale: true })
@@ -325,6 +418,12 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       live.close = price
       if (price > live.high) live.high = price
       if (price < live.low) live.low = price
+      // Deliberately NO version bump. The bubble band and the rail are drawn
+      // from `snaps` and the price scale — never from the forming bar — so a
+      // tick is not a reason to repaint them. If the tick DOES move the scale
+      // (a new high autoscales the pane), viewSignature() sees that on its own
+      // and the frame draws anyway. Bumping here instead forced a full-band
+      // redraw on every quote, several times a second, forever.
       series.update({ time: live.time, open: live.open, high: live.high, low: live.low, close: live.close })
     },
     setIntervalMs(ms) {
@@ -332,12 +431,19 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     },
     setSnapshots(next) {
       snaps = next
+      version++
+      // The probe points come out of the data, so a new ladder needs new ones —
+      // otherwise the signature is computed against strikes that are no longer
+      // on the chart and can stop changing when the view does.
+      pickProbes()
     },
     setDrawOpts(next) {
       drawOpts = next
+      version++
     },
     setRailSink(sink) {
       railSink = sink
+      version++
     },
     scrollToNow() {
       try {
@@ -352,6 +458,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     },
     destroy() {
       railSink = null
+      ro.disconnect()
       cancelAnimationFrame(raf)
       try {
         ts.unsubscribeVisibleLogicalRangeChange(checkOffscreen)

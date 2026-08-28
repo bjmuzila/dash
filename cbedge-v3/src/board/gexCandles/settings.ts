@@ -48,6 +48,16 @@ export interface ChartSettings {
   railOn: boolean
   /** TESTING PHASE ONLY — reach back 48h so yesterday's bubbles draw too. */
   prevDay: boolean
+  /**
+   * Which expiry the bubbles draw. '' follows the NEAREST, which is the
+   * default and the eventual permanent behaviour; a value pins it, which is
+   * what the toolbar dropdown is for.
+   *
+   * A pinned expiry that is not in the current symbol's list is ignored rather
+   * than erroring — that is what happens on every symbol change, since SPX's
+   * dates are not AMZN's.
+   */
+  expiry: string
 }
 
 export const DEFAULT_SETTINGS: ChartSettings = {
@@ -70,6 +80,7 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   // The default flips to false when this is retired — see the note on
   // GEX_HISTORY_MINUTES_PREV_DAY.
   prevDay: true,
+  expiry: '',
 }
 
 /** Per SIDE of spot, so the drawn count is up to 2× this. */
@@ -123,14 +134,18 @@ export const GEX_HISTORY_MINUTES = 720
  *
  * This exists to give the layer something to draw outside market hours and to
  * make a day's worth of gamma migration visible while the card is being built.
- * It is not what the card is for: the finished version shows the CURRENT /
- * closest expiration over the current session, which is `GEX_HISTORY_MINUTES`
- * above with `anyExpiry` off.
+ * It is not what the card is for: the finished version shows the current
+ * session, which is `GEX_HISTORY_MINUTES` above.
  *
- * To retire it: delete this constant and the `prevDay` setting, drop the
- * `Prev day` chip from GexCandlesCard's Layers panel, and — separately, because
- * it is the other half of the same eventual change — stop passing `anyExpiry=1`
- * in gexHistoryUrl().
+ * It is also the single biggest cost on this card: the history route returns one
+ * column PER MINUTE, so 2880 is four times the columns — and four times the
+ * payload and parse — of the 720 default. If the bubbles feel slow, this is the
+ * first thing to turn off.
+ *
+ * To retire it: delete this constant and the `prevDay` setting and drop the
+ * `Prev day` chip from GexCandlesCard's Layers panel. (The other half of that
+ * eventual change — one expiry instead of `anyExpiry=1` — is already done; the
+ * toolbar's expiry dropdown names it.)
  *
  * The route clamps `minutes` to 5760, so this is well inside what it will serve.
  */
@@ -171,6 +186,7 @@ function coerce(raw: unknown): ChartSettings {
     countdown: p.countdown !== false,
     railOn: p.railOn !== false,
     prevDay: p.prevDay !== false,
+    expiry: typeof p.expiry === 'string' ? p.expiry : '',
   }
 }
 
