@@ -43,6 +43,22 @@ export interface ChartDrawOpts {
   on: boolean
 }
 
+/**
+ * Called once per animation frame with the chart's CURRENT price mapping, so a
+ * DOM layer beside the chart can sit on the same prices the candles do.
+ *
+ * This is how the GEX rail lines up: it does not guess a pixel-per-point from
+ * the visible range, it asks the same `priceToCoordinate` the bubble layer
+ * draws with, in the same frame. Pan, zoom, autoscale and resize all move that
+ * mapping, and a rail that recomputed on any subset of those events would sit a
+ * few pixels off its strikes exactly when the user was looking hardest.
+ *
+ * A sink positions DOM nodes imperatively. It must NOT set React state — this
+ * runs 60 times a second, and AGENTS.md rule 4 is that a tick never travels
+ * through React on its way to a chart.
+ */
+export type RailSink = (yOfPrice: (price: number) => number | null, height: number) => void
+
 export interface EsChartHandle {
   /**
    * `reframe` re-fits the time scale AND re-enables price autoscale. Pass it
@@ -70,6 +86,8 @@ export interface EsChartHandle {
   setIntervalMs: (ms: number) => void
   setSnapshots: (snaps: BubbleSnapshot[]) => void
   setDrawOpts: (opts: ChartDrawOpts) => void
+  /** Register (or clear, with null) the per-frame price mapping for the rail. */
+  setRailSink: (sink: RailSink | null) => void
   /** Re-frame on the newest bar, keeping the user's zoom. */
   scrollToNow: () => void
   destroy: () => void
@@ -169,6 +187,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   let snaps: BubbleSnapshot[] = []
   let barCount = 0
   let drawOpts: ChartDrawOpts = { size: 1, curve: 1, intensity: 1, on: true }
+  let railSink: RailSink | null = null
   let raf = 0
   // The forming bar, kept here so a live tick can extend it without going back
   // through React. `openMs` is its wall-clock open, which is what decides
@@ -196,12 +215,40 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   // A steady rAF redraw rather than chasing every event that can move the price
   // axis — pan, zoom, autoscale and resize all qualify, and enumerating them
   // one at a time is how an overlay ends up half a pixel behind its chart.
+  const yOfPrice = (price: number): number | null => {
+    const y = series.priceToCoordinate(price)
+    return y == null ? null : (y as number)
+  }
+
   function draw() {
     raf = requestAnimationFrame(draw)
     const rect = container.getBoundingClientRect()
     const dpr = window.devicePixelRatio || 1
     const w = Math.max(1, Math.round(rect.width))
     const h = Math.max(1, Math.round(rect.height))
+
+    // BEFORE the bubble early-returns below. The rail is a separate layer with
+    // its own on/off switch — it must keep tracking the price scale on a chart
+    // whose bubbles are off, or have no history yet.
+    //
+    // The height handed over is the PLOT's, not the container's: the time axis
+    // owns the bottom ~26px and there is no price down there. Passing the
+    // container height would let the rail park a strike below the lowest candle,
+    // level with the clock — which is exactly the kind of "close enough"
+    // alignment the rail exists to not do. The bubble canvas below still uses
+    // the full container height, because it is drawing INSIDE the chart's own
+    // box and lightweight-charts clips it.
+    if (railSink) {
+      let plotH = h
+      try {
+        plotH = Math.max(1, h - ts.height())
+      } catch {
+        /* the scale is gone mid-teardown; the container height is close enough
+           for the frame that is about to be cancelled */
+      }
+      railSink(yOfPrice, plotH)
+    }
+
     if (overlay.width !== w * dpr || overlay.height !== h * dpr) {
       overlay.width = w * dpr
       overlay.height = h * dpr
@@ -229,10 +276,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
           const t = ts.coordinateToTime(x as Coordinate)
           return typeof t === 'number' ? t * 1000 : null
         },
-        yOfPrice: (price) => {
-          const y = series.priceToCoordinate(price)
-          return y == null ? null : (y as number)
-        },
+        yOfPrice,
         width: w,
         height: h,
       },
@@ -292,6 +336,9 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     setDrawOpts(next) {
       drawOpts = next
     },
+    setRailSink(sink) {
+      railSink = sink
+    },
     scrollToNow() {
       try {
         ts.scrollToRealTime()
@@ -304,6 +351,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       }
     },
     destroy() {
+      railSink = null
       cancelAnimationFrame(raf)
       try {
         ts.unsubscribeVisibleLogicalRangeChange(checkOffscreen)

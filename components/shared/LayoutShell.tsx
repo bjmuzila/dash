@@ -102,15 +102,24 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
     setIsEmbed(new URLSearchParams(window.location.search).get("embed") === "1");
   }, [pathname]);
 
-  // /docs is dual-audience: in-app help for members (full dashboard chrome) AND
-  // a public KB linked from the marketing toolbar. For signed-out visitors it
-  // must NOT show the app's GlobalToolbar/sidebar — it gets the public toolbar
+  // Dual-audience routes: in-app pages for members (full dashboard chrome) AND
+  // pages that must render for signed-OUT visitors. A guest must NOT get the
+  // app's GlobalToolbar/OwnerSidebar/docks — that nav links to paywalled routes
+  // and the docks mount the live feed — so they get the marketing toolbar
   // instead. Wait for isLoaded so we don't flash the wrong chrome.
+  //   /docs      — end-user KB, linked from the public toolbar.
+  //   /whats-new — customer changelog; public because shipping every week is a
+  //                selling point (also allowlisted in middleware.ts). Without
+  //                this branch a guest would land on the changelog wearing the
+  //                paid dashboard's chrome, every link in it bouncing to "/".
   const { isSignedIn, isLoaded } = useAuth();
-  const isPublicDocs = isLoaded && !isSignedIn && (pathname === "/docs" || pathname.startsWith("/docs/"));
+  const isGuest = isLoaded && !isSignedIn;
+  const isPublicDocs = isGuest && (pathname === "/docs" || pathname.startsWith("/docs/"));
+  const isPublicWhatsNew = isGuest && pathname === "/whats-new";
+  const isPublicChrome = isPublicDocs || isPublicWhatsNew;
 
   const isBare =
-    isEmbed || isPublicDocs || BARE_ROUTES.some((r) => pathname === r || pathname.startsWith(r + "/"));
+    isEmbed || isPublicChrome || BARE_ROUTES.some((r) => pathname === r || pathname.startsWith(r + "/"));
 
   if (isBare) {
     return (
@@ -127,8 +136,9 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
         }}
       >
         {!isEmbed && <VisitTracker />}
-        {/* Sticky — reserves its own height, no spacer needed. */}
-        {isPublicDocs && <PublicNav active="Docs" />}
+        {/* Sticky — reserves its own height, no spacer needed. /whats-new is not
+            one of PUBLIC_NAV's pills, so no pill is marked current there. */}
+        {isPublicChrome && <PublicNav active={isPublicDocs ? "Docs" : undefined} />}
         {children}
       </div>
     );

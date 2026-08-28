@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
+import { CardToolbar } from '@/design/primitives/Card'
 import { useQuery } from '@/data/api'
 import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
@@ -22,6 +23,7 @@ import {
 import { candlesUrl, filterSession, fmtCountdown, parseCandles, rollup, type Bar } from './candles'
 import { gexHistoryUrl, parseGexHistory } from './gexHistory'
 import { buildBubbleModel } from './bubbles'
+import { buildRail, GexRail } from './GexRail'
 import { mountEsChart, type EsChartHandle } from './chart'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,8 +127,11 @@ export function GexCandlesCard() {
   )
 
   const expiry = expiryQ.data?.data?.items?.[0]?.['expiration-date'] ?? ''
+  // Either layer keeps this alive: the rail reads the newest column of the same
+  // history the bubbles are drawn from, so turning the bubbles off with the
+  // rail on must not take the request — and its data — away with them.
   const gexQ = useQuery<unknown>(
-    settings.bubblesOn && expiry
+    (settings.bubblesOn || settings.railOn) && expiry
       ? gexHistoryUrl(def.gexSymbol, expiry, GEX_HISTORY_MINUTES, BUBBLE_LADDER_REQUEST)
       : null,
     // The recorder writes a column a minute, so asking more often than that
@@ -152,6 +157,10 @@ export function GexCandlesCard() {
     () => buildBubbleModel(columns, { metric: settings.gexMetric, perSide: settings.bubbleLevels }),
     [columns, settings.gexMetric, settings.bubbleLevels],
   )
+
+  // Same history, second view: the bubbles say how the ladder got here across
+  // the session, the rail says where it stands right now. No extra request.
+  const railModel = useMemo(() => buildRail(columns, settings.gexMetric), [columns, settings.gexMetric])
 
   // ── Chart ──────────────────────────────────────────────────────────────────
   const { onMount, apply } = useEsChart(setLatestOffscreen)
@@ -244,8 +253,11 @@ export function GexCandlesCard() {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col gap-1">
-      {/* ── Toolbar ── */}
-      <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+      {/* ── Toolbar ──
+          Portalled into the Card's header. This card used to draw its own row
+          right under that header, so the board showed two bars stacked and the
+          chart lost the height of both. */}
+      <CardToolbar>
         <SymbolPicker active={settings.symbol} onSelect={(s) => patch({ symbol: s })} />
         <SegGroup
           title="Bar interval"
@@ -262,14 +274,14 @@ export function GexCandlesCard() {
           value={settings.session}
           onChange={(v) => patch({ session: v })}
         />
-        <div className="relative ml-auto shrink-0">
+        <div className="relative shrink-0">
           <button
             type="button"
             onClick={() => setSettingsOpen((v) => !v)}
-            title="Bubble settings"
+            title="Chart layers and bubble settings"
             className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg"
           >
-            ⚙ Bubbles
+            ⚙ Layers
           </button>
           <Popover open={settingsOpen} onClose={() => setSettingsOpen(false)}>
             <div className="flex w-64 flex-col gap-2">
@@ -282,12 +294,32 @@ export function GexCandlesCard() {
                     title="Draw the GEX ladder over the candles"
                   />
                   <Chip
+                    label="GEX rail"
+                    on={settings.railOn}
+                    onClick={() => patch({ railOn: !settings.railOn })}
+                    title="The strike ladder down the right-hand side. Every row sits at the same height as its strike on the chart — it reads the chart's own price scale, so it stays level through a pan, a zoom and an autoscale"
+                  />
+                  <Chip
                     label="Countdown"
                     on={settings.countdown}
                     onClick={() => patch({ countdown: !settings.countdown })}
                     title="Time left in the forming bar"
                   />
                 </div>
+              </PanelSection>
+
+              {/* Outside the bubble gate: the RAIL reads this too, so hiding it
+                  with the bubbles would leave the rail's basis unreachable. */}
+              <PanelSection title="GEX basis">
+                <SegGroup
+                  title="Vol+OI is open interest plus today's volume; Vol drops the open interest term"
+                  options={[
+                    { label: 'Vol+OI', value: 'voloi' },
+                    { label: 'Vol', value: 'vol' },
+                  ]}
+                  value={settings.gexMetric}
+                  onChange={(v) => patch({ gexMetric: v })}
+                />
               </PanelSection>
 
               {settings.bubblesOn && (
@@ -334,25 +366,12 @@ export function GexCandlesCard() {
                       title="Overall opacity of the bubble layer. The magnitude gradient runs underneath it"
                     />
                   </PanelSection>
-
-
-                  <PanelSection title="GEX basis">
-                    <SegGroup
-                      title="Vol+OI is open interest plus today's volume; Vol drops the open interest term"
-                      options={[
-                        { label: 'Vol+OI', value: 'voloi' },
-                        { label: 'Vol', value: 'vol' },
-                      ]}
-                      value={settings.gexMetric}
-                      onChange={(v) => patch({ gexMetric: v })}
-                    />
-                  </PanelSection>
                 </>
               )}
             </div>
           </Popover>
         </div>
-      </div>
+      </CardToolbar>
 
       {/* ── Status line ── */}
       {error && <span className="shrink-0 text-xs text-down">{error.message}</span>}
@@ -362,35 +381,44 @@ export function GexCandlesCard() {
         </span>
       )}
 
-      {/* ── Chart ── */}
-      <div className="relative min-h-0 flex-1">
-        <ChartFrame onMount={onMount} className="absolute inset-0" />
+      {/* ── Chart + rail ──
+          One flex row so the rail is a SIBLING of the chart with the same top
+          and the same height. That is what makes the rail's absolute rows and
+          the chart's priceToCoordinate share an origin — a rail nested inside
+          the chart's own box would be under the crosshair and the pan handler,
+          and one offset a padding change away from lying about every strike. */}
+      <div className="flex min-h-0 flex-1 gap-1">
+        <div className="relative min-h-0 flex-1">
+          <ChartFrame onMount={onMount} className="absolute inset-0" />
 
-        <span
-          ref={countdownRef}
-          className="tabular pointer-events-none absolute right-16 top-1.5 z-10 font-mono text-[11px] font-extrabold text-accent opacity-90"
-        />
+          <span
+            ref={countdownRef}
+            className="tabular pointer-events-none absolute right-16 top-1.5 z-10 font-mono text-[11px] font-extrabold text-accent opacity-90"
+          />
 
-        {latestOffscreen && bars.length > 0 && (
-          <button
-            type="button"
-            onClick={() => apply((h) => h.scrollToNow())}
-            title="Jump to the current candle — keeps your zoom"
-            aria-label="Scroll to the latest candle"
-            className="absolute bottom-8 right-16 z-20 flex h-7 w-7 items-center justify-center rounded-full border border-line bg-surface text-accent shadow-lg transition-colors hover:bg-raised hover:text-fg"
-          >
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden focusable="false">
-              <path
-                d="M4 3.5 8.5 8 4 12.5"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path d="M12 3.5v9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-            </svg>
-          </button>
-        )}
+          {latestOffscreen && bars.length > 0 && (
+            <button
+              type="button"
+              onClick={() => apply((h) => h.scrollToNow())}
+              title="Jump to the current candle — keeps your zoom"
+              aria-label="Scroll to the latest candle"
+              className="absolute bottom-8 right-16 z-20 flex h-7 w-7 items-center justify-center rounded-full border border-line bg-surface text-accent shadow-lg transition-colors hover:bg-raised hover:text-fg"
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden focusable="false">
+                <path
+                  d="M4 3.5 8.5 8 4 12.5"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path d="M12 3.5v9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {settings.railOn && <GexRail model={railModel} applyChart={apply} />}
       </div>
     </div>
   )

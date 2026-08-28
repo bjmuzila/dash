@@ -1,5 +1,135 @@
 # Changelog
 
+## 2026-08-28 - /whats-new is public: allowlisted in middleware, and guests get the marketing toolbar instead of the paid chrome
+
+Edited: `middleware.ts`, `components/shared/LayoutShell.tsx`.
+
+**1. The changelog page was paywalled.** `/whats-new` was in neither
+`PUBLIC_PATTERNS` nor `PAID_EXEMPT`, so a signed-out visitor was 307'd to `/` and
+a signed-in-but-unpaid user was redirected to `/home`. Only paid subscribers and
+the owner ever saw it - which is backwards for a page whose whole job is to show
+prospects that the product ships every week. Added an anchored `/^\/whats-new$/`
+to `PUBLIC_PATTERNS`. The page already renders correctly with no session:
+`getServerUserId()` returns null, `isOwner` is false, and the hidden-bullet list
+is withheld, so a guest sees exactly what a paying customer sees and nothing more.
+
+**2. A guest would have landed on it wearing the dashboard's chrome.**
+`LayoutShell` only bares out for `BARE_ROUTES` plus the signed-out `/docs` case,
+so opening the page public would have mounted `GlobalToolbar`, `GexDock` and
+`NotesDock` for someone with no account - a hamburger full of paywalled links
+that all bounce to `/`, plus the live-feed docks. Generalised the existing
+`isPublicDocs` branch: `isGuest` + `isPublicDocs` + `isPublicWhatsNew` feed one
+`isPublicChrome` flag that drives the bare shell and `PublicNav`. `/docs` still
+passes `active="Docs"`; `/whats-new` is not one of the `PUBLIC_NAV` pills, so it
+passes `undefined` and no pill reads as current. Docs behaviour is byte-for-byte
+unchanged, including its `overflow: auto` (the changelog scrolls inside its own
+`PageShell`, so it keeps `hidden`).
+
+**Not changed:** no `What's New` entry was added to `PUBLIC_NAV` - the page is
+reachable by direct link (X, Discord, email) but is still not advertised in the
+marketing toolbar. Say the word if it should be a pill.
+
+## 2026-08-28 - v3: Multi Greek's core matched to v2 exactly, Economic Calendar cut to today
+
+Edited: `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`,
+`cbedge-v3/src/board/econCalendar/EconCalendarCard.tsx`.
+
+**1. The Core Bullseye cell now draws exactly as v2's VIVID skin draws it.**
+Transcribed from `MultGreekClient.tsx`'s `levelFillBg()` + `HEAT_SKINS.vivid`,
+value for value:
+
+- gold at **85%**, laid OVER the heat wash rather than replacing it. That 0.85 is
+  v2's own number and the reason for it is that gold at full strength swamps the
+  row AND takes the sign with it. Blended, the cyan or red underneath still shows
+  through, so the cell says "core" and "which way the gamma points" at once.
+  Implemented the way v2 does it - two identical gradient stops layered over the
+  heat background in one property.
+- the figure is **white with v2's drop shadow** (`0 1px 2px` at 85% black), not
+  the GEX hue. Earlier today this shipped as a solid gold cell with a GEX-hued
+  number; a mid-tone hue on gold is the weakest pair on the board, and with the
+  wash showing through the fill there is nothing left for the ink to say.
+- the later-expiry star keeps v2's flip: dark ink with a WHITE halo on a filled
+  CB cell, rather than gold-on-gold.
+
+Every value is a token or a `color-mix()` of one - no literals entered `src/`.
+
+**2. Economic Calendar is today only, and released rows leave.**
+The window was today → today+6 with a dimmed tail of events 30 minutes past. A
+week of scrolling is the wrong answer to "what is left today", which is the only
+question a card this size gets asked. Now: today's ET date only, and an event
+more than **60 minutes** past its start is REMOVED rather than dimmed - the print
+lands within the hour and after that the row is occupying a card that is about
+what is still coming. The 60-second tick that used to move rows ahead → past now
+expires them off the card; still no network in that path. The weekly view is
+unchanged on the full page.
+
+## 2026-08-28 - v3: one toolbar per card, a GEX rail pinned to the price axis, and a token that was silently missing
+
+Edited: `cbedge-v3/src/design/primitives/Card.tsx`, `cbedge-v3/src/design/tokens.css`,
+`cbedge-v3/src/board/gexCandles/{GexCandlesCard.tsx,GexRail.tsx,chart.ts,settings.ts}`,
+`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`,
+`cbedge-v3/src/board/econCalendar/EconCalendarCard.tsx`,
+`cbedge-v3/src/board/keyLevels/KeyLevelsCard.tsx`.
+
+**1. One toolbar per card.** Every card with controls drew its own row of buttons
+directly under the Card header, so the board showed two stacked bars - one
+carrying the card's name and nothing else, one carrying the controls - and the
+chart or ladder underneath lost the height of both. `Card` now exposes a portal
+slot in its header and a `<CardToolbar>` a body renders into; GEX Candles, Multi
+Greek, Key Levels and the Economic Calendar all moved their row up into it.
+
+A portal rather than a `toolbar` prop on `CardDef`, because the cards that have
+controls are the lazy() ones: the catalog cannot hand BoardPage a toolbar out of
+a module it has not imported yet. The context distinguishes "not inside a Card"
+(render inline) from "inside a Card whose header has not committed yet" (render
+nothing this frame), which is what stops the bar painting inline for one frame
+before it jumps into the header.
+
+**2. GEX rail on the GEX Candles card, pinned to the chart's price axis.**
+New `GexRail.tsx`: the live strike ladder down the right-hand side, shaped after
+v2's "By expiration" ladder on the Analysis page - strike, its level tag, a
+diverging bar around a centre hairline, the dollar value. Toggled by a `GEX rail`
+chip in the card's settings and persisted with the rest.
+
+Every row is absolutely positioned and its `top` comes from the chart's OWN
+`priceToCoordinate`, delivered once a frame through a new `RailSink` on the chart
+handle - the same mapping, in the same frame, that the bubble layer draws with.
+That is the only way a rail can be level with its strikes through a pan, a zoom
+and an autoscale; a flowing list is evenly spaced and a chart's strikes are not.
+Positioning is imperative straight onto the DOM node (AGENTS.md rule 4 - a tick
+never travels through React state on its way to a chart).
+
+The height handed to the sink is the PLOT's, not the container's: the time axis
+owns the bottom ~26px and there is no price down there. Rows are placed in
+priority order - the three named levels first, then biggest gamma - and any row
+landing within a row-height of one already placed is hidden, so a zoomed-out
+ladder thins instead of turning into overlapping text.
+
+No new request: the rail reads the newest column of the same GEX history the
+bubbles are built from. The history query gate widened to
+`bubblesOn || railOn` and the `GEX basis` control moved out of the bubbles-only
+section, so turning the bubbles off with the rail on does not take the rail's
+data - or its basis switch - away with them.
+
+Bars use `--color-gex-pos` / `--color-gex-neg` rather than v2's green/red, so the
+rail and the bubbles beside it never disagree about the sign of the same strike.
+Everything else follows the v2 ladder.
+
+**3. `@theme` -> `@theme static` in tokens.css - a colour that was silently
+missing.** Tailwind v4 tree-shakes a theme block down to the variables it can SEE
+used, and it cannot see a var name built at runtime. `var(--color-level-${key})`
+- the Multi Greek CW/PW badge rings, and the new rail's level tags - resolved to
+an EMPTY STRING, so those marks painted transparent. Found by inspecting the
+computed style of a rail tag that rendered with no background; the Multi Greek
+badges have been quietly missing their rings the same way. `static` emits every
+token on :root whether or not a utility references it. CSS 4.7kb -> 4.8kb brotli
+against a 19.5kb budget.
+
+Verified: typecheck, build, budgets (initial load 78.1kb / 109.4kb, react
+unchanged at 50.7kb / 53.7kb) and all 8 ws-scope assertions green, plus a
+screenshot against `scripts/mock-server.mjs` confirming the rail rows sit level
+with the chart's price labels and the CB/PW tags paint.
+
 ## 2026-08-28 - v3 Multi Greek: SPX unpinned from one expiry, a gold core, and bubble rows that cannot merge
 
 Edited: `server-v2/server-with-proxy.js`, `cbedge-v3/src/board/multiGreek/mgMath.ts`,

@@ -25,6 +25,14 @@ const PUBLIC_PATTERNS: RegExp[] = [
   // content, so it must resolve for signed-out visitors instead of bouncing to /.
   /^\/docs(\/.*)?$/,
   /^\/pricing$/,
+  // Customer changelog (app/whats-new/page.tsx, reads CUSTOMER_CHANGELOG.md).
+  // Public on purpose: "we ship every week" is a selling point, so a signed-out
+  // visitor — or anyone following a link from X/Discord — must land on the real
+  // page instead of being 307'd to "/". The page renders correctly with no
+  // session: getServerUserId() returns null, isOwner is false, and the hidden
+  // bullet list is withheld, so a guest sees exactly what a paying customer
+  // sees and nothing more. Anchored (no /.* suffix) — there are no subroutes.
+  /^\/whats-new$/,
   /^\/checkout\/success$/,
   /^\/sign-in(\/.*)?$/,
   /^\/sign-up(\/.*)?$/,

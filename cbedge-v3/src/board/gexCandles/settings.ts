@@ -40,10 +40,12 @@ export interface ChartSettings {
   bubbleCurve: number
   /** Overall opacity of the layer. */
   bubbleIntensity: number
-  /** Which GEX quantity a bubble is sized by. */
+  /** Which GEX quantity a bubble is sized by. Also what the rail lists. */
   gexMetric: GexMetric
   /** The forming-bar countdown in the top-right corner. */
   countdown: boolean
+  /** The strike ladder down the right-hand side, pinned to the price axis. */
+  railOn: boolean
 }
 
 export const DEFAULT_SETTINGS: ChartSettings = {
@@ -59,6 +61,9 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   bubbleIntensity: 1,
   gexMetric: 'voloi',
   countdown: true,
+  // On by default: the rail is the numbers behind the bubbles, and a bubble
+  // layer with no way to read the figure it is drawn from is half a feature.
+  railOn: true,
 }
 
 /** Per SIDE of spot, so the drawn count is up to 2× this. */
@@ -139,6 +144,7 @@ function coerce(raw: unknown): ChartSettings {
     ),
     gexMetric: p.gexMetric === 'vol' ? 'vol' : 'voloi',
     countdown: p.countdown !== false,
+    railOn: p.railOn !== false,
   }
 }
 

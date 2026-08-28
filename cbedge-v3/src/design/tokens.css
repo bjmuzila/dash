@@ -24,7 +24,16 @@
 
 @import 'tailwindcss';
 
-@theme {
+/* `static`, not a bare @theme. Tailwind v4 tree-shakes a theme block down to
+   the variables it can SEE used, and it cannot see a var name built at runtime:
+   `var(--color-level-${key})` in the Multi Greek badges and the GEX rail's
+   level tags resolved to an empty string, so those marks painted transparent —
+   a colour silently missing, which is the one failure mode a token file exists
+   to prevent. `static` emits every token on :root whether or not a utility
+   references it. It costs a few hundred bytes of CSS against a budget with
+   four times the headroom, and it makes the rule at the top of this file
+   ("var(--color-…) always works") actually true. */
+@theme static {
   /* ── Surfaces ──────────────────────────────────────────────────────────
      Dark-slate ramp (2026-08-27), from the reference mockup
      (20260818darkslatecardtheme.html): app → rail → shell → card → card-2

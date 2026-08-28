@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CardToolbar } from '@/design/primitives/Card'
 import { useQuery } from '@/data/api'
 import { SegGroup, Slider, Popover, PanelSection, Chip } from '../gexCandles/controls'
 import {
@@ -60,6 +61,12 @@ const BASIS_STORE_KEY = 'cb-v3-mg-basis'
 
 /** Strike rail width, matching v2 so the two boards read at the same rhythm. */
 const RAIL_PX = 76
+
+/**
+ * The Core Bullseye fill — v2's VIVID skin, value for value: gold at 85%,
+ * laid OVER the cell's heat wash rather than replacing it.
+ */
+const CB_FILL = 'color-mix(in srgb, var(--color-level-cb) 85%, transparent)'
 
 function readStored(key: string, fallback: string): string {
   try {
@@ -387,6 +394,8 @@ function TickerPanel({
                 const rank = s ? s.top3.indexOf(strike) : -1
                 const alpha = s ? cellAlpha(v, s.maxAbs, rank, intensity) : 0
                 const hue = v >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
+                const heat =
+                  alpha > 0 ? `color-mix(in srgb, ${hue} ${(alpha * 100).toFixed(1)}%, transparent)` : 'transparent'
                 const level = showLevels ? levelOf(c.key, strike) : null
                 const isFront = front != null && c.key === front.key
                 const isCb = level === 'cb'
@@ -395,42 +404,42 @@ function TickerPanel({
                   <div
                     key={c.key}
                     className={[
-                      'tabular relative min-w-0 truncate rounded-[2px] px-1 text-center font-mono text-[10px]',
-                      isCb ? 'mg-cb-glow font-extrabold' : 'text-fg',
+                      'tabular relative min-w-0 truncate rounded-[2px] px-1 text-center font-mono text-[10px] text-fg',
+                      isCb ? 'mg-cb-glow font-extrabold' : '',
                     ].join(' ')}
                     style={
                       isCb
                         ? {
-                            // The core is the ONE cell that does not take the
-                            // heat wash. Gold is the mark — a heat colour would
-                            // make it the same picture as a merely-large
-                            // strike — and the number keeps the GEX hue on top
-                            // of it so the sign survives the swap. The dark halo
-                            // is what makes a mid-tone hue legible on gold; it
-                            // is a shadow, not a second colour.
-                            background: 'var(--color-level-cb)',
-                            color: hue,
-                            textShadow: '0 0 2px var(--color-app), 0 0 4px var(--color-app)',
-                            outline: '1px solid var(--color-level-cb)',
-                            outlineOffset: -1,
+                            // THE CORE, EXACTLY AS v2'S VIVID SKIN DRAWS IT.
+                            //
+                            // Gold at 85%, BLENDED OVER the heat rather than
+                            // replacing it — that 0.85 is v2's own number, and
+                            // the reason for it is that gold at full strength
+                            // swamps the row AND takes the sign with it. Laid
+                            // over the wash, the cyan or red underneath still
+                            // shows through, so the cell says "core" and "which
+                            // way the gamma points" at the same time.
+                            //
+                            // The figure is WHITE with v2's drop shadow, not the
+                            // GEX hue: a mid-tone hue on gold is the weakest
+                            // pair on the board, and the fill beneath is already
+                            // carrying the sign.
+                            //
+                            // Two identical gradient stops is how a flat colour
+                            // gets layered over a background in one property —
+                            // the same trick v2's levelFillBg() uses.
+                            background: `linear-gradient(${CB_FILL}, ${CB_FILL}), ${heat}`,
+                            textShadow: '0 1px 2px color-mix(in srgb, var(--color-app) 85%, transparent)',
                           }
                         : {
-                            background:
-                              alpha > 0
-                                ? `color-mix(in srgb, ${hue} ${(alpha * 100).toFixed(1)}%, transparent)`
-                                : undefined,
+                            background: alpha > 0 ? heat : undefined,
                             outline: rank === 0 && v !== 0 ? `1px solid ${hue}` : undefined,
                             outlineOffset: -1,
                           }
                     }
                   >
-                    {/* On the core the sign inherits the cell's GEX hue rather
-                        than taking its own up/down colour — two colours on a
-                        gold cell reads as a rendering fault. */}
                     <span
-                      className={
-                        isCb ? undefined : f.sign === '+' ? 'text-up' : f.sign === '−' ? 'text-down' : 'text-muted'
-                      }
+                      className={f.sign === '+' ? 'text-up' : f.sign === '−' ? 'text-down' : 'text-muted'}
                     >
                       {f.sign}
                     </span>
@@ -445,7 +454,10 @@ function TickerPanel({
                       <span
                         title="Core Bullseye"
                         className="pointer-events-none absolute left-0.5 top-px text-[10px] leading-none"
-                        style={{ color: 'var(--color-app)', textShadow: 'none' }}
+                        style={{
+                          color: 'var(--color-app)',
+                          textShadow: '0 0 2px color-mix(in srgb, var(--color-fg) 55%, transparent)',
+                        }}
                       >
                         ★
                       </span>
@@ -533,8 +545,10 @@ export function MultiGreekCard() {
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       {/* The board's state is legible from the panels themselves — the tickers
           are in their own headers, the expiries in the column headers — so the
-          only thing this row needs to carry is the way in to the settings. */}
-      <div className="relative flex shrink-0 justify-end">
+          only thing the toolbar needs to carry is the way in to the settings,
+          and it goes in the Card's header rather than in a second bar under it. */}
+      <CardToolbar>
+        <div className="relative">
         <button
           type="button"
           onClick={() => setCogOpen((v) => !v)}
@@ -595,7 +609,8 @@ export function MultiGreekCard() {
             </PanelSection>
           </div>
         </Popover>
-      </div>
+        </div>
+      </CardToolbar>
 
       <div className="flex min-h-0 flex-1 gap-2 overflow-x-auto">
         {tickers.map((t, i) => (

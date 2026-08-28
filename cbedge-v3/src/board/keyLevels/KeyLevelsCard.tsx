@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { useMemo } from 'react'
+import { CardToolbar } from '@/design/primitives/Card'
 import { useField } from '@/data/hooks'
 import { useQuery } from '@/data/api'
 import type { GexData, GexFrame, SpotFrame } from '@/contract/frames'
@@ -264,7 +265,9 @@ export function KeyLevelsCard() {
 
   return (
     <div className={['flex min-h-0 flex-1 flex-col gap-2', emptyFeed ? 'stale' : ''].join(' ')}>
-      <div className="flex shrink-0 items-baseline justify-between gap-2">
+      {/* The baseline caption is this card's whole toolbar, so it belongs in the
+          Card header beside the title rather than on a row of its own. */}
+      <CardToolbar>
         <span className="text-[10px] uppercase tracking-[0.1em] text-muted opacity-60">
           {baseline ? (
             <>
@@ -276,7 +279,7 @@ export function KeyLevelsCard() {
             'no prior-close baseline — levels only'
           )}
         </span>
-      </div>
+      </CardToolbar>
 
       <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3 xl:grid-cols-6">
         <Tile

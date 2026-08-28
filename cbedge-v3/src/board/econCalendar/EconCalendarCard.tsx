@@ -1,22 +1,27 @@
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@/data/api'
+import { CardToolbar } from '@/design/primitives/Card'
 import { Popover } from '../gexCandles/controls'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Economic Calendar & Earnings — v2's home-page panel, as a board card.
 //
-// A rolling SEVEN-DAY window (today → today+6 ET), sorted by date then time,
-// split into "still ahead" and a dimmed tail of events more than 30 minutes
-// past. Earnings are woven into the day they belong to: pre-market before the
-// first event, after-hours before the first event past 16:00, time-unconfirmed
-// last.
+// TODAY ONLY, ET, sorted by time. An event more than an hour past its start is
+// REMOVED, not dimmed — the print lands within the hour and after that the row
+// is occupying a card that is about what is still coming. Earnings are woven
+// into the day: pre-market before the first event, after-hours before the first
+// event past 16:00, time-unconfirmed last.
+//
+// Was a rolling seven days with a dimmed tail. A week of scrolling is the wrong
+// answer to "what is left today", which is the only question a card this size
+// gets asked; the weekly view lives on the full page.
 //
 // Two fetches, once, on mount:
 //   /api/calendar        { events, source }   ForexFactory + the President feed
 //   /proxy/earnings-week { ok, rows }         this week, ≥ the recorder's mcap floor
 //
-// Neither is polled. A 60-second tick moves rows from ahead → past without
+// Neither is polled. A 60-second tick expires released rows off the card without
 // touching the network, which is the only thing that actually changes minute to
 // minute; the underlying calendar is a weekly file.
 //
@@ -129,11 +134,19 @@ function etMinutes(ms: number): number {
   return h * 60 + m
 }
 
-/** today → today+6, ET, as YYYY-MM-DD. */
+/**
+ * TODAY ONLY, ET.
+ *
+ * Was today → today+6. A seven-day window on a board card is a week's worth of
+ * scrolling to answer "what is left today", which is the only question a card
+ * this size is being asked. The weekly view still exists on the full page.
+ *
+ * Kept as a function returning a list so the day-header and earnings-weaving
+ * code below is unchanged — it groups by date either way, and a one-day list is
+ * the degenerate case of a seven-day one.
+ */
 function etWeekDays(now: number): string[] {
-  const out: string[] = []
-  for (let i = 0; i < 7; i++) out.push(etDate(now + i * 86_400_000))
-  return out
+  return [etDate(now)]
 }
 
 function fullDayLabel(date: string, today: string): string {
@@ -152,12 +165,22 @@ function minutesOf(hhmm: string): number {
   return Number.isFinite(hh) && Number.isFinite(mm) ? hh * 60 + mm : 0
 }
 
-/** More than 30 minutes past its start, or on an earlier ET date. */
+/**
+ * How long a released event stays on the card after its start.
+ *
+ * An hour, and then the row is REMOVED rather than dimmed. Thirty minutes and a
+ * dimmed tail was the old behaviour: the print is what matters and it lands
+ * within the hour, after which the row is just occupying a card that is now
+ * about today alone.
+ */
+const DROP_AFTER_MIN = 60
+
+/** Past its window, or on another ET date. Such rows are dropped, not dimmed. */
 function isStale(ev: CalEvent, now: number): boolean {
   const today = etDate(now)
   if (ev.date < today) return true
   if (ev.date > today) return false
-  return minutesOf(ev.time) + 30 < etMinutes(now)
+  return minutesOf(ev.time) + DROP_AFTER_MIN < etMinutes(now)
 }
 
 function fmtMcap(v: number): string {
@@ -319,8 +342,11 @@ export function EconCalendarCard() {
 
   const showEarnings = active.has('all') || active.has('earnings')
 
+  // No faded tail any more: an event more than DROP_AFTER_MIN past its start
+  // leaves the card. `past` stays as an empty list so the "nothing today" check
+  // and the render below read the same as before.
   const ahead = events.filter((e) => !isStale(e, now))
-  const past = events.filter((e) => isStale(e, now))
+  const past: CalEvent[] = []
 
   /** Day headers + earnings weaving. Only the non-faded pass carries earnings. */
   const withSeparators = (list: CalEvent[], faded: boolean): ReactNode[] => {
@@ -391,8 +417,10 @@ export function EconCalendarCard() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="relative flex shrink-0 items-center justify-between gap-2 pb-1.5">
-        <span className="text-[10px] uppercase tracking-[0.1em] text-muted opacity-60">Next 7 days · ET</span>
+      {/* One toolbar per card: the window caption and the filter go in the
+          Card's header, not in a second bar underneath it. */}
+      <CardToolbar>
+        <span className="text-[10px] uppercase tracking-[0.1em] text-muted opacity-60">Today · ET</span>
         <div className="relative">
           <button
             type="button"
@@ -428,11 +456,11 @@ export function EconCalendarCard() {
             </div>
           </Popover>
         </div>
-      </div>
+      </CardToolbar>
 
       <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-line">
         {loading && <div className="px-2.5 py-3 text-xs text-muted opacity-60">Loading…</div>}
-        {nothing && <div className="px-2.5 py-3 text-xs text-muted opacity-60">No events this week.</div>}
+        {nothing && <div className="px-2.5 py-3 text-xs text-muted opacity-60">Nothing left today.</div>}
         {withSeparators(ahead, false)}
         {past.length > 0 && <div className="border-t border-line" />}
         {withSeparators(past, true)}

@@ -641,17 +641,21 @@ const XP_CSS = `
   /* ── v2 DASHBOARD (/gex2) TOKENS ──────────────────────────────────────────
      The GEX Matrix and GEX Profile panels are themed to the v2 dashboard's
      visual language (BUDGET_UI_STYLE.md / components/shared/homeTheme.ts):
-     ONE accent — light blue #7dd3fc — a soft red #f4948e instead of the flat
-     alert red, orange #FB8501 for the sign-blind Core Bullseye, and frosted
-     near-black panel fills with hairline edges. Values mirror LIGHT_BLUE /
-     SOFT_RED / HOME_THEME.orange in homeTheme.ts; they are literals here only
-     because owner-vite cannot import from the Next app. Do not re-declare them
-     per rule — every v2-themed rule below reads these variables. */
+     ONE accent — light blue #7dd3fc — orange #FB8501 for the sign-blind Core
+     Bullseye, and frosted near-black panel fills with hairline edges. The blue
+     mirrors LIGHT_BLUE in homeTheme.ts; it is a literal here only because
+     owner-vite cannot import from the Next app.
+
+     THE RED IS NOT the v2 SOFT_RED (#f4948e). That washed out against the
+     blue at the alphas the heat ramp paints, so negative GEX keeps the red it
+     has always had — --sm-red / rgba(255,71,87), the same pair the home
+     heatmap uses. Do not re-declare any of these per rule; every v2-themed
+     rule below reads these variables. */
   .xp-v2 {
     --v2-blue: #7dd3fc;
     --v2-blue-rgb: 125,211,252;
-    --v2-red: #f4948e;
-    --v2-red-rgb: 244,148,142;
+    --v2-red: var(--sm-red);
+    --v2-red-rgb: 255,71,87;
     --v2-core: #FB8501;
     --v2-core-rgb: 251,133,1;
     --v2-ink: #04121a;
@@ -700,7 +704,10 @@ const XP_CSS = `
   /* 3-column grid. Columns stretch to the SAME height (the matrix sets it), so
      loading the Behavior block scrolls inside the rail instead of growing the
      row and pushing the CB Edge footer down. */
-  .xp-grid3 { display:grid; grid-template-columns:1.1fr .85fr 1fr; gap:16px; align-items:stretch; }
+  /* The two GEX panels are the SAME width — they are read side by side as one
+     ladder, and a strike row that is 1.1fr in one panel and .85fr in the other
+     breaks that. The rail takes what is left. */
+  .xp-grid3 { display:grid; grid-template-columns:1fr 1fr 1.05fr; gap:16px; align-items:stretch; }
   @media (max-width: 1000px){ .xp-grid3 { grid-template-columns:1fr; } .xp-rail { overflow:visible; } }
   .xp-rail { display:flex; flex-direction:column; gap:16px; min-height:0; overflow-y:auto; }
 
@@ -755,17 +762,13 @@ const XP_CSS = `
   @media (max-width: 1000px){ .xp-mxmark { flex:0 0 auto; } }
 
   /* PANEL 2 — GEX profile bars.
-     The header strip is a FIXED height and the matrix panel renders an empty
-     .xp-pf2-spacer of the same height, so the two panels' strike rows stay on
-     the same baseline no matter what the strip contains. */
-  .xp-pf2-spacer { box-sizing:border-box; height:52px; display:flex; flex-direction:column; justify-content:space-between; padding-bottom:6px; }
-  .xp-pf2-top { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
-  .xp-pf2-top .lbl { font-size:10px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; color:var(--v2-label); }
-  .xp-pf2-top .tot { display:flex; flex-direction:column; align-items:flex-end; line-height:1.15; }
-  .xp-pf2-top .tot .k { font-size:10px; font-weight:700; letter-spacing:.10em; color:var(--v2-sub); }
-  .xp-pf2-top .tot .v { font-family:var(--sm-mono); font-size:13px; font-weight:900; }
-  .xp-pf2-top .tot .v.g { color:var(--v2-blue); } .xp-pf2-top .tot .v.r { color:var(--v2-red); }
-  .xp-pf2-exp { align-self:flex-start; font-family:var(--sm-mono); font-size:10px; font-weight:800; letter-spacing:.08em; color:var(--v2-blue); border:1px solid rgba(var(--v2-blue-rgb),.38); background:rgba(var(--v2-blue-rgb),.10); border-radius:5px; padding:2px 7px; }
+     The panel used to open with a header strip (BY EXPIRATION · the running
+     NET GEX total · the expiry pill), and the matrix panel rendered an empty
+     .xp-pf2-spacer of the same height to keep the two panels' strike rows on
+     one baseline. All three of those readouts are in the CARD TITLE BAR now
+     (TOTAL NET GEX was already a chip there; EXPIRATION took the GEX BASIS
+     chip's place), so the strip and its spacer are both gone and the two
+     panels start at the same place by construction. */
   .xp-pf2-head { box-sizing:border-box; display:grid; grid-template-columns:52px 1fr 56px; gap:6px; align-items:flex-end; height:18px; padding:0 4px 4px; font-size:10px; font-weight:700; letter-spacing:.06em; color:var(--v2-sub); border-bottom:1px solid var(--v2-line); }
   .xp-pf2-head span:nth-child(2) { text-align:center; }
   .xp-pf2-head .r { text-align:right; }
@@ -776,7 +779,7 @@ const XP_CSS = `
   .xp-pf-row .k .pf-dot { position:absolute; right:0; top:50%; transform:translateY(-50%); width:5px; height:5px; border-radius:50%; display:block; }
   .pf-dot.core { background:var(--v2-core); box-shadow:0 0 6px rgba(var(--v2-core-rgb),.8); }
   .pf-dot.cw { background:var(--v2-blue); }
-  .pf-dot.pw { background:var(--v2-red); }
+  .pf-dot.pw { background:rgb(255,71,87); }
   .pf-dot.flip { background:#8ECAE6; }
   .xp-pf-row .track { position:relative; height:11px; }
   .xp-pf-row .track i { position:absolute; top:0; height:11px; border-radius:2px; display:block; }
@@ -818,11 +821,11 @@ const XP_CSS = `
      used to sit (the mark moved into the matrix column's spare space).
      flex:1 + min-height:0 means it takes only what is actually spare — on a
      short viewport it collapses instead of pushing the plan off the card. */
-  .xp-railnote { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; justify-content:center; gap:7px; padding:18px 6px; }
-  .xp-railnote .tag { font-size:17px; font-weight:900; letter-spacing:.04em; color:var(--amber); }
-  .xp-railnote .txt { font-size:13px; color:#dfe7f0; line-height:1.5; }
+  .xp-railnote { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; justify-content:center; gap:9px; padding:18px 6px; }
+  .xp-railnote .tag { font-size:22px; font-weight:900; letter-spacing:.04em; color:var(--amber); }
+  .xp-railnote .txt { font-size:17px; color:#dfe7f0; line-height:1.5; }
   .xp-railnote .txt b { color:var(--amber); }
-  .xp-railnote .txt .disc { display:block; margin-top:8px; font-size:11px; color:#9aa4b2; letter-spacing:.04em; }
+  .xp-railnote .txt .disc { display:block; margin-top:10px; font-size:14px; color:#9aa4b2; letter-spacing:.04em; }
   @media (max-width: 1000px){ .xp-railnote { flex:0 0 auto; } }
 
   .xp-gen-btn { font-family:var(--sm-mono); font-size:10px; font-weight:700; letter-spacing:.03em; cursor:pointer; padding:4px 9px; border-radius:5px; border:1px solid var(--cyan); background:transparent; color:var(--cyan); transition:.12s; }
@@ -1087,23 +1090,18 @@ function ExplainerMockup({
   };
 
   // ── GEX Profile axis ───────────────────────────────────────────────────────
-  // One linear scale shared by both signs, with the zero origin placed where the
-  // negative side actually needs it — so a -741M bar and a +6.1B bar are drawn
-  // to the same dollars-per-pixel instead of each filling its own half.
+  // ZERO SITS DEAD CENTRE. The origin used to float to wherever the negative
+  // side needed it, which packed the whole card to one edge and made the card
+  // impossible to read at a glance. It is pinned at 50% now: one linear scale
+  // shared by both signs, keyed off the larger side, so a -741M bar and a
+  // +6.1B bar are still drawn to the same dollars-per-pixel — the smaller side
+  // simply does not reach its half, which is the point.
+  const PF_ORIGIN_PCT = 50;
   const pfAxis = useMemo(() => {
-    let posMax = 0, negMax = 0;
-    for (const r of ladderRows) {
-      if (r.gx > posMax) posMax = r.gx;
-      if (-r.gx > negMax) negMax = -r.gx;
-    }
-    const total = posMax + negMax;
-    if (!(total > 0)) return { originPct: 20, unit: 0 };
-    const originPct = Math.min(45, Math.max(8, (negMax / total) * 100));
-    const unit = Math.min(
-      posMax > 0 ? (100 - originPct) / posMax : Infinity,
-      negMax > 0 ? originPct / negMax : Infinity,
-    );
-    return { originPct, unit: Number.isFinite(unit) ? unit : 0 };
+    let maxAbs = 0;
+    for (const r of ladderRows) maxAbs = Math.max(maxAbs, Math.abs(r.gx));
+    if (!(maxAbs > 0)) return { originPct: PF_ORIGIN_PCT, unit: 0 };
+    return { originPct: PF_ORIGIN_PCT, unit: PF_ORIGIN_PCT / maxAbs };
   }, [ladderRows]);
 
   // The ladder strike nearest live spot — highlighted the way the dashboard
@@ -1141,9 +1139,10 @@ function ExplainerMockup({
     [...ladderRows].sort((a, b) => Math.abs(b.gx) - Math.abs(a.gx)).slice(0, 3).forEach((r, i) => m.set(r.k, i + 1));
     return m;
   }, [ladderRows]);
-  // Home-heatmap cell RAMP with the v2 (/gex2) accent pair substituted for the
-  // heatmap's blue/red: pos = LIGHT_BLUE rgba(125,211,252), neg = SOFT_RED
-  // rgba(244,148,142). Rank tiers and the easing are unchanged —
+  // Home-heatmap cell RAMP with only the POSITIVE side moved to the v2 accent:
+  // pos = LIGHT_BLUE rgba(125,211,252); neg stays the heatmap's rgba(255,71,87)
+  // (the v2 SOFT_RED washed out against the blue at these alphas). Rank tiers
+  // and the easing are unchanged —
   //   rank1/2/3 → .90/.45/.25; else
   //   alpha = min(.18, .02 + ((|n|/robustMax)*intensity)^1.4 * .16), intensity 1.4.
   const HEAT_INTENSITY = 1.4;
@@ -1151,13 +1150,13 @@ function ExplainerMockup({
     if (!gx) return "transparent";
     const pos = gx >= 0;
     const rank = rankByStrike.get(k) ?? 0;
-    if (rank === 1) return pos ? "rgba(125,211,252,0.90)" : "rgba(244,148,142,0.90)";
-    if (rank === 2) return pos ? "rgba(125,211,252,0.45)" : "rgba(244,148,142,0.45)";
-    if (rank === 3) return pos ? "rgba(125,211,252,0.25)" : "rgba(244,148,142,0.25)";
+    if (rank === 1) return pos ? "rgba(125,211,252,0.90)" : "rgba(255,71,87,0.90)";
+    if (rank === 2) return pos ? "rgba(125,211,252,0.45)" : "rgba(255,71,87,0.45)";
+    if (rank === 3) return pos ? "rgba(125,211,252,0.25)" : "rgba(255,71,87,0.25)";
     const ratio = Math.min(Math.abs(gx) / scaleMax, 1);
     const eased = Math.pow(ratio * HEAT_INTENSITY, 1.4);
     const alpha = Math.min(0.18, 0.02 + eased * 0.16);
-    return pos ? `rgba(125,211,252,${alpha.toFixed(2)})` : `rgba(244,148,142,${alpha.toFixed(2)})`;
+    return pos ? `rgba(125,211,252,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
   };
   const snapDate = new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "2-digit" });
 
@@ -1196,9 +1195,9 @@ function ExplainerMockup({
             <span className="lbl">TOTAL NET GEX</span>
             <span className="val">{totalNetStr}</span>
           </div>
-          <div className="xp-chip">
-            <span className="lbl">GEX BASIS</span>
-            <span className="val">{gexBasis === "vol" ? "VOL GEX" : "OI + VOL"}</span>
+          <div className="xp-chip cyan">
+            <span className="lbl">EXPIRATION</span>
+            <span className="val">{expiryLabel}</span>
           </div>
         </div>
 
@@ -1207,7 +1206,6 @@ function ExplainerMockup({
           <div className="xp-panel xp-v2 xp-matrix-panel">
             <div className="xp-panel-h">GEX MATRIX (STRIKE)</div>
             <div className="xp-matrix">
-              <div className="xp-pf2-spacer" aria-hidden="true" />
               <div className="xp-mx-head"><span>STRIKE</span><span>NET GEX</span></div>
               {ladderRows.map((r) => {
                 const pos = r.gx >= 0;
@@ -1241,17 +1239,6 @@ function ExplainerMockup({
           <div className="xp-panel xp-v2">
             <div className="xp-panel-h">GEX PROFILE</div>
             <div className="xp-profile">
-              {/* header strip — expiry on the left, running total on the right */}
-              <div className="xp-pf2-spacer">
-                <div className="xp-pf2-top">
-                  <span className="lbl">BY EXPIRATION</span>
-                  <span className="tot">
-                    <span className="k">NET GEX</span>
-                    <span className={`v ${totalNetK >= 0 ? "g" : "r"}`}>{gexBM(totalNetK / 1000)}</span>
-                  </span>
-                </div>
-                <span className="xp-pf2-exp">{expiryLabel}</span>
-              </div>
               <div className="xp-pf2-head"><span>STRIKE</span><span>NET GEX</span><span className="r">VALUE</span></div>
               {ladderRows.map((r) => {
                 const pos = r.gx >= 0;
