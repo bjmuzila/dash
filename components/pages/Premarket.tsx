@@ -221,6 +221,48 @@ function hexA(hex: string, a: number): string {
 /** White alpha — the app's neutral surface rung (borders, sunken tracks, hover). */
 const ink = (a: number) => `rgba(255,255,255,${a})`;
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  THE GEX PROFILE'S GEOMETRY — three numbers, one source
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Row pitch of the scrolling GEX profile, in px. Interpolated into the
+ * stylesheet below AND used by rowTop() for the spot / flip rules, so the CSS
+ * and the arithmetic cannot drift. They were a literal 19 in each place and
+ * this file's own centring comment already flagged that as a trap.
+ */
+const PROFILE_ROW_H = 19;
+/**
+ * The profile's viewport height. FIXED, not a max — see PROFILE_PAD.
+ */
+const PROFILE_VIEW_H = 440;
+/**
+ * Half a viewport of empty room above the first strike and below the last.
+ *
+ * ── WHY (2026-08-28) ────────────────────────────────────────────────────────
+ * The panel is supposed to open with SPOT in the middle of the card, and it
+ * could not always do that. Centring is `scrollTop = rowTop - (view - row)/2`,
+ * and scrollTop cannot go below 0 or above scrollHeight - clientHeight — so
+ * whenever spot sat within ~11 rows of either END of the ladder the write was
+ * clamped and spot rendered high or low in the card instead of in the middle.
+ *
+ * That is not an edge case once the picker covers the whole watchlist: the
+ * window is spot ±60 STRIKES of whatever the chain actually lists, clamped to
+ * the ends of that chain (see windowAt), so a name whose board thins out a few
+ * strikes above the money opens with spot near the top and nothing to scroll.
+ * Sizing the box to its content instead of a fixed height made the same thing
+ * happen from the other direction: a short ladder is a short card, and spot is
+ * wherever it lands in it.
+ *
+ * Half a viewport of padding at each end removes the clamp entirely: the first
+ * and last rows can both reach the middle, so the target is exactly
+ * `i * PROFILE_ROW_H` for every row on every ticker — never 0, never the
+ * maximum, no special cases. The cost is empty space at the two ends of the
+ * scroll, which is what every price ladder does and what makes the middle of
+ * the card mean something.
+ */
+const PROFILE_PAD = (PROFILE_VIEW_H - PROFILE_ROW_H) / 2;
+
 const CSS = `
 .pmk{
   /* SURFACE TOKENS — interpolated from components/shared/homeTheme, never typed
@@ -519,7 +561,7 @@ const CSS = `
   letter-spacing:.06em;text-transform:uppercase;color:var(--dim);cursor:pointer;
   background:rgba(13,17,23,.92);border:1px solid var(--line2);border-radius:6px;padding:3px 8px}
 .pmk .recenter:hover{color:var(--txt);border-color:var(--cyanEdge)}
-.pmk .row{display:grid;grid-template-columns:52px 1fr;align-items:center;height:19px;gap:8px}
+.pmk .row{display:grid;grid-template-columns:52px 1fr;align-items:center;height:${PROFILE_ROW_H}px;gap:8px}
 .pmk .row .k{font-size:10.5px;text-align:right;color:var(--dim)}
 .pmk .row.key .k{color:var(--txt);font-weight:600}
 .pmk .track{position:relative;height:13px;background:linear-gradient(90deg,transparent calc(50% - .5px),var(--line2) calc(50% - .5px),var(--line2) calc(50% + .5px),transparent calc(50% + .5px))}
@@ -1921,6 +1963,15 @@ export default function Premarket() {
    *
    * Now it reads the row element and centres on its real box, and reports
    * "not ready" instead of writing a nonsense scrollTop.
+   *
+   * ── AND IT CAN NO LONGER BE CLAMPED (2026-08-28) ───────────────────────────
+   * The Math.max(0, ...) below used to bite: with the box sized to its content
+   * and no room past the ends of the ladder, a spot within ~11 rows of either
+   * end had no scroll position that would centre it, so the write was clamped
+   * and spot rendered high or low in the card. The panel now carries half a
+   * viewport of padding at each end (PROFILE_PAD), which makes the target
+   * exactly i * PROFILE_ROW_H for every row — always inside [0, max]. The
+   * clamp stays as a guard, but nothing reaches it.
    */
   const centerOnSpot = useCallback((): boolean => {
     const el = chartRef.current;
@@ -2002,10 +2053,19 @@ export default function Premarket() {
     progTopRef.current = -1;
   }, [sym]);
 
+  /**
+   * Vertical centre of a strike's row, in the .chart box's own coordinates —
+   * what the spot and flip rules are pinned to.
+   *
+   * PROFILE_PAD is added because the rules are absolutely positioned, and an
+   * absolutely positioned child is placed from the PADDING edge while the rows
+   * begin after the padding. Without it both rules sit half a viewport above
+   * the row they name.
+   */
   const rowTop = (strike: number | null) => {
     if (strike == null) return null;
     const i = bars.findIndex((b) => b.strike === strike);
-    return i < 0 ? null : i * 19 + 9.5;
+    return i < 0 ? null : PROFILE_PAD + i * PROFILE_ROW_H + PROFILE_ROW_H / 2;
   };
 
   const tagFor = (strike: number): { text: string; color: string } | null => {
@@ -2698,7 +2758,19 @@ export default function Premarket() {
               </div>
 
               <div style={{ position: "relative" }}>
-              <div className="chart" ref={chartRef} onScroll={onChartScroll}>
+              {/* Fixed height + half a viewport of padding at each end, so the
+                  centring write below is never clamped and SPOT lands dead centre
+                  on every ticker. See PROFILE_PAD. Skipped while the ladder is
+                  empty — 210px of padding over "Waiting for the chain..." is just
+                  a hole. */}
+              <div
+                className="chart"
+                ref={chartRef}
+                onScroll={onChartScroll}
+                style={bars.length
+                  ? { height: PROFILE_VIEW_H, paddingTop: PROFILE_PAD, paddingBottom: PROFILE_PAD }
+                  : undefined}
+              >
                 {bars.length === 0 && (
                   <div style={{ padding: "40px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
                     Waiting for the chain…

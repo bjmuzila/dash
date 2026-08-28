@@ -1,377 +1,63 @@
 # Changelog
 
-## 2026-08-28 - v3: Multi Greek cells open a detail card
-
-Edited: `cbedge-v3/src/board/multiGreek/CellCard.tsx` (new),
-`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`,
-`cbedge-v3/src/board/multiGreek/mgMath.ts`,
-`cbedge-v3/scripts/mock-server.mjs`.
-
-Clicking a cell opens v2's click card where you clicked: ticker + strike, the
-expiry and its DTE, CALLS and PUTS boxes (volume / OI / net premium), Net Prem
-(C-P), NET GEX, and the delta stamps.
-
-**Above the divider costs nothing.** Volume, open interest and net premium all
-come from the chain the ladder was already drawn from - the cell you clicked
-already had every one of them, the ladder just has room to print one number. Net
-premium is `volume x mark x 100`, which is the formula v2's card uses. `mark` is
-new on `Leg` in mgMath (with `(bid+ask)/2` as the FALLBACK, not the primary -
-`mark` survives a one-sided book that would make a midpoint meaningless); the
-chain response was already carrying it and the parser was throwing it away.
-
-**Below the divider is history, which a chain cannot supply** - a chain is a
-photograph of now. The deltas come from `/api/mult-greek-gex-change`, already
-registered in server-v2, which returns the recorder's stored NET GEX for this
-cell at -5 / -15 / -30 minutes and at the open; the card diffs its live value
-against them, as v2 does.
-
-Three delta states, and they are NOT the same thing: a number (the recorder has a
-reading that far back), `building` (the recorder is up but has not reached that
-far back), and `no baseline` (the recorder is not running, or this ticker/expiry
-is outside the set it records). v2 collapses the last two into "building...",
-which reads as "wait a bit" on a board that is never going to fill in.
-
-The ex-0DTE TOTAL column is inert: it has no single expiry behind it, so there is
-no chain row to open and no baseline to diff, and a card there could only say
-"-". Clicking the cell that is already open closes it, so one gesture is both
-"look" and "put it away". The card is `position: fixed`, because the Card it
-lives in has `overflow-hidden` and an absolutely-positioned one is clipped at
-every edge; it owns ONE piece of board-level state rather than one per panel,
-since only one can be open at a time.
-
-`scripts/mock-server.mjs` gained `/api/mult-greek-gex-change`, returning `vOpen:
-null` on purpose so the `building` branch is exercised every time the mock is
-opened (AGENTS.md trap 3).
-
-Verified: typecheck, build, budgets (initial load 77.9kb / 109.4kb, Multi Greek's
-chunk 4.7kb -> 5.9kb) and all 8 ws-scope assertions green, plus a screenshot of
-the card open over the board.
-
-## 2026-08-28 - v3: Key Levels is one horizontal axis, with this week's EM on it
-
-Edited: `cbedge-v3/src/board/keyLevels/LevelsAxis.tsx` (new),
-`cbedge-v3/src/board/keyLevels/KeyLevelsCard.tsx`,
-`cbedge-v3/scripts/mock-server.mjs`.
-
-**Six tiles became one axis.** Tiles answer "what is the call wall" one at a
-time. The question actually being asked is "where is price sitting inside the
-gamma" - which is a question about the DISTANCES BETWEEN the levels, and six
-boxes in a row cannot show a distance at all. Now: one horizontal price rail with
-Put Wall, Gamma Flip, Max Pain, Core (max gamma strike), Spot and Call Wall as
-ticks on it, labels alternating above and below.
-
-**Nothing was dropped in the move.** Every tile's level is a mark; each tile's
-distance is the note under its price; each tile's migration word ("building",
-"deepening", "rose 15") is on that same line; each wall's dollar gamma is the
-dim fourth line. The arithmetic is untouched - `levelsMath.ts` is still a
-straight transcription of Premarket.tsx's derivations.
-
-**The rail's PW -> CW span is tinted** red at the floor, through grey, to
-level-blue at the ceiling. That tinted span is the corridor: the part of the axis
-gamma is actually defending. The rest of the rail stays grey. Spot's tick is
-taller and drawn over everything - "where price is" must never be the ambiguous
-mark on this card.
-
-**Labels are spread, never dropped.** Alternating above/below in price order,
-then a collision pass per band that nudges each label clear of its neighbour and
-off the ends. Only the LABEL moves; the tick stays on the price, so a nudged
-label is still unambiguous. The minimum gap is measured against the real
-container width through a ResizeObserver rather than a guessed percentage - at
-w:12 this card is ~1400px and at w:6 it is ~700px.
-
-**This week's estimated move, from `/api/em-tracker`** (Postgres, owner-gated -
-which /v3 already is). `up` / `down` are the band's PRICES and are what goes on
-the axis; `ref_close ± em` is the fallback for a row imported before the bounds
-were stored. Ten minutes of cache, no poll: it is a weekly number.
-
-It is drawn ONLY IF IT ALREADY FITS the range the gamma levels drew. On a quiet
-week the band sits inside them and is the most useful thing on the card; on a
-wide week it can be fifty points outside the put wall, and putting it on the axis
-would squash every level that matters into the middle third to make room for a
-number nobody is trading against today.
-
-The axis's domain readout ("6,766.70 - 6,828.30 - 61.60 PTS") went in the Card's
-header rather than on a title row of its own. The Card already says "Key Levels";
-a second heading inside it is the two-toolbar problem in a different costume.
-
-`scripts/mock-server.mjs` gained `/api/em-tracker` - AGENTS.md trap 3, it has to
-stay in sync with the catalog or the card falls through to the static handler and
-throws into a caught promise. Struck at 0.4% so the LOW lands inside the gamma
-levels and the HIGH lands outside, exercising both sides of the "too far away"
-test every time the mock is opened.
-
-Verified: typecheck, build, budgets (initial load 77.8kb / 109.4kb) and all 8
-ws-scope assertions green, plus a screenshot against the mock showing the EM low
-drawn and the EM high correctly withheld.
-
-## 2026-08-28 - v3: the GEX Chart card is a real chart
-
-Edited: `cbedge-v3/src/board/gexChart/gexChartRender.ts` (new),
-`cbedge-v3/src/board/gexChart/GexChartCard.tsx` (new),
-`cbedge-v3/src/board/catalog.tsx`.
-
-The `gex-chart` card was a four-line placeholder: `drawDivergingBars()` over
-`netGEX`, no labels, no levels, no spot, no settings. Replaced in place - SAME
-CARD ID, so anyone with it on their board keeps it and nothing has to be
-re-added - with v2's chart cut down to its core.
-
-**What it draws.** Diverging net-GEX bars by strike, strike labels, value labels,
-the call wall, the put wall, the gamma flip, and the live spot price interpolated
-BETWEEN the two strikes that bracket it rather than snapped to the nearest rung
-(on a 5-point grid, snapping puts the line up to 2.5 points from the price
-written on it).
-
-**Two switches, both in the card's one toolbar.**
-- `OI+VOL` / `VOL` - and this costs NO REQUEST. Every `gex` frame already carries
-  both bases per strike (`netGEX` and `netVolGEX`); the switch redraws a canvas
-  and touches no network.
-- `HORIZ` / `VERT` - which way the bars run. HORIZ is strikes down the left edge
-  with bars growing sideways, the ladder you read against a price axis; VERT is
-  strikes along the bottom with bars up and down, a gamma profile across the
-  range. Both persist per browser.
-
-**Deliberately NOT carried over from v2's 60KB GexChart.tsx:** the options
-overlay, the expiry picker, zoom, replay. Each is its own feature. The card's
-chunk is 2.5kb brotli.
-
-Canvas, not DOM: a hundred strikes x (bar + strike label + value label) is three
-hundred nodes re-laid-out per frame. Every colour is read from a CSS custom
-property off the canvas element at draw time, since a `<canvas>` cannot take a
-className for its pixels. Both frames go through `watchFrame`, not `useField` -
-the model lands in a ref and the canvas redraws, so a tick never re-renders the
-component (AGENTS.md rule 4). The only value that leaves that path is the board
-total printed in the toolbar, and it moves once per frame.
-
-Labels sit on opaque chips and spot is drawn at the opposite end of the card from
-the level tags - in the strike gutter horizontally, in the bottom gutter
-vertically. The first pass stacked them together and the flip, the call wall and
-the price overlapped every time they were near each other, which is most of the
-time.
-
-The card moved from static to `lazy()` in the catalog now that it has a real
-renderer behind it. Entry chunk 20.8kb -> 20.5kb brotli as a result.
-
-Verified: typecheck, build, budgets (initial load 77.9kb / 109.4kb) and all 8
-ws-scope assertions green, plus screenshots of both orientations against
-`scripts/mock-server.mjs`.
-
-## 2026-08-28 - v3: Multi Greek's core matched to v2 exactly, Economic Calendar cut to today
-
-Edited: `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`,
-`cbedge-v3/src/board/econCalendar/EconCalendarCard.tsx`.
-
-**1. The Core Bullseye cell now draws exactly as v2's VIVID skin draws it.**
-Transcribed from `MultGreekClient.tsx`'s `levelFillBg()` + `HEAT_SKINS.vivid`,
-value for value:
-
-- gold at **85%**, laid OVER the heat wash rather than replacing it. That 0.85 is
-  v2's own number and the reason for it is that gold at full strength swamps the
-  row AND takes the sign with it. Blended, the cyan or red underneath still shows
-  through, so the cell says "core" and "which way the gamma points" at once.
-  Implemented the way v2 does it - two identical gradient stops layered over the
-  heat background in one property.
-- the figure is **white with v2's drop shadow** (`0 1px 2px` at 85% black), not
-  the GEX hue. Earlier today this shipped as a solid gold cell with a GEX-hued
-  number; a mid-tone hue on gold is the weakest pair on the board, and with the
-  wash showing through the fill there is nothing left for the ink to say.
-- the later-expiry star keeps v2's flip: dark ink with a WHITE halo on a filled
-  CB cell, rather than gold-on-gold.
-
-Every value is a token or a `color-mix()` of one - no literals entered `src/`.
-
-**2. Economic Calendar is today only, and released rows leave.**
-The window was today → today+6 with a dimmed tail of events 30 minutes past. A
-week of scrolling is the wrong answer to "what is left today", which is the only
-question a card this size gets asked. Now: today's ET date only, and an event
-more than **60 minutes** past its start is REMOVED rather than dimmed - the print
-lands within the hour and after that the row is occupying a card that is about
-what is still coming. The 60-second tick that used to move rows ahead → past now
-expires them off the card; still no network in that path. The weekly view is
-unchanged on the full page.
-
-## 2026-08-28 - v3: one toolbar per card, a GEX rail pinned to the price axis, and a token that was silently missing
-
-Edited: `cbedge-v3/src/design/primitives/Card.tsx`, `cbedge-v3/src/design/tokens.css`,
-`cbedge-v3/src/board/gexCandles/{GexCandlesCard.tsx,GexRail.tsx,chart.ts,settings.ts}`,
-`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`,
-`cbedge-v3/src/board/econCalendar/EconCalendarCard.tsx`,
-`cbedge-v3/src/board/keyLevels/KeyLevelsCard.tsx`.
-
-**1. One toolbar per card.** Every card with controls drew its own row of buttons
-directly under the Card header, so the board showed two stacked bars - one
-carrying the card's name and nothing else, one carrying the controls - and the
-chart or ladder underneath lost the height of both. `Card` now exposes a portal
-slot in its header and a `<CardToolbar>` a body renders into; GEX Candles, Multi
-Greek, Key Levels and the Economic Calendar all moved their row up into it.
-
-A portal rather than a `toolbar` prop on `CardDef`, because the cards that have
-controls are the lazy() ones: the catalog cannot hand BoardPage a toolbar out of
-a module it has not imported yet. The context distinguishes "not inside a Card"
-(render inline) from "inside a Card whose header has not committed yet" (render
-nothing this frame), which is what stops the bar painting inline for one frame
-before it jumps into the header.
-
-**2. GEX rail on the GEX Candles card, pinned to the chart's price axis.**
-New `GexRail.tsx`: the live strike ladder down the right-hand side, shaped after
-v2's "By expiration" ladder on the Analysis page - strike, its level tag, a
-diverging bar around a centre hairline, the dollar value. Toggled by a `GEX rail`
-chip in the card's settings and persisted with the rest.
-
-Every row is absolutely positioned and its `top` comes from the chart's OWN
-`priceToCoordinate`, delivered once a frame through a new `RailSink` on the chart
-handle - the same mapping, in the same frame, that the bubble layer draws with.
-That is the only way a rail can be level with its strikes through a pan, a zoom
-and an autoscale; a flowing list is evenly spaced and a chart's strikes are not.
-Positioning is imperative straight onto the DOM node (AGENTS.md rule 4 - a tick
-never travels through React state on its way to a chart).
-
-The height handed to the sink is the PLOT's, not the container's: the time axis
-owns the bottom ~26px and there is no price down there. Rows are placed in
-priority order - the three named levels first, then biggest gamma - and any row
-landing within a row-height of one already placed is hidden, so a zoomed-out
-ladder thins instead of turning into overlapping text.
-
-No new request: the rail reads the newest column of the same GEX history the
-bubbles are built from. The history query gate widened to
-`bubblesOn || railOn` and the `GEX basis` control moved out of the bubbles-only
-section, so turning the bubbles off with the rail on does not take the rail's
-data - or its basis switch - away with them.
-
-Bars use `--color-gex-pos` / `--color-gex-neg` rather than v2's green/red, so the
-rail and the bubbles beside it never disagree about the sign of the same strike.
-Everything else follows the v2 ladder.
-
-**3. `@theme` -> `@theme static` in tokens.css - a colour that was silently
-missing.** Tailwind v4 tree-shakes a theme block down to the variables it can SEE
-used, and it cannot see a var name built at runtime. `var(--color-level-${key})`
-- the Multi Greek CW/PW badge rings, and the new rail's level tags - resolved to
-an EMPTY STRING, so those marks painted transparent. Found by inspecting the
-computed style of a rail tag that rendered with no background; the Multi Greek
-badges have been quietly missing their rings the same way. `static` emits every
-token on :root whether or not a utility references it. CSS 4.7kb -> 4.8kb brotli
-against a 19.5kb budget.
-
-Verified: typecheck, build, budgets (initial load 78.1kb / 109.4kb, react
-unchanged at 50.7kb / 53.7kb) and all 8 ws-scope assertions green, plus a
-screenshot against `scripts/mock-server.mjs` confirming the rail rows sit level
-with the chart's price labels and the CB/PW tags paint.
-
-## 2026-08-28 - v3 Multi Greek: SPX unpinned from one expiry, a gold core, and bubble rows that cannot merge
-
-Edited: `server-v2/server-with-proxy.js`, `cbedge-v3/src/board/multiGreek/mgMath.ts`,
-`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`, `cbedge-v3/src/board/gexCandles/bubbles.ts`.
-
-**1. SPX was stuck at one column, and it was the backend doing it.**
-`/proxy/api/tt/chains/:ticker` with no `expiration` hands the request to
-`serveChainFromLive()`, which by design streams only the ONE active gated expiry.
-SPX is the subscribed underlying, so it came back with a single `items` entry;
-SPY/QQQ/NDX are not, so they fell through to REST and got the nearest three. The
-Multi Greek ladder is read ACROSS expiries, so this made the board's column
-setting do nothing at all on the one panel it matters most on.
-
-Fixed with an opt-out rather than a behaviour change: `?live=0` on that route
-skips the live path and goes straight to `fetchChainFull()`. Additive and
-opt-in - no existing caller passes it, so every current request keeps the live
-fast path exactly as before. v3's `chainsUrl()` now sets it. The cost is that
-SPX's ladder is REST-sourced; it polls on 15s anyway, and REST is the only
-response that has the columns.
-
-**2. Columns split into 1/2/3 plus an independent ex-0DTE toggle.**
-`MAX_EXP_COLS` 4 -> 3, because three is all `fetchChainFull()` returns (nearest
-plus up to two more). The old "4" option was therefore dead: the ex-0DTE total
-was gated on there being four real columns to replace one of, and there never
-were four, so 4 rendered identically to 3 and the total column never once
-appeared. Now the count picks 1-3 dated columns and `ALL ex-0DTE` is its own
-chip that APPENDS a fourth, summing every available non-0DTE expiry including
-ones with no column of their own - which is the point of it, since "everything
-except today" is a different question from "the next two expiries" and should
-not cost a column you were reading. Suppressed when every usable expiry is 0DTE.
-A stored blob holding 4 clamps to 3, which is what it already drew.
-
-**3. The Core Bullseye cell is gold, and its number keeps the GEX hue.**
-The CB cell no longer takes the heat wash - a heat colour made the core the same
-picture as a merely-large strike. Gold background (`--color-level-cb`), the
-figure in `--color-gex-pos` / `--color-gex-neg` with a dark halo so a mid-tone
-hue stays legible on gold, and the sign inherits that hue instead of taking its
-own up/down colour. The later-expiry star flipped from gold to `--color-app`:
-the cell under it is gold now, and a gold star on gold is an invisible star.
-
-**4. The ATM chip is gone from the strike rail.** The row's white inset ring
-already says which strike is at the money; the badge cost the strike number half
-its width across four ladders at once. The ring stays.
-
-**5. Bubble rows can no longer merge into one slab.**
-`capFor()` (one radius cap per snapshot, taken from the tightest gap on the
-ladder) is replaced by `placeMarks()`, which sizes every mark and then enforces
-non-overlap pairwise between vertical neighbours, in pixels, LAST. Two faults in
-the old version: the size slider was applied AFTER the cap, so anything above 1x
-drew straight through the bound and merged two strikes' rows - which is the bug
-reported; and being global, one tight pair shrank every mark in the snapshot
-including ones with all the room in the world. Placement is memoised per
-snapshot per frame, not per segment. Still pixels-only - no bar index, no
-interval, nothing keyed to timeframe.
-
-## 2026-08-27 - ΔGEX Board: a capture-phase chip on the run stamp, and the EOD sweep no longer crosses the feed roll
-
-Edited: `server-v2/eod-strike-gex-recorder.js`, `owner-vite/src/pages/GexGrowth.tsx`.
-
-Tonight's board carried `run 2026-08-27 20:01:52 ET`. That stamp was real - it is
-`captured_at`, taken before the first chain fetch - but it was not the 16:05
-slot. The scheduler fires at `RUN_AT_MIN` (965 = 16:05) **or on any later boot the
-same evening**, and the catch-up window ran to 22:00 ET. The 16:05 run did not
-land, something restarted around 20:00, the 45s post-boot check fired, and the
-session was recorded four hours late.
-
-The old comment said capturing at 19:40 after a restart is "just as correct as
-16:05". That is true of the OI half and false of the volume half. The upstream
-feed rolls its trading day at 20:00 ET and the roll zeroes the chain's
-day-volume field, so a sweep starting at 20:01 writes `OI(T-1) + Vol(empty)` as
-session T's close: `vol_gex` zeroed, `net_gex` silently reduced to the OI-only
-number, and the oivol delta against T-1 wrong by a full session of volume.
-
-**1. The catch-up window now closes before the roll.** `WINDOW_CLOSE_MIN`
-1320 -> 1185 (19:45 ET), fifteen minutes of margin. The cost of closing early is
-"no session recorded", which the board shows; the cost of staying open was a
-quietly wrong session, which it could not. Anything later is now a deliberate
-`POST /proxy/eod-strike-gex-run`, not something the scheduler does on its own.
-
-**2. A zero-volume guard, as the second line.** A board carrying open interest
-and no volume anywhere is not a quiet session - a strike with 40k OI traded
-something. `runSweep()` now detects that shape and writes `vol_*` as NULL rather
-than as zero, so the `vol` basis reports "nothing recorded for this session"
-(the read path already branches on `hasBasis`) instead of a flat zero board a
-reader would take at face value. It triggers on the DATA, not the clock, so it
-also catches a roll at an hour nobody expected. `net_gex` is left as computed -
-it is the legacy series and never NULL, and breaking a year of level continuity
-to patch a row `WINDOW_CLOSE_MIN` should have prevented is the wrong trade.
-
-**3. Catch-up sweeps say so in the log.** Any run more than 30 minutes past the
-16:05 slot logs `CATCH-UP sweep at HH:MM ET (Nm past the 16:05 slot)`. Healthy
-path, never the intended one, and somebody will ask why the stamp is off.
-
-**4. The run stamp now carries a capture-phase chip - the actual ask.** A clock
-alone does not tell you whether the data is premarket, live, after hours or past
-the roll, and that is the question. `capturePhase()` classifies the stamp on the
-US equity day in ET:
-
-| ET window | chip | tone |
-|---|---|---|
-| 04:00-09:30 | premarket | info (blue) - where the 09:25 settled-OI re-stamp lands |
-| 09:30-16:00 | live session | warn (gold) - mid-session read, volume partial |
-| 16:00-20:00 | after hours | pos (green) - the intended 16:05 window |
-| 20:00-04:00 | overnight | neg (red) - past the feed roll, volume suspect |
-| Sat/Sun | weekend | info (blue) |
-
-The tone is inverted relative to the market on purpose: this sweep is supposed
-to run after the close, so "after hours" is the good state and everything else
-is a flag. Each chip carries a tooltip saying what that phase does to the number.
-The prior-session tooltip on the run chip gained the same phase suffix via
-`fmtStampWithPhase()`, so a delta between two differently-phased captures is
-visible without opening anything. `toneChip` gained a fourth tone, `info`
-(`LIGHT_BLUE`), for states that are a fact rather than a verdict.
-
-Holidays are not detected - the page has no calendar - so a holiday capture
-reads as whatever its clock says, with the date beside it.
+## 2026-08-28 - Premarket: spot opens dead centre on every ticker; put wall must be negative GEX
+
+Edited: `components/pages/Premarket.tsx`,
+`components/pages/premarket/chainGex.ts`.
+
+**1. GEX Profile by Strike opens with spot in the middle of the card.**
+
+Centring is `scrollTop = rowTop - (view - row)/2`, and scrollTop cannot go below
+0 or above `scrollHeight - clientHeight`. So whenever spot sat within ~11 rows of
+either END of the ladder the write was clamped and spot rendered high or low in
+the card instead of in the middle. That stopped being an edge case when the
+picker opened up to the whole watchlist: the window is spot +/-60 STRIKES of
+whatever the chain actually lists, clamped to the ends of that chain, so a name
+whose board thins out a few strikes above the money opened with spot near the
+top and nothing to scroll. Sizing the box to its content made the same thing
+happen from the other side - a short ladder is a short card, and spot lands
+wherever it lands in it.
+
+- The panel is now a FIXED 440px viewport with **half a viewport of padding at
+  each end** (`PROFILE_PAD`). The first and last rows can both reach the middle,
+  so the centring target is exactly `i * PROFILE_ROW_H` for every row on every
+  ticker - never 0, never the maximum, no special cases. The clamp stays as a
+  guard and nothing reaches it.
+- `rowTop()` adds the padding, because the spot and flip rules are absolutely
+  positioned (placed from the PADDING edge) while the rows begin after it -
+  otherwise both rules would sit half a viewport above the row they name.
+- The padding is skipped while the ladder is empty; 210px of nothing over
+  "Waiting for the chain" is just a hole.
+- The 19px row pitch was a literal in the stylesheet AND in `rowTop` - the
+  file's own centring comment already flagged that as a trap. It is one
+  `PROFILE_ROW_H` const now, interpolated into the CSS.
+
+**2. A put wall must be negative GEX.**
+
+`wallsOf()` in chainGex.ts - the walls for every non-SPX symbol - ranked the two
+sides by RAW PER-SIDE GAMMA MAGNITUDE, with no sign and no side-of-spot test. On
+a 0DTE board the ATM strike carries the most call gamma AND the most put gamma,
+so the page printed **"Call wall 770.00 / Put wall 770.00"** on a strike whose
+net gamma was strongly POSITIVE. A put wall is a floor - the strike where
+dealers are short gamma - so a put wall on positive net GEX is not a wall, and
+one sitting on top of the call wall says nothing.
+
+It now reproduces the SERVER's definition exactly
+(`findCallWall` / `findPutWall` in `server-v2/computation/gex-calculator.js`),
+so SPX (socket) and every other symbol (this hook) cannot mean different things
+by the word:
+
+- call wall = the strike ABOVE spot with the most POSITIVE net OI+Vol GEX
+- put wall = the strike BELOW spot with the most NEGATIVE net OI+Vol GEX
+
+Net rather than per-side magnitude is what makes the sign mean anything:
+`netGEXOf` returns calls positive and puts negative, so "most negative" IS
+"heaviest put gamma net of the calls written against it". Null for a side with
+no qualifying strike - the honest answer on a one-sided board, and what the
+server returns too; the page already renders a null level as "-".
+
+No server change: the server was already correct. This was the client copy
+drifting.
 
 ## 2026-08-27 - Fix: section 3's ladder rendered all 121 strikes instead of filling the column
 

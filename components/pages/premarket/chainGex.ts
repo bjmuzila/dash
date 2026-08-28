@@ -211,21 +211,42 @@ export function chainRowsOf(items: unknown[], expDate: string, spot: number): Ch
 }
 
 /**
- * Walls, on the same definition every other surface in this app uses:
- *   call wall = the strike carrying the most POSITIVE call gamma
- *   put wall  = the strike carrying the most NEGATIVE put gamma (by magnitude)
- * Deliberately identical to parseTickerBoard's, so the number cannot depend on
- * which board you happen to be looking at.
+ * Walls, on the SERVER's definition — findCallWall / findPutWall in
+ * server-v2/computation/gex-calculator.js, reproduced here so SPX (socket) and
+ * every other symbol (this hook) can never mean different things by the word:
+ *
+ *   call wall = the strike ABOVE spot with the most POSITIVE net OI+Vol GEX
+ *   put wall  = the strike BELOW spot with the most NEGATIVE net OI+Vol GEX
+ *
+ * ── WHY THIS CHANGED (2026-08-28) ───────────────────────────────────────────
+ * It used to rank the two sides by RAW PER-SIDE GAMMA MAGNITUDE — most call
+ * gamma, most put gamma — with no sign and no side-of-spot test. Both of those
+ * are wrong in the same way, and the failure is not subtle: on a 0DTE board the
+ * ATM strike carries the most call gamma AND the most put gamma, so the panel
+ * printed "Call wall 770.00 / Put wall 770.00" on a strike whose NET gamma was
+ * strongly POSITIVE. A put wall is a floor — it is the strike where dealers are
+ * short gamma — so a put wall on positive net GEX is not a wall at all, and one
+ * sitting on top of the call wall says nothing.
+ *
+ * Net, not per-side magnitude, is what makes the sign meaningful: netGEXOf
+ * returns calls positive and puts negative on the OI+Vol leg, so "most
+ * negative" IS "heaviest put gamma net of the calls written against it". The
+ * side-of-spot filter is the server's too and is what stops the two walls
+ * collapsing onto one strike.
+ *
+ * Returns null for a side with no qualifying strike — which is the honest
+ * answer on a board that is one-sided, and is what the server returns too. The
+ * page already renders every level as "—" when it is null.
  */
 function wallsOf(rows: ChainRow[], spot: number): { callWall: number | null; putWall: number | null } {
   if (!rows.length || !(spot > 0)) return { callWall: null, putWall: null };
   let cw: { k: number; v: number } | null = null;
   let pw: { k: number; v: number } | null = null;
   for (const r of rows) {
-    const call = Math.abs(r.callGamma ?? 0) * ((r.callOI ?? 0) + (r.callVolume ?? 0)) * spot * spot;
-    const put = Math.abs(r.putGamma ?? 0) * ((r.putOI ?? 0) + (r.putVolume ?? 0)) * spot * spot;
-    if (call > 0 && (cw == null || call > cw.v)) cw = { k: r.strike, v: call };
-    if (put > 0 && (pw == null || put > pw.v)) pw = { k: r.strike, v: put };
+    const net = netGEXOf(r, "net", spot);
+    if (!Number.isFinite(net)) continue;
+    if (r.strike > spot && net > 0 && (cw == null || net > cw.v)) cw = { k: r.strike, v: net };
+    if (r.strike < spot && net < 0 && (pw == null || net < pw.v)) pw = { k: r.strike, v: net };
   }
   return { callWall: cw?.k ?? null, putWall: pw?.k ?? null };
 }
