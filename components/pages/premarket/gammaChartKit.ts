@@ -81,6 +81,17 @@ export const AUTO_MIN_STRIKES = 20;
 /** Above this many bars the axis is unreadable, so neighbours are folded. */
 export const MAX_BARS = 150;
 /**
+ * ...and the other end of the same problem: the widest a single bar may be, px.
+ *
+ * A bar that tiles its slot is right on a full board and absurd on a sparse one.
+ * A VOL board before the open, or any ±1% window on a coarse ladder, has under a
+ * dozen strikes in it — tiled across 1,400px that is nine 160px SLABS edge to
+ * edge, which is a colour field with a curve on top rather than a distribution
+ * anyone can read a shape off. Capped, the same board reads as nine bars on an
+ * axis, and a full board is nowhere near the cap so nothing about it changes.
+ */
+export const MAX_BAR_W = 48;
+/**
  * Zoom stops here — about six 5-point strikes across the card.
  *
  * A CAP, not a constant: the real floor is `min(MIN_HALF, 3 × gridStep)`, so a

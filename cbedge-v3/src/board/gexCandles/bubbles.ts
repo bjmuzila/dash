@@ -206,22 +206,10 @@ function rgba(c: [number, number, number], a: number): string {
   return `rgba(${c[0]},${c[1]},${c[2]},${a})`
 }
 
-/** Index of the snapshot nearest `ts`. Binary search — this runs per x step. */
-function nearestIndex(snaps: BubbleSnapshot[], ts: number): number {
-  let lo = 0
-  let hi = snaps.length - 1
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1
-    const at = snaps[mid]
-    if (!at) break
-    if (at.ts < ts) lo = mid + 1
-    else hi = mid
-  }
-  const cur = snaps[lo]
-  const prev = snaps[lo - 1]
-  if (cur && prev && Math.abs(prev.ts - ts) <= Math.abs(cur.ts - ts)) return lo - 1
-  return lo
-}
+// Removed 2026-08-28: nearestIndex() answered "which snapshot is at this pixel"
+// for the old fixed-segment walk. drawBubbles now walks SNAPSHOTS and asks the
+// inverse question — which pixel is this snapshot at — so nothing looks up a
+// snapshot by time any more.
 
 /** A mark resolved to a pixel row: where it sits and how fat it may be drawn. */
 interface PlacedMark {
@@ -391,66 +379,151 @@ function xAtTime(win: TimeWindow, geo: BubbleGeometry, ms: number): number {
   return (lo + hi) / 2
 }
 
+/**
+ * A sampled x -> time table for the pane, and the interpolated inverse.
+ *
+ * Built once per drawn frame. The alternative — a binary search per snapshot —
+ * is 20 chart calls each, ~2,000 a frame at a session's worth of history, to
+ * answer a question that is piecewise-linear in x and can simply be sampled.
+ */
+interface XMap {
+  xs: number[]
+  ts: number[]
+}
+const XMAP_SAMPLES = 128
+
+function buildXMap(geo: BubbleGeometry, win: TimeWindow): XMap {
+  const xs: number[] = []
+  const ts: number[] = []
+  for (let i = 0; i <= XMAP_SAMPLES; i++) {
+    const x = win.xLo + ((win.xHi - win.xLo) * i) / XMAP_SAMPLES
+    const t = geo.timeAtX(x)
+    if (t == null) continue
+    // Monotonic by construction; a repeated time (whitespace past the last bar)
+    // would break the interpolation, so keep only strictly increasing samples.
+    if (ts.length && t <= ts[ts.length - 1]!) continue
+    xs.push(x)
+    ts.push(t)
+  }
+  return { xs, ts }
+}
+
+/** Pixel for an instant, interpolated. Off either end clamps to that end. */
+function xOf(map: XMap, ms: number): number | null {
+  const n = map.ts.length
+  if (n === 0) return null
+  if (n === 1) return map.xs[0]!
+  if (ms <= map.ts[0]!) return map.xs[0]!
+  if (ms >= map.ts[n - 1]!) return map.xs[n - 1]!
+  let lo = 0
+  let hi = n - 1
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    if (map.ts[mid]! <= ms) lo = mid
+    else hi = mid
+  }
+  const t0 = map.ts[lo]!
+  const t1 = map.ts[hi]!
+  const f = t1 === t0 ? 0 : (ms - t0) / (t1 - t0)
+  return map.xs[lo]! + (map.xs[hi]! - map.xs[lo]!) * f
+}
+
+/**
+ * How far a single snapshot's mark may stretch horizontally, as a multiple of
+ * its own radius.
+ *
+ * A row is drawn one snapshot at a time, each stroke as long as the gap to its
+ * neighbours — so when a session is squeezed into a few hundred pixels the
+ * strokes tile and the row is the continuous band it should be. Zoom in far
+ * enough and that gap becomes tens of pixels, and without this cap a minute of
+ * gamma smeared across all of it: the layer turned into flat horizontal bars,
+ * which is what it looked like at 1m. Capped, a mark stays a lozenge barely
+ * wider than it is tall, so a row reads as a chain of bubbles at any zoom.
+ */
+const MAX_STRETCH_R = 0.8
+
+/**
+ * Returns whether anything was actually painted. False means the history does
+ * not reach the visible window — zoomed or panned into candles older than the
+ * first snapshot, or newer than the last. That is correct, and it is
+ * indistinguishable from a broken layer, so the caller says so on screen.
+ */
 export function drawBubbles(
   ctx: CanvasRenderingContext2D,
   snaps: BubbleSnapshot[],
   geo: BubbleGeometry,
   opts: DrawOpts,
   palette: BubblePalette,
-): void {
+): boolean {
   const { width: w, height: h } = geo
-  if (!snaps.length || w <= 0 || h <= 0) return
+  if (!snaps.length || w <= 0 || h <= 0) return false
 
   const first = snaps[0]
   const last = snaps[snaps.length - 1]
-  if (!first || !last) return
+  if (!first || !last) return false
 
   // Extent comes from the DATA's own time range, clamped to the pane — not from
   // a lookback in bars. This is why the band starts where the session's gamma
   // history starts on every timeframe, with nothing to configure.
   const win = timeWindow(geo)
-  if (!win) return
+  if (!win) return false
   const xFirst = xAtTime(win, geo, first.ts)
   const xLast = xAtTime(win, geo, last.ts)
   const x0 = Math.max(0, Math.min(xFirst, xLast))
   const x1 = Math.min(w, Math.max(xFirst, xLast))
-  if (x1 <= x0) return
+  if (x1 <= x0) return false
 
   const layerAlpha = Math.max(0.05, Math.min(1, opts.intensity))
   const minOpacity = Math.max(0.1, 1 - Math.max(0, Math.min(1, BUBBLE_STYLE.fade)))
 
-  // Segment width is derived from the band's PIXEL span, so it is the same on
-  // every timeframe and adapts to zoom. Each segment is stroked across its own
-  // width, which is what keeps a thin row solid instead of dotted.
-  const segW = Math.max(1, (x1 - x0) / MAX_SEGMENTS)
+  const map = buildXMap(geo, win)
 
-  // One placement per snapshot, not per segment: the same snapshot is hit by
-  // many segments and its geometry does not change between them. Doing the fit
-  // per segment would also be visibly wrong — the shrink is a property of the
-  // snapshot's ladder, not of where along the band you happen to be.
+  // ONE STROKE PER SNAPSHOT, not per fixed pixel segment.
+  //
+  // The old walk cut the band into 320 equal slices and asked each what the
+  // gamma was there. That is the same picture as this at low zoom — the slices
+  // are narrower than a snapshot and tile into a band — but at high zoom a
+  // slice covers many minutes and the row became one uniform bar, with no way
+  // to cap its length because the slice, not the snapshot, owned the geometry.
+  // Walking snapshots puts the length back where it belongs: each mark stretches
+  // to its neighbours, and no further than MAX_STRETCH_R of its own radius.
+  const centres: number[] = []
+  for (const snap of snaps) centres.push(xOf(map, snap.ts) ?? -1)
+
+  // At a session's zoom there are more snapshots than pixels; drawing all of
+  // them is thousands of redundant strokes for the same band. Stride so the
+  // count stays bounded — the old MAX_SEGMENTS budget, spent on snapshots.
+  const stride = Math.max(1, Math.ceil(snaps.length / MAX_SEGMENTS))
+
   const placedBySnap = new Map<number, PlacedMark[]>()
 
   ctx.lineCap = 'round'
 
-  for (let x = x0; x < x1; x += segW) {
-    // Sample the gamma at the MIDDLE of the segment. Sampling at the leading
-    // edge shifts the whole band half a segment early, which is visible as a
-    // level appearing before the candle that made it.
-    const t = geo.timeAtX(x + segW / 2)
-    if (t == null) continue
-    const idx = nearestIndex(snaps, t)
-    const snap = snaps[idx]
-    if (!snap) continue
+  let drew = 0
+  for (let i = 0; i < snaps.length; i += stride) {
+    const snap = snaps[i]
+    const cx = centres[i]!
+    if (!snap || cx < 0) continue
 
-    let placed = placedBySnap.get(idx)
+    // Half the distance to each neighbour IN THE STRIDE, so a strided walk
+    // still tiles instead of leaving gaps it never meant to leave.
+    const prev = centres[Math.max(0, i - stride)]!
+    const next = centres[Math.min(snaps.length - 1, i + stride)]!
+    const gap = Math.max(0, Math.max(cx - prev, next - cx))
+
+    let placed = placedBySnap.get(i)
     if (placed === undefined) {
       placed = placeMarks(snap, geo, opts)
-      placedBySnap.set(idx, placed)
+      placedBySnap.set(i, placed)
     }
-    const xEnd = Math.min(x1, x + segW)
 
     for (const { mark: m, y, r } of placed) {
       if (y < -20 || y > h + 20) continue
+      const half = Math.min(gap, r * MAX_STRETCH_R) / 2
+      const xa = cx - half
+      const xb = cx + half
+      // Wholly off the pane, caps included.
+      if (xb + r < 0 || xa - r > w) continue
 
       const positive = m.value >= 0
       const base = positive ? palette.pos : palette.neg
@@ -461,9 +534,9 @@ export function drawBubbles(
       // transform to the context, so multiplying by dpr here would scale it
       // twice and make a retina panel draw a band twice as fat as a normal one.
       //
-      // lineWidth 2r + round caps == a circle of radius r swept from x to xEnd.
-      // A zero-length stroke still paints a full circle, which is what draws the
-      // single newest snapshot when the band is one segment wide.
+      // lineWidth 2r + round caps == a circle of radius r swept from xa to xb.
+      // A zero-length stroke still paints a full circle, which is what draws a
+      // lone snapshot.
       ctx.beginPath()
       ctx.lineWidth = r * 2
       ctx.strokeStyle = rgba(col, opacity)
@@ -471,13 +544,15 @@ export function drawBubbles(
         ctx.shadowColor = rgba(base, 0.95)
         ctx.shadowBlur = Math.min(BUBBLE_STYLE.glowMaxPx, Math.max(1.5, r * BUBBLE_STYLE.glowTopFactor))
       }
-      ctx.moveTo(x, y)
-      ctx.lineTo(xEnd, y)
+      ctx.moveTo(xa, y)
+      ctx.lineTo(xb, y)
       ctx.stroke()
+      drew++
       if (m.isCore) {
         ctx.shadowBlur = 0
         ctx.shadowColor = 'transparent'
       }
     }
   }
+  return drew > 0
 }

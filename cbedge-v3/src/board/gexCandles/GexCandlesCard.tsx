@@ -93,11 +93,13 @@ function dteLabel(expiry: string): string {
 }
 
 /** Wires an EsChartHandle to a <ChartFrame>, buffering setters until it mounts. */
-function useEsChart(onLatestOffscreen: (off: boolean) => void) {
+function useEsChart(onLatestOffscreen: (off: boolean) => void, onOutOfRange: (out: boolean) => void) {
   const handleRef = useRef<EsChartHandle | null>(null)
   const pending = useRef<Array<(h: EsChartHandle) => void>>([])
   const offRef = useRef(onLatestOffscreen)
   offRef.current = onLatestOffscreen
+  const oorRef = useRef(onOutOfRange)
+  oorRef.current = onOutOfRange
 
   const apply = useCallback((fn: (h: EsChartHandle) => void) => {
     const h = handleRef.current
@@ -107,7 +109,10 @@ function useEsChart(onLatestOffscreen: (off: boolean) => void) {
 
   const onMount = useCallback((frame: ChartHandle): (() => void) => {
     let cancelled = false
-    void mountEsChart(frame.el, { onLatestOffscreen: (off) => offRef.current(off) }).then((created) => {
+    void mountEsChart(frame.el, {
+      onLatestOffscreen: (off) => offRef.current(off),
+      onBubblesOutOfRange: (out) => oorRef.current(out),
+    }).then((created) => {
       if (cancelled) {
         created.destroy()
         return
@@ -137,6 +142,9 @@ export function GexCandlesCard() {
   const [settings, setSettings] = useState<ChartSettings>(() => loadSettings(CARD_ID))
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [latestOffscreen, setLatestOffscreen] = useState(false)
+  // The bubble layer has data but none of it falls in the visible window. Set
+  // from the draw loop, but only when it CHANGES — see onBubblesOutOfRange.
+  const [bubblesOutOfRange, setBubblesOutOfRange] = useState(false)
   const countdownRef = useRef<HTMLSpanElement | null>(null)
   const barsRef = useRef<Bar[]>([])
 
@@ -223,7 +231,7 @@ export function GexCandlesCard() {
   )
 
   // ── Chart ──────────────────────────────────────────────────────────────────
-  const { onMount, apply } = useEsChart(setLatestOffscreen)
+  const { onMount, apply } = useEsChart(setLatestOffscreen, setBubblesOutOfRange)
 
   // Anything in this key changes the SCALE of the series, so the view has to be
   // re-framed when it does — a symbol switch above all, since SPX at ~6,800 and
@@ -467,6 +475,14 @@ export function GexCandlesCard() {
             ref={countdownRef}
             className="tabular pointer-events-none absolute right-16 top-1.5 z-10 font-mono text-[11px] font-extrabold text-accent opacity-90"
           />
+
+          {/* An empty bubble layer that HAS data is indistinguishable from a
+              broken one, and that ambiguity cost real debugging time. Say it. */}
+          {bubblesOutOfRange && settings.bubblesOn && (
+            <span className="pointer-events-none absolute left-2 top-1.5 z-10 text-[10px] text-muted opacity-55">
+              no GEX history in view
+            </span>
+          )}
 
           {latestOffscreen && bars.length > 0 && (
             <button

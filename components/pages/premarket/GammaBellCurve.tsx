@@ -49,7 +49,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import type { ChainRow } from "@/lib/calculations/calculations";
 import {
   BASIS_META, ZOOM_META,
-  MAX_BAND,
+  MAX_BAND, MAX_BAR_W,
   fmtB,
   foldBins, layoutLevels, lsqGaussian, massInside, moments,
   useGridStep, usePref, useStrikeWindow, useWideBins, useWideHalf,
@@ -253,8 +253,35 @@ export default function GammaBellCurve({
     const netPx = (botH / span) * yScale;
     const yNet = (v: number) => zeroY - v * netPx;
 
-    const slot = (plotW / Math.max(1, k1 - k0)) * gridStep;
-    const barW = slot > 6 ? Math.max(3, slot - 3) : Math.max(1.5, slot * 0.82);
+    // ── BAR WIDTH ───────────────────────────────────────────────────────────
+    // Off the spacing of the bins ACTUALLY IN VIEW, not `gridStep`.
+    //
+    // gridStep is the median gap over the WHOLE board this card reads, and that
+    // board is widened to at least WIDE_MIN_STRIKES — so on a ladder that is
+    // listed every 0.50 near the money and every 2.50 out in the wings, the
+    // median is the WING's spacing and every bar near the money was drawn five
+    // times its own slot, straight over its neighbours.
+    //
+    // The tightest gap in view is the only width that can never overlap
+    // anywhere on screen, so that is what it uses.
+    let minGap = Infinity;
+    for (let i = 1; i < binsIn.length; i++) {
+      const g = binsIn[i].k - binsIn[i - 1].k;
+      if (g > 1e-9 && g < minGap) minGap = g;
+    }
+    const step = Number.isFinite(minGap) ? Math.min(minGap, gridStep) : gridStep;
+
+    const slot = (plotW / Math.max(1e-9, k1 - k0)) * step;
+    // ...and capped, because the other failure is the opposite one: a VOL board
+    // pre-open, or any ±1% window on a coarse ladder, has under a dozen strikes
+    // in it, and a bar that tiles its slot is then a 160px SLAB. Nine slabs edge
+    // to edge is not a distribution you can read a shape off — it is a colour
+    // field with a curve on top, which is what "the bell curve is messed up"
+    // looks like. Capped, the same board reads as nine bars on an axis.
+    const barW = Math.min(
+      MAX_BAR_W,
+      slot > 6 ? Math.max(3, slot - 3) : Math.max(1.5, slot * 0.82),
+    );
     return { x, yTop, yNet, maxMass, maxP, maxN, zeroY, barW };
   }, [binsIn, fit, k0, k1, plotW, topH, topY1, botY0, botH, yScale, gridStep]);
 
@@ -458,6 +485,10 @@ export default function GammaBellCurve({
           {massTicks.map((v) => {
             const yy = yTop(v);
             if (yy < topY0 - 2 || yy > topY1) return null;
+            // A tick that lands on the baseline prints its label straight over
+            // the "0" beside it — two numbers in the same 10px of gutter, which
+            // is what a squashed pane looks like when you zoom in on it.
+            if (Math.abs(yy - topY1) < 11) return null;
             return (
               <g key={`m${v}`}>
                 <line x1={PAD.l} x2={W - PAD.r} y1={yy} y2={yy} stroke="var(--line)" strokeWidth={1} />
@@ -468,7 +499,12 @@ export default function GammaBellCurve({
           })}
           <line x1={PAD.l} x2={W - PAD.r} y1={topY1} y2={topY1} stroke="var(--line2)" strokeWidth={1} />
           <text x={PAD.l - 9} y={topY1 + 3.5} textAnchor="end" fontSize={10} fill="var(--dim2)">0</text>
-          <text x={PAD.l} y={topY0 - 6} fontSize={9} fill="var(--dim2)" className="gd-pane-l">
+          {/* HALO on every pane label: the bars run underneath them (a one-sided
+              net pane fills its whole height), and 9px uppercase over a solid
+              green block is unreadable. paintOrder=stroke draws the plate colour
+              behind the glyphs rather than over them. */}
+          <text x={PAD.l} y={topY0 - 6} fontSize={9} fill="var(--dim2)" className="gd-pane-l"
+            stroke="var(--panel)" strokeWidth={3} paintOrder="stroke">
             Gamma mass
           </text>
 
@@ -490,6 +526,11 @@ export default function GammaBellCurve({
           {netTicks.map((v) => {
             const yy = yNet(v);
             if (yy < botY0 - 2 || yy > botY1 + 2) return null;
+            // Same guard as the mass pane. This one fires constantly on a
+            // one-sided board: with +346M of long gamma against -2M of short,
+            // the zero line sits two pixels off the floor and the "-2M" tick
+            // was printed on top of the "0".
+            if (Math.abs(yy - zeroY) < 11) return null;
             return (
               <g key={`n${v}`}>
                 <line x1={PAD.l} x2={W - PAD.r} y1={yy} y2={yy} stroke="var(--line)" strokeWidth={1} />
@@ -516,10 +557,12 @@ export default function GammaBellCurve({
           </g>
           {/* The two sides named on the pane itself, so "green/red" never has
               to be looked up in a legend. */}
-          <text x={PAD.l + 6} y={botY0 + 11} fontSize={9} fill="var(--pos)" className="gd-pane-l">
+          <text x={PAD.l + 6} y={botY0 + 11} fontSize={9} fill="var(--pos)" className="gd-pane-l"
+            stroke="var(--panel)" strokeWidth={3} paintOrder="stroke">
             long gamma · dealers dampen
           </text>
-          <text x={PAD.l + 6} y={botY1 - 4} fontSize={9} fill="var(--neg)" className="gd-pane-l">
+          <text x={PAD.l + 6} y={botY1 - 4} fontSize={9} fill="var(--neg)" className="gd-pane-l"
+            stroke="var(--panel)" strokeWidth={3} paintOrder="stroke">
             short gamma · dealers amplify
           </text>
 

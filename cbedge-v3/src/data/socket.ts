@@ -92,8 +92,69 @@ function ingest(raw: unknown): void {
     return // a malformed frame is not worth a thrown error in the hot path
   }
   if (!isFrame(parsed)) return
+  if (parsed.type === 'snapshot') fanOutSnapshot(parsed)
   write(parsed.type, parsed)
   persist(parsed.type, parsed)
+}
+
+/**
+ * The connect SNAPSHOT is every frame at once, sent as one message the moment a
+ * client connects — and until this existed, nothing in v3 read it.
+ *
+ * That is not a missed optimisation, it is the difference between a panel
+ * working and not. server-v2 DEDUPES AND THROTTLES the `gex` frame: an
+ * unchanged chain — overnight, a quiet tape, any pause between recomputes —
+ * broadcasts nothing at all, by design (it is ~100KB a go). A card that listens
+ * only for `gex` then sits on "Waiting for the feed…" indefinitely while the
+ * socket has already handed it the whole ladder in the snapshot.
+ *
+ * Every reconnect replays the snapshot, so this is also what refills a panel
+ * after the topic scope changes and the replay cache is dropped.
+ *
+ * A scoped snapshot has its heavy arrays stripped (gexRows becomes undefined),
+ * which is why every field is checked before it is fanned out rather than
+ * written through blindly — the shapes below are transcribed from
+ * buildSnapshot() and the msg() calls in server-v2/websocket-server.js.
+ */
+function fanOutSnapshot(frame: { symbol?: string; ts?: number; data?: unknown }): void {
+  const d = frame.data as Record<string, unknown> | undefined
+  if (!d || typeof d !== 'object') return
+
+  const put = (type: string, data: unknown) => {
+    const synthetic = { type, symbol: frame.symbol, ts: frame.ts, data }
+    write(type, synthetic)
+    persist(type, synthetic)
+  }
+
+  if (Array.isArray(d.gexRows) && d.gexRows.length) {
+    put('gex', {
+      gexRows: d.gexRows,
+      totals: d.totals,
+      callWall: d.callWall,
+      putWall: d.putWall,
+      gexFlip: d.gexFlip,
+      totalNetGex: d.totalNetGex,
+      expiry: d.expiry,
+      updatedAt: d.updatedAt,
+    })
+  }
+  if (typeof d.spot === 'number' && d.spot > 0) {
+    put('spot', { spot: d.spot, prevClose: d.prevClose, basis: d.basis })
+  }
+  if (typeof d.vix === 'number' || typeof d.esFut === 'number') {
+    put('aux', {
+      vix: d.vix,
+      esFut: d.esFut,
+      basis: d.basis,
+      vixPrevClose: d.vixPrevClose,
+      esFutPrevClose: d.esFutPrevClose,
+      spotDisplay: d.spotDisplay,
+    })
+  }
+  if (d.status && typeof d.status === 'object') {
+    put('status', { ...(d.status as Record<string, unknown>), expirations: d.expirations, expiry: d.expiry })
+  }
+  if (d.flow && typeof d.flow === 'object') put('flow', d.flow)
 }
 
 // ── Scope management ─────────────────────────────────────────────────────────

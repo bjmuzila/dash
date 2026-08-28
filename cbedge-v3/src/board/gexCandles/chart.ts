@@ -96,6 +96,13 @@ export interface EsChartHandle {
 export interface MountOpts {
   /** Fired whenever the newest bar moves on or off screen. */
   onLatestOffscreen: (off: boolean) => void
+  /**
+   * Fired when the bubble layer starts, or stops, having anything to draw in
+   * the visible window — zoomed or panned off the end of the GEX history.
+   * Called ONLY on a change, so it is safe to hold in React state; the draw
+   * loop itself never sets state (AGENTS.md rule 4).
+   */
+  onBubblesOutOfRange: (out: boolean) => void
 }
 
 export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts): Promise<EsChartHandle> {
@@ -282,6 +289,13 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     }
   }
 
+  let lastOutOfRange: boolean | null = null
+  function reportOutOfRange(out: boolean) {
+    if (out === lastOutOfRange) return
+    lastOutOfRange = out
+    mountOpts.onBubblesOutOfRange(out)
+  }
+
   let lastSig = ''
   function viewSignature(): string {
     const px = (v: number | null) => (v == null ? 'n' : Math.round(v * 10) / 10)
@@ -350,9 +364,15 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     if (!ctx) return
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
-    if (!drawOpts.on || !snaps.length) return
+    if (!drawOpts.on || !snaps.length) {
+      // Off, or nothing loaded yet. Neither is "out of range" — the note exists
+      // to explain an EMPTY layer that has data, not a layer that is switched
+      // off or still loading.
+      reportOutOfRange(false)
+      return
+    }
 
-    drawBubbles(
+    const drew = drawBubbles(
       ctx,
       snaps,
       {
@@ -374,6 +394,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       { size: drawOpts.size, curve: drawOpts.curve, intensity: drawOpts.intensity },
       palette,
     )
+    reportOutOfRange(!drew)
   }
   raf = requestAnimationFrame(draw)
 

@@ -481,6 +481,15 @@ server.on('upgrade', (req, socket) => {
 
   console.log(`  ws connect  topics=${topics ? [...topics].join(',') : 'ALL'}`)
 
+  // The CONNECT SNAPSHOT — every frame at once, scoped like the real server.
+  //
+  // This is not decoration. server-v2 sends this and then DEDUPES AND THROTTLES
+  // the `gex` frame, so on a static chain a client's only ladder is the one in
+  // here. A mock that fired `gex` every second instead let the GEX Chart card
+  // ship "Waiting for the feed…" to production and pass every local test.
+  // See MOCK_QUIET_GEX below for the switch that reproduces it.
+  send(client, scopeSnapshot(buildSnapshot(), topics))
+
   socket.on('close', () => clients.delete(client))
   // We never read from the client; drain so the socket does not stall.
   socket.on('data', () => {})
@@ -517,6 +526,46 @@ function broadcast(frame) {
       clients.delete(c)
     }
   }
+}
+
+function send(client, frame) {
+  try {
+    client.socket.write(encode(JSON.stringify(frame)))
+  } catch {
+    clients.delete(client)
+  }
+}
+
+/** Mirrors buildSnapshot() in server-v2/websocket-server.js. */
+function buildSnapshot() {
+  return {
+    type: 'snapshot',
+    symbol: 'SPX',
+    ts: Date.now(),
+    data: {
+      symbol: 'SPX',
+      spot: Number(spot.toFixed(2)),
+      spotDisplay: Number(spot.toFixed(2)),
+      prevClose,
+      vix: 14.6,
+      esFut: Number((spot + 45).toFixed(2)),
+      basis: 45,
+      vixPrevClose: 14.5,
+      esFutPrevClose: prevClose + 45,
+      expiry,
+      expirations: [expiry],
+      updatedAt: Date.now(),
+      ...gexPayload(),
+      status: { session: 'RTH', feed: 'mock', lastFeedAt: Date.now() },
+    },
+  }
+}
+
+/** Mirrors scopeSnapshot(): a scoped client's heavy arrays are stripped. */
+function scopeSnapshot(snap, topics) {
+  if (!topics) return snap
+  if (topics.has('gex')) return snap
+  return { ...snap, data: { ...snap.data, gexRows: undefined } }
 }
 
 // ── Synthetic data — WS frame shapes match the real envelope msg() builds in
@@ -563,7 +612,15 @@ setInterval(() => {
 // ~$200 window and will not zoom below MIN_COUNT=30, so a 24-rung ladder pins
 // its viewport and makes pan and zoom untestable against the mock — which is
 // the one thing the mock exists to prevent (see the header note).
-setInterval(() => {
+/**
+ * The gex payload, shared by the connect snapshot and the periodic frame.
+ *
+ * 121 strikes, not the 24 the default gives: the GEX Chart card opens on a
+ * ~$200 window and will not zoom below MIN_COUNT=30, so a 24-rung ladder pins
+ * its viewport and makes pan and zoom untestable against the mock — which is
+ * the one thing the mock exists to prevent (see the header note).
+ */
+function gexPayload() {
   const rows = ladder('SPX', spot, 121)
   const gexRows = rows.map((r) => ({
     strike: r.strike,
@@ -580,22 +637,34 @@ setInterval(() => {
     dte: 0,
   }))
   const byAbs = [...gexRows].sort((a, b) => Math.abs(b.netGEX) - Math.abs(a.netGEX))
-  broadcast({
-    type: 'gex',
-    symbol: 'SPX',
-    ts: Date.now(),
-    data: {
-      gexRows,
-      callWall: byAbs.find((r) => r.netGEX > 0)?.strike ?? null,
-      putWall: byAbs.find((r) => r.netGEX < 0)?.strike ?? null,
-      gexFlip: Math.round(spot / UNIVERSE.SPX.step) * UNIVERSE.SPX.step,
-      totalNetGex: gexRows.reduce((s, r) => s + r.netGEX, 0),
-      totals: {},
-      expiry,
-      updatedAt: Date.now(),
-    },
-  })
-}, 1000)
+  return {
+    gexRows,
+    callWall: byAbs.find((r) => r.netGEX > 0)?.strike ?? null,
+    putWall: byAbs.find((r) => r.netGEX < 0)?.strike ?? null,
+    gexFlip: Math.round(spot / UNIVERSE.SPX.step) * UNIVERSE.SPX.step,
+    totalNetGex: gexRows.reduce((s, r) => s + r.netGEX, 0),
+    totals: {},
+    expiry,
+    updatedAt: Date.now(),
+  }
+}
+
+// gex — a ladder around spot, shaped like a real skew so the walls hold still
+// instead of jumping to a different strike every second.
+//
+// MOCK_QUIET_GEX=1 sends NO periodic gex frames at all, leaving the connect
+// snapshot as the only ladder a client ever gets. That is not an edge case: the
+// real server dedupes an unchanged chain and goes silent for exactly this
+// reason, and every socket-fed card has to survive it. Run the app against it
+// before believing a card is wired up.
+const QUIET_GEX = process.env.MOCK_QUIET_GEX === '1'
+if (!QUIET_GEX) {
+  setInterval(() => {
+    broadcast({ type: 'gex', symbol: 'SPX', ts: Date.now(), data: gexPayload() })
+  }, 1000)
+} else {
+  console.log('  MOCK_QUIET_GEX=1 — no periodic gex frames; the connect snapshot is the only ladder')
+}
 
 // flow — a rolling net-premium tape, mock sweeps/blocks.
 setInterval(() => {
