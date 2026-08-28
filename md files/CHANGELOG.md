@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-08-28 - Deploy fix: `buildShareColor` was imported but never exported
+
+Edited: `components/shared/GexHeatBar.tsx`.
+
+The v8.28.7 VPS deploy failed at the `app-vite` build step:
+
+    "buildShareColor" is not exported by "components/shared/GexHeatBar.tsx",
+    imported by "components/pages/premarket/GexChurnFeed.tsx"
+
+`GexChurnFeed` imports `buildShareColor` for the row edge colour and the legend
+gradient, but the function was declared without `export`. Next's build let it
+through; Rollup, which is what the Vite SPA build runs on, treats an import of a
+non-exported binding as a hard error and failed the whole image build - so the
+deploy stopped before the SPA (and therefore v3) was rebuilt. One word: the
+function is exported now.
+
 ## 2026-08-28 - v3 GEX Candles: the bubble layer only repaints when the view moves, and it no longer vanishes
 
 Edited: `cbedge-v3/src/board/gexCandles/chart.ts`,

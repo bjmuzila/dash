@@ -97,7 +97,10 @@ function hexToRgb(hex: string): [number, number, number] {
 }
 
 /** Diverging ramp across three THEME anchors — no literals. */
-function buildShareColor(share: number, alpha = 1): string {
+// Exported: GexChurnFeed paints its own edge and legend from the same ramp.
+// Rollup (the Vite build) fails the whole app-vite build on an import of a
+// non-exported binding, which is exactly how this broke the deploy.
+export function buildShareColor(share: number, alpha = 1): string {
   const s = Number.isFinite(share) ? Math.max(-1, Math.min(1, share)) : 0;
   const from = s < 0 ? hexToRgb(SOFT_RED) : hexToRgb(HOME_THEME.purple);
   const to = s < 0 ? hexToRgb(HOME_THEME.purple) : hexToRgb(LIGHT_BLUE);
