@@ -1,252 +1,231 @@
 # Changelog
 
-## 2026-08-28 - Bubbles: top N AT EVERY MOMENT, so a level that ran the 11:00 high keeps its trail
+## 2026-08-28 - v3: the four gaps that would have let the board get slow quietly
 
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`cbedge-v3/src/board/gexCandles/bubbles.ts`.
-
-The session-wide row set fixed the eleven-band union and broke something worse:
-7770 was the top GEX strike at the day's high and vanished off the chart
-entirely, leaving seven rows stacked around the close.
-
-**Ranking across the whole session cannot work, and the reason is in this repo's
-own calibration.** Gamma at the top strike grows ~4.7x from the open to the bell
-(`gexTodScale`, measured off six sessions of per-strike history). Rank a day's
-strikes against each other on the raw number and the afternoon wins every
-comparison it is in: an entire morning of real levels ranks below a mediocre
-15:00 strike, and the chart quietly becomes "the last hour, drawn wide".
-
-**So the selection is per bucket again — but only the selection.** A strike is
-drawn over the stretch where it was actually in the top N, so a vertical slice
-anywhere holds exactly N rows (never the union), and a wall that dominated the
-11:00 high keeps its trail up at the high where it happened. Ranking within a
-bucket never makes the cross-time comparison at all, so no detrend is needed for
-it — 11:00's strikes are ranked against 11:00's.
-
-**Hysteresis is what makes per-bucket selection viable.** It is the thing the
-first per-snapshot version was missing: a hard top-N boundary is a coin flip for
-the strikes sitting on it, ranks N and N+1 swap for a minute, both rows break,
-and the trail comes out as dashes — which is exactly what the wings looked like.
-An incumbent now keeps its place while it stays inside N + 2, so it takes a real
-fall out of the ladder, not a tick of noise, to end a row. On v3 the cutoff also
-only ever blocks a NEWCOMER, for the same reason: an incumbent dipping under the
-bar for a minute would punch a hole in its own trail.
-
-The min-per-side swap is likewise decided against THAT bucket's spot — where
-price was at 11:00 is what decides which side an 11:00 row is on. And the glow is
-the bucket's own leader among the drawn rows, so it shows *when* a level was the
-one running the board.
-
-Everything from the previous pass that was right is untouched: one session-wide
-normaliser for the radius (rows taper instead of bulging), the smoothing pass,
-one size plan per frame, thin rows. One correction to the size plan — its spacing
-cap now measures every strike drawn ANYWHERE on the chart, not just the newest
-column's rows. Rows come and go through the session, and two that sat a point
-apart at 11:00 are the pair that actually has to fit.
-
-## 2026-08-28 - Bubbles: one row set for the session, thin rows, smoothed. The three reasons it looked wrong
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`,
-`cbedge-v3/src/board/gexCandles/bubbles.ts`,
-`cbedge-v3/src/board/gexCandles/settings.ts`.
-
-Four levels were set and eleven bands were on the chart, half of them dashed and
-all of them bulging and pinching like caterpillars. Three separate causes, none
-of them a tuning problem:
-
-**1. The row set was chosen PER SNAPSHOT.** Every column ranked its own board and
-drew its own top four — so every column obeyed the count and the CHART did not,
-because what you see is the UNION over the session. A strike that was top-four
-for ten minutes at 10:00 and again at 15:00 put two disconnected segments on the
-chart, which reads as a rendering fault rather than as information.
-
-The set is now picked ONCE, from the whole loaded history, by each strike's PEAK
-|GEX| over the session, with the min-per-side rule applied against the CURRENT
-spot. `levels` means what it says: that many rows, first pixel to last, unbroken.
-(v2 had a subtler version of the same bug — an EXPANDING ranking, so late
-entrants started mid-chart. Same fix, and it deleted the per-bucket balance
-machinery with it.)
-
-**2. Radius was normalised against each snapshot's OWN core.** Every quiet minute
-renormalised back up to full size, so a row bulged wherever its neighbours were
-weak. There is one denominator now — the session's biggest — so a row is
-comparable to itself an hour ago and to the row above it, and it TAPERS instead
-of lumping. v3 also gained a centred 5-snapshot mean over each row's series: the
-minute-to-minute wobble is drawn as a one-pixel slice and reads as noise, while
-the build-and-bleed shape that carries meaning survives the window untouched.
-
-Same class of bug on the pixel side: `placeMarks` re-derived the pane cap, the
-tightest pair and the variance from whichever marks that minute happened to hold,
-so a missing neighbour widened the gap, raised the cap, and fattened every mark in
-that column. Sizing is now ONE plan per frame (`planSizes`), computed off the
-newest snapshot. The only thing that varies along a row is that strike's own gamma
-at that minute, which is the entire point of drawing a trail.
-
-**3. The rows were twice as thick as they should be.** `topFrac` was 3% of the
-pane railed to 5-15px — on an 800px pane a 15px radius is a THIRTY-pixel band.
-At that size a level stops being a line you read price against and becomes a
-region price is usually inside, which tells you nothing. Now 1.2% railed 2.5-6px:
-rows 5-12px thick, unmistakably bands, thin enough that four of them leave the
-candles legible. Both apps. The core's glow cap came down 9px -> 5px with it — the
-dominant level is found by being the biggest row, not the brightest thing on the
-chart.
-
-Also gone: v3's `MAX_STRETCH_R`. It stopped each snapshot's stroke at 0.8 of its
-own radius, which with thin marks is shorter than the gap between snapshots — so
-the strokes no longer met and rows came out dotted. Strokes now reach half way to
-their neighbours and meet exactly. A level that held for an hour is one thing for
-that hour, so a solid row is also the truer picture; its thickness still carries
-the history.
-
-## 2026-08-28 - Bubbles: Auto. Every bubble setting computed from the chart, on both v2 and v3
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`,
-`components/shared/DockToolbar.tsx`,
-`cbedge-v3/src/board/gexCandles/bubbles.ts`,
-`cbedge-v3/src/board/gexCandles/settings.ts`,
-`cbedge-v3/src/board/gexCandles/controls.tsx`,
+Edited: `cbedge-v3/src/design/primitives/ChartFrame.tsx`,
+`cbedge-v3/src/design/primitives/Board.tsx`,
+`cbedge-v3/src/board/chart-render.ts`, `cbedge-v3/src/board/catalog.tsx`,
+`cbedge-v3/src/board/gexChart/GexChartCard.tsx`,
+`cbedge-v3/src/board/gexChart/gexChartRender.ts`,
 `cbedge-v3/src/board/gexCandles/chart.ts`,
-`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
+`cbedge-v3/vite.config.ts`, `cbedge-v3/budgets.json`,
+`cbedge-v3/package.json`, `cbedge-v3/scripts/check-budgets.mjs`,
+`cbedge-v3/AGENTS.md`. Added: `cbedge-v3/scripts/perf-check.mjs`. `perf.mjs` is
+now a forwarder to it.
 
-Every bubble slider was asking the user a question they could not answer from the
-panel, because the right answer depends on things only the chart knows: how many
-levels this board actually has, how far the top one is from the rest, how tall
-the pane is, how close the bars and the rows land at this zoom. **Auto** computes
-all of them, and is ON by default on both surfaces.
+v3 is fast for structural reasons — per-card chunks, the early-boot socket,
+budgets set close to reality, imperative charts. Every one of those is a thing a
+future card can break without anyone noticing. These are the four places where
+nothing was watching.
 
-**The policy** — `BUBBLE_AUTO` in each app's settings module, with the derivation
-as small pure functions beside it so it can be read and argued with in one place:
+**1. The redraw guard ran only when a human remembered it.** `perf.mjs` sat at
+the v3 root, was in no npm script, needed a server started by hand, and measured
+one card on whatever board happened to be saved. It is now
+`scripts/perf-check.mjs`: it boots its own mock server, adds **every card in the
+catalog** through the real "+ Add card" menu (so a new card is measured the day
+it is added, with no list in the script to keep in sync), and runs as part of
+`npm run check`.
 
-- **levels** — a strike holding at least 5% of the board's gamma is a level;
-  under that it is a wing and drawing it costs a row and buys nothing. Count
-  them, clamp to 4-6. Four is the resting number; a genuinely flat board widens.
-- **size** — a target top radius of 3% of the pane height, railed to 5-15px, with
-  each row past the fourth trimming 5% off it. On v2 auto takes
-  `min(1, target / budget)` — it may ask for LESS than the pitch caps allow,
-  never more, which is what stops a zoomed-in chart drawing six 20px blobs over
-  the candles. The non-overlap guarantee is untouched: auto is not allowed to
-  argue with it.
-- **floor** (v3) — 14% of the top, 0.8-2.5px, so the weakest drawn level is
-  always a visible dot and never big enough to read as a real one.
-- **cutoff** (v3) — 6% of the LEADER's share rather than a fixed percent: 0.4% of
-  the board means something different when the wall holds 20% than when the
-  biggest strike holds 4%.
-- **curve / variance** — measured off the median drawn mark's ratio to the top.
-  Bunched (median near 1) and a straight-proportional law draws six
-  near-identical circles, so the exponent steepens; a real wall pulls the median
-  down and it goes back to linear, because the numbers already separate.
-- **intensity** — a busier layer sits quieter against the candles.
+**2. It only guarded one card.** The board is N cards on ONE main thread sharing
+ONE animation frame — GEX Candles being disciplined is worth nothing if the next
+canvas card repaints every frame. The check now counts **repaints per animation
+frame, per canvas, per card**, attributed through a new `data-card-id` on the
+board tile. Multiple draw calls in one frame count as one repaint, so how chatty
+a renderer's drawing code is does not distort the number.
 
-Data-side values (levels, cutoff) are decided ONCE off the newest column and held
-for the whole trail — re-deciding per column makes rows blink in and out as the
-session scrolls past. Pixel-side values (size, floor, variance) are per frame,
-because every factor they read moves with the chart.
+Every canvas v3 owns now tags itself `data-cb-layer`. That is the generalized
+fix for the trap the old script's header warned about: it found the right canvas
+by probing for `pointerEvents: none`, and hooking the wrong one made the guard
+"pass" while measuring nothing. Library-owned canvases are excluded by
+construction now, not by a guess.
 
-**The sliders stay.** An `Auto` chip heads the Bubbles section on both; while it
-is on the rows under it are dimmed and inert (a new `disabled` prop on v2's
-`DockSlider` and v3's `Slider`). They are not hidden on purpose: the values they
-hold are exactly what comes back the moment Auto is switched off, and a control
-that vanishes takes that answer with it. Persisted as `bAuto` per slot on v2 and
-`bubbleAuto` in the card blob on v3.
+**3. Offscreen cards still painted.** Nothing in a browser stops an offscreen
+`<canvas>` — it takes draw calls exactly as fast as a visible one. `ChartFrame`
+now tracks its own visibility (IntersectionObserver + tab visibility) and
+reports it three ways: `handle.visible()` for a per-frame loop, `onVisibility`
+for an on-demand renderer, `data-visible` on the element for the harness and for
+devtools. GEX Candles' rAF loop skips the frame outright; the GEX Chart and Flow
+Tape defer the paint and perform the last one owed on the way back into view.
+Nothing is lost — every one of these repaints the whole canvas from current
+data, so only the last one ever mattered. `rootMargin` is 200px, so a card
+paints just before it is scrolled to, not a frame after.
 
-What auto never touches: what a size MEANS. Radius stays proportional to |net
-GEX| against the reference under every rule above — auto moves the budget, the
-floor and the exponent, never a single mark on its own.
+This is the one with teeth as the board grows: with a dozen cards, most of them
+are below the fold at any moment, and `spot` is a 10Hz topic that re-pushes the
+ladder to every one of them.
 
-## 2026-08-28 - Bubbles: no fused rails on Auto/1m, top 4 strikes actually lands, and the same rule on v3 GEX Candles
+**4. Source maps were shipping to production.** 2.2MB of `.map` next to the
+bundles in `dist/`, which the Dockerfile copies to `public/v3` and the VPS
+serves — v3's entire source, comments included, to anyone who opens devtools on
+a customer page. They cost nothing at runtime, which is why it was easy to
+miss. Off by default now; `CB_SOURCEMAPS=1 npm run build` when you need them.
 
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`,
-`cbedge-v3/src/board/gexCandles/bubbles.ts`,
-`cbedge-v3/src/board/gexCandles/settings.ts`,
-`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
+**Plus: budgets now ratchet.** A ceiling only enforces something while it stays
+close to reality, and these drift upward on their own — a chunk gets split, a
+card moves behind `lazy()`, and July's "no headroom" is September's 40%
+headroom, at which point the next regression sails under it and nothing fails.
+`check-budgets.mjs` prints headroom per asset, reports any budget carrying more
+than 15% slack, and `npm run budgets:ratchet` rewrites `budgets.json` down to
+what the bundle actually weighs. A report, not a failure, by default: a build
+that breaks on the news that it got smaller is a build people learn to ignore.
 
-**1. v2: Auto + 1m drew solid rails.** `colBoundFloorPx` (7px) was floored UNDER
-the column-pitch cap, so on a 1m session fitted to the pane - bars ~4px apart -
-every mark got a 7px radius inside a 4px slot and the rows fused into the
-horizontal bars the bucket exists to prevent.
+Three assertions in `perf-check`, all load-bearing: an on-screen card is quiet
+while idle (a fraction of the frame count, not zero — the live spot autoscales
+the pane and genuinely moves the price mapping); an off-screen card does not
+paint at all; and a card being panned and zoomed still redraws. Without the
+third, a renderer that draws nothing passes everything — a far worse bug, and
+identical in every other measurement. Every card is scrolled through and
+confirmed to have painted at least once before any budget is applied, so a card
+that never drew is reported as NOT MEASURED rather than as a pass.
 
-The floor was written for the MANUAL 1m/5m buckets, where the columns are
-deliberately denser than the candles and the user has asked for sub-bar detail
-and accepted fusing to get it. On Auto nobody asked for that: one column per
-candle is exactly as much detail as the chart carries, so the pitch is now a
-real constraint - `colBound` and `rxCap` both drop the floor when the bucket
-follows the candle. Marks shrink to fit the bar and grow back on zoom, which is
-the honest answer: a bubble cannot truthfully be wider than its own bar.
+Thresholds live in `budgets.json` under `perf`, next to the byte budgets.
 
-**2. v2: the top-4 default now reaches existing charts.** `topStrikes` 5 -> 4
-did nothing on any browser that had opened the chart once, because `bLevels` is
-persisted per slot and a saved value wins. Added a bubble-DEFAULTS stamp
-(`BUBBLE_DEFAULTS_V`, `es-candles-bubble-defaults-v`): when it moves, the keys
-in `BUBBLE_DEFAULT_KEYS` are DELETED from every slot blob once and the card falls
-back to the constant. Deleting rather than overwriting is what keeps it honest -
-the blob goes back to "never set", so the next default change reaches it too.
-Runs from `readSlot` (self-healing, like `ensureMigrated`), after the migration
-and before the shared seed so a stale key cannot be copied forward. Nothing else
-in the blob is touched; this is not a settings reset.
+**Not touched:** `server-v2`, the socket, topic derivation, any v2 file.
 
-**3. v3 GEX Candles: same selection rule.** `bubbleLevels` changed from PER SIDE
-to a TOTAL, default 4, with `BUBBLE_MIN_PER_SIDE = 1` guaranteed. `buildBubbleModel`
-now ranks the whole board once and takes the top N, then - only if a side came
-out empty - swaps the weakest picked strike for the strongest one on the missing
-side. One swap deep, skipped below 2 levels.
 
-Per-side could not express "the top four": on a lopsided board the
-fourth-strongest strike is often the third one above spot, and a fixed count each
-way drew as many rows below spot as above whether or not they were worth drawing.
-The floor keeps what the split was actually for - never a picture of only the
-resistance overhead - at the cost of one mark, and only when a side would be
-blank. Range is now 1-16 (the old per-side 8 in marks), the slider reads "levels"
-instead of "per side", and a `SETTINGS_V` stamp in the stored blob pushes the new
-default past saved values the same way v2's does.
+## 2026-08-28 - Wall migration legend: the swatch is centred on the chip, not the baseline
 
-## 2026-08-28 - ES Candles bubbles: the bucket follows the candle, and the ladder always has a side under price
+Edited: `components/pages/LevelLog.tsx`. Reverted: the `lib/snapshot.ts` change
+from earlier today (see below) - it was the wrong lever and measurement says so.
 
-Edited: `components/dashboard/es-candles/slotStore.ts`,
-`components/dashboard/es-candles/EsChartCard.tsx`.
+The colour squares sat off the label text, live and worse in the popped-out
+PNG. Two causes stacked:
 
-**1. The bucket is "Auto" now, and Auto is the default.** A bubble's time is its
-candle's time, so the trail re-formats with the timeframe switcher instead of
-having to be re-picked after it. Auto buckets by the CONTAINING BAR (`barAt()`),
-which is the only setting that holds across the switcher: a fixed 5m bucket
-stacks twelve columns inside a 1h candle and merges them back into the solid
-rail the bucket exists to prevent, and on a 1m chart it throws four minutes out
-of every five. `1m` / `5m` stay in the picker as manual overrides for sub-bar
-detail on a 15m+ chart.
+1. The swatch was an inline-block on `vertical-align: middle`, which aligns a
+   box's centre to `baseline + x-height/2` - the optical centre of LOWERCASE.
+   These labels are "Put Wall", "Call Wall", "CORE": caps and ascenders, no
+   descenders, so their ink centre is higher than the x-height band and the
+   square read low against it.
+2. An inline swatch rides the line box, and `snapshot.ts`'s `data-cap-center`
+   rewrite MOVES that line box - it re-splits the chip's vertical padding by
+   the measured html2canvas baseline bias to land the glyphs centred. The
+   square went along for the ride, so the capture disagreed with the live page
+   on top of (1).
 
-`BubbleBucket` gained `"auto"`; `"bar"` is the pre-rename spelling of the same
-behaviour and is still accepted, still resolves to the same bucketer, and still
-lights up the Auto tile in the picker - so a slot blob written before this change
-keeps working and a rollback finds a blob it understands. The comparison went
-from `=== "bar"` to `isAutoBucket()`, so there is one place that decides what
-"follows the candle" means.
+Fix: the swatch is `position:absolute`, `left:0`, `top:50%`,
+`margin-top:-5.5px`, with the chip `position:relative` and a `padding-left`
+that reserves the lane it used to occupy inline. Painted size is unchanged
+(11x11 border-box, was 9x9 + 1px border) and so is the label's x position.
+Centred on the chip's own box it depends on no font metric at all - and since
+the fixed height + line-height already centres the text in that same box,
+centring on the box IS centring on the label, live and in the PNG alike.
 
-**2. The drawn strikes default to the top 4, with at least one on each side of
-spot.** `BUBBLE_STYLE.topStrikes` 5 -> 4, and a new `BUBBLE_MIN_PER_SIDE = 1`
-guarantee in the per-bucket selection.
+Measured, not eyeballed: a real html2canvas render of the chip in headless
+Chromium, swatch ink centre vs label ink centre. Live drift 1.50px -> 0.50px;
+capture drift now 0.33px and identical with or without the snapshot.ts nudge -
+which is why that nudge came back out. It had been counter-shifting text-free
+children by the bias, and the same measurement showed it overshooting rather
+than correcting. `lib/snapshot.ts` is back to byte-for-byte what it was.
 
-The selection was a pure peak-|GEX| ranking, and gamma is routinely lopsided
-enough to put all four rows above price - at which point the chart says nothing
-about what is underneath it, which is half of the read. If a side comes out
-empty, the weakest shown strike (which by construction is on the crowded side) is
-swapped for the STRONGEST strike on the missing side, taken from the full
-ranking so the row that appears is real gamma and not a nearest-strike stand-in.
+## 2026-08-28 - Wall migration: hiding CORE gives both walls back
 
-It is a floor, not a split: with genuinely one-sided gamma the other three rows
-still land on the heavy side, so the guarantee costs one row and only when a side
-would be blank. Inert below 2 levels, where honouring it would mean the "levels"
-slider drawing more rows than it says.
+Edited: `components/pages/LevelLog.tsx`.
 
-The swap is decided per BUCKET, not per ranking - spot travels through the ladder
-while the ranking rarely moves - but the expensive half is untouched: the sort
-stays behind the existing `dirty` flag and the shown Set is rebuilt only when the
-swap itself changes. Spot is read in STRIKE space (the bar's close carried across
-the same `basisAt()` the marks are drawn through, binary-searched off the bar
-array rather than a rebuilt map), and the bubble prep cache key gained spot
-quantised to 5 points - the strike pitch - so the cache sees price move without
-re-sorting the ranking on every tick.
+Switching CORE off in the legend left the chart drawing only the role model's
+OTHER line, so the wall CORE had been standing in for came back in fragments -
+present in the stretches where it happened to be the lighter wall, gone
+everywhere else. Across a 5-day span that reads as a level that kept dying
+rather than one that held all week.
+
+The role model exists for one reason: CORE IS one of the walls, so drawing the
+matching wall beside it is the same strike twice in two colours. Hide CORE and
+that double is gone, and with it the reason to suppress anything - so the
+`roled` branch is now gated on `!off.has("cb")`. With CORE off the renderer
+falls through to the plain per-level drawing: call wall and put wall each from
+their own recorded series, full span, every session. Turning CORE back on
+restores the two-role drawing exactly as before. The redundant `off.has("cb")`
+guard inside the role branch went with it.
+
+
+## 2026-08-28 - Wall migration: the shaded corridor is gone
+
+Edited: `components/pages/LevelLog.tsx`.
+
+The chart shaded the corridor between the two bounding levels with
+`rgba(cyan, 0.06)`. At that alpha over the panel it never read as a tint - it
+read as blocky dark rectangles sitting behind the lines, and because the edges
+are step functions every wall change cut another hard vertical seam into it.
+Dropped entirely: the `band` field on `DaySeg`, the per-slot up/lo edge
+resolution, the `bandRuns()` polygon builder, the `bandOn` switch and the
+`<polygon>` render. The three level lines and the price line already say where
+the room was. No behaviour anywhere else changes - the legend chips still
+switch their own series, the session dividers and the held-from mark are
+untouched.
+
+
+## 2026-08-28 - Wall migration legend: swatches back on the label's centre line
+
+Edited: `lib/snapshot.ts`.
+
+The exported PNG of the Level Log's WALL MIGRATION legend drew each colour
+swatch a pixel or two above the label beside it. The live page was fine - the
+cause was the capture path.
+
+`prepareForCapture()` opts fixed-height chips into `data-cap-center`, which
+collapses the line box and re-splits the vertical padding by the measured
+`captureBaselineBias` - html2canvas paints text ~1-2px lower than the browser
+does, so the box is nudged up to compensate and the glyphs land on the optical
+centre. But that nudge moves the whole LINE BOX, not just the glyphs. The
+legend chip's swatch is a real 9px box, painted at its layout position and
+already correct, so it rode up with the box and finished sitting high above the
+text it labels.
+
+New `counterShiftBoxes()` pushes each text-free element child of a
+`data-cap-center` chip back down by the same `bias`, via
+`position:relative` + `top` - a paint-time offset html2canvas honours that
+cannot reflow the chip, so the painted box is unchanged. Children that contain
+text are deliberately skipped: they are drawn with the same low baseline as the
+chip's own text and need the shift they inherited. The fix is generic, so every
+swatch/dot/icon chip in the app gets it, not just this legend.
+
+
+## 2026-08-28 - Premarket replay: /es-candles' transport, and a bell curve that stops shaking
+
+Edited: `components/pages/Premarket.tsx`,
+`components/pages/premarket/GammaBellCurve.tsx`,
+`components/pages/premarket/gammaChartKit.ts`.
+
+**1. The transport is /es-candles' transport.** Same components, same order,
+same language: `DockButton` for every key, `SegGroup` for the speed strip,
+`DockSlider` (width auto, so it flexes) for the scrub, `● Live` to leave and a
+pinned `X` to close. Two replays on one site that look different read as two
+features with two sets of rules. The `<` date `>` stepper came over with it -
+it walks only the sessions that actually have frames, so it can never land on a
+date that turns its own transport off, and it beats scrolling back to the head's
+session picker to answer "what did yesterday look like". The X sits outside the
+has-frames branch for the same reason it does there: on a session with nothing
+recorded the bar is one sentence, and a dock you can open and not close is a
+trap. The coverage caveats stay behind the (i).
+
+**2. The gamma bell curve no longer shakes.** Its strike window was centred on
+spot. Spot jumps every replay frame, so the axis re-centred every frame and
+every bar slid sideways under the cursor - the card, and the page around it,
+read as shaking, and "which strike grew" was the one thing that would not hold
+still long enough to watch.
+
+While replay is on the card now takes an `axisAnchor`: the MIDPOINT of the whole
+session's spot range, plus that range's half-width as a floor on the window.
+Computed off every frame rather than the current one, so it does not move as the
+scrubber does. The bars hold still and SPOT moves across them, which is the
+right way round, and the floor covers the day's whole travel so pinning the axis
+can never push spot off the side of its own chart. In the kit, `useWideBins`
+takes an optional window `center` and `useStrikeWindow` an optional `center` +
+`floorHalf`; the gamma MATH is untouched and still prices every strike off the
+real spot. Live, nothing changes - no anchor, follow spot.
+
+**3. A bell per side on the net pane.** The top pane fits a normal through gamma
+mass, which is unsigned and has one hump; net GEX has two, and they are
+different questions - where the long-gamma block is centred and how wide it is,
+and the same for the short one. Each side is now fitted on its own by handing
+`lsqGaussian` the rows with `mass` set to that side's magnitude, so zero-mass
+strikes drop out and neither side's flat data drags the other's width. Drawn in
+amber, the card's existing "this is the fitted normal" colour, at 1.8 rather
+than the mass fit's 2.2 so the bars underneath stay readable. Each side's peak
+and sigma are printed on its own pane label; a side with under five bars gets no
+curve and no numbers rather than a fit through noise.
+
+No proxy, server or recorder change.
 
 ## 2026-08-28 - Premarket replay: the Post-Market build column was showing the finished day at every frame
 

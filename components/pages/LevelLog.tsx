@@ -283,6 +283,8 @@ const ROW_LEAD_H = 20;
 const RAIL_CHIP_H = 24;
 /** Same idea for the wall-migration legend chips — see `legendChip`. */
 const LEGEND_CHIP_H = 16;
+/** Painted size of a legend colour swatch — border included (border-box). */
+const LEGEND_SWATCH = 11;
 
 const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
 /** Column-head width version of the same three. */
@@ -1966,16 +1968,41 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }:
         title={on ? `Hide ${label}` : `Show ${label}`}
         data-cap-center
         style={{
+          position: "relative",
           display: "inline-block", boxSizing: "border-box", whiteSpace: "nowrap",
           height: LEGEND_CHIP_H, lineHeight: `${LEGEND_CHIP_H}px`,
-          padding: 0, borderRadius: 6, border: "1px solid transparent", background: "transparent",
+          // Left padding is the swatch's reserved lane — see below. 11px of
+          // painted swatch + the 6px gap the old `marginRight` gave it.
+          padding: `0 0 0 ${LEGEND_SWATCH + 6}px`,
+          borderRadius: 6, border: "1px solid transparent", background: "transparent",
           fontFamily: "inherit", fontSize: 11, cursor: "pointer",
           color: MUTED, opacity: on ? 1 : 0.4,
         }}
       >
+        {/* THE SWATCH IS TAKEN OUT OF THE LINE BOX ON PURPOSE.
+            It used to be an inline-block on `vertical-align: middle`, which
+            aligns a box's centre to `baseline + x-height/2`. That is the
+            optical centre of LOWERCASE, and these labels are "Put Wall",
+            "Call Wall", "CORE" — caps and ascenders, no descenders — so the
+            ink sits higher than the x-height band and the square read ~1.5px
+            low against it. Worse, an inline swatch rides the line box, and
+            snapshot.ts's `data-cap-center` rewrite MOVES that line box (it
+            re-splits the padding by the measured html2canvas baseline bias to
+            get the glyphs centred), which dragged the square somewhere else
+            again in the PNG — so the popped-out capture disagreed with the
+            live page as well as with itself.
+            Absolutely positioned against the chip and centred on its box, the
+            square depends on no font metric at all: the text is centred in
+            that same box by the fixed height + line-height, so centring on the
+            box IS centring on the label, live and in the capture alike.
+            Measured both ways against a real html2canvas render before and
+            after: live drift 1.5px → 0.5px, and the capture now lands within
+            a third of a pixel of the live page instead of moving with the
+            bias. */}
         <span aria-hidden style={{
-          display: "inline-block", verticalAlign: "middle", marginRight: 6,
-          width: 9, height: 9, borderRadius: 2,
+          position: "absolute", left: 0, top: "50%", marginTop: -LEGEND_SWATCH / 2,
+          display: "block", boxSizing: "border-box",
+          width: LEGEND_SWATCH, height: LEGEND_SWATCH, borderRadius: 2,
           background: on ? color : "transparent", border: `1px solid ${color}`,
         }} />
         <span style={{ verticalAlign: "middle", marginRight: 6 }}>{label}</span>

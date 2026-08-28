@@ -47,11 +47,32 @@ not by memory.
    `watchFrame` + the chart library's own API. Never push a tick through React
    state on its way to a chart.
 
-5. **Budgets are hard limits.** `npm run build` fails if a chunk is over. Raise a
-   number in `budgets.json` deliberately, in a diff someone can see — never work
-   around it.
+5. **A card nobody can see does not paint.** `ChartFrame` reports its own
+   visibility three ways — `handle.visible()` for a per-frame loop,
+   `onVisibility` for an on-demand renderer, `data-visible` on the element. Use
+   one. The board is N cards on ONE main thread sharing ONE animation frame, and
+   the cards below the fold are most of that budget if nothing stops them —
+   nothing in the browser stops them for you. `npm run perf` catches a renderer
+   that ignores all three.
 
-6. **No silent catch-all route.** An unregistered route renders NotFound. v2 fell
+6. **Every canvas v3 owns carries `data-cb-layer`.** One line where it is
+   created. It is how the perf check tells our layers from the ones a chart
+   library made for itself, and it is what makes a per-card redraw number
+   possible at all.
+
+7. **Budgets are hard limits, and they ratchet.** `npm run build` fails if a
+   chunk is over. Raise a number in `budgets.json` deliberately, in a diff
+   someone can see — never work around it. When a chunk gets SMALLER, pull the
+   number back down with `npm run budgets:ratchet`: a budget carrying 40%
+   headroom has stopped enforcing anything, and the check now says so on every
+   run.
+
+8. **Source maps do not ship.** `dist/` is copied to `public/v3` and served, so
+   a shipped map publishes v3's entire source to anyone who opens devtools on a
+   customer page. Off by default; build with `CB_SOURCEMAPS=1` when you need
+   them locally.
+
+9. **No silent catch-all route.** An unregistered route renders NotFound. v2 fell
    through to `/traders-dashboard`, which made missing pages look like they
    half-worked.
 
@@ -130,15 +151,38 @@ a catch-all would swallow `/v3/assets/*.js` and hand back HTML.
 2. Read it with `useField`. That is the whole process; nothing else needs to
    know, including the socket.
 
+## Adding a card to the board
+
+`src/board/catalog.tsx` — one entry in `CARD_CATALOG`, and the "+ Add card"
+dropdown, `BoardPage` and `Board` all pick it up. Big cards go behind `lazy()`;
+a card that is a few lines stays static, because a chunk boundary costs more
+than it saves.
+
+Then, before you push:
+
+- Anything that paints must go through `ChartFrame` and honour ONE of its
+  visibility signals (non-negotiable 5), and tag its canvas `data-cb-layer`
+  (non-negotiable 6).
+- Run **`npm run perf`**. It adds every card in the catalog to a board and
+  measures your new one automatically — there is no list to update. It is the
+  only thing standing between the fifteenth card and a board that runs at 15fps
+  for a reason nobody can point at.
+
 ## Commands
 
 ```
-npm run dev        # dev server on :5273, proxying to VITE_BACKEND_ORIGIN
-npm run build      # typecheck + build + budget check (fails on over-budget)
-npm run mock       # serve dist/ with synthetic data, no backend needed
-npm run check      # typecheck + build + budgets + ws scope check
-npm run check:ws   # the important one — proves topic derivation is correct
+npm run dev             # dev server on :5273, proxying to VITE_BACKEND_ORIGIN
+npm run build           # typecheck + build + budget check (fails on over-budget)
+npm run mock            # serve dist/ with synthetic data, no backend needed
+npm run check           # typecheck + build + budgets + ws scope + perf
+npm run check:ws        # proves topic derivation is correct
+npm run perf            # per-card redraw guard: idle quiet, offscreen silent,
+                        # interaction still paints
+npm run budgets:ratchet # pull budgets.json down to what dist/ actually weighs
 ```
+
+`check:ws` and `perf` are the two that catch silent failures — a wrong topic
+scope and a runaway repaint both look completely fine on screen for a while.
 
 ## Deploy
 
@@ -151,6 +195,8 @@ Wired up, same shape as `app-vite`:
   fail a commit, not a deploy; an over-budget v3 bundle must never be able to
   block a v2 hotfix from reaching the VPS. Run `npm run check` on the laptop
   before pushing.
+- Source maps are NOT emitted (see non-negotiable 8). The deploy would serve
+  them publicly out of `public/v3`.
 - `middleware.ts` gates `/v3*` to owner-only, the same treatment `/home3` gets.
   Remove that pattern when v3 ships.
 - Live at `cbedge.net/v3/` after `push.ps1` → GitHub → VPS pull + rebuild.

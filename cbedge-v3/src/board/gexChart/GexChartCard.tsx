@@ -45,31 +45,76 @@ export function GexChartCard() {
   const handleRef = useRef<GexChartHandle | null>(null)
   const modelRef = useRef<GexChartModel>(EMPTY_MODEL)
 
-  const push = useCallback((rows: GexData['gexRows'] | null, spot: number, sym: string) => {
-    const model: GexChartModel = rows?.length ? { rows, spot, symbol: sym } : { ...EMPTY_MODEL, symbol: sym }
-    modelRef.current = model
-    handleRef.current?.setModel(model)
-    let sum: number | null = null
-    if (rows?.length) {
-      sum = 0
-      for (const r of rows) sum += netOf(r)
+  // ── Offscreen cards do not paint ────────────────────────────────────────────
+  // `spot` is a 10Hz topic and every tick re-pushes the ladder, so an unguarded
+  // copy of this card repaints its canvas ten times a second for as long as it
+  // is on the board — including while it is scrolled a thousand pixels below
+  // the fold. The model is kept up to date either way (it is a ref assignment);
+  // only the PAINT is deferred, and only the last one is owed, because setModel
+  // redraws the whole chart from the current model.
+  const visibleRef = useRef(true)
+  const missedRef = useRef(false)
+
+  const paint = useCallback(() => {
+    const handle = handleRef.current
+    if (!handle) return
+    if (!visibleRef.current) {
+      missedRef.current = true
+      return
     }
-    setTotal(sum)
+    missedRef.current = false
+    handle.setModel(modelRef.current)
   }, [])
 
-  const onMount = useCallback((frame: ChartHandle): (() => void) => {
-    const created = mountGexChart(frame.el)
-    handleRef.current = created
-    // Replay whatever arrived before the frame mounted, so the first paint is
-    // never an empty chart that fills in a beat later.
-    created.setModel(modelRef.current)
-    return () => {
-      created.destroy()
-      handleRef.current = null
+  const push = useCallback(
+    (rows: GexData['gexRows'] | null, spot: number, sym: string) => {
+      const model: GexChartModel = rows?.length ? { rows, spot, symbol: sym } : { ...EMPTY_MODEL, symbol: sym }
+      modelRef.current = model
+      paint()
+      let sum: number | null = null
+      if (rows?.length) {
+        sum = 0
+        for (const r of rows) sum += netOf(r)
+      }
+      // Left ungated on purpose: it is the header number, it must be right the
+      // instant the card is scrolled back into view, and React bails out on an
+      // unchanged value anyway.
+      setTotal(sum)
+    },
+    [paint],
+  )
+
+  const onMount = useCallback(
+    (frame: ChartHandle): (() => void) => {
+      const created = mountGexChart(frame.el)
+      handleRef.current = created
+      visibleRef.current = frame.visible()
+      // Replay whatever arrived before the frame mounted, so the first paint is
+      // never an empty chart that fills in a beat later.
+      created.setModel(modelRef.current)
+      return () => {
+        created.destroy()
+        handleRef.current = null
+      }
+    },
+    [],
+  )
+
+  const onResize = useCallback(() => {
+    if (!visibleRef.current) {
+      missedRef.current = true
+      return
     }
+    handleRef.current?.redraw()
   }, [])
 
-  const onResize = useCallback(() => handleRef.current?.redraw(), [])
+  const onVisibility = useCallback(
+    (visible: boolean) => {
+      visibleRef.current = visible
+      if (visible && missedRef.current) paint()
+    },
+    [paint],
+  )
 
   // ── SPX: the socket ────────────────────────────────────────────────────────
   // Returning early when off-socket is what UNSUBSCRIBES, which is also what
@@ -135,7 +180,12 @@ export function GexChartCard() {
       </CardToolbar>
 
       <div className="relative min-h-0 flex-1">
-        <ChartFrame onMount={onMount} onResize={onResize} className="absolute inset-0" />
+        <ChartFrame
+          onMount={onMount}
+          onResize={onResize}
+          onVisibility={onVisibility}
+          className="absolute inset-0"
+        />
         {total == null && (
           <span className="pointer-events-none absolute left-1 top-1 text-[10px] text-muted opacity-50">
             {onSocket ? 'Waiting for the feed…' : `Loading ${symbol}'s chain…`}

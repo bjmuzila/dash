@@ -1,9 +1,20 @@
 {
-  "$comment": "Hard limits, in BROTLI-compressed bytes, enforced by scripts/check-budgets.mjs on every build. These are set close to current reality on purpose — a budget with 4x headroom enforces nothing. Raising a number is a deliberate decision that shows up in a diff, which is the whole point: 'no exceptions' only survives if a machine enforces it.",
+  "$comment": "Hard limits, in BROTLI-compressed bytes, enforced by scripts/check-budgets.mjs on every build. These are set close to current reality on purpose — a budget with 4x headroom enforces nothing. Raising a number is a deliberate decision that shows up in a diff, which is the whole point: 'no exceptions' only survives if a machine enforces it. LOWERING one matters just as much and is far easier to forget, which is what `ratchet` is for: `npm run budgets:ratchet` pulls every number back down to what the bundle actually weighs today.",
   "entry": 46000,
   "react": 55000,
   "route": 80000,
   "css": 20000,
   "html": 4096,
-  "totalInitial": 112000
+  "totalInitial": 112000,
+  "ratchet": {
+    "$comment": "slack = how much headroom a budget may carry before it stops enforcing anything. When the largest asset of a kind is more than this fraction under its budget, the check reports SLACK. enforce=true turns those reports into build failures; leave it false so a bundle getting SMALLER never blocks a commit — re-tighten deliberately with `npm run budgets:ratchet`.",
+    "slack": 0.15,
+    "enforce": false
+  },
+  "perf": {
+    "$comment": "Limits for scripts/perf-check.mjs, which counts REPAINTS PER ANIMATION FRAME on every canvas v3 owns (the ones tagged data-cb-layer), attributed per board card. idleRepaintsPerFrame is measured with the card on screen and nothing happening — not zero, because a live spot legitimately moves the price mapping and the pane autoscales with it. offscreenRepaints is a hard zero: a card scrolled out of view must not paint at all. interactionRepaints is the other half of the guard — a gate that suppressed everything would pass every other line here.",
+    "idleRepaintsPerFrame": 0.15,
+    "offscreenRepaints": 0,
+    "interactionRepaints": 10
+  }
 }

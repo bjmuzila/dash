@@ -122,6 +122,9 @@ function useEsChart(onLatestOffscreen: (off: boolean) => void, onOutOfRange: (ou
     void mountEsChart(frame.el, {
       onLatestOffscreen: (off) => offRef.current(off),
       onBubblesOutOfRange: (out) => oorRef.current(out),
+      // The draw loop's own visibility gate — see MountOpts.isVisible in
+      // ./chart.ts. `frame.visible` is stable for the life of the frame.
+      isVisible: frame.visible,
     }).then((created) => {
       if (cancelled) {
         created.destroy()

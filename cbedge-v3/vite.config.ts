@@ -63,9 +63,24 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       target: 'es2022',
-      // Source maps are worth their weight — they cost nothing at runtime
-      // (browsers only fetch them when devtools is open).
-      sourcemap: true,
+      // ── SOURCE MAPS ARE OFF BY DEFAULT ──────────────────────────────────
+      // They cost nothing at RUNTIME — a browser fetches a .map only when
+      // devtools is open — but the Dockerfile copies dist/ to public/v3 and
+      // the VPS serves it, so shipping them publishes v3's entire source,
+      // comments included, to anyone who opens the inspector on a customer
+      // page. That was 2.2MB of readable source sitting next to the bundles.
+      //
+      // They are also most of the build's output and a real slice of its time,
+      // on a deploy that never reads them.
+      //
+      // To debug a production build locally, turn them on for that build:
+      //   PowerShell   $env:CB_SOURCEMAPS=1; npm run build
+      //   bash         CB_SOURCEMAPS=1 npm run build
+      //
+      // Read from process.env, NOT from loadEnv's `env`: this is a
+      // machine-local debugging switch, and making it a .env value is how it
+      // ends up committed and then quietly true on the VPS.
+      sourcemap: process.env.CB_SOURCEMAPS === '1',
       cssCodeSplit: true,
       reportCompressedSize: false, // speeds the build; check-budgets.mjs measures for real
       rollupOptions: {

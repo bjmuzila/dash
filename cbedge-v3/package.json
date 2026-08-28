@@ -9,9 +9,11 @@
     "build": "tsc --noEmit && vite build && node scripts/check-budgets.mjs",
     "build:fast": "vite build",
     "budgets": "node scripts/check-budgets.mjs",
+    "budgets:ratchet": "node scripts/check-budgets.mjs --ratchet",
     "mock": "node scripts/mock-server.mjs 4310",
     "check:ws": "node scripts/ws-scope-check.mjs",
-    "check": "npm run typecheck && npm run build:fast && npm run budgets && npm run check:ws",
+    "perf": "node scripts/perf-check.mjs",
+    "check": "npm run typecheck && npm run build:fast && npm run budgets && npm run check:ws && npm run perf",
     "preview": "vite preview --port 4173"
   },
   "dependencies": {

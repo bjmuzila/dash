@@ -218,6 +218,11 @@ export function Board({
         return (
           <div
             key={`${baseId}-${it.id}`}
+            // The tile's identity, in the DOM. scripts/perf-check.mjs attributes
+            // every canvas it instruments to a card by walking up to this
+            // attribute — without it a paint is just "something on the page
+            // drew", and a per-card redraw budget is not possible at all.
+            data-card-id={it.id}
             onPointerDown={(e) => onDownMove(e, it.id)}
             className="absolute"
             style={{

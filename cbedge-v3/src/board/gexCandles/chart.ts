@@ -109,6 +109,17 @@ export interface MountOpts {
    * loop itself never sets state (AGENTS.md rule 4).
    */
   onBubblesOutOfRange: (out: boolean) => void
+  /**
+   * Is the card on screen? Pass `ChartHandle.visible` straight through.
+   *
+   * The draw loop below is already guarded by the view signature, which is the
+   * right guard for a chart somebody is looking at. It is the wrong guard for
+   * one scrolled a thousand pixels below the fold: the signature keeps changing
+   * there, because every live tick that makes a new high re-autoscales the pane
+   * and genuinely moves the price mapping. So the whole frame is skipped
+   * instead. Omitting this paints exactly as before.
+   */
+  isVisible?: () => boolean
 }
 
 export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts): Promise<EsChartHandle> {
@@ -195,6 +206,11 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   overlay.style.position = 'absolute'
   overlay.style.inset = '0'
   overlay.style.pointerEvents = 'none'
+  // Marks this as a canvas v3 CODE owns, as opposed to the two lightweight-charts
+  // creates for itself. scripts/perf-check.mjs measures only these — that is the
+  // generalized version of the "hook the wrong canvas" trap its header warns
+  // about, which used to be avoided by probing for pointerEvents:none.
+  overlay.dataset.cbLayer = 'bubbles'
   container.appendChild(overlay)
 
   let snaps: BubbleSnapshot[] = []
@@ -339,6 +355,19 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
 
   function draw() {
     raf = requestAnimationFrame(draw)
+
+    // Off screen: skip the frame outright, before the signature is even
+    // computed. The loop keeps running (a hidden card is cheap — one predicate
+    // call per frame, and the browser throttles rAF to nothing in a background
+    // tab anyway) rather than being torn down and restarted, which would mean
+    // reasoning about a half-destroyed chart every time a card crosses the fold.
+    //
+    // Nothing is lost by skipping. lastSig is not updated here, so whatever
+    // changed while hidden — new data, a resize, a pan — leaves the signature
+    // different from the last DRAWN one, and the first visible frame repaints.
+    // If nothing changed, the canvas already holds the right pixels.
+    if (mountOpts.isVisible && !mountOpts.isVisible()) return
+
     const sig = viewSignature()
     if (sig === lastSig) return
     lastSig = sig

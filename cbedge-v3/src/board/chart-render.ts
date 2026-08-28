@@ -19,43 +19,96 @@ import type { ChartHandle } from '@/design/primitives/ChartFrame'
 
 /**
  * Wires a ChartFrame to a plain <canvas> this hook creates and owns. Returns
- * `onMount`/`onResize` to spread onto <ChartFrame>, and `setDraw` to install
- * the render function — call `setDraw` again whenever the data to paint
- * changes (a REST refetch) or, for a live topic, from inside a `watchFrame`
- * callback so the tick never goes through React state on its way to the
- * canvas (AGENTS.md rule 4).
+ * `onMount`/`onResize`/`onVisibility` to spread onto <ChartFrame>, and
+ * `setDraw` to install the render function — call `setDraw` again whenever the
+ * data to paint changes (a REST refetch) or, for a live topic, from inside a
+ * `watchFrame` callback so the tick never goes through React state on its way
+ * to the canvas (AGENTS.md rule 4).
+ *
+ * ── Painting is GATED ON VISIBILITY ──────────────────────────────────────────
+ * This is an on-demand renderer: it paints when told to, and a live topic tells
+ * it to several times a second, forever, whether or not the card is on screen.
+ * On a scrolling board most cards are not. So a draw requested while hidden is
+ * not performed — it is remembered, and performed once on the way back into
+ * view. Nothing is lost: only the LAST draw matters, because every draw
+ * repaints the whole canvas from current data.
+ *
+ * PASS `onVisibility` TO <ChartFrame>. Without it this hook never learns it is
+ * hidden and paints exactly as it used to — no error, no warning, just an
+ * offscreen card spending frame budget. scripts/perf-check.mjs is what catches
+ * that.
  */
 export function useCanvasRenderer() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const sizeRef = useRef({ w: 0, h: 0 })
   const drawRef = useRef<((canvas: HTMLCanvasElement, w: number, h: number) => void) | null>(null)
+  const visibleRef = useRef(true)
+  const missedRef = useRef(false)
 
-  const onMount = useCallback((handle: ChartHandle): (() => void) => {
-    const canvas = document.createElement('canvas')
-    canvas.style.display = 'block'
-    canvas.style.width = '100%'
-    canvas.style.height = '100%'
-    handle.el.appendChild(canvas)
-    canvasRef.current = canvas
-    sizeRef.current = { w: handle.width, h: handle.height }
-    drawRef.current?.(canvas, handle.width, handle.height)
-    return () => {
-      canvas.remove()
-      canvasRef.current = null
+  /** Paint now, or note that a paint is owed once the card is visible again. */
+  const paint = useCallback(() => {
+    const canvas = canvasRef.current
+    const draw = drawRef.current
+    if (!canvas || !draw) return
+    if (!visibleRef.current) {
+      missedRef.current = true
+      return
     }
+    missedRef.current = false
+    draw(canvas, sizeRef.current.w, sizeRef.current.h)
   }, [])
 
-  const onResize = useCallback((w: number, h: number) => {
-    sizeRef.current = { w, h }
-    if (canvasRef.current) drawRef.current?.(canvasRef.current, w, h)
-  }, [])
+  const onMount = useCallback(
+    (handle: ChartHandle): (() => void) => {
+      const canvas = document.createElement('canvas')
+      canvas.style.display = 'block'
+      canvas.style.width = '100%'
+      canvas.style.height = '100%'
+      // Marks this as a canvas v3 CODE owns, as opposed to one a chart library
+      // created for itself. scripts/perf-check.mjs measures only these — hooking
+      // every canvas on the page would fold lightweight-charts' own per-tick
+      // repaints into the number and make the guard unreadable.
+      canvas.dataset.cbLayer = 'canvas'
+      handle.el.appendChild(canvas)
+      canvasRef.current = canvas
+      sizeRef.current = { w: handle.width, h: handle.height }
+      visibleRef.current = handle.visible()
+      paint()
+      return () => {
+        canvas.remove()
+        canvasRef.current = null
+      }
+    },
+    [paint],
+  )
 
-  const setDraw = useCallback((fn: (canvas: HTMLCanvasElement, w: number, h: number) => void) => {
-    drawRef.current = fn
-    if (canvasRef.current) fn(canvasRef.current, sizeRef.current.w, sizeRef.current.h)
-  }, [])
+  const onResize = useCallback(
+    (w: number, h: number) => {
+      sizeRef.current = { w, h }
+      paint()
+    },
+    [paint],
+  )
 
-  return { onMount, onResize, setDraw }
+  const onVisibility = useCallback(
+    (visible: boolean) => {
+      visibleRef.current = visible
+      // Only on the way IN, and only if something was actually skipped. A card
+      // that was never asked to draw while hidden has nothing to catch up on.
+      if (visible && missedRef.current) paint()
+    },
+    [paint],
+  )
+
+  const setDraw = useCallback(
+    (fn: (canvas: HTMLCanvasElement, w: number, h: number) => void) => {
+      drawRef.current = fn
+      paint()
+    },
+    [paint],
+  )
+
+  return { onMount, onResize, onVisibility, setDraw }
 }
 
 export interface Candle {

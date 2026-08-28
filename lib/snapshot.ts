@@ -546,16 +546,6 @@ function applyUniversalCloneFixes(root: HTMLElement) {
       // the height and the line box alone and only move the text inside it.
       shiftTextByBias(n, bias, cs);
     }
-    // Fix, part 3: the bias re-split moves the whole LINE BOX, not just the
-    // glyphs — so a chip that also carries a non-text child (the wall log
-    // legend's colour swatch, an icon dot) has that child dragged up by `bias`
-    // too. The text needed the shift because html2canvas draws it low; the
-    // swatch is a real box and was already drawn where it belongs, so it comes
-    // out `bias` px high above the label it is supposed to sit beside. Push
-    // element children back down by the same amount. `position:relative` +
-    // `top` is a paint-time offset html2canvas honours and it cannot reflow the
-    // chip, so the painted box is still identical.
-    counterShiftBoxes(n, bias);
     // inline-flex centering is its own html2canvas hazard (it lays the child out
     // but still draws text from the rect's top) — force the simple flow box.
     if ((n.style.display || "").includes("flex")) n.style.display = "inline-block";
@@ -619,33 +609,6 @@ function shiftTextByBias(n: HTMLElement, bias: number, cs: CSSStyleDeclaration |
   const pb = parseFloat(cs?.paddingBottom || "") || 0;
   if (!(pt > 0) && bias > 0) return;
   setSplitPadding(n, pt - bias, pt + pb);
-}
-
-/**
- * Undo the bias shift for the non-text boxes inside a `data-cap-center` chip.
- *
- * The padding re-split above moves the element's whole line box up by `bias` so
- * that html2canvas — which paints text ~1–2px low — lands the glyphs on the
- * box's optical centre. Any child that is NOT text (a colour swatch, a dot, an
- * icon) is painted as a box, at its real layout position, so it does not want
- * that correction and ends up riding high. Nudging it back down by `bias`
- * restores the swatch/label alignment the live page has.
- *
- * TEXT children are deliberately left alone: they are drawn with the same low
- * baseline as the chip's own text and therefore need the shift they inherited.
- * Only childless / text-free elements are touched, which is exactly the
- * swatch-and-icon shape and never a label.
- */
-function counterShiftBoxes(n: HTMLElement, bias: number): void {
-  if (!bias) return;
-  Array.from(n.children).forEach((el) => {
-    const c = el as HTMLElement;
-    if ((c.textContent || "").trim()) return;
-    const pos = c.style.position || "";
-    if (pos && pos !== "static" && pos !== "relative") return;
-    c.style.position = "relative";
-    c.style.top = `${(parseFloat(c.style.top || "") || 0) + bias}px`;
-  });
 }
 
 /** 1x1 GIF — the same probe image html2canvas measures its own metrics with. */

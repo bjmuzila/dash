@@ -223,6 +223,9 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
   canvas.style.display = 'block'
   canvas.style.width = '100%'
   canvas.style.height = '100%'
+  // Marks this as a canvas v3 CODE owns — same contract as the line in
+  // board/chart-render.ts. scripts/perf-check.mjs measures only these.
+  canvas.dataset.cbLayer = 'gex-chart'
   container.appendChild(canvas)
   if (getComputedStyle(container).position === 'static') container.style.position = 'relative'
   container.style.touchAction = 'none'

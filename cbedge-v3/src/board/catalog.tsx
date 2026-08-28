@@ -62,7 +62,7 @@ export interface CardDef {
 const FLOW_HISTORY_MAX = 120
 
 function FlowTapeCard() {
-  const { onMount, onResize, setDraw } = useCanvasRenderer()
+  const { onMount, onResize, onVisibility, setDraw } = useCanvasRenderer()
   const { symbol } = usePageSymbol()
   const following = isSocketSymbol(symbol)
   const [snapshot, setSnapshot] = useState<{ netPremium: number; buyPct: number; prints: number } | null>(null)
@@ -104,7 +104,7 @@ function FlowTapeCard() {
         <Stat label="Prints" value={snapshot?.prints} size="sm" />
       </div>
       <div className="h-16 shrink-0">
-        <ChartFrame onMount={onMount} onResize={onResize} />
+        <ChartFrame onMount={onMount} onResize={onResize} onVisibility={onVisibility} />
       </div>
       <Table
         columns={[
