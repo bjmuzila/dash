@@ -1,5 +1,68 @@
 # Changelog
 
+## 2026-08-28 - v3: the GEX Chart is v2's home-page chart, pan/zoom and all
+
+Edited: `cbedge-v3/src/board/gexChart/{gexChartRender.ts,GexChartCard.tsx}`,
+`cbedge-v3/src/design/tokens.css`, `cbedge-v3/scripts/mock-server.mjs`.
+
+Rewritten as a port of `components/dashboard/GexChart.tsx` rather than a chart of
+my own that happened to draw the same numbers.
+
+**Transcribed, not reinvented.** The padding (20/6/16/16), the bar gradients, the
+1.25 y headroom, the 1.16/0.86 zoom factors, the 1.003^dy y-scale ramp, the ~$200
+default window, MIN_COUNT 30, the densify step detection and the ATM centring are
+v2's numbers.
+
+**The interaction, which was the point:**
+- **wheel = zoom**, cursor-anchored — the strike under the pointer is the fixed
+  point, so it does not walk away as you scroll. Bound natively with
+  `{ passive: false }`: React's `onWheel` prop is passive, so `preventDefault()`
+  there is ignored and the whole page scrolls instead.
+- **drag = pan.**
+- **drag on the left gutter = y-scale** (v2's second drag mode).
+- **double-click = recentre on ATM + reset the y-scale.**
+- **hover** highlights the bar and shows a small strike/value readout.
+
+**Same colouring.** Positive `#29b6f6`, negative `#ffb300` — AMBER, not the red
+v3 uses elsewhere — with v2's gradient: the lit end lightens toward white by up
+to 28% of the bar's share of the column max. Two new tokens
+(`--color-gexbar-pos` / `--color-gexbar-neg`) rather than recolouring the
+existing GEX pair, because v2 genuinely runs both: blue/red bubbles on the ES
+chart, blue/amber bars on the GEX chart. The token comment says which to delete
+if they ever converge.
+
+**No toggles**, and v2 has none either — `mode`, `dataMode`, `showOI`, `showDex`
+are PROPS its home page passes from its own cog, and it passes net GEX on OI+VOL.
+So my OI+VOL/VOL and HORIZ/VERT segments are gone; the header carries the board
+total and, off-socket, `· chain`.
+
+**Imperative, and it has to be.** A pan is sixty pointer events a second, each
+changing the viewport. `mountGexChart()` owns the canvas, the viewport and the
+listeners the way chart.ts does for the candles, so none of that reaches React
+(AGENTS.md rule 4).
+
+**Two deliberate deviations from v2**, both noted in the file:
+1. X labels use a nice step over the VISIBLE strike range. v2 hardcodes
+   "multiples of 50" — right for SPX, and zero labels on an AMZN chart whose
+   whole window is 40 points wide. This chart follows the page ticker.
+2. No opaque `#05080d` plot fill. v2 sits in its own panel; here the chart is
+   inside a v3 Card and a different dark over the card's surface reads as a hole.
+
+**A bug the port surfaced:** the bottom gridline label collided with both the
+strike labels and the "scroll=zoom · drag=pan · dbl=recenter" hint. Gridline
+LINES still run to the frame; their LABELS are now suppressed in the bottom strip.
+
+**The mock could not test any of this.** `ladder()` defaulted to 24 rungs and the
+chart will not zoom below MIN_COUNT=30, so the viewport was pinned and pan/zoom
+were unexercisable — exactly what AGENTS.md trap 3 says the mock exists to
+prevent. The socket gex frame now sends 121 strikes and the chain 81.
+
+Verified by driving a real browser: wheel, drag-pan, gutter y-scale and
+double-click each change the canvas, the page does NOT scroll on wheel
+(preventDefault is honoured), and double-click puts spot back at centre. Plus
+typecheck, build, budgets (initial load 78.4kb / 109.4kb, the card's chunk 10.3kb
+raw) and the 8 ws-scope assertions.
+
 ## 2026-08-28 - v3: the core and a wall can no longer be the same strike
 
 Edited: `cbedge-v3/src/board/chainGex.ts`,

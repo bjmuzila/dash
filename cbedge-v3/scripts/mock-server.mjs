@@ -207,7 +207,10 @@ function mockChain(ticker) {
   const day = 86_400_000
   const now = Date.now()
   const items = [0, 1, 2, 4].map((d) => {
-    const rows = ladder(ticker, spot, 30)
+    // 81 rungs so the chain-derived GEX ladder (chainGex.ts, which every
+    // non-SPX card reads) is wide enough to pan and zoom, same reason as the
+    // socket ladder below.
+    const rows = ladder(ticker, spot, 81)
     return {
       'expiration-date': etDate(now + d * day),
       strikes: rows.map((r) => {
@@ -555,8 +558,13 @@ setInterval(() => {
 
 // gex — a ladder around spot, shaped like a real skew so the walls hold still
 // instead of jumping to a different strike every second.
+//
+// 121 strikes, not the 24 the default gives: the GEX Chart card opens on a
+// ~$200 window and will not zoom below MIN_COUNT=30, so a 24-rung ladder pins
+// its viewport and makes pan and zoom untestable against the mock — which is
+// the one thing the mock exists to prevent (see the header note).
 setInterval(() => {
-  const rows = ladder('SPX', spot)
+  const rows = ladder('SPX', spot, 121)
   const gexRows = rows.map((r) => ({
     strike: r.strike,
     netGEX: Math.round(r.value),

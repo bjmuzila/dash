@@ -107,6 +107,20 @@
   --color-gex-neg: #ff4757;
   --color-gex-neg-hot: #ffcdd2;
 
+  /* ── GEX Chart bars ───────────────────────────────────────────────────
+     A SECOND positive/negative pair, and deliberately not the four above.
+
+     v2 draws its bubbles blue/RED and its home-page GEX chart bars
+     blue/AMBER, and the chart is the one being matched value-for-value —
+     so v3 carries both pairs rather than quietly recolouring one surface
+     to agree with the other. They are different marks answering different
+     questions: a bubble is a level on a price chart, a bar is a magnitude
+     on its own axis.
+
+     If these ever converge, this is the pair to delete.                   */
+  --color-gexbar-pos: #29b6f6;
+  --color-gexbar-neg: #ffb300;
+
   /* ── Key levels ───────────────────────────────────────────────────────
      The wall palette shared by the Key Levels tiles, the Multi Greek
      ladder badges and any future levels rail. cb = Core Bullseye /

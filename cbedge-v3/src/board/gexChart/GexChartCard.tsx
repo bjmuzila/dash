@@ -1,132 +1,88 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChartFrame } from '@/design/primitives/ChartFrame'
+import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
 import { useQuery } from '@/data/api'
 import { watchFrame } from '@/data/hooks'
 import { isSocketSymbol, usePageSymbol } from '@/data/symbol'
-import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
-import { SegGroup } from '../gexCandles/controls'
-import { useCanvasRenderer } from '../chart-render'
+import type { GexData, GexFrame, SpotFrame } from '@/contract/frames'
 import { chainGexUrl, chainToGex, EMPTY_CHAIN_GEX } from '../chainGex'
-import { drawGexChart, fmtGexShort, type GexBar, type GexChartModel, type GexOrientation } from './gexChartRender'
+import {
+  EMPTY_MODEL,
+  fmtGexShort,
+  mountGexChart,
+  netOf,
+  type GexChartHandle,
+  type GexChartModel,
+} from './gexChartRender'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GEX Chart — net gamma by strike, live off the socket.
+// GEX Chart — v2's home-page chart, as a board card.
+//
+// NO TOGGLES. v2's chart has none either: `mode`, `dataMode`, `showOI`,
+// `showDex` and the rest are PROPS the home page passes from its own cog, and
+// the home page passes net GEX on the OI+VOL basis. That is what this draws, so
+// there is nothing left for a toolbar to switch. The header carries the board
+// total and, off-socket, where the numbers came from.
+//
+// The chart itself — pan, zoom, y-scale, recentre, the bar gradients — is
+// gexChartRender.ts, which owns its canvas and its listeners. A pan is sixty
+// pointer events a second; none of them reach React.
 //
 // ── Two sources, one shape ───────────────────────────────────────────────────
-// SPX comes off the socket: every `gex` frame already carries both bases per
-// strike plus the walls and the flip, so nothing is fetched and the basis switch
-// is a redraw, not a request. Any OTHER page symbol comes from /api/chains
-// through board/chainGex.ts, which produces the identical row shape — so the
-// only thing that differs below is where `frameRef` is filled from.
-//
-// Spot follows the same split: the `spot` frame for SPX (the live print, which
-// the gex frame does not carry), the chain's own underlyingPrice otherwise.
-//
-// ── netGEX IS NOT OI+VOL ─────────────────────────────────────────────────────
-// From server-v2/computation/gex-calculator.js: `netGEX` is the OI-ONLY net and
-// `netVolGEX` is the VOLUME-ONLY net, and the OI+VOL basis every other surface
-// uses is the two SUMMED (`oiVolNet()`). The first cut of this card mapped
-// OI+VOL straight onto `netGEX`, which drew the OI-only ladder under a label
-// promising both. Fixed; the sum is what `OI+VOL` now shows.
-//
-// ── The socket path goes through watchFrame, not useField ────────────────────
-// AGENTS.md rule 4. A frame lands, the model goes into a ref and the canvas is
-// redrawn — this component does not re-render for a tick. Only the two toolbar
-// switches are React state, because those are the only things a user changes.
+// SPX comes off the socket. Any other page symbol comes from /api/chains
+// through board/chainGex.ts, which produces the identical row shape. Spot
+// follows the same split: the `spot` frame for SPX (the live print, which the
+// gex frame does not carry), the chain's own underlyingPrice otherwise.
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Basis = 'oivol' | 'vol'
-
-const BASIS_KEY = 'cb-v3-gex-chart-basis'
-const ORIENT_KEY = 'cb-v3-gex-chart-orient'
-
-function readStored(key: string, fallback: string): string {
-  try {
-    return localStorage.getItem(key) ?? fallback
-  } catch {
-    return fallback
-  }
-}
-function write(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    /* best-effort — the in-memory setting still drives this session */
-  }
-}
-
-const EMPTY: GexChartModel = { bars: [], spot: null, callWall: null, putWall: null, flip: null }
-
-/** OI+VOL is the two summed; VOL is the volume term alone. */
-function valueOfRow(r: GexRow, basis: Basis): number {
-  const vol = Number(r.netVolGEX) || 0
-  return basis === 'vol' ? vol : (Number(r.netGEX) || 0) + vol
-}
-
 export function GexChartCard() {
-  const { onMount, onResize, setDraw } = useCanvasRenderer()
   const { symbol } = usePageSymbol()
   const onSocket = isSocketSymbol(symbol)
 
-  const [basis, setBasis] = useState<Basis>(() => (readStored(BASIS_KEY, 'oivol') === 'vol' ? 'vol' : 'oivol'))
-  const [orientation, setOrientation] = useState<GexOrientation>(() =>
-    readStored(ORIENT_KEY, 'horizontal') === 'vertical' ? 'vertical' : 'horizontal',
-  )
-  /** The one number worth a re-render: the board total, printed in the toolbar. */
+  /** The one number worth a re-render: the board total, printed in the header. */
   const [total, setTotal] = useState<number | null>(null)
 
-  // The last frame, kept raw so the basis switch can re-derive the bars without
-  // waiting for another frame to land.
-  const frameRef = useRef<GexData | null>(null)
-  const spotRef = useRef<number | null>(null)
-  const optsRef = useRef({ basis, orientation })
-  optsRef.current = { basis, orientation }
+  const handleRef = useRef<GexChartHandle | null>(null)
+  const modelRef = useRef<GexChartModel>(EMPTY_MODEL)
 
-  const redraw = useCallback(() => {
-    const d = frameRef.current
-    const { basis: b, orientation: o } = optsRef.current
-    const model: GexChartModel = d
-      ? {
-          bars: [...d.gexRows]
-            .sort((x, y) => x.strike - y.strike)
-            .map<GexBar>((r) => ({ strike: r.strike, value: valueOfRow(r, b) })),
-          spot: spotRef.current,
-          callWall: d.callWall,
-          putWall: d.putWall,
-          flip: d.gexFlip,
-        }
-      : { ...EMPTY, spot: spotRef.current }
-    setDraw((canvas, w, h) => drawGexChart(canvas, w, h, { ...model, orientation: o }))
-  }, [setDraw])
+  const push = useCallback((rows: GexData['gexRows'] | null, spot: number, sym: string) => {
+    const model: GexChartModel = rows?.length ? { rows, spot, symbol: sym } : { ...EMPTY_MODEL, symbol: sym }
+    modelRef.current = model
+    handleRef.current?.setModel(model)
+    let sum: number | null = null
+    if (rows?.length) {
+      sum = 0
+      for (const r of rows) sum += netOf(r)
+    }
+    setTotal(sum)
+  }, [])
 
-  const publish = useCallback(
-    (d: GexData | null) => {
-      frameRef.current = d
-      // The total is the only value that leaves the imperative path, and it
-      // moves once per frame rather than once per tick.
-      let sum: number | null = null
-      if (d) {
-        sum = 0
-        for (const r of d.gexRows) sum += valueOfRow(r, optsRef.current.basis)
-      }
-      setTotal(sum)
-      redraw()
-    },
-    [redraw],
-  )
+  const onMount = useCallback((frame: ChartHandle): (() => void) => {
+    const created = mountGexChart(frame.el)
+    handleRef.current = created
+    // Replay whatever arrived before the frame mounted, so the first paint is
+    // never an empty chart that fills in a beat later.
+    created.setModel(modelRef.current)
+    return () => {
+      created.destroy()
+      handleRef.current = null
+    }
+  }, [])
+
+  const onResize = useCallback(() => handleRef.current?.redraw(), [])
 
   // ── SPX: the socket ────────────────────────────────────────────────────────
-  // Returning undefined when off-socket is what UNSUBSCRIBES on a symbol
-  // change, which is also what narrows the socket's derived topic scope — the
-  // card stops asking for `gex` the moment it stops reading it.
+  // Returning early when off-socket is what UNSUBSCRIBES, which is also what
+  // narrows the socket's derived topic scope — the card stops asking for `gex`
+  // the moment it stops reading it.
+  const spotRef = useRef(0)
   useEffect(() => {
     if (!onSocket) return
     return watchFrame<GexFrame>('gex', (frame) => {
       const d = frame?.data
-      if (d) publish(d)
+      if (d) push(d.gexRows, spotRef.current, symbol)
     })
-  }, [onSocket, publish])
+  }, [onSocket, push, symbol])
 
   useEffect(() => {
     if (!onSocket) return
@@ -134,64 +90,26 @@ export function GexChartCard() {
       const px = frame?.data.spot
       if (typeof px !== 'number' || !(px > 0)) return
       spotRef.current = px
-      redraw()
+      const m = modelRef.current
+      if (m.rows.length) push(m.rows, px, symbol)
     })
-  }, [onSocket, redraw])
+  }, [onSocket, push, symbol])
 
   // ── Everything else: the chain ─────────────────────────────────────────────
-  // 15s, the same cadence Multi Greek polls its ladders on. `staleMs` alone
-  // would never refetch — it is a cache TTL, not an interval — so this card
-  // would sit on the ladder it loaded with.
   const chainQ = useQuery<unknown>(onSocket ? null : chainGexUrl(symbol), { staleMs: 15_000, pollMs: 15_000 })
-  const chainGex = useMemo(() => (onSocket ? EMPTY_CHAIN_GEX : chainToGex(chainQ.data)), [onSocket, chainQ.data])
+  const chain = useMemo(() => (onSocket ? EMPTY_CHAIN_GEX : chainToGex(chainQ.data)), [onSocket, chainQ.data])
 
   useEffect(() => {
     if (onSocket) return
-    spotRef.current = chainGex.spot || null
-    publish(
-      chainGex.rows.length
-        ? {
-            gexRows: chainGex.rows,
-            callWall: chainGex.callWall,
-            putWall: chainGex.putWall,
-            gexFlip: chainGex.flip,
-            totalNetGex: 0,
-            totals: null,
-            expiry: chainGex.expiry,
-          }
-        : null,
-    )
-  }, [onSocket, chainGex, publish])
+    push(chain.rows, chain.spot, symbol)
+  }, [onSocket, chain, push, symbol])
 
-  // A symbol change must not leave the previous one's ladder on screen while
-  // the next source warms up — that is the failure where an AMZN heading sits
-  // over SPX's strikes.
+  // A symbol change must not leave the previous ticker's ladder on screen while
+  // the next source warms up.
   useEffect(() => {
-    frameRef.current = null
-    spotRef.current = null
-    setTotal(null)
-    redraw()
-  }, [symbol, redraw])
-
-  // A switch changed: re-derive from the frame already in hand.
-  useEffect(() => {
-    const d = frameRef.current
-    if (d) {
-      let sum = 0
-      for (const r of d.gexRows) sum += valueOfRow(r, basis)
-      setTotal(sum)
-    }
-    redraw()
-  }, [basis, orientation, redraw])
-
-  const commitBasis = (b: Basis) => {
-    setBasis(b)
-    write(BASIS_KEY, b)
-  }
-  const commitOrientation = (o: GexOrientation) => {
-    setOrientation(o)
-    write(ORIENT_KEY, o)
-  }
+    spotRef.current = 0
+    push(null, 0, symbol)
+  }, [symbol, push])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -204,40 +122,22 @@ export function GexChartCard() {
           }
           className="text-[10px] uppercase tracking-[0.1em] text-muted opacity-60"
         >
-          Net GEX{onSocket ? '' : ' · chain'}
+          Net GEX · OI+VOL{onSocket ? '' : ' · chain'}
         </span>
         <span
           className={[
             'tabular font-mono text-[11px] font-extrabold',
-            total == null ? 'text-muted opacity-50' : total >= 0 ? 'text-gex-pos' : 'text-gex-neg',
+            total == null ? 'text-muted opacity-50' : total >= 0 ? 'text-gexbar-pos' : 'text-gexbar-neg',
           ].join(' ')}
         >
           {total == null ? '—' : fmtGexShort(total)}
         </span>
-        <SegGroup
-          title="OI+VOL is the open-interest net PLUS today's volume net — the two summed, which is the basis every other GEX surface uses. VOL is the volume term alone. Both are already in hand, so this switch redraws and does not refetch"
-          options={[
-            { label: 'OI+VOL', value: 'oivol' },
-            { label: 'VOL', value: 'vol' },
-          ]}
-          value={basis}
-          onChange={(v) => commitBasis(v as Basis)}
-        />
-        <SegGroup
-          title="Which way the bars run. HORIZ puts strikes down the left edge and grows the bars sideways — the ladder you read against a price axis. VERT puts strikes along the bottom and grows them up and down — a gamma profile across the strike range"
-          options={[
-            { label: 'HORIZ', value: 'horizontal' },
-            { label: 'VERT', value: 'vertical' },
-          ]}
-          value={orientation}
-          onChange={(v) => commitOrientation(v as GexOrientation)}
-        />
       </CardToolbar>
 
       <div className="relative min-h-0 flex-1">
         <ChartFrame onMount={onMount} onResize={onResize} className="absolute inset-0" />
         {total == null && (
-          <span className="absolute left-1 top-1 text-[10px] text-muted opacity-50">
+          <span className="pointer-events-none absolute left-1 top-1 text-[10px] text-muted opacity-50">
             {onSocket ? 'Waiting for the feed…' : `Loading ${symbol}'s chain…`}
           </span>
         )}
