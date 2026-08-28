@@ -83,6 +83,12 @@ export type BubbleStyle = {
    * is a question about how much of the board you want to see, not a correction
    * to a scale that was coming out wrong — which is what every retired slider
    * was. See BUBBLE_LEVELS_RANGE.
+   *
+   * Four, not five. The ladder is read as "what is holding price on each side",
+   * and four is the smallest count that still shows a pair above and a pair
+   * below without the fifth row's trail crowding the candles. The count is only
+   * half the rule — see BUBBLE_MIN_PER_SIDE, which guarantees the selection is
+   * never all on one side of spot however the ranking comes out.
    */
   topStrikes: number;
   /** How many of those render as walls — white-hot with a glow. Colour only. */
@@ -157,7 +163,7 @@ export type BubbleStyle = {
 };
 
 export const BUBBLE_STYLE: BubbleStyle = {
-  topStrikes: 5,
+  topStrikes: 4,
   highlight: 1,
   maxPx: 20,
   maxPxRowFrac: 0.42,
@@ -202,6 +208,26 @@ export const BUBBLE_STYLE: BubbleStyle = {
  * so the ask stays a nudge rather than a way to paint the canvas.
  */
 export const BUBBLE_LEVELS_RANGE = { min: 1, max: 15 } as const;
+/**
+ * How many of the drawn strikes must sit on EACH side of spot.
+ *
+ * The selection is a pure peak-|GEX| ranking, and gamma is routinely lopsided —
+ * an expiration pinned under a stack of calls can put all four of the top
+ * strikes above price, at which point the chart says nothing whatsoever about
+ * what is underneath it. That is the one read the ladder exists for, so it is
+ * guaranteed rather than left to the ranking: if a side is empty, the weakest
+ * shown strike on the crowded side is swapped for the strongest strike on the
+ * missing one.
+ *
+ * It is a FLOOR, not a split. With gamma genuinely one-sided the other three
+ * rows still all land on the heavy side — the guarantee only ever costs the
+ * single weakest row, and only when a side would otherwise be blank.
+ *
+ * Inert below `2 * BUBBLE_MIN_PER_SIDE` levels: at 1 level there is no room to
+ * honour it, and forcing it there would mean the "levels" slider silently
+ * drawing more rows than it says.
+ */
+export const BUBBLE_MIN_PER_SIDE = 1;
 export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 } as const;
 /**
  * Ceiling raised 2 -> 4.
@@ -278,13 +304,29 @@ export const BUBBLE_REF_CUTOFF_MIN = 15 * 60 + 30; // 15:30 ET — closing aucti
 /**
  * Bubble time bucket. Storage is always 1-minute; this aggregates at DRAW time.
  *
- * "bar" is the default now that the card has a timeframe switcher: a fixed 5m
- * bucket puts twelve bubble columns inside a single 1h candle, which merges them
- * back into the solid rail the bucket exists to prevent. One column per bar
- * holds at every interval.
+ * ── "auto" is the default ───────────────────────────────────────────────────
+ * A bubble's time IS its candle's time: the bucket follows the chart's own bar,
+ * so switching the timeframe re-formats the trail with it and there is nothing
+ * to keep in sync by hand. A FIXED bucket cannot do that — 5m puts twelve
+ * columns inside a single 1h candle and merges them back into the solid rail the
+ * bucket exists to prevent, while on a 1m chart it throws four minutes out of
+ * every five.
+ *
+ * `1` / `5` remain as MANUAL overrides for sub-bar detail on a 15m+ chart, where
+ * one column per candle is deliberately coarser than the data underneath it.
+ *
+ * "bar" is the pre-auto spelling of the same behaviour. It is still accepted, and
+ * still resolves to the containing candle, so a saved blob written before this
+ * change keeps working and reads as "Auto" in the picker; nothing writes it any
+ * more. Do not delete it — a rollback should still find a blob it understands.
  */
-export type BubbleBucket = 1 | 5 | "bar";
-export const isBubbleBucket = (v: unknown): v is BubbleBucket => v === 1 || v === 5 || v === "bar";
+export type BubbleBucket = 1 | 5 | "bar" | "auto";
+export const isBubbleBucket = (v: unknown): v is BubbleBucket =>
+  v === 1 || v === 5 || v === "bar" || v === "auto";
+/** Does this bucket track the chart's own bar? ("auto", and its legacy spelling.) */
+export const isAutoBucket = (v: BubbleBucket): boolean => v === "auto" || v === "bar";
+/** What a fresh card starts on. */
+export const BUBBLE_BUCKET_DEFAULT: BubbleBucket = "auto";
 
 export type SlotBlob = Record<string, unknown>;
 

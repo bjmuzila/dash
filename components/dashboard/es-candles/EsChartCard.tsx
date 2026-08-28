@@ -102,9 +102,10 @@ import { PanelSection, PanelChip, SLIDER_LABEL_W } from "./panelUi";
 import {
   BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_REF_START_MIN, BUBBLE_REF_CUTOFF_MIN,
   BUBBLE_LEVELS_RANGE, BUBBLE_INTENSITY_RANGE, BUBBLE_SIZE_RANGE, BUBBLE_CURVE_RANGE,
+  BUBBLE_MIN_PER_SIDE, BUBBLE_BUCKET_DEFAULT,
   SHARED_SLOT,
   readSlot, writeSlot, writeSlotQuiet, broadcastSlot, subscribeSlot,
-  isBubbleBucket,
+  isBubbleBucket, isAutoBucket,
   subscribeReplayCmd, broadcastReplayCmd, INDICATORS_DEFAULT,
   type BubbleBucket, type SlotId, type SlotBlob, type IndicatorCfg,
 } from "./slotStore";
@@ -878,7 +879,7 @@ function EsChartCard({
   // weekend backfill wipe and repaint — the wall clock says Saturday, the data
   // says Friday, and they'd disagree forever.
   const lastWallDayRef = useRef<string>("");
-  const bubbleMinsRef = useRef<BubbleBucket>("bar");
+  const bubbleMinsRef = useRef<BubbleBucket>(BUBBLE_BUCKET_DEFAULT);
   const bubbleLevelsRef = useRef(BUBBLE_STYLE.topStrikes);
   const bubbleIntensityRef = useRef(BUBBLE_STYLE.intensity);
   const bubbleSizeRef = useRef(BUBBLE_STYLE.size);
@@ -1082,12 +1083,14 @@ function EsChartCard({
   // At 1m the bubbles sit a few px apart and overlap into solid rails, which is
   // the whole reason a bucket exists.
   //
-  // "bar" (one column per candle) is the default now that the timeframe is
-  // switchable. A fixed 5m bucket was right when every chart was 5m; on a 1h
-  // chart it stacks twelve columns inside one candle and recreates exactly the
-  // solid rail it was meant to prevent. 1m and 5m stay available for when you
-  // want sub-bar detail on a 15m+ chart.
-  const [bubbleMins, setBubbleMins] = useState<BubbleBucket>("bar");
+  // "Auto" (one column per candle) is the default now that the timeframe is
+  // switchable: a bubble's time IS its candle's time, so the trail re-formats
+  // with the timeframe switcher instead of needing to be re-picked after it. A
+  // fixed 5m bucket was right when every chart was 5m; on a 1h chart it stacks
+  // twelve columns inside one candle and recreates exactly the solid rail it was
+  // meant to prevent, and on a 1m chart it throws away four minutes in five. 1m
+  // and 5m stay as manual overrides for sub-bar detail on a 15m+ chart.
+  const [bubbleMins, setBubbleMins] = useState<BubbleBucket>(BUBBLE_BUCKET_DEFAULT);
   // ── Replay mode ──────────────────────────────────────────────────────────
   // Scrub / playback of the CURRENT ET session. Candles + the two time-series
   // gamma overlays (heatmap + bubbles) reveal only up to a moving cursor, so you
@@ -4481,15 +4484,19 @@ function EsChartCard({
           // minute in each bucket (the freshest read of that strike's gamma), not
           // a mean — averaging smears the very spikes we're trying to show.
           //
-          // "bar" tracks the chart's own bar size, which is the only setting that
-          // holds across the timeframe switcher: a fixed 5m bucket puts twelve
-          // bubble columns inside one 1h candle and merges them back into the
-          // solid rail the bucket exists to prevent.
-          // "bar" buckets by the CONTAINING BAR via barAt(), not by
+          // "Auto" tracks the chart's own bar size, which is the only setting
+          // that holds across the timeframe switcher: a fixed 5m bucket puts
+          // twelve bubble columns inside one 1h candle and merges them back into
+          // the solid rail the bucket exists to prevent.
+          //
+          // It buckets by the CONTAINING BAR via barAt(), not by
           // floor(ts / candleMs): 15m/30m/1h bars are anchored to 09:30 ET and
           // the RTH close forces a short bar, so an epoch-aligned bucket would
           // straddle two candles and put one bubble column half over each.
-          const bucketOf = bubbleMinsRef.current === "bar"
+          //
+          // isAutoBucket, not `=== "auto"`: a blob saved before the rename still
+          // says "bar", and that has always meant this exact bucketer.
+          const bucketOf = isAutoBucket(bubbleMinsRef.current)
             ? (t: number) => barAt(t) ?? t
             : (t: number) => Math.floor(t / (bubbleMinsRef.current as number * 60_000)) * (bubbleMinsRef.current as number * 60_000);
           const metric = gexMetricRef.current;
@@ -4519,6 +4526,13 @@ function EsChartCard({
             barsSig.length,
             barsSig.length ? barsSig[barsSig.length - 1].timestamp : 0,
             candleMsRef.current,
+            // Spot, QUANTISED TO 5 POINTS — the strike pitch. The min-per-side
+            // swap below is a function of where price sits in the ladder, so the
+            // cache has to see price move; keying on the raw close would rebuild
+            // the whole ranking on every tick, and keying on nothing would leave
+            // the swap frozen at whatever the last GEX minute saw. A crossing can
+            // only change the answer when it clears a strike.
+            barsSig.length ? Math.round(barsSig[barsSig.length - 1].close / 5) : 0,
           ].join("|");
 
           let prep = bubblePrepRef.current;
@@ -4649,6 +4663,41 @@ function EsChartCard({
             // The ranking only CHANGES when a new peak appears, so the sort is
             // skipped for every bucket that didn't move one — on a settled
             // session that is almost all of them.
+            //
+            // ── AND THE SELECTION IS BALANCED AROUND SPOT ─────────────────
+            // A pure ranking is free to put every drawn strike on one side of
+            // price — gamma is routinely that lopsided — and a ladder sitting
+            // entirely overhead says nothing about what is underneath, which is
+            // half of the read. BUBBLE_MIN_PER_SIDE is enforced per bucket
+            // below: it is a FLOOR, not a split, so it only ever costs the
+            // single weakest row and only when a side would be blank.
+            //
+            // Per BUCKET, not per ranking: spot moves every bar while the
+            // ranking changes rarely, so the swap has to be re-decided as price
+            // travels through the ladder. It is still cheap — the sort stays
+            // behind `dirty`, and the Set is rebuilt only when the swap itself
+            // changes (`balKey`).
+            //
+            // Spot in STRIKE space: the bubbles live in SPX strikes and the
+            // candles are ES, so the bar's close comes back across the same
+            // basisAt() the marks are drawn through. Bars are ascending, hence
+            // the binary search rather than a Map — the bar grid changes with
+            // the timeframe and rebuilding a keyed map per prep is the thing
+            // this cache exists to avoid.
+            const pBars = rowsRef.current;
+            const spotKAt = (tMs: number): number | null => {
+              if (!pBars.length) return null;
+              let lo = 0, hi = pBars.length - 1;
+              if (tMs > pBars[0].timestamp) {
+                while (lo < hi) {
+                  const mid = (lo + hi + 1) >> 1;
+                  if (pBars[mid].timestamp <= tMs) lo = mid; else hi = mid - 1;
+                }
+              }
+              const close = pBars[lo]?.close;
+              if (!Number.isFinite(close)) return null;
+              return (close as number) - basisAt(tMs);
+            };
             const peakSoFar = new Map<number, number>();
             const pShownAt = new Map<number, Set<number>>();
             // strike → its 0-based rank inside the highlighted set (0 = the
@@ -4658,18 +4707,56 @@ function EsChartCard({
             const pOrderAt = new Map<number, GexCell[]>();
             let shownNow: Set<number> = new Set();
             let wallNow: Map<number, number> = new Map();
+            let ranked: number[] = [];
+            let balKey = "";
             let dirty = true;
+            const nLevels = Math.max(0, bubbleLevelsRef.current);
             for (const m of pMins) {
               for (const c of m.cells) {
                 const a = Math.abs(valOf(c));
                 if (a > 0 && a > (peakSoFar.get(c.strike) ?? 0)) { peakSoFar.set(c.strike, a); dirty = true; }
               }
               if (dirty) {
-                const ranked = [...peakSoFar.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
-                shownNow = new Set(ranked.slice(0, Math.max(0, bubbleLevelsRef.current)));
+                ranked = [...peakSoFar.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
                 wallNow = new Map();
                 ranked.slice(0, Math.max(0, BUBBLE_STYLE.highlight)).forEach((s, i) => wallNow.set(s, i));
                 dirty = false;
+                // Force the shown set to rebuild against the new ranking even if
+                // the swap decision itself lands on the same pair.
+                balKey = "";
+              }
+              // ── The min-per-side swap ──────────────────────────────────────
+              // Only ever ONE swap deep. Two would start rewriting the ladder to
+              // be symmetric rather than to be honest about where the gamma is,
+              // and the ranking is the thing being protected here.
+              //
+              // Skipped entirely below 2 * BUBBLE_MIN_PER_SIDE levels: at one
+              // level there is no room to honour it, and drawing an extra row to
+              // make it fit would mean the "levels" slider lying about its count.
+              const base = ranked.slice(0, nLevels);
+              const spotK = nLevels >= 2 * BUBBLE_MIN_PER_SIDE ? spotKAt(m.slotTs) : null;
+              let swapIn: number | null = null;
+              let swapOut: number | null = null;
+              if (spotK != null && base.length >= 2 * BUBBLE_MIN_PER_SIDE) {
+                const nAbove = base.reduce((n, s) => n + (s >= spotK ? 1 : 0), 0);
+                const nBelow = base.length - nAbove;
+                if (nAbove < BUBBLE_MIN_PER_SIDE || nBelow < BUBBLE_MIN_PER_SIDE) {
+                  const wantAbove = nAbove < BUBBLE_MIN_PER_SIDE;
+                  // Strongest strike on the missing side, from the FULL ranking —
+                  // so the row that appears is still the best gamma over there,
+                  // never a nearest-strike stand-in.
+                  swapIn = ranked.find((s) => (wantAbove ? s >= spotK : s < spotK)) ?? null;
+                  // The weakest shown strike, which by construction is on the
+                  // crowded side (the other side is empty).
+                  if (swapIn != null) swapOut = base[base.length - 1];
+                }
+              }
+              const nextKey = `${swapIn ?? "-"}>${swapOut ?? "-"}`;
+              if (nextKey !== balKey) {
+                const set = new Set(base);
+                if (swapIn != null && swapOut != null) { set.delete(swapOut); set.add(swapIn); }
+                shownNow = set;
+                balKey = nextKey;
               }
               // Shared references: the sets are immutable once built, so an
               // unchanged bucket costs one pointer instead of a rebuilt Set.
@@ -5684,15 +5771,22 @@ function EsChartCard({
               />
             </PanelSection>
 
-            {/* "Bar" = one bubble column per candle, and it's the default:
-                a fixed 5m bucket stacks twelve columns inside a 1h candle
-                and merges them back into the solid rail the bucket exists
-                to prevent. 1m/5m stay for sub-bar detail on a 15m+ chart. */}
+            {/* "Auto" = one bubble column per candle, and it's the default:
+                the bubble's time is the candle's time, so the trail
+                re-formats with the timeframe switcher instead of having to
+                be re-picked after it. A fixed 5m bucket stacks twelve
+                columns inside a 1h candle and merges them back into the
+                solid rail the bucket exists to prevent. 1m/5m stay as
+                manual overrides for sub-bar detail on a 15m+ chart.
+
+                A blob saved before the rename holds "bar", which is the old
+                spelling of Auto — mapped here so the picker highlights
+                Auto rather than nothing at all. */}
             <PanelSection title="Bucket">
               <SegGroup
-                options={[{ label: "Bar", value: "bar" }, { label: "1m", value: "1" }, { label: "5m", value: "5" }]}
-                active={String(bubbleMins)}
-                onChange={(v) => updateBubbleMins(v === "bar" ? "bar" : Number(v) === 1 ? 1 : 5)}
+                options={[{ label: "Auto", value: "auto" }, { label: "1m", value: "1" }, { label: "5m", value: "5" }]}
+                active={isAutoBucket(bubbleMins) ? "auto" : String(bubbleMins)}
+                onChange={(v) => updateBubbleMins(v === "auto" ? "auto" : Number(v) === 1 ? 1 : 5)}
               />
             </PanelSection>
 

@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-08-28 - ES Candles bubbles: the bucket follows the candle, and the ladder always has a side under price
+
+Edited: `components/dashboard/es-candles/slotStore.ts`,
+`components/dashboard/es-candles/EsChartCard.tsx`.
+
+**1. The bucket is "Auto" now, and Auto is the default.** A bubble's time is its
+candle's time, so the trail re-formats with the timeframe switcher instead of
+having to be re-picked after it. Auto buckets by the CONTAINING BAR (`barAt()`),
+which is the only setting that holds across the switcher: a fixed 5m bucket
+stacks twelve columns inside a 1h candle and merges them back into the solid
+rail the bucket exists to prevent, and on a 1m chart it throws four minutes out
+of every five. `1m` / `5m` stay in the picker as manual overrides for sub-bar
+detail on a 15m+ chart.
+
+`BubbleBucket` gained `"auto"`; `"bar"` is the pre-rename spelling of the same
+behaviour and is still accepted, still resolves to the same bucketer, and still
+lights up the Auto tile in the picker - so a slot blob written before this change
+keeps working and a rollback finds a blob it understands. The comparison went
+from `=== "bar"` to `isAutoBucket()`, so there is one place that decides what
+"follows the candle" means.
+
+**2. The drawn strikes default to the top 4, with at least one on each side of
+spot.** `BUBBLE_STYLE.topStrikes` 5 -> 4, and a new `BUBBLE_MIN_PER_SIDE = 1`
+guarantee in the per-bucket selection.
+
+The selection was a pure peak-|GEX| ranking, and gamma is routinely lopsided
+enough to put all four rows above price - at which point the chart says nothing
+about what is underneath it, which is half of the read. If a side comes out
+empty, the weakest shown strike (which by construction is on the crowded side) is
+swapped for the STRONGEST strike on the missing side, taken from the full
+ranking so the row that appears is real gamma and not a nearest-strike stand-in.
+
+It is a floor, not a split: with genuinely one-sided gamma the other three rows
+still land on the heavy side, so the guarantee costs one row and only when a side
+would be blank. Inert below 2 levels, where honouring it would mean the "levels"
+slider drawing more rows than it says.
+
+The swap is decided per BUCKET, not per ranking - spot travels through the ladder
+while the ranking rarely moves - but the expensive half is untouched: the sort
+stays behind the existing `dirty` flag and the shown Set is rebuilt only when the
+swap itself changes. Spot is read in STRIKE space (the bar's close carried across
+the same `basisAt()` the marks are drawn through, binary-searched off the bar
+array rather than a rebuilt map), and the bubble prep cache key gained spot
+quantised to 5 points - the strike pitch - so the cache sees price move without
+re-sorting the ranking on every tick.
+
 ## 2026-08-28 - Premarket replay: the Post-Market build column was showing the finished day at every frame
 
 Edited: `components/pages/premarket/PostMarketTab.tsx`,
