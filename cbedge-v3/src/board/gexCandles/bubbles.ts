@@ -43,14 +43,21 @@
 //               of only the resistance above you is not a picture of the gamma
 //               you are trading inside of.
 //
-//   THE CORE    the strongest of them. Always draws at the largest radius the
-//               spacing allows, so it is findable at a glance whether the whole
-//               session is quiet or busy. Takes the hot colour and the glow.
+//   THE CORE    the strongest of them. Draws at the largest radius the pane and
+//               its neighbours allow, so it is findable at a glance whether the
+//               whole session is quiet or busy. Takes the hot colour and glow.
 //
 //   EVERYTHING  radius = core radius × (its |GEX| ÷ the core's |GEX|). Linear,
 //   ELSE        so size reads directly as "how much of this snapshot's gamma is
 //               here". Anything under DUST of the core is dropped rather than
 //               drawn as a speck.
+//
+// ── ROWS NEVER TOUCH ─────────────────────────────────────────────────────────
+//
+// Two strikes' rows merging into one slab is the failure this layer is most
+// prone to, and it is a lie: it draws two levels as one. placeMarks() below
+// makes non-overlap a HARD constraint applied LAST, after every setting has had
+// its say, pairwise between vertical neighbours in pixels.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { BUBBLE_STYLE, type GexMetric } from './settings'
@@ -216,34 +223,85 @@ function nearestIndex(snaps: BubbleSnapshot[], ts: number): number {
   return lo
 }
 
+/** A mark resolved to a pixel row: where it sits and how fat it may be drawn. */
+interface PlacedMark {
+  mark: BubbleMark
+  y: number
+  r: number
+}
+
 /**
- * The radius the snapshot's CORE gets.
- *
- * VERTICAL SPACING IS THE BOUND, and it is measured from the marks actually
- * being drawn, at the current zoom — not from the ladder's strike step, which
- * with three marks a side is tens of strikes away from the real gap.
- *
- * There is deliberately NO horizontal bound. A mark's left and right
- * neighbours are the same strike a few pixels earlier and later; those merging
- * is not a collision, it is the band. That is the whole reason the layer can
- * step in pixels.
- *
- * The chart's height is the second term. Spacing alone would let six marks on a
- * tall, sparse pane grow until the ladder was mostly circle; a fraction of the
- * pane height keeps the band proportionate to the chart it is drawn on, at
- * every window size, without anyone tuning a pixel number per layout.
+ * Below this a row would be sub-pixel anyway. It is the floor the fit pass may
+ * shrink to, so two strikes landing on the same pixel stay visible as a hairline
+ * instead of vanishing — at that size they cannot read as a merged slab.
  */
-function capFor(ys: number[], height: number): number {
-  let minGap = Infinity
-  for (let i = 1; i < ys.length; i++) {
-    const hi = ys[i]
-    const lo = ys[i - 1]
-    if (hi === undefined || lo === undefined) continue
-    const gap = hi - lo
-    if (gap > 0 && gap < minGap) minGap = gap
+const HAIRLINE_PX = 0.35
+
+/** Passes of the pairwise fit. Shrinking one pair can leave the next tight. */
+const FIT_PASSES = 6
+
+/**
+ * Every mark in a snapshot, placed and sized so that NO TWO ROWS TOUCH.
+ *
+ * Two stages, and the order is the whole point:
+ *
+ *   WANT   each radius from its ratio alone — a fraction of the pane height,
+ *          scaled by the size slider, shaped by `curve`. This is the picture the
+ *          settings ask for, before geometry gets a say.
+ *   FIT    walk the marks in y order and shrink any ADJACENT PAIR whose radii
+ *          plus the hairline do not fit the gap between them, proportionally so
+ *          the pair keeps its relative weight.
+ *
+ * This replaces a single per-snapshot cap taken from the tightest gap on the
+ * ladder. That had two faults. The size slider was applied AFTER it, so anything
+ * above 1× drew straight through the bound and merged rows — which is the bug
+ * this fixes. And being global, one tight pair shrank every mark in the
+ * snapshot, including marks with all the room in the world.
+ *
+ * VERTICAL SPACING IS THE ONLY BOUND, measured from the marks actually drawn at
+ * the current zoom — never from the ladder's strike step, which with three marks
+ * a side is tens of strikes away from the real gap. There is deliberately NO
+ * horizontal bound: a mark's left and right neighbours are the same strike a few
+ * pixels earlier and later, and those merging is not a collision, it is the band.
+ * That is the whole reason the layer can step in pixels.
+ *
+ * The pane's height is the second term of WANT. Spacing alone would let six
+ * marks on a tall, sparse pane grow until the ladder was mostly circle; a
+ * fraction of the pane height keeps the band proportionate to the chart it is
+ * drawn on, at every window size, with no per-layout pixel number to tune.
+ */
+function placeMarks(snap: BubbleSnapshot, geo: BubbleGeometry, opts: DrawOpts): PlacedMark[] {
+  const base = Math.max(BUBBLE_STYLE.minPx, geo.height * BUBBLE_STYLE.heightFrac * opts.size)
+
+  const placed: PlacedMark[] = []
+  for (const mark of snap.marks) {
+    const y = geo.yOfPrice(mark.strike)
+    if (y == null) continue
+    // The core has ratio 1, so it draws at exactly `base` on every curve
+    // setting — `curve` only changes how fast the ones BELOW it fall away.
+    const shaped = opts.curve <= 1.001 ? mark.ratio : Math.pow(mark.ratio, opts.curve)
+    placed.push({ mark, y, r: Math.max(BUBBLE_STYLE.minPx, base * shaped) })
   }
-  const spacing = Number.isFinite(minGap) ? minGap / 2 - BUBBLE_STYLE.gapPx : Infinity
-  return Math.max(BUBBLE_STYLE.minPx, Math.min(spacing, height * BUBBLE_STYLE.heightFrac))
+  placed.sort((a, b) => a.y - b.y)
+
+  for (let pass = 0; pass < FIT_PASSES; pass++) {
+    let tightened = false
+    for (let i = 1; i < placed.length; i++) {
+      const above = placed[i - 1]
+      const below = placed[i]
+      if (!above || !below) continue
+      const room = below.y - above.y - BUBBLE_STYLE.gapPx
+      const sum = above.r + below.r
+      if (sum <= room) continue
+      const f = room > 0 ? room / sum : 0
+      above.r = Math.max(HAIRLINE_PX, above.r * f)
+      below.r = Math.max(HAIRLINE_PX, below.r * f)
+      tightened = true
+    }
+    if (!tightened) break
+  }
+
+  return placed
 }
 
 export function drawBubbles(
@@ -278,9 +336,11 @@ export function drawBubbles(
   // width, which is what keeps a thin row solid instead of dotted.
   const segW = Math.max(1, (x1 - x0) / MAX_SEGMENTS)
 
-  // One cap per snapshot, not per segment: the same snapshot is hit by many
-  // segments and its geometry does not change between them.
-  const capBySnap = new Map<number, number>()
+  // One placement per snapshot, not per segment: the same snapshot is hit by
+  // many segments and its geometry does not change between them. Doing the fit
+  // per segment would also be visibly wrong — the shrink is a property of the
+  // snapshot's ladder, not of where along the band you happen to be.
+  const placedBySnap = new Map<number, PlacedMark[]>()
 
   ctx.lineCap = 'round'
 
@@ -294,27 +354,15 @@ export function drawBubbles(
     const snap = snaps[idx]
     if (!snap) continue
 
-    let placed = capBySnap.get(idx)
+    let placed = placedBySnap.get(idx)
     if (placed === undefined) {
-      const ys: number[] = []
-      for (const m of snap.marks) {
-        const y = geo.yOfPrice(m.strike)
-        if (y != null) ys.push(y)
-      }
-      placed = capFor(ys.sort((a, b) => a - b), h)
-      capBySnap.set(idx, placed)
+      placed = placeMarks(snap, geo, opts)
+      placedBySnap.set(idx, placed)
     }
-    const cap = placed * opts.size
     const xEnd = Math.min(x1, x + segW)
 
-    for (const m of snap.marks) {
-      const y = geo.yOfPrice(m.strike)
-      if (y == null || y < -20 || y > h + 20) continue
-
-      // The core has ratio 1, so it draws at exactly `cap` on every curve
-      // setting — `curve` only changes how fast the ones BELOW it fall away.
-      const shaped = opts.curve <= 1.001 ? m.ratio : Math.pow(m.ratio, opts.curve)
-      const r = Math.max(BUBBLE_STYLE.minPx, cap * shaped)
+    for (const { mark: m, y, r } of placed) {
+      if (y < -20 || y > h + 20) continue
 
       const positive = m.value >= 0
       const base = positive ? palette.pos : palette.neg

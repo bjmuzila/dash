@@ -21,8 +21,19 @@ export const BASIS_LABEL: Record<Basis, string> = {
   oi: 'OI',
 }
 
-/** Most columns the board will ever draw, including the synthetic total. */
-export const MAX_EXP_COLS = 4
+/**
+ * Most EXPIRY columns a panel can draw.
+ *
+ * Three, because three is all the backend has: fetchChainFull() in
+ * proxy-tastytrade.js returns the nearest expiration plus up to two more, and
+ * nothing downstream can invent a fourth. This used to be 4, which made the "4"
+ * option silently identical to "3" — the ex-0DTE total was gated on there being
+ * four real columns to replace one of, and there never were.
+ */
+export const MAX_EXP_COLS = 3
+
+/** Expiry columns plus the optional ex-0DTE total. Sets the panel's widest grid. */
+export const MAX_COLS = MAX_EXP_COLS + 1
 
 // ── Chain parse ──────────────────────────────────────────────────────────────
 // The chain route hyphenates its keys and hands back `strike-price` as a STRING
@@ -162,35 +173,51 @@ export function daysBetween(from: string, to: string): number {
  * daily, most equities are weekly), so forcing one date list on all four
  * produces empty columns; anchoring instead keeps the columns comparable
  * without pretending the calendars match.
+ *
+ * Returns EVERY usable expiry, not a slice: the ex-0DTE total below has to sum
+ * expiries the user has chosen not to give a column to, so the caller needs the
+ * full list even when it is only going to draw one of them.
  */
-export function pickColumns(expiries: string[], anchor: string, count: number): Column[] {
+export function pickColumns(expiries: string[], anchor: string): Column[] {
   const today = todayEt()
-  const usable = expiries.filter((e) => e >= anchor).slice(0, MAX_EXP_COLS)
-  return usable.slice(0, count).map((expiration) => {
-    const daysTo = daysBetween(today, expiration)
-    return {
-      key: expiration,
-      expiration,
-      daysTo,
-      label: `${Math.max(0, daysTo)}DTE`,
-      subLabel: `GEX · ${expiration.slice(5)}`,
-    }
-  })
+  return expiries
+    .filter((e) => e >= anchor)
+    .slice(0, MAX_EXP_COLS)
+    .map((expiration) => {
+      const daysTo = daysBetween(today, expiration)
+      return {
+        key: expiration,
+        expiration,
+        daysTo,
+        label: `${Math.max(0, daysTo)}DTE`,
+        subLabel: `GEX · ${expiration.slice(5)}`,
+      }
+    })
 }
 
 /**
- * At the full column count the LAST real expiry column is replaced by an
- * ex-0DTE total, not appended to. Four expiries plus a total would be five
- * columns in a space designed for four; the fourth expiry still feeds the sum,
- * it just stops having a column of its own.
+ * How many expiry columns to draw, and whether to append the ex-0DTE total.
  *
- * Below the full count there is no total at all — 3 means three expiries.
+ * The two are INDEPENDENT. The count picks how many dated columns you read
+ * across; the total is its own column, appended, summing every available expiry
+ * that is not 0DTE — including ones with no column of their own. That is the
+ * point of it: "everything except today" is a different question from "the next
+ * two expiries", and answering it should not cost a column you were reading.
+ *
+ * The total is suppressed when every usable expiry IS 0DTE, since an empty sum
+ * column is just a column of dashes.
  */
-export function withEx0Column(cols: Column[], count: number): { display: Column[]; ex0Source: Column[] } {
-  if (count < MAX_EXP_COLS || cols.length < MAX_EXP_COLS) return { display: cols, ex0Source: [] }
-  const ex0Source = cols.filter((c) => c.daysTo !== 0)
+export function withEx0Column(
+  all: Column[],
+  count: number,
+  showEx0: boolean,
+): { display: Column[]; ex0Source: Column[] } {
+  const shown = all.slice(0, Math.max(1, Math.min(MAX_EXP_COLS, count)))
+  if (!showEx0) return { display: shown, ex0Source: [] }
+  const ex0Source = all.filter((c) => c.daysTo !== 0)
+  if (!ex0Source.length) return { display: shown, ex0Source: [] }
   const total: Column = { key: EX0_KEY, expiration: '', daysTo: -1, label: 'ALL', subLabel: 'EX-0DTE' }
-  return { display: [...cols.slice(0, MAX_EXP_COLS - 1), total], ex0Source }
+  return { display: [...shown, total], ex0Source }
 }
 
 // ── Per-column statistics ────────────────────────────────────────────────────

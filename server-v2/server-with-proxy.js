@@ -4057,11 +4057,23 @@ async function main() {
           const url = new URL(req.url || '/', 'http://localhost');
           const ticker = decodeURIComponent(chainMatch[1]).split('?')[0];
           const expiration = url.searchParams.get('expiration') || '';
+          // ?live=0 — opt OUT of the live subscriber for this request.
+          //
+          // serveChainFromLive() only ever streams the ONE active expiry, so an
+          // expiration-less request for the subscribed underlying (SPX) comes
+          // back with a single `items` entry, while every other ticker falls
+          // through to REST and gets the nearest three. A caller that reads the
+          // chain ACROSS expiries — cbedge-v3's Multi Greek ladder — therefore
+          // saw SPX pinned to one column no matter what it asked for.
+          //
+          // Additive and opt-in: no existing caller passes it, so every current
+          // request keeps the live fast path exactly as before.
+          const forceRest = url.searchParams.get('live') === '0';
           try {
             // Serve from the live subscriber when it fully covers the request
             // (active SPX expiry, in-window strikes) — no upstream REST pull.
             // Returns null when not fully covered → fall back to REST unchanged.
-            const live = proxy?.serveChainFromLive?.(ticker, expiration) || null;
+            const live = forceRest ? null : (proxy?.serveChainFromLive?.(ticker, expiration) || null);
             const data = live || await fetchChainFull(ticker, expiration);
             sendJson(res, 200, { data, context: live ? 'live' : 'rest' });
           } catch (e) {

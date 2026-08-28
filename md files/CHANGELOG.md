@@ -1,5 +1,122 @@
 # Changelog
 
+## 2026-08-28 - v3 Multi Greek: SPX unpinned from one expiry, a gold core, and bubble rows that cannot merge
+
+Edited: `server-v2/server-with-proxy.js`, `cbedge-v3/src/board/multiGreek/mgMath.ts`,
+`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`, `cbedge-v3/src/board/gexCandles/bubbles.ts`.
+
+**1. SPX was stuck at one column, and it was the backend doing it.**
+`/proxy/api/tt/chains/:ticker` with no `expiration` hands the request to
+`serveChainFromLive()`, which by design streams only the ONE active gated expiry.
+SPX is the subscribed underlying, so it came back with a single `items` entry;
+SPY/QQQ/NDX are not, so they fell through to REST and got the nearest three. The
+Multi Greek ladder is read ACROSS expiries, so this made the board's column
+setting do nothing at all on the one panel it matters most on.
+
+Fixed with an opt-out rather than a behaviour change: `?live=0` on that route
+skips the live path and goes straight to `fetchChainFull()`. Additive and
+opt-in - no existing caller passes it, so every current request keeps the live
+fast path exactly as before. v3's `chainsUrl()` now sets it. The cost is that
+SPX's ladder is REST-sourced; it polls on 15s anyway, and REST is the only
+response that has the columns.
+
+**2. Columns split into 1/2/3 plus an independent ex-0DTE toggle.**
+`MAX_EXP_COLS` 4 -> 3, because three is all `fetchChainFull()` returns (nearest
+plus up to two more). The old "4" option was therefore dead: the ex-0DTE total
+was gated on there being four real columns to replace one of, and there never
+were four, so 4 rendered identically to 3 and the total column never once
+appeared. Now the count picks 1-3 dated columns and `ALL ex-0DTE` is its own
+chip that APPENDS a fourth, summing every available non-0DTE expiry including
+ones with no column of their own - which is the point of it, since "everything
+except today" is a different question from "the next two expiries" and should
+not cost a column you were reading. Suppressed when every usable expiry is 0DTE.
+A stored blob holding 4 clamps to 3, which is what it already drew.
+
+**3. The Core Bullseye cell is gold, and its number keeps the GEX hue.**
+The CB cell no longer takes the heat wash - a heat colour made the core the same
+picture as a merely-large strike. Gold background (`--color-level-cb`), the
+figure in `--color-gex-pos` / `--color-gex-neg` with a dark halo so a mid-tone
+hue stays legible on gold, and the sign inherits that hue instead of taking its
+own up/down colour. The later-expiry star flipped from gold to `--color-app`:
+the cell under it is gold now, and a gold star on gold is an invisible star.
+
+**4. The ATM chip is gone from the strike rail.** The row's white inset ring
+already says which strike is at the money; the badge cost the strike number half
+its width across four ladders at once. The ring stays.
+
+**5. Bubble rows can no longer merge into one slab.**
+`capFor()` (one radius cap per snapshot, taken from the tightest gap on the
+ladder) is replaced by `placeMarks()`, which sizes every mark and then enforces
+non-overlap pairwise between vertical neighbours, in pixels, LAST. Two faults in
+the old version: the size slider was applied AFTER the cap, so anything above 1x
+drew straight through the bound and merged two strikes' rows - which is the bug
+reported; and being global, one tight pair shrank every mark in the snapshot
+including ones with all the room in the world. Placement is memoised per
+snapshot per frame, not per segment. Still pixels-only - no bar index, no
+interval, nothing keyed to timeframe.
+
+## 2026-08-27 - ΔGEX Board: a capture-phase chip on the run stamp, and the EOD sweep no longer crosses the feed roll
+
+Edited: `server-v2/eod-strike-gex-recorder.js`, `owner-vite/src/pages/GexGrowth.tsx`.
+
+Tonight's board carried `run 2026-08-27 20:01:52 ET`. That stamp was real - it is
+`captured_at`, taken before the first chain fetch - but it was not the 16:05
+slot. The scheduler fires at `RUN_AT_MIN` (965 = 16:05) **or on any later boot the
+same evening**, and the catch-up window ran to 22:00 ET. The 16:05 run did not
+land, something restarted around 20:00, the 45s post-boot check fired, and the
+session was recorded four hours late.
+
+The old comment said capturing at 19:40 after a restart is "just as correct as
+16:05". That is true of the OI half and false of the volume half. The upstream
+feed rolls its trading day at 20:00 ET and the roll zeroes the chain's
+day-volume field, so a sweep starting at 20:01 writes `OI(T-1) + Vol(empty)` as
+session T's close: `vol_gex` zeroed, `net_gex` silently reduced to the OI-only
+number, and the oivol delta against T-1 wrong by a full session of volume.
+
+**1. The catch-up window now closes before the roll.** `WINDOW_CLOSE_MIN`
+1320 -> 1185 (19:45 ET), fifteen minutes of margin. The cost of closing early is
+"no session recorded", which the board shows; the cost of staying open was a
+quietly wrong session, which it could not. Anything later is now a deliberate
+`POST /proxy/eod-strike-gex-run`, not something the scheduler does on its own.
+
+**2. A zero-volume guard, as the second line.** A board carrying open interest
+and no volume anywhere is not a quiet session - a strike with 40k OI traded
+something. `runSweep()` now detects that shape and writes `vol_*` as NULL rather
+than as zero, so the `vol` basis reports "nothing recorded for this session"
+(the read path already branches on `hasBasis`) instead of a flat zero board a
+reader would take at face value. It triggers on the DATA, not the clock, so it
+also catches a roll at an hour nobody expected. `net_gex` is left as computed -
+it is the legacy series and never NULL, and breaking a year of level continuity
+to patch a row `WINDOW_CLOSE_MIN` should have prevented is the wrong trade.
+
+**3. Catch-up sweeps say so in the log.** Any run more than 30 minutes past the
+16:05 slot logs `CATCH-UP sweep at HH:MM ET (Nm past the 16:05 slot)`. Healthy
+path, never the intended one, and somebody will ask why the stamp is off.
+
+**4. The run stamp now carries a capture-phase chip - the actual ask.** A clock
+alone does not tell you whether the data is premarket, live, after hours or past
+the roll, and that is the question. `capturePhase()` classifies the stamp on the
+US equity day in ET:
+
+| ET window | chip | tone |
+|---|---|---|
+| 04:00-09:30 | premarket | info (blue) - where the 09:25 settled-OI re-stamp lands |
+| 09:30-16:00 | live session | warn (gold) - mid-session read, volume partial |
+| 16:00-20:00 | after hours | pos (green) - the intended 16:05 window |
+| 20:00-04:00 | overnight | neg (red) - past the feed roll, volume suspect |
+| Sat/Sun | weekend | info (blue) |
+
+The tone is inverted relative to the market on purpose: this sweep is supposed
+to run after the close, so "after hours" is the good state and everything else
+is a flag. Each chip carries a tooltip saying what that phase does to the number.
+The prior-session tooltip on the run chip gained the same phase suffix via
+`fmtStampWithPhase()`, so a delta between two differently-phased captures is
+visible without opening anything. `toneChip` gained a fourth tone, `info`
+(`LIGHT_BLUE`), for states that are a fact rather than a verdict.
+
+Holidays are not detected - the page has no calendar - so a holiday capture
+reads as whatever its clock says, with the date beside it.
+
 ## 2026-08-27 - Fix: section 3's ladder rendered all 121 strikes instead of filling the column
 
 Edited: `components/pages/premarket/PostMarketTab.tsx`.

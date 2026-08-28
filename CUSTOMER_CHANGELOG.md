@@ -2,27 +2,21 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Friday 8/28/2026
+
+* **Click any label on the wall migration chart to hide or show that line** — call wall, put wall, CORE or price.
+
+* **The walls no longer disappear and reappear mid-day.** CORE is drawn as whichever wall is heavier, and the other wall stays on screen the whole session in its own colour.
+
+* **Snapshot button in the popped-out wall migration chart** — one click copies a branded PNG. The chart is taller, and the week view now labels each day by name.
+
 ## Thursday 8/27/2026
 
-* **The Level Log has two new switches** — today's expiry vs all the other expirations, and OI+Volume GEX vs volume-only GEX. Four readings of the same day.
+* **The Level Log has two new switches** — today's expiry vs all the other expirations, and OI+Volume GEX vs volume-only GEX. Four readings of the same day. Pop the wall migration chart out full size**, and flip it to the last 5 sessions to see where a level sat all week. Levels refresh every minute** instead of every five, so each 15-minute log entry is far fresher.
 
-* **Levels are now colour-coded**: gold CORE, green call wall, red put wall.
+* **Premarket and Post-Market now work for your whole main watchlist** — SPY, QQQ, NDX, VIX, AAPL, AMD, AMZN, GOOGL, META, MSFT, NVDA, SPCX and TSLA, not just SPX. Every ticker gets the full page**, not a stripped-down version: the regime strip, key levels, GEX profile, expected range, gamma bell curve and the complete post-market recap.
 
-* **CORE finally reads the same everywhere.** The migration chart used to show a different CORE number in the All view than in the Core view.
-
-* **Pop the wall migration chart out full size**, and flip it to the last 5 sessions to see where a level sat all week.
-
-* **Levels refresh every minute** instead of every five, so each 15-minute log entry is far fresher.
-
-* **Premarket and Post-Market now work for your whole main watchlist** — SPY, QQQ, NDX, VIX, AAPL, AMD, AMZN, GOOGL, META, MSFT, NVDA, SPCX and TSLA, not just SPX.
-
-* **Every ticker gets the full page**, not a stripped-down version: the regime strip, key levels, GEX profile, expected range, gamma bell curve and the complete post-market recap.
-
-* **The gamma bell curve shows a proper 20 strikes each side** instead of a handful, so the shape of the board is actually readable on stocks.
-
-* **Prices now show the right number of decimals** for whatever you're looking at — a $187.50 strike no longer rounds to 188.
-
-* **The GEX profile opens centred on spot** instead of scrolled to the bottom of the ladder.
+* **SPX is now its own chart on ES Candles** — the same gamma you get on ES, drawn on the index's own candles with no basis offset in the way. New RTH / ETH button on ES Candles.** Flip between the New York session only (9:30am–4pm ET) and the full overnight tape. Search any ticker on ES Candles.** The symbol picker now lists your whole watchlist and accepts anything you type.
 
 ## Tuesday 8/25/2026
 

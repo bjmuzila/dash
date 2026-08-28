@@ -166,9 +166,31 @@ const rosterStore = require('./roster-store');
 // Minute-of-day ET to fire. 965 = 16:05 ET — five minutes past the bell, so the
 // chain's day-volume field is settled. Same slot atm-prem-recorder uses.
 const RUN_AT_MIN = Number(process.env.EOD_STRIKE_GEX_RUN_AT_MIN || 965);
-// Latest minute the catch-up window stays open. 22:00 ET, so a VPS restarted at
-// 7pm still captures the session instead of silently losing the day.
-const WINDOW_CLOSE_MIN = Number(process.env.EOD_STRIKE_GEX_CLOSE_MIN || 1320);
+// Latest minute the catch-up window stays open, so a VPS restarted in the
+// evening still captures the session instead of silently losing the day.
+//
+// 19:45 ET, NOT 22:00 — and the fifteen minutes of margin are the whole point.
+// The upstream feed rolls its trading day at 20:00 ET (the end of the equity
+// extended session), and the roll resets the chain's day-VOLUME field to zero
+// for the new day. A catch-up sweep that starts at 20:01 therefore reads
+//
+//     OI(T-1)  +  Vol(<empty>)
+//
+// and writes it as session T's close: vol_gex zeroed, net_gex silently reduced
+// to the OI-only number, and the oivol Δ against T-1 wrong by a full session of
+// volume. That is the exact failure that produced the 2026-08-27 20:01:52 row.
+// The OI half is immune (settled file, and the 09:25 pass re-stamps it anyway),
+// so the loss from closing the window early is only ever "no session recorded",
+// which the board SHOWS. A quietly wrong session is the worse outcome.
+//
+// Anything later than this is a manual POST /proxy/eod-strike-gex-run decision,
+// not something the scheduler does on its own.
+const WINDOW_CLOSE_MIN = Number(process.env.EOD_STRIKE_GEX_CLOSE_MIN || 1185);
+// Minute the upstream day rolls and day-volume resets. Used only by the
+// zero-volume guard in runSweep() for its diagnostic wording — the guard itself
+// triggers on the DATA (a board with OI and no volume at all), never on the
+// clock, so it also catches a roll that happens at an hour nobody expected.
+const FEED_ROLL_MIN = Number(process.env.EOD_STRIKE_GEX_FEED_ROLL_MIN || 1200);
 // Strikes kept EACH WAY from the closing spot. 40 + 40 + the spot strike.
 const WINDOW_SIDE = Math.max(5, Math.min(200, Number(process.env.EOD_STRIKE_GEX_SIDE || 40)));
 // 0 = uncapped (every listed expiry, which is what "all expirations" means).
@@ -281,6 +303,9 @@ function isTradingDayET() {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Minute-of-day → "HH:MM", for log lines that quote the schedule. */
+const hhmmET = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
 // ── PG pool (same lazy pattern as oi-daily-recorder.js) ──────────────────────
 
@@ -1093,6 +1118,36 @@ async function runSweep({ symbols = null, date = null } = {}) {
           tickersFailed += 1;
           failures.push(`${symbol}: empty board`);
         } else {
+          // ── ZERO-VOLUME GUARD (the feed day roll) ──────────────────────────
+          //
+          // A board that carries open interest but NO volume anywhere is not a
+          // quiet session — a name with 40k OI on a strike traded something. It
+          // is a read taken after the upstream day rolled and zeroed the
+          // day-volume field, and writing it lands a fake zero that is
+          // indistinguishable from a real one for the rest of the series' life.
+          //
+          // So the volume half is dropped to NULL rather than recorded. The
+          // read path branches on hasBasis, so the `vol` basis then reports
+          // "nothing recorded for this session" — which is true — instead of a
+          // flat zero board a reader would take at face value.
+          //
+          // net_gex is left exactly as computed, deliberately. It is the legacy
+          // series and it is never NULL; on a rolled read it equals the OI-only
+          // number, which the run-stamp phase chip on the board makes visible.
+          // Rewriting or skipping it would break a year of level continuity to
+          // fix a row that WINDOW_CLOSE_MIN should have prevented in the first
+          // place. This guard is the second line, not the first.
+          const volAbs = win.reduce((a, r) => a + Math.abs(Number(r.volGex) || 0), 0);
+          const oiAbs = win.reduce((a, r) => a + Math.abs(Number(r.oiGex) || 0), 0);
+          if (oiAbs > 0 && volAbs === 0) {
+            for (const r of win) { r.volGex = null; r.volCallGex = null; r.volPutGex = null; }
+            const { minutes } = nowET();
+            failures.push(
+              `${symbol}: zero day-volume on a board with open interest — vol_* left NULL`
+              + (minutes >= FEED_ROLL_MIN ? ' (read is past the feed day roll)' : ' (upstream volume field empty)'),
+            );
+          }
+
           // FLOW BASIS, for the handful of names that stream into flow_prints.
           // Folded onto the SAME windowed rows rather than written as its own
           // ladder: a strike with flow but no OI+Vol row does not exist on this
@@ -2355,8 +2410,19 @@ function startEodStrikeGexRecorder() {
       const { minutes } = nowET();
       // Fire at RUN_AT_MIN, or on any later boot the same evening — the close is
       // a settled snapshot, so capturing it at 19:40 after a restart is just as
-      // correct as capturing it at 16:05.
+      // correct as capturing it at 16:05. It is NOT just as correct at 20:01,
+      // which is why the window now closes before the feed roll; see
+      // WINDOW_CLOSE_MIN.
       if (minutes < RUN_AT_MIN || minutes >= WINDOW_CLOSE_MIN) return;
+      // A catch-up is a normal, healthy path, but it is never the intended one —
+      // say so in the log, because the row it writes carries a run stamp hours
+      // off the close and somebody will ask why.
+      if (minutes > RUN_AT_MIN + 30) {
+        console.warn(
+          `[eod-strike-gex] CATCH-UP sweep at ${hhmmET(minutes)} ET (${minutes - RUN_AT_MIN}m past the 16:05 slot) — `
+          + 'the 16:05 run did not land. OI is unaffected; volume is read as-is and guarded against a rolled feed.',
+        );
+      }
       _lastRunDate = day; // claim the day BEFORE awaiting, so a sweep that runs
                           // for eight minutes can't be double-fired by ticks
       runSweep({ date: day })
@@ -2383,13 +2449,13 @@ function startEodStrikeGexRecorder() {
   // First check shortly after boot so an evening restart still backfills today.
   setTimeout(check, 45_000);
 
-  const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
   console.log(
     `[eod-strike-gex] recorder started — ${symbolsSync().length} symbols × ` +
     `${EXPIRY_DEPTH > 0 ? EXPIRY_DEPTH : 'all'} expiries (ex-0DTE), ±${WINDOW_SIDE} strikes, ` +
-    `once daily at ${hhmm(RUN_AT_MIN)} ET, ${RETAIN_DAYS}d retention (roster re-resolved each sweep); ` +
+    `once daily at ${hhmmET(RUN_AT_MIN)} ET (catch-up until ${hhmmET(WINDOW_CLOSE_MIN)}, before the ` +
+    `${hhmmET(FEED_ROLL_MIN)} feed roll), ${RETAIN_DAYS}d retention (roster re-resolved each sweep); ` +
     `bases oivol/oi/vol + flow for [${[...FLOW_GEX_SYMBOLS].join(',') || 'none'}]; ` +
-    `OI re-stamp ${RESTAMP_ENABLED ? `at ${hhmm(RESTAMP_AT_MIN)} ET` : 'DISABLED'}`,
+    `OI re-stamp ${RESTAMP_ENABLED ? `at ${hhmmET(RESTAMP_AT_MIN)} ET` : 'DISABLED'}`,
   );
 }
 

@@ -5,6 +5,7 @@ import {
   BASIS_LABEL,
   EX0_KEY,
   MAX_EXP_COLS,
+  MAX_COLS,
   cellAlpha,
   columnStats,
   fmtGex,
@@ -28,16 +29,18 @@ import {
 // than one per panel — four panels on different counts stop lining up, and a
 // board that does not line up cannot answer the question it exists to answer.
 //
-// The count is columns ON SCREEN, not expiries: at the full four the last real
-// expiry column is replaced by the synthetic ex-0DTE TOTAL (it still feeds the
-// sum), so 4 = three expiries plus a total and 3 = three expiries, no total.
+// The count is EXPIRY columns — 1, 2 or 3, which is every expiry the chain
+// route has (it returns the nearest plus up to two more). The ex-0DTE TOTAL is
+// its own switch and its own extra column, summing every non-0DTE expiry
+// available whether or not that expiry is drawn. Four columns maximum.
 //
-// ── Marks on the ladder, matching v2 ─────────────────────────────────────────
-//   ATM        a white ring around the row, and an ATM chip in the strike cell
-//   CB         gold. Front expiry: a gold-ringed CB badge plus a pulsing glow.
-//              Later expiries: a gold ★ in the cell's top-left corner — the
-//              same strike, marked more quietly because the front expiry is
-//              the one being traded.
+// ── Marks on the ladder ──────────────────────────────────────────────────────
+//   ATM        a white ring around the row
+//   CB         the cell goes GOLD and its number keeps the GEX hue, so the core
+//              is findable across four ladders at a glance while the sign is
+//              still readable. Front expiry adds the named badge and a pulse;
+//              later expiries get a ★ in the corner — the same strike, marked
+//              more quietly because the front expiry is the one being traded.
 //   CW / PW    ringed badges in their own colours, front expiry only
 //
 // ── Not carried over ─────────────────────────────────────────────────────────
@@ -52,6 +55,7 @@ const DEFAULT_TICKERS = ['SPX', 'SPY', 'QQQ', 'NDX']
 
 const TICKERS_KEY = 'cb-v3-mg-tickers'
 const COLS_KEY = 'cb-v3-mg-col-count'
+const EX0_STORE_KEY = 'cb-v3-mg-ex0'
 const BASIS_STORE_KEY = 'cb-v3-mg-basis'
 
 /** Strike rail width, matching v2 so the two boards read at the same rhythm. */
@@ -98,8 +102,21 @@ function loadTickers(): string[] {
   }
 }
 
+/**
+ * `live=0` is load-bearing, and only for SPX.
+ *
+ * Without it the chain adapter serves the subscribed underlying from the live
+ * WebSocket subscriber, which streams exactly ONE expiry — so SPX came back
+ * with a single expiration and its panel was stuck at one column no matter what
+ * the board was set to, while SPY/QQQ/NDX fell through to REST and got three.
+ * The flag opts this caller out of that fast path; the ladder is read ACROSS
+ * expiries, so a one-expiry chain is not a chain it can use.
+ *
+ * It costs SPX the live path, which is the right trade here: the panel polls on
+ * a 15s cadence anyway and the REST response is the only one with the columns.
+ */
 function chainsUrl(ticker: string): string {
-  return `/api/chains?ticker=${encodeURIComponent(ticker)}&range=all`
+  return `/api/chains?ticker=${encodeURIComponent(ticker)}&range=all&live=0`
 }
 
 // ── One panel ────────────────────────────────────────────────────────────────
@@ -108,6 +125,7 @@ interface PanelProps {
   ticker: string
   anchor: string
   colCount: number
+  showEx0: boolean
   basis: Basis
   intensity: number
   showLevels: boolean
@@ -115,7 +133,16 @@ interface PanelProps {
   onCommitTicker: (next: string) => boolean
 }
 
-function TickerPanel({ ticker, anchor, colCount, basis, intensity, showLevels, onCommitTicker }: PanelProps) {
+function TickerPanel({
+  ticker,
+  anchor,
+  colCount,
+  showEx0,
+  basis,
+  intensity,
+  showLevels,
+  onCommitTicker,
+}: PanelProps) {
   // 15s, matching v2's auto-refresh. staleMs alone would never refetch — it is
   // a cache TTL, not an interval — so the ladder would freeze at whatever it
   // loaded with.
@@ -130,13 +157,12 @@ function TickerPanel({ ticker, anchor, colCount, basis, intensity, showLevels, o
   const spot = chain.underlying
 
   const { display, ex0Source } = useMemo(() => {
-    const cols = pickColumns(
+    const all = pickColumns(
       chain.expiries.map((e) => e.expiration),
       anchor || chain.expiries[0]?.expiration || '',
-      colCount,
     )
-    return withEx0Column(cols, colCount)
-  }, [chain.expiries, anchor, colCount])
+    return withEx0Column(all, colCount, showEx0)
+  }, [chain.expiries, anchor, colCount, showEx0])
 
   /** strike → value, per displayed column. The total column sums its sources. */
   const valuesByCol = useMemo(() => {
@@ -348,18 +374,11 @@ function TickerPanel({ ticker, anchor, colCount, basis, intensity, showLevels, o
                   : null),
               }}
             >
-              <span className="flex items-center justify-center gap-1 truncate border-r border-line px-1 text-center font-mono text-[11px] font-extrabold text-muted">
-                <span className="shrink-0">
-                  {Number.isInteger(strike) ? strike : strike.toFixed(2)}
-                </span>
-                {isAtm && (
-                  <span
-                    title="At the money"
-                    className="inline-flex h-[11px] shrink-0 items-center justify-center rounded-[3px] bg-fg px-1 text-[8px] font-black leading-none tracking-[0.04em] text-bg"
-                  >
-                    ATM
-                  </span>
-                )}
+              {/* No ATM chip. The row's white ring already says which strike is
+                  at the money, and a badge in the rail cost the strike number
+                  half its width on four ladders at once. */}
+              <span className="truncate border-r border-line px-1 text-center font-mono text-[11px] font-extrabold text-muted">
+                {Number.isInteger(strike) ? strike : strike.toFixed(2)}
               </span>
 
               {display.map((c) => {
@@ -376,29 +395,57 @@ function TickerPanel({ ticker, anchor, colCount, basis, intensity, showLevels, o
                   <div
                     key={c.key}
                     className={[
-                      'tabular relative min-w-0 truncate rounded-[2px] px-1 text-center font-mono text-[10px] text-fg',
-                      isCb ? 'mg-cb-glow' : '',
+                      'tabular relative min-w-0 truncate rounded-[2px] px-1 text-center font-mono text-[10px]',
+                      isCb ? 'mg-cb-glow font-extrabold' : 'text-fg',
                     ].join(' ')}
-                    style={{
-                      background:
-                        alpha > 0 ? `color-mix(in srgb, ${hue} ${(alpha * 100).toFixed(1)}%, transparent)` : undefined,
-                      outline: rank === 0 && v !== 0 ? `1px solid ${hue}` : undefined,
-                      outlineOffset: -1,
-                    }}
+                    style={
+                      isCb
+                        ? {
+                            // The core is the ONE cell that does not take the
+                            // heat wash. Gold is the mark — a heat colour would
+                            // make it the same picture as a merely-large
+                            // strike — and the number keeps the GEX hue on top
+                            // of it so the sign survives the swap. The dark halo
+                            // is what makes a mid-tone hue legible on gold; it
+                            // is a shadow, not a second colour.
+                            background: 'var(--color-level-cb)',
+                            color: hue,
+                            textShadow: '0 0 2px var(--color-app), 0 0 4px var(--color-app)',
+                            outline: '1px solid var(--color-level-cb)',
+                            outlineOffset: -1,
+                          }
+                        : {
+                            background:
+                              alpha > 0
+                                ? `color-mix(in srgb, ${hue} ${(alpha * 100).toFixed(1)}%, transparent)`
+                                : undefined,
+                            outline: rank === 0 && v !== 0 ? `1px solid ${hue}` : undefined,
+                            outlineOffset: -1,
+                          }
+                    }
                   >
-                    <span className={f.sign === '+' ? 'text-up' : f.sign === '−' ? 'text-down' : 'text-muted'}>
+                    {/* On the core the sign inherits the cell's GEX hue rather
+                        than taking its own up/down colour — two colours on a
+                        gold cell reads as a rendering fault. */}
+                    <span
+                      className={
+                        isCb ? undefined : f.sign === '+' ? 'text-up' : f.sign === '−' ? 'text-down' : 'text-muted'
+                      }
+                    >
                       {f.sign}
                     </span>
                     {f.text}
 
-                    {/* Later expiries mark their own CB with a gold star. Same
+                    {/* Later expiries mark their own CB with a star. Same
                         strike, quieter mark — the front expiry is the one being
-                        traded, so it gets the named badge. */}
+                        traded, so it gets the named badge. Drawn in the app
+                        ground, not gold: the cell underneath it IS gold now, and
+                        a gold star on gold is an invisible star. */}
                     {isCb && !isFront && (
                       <span
                         title="Core Bullseye"
                         className="pointer-events-none absolute left-0.5 top-px text-[10px] leading-none"
-                        style={{ color: 'var(--color-level-cb)', textShadow: '0 0 2px var(--color-app)' }}
+                        style={{ color: 'var(--color-app)', textShadow: 'none' }}
                       >
                         ★
                       </span>
@@ -429,10 +476,13 @@ function TickerPanel({ ticker, anchor, colCount, basis, intensity, showLevels, o
 
 export function MultiGreekCard() {
   const [tickers, setTickers] = useState<string[]>(() => loadTickers())
+  // A blob written before the split stored 4 here; it clamps to 3, which is the
+  // same number of expiry columns that setting ever actually drew.
   const [colCount, setColCount] = useState(() => {
     const n = Number(readStored(COLS_KEY, String(MAX_EXP_COLS)))
     return Number.isFinite(n) ? Math.min(MAX_EXP_COLS, Math.max(1, Math.round(n))) : MAX_EXP_COLS
   })
+  const [showEx0, setShowEx0] = useState(() => readStored(EX0_STORE_KEY, '1') !== '0')
   const [basis, setBasis] = useState<Basis>(() => {
     const v = readStored(BASIS_STORE_KEY, 'oivol')
     return v === 'vol' || v === 'oi' ? v : 'oivol'
@@ -453,6 +503,10 @@ export function MultiGreekCard() {
     const v = Math.min(MAX_EXP_COLS, Math.max(1, Math.round(n)))
     setColCount(v)
     write(COLS_KEY, String(v))
+  }
+  const commitEx0 = (on: boolean) => {
+    setShowEx0(on)
+    write(EX0_STORE_KEY, on ? '1' : '0')
   }
   const commitBasis = (b: Basis) => {
     setBasis(b)
@@ -484,7 +538,7 @@ export function MultiGreekCard() {
         <button
           type="button"
           onClick={() => setCogOpen((v) => !v)}
-          title={`${BASIS_LABEL[basis]} · ${colCount} col`}
+          title={`${BASIS_LABEL[basis]} · ${colCount + (showEx0 ? 1 : 0)} of ${MAX_COLS} col`}
           className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted hover:bg-raised hover:text-fg"
         >
           ⚙ Board
@@ -493,11 +547,19 @@ export function MultiGreekCard() {
           <div className="flex w-60 flex-col gap-2">
             <PanelSection title="Columns">
               <SegGroup
-                title="How many columns each panel draws. At 4 the last expiry column becomes the ex-0DTE total."
-                options={[1, 2, 3, 4].map((n) => ({ label: String(n), value: String(n) }))}
+                title="How many EXPIRY columns each panel draws, nearest first. Three is every expiry the chain route returns."
+                options={[1, 2, 3].map((n) => ({ label: String(n), value: String(n) }))}
                 value={String(colCount)}
                 onChange={(v) => commitCols(Number(v))}
               />
+              <div className="flex gap-1">
+                <Chip
+                  label="ALL ex-0DTE"
+                  on={showEx0}
+                  onClick={() => commitEx0(!showEx0)}
+                  title="Append a total column summing every available expiry except 0DTE — including expiries that have no column of their own. Four columns maximum."
+                />
+              </div>
             </PanelSection>
             <PanelSection title="Basis">
               <SegGroup
@@ -542,6 +604,7 @@ export function MultiGreekCard() {
             ticker={t}
             anchor={anchor}
             colCount={colCount}
+            showEx0={showEx0}
             basis={basis}
             intensity={intensity}
             showLevels={showLevels}

@@ -425,6 +425,94 @@ const fmtEtStamp = (iso?: string | null) => {
     }).format(d).replace(", ", " ") + " ET";
 };
 
+/**
+ * WHICH PART OF THE TRADING DAY A CAPTURE LANDED IN.
+ *
+ * The run stamp answers "when", and by itself that is not the question anyone
+ * actually has. "20:01:52" only means something once you know it is PAST the
+ * close, past the extended session, and past the point where the feed rolls its
+ * trading day — at which moment the chain's volume field has reset and the read
+ * is no longer describing the session it is filed under. A reader should not
+ * have to hold the market calendar in their head to notice that.
+ *
+ * So the clock gets a phase beside it. Boundaries are the US equity day in ET:
+ *
+ *   04:00–09:30  PREMARKET   — where the 09:25 settled-OI re-stamp lands
+ *   09:30–16:00  LIVE        — RTH; a read here is mid-session, not a close
+ *   16:00–20:00  AFTER HOURS — the intended window; 16:05 is the target
+ *   20:00–04:00  OVERNIGHT   — past the feed roll; day volume has reset
+ *
+ * The TONE is specific to this board rather than to the market: the sweep is
+ * supposed to run after the close, so "after hours" is the good state and
+ * everything else is a flag of some kind. That inversion is deliberate — a chip
+ * that greens on 16:05 and reds on 20:01 answers the question the reader has,
+ * which is "is this stamp where it should be", not "is the market open".
+ *
+ * Holidays are not detected (the page has no calendar). A holiday capture reads
+ * as whatever its clock says, which is the honest fallback — the date is right
+ * beside it.
+ */
+type CapturePhase = "premarket" | "live" | "afterhours" | "overnight" | "weekend";
+
+const PHASE_COPY: Record<CapturePhase, {
+  label: string; tone: "pos" | "neg" | "warn" | "info"; title: string;
+}> = {
+  afterhours: {
+    label: "after hours", tone: "pos",
+    title: "Captured after the close and before the 20:00 ET feed roll — the window the sweep is scheduled for (16:05). Volume is the settled full session; open interest is last night's file until the 09:25 re-stamp.",
+  },
+  premarket: {
+    label: "premarket", tone: "info",
+    title: "Captured before the open. This is where the 09:25 settled-OI re-stamp lands, so it is the expected phase for the OI basis. On any basis that includes volume it means the read came from a session that had not started trading.",
+  },
+  live: {
+    label: "live session", tone: "warn",
+    title: "Captured during regular hours — a mid-session read, not an end-of-day one. Volume is partial and the board will not match the close.",
+  },
+  overnight: {
+    label: "overnight", tone: "neg",
+    title: "Captured past the 20:00 ET feed roll (or before 04:00). The chain's day-volume field resets at the roll, so the volume half of this row can be zero or partial even though the session traded normally. Open interest is unaffected.",
+  },
+  weekend: {
+    label: "weekend", tone: "info",
+    title: "Captured on a Saturday or Sunday. Nothing traded between this read and the session it is filed under.",
+  },
+};
+
+/** ET weekday + minute-of-day for an instant, independent of the browser's TZ. */
+const etClock = (iso: string): { weekday: string; minutes: number } | null => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hourCycle: "h23",
+    weekday: "short", hour: "2-digit", minute: "2-digit",
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const h = Number(get("hour"));
+  const m = Number(get("minute"));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return { weekday: get("weekday"), minutes: h * 60 + m };
+};
+
+const capturePhase = (iso?: string | null): CapturePhase | null => {
+  if (!iso) return null;
+  const c = etClock(iso);
+  if (!c) return null;
+  if (c.weekday === "Sat" || c.weekday === "Sun") return "weekend";
+  if (c.minutes < 240) return "overnight";   // < 04:00
+  if (c.minutes < 570) return "premarket";   // < 09:30
+  if (c.minutes < 960) return "live";        // < 16:00
+  if (c.minutes < 1200) return "afterhours"; // < 20:00
+  return "overnight";
+};
+
+/** "2026-08-27 20:01:52 ET · overnight" — for tooltips, where a chip cannot go. */
+const fmtStampWithPhase = (iso?: string | null) => {
+  if (!iso) return "";
+  const p = capturePhase(iso);
+  return `${fmtEtStamp(iso)}${p ? ` · ${PHASE_COPY[p].label}` : ""}`;
+};
+
 /** ET wall clock for the "as of" stamp — the table's own timezone. */
 const fmtEtTime = (iso?: string) => {
   if (!iso) return "";
@@ -1019,8 +1107,12 @@ const chipBase: CSSProperties = {
   borderRadius: 999, fontSize: 10, fontWeight: 800, letterSpacing: ".05em",
   textTransform: "uppercase", border: `1px solid ${T.border}`, whiteSpace: "nowrap",
 };
-const toneColor = (t: "pos" | "neg" | "warn") => (t === "pos" ? POS : t === "neg" ? NEG : T.gold);
-function toneChip(t: "pos" | "neg" | "warn"): CSSProperties {
+// `info` is the fourth tone: a state that is neither good nor a warning, just
+// worth naming — the card accent rather than a verdict colour. Added for the
+// capture-phase chip, where "premarket" is simply a fact about the clock.
+type ChipTone = "pos" | "neg" | "warn" | "info";
+const toneColor = (t: ChipTone) => (t === "pos" ? POS : t === "neg" ? NEG : t === "info" ? LIGHT_BLUE : T.gold);
+function toneChip(t: ChipTone): CSSProperties {
   const c = toneColor(t);
   return { ...chipBase, color: c, borderColor: `${c}61`, background: `${c}1c` };
 }
@@ -2754,7 +2846,7 @@ export default function GexGrowth() {
           {detail?.capturedAt ? (
             <span
               title={detail.prevCapturedAt
-                ? `Prior session's ${BASIS_COPY[basis].name} was captured ${fmtEtStamp(detail.prevCapturedAt)}. A Δ compares these two moments.`
+                ? `Prior session's ${BASIS_COPY[basis].name} was captured ${fmtStampWithPhase(detail.prevCapturedAt)}. A Δ compares these two moments.`
                 : "No prior session on file to compare against."}
               style={{
                 fontFamily: MONO, fontSize: 10, color: T.textMuted, flexShrink: 0,
@@ -2764,6 +2856,25 @@ export default function GexGrowth() {
               run {fmtEtStamp(detail.capturedAt)}
             </span>
           ) : null}
+
+          {/* WHICH PHASE OF THE DAY THAT CLOCK IS IN. Beside the stamp, never
+              inside it: the timestamp is the fact and the phase is what it
+              MEANS, and the second one is what a reader is actually checking.
+              Green on the 16:05 window, red once a read is past the 20:00 feed
+              roll — see capturePhase() for why that inversion is on purpose. */}
+          {(() => {
+            const ph = capturePhase(detail?.capturedAt);
+            if (!ph) return null;
+            const c = PHASE_COPY[ph];
+            return (
+              <span
+                title={c.title}
+                style={{ ...toneChip(c.tone), fontSize: 9.5, padding: "2px 7px", flexShrink: 0 }}
+              >
+                {c.label}
+              </span>
+            );
+          })()}
 
           {/* Settled-OI provenance. Only meaningful on `oi`, and it is the flag
               that says whether the Δ on screen is a real ΔOI or two
