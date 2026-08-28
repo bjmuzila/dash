@@ -396,7 +396,7 @@ const CSS = `
        Post-Market tab — is nowhere near the top. Docked, it stays under the
        cursor wherever you are reading.
 
-   `.pmk` is the scroll container (height:100%; overflow:auto), so the bar is
+   .pmk is the scroll container (height:100%; overflow:auto), so the bar is
    the LAST CHILD of it with position:sticky; bottom:0 — pinned to the viewport
    edge for the whole scroll, then at rest in flow at the very end, so it never
    permanently covers anything. It needs an OPAQUE plate under the cyan wash for
