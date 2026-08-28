@@ -398,6 +398,7 @@ export function DockSlider({
   steppers = true,
   labelWidth,
   valueWidth = 34,
+  disabled = false,
 }: {
   label?: string;
   value: number;
@@ -419,6 +420,15 @@ export function DockSlider({
    */
   labelWidth?: number;
   valueWidth?: number;
+  /**
+   * Dim and inert — the control still SHOWS its value, it just cannot be moved.
+   *
+   * For a setting something else is currently deciding (an Auto mode). Hiding
+   * the slider instead would be worse: the number it is holding is the number
+   * that comes back the moment Auto is turned off, and a control that vanishes
+   * takes that answer with it.
+   */
+  disabled?: boolean;
 }) {
   const fluid = width === "auto";
   // Latest value for the hold-to-repeat timer, which would otherwise close over
@@ -453,8 +463,8 @@ export function DockSlider({
   };
   useEffect(() => stopHold, []);
 
-  const atMin = value <= min;
-  const atMax = value >= max;
+  const atMin = disabled || value <= min;
+  const atMax = disabled || value >= max;
 
   // One bordered pill split by a hairline, rather than two floating boxes —
   // reads as a single control and holds a tidy column in a stacked group.
@@ -496,6 +506,7 @@ export function DockSlider({
         // whatever grid/flex parent holds it, and its value + stepper spill past
         // the container's edge on a narrow viewport.
         ...(fluid ? { width: "100%", minWidth: 0 } : { flexShrink: 0 }),
+        ...(disabled ? { opacity: 0.42, pointerEvents: "none" as const } : null),
       }}
     >
       <style>{`
@@ -521,6 +532,7 @@ export function DockSlider({
           max={max}
           step={step}
           value={value}
+          disabled={disabled}
           onChange={(e) => onChange(Number(e.target.value))}
           style={fluid
             ? { flex: 1, minWidth: 0, accentColor: accent }

@@ -1451,8 +1451,8 @@ function useWallSeries(
  * PostMarketTab.tsx → WallChart).
  *
  *   ONE LINE PER RECORDED LEVEL. Call wall (green), put wall (red) and CORE
- *   (gold), each in the colour the rest of the page reads as that level, with
- *   the corridor between the two walls shaded. CORE is the recorded `cb` strike — the same
+ *   (gold), each in the colour the rest of the page reads as that level, on a
+ *   plain panel — no shaded corridor. CORE is the recorded `cb` strike — the same
  *   number the ticker rail, the timeline and the copied text show — and it
  *   frequently sits ON one of the walls, because the biggest node on the chain
  *   is usually also the biggest node on one side of spot. That overlap IS the
@@ -1526,12 +1526,6 @@ type DaySeg = {
    * Null on the views where there is nothing to resolve.
    */
   roles: { core: (number | null)[]; other: (number | null)[]; side: (WallSide | null)[] } | null;
-  /**
-   * The corridor's two edges, already resolved for the CORE-sign rule below —
-   * so where a wall is suppressed the band closes on the CORE that replaced it
-   * rather than vanishing.
-   */
-  band: { up: (number | null)[]; lo: (number | null)[] } | null;
   spotPts: { s: number; v: number }[];
   spotDrawn: { s: number; v: number }[];
   dense: boolean;
@@ -1749,25 +1743,13 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }:
       const dense = tape.length >= 20;
       const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }));
 
-      /**
-       * The corridor is the room price had, so its edges are the two lines that
-       * are actually bounding it: CORE and OTHER under the role model, the two
-       * walls without it. Never CORE against the wall it already is, which
-       * would be a band of zero width.
-       */
-      const up: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-      const dn: (number | null)[] = new Array(WALL_SLOTS).fill(null);
-      for (let s = 0; s <= lastSlot; s++) {
-        const a = roles ? roles.core[s] : cwArr?.[s] ?? null;
-        const b = roles ? roles.other[s] : pwArr?.[s] ?? null;
-        if (a == null || b == null) continue;
-        up[s] = Math.max(a, b);
-        dn[s] = Math.min(a, b);
-      }
-      const band = up.some((v, s) => v != null && dn[s] != null) ? { up, lo: dn } : null;
+      /* (Removed 2026-08-28: the shaded corridor between the two bounding
+         levels. At 0.06 alpha on the panel it did not read as a tint — it read
+         as blocky dark rectangles behind the lines, and every wall step cut a
+         new hard edge into it. The lines already say where the room was.) */
 
       if (!series.size && !spotDrawn.length) continue;
-      segs.push({ date: day.date, series, roles, band, spotPts, spotDrawn, dense, lastSlot, lastWrite });
+      segs.push({ date: day.date, series, roles, spotPts, spotDrawn, dense, lastSlot, lastWrite });
     }
     if (!segs.length) return null;
 
@@ -1864,22 +1846,6 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }:
     return out;
   };
 
-  /** The corridor, one polygon per stretch where BOTH edges exist. */
-  const bandRuns = (i: number, up: (number | null)[], dn: (number | null)[]): string[] => {
-    const out: string[] = [];
-    const L = segs[i].lastSlot;
-    let s = 0;
-    while (s <= L) {
-      if (up[s] == null || dn[s] == null) { s++; continue; }
-      const a = s;
-      while (s <= L && up[s] != null && dn[s] != null) s++;
-      const b = s - 1;
-      const poly = [...stepRun(i, up, a, b), ...stepRun(i, dn, a, b, true)];
-      if (poly.length > 2) out.push(poly.join(" "));
-    }
-    return out;
-  };
-
   /** Last written value of a level across the whole span — the legend's number. */
   const lastOf = (lt: WallLevel) => {
     for (let i = N - 1; i >= 0; i--) {
@@ -1903,11 +1869,21 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }:
    * Without the role model (the WALLS view, the CORE view) it is the plain
    * per-level drawing it always was: gold CORE, green call wall, red put wall,
    * walls first so the gold reads on top of the wall it coincides with.
+   *
+   * SWITCHING CORE OFF DROPS THE ROLE MODEL WITH IT. The whole reason CORE
+   * suppresses a wall is that it IS that wall — one strike drawn twice in two
+   * colours is the thing the model exists to prevent. With CORE hidden there is
+   * no double, so there is nothing left to suppress: both walls go back to
+   * their own recorded series and each runs the full span, every session. The
+   * old behaviour left only OTHER on the chart, so the wall CORE had been
+   * standing in for appeared in fragments — visible in the stretches where it
+   * happened to be the lighter one and simply absent everywhere else, which
+   * reads as a level that kept dying rather than one that held all week.
    */
   const drawOrder: WallLevel[] = ["put_wall", "call_wall", "cb"];
   const drawn = drawOrder.filter((lt) => levels.includes(lt));
   const paths: { key: string; d: string; color: string; w: number }[] = [];
-  if (roled) {
+  if (roled && !off.has("cb")) {
     for (let i = 0; i < N; i++) {
       const r = segs[i].roles;
       if (!r) continue;
@@ -1933,11 +1909,10 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }:
         }
         k++;
       }
-      if (!off.has("cb")) {
-        stepRuns(i, r.core).forEach((d, j) => {
-          paths.push({ key: `core-${i}-${j}`, d, color: LEVEL_COLOR.cb, w: 2.2 });
-        });
-      }
+      // No `off.has("cb")` guard: this branch only runs while CORE is on.
+      stepRuns(i, r.core).forEach((d, j) => {
+        paths.push({ key: `core-${i}-${j}`, d, color: LEVEL_COLOR.cb, w: 2.2 });
+      });
     }
   } else {
     for (const lt of drawn) {
@@ -1948,18 +1923,6 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }:
         });
       }
     }
-  }
-
-  // The corridor between the levels bounding price — the room it actually had.
-  // Per day, for the same reason the lines are. Switched off with either edge,
-  // because a band with one edge hidden is a shape with no second number.
-  const bandOn = !off.has("call_wall") && !off.has("put_wall") && !off.has("cb");
-  const corridors: { key: string; d: string }[] = [];
-  if (bandOn) {
-    segs.forEach((seg, i) => {
-      if (!seg.band) return;
-      bandRuns(i, seg.band.up, seg.band.lo).forEach((d, k) => corridors.push({ key: `band-${i}-${k}`, d }));
-    });
   }
 
   const spotLines = off.has("spot")
@@ -1980,8 +1943,8 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }:
    * and the strike it currently sits on. Not the old uppercase pill row — that
    * was a second title bar fighting the head above it.
    *
-   * Each chip is also the series' SWITCH. Three levels, a price line and a
-   * shaded band inside 190px is a lot of ink for one question, and the question
+   * Each chip is also the series' SWITCH. Three levels and a price line
+   * inside 190px is a lot of ink for one question, and the question
    * is usually about one of them — so the chip that names a series turns it
    * off. Off reads as off: the swatch hollows out and the whole chip dims,
    * rather than the row looking identical to a chart that simply had no data.
@@ -2066,8 +2029,6 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }:
       <div style={{ position: "relative" }}>
       <svg viewBox={`0 0 100 ${height}`} height={height} preserveAspectRatio="none"
         style={{ width: "100%", display: "block" }}>
-        {/* The corridor between the two walls, so the room price had is readable. */}
-        {corridors.map((c) => <polygon key={c.key} points={c.d as string} fill={rgba(C.cyan, 0.06)} />)}
         {/* Session boundaries. Solid, unlike the dashed "log stopped writing"
             mark, because they are a different kind of edge: one is a gap in the
             clock, the other is a gap in the rows. */}

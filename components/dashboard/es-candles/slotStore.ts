@@ -256,6 +256,99 @@ export const BUBBLE_SIZE_RANGE = { min: 0.4, max: 4 } as const;
 export const BUBBLE_CURVE_RANGE = { min: 1, max: 3 } as const;
 
 /**
+ * ── AUTO ─────────────────────────────────────────────────────────────────────
+ *
+ * Every bubble setting has a right answer that depends on things the user cannot
+ * see from the panel — how many strikes this board actually has, how far the top
+ * one is from the rest, how tall the pane is, how far apart the bars land at this
+ * zoom. Auto computes all four from those factors on every frame; the sliders
+ * stay in the panel as the manual override, dimmed while it is on.
+ *
+ * The numbers below are the AUTO POLICY, not a second set of defaults. Each one
+ * answers a question about the picture:
+ *
+ *   levelShare   what counts as a level at all. A strike holding at least 5% of
+ *                the board's gamma is one; anything under is a wing, and drawing
+ *                it costs a row and buys nothing. The count is then clamped to
+ *                [minLevels, maxLevels] — four is the resting number (see
+ *                topStrikes), and a genuinely flat board may widen to six.
+ *
+ *   topFrac      the biggest mark, as a fraction of the pane. 3% of the height
+ *                is a mark you can see and rank without it becoming a blob that
+ *                buries the candles under it. Railed at 5–15px so a very short
+ *                or very tall pane still lands somewhere sane.
+ *
+ *   crowdTrim    each row past the fourth takes a little off the top, because
+ *                six rows at the four-row size is a busier chart than the extra
+ *                rows are worth.
+ *
+ *   spreadGain   the curve. When the drawn strikes sit within a few percent of
+ *                each other, straight-proportional draws six near-identical
+ *                circles and the ladder is unrankable; the exponent separates
+ *                them. When there IS a dominant wall, the spread is already in
+ *                the numbers and the curve stays near linear. So: measured off
+ *                the median drawn strike's ratio to the top, per frame.
+ *
+ *   dimPerRow    a busier layer sits quieter against the candles.
+ *
+ * NOTE the one thing auto never touches: what a size MEANS. Radius stays
+ * proportional to |net GEX| against the session reference under every rule here
+ * — auto moves the BUDGET and the exponent, never a single mark on its own.
+ */
+export const BUBBLE_AUTO = {
+  levelShare: 0.05,
+  minLevels: 4,
+  maxLevels: 6,
+  topFrac: 0.030,
+  topMinPx: 5,
+  topMaxPx: 15,
+  crowdTrim: 0.05,
+  spreadGain: 1.2,
+  curveMax: 2.2,
+  dimPerRow: 0.05,
+  dimFloor: 0.7,
+} as const;
+
+/**
+ * How many strikes to draw, from the board's own shape.
+ *
+ * `sharesDesc` is each strike's share of the column's total |GEX|, biggest
+ * first. Walks until a strike falls under `levelShare` — the list is sorted, so
+ * the first miss ends it.
+ */
+export function autoBubbleLevels(sharesDesc: number[]): number {
+  let n = 0;
+  for (const s of sharesDesc) {
+    if (s >= BUBBLE_AUTO.levelShare) n++;
+    else break;
+  }
+  return Math.min(BUBBLE_AUTO.maxLevels, Math.max(BUBBLE_AUTO.minLevels, n));
+}
+
+/**
+ * The target radius of the biggest mark, in CSS px, before the pitch caps have
+ * their say. Auto never asks for more room than the caps allow — it only ever
+ * asks for LESS than the full budget, which is what stops a zoomed-in chart
+ * turning into six 20px blobs.
+ */
+export function autoBubbleTopPx(paneH: number, rows: number): number {
+  const target = Math.min(BUBBLE_AUTO.topMaxPx, Math.max(BUBBLE_AUTO.topMinPx, paneH * BUBBLE_AUTO.topFrac));
+  const trim = 1 - BUBBLE_AUTO.crowdTrim * Math.max(0, rows - BUBBLE_AUTO.minLevels);
+  return Math.max(BUBBLE_AUTO.topMinPx * 0.8, target * trim);
+}
+
+/** The size exponent, from how tightly the drawn strikes are bunched. */
+export function autoBubbleCurve(medianRatio: number): number {
+  const r = Math.max(0, Math.min(1, medianRatio));
+  return Math.min(BUBBLE_AUTO.curveMax, Math.max(BUBBLE_CURVE_RANGE.min, 1 + BUBBLE_AUTO.spreadGain * r));
+}
+
+/** Layer opacity, from how many rows are on the chart. */
+export function autoBubbleIntensity(rows: number): number {
+  return Math.max(BUBBLE_AUTO.dimFloor, 1 - BUBBLE_AUTO.dimPerRow * Math.max(0, rows - BUBBLE_AUTO.minLevels));
+}
+
+/**
  * Floor under the EXPANDING session reference, as a fraction of the reference
  * over the whole loaded buffer.
  *

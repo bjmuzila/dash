@@ -45,6 +45,8 @@ export interface ChartDrawOpts {
   variance: number
   intensity: number
   on: boolean
+  /** Take the four above from the pane and the data instead — see BUBBLE_AUTO. */
+  auto?: boolean
 }
 
 /**
@@ -197,7 +199,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
 
   let snaps: BubbleSnapshot[] = []
   let barCount = 0
-  let drawOpts: ChartDrawOpts = { size: 1, floorPx: 1.5, variance: 1, intensity: 1, on: true }
+  let drawOpts: ChartDrawOpts = { size: 1, floorPx: 1.5, variance: 1, intensity: 1, on: true, auto: true }
   let railSink: RailSink | null = null
   let raf = 0
   // The forming bar, kept here so a live tick can extend it without going back
@@ -395,7 +397,13 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         width: w,
         height: h,
       },
-      { size: drawOpts.size, floorPx: drawOpts.floorPx, variance: drawOpts.variance, intensity: drawOpts.intensity },
+      {
+        size: drawOpts.size,
+        floorPx: drawOpts.floorPx,
+        variance: drawOpts.variance,
+        intensity: drawOpts.intensity,
+        auto: drawOpts.auto,
+      },
       palette,
     )
     reportOutOfRange(!drew)

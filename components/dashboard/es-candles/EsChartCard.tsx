@@ -103,6 +103,7 @@ import {
   BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_REF_START_MIN, BUBBLE_REF_CUTOFF_MIN,
   BUBBLE_LEVELS_RANGE, BUBBLE_INTENSITY_RANGE, BUBBLE_SIZE_RANGE, BUBBLE_CURVE_RANGE,
   BUBBLE_MIN_PER_SIDE, BUBBLE_BUCKET_DEFAULT,
+  autoBubbleLevels, autoBubbleTopPx, autoBubbleCurve, autoBubbleIntensity,
   SHARED_SLOT,
   readSlot, writeSlot, writeSlotQuiet, broadcastSlot, subscribeSlot,
   isBubbleBucket, isAutoBucket,
@@ -845,6 +846,17 @@ function EsChartCard({
     /** gexTodScale() for each bucket, cached — it formats a Date to get ET. */
     todAt: Map<number, number>;
     strikeStep: number;
+    /**
+     * What AUTO decided from the board, for the frame to use. Both are read off
+     * the NEWEST bucket — the live board — and then held for the whole trail:
+     * re-deciding per bucket would make rows blink in and out and the curve
+     * breathe as you scroll back through the session.
+     *
+     * `levels` is also what the selection above actually used, auto or not, so
+     * the draw never has to ask which mode it is in to know the row count.
+     */
+    levels: number;
+    autoCurve: number;
   } | null>(null);
   // Pre-rendered glow sprites for the highlighted walls. `ctx.shadowBlur` is a
   // per-fill gaussian blur — the single most expensive thing this overlay did,
@@ -880,6 +892,9 @@ function EsChartCard({
   // says Friday, and they'd disagree forever.
   const lastWallDayRef = useRef<string>("");
   const bubbleMinsRef = useRef<BubbleBucket>(BUBBLE_BUCKET_DEFAULT);
+  // Auto tunes levels / size / curve / intensity from the board and the pane on
+  // every frame; the four refs below are then only read when it is OFF.
+  const bubbleAutoRef = useRef(true);
   const bubbleLevelsRef = useRef(BUBBLE_STYLE.topStrikes);
   const bubbleIntensityRef = useRef(BUBBLE_STYLE.intensity);
   const bubbleSizeRef = useRef(BUBBLE_STYLE.size);
@@ -1075,6 +1090,13 @@ function EsChartCard({
   //   size      — multiplier on the size BUDGET, not on any single mark.
   // None of them changes what size MEANS: radius stays straight proportional to
   // |net GEX| against the session reference at every setting.
+  // ── Auto ───────────────────────────────────────────────────────────────────
+  // On by default, and it drives all four controls below. See BUBBLE_AUTO in
+  // slotStore for the policy and why each factor is in it. The sliders stay
+  // mounted and dimmed while it is on: the values they hold are what comes back
+  // the moment it is turned off, and a control that vanishes takes that answer
+  // with it.
+  const [bubbleAuto, setBubbleAuto] = useState(true);
   const [bubbleLevels, setBubbleLevels] = useState(BUBBLE_STYLE.topStrikes);
   const [bubbleIntensity, setBubbleIntensity] = useState(BUBBLE_STYLE.intensity);
   const [bubbleSize, setBubbleSize] = useState(BUBBLE_STYLE.size);
@@ -1660,6 +1682,7 @@ function EsChartCard({
     // carries them; the style is frozen now, so they are inert rather than a
     // hidden per-card override that would make two cards size differently.
     if (isBubbleBucket(p.mins)) setBubbleMins(p.mins);
+    if (typeof p.bAuto === "boolean") setBubbleAuto(p.bAuto);
     if (typeof p.bLevels === "number" && Number.isFinite(p.bLevels)) {
       setBubbleLevels(Math.round(Math.min(BUBBLE_LEVELS_RANGE.max, Math.max(BUBBLE_LEVELS_RANGE.min, p.bLevels))));
     }
@@ -1752,6 +1775,7 @@ function EsChartCard({
   // one remaining preference in the panel, the bucket, already persists per slot
   // on every change.)
   //
+  const updateBubbleAuto = useCallback((on: boolean) => { setBubbleAuto(on); saveSetting({ bAuto: on }); }, [saveSetting]);
   const updateBubbleLevels = useCallback((n: number) => {
     const v = Math.round(Math.min(BUBBLE_LEVELS_RANGE.max, Math.max(BUBBLE_LEVELS_RANGE.min, n)));
     setBubbleLevels(v);
@@ -1844,6 +1868,7 @@ function EsChartCard({
   // Mirrored into refs so the imperative overlay draw reads them without
   // re-subscribing.
   useEffect(() => { bubbleMinsRef.current = bubbleMins; }, [bubbleMins]);
+  useEffect(() => { bubbleAutoRef.current = bubbleAuto; }, [bubbleAuto]);
   useEffect(() => { bubbleLevelsRef.current = bubbleLevels; }, [bubbleLevels]);
   useEffect(() => { bubbleIntensityRef.current = bubbleIntensity; }, [bubbleIntensity]);
   useEffect(() => { bubbleSizeRef.current = bubbleSize; }, [bubbleSize]);
@@ -4520,7 +4545,9 @@ function EsChartCard({
             minuteColsVerRef.current,
             metric,
             String(bubbleMinsRef.current),
-            bubbleLevelsRef.current,
+            // Auto decides the level count from the board, so the mode is part
+            // of the key — flipping it has to re-rank, not repaint.
+            bubbleAutoRef.current ? "auto" : bubbleLevelsRef.current,
             replayTsRef.current ?? "-",
             // barAt() is the "bar" bucketer, so the bar grid is part of the key.
             barsSig.length,
@@ -4710,7 +4737,39 @@ function EsChartCard({
             let ranked: number[] = [];
             let balKey = "";
             let dirty = true;
-            const nLevels = Math.max(0, bubbleLevelsRef.current);
+            // ── AUTO: how many rows, and how steep ─────────────────────────
+            // Both read off the NEWEST bucket — the live board — and then held
+            // for the whole trail. Deciding per bucket would make rows blink in
+            // and out and the curve breathe as the session scrolled past, and
+            // neither is a thing the chart should do on its own.
+            //
+            // levels: how many strikes this board actually HAS, by share of its
+            // own gamma. A quiet two-wall board draws the four-row minimum; a
+            // flat one where six strikes each hold 5%+ widens to six.
+            //
+            // curve: how bunched the drawn strikes are. The median row's ratio
+            // to the top IS the spread — near 1 means six near-identical
+            // circles under a straight-proportional law, which is unrankable,
+            // so the exponent steepens. A real wall pulls the median down and
+            // the law goes back to linear, because the numbers already separate.
+            let autoCurve = BUBBLE_CURVE_RANGE.min;
+            let nLevels = Math.max(0, bubbleLevelsRef.current);
+            if (bubbleAutoRef.current) {
+              const live = pMins[pMins.length - 1];
+              const absDesc = live
+                ? live.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0).sort((a, b) => b - a)
+                : [];
+              const total = absDesc.reduce((s, v) => s + v, 0);
+              nLevels = total > 0
+                ? autoBubbleLevels(absDesc.map((v) => v / total))
+                : BUBBLE_STYLE.topStrikes;
+              const drawn = absDesc.slice(0, nLevels);
+              const top = drawn[0] ?? 0;
+              const median = drawn.length && top > 0
+                ? drawn[Math.floor(drawn.length / 2)]! / top
+                : 0;
+              autoCurve = autoBubbleCurve(median);
+            }
             for (const m of pMins) {
               for (const c of m.cells) {
                 const a = Math.abs(valOf(c));
@@ -4793,10 +4852,14 @@ function EsChartCard({
               }
               if (Number.isFinite(dK) && ks.length > 1) pStrikeStep = dK;
             }
-            prep = { sig: prepSig, mins: pMins, sessRef: pSessRef, runRef: pRunRef, shownAt: pShownAt, wallAt: pWallAt, orderAt: pOrderAt, todAt: pTodAt, strikeStep: pStrikeStep };
+            prep = { sig: prepSig, mins: pMins, sessRef: pSessRef, runRef: pRunRef, shownAt: pShownAt, wallAt: pWallAt, orderAt: pOrderAt, todAt: pTodAt, strikeStep: pStrikeStep, levels: nLevels, autoCurve };
             bubblePrepRef.current = prep;
           }
           const { mins, sessRef, runRef, shownAt, wallAt, orderAt, todAt, strikeStep } = prep;
+          // Auto is read once per frame, here, so every rule below sees the same
+          // answer — a flag flipped mid-draw would size the ladder one way and
+          // colour it another.
+          const autoOn = bubbleAutoRef.current;
 
           if (mins.length) {
             if (sessRef > 0) {
@@ -4826,7 +4889,8 @@ function EsChartCard({
               // multiplies the whole thing — the magnitude gradient above still
               // runs underneath, so turning the layer down dims the wings and
               // the wall together instead of flattening one into the other.
-              const layerAlpha = Math.max(0.05, Math.min(1, bubbleIntensityRef.current));
+              const layerAlpha = Math.max(0.05, Math.min(1,
+                autoOn ? autoBubbleIntensity(prep.levels) : bubbleIntensityRef.current));
               // ── SIZE MEANS ONE THING: |net GEX| AT THAT STRIKE ────────────
               // Highlight no longer touches the radius. It used to multiply it
               // (1.35x flat, then 2.6x graduated, then 1.45x), and every one of
@@ -4956,7 +5020,7 @@ function EsChartCard({
               // being rebuilt to escape. The honest consequence: at or below
               // 1.00x marks are guaranteed never to touch; above it they may,
               // which is the user asking for bigger and accepting fused rows.
-              const sizeMul = Math.max(BUBBLE_SIZE_RANGE.min, Math.min(BUBBLE_SIZE_RANGE.max, bubbleSizeRef.current));
+              const manualSizeMul = Math.max(BUBBLE_SIZE_RANGE.min, Math.min(BUBBLE_SIZE_RANGE.max, bubbleSizeRef.current));
               // ── The column term has a FLOOR ────────────────────────────────
               // The note above says horizontal overlap is allowed and that the
               // only thing which must never fuse is two ROWS — yet the budget
@@ -4991,11 +5055,25 @@ function EsChartCard({
               const colBound = isAutoBucket(bubbleMinsRef.current)
                 ? Math.max(0.6, colPitch * BUBBLE_STYLE.maxPxColFrac)
                 : Math.max(colPitch * BUBBLE_STYLE.maxPxColFrac, BUBBLE_STYLE.colBoundFloorPx);
-              const maxPx = Math.max(1.2, sizeMul * Math.min(
+              // The budget the pitches allow, before anyone's multiplier.
+              const budgetPx = Math.min(
                 BUBBLE_STYLE.maxPx,
                 rowPitch * BUBBLE_STYLE.maxPxRowFrac,
                 colBound,
-              ));
+              );
+              // ── AUTO SIZE ONLY EVER SHRINKS ────────────────────────────────
+              // The pitch caps say what CAN be drawn without two rows fusing;
+              // they say nothing about what SHOULD be. Zoomed in, `budgetPx`
+              // runs to the full 20px and six 20px blobs bury the candles they
+              // are drawn over. So auto picks a target from the pane's own
+              // height and the row count, and takes `min(1, target / budget)` —
+              // it can ask for less than the caps allow, never for more. Asking
+              // for more is what the manual slider is for, and it is the one
+              // setting that can make rows touch.
+              const sizeMul = autoOn
+                ? Math.min(1, autoBubbleTopPx(h, prep.levels) / Math.max(0.5, budgetPx))
+                : manualSizeMul;
+              const maxPx = Math.max(1.2, sizeMul * budgetPx);
               // Rails, not policy. The budget above already guarantees the gap
               // at 1.00x; these exist only so a degenerate projection (a chart
               // squeezed to a few pixels) cannot paint over everything. They
@@ -5153,7 +5231,10 @@ function EsChartCard({
                   // dominant strikes pull away without everything bloating with
                   // them — and because x^k is monotonic on [0,1], more gamma is
                   // still strictly more radius at every setting.
-                  const curve = bubbleCurveRef.current;
+                  // On Auto the exponent is measured off the live board's own
+                  // spread once per prep (see prep.autoCurve), so a bunched
+                  // ladder separates and a ladder with a real wall stays linear.
+                  const curve = autoOn ? prep.autoCurve : bubbleCurveRef.current;
                   const shaped = curve === 1 ? ratio : Math.pow(ratio, curve);
                   const r = Math.max(minPx, maxPx * shaped);
                   // Rank only drives how hard this row GLOWS (#1 brightest).
@@ -5560,7 +5641,7 @@ function EsChartCard({
     // read by draw() (they key the basis memo), so they belong here even though
     // their sources already are — exhaustive-deps is right about that, and
     // listing them costs nothing: each is stable whenever its source is.
-  }, [schedulePaint, showHeatmap, showGexBubbles, bubbleMins, bubbleLevels, bubbleIntensity, bubbleSize, bubbleCurve, intensity, gexMetric, rows, rowsHash, interval, showProfile, profile, showTpo, tpoProfiles, showFlipCross, mvcHistory, mvcHistoryHash, showCb, bb, weeklyEm]);
+  }, [schedulePaint, showHeatmap, showGexBubbles, bubbleMins, bubbleAuto, bubbleLevels, bubbleIntensity, bubbleSize, bubbleCurve, intensity, gexMetric, rows, rowsHash, interval, showProfile, profile, showTpo, tpoProfiles, showFlipCross, mvcHistory, mvcHistoryHash, showCb, bb, weeklyEm]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -5765,12 +5846,26 @@ function EsChartCard({
                 by eye. At its default ("flat") the law is exactly the
                 straight-proportional one it has always been. */}
             <PanelSection title="Bubbles" first>
+              {/* Auto first, because while it is on the four rows under it are
+                  a readout rather than a control. They stay MOUNTED and dimmed:
+                  the values they hold are exactly what comes back when Auto is
+                  switched off, and a control that vanishes takes that answer
+                  with it. */}
+              <div style={{ display: "flex" }}>
+                <PanelChip
+                  label="Auto"
+                  on={bubbleAuto}
+                  onClick={() => updateBubbleAuto(!bubbleAuto)}
+                  title="Size the layer from the chart itself — how many levels this board actually has, how bunched they are, how tall the pane is and how far apart the bars land at this zoom. Turn it off to drive the four below by hand"
+                />
+              </div>
               <DockSlider
                 label="levels" labelWidth={SLIDER_LABEL_W} width="auto"
                 value={bubbleLevels}
                 min={BUBBLE_LEVELS_RANGE.min} max={BUBBLE_LEVELS_RANGE.max} step={1}
                 format={(v) => v.toFixed(0)}
                 onChange={(v) => updateBubbleLevels(v)}
+                disabled={bubbleAuto}
                 title="How many strikes draw per column, ranked by their peak |GEX| across the whole session — so a level keeps its trail even after it drops out of the current top N"
               />
               <DockSlider
@@ -5779,6 +5874,7 @@ function EsChartCard({
                 min={BUBBLE_SIZE_RANGE.min} max={BUBBLE_SIZE_RANGE.max} step={0.05}
                 format={(v) => `${v.toFixed(2)}×`}
                 onChange={(v) => updateBubbleSize(v)}
+                disabled={bubbleAuto}
                 title="Scales the whole ladder at once — the ratio between the wall and the smallest strike is identical at every setting. At or below 1.00× marks are guaranteed never to touch; above it they may overlap, which is the trade for bigger marks on a tight chart"
               />
               <DockSlider
@@ -5787,6 +5883,7 @@ function EsChartCard({
                 min={BUBBLE_CURVE_RANGE.min} max={BUBBLE_CURVE_RANGE.max} step={0.05}
                 format={(v) => (v <= 1.001 ? "flat" : `${v.toFixed(2)}`)}
                 onChange={(v) => updateBubbleCurve(v)}
+                disabled={bubbleAuto}
                 title="How hard the biggest levels pull away from the rest. At 'flat' the radius is straight proportional to |net GEX|. Turning it up steepens the scale — the top strikes keep the full size budget while the wings shrink under them — so the dominant levels dominate without everything growing together. Monotonic at every setting: more gamma is always a bigger mark"
               />
               <DockSlider
@@ -5795,6 +5892,7 @@ function EsChartCard({
                 min={BUBBLE_INTENSITY_RANGE.min} max={BUBBLE_INTENSITY_RANGE.max} step={0.05}
                 format={(v) => `${Math.round(v * 100)}%`}
                 onChange={(v) => updateBubbleIntensity(v)}
+                disabled={bubbleAuto}
                 title="Overall opacity of the bubble layer. The magnitude gradient runs underneath it, so turning this down dims the wings and the wall together rather than flattening one into the other"
               />
             </PanelSection>

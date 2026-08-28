@@ -751,6 +751,42 @@ var TPL={
     {t:'image',x:1020,y:56,w:500,h:788,label:'Signal / alert card screenshot'}
   ]},
 
+  /* Two-screenshot alert result — the daily "here's what the alerts did" post.
+     Everything except the two image slots is rendered type, so the whole job is
+     load template → drop in the alerts-table strip and the option-price chart →
+     retype four numbers → Download PNG.
+
+     The two slots are sized to the aspect ratio the tracker actually exports,
+     so object-fit:cover lands flush and nothing has to be zoomed or panned:
+       · alerts table strip  ~1013x196  (5.17:1)  → 660x128
+       · option price chart  ~1014x624  (1.63:1)  → 660x406
+     Resize a slot from its corner with shift held to keep that ratio. */
+  alerts:function(){return [
+    // ── left column: the rendered story ──────────────────────────────────
+    {t:'logo',x:80,y:52,w:320,h:106},
+    {t:'text',x:80,y:184,w:720,html:'0DTE ALERT · RESULT',fs:22,fw:700,col:C.mut,ls:3},
+    {t:'text',x:80,y:222,w:760,html:'SPXW 7750C',fs:62,fw:800},
+    {t:'text',x:80,y:300,w:760,html:'<span style="color:'+accent()+'">+440.9%</span> to the peak',fs:44,fw:800},
+    {t:'box',x:80,y:392,w:720,h:158},
+    {t:'text',x:112,y:420,w:200,html:'ENTRY',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:112,y:452,w:200,html:'$4.65',fs:44,fw:800},
+    {t:'text',x:352,y:420,w:200,html:'PEAK',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:352,y:452,w:200,html:'$25.15',fs:44,fw:800,col:accent()},
+    {t:'text',x:592,y:420,w:200,html:'PER CONTRACT',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:592,y:452,w:200,html:'+$2,050',fs:40,fw:800,col:accent()},
+    {t:'list',x:80,y:586,w:720,fs:25,items:['Called 10:30 AM · peak 11:01 AM','Three alerts fired — all three ran','Posted live, tracked to the tick after']},
+    {t:'text',x:80,y:834,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim},
+
+    // ── right column: the two screenshot slots + CTA ─────────────────────
+    {t:'text',x:860,y:56,w:660,html:'THE ALERTS THAT FIRED',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:90,w:660,h:128,label:'Alerts table screenshot · wide strip'},
+    {t:'text',x:860,y:258,w:660,html:'THE 7750C, ALL SESSION',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:292,w:660,h:406,label:'Option price chart screenshot'},
+    {t:'box',x:860,y:732,w:660,h:112,bgc:C.panelUp},
+    {t:'text',x:892,y:756,w:600,html:'Every alert tracked to the tick.',fs:26,fw:800,col:C.pale},
+    {t:'text',x:892,y:794,w:600,html:'cbedge.net · free 2-day trial',fs:22,fw:700,col:C.dim}
+  ]},
+
   blank:function(){return []}
 };
 
@@ -758,7 +794,8 @@ function customTpls(){ try{return JSON.parse(localStorage.getItem('cbe_tpls')||'
 
 function refreshT(){
   var sel0=document.getElementById('tpl'), cur=sel0.value;
-  var built=[['levels','Key levels — walls &amp; flip'],['earnings','Earnings — estimated move'],
+  var built=[['alerts','Alert result — 2 screenshots'],
+             ['levels','Key levels — walls &amp; flip'],['earnings','Earnings — estimated move'],
              ['explain','Screenshot + callouts'],['recap','Called it — level vs price'],
              ['signal','Live signal / alert'],['updates','What&#39;s new / changelog'],
              ['feature','Feature list + shots'],['hero','Hero screenshot'],['grid','Feature grid'],
@@ -952,7 +989,9 @@ function syncSelects(){
 stage.style.background=C.bg;
 stage.querySelector('.bar').style.background=accent();
 ['tpl','size','pload'].forEach(function(id){ themeSelect(document.getElementById(id)); });
-setSize(); refreshT(); loadTpl('levels'); fit(); refreshP(); syncSelects();
+// 'alerts' is now the first option, so the dropdown has to be pointed at the
+// template we actually load or the label and the canvas disagree on first paint.
+setSize(); refreshT(); document.getElementById('tpl').value='levels'; loadTpl('levels'); fit(); refreshP(); syncSelects();
 window.addEventListener('resize',fit);
 </script>
 </body>

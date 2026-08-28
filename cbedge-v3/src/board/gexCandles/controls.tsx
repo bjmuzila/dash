@@ -85,6 +85,7 @@ export function Slider({
   format,
   onChange,
   title,
+  disabled = false,
 }: {
   label: string
   value: number
@@ -94,9 +95,23 @@ export function Slider({
   format: (v: number) => string
   onChange: (v: number) => void
   title?: string
+  /**
+   * Dim and inert — the row still SHOWS its value, it just cannot be moved.
+   *
+   * For a setting something else is currently deciding (an Auto mode). Hiding
+   * it instead would be worse: the number it holds is the number that comes
+   * back the moment Auto is turned off.
+   */
+  disabled?: boolean
 }) {
   return (
-    <label className="flex items-center gap-2 text-[10px] text-muted" title={title}>
+    <label
+      className={[
+        'flex items-center gap-2 text-[10px] text-muted',
+        disabled ? 'pointer-events-none opacity-40' : '',
+      ].join(' ')}
+      title={title}
+    >
       <span className="w-14 shrink-0 opacity-70">{label}</span>
       <input
         type="range"
@@ -104,6 +119,7 @@ export function Slider({
         max={max}
         step={step}
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
         className="h-1 min-w-0 flex-1 accent-[var(--color-accent)]"
       />

@@ -268,8 +268,9 @@ export function GexCandlesCard() {
         metric: settings.gexMetric,
         levels: settings.bubbleLevels,
         cutoffPct: settings.bubbleCutoff,
+        auto: settings.bubbleAuto,
       }),
-    [columns, settings.gexMetric, settings.bubbleLevels, settings.bubbleCutoff],
+    [columns, settings.gexMetric, settings.bubbleLevels, settings.bubbleCutoff, settings.bubbleAuto],
   )
 
   // Same history, second view: the bubbles say how the ladder got here across
@@ -334,6 +335,7 @@ export function GexCandlesCard() {
           floorPx: settings.bubbleFloor,
           variance: settings.bubbleCurve,
           intensity: settings.bubbleIntensity,
+          auto: settings.bubbleAuto,
         }),
       ),
     [
@@ -342,6 +344,7 @@ export function GexCandlesCard() {
       settings.bubbleFloor,
       settings.bubbleCurve,
       settings.bubbleIntensity,
+      settings.bubbleAuto,
       apply,
     ],
   )
@@ -470,6 +473,18 @@ export function GexCandlesCard() {
               {settings.bubblesOn && (
                 <>
                   <PanelSection title="Bubbles">
+                    {/* Auto first, because while it is on the six rows under it
+                        are a readout rather than a control. They stay MOUNTED
+                        and dimmed: what they hold is exactly what comes back
+                        when Auto is switched off. */}
+                    <div className="flex">
+                      <Chip
+                        label="Auto"
+                        on={settings.bubbleAuto}
+                        onClick={() => patch({ bubbleAuto: !settings.bubbleAuto })}
+                        title="Size the layer from the chart itself — how many levels this board actually has, how bunched they are, how tall the pane is and how close the rows land at this zoom. Turn it off to drive the six below by hand"
+                      />
+                    </div>
                     <Slider
                       label="levels"
                       value={settings.bubbleLevels}
@@ -478,6 +493,7 @@ export function GexCandlesCard() {
                       step={1}
                       format={(v) => v.toFixed(0)}
                       onChange={(v) => patch({ bubbleLevels: Math.round(v) })}
+                      disabled={settings.bubbleAuto}
                       title="How many strikes draw in total, strongest first across the whole board \u2014 always with at least one of them on each side of spot. The ranking picks the levels actually holding gamma; the per-side floor stops the chart being a picture of only the resistance overhead, which the top strikes often all are"
                     />
                     <Slider
@@ -488,6 +504,7 @@ export function GexCandlesCard() {
                       step={0.05}
                       format={(v) => `${v.toFixed(2)}×`}
                       onChange={(v) => patch({ bubbleSize: v })}
+                      disabled={settings.bubbleAuto}
                       title="The TOP radius — what the strongest strike draws at. Every other mark is a fraction of it, so the whole ladder scales together and their relative sizes never change. Capped by the tightest pair on screen, so nothing can overlap: zoom the price axis out and the cap does the limiting instead of this"
                     />
                     <Slider
@@ -498,6 +515,7 @@ export function GexCandlesCard() {
                       step={0.5}
                       format={(v) => (v <= 0 ? 'none' : `${v.toFixed(1)}px`)}
                       onChange={(v) => patch({ bubbleFloor: v })}
+                      disabled={settings.bubbleAuto}
                       title="The smallest a drawn mark may be. Every level that survives the gates starts here and grows from it — so if a level is on the chart at all you can see it, and whether it is on the chart is the cutoff's decision, not this one's"
                     />
                     <Slider
@@ -508,7 +526,8 @@ export function GexCandlesCard() {
                       step={0.05}
                       format={(v) => (v <= 0 ? 'off' : `${v.toFixed(2)}%`)}
                       onChange={(v) => patch({ bubbleCutoff: v })}
-                      title="Drop any strike holding under this percent of the board's total gamma — the same figure the GEX table prints. 'per side' decides how busy the chart is; this decides where a level stops mattering at all"
+                      disabled={settings.bubbleAuto}
+                      title="Drop any strike holding under this percent of the board's total gamma — the same figure the GEX table prints. 'levels' decides how busy the chart is; this decides where a level stops mattering at all"
                     />
                     <Slider
                       label="variance"
@@ -518,6 +537,7 @@ export function GexCandlesCard() {
                       step={0.05}
                       format={(v) => (v >= 0.999 && v <= 1.001 ? 'linear' : v.toFixed(2))}
                       onChange={(v) => patch({ bubbleCurve: v })}
+                      disabled={settings.bubbleAuto}
                       title="How hard the walls pull away from the rest. At 'linear' half the gamma is half the bubble. Above it only the real walls stay big and everything else falls toward the floor; below it the ladder flattens so the small levels stay readable"
                     />
                     <Slider
@@ -528,6 +548,7 @@ export function GexCandlesCard() {
                       step={0.05}
                       format={(v) => `${Math.round(v * 100)}%`}
                       onChange={(v) => patch({ bubbleIntensity: v })}
+                      disabled={settings.bubbleAuto}
                       title="Overall opacity of the bubble layer. The magnitude gradient runs underneath it"
                     />
                   </PanelSection>

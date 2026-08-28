@@ -70,7 +70,17 @@
 // its say, pairwise between vertical neighbours in pixels.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { BUBBLE_STYLE, BUBBLE_MIN_PER_SIDE, type GexMetric } from './settings'
+import {
+  BUBBLE_STYLE,
+  BUBBLE_MIN_PER_SIDE,
+  autoCutoffPct,
+  autoFloorPx,
+  autoIntensity,
+  autoLevels,
+  autoTopPx,
+  autoVariance,
+  type GexMetric,
+} from './settings'
 import { valueOf, type GexColumn } from './gexHistory'
 
 /**
@@ -133,6 +143,13 @@ export interface BuildOpts {
    * ended up meaning neither.
    */
   cutoffPct: number
+  /**
+   * Ignore both numbers above and take them from the board instead — see
+   * BUBBLE_AUTO. Read ONCE, off the newest column, and then held for the whole
+   * trail: re-deciding per column would make rows blink in and out as the
+   * session scrolled past, which is not a thing the chart should do on its own.
+   */
+  auto?: boolean
 }
 
 /**
@@ -141,8 +158,27 @@ export interface BuildOpts {
  * and a timeframe change without being rebuilt.
  */
 export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleSnapshot[] {
-  const { metric, levels, cutoffPct } = opts
-  if (!columns.length || levels <= 0) return []
+  const { metric } = opts
+  if (!columns.length) return []
+
+  // ── AUTO, decided once off the newest column ──────────────────────────────
+  // The live board is what the settings should answer to, and holding one
+  // answer for the whole trail is what keeps the rows steady while you scroll.
+  let levels = opts.levels
+  let cutoffPct = opts.cutoffPct
+  if (opts.auto) {
+    const live = columns[columns.length - 1]
+    const absDesc = live
+      ? live.cells.map((c) => Math.abs(valueOf(c, metric))).filter((v) => v > 0).sort((a, b) => b - a)
+      : []
+    const total = absDesc.reduce((s, v) => s + v, 0)
+    if (total > 0) {
+      const shares = absDesc.map((v) => v / total)
+      levels = autoLevels(shares)
+      cutoffPct = autoCutoffPct(shares[0] ?? 0)
+    }
+  }
+  if (levels <= 0) return []
 
   const out: BubbleSnapshot[] = []
 
@@ -281,6 +317,13 @@ export interface DrawOpts {
    */
   variance: number
   intensity: number
+  /**
+   * Ignore the four above and take them from the pane and the snapshot instead
+   * — see BUBBLE_AUTO. Evaluated per FRAME, because every factor it reads
+   * (pane height, row spacing at this zoom, how bunched this snapshot is) moves
+   * with the chart.
+   */
+  auto?: boolean
 }
 
 function rgba(c: [number, number, number], a: number): string {
@@ -365,16 +408,35 @@ function placeMarks(snap: BubbleSnapshot, geo: BubbleGeometry, opts: DrawOpts): 
     if (gap < tightest) tightest = gap
   }
 
-  const paneCap = geo.height * BUBBLE_STYLE.heightFrac * opts.size
+  // ── AUTO ────────────────────────────────────────────────────────────────
+  // The pane cap answers "how big may the ladder be" from the window; auto
+  // answers "how big SHOULD it be" from the window AND the row count, which is
+  // the part a fixed fraction cannot know. The spacing cap below is untouched
+  // either way — it is the non-overlap guarantee and auto is not allowed to
+  // argue with it.
+  const paneCap = opts.auto
+    ? autoTopPx(geo.height, rows.length)
+    : geo.height * BUBBLE_STYLE.heightFrac * opts.size
   const spacingCap = Number.isFinite(tightest) ? tightest / 2 - BUBBLE_STYLE.gapPx / 2 : paneCap
   const top = Math.max(BUBBLE_STYLE.minPx, Math.min(paneCap, spacingCap))
   // The floor cannot exceed the top, or a crowded pane would draw every mark at
   // the same size and the layer would stop saying anything.
-  const floor = Math.max(HAIRLINE_PX, Math.min(opts.floorPx, top * 0.85))
+  const floorWanted = opts.auto ? autoFloorPx(top) : opts.floorPx
+  const floor = Math.max(HAIRLINE_PX, Math.min(floorWanted, top * 0.85))
   const span = Math.max(0, top - floor)
 
+  // The exponent, on auto, is measured off THIS snapshot's own spread: the
+  // median mark's ratio to the core. Bunched (median near 1) and a linear law
+  // draws near-identical circles, so it steepens; a real wall pulls the median
+  // down and it goes back to linear, because the numbers already separate.
+  let variance = opts.variance
+  if (opts.auto) {
+    const ratios = rows.map((r) => r.mark.ratio).sort((a, b) => b - a)
+    variance = autoVariance(ratios.length ? ratios[Math.floor(ratios.length / 2)]! : 0)
+  }
+
   const placed: PlacedMark[] = rows.map(({ mark, y }) => {
-    const shaped = opts.variance <= 1.001 && opts.variance >= 0.999 ? mark.ratio : Math.pow(mark.ratio, opts.variance)
+    const shaped = variance <= 1.001 && variance >= 0.999 ? mark.ratio : Math.pow(mark.ratio, variance)
     return { mark, y, r: floor + span * shaped }
   })
 
@@ -586,7 +648,11 @@ export function drawBubbles(
   const x1 = Math.min(w, Math.max(xFirst, xLast))
   if (x1 <= x0) return false
 
-  const layerAlpha = Math.max(0.05, Math.min(1, opts.intensity))
+  // Row count off the newest snapshot: it is the one the reader is looking at,
+  // and taking it per snapshot would make the layer's opacity flicker along the
+  // trail as marks came and went.
+  const autoRows = last.marks.length
+  const layerAlpha = Math.max(0.05, Math.min(1, opts.auto ? autoIntensity(autoRows) : opts.intensity))
   const minOpacity = Math.max(0.1, 1 - Math.max(0, Math.min(1, BUBBLE_STYLE.fade)))
 
   const map = buildXMap(geo, win)

@@ -34,6 +34,14 @@ export interface ChartSettings {
   /** Master on/off for the whole bubble layer. */
   bubblesOn: boolean
   /**
+   * Tune the six settings below from the chart itself — see BUBBLE_AUTO.
+   *
+   * On by default. The sliders stay in the panel while it is on, dimmed: the
+   * values they hold are exactly what comes back when it is switched off, and a
+   * control that disappears takes that answer with it.
+   */
+  bubbleAuto: boolean
+  /**
    * How many strikes draw IN TOTAL, strongest first across the whole board —
    * with at least `BUBBLE_MIN_PER_SIDE` of them on each side of spot.
    *
@@ -95,6 +103,7 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   session: 'eth',
   interval: 5,
   bubblesOn: true,
+  bubbleAuto: true,
   // The top four on the board, one of them guaranteed on each side of spot.
   // Four marks is enough to see the corridor you are trading inside without the
   // ladder turning into a wall of circles, and ranking them across the whole
@@ -165,6 +174,126 @@ export const BUBBLE_CUTOFF_RANGE = { min: 0, max: 5 }
 // the small levels are the ones being read.
 export const BUBBLE_CURVE_RANGE = { min: 0.3, max: 3 }
 export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 }
+
+/**
+ * ── AUTO ─────────────────────────────────────────────────────────────────────
+ *
+ * Every setting above has a right answer that depends on things you cannot see
+ * from the panel: how many levels this board actually has, how far the top one
+ * is from the rest, how tall the pane is, how close the rows land at this zoom.
+ * Auto computes all six from those factors — the data ones once per model
+ * build, the pixel ones on every drawn frame — and the sliders stay in the
+ * panel, dimmed, as the manual override.
+ *
+ * This is the AUTO POLICY, not a second set of defaults. Each number answers a
+ * question about the picture:
+ *
+ *   levelShare   what counts as a level. A strike holding at least 5% of the
+ *                board's gamma is one; under that it is a wing, and drawing it
+ *                costs a row and buys nothing. Clamped to [minLevels,
+ *                maxLevels] — four is the resting number, a genuinely flat
+ *                board may widen to six.
+ *
+ *   cutoffOfTop  the speck gate, as a fraction of the LEADER's share rather
+ *                than a fixed percent — 0.4% of the board means something
+ *                different on a board whose wall holds 20% and one whose
+ *                biggest strike holds 4%.
+ *
+ *   topFrac      the biggest mark, as a fraction of the pane height, railed to
+ *                a pixel range so a very short or very tall pane still lands
+ *                somewhere sane. Small enough that the band never buries the
+ *                candles under it.
+ *
+ *   crowdTrim    every row past the fourth takes a little off the top: six rows
+ *                at the four-row size is a busier chart than the extra rows are
+ *                worth.
+ *
+ *   floorOfTop   the smallest drawn mark, as a fraction of the biggest — so the
+ *                weakest level stays a visible dot at every zoom without ever
+ *                being big enough to be mistaken for a real one.
+ *
+ *   spreadGain   the curve. When the drawn strikes sit within a few percent of
+ *                each other, straight-linear draws six near-identical circles
+ *                and the ladder is unrankable; the exponent separates them.
+ *                When there IS a dominant wall the numbers already separate, so
+ *                it stays near linear. Measured off the median drawn mark's
+ *                ratio to the core, per snapshot.
+ *
+ *   dimPerRow    a busier layer sits quieter against the candles.
+ *
+ * What auto never touches: what a size MEANS. r = floor + (top − floor) ×
+ * ratio^variance under every rule here — auto moves the ends of that range and
+ * the exponent, never one mark on its own.
+ */
+export const BUBBLE_AUTO = {
+  levelShare: 0.05,
+  minLevels: 4,
+  maxLevels: 6,
+  cutoffOfTop: 0.06,
+  cutoffMinPct: 0.25,
+  cutoffMaxPct: 1.5,
+  topFrac: 0.03,
+  topMinPx: 5,
+  topMaxPx: 15,
+  crowdTrim: 0.05,
+  floorOfTop: 0.14,
+  floorMinPx: 0.8,
+  floorMaxPx: 2.5,
+  spreadGain: 1.5,
+  curveMin: 0.9,
+  curveMax: 2.2,
+  dimPerRow: 0.05,
+  dimFloor: 0.7,
+} as const
+
+function clampTo(v: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, v))
+}
+
+/**
+ * How many strikes to draw, from the board's own shape. `sharesDesc` is each
+ * strike's share of the column total, biggest first — sorted, so the first
+ * strike under the bar ends the walk.
+ */
+export function autoLevels(sharesDesc: number[]): number {
+  let n = 0
+  for (const s of sharesDesc) {
+    if (s >= BUBBLE_AUTO.levelShare) n++
+    else break
+  }
+  return clampTo(n, BUBBLE_AUTO.minLevels, BUBBLE_AUTO.maxLevels)
+}
+
+/** The speck gate, as a percent of the board, scaled to the leader's share. */
+export function autoCutoffPct(topShare: number): number {
+  return clampTo(topShare * 100 * BUBBLE_AUTO.cutoffOfTop, BUBBLE_AUTO.cutoffMinPct, BUBBLE_AUTO.cutoffMaxPct)
+}
+
+/** Target radius of the biggest mark, px, before the spacing cap has its say. */
+export function autoTopPx(paneH: number, rows: number): number {
+  const target = clampTo(paneH * BUBBLE_AUTO.topFrac, BUBBLE_AUTO.topMinPx, BUBBLE_AUTO.topMaxPx)
+  const trim = 1 - BUBBLE_AUTO.crowdTrim * Math.max(0, rows - BUBBLE_AUTO.minLevels)
+  return Math.max(BUBBLE_AUTO.topMinPx * 0.8, target * trim)
+}
+
+/** Smallest drawn mark, px, from the biggest one. */
+export function autoFloorPx(topPx: number): number {
+  return clampTo(topPx * BUBBLE_AUTO.floorOfTop, BUBBLE_AUTO.floorMinPx, BUBBLE_AUTO.floorMaxPx)
+}
+
+/** The size exponent, from how tightly the drawn marks are bunched. */
+export function autoVariance(medianRatio: number): number {
+  return clampTo(
+    BUBBLE_AUTO.curveMin + BUBBLE_AUTO.spreadGain * clampTo(medianRatio, 0, 1),
+    BUBBLE_AUTO.curveMin,
+    BUBBLE_AUTO.curveMax,
+  )
+}
+
+/** Layer opacity, from how many rows are on the chart. */
+export function autoIntensity(rows: number): number {
+  return Math.max(BUBBLE_AUTO.dimFloor, 1 - BUBBLE_AUTO.dimPerRow * Math.max(0, rows - BUBBLE_AUTO.minLevels))
+}
 
 /**
  * Frozen look of the bubble layer. Everything here is a shape decision, not a
@@ -274,6 +403,7 @@ function coerce(raw: unknown): ChartSettings {
     session: p.session === 'rth' ? 'rth' : 'eth',
     interval,
     bubblesOn: p.bubblesOn !== false,
+    bubbleAuto: p.bubbleAuto !== false,
     bubbleLevels: Math.round(
       clamp(num(p.bubbleLevels, DEFAULT_SETTINGS.bubbleLevels), BUBBLE_LEVELS_RANGE.min, BUBBLE_LEVELS_RANGE.max),
     ),
