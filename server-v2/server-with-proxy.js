@@ -85,6 +85,17 @@ catch (e) { console.warn('[eod-strike-gex] recorder not loaded:', e.message); }
 let startGexWatchRecorder = () => {};
 try { ({ startGexWatchRecorder } = require('./gex-watch-recorder')); }
 catch (e) { console.warn('[gex-watch] recorder not loaded:', e.message); }
+// Daily (16:50 ET) GROSS GAMMA CHURN rollup: one row per (symbol, session)
+// holding |call|+|put| gamma, how much of it rewrote itself, and whether that
+// gamma was added, rotated or pulled off → gex_gross_daily. Runs LAST of the
+// three because it reads the same ladder eod-strike-gex writes at 16:05.
+// Its own table is the point: eod_strike_gex has been holding ~11 sessions, so
+// anything derived live off it inherits that amnesia — this rollup accumulates
+// forward and keeps the baseline the heat bars are scaled against. Shares its
+// computation with /api/gex-gross-feed via _lib-gex-gross.cjs.
+let startGexGrossRecorder = () => {};
+try { ({ startGexGrossRecorder } = require('./gex-gross-recorder')); }
+catch (e) { console.warn('[gex-gross] recorder not loaded:', e.message); }
 // Daily (16:05 ET) near-the-money PREMIUM TRADED snapshot: call and put notional
 // for the front and back monthly at ±1/2/5% of spot → atm_prem_diff. Backs the
 // Test Lab "Prem Diff" tab. Same defensive load as its neighbours above — a
@@ -2243,6 +2254,23 @@ async function main() {
         })();
         return;
       }
+      // Manual fire of the gross-gamma churn rollup (normally automatic at
+      // 16:50 ET). Recomputes the trailing GEX_GROSS_DAYS of sessions and
+      // re-scores every row's baseline. Safe to re-fire and safe to run out of
+      // order: the write is a PK upsert on (date, symbol) and the normalizer is
+      // a second pass over the whole table, so a backfilled session immediately
+      // re-scores everything that depends on it.
+      //   POST /proxy/gex-gross-run
+      if (pathname === '/proxy/gex-gross-run' && req.method === 'POST') {
+        (async () => {
+          try {
+            const { runOnce } = require('./gex-gross-recorder');
+            const out = await runOnce('manual');
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // Manual fire of the morning OI re-stamp (normally automatic at 09:25 ET).
       //   POST /proxy/eod-strike-gex-restamp[?symbol=NVDA][&date=YYYY-MM-DD]
       //
@@ -4261,6 +4289,11 @@ async function main() {
     // Reads the ladder above and logs what it flagged, so the watch feed has
     // real fire times and its odds become forward-tested rather than re-derived.
     startGexWatchRecorder();
+    // Rolls the same ladder up to one row per (symbol, session): gross gamma,
+    // how much of it churned, and whether it was added or pulled. Fires after
+    // the watch recorder for the same reason the watch fires after the ladder —
+    // it reads what the earlier pass wrote.
+    startGexGrossRecorder();
     // Daily near-the-money PREMIUM TRADED snapshot (16:05 ET, weekdays) →
     // atm_prem_diff. Fires after the close because it reads the chain's DAY
     // VOLUME, which is only final once the 16:00 print is in. One row per

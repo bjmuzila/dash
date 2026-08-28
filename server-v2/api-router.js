@@ -7044,6 +7044,48 @@ if (libDb) {
     });
   }
 
+  // /api/gex-gross-feed — the GROSS GAMMA CHURN board behind the heat bars.
+  //
+  // SUBSCRIBER, not owner: customer surface. It reads the gex_gross_daily
+  // rollup gex-gross-recorder.js already wrote and computes NOTHING — the
+  // engine behind it is a full-ladder window scan across ~169 symbols and must
+  // never fire on a page load. One indexed read.
+  //
+  // Answers two shapes off one route:
+  //   /api/gex-gross-feed                 → the latest session's board
+  //   /api/gex-gross-feed?symbol=NVDA     → that ticker's series (the sparkline)
+  //
+  // Both live in _lib-gex-gross.cjs so this route and the recorder can never
+  // disagree about what churn, build_share or a "clean" session means.
+  {
+    register('/api/gex-gross-feed', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          if (!libDb?.queryAll) { send(res, 200, { ok: true, rows: [], note: 'Feed unavailable.' }); return; }
+          const q = new URL(req.url || '/', 'http://localhost').searchParams;
+          const GG = require('./_lib-gex-gross.cjs').create({ queryAll: (...a) => libDb.queryAll(...a) });
+          const sym = (q.get('symbol') || '').trim().toUpperCase();
+          if (sym) {
+            const days = Math.max(1, Math.min(400, Number(q.get('days')) || 60));
+            send(res, 200, { ok: true, ...(await GG.readGrossHistory(sym, days)) });
+            return;
+          }
+          const lim = Math.max(1, Math.min(200, Number(q.get('limit')) || 25));
+          // Defaults mirror the recorder's env defaults. A caller may lower the
+          // floor to inspect small books, but the page never should — a
+          // percentage off a $4M gross book is noise wearing a signal's clothes.
+          const minGross = Math.max(0, Number(q.get('minGross')) || 25e6);
+          const minSess = Math.max(1, Number(q.get('minSess')) || 5);
+          send(res, 200, { ok: true, ...(await GG.readGrossFeed(lim, minGross, minSess)) });
+        } catch (e) {
+          // A customer page must degrade to "nothing to show", never to a stack.
+          send(res, 200, { ok: true, rows: [], note: 'Feed unavailable right now.', error: e.message });
+        }
+      },
+    });
+  }
+
   // /api/backtests?test=... — owner-only research panels (read-only SELECTs +
   // one live-chain fetch). Ported verbatim from app/api/backtests/route.ts:
   // queryAll->libDb.queryAll, getServerUserId gate->enforceAuth 'owner',

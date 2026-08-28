@@ -1,5 +1,86 @@
 # Changelog
 
+## 2026-08-28 - GEX gross-gamma churn: a daily heat bar the calendar cannot fake
+
+New: `server-v2/_lib-gex-gross.cjs`, `server-v2/gex-gross-recorder.js`,
+`components/shared/GexHeatBar.tsx`. Edited: `server-v2/server-with-proxy.js`,
+`server-v2/api-router.js`.
+
+**The question this answers:** how much gamma came in today relative to what was
+already on the board — tracked daily, per ticker, as a bar that fills.
+
+**Why net_gex could not answer it.** A net sum cancels. `net_gex` is a positive
+call leg plus a negative put leg, so a session where $500M of call gamma was
+added and $500M of put gamma was added nets to roughly nothing and reads as a
+quiet day. Every quantity here therefore takes its absolute value at the LEG,
+before any sum:
+
+```
+gross  = Σ ( |call_gex|  + |put_gex|  )   the board's total gamma
+churn  = Σ ( |Δcall_gex| + |Δput_gex| )   what rewrote itself today
+build  = gross_now − gross_prev           net growth of the book
+```
+
+**Two facts, one bar.** `|build| ≤ churn` always (triangle inequality), so
+`build_share = build / churn` is bounded to [−1, +1] and reads as "what fraction
+of today's churn was net new gamma": +1 pure addition, 0 pure rotation, −1 pure
+unwind. FILL is churn, COLOR is build_share. Churn alone cannot tell a giant roll
+apart from a giant build — on 2026-08-27 NVDA churned 312% at build_share 0.90
+while MSTR churned 129% at 0.29.
+
+**The fill scale is NOT 0–100%.** Measured across the roster, the median ticker
+churns 16–19% of its book on an ordinary session and p90 sits near 40% — but
+NVDA printed 312% and CRM 261% on 08-27, and five of the top thirty cleared
+100%. A 0–100% bar would peg on every interesting day and sit half-full on dull
+ones. So fill is HEAT: churn ÷ that ticker's own trailing clean average, 1.0 = a
+normal day for it, full at 4×. SPY carries a $92B gross book and WEN $3.7M; any
+roster-wide percentage ranks by ticker size, not by what happened.
+
+**Opex and earnings are excluded from the baseline — both measured first.**
+- OPEX (third Friday): on 2026-08-21 the median ticker's ENTIRE gross book fell
+  31.3% (the only negative build_med in the sample) and the cross-section
+  collapsed to a 1.7× p25→p90 spread against 3–4× on ordinary days. Everything
+  churns because everything expires.
+- EARNINGS: on 2026-08-27 the churn board ranked NVDA / CRM / TSLA / MU / CRWD —
+  which is just the list of who had reported. Post-print IV collapse multiplies
+  gamma per contract (γ ≈ ∝ 1/σ√T at the money) with ZERO change in open
+  interest, and the pre-event book is rewritten around the new spot. With ~169
+  tickers reporting ~4×/yr that is ~650 contaminated ticker-days a year setting
+  the scale every quiet day is measured against.
+
+Both are still RECORDED and still DISPLAYED with a badge — "the book
+restructured after the print" is worth seeing, it is just not repositioning.
+`clean = NOT opex AND NOT earnings AND gross_prev ≥ floor` is a stored column,
+so the flag a row was scored under survives a later retune.
+
+**The earnings window is two sessions, anchored on the session spine** — `after`
+→ {anchor, anchor+1}, `pre` → {anchor−1, anchor}, `unknown` → both. Never
+calendar arithmetic: a Friday print would otherwise mark Saturday and leave
+Monday, the session that actually holds the restructure, in the baseline.
+
+**It is a stored rollup, not a live query.** `eod_strike_gex` was holding ELEVEN
+sessions for CRWD against a 400-day retention setting, so anything derived live
+off it inherits that amnesia. `gex_gross_daily` is ~169 tiny rows a session,
+accumulates forward on its own, and the normalizer reads it rather than the
+ladder — the baseline keeps deepening whatever happens upstream. Same bet
+`gex_watch_alerts` made. The engine is also a full-ladder window scan across
+~169 symbols and must never fire on a page load.
+
+**A $25M gross floor**, mirroring MIN_BASE/MIN_ABS in the watch engine: WEN sits
+at a $3.7M book where a couple of contracts swing churn_pct by tens of points.
+
+**Legs start 2026-08-18.** `call_gex`/`put_gex` were added with no backfill —
+the chains are gone and the split is exactly what net_gex threw away — so there
+is no gross history before that date and the feed says so instead of inventing
+one. Tickers below the minimum clean-session count render on a hatched
+provisional track rather than quoting a ratio against three days.
+
+Recorder fires 16:50 ET (after the 16:05 ladder and the 16:40 watch, both of
+which it reads). `GEX_GROSS_RECORDER=0` disables; `POST /proxy/gex-gross-run`
+fires manually. Feed: `GET /api/gex-gross-feed` (board) and
+`?symbol=NVDA` (series), subscriber auth. One definition in
+`_lib-gex-gross.cjs` so the recorder and the panel cannot drift.
+
 ## 2026-08-28 - v3: the GEX Chart is v2's home-page chart, pan/zoom and all
 
 Edited: `cbedge-v3/src/board/gexChart/{gexChartRender.ts,GexChartCard.tsx}`,
