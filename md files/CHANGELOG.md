@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-08-28 - Bubbles: one row set for the session, thin rows, smoothed. The three reasons it looked wrong
+
+Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
+`components/dashboard/es-candles/slotStore.ts`,
+`cbedge-v3/src/board/gexCandles/bubbles.ts`,
+`cbedge-v3/src/board/gexCandles/settings.ts`.
+
+Four levels were set and eleven bands were on the chart, half of them dashed and
+all of them bulging and pinching like caterpillars. Three separate causes, none
+of them a tuning problem:
+
+**1. The row set was chosen PER SNAPSHOT.** Every column ranked its own board and
+drew its own top four — so every column obeyed the count and the CHART did not,
+because what you see is the UNION over the session. A strike that was top-four
+for ten minutes at 10:00 and again at 15:00 put two disconnected segments on the
+chart, which reads as a rendering fault rather than as information.
+
+The set is now picked ONCE, from the whole loaded history, by each strike's PEAK
+|GEX| over the session, with the min-per-side rule applied against the CURRENT
+spot. `levels` means what it says: that many rows, first pixel to last, unbroken.
+(v2 had a subtler version of the same bug — an EXPANDING ranking, so late
+entrants started mid-chart. Same fix, and it deleted the per-bucket balance
+machinery with it.)
+
+**2. Radius was normalised against each snapshot's OWN core.** Every quiet minute
+renormalised back up to full size, so a row bulged wherever its neighbours were
+weak. There is one denominator now — the session's biggest — so a row is
+comparable to itself an hour ago and to the row above it, and it TAPERS instead
+of lumping. v3 also gained a centred 5-snapshot mean over each row's series: the
+minute-to-minute wobble is drawn as a one-pixel slice and reads as noise, while
+the build-and-bleed shape that carries meaning survives the window untouched.
+
+Same class of bug on the pixel side: `placeMarks` re-derived the pane cap, the
+tightest pair and the variance from whichever marks that minute happened to hold,
+so a missing neighbour widened the gap, raised the cap, and fattened every mark in
+that column. Sizing is now ONE plan per frame (`planSizes`), computed off the
+newest snapshot. The only thing that varies along a row is that strike's own gamma
+at that minute, which is the entire point of drawing a trail.
+
+**3. The rows were twice as thick as they should be.** `topFrac` was 3% of the
+pane railed to 5-15px — on an 800px pane a 15px radius is a THIRTY-pixel band.
+At that size a level stops being a line you read price against and becomes a
+region price is usually inside, which tells you nothing. Now 1.2% railed 2.5-6px:
+rows 5-12px thick, unmistakably bands, thin enough that four of them leave the
+candles legible. Both apps. The core's glow cap came down 9px -> 5px with it — the
+dominant level is found by being the biggest row, not the brightest thing on the
+chart.
+
+Also gone: v3's `MAX_STRETCH_R`. It stopped each snapshot's stroke at 0.8 of its
+own radius, which with thin marks is shorter than the gap between snapshots — so
+the strokes no longer met and rows came out dotted. Strokes now reach half way to
+their neighbours and meet exactly. A level that held for an hour is one thing for
+that hour, so a solid row is also the truer picture; its thickness still carries
+the history.
+
 ## 2026-08-28 - Bubbles: Auto. Every bubble setting computed from the chart, on both v2 and v3
 
 Edited: `components/dashboard/es-candles/EsChartCard.tsx`,

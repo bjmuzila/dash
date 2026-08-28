@@ -299,9 +299,13 @@ export const BUBBLE_AUTO = {
   levelShare: 0.05,
   minLevels: 4,
   maxLevels: 6,
-  topFrac: 0.030,
-  topMinPx: 5,
-  topMaxPx: 15,
+  // 1.2% of the pane, railed 2.5-6px — so a row is 5-12px thick. Was 3% railed
+  // 5-15px, which on an 800px pane is a THIRTY-pixel band: at that size a level
+  // stops being a line you read price against and becomes a region price is
+  // usually inside, which tells you nothing.
+  topFrac: 0.012,
+  topMinPx: 2.5,
+  topMaxPx: 6,
   crowdTrim: 0.05,
   spreadGain: 1.2,
   curveMax: 2.2,

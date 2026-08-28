@@ -4675,42 +4675,12 @@ function EsChartCard({
                 pRunRef.set(m.slotTs, Math.max(acc, pSessRef * BUBBLE_REF_FLOOR_FRAC));
               }
             }
-            // GLOBAL strike selection — the key to the continuous-tube look. Rank
-            // strikes by their PEAK |GEX| across the whole session (not per column),
-            // so the dominant walls (Call/Put Wall) are the SAME rows in every
-            // column and render as unbroken bright tubes, while everything else
-            // stays faint. The "levels" control = how many rows draw;
-            // BUBBLE_STYLE.highlight = how many are "walls" (white-hot, glowing).
-            // Ranked by peak |GEX| AS OF each bucket (expanding, same reasoning as
-            // runRef above) rather than over the whole session: a strike that was
-            // top-N at 10:00 keeps its 10:00 trail forever, even if it's long since
-            // fallen out of the current top-N. The newest column still shows only
-            // what's top-N right now, so the live read is unchanged.
-            //
-            // The ranking only CHANGES when a new peak appears, so the sort is
-            // skipped for every bucket that didn't move one — on a settled
-            // session that is almost all of them.
-            //
-            // ── AND THE SELECTION IS BALANCED AROUND SPOT ─────────────────
-            // A pure ranking is free to put every drawn strike on one side of
-            // price — gamma is routinely that lopsided — and a ladder sitting
-            // entirely overhead says nothing about what is underneath, which is
-            // half of the read. BUBBLE_MIN_PER_SIDE is enforced per bucket
-            // below: it is a FLOOR, not a split, so it only ever costs the
-            // single weakest row and only when a side would be blank.
-            //
-            // Per BUCKET, not per ranking: spot moves every bar while the
-            // ranking changes rarely, so the swap has to be re-decided as price
-            // travels through the ladder. It is still cheap — the sort stays
-            // behind `dirty`, and the Set is rebuilt only when the swap itself
-            // changes (`balKey`).
-            //
-            // Spot in STRIKE space: the bubbles live in SPX strikes and the
-            // candles are ES, so the bar's close comes back across the same
-            // basisAt() the marks are drawn through. Bars are ascending, hence
-            // the binary search rather than a Map — the bar grid changes with
-            // the timeframe and rebuilding a keyed map per prep is the thing
-            // this cache exists to avoid.
+            // Spot in STRIKE space, for the min-per-side rule below: the
+            // bubbles live in SPX strikes and the candles are ES, so the bar's
+            // close comes back across the same basisAt() the marks are drawn
+            // through. Bars are ascending, hence the binary search rather than a
+            // keyed map — the bar grid changes with the timeframe and rebuilding
+            // a map per prep is the thing this cache exists to avoid.
             const pBars = rowsRef.current;
             const spotKAt = (tMs: number): number | null => {
               if (!pBars.length) return null;
@@ -4725,33 +4695,19 @@ function EsChartCard({
               if (!Number.isFinite(close)) return null;
               return (close as number) - basisAt(tMs);
             };
-            const peakSoFar = new Map<number, number>();
-            const pShownAt = new Map<number, Set<number>>();
-            // strike → its 0-based rank inside the highlighted set (0 = the
-            // session's dominant wall as of that bucket). A Map, not a Set,
-            // because the rank now drives the radius boost and the glow.
-            const pWallAt = new Map<number, Map<number, number>>();
-            const pOrderAt = new Map<number, GexCell[]>();
-            let shownNow: Set<number> = new Set();
-            let wallNow: Map<number, number> = new Map();
-            let ranked: number[] = [];
-            let balKey = "";
-            let dirty = true;
             // ── AUTO: how many rows, and how steep ─────────────────────────
             // Both read off the NEWEST bucket — the live board — and then held
-            // for the whole trail. Deciding per bucket would make rows blink in
-            // and out and the curve breathe as the session scrolled past, and
-            // neither is a thing the chart should do on its own.
+            // for the whole trail.
             //
             // levels: how many strikes this board actually HAS, by share of its
             // own gamma. A quiet two-wall board draws the four-row minimum; a
             // flat one where six strikes each hold 5%+ widens to six.
             //
             // curve: how bunched the drawn strikes are. The median row's ratio
-            // to the top IS the spread — near 1 means six near-identical
-            // circles under a straight-proportional law, which is unrankable,
-            // so the exponent steepens. A real wall pulls the median down and
-            // the law goes back to linear, because the numbers already separate.
+            // to the top IS the spread — near 1 means near-identical bands under
+            // a straight-proportional law, which is unrankable, so the exponent
+            // steepens. A real wall pulls the median down and the law goes back
+            // to linear, because the numbers already separate.
             let autoCurve = BUBBLE_CURVE_RANGE.min;
             let nLevels = Math.max(0, bubbleLevelsRef.current);
             if (bubbleAutoRef.current) {
@@ -4759,84 +4715,80 @@ function EsChartCard({
               const absDesc = live
                 ? live.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0).sort((a, b) => b - a)
                 : [];
-              const total = absDesc.reduce((s, v) => s + v, 0);
+              const total = absDesc.reduce((sum, v) => sum + v, 0);
               nLevels = total > 0
                 ? autoBubbleLevels(absDesc.map((v) => v / total))
                 : BUBBLE_STYLE.topStrikes;
               const drawn = absDesc.slice(0, nLevels);
-              const top = drawn[0] ?? 0;
-              const median = drawn.length && top > 0
-                ? drawn[Math.floor(drawn.length / 2)]! / top
+              const topAbs = drawn[0] ?? 0;
+              const median = drawn.length && topAbs > 0
+                ? drawn[Math.floor(drawn.length / 2)]! / topAbs
                 : 0;
               autoCurve = autoBubbleCurve(median);
             }
+            // ── ONE ROW SET FOR THE WHOLE SESSION ────────────────────────
+            //
+            // Strikes ranked by their PEAK |GEX| across the loaded session, and
+            // the top N drawn in EVERY bucket. `levels` then means what it says:
+            // that many rows on the chart, from the first pixel to the last.
+            //
+            // This was an EXPANDING ranking — each bucket drew the top N as of
+            // itself. Every bucket obeyed the count and the CHART did not, since
+            // what you see is the union over the session: "4" drew eight or ten
+            // bands, and the ones that entered late started mid-chart, which
+            // reads as a rendering fault rather than as information.
+            //
+            // Peak, not sum or mean: a wall that built for twenty minutes and
+            // was taken off is a level that mattered, and averaging it against a
+            // quiet session erases it.
+            const peakAll = new Map<number, number>();
             for (const m of pMins) {
               for (const c of m.cells) {
                 const a = Math.abs(valOf(c));
-                if (a > 0 && a > (peakSoFar.get(c.strike) ?? 0)) { peakSoFar.set(c.strike, a); dirty = true; }
+                if (a > 0 && a > (peakAll.get(c.strike) ?? 0)) peakAll.set(c.strike, a);
               }
-              if (dirty) {
-                ranked = [...peakSoFar.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
-                wallNow = new Map();
-                ranked.slice(0, Math.max(0, BUBBLE_STYLE.highlight)).forEach((s, i) => wallNow.set(s, i));
-                dirty = false;
-                // Force the shown set to rebuild against the new ranking even if
-                // the swap decision itself lands on the same pair.
-                balKey = "";
+            }
+            const rankedAll = [...peakAll.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
+            const chosen = rankedAll.slice(0, nLevels);
+            // ── The min-per-side swap ──────────────────────────────────────
+            // Decided against the NEWEST bucket's spot: which side a row is on
+            // is a question about where price is now, not where it was at 09:31.
+            // One swap deep, and only when a side is empty — the weakest chosen
+            // strike (on the crowded side by construction) gives its place to
+            // the strongest strike over there, so the row that appears is real
+            // gamma and not a nearest-strike stand-in.
+            const spotLive = pMins.length ? spotKAt(pMins[pMins.length - 1].slotTs) : null;
+            if (spotLive != null && nLevels >= 2 * BUBBLE_MIN_PER_SIDE && chosen.length >= 2 * BUBBLE_MIN_PER_SIDE) {
+              let nAbove = 0;
+              for (const k of chosen) if (k >= spotLive) nAbove++;
+              const nBelow = chosen.length - nAbove;
+              if (nAbove < BUBBLE_MIN_PER_SIDE || nBelow < BUBBLE_MIN_PER_SIDE) {
+                const wantAbove = nAbove < BUBBLE_MIN_PER_SIDE;
+                const swapIn = rankedAll.find((k) => (wantAbove ? k >= spotLive : k < spotLive));
+                if (swapIn != null) chosen[chosen.length - 1] = swapIn;
               }
-              // ── The min-per-side swap ──────────────────────────────────────
-              // Only ever ONE swap deep. Two would start rewriting the ladder to
-              // be symmetric rather than to be honest about where the gamma is,
-              // and the ranking is the thing being protected here.
-              //
-              // Skipped entirely below 2 * BUBBLE_MIN_PER_SIDE levels: at one
-              // level there is no room to honour it, and drawing an extra row to
-              // make it fit would mean the "levels" slider lying about its count.
-              const base = ranked.slice(0, nLevels);
-              const spotK = nLevels >= 2 * BUBBLE_MIN_PER_SIDE ? spotKAt(m.slotTs) : null;
-              let swapIn: number | null = null;
-              let swapOut: number | null = null;
-              if (spotK != null && base.length >= 2 * BUBBLE_MIN_PER_SIDE) {
-                const nAbove = base.reduce((n, s) => n + (s >= spotK ? 1 : 0), 0);
-                const nBelow = base.length - nAbove;
-                if (nAbove < BUBBLE_MIN_PER_SIDE || nBelow < BUBBLE_MIN_PER_SIDE) {
-                  const wantAbove = nAbove < BUBBLE_MIN_PER_SIDE;
-                  // Strongest strike on the missing side, from the FULL ranking —
-                  // so the row that appears is still the best gamma over there,
-                  // never a nearest-strike stand-in.
-                  swapIn = ranked.find((s) => (wantAbove ? s >= spotK : s < spotK)) ?? null;
-                  // The weakest shown strike, which by construction is on the
-                  // crowded side (the other side is empty).
-                  if (swapIn != null) swapOut = base[base.length - 1];
-                }
-              }
-              const nextKey = `${swapIn ?? "-"}>${swapOut ?? "-"}`;
-              if (nextKey !== balKey) {
-                const set = new Set(base);
-                if (swapIn != null && swapOut != null) { set.delete(swapOut); set.add(swapIn); }
-                shownNow = set;
-                balKey = nextKey;
-              }
-              // Shared references: the sets are immutable once built, so an
-              // unchanged bucket costs one pointer instead of a rebuilt Set.
-              pShownAt.set(m.slotTs, shownNow);
-              pWallAt.set(m.slotTs, wallNow);
+            }
+            // ONE Set and ONE wall map, shared by every bucket — so a bucket
+            // costs a pointer rather than a rebuilt Set, and no row can appear
+            // or vanish part way along the chart.
+            const shownAll: Set<number> = new Set(chosen);
+            const wallAll: Map<number, number> = new Map();
+            chosen.slice(0, Math.max(0, BUBBLE_STYLE.highlight)).forEach((s, i) => wallAll.set(s, i));
+            const pShownAt = new Map<number, Set<number>>();
+            const pWallAt = new Map<number, Map<number, number>>();
+            const pOrderAt = new Map<number, GexCell[]>();
+            for (const m of pMins) {
+              pShownAt.set(m.slotTs, shownAll);
+              pWallAt.set(m.slotTs, wallAll);
               // Biggest first, so a mark that grows toward the strike pitch lets
               // the smaller rows land ON TOP of it rather than disappearing
-              // underneath. (Was computed per frame in draw().)
+              // underneath.
               pOrderAt.set(
                 m.slotTs,
                 m.cells
-                  .filter((c) => shownNow.has(c.strike))
+                  .filter((c) => shownAll.has(c.strike))
                   .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a))),
               );
-              // (A per-column CONTRAST STRETCH used to be computed here: the
-              // bottom of the size domain was the weakest strike shown in THIS
-              // column, so every column was re-normalised to its own range. It
-              // made a quiet column's ladder look exactly like a loud one's,
-              // which is precisely the comparison the bubbles exist to support.
-              // There is no domain bottom now — size is proportional to |net
-              // GEX| against the session reference, so zero gamma is zero px.)
             }
             // The chain's own strike increment. Data, not viewport — but it used
             // to be recomputed per frame by flat-mapping every cell of every

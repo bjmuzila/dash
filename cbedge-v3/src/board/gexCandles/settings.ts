@@ -232,13 +232,22 @@ export const BUBBLE_AUTO = {
   cutoffOfTop: 0.06,
   cutoffMinPct: 0.25,
   cutoffMaxPct: 1.5,
-  topFrac: 0.03,
-  topMinPx: 5,
-  topMaxPx: 15,
+  // ── HOW FAT A ROW MAY BE ───────────────────────────────────────────────
+  // Was 3% of the pane, railed 5–15px. On an 800px pane that is a 15px radius
+  // — a THIRTY-PIXEL band — and with a strike every point the rows ran into
+  // each other and buried the candles between them. A level is a line you read
+  // price against; at 30px it is a region, and price is inside it more often
+  // than not, which tells you nothing.
+  //
+  // 1.2% railed 2.5–6px puts a row at 5–12px: unmistakably a band rather than
+  // a hairline, thin enough that four of them leave the candles legible.
+  topFrac: 0.012,
+  topMinPx: 2.5,
+  topMaxPx: 6,
   crowdTrim: 0.05,
-  floorOfTop: 0.14,
-  floorMinPx: 0.8,
-  floorMaxPx: 2.5,
+  floorOfTop: 0.22,
+  floorMinPx: 0.7,
+  floorMaxPx: 1.6,
   spreadGain: 1.5,
   curveMin: 0.9,
   curveMax: 2.2,
@@ -307,8 +316,10 @@ export const BUBBLE_STYLE = {
    *  mostly circle; this keeps the band proportionate to the chart at every
    *  window size, with no per-layout pixel number to tune. */
   heightFrac: 0.035,
-  glowTopFactor: 0.75,
-  glowMaxPx: 9,
+  glowTopFactor: 0.6,
+  // 9 was a bloom wider than the mark it lit. The core is found by being the
+  // biggest row, not by being the brightest thing on the chart.
+  glowMaxPx: 5,
   /** The weakest mark fades to 1 − fade. */
   fade: 0.55,
   /** Hairline kept between marks, so "not overlapping" reads as separate
