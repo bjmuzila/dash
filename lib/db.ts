@@ -2704,7 +2704,12 @@ export async function createUser(r: {
 }
 
 /** Transparent bcrypt->scrypt upgrade after a successful legacy-hash login. */
-export async function updateUserPasswordHash(id: string, passwordHash: string): Promise<void> {
+/** Sets (or, with null, CLEARS) the stored credential. Null is a real state,
+ *  not an error: a Google-only account has never had one, and
+ *  /api/admin/force-password-reset deliberately blanks it so the old password
+ *  stops working. A null hash fails verifyPassword generically, so the account
+ *  simply can't be signed into until a reset token sets a new one. */
+export async function updateUserPasswordHash(id: string, passwordHash: string | null): Promise<void> {
   await pgQuery(`UPDATE users SET password_hash = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [id, passwordHash]);
 }
 

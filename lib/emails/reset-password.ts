@@ -14,26 +14,57 @@ export interface ResetPasswordOpts {
   resetUrl: string;
   /** Minutes until the link expires (matches app/api/auth/forgot-password's RESET_TTL_MS). */
   expiresInMinutes?: number;
+  /** Overrides the rendered expiry phrase, for TTLs that read badly in minutes
+   *  (a 7-day admin link is "7 days", not "10080 minutes"). */
+  expiresLabel?: string;
+  /** Sent by the owner from the Sales page rather than requested by the
+   *  customer. Two lines have to change: the customer didn't ask for this, and
+   *  — unlike a self-service reset — their old password has ALREADY been
+   *  cleared, so "ignore this and nothing changes" would be a lie. */
+  adminInitiated?: boolean;
+}
+
+function expiryPhrase(opts: ResetPasswordOpts): string {
+  if (opts.expiresLabel) return opts.expiresLabel;
+  return `${opts.expiresInMinutes ?? 60} minutes`;
 }
 
 export function resetPasswordText(opts: ResetPasswordOpts): string {
-  const mins = opts.expiresInMinutes ?? 60;
+  const expires = expiryPhrase(opts);
+  const intro = opts.adminInitiated
+    ? `We've reset the password on your CB Edge account so you can get back in. Set a new one here — this link expires in ${expires}:`
+    : `We received a request to reset your password. This link expires in ${expires}:`;
+  const footer = opts.adminInitiated
+    ? "Your old password no longer works. If this link expires before you use it, click “Forgot password?” on the sign-in page and we'll send a fresh one."
+    : "If you didn't request this, you can safely ignore this email — your password won't change.";
   return [
     "Reset your CB Edge password",
     "",
-    `We received a request to reset your password. This link expires in ${mins} minutes:`,
+    intro,
     "",
     opts.resetUrl,
     "",
-    "If you didn't request this, you can safely ignore this email — your password won't change.",
+    footer,
     "",
     "— CB Edge",
   ].join("\n");
 }
 
 export function resetPasswordEmail(opts: ResetPasswordOpts): string {
-  const mins = opts.expiresInMinutes ?? 60;
+  const expires = escapeHtml(expiryPhrase(opts));
   const url = escapeHtml(opts.resetUrl);
+
+  const intro = opts.adminInitiated
+    ? `We've reset the password on your <strong style="color:#219EBC;">CB Edge</strong> account so you can get back in. Click below to choose a new one — this link expires in <strong style="color:#8ECAE6;">${expires}</strong>.`
+    : `We received a request to reset the password on your <strong style="color:#219EBC;">CB Edge</strong> account. Click below to choose a new one — this link expires in <strong style="color:#8ECAE6;">${expires}</strong>.`;
+
+  const footer = opts.adminInitiated
+    ? `Your old password no longer works. If this link expires before you use it, click &ldquo;Forgot password?&rdquo; on the sign-in page and we&rsquo;ll send a fresh one.`
+    : `If you didn't request this, you can safely ignore this email — your password won't change.`;
+
+  const preheader = opts.adminInitiated
+    ? `Set a new CB Edge password — this link expires in ${expires}.`
+    : `Reset your CB Edge password — this link expires in ${expires}.`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -44,7 +75,7 @@ export function resetPasswordEmail(opts: ResetPasswordOpts): string {
 <title>${escapeHtml(RESET_PASSWORD_SUBJECT)}</title>
 </head>
 <body style="margin:0;padding:0;background:#05060A;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Reset your CB Edge password — this link expires in ${mins} minutes.</div>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${preheader}</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#05060A;">
     <tr>
       <td align="center" style="padding:32px 16px;">
@@ -59,14 +90,14 @@ export function resetPasswordEmail(opts: ResetPasswordOpts): string {
 
           <tr>
             <td align="center" style="padding:22px 32px 4px 32px;">
-              <div style="font:800 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">Reset your password</div>
+              <div style="font:800 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">${opts.adminInitiated ? "Set a new password" : "Reset your password"}</div>
             </td>
           </tr>
 
           <tr>
             <td style="padding:14px 32px 4px 32px;">
               <p style="margin:0 0 14px 0;font:400 14px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">
-                We received a request to reset the password on your <strong style="color:#219EBC;">CB Edge</strong> account. Click below to choose a new one — this link expires in <strong style="color:#8ECAE6;">${mins} minutes</strong>.
+                ${intro}
               </p>
             </td>
           </tr>
@@ -86,7 +117,7 @@ export function resetPasswordEmail(opts: ResetPasswordOpts): string {
           <tr>
             <td style="padding:0 32px 28px 32px;">
               <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:16px;font:400 13px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;">
-                If you didn't request this, you can safely ignore this email — your password won't change.
+                ${footer}
               </div>
             </td>
           </tr>

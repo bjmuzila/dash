@@ -1,79 +1,88 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import { HOME_THEME, homeButtonStyle } from "../lib/theme";
 import { PageShell, Card } from "../components/PageCard";
 import { ThemedSelect } from "../components/ThemedSelect";
 
 /**
- * /owner/labs — the GEX SURFACE.
+ * /owner/labs — STRIKE × DAYS, and the levels that walk on top of it.
  *
- * ── WHAT THIS IS FOR ────────────────────────────────────────────────────────
- * The ΔGEX Board answers "what changed between two closes". This page answers
- * the question that one structurally cannot: "where is dealer positioning
- * BUILDING, over time, and is it building or is it just following price".
+ * ── WHAT IT ANSWERS ─────────────────────────────────────────────────────────
+ * The ΔGEX Board diffs two closes. It cannot tell "the wall is being BUILT"
+ * from "the wall is FOLLOWING price", because it has no time axis and no price
+ * on it — and on a ladder those two are the same picture. This page puts both
+ * in the frame.
  *
- * Those two are the same picture in a ladder and completely different pictures
- * here, which is the entire reason the page exists. A wall that thickens at a
- * fixed strike while spot wanders is positioning being ADDED. A wall that keeps
- * its distance from spot as spot moves is positioning FOLLOWING. The ladder
- * cannot tell them apart because it has no time axis and no price on it. The
- * surface has both.
+ * ── TWO PANELS, ONE FETCH ───────────────────────────────────────────────────
+ * 1. STRIKE × DAYS. Strike up the side, sessions across, price drawn over the
+ *    top. Two colour modes off the same numbers:
+ *      |GEX|  black → orange → white, sequential. How much gamma sits at a
+ *             strike, sign ignored. A band BRIGHTENING left-to-right is the
+ *             thing this page exists to catch, and sign only distracts from it.
+ *             Unsigned, so a wall and an acceleration zone look identical —
+ *             read it beside the signed view, never alone.
+ *      NET    green/red diverging, near-black midpoint. Which way each band
+ *             pushes.
+ * 2. WALL MIGRATION. The levels the grid implies, walked over the same
+ *    sessions. Deliberately the SAME DRAWING as WallMigrationChart in
+ *    components/pages/LevelLog.tsx, one scale up: that chart's x is 15-minute
+ *    slots inside a session, this one's is sessions. Everything else is copied
+ *    on purpose so the two surfaces read alike.
  *
- * ── THE TWO VIEWS, AND WHY BOTH ─────────────────────────────────────────────
- * SURFACE — strike up the side, sessions across, colour is the level, and spot
- *   drawn straight over the top. No occlusion, so it takes 45 sessions as
- *   easily as 7, and the shape you are looking for (a band that WIDENS toward
- *   the right edge) is a shape, not a number to read. This is the glance view.
- * SCRUB — one profile at full size with a slider through the same sessions and
- *   the previous five drawn as fading ghosts. The surface tells you something
- *   happened; this is where you go to watch it happen and find the session it
- *   started. Needs your hand on it, which is why it is second.
+ * Both panels read ONE payload — GET /api/eod-strike-gex-surface — and panel 2
+ * derives its levels from the same grid panel 1 paints, so they cannot disagree
+ * about where a wall was.
  *
- * Both read ONE payload — GET /api/eod-strike-gex-surface — so they can never
- * disagree, and switching between them costs nothing.
+ * ── THE RULES PANEL 2 INHERITS FROM LevelLog ────────────────────────────────
+ * STEPS, NEVER SLOPES. A wall holds its strike until the book rolls it. A
+ * diagonal drawn between two sessions would put the level at prices it never
+ * occupied, which is precisely the reading this panel exists for. Spot is the
+ * one exception and is drawn as a continuous stroke: price really does move
+ * between closes.
  *
- * ── WHY A DEDICATED ENDPOINT ────────────────────────────────────────────────
- * The obvious build is to call /api/eod-strike-gex-change once per session in
- * the window. That is 45 round trips for one symbol, and it makes each view
- * rebuild the strike × session rectangle itself — which is exactly how two
- * views of "the same" data end up drawing different pictures. The rectangle is
- * built once, server-side, in getStrikeGexSurface().
+ * THE CORE-SIGN RULE, AS TWO ROLES. CORE is the single largest |GEX| node on
+ * the board, so it IS one of the walls — drawing the matching wall beside it is
+ * the same strike twice in two colours. So: CORE is the heavier wall, OTHER is
+ * the lighter one, both lines run the whole window, and when dominance flips
+ * the lines swap. OTHER is drawn in the colour of the wall it currently IS, in
+ * contiguous same-side runs, so neither colour blinks out mid-run. LevelLog
+ * arrived at this after the per-slot masking version made the eye read "a level
+ * vanished" instead of "a role swapped"; there is no reason to re-learn it.
  *
- * ── NULL IS NOT ZERO ────────────────────────────────────────────────────────
- * The recorder writes ±40 strikes around each session's close, so over a long
- * window the far strikes genuinely have no reading on the sessions where spot
- * was somewhere else. Those come back as null and are drawn as EMPTY, not as
- * the neutral middle of the scale. Painting them as zero would draw a hard edge
- * across the surface that is an artefact of the recording window rather than a
- * fact about the book, and it would be the most confident-looking wrong thing
- * on the page.
+ * NULL IS NOT ZERO. The recorder writes ±40 strikes around each session's
+ * close, so over a long window the far strikes genuinely have no reading on
+ * sessions where spot was elsewhere. Those come back null and draw as EMPTY,
+ * not as the middle of the scale — a zero there would paint a hard edge across
+ * the surface that is an artefact of the recording window, not a fact about the
+ * book, and it would be the most confident-looking wrong thing on the page.
  */
 
 const T = HOME_THEME;
-// Same two literals GexGrowth.tsx defines, for the same reason: OWNER_THEME has
-// no true green (`green` is the light blue), and a gamma sign that reads green
-// on one page and blue on the next is worse than one shared local constant.
-// If a real +/− pair ever lands in the theme, both pages take it from there.
+const MONO = "var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const DIM = "rgba(255,255,255,0.42)";
+const FAINT = "rgba(255,255,255,0.055)";
+/**
+ * The level palette is LEVEL_COLORS + ES_CANDLE_UP from
+ * components/shared/homeTheme.ts, copied rather than imported: owner-vite is a
+ * separate Vite app and cannot reach the customer app's module graph. Copied
+ * VALUES, not invented ones — the whole point of matching WallMigrationChart is
+ * that a CORE line is the same gold on both surfaces. If those tokens ever move
+ * they must move here too.
+ */
+const CORE_GOLD = "#ffd600";
+const CALL_GREEN = "#30d158";
+const PUT_RED = "#ff4757";
+const SPOT_INK = "#FFFFFF";
+/** The diverging pair, matching GexGrowth.tsx — OWNER_THEME has no true green. */
 const POS = "#22C55E";
 const NEG = "#EF4444";
-const MONO = "var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-const INK = "#E6EDF5";
-const DIM = "rgba(255,255,255,0.42)";
-const GRIDLINE = "rgba(255,255,255,0.07)";
-const CELL_EMPTY = "rgba(255,255,255,0.025)";
+/** Zero is the panel floor, not a grey. A surface should glow out of the dark. */
+const FLOOR: [number, number, number] = [10, 13, 19];
 
 type Surface = {
-  ok?: boolean;
-  error?: string;
-  symbol?: string;
-  basis?: string;
-  leg?: string;
-  dates?: string[];
-  spots?: (number | null)[];
-  strikes?: number[];
-  grid?: (number | null)[][];
-  window?: { lo: number; hi: number } | null;
-  capturedAt?: string | null;
-  clipped?: boolean;
+  ok?: boolean; error?: string; symbol?: string; basis?: string; leg?: string;
+  dates?: string[]; spots?: (number | null)[]; strikes?: number[];
+  grid?: (number | null)[][]; window?: { lo: number; hi: number } | null;
+  capturedAt?: string | null; clipped?: boolean;
 };
 
 const SYMBOLS = ["SPX", "SPY", "QQQ", "NDX", "IWM", "NVDA", "TSLA", "AAPL", "META", "AMZN"];
@@ -84,52 +93,64 @@ const BASES = [
   { value: "flow", label: "Flow (signed)" },
 ];
 const WINDOWS = [
-  { value: "20", label: "20 sessions" },
+  { value: "15", label: "15 sessions" },
+  { value: "30", label: "30 sessions" },
   { value: "45", label: "45 sessions" },
   { value: "90", label: "90 sessions" },
 ];
-// How far either side of the price path to draw, as a PERCENTAGE of spot — the
-// only unit that means the same thing on SPY at 770 and SPX at 7700.
+// A percentage of spot — the only unit that means the same on SPY at 770 and
+// SPX at 7700. A fixed point offset draws a sliver on one and empty on the other.
 const WIDTHS = [
   { value: "2", label: "±2% strikes" },
-  { value: "5", label: "±5% strikes" },
-  { value: "10", label: "±10% strikes" },
-  { value: "20", label: "±20% strikes" },
+  { value: "4", label: "±4% strikes" },
+  { value: "8", label: "±8% strikes" },
+  { value: "15", label: "±15% strikes" },
 ];
+
+type Mode = "abs" | "net";
+type MigKey = "core" | "other" | "spot";
 
 /* ── colour ──────────────────────────────────────────────────────────────── */
 
-const rgbOf = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.substr(i, 2), 16));
-const NEUTRAL = [26, 32, 41];
-function mixTo(hex: string, t: number) {
-  const c = rgbOf(hex);
-  return `rgb(${NEUTRAL.map((v, i) => Math.round(v + (c[i] - v) * t)).join(",")})`;
+const rgbOf = (h: string) => [1, 3, 5].map((i) => parseInt(h.substr(i, 2), 16));
+const lerp = (a: number[], b: number[], t: number) =>
+  `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(",")})`;
+
+/** Diverging: two hues, a dark neutral midpoint. Never a rainbow. */
+function netColor(v: number | null, max: number) {
+  if (v == null || !Number.isFinite(v) || max <= 0) return `rgb(${FLOOR.join(",")})`;
+  const t = Math.min(1, Math.abs(v) / max);
+  if (t < 0.03) return `rgb(${FLOOR.join(",")})`;
+  return lerp(FLOOR, rgbOf(v > 0 ? POS : NEG), 0.08 + 0.92 * Math.pow((t - 0.03) / 0.97, 0.7));
 }
 /**
- * Diverging: two hues, a neutral midpoint, and a dead zone so a 2% deviation
- * does not shout as loudly as a 200% one. Never a rainbow, and zero is grey
- * rather than green — a strike with no gamma is not a bullish strike.
+ * Sequential: one hue family, monotonically lighter. |GEX| has no sign and no
+ * meaningful midpoint, so a diverging ramp here would invent one.
  */
-function divColor(v: number | null, max: number): string {
-  if (v == null || !Number.isFinite(v)) return CELL_EMPTY;
-  const t = max > 0 ? Math.min(1, Math.abs(v) / max) : 0;
-  if (t < 0.05) return `rgb(${NEUTRAL.join(",")})`;
-  const u = (t - 0.05) / 0.95;
-  return mixTo(v > 0 ? POS : NEG, 0.1 + 0.9 * Math.pow(u, 0.85));
+const HEAT: number[][] = [FLOOR, [58, 22, 4], [122, 58, 0], rgbOf("#F97316"), rgbOf("#FFB703"), [255, 240, 200], [255, 253, 245]];
+function absColor(v: number | null, max: number) {
+  if (v == null || !Number.isFinite(v) || max <= 0) return `rgb(${FLOOR.join(",")})`;
+  const t = Math.min(1, Math.pow(Math.abs(v) / max, 0.88));
+  const k = t * (HEAT.length - 1);
+  const i = Math.min(HEAT.length - 2, Math.floor(k));
+  return lerp(HEAT[i], HEAT[i + 1], k - i);
 }
+const cellColor = (v: number | null, max: number, mode: Mode) =>
+  (mode === "abs" ? absColor(v, max) : netColor(v, max));
 
 const fmtB = (v: number | null) => {
   if (v == null || !Number.isFinite(v)) return "—";
-  const a = Math.abs(v);
-  const s = v > 0 ? "+" : v < 0 ? "−" : "";
+  const a = Math.abs(v); const s = v > 0 ? "+" : v < 0 ? "−" : "";
   if (a >= 1e9) return `${s}${(a / 1e9).toFixed(2)}B`;
   if (a >= 1e6) return `${s}${(a / 1e6).toFixed(0)}M`;
   if (a >= 1e3) return `${s}${(a / 1e3).toFixed(0)}K`;
   return `${s}${a.toFixed(0)}`;
 };
-const shortDate = (d: string) => {
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const dayLabel = (d: string, withMonth: boolean) => {
   const p = d.split("-");
-  return p.length === 3 ? `${Number(p[1])}/${Number(p[2])}` : d;
+  if (p.length !== 3) return d;
+  return withMonth ? `${MON[Number(p[1]) - 1]} ${Number(p[2])}` : `${Number(p[2])}`;
 };
 const fmtEtStamp = (iso?: string | null) => {
   if (!iso) return "";
@@ -140,14 +161,22 @@ const fmtEtStamp = (iso?: string | null) => {
     hour: "2-digit", minute: "2-digit", second: "2-digit",
   }).format(d).replace(", ", " ")} ET`;
 };
+/** A round strike step giving ~12 labels, whatever the underlying's scale. */
+function tickStep(span: number) {
+  const raw = span / 12;
+  const mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-6))));
+  for (const m of [1, 2, 2.5, 5, 10]) if (mag * m >= raw) return mag * m;
+  return mag * 10;
+}
 
 /* ── page ────────────────────────────────────────────────────────────────── */
 
 export default function GexSurface() {
-  const [symbol, setSymbol] = useState("SPY");
+  const [symbol, setSymbol] = useState("SPX");
   const [basis, setBasis] = useState("oivol");
-  const [days, setDays] = useState("45");
-  const [sidePct, setSidePct] = useState("5");
+  const [days, setDays] = useState("15");
+  const [sidePct, setSidePct] = useState("4");
+  const [mode, setMode] = useState<Mode>("abs");
   const [data, setData] = useState<Surface | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -163,16 +192,14 @@ export default function GexSurface() {
         { cache: "no-store" },
       );
       const j: Surface = await res.json();
-      // Stale-response guard: the symbol picker can fire faster than the query
-      // returns, and an out-of-order resolve would paint the wrong name's book
-      // under the right name's header.
+      // Stale-response guard: the pickers fire faster than the query returns and
+      // an out-of-order resolve paints the wrong name under the right header.
       if (id !== reqId.current) return;
       if (!res.ok || j.ok === false) { setErr(j.error || `HTTP ${res.status}`); setData(null); }
-      else { setData(j); }
+      else setData(j);
     } catch (e) {
       if (id !== reqId.current) return;
-      setErr(e instanceof Error ? e.message : String(e));
-      setData(null);
+      setErr(e instanceof Error ? e.message : String(e)); setData(null);
     } finally {
       if (id === reqId.current) setLoading(false);
     }
@@ -186,100 +213,65 @@ export default function GexSurface() {
   const spots = data?.spots ?? [];
   const ready = dates.length > 1 && strikes.length > 1;
 
-  /** Δ vs the prior session. Derived, never fetched — one source, two readings. */
-  const dgrid = useMemo(() => grid.map((row, d) => row.map((v, i) => {
-    if (d === 0) return null;
-    const p = grid[d - 1][i];
-    return v == null || p == null ? null : v - p;
-  })), [grid]);
-
-  const vmax = useMemo(() => {
+  const max = useMemo(() => {
     let m = 0;
     for (const row of grid) for (const v of row) if (v != null && Math.abs(v) > m) m = Math.abs(v);
     return m;
   }, [grid]);
-  const dmax = useMemo(() => {
-    let m = 0;
-    for (const row of dgrid) for (const v of row) if (v != null && Math.abs(v) > m) m = Math.abs(v);
-    return m;
-  }, [dgrid]);
-
-  const [scrub, setScrub] = useState(0);
-  useEffect(() => { setScrub(Math.max(0, dates.length - 1)); }, [dates.length]);
 
   return (
     <PageShell>
-      <Card
-        variant="classic"
-        title="GEX Surface · labs"
-        subtitle="Where positioning is building, over time — and whether it is building or following price"
-        padding={20}
-      >
-        <p style={{ margin: "0 0 16px", fontSize: 13, color: T.text, opacity: 0.72, maxWidth: "92ch", lineHeight: 1.6 }}>
-          One payload, two views. The ΔGEX Board diffs two closes; this draws every strike against every
-          session with spot on top. A band that <b>widens</b> toward the right edge is positioning being added.
-          A band that <b>holds its distance</b> from the price line as price moves is positioning following.
-          Those look identical on a ladder.
-        </p>
+      <Card variant="classic" padding={20} style={{ background: T.bg }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 21, fontWeight: 600, letterSpacing: "-0.01em", color: T.text }}>
+              {data?.symbol || symbol} {mode === "abs" ? "|GEX|" : "GEX"} — Strike × Days
+            </h2>
+            <div style={{ fontSize: 12.5, color: DIM, marginTop: 4 }}>
+              {mode === "abs" ? "Absolute gamma magnitude" : "Signed net gamma"}
+              {" · EOD snapshots · "}{dates.length || "—"} sessions
+              {data?.capturedAt ? ` · run ${fmtEtStamp(data.capturedAt)}` : ""}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <ModeTab on={mode === "abs"} accent="#F97316" onClick={() => setMode("abs")}>|GEX| magnitude</ModeTab>
+            <ModeTab on={mode === "net"} accent={T.cyan} onClick={() => setMode("net")}>signed net</ModeTab>
+          </div>
+        </div>
 
         <Controls
-          symbol={symbol} setSymbol={setSymbol}
-          basis={basis} setBasis={setBasis}
-          days={days} setDays={setDays}
-          sidePct={sidePct} setSidePct={setSidePct}
+          symbol={symbol} setSymbol={setSymbol} basis={basis} setBasis={setBasis}
+          days={days} setDays={setDays} sidePct={sidePct} setSidePct={setSidePct}
           onReload={load} loading={loading}
         />
 
-        {err ? (
-          <div style={{ ...noteStyle, borderLeftColor: NEG, color: NEG }}>
-            Could not read the surface: {err}
-          </div>
-        ) : null}
-
+        {err ? <div style={{ ...noteStyle, borderLeftColor: NEG, color: NEG }}>Could not read: {err}</div> : null}
         {!err && !loading && data && !ready ? (
           <div style={noteStyle}>
             {dates.length === 0
-              ? `No recorded sessions for ${symbol} on the ${BASES.find((b) => b.value === basis)?.label} basis. `
-                + "The bases start at their own migration dates — try OI + Volume, which has the full history."
-              : "Only one session on file for this reading. A surface needs at least two."}
+              ? `No recorded sessions for ${symbol} on this basis. The bases start at their own migration dates — OI + Volume has the full history.`
+              : "Only one session on file. A strike × days view needs at least two."}
           </div>
         ) : null}
+        {loading && !ready ? <div style={{ ...noteStyle, color: DIM }}>Reading {symbol}…</div> : null}
 
         {ready ? (
           <>
-            <Meta data={data} loading={loading} />
-            <SectionLabel
-              n="A" title="The surface"
-              sub={`strike × session · colour is the level · ${dates.length} sessions`}
-            />
-            <SurfaceChart
-              dates={dates} strikes={strikes} grid={grid} spots={spots} max={vmax} withSpot
-            />
-            <SectionLabel n="" title="Δ vs prior session" sub="same axes" small />
-            {/* The oldest session has no prior, so its column is all null. Dropped
-                rather than drawn: an empty leading column reads as "nothing
-                happened that day", which is not what it means. */}
-            <SurfaceChart
-              dates={dates.slice(1)} strikes={strikes} grid={dgrid.slice(1)}
-              spots={spots.slice(1)} max={dmax} withSpot
-            />
-            <Legend max={vmax} />
-
-            <SectionLabel
-              n="D" title="Scrub"
-              sub="one profile, a slider, and the trail behind it"
-            />
-            <Scrub
-              dates={dates} strikes={strikes} grid={grid} spots={spots} max={vmax}
-              idx={Math.min(scrub, dates.length - 1)} setIdx={setScrub}
-            />
+            <Heatmap dates={dates} strikes={strikes} grid={grid} spots={spots} max={max} mode={mode} />
+            <div style={{ fontSize: 12, color: DIM, textAlign: "center", marginTop: 12 }}>
+              {mode === "abs"
+                ? "Unsigned — walls and acceleration zones look the same; read it next to the signed net view"
+                : "Signed — green is long gamma, red is short. Zero is the background, not a colour."}
+            </div>
           </>
         ) : null}
-
-        {loading && !ready ? (
-          <div style={{ ...noteStyle, color: T.text, opacity: 0.6 }}>Reading {symbol}…</div>
-        ) : null}
       </Card>
+
+      {ready ? (
+        <Card variant="classic" padding={0} style={{ background: T.bg, marginTop: 16 }}>
+          <WallMigration dates={dates} strikes={strikes} grid={grid} spots={spots} />
+        </Card>
+      ) : null}
     </PageShell>
   );
 }
@@ -287,15 +279,28 @@ export default function GexSurface() {
 /* ── chrome ──────────────────────────────────────────────────────────────── */
 
 const noteStyle: CSSProperties = {
-  borderLeft: `2px solid ${T.cyan}`,
-  background: "rgba(33,158,188,0.06)",
-  padding: "11px 14px",
-  borderRadius: "0 8px 8px 0",
-  fontSize: 12.5,
-  color: T.text,
-  margin: "14px 0 0",
-  lineHeight: 1.55,
+  borderLeft: `2px solid ${T.cyan}`, background: "rgba(33,158,188,0.06)",
+  padding: "11px 14px", borderRadius: "0 8px 8px 0", fontSize: 12.5,
+  color: T.text, margin: "14px 0 0", lineHeight: 1.55,
 };
+
+function ModeTab({ on, accent, onClick, children }: {
+  on: boolean; accent: string; onClick: () => void; children: ReactNode;
+}) {
+  return (
+    <button
+      type="button" onClick={onClick} aria-pressed={on}
+      style={{
+        background: on ? `${accent}24` : "transparent",
+        border: `1px solid ${on ? accent : T.border}`,
+        color: on ? accent : T.text,
+        borderRadius: 8, padding: "6px 13px", fontFamily: MONO, fontSize: 11,
+        cursor: "pointer", letterSpacing: ".03em", whiteSpace: "nowrap",
+        opacity: on ? 1 : 0.72,
+      }}
+    >{children}</button>
+  );
+}
 
 function Controls({
   symbol, setSymbol, basis, setBasis, days, setDays, sidePct, setSidePct, onReload, loading,
@@ -309,356 +314,384 @@ function Controls({
   const [typed, setTyped] = useState(symbol);
   useEffect(() => { setTyped(symbol); }, [symbol]);
   return (
-    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
-      <div style={{ width: 150 }}>
+    <div style={{ display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap", margin: "16px 0 6px" }}>
+      <div style={{ width: 128 }}>
         <ThemedSelect
           value={SYMBOLS.includes(symbol) ? symbol : ""}
           options={SYMBOLS.map((s) => ({ value: s, label: s }))}
-          onChange={setSymbol}
-          ariaLabel="Symbol"
-          placeholder={symbol || "symbol"}
+          onChange={setSymbol} ariaLabel="Symbol" placeholder={symbol || "symbol"}
         />
       </div>
-      <form
-        onSubmit={(e) => { e.preventDefault(); const v = typed.trim().toUpperCase(); if (v) setSymbol(v); }}
-        style={{ display: "flex", gap: 6 }}
-      >
+      <form onSubmit={(e) => { e.preventDefault(); const v = typed.trim().toUpperCase(); if (v) setSymbol(v); }}>
         <input
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-          aria-label="Any symbol"
-          placeholder="any ticker"
+          value={typed} onChange={(e) => setTyped(e.target.value)}
+          aria-label="Any symbol" placeholder="any ticker"
           style={{
-            width: 108, background: T.panelInset, color: T.text, fontFamily: MONO, fontSize: 12,
+            width: 104, background: T.panelInset, color: T.text, fontFamily: MONO, fontSize: 12,
             border: `1px solid ${T.border}`, borderRadius: 8, padding: "7px 10px", textTransform: "uppercase",
           }}
         />
       </form>
-      <div style={{ width: 168 }}>
-        <ThemedSelect value={basis} options={BASES} onChange={setBasis} ariaLabel="Basis" />
-      </div>
-      <div style={{ width: 148 }}>
-        <ThemedSelect value={days} options={WINDOWS} onChange={setDays} ariaLabel="Lookback" />
-      </div>
-      <div style={{ width: 152 }}>
-        <ThemedSelect value={sidePct} options={WIDTHS} onChange={setSidePct} ariaLabel="Strike range" />
-      </div>
-      <button
-        type="button" onClick={onReload} disabled={loading}
-        style={{ ...homeButtonStyle, padding: "7px 15px", fontSize: 12, opacity: loading ? 0.5 : 1 }}
-      >
+      <div style={{ width: 156 }}><ThemedSelect value={basis} options={BASES} onChange={setBasis} ariaLabel="Basis" /></div>
+      <div style={{ width: 138 }}><ThemedSelect value={days} options={WINDOWS} onChange={setDays} ariaLabel="Lookback" /></div>
+      <div style={{ width: 144 }}><ThemedSelect value={sidePct} options={WIDTHS} onChange={setSidePct} ariaLabel="Strike range" /></div>
+      <button type="button" onClick={onReload} disabled={loading}
+        style={{ ...homeButtonStyle, padding: "7px 14px", fontSize: 12, opacity: loading ? 0.5 : 1 }}>
         {loading ? "…" : "↻"}
       </button>
     </div>
   );
 }
 
-function Meta({ data, loading }: { data: Surface | null; loading: boolean }) {
-  if (!data) return null;
-  const n = data.dates?.length ?? 0;
-  return (
-    <div style={{
-      display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center",
-      fontFamily: MONO, fontSize: 10.5, color: DIM, marginTop: 14,
-    }}>
-      <span style={{ color: T.cyan }}>{data.symbol}</span>
-      <span>{n} sessions · {data.dates?.[0]} → {data.dates?.[n - 1]}</span>
-      <span>
-        {data.strikes?.length} strikes
-        {data.window ? ` · ${Math.round(data.window.lo)}–${Math.round(data.window.hi)}` : ""}
-      </span>
-      {data.capturedAt ? <span>run {fmtEtStamp(data.capturedAt)}</span> : null}
-      {data.clipped ? (
-        <span
-          title="The union of every session's recorded window is wider than what is drawn. The grid is clipped to the strikes around the latest close — the ones you are actually looking at."
-          style={{ color: T.gold }}
-        >
-          clipped to the live window
-        </span>
-      ) : null}
-      {loading ? <span style={{ color: T.cyan }}>reloading…</span> : null}
-    </div>
-  );
-}
+/* ── panel 1 · strike × days ─────────────────────────────────────────────── */
 
-function SectionLabel({ n, title, sub, small }: { n: string; title: string; sub?: string; small?: boolean }) {
-  return (
-    <div style={{
-      display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap",
-      margin: small ? "18px 0 7px" : "26px 0 10px",
-      paddingTop: small ? 12 : 0,
-      borderTop: small ? `1px dashed ${T.border}` : undefined,
-    }}>
-      {n ? (
-        <span style={{
-          fontFamily: MONO, fontSize: 10, fontWeight: 800, letterSpacing: ".06em",
-          color: T.bg, background: T.cyan, borderRadius: 5, padding: "2px 7px",
-        }}>{n}</span>
-      ) : null}
-      <span style={{ fontSize: small ? 12 : 15, fontWeight: 700, color: T.text }}>{title}</span>
-      {sub ? (
-        <span style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: ".08em", textTransform: "uppercase", color: DIM }}>
-          {sub}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-function Legend({ max }: { max: number }) {
-  const steps = Array.from({ length: 21 }, (_, i) => ((i - 10) / 10) * max);
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 12,
-      fontFamily: MONO, fontSize: 9.5, color: DIM, letterSpacing: ".04em",
-    }}>
-      <span>short γ</span>
-      <span style={{ display: "flex", width: 170, height: 9, borderRadius: 3, overflow: "hidden" }}>
-        {steps.map((v, i) => <i key={i} style={{ flex: 1, background: divColor(v, max) }} />)}
-      </span>
-      <span>long γ</span>
-      <span><i style={{ display: "inline-block", width: 10, height: 2, background: INK, verticalAlign: 3, marginRight: 5 }} />spot</span>
-      <span><i style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: CELL_EMPTY, border: `1px solid ${T.border}`, verticalAlign: -1, marginRight: 5 }} />not recorded — never drawn as zero</span>
-      <span>hover any cell for the number</span>
-    </div>
-  );
-}
-
-/* ── A · the surface ─────────────────────────────────────────────────────── */
-
-function SurfaceChart({
-  dates, strikes, grid, spots, max, withSpot,
-}: {
+function Heatmap({ dates, strikes, grid, spots, max, mode }: {
   dates: string[]; strikes: number[]; grid: (number | null)[][];
-  spots: (number | null)[]; max: number; withSpot?: boolean;
+  spots: (number | null)[]; max: number; mode: Mode;
 }) {
-  const CH = strikes.length > 70 ? 7 : strikes.length > 45 ? 9 : 12;
-  const W = 1000, L = 46, R = 16, TP = 10, BM = 26;
-  const H = strikes.length * CH + TP + BM;
-  const cw = (W - L - R) / dates.length;
+  const W = 1180, L = 70, RPAD = 185, TP = 30, BM = 38, H = 514;
+  const PLOT_W = W - L - RPAD;
+  const rows = strikes.length;
+  const ch = (H - TP - BM) / rows;
+  const cw = PLOT_W / dates.length;
   const x = (d: number) => L + d * cw;
-  // Strikes ascending in the payload; the surface reads high-at-top, so the row
-  // index is inverted here rather than the array being reversed — the grid's
-  // column order has to stay aligned with `strikes` for the tooltips.
-  const y = (i: number) => TP + (strikes.length - 1 - i) * CH;
+  // Strikes ascend in the payload; the chart reads high-at-top, so the row index
+  // is inverted here rather than the array reversed — the column order has to
+  // stay aligned with `strikes` for hit-testing and tooltips.
+  const y = (i: number) => TP + (rows - 1 - i) * ch;
 
-  // Spot is mapped onto the STRIKE axis and then CLAMPED to the plot box.
-  //
-  // The server sizes the window off the spot path so this should not bite, but
-  // "should not" is not a guarantee: the 240-row ceiling can tighten the window
-  // past an old session's close, and a symbol whose ladder is finer than its
-  // range will hit that. An unclamped point becomes a line running off the top
-  // or bottom of the chart into the margin — which is exactly how this looked
-  // on SPX with a fixed ±45-point window. Clamped, an out-of-frame session
-  // pins to the edge and is flagged below the chart instead.
-  const loK = strikes[0], hiK = strikes[strikes.length - 1];
-  const yTop = TP + CH / 2;
-  const yBot = TP + (strikes.length - 1) * CH + CH / 2;
-  const yPrice = (p: number) => {
-    if (hiK === loK) return yTop;
-    return TP + (hiK - p) * ((strikes.length - 1) * CH) / (hiK - loK) + CH / 2;
+  const lo = strikes[0], hi = strikes[rows - 1];
+  const yTop = TP + ch / 2, yBot = TP + (rows - 1) * ch + ch / 2;
+  const yPrice = (p: number) => (hi === lo ? yTop
+    : Math.min(yBot, Math.max(yTop, TP + (hi - p) * ((rows - 1) * ch) / (hi - lo) + ch / 2)));
+  const offFrame = spots.filter((p) => p != null && (p < lo || p > hi)).length;
+
+  const step = tickStep(hi - lo);
+  const ticks = useMemo(
+    () => strikes.map((s, i) => ({ s, i })).filter(({ s }) => Math.abs(s / step - Math.round(s / step)) < 1e-9),
+    [strikes, step],
+  );
+  const dateStep = Math.max(1, Math.ceil(dates.length / 16));
+
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [hover, setHover] = useState<{ d: number; i: number } | null>(null);
+  const locate = (e: ReactMouseEvent) => {
+    const el = svgRef.current; if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const px = ((e.clientX - r.left) / r.width) * W;
+    const py = ((e.clientY - r.top) / r.height) * H;
+    if (px < L || px > L + PLOT_W || py < TP || py > TP + rows * ch) return null;
+    return {
+      d: Math.min(dates.length - 1, Math.max(0, Math.floor((px - L) / cw))),
+      i: Math.min(rows - 1, Math.max(0, rows - 1 - Math.floor((py - TP) / ch))),
+    };
   };
-  const clampY = (v: number) => Math.min(yBot, Math.max(yTop, v));
-  const offFrame = spots.filter((p) => p != null && (p < loK || p > hiK)).length;
   const spotPts = spots
-    .map((p, d) => (p == null ? null : `${(x(d) + cw / 2).toFixed(1)},${clampY(yPrice(p)).toFixed(1)}`))
+    .map((p, d) => (p == null ? null : `${(x(d) + cw / 2).toFixed(1)},${yPrice(p).toFixed(1)}`))
     .filter(Boolean).join(" ");
-
-  const strikeTicks = useMemo(() => {
-    const span = strikes[strikes.length - 1] - strikes[0];
-    const step = span > 120 ? 20 : span > 60 ? 10 : span > 24 ? 5 : 2;
-    return strikes.map((s, i) => ({ s, i })).filter(({ s }) => s % step === 0);
-  }, [strikes]);
-  const dateStep = Math.max(1, Math.ceil(dates.length / 9));
+  const hv = hover ? grid[hover.d]?.[hover.i] : null;
 
   return (
-    <div style={{ overflowX: "auto" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", minWidth: 560, height: "auto", display: "block", fontFamily: MONO }}>
+    <div style={{ position: "relative", marginTop: 14 }}>
+      <svg
+        ref={svgRef} viewBox={`0 0 ${W} ${H}`}
+        style={{ width: "100%", height: "auto", display: "block", fontFamily: MONO, cursor: "crosshair" }}
+        onMouseMove={(e) => setHover(locate(e))}
+        onMouseLeave={() => setHover(null)}
+      >
+        <rect x={L} y={TP} width={PLOT_W} height={rows * ch} fill={`rgb(${FLOOR.join(",")})`} />
         {grid.map((row, d) => row.map((v, i) => (
-          <rect
-            key={`${d}-${i}`}
-            x={x(d).toFixed(2)} y={y(i)} width={(cw + 0.6).toFixed(2)} height={CH}
-            fill={divColor(v, max)}
-          >
-            <title>{`${strikes[i]} · ${dates[d]}\n${fmtB(v)}${v == null ? " (not recorded this session)" : ""}`}</title>
-          </rect>
+          <rect key={`${d}-${i}`} x={x(d)} y={y(i)} width={cw + 0.5} height={ch + 0.6}
+            fill={cellColor(v, max, mode)} shapeRendering="crispEdges" />
         )))}
 
-        {withSpot && spotPts ? (
-          <>
-            {/* Drawn twice: a dark casing under a light line, so the price stays
-                legible over both the green and the red side of the surface. */}
-            <polyline points={spotPts} fill="none" stroke="#05070B" strokeWidth={3.4} strokeLinejoin="round" />
-            <polyline points={spotPts} fill="none" stroke={INK} strokeWidth={1.7} strokeLinejoin="round" />
-          </>
-        ) : null}
+        {/* Faint rules so a strike can be carried across the width without
+            losing the row. Over the cells, under the price line. */}
+        {ticks.map(({ i }) => (
+          <line key={`h${i}`} x1={L} y1={y(i)} x2={L + PLOT_W} y2={y(i)} stroke={FAINT} strokeWidth={1} />
+        ))}
+        {dates.map((_, d) => (
+          <line key={`v${d}`} x1={x(d)} y1={TP} x2={x(d)} y2={TP + rows * ch} stroke={FAINT} strokeWidth={1} />
+        ))}
 
-        {strikeTicks.map(({ s, i }) => (
-          <text key={s} x={L - 7} y={y(i) + CH / 2 + 3.5} fill={DIM} fontSize={9} textAnchor="end">{s}</text>
+        {/* PRICE. Without it you cannot tell a wall being BUILT from a wall that
+            is merely following price, and that is the whole question. */}
+        <polyline points={spotPts} fill="none" stroke="#04060A" strokeWidth={4} strokeLinejoin="round" strokeLinecap="round" />
+        <polyline points={spotPts} fill="none" stroke="#D6E7F0" strokeWidth={1.9} strokeLinejoin="round" strokeLinecap="round" />
+        {spots.map((p, d) => (p == null ? null : (
+          <circle key={d} cx={(x(d) + cw / 2).toFixed(1)} cy={yPrice(p).toFixed(1)} r={3}
+            fill="#D6E7F0" stroke="#04060A" strokeWidth={1.3} />
+        )))}
+
+        <text x={L - 10} y={TP - 11} fill={DIM} fontSize={10.5} textAnchor="end">Strike</text>
+        {ticks.map(({ s, i }) => (
+          <text key={s} x={L - 10} y={y(i) + ch / 2 + 3.6} fill={DIM} fontSize={10.5} textAnchor="end">{s}</text>
         ))}
         {dates.map((d, i) => (
-          i % dateStep === 0 && i < dates.length - 2 ? (
-            <text key={d} x={(x(i) + cw / 2).toFixed(1)} y={H - 9} fill={DIM} fontSize={9} textAnchor="middle">
-              {shortDate(d)}
+          i % dateStep === 0
+            ? <text key={d} x={(x(i) + cw / 2).toFixed(1)} y={H - 14} fill={DIM} fontSize={10.5} textAnchor="middle">
+              {dayLabel(d, i === 0)}
             </text>
-          ) : null
+            : null
         ))}
-        <text x={W - R} y={H - 9} fill={T.cyan} fontSize={9} textAnchor="end">
-          {shortDate(dates[dates.length - 1])}
-        </text>
+        <ColorBar x={L + PLOT_W + 52} y={TP + 22} h={rows * ch - 44} max={max} mode={mode} />
       </svg>
-      {withSpot && offFrame > 0 ? (
+
+      {hover ? (
+        <div style={{
+          position: "absolute", right: 8, top: 8, pointerEvents: "none",
+          background: "#04060A", border: `1px solid ${T.borderStrong}`, borderRadius: 7,
+          padding: "6px 10px", fontFamily: MONO, fontSize: 10.5, color: T.text, lineHeight: 1.5,
+        }}>
+          <div style={{ color: T.cyan }}>{strikes[hover.i]} · {dates[hover.d]}</div>
+          <div style={{ color: DIM }}>
+            {mode === "abs" ? `|GEX| ${fmtB(hv == null ? null : Math.abs(hv))}` : `net ${fmtB(hv)}`}
+            {hv == null ? " · not recorded this session" : ""}
+          </div>
+          <div style={{ color: DIM }}>spot {spots[hover.d]?.toFixed(2) ?? "—"}</div>
+        </div>
+      ) : null}
+
+      {offFrame > 0 ? (
         <div style={{ fontFamily: MONO, fontSize: 9.5, color: T.gold, marginTop: 4 }}>
-          {offFrame} session{offFrame === 1 ? "'s" : "s'"} close sits outside the drawn strike range — the price
-          line is pinned to the edge there. Widen the window or shorten the lookback.
+          {offFrame} session{offFrame === 1 ? "" : "s"} closed outside the drawn strike range — the price line is
+          pinned to the edge there. Widen the strike range.
         </div>
       ) : null}
     </div>
   );
 }
 
-/* ── D · scrub ───────────────────────────────────────────────────────────── */
+function ColorBar({ x, y, h, max, mode }: { x: number; y: number; h: number; max: number; mode: Mode }) {
+  const N = 44, seg = h / N;
+  const top = mode === "abs" ? "high |GEX|" : "+ GEX wall";
+  const bot = mode === "abs" ? "low |GEX|" : "− GEX accel";
+  return (
+    <g>
+      <text x={x - 4} y={y - 12} fill={DIM} fontSize={10.5}>{mode === "abs" ? "|GEX| pressure" : "net GEX"}</text>
+      {Array.from({ length: N }, (_, k) => {
+        // Top of the bar is the high end in both modes: the signed ramp runs
+        // +max → −max through the floor, the magnitude ramp max → 0.
+        const t = 1 - k / (N - 1);
+        const v = mode === "abs" ? t * max : (t * 2 - 1) * max;
+        return <rect key={k} x={x} y={y + k * seg} width={17} height={seg + 0.6} fill={cellColor(v, max, mode)} />;
+      })}
+      <rect x={x} y={y} width={17} height={h} fill="none" stroke="rgba(255,255,255,0.12)" />
+      <text x={x + 24} y={y + 11} fill={DIM} fontSize={10.5}>{top}</text>
+      {mode === "net" ? <text x={x + 24} y={y + h / 2 + 4} fill={DIM} fontSize={10.5}>0</text> : null}
+      <text x={x + 24} y={y + h - 1} fill={DIM} fontSize={10.5}>{bot}</text>
+    </g>
+  );
+}
 
-function Scrub({
-  dates, strikes, grid, spots, max, idx, setIdx,
-}: {
-  dates: string[]; strikes: number[]; grid: (number | null)[][];
-  spots: (number | null)[]; max: number; idx: number; setIdx: (n: number) => void;
+/* ── panel 2 · wall migration ────────────────────────────────────────────── */
+
+function WallMigration({ dates, strikes, grid, spots }: {
+  dates: string[]; strikes: number[]; grid: (number | null)[][]; spots: (number | null)[];
 }) {
-  const [playing, setPlaying] = useState(false);
-  const timer = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!playing) { if (timer.current) { window.clearInterval(timer.current); timer.current = null; } return; }
-    let d = idx >= dates.length - 1 ? 0 : idx;
-    setIdx(d);
-    timer.current = window.setInterval(() => {
-      d += 1;
-      if (d >= dates.length) { setPlaying(false); setIdx(dates.length - 1); return; }
-      setIdx(d);
-    }, 140);
-    return () => { if (timer.current) { window.clearInterval(timer.current); timer.current = null; } };
-    // idx is deliberately not a dep: including it would restart the interval on
-    // every tick and the animation would never advance past the first frame.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, dates.length]);
-
-  const W = 1000, L = 52, R = 18, TP = 16, BM = 34, H = 300;
-  const BASE = TP + (H - TP - BM) * 0.58;
-  const AMP = (H - TP - BM) * 0.5;
-  const lo = strikes[0], hi = strikes[strikes.length - 1];
-  const x = (s: number) => (hi === lo ? L : L + (s - lo) * (W - L - R) / (hi - lo));
-  const yv = (v: number) => BASE - (max > 0 ? v / max : 0) * AMP;
-
-  /** One session's profile. Nulls break the path rather than reading as zero. */
-  const pathFor = (d: number) => {
-    const row = grid[d] || [];
-    const out: string[] = [];
-    let pen = false;
-    row.forEach((v, i) => {
-      if (v == null) { pen = false; return; }
-      out.push(`${pen ? "L" : "M"}${x(strikes[i]).toFixed(1)} ${yv(v).toFixed(1)}`);
-      pen = true;
-    });
-    return out.join(" ");
-  };
-  const areaFor = (d: number) => {
-    const p = pathFor(d);
-    if (!p) return "";
-    const first = strikes.find((_, i) => grid[d]?.[i] != null);
-    const lastI = [...strikes.keys()].reverse().find((i) => grid[d]?.[i] != null);
-    if (first == null || lastI == null) return "";
-    return `M${x(first).toFixed(1)} ${BASE} ${p.replace(/^M/, "L")} L${x(strikes[lastI]).toFixed(1)} ${BASE} Z`;
-  };
-
-  const row = grid[idx] || [];
-  let bi = -1, wi = -1;
-  row.forEach((v, i) => {
-    if (v == null) return;
-    if (bi < 0 || (row[bi] as number) < v) bi = i;
-    if (wi < 0 || (row[wi] as number) > v) wi = i;
+  /**
+   * Kept as the set of what is OFF, so a series that only appears later (a
+   * longer window landing, the basis switching) arrives visible.
+   */
+  const [off, setOff] = useState<Set<MigKey>>(() => new Set());
+  const toggle = (k: MigKey) => setOff((prev) => {
+    const next = new Set(prev);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    return next;
   });
-  const spot = spots[idx];
+  const live = (k: MigKey) => !off.has(k);
 
-  const gridLines: number[] = [];
-  if (max > 0) { const st = max / 2; for (let g = -max; g <= max + 1e-9; g += st) gridLines.push(g); }
+  /**
+   * The two roles. CORE is the heaviest |GEX| node — which IS one of the walls —
+   * and OTHER is the lighter one, carrying the side it currently is so it can be
+   * drawn in that wall's colour. See the header for why this beats masking the
+   * matching wall out per session.
+   */
+  const M = useMemo(() => {
+    const core: number[] = [], other: number[] = [], side: ("call" | "put")[] = [];
+    const cw: number[] = [], pw: number[] = [];
+    dates.forEach((_, d) => {
+      const row = grid[d] || [];
+      let bi = -1, wi = -1;
+      row.forEach((v, i) => {
+        if (v == null) return;
+        if (bi < 0 || v > (row[bi] as number)) bi = i;
+        if (wi < 0 || v < (row[wi] as number)) wi = i;
+      });
+      if (bi < 0 || wi < 0) { core.push(NaN); other.push(NaN); side.push("call"); cw.push(NaN); pw.push(NaN); return; }
+      const callK = strikes[bi], putK = strikes[wi];
+      cw.push(callK); pw.push(putK);
+      const coreIsCall = Math.abs(row[bi] as number) >= Math.abs(row[wi] as number);
+      core.push(coreIsCall ? callK : putK);
+      other.push(coreIsCall ? putK : callK);
+      side.push(coreIsCall ? "put" : "call");
+    });
+    return { core, other, side, cw, pw };
+  }, [dates, grid, strikes]);
+
+  const ND = dates.length;
+  const ok = M.core.every((v) => Number.isFinite(v));
+  const W = 1000, H = 250, PAD = 8;
+
+  let vals: number[] = [];
+  if (live("core")) vals = vals.concat(M.core);
+  if (live("other")) vals = vals.concat(M.other);
+  if (live("spot")) vals = vals.concat(spots.filter((v): v is number => v != null));
+  vals = vals.filter((v) => Number.isFinite(v));
+  if (!vals.length) vals = [strikes[0], strikes[strikes.length - 1]];
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const padY = (hi - lo) * 0.14 || 10; lo -= padY; hi += padY;
+
+  const x = (d: number) => (ND > 1 ? (d * W) / (ND - 1) : W / 2);
+  const y = (v: number) => PAD + (1 - (v - lo) / (hi - lo)) * (H - PAD * 2);
+  const edges = (d: number): [number, number] => [
+    d === 0 ? 0 : (x(d - 1) + x(d)) / 2,
+    d === ND - 1 ? W : (x(d) + x(d + 1)) / 2,
+  ];
+  /** A level HOLDS its strike until the book rolls it, so it is a step. */
+  const stepPath = (arr: number[]) => {
+    let p = "";
+    for (let d = 0; d < ND; d++) {
+      const [xa, xb] = edges(d);
+      p += `${d === 0 ? "M" : "L"}${xa.toFixed(1)} ${y(arr[d]).toFixed(1)} L${xb.toFixed(1)} ${y(arr[d]).toFixed(1)} `;
+    }
+    return p;
+  };
+  const corridor = () => {
+    const up: string[] = [], dn: string[] = [];
+    for (let d = 0; d < ND; d++) {
+      const a = Math.max(M.core[d], M.other[d]), b = Math.min(M.core[d], M.other[d]);
+      const [xa, xb] = edges(d);
+      up.push(`${xa.toFixed(1)} ${y(a).toFixed(1)}`, `${xb.toFixed(1)} ${y(a).toFixed(1)}`);
+      dn.push(`${xa.toFixed(1)} ${y(b).toFixed(1)}`, `${xb.toFixed(1)} ${y(b).toFixed(1)}`);
+    }
+    return `M${up.join(" L")} L${dn.reverse().join(" L")} Z`;
+  };
+  /** OTHER in contiguous same-side runs, so neither colour blinks mid-run. */
+  const otherRuns = () => {
+    const out: { d: string; c: string }[] = [];
+    let start = 0;
+    for (let d = 1; d <= ND; d++) {
+      if (d === ND || M.side[d] !== M.side[start]) {
+        let p = "";
+        for (let k = start; k < d; k++) {
+          const [xa, xb] = edges(k);
+          p += `${k === start ? "M" : "L"}${xa.toFixed(1)} ${y(M.other[k]).toFixed(1)} L${xb.toFixed(1)} ${y(M.other[k]).toFixed(1)} `;
+        }
+        out.push({ d: p, c: M.side[start] === "call" ? CALL_GREEN : PUT_RED });
+        start = d;
+      }
+    }
+    return out;
+  };
+
+  const lastSide = M.side[ND - 1];
+  const chips: { k: MigKey; c: string; label: string; val: string }[] = [
+    { k: "core", c: CORE_GOLD, label: "CORE", val: ok ? String(M.core[ND - 1]) : "—" },
+    { k: "other", c: lastSide === "call" ? CALL_GREEN : PUT_RED, label: lastSide === "call" ? "Call Wall" : "Put Wall", val: ok ? String(M.other[ND - 1]) : "—" },
+    { k: "spot", c: SPOT_INK, label: "spot", val: spots[ND - 1] != null ? (spots[ND - 1] as number).toFixed(2) : "—" },
+  ];
+  const rolls = M.core.reduce((n, v, d) => n + (d && v !== M.core[d - 1] ? 1 : 0), 0);
+  const dateStep = Math.max(1, Math.ceil(ND / 12));
+
+  if (!ok) {
+    return <div style={{ padding: "15px 20px", fontSize: 12.5, color: DIM }}>
+      Not enough recorded strikes to resolve walls on every session in this window.
+    </div>;
+  }
 
   return (
-    <>
-      <div style={{ overflowX: "auto" }}>
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", minWidth: 560, height: "auto", display: "block", fontFamily: MONO }}>
-          <defs>
-            <clipPath id="scrubUp"><rect x={0} y={0} width={W} height={BASE} /></clipPath>
-            <clipPath id="scrubDn"><rect x={0} y={BASE} width={W} height={H} /></clipPath>
-          </defs>
-
-          {gridLines.map((g) => (
-            <g key={g}>
-              <line x1={L} y1={yv(g)} x2={W - R} y2={yv(g)} stroke={g === 0 ? "rgba(255,255,255,0.18)" : GRIDLINE} strokeWidth={1} />
-              <text x={L - 8} y={yv(g) + 3.5} fill={DIM} fontSize={9} textAnchor="end">{fmtB(g)}</text>
-            </g>
-          ))}
-
-          {/* GHOSTS — the previous five sessions, fading back. This is the trail:
-              you see where the walls were as well as where they are. */}
-          {[5, 4, 3, 2, 1].map((k) => {
-            const d = idx - k;
-            if (d < 0) return null;
-            const p = pathFor(d);
-            if (!p) return null;
-            const op = 0.30 - 0.045 * k;
-            return (
-              <g key={k}>
-                <path d={p} fill="none" stroke={POS} strokeWidth={1.2} opacity={op} clipPath="url(#scrubUp)" strokeLinejoin="round" />
-                <path d={p} fill="none" stroke={NEG} strokeWidth={1.2} opacity={op} clipPath="url(#scrubDn)" strokeLinejoin="round" />
-              </g>
-            );
-          })}
-
-          <path d={areaFor(idx)} fill={POS} opacity={0.22} clipPath="url(#scrubUp)" />
-          <path d={areaFor(idx)} fill={NEG} opacity={0.22} clipPath="url(#scrubDn)" />
-          <path d={pathFor(idx)} fill="none" stroke={POS} strokeWidth={2.2} clipPath="url(#scrubUp)" strokeLinejoin="round" />
-          <path d={pathFor(idx)} fill="none" stroke={NEG} strokeWidth={2.2} clipPath="url(#scrubDn)" strokeLinejoin="round" />
-
-          {spot != null ? (
-            <>
-              <line x1={x(spot)} y1={TP} x2={x(spot)} y2={H - BM} stroke={T.cyan} strokeWidth={1} strokeDasharray="3 4" opacity={0.75} />
-              <path d={`M${x(spot) - 4.5} ${H - BM + 9} L${x(spot)} ${H - BM + 2} L${x(spot) + 4.5} ${H - BM + 9} Z`} fill={T.cyan} />
-            </>
-          ) : null}
-
-          {strikes.filter((s) => s % (hi - lo > 60 ? 10 : hi - lo > 24 ? 5 : 2) === 0).map((s) => (
-            <text key={s} x={x(s).toFixed(1)} y={H - 8} fill={DIM} fontSize={9.5} textAnchor="middle">{s}</text>
-          ))}
-        </svg>
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap", fontFamily: MONO, fontSize: 11 }}>
-        <button
-          type="button" onClick={() => setPlaying((p) => !p)}
-          style={{
-            background: T.panelInset, border: `1px solid ${T.borderStrong}`, color: T.text,
-            borderRadius: 7, padding: "5px 13px", fontFamily: MONO, fontSize: 11, cursor: "pointer",
-          }}
-        >
-          {playing ? "❚❚ pause" : "▶ play"}
-        </button>
-        <input
-          type="range" min={0} max={Math.max(0, dates.length - 1)} value={idx}
-          onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }}
-          aria-label="Session"
-          style={{ flex: 1, minWidth: 180, accentColor: T.cyan }}
-        />
-        <span style={{ color: idx === dates.length - 1 ? T.cyan : T.text, minWidth: 86 }}>
-          {dates[idx]}{idx === dates.length - 1 ? " · latest" : ""}
+    <div style={{ padding: "15px 20px 14px" }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap", marginBottom: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: T.text }}>
+          Wall migration
+        </span>
+        <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>
+          {ND} sessions · recorded levels · {dates[0]} → {dates[ND - 1]}
         </span>
       </div>
-      <div style={{ fontFamily: MONO, fontSize: 10, color: DIM, marginTop: 6 }}>
-        {spot != null ? `spot ${spot.toFixed(2)} · ` : ""}
-        {bi >= 0 ? `heaviest long γ ${strikes[bi]} ${fmtB(row[bi])}` : "no long γ recorded"}
-        {wi >= 0 ? ` · heaviest short γ ${strikes[wi]} ${fmtB(row[wi])}` : ""}
-        {" · ghosts = the previous five sessions"}
+
+      {/* Swatch chips, under the head and above the plot — each one the series'
+          switch. Off reads as off: the swatch hollows and the chip dims. */}
+      <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        {chips.map((c) => {
+          const on = live(c.k);
+          return (
+            <button
+              key={c.k} type="button" onClick={() => toggle(c.k)} aria-pressed={on}
+              title={on ? `Hide ${c.label}` : `Show ${c.label}`}
+              style={{
+                display: "inline-block", boxSizing: "border-box", whiteSpace: "nowrap",
+                height: 16, lineHeight: "16px", padding: 0, borderRadius: 6,
+                border: "1px solid transparent", background: "transparent",
+                fontFamily: "inherit", fontSize: 11, cursor: "pointer",
+                color: DIM, opacity: on ? 1 : 0.4,
+              }}
+            >
+              <span aria-hidden style={{
+                display: "inline-block", verticalAlign: "middle", marginRight: 6,
+                width: 9, height: 9, borderRadius: 2,
+                background: on ? c.c : "transparent", border: `1px solid ${c.c}`,
+              }} />
+              <span style={{ verticalAlign: "middle", marginRight: 6 }}>{c.label}</span>
+              <span style={{ verticalAlign: "middle", fontFamily: MONO, color: on ? T.text : DIM }}>{c.val}</span>
+            </button>
+          );
+        })}
       </div>
-    </>
+
+      {/* preserveAspectRatio="none" — x is sessions, y is price, and the two have
+          no business sharing a scale. So NO <text> and NO <circle> inside: the
+          squash would stretch them. Both axes are DOM, outside the box. */}
+      <div style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+        <div style={{ position: "relative", width: 46, height: H, flex: "none" }}>
+          {Array.from({ length: 6 }, (_, k) => {
+            const v = lo + ((hi - lo) * k) / 5;
+            return (
+              <div key={k} style={{
+                position: "absolute", right: 0, top: PAD + (1 - k / 5) * (H - PAD * 2),
+                transform: "translateY(-50%)", fontFamily: MONO, fontSize: 10.5, color: DIM, whiteSpace: "nowrap",
+              }}>{Math.round(v)}</div>
+            );
+          })}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: H, display: "block" }}>
+            {live("core") && live("other")
+              ? <path d={corridor()} fill="rgba(255,255,255,0.035)" />
+              : null}
+            {live("spot") ? (
+              <polyline
+                points={spots.map((p, d) => (p == null ? null : `${x(d).toFixed(1)},${y(p).toFixed(1)}`)).filter(Boolean).join(" ")}
+                fill="none" stroke={SPOT_INK} strokeWidth={1.6} vectorEffect="non-scaling-stroke" strokeLinejoin="round"
+              />
+            ) : null}
+            {live("other") ? otherRuns().map((r, k) => (
+              <path key={k} d={r.d} fill="none" stroke={r.c} strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+            )) : null}
+            {live("core") ? (
+              <path d={stepPath(M.core)} fill="none" stroke={CORE_GOLD} strokeWidth={2.2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+            ) : null}
+          </svg>
+          <div style={{ position: "relative", height: 18, marginTop: 5 }}>
+            {dates.map((d, i) => (
+              i % dateStep === 0 || i === ND - 1 ? (
+                <div key={d} style={{
+                  position: "absolute", left: `${(ND > 1 ? (i / (ND - 1)) * 100 : 50).toFixed(3)}%`,
+                  transform: "translateX(-50%)", fontFamily: MONO, fontSize: 10.5, color: DIM, whiteSpace: "nowrap",
+                }}>{dayLabel(d, i === 0)}</div>
+              ) : null
+            ))}
+          </div>
+        </div>
+        <div style={{ width: 96, flex: "none" }} />
+      </div>
+
+      <div style={{ display: "flex", gap: 18, marginTop: 8, fontFamily: MONO, fontSize: 10.5, color: DIM, flexWrap: "wrap" }}>
+        <span title="Sessions on which the heaviest |GEX| node moved to a different strike.">CORE rolled {rolls}×</span>
+        <span>corridor {Math.min(...M.pw)} – {Math.max(...M.cw)}</span>
+        <span>now {M.pw[ND - 1]} / {M.cw[ND - 1]}</span>
+      </div>
+    </div>
   );
 }

@@ -542,7 +542,7 @@ function MonthlyProfitChart({ revenueByMonth, subs, expensesMonthly }: {
 // pill. Amount is wider now, every cell is `minWidth: 0` + clipped so nothing
 // can bleed into its neighbour again, and Status is wide enough for
 // "cancelling" plus its date sub-line.
-const SUB_TABLE_COLS = "minmax(0,1fr) 90px 132px 116px 86px 78px 92px";
+const SUB_TABLE_COLS = "minmax(0,1fr) 90px 132px 116px 86px 78px 92px 96px";
 const TRIAL_TABLE_COLS = "1.7fr 1fr 1fr 110px 90px";
 
 /** Grid children default to min-content width, which is what let the amount
@@ -568,6 +568,85 @@ function StatusTag({ s }: { s: StripeSubscription }) {
           {st.detail}
         </span>
       )}
+    </span>
+  );
+}
+
+/** Owner-only "they can't get in" button.
+ *
+ *  Google sign-in was retired 2026-08-20, and an account that only ever used it
+ *  has no password at all — login just fails and the customer is locked out of
+ *  something they're still paying for. One click blanks the credential, kills
+ *  their sessions and mails a 7-day set-password link.
+ *
+ *  Two-step by design: it is destructive (their current password stops working
+ *  immediately), so the first click only arms it. No window.confirm — a modal
+ *  blocks the whole page and nothing else in owner-vite uses one.
+ */
+function ResetPasswordButton({ email }: { email: string }) {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<"ok" | "err" | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  // Disarm if the owner clicks once and then wanders off.
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 5000);
+    return () => clearTimeout(t);
+  }, [armed]);
+
+  const fire = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/admin/force-password-reset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      if (j?.emailSent) {
+        setDone("ok");
+        setMsg(`Set-password email sent to ${email}. Old password is now dead.`);
+      } else {
+        // The account IS reset either way — the route clears the credential
+        // before it mails. Say so, or the owner will click again for nothing.
+        setDone("err");
+        setMsg(`Password cleared, but the email failed (${j?.emailError || "unknown"}). Tell them to use "Forgot password?".`);
+      }
+    } catch (err) {
+      setDone("err");
+      setMsg(String(err instanceof Error ? err.message : err));
+    } finally {
+      setBusy(false);
+      setArmed(false);
+    }
+  };
+
+  const label = busy ? "…" : done === "ok" ? "✓ Sent" : armed ? "Sure?" : "Reset pw";
+  const tone = done === "ok" ? T.green : done === "err" ? T.orange : armed ? T.orange : undefined;
+
+  return (
+    <span style={{ ...CELL, display: "flex", justifyContent: "flex-end" }}>
+      <button
+        onClick={() => (armed ? fire() : setArmed(true))}
+        disabled={busy}
+        title={msg ?? `Clear ${email}'s password, sign them out everywhere, and email them a 7-day link to set a new one. Use this for the ex-Google accounts that can't sign in.`}
+        style={{
+          ...homeSecondaryButtonStyle,
+          padding: "3px 8px",
+          fontSize: 13,
+          whiteSpace: "nowrap",
+          opacity: busy ? 0.5 : 1,
+          // homeSecondaryButtonStyle sets `border` (shorthand), so the tinted state must
+          // replace the whole shorthand — mixing it with borderColor warns in React.
+          ...(tone ? { color: tone, border: `1px solid ${tone}66` } : null),
+        }}
+      >
+        {label}
+      </button>
     </span>
   );
 }
@@ -603,6 +682,7 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
         <span style={CELL}>Renews</span>
         <span style={CELL}>Joined</span>
         <span style={CELL}>Total Spent</span>
+        <span style={{ ...CELL, textAlign: "right" }}>Account</span>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         {subs.length === 0 ? (
@@ -659,6 +739,7 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
             </span>
             <span style={{ ...CELL, color: T.text, fontSize: 14, whiteSpace: "nowrap" }}>{fmtDateShort(s.joined)}</span>
             <span style={{ ...CELL, color: T.green, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 14, whiteSpace: "nowrap" }}>{fmtMoney(s.total_spent)}</span>
+            <ResetPasswordButton email={s.customer_email} />
           </div>
           );
         })}
