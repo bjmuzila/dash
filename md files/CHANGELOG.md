@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-08-29 - Build fix (again): backticks inside STUDIO_HTML
+
+Edited: owner-vite/src/pages/studioHtml.ts.
+
+Same failure as the earlier v8.29.2 break, in a second spot. The whole file is
+one String.raw template literal, so a backtick ANYWHERE inside it — including in
+a comment quoting an identifier — closes the template early and esbuild dies on
+the next word. This round it was line 286 (vals) plus the line 992 (alerts) one
+that came back with a later edit. Both swapped to single quotes.
+
+Hard rule for this file: no backticks between the opening String.raw and the
+closing </html>, comments included. Quick check before pushing:
+
+    grep -n '`' owner-vite/src/pages/studioHtml.ts
+
+Only two hits are legal — the opening line and the closing line.
+
 ## 2026-08-29 - Bubbles: auto stops at 5m, and the sizes spread out again
 
 Edited: `cbedge-v3/src/board/gexCandles/settings.ts`, `bubbles.ts`,

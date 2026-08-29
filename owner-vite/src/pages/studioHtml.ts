@@ -283,7 +283,7 @@ function snapTargets(exclude){
   });
   return {xs:xs,ys:ys};
 }
-// Smallest correction that puts any of `vals` (the moving box's edges/centre)
+// Smallest correction that puts any of 'vals' (the moving box's edges/centre)
 // onto any candidate. Returns {d:offset to apply, at:the line to draw}.
 function bestSnap(cands,vals,tol){
   var best=null;
@@ -989,7 +989,7 @@ var TPL={
   ]},
 
   /* Weekend estimated-moves scoreboard — the Saturday "here is how the week
-     graded" post, ending in the sign-up ask. Same deal as `alerts`: two image
+     graded" post, ending in the sign-up ask. Same deal as 'alerts': two image
      slots, everything else rendered, and Auto-fill reads the numbers off the
      shots into the [data-k] layers.
 
