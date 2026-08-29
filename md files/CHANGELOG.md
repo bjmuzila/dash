@@ -1,5 +1,158 @@
 # Changelog
 
+## 2026-08-29 - v3 GEX Candles: Friday's bubbles, on a weekend
+
+Edited: `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
+
+The card drew an empty layer all weekend — which is exactly when there is most
+time to look at it. Three separate reasons, all of them "the code assumes the
+market is open":
+
+**1. The expiry.** `/api/expirations` lists what is TRADEABLE, so on a Saturday
+its first entry is Monday. Ask the history route for Monday's expiry and it
+answers honestly with nothing, because Monday has not happened. What you want on
+a Saturday is FRIDAY: the last session that traded, and the expiry its gamma was
+recorded against. The default is now that Friday's date on Sat/Sun, and the
+nearest tradeable expiry every other day. The date is not in the expirations
+list — it has expired — and does not need to be: the route takes `expiry` as a
+plain parameter and the rows are still in the table. It is added to the top of
+the dropdown so the control is not showing a value it does not list, which
+renders as empty and reads as broken.
+
+**2. The reach.** 48h is enough on a Saturday and not on a Sunday evening: 48h
+back from Sunday 20:00 lands at Friday 20:00, four hours after the close, so the
+card reached PAST the session it was trying to show and came back holding
+nothing but the frozen post-close book. On a weekend the window is now measured
+— the distance back to that Friday's 04:00 ET plus an hour — instead of a
+constant that cannot know what day it is. Sunday 20:00 asks for 3,900 minutes;
+the route clamps at 5,760.
+
+**3. The weekend columns.** The recorder has no market-hours gate: it republishes
+the last cash book once a minute right through Saturday and Sunday. Left in, the
+trail runs flat to the right of Friday's close for two days — real rows, and a
+picture of nothing happening drawn wider than the day that did happen. On a
+weekend the columns are scoped to that Friday's ET day and nothing else.
+
+Weekday behaviour is untouched on all three.
+
+## 2026-08-29 - Bubbles: they are bubbles again. Stamped on a pixel cadence, not drawn from the data
+
+Edited: `cbedge-v3/src/board/gexCandles/bubbles.ts`.
+
+They were called bubbles and they rendered as solid bars. A row is a chain of
+separate round marks again, laid down every `2 x top + 2 x gapPx` pixels across
+its span, with the gamma behind each one looked up by time at that pixel.
+
+Both continuous versions were wrong for the same reason: **they took their
+cadence from the DATA.** One stroke per snapshot at a session's zoom is a
+thousand strokes across fifteen hundred pixels, so whatever the radius they
+overlap into a bar - and a bar is a different claim than a trail. It says the
+level was one thing for the whole stretch; the marks say it was sampled,
+repeatedly, and here is what it read each time. The first attempt capped stroke
+length instead (`MAX_STRETCH_R`), which broke rows into dashes the moment the
+gap between snapshots exceeded the radius - the same failure from the other side.
+
+Cadence in PIXELS fixes both at once, because pixels are the only thing constant
+across zooms. Spacing derives from the mark size itself, so marks clear each
+other horizontally at every zoom by exactly the hairline that separates two rows
+vertically. Zoom in, more of them; zoom out, fewer; a chain of bubbles either
+way, with no timeframe term anywhere and nothing to configure.
+
+The cadence uses the frame's TOP radius rather than each mark's own, so every row
+stamps at the same x positions - a weak row is a faint dotted line under a wall's
+fat chain, aligned with it, and the eye can read down a column.
+
+Deleted with the stroke walk: `MAX_SEGMENTS` and its stride budget, `placeMarks`,
+and the `buildXMap`/`xOf` sampled time-to-x table. The stamp loop walks pixels
+and asks `timeAtX` directly, which is the same question the other way round and
+needs no table; the mark count is now bounded by the pane's width over the mark
+size, so there is nothing left to cap.
+
+## 2026-08-29 - Bubbles: no settings. Six sliders and an Auto mode become eleven numbers
+
+Edited: `cbedge-v3/src/board/gexCandles/settings.ts`, `bubbles.ts`, `chart.ts`,
+`GexCandlesCard.tsx`, `cbedge-v3/tools/bubble-lab/{entry.ts,lab.html}`,
+`components/dashboard/es-candles/EsChartCard.tsx`.
+
+The layer had six sliders, an Auto mode, and about twenty constants behind it
+deciding how many rows to draw, when a level stopped counting, how much to dim a
+busy chart. Every one of them was answerable and none of them was ever answered
+the same way twice — which is the actual reason this never looked right. A
+setting is a question you have to keep re-answering, and the chart has one right
+answer at a time.
+
+**There are no bubble settings now.** Bubbles are on or off. Everything else is
+`BUBBLES` in settings.ts: eleven numbers, each one there because removing it
+changes the picture in a way you can name, and the comment on it says which.
+
+What went, and why, written down so nobody adds them back:
+
+- **The cutoff gate.** Redundant the moment `levels` is four — the
+  fourth-strongest strike on the board is worth drawing by definition, so a
+  share gate on top could only ever remove a row you had asked for. Which it
+  did, silently, and that is why the 30-minute cell said "nothing drawn".
+- **The auto level count.** It widened 4 → 6 on a flat board. "Six sometimes" is
+  not simpler than four, it is four plus a surprise.
+- **Crowd trim and per-row dimming.** Both scaled the picture by the row count.
+  With the row count fixed they are constants multiplied by one.
+- **Rank hysteresis.** The sweep settled it: with the ranking reading the
+  smoothed series, `hyst` 0 and `hyst` 16 give the same bands and the same
+  breaks. The noise it was absorbing is no longer in the input. `dwell` does the
+  whole job.
+- **The six sliders and the Auto chip**, on both surfaces. v2's four went with
+  them; its draw path takes the auto branch unconditionally now.
+
+The lab's panel follows automatically — it builds itself from the object — so it
+went from twenty-five sliders across two groups to eleven under one heading, and
+it is now the only place these numbers are adjustable at all.
+
+On the same fixture the card draws **4 rows**, which is what the setting has been
+claiming since the start.
+
+## 2026-08-28 - Bubbles: the lab found two real bugs in its first hour
+
+Edited: `cbedge-v3/src/board/gexCandles/bubbles.ts`,
+`cbedge-v3/src/board/gexCandles/settings.ts`.
+
+First real session through the Bubble Lab (SPX, 1,440 columns, `levels` auto = 5)
+and the readout said it immediately: **5 rows on screen, 25 distinct bands over
+the trail, 158 row-endings.** That is the dashed-wings look, measured instead of
+squinted at.
+
+**1. The ranking was reading raw |GEX|.** Ranks 4, 5 and 6 sit inside the noise
+of each other and trade places every other minute, so a row broke every time.
+Rank hysteresis was treating the symptom and barely moved it — `hyst=16` still
+left 20 bands and 21 breaks, and slack that wide has stopped meaning anything.
+
+The model now **smooths first and selects second**: the dense per-strike series
+is built and smoothed before any selection, and the ranking reads the smoothed
+value. Same series the radius is already drawn from, so what decides a row and
+what sizes it finally agree. Average row segment went from a few minutes to
+**58**, and the result is now insensitive to `hyst` — which is the proof that
+rank slack was never the lever.
+
+**2. `dwell` made every row permanent.** The new minimum-row-length rule
+refreshed a strike's lease for everything in the drawn set — including the
+strikes that were only in the set BECAUSE they had a lease. Every row renewed
+itself, forever.
+
+It measured beautifully: 8 bands, 6 breaks over a whole session. It was
+completely wrong. The eight were whatever happened to top the board in the
+fixture's first minute — an overnight book of round-number strikes — and nothing
+could displace them, so **the 7710 wall holding −472B into the close was not
+drawn at all.** The 30-minute cell said "nothing drawn" because every selected
+strike was tens of points from price.
+
+The lease is now refreshed only by genuinely ranking inside `levels`; anything
+held over spends its credit one column at a time. `smoothWindow` 2 → 5,
+`dwell` 12 → 20, both from the sweep rather than from feel.
+
+Worth saying plainly: bug 2 is one I wrote an hour earlier and would have shipped
+on the strength of a number that looked like success. What caught it was the
+lab's second readout — the drawn strikes were 7650/7700/7720/7730/7750/7770 while
+price was at 7710 — and a two-line script that printed which of them were even
+inside the visible price window. Neither is visible in a screenshot of a chart.
+
 ## 2026-08-28 - Bubble Lab: the live layer, drawn against frozen sessions, all at once
 
 Added: `cbedge-v3/tools/bubble-lab/` (`capture.mjs`, `build.mjs`, `entry.ts`,

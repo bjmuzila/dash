@@ -37,16 +37,8 @@ function hexToRgb(hex: string, fallback: [number, number, number]): [number, num
 }
 
 export interface ChartDrawOpts {
-  /** Top radius, as a multiple of the pane-height cap. */
-  size: number
-  /** Minimum radius in CSS pixels for anything that is drawn at all. */
-  floorPx: number
-  /** Exponent on a mark's ratio. 1 = linear in |GEX|. */
-  variance: number
-  intensity: number
+  /** The only bubble setting there is. Everything else is BUBBLES in settings. */
   on: boolean
-  /** Take the four above from the pane and the data instead — see BUBBLE_AUTO. */
-  auto?: boolean
 }
 
 /**
@@ -109,17 +101,6 @@ export interface MountOpts {
    * loop itself never sets state (AGENTS.md rule 4).
    */
   onBubblesOutOfRange: (out: boolean) => void
-  /**
-   * Is the card on screen? Pass `ChartHandle.visible` straight through.
-   *
-   * The draw loop below is already guarded by the view signature, which is the
-   * right guard for a chart somebody is looking at. It is the wrong guard for
-   * one scrolled a thousand pixels below the fold: the signature keeps changing
-   * there, because every live tick that makes a new high re-autoscales the pane
-   * and genuinely moves the price mapping. So the whole frame is skipped
-   * instead. Omitting this paints exactly as before.
-   */
-  isVisible?: () => boolean
 }
 
 export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts): Promise<EsChartHandle> {
@@ -206,16 +187,11 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   overlay.style.position = 'absolute'
   overlay.style.inset = '0'
   overlay.style.pointerEvents = 'none'
-  // Marks this as a canvas v3 CODE owns, as opposed to the two lightweight-charts
-  // creates for itself. scripts/perf-check.mjs measures only these — that is the
-  // generalized version of the "hook the wrong canvas" trap its header warns
-  // about, which used to be avoided by probing for pointerEvents:none.
-  overlay.dataset.cbLayer = 'bubbles'
   container.appendChild(overlay)
 
   let snaps: BubbleSnapshot[] = []
   let barCount = 0
-  let drawOpts: ChartDrawOpts = { size: 1, floorPx: 1.5, variance: 1, intensity: 1, on: true, auto: true }
+  let drawOpts: ChartDrawOpts = { on: true }
   let railSink: RailSink | null = null
   let raf = 0
   // The forming bar, kept here so a live tick can extend it without going back
@@ -355,19 +331,6 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
 
   function draw() {
     raf = requestAnimationFrame(draw)
-
-    // Off screen: skip the frame outright, before the signature is even
-    // computed. The loop keeps running (a hidden card is cheap — one predicate
-    // call per frame, and the browser throttles rAF to nothing in a background
-    // tab anyway) rather than being torn down and restarted, which would mean
-    // reasoning about a half-destroyed chart every time a card crosses the fold.
-    //
-    // Nothing is lost by skipping. lastSig is not updated here, so whatever
-    // changed while hidden — new data, a resize, a pan — leaves the signature
-    // different from the last DRAWN one, and the first visible frame repaints.
-    // If nothing changed, the canvas already holds the right pixels.
-    if (mountOpts.isVisible && !mountOpts.isVisible()) return
-
     const sig = viewSignature()
     if (sig === lastSig) return
     lastSig = sig
@@ -425,13 +388,6 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         yOfPrice,
         width: w,
         height: h,
-      },
-      {
-        size: drawOpts.size,
-        floorPx: drawOpts.floorPx,
-        variance: drawOpts.variance,
-        intensity: drawOpts.intensity,
-        auto: drawOpts.auto,
       },
       palette,
     )

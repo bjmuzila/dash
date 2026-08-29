@@ -51,6 +51,8 @@
   .sess h2 { font-size: 12px; margin: 0 0 1px; font-weight: 700; }
   .sess .meta { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
   .cells { display: flex; gap: 10px; flex-wrap: wrap; }
+  .cell.wide { flex: 1 1 100%; }
+  .cell.half { flex: 1 1 calc(50% - 5px); min-width: 380px; }
   .cell { border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: #04060a; }
   .cell .cap {
     font-size: 10px; color: var(--muted); padding: 3px 7px; border-bottom: 1px solid var(--line);
@@ -69,28 +71,14 @@
   <fieldset>
     <legend>Mode</legend>
     <div class="chips">
-      <button id="autoBtn" class="on">Auto</button>
       <button id="metricBtn">Vol+OI</button>
+      <button id="dayBtn" class="on">Day</button>
       <button id="rebuildBtn">Redraw</button>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <label>levels (manual)</label>
-      <input type="range" id="mLevels" min="1" max="12" step="1" value="4" />
-      <span class="val" id="mLevelsV">4</span>
-    </div>
-    <div class="row">
-      <label>cutoff % (manual)</label>
-      <input type="range" id="mCutoff" min="0" max="3" step="0.05" value="0.4" />
-      <span class="val" id="mCutoffV">0.40</span>
     </div>
   </fieldset>
 
   <fieldset id="autoFields">
-    <legend>Auto policy</legend>
-  </fieldset>
-
-  <fieldset id="styleFields">
-    <legend>Frozen style</legend>
+    <legend>The eleven numbers</legend>
   </fieldset>
 
   <fieldset>
@@ -132,23 +120,53 @@
   }
 
   const state = {
-    auto: true,
     metric: 'voloi',
-    levels: 4,
-    cutoff: 0.4,
+    // Latest ET session only, vs everything the capture reached back for.
+    //
+    // The 48h reach is a testing-phase flag on the card (prevDay), and on this
+    // fixture it is two thirds of the chart: an overnight book the recorder
+    // republishes frozen once a minute, with no candles behind it. It is real
+    // data and it is not a session, so it belongs behind a switch rather than
+    // in the default picture — and seeing the two side by side is the fastest
+    // way to tell a layer bug from an overnight artefact.
+    dayOnly: true,
+  }
+
+  const ET_DAY = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  })
+  function scope(fx) {
+    if (!state.dayOnly) return { columns: fx.columns, bars: fx.bars, from: fx.from, to: fx.to }
+    const last = ET_DAY.format(new Date(fx.to))
+    const columns = fx.columns.filter((c) => ET_DAY.format(new Date(c.slotTs)) === last)
+    if (!columns.length) return { columns: fx.columns, bars: fx.bars, from: fx.from, to: fx.to }
+    const from = columns[0].slotTs
+    const to = columns[columns.length - 1].slotTs
+    return { columns, bars: fx.bars.filter((b) => b.t >= from - 18e5 && b.t <= to + 18e5), from, to }
   }
 
   // The three zooms are the whole reason this is a grid. Sizing rules that look
   // fine across a full session fall apart at 30 minutes, where the rows are far
   // apart and the marks have room to bloat — and the other way round. Judging
   // one zoom at a time is how this layer kept shipping half-right.
+  // The full session gets a row to itself at the full width of the sheet. It is
+  // the cell every question is actually asked of — where a row starts, whether
+  // it breaks, whether the morning survives the afternoon — and at a third of
+  // the width a change of a pixel in the size law is invisible, which is the
+  // one thing this tool exists to prevent. The two zooms under it are the
+  // spacing checks and they read fine at half width.
   const ZOOMS = [
-    { label: 'full session', minutes: 0 },
-    { label: 'last 2h', minutes: 120 },
-    { label: 'last 30m', minutes: 30 },
+    { label: 'full session', minutes: 0, share: 1, height: 460 },
+    { label: 'last 2h', minutes: 120, share: 0.5, height: 300 },
+    { label: 'last 30m', minutes: 30, share: 0.5, height: 300 },
   ]
-  const CELL_W = 468
-  const CELL_H = 236
+  // Cells are measured off the sheet, not hardcoded, so a wider window is a
+  // bigger chart rather than more empty margin.
+  function cellSize(zoom) {
+    const avail = Math.max(420, sheet.clientWidth - 32)
+    const w = zoom.share >= 1 ? avail : Math.max(380, Math.floor((avail - 10) / 2))
+    return { w, h: zoom.height }
+  }
 
   // ── The geometry ─────────────────────────────────────────────────────────
   // A linear stand-in for lightweight-charts' scales. It answers the same four
@@ -194,6 +212,7 @@
   }
 
   function drawCell(canvas, fx, zoom) {
+    const { w: CELL_W, h: CELL_H } = cellSize(zoom)
     const dpr = window.devicePixelRatio || 1
     canvas.width = Math.round(CELL_W * dpr)
     canvas.height = Math.round(CELL_H * dpr)
@@ -203,10 +222,11 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, CELL_W, CELL_H)
 
-    const tMax = fx.to
-    const tMin = zoom.minutes ? Math.max(fx.from, tMax - zoom.minutes * 60_000) : fx.from
-    const bars = fx.bars.filter((b) => b.t >= tMin && b.t <= tMax)
-    const src = bars.length ? bars : fx.bars
+    const view = scope(fx)
+    const tMax = view.to
+    const tMin = zoom.minutes ? Math.max(view.from, tMax - zoom.minutes * 60_000) : view.from
+    const bars = view.bars.filter((b) => b.t >= tMin && b.t <= tMax)
+    const src = bars.length ? bars : view.bars
     let lo = Infinity, hi = -Infinity
     for (const b of src) { if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h }
     if (!Number.isFinite(lo)) return { drew: false, rows: 0 }
@@ -219,7 +239,7 @@
     ctx.strokeStyle = 'rgba(255,255,255,.05)'
     ctx.fillStyle = 'rgba(230,237,243,.30)'
     ctx.font = '9px ui-monospace, monospace'
-    const steps = 5
+    const steps = CELL_H > 380 ? 9 : 5
     for (let i = 0; i <= steps; i++) {
       const p = geo._pLo + ((geo._pHi - geo._pLo) * i) / steps
       const y = geo.yOfPrice(p)
@@ -227,19 +247,33 @@
       ctx.fillText(p.toFixed(0), geo._x1 + 6, y + 3)
     }
 
+    // ET clock along the bottom. Without it the full-session cell is a
+    // 24-hour strip with no way to say WHEN a row started, which is half of
+    // what you are looking for.
+    ctx.fillStyle = 'rgba(230,237,243,.38)'
+    ctx.font = '9px ui-monospace, monospace'
+    const hours = Math.max(1, Math.round((tMax - tMin) / 3600_000))
+    const tickEvery = hours > 12 ? 4 : hours > 4 ? 2 : hours > 1 ? 1 : 0.5
+    const fmtEt = (ms) =>
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
+      }).format(new Date(ms))
+    const step = tickEvery * 3600_000
+    for (let t = Math.ceil(tMin / step) * step; t <= tMax; t += step) {
+      const x = geo.xOfTime(t)
+      if (x < 24 || x > geo._x1 - 24) continue
+      ctx.strokeStyle = 'rgba(255,255,255,.04)'
+      ctx.beginPath(); ctx.moveTo(x, geo._y0); ctx.lineTo(x, geo._y1); ctx.stroke()
+      const lab = fmtEt(t)
+      ctx.fillText(lab, x - ctx.measureText(lab).width / 2, CELL_H - 4)
+    }
+
     drawCandles(ctx, bars, geo)
 
     // THE REAL MODEL, THE REAL DRAW.
-    const columns = fx.columns.filter((c) => c.slotTs >= fx.from && c.slotTs <= tMax)
-    const snaps = L.buildBubbleModel(columns, {
-      metric: state.metric,
-      levels: state.levels,
-      cutoffPct: state.cutoff,
-      auto: state.auto,
-    })
-    const drew = L.drawBubbles(ctx, snaps, geo, {
-      size: 1, floorPx: 1.5, variance: 1.5, intensity: 1, auto: state.auto,
-    }, palette)
+    const columns = view.columns.filter((c) => c.slotTs >= view.from && c.slotTs <= tMax)
+    const snaps = L.buildBubbleModel(columns, { metric: state.metric })
+    const drew = L.drawBubbles(ctx, snaps, geo, palette)
 
     const rows = snaps.length ? snaps[snaps.length - 1].marks.length : 0
     // How many DISTINCT strikes the whole trail holds. The number that matters:
@@ -262,7 +296,7 @@
     wrap.className = 'cells'
     for (const z of ZOOMS) {
       const cell = document.createElement('div')
-      cell.className = 'cell'
+      cell.className = 'cell ' + (z.share >= 1 ? 'wide' : 'half')
       const cap = document.createElement('div')
       cap.className = 'cap'
       cap.innerHTML = `<span>${z.label}</span><span class="stat"></span>`
@@ -303,17 +337,13 @@
   // Generated from the objects themselves, so a constant added to BUBBLE_AUTO
   // shows up here on the next build with nothing to wire.
   const RANGES = {
-    levelShare: [0, 0.3, 0.005], minLevels: [1, 8, 1], maxLevels: [1, 12, 1],
-    cutoffOfTop: [0, 0.3, 0.005], cutoffMinPct: [0, 2, 0.05], cutoffMaxPct: [0, 5, 0.05],
+    levels: [1, 10, 1], minPerSide: [0, 3, 1], smoothWindow: [0, 20, 1], dwell: [0, 60, 1],
     topFrac: [0.002, 0.05, 0.001], topMinPx: [0.5, 10, 0.5], topMaxPx: [2, 30, 0.5],
-    crowdTrim: [0, 0.2, 0.01], floorOfTop: [0, 0.5, 0.01], floorMinPx: [0, 3, 0.1],
-    floorMaxPx: [0.5, 6, 0.1], spreadGain: [0, 3, 0.05], curveMin: [0.3, 2, 0.05],
-    curveMax: [1, 4, 0.05], dimPerRow: [0, 0.2, 0.01], dimFloor: [0.2, 1, 0.05],
-    smoothWindow: [0, 10, 1], hyst: [0, 8, 1],
-    minPx: [0.2, 4, 0.1], heightFrac: [0.005, 0.12, 0.001], glowTopFactor: [0, 2, 0.05],
-    glowMaxPx: [0, 20, 0.5], fade: [0, 0.95, 0.05], gapPx: [0, 4, 0.1],
+    floorOfTop: [0, 0.5, 0.01], floorMinPx: [0, 3, 0.1], floorMaxPx: [0.5, 6, 0.1],
+    curve: [0.5, 3, 0.05], fade: [0, 0.95, 0.05], gapPx: [0, 4, 0.1],
+    glowFactor: [0, 2, 0.05], glowMaxPx: [0, 20, 0.5], minPx: [0.2, 4, 0.1],
   }
-  const initial = { auto: { ...L.BUBBLE_AUTO }, style: { ...L.BUBBLE_STYLE } }
+  const initial = { auto: { ...L.BUBBLES } }
 
   function buildFields(target, obj, host) {
     for (const key of Object.keys(obj)) {
@@ -339,42 +369,28 @@
       row._reset = () => { input.value = obj[key]; out.textContent = Number(obj[key]).toFixed(dec) }
     }
   }
-  buildFields(L.BUBBLE_AUTO, initial.auto, document.getElementById('autoFields'))
-  buildFields(L.BUBBLE_STYLE, initial.style, document.getElementById('styleFields'))
+  buildFields(L.BUBBLES, initial.auto, document.getElementById('autoFields'))
 
-  const autoBtn = document.getElementById('autoBtn')
-  autoBtn.addEventListener('click', () => {
-    state.auto = !state.auto
-    autoBtn.classList.toggle('on', state.auto)
-    redraw()
-  })
   const metricBtn = document.getElementById('metricBtn')
   metricBtn.addEventListener('click', () => {
     state.metric = state.metric === 'voloi' ? 'vol' : 'voloi'
     metricBtn.textContent = state.metric === 'voloi' ? 'Vol+OI' : 'Vol'
     redraw()
   })
+  const dayBtn = document.getElementById('dayBtn')
+  dayBtn.addEventListener('click', () => {
+    state.dayOnly = !state.dayOnly
+    dayBtn.textContent = state.dayOnly ? 'Day' : '48h'
+    dayBtn.classList.toggle('on', state.dayOnly)
+    redraw()
+  })
   document.getElementById('rebuildBtn').addEventListener('click', redraw)
-
-  const bind = (id, key, dec) => {
-    const el = document.getElementById(id)
-    const out = document.getElementById(id + 'V')
-    el.addEventListener('input', () => {
-      state[key] = Number(el.value)
-      out.textContent = Number(el.value).toFixed(dec)
-      redraw()
-    })
-  }
-  bind('mLevels', 'levels', 0)
-  bind('mCutoff', 'cutoff', 2)
 
   document.getElementById('copyBtn').addEventListener('click', () => {
     const fmt = (o) => Object.entries(o)
       .map(([k, v]) => `  ${k}: ${typeof v === 'number' ? Number(v.toFixed(4)) : JSON.stringify(v)},`)
       .join('\n')
-    const text =
-      `export const BUBBLE_AUTO = {\n${fmt(L.BUBBLE_AUTO)}\n} as const\n\n` +
-      `export const BUBBLE_STYLE = {\n${fmt(L.BUBBLE_STYLE)}\n} as const\n`
+    const text = `export const BUBBLES = {\n${fmt(L.BUBBLES)}\n} as const\n`
     navigator.clipboard?.writeText(text)
     console.log(text)
     const b = document.getElementById('copyBtn')
@@ -383,10 +399,17 @@
   })
 
   document.getElementById('resetBtn').addEventListener('click', () => {
-    Object.assign(L.BUBBLE_AUTO, initial.auto)
-    Object.assign(L.BUBBLE_STYLE, initial.style)
-    document.querySelectorAll('#autoFields .row, #styleFields .row').forEach((r) => r._reset && r._reset())
+    Object.assign(L.BUBBLES, initial.auto)
+    document.querySelectorAll('#autoFields .row').forEach((r) => r._reset && r._reset())
     redraw()
+  })
+
+  // A wider window is a bigger chart, so the sheet has to redraw when it
+  // changes. Debounced through the same rAF gate every control uses.
+  let rt = 0
+  window.addEventListener('resize', () => {
+    clearTimeout(rt)
+    rt = setTimeout(redraw, 120)
   })
 
   redraw()

@@ -5,16 +5,10 @@ import { useQuery } from '@/data/api'
 import { usePageSymbol } from '@/data/symbol'
 import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
-import { SegGroup, Chip, Slider, Popover, PanelSection, Dropdown } from './controls'
+import { SegGroup, Chip, Popover, PanelSection, Dropdown } from './controls'
 import { chainTicker, symbolDef } from './symbols'
 import {
-  BUBBLE_CURVE_RANGE,
-  BUBBLE_INTENSITY_RANGE,
   BUBBLE_LADDER_REQUEST,
-  BUBBLE_LEVELS_RANGE,
-  BUBBLE_SIZE_RANGE,
-  BUBBLE_FLOOR_RANGE,
-  BUBBLE_CUTOFF_RANGE,
   GEX_HISTORY_MINUTES,
   GEX_HISTORY_MINUTES_PREV_DAY,
   INTERVALS,
@@ -26,6 +20,7 @@ import {
 } from './settings'
 import { candlesUrl, filterSession, fmtCountdown, parseCandles, rollup, type Bar } from './candles'
 import {
+  etDay,
   etDayLong,
   etDayShort,
   filterByDay,
@@ -102,6 +97,38 @@ function dteLabel(expiry: string): string {
   return `${Math.max(0, Math.round((b - a) / 86_400_000))}DTE`
 }
 
+/**
+ * ── THE WEEKEND ─────────────────────────────────────────────────────────────
+ *
+ * `/api/expirations` lists what is TRADEABLE, so on a Saturday its first entry
+ * is Monday. Ask the history route for Monday's expiry and it answers honestly
+ * with nothing — Monday has not happened — and the card draws an empty layer all
+ * weekend, which is exactly when there is most time to look at it.
+ *
+ * What you want to see on a Saturday is FRIDAY: the last session that traded,
+ * and the expiry its gamma was recorded against. So on a weekend the expiry
+ * defaults to the previous Friday's date rather than to the top of the list.
+ *
+ * That date is not in the expirations list — it has expired — and it does not
+ * need to be: the history route takes `expiry` as a plain parameter and the rows
+ * are still in the table. This is only a DEFAULT; the dropdown still pins
+ * anything the user picks.
+ *
+ * Weekday behaviour is untouched: the nearest expiry is today's or the next
+ * one, and that is what the card should follow.
+ */
+const ET_WEEKDAY_IDX = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' })
+function etWeekendSessionDay(now = new Date()): string {
+  const wd = ET_WEEKDAY_IDX.format(now)
+  const back = wd === 'Sat' ? 1 : wd === 'Sun' ? 2 : 0
+  if (!back) return ''
+  // Step back whole ET days from noon UTC, which neither the ET offset nor a DST
+  // edge can move onto the wrong date.
+  const today = ET_DATE.format(now)
+  const t = Date.parse(`${today}T12:00:00Z`) - back * 86_400_000
+  return ET_DATE.format(new Date(t))
+}
+
 /** Wires an EsChartHandle to a <ChartFrame>, buffering setters until it mounts. */
 function useEsChart(onLatestOffscreen: (off: boolean) => void, onOutOfRange: (out: boolean) => void) {
   const handleRef = useRef<EsChartHandle | null>(null)
@@ -122,9 +149,6 @@ function useEsChart(onLatestOffscreen: (off: boolean) => void, onOutOfRange: (ou
     void mountEsChart(frame.el, {
       onLatestOffscreen: (off) => offRef.current(off),
       onBubblesOutOfRange: (out) => oorRef.current(out),
-      // The draw loop's own visibility gate — see MountOpts.isVisible in
-      // ./chart.ts. `frame.visible` is stable for the life of the frame.
-      isVisible: frame.visible,
     }).then((created) => {
       if (cancelled) {
         created.destroy()
@@ -198,7 +222,13 @@ export function GexCandlesCard() {
         .filter((e): e is string => Boolean(e)),
     [expiryQ.data],
   )
-  const expiry = settings.expiry && expiries.includes(settings.expiry) ? settings.expiry : (expiries[0] ?? '')
+  // A pinned expiry wins, then the weekend's last traded session, then the
+  // nearest tradeable one. `expiries.includes` still guards the pin, so a symbol
+  // change cannot leave the card on a date that symbol does not trade.
+  const weekendExpiry = useMemo(() => etWeekendSessionDay(), [])
+  const expiry = settings.expiry && expiries.includes(settings.expiry)
+    ? settings.expiry
+    : weekendExpiry || expiries[0] || ''
   // Either layer keeps this alive: the rail reads the newest column of the same
   // history the bubbles are drawn from, so turning the bubbles off with the
   // rail on must not take the request — and its data — away with them.
@@ -207,7 +237,19 @@ export function GexCandlesCard() {
   // when this is retired.
   // The REACH of the request. Which of the days that come back is drawn is the
   // toolbar day picker's decision, downstream of this and free.
-  const historyMinutes = settings.prevDay ? GEX_HISTORY_MINUTES_PREV_DAY : GEX_HISTORY_MINUTES
+  // ON A WEEKEND THE REACH HAS TO CLEAR THE WEEKEND.
+  // 48h is enough on a Saturday and not on a Sunday evening — 48h back from
+  // Sunday 20:00 lands at Friday 20:00, four hours after the close, so the card
+  // would reach past the whole session it is trying to show and come back with
+  // nothing but the frozen post-close book. Ask for the distance to that
+  // Friday's pre-open plus an hour, instead of a constant that cannot know what
+  // day it is. The route clamps at 5760, which is comfortably above a Sunday.
+  const historyMinutes = useMemo(() => {
+    if (!weekendExpiry) return settings.prevDay ? GEX_HISTORY_MINUTES_PREV_DAY : GEX_HISTORY_MINUTES
+    const preOpen = Date.parse(`${weekendExpiry}T08:00:00Z`) // 04:00 ET, before any session column
+    const back = Math.ceil((Date.now() - preOpen) / 60_000) + 60
+    return Math.min(5760, Math.max(GEX_HISTORY_MINUTES_PREV_DAY, back))
+  }, [weekendExpiry, settings.prevDay])
   const gexQ = useQuery<unknown>(
     (settings.bubblesOn || settings.railOn) && expiry
       ? gexHistoryUrl(def.gexSymbol, expiry, historyMinutes, BUBBLE_LADDER_REQUEST)
@@ -237,9 +279,17 @@ export function GexCandlesCard() {
   // is Friday's — which is exactly the weekend this is being tested over.
   const allColumns = useMemo(() => parseGexHistory(gexQ.data), [gexQ.data])
   const days = useMemo(() => sessionDays(allColumns), [allColumns])
+  // On a weekend, draw THAT session and nothing else. The recorder republishes
+  // the last cash book once a minute all weekend, so without this the trail runs
+  // flat across Saturday and Sunday to the right of the close — real rows, and a
+  // picture of nothing happening, drawn wider than the day that did happen.
+  const weekendColumns = useMemo(
+    () => (weekendExpiry ? allColumns.filter((c) => etDay(c.slotTs) === weekendExpiry) : null),
+    [allColumns, weekendExpiry],
+  )
   const columns = useMemo(
-    () => filterByDay(allColumns, settings.bubbleDay, days),
-    [allColumns, settings.bubbleDay, days],
+    () => weekendColumns ?? filterByDay(allColumns, settings.bubbleDay, days),
+    [weekendColumns, allColumns, settings.bubbleDay, days],
   )
 
   // Only when there is a choice to make. One session in the data — the finished
@@ -267,23 +317,24 @@ export function GexCandlesCard() {
   // longer rebuilds it.
   const snapshots = useMemo(
     () =>
-      buildBubbleModel(columns, {
-        metric: settings.gexMetric,
-        levels: settings.bubbleLevels,
-        cutoffPct: settings.bubbleCutoff,
-        auto: settings.bubbleAuto,
-      }),
-    [columns, settings.gexMetric, settings.bubbleLevels, settings.bubbleCutoff, settings.bubbleAuto],
+      buildBubbleModel(columns, { metric: settings.gexMetric }),
+    [columns, settings.gexMetric],
   )
 
   // Same history, second view: the bubbles say how the ladder got here across
   // the session, the rail says where it stands right now. No extra request.
   const railModel = useMemo(() => buildRail(columns, settings.gexMetric), [columns, settings.gexMetric])
 
-  const expiryOptions = useMemo(
-    () => expiries.map((e) => ({ value: e, label: dteLabel(e), sub: e.slice(5) })),
-    [expiries],
-  )
+  // On a weekend the default is a date the list does not carry, so it is added
+  // at the top — a dropdown whose current value is not one of its own options
+  // renders as empty, which reads as broken.
+  const expiryOptions = useMemo(() => {
+    const opts = expiries.map((e) => ({ value: e, label: dteLabel(e), sub: e.slice(5) }))
+    if (weekendExpiry && !expiries.includes(weekendExpiry)) {
+      opts.unshift({ value: weekendExpiry, label: 'Fri', sub: weekendExpiry.slice(5) })
+    }
+    return opts
+  }, [expiries, weekendExpiry])
 
   // ── Chart ──────────────────────────────────────────────────────────────────
   const { onMount, apply } = useEsChart(setLatestOffscreen, setBubblesOutOfRange)
@@ -332,24 +383,9 @@ export function GexCandlesCard() {
   useEffect(
     () =>
       apply((h) =>
-        h.setDrawOpts({
-          on: settings.bubblesOn,
-          size: settings.bubbleSize,
-          floorPx: settings.bubbleFloor,
-          variance: settings.bubbleCurve,
-          intensity: settings.bubbleIntensity,
-          auto: settings.bubbleAuto,
-        }),
+        h.setDrawOpts({ on: settings.bubblesOn }),
       ),
-    [
-      settings.bubblesOn,
-      settings.bubbleSize,
-      settings.bubbleFloor,
-      settings.bubbleCurve,
-      settings.bubbleIntensity,
-      settings.bubbleAuto,
-      apply,
-    ],
+    [settings.bubblesOn, apply],
   )
 
   // ── Countdown ──────────────────────────────────────────────────────────────
@@ -473,90 +509,6 @@ export function GexCandlesCard() {
                 />
               </PanelSection>
 
-              {settings.bubblesOn && (
-                <>
-                  <PanelSection title="Bubbles">
-                    {/* Auto first, because while it is on the six rows under it
-                        are a readout rather than a control. They stay MOUNTED
-                        and dimmed: what they hold is exactly what comes back
-                        when Auto is switched off. */}
-                    <div className="flex">
-                      <Chip
-                        label="Auto"
-                        on={settings.bubbleAuto}
-                        onClick={() => patch({ bubbleAuto: !settings.bubbleAuto })}
-                        title="Size the layer from the chart itself — how many levels this board actually has, how bunched they are, how tall the pane is and how close the rows land at this zoom. Turn it off to drive the six below by hand"
-                      />
-                    </div>
-                    <Slider
-                      label="levels"
-                      value={settings.bubbleLevels}
-                      min={BUBBLE_LEVELS_RANGE.min}
-                      max={BUBBLE_LEVELS_RANGE.max}
-                      step={1}
-                      format={(v) => v.toFixed(0)}
-                      onChange={(v) => patch({ bubbleLevels: Math.round(v) })}
-                      disabled={settings.bubbleAuto}
-                      title="How many strikes draw in total, strongest first across the whole board \u2014 always with at least one of them on each side of spot. The ranking picks the levels actually holding gamma; the per-side floor stops the chart being a picture of only the resistance overhead, which the top strikes often all are"
-                    />
-                    <Slider
-                      label="size"
-                      value={settings.bubbleSize}
-                      min={BUBBLE_SIZE_RANGE.min}
-                      max={BUBBLE_SIZE_RANGE.max}
-                      step={0.05}
-                      format={(v) => `${v.toFixed(2)}×`}
-                      onChange={(v) => patch({ bubbleSize: v })}
-                      disabled={settings.bubbleAuto}
-                      title="The TOP radius — what the strongest strike draws at. Every other mark is a fraction of it, so the whole ladder scales together and their relative sizes never change. Capped by the tightest pair on screen, so nothing can overlap: zoom the price axis out and the cap does the limiting instead of this"
-                    />
-                    <Slider
-                      label="floor"
-                      value={settings.bubbleFloor}
-                      min={BUBBLE_FLOOR_RANGE.min}
-                      max={BUBBLE_FLOOR_RANGE.max}
-                      step={0.5}
-                      format={(v) => (v <= 0 ? 'none' : `${v.toFixed(1)}px`)}
-                      onChange={(v) => patch({ bubbleFloor: v })}
-                      disabled={settings.bubbleAuto}
-                      title="The smallest a drawn mark may be. Every level that survives the gates starts here and grows from it — so if a level is on the chart at all you can see it, and whether it is on the chart is the cutoff's decision, not this one's"
-                    />
-                    <Slider
-                      label="cutoff"
-                      value={settings.bubbleCutoff}
-                      min={BUBBLE_CUTOFF_RANGE.min}
-                      max={BUBBLE_CUTOFF_RANGE.max}
-                      step={0.05}
-                      format={(v) => (v <= 0 ? 'off' : `${v.toFixed(2)}%`)}
-                      onChange={(v) => patch({ bubbleCutoff: v })}
-                      disabled={settings.bubbleAuto}
-                      title="Drop any strike holding under this percent of the board's total gamma — the same figure the GEX table prints. 'levels' decides how busy the chart is; this decides where a level stops mattering at all"
-                    />
-                    <Slider
-                      label="variance"
-                      value={settings.bubbleCurve}
-                      min={BUBBLE_CURVE_RANGE.min}
-                      max={BUBBLE_CURVE_RANGE.max}
-                      step={0.05}
-                      format={(v) => (v >= 0.999 && v <= 1.001 ? 'linear' : v.toFixed(2))}
-                      onChange={(v) => patch({ bubbleCurve: v })}
-                      disabled={settings.bubbleAuto}
-                      title="How hard the walls pull away from the rest. At 'linear' half the gamma is half the bubble. Above it only the real walls stay big and everything else falls toward the floor; below it the ladder flattens so the small levels stay readable"
-                    />
-                    <Slider
-                      label="intensity"
-                      value={settings.bubbleIntensity}
-                      min={BUBBLE_INTENSITY_RANGE.min}
-                      max={BUBBLE_INTENSITY_RANGE.max}
-                      step={0.05}
-                      format={(v) => `${Math.round(v * 100)}%`}
-                      onChange={(v) => patch({ bubbleIntensity: v })}
-                      disabled={settings.bubbleAuto}
-                      title="Overall opacity of the bubble layer. The magnitude gradient runs underneath it"
-                    />
-                  </PanelSection>
-                </>
-              )}
             </div>
           </Popover>
         </div>

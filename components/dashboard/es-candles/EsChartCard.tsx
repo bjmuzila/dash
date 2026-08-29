@@ -892,9 +892,6 @@ function EsChartCard({
   // says Friday, and they'd disagree forever.
   const lastWallDayRef = useRef<string>("");
   const bubbleMinsRef = useRef<BubbleBucket>(BUBBLE_BUCKET_DEFAULT);
-  // Auto tunes levels / size / curve / intensity from the board and the pane on
-  // every frame; the four refs below are then only read when it is OFF.
-  const bubbleAutoRef = useRef(true);
   const bubbleLevelsRef = useRef(BUBBLE_STYLE.topStrikes);
   const bubbleIntensityRef = useRef(BUBBLE_STYLE.intensity);
   const bubbleSizeRef = useRef(BUBBLE_STYLE.size);
@@ -1090,13 +1087,6 @@ function EsChartCard({
   //   size      — multiplier on the size BUDGET, not on any single mark.
   // None of them changes what size MEANS: radius stays straight proportional to
   // |net GEX| against the session reference at every setting.
-  // ── Auto ───────────────────────────────────────────────────────────────────
-  // On by default, and it drives all four controls below. See BUBBLE_AUTO in
-  // slotStore for the policy and why each factor is in it. The sliders stay
-  // mounted and dimmed while it is on: the values they hold are what comes back
-  // the moment it is turned off, and a control that vanishes takes that answer
-  // with it.
-  const [bubbleAuto, setBubbleAuto] = useState(true);
   const [bubbleLevels, setBubbleLevels] = useState(BUBBLE_STYLE.topStrikes);
   const [bubbleIntensity, setBubbleIntensity] = useState(BUBBLE_STYLE.intensity);
   const [bubbleSize, setBubbleSize] = useState(BUBBLE_STYLE.size);
@@ -1682,7 +1672,6 @@ function EsChartCard({
     // carries them; the style is frozen now, so they are inert rather than a
     // hidden per-card override that would make two cards size differently.
     if (isBubbleBucket(p.mins)) setBubbleMins(p.mins);
-    if (typeof p.bAuto === "boolean") setBubbleAuto(p.bAuto);
     if (typeof p.bLevels === "number" && Number.isFinite(p.bLevels)) {
       setBubbleLevels(Math.round(Math.min(BUBBLE_LEVELS_RANGE.max, Math.max(BUBBLE_LEVELS_RANGE.min, p.bLevels))));
     }
@@ -1775,7 +1764,6 @@ function EsChartCard({
   // one remaining preference in the panel, the bucket, already persists per slot
   // on every change.)
   //
-  const updateBubbleAuto = useCallback((on: boolean) => { setBubbleAuto(on); saveSetting({ bAuto: on }); }, [saveSetting]);
   const updateBubbleLevels = useCallback((n: number) => {
     const v = Math.round(Math.min(BUBBLE_LEVELS_RANGE.max, Math.max(BUBBLE_LEVELS_RANGE.min, n)));
     setBubbleLevels(v);
@@ -1868,7 +1856,6 @@ function EsChartCard({
   // Mirrored into refs so the imperative overlay draw reads them without
   // re-subscribing.
   useEffect(() => { bubbleMinsRef.current = bubbleMins; }, [bubbleMins]);
-  useEffect(() => { bubbleAutoRef.current = bubbleAuto; }, [bubbleAuto]);
   useEffect(() => { bubbleLevelsRef.current = bubbleLevels; }, [bubbleLevels]);
   useEffect(() => { bubbleIntensityRef.current = bubbleIntensity; }, [bubbleIntensity]);
   useEffect(() => { bubbleSizeRef.current = bubbleSize; }, [bubbleSize]);
@@ -4547,7 +4534,7 @@ function EsChartCard({
             String(bubbleMinsRef.current),
             // Auto decides the level count from the board, so the mode is part
             // of the key — flipping it has to re-rank, not repaint.
-            bubbleAutoRef.current ? "auto" : bubbleLevelsRef.current,
+            "auto",
             replayTsRef.current ?? "-",
             // barAt() is the "bar" bucketer, so the bar grid is part of the key.
             barsSig.length,
@@ -4710,7 +4697,7 @@ function EsChartCard({
             // to linear, because the numbers already separate.
             let autoCurve = BUBBLE_CURVE_RANGE.min;
             let nLevels = Math.max(0, bubbleLevelsRef.current);
-            if (bubbleAutoRef.current) {
+            {
               const live = pMins[pMins.length - 1];
               const absDesc = live
                 ? live.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0).sort((a, b) => b - a)
@@ -4840,10 +4827,11 @@ function EsChartCard({
             bubblePrepRef.current = prep;
           }
           const { mins, sessRef, runRef, shownAt, wallAt, orderAt, todAt, strikeStep } = prep;
-          // Auto is read once per frame, here, so every rule below sees the same
-          // answer — a flag flipped mid-draw would size the ladder one way and
-          // colour it another.
-          const autoOn = bubbleAutoRef.current;
+          // Always on. The manual path is gone from the panel; the branches
+          // below stay because they are how the pitch caps and the manual
+          // budget differ, and collapsing them would inline a decision that is
+          // worth being able to read.
+          const autoOn = true;
 
           if (mins.length) {
             if (sessRef > 0) {
@@ -5625,7 +5613,7 @@ function EsChartCard({
     // read by draw() (they key the basis memo), so they belong here even though
     // their sources already are — exhaustive-deps is right about that, and
     // listing them costs nothing: each is stable whenever its source is.
-  }, [schedulePaint, showHeatmap, showGexBubbles, bubbleMins, bubbleAuto, bubbleLevels, bubbleIntensity, bubbleSize, bubbleCurve, intensity, gexMetric, rows, rowsHash, interval, showProfile, profile, showTpo, tpoProfiles, showFlipCross, mvcHistory, mvcHistoryHash, showCb, bb, weeklyEm]);
+  }, [schedulePaint, showHeatmap, showGexBubbles, bubbleMins, bubbleLevels, bubbleIntensity, bubbleSize, bubbleCurve, intensity, gexMetric, rows, rowsHash, interval, showProfile, profile, showTpo, tpoProfiles, showFlipCross, mvcHistory, mvcHistoryHash, showCb, bb, weeklyEm]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -5829,58 +5817,12 @@ function EsChartCard({
                 |net GEX| and nothing else, and the ladder stays rankable
                 by eye. At its default ("flat") the law is exactly the
                 straight-proportional one it has always been. */}
-            <PanelSection title="Bubbles" first>
-              {/* Auto first, because while it is on the four rows under it are
-                  a readout rather than a control. They stay MOUNTED and dimmed:
-                  the values they hold are exactly what comes back when Auto is
-                  switched off, and a control that vanishes takes that answer
-                  with it. */}
-              <div style={{ display: "flex" }}>
-                <PanelChip
-                  label="Auto"
-                  on={bubbleAuto}
-                  onClick={() => updateBubbleAuto(!bubbleAuto)}
-                  title="Size the layer from the chart itself — how many levels this board actually has, how bunched they are, how tall the pane is and how far apart the bars land at this zoom. Turn it off to drive the four below by hand"
-                />
-              </div>
-              <DockSlider
-                label="levels" labelWidth={SLIDER_LABEL_W} width="auto"
-                value={bubbleLevels}
-                min={BUBBLE_LEVELS_RANGE.min} max={BUBBLE_LEVELS_RANGE.max} step={1}
-                format={(v) => v.toFixed(0)}
-                onChange={(v) => updateBubbleLevels(v)}
-                disabled={bubbleAuto}
-                title="How many strikes draw per column, ranked by their peak |GEX| across the whole session — so a level keeps its trail even after it drops out of the current top N"
-              />
-              <DockSlider
-                label="size" labelWidth={SLIDER_LABEL_W} width="auto"
-                value={bubbleSize}
-                min={BUBBLE_SIZE_RANGE.min} max={BUBBLE_SIZE_RANGE.max} step={0.05}
-                format={(v) => `${v.toFixed(2)}×`}
-                onChange={(v) => updateBubbleSize(v)}
-                disabled={bubbleAuto}
-                title="Scales the whole ladder at once — the ratio between the wall and the smallest strike is identical at every setting. At or below 1.00× marks are guaranteed never to touch; above it they may overlap, which is the trade for bigger marks on a tight chart"
-              />
-              <DockSlider
-                label="top" labelWidth={SLIDER_LABEL_W} width="auto"
-                value={bubbleCurve}
-                min={BUBBLE_CURVE_RANGE.min} max={BUBBLE_CURVE_RANGE.max} step={0.05}
-                format={(v) => (v <= 1.001 ? "flat" : `${v.toFixed(2)}`)}
-                onChange={(v) => updateBubbleCurve(v)}
-                disabled={bubbleAuto}
-                title="How hard the biggest levels pull away from the rest. At 'flat' the radius is straight proportional to |net GEX|. Turning it up steepens the scale — the top strikes keep the full size budget while the wings shrink under them — so the dominant levels dominate without everything growing together. Monotonic at every setting: more gamma is always a bigger mark"
-              />
-              <DockSlider
-                label="intensity" labelWidth={SLIDER_LABEL_W} width="auto"
-                value={bubbleIntensity}
-                min={BUBBLE_INTENSITY_RANGE.min} max={BUBBLE_INTENSITY_RANGE.max} step={0.05}
-                format={(v) => `${Math.round(v * 100)}%`}
-                onChange={(v) => updateBubbleIntensity(v)}
-                disabled={bubbleAuto}
-                title="Overall opacity of the bubble layer. The magnitude gradient runs underneath it, so turning this down dims the wings and the wall together rather than flattening one into the other"
-              />
-            </PanelSection>
-
+            {/* The four sliders and the Auto chip that used to sit here are
+                gone — see BUBBLE_AUTO in slotStore. Every one of them was a
+                question you had to keep re-answering, and the chart only has
+                one right answer at a time. The layer sizes itself from the
+                board and the pane now, always. What is left is what the layer
+                cannot know: which bucket, and whether the CB line is wanted. */}
             {/* "Auto" = one bubble column per candle, and it's the default:
                 the bubble's time is the candle's time, so the trail
                 re-formats with the timeframe switcher instead of having to

@@ -24,25 +24,52 @@ card looks right, because the layer never sees anything but the four functions i
 
 ## Use it
 
+**All of this runs on your laptop.** The lab is a dev tool — it never ships and
+it has nothing to do with the VPS. (The VPS only ever gets code through
+`push.ps1` -> GitHub -> `docker compose build`, so a file edited locally is not
+there yet, and does not need to be.)
+
+### 1. Capture a session — in the browser, no cookie
+
+Open a logged-in **cbedge.net** tab, open devtools (F12) -> Console, paste the
+whole of `capture-in-browser.js`, change `NAME` / `NOTE` at the top, press enter.
+It downloads one JSON file.
+
+The page is already authenticated, so a same-origin `fetch` carries the session
+for free — there is no cookie to copy and nothing to escape.
+
+Move the downloaded file into `cbedge-v3/tools/bubble-lab/fixtures/`.
+
+### 2. Build and open
+
 ```bash
 cd cbedge-v3
-
-# 1. freeze a session (needs a logged-in cookie for the API routes)
-node tools/bubble-lab/capture.mjs --name fri-pin --symbol SPX \
-  --note "hard pin, price parked on 7700 all afternoon" \
-  --cookie "sb-access-token=…; sb-refresh-token=…"
-
-# 2. bundle the live modules + every fixture
-node tools/bubble-lab/build.mjs        # or --watch while editing bubbles.ts
-
-# 3. open it — no server, file:// works
-open tools/bubble-lab/lab.html
+npm run lab
+open tools/bubble-lab/lab.html     # Windows: just double-click it
 ```
 
-Sliders on the left mutate `BUBBLE_AUTO` and `BUBBLE_STYLE` in place and redraw
-every cell. When it looks right, **Copy constants** puts them on the clipboard in
-the shape `settings.ts` wants them pasted. Nothing in this page writes to the
-app.
+That is the whole loop. Edit `bubbles.ts` or `settings.ts`, run `npm run lab`
+again (or `npm run lab:watch`), refresh the page.
+
+### The terminal capture, if you want six in a loop
+
+`capture.mjs` does the same three requests from Node, which means it needs the
+session cookie handed to it:
+
+```bash
+printf '%s' 'PASTE_THE_WHOLE_COOKIE' > /tmp/cb.cookie
+node tools/bubble-lab/capture.mjs --name fri-pin --symbol SPX \
+  --note "hard pin" --cookie-file /tmp/cb.cookie
+```
+
+Cookie: devtools -> Network -> any `/api/*` request -> Request Headers -> Cookie
+-> copy the whole value. `--cookie "..."` and `CB_COOKIE=...` work too, and
+`--base http://localhost:3000` if you are running it on the VPS.
+
+Do not paste the `...` out of a README as a placeholder — a typographic ellipsis
+is above character 255 and an HTTP header cannot hold one, which is what Node's
+`Cannot convert argument to a ByteString` means. `capture.mjs` catches that case
+and says so, but the browser capture above avoids the whole subject.
 
 ## The fixtures to capture
 
@@ -67,7 +94,8 @@ That single readout is what would have caught the eleven-band bug on day one.
 
 | file | |
 |---|---|
-| `capture.mjs` | hits `/api/expirations`, the GEX history route and `/api/snapshots/etf-candles`, writes `fixtures/<name>.json` |
+| `capture-in-browser.js` | paste into the console on a logged-in tab; downloads one fixture. The easy path |
+| `capture.mjs` | the same three requests from Node, for scripting a batch. Needs a cookie |
 | `build.mjs` | esbuild-bundles `entry.ts` → `lab.bundle.js`, inlines fixtures → `fixtures.js` |
 | `entry.ts` | re-exports the live modules; the only file that knows where they live |
 | `lab.html` | the sheet, the synthetic geometry, and the controls |
