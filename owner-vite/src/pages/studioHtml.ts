@@ -122,7 +122,7 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
 
   <h3>Auto-fill</h3>
   <div class="row"><button id="autofill" class="pri" style="flex:1">Read the screenshots</button></div>
-  <p class="empty" id="afmsg" style="margin:2px 0 0">Drop your shots into the image slots, then this reads the numbers off them and fills the text layers.</p>
+  <p class="empty" id="afmsg" style="margin:2px 0 0">Drop your shots into the image slots and this reads the numbers off them. Works on any template: give a layer a <b>k:</b> name and its current text becomes the example to match. Wrap part of a line in <b>&lt;span class="fv"&gt;</b> to fill just that part.</p>
 
   <h3>Canvas</h3>
   <label>Size</label>
@@ -774,7 +774,7 @@ var TPL={
     {t:'logo',x:80,y:52,w:320,h:106},
     {t:'text',x:80,y:184,w:720,html:'0DTE ALERT · RESULT',fs:22,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:222,w:760,html:'SPXW 7750C',fs:62,fw:800,k:'contract'},
-    {t:'text',x:80,y:300,w:760,html:'<span style="color:'+accent()+'">+440.9%</span> to the peak',fs:44,fw:800,k:'pct'},
+    {t:'text',x:80,y:300,w:760,html:'<span class="fv" style="color:'+accent()+'">+440.9%</span> to the peak',fs:44,fw:800,k:'pct'},
     {t:'box',x:80,y:392,w:720,h:158},
     {t:'text',x:112,y:420,w:200,html:'ENTRY',fs:17,fw:700,col:C.mut,ls:2},
     {t:'text',x:112,y:452,w:200,html:'$4.65',fs:44,fw:800,k:'entry'},
@@ -795,6 +795,49 @@ var TPL={
     {t:'text',x:892,y:794,w:600,html:'cbedge.net · free 2-day trial',fs:22,fw:700,col:C.dim}
   ]},
 
+  /* Weekend estimated-moves scoreboard — the Saturday "here is how the week
+     graded" post, ending in the sign-up ask. Same deal as `alerts`: two image
+     slots, everything else rendered, and Auto-fill reads the numbers off the
+     shots into the [data-k] layers.
+
+     Slots are sized to the weekly-stats strips the Results page exports:
+       · all-tickers strip  ~425x123  (3.46:1) → 660x191
+       · core-board strip   ~425x212  (2.01:1) → 660x329 */
+  emweek:function(){return [
+    // ── left column: the rendered scoreboard + the ask ───────────────────
+    {t:'logo',x:80,y:52,w:320,h:106},
+    {t:'text',x:80,y:184,w:760,html:'ESTIMATED MOVES · WEEKLY RESULTS',fs:20,fw:700,col:C.mut,ls:3},
+    {t:'text',x:80,y:218,w:800,html:'Week of 8/28',fs:56,fw:800,k:'weekLabel'},
+    {t:'text',x:80,y:296,w:800,html:'Every move we scored this week — wins and misses.',fs:28,fw:700,col:C.body},
+
+    {t:'box',x:80,y:370,w:350,h:210},
+    {t:'text',x:112,y:398,w:290,html:'ALL TICKERS',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:112,y:432,w:290,html:'82.4%',fs:52,fw:800,col:accent(),k:'allPct'},
+    {t:'text',x:112,y:504,w:290,html:'192 W · 41 L',fs:22,fw:800,col:C.body,k:'allRecord'},
+    {t:'text',x:112,y:538,w:290,html:'233 scored of 404 tickers',fs:18,fw:700,col:C.dim,k:'allScored'},
+
+    {t:'box',x:454,y:370,w:350,h:210},
+    {t:'text',x:486,y:398,w:290,html:'CORE BOARD',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:486,y:432,w:290,html:'85.0%',fs:52,fw:800,col:C.pale,k:'corePct'},
+    {t:'text',x:486,y:504,w:290,html:'17 W · 3 L',fs:22,fw:800,col:C.body,k:'coreRecord'},
+    {t:'text',x:486,y:538,w:290,html:'20 scored of 22 tickers',fs:18,fw:700,col:C.dim,k:'coreScored'},
+
+    {t:'box',x:80,y:620,w:724,h:180,bgc:C.panelUp},
+    {t:'text',x:112,y:648,w:660,html:'NEXT WEEK&#39;S LEVELS',fs:18,fw:700,col:C.gold,ls:2},
+    {t:'text',x:112,y:682,w:660,html:'Sign up and get this week&#39;s levels.',fs:34,fw:800},
+    {t:'text',x:112,y:730,w:660,html:'Estimated moves, walls and the gamma flip — posted before the open at cbedge.net',fs:22,fw:700,col:C.body},
+    {t:'text',x:80,y:836,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim},
+
+    // ── right column: the two weekly-stats strips ────────────────────────
+    {t:'text',x:860,y:56,w:660,html:'ALL SCORED TICKERS',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:90,w:660,h:191,label:'Weekly stats — all tickers',k:'shot-all'},
+    {t:'text',x:860,y:321,w:660,html:'THE CORE BOARD',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:355,w:660,h:329,label:'Weekly stats — core board',k:'shot-core'},
+    {t:'box',x:860,y:712,w:660,h:132,bgc:C.panelUp},
+    {t:'text',x:892,y:740,w:600,html:'Scored = graded against the actual close.',fs:24,fw:800,col:C.pale},
+    {t:'text',x:892,y:784,w:600,html:'Every ticker, every week — nothing dropped after the fact.',fs:20,fw:700,col:C.dim}
+  ]},
+
   blank:function(){return []}
 };
 
@@ -803,6 +846,7 @@ function customTpls(){ try{return JSON.parse(localStorage.getItem('cbe_tpls')||'
 function refreshT(){
   var sel0=document.getElementById('tpl'), cur=sel0.value;
   var built=[['alerts','Alert result — 2 screenshots'],
+             ['emweek','EM weekend results + sign-up'],
              ['levels','Key levels — walls &amp; flip'],['earnings','Earnings — estimated move'],
              ['explain','Screenshot + callouts'],['recap','Called it — level vs price'],
              ['signal','Live signal / alert'],['updates','What&#39;s new / changelog'],
@@ -824,6 +868,7 @@ function loadTpl(name){
   stage.querySelectorAll('.ly').forEach(function(x){x.remove()});
   TPL[name]().forEach(mkLayer);
   select(null);
+  afhelp();   // last post's fill report doesn't belong on the next one
 }
 
 document.getElementById('apply').onclick=function(){loadTpl(document.getElementById('tpl').value)};
@@ -909,30 +954,61 @@ function afmsg(t,bad){
   var p=document.getElementById('afmsg');
   p.textContent=t; p.style.color=bad?'#f4948e':'';
 }
-function fillK(k,html){
-  if(html==null||html==='') return 0;
-  var d=stage.querySelector('.ly[data-k="'+k+'"]'); if(!d) return 0;
-  var e=d.querySelector('.ed'); if(!e) return 0;
-  e.innerHTML=html; return 1;
+// The resting copy is markup and afmsg() writes textContent, so stash it once and
+// put it back when the panel has nothing to report.
+var AF_HELP=document.getElementById('afmsg').innerHTML;
+function afhelp(){ var p=document.getElementById('afmsg'); p.innerHTML=AF_HELP; p.style.color=''; }
+function fillK(k,v){
+  var d=stage.querySelector('.ly[data-k="'+k+'"]'); if(!d||v==null||v==='') return 0;
+  var eds=d.querySelectorAll('.ed');
+  if(Array.isArray(v)){                        // a bullets layer: one string per row
+    var m=0;
+    v.slice(0,eds.length).forEach(function(x,i){ if(x){ eds[i].textContent=x; m++; } });
+    return m;
+  }
+  // .fv = "the part of this line that is the value". A layer without one is all
+  // value. textContent, never innerHTML: model output must not become markup.
+  var t=d.querySelector('.fv')||eds[0];
+  if(!t) return 0;
+  t.textContent=v; return 1;
+}
+// What the loaded template is asking for. Every k: layer becomes one field, with
+// its current text as the example of the shape wanted — which is the whole reason
+// a new template needs no server change: name the layers and they get filled.
+function fieldSpec(){
+  var out=[];
+  stage.querySelectorAll('.ly[data-k]').forEach(function(d){
+    if(d.dataset.t==='image'||d.dataset.t==='logo') return;   // those are the slots
+    var eds=d.querySelectorAll('.ed'); if(!eds.length) return;
+    if(d.dataset.t==='list'){
+      out.push({key:d.dataset.k,kind:'list',rows:eds.length,
+                example:[].map.call(eds,function(e){return e.textContent.trim()})});
+    } else {
+      var t=d.querySelector('.fv')||eds[0];
+      out.push({key:d.dataset.k,kind:'text',example:t.textContent.trim()});
+    }
+  });
+  return out;
 }
 function shotsOnStage(){
   var out=[];
   stage.querySelectorAll('.ly[data-t=image] img').forEach(function(im){
     var m=/^data:(image\/[a-z+.-]+);base64,(.+)$/i.exec(im.dataset.url||im.getAttribute('src')||'');
-    if(!m) return;                       // logo default and stale slots aren't screenshots
+    if(!m) return;                       // logo default and empty slots aren't screenshots
     out.push({mediaType:m[1],data:m[2],slot:im.parentNode.dataset.k||''});
   });
-  return out.slice(0,2);                 // the template has two slots; cap the bill
+  return out.slice(0,3);                 // cap the bill; no template needs more
 }
 document.getElementById('autofill').onclick=function(){
-  var btn=this, shots=shotsOnStage();
+  var btn=this, shots=shotsOnStage(), spec=fieldSpec();
   if(!shots.length){ afmsg('No screenshots loaded yet — double-click an image slot to add one.',1); return; }
+  if(!spec.length){ afmsg('This template has no auto-fill fields — give its layers a k: name first.',1); return; }
   btn.disabled=true;
-  afmsg('Reading '+shots.length+' screenshot'+(shots.length>1?'s':'')+'…');
+  afmsg('Reading '+shots.length+' screenshot'+(shots.length>1?'s':'')+' for '+spec.length+' fields…');
   fetch('/api/post-studio/read-shots',{
     method:'POST',credentials:'same-origin',
     headers:{'content-type':'application/json'},
-    body:JSON.stringify({shots:shots})
+    body:JSON.stringify({shots:shots,fields:spec,template:document.getElementById('tpl').value})
   }).then(function(r){
     return r.json().catch(function(){return {}}).then(function(j){
       if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
@@ -940,21 +1016,17 @@ document.getElementById('autofill').onclick=function(){
     });
   }).then(function(j){
     var f=j.fields||{}, n=0;
-    n+=fillK('contract',f.contract);
-    if(f.pct) n+=fillK('pct','<span style="color:'+accent()+'">'+f.pct+'</span> to the peak');
-    n+=fillK('entry',f.entry);
-    n+=fillK('peak',f.peak);
-    n+=fillK('perContract',f.perContract);
-    var list=stage.querySelector('.ly[data-k="bullets"]');
-    if(list && f.bullets && f.bullets.length){
-      var eds=list.querySelectorAll('.ed');
-      f.bullets.slice(0,eds.length).forEach(function(b,i){ eds[i].innerHTML=b; n++; });
-    }
-    if(!n){ afmsg('Nothing to fill — load the “Alert result” template first.',1); return; }
+    Object.keys(f).forEach(function(k){ n+=fillK(k,f[k]); });
+    if(!n){ afmsg('Nothing filled — these screenshots do not carry this template\u2019s numbers.',1); return; }
     // Never let this read as finished. It is OCR on a screenshot, and a misread
-    // digit here becomes a public claim about a trade.
-    var miss=(j.missing||[]).length ? ' Could not read: '+j.missing.join(', ')+'.' : '';
-    afmsg('Filled '+n+' field'+(n>1?'s':'')+'.'+miss+' Check every number against the screenshot before you post.',!!miss);
+    // digit here becomes a public claim about trading results. Anything the model
+    // worked out rather than read gets named, because that is where a wrong number
+    // that still looks plausible comes from.
+    var msg='Filled '+n+' field'+(n>1?'s':'')+'.';
+    var calc=j.computed||[], miss=j.missing||[];
+    if(calc.length) msg+=' Calculated, not read: '+calc.join(', ')+'.';
+    if(miss.length) msg+=' Left alone: '+miss.join(', ')+'.';
+    afmsg(msg+' Check every number against the screenshot before you post.',!!(calc.length||miss.length));
   }).catch(function(e){
     afmsg('Auto-fill failed: '+e.message,1);
   }).then(function(){ btn.disabled=false; });

@@ -22,6 +22,7 @@
 import type { Coordinate, IChartApi, ISeriesApi, UTCTimestamp } from 'lightweight-charts'
 import type { Bar } from './candles'
 import { drawBubbles, type BubbleSnapshot, type BubblePalette } from './bubbles'
+import { BUBBLES } from './settings'
 
 function cssVar(el: HTMLElement, name: string, fallback: string): string {
   const v = getComputedStyle(el).getPropertyValue(name).trim()
@@ -94,6 +95,16 @@ export interface EsChartHandle {
 export interface MountOpts {
   /** Fired whenever the newest bar moves on or off screen. */
   onLatestOffscreen: (off: boolean) => void
+  /**
+   * Fired when the visible span changes enough to move the bubble BUCKET onto a
+   * different rung of BUBBLES.bucketRungsMin. The model needs it and the model has
+   * no idea how wide the pane is; the chart does, and it already gets a callback
+   * on every range change.
+   *
+   * Debounced to the bucket value itself, not the span, so it fires twice a
+   * session instead of on every wheel tick.
+   */
+  onBucketMs?: (ms: number) => void
   /**
    * Fired when the bubble layer starts, or stops, having anything to draw in
    * the visible window — zoomed or panned off the end of the GEX history.
@@ -287,6 +298,21 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     }
   }
 
+  // ── The bucket, reported to the model ─────────────────────────────────────
+  // Debounced to the BUCKET VALUE, not the span: it changes twice a session
+  // rather than on every wheel tick, and each change rebuilds the model.
+  let lastBucket = 0
+  function reportBucket(spanMs: number, plotPx: number) {
+    const msPerPx = spanMs / Math.max(1, plotPx)
+    const need = BUBBLES.bucketPxPerDot * msPerPx
+    const rungs = BUBBLES.bucketRungsMin
+    const rung = rungs.find((m) => m * 60_000 >= need) ?? rungs[rungs.length - 1]!
+    const ms = rung * 60_000
+    if (ms === lastBucket) return
+    lastBucket = ms
+    mountOpts.onBucketMs?.(ms)
+  }
+
   let lastOutOfRange: boolean | null = null
   function reportOutOfRange(out: boolean) {
     if (out === lastOutOfRange) return
@@ -370,27 +396,29 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       return
     }
 
-    const drew = drawBubbles(
-      ctx,
-      snaps,
-      {
-        xOfTime: (ms) => {
-          const x = ts.timeToCoordinate(Math.floor(ms / 1000) as UTCTimestamp)
-          return x == null ? null : (x as number)
-        },
-        // The inverse. This is what lets the layer step in PIXELS and then ask
-        // "what was the gamma here", instead of walking bars — the one change
-        // that makes the band look the same on 1m and 5m.
-        timeAtX: (x) => {
-          const t = ts.coordinateToTime(x as Coordinate)
-          return typeof t === 'number' ? t * 1000 : null
-        },
-        yOfPrice,
-        width: w,
-        height: h,
+    const geo = {
+      xOfTime: (ms: number) => {
+        const x = ts.timeToCoordinate(Math.floor(ms / 1000) as UTCTimestamp)
+        return x == null ? null : (x as number)
       },
-      palette,
-    )
+      // The inverse. timeToCoordinate() answers only for times that are IN the
+      // series and the buckets are per-minute, so a bucket almost never lands on
+      // a bar; coordinateToTime() is defined across the whole plot.
+      timeAtX: (x: number) => {
+        const t = ts.coordinateToTime(x as Coordinate)
+        return typeof t === 'number' ? t * 1000 : null
+      },
+      yOfPrice,
+      width: w,
+      height: h,
+    }
+    // The visible span decides the bucket. Measured off the plot rather than
+    // the data, because it is a question about how much room a dot has.
+    const tA = geo.timeAtX(1)
+    const tB = geo.timeAtX(Math.max(2, w - 60))
+    if (tA != null && tB != null && tB > tA) reportBucket(tB - tA, Math.max(2, w - 60))
+
+    const drew = drawBubbles(ctx, snaps, geo, palette)
     reportOutOfRange(!drew)
   }
   raf = requestAnimationFrame(draw)

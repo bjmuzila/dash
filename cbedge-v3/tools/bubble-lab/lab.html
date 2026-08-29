@@ -73,12 +73,15 @@
     <div class="chips">
       <button id="metricBtn">Vol+OI</button>
       <button id="dayBtn" class="on">Day</button>
+      <button id="modeBtn">per-bar</button>
+      <button id="barBtn">1m bars</button>
+      <button id="bucketBtn" class="on">auto bucket</button>
       <button id="rebuildBtn">Redraw</button>
     </div>
   </fieldset>
 
   <fieldset id="autoFields">
-    <legend>The eleven numbers</legend>
+    <legend>The numbers</legend>
   </fieldset>
 
   <fieldset>
@@ -130,6 +133,45 @@
     // in the default picture — and seeing the two side by side is the fastest
     // way to tell a layer bug from an overnight artefact.
     dayOnly: true,
+    // Candle timeframe. The bubbles do NOT depend on it — the bucket comes from
+    // the visible span in pixels — so flipping this is the check that they
+    // don't: the dots must not move when the bars underneath them do.
+    barMin: 1,
+    // Bubble bucket. 'auto' is the pixel rule the card ships with — the smallest
+    // rung whose dots own `bucketPxPerDot`. 1 and 5 force it, which is the only
+    // way to see what a fixed bucket actually costs: 1m across a session is 390
+    // dots on 1500px and they cannot help but fuse, 5m on a half-hour view is
+    // six. Both are correct somewhere and neither is correct everywhere, which
+    // is the argument for auto — made here rather than asserted.
+    bucketMin: 'auto',
+  }
+
+  /**
+   * Roll the fixture's 1m bars up to `barMin`.
+   *
+   * Plain epoch-aligned buckets, not the 09:30-anchored grid candles.ts uses:
+   * 09:30 ET is thirty minutes past the hour and 5 divides 30, so for the two
+   * rungs this selector offers the two grids coincide exactly. (They stop
+   * coinciding at 15m and up, which is why the app rolls up the careful way and
+   * this does not need to.)
+   */
+  function rollBars(bars, barMin) {
+    if (barMin <= 1) return bars
+    const step = barMin * 60_000
+    const out = []
+    let cur = null
+    for (const b of bars) {
+      const t = Math.floor(b.t / step) * step
+      if (!cur || cur.t !== t) {
+        cur = { t, o: b.o, h: b.h, l: b.l, c: b.c }
+        out.push(cur)
+      } else {
+        if (b.h > cur.h) cur.h = b.h
+        if (b.l < cur.l) cur.l = b.l
+        cur.c = b.c
+      }
+    }
+    return out
   }
 
   const ET_DAY = new Intl.DateTimeFormat('en-CA', {
@@ -225,8 +267,8 @@
     const view = scope(fx)
     const tMax = view.to
     const tMin = zoom.minutes ? Math.max(view.from, tMax - zoom.minutes * 60_000) : view.from
-    const bars = view.bars.filter((b) => b.t >= tMin && b.t <= tMax)
-    const src = bars.length ? bars : view.bars
+    const bars = rollBars(view.bars.filter((b) => b.t >= tMin && b.t <= tMax), state.barMin)
+    const src = bars.length ? bars : rollBars(view.bars, state.barMin)
     let lo = Infinity, hi = -Infinity
     for (const b of src) { if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h }
     if (!Number.isFinite(lo)) return { drew: false, rows: 0 }
@@ -272,15 +314,26 @@
 
     // THE REAL MODEL, THE REAL DRAW.
     const columns = view.columns.filter((c) => c.slotTs >= view.from && c.slotTs <= tMax)
-    const snaps = L.buildBubbleModel(columns, { metric: state.metric })
+    // Same rule the card uses, unless the chip is forcing a rung.
+    const msPerPx = (tMax - tMin) / Math.max(1, geo._x1 - geo._x0)
+    const need = L.BUBBLES.bucketPxPerDot * msPerPx
+    const rungs = L.BUBBLES.bucketRungsMin
+    const autoMs = (rungs.find((m) => m * 60000 >= need) ?? rungs[rungs.length - 1]) * 60000
+    const bucketMs = state.bucketMin === 'auto' ? autoMs : state.bucketMin * 60000
+    const snaps = L.buildBubbleModel(columns, { metric: state.metric, bucketMs })
     const drew = L.drawBubbles(ctx, snaps, geo, palette)
 
     const rows = snaps.length ? snaps[snaps.length - 1].marks.length : 0
+    // Say when a forced bucket is finer than the auto rule would allow: that is
+    // the case where dots overlap, and the caption should admit it rather than
+    // leave you wondering whether the size law broke.
+    const bucketLabel = `${Math.round(bucketMs / 60000)}m` +
+      (state.bucketMin !== 'auto' && bucketMs < autoMs ? ' (tight)' : '')
     // How many DISTINCT strikes the whole trail holds. The number that matters:
     // `levels` is what a vertical slice shows, this is what the eye counts.
     const distinct = new Set()
     for (const s of snaps) for (const m of s.marks) distinct.add(m.strike)
-    return { drew, rows, distinct: distinct.size, snaps: snaps.length }
+    return { drew, rows, distinct: distinct.size, snaps: snaps.length, bucketLabel }
   }
 
   // ── The sheet ────────────────────────────────────────────────────────────
@@ -327,7 +380,7 @@
         }
         c.stat.style.color = ''
         c.stat.textContent = r && r.drew
-          ? `${r.rows} rows · ${r.distinct} strikes`
+          ? `${state.barMin}m bars · ${r.bucketLabel} bucket · ${r.snaps} dots · ${r.rows} rows · ${r.distinct} strikes`
           : 'nothing drawn'
       }
     })
@@ -337,17 +390,22 @@
   // Generated from the objects themselves, so a constant added to BUBBLE_AUTO
   // shows up here on the next build with nothing to wire.
   const RANGES = {
-    levels: [1, 10, 1], minPerSide: [0, 3, 1], smoothWindow: [0, 20, 1], dwell: [0, 60, 1],
-    topFrac: [0.002, 0.05, 0.001], topMinPx: [0.5, 10, 0.5], topMaxPx: [2, 30, 0.5],
-    floorOfTop: [0, 0.5, 0.01], floorMinPx: [0, 3, 0.1], floorMaxPx: [0.5, 6, 0.1],
-    curve: [0.5, 3, 0.05], fade: [0, 0.95, 0.05], gapPx: [0, 4, 0.1],
-    glowFactor: [0, 2, 0.05], glowMaxPx: [0, 20, 0.5], minPx: [0.2, 4, 0.1],
+    bucketPxPerDot: [4, 80, 1],
+    levels: [1, 10, 1], minPerSide: [0, 3, 1], dwell: [0, 60, 1],
+    floorPx: [0.5, 8, 0.1], capPx: [4, 30, 0.5], topBoost: [1, 2.5, 0.01], minPx: [0.5, 4, 0.1],
+    gapPx: [0, 4, 0.1], fitPasses: [0, 12, 1], jitterPx: [0, 8, 0.5],
+    fade: [0, 0.95, 0.05], ageKeep: [0.2, 1, 0.05],
+    ringPx: [0, 4, 0.1], glowFactor: [0, 2, 0.05], glowMaxPx: [0, 20, 0.5],
   }
   const initial = { auto: { ...L.BUBBLES } }
 
   function buildFields(target, obj, host) {
     for (const key of Object.keys(obj)) {
       const v = obj[key]
+      // Skips `profiles` and `bucketRungsMin`: a slider per rung per field is a
+      // wall of controls, and the profiles are meant to be edited in
+      // settings.ts where the comment explaining them lives. The chips force a
+      // rung; the numbers below apply to whichever one is active.
       if (typeof v !== 'number') continue
       const [min, max, step] = RANGES[key] ?? [0, Math.max(1, v * 3), v > 3 ? 1 : 0.01]
       const row = document.createElement('div')
@@ -382,6 +440,31 @@
     state.dayOnly = !state.dayOnly
     dayBtn.textContent = state.dayOnly ? 'Day' : '48h'
     dayBtn.classList.toggle('on', state.dayOnly)
+    redraw()
+  })
+  const barBtn = document.getElementById('barBtn')
+  barBtn.addEventListener('click', () => {
+    state.barMin = state.barMin === 1 ? 5 : 1
+    barBtn.textContent = `${state.barMin}m bars`
+    barBtn.classList.toggle('on', state.barMin === 5)
+    redraw()
+  })
+
+  const BUCKETS = ['auto', 1, 5]
+  const bucketBtn = document.getElementById('bucketBtn')
+  bucketBtn.addEventListener('click', () => {
+    const next = BUCKETS[(BUCKETS.indexOf(state.bucketMin) + 1) % BUCKETS.length]
+    state.bucketMin = next
+    bucketBtn.textContent = next === 'auto' ? 'auto bucket' : `${next}m bucket`
+    bucketBtn.classList.toggle('on', next === 'auto')
+    redraw()
+  })
+
+  const modeBtn = document.getElementById('modeBtn')
+  modeBtn.addEventListener('click', () => {
+    L.BUBBLES.strikeMode = L.BUBBLES.strikeMode === 'per-bar' ? 'latest' : 'per-bar'
+    modeBtn.textContent = L.BUBBLES.strikeMode
+    modeBtn.classList.toggle('on', L.BUBBLES.strikeMode === 'latest')
     redraw()
   })
   document.getElementById('rebuildBtn').addEventListener('click', redraw)

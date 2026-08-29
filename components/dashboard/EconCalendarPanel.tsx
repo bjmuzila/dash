@@ -9,7 +9,7 @@ import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/
 // → text chip). Shared with the standalone /economic-calendar page so a logo
 // dropped into public/logos shows up in both places.
 import ChipLogo from "@/components/shared/ChipLogo";
-import { groupEarningsByDate } from "@/lib/econCalendar";
+import { groupEarningsByDate, pickAnticipated } from "@/lib/econCalendar";
 
 interface CalEvent {
   date: string;
@@ -45,9 +45,13 @@ interface EarnRow {
 const CHIP_W = 40;   // chip column width
 const CHIP_GAP = 8;  // flex gap between chips
 
+// Sub-billion names reach this panel now that the recorder has no mcap floor,
+// and `$${Math.round(n/1e9)}B` renders every one of them as "$0B".
 function fmtMcap(n: number) {
+  if (!n) return "n/a";
   if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
-  return `$${Math.round(n / 1e9)}B`;
+  if (n >= 1e9) return `$${Math.round(n / 1e9)}B`;
+  return `$${Math.round(n / 1e6)}M`;
 }
 
 function etToday() {
@@ -193,7 +197,10 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
     const [econRes, qRes, earnRes] = await Promise.all([
       fetch("/api/calendar", { cache: "no-store" }),
       fetch("/api/calendar-quote", { cache: "no-store" }),
-      fetch("/proxy/earnings-week", { cache: "no-store" }),
+      // This panel weaves earnings into a rolling today→+6 event list, so it
+      // spans a week boundary on any Thu/Fri — ask for both weeks or the last
+      // two days of the strip lose their earnings.
+      fetch("/proxy/earnings-week?week=both", { cache: "no-store" }),
     ]);
     const econJson = await econRes.json();
     if (!econRes.ok) {
@@ -232,14 +239,23 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
     return () => clearInterval(id);
   }, []);
 
-  // Earnings keyed by ET date → premarket / after-hours. "Time TBD" is dropped.
+  // Earnings keyed by ET date → premarket / after-hours / time-TBD.
   // Memoised on `earnings`. This used to be a bare IIFE that rebuilt the whole
   // Map on EVERY render — including the once-a-minute `now` tick that exists
   // only to re-evaluate event staleness. So a page left open re-bucketed the
   // full earnings list 60 times an hour for a result that changes when the
   // fetch changes, which is once. Shared with the phone view via
   // lib/econCalendar so all three surfaces bucket identically.
-  const earnByDate = useMemo(() => groupEarningsByDate(earnings), [earnings]);
+  //
+  // pickAnticipated is NOT optional here. The feed is now the whole Nasdaq
+  // calendar (~500 names a day); this panel is a narrow sidebar strip and
+  // without the narrowing a single Wednesday would push a 400-chip block
+  // between two econ events. The full-week board on /economic-calendar is where
+  // "show me everything" lives.
+  const earnByDate = useMemo(
+    () => groupEarningsByDate(pickAnticipated(earnings)),
+    [earnings]
+  );
 
   const today    = etToday();
   const weekDays = etWeekDays();

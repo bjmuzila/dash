@@ -1969,14 +1969,25 @@ async function main() {
         })();
         return;
       }
-      // ── Earnings calendar (weekly, mcap ≥ $100B) ─────────────────────────
-      //   GET /proxy/earnings-week  → today → Friday, one row per name
+      // ── Earnings calendar ────────────────────────────────────────────────
+      //   GET /proxy/earnings-week[?week=this|next|both]
+      //
+      // Default is BOTH weeks (Mon–Fri of this week + next), because the
+      // earnings board has a week toggle and re-fetching on every flip would
+      // trade ~60KB of JSON for a network round-trip on a list that changes
+      // once a day. There is no mcap floor any more — the recorder stores the
+      // full Nasdaq calendar and the surfaces narrow via
+      // lib/econCalendar.pickAnticipated. `minMcap` is still reported so a
+      // client can tell a trimmed sweep from a full one.
       if (pathname === '/proxy/earnings-week' && req.method === 'GET') {
         (async () => {
           try {
-            const { getWeekRows, MIN_MCAP } = require('./earnings-calendar-recorder');
-            const rows = await getWeekRows();
-            sendJson(res, 200, { ok: true, minMcap: MIN_MCAP, rows });
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const w = String(u.searchParams.get('week') || 'both').toLowerCase();
+            const week = w === 'this' || w === 'next' ? w : 'both';
+            const { getWeekRows, MIN_MCAP, daysForWeek } = require('./earnings-calendar-recorder');
+            const rows = await getWeekRows(week);
+            sendJson(res, 200, { ok: true, week, days: daysForWeek(week), minMcap: MIN_MCAP, rows });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;
@@ -1997,11 +2008,18 @@ async function main() {
         })();
         return;
       }
-      // Manual fire: POST /proxy/earnings-week-run?week=this|next
+      // Manual fire: POST /proxy/earnings-week-run?week=this|next|both[&minMcap=10]
+      //
+      // minMcap was documented on this route but never actually forwarded, so
+      // the "widen just this week without a redeploy" escape hatch silently did
+      // nothing. It is passed through now; omitted → the recorder's own floor
+      // (currently 0 / no floor). Reads as $B under 1000, else raw dollars.
       if (pathname === '/proxy/earnings-week-run' && req.method === 'POST') {
         const u = new URL(req.url, `http://localhost:${PORT}`);
-        const week = u.searchParams.get('week') === 'next' ? 'next' : 'this';
-        require('./earnings-calendar-recorder').runSweep(week)
+        const w = String(u.searchParams.get('week') || 'this').toLowerCase();
+        const week = w === 'next' || w === 'both' ? w : 'this';
+        const minMcap = u.searchParams.get('minMcap');
+        require('./earnings-calendar-recorder').runSweep(week, minMcap == null ? {} : { minMcap })
           .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;

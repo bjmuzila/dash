@@ -1998,8 +1998,20 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }:
             Measured both ways against a real html2canvas render before and
             after: live drift 1.5px → 0.5px, and the capture now lands within
             a third of a pixel of the live page instead of moving with the
-            bias. */}
-        <span aria-hidden style={{
+            bias.
+            2026-08-29: centring on the box is right on the LIVE page and still
+            wrong in the PNG, because html2canvas does not draw text where the
+            box puts it — it draws every run at `textRect.top + baseline`, and
+            that `baseline` comes from a probe measured in the MAIN document
+            under the BODY's line-height (FontMetrics is constructed with the
+            page `document`, not the clone). The cap-center rewrite collapses
+            the chip to `line-height:1`, so the probe's half-leading is not the
+            chip's, and the glyphs land several px below the box centre the
+            square is pinned to — the whole 3px of padding slack cannot buy
+            that back. `data-cap-swatch` opts the square into snapshot.ts's
+            second pass, which re-pins it to where the text will ACTUALLY be
+            drawn. Capture-only: nothing here moves on the live page. */}
+        <span aria-hidden data-cap-swatch style={{
           position: "absolute", left: 0, top: "50%", marginTop: -LEGEND_SWATCH / 2,
           display: "block", boxSizing: "border-box",
           width: LEGEND_SWATCH, height: LEGEND_SWATCH, borderRadius: 2,

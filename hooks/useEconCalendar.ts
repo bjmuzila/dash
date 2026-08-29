@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { groupEarningsByDate, type CalEvent, type EarnBucket, type EarnRow } from "@/lib/econCalendar";
+import {
+  groupEarningsByDate,
+  pickAnticipated,
+  ANTICIPATED_PER_DAY,
+  type CalEvent,
+  type EarnBucket,
+  type EarnRow,
+} from "@/lib/econCalendar";
 
 /**
  * useEconCalendar — the calendar feed, fetched once and shaped for rendering.
@@ -9,7 +16,13 @@ import { groupEarningsByDate, type CalEvent, type EarnBucket, type EarnRow } fro
  * Three endpoints in parallel, same as both desktop copies:
  *   /api/calendar        economic events (ForexFactory + the presidential feed)
  *   /api/calendar-quote  the decorative quote of the day
- *   /proxy/earnings-week  today→Friday earnings above the mcap floor
+ *   /proxy/earnings-week  Mon–Fri of this week AND next, EVERY name Nasdaq lists
+ *
+ * That last one used to be pre-filtered server-side to mcap ≥ $25B, which threw
+ * away most of a "most anticipated" week. It now returns the lot (~2,500 rows
+ * across two weeks) and the narrowing happens here via `pickAnticipated`, so
+ * `earnings` / `earnByDate` stay board-sized while `earningsAll` keeps the raw
+ * feed available for a surface that wants to widen without another fetch.
  *
  * FAILURE SEMANTICS WORTH KNOWING: /api/calendar answers HTTP 200 with an empty
  * events array when the upstream is down, so `res.ok` tells you nothing. The
@@ -28,7 +41,10 @@ const CLOCK_MS = 60_000;
 
 export type EconCalendarState = {
   events: CalEvent[];
+  /** Anticipated names only (see perDay). This is what a view should render. */
   earnings: EarnRow[];
+  /** The unnarrowed feed — every name Nasdaq listed for both weeks. */
+  earningsAll: EarnRow[];
   /** pre / after / tbd — see EarnBucket. `tbd` is the unconfirmed-time bucket. */
   earnByDate: Map<string, EarnBucket>;
   quote: string | null;
@@ -42,8 +58,16 @@ export type EconCalendarState = {
   reload: () => Promise<void>;
 };
 
-export function useEconCalendar(opts: { withQuote?: boolean } = {}): EconCalendarState {
-  const { withQuote = true } = opts;
+export function useEconCalendar(
+  opts: {
+    withQuote?: boolean;
+    /** 'this' | 'next' | 'both' — Mon–Fri range asked of the server. */
+    week?: "this" | "next" | "both";
+    /** Anticipated names per day. 0 = no narrowing (see pickAnticipated). */
+    perDay?: number;
+  } = {},
+): EconCalendarState {
+  const { withQuote = true, week = "both", perDay = ANTICIPATED_PER_DAY } = opts;
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [earnings, setEarnings] = useState<EarnRow[]>([]);
   const [quote, setQuote] = useState<string | null>(null);
@@ -63,7 +87,7 @@ export function useEconCalendar(opts: { withQuote?: boolean } = {}): EconCalenda
         withQuote
           ? fetch("/api/calendar-quote", { cache: "no-store" })
           : Promise.resolve(null as unknown as Response),
-        fetch("/proxy/earnings-week", { cache: "no-store" }),
+        fetch(`/proxy/earnings-week?week=${week}`, { cache: "no-store" }),
       ]);
 
       const econJson = await econRes.json().catch(() => null);
@@ -96,7 +120,7 @@ export function useEconCalendar(opts: { withQuote?: boolean } = {}): EconCalenda
     } catch (e) {
       setError(e instanceof Error ? e.message : "Calendar request failed");
     }
-  }, [withQuote]);
+  }, [withQuote, week]);
 
   useEffect(() => {
     void reload().finally(() => setLoading(false));
@@ -107,7 +131,16 @@ export function useEconCalendar(opts: { withQuote?: boolean } = {}): EconCalenda
     return () => clearInterval(id);
   }, []);
 
-  const earnByDate = useMemo(() => groupEarningsByDate(earnings), [earnings]);
+  // Narrow ONCE, here, so every consumer of this hook shows the same names and
+  // nobody re-derives "which of these matter" per surface.
+  const shown = useMemo(() => pickAnticipated(earnings, perDay), [earnings, perDay]);
+  const earnByDate = useMemo(() => groupEarningsByDate(shown), [shown]);
 
-  return { events, earnings, earnByDate, quote, source, warning, error, loading, now, reload };
+  return {
+    events,
+    earnings: shown,
+    earningsAll: earnings,
+    earnByDate,
+    quote, source, warning, error, loading, now, reload,
+  };
 }

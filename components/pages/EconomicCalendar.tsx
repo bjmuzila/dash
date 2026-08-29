@@ -8,7 +8,13 @@ import { HOME_THEME as HT, homeShellStyle, homeButtonStyle, DOCK_THEME } from "@
 // /proxy/ticker-logo resolver, then a ticker-text chip. This page used to hit
 // the resolver directly, so mirrored logos never showed up here.
 import ChipLogo from "@/components/shared/ChipLogo";
-import { groupEarningsByDate, bucketCount } from "@/lib/econCalendar";
+import {
+  groupEarningsByDate,
+  bucketCount,
+  pickAnticipated,
+  etMonFri,
+  ANTICIPATED_PER_DAY,
+} from "@/lib/econCalendar";
 
 interface CalEvent {
   date: string;
@@ -90,16 +96,24 @@ const BOARD = {
   rule: "rgba(255,255,255,0.09)",
 } as const;
 
+// Sub-billion names are in the feed now that the recorder has no mcap floor
+// (KNOP, DLTH, DAKT, BLRX…), and the old `Math.round(n/1e9)}B` rendered every
+// one of them as "$0B" — which looked like missing data on exactly the names
+// that had just been un-hidden.
 function fmtMcap(n: number) {
+  if (!n) return "n/a";
   if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
-  return `$${Math.round(n / 1e9)}B`;
+  if (n >= 1e9) return `$${Math.round(n / 1e9)}B`;
+  return `$${Math.round(n / 1e6)}M`;
 }
 
 /** Compact cap for the chip's second line — one line, never wraps a column. */
 function fmtMcapShort(n: number) {
   if (!n) return "";
   if (n >= 1e12) return `${(n / 1e12).toFixed(1)}T`;
-  return `${Math.round(n / 1e9)}B`;
+  if (n >= 1e9) return `${Math.round(n / 1e9)}B`;
+  if (n >= 1e8) return `${Math.round(n / 1e6)}M`;
+  return `${(n / 1e6).toFixed(0)}M`;
 }
 
 /** "MON" / "AUG 24" for the earnings week board's day headers. */
@@ -142,11 +156,29 @@ const FILTER_OPTS: { value: FilterKey; label: string; color: string }[] = [
 // here would silently re-hide the names the server was just widened to include.
 const MCAP_OPTS: { value: number; label: string }[] = [
   { value: 0,     label: "All caps" },
+  { value: 1e9,   label: "≥ $1B"    },
+  { value: 10e9,  label: "≥ $10B"   },
   { value: 25e9,  label: "≥ $25B"   },
-  { value: 50e9,  label: "≥ $50B"   },
   { value: 100e9, label: "≥ $100B"  },
-  { value: 250e9, label: "≥ $250B"  },
   { value: 1e12,  label: "≥ $1T"    },
+];
+
+/**
+ * How many names the board shows.
+ *
+ * "Anticipated" is the shared rule in lib/econCalendar (mcap ≥ $25B, OR on the
+ * maintained interest list, then topped up to ~14/day by size). "All" is every
+ * name Nasdaq lists for the week — several hundred a day, which is a legitimate
+ * thing to want and a terrible default.
+ *
+ * This exists at ALL because the recorder used to do this narrowing server-side
+ * with a hard $25B cut, so "all" was never actually reachable from the UI: the
+ * missing names had never been stored.
+ */
+type ViewKey = "anticipated" | "all";
+const VIEW_OPTS: { value: ViewKey; label: string; hint: string }[] = [
+  { value: "anticipated", label: "Anticipated", hint: "Most-watched names, ~14 per day" },
+  { value: "all",         label: "All",         hint: "Every name on the Nasdaq calendar" },
 ];
 
 function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
@@ -214,6 +246,10 @@ export default function EconomicCalendarPage() {
   // Earnings market-cap floor, in dollars. 0 = no floor (see MCAP_OPTS).
   const [mcapMin,       setMcapMin]       = useState(0);
   const [capOpen,       setCapOpen]       = useState(false);
+  // Which Mon–Fri the board shows. 0 = this week, 1 = next. The feed carries
+  // both, so flipping this is a filter, not a refetch.
+  const [earnWeek,      setEarnWeek]      = useState<0 | 1>(0);
+  const [earnView,      setEarnView]      = useState<ViewKey>("anticipated");
   // Drives the screenshot button's label only. "copied"/"saved" are the two
   // success outcomes — the clipboard write is the intent, the download is the
   // fallback the browser forces, and the button has to say which happened or a
@@ -309,7 +345,7 @@ export default function EconomicCalendarPage() {
       // and would be in its TDZ at the point this callback is created.
       const where = await captureAndCopy(
         el,
-        `${earnMode ? "earnings" : "econ-calendar"}-${etToday()}.png`,
+        `${earnMode ? `earnings-${earnWeek === 0 ? "this" : "next"}-week` : "econ-calendar"}-${etToday()}.png`,
         {
           background: HT.bg,   // else transparent, which reads black-on-black in most viewers
           // See the ticker-logo note above: a 302'd third-party logo taints the
@@ -337,7 +373,7 @@ export default function EconomicCalendarPage() {
       el.style.height = prevEl.height;
       el.style.overflow = prevEl.overflow;
     }
-  }, [shot, activeTab]);
+  }, [shot, activeTab, earnWeek]);
 
   const shotLabel =
     shot === "working" ? "…"
@@ -353,7 +389,9 @@ export default function EconomicCalendarPage() {
       const [econRes, qRes, earnRes] = await Promise.all([
         fetch("/api/calendar", { cache: "no-store" }),
         fetch("/api/calendar-quote", { cache: "no-store" }),
-        fetch("/proxy/earnings-week", { cache: "no-store" }),
+        // Both Mon–Fri weeks in one request — the board's week toggle is a
+        // client-side filter, so flipping it costs nothing.
+        fetch("/proxy/earnings-week?week=both", { cache: "no-store" }),
       ]);
       const econJson = await econRes.json();
       if (!econRes.ok) throw new Error(econJson?.error || `HTTP ${econRes.status}`);
@@ -396,20 +434,45 @@ export default function EconomicCalendarPage() {
   // The market-cap floor is applied BEFORE bucketing, so a day left with no
   // qualifying names drops out of the Map entirely and its separator stops
   // rendering — rather than showing an empty PRE/AFTER strip.
-  const earnByDate = useMemo(
-    () => groupEarningsByDate(mcapMin > 0 ? earnings.filter(r => r.market_cap >= mcapMin) : earnings),
-    [earnings, mcapMin]
+  //
+  // TWO derivations now, because the tabs want different things out of one feed:
+  //
+  //   earnByDate  — the CALENDAR tab, where earnings are woven between timed
+  //                 econ events. Always the anticipated subset: the feed is the
+  //                 whole Nasdaq calendar and a 400-chip block wedged between
+  //                 two events is not a calendar.
+  //   boardByDate — the EARNINGS tab's week board, which honours the week and
+  //                 view toggles and is allowed to show everything.
+  const capped = useCallback(
+    (rows: EarnRow[]) => (mcapMin > 0 ? rows.filter(r => r.market_cap >= mcapMin) : rows),
+    [mcapMin]
   );
 
+  const earnByDate = useMemo(
+    () => groupEarningsByDate(capped(pickAnticipated(earnings))),
+    [earnings, capped]
+  );
+
+  // Mon–Fri of the selected week. etMonFri rolls weekends forward exactly like
+  // the recorder's weekMonFri, so "this week" on a Saturday is the week that
+  // starts Monday — the same week the server stored.
+  const boardDays = useMemo(() => etMonFri(earnWeek), [earnWeek]);
+
+  const boardByDate = useMemo(() => {
+    const inWeek = earnings.filter(r => boardDays.includes(r.date));
+    return groupEarningsByDate(
+      capped(pickAnticipated(inWeek, earnView === "all" ? 0 : ANTICIPATED_PER_DAY))
+    );
+  }, [earnings, boardDays, earnView, capped]);
+
   // Names actually renderable at the current floor, for the dropdown label.
-  // Counted off the bucketed Map, not `earnings`, so it matches what is on
-  // screen: rows Nasdaq marks "time not supplied" are dropped by
-  // groupEarningsByDate and were never going to show up.
+  // Counted off the bucketed Map for the tab in view, not off `earnings`, so it
+  // matches what is on screen.
   const earnShown = useMemo(() => {
     let n = 0;
-    for (const b of earnByDate.values()) n += bucketCount(b);
+    for (const b of (activeTab === "earnings" ? boardByDate : earnByDate).values()) n += bucketCount(b);
     return n;
-  }, [earnByDate]);
+  }, [earnByDate, boardByDate, activeTab]);
 
   const mcapLabel = MCAP_OPTS.find(o => o.value === mcapMin)?.label ?? "All caps";
 
@@ -548,9 +611,11 @@ export default function EconomicCalendarPage() {
     return result;
   }
 
-  // Earnings-only view: every date that has pre/after earnings, newest first,
+  // Earnings-only view: every date that has pre/after/tbd earnings, in order,
   // with an optional ticker/company search — independent of the impact filters.
-  const earningsDates = Array.from(earnByDate.keys()).sort();
+  // Driven by boardByDate, so the week and view toggles apply here and only
+  // here; the calendar tab keeps its own anticipated-only derivation.
+  const earningsDates = Array.from(boardByDate.keys()).sort();
   const q = search.trim().toLowerCase();
   function matchesQ(r: EarnRow) {
     if (!q) return true;
@@ -558,7 +623,7 @@ export default function EconomicCalendarPage() {
   }
   const earningsSections = earningsDates
     .map(date => {
-      const bucket = earnByDate.get(date)!;
+      const bucket = boardByDate.get(date)!;
       const pre = bucket.pre.filter(matchesQ);
       const after = bucket.after.filter(matchesQ);
       const tbd = bucket.tbd.filter(matchesQ);
@@ -587,12 +652,16 @@ export default function EconomicCalendarPage() {
   function renderEarningsOnly() {
     if (earningsSections.length === 0) {
       // Name the reason. "No earnings match." reads as an empty feed, but the
-      // usual cause is a cap floor the user set two clicks ago and forgot.
+      // usual cause is a cap floor the user set two clicks ago and forgot — or,
+      // now, a week the recorder has not swept yet.
+      const inWeek = earnings.filter(r => boardDays.includes(r.date)).length;
       const why = earnings.length === 0
-        ? "No earnings this week."
-        : mcapMin > 0 && earnShown === 0
-          ? `No earnings ${mcapLabel} this week — try a lower cap.`
-          : "No earnings match.";
+        ? "No earnings loaded."
+        : inWeek === 0
+          ? `Nothing stored for ${dayDate(boardDays[0])}–${dayDate(boardDays[4])} yet.`
+          : mcapMin > 0 && earnShown === 0
+            ? `No earnings ${mcapLabel} this week — try a lower cap.`
+            : "No earnings match.";
       return <div style={{ color: HT.text, fontSize: 14, padding: 20 }}>{why}</div>;
     }
 
@@ -615,7 +684,7 @@ export default function EconomicCalendarPage() {
         }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
             <span style={{ fontSize: 13, fontWeight: 900, color: HT.text, letterSpacing: "0.14em" }}>
-              EARNINGS THIS WEEK
+              {earnWeek === 0 ? "EARNINGS THIS WEEK" : "EARNINGS NEXT WEEK"}
             </span>
             <span style={{ fontSize: 11, color: HT.text, fontFamily: "var(--font-mono)", letterSpacing: "0.04em" }}>
               {dayDate(first)} – {dayDate(last)}
@@ -636,6 +705,18 @@ export default function EconomicCalendarPage() {
               padding: "0 10px", borderRadius: 999, letterSpacing: "0.06em",
             }}>
               {shown} NAMES
+            </span>
+            {/* Both of these are captured into the copied PNG on purpose: a
+                board pasted into a chat has to say what it is a board OF, or
+                "14 names on Wednesday" reads as the whole day's calendar. */}
+            <span style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              lineHeight: 1, height: 22, boxSizing: "border-box",
+              fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono)",
+              color: HT.text, border: `1px solid ${BOARD.edge}`,
+              padding: "0 10px", borderRadius: 999,
+            }}>
+              {earnView === "all" ? "ALL NAMES" : "ANTICIPATED"}
             </span>
             {mcapMin > 0 && (
               <span style={{
@@ -773,6 +854,49 @@ export default function EconomicCalendarPage() {
               </div>
             )}
           </div>
+          )}
+
+          {/* Week + breadth, earnings tab only. The feed already holds both
+              weeks, so these are filters over rows in hand — no refetch, no
+              spinner, and the Copy button captures whatever is showing. */}
+          {activeTab === "earnings" && (
+            <>
+              <div style={{ display: "flex", gap: 3, background: HT.panelBg, borderRadius: 6, padding: 3, border: `1px solid ${HT.border}` }}>
+                {([0, 1] as const).map(w => (
+                  <button
+                    key={w}
+                    onClick={() => setEarnWeek(w)}
+                    title={`${dayDate(etMonFri(w)[0])} – ${dayDate(etMonFri(w)[4])}`}
+                    style={{
+                      fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+                      padding: "5px 10px", borderRadius: 4, border: "none", cursor: "pointer",
+                      background: earnWeek === w ? HT.cyan : "transparent",
+                      color: earnWeek === w ? "#05080d" : HT.text,
+                    }}
+                  >
+                    {w === 0 ? "This wk" : "Next wk"}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: "flex", gap: 3, background: HT.panelBg, borderRadius: 6, padding: 3, border: `1px solid ${HT.border}` }}>
+                {VIEW_OPTS.map(o => (
+                  <button
+                    key={o.value}
+                    onClick={() => setEarnView(o.value)}
+                    title={o.hint}
+                    style={{
+                      fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+                      padding: "5px 10px", borderRadius: 4, border: "none", cursor: "pointer",
+                      background: earnView === o.value ? HT.cyan : "transparent",
+                      color: earnView === o.value ? "#05080d" : HT.text,
+                    }}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </>
           )}
 
           {/* Earnings market-cap floor. Shown on BOTH tabs: the calendar tab

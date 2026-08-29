@@ -9,6 +9,7 @@ import { SegGroup, Chip, Popover, PanelSection, Dropdown } from './controls'
 import { chainTicker, symbolDef } from './symbols'
 import {
   BUBBLE_LADDER_REQUEST,
+  BUBBLES,
   GEX_HISTORY_MINUTES,
   GEX_HISTORY_MINUTES_PREV_DAY,
   INTERVALS,
@@ -130,13 +131,21 @@ function etWeekendSessionDay(now = new Date()): string {
 }
 
 /** Wires an EsChartHandle to a <ChartFrame>, buffering setters until it mounts. */
-function useEsChart(onLatestOffscreen: (off: boolean) => void, onOutOfRange: (out: boolean) => void) {
+function useEsChart(
+  onLatestOffscreen: (off: boolean) => void,
+  onOutOfRange: (out: boolean) => void,
+  onBucketMs: (ms: number) => void,
+) {
   const handleRef = useRef<EsChartHandle | null>(null)
   const pending = useRef<Array<(h: EsChartHandle) => void>>([])
   const offRef = useRef(onLatestOffscreen)
   offRef.current = onLatestOffscreen
   const oorRef = useRef(onOutOfRange)
   oorRef.current = onOutOfRange
+  // Through a ref like the other two: the chart is mounted once and the
+  // callbacks it closes over must never be a reason to re-mount it.
+  const bucketRef = useRef(onBucketMs)
+  bucketRef.current = onBucketMs
 
   const apply = useCallback((fn: (h: EsChartHandle) => void) => {
     const h = handleRef.current
@@ -149,6 +158,7 @@ function useEsChart(onLatestOffscreen: (off: boolean) => void, onOutOfRange: (ou
     void mountEsChart(frame.el, {
       onLatestOffscreen: (off) => offRef.current(off),
       onBubblesOutOfRange: (out) => oorRef.current(out),
+      onBucketMs: (ms) => bucketRef.current(ms),
     }).then((created) => {
       if (cancelled) {
         created.destroy()
@@ -182,6 +192,10 @@ export function GexCandlesCard() {
   // The bubble layer has data but none of it falls in the visible window. Set
   // from the draw loop, but only when it CHANGES — see onBubblesOutOfRange.
   const [bubblesOutOfRange, setBubblesOutOfRange] = useState(false)
+  // One bubble per bucket, and the bucket comes from how wide the visible window
+  // is — the chart reports it, debounced to the value itself, so this changes
+  // twice a session rather than on every wheel tick.
+  const [bucketMs, setBucketMs] = useState(BUBBLES.bucketCoarseMs)
   const countdownRef = useRef<HTMLSpanElement | null>(null)
   const barsRef = useRef<Bar[]>([])
 
@@ -317,8 +331,8 @@ export function GexCandlesCard() {
   // longer rebuilds it.
   const snapshots = useMemo(
     () =>
-      buildBubbleModel(columns, { metric: settings.gexMetric }),
-    [columns, settings.gexMetric],
+      buildBubbleModel(columns, { metric: settings.gexMetric, bucketMs }),
+    [columns, settings.gexMetric, bucketMs],
   )
 
   // Same history, second view: the bubbles say how the ladder got here across
@@ -337,7 +351,7 @@ export function GexCandlesCard() {
   }, [expiries, weekendExpiry])
 
   // ── Chart ──────────────────────────────────────────────────────────────────
-  const { onMount, apply } = useEsChart(setLatestOffscreen, setBubblesOutOfRange)
+  const { onMount, apply } = useEsChart(setLatestOffscreen, setBubblesOutOfRange, setBucketMs)
 
   // Anything in this key changes the SCALE of the series, so the view has to be
   // re-framed when it does — a symbol switch above all, since SPX at ~6,800 and

@@ -85,81 +85,124 @@ export const DEFAULT_SETTINGS: ChartSettings = {
 }
 
 /**
- * ── THE BUBBLE LAYER, IN ELEVEN NUMBERS ──────────────────────────────────────
+ * ── THE BUBBLE LAYER ─────────────────────────────────────────────────────────
  *
- * There used to be six sliders, an Auto mode, and about twenty constants behind
- * it deciding how many rows to draw, when a level stopped counting, how much to
- * dim a busy chart. Every one of them was answerable, none of them was ever
- * answered the same way twice, and the layer still came out wrong — because a
- * setting is a question you have to keep re-answering, and the chart only has
- * one right answer at a time.
+ * There are no settings. Bubbles are on or off; everything below is fixed, and
+ * every number is here because removing it changes the picture in a way you can
+ * name. The rules it implements, in order:
  *
- * So there are no settings any more. Bubbles are on or off. Everything else is
- * below, fixed, and each number is here because removing it changes the picture
- * in a way you can name:
+ *   1 bubble per bucket        the trail is a SAMPLE, not a line. Bucket to 1m
+ *                              or 5m by how wide the window is, last print in
+ *                              the bucket wins.
+ *   4-10 strikes, 1 a side     rank by |netGex|, force one above spot and one
+ *                              below, then fill from the ranking.
+ *   grow with net GEX          r = floor + sqrt(|gex| / windowMax) x (cap-floor)
+ *   the top strike stands out  the bucket's largest gets x1.38, a white ring
+ *                              and a bright core - about 18px against 7px peers
+ *   old dots survive           never below minPx, and age only fades opacity a
+ *                              little
+ *   no overlap if possible     same-bucket neighbours shrink toward the floor,
+ *                              then take a few px of X jitter
+ *   history stays the day      nothing is ever spliced. 'per-bar' keeps each
+ *                              bucket's own strikes on the axis; 'latest' locks
+ *                              the Y set to the current picks and plots those
+ *                              backward through the session
  *
- *   levels / minPerSide   what you asked for: the four strikes actually holding
- *                         gamma, never all on one side of price.
- *   smoothWindow          ranks 4, 5 and 6 sit inside each other's noise and
- *                         swap every other minute; ranking on the smoothed
- *                         series is what stops a row dashing into segments.
- *                         Measured: it took the average segment from a few
- *                         minutes to 58.
- *   dwell                 minimum row length. A band that exists for ninety
- *                         seconds is noise however it got selected.
- *   topFrac / min / max   how fat a row may be, as a fraction of the pane,
- *                         railed in pixels. 3% railed to 15px was a THIRTY-pixel
- *                         band — at that size a level stops being a line you
- *                         read price against and becomes a region price is
- *                         usually inside.
- *   floorOfTop            the weakest drawn row, as a fraction of the biggest:
- *                         visible, never mistakable for a real one.
- *   curve                 the size exponent. Four rows on a typical board sit
- *                         within a few percent of each other and a straight
- *                         proportional law draws four identical bands.
- *   fade / gapPx / glow   the look: how far the weakest row fades, the hairline
- *                         that keeps two rows from reading as one, and how hard
- *                         the column's leader burns.
- *
- * GONE, and why, so nobody adds them back:
- *   the cutoff gate       redundant once `levels` is four. The fourth-strongest
- *                         strike on the board is worth drawing by definition;
- *                         a second gate could only ever remove a row you asked
- *                         for, which it did, silently.
- *   auto level count      widened 4 -> 6 on a flat board. "Six sometimes" is not
- *                         simpler than four, it is four plus a surprise.
- *   crowd trim / dim      both scaled the picture by the row count. With the row
- *                         count fixed they are constants multiplied by one.
- *   the six sliders       see above.
+ * What is deliberately NOT here, so nobody adds it back: a share cutoff (with
+ * four rows the fourth-strongest strike is worth drawing by definition, so a
+ * second gate could only ever delete a row you asked for), an auto row count
+ * (four plus a surprise is not simpler than four), and the six sliders and Auto
+ * mode this replaced - a setting is a question you have to keep re-answering,
+ * and the chart has one right answer at a time.
  */
 export const BUBBLES = {
-  /** Rows drawn per column, ranked within that column. */
+  // ── 1 bubble per bucket ──────────────────────────────────────────────────
+  /**
+   * The bucket ladder, in minutes. The layer picks the SMALLEST rung whose dots
+   * land far enough apart for a full-size mark to fit between them — see
+   * `bucketPxPerDot`. One bubble per rung, last print in it wins.
+   *
+   * Not a fixed 1m or 5m: 1m is right on a half-hour view and 390 overlapping
+   * dots across a session, and 5m is right on a session and six dots on a
+   * half-hour. The rung is a consequence of the zoom, which is the only thing
+   * that knows how much room a dot has.
+   */
+  bucketRungsMin: [1, 5, 15, 30, 60],
+  /**
+   * Pixels a bucket must own before its rung is allowed. Set from the mark
+   * itself — a top mark is `capPx * topBoost` in radius, so this is its
+   * diameter plus the hairline, and dots at this cadence can never fuse.
+   */
+  bucketPxPerDot: 2 * 13 * 1.38 + 0.8,
+
+  // ── The strike set ───────────────────────────────────────────────────────
+  /** Rows per bucket. The design range is 4–10; four is the resting value. */
   levels: 4,
-  /** How many of them must sit on each side of that column's spot. */
+  /** Forced before the ranking fills the rest — one above spot, one below. */
   minPerSide: 1,
-  /** Half-width, in columns, of the centred mean the ranking and radius read. */
-  smoothWindow: 5,
-  /** Minimum row length, in columns, once a strike genuinely ranks. */
-  dwell: 20,
-  /** Top radius as a fraction of the pane height, railed to these pixels. */
-  topFrac: 0.012,
-  topMinPx: 2.5,
-  topMaxPx: 6,
-  /** The weakest drawn row, as a fraction of the top, railed to these pixels. */
-  floorOfTop: 0.22,
-  floorMinPx: 0.7,
-  floorMaxPx: 1.6,
-  /** Size exponent: r = floor + (top - floor) * ratio^curve. */
-  curve: 1.5,
-  /** The weakest row fades to 1 - fade. */
-  fade: 0.55,
-  /** Hairline kept between two rows, so "not overlapping" reads as separate. */
+  /**
+   * 'per-bar'  each bucket keeps the strikes IT chose, so a level stays on the
+   *            axis where it happened even after spot walks away from it.
+   * 'latest'   the Y set is locked to the current bucket's picks and those same
+   *            strikes are plotted backward through the session.
+   */
+  strikeMode: 'per-bar' as 'per-bar' | 'latest',
+
+  // ── Size, PER RUNG ───────────────────────────────────────────────────────
+  //   r = floorPx + sqrt(|gex| / windowMax) * (capPx - floorPx),  x topBoost
+  //
+  // sqrt, not linear: the top strike is routinely 5-10x its neighbours and a
+  // linear law spends the whole budget on it, leaving the rest as identical
+  // specks. Under the root a 25%-of-max strike still draws at half the range.
+  //
+  // ── AND THE NUMBERS ARE PER BUCKET SIZE ──────────────────────────────────
+  // A 13px cap is right at 5m and absurd at 1m: five times the dots in the same
+  // width, so marks that clear each other at 5m fuse into ribbons at 1m. That is
+  // not a tuning failure, it is the same number being asked two different
+  // questions — and the fix is not one cleverer number, it is one per rung.
+  //
+  // Each rung's profile is what that bucket looks right at, at the zoom where
+  // the auto rule would pick it. Rungs between the listed ones take the nearest
+  // profile below.
+  profiles: {
+    1: { capPx: 5.5, floorPx: 1.2, topBoost: 1.5, ringPx: 1.0 },
+    5: { capPx: 13, floorPx: 2.5, topBoost: 1.38, ringPx: 1.4 },
+    15: { capPx: 16, floorPx: 3, topBoost: 1.34, ringPx: 1.6 },
+    30: { capPx: 18, floorPx: 3.5, topBoost: 1.3, ringPx: 1.8 },
+    60: { capPx: 20, floorPx: 4, topBoost: 1.28, ringPx: 2 },
+  } as Record<number, { capPx: number; floorPx: number; topBoost: number; ringPx: number }>,
+  /**
+   * …and the profile is then SHRUNK to the room that actually exists.
+   *
+   * A profile is right at the zoom its rung was chosen for. Force a rung the
+   * auto rule would not have picked — which the lab exists to let you do, and
+   * which a pinned setting would do every day — and the dots land closer than
+   * the profile assumes. So the cap is additionally held to this fraction of the
+   * measured gap between two dots. It only ever shrinks: at the intended zoom it
+   * is inert, and at 1m across a whole session it turns what were fused ribbons
+   * into a fine dotted trail, which is the truthful picture of 975 samples in
+   * 1500 pixels.
+   */
+  capOfSpacing: 0.42,
+  /** Absolute floor. Old dots never shrink past this, whatever the fit does. */
+  minPx: 1.2,
+
+  // ── Not overlapping ──────────────────────────────────────────────────────
+  /** Hairline kept between two marks in the same bucket. */
   gapPx: 0.8,
-  /** The leader's glow, as a multiple of its own radius, capped. */
+  /** Passes of the pairwise vertical shrink before jitter is used. */
+  fitPasses: 6,
+  /** Max horizontal nudge, px, for a pair that still does not fit after that. */
+  jitterPx: 3,
+
+  // ── Colour ───────────────────────────────────────────────────────────────
+  /** The weakest mark fades to 1 - fade. */
+  fade: 0.45,
+  /** The oldest bucket keeps this much of its opacity. Age reads, faintly. */
+  ageKeep: 0.75,
+  /** The glow under the top mark. Its ring width is per-rung, in `profiles`. */
   glowFactor: 0.6,
-  glowMaxPx: 5,
-  /** Absolute radius floor, below which a row is not a row. */
-  minPx: 0.8,
+  glowMaxPx: 7,
 } as const
 
 /**

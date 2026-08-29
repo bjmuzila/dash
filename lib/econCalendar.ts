@@ -49,8 +49,10 @@ export function impactColor(i: string): string {
 }
 
 export function fmtMcap(n: number): string {
+  if (!n) return "n/a";
   if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
-  return `$${Math.round(n / 1e9)}B`;
+  if (n >= 1e9) return `$${Math.round(n / 1e9)}B`;
+  return `$${Math.round(n / 1e6)}M`;
 }
 
 export function etToday(): string {
@@ -73,6 +75,29 @@ export function etWeekDays(): string[] {
     x.setDate(base.getDate() + i);
     return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
   });
+}
+
+function addDaysYmd(ymd: string, n: number): string {
+  const d = new Date(`${ymd}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Mon–Fri (YYYY-MM-DD, ET) of a trading week. `offsetWeeks` 0 = the week
+ * containing today, 1 = next week, and so on.
+ *
+ * Weekends roll FORWARD, matching server-v2/earnings-calendar-recorder.js's
+ * weekMonFri: on a Saturday "this week" is the week that starts on Monday, not
+ * the one that just ended. The two must agree or the board asks the server for
+ * a week it did not store.
+ */
+export function etMonFri(offsetWeeks = 0): string[] {
+  const today = etToday();
+  const dow = new Date(`${today}T12:00:00Z`).getUTCDay(); // 0=Sun..6=Sat
+  const toMon = dow === 0 ? 1 : dow === 6 ? 2 : 1 - dow;
+  const mon = addDaysYmd(today, toMon + offsetWeeks * 7);
+  return [0, 1, 2, 3, 4].map((i) => addDaysYmd(mon, i));
 }
 
 /** ET wall clock as a date string + minutes since midnight. */
@@ -150,6 +175,157 @@ export function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
   return false;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  ANTICIPATED EARNINGS
+//
+//  The recorder now stores EVERY name Nasdaq lists (see its header — the old
+//  $25B floor was silently deleting exactly the names anyone wanted). That is
+//  ~400–500 rows a day, which no board can render, so the narrowing lives here
+//  instead: one shared definition of "the names that matter", used by the week
+//  board, the home panel and the phone view alike.
+//
+//  Two rules, OR'd:
+//
+//   1. MEGA_CAP — anything at or above $25B is anticipated by definition. This
+//      is the old server floor, kept as a display rule where it belongs.
+//   2. ANTICIPATED_SYMBOLS — a maintained list of names traders position for
+//      regardless of size. This is the half the cap rule cannot express: CRDO,
+//      GTLB, PATH, CIEN, FIVE, OLLI, DLTH, DAKT, KNOP are all "most anticipated"
+//      board regulars and all far under $25B. Size is not interest.
+//
+//  Then each day is TOPPED UP to ANTICIPATED_PER_DAY with the largest remaining
+//  caps, so a quiet Monday still shows a full column instead of two chips, and
+//  a name that is genuinely big but missing from the list below cannot fall
+//  through the gap.
+//
+//  Maintaining the list: add a ticker when it shows up on a most-anticipated
+//  board and is under $25B. Removing one is never urgent — a stale entry costs
+//  one chip on the day that company reports.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Anticipated by size alone. Also the old server-side floor. */
+export const MEGA_CAP = 25e9;
+
+/** Per-day target for the anticipated view — roughly a full board column. */
+export const ANTICIPATED_PER_DAY = 14;
+
+export const ANTICIPATED_SYMBOLS: ReadonlySet<string> = new Set([
+  // ── Semis / hardware ──
+  "NVDA", "AMD", "AVGO", "MU", "MRVL", "ARM", "INTC", "TSM", "ASML", "QCOM", "TXN", "ADI",
+  "ON", "MCHP", "SWKS", "QRVO", "WOLF", "LSCC", "AMBA", "CRDO", "ALAB", "RMBS", "SITM",
+  "POWI", "MPWR", "SLAB", "PI", "INDI", "ALGM", "AOSL", "SMCI", "DELL", "HPE", "HPQ",
+  "NTAP", "PSTG", "WDC", "STX", "ANET", "CIEN", "JNPR", "INFN", "COMM", "EXTR", "NTGR",
+  "AMAT", "LRCX", "KLAC", "ENTG", "TER", "ACLS", "UCTT", "ICHR", "COHU", "FORM", "ONTO",
+  "NVMI", "CAMT", "AEIS", "MKSI", "PLAB", "SGH", "VSH", "DIOD",
+  // ── Software / SaaS / data ──
+  "PLTR", "SNOW", "MDB", "NET", "DDOG", "CRWD", "ZS", "PANW", "S", "OKTA", "TWLO", "GTLB",
+  "PATH", "AI", "CFLT", "ESTC", "DOCN", "FSLY", "SUMO", "BRZE", "AMPL", "GLBE", "ASAN",
+  "MNDY", "TEAM", "NOW", "CRM", "WDAY", "ADBE", "ORCL", "IBM", "SAP", "INTU", "HUBS",
+  "ZI", "BILL", "PCTY", "PAYC", "VEEV", "TYL", "SPSC", "AZPN", "PTC", "ANSS", "CDNS",
+  "SNPS", "KEYS", "APPF", "BLKB", "DBX", "BOX", "ZM", "DOCU", "RNG", "FIVN", "NICE",
+  "PEGA", "VERX", "NCNO", "OLO", "TOST", "SQ", "XYZ", "SHOP", "WIX", "SQSP", "YEXT",
+  "SPRT", "CXM", "SPRINKLR", "KVYO", "ZETA", "APP", "U", "RBLX", "TTD", "MGNI", "CRTO",
+  "DV", "PUBM", "IAS", "RZLV", "BBAI", "SOUN", "TEM", "IONQ", "RGTI", "QBTS", "QUBT",
+  "AUR", "LAZR", "OUST", "INVZ", "MVIS",
+  // ── Internet / media ──
+  "META", "GOOGL", "GOOG", "AMZN", "AAPL", "MSFT", "NFLX", "DIS", "PARA", "WBD", "ROKU",
+  "SPOT", "SNAP", "PINS", "MTCH", "BMBL", "YELP", "TRIP", "ABNB", "BKNG", "EXPE", "UBER",
+  "LYFT", "DASH", "GRAB", "SE", "MELI", "BABA", "JD", "PDD", "BIDU", "NTES", "TCOM",
+  "IQ", "BILI", "WB", "TME", "DIDIY", "CANG", "GDS", "VNET", "EDU", "TAL", "ZH",
+  // ── EV / auto / mobility ──
+  "TSLA", "RIVN", "LCID", "NIO", "XPEV", "LI", "ZK", "PSNY", "GM", "F", "STLA", "HMC",
+  "TM", "RACE", "MULN", "GOEV", "FFAI", "NKLA", "WKHS", "HYZN", "BLNK", "CHPT", "EVGO",
+  "QS", "MVST", "FREY", "SLDP", "ENVX", "AMPX",
+  // ── Crypto / fintech ──
+  "COIN", "MARA", "RIOT", "CLSK", "HUT", "BITF", "CIFR", "WULF", "IREN", "HIVE", "BTBT",
+  "CAN", "BTDR", "GLXY", "MSTR", "HOOD", "PYPL", "SOFI", "AFRM", "UPST", "LC", "NU",
+  "MQ", "DLO", "PAGS", "STNE", "FOUR", "FI", "GPN", "TOAST", "RELY", "FLYW", "EVTC",
+  "WEX", "JKHY", "ACIW", "ALLY", "SYF", "COF", "DFS", "AXP",
+  // ── Retail / consumer ──
+  "LULU", "NKE", "DECK", "ONON", "CROX", "SKX", "BIRD", "VFC", "PVH", "RL", "GPS", "ANF",
+  "AEO", "URBN", "BKE", "CHWY", "FIVE", "OLLI", "DLTR", "DG", "TGT", "WMT", "COST", "BJ",
+  "KR", "ACI", "SFM", "TJX", "ROST", "BURL", "M", "JWN", "KSS", "DDS", "BBWI", "VSCO",
+  "GES", "LEVI", "CATO", "CHS", "TLYS", "ZUMZ", "BOOT", "SCVL", "GCO", "DLTH", "LE",
+  "HIBB", "ASO", "DKS", "BGFV", "SPWH", "RCII", "CONN", "WSM", "RH", "ARHS", "LOVE",
+  "PRPL", "TPX", "SNBR", "W", "BYON", "ETSY", "EBAY", "REAL", "TDUP", "POSH", "FIGS",
+  "YETI", "SWBI", "RGR", "AOUT", "VSTO", "PLNT", "XPOF", "EL", "ELF", "COTY", "IPAR",
+  "HELE", "NWL", "CENT", "WOOF", "PETQ", "IDXX", "FRPT", "CHEF", "SFD",
+  // ── Restaurants / travel ──
+  "CMG", "SBUX", "MCD", "YUM", "QSR", "WEN", "JACK", "SHAK", "CAVA", "SG", "PTLO", "WING",
+  "TXRH", "DRI", "EAT", "BLMN", "CAKE", "DENN", "PLAY", "DPZ", "PZZA", "LUV", "DAL",
+  "UAL", "AAL", "JBLU", "SAVE", "ALK", "RCL", "CCL", "NCLH", "MAR", "HLT", "H", "WH",
+  // ── Food / staples ──
+  "CPB", "GIS", "K", "KHC", "HRL", "SJM", "CAG", "MKC", "TSN", "TAP", "STZ", "BF.B",
+  "DEO", "KO", "PEP", "MNST", "CELH", "KDP", "SAM", "FIZZ", "POST", "LW", "DAR", "INGR",
+  "FLO", "THS", "UTZ", "JJSF", "LANC", "CALM", "VITL", "HAIN", "SMPL", "BRBR",
+  // ── Health / medtech / biotech ──
+  "MDT", "ISRG", "DXCM", "PODD", "TNDM", "IRTC", "NVRO", "PEN", "GMED", "ATEC", "SYK",
+  "BSX", "ABT", "JNJ", "PFE", "MRK", "LLY", "ABBV", "BMY", "AMGN", "GILD", "BIIB",
+  "VRTX", "REGN", "MRNA", "NVAX", "BNTX", "PHR", "DOCS", "HIMS", "TDOC", "GDRX", "OSCR",
+  "CLOV", "ALHC", "MMED", "BLRX", "SRPT", "ALNY", "IONS", "BEAM", "NTLA", "CRSP",
+  "EDIT", "VERV", "RXRX", "ABSI", "SDGR", "TEVA", "VTRS", "OGN", "WLY",
+  // ── Industrials / defense / infra ──
+  "BA", "GE", "CAT", "DE", "TTC", "HON", "MMM", "EMR", "ETN", "PH", "ROK", "AOS", "GNRC",
+  "PWR", "AGX", "FIX", "EME", "MTZ", "PRIM", "ACM", "J", "STRL", "GVA", "TTEK", "WMS",
+  "AWI", "TREX", "BLDR", "POOL", "SITE", "FAST", "GWW", "WSO", "MSM", "DXPE", "KMT",
+  "LECO", "ITW", "DOV", "IEX", "XYL", "FLS", "PNR", "WTS", "ZWS", "CSWI", "AAON", "LII",
+  "TT", "JCI", "CARR", "OTIS", "BRC", "DAKT", "BBCP", "DOO", "SAIC", "LDOS", "BAH",
+  "CACI", "PSN", "KTOS", "AVAV", "RKLB", "ASTS", "PL", "SPCE", "LUNR", "RDW", "IOT",
+  "HMR", "KNOP", "SSL", "GIII",
+  // ── Energy / clean energy ──
+  "FCEL", "PLUG", "BE", "BLDP", "HTOO", "ENPH", "SEDG", "RUN", "NOVA", "FSLR", "ARRY",
+  "SHLS", "NXT", "CSIQ", "JKS", "DQ", "MAXN", "OKLO", "SMR", "NNE", "LEU", "CCJ", "UEC",
+  "GOLD", "NEM", "AEM", "AU", "KGC", "HL", "CDE", "AG", "PAAS", "EXK", "FSM", "MAG",
+  // ── Financial / insurance / other ──
+  "GS", "MS", "JPM", "BAC", "C", "WFC", "SCHW", "BLK", "BX", "KKR", "APO", "ARES", "OWL",
+  "LAZ", "EVR", "PJT", "HLI", "MC", "PIPR", "SF", "JEF", "IBKR", "VIRT", "MKTX", "CBOE",
+  "CME", "ICE", "NDAQ", "TW", "COIN",
+]);
+
+/** True when a row is "anticipated" on its own merits (size or the list). */
+export function isAnticipated(r: EarnRow): boolean {
+  return (r.market_cap ?? 0) >= MEGA_CAP || ANTICIPATED_SYMBOLS.has(r.symbol);
+}
+
+/**
+ * Narrow a full week of rows to the anticipated names, per day.
+ *
+ * Every row that `isAnticipated` survives, and each day is then topped up with
+ * its largest remaining caps until it holds `perDay` names. Order within a day
+ * is market cap descending, which is also the order the board's columns want.
+ *
+ * `perDay <= 0` returns everything, so a caller can offer an "All" view without
+ * branching on a different code path.
+ */
+export function pickAnticipated(rows: EarnRow[], perDay = ANTICIPATED_PER_DAY): EarnRow[] {
+  if (perDay <= 0) return rows;
+
+  const byDate = new Map<string, EarnRow[]>();
+  for (const r of rows) {
+    const list = byDate.get(r.date);
+    if (list) list.push(r);
+    else byDate.set(r.date, [r]);
+  }
+
+  const out: EarnRow[] = [];
+  for (const list of byDate.values()) {
+    const sorted = [...list].sort((a, b) => (b.market_cap ?? 0) - (a.market_cap ?? 0));
+    const keep: EarnRow[] = [];
+    const kept = new Set<string>();
+    for (const r of sorted) {
+      if (isAnticipated(r)) { keep.push(r); kept.add(r.symbol); }
+    }
+    for (const r of sorted) {
+      if (keep.length >= perDay) break;
+      if (kept.has(r.symbol)) continue;
+      keep.push(r);
+      kept.add(r.symbol);
+    }
+    out.push(...keep);
+  }
+  return out;
+}
+
 export interface EarnBucket {
   pre: EarnRow[];
   after: EarnRow[];
@@ -163,13 +339,12 @@ export interface EarnBucket {
  * "after" was DROPPED here and never rendered on any surface. That is not a
  * rare edge — Nasdaq marks the large majority of its calendar
  * "time-not-supplied" (on a typical day ~380 of ~490 rows), and that includes
- * real large caps. While the recorder's floor was $100B only a handful of names
- * survived the cap at all so the loss was invisible; at $25B it is the reason
- * the calendar reads half-empty.
+ * real large caps.
  *
  * The bucket is kept SEPARATE rather than folded into pre/after on purpose:
  * guessing a session would put names on the wrong side of the close, which is
- * worse than saying the time is unconfirmed.
+ * worse than saying the time is unconfirmed. The recorder's daily 06:30 ET
+ * re-sweep is what drains this bucket as Nasdaq confirms times through the week.
  */
 export function groupEarningsByDate(rows: EarnRow[]): Map<string, EarnBucket> {
   const map = new Map<string, EarnBucket>();

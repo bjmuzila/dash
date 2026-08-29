@@ -520,16 +520,17 @@ function applyUniversalCloneFixes(root: HTMLElement) {
   //
   // Fix, part 2: part 1 alone still left every label sitting LOW in its pill,
   // because html2canvas's baseline is not the font's ascent — see
-  // `captureBaselineBias()`. The padding is therefore split asymmetrically by the
+  // `captureFontProbe()`. The padding is therefore split asymmetrically by the
   // measured bias, which pushes the glyphs back onto the box's optical centre.
   // Same painted height, same border, and the live page is untouched — this only
   // ever runs on the clone.
-  const biasCache = new Map<string, number>();
+  const biasCache = new Map<string, FontProbe>();
   root.querySelectorAll<HTMLElement>("[data-cap-center]").forEach((n) => {
     const cs = styleOf(n);
     const h = parseFloat(n.style.height || "");
     const fs = parseFloat(n.style.fontSize || "") || parseFloat(cs?.fontSize || "") || 12;
-    const bias = biasFor(n, fs, biasCache);
+    const probe = probeFor(n, fs, biasCache);
+    const bias = probe.bias;
 
     if (h > 0) {
       // border-box: the declared height already contains the 1px borders.
@@ -549,6 +550,8 @@ function applyUniversalCloneFixes(root: HTMLElement) {
     // inline-flex centering is its own html2canvas hazard (it lays the child out
     // but still draws text from the rect's top) — force the simple flow box.
     if ((n.style.display || "").includes("flex")) n.style.display = "inline-block";
+    // Second pass: anything that has to sit ON the label rather than in the box.
+    alignCapSwatches(n, fs, probe.baseline);
   });
 
   // Same bias, no opt-in: the app's segmented switches and toolbar chips are
@@ -565,8 +568,95 @@ function applyUniversalCloneFixes(root: HTMLElement) {
     if (!(n.textContent || "").trim()) return;
     const cs = styleOf(n);
     const fs = parseFloat(cs?.fontSize || "") || parseFloat(n.style.fontSize || "") || 12;
-    shiftTextByBias(n, biasFor(n, fs, biasCache), cs);
+    shiftTextByBias(n, probeFor(n, fs, biasCache).bias, cs);
   });
+}
+
+/**
+ * Cap height as a fraction of the em, for putting a square on the optical
+ * middle of a run of TEXT rather than on the middle of its box. 0.72 is Inter
+ * (0.727), Arial (0.716) and Helvetica (0.717) to within a tenth of a pixel at
+ * these sizes, which is well under what a 1px swatch edge can show.
+ */
+const CAP_HEIGHT_RATIO = 0.72;
+
+/**
+ * Gotcha 10b: a colour swatch pinned to the middle of a `data-cap-center` chip
+ * drifts off its own label in the PNG.
+ *
+ * The chip centers its label the CSS way and the swatch is centred on the chip,
+ * so on the live page the two agree exactly. html2canvas does not draw text
+ * where the box puts it: it paints each run at `textRect.top + baseline`, and
+ * `baseline` comes from `FontMetrics`, which html2canvas constructs with the
+ * PAGE document (`new FontMetrics(document)`) and probes inside a container that
+ * inherits the BODY's line-height. The cap-center rewrite above collapses the
+ * chip to `line-height:1`, so the probe's half-leading is not the chip's, and
+ * the glyphs land several px lower than the box centre. `setSplitPadding` can
+ * only give back what the declared height reserved — 3px on a 16px legend chip —
+ * so the text stays low while the square stays put, and the wall-migration
+ * legend read as squares floating above their words.
+ *
+ * Rather than model the error, aim at it: work out where html2canvas will put
+ * the baseline for this run, put the cap band's middle half a cap height above
+ * it, and re-pin the swatch there. Opt-in via `data-cap-swatch`, clone-only, and
+ * the box, its border and its size are untouched — only the square moves.
+ */
+function alignCapSwatches(n: HTMLElement, fontSize: number, drawnBaseline: number): void {
+  const swatches = n.querySelectorAll<HTMLElement>("[data-cap-swatch]");
+  if (!swatches.length) return;
+  const view = n.ownerDocument ? n.ownerDocument.defaultView : null;
+  if (!view || !(drawnBaseline > 0)) return;
+
+  // The run the swatch labels — the first in-flow child with text in it, which
+  // is the one sitting next to the square. A Range over the whole chip would
+  // union in the absolutely-positioned swatch and measure itself.
+  const anchor = firstTextRect(n, view);
+  if (!anchor || !(anchor.height > 0)) return;
+
+  const box = n.getBoundingClientRect();
+  const bt = parseFloat(view.getComputedStyle(n).borderTopWidth || "") || 0;
+  const capMiddle = anchor.top + drawnBaseline - (fontSize * CAP_HEIGHT_RATIO) / 2;
+
+  swatches.forEach((sw) => {
+    const r = sw.getBoundingClientRect();
+    const h = r.height || parseFloat(sw.style.height || "") || 0;
+    if (!(h > 0)) return;
+    const pos = view.getComputedStyle(sw).position;
+    if (pos === "absolute" || pos === "fixed") {
+      // `top` is measured from the containing block's PADDING box.
+      sw.style.top = `${capMiddle - h / 2 - (box.top + bt)}px`;
+      sw.style.bottom = "auto";
+      sw.style.marginTop = "0";
+    } else {
+      // In-flow (an inline-block dot): nudge it without disturbing the line.
+      sw.style.position = "relative";
+      sw.style.top = `${capMiddle - (r.top + h / 2)}px`;
+    }
+  });
+}
+
+/** Rect of the first in-flow run of text inside `n`, or null if there is none. */
+function firstTextRect(n: HTMLElement, view: Window): DOMRect | null {
+  const doc = n.ownerDocument;
+  if (!doc) return null;
+  for (const node of Array.from(n.childNodes)) {
+    if (node.nodeType === 3) {
+      if (!(node.textContent || "").trim()) continue;
+      const r = doc.createRange();
+      r.selectNode(node);
+      return r.getBoundingClientRect();
+    }
+    if (node.nodeType !== 1) continue;
+    const el = node as HTMLElement;
+    if (el.hasAttribute("data-cap-swatch")) continue;
+    if (!(el.textContent || "").trim()) continue;
+    const p = view.getComputedStyle(el).position;
+    if (p === "absolute" || p === "fixed") continue;
+    const r = doc.createRange();
+    r.selectNodeContents(el);
+    return r.getBoundingClientRect();
+  }
+  return null;
 }
 
 /** Computed style of a cloned node, or null if the clone has no view yet. */
@@ -575,14 +665,14 @@ function styleOf(n: HTMLElement): CSSStyleDeclaration | null {
   return view ? view.getComputedStyle(n) : null;
 }
 
-/** `captureBaselineBias` for an element, with its font resolved off the clone. */
-function biasFor(n: HTMLElement, fontSize: number, cache: Map<string, number>): number {
+/** `captureFontProbe` for an element, with its font resolved off the clone. */
+function probeFor(n: HTMLElement, fontSize: number, cache: Map<string, FontProbe>): FontProbe {
   const cs = styleOf(n);
   // Computed, not inline: `var(--font-sans)` has to be resolved before the probe
   // can measure the family html2canvas will actually draw with.
   const family = cs?.fontFamily || n.style.fontFamily || "sans-serif";
   const weight = cs?.fontWeight || n.style.fontWeight || "400";
-  return captureBaselineBias(n.ownerDocument, family, weight, fontSize, cache);
+  return captureFontProbe(n.ownerDocument, family, weight, fontSize, cache);
 }
 
 /**
@@ -634,19 +724,31 @@ const PROBE_GIF =
  * The probe is appended to the clone document's <body> and removed again before
  * returning — never inside `root`, so the canvas index-pairing downstream is
  * untouched. Cached per capture, per font + weight + size.
+ *
+ * `baseline` is the raw value html2canvas itself will use — the drop from a text
+ * run's rect top to the baseline it paints on. `alignCapSwatches` needs the
+ * absolute number, not just the error, to work out where the glyphs will land.
  */
-function captureBaselineBias(
+type FontProbe = {
+  /** px html2canvas draws LOWER than the browser. */
+  bias: number;
+  /** px from a run's rect top to the baseline html2canvas paints on. */
+  baseline: number;
+};
+
+function captureFontProbe(
   doc: Document,
   fontFamily: string,
   fontWeight: string,
   fontSize: number,
-  cache: Map<string, number>,
-): number {
+  cache: Map<string, FontProbe>,
+): FontProbe {
   const key = `${fontFamily}|${fontWeight}|${fontSize}`;
   const hit = cache.get(key);
   if (hit != null) return hit;
 
   let bias = 0;
+  let baseline = 0;
   try {
     const host = doc.body || doc.documentElement;
     const size = `${fontSize}px`;
@@ -674,15 +776,22 @@ function captureBaselineBias(
     const actual = img.getBoundingClientRect().bottom - span.getBoundingClientRect().top;
     container.remove();
     if (Number.isFinite(assumed) && Number.isFinite(actual)) bias = assumed - actual;
+    if (Number.isFinite(assumed)) baseline = assumed;
   } catch {
     bias = 0;
+    baseline = 0;
   }
   // A sub-pixel-to-2px nudge, never a layout move. If the probe comes back wild
   // (no layout yet, a font that failed to load), ignore it rather than shove the
   // label out of its box.
   if (!Number.isFinite(bias) || Math.abs(bias) > 4) bias = 0;
-  cache.set(key, bias);
-  return bias;
+  // The baseline itself is a real distance, not a nudge: a sane one is inside
+  // one em of the font size. Anything else means the probe never laid out, and
+  // 0 switches `alignCapSwatches` off rather than flinging the swatch away.
+  if (!Number.isFinite(baseline) || baseline <= 0 || baseline > fontSize * 2) baseline = 0;
+  const probe: FontProbe = { bias, baseline };
+  cache.set(key, probe);
+  return probe;
 }
 
 /**

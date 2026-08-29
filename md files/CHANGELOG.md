@@ -1,5 +1,148 @@
 # Changelog
 
+## 2026-08-29 - Level Log: wall-migration legend swatches now sit on their labels in the PNG
+
+Edited: `lib/snapshot.ts`, `components/pages/LevelLog.tsx`.
+
+Expand the wall-migration chart, hit PNG, and the four colour squares floated
+several pixels above "Put Wall" / "Call Wall" / "CORE" / "spot". On the live page
+they are dead centre — the drift is the capture's.
+
+Cause: html2canvas does not draw text where the box puts it. It paints each run
+at `textRect.top + baseline`, and `baseline` comes from a probe html2canvas builds
+with the **page** document (`new FontMetrics(document)`) inside a container that
+inherits the BODY's line-height. The existing `data-cap-center` rewrite collapses
+a chip to `line-height:1` and re-splits its padding to compensate — but the
+padding can only give back what the declared height reserved, which is 3px on a
+16px legend chip. The rest of the drop stays, the glyphs land low, and the swatch
+— pinned to the middle of the BOX — stays where it was.
+
+Fix: aim at the error instead of modelling it. `captureBaselineBias` became
+`captureFontProbe` and now returns the raw `baseline` html2canvas will use as well
+as the `bias`, and a second clone-only pass (`alignCapSwatches`) re-pins anything
+marked `data-cap-swatch` onto the cap band of the run beside it — baseline minus
+half a cap height (0.72em, which is Inter/Arial/Helvetica to within a tenth of a
+pixel). Absolutely positioned swatches get a new `top`; an in-flow one is nudged
+with `position:relative`. The box, its border and its size are untouched, the live
+page is untouched, and a probe that fails to lay out returns `baseline: 0`, which
+switches the pass off rather than flinging the square somewhere.
+
+Opted in so far: the wall-migration legend swatch in `LevelLog.tsx`. Verified
+against a real html2canvas render — swatch centre vs label cap centre went 3.0px →
+0.5px (cap-center alone) → 0.0px.
+
+## 2026-08-29 - Bubbles: one size profile per bucket rung, plus a spacing shrink
+
+Edited: `cbedge-v3/src/board/gexCandles/settings.ts`, `bubbles.ts`,
+`tools/bubble-lab/lab.html`.
+
+5m looked right and 1m came out as fused neon ribbons. That is not a tuning
+failure, it is one number being asked two different questions: a 13px cap over 5m
+dots clears its neighbours, and over 1m dots — five times as many in the same
+width — it cannot. The fix is not a cleverer single number.
+
+**`BUBBLES.profiles` is now one set of size numbers per rung**, hardcoded:
+
+| rung | capPx | floorPx | topBoost | ringPx |
+|---|---|---|---|---|
+| 1m | 5.5 | 1.2 | 1.50 | 1.0 |
+| 5m | 13 | 2.5 | 1.38 | 1.4 |
+| 15m | 16 | 3.0 | 1.34 | 1.6 |
+| 30m | 18 | 3.5 | 1.30 | 1.8 |
+| 60m | 20 | 4.0 | 1.28 | 2.0 |
+
+Each is what that bucket looks right at, at the zoom where the auto rule would
+pick it. A bucket between two listed rungs takes the nearest profile BELOW, so an
+unlisted one is never sized by numbers meant for something coarser.
+
+**And the profile is then shrunk to the room that actually exists.** A profile is
+right at its own zoom; force a rung the auto rule would not have picked — which
+the lab exists to allow, and which a pinned setting would do every day — and the
+dots land closer than the profile assumes. So the cap is also held to
+`capOfSpacing` (0.42) of the measured gap between two dots. It only ever shrinks:
+inert at the intended zoom, and at 1m across a whole session it turns the fused
+ribbons into a fine dotted trail, which is the truthful picture of 975 samples in
+1500 pixels.
+
+Both the bucket and its pixel spacing are MEASURED in `drawBubbles` off the
+snapshots themselves — median consecutive gap, not mean, so a feed outage or a
+weekend is not one huge diff claiming there is far more room than there is. The
+draw is told the model's decision once, by looking at it, rather than twice.
+
+## 2026-08-29 - Bubble Lab: a bucket selector beside the bar selector
+
+Edited: `cbedge-v3/tools/bubble-lab/lab.html`.
+
+`auto bucket` / `1m bucket` / `5m bucket`, next to the `1m bars` / `5m bars` chip
+added earlier. Two selectors because there are two timeframes on this chart and
+they are not the same one: the bars are the candles, the bucket is the bubbles.
+
+**Auto is the pixel rule the card ships with** — the smallest rung whose dots own
+`bucketPxPerDot`, which is a top mark's own diameter plus the hairline. 1m and 5m
+force it, and forcing is the point: a fixed bucket is correct at exactly one zoom
+and the selector is how you see what it costs everywhere else. Across this
+session 1m is 975 dots on 1500 pixels, which cannot help but fuse; 5m on a
+half-hour view is six. Both are right somewhere and neither is right everywhere,
+which is the argument for auto — now made on screen rather than asserted in a
+comment.
+
+When a forced bucket is finer than auto would allow, the caption says
+`5m (tight) bucket`. That is the state where dots overlap, and it should read as
+a choice rather than leave you wondering whether the size law broke.
+
+## 2026-08-29 - Bubble Lab: a bar selector, and what it is actually for
+
+Edited: `cbedge-v3/tools/bubble-lab/lab.html`.
+
+A `1m bars` / `5m bars` chip in the Mode row, rolling the fixture's 1m candles up
+in the page. Each cell's caption now reads `5m bars · 15m bucket · 65 dots · 4
+rows · 20 strikes`, so the two timeframes on this chart are never confused for
+each other again.
+
+They are two different things and the selector is the proof: **the bars are the
+candles, the bucket is the bubbles, and the bucket does not come from the bars.**
+It comes from the visible span in pixels — the smallest rung whose dots own
+`bucketPxPerDot`. Flip the chip and the caption changes on the left of the dot
+and not on the right: same dots, same buckets, same rows, only the candles under
+them redraw. If that ever stops being true, a timeframe term has crept back into
+the layer, which is the bug this whole rebuild was undoing.
+
+The roll-up is plain epoch-aligned buckets rather than the 09:30-anchored grid
+`candles.ts` uses. 09:30 ET is thirty past the hour and 5 divides 30, so for
+these two rungs the grids coincide exactly. They stop coinciding at 15m and up —
+which is why the app rolls up the careful way and the lab does not need to, and
+why this selector stops at 5m rather than growing a ladder it would then have to
+get right.
+
+## 2026-08-29 - Bubbles: rebuilt to the rules table
+
+Edited: `cbedge-v3/src/board/gexCandles/bubbles.ts`, `settings.ts`, `chart.ts`,
+`GexCandlesCard.tsx`, `tools/bubble-lab/lab.html`.
+
+| rule | implementation |
+|---|---|
+| 1 bubble / timeframe | Columns bucket to a rung of `bucketRungsMin` (1/5/15/30/60m). Last print in the bucket wins — a mean would smear the very move a dot exists to show. |
+| 4-10 strikes, >=1 each side | `pick()` ranks by \|netGex\|, FORCES one above spot and one below, then fills the remaining slots from the ranking. Forced first, not swapped in after: the two sides are taken before the ranking gets to spend the slots. |
+| Grow with net GEX | `r = floorPx + sqrt(\|gex\| / windowMax) * (capPx - floorPx)`. One denominator for the whole window. |
+| Top strike stands apart | The bucket's largest gets `topBoost` 1.38x, a bright core and a white ring. 13 x 1.38 = ~18px against ~7px peers, which is the mock. |
+| Floor so old dots survive | Never below `minPx`, whatever the fit pass does. Age fades opacity only from 1.0 to `ageKeep` 0.75 — a trail that fades to nothing cannot be read for the morning, which is half of why it is drawn. |
+| No overlap if possible | Same-bucket neighbours shrink toward the floor proportionally over `fitPasses`, then a pair that still cannot fit takes `jitterPx` of X nudge. Nothing is ever dropped. |
+| History stays the day | Nothing spliced. `strikeMode: 'per-bar'` keeps each bucket's own picks on the axis; `'latest'` locks the Y set to the current picks and plots those strikes backward through the session. |
+
+**The rung is chosen from PIXELS, not from a fixed 1m/5m.** 1m is right on a
+half-hour view and 390 overlapping dots across a session; 5m is right on a
+session and six dots on a half-hour. The layer takes the smallest rung whose
+dots own at least `bucketPxPerDot` — set from the mark itself, `2 x capPx x
+topBoost + gapPx`, so a full-size top mark fits between two dots and they can
+never fuse. The chart reports it on range change, debounced to the rung value
+rather than the span, so it fires twice a session instead of on every wheel tick.
+
+**Gone with the rewrite:** the continuous stroke walk and everything that
+propped it up — smoothing, rank hysteresis, dwell, `planSizes`, the sampled
+time-to-x table. Every one of those was a patch for a renderer where a strike
+dropping out for one print left a hole in a LINE. A dot that is not there for one
+bucket is a gap in a chain of dots, which is what a sample looks like.
+
 ## 2026-08-29 - v3 GEX Candles: Friday's bubbles, on a weekend
 
 Edited: `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
