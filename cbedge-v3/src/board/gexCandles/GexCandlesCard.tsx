@@ -14,6 +14,7 @@ import {
   GEX_HISTORY_MINUTES_PREV_DAY,
   INTERVALS,
   INTERVAL_LABEL,
+  isAutoBucket,
   loadSettings,
   saveSettings,
   type ChartSettings,
@@ -195,7 +196,12 @@ export function GexCandlesCard() {
   // One bubble per bucket, and the bucket comes from how wide the visible window
   // is — the chart reports it, debounced to the value itself, so this changes
   // twice a session rather than on every wheel tick.
-  const [bucketMs, setBucketMs] = useState(BUBBLES.bucketCoarseMs)
+  // Seeded at the coarsest rung the ladder has, so the first frame — drawn
+  // before the chart has measured anything — errs toward too few dots rather
+  // than a 1m firehose that is replaced a frame later.
+  const [bucketMs, setBucketMs] = useState(
+    BUBBLES.bucketRungsMin[BUBBLES.bucketRungsMin.length - 1]! * 60_000,
+  )
   const countdownRef = useRef<HTMLSpanElement | null>(null)
   const barsRef = useRef<Bar[]>([])
 
@@ -397,9 +403,12 @@ export function GexCandlesCard() {
   useEffect(
     () =>
       apply((h) =>
-        h.setDrawOpts({ on: settings.bubblesOn }),
+        h.setDrawOpts({
+          on: settings.bubblesOn,
+          bucketMin: isAutoBucket(settings.bubbleBucket) ? null : settings.bubbleBucket,
+        }),
       ),
-    [settings.bubblesOn, apply],
+    [settings.bubblesOn, settings.bubbleBucket, apply],
   )
 
   // ── Countdown ──────────────────────────────────────────────────────────────
@@ -520,6 +529,25 @@ export function GexCandlesCard() {
                   ]}
                   value={settings.gexMetric}
                   onChange={(v) => patch({ gexMetric: v })}
+                />
+              </PanelSection>
+
+              {/* The ONLY bubble setting. Six sliders came out of this panel and
+                  this is what replaced them, because it is the one question the
+                  layer cannot answer for itself from the pane alone: whether
+                  you want the rung it would pick, or a finer one held to the
+                  floor. Auto is right nearly always — a pinned rung is for
+                  reading sub-bar detail on a wide chart. */}
+              <PanelSection title="Bubble bucket">
+                <SegGroup
+                  title="How much time one bubble covers. Auto picks the finest rung whose dots still separate at this zoom and re-picks as you zoom; 1m and 5m pin it. A pin sets the rung, not the stride — at a wide zoom a pinned 1m still draws every Nth bucket, which is the same picture Auto would have drawn"
+                  options={[
+                    { label: 'Auto', value: 'auto' },
+                    { label: '1m', value: '1' },
+                    { label: '5m', value: '5' },
+                  ]}
+                  value={isAutoBucket(settings.bubbleBucket) ? 'auto' : String(settings.bubbleBucket)}
+                  onChange={(v) => patch({ bubbleBucket: v === 'auto' ? 'auto' : v === '1' ? 1 : 5 })}
                 />
               </PanelSection>
 

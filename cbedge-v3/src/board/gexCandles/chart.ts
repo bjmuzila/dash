@@ -38,8 +38,18 @@ function hexToRgb(hex: string, fallback: [number, number, number]): [number, num
 }
 
 export interface ChartDrawOpts {
-  /** The only bubble setting there is. Everything else is BUBBLES in settings. */
+  /** Master on/off for the bubble layer. */
   on: boolean
+  /**
+   * Pin the bubble bucket to a rung, in minutes, or null to let the pane choose.
+   *
+   * The chart owns this rather than the model because the auto answer is a
+   * question about PIXELS — how much room a dot has — and the model has no idea
+   * how wide the pane is. Pinning short-circuits that measurement; it does NOT
+   * short-circuit the stride, so a pinned 1m on a whole session still draws
+   * every Nth bucket and lands on the picture auto would have drawn anyway.
+   */
+  bucketMin: 1 | 5 | null
 }
 
 /**
@@ -202,7 +212,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
 
   let snaps: BubbleSnapshot[] = []
   let barCount = 0
-  let drawOpts: ChartDrawOpts = { on: true }
+  let drawOpts: ChartDrawOpts = { on: true, bucketMin: null }
   let railSink: RailSink | null = null
   let raf = 0
   // The forming bar, kept here so a live tick can extend it without going back
@@ -303,11 +313,14 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   // rather than on every wheel tick, and each change rebuilds the model.
   let lastBucket = 0
   function reportBucket(spanMs: number, plotPx: number) {
-    const msPerPx = spanMs / Math.max(1, plotPx)
-    const need = BUBBLES.bucketPxPerDot * msPerPx
-    const rungs = BUBBLES.bucketRungsMin
-    const rung = rungs.find((m) => m * 60_000 >= need) ?? rungs[rungs.length - 1]!
-    const ms = rung * 60_000
+    const forced = drawOpts.bucketMin
+    const ms = forced ? forced * 60_000 : (() => {
+      const msPerPx = spanMs / Math.max(1, plotPx)
+      const need = BUBBLES.bucketPxPerDot * msPerPx
+      const rungs = BUBBLES.bucketRungsMin
+      const rung = rungs.find((m) => m * 60_000 >= need) ?? rungs[rungs.length - 1]!
+      return rung * 60_000
+    })()
     if (ms === lastBucket) return
     lastBucket = ms
     mountOpts.onBucketMs?.(ms)

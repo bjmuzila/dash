@@ -1,21 +1,42 @@
 # Changelog
 
-## 2026-08-29 - Build fix (again): backticks inside STUDIO_HTML
+## 2026-08-29 - v3: the bubble bucket picker (Auto / 1m / 5m), like v2
 
-Edited: owner-vite/src/pages/studioHtml.ts.
+Edited: `cbedge-v3/src/board/gexCandles/settings.ts`, `chart.ts`,
+`GexCandlesCard.tsx`.
 
-Same failure as the earlier v8.29.2 break, in a second spot. The whole file is
-one String.raw template literal, so a backtick ANYWHERE inside it — including in
-a comment quoting an identifier — closes the template early and esbuild dies on
-the next word. This round it was line 286 (vals) plus the line 992 (alerts) one
-that came back with a later edit. Both swapped to single quotes.
+v2's ES Candles has had an Auto / 1m / 5m bucket picker since the engine was
+built; v3 was running permanently on Auto with no way to say otherwise. It now
+has the same control, under **Layers -> Bubble bucket**.
 
-Hard rule for this file: no backticks between the opening String.raw and the
-closing </html>, comments included. Quick check before pushing:
+* **`settings.ts`** - `BubbleBucket` (`1 | 5 | 'auto'`), `isBubbleBucket`,
+  `isAutoBucket`, `BUBBLE_BUCKET_DEFAULT`, and a `bubbleBucket` field on
+  `ChartSettings`. It is the ONLY bubble setting the card has; everything else
+  about the layer is still the frozen `BUBBLES` block. `SETTINGS_V` 3 -> 4, and
+  an older blob simply has no such key, falls back to `'auto'`, and that is the
+  behaviour it already had - nothing needs forcing.
 
-    grep -n '`' owner-vite/src/pages/studioHtml.ts
+  v2 also accepts a legacy `'bar'` spelling of Auto. v3 has no blobs old enough
+  to hold it, so it is not accepted here - the one deliberate difference between
+  the two copies.
 
-Only two hits are legal — the opening line and the closing line.
+* **`chart.ts`** - `ChartDrawOpts` gains `bucketMin: 1 | 5 | null`, and
+  `reportBucket` short-circuits its pixel measurement when it is set. The CHART
+  owns this, not the model, because the auto answer is a question about pixels -
+  how much room a dot has - and the model has no idea how wide the pane is.
+
+  **A pin sets the RUNG, not the stride.** A forced 1m across a whole session
+  still draws every Nth bucket, because 975 dots do not fit in 1500px whoever
+  picked the number - so at a wide zoom a pin lands on exactly the picture Auto
+  would have drawn. That is correct, and worth knowing before someone files it
+  as the picker not working.
+
+**Also fixed:** `GexCandlesCard` seeded its bucket state from
+`BUBBLES.bucketCoarseMs`, a constant deleted when the bubble knobs came out - a
+dangling reference that would have failed `npm run typecheck`. It now seeds from
+the coarsest rung the ladder actually has, so the first frame (drawn before the
+chart has measured anything) errs toward too few dots rather than a 1m firehose
+replaced a frame later.
 
 ## 2026-08-29 - Bubbles: auto stops at 5m, and the sizes spread out again
 

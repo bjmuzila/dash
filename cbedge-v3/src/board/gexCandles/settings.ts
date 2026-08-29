@@ -61,6 +61,12 @@ export interface ChartSettings {
    * dates are not AMZN's.
    */
   expiry: string
+  /**
+   * The bubble time bucket: 'auto' follows the pane, 1 or 5 pins the rung.
+   * See BubbleBucket. This is the ONLY bubble setting the user has — everything
+   * else about the layer is the frozen BUBBLES block above.
+   */
+  bubbleBucket: BubbleBucket
 }
 
 export const DEFAULT_SETTINGS: ChartSettings = {
@@ -82,6 +88,7 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   // session and no picker; 'latest' is what that collapses to.
   bubbleDay: 'both',
   expiry: '',
+  bubbleBucket: BUBBLE_BUCKET_DEFAULT,
 }
 
 /**
@@ -282,6 +289,32 @@ export const BUBBLES = {
  */
 export const BUBBLE_LADDER_REQUEST = 30
 
+/**
+ * Which time bucket the bubbles aggregate at. Storage is always one column per
+ * MINUTE; this is a DRAW-time aggregation.
+ *
+ * 'auto' is the default and the right answer almost always: the bucket is a
+ * question about how much room a dot has, and only the chart knows how wide the
+ * pane is. It picks the smallest rung of `BUBBLES.bucketRungsMin` whose dots
+ * land far enough apart, and re-picks on every zoom.
+ *
+ * 1 and 5 are MANUAL overrides, and they override the RUNG, not the stride: a
+ * forced 1m on a whole session still strides, because 975 dots do not fit in
+ * 1500px whatever anyone picked. So the honest description of a pinned value is
+ * "never coarser than this", and at a wide zoom it lands on the same picture
+ * auto would have drawn.
+ *
+ * (v2's slotStore carries the same three values plus a legacy 'bar' spelling,
+ * which is the pre-rename name for 'auto'. v3 has no blobs old enough to hold
+ * it, so it is not accepted here.)
+ */
+export type BubbleBucket = 1 | 5 | 'auto'
+export const isBubbleBucket = (v: unknown): v is BubbleBucket => v === 1 || v === 5 || v === 'auto'
+/** Does this bucket follow the pane, rather than pin a rung? */
+export const isAutoBucket = (v: BubbleBucket): boolean => v === 'auto'
+/** What a fresh card starts on. */
+export const BUBBLE_BUCKET_DEFAULT: BubbleBucket = 'auto'
+
 /** How far back the bubble history reaches, minutes. One full session + pre. */
 export const GEX_HISTORY_MINUTES = 720
 
@@ -316,12 +349,16 @@ const KEY_PREFIX = 'cb-v3-gex-candles:'
 /**
  * Blob version, written alongside the settings and checked on load.
  *
+ * v4 (2026-08-29): `bubbleBucket` added — the one bubble setting there is. An
+ * older blob has no such key, `coerce` falls back to 'auto', and that is the
+ * behaviour those blobs already had, so nothing needs forcing.
+ *
  * v3 (2026-08-29): the bubble knobs are gone from ChartSettings entirely, so
  * there is nothing left to force onto anyone — an old blob's stale keys are
  * simply never read. Kept because the next default that needs pushing will need
  * this, and re-deriving the mechanism is worse than leaving it inert.
  */
-const SETTINGS_V = 3
+const SETTINGS_V = 4
 const STALE_ON_UPGRADE: string[] = []
 
 /** Coerce an unknown parsed blob into a complete, in-range settings object. */
@@ -347,6 +384,7 @@ function coerce(raw: unknown): ChartSettings {
     prevDay: p.prevDay !== false,
     bubbleDay: p.bubbleDay === 'latest' || p.bubbleDay === 'prev' ? p.bubbleDay : 'both',
     expiry: typeof p.expiry === 'string' ? p.expiry : '',
+    bubbleBucket: isBubbleBucket(p.bubbleBucket) ? p.bubbleBucket : DEFAULT_SETTINGS.bubbleBucket,
   }
 }
 
