@@ -6,7 +6,11 @@
  * The same board the owner Results → Contracts tab renders, cut down to the one
  * thing a customer is reading it for: what the CB-strike 0DTE contract did at
  * each of today's checkpoints. One row per checkpoint — 9:45, 10:30, 12:00 —
- * with what was paid, the day's high-water mark, and the P/L against it.
+ * with what was paid, the day's high-water mark, and the P/L to that mark.
+ *
+ * THE P/L IS ENTRY → PEAK, not held-to-the-bell, and there is no summed total
+ * across the three rows. Both are deliberate; the reasons are on the cells
+ * themselves.
  *
  * WHAT THIS IS NOT: the owner board's range picker, its per-checkpoint roll-up
  * cards, and its recorder controls (Run now / Diagnose) are all deliberately
@@ -138,15 +142,16 @@ export default function CbContracts() {
   // and the next poll picks it up. Anything faster re-renders between writes.
   useEffect(() => { void load(); const id = setInterval(() => void load(), 60_000); return () => clearInterval(id); }, [load]);
 
-  const totals = useMemo(() => {
-    const settled = trades.filter((t) => t.status === "closed" && t.pnl != null);
-    return {
-      taken: trades.filter((t) => t.status !== "skipped").length,
-      open: trades.filter((t) => t.status === "open").length,
-      usd: settled.reduce((a, t) => a + (n(t.pnl_usd) ?? 0), 0),
-      closed: settled.length,
-    };
-  }, [trades]);
+  // Counts only. There is deliberately NO summed P/L across the three
+  // checkpoints: they are three separate one-contract probes of the same
+  // session, not three legs of one position, and adding them up invents a
+  // portfolio nobody held. A reader who wants the day's total can add the rows
+  // they would actually have taken; a footer that does it for them states a
+  // number that was never anyone's result.
+  const totals = useMemo(() => ({
+    taken: trades.filter((t) => t.status !== "skipped").length,
+    open: trades.filter((t) => t.status === "open").length,
+  }), [trades]);
 
   if (state === "denied" || state === "error") return null;
 
@@ -188,7 +193,7 @@ export default function CbContracts() {
                 <th>Contract</th>
                 <th className="r">Entry</th>
                 <th className="r">Peak</th>
-                <th className="r">P/L</th>
+                <th className="r">Peak P/L</th>
               </tr>
             </thead>
             <tbody>
@@ -199,11 +204,18 @@ export default function CbContracts() {
                 // number would stop starring anything and every live mark would
                 // read as booked.
                 const unrealized = t.status === "open";
-                const shown = n(t.pnl) ?? (t.entry_price != null && t.last_price != null
-                  ? Math.round((n(t.last_price)! - n(t.entry_price)!) * 100) / 100
-                  : null);
+                // ENTRY → PEAK, and nothing else. This column used to be
+                // `t.pnl` — the held-to-the-bell result — which put a number
+                // beside the Peak column that contradicted it: 7790C peaked at
+                // $3.25 off a $1.90 entry and the row still read −1.87, because
+                // there is no sell rule and it gave it all back by the close.
+                // Both facts are true; two of them in one row read as a
+                // mistake. The table's subject is the PEAK — what the move
+                // offered — so the P/L is measured to the same place, and the
+                // star still says the peak can still move.
                 const entryVsPeak = t.best_price != null && t.entry_price != null
-                  ? Number(t.best_price) - Number(t.entry_price) : null;
+                  ? Math.round((Number(t.best_price) - Number(t.entry_price)) * 100) / 100 : null;
+                const shown = entryVsPeak;
                 return (
                   <tr key={t.id} className={skipped ? "skip" : undefined}>
                     <td className="mono dim">{t.date}</td>
@@ -272,11 +284,9 @@ export default function CbContracts() {
 
           <div className="cbcfoot">
             <span>{totals.taken} traded · {totals.open} open</span>
-            <span className={`net${totals.usd >= 0 ? " up" : " down"}`}>
-              net {totals.usd >= 0 ? "+" : "−"}${Math.abs(totals.usd).toFixed(0)}
-              {totals.closed === 0 ? " · nothing closed yet" : ""}
+            <span className="cbclegend">
+              ←CB marks a walked strike · P/L is entry → peak, per contract · <b>*</b> still open
             </span>
-            <span className="cbclegend">←CB marks a walked strike · held to the bell · <b>*</b> unrealized</span>
           </div>
         </div>
       )}
@@ -579,9 +589,6 @@ export const CB_CONTRACTS_CSS = `
 .pmk .cbcfoot{display:flex;gap:16px;flex-wrap:wrap;align-items:center;padding:8px 13px;
   border-top:1px solid var(--line);font-size:10.5px;color:var(--dim2);
   font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
-.pmk .cbcfoot .net{font-weight:700}
-.pmk .cbcfoot .net.up{color:var(--pos)}
-.pmk .cbcfoot .net.down{color:var(--neg)}
 .pmk .cbcfoot .cbclegend{margin-left:auto}
 
 /* ── Probe card ─────────────────────────────────────────────────────────── */

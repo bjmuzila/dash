@@ -35,12 +35,15 @@
  * inequality), so it lives in [−1, +1]:
  *
  *   +1  pure addition — gamma arrived, nothing left      (LIGHT_BLUE, bright)
- *    0  pure rotation — as much came off as went on      (purple, dim)
- *   −1  pure unwind   — gamma left, nothing replaced it  (SOFT_RED)
+ *    0  pure rotation — as much came off as went on      (dim, either hue)
+ *   −1  pure unwind   — gamma left, nothing replaced it  (ES_CANDLE_DOWN)
  *
  * The brightness gradient does real work here: a dim bar is a book that churned
  * without growing. On 2026-08-27 NVDA read 0.90 (almost pure addition) while
  * MSTR read 0.29 (mostly rotation) at a similar churn.
+ *
+ * The exact anchors, why they are those two, and why the middle dims toward a
+ * neutral instead of a third colour are all in buildShareColor's own note.
  *
  * ── OPEX AND EARNINGS ARE SHOWN, NOT HIDDEN ─────────────────────────────────
  * They are excluded from the BASELINE (see the _lib header — opex drops the
@@ -53,7 +56,7 @@
 
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { HOME_THEME, LIGHT_BLUE, SOFT_RED, statTileStyle } from "./homeTheme";
+import { HOME_THEME, LIGHT_BLUE, ES_CANDLE_DOWN, statTileStyle } from "./homeTheme";
 
 /** One row of /api/gex-gross-feed. */
 export type GexGrossRow = {
@@ -96,12 +99,53 @@ function hexToRgb(hex: string): [number, number, number] {
   ];
 }
 
-/** Diverging ramp across three THEME anchors — no literals. */
+/**
+ * Diverging ramp between the app's blue/red pair — no literals.
+ *
+ *   −1  pure unwind   → ES_CANDLE_DOWN, full   (the app's saturated red)
+ *    0  pure rotation → the same hue, dimmed to the floor over HOME_THEME.panel
+ *   +1  pure addition → LIGHT_BLUE, full
+ *
+ * ── 2026-08-29: WHY THE RED LOOKED FADED, AND IT WAS NOT ONE THING ──────────
+ * (1) The anchor was SOFT_RED (#f4948e), a pale salmon — the app's ANNOTATION
+ *     red, not its trading red. Opposite LIGHT_BLUE, an unwind read as washed
+ *     pink while a build of the same size read as bright blue: one scale, two
+ *     weights. It is now ES_CANDLE_DOWN, the saturated red the candles and
+ *     every P/L on the site already use, so both ends of this ramp are the
+ *     blue/red pair the rest of the page is in.
+ *
+ * (2) The MIDPOINT was HOME_THEME.purple (#126783 — a dark TEAL), and this was
+ *     the real culprit. Interpolating red→teal does not pass through "dim red",
+ *     it passes through MUD: a genuine unwind at −0.35 came out rgb(151,96,109),
+ *     a mauve-grey that reads as neither red nor blue. Both sides now dim toward
+ *     HOME_THEME.panel instead, which is a NEUTRAL dark, so the hue survives all
+ *     the way down — −0.35 is now a plain dark red.
+ *
+ * (3) The mix is eased (|s| ** 0.55) and floored (never below FLOOR of the way
+ *     to the anchor). The easing reaches full colour fast so mid-sized shares
+ *     read as what they are; the floor keeps a near-zero bar VISIBLE — mixing
+ *     all the way to panel would make a pure-rotation bar near-black on a
+ *     near-black page, and the fill LENGTH still has to be readable, because
+ *     that is the churn heat and it is a separate fact from the colour.
+ *
+ * Everything here is symmetric, so the blue end sharpened by exactly as much as
+ * the red one. The ramp is still diverging and still says the same three things
+ * — it just says the red one out loud.
+ *
+ * The trade for (2): at exactly 0 the two sides no longer meet at one colour,
+ * they meet at "dim red" and "dim blue". That is not a defect. build_share is
+ * signed and the sign is the whole point; a scale that hides it at small
+ * magnitudes is how a book that quietly bled gamma all week looked identical to
+ * one that quietly added it.
+ */
+const RAMP_EASE = 0.55;
+const RAMP_FLOOR = 0.4;
+
 function buildShareColor(share: number, alpha = 1): string {
   const s = Number.isFinite(share) ? Math.max(-1, Math.min(1, share)) : 0;
-  const from = s < 0 ? hexToRgb(SOFT_RED) : hexToRgb(HOME_THEME.purple);
-  const to = s < 0 ? hexToRgb(HOME_THEME.purple) : hexToRgb(LIGHT_BLUE);
-  const t = s < 0 ? s + 1 : s;
+  const from = hexToRgb(HOME_THEME.panel);
+  const to = hexToRgb(s < 0 ? ES_CANDLE_DOWN : LIGHT_BLUE);
+  const t = RAMP_FLOOR + (1 - RAMP_FLOOR) * Math.abs(s) ** RAMP_EASE;
   const mix = from.map((c, i) => Math.round(c + (to[i] - c) * t));
   return `rgba(${mix[0]},${mix[1]},${mix[2]},${alpha})`;
 }
@@ -196,7 +240,12 @@ export function GexHeatBar({ row, showLabel = true, height = 10, style }: GexHea
           style={{
             width: `${frac * 100}%`,
             height: "100%",
-            background: `linear-gradient(90deg, ${buildShareColor(row.buildShare, 0.55)}, ${fillColor})`,
+            // The left stop was 0.55 alpha, which on a short bar meant most of
+            // the fill was half-transparent and the colour never got a chance
+            // to land — the other half of "the red looks faded". 0.82 still
+            // reads as a gradient across a long bar without washing out a short
+            // one.
+            background: `linear-gradient(90deg, ${buildShareColor(row.buildShare, 0.82)}, ${fillColor})`,
             transition: "width 240ms ease",
           }}
         />
@@ -437,7 +486,10 @@ export function GexChurnHistory({ symbol, rows, note, loading, limit = 12, style
                       style={{
                         width: `${frac * 100}%`,
                         height: "100%",
-                        background: `linear-gradient(90deg, ${buildShareColor(r.buildShare, 0.55)}, ${color})`,
+                        // Same 0.82 left stop as the board's bar — these rows
+                        // are 8px tall and were the worst case for the old
+                        // half-transparent start.
+                        background: `linear-gradient(90deg, ${buildShareColor(r.buildShare, 0.82)}, ${color})`,
                       }}
                     />
                   </div>

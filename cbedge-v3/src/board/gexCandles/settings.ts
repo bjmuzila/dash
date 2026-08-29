@@ -126,8 +126,17 @@ export const BUBBLES = {
    * dots across a session, and 5m is right on a session and six dots on a
    * half-hour. The rung is a consequence of the zoom, which is the only thing
    * that knows how much room a dot has.
+   *
+   * CAPPED AT 5m. 15m and coarser were reachable on a wide view and the result
+   * was a scatter of lonely dots with the session's shape missing between them —
+   * technically legible, useless to read. Past 5m the answer is not a coarser
+   * BUCKET (which throws away the prints) but the stride (which keeps the
+   * bucketing honest and just draws every Nth), so the ladder stops here and the
+   * stride takes it from there. The 15/30/60 entries in `profiles` stay: a
+   * strided 5m trail is SIZED by its effective spacing, so those are still
+   * reached — as sizes, never as buckets.
    */
-  bucketRungsMin: [1, 5, 15, 30, 60],
+  bucketRungsMin: [1, 5],
   /**
    * Pixels a bucket must own before its rung is allowed.
    *
@@ -160,11 +169,12 @@ export const BUBBLES = {
   strikeMode: 'per-bar' as 'per-bar' | 'latest',
 
   // ── Size, PER RUNG ───────────────────────────────────────────────────────
-  //   r = floorPx + sqrt(|gex| / windowMax) * (capPx - floorPx),  x topBoost
+  //   r = floorPx + (|gex| / windowMax) ** sizeCurve * (capPx - floorPx),  x topBoost
   //
-  // sqrt, not linear: the top strike is routinely 5-10x its neighbours and a
-  // linear law spends the whole budget on it, leaving the rest as identical
-  // specks. Under the root a 25%-of-max strike still draws at half the range.
+  // Compressive, not linear: the top strike is routinely 5-10x its neighbours
+  // and a linear law spends the whole budget on it, leaving the rest as
+  // identical specks. Under the curve a 25%-of-max strike still draws at
+  // roughly two fifths of the range.
   //
   // ── AND THE NUMBERS ARE PER BUCKET SIZE ──────────────────────────────────
   // A 13px cap is right at 5m and absurd at 1m: five times the dots in the same
@@ -176,12 +186,36 @@ export const BUBBLES = {
   // the auto rule would pick it. Rungs between the listed ones take the nearest
   // profile below.
   profiles: {
-    1: { capPx: 9, floorPx: 1.6, topBoost: 1.45, ringPx: 1.1 },
-    5: { capPx: 13, floorPx: 2.5, topBoost: 1.38, ringPx: 1.4 },
-    15: { capPx: 16, floorPx: 3, topBoost: 1.34, ringPx: 1.6 },
-    30: { capPx: 18, floorPx: 3.5, topBoost: 1.3, ringPx: 1.8 },
-    60: { capPx: 20, floorPx: 4, topBoost: 1.28, ringPx: 2 },
+    1: { capPx: 9, floorPx: 1.6, topBoost: 1.6, ringPx: 1.1 },
+    5: { capPx: 13, floorPx: 2.5, topBoost: 1.55, ringPx: 1.4 },
+    15: { capPx: 16, floorPx: 3, topBoost: 1.5, ringPx: 1.6 },
+    30: { capPx: 18, floorPx: 3.5, topBoost: 1.46, ringPx: 1.8 },
+    60: { capPx: 20, floorPx: 4, topBoost: 1.42, ringPx: 2 },
   } as Record<number, { capPx: number; floorPx: number; topBoost: number; ringPx: number }>,
+  /**
+   * The exponent on `|gex| / windowMax`.
+   *
+   * Was a plain square root (0.5). At 0.5 a strike holding 5% of the max still
+   * draws at 22% of the range and one holding 30% at 55%, which is most of the
+   * ladder bunched in the top half of the size budget — every mark roughly the
+   * same dot, the top one distinguishable only by its ring. Steeper spreads the
+   * middle back out: 5% -> 16%, 30% -> 48%, and the biggest wall of the day
+   * reads as bigger from across the room, which is the entire job of the layer.
+   *
+   * Do not go past ~0.75. Beyond that the law is effectively linear again and
+   * everything below the leader collapses onto the floor.
+   */
+  sizeCurve: 0.62,
+  /**
+   * The floor, as a fraction of whatever cap survived the spacing shrink.
+   *
+   * Was 0.45, which at a wide zoom (cap ~4.6px) left a 2.5px range between the
+   * smallest mark and the largest — under a hairline of separation once the ring
+   * is on. At 0.25 the small end goes properly small and the spread is visible
+   * at the zoom where the whole session is on screen. `minPx` is still the hard
+   * bottom underneath it.
+   */
+  floorOfCap: 0.25,
   /**
    * …and the profile is then SHRUNK to the room that actually exists.
    *
@@ -193,8 +227,24 @@ export const BUBBLES = {
    * is inert, and at 1m across a whole session it turns what were fused ribbons
    * into a fine dotted trail, which is the truthful picture of 975 samples in
    * 1500 pixels.
+   *
+   * This bounds the PEERS ONLY. It used to be divided by `topBoost` so the
+   * boosted leader fit inside it too — which meant one dot per bucket dictated
+   * the size of all the others, and the whole ladder paid a 30-40% tax for a
+   * mark that already has a ring and a glow to set it apart.
    */
-  capOfSpacing: 0.42,
+  capOfSpacing: 0.28,
+  /**
+   * The leader's own share of the spacing — larger than the peers', so it stands
+   * apart, and still a bound, so it cannot fuse.
+   *
+   * Just under 0.5, which is the geometric limit: two marks one spacing apart
+   * touch when each is half the spacing. Removing the leader's bound altogether
+   * looked fine on a session view and drew a continuous sausage at a 30-minute
+   * zoom, where the profile cap binds instead of the spacing and the boost then
+   * put 14px of radius into 15px of room.
+   */
+  topOfSpacing: 0.34,
   /** Absolute floor. Old dots never shrink past this, whatever the fit does. */
   minPx: 1.2,
 
@@ -211,7 +261,15 @@ export const BUBBLES = {
   fade: 0.45,
   /** The oldest bucket keeps this much of its opacity. Age reads, faintly. */
   ageKeep: 0.75,
-  /** The glow under the top mark. Its ring width is per-rung, in `profiles`. */
+  /**
+   * The glow under the top mark. Its ring width is per-rung, in `profiles`.
+   *
+   * Both of these are CEILINGS, not amounts: the blur actually drawn is also
+   * held to the room left beside the mark once its own radius is taken out of
+   * the spacing, and at a tight zoom that room is zero and the glow simply does
+   * not draw. A 7px halo painted across a 2px gap is what turned the leader's
+   * row into one continuous sausage — the marks were clearing, the blur was not.
+   */
   glowFactor: 0.6,
   glowMaxPx: 7,
 } as const

@@ -42,9 +42,9 @@
  *                              wins.
  *   4 strikes, 1 a side        rank by |netGex|, FORCE one above spot and one
  *                              below, then fill from the ranking.
- *   grow with net GEX          r = floor + sqrt(|gex| / windowMax) x (cap-floor)
- *   the top strike stands out  the bucket's largest gets x1.38, a white ring and
- *                              a bright core
+ *   grow with net GEX          r = floor + ratio**sizeCurve x (cap - floor)
+ *   the top strike stands out  the bucket's largest gets the boost, a white ring
+ *                              and a bright core
  *   old dots survive           never below minPx; age fades opacity only to
  *                              `ageKeep`
  *   no overlap if possible     same-bucket neighbours shrink toward the floor,
@@ -57,8 +57,15 @@ export const BUBBLES = {
   /**
    * The bucket ladder, in minutes. The layer picks the SMALLEST rung whose dots
    * land far enough apart to be told apart — see `bucketPxPerDot`.
+   *
+   * CAPPED AT 5m. 15m and coarser were reachable on a wide view and drew a
+   * scatter of lonely dots with the session's shape missing between them. Past
+   * 5m the answer is not a coarser BUCKET (which throws away the prints) but the
+   * stride (which keeps the bucketing honest and draws every Nth). The
+   * 15/30/60 entries in `profiles` stay — a strided 5m trail is SIZED by its
+   * effective spacing, so they are still reached as sizes, never as buckets.
    */
-  bucketRungsMin: [1, 5, 15, 30, 60],
+  bucketRungsMin: [1, 5],
   /**
    * Pixels a bucket must own before its rung is allowed. Set from the SMALLEST
    * legible mark, not a full-size one: at a full-size threshold a 1m rung needs
@@ -88,19 +95,39 @@ export const BUBBLES = {
    * nearest profile BELOW.
    */
   profiles: {
-    1: { capPx: 9, floorPx: 1.6, topBoost: 1.45, ringPx: 1.1 },
-    5: { capPx: 13, floorPx: 2.5, topBoost: 1.38, ringPx: 1.4 },
-    15: { capPx: 16, floorPx: 3, topBoost: 1.34, ringPx: 1.6 },
-    30: { capPx: 18, floorPx: 3.5, topBoost: 1.3, ringPx: 1.8 },
-    60: { capPx: 20, floorPx: 4, topBoost: 1.28, ringPx: 2 },
+    1: { capPx: 9, floorPx: 1.6, topBoost: 1.6, ringPx: 1.1 },
+    5: { capPx: 13, floorPx: 2.5, topBoost: 1.55, ringPx: 1.4 },
+    15: { capPx: 16, floorPx: 3, topBoost: 1.5, ringPx: 1.6 },
+    30: { capPx: 18, floorPx: 3.5, topBoost: 1.46, ringPx: 1.8 },
+    60: { capPx: 20, floorPx: 4, topBoost: 1.42, ringPx: 2 },
   } as Record<number, { capPx: number; floorPx: number; topBoost: number; ringPx: number }>,
+  /**
+   * The exponent on `|gex| / windowMax`. Was a plain square root (0.5), which
+   * put a 5%-of-max strike at 22% of the range and a 30% strike at 55% — most of
+   * the ladder bunched in the top half of the budget, every mark the same dot.
+   * Steeper spreads the middle back out: 5% -> 16%, 30% -> 48%, and the day's
+   * biggest wall reads as bigger from across the room. Do not go past ~0.75.
+   */
+  sizeCurve: 0.62,
+  /** The floor, as a fraction of whatever cap survived the spacing shrink. */
+  floorOfCap: 0.25,
   /**
    * …and the profile is then SHRUNK to the room that actually exists. A profile
    * is right at the zoom its rung was chosen for; force a rung the auto rule
    * would not have picked and the dots land closer than it assumes. Only ever
    * shrinks.
+   *
+   * This bounds the PEERS ONLY. It used to be divided by `topBoost` so the
+   * boosted leader fit inside it too, which meant one dot per bucket dictated
+   * the size of every other dot in it.
    */
-  capOfSpacing: 0.42,
+  capOfSpacing: 0.28,
+  /**
+   * The leader's own, larger share of the spacing — so it stands apart, and
+   * still a bound, so a row of leaders on one strike stays a row of dots rather
+   * than fusing into one continuous bar.
+   */
+  topOfSpacing: 0.34,
   /** Absolute floor. Old dots never shrink past this, whatever the fit does. */
   minPx: 1.2,
 
@@ -115,6 +142,12 @@ export const BUBBLES = {
   fade: 0.45,
   /** The oldest bucket keeps this much of its opacity. */
   ageKeep: 0.75,
+  /**
+   * Both are CEILINGS, not amounts: the blur actually drawn is also held to the
+   * room left beside the mark once its radius is taken out of the spacing, and
+   * at a tight zoom that room is zero and the glow does not draw. A 7px halo
+   * painted across a 2px gap is what turned the leader's row into a sausage.
+   */
   glowFactor: 0.6,
   glowMaxPx: 7,
 } as const;

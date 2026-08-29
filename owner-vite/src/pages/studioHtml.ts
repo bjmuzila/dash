@@ -83,6 +83,18 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
   #stage{position:relative;overflow:hidden;transform-origin:top left;box-shadow:0 18px 40px rgba(0,0,0,.45)}
   #stage .grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);background-size:100px 100px;pointer-events:none}
   #stage .bar{position:absolute;left:0;bottom:0;width:100%;height:12px}
+  /* Background FX plate. One generated SVG, not a stack of blurred divs:
+     html2canvas cannot rasterise CSS filter/backdrop-filter/mix-blend-mode, but
+     it loads a background-image fine and the browser rasterises the SVG — so
+     turbulence smoke and real gaussian blur survive the export. */
+  #stage .fx{position:absolute;inset:0;background-size:100% 100%;background-repeat:no-repeat;pointer-events:none}
+  /* Alignment guides. Gold so they never read as content, above every layer,
+     and gone the moment the stage goes into export mode. */
+  #guides{position:absolute;inset:0;pointer-events:none;z-index:50}
+  #guides .gl{position:absolute;background:var(--gold);opacity:.85}
+  #guides .gv{top:0;bottom:0;width:1px}
+  #guides .gh{left:0;right:0;height:1px}
+  #stage.exp #guides{display:none}
 
   .ly{position:absolute;cursor:move}
   .ly.sel{outline:2px solid var(--acc);outline-offset:2px}
@@ -141,6 +153,18 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
     <button id="tgrid" class="on">Grid lines</button>
     <button id="tbar" class="on">Accent bar</button>
   </div>
+  <label>Background FX</label>
+  <div class="row">
+    <button data-fx="lights">Lights</button>
+    <button data-fx="rays">Rays</button>
+    <button data-fx="smoke">Smoke</button>
+    <button data-fx="grain">Grain</button>
+    <button data-fx="scan">Scanlines</button>
+    <button data-fx="vignette">Vignette</button>
+  </div>
+  <label>FX strength <span id="fxlab" style="color:var(--acc)"></span></label>
+  <input type="range" id="fxamt" min="0" max="100" value="45">
+  <p class="empty" style="margin:6px 0 0">Guides are editor-only and never reach the PNG. Grid lines, the accent bar and FX all export. Hold Alt while dragging to ignore the snap.</p>
 
   <h3>Add layer</h3>
   <div class="row">
@@ -224,6 +248,155 @@ function fit(){
 }
 function accent(){return document.getElementById('ac').value}
 
+// ── Editor chrome: the guide overlay and the FX plate ───────────────────────
+// Both live inside #stage so they sit in canvas coordinates and scale with the
+// zoom, and both are re-acquired after restore() replaces stage.innerHTML.
+var guides=null, fxPlate=null;
+function chrome(){
+  fxPlate=stage.querySelector('.fx');
+  if(!fxPlate){ fxPlate=document.createElement('div'); fxPlate.className='fx'; stage.insertBefore(fxPlate,stage.firstChild); }
+  guides=document.getElementById('guides');
+  if(!guides){ guides=document.createElement('div'); guides.id='guides'; }
+  stage.appendChild(guides);   // last child, so new layers can't paint over it
+  guides.innerHTML='';
+  applyFx();
+}
+
+// ── Alignment guides ────────────────────────────────────────────────────────
+// Edges and centres of every other layer, plus the canvas frame. Drag or resize
+// within SNAP screen pixels of one and the box lands exactly on it; hold Alt to
+// move freely. The line is only ever an editor overlay — see #stage.exp above.
+var SNAP=6;
+function boxOf(x){ return {l:x.offsetLeft,t:x.offsetTop,w:x.offsetWidth,h:x.offsetHeight}; }
+function unionBox(list){
+  var l=Infinity,t=Infinity,r=-Infinity,b=-Infinity;
+  list.forEach(function(x){ var o=boxOf(x); l=Math.min(l,o.l); t=Math.min(t,o.t); r=Math.max(r,o.l+o.w); b=Math.max(b,o.t+o.h); });
+  return {l:l,t:t,w:r-l,h:b-t};
+}
+function snapTargets(exclude){
+  var xs=[0,W/2,W], ys=[0,H/2,H];
+  stage.querySelectorAll('.ly').forEach(function(x){
+    if(exclude.indexOf(x)>=0) return;
+    var o=boxOf(x);
+    xs.push(o.l,o.l+o.w/2,o.l+o.w);
+    ys.push(o.t,o.t+o.h/2,o.t+o.h);
+  });
+  return {xs:xs,ys:ys};
+}
+// Smallest correction that puts any of `vals` (the moving box's edges/centre)
+// onto any candidate. Returns {d:offset to apply, at:the line to draw}.
+function bestSnap(cands,vals,tol){
+  var best=null;
+  vals.forEach(function(v){
+    cands.forEach(function(c){
+      var d=c-v; if(Math.abs(d)>tol) return;
+      if(!best||Math.abs(d)<Math.abs(best.d)-0.01){ best={d:d,at:[c]}; return; }
+      // Same correction, a different line: the box lands on both at once, so
+      // draw both — that is the difference between "it snapped" and knowing
+      // WHAT it lined up with.
+      if(Math.abs(d-best.d)<0.01 && best.at.indexOf(c)<0) best.at.push(c);
+    });
+  });
+  return best;
+}
+function snapTol(){ return Math.max(1.5,SNAP/Z); }
+function showGuides(xs,ys){
+  if(!guides) return;
+  guides.innerHTML=xs.map(function(v){return '<i class="gl gv" style="left:'+v+'px"></i>'}).join('')
+                 + ys.map(function(v){return '<i class="gl gh" style="top:'+v+'px"></i>'}).join('');
+}
+function clearGuides(){ if(guides) guides.innerHTML=''; }
+
+// ── Background FX ───────────────────────────────────────────────────────────
+// One SVG covering the canvas, rebuilt whenever the toggles, strength, accent
+// or canvas size change. SVG rather than CSS because of the html2canvas note on
+// .fx above — and because feTurbulence is what makes smoke look like smoke
+// rather than like a blurred blob.
+var FX=[];
+function hex2rgb(h){
+  h=String(h||'').replace('#','');
+  if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  return [parseInt(h.slice(0,2),16)||0,parseInt(h.slice(2,4),16)||0,parseInt(h.slice(4,6),16)||0];
+}
+function fxSvg(){
+  var amt=(+document.getElementById('fxamt').value||0)/100;
+  if(!FX.length||amt<=0) return '';
+  var has=function(k){return FX.indexOf(k)>=0};
+  var ac=accent(), c=hex2rgb(ac);
+  var r=(c[0]/255).toFixed(3), g=(c[1]/255).toFixed(3), b=(c[2]/255).toFixed(3);
+  var o=function(v){return (v*amt).toFixed(3)};
+  var defs=[], body=[];
+
+  // Order is fixed, not toggle order: atmosphere first, then the overlays that
+  // are supposed to sit on top of everything.
+  if(has('lights')){
+    defs.push('<radialGradient id="l1"><stop offset="0" stop-color="'+ac+'" stop-opacity="'+o(0.32)+'"/><stop offset="1" stop-color="'+ac+'" stop-opacity="0"/></radialGradient>',
+              '<radialGradient id="l2"><stop offset="0" stop-color="#8ECAE6" stop-opacity="'+o(0.18)+'"/><stop offset="1" stop-color="#8ECAE6" stop-opacity="0"/></radialGradient>',
+              '<radialGradient id="l3"><stop offset="0" stop-color="#FFB703" stop-opacity="'+o(0.10)+'"/><stop offset="1" stop-color="#FFB703" stop-opacity="0"/></radialGradient>');
+    body.push('<ellipse cx="'+(W*0.14)+'" cy="'+(H*0.08)+'" rx="'+(W*0.55)+'" ry="'+(H*0.62)+'" fill="url(#l1)"/>',
+              '<ellipse cx="'+(W*0.94)+'" cy="'+(H*0.88)+'" rx="'+(W*0.46)+'" ry="'+(H*0.55)+'" fill="url(#l2)"/>',
+              '<ellipse cx="'+(W*0.64)+'" cy="'+(H*0.00)+'" rx="'+(W*0.30)+'" ry="'+(H*0.34)+'" fill="url(#l3)"/>');
+  }
+  if(has('rays')){
+    defs.push('<linearGradient id="ry" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="'+ac+'" stop-opacity="'+o(0.22)+'"/><stop offset="1" stop-color="'+ac+'" stop-opacity="0"/></linearGradient>',
+              '<filter id="ryb" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="'+Math.round(W*0.013)+'"/></filter>');
+    var rays='';
+    [0.06,0.21,0.30,0.47,0.58].forEach(function(pp,i){
+      rays+='<rect x="'+(W*pp)+'" y="'+(-H*0.3)+'" width="'+(W*(i%2?0.040:0.085))+'" height="'+(H*1.7)+'" fill="url(#ry)"/>';
+    });
+    body.push('<g filter="url(#ryb)" transform="rotate(-17 '+(W*0.3)+' 0)">'+rays+'</g>');
+  }
+  if(has('smoke')){
+    // Turbulence -> alpha from the red channel -> blur. Masked to fade out
+    // toward the top so it reads as haze pooling low, not fog over the type.
+    defs.push('<filter id="smk" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">'
+      +'<feTurbulence type="fractalNoise" baseFrequency="0.0032 0.0055" numOctaves="5" seed="17" result="t"/>'
+      +'<feColorMatrix in="t" type="matrix" values="0 0 0 0 '+r+' 0 0 0 0 '+g+' 0 0 0 0 '+b+' 1.15 0 0 0 -0.46"/>'
+      +'<feGaussianBlur stdDeviation="'+Math.round(W*0.008)+'"/></filter>',
+      '<linearGradient id="smkg" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="0.75" stop-color="#fff" stop-opacity="0"/></linearGradient>',
+      '<mask id="smkm"><rect width="'+W+'" height="'+H+'" fill="url(#smkg)"/></mask>');
+    body.push('<g mask="url(#smkm)" opacity="'+o(0.55)+'"><rect width="'+W+'" height="'+H+'" filter="url(#smk)"/></g>');
+  }
+  if(has('scan')){
+    defs.push('<pattern id="sc" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="1" fill="#ffffff" opacity="'+o(0.10)+'"/></pattern>');
+    body.push('<rect width="'+W+'" height="'+H+'" fill="url(#sc)"/>');
+  }
+  if(has('grain')){
+    defs.push('<filter id="grn" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="5" result="t"/>'
+      +'<feColorMatrix in="t" type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1 0 0 0 -0.5"/></filter>');
+    body.push('<rect width="'+W+'" height="'+H+'" filter="url(#grn)" opacity="'+o(0.14)+'"/>');
+  }
+  if(has('vignette')){
+    defs.push('<radialGradient id="vg" cx="0.5" cy="0.5" r="0.78"><stop offset="0.42" stop-color="#000000" stop-opacity="0"/><stop offset="1" stop-color="#000000" stop-opacity="'+o(0.62)+'"/></radialGradient>');
+    body.push('<rect width="'+W+'" height="'+H+'" fill="url(#vg)"/>');
+  }
+
+  var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">'
+    +'<defs>'+defs.join('')+'</defs>'+body.join('')+'</svg>';
+  return 'url("data:image/svg+xml,'+encodeURIComponent(svg)+'")';
+}
+function applyFx(){
+  if(!fxPlate) return;
+  fxPlate.style.backgroundImage=fxSvg()||'none';
+  var amt=+document.getElementById('fxamt').value||0;
+  document.getElementById('fxlab').textContent=FX.length?amt+'%':'off';
+}
+function setFx(list,amt){
+  FX=(list||[]).slice();
+  if(amt!=null) document.getElementById('fxamt').value=amt;
+  document.querySelectorAll('#side button[data-fx]').forEach(function(b){ b.classList.toggle('on',FX.indexOf(b.dataset.fx)>=0); });
+  applyFx();
+}
+document.querySelectorAll('#side button[data-fx]').forEach(function(b){
+  b.onclick=function(){
+    var k=b.dataset.fx, i=FX.indexOf(k);
+    if(i>=0) FX.splice(i,1); else FX.push(k);
+    b.classList.toggle('on',i<0);
+    applyFx();
+  };
+});
+document.getElementById('fxamt').oninput=applyFx;
+
 function mkLayer(o){
   var d=document.createElement('div');
   d.className='ly'; d.dataset.t=o.t;
@@ -302,13 +475,24 @@ function addHandle(d){
     if(d.dataset.lock==='1') return;
     var x0=e.clientX,y0=e.clientY,w0=d.offsetWidth,h0=d.offsetHeight;
     var ar=h0/w0;
+    var tgt=snapTargets([d]), tol=snapTol(), L=d.offsetLeft, T=d.offsetTop;
     function mv(ev){
       var w=Math.max(40,w0+(ev.clientX-x0)/Z);
-      d.style.width=px(w);
+      var h=Math.max(30,h0+(ev.clientY-y0)/Z);
+      var gx=[],gy=[];
+      // Matching one card's width to its neighbour is the whole reason this is
+      // here, so the resize edge snaps to the same lines the drag does.
+      if(!ev.altKey){
+        var sx=bestSnap(tgt.xs,[L+w],tol); if(sx){ w=Math.max(40,sx.at[0]-L); gx=sx.at; }
+        // Shift owns the height; don't fight it with a snap.
+        if(!ev.shiftKey){ var sy=bestSnap(tgt.ys,[T+h],tol); if(sy){ h=Math.max(30,sy.at[0]-T); gy=sy.at; } }
+      }
       // Shift while dragging the handle = keep the box's aspect ratio.
-      d.style.height=px(ev.shiftKey ? Math.max(30,w*ar) : Math.max(30,h0+(ev.clientY-y0)/Z));
+      if(ev.shiftKey) h=Math.max(30,w*ar);
+      showGuides(gx,gy);
+      d.style.width=px(Math.round(w)); d.style.height=px(Math.round(h));
     }
-    function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up)}
+    function up(){clearGuides();document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up)}
     document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);
   });
 }
@@ -348,11 +532,20 @@ function wire(d){
     var movers=selSet.filter(function(x){return x.dataset.lock!=='1'});
     if(movers.indexOf(d)<0) movers=[d];
     var st=movers.map(function(x){return [x.offsetLeft,x.offsetTop]});
+    // Snap against everything that is NOT moving, using the selection's own
+    // bounding box — so a grouped set aligns as one card, not per layer.
+    var tgt=snapTargets(movers), ub=unionBox(movers), tol=snapTol();
     function mv(ev){
-      var dx=(ev.clientX-x0)/Z, dy=(ev.clientY-y0)/Z;
-      movers.forEach(function(x,i){ x.style.left=px(st[i][0]+dx); x.style.top=px(st[i][1]+dy); });
+      var dx=(ev.clientX-x0)/Z, dy=(ev.clientY-y0)/Z, gx=[], gy=[];
+      if(!ev.altKey){
+        var nl=ub.l+dx, nt=ub.t+dy;
+        var sx=bestSnap(tgt.xs,[nl,nl+ub.w/2,nl+ub.w],tol); if(sx){ dx+=sx.d; gx=sx.at; }
+        var sy=bestSnap(tgt.ys,[nt,nt+ub.h/2,nt+ub.h],tol); if(sy){ dy+=sy.d; gy=sy.at; }
+      }
+      showGuides(gx,gy);
+      movers.forEach(function(x,i){ x.style.left=px(Math.round(st[i][0]+dx)); x.style.top=px(Math.round(st[i][1]+dy)); });
     }
-    function up(){document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up)}
+    function up(){clearGuides();document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up)}
     document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);
   });
   d.addEventListener('wheel',function(e){
@@ -796,7 +989,7 @@ var TPL={
   ]},
 
   /* Weekend estimated-moves scoreboard — the Saturday "here is how the week
-     graded" post, ending in the sign-up ask. Same deal as 'alerts': two image
+     graded" post, ending in the sign-up ask. Same deal as `alerts`: two image
      slots, everything else rendered, and Auto-fill reads the numbers off the
      shots into the [data-k] layers.
 
@@ -884,7 +1077,8 @@ document.getElementById('tsave').onclick=function(){
   });
   clone.querySelectorAll('.ly[data-t=logo] img').forEach(function(im){ im.src=LOGO_SRC; delete im.dataset.url; });
   var t=customTpls();
-  t[n]={W:W,H:H,bg:document.getElementById('bg').value,ac:accent(),html:clone.innerHTML};
+  t[n]={W:W,H:H,bg:document.getElementById('bg').value,ac:accent(),
+        fx:{on:FX.slice(),amt:+document.getElementById('fxamt').value},html:clone.innerHTML};
   try{ localStorage.setItem('cbe_tpls',JSON.stringify(t)); }
   catch(e){ alert('Could not save: '+e); return; }
   refreshT();
@@ -902,12 +1096,13 @@ document.getElementById('tdel').onclick=function(){
   refreshT();
 };
 document.getElementById('size').onchange=function(){
-  var p=this.value.split('x'); W=+p[0]; H=+p[1]; setSize(); fit();
+  var p=this.value.split('x'); W=+p[0]; H=+p[1]; setSize(); fit(); applyFx();
 };
 document.getElementById('bg').oninput=function(){stage.style.background=this.value};
 document.getElementById('ac').oninput=function(){
   stage.querySelector('.bar').style.background=this.value;
   stage.querySelectorAll('.ly[data-t=list] .dot').forEach(function(x){x.style.background=this.value}.bind(this));
+  applyFx();   // lights, rays and smoke are all tinted from the accent
 };
 document.getElementById('tgrid').onclick=function(){
   var g=stage.querySelector('.grid'); var on=g.style.display!=='none';
@@ -1033,13 +1228,18 @@ document.getElementById('autofill').onclick=function(){
 };
 
 function serialize(){
-  return {W:W,H:H,bg:document.getElementById('bg').value,ac:accent(),html:stage.innerHTML};
+  clearGuides();   // never bake an in-progress guide into a saved preset
+  return {W:W,H:H,bg:document.getElementById('bg').value,ac:accent(),
+          fx:{on:FX.slice(),amt:+document.getElementById('fxamt').value},
+          html:stage.innerHTML};
 }
 function restore(s){
   W=s.W;H=s.H; document.getElementById('size').value=W+'x'+H;
   document.getElementById('bg').value=s.bg; stage.style.background=s.bg;
   document.getElementById('ac').value=s.ac;
   stage.innerHTML=s.html;
+  chrome();   // stage.innerHTML just replaced the fx plate and the guide overlay
+  setFx(s.fx&&s.fx.on||[], s.fx?s.fx.amt:null);   // presets saved before FX have none
   stage.querySelectorAll('.ly').forEach(function(d){
     var h=d.querySelector('.hnd'); if(h)h.remove();
     d.classList.remove('sel');
@@ -1135,7 +1335,7 @@ stage.querySelector('.bar').style.background=accent();
 ['tpl','size','pload'].forEach(function(id){ themeSelect(document.getElementById(id)); });
 // 'alerts' is now the first option, so the dropdown has to be pointed at the
 // template we actually load or the label and the canvas disagree on first paint.
-setSize(); refreshT(); document.getElementById('tpl').value='levels'; loadTpl('levels'); fit(); refreshP(); syncSelects();
+chrome(); setSize(); refreshT(); document.getElementById('tpl').value='levels'; loadTpl('levels'); fit(); refreshP(); syncSelects();
 window.addEventListener('resize',fit);
 </script>
 </body>

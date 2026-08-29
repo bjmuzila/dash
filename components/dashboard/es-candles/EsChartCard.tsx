@@ -4604,12 +4604,26 @@ function EsChartCard({
               const rungs = Object.keys(BUBBLES.profiles).map(Number).sort((a, b) => a - b);
               const rung = [...rungs].reverse().find((r) => r <= mins) ?? rungs[0]!;
               const pr = BUBBLES.profiles[rung]!;
-              const room = pxPerDot > 0 ? (BUBBLES.capOfSpacing * pxPerDot * stride) / pr.topBoost : pr.capPx;
+              // TWO spacing bounds, because the leader and its peers answer
+              // different questions. Peers get `capOfSpacing`; the leader gets
+              // its own, larger `topOfSpacing`. Dividing the peers' room by
+              // topBoost — what this used to do — let one dot per bucket set
+              // the size of every other dot in it.
+              const spacing = pxPerDot * stride;
+              const room = spacing > 0 ? BUBBLES.capOfSpacing * spacing : pr.capPx;
               const capPx = Math.max(BUBBLES.minPx, Math.min(pr.capPx, room));
+              const topRoom = spacing > 0 ? BUBBLES.topOfSpacing * spacing : pr.capPx * pr.topBoost;
+              const topCapPx = Math.max(capPx, Math.min(pr.capPx * pr.topBoost, topRoom));
+              // The glow gets what is left over, which is often nothing. Blur is
+              // not free real estate: a 7px halo painted across a 2px gap is
+              // what turned the leader's row into one continuous sausage.
+              const spare = spacing > 0 ? spacing / 2 - topCapPx : BUBBLES.glowMaxPx;
               return {
                 capPx,
-                floorPx: Math.max(BUBBLES.minPx, Math.min(pr.floorPx, capPx * 0.45)),
+                floorPx: Math.max(BUBBLES.minPx, Math.min(pr.floorPx, capPx * BUBBLES.floorOfCap)),
                 topBoost: pr.topBoost,
+                topCapPx,
+                glowPx: Math.max(0, Math.min(BUBBLES.glowMaxPx, spare)),
                 ringPx: pr.ringPx,
               };
             })();
@@ -4636,8 +4650,9 @@ function EsChartCard({
               for (const m of marks) {
                 const y = series.priceToCoordinate(m.strike + basis);
                 if (y == null || y < -20 || y > h + 20) continue;
-                const base = size.floorPx + Math.sqrt(m.ratio) * (size.capPx - size.floorPx);
-                rows.push({ m, y, r: m.isTop ? base * size.topBoost : base, dx: 0 });
+                const base = size.floorPx + Math.pow(m.ratio, BUBBLES.sizeCurve) * (size.capPx - size.floorPx);
+                const r0 = m.isTop ? Math.min(base * size.topBoost, size.topCapPx) : base;
+                rows.push({ m, y, r: r0, dx: 0 });
               }
               rows.sort((a, b) => a.y - b.y);
               for (let pass = 0; pass < BUBBLES.fitPasses; pass++) {
@@ -4672,7 +4687,7 @@ function EsChartCard({
                 if (m.isTop) {
                   ctx.fillStyle = `rgba(${hot[0]},${hot[1]},${hot[2]},${alpha})`;
                   ctx.shadowColor = `rgba(${base[0]},${base[1]},${base[2]},0.95)`;
-                  ctx.shadowBlur = Math.min(BUBBLES.glowMaxPx, Math.max(1.5, r * BUBBLES.glowFactor));
+                  ctx.shadowBlur = Math.min(size.glowPx, r * BUBBLES.glowFactor);
                   ctx.arc(cx, y, r, 0, Math.PI * 2);
                   ctx.fill();
                   ctx.shadowBlur = 0;

@@ -1,80 +1,54 @@
 # Changelog
 
-## 2026-08-29 - Contracts card: last session until 9:45, today after it
+## 2026-08-29 - Bubbles: auto stops at 5m, and the sizes spread out again
 
-Edited: `server-v2/api-router.js`, `components/pages/premarket/CbContracts.tsx`,
-`components/pages/Premarket.tsx`.
+Edited: `cbedge-v3/src/board/gexCandles/settings.ts`, `bubbles.ts`,
+`components/dashboard/es-candles/slotStore.ts`, `EsChartCard.tsx`.
 
-`/api/cb-contracts` was today-only, which meant the card was empty every evening,
-all weekend, and every morning until 09:45 - most of the hours anyone reads a
-premarket page. It now asks for today first and falls back to the most recent
-date that HAS rows, and returns `today: true|false` alongside `date`.
+Two complaints off the live charts, both fair.
 
-So on Saturday the card shows Friday's board, and at 09:45 ET the recorder writes
-the first row of the new session and the card's existing 60s poll picks it up -
-the table switches to today on its own and fills in 10:30 and 12:00 as they
-print. Nothing schedules anything; the poll is the whole mechanism.
+**1. Auto was allowed to pick 15m, 30m and 1h, and it looked empty.** On a wide
+view those rungs draw a scatter of lonely dots with the session's shape missing
+between them - technically legible, useless to read. The ladder now stops at 5m
+(`bucketRungsMin: [1, 5]`). Past 5m the right answer was never a coarser BUCKET,
+which throws prints away; it is the stride, which keeps the bucketing honest and
+just draws every Nth. The 15/30/60 entries in `profiles` stay, because a strided
+5m trail is sized by its EFFECTIVE spacing - they are still reached as sizes,
+never as buckets. Full session on the fixture went from a handful of dots to
+195.
 
-The fallback is LAST SESSION WITH ROWS, not "yesterday": Monday premarket has to
-show Friday and the day after a holiday has to skip it. `listTrades({since:1})`
-resolves that off the data instead of off a calendar this route would otherwise
-have to keep.
+**2. Everything was the same dot.** Three things were flattening the ladder and
+all three were the same mistake - spending the size budget on the leader.
 
-The session is in the card's HEADING - "Contracts . today" or "Contracts . Fri
-Aug 28" with an amber LAST SESSION pill - because a table that is yesterday's
-before 9:45 and today's after it gets read as the wrong one if you have to work
-out which. `sessionLabel()` formats the date off `Date.UTC` in UTC: `new
-Date("2026-08-28")` is midnight UTC, which is the 27th in ET, so formatting it in
-America/New_York would label every session as the day before.
+* **The peers were paying for the leader's boost.** `capOfSpacing` was divided
+  by `topBoost` so the boosted top mark would still fit inside its bucket's
+  spacing. One dot per bucket was therefore setting the size of every other dot
+  in it, a 30-40% tax on the whole ladder for a mark that already has a ring and
+  a glow. The leader now has its OWN share (`topOfSpacing`, 0.34) and the peers
+  have theirs (`capOfSpacing`, 0.28). Both are bounds - taking the leader's
+  bound off entirely was tried first and drew a continuous sausage at a tight
+  zoom.
+* **The curve was too kind to the middle.** Plain `sqrt` put a 5%-of-max strike
+  at 22% of the range and a 30% strike at 55%, so most of the ladder sat bunched
+  in the top half of the budget. `sizeCurve: 0.62` spreads it back out - 5% ->
+  16%, 30% -> 48%.
+* **The floor was too high.** `floorOfCap` 0.45 -> 0.25, so the small end goes
+  properly small and the spread is visible at the zoom where the whole session
+  is on screen. `minPx` is still the hard bottom.
 
-`?ticks=` is still checked against the served session's rows, and an open probe
-card is now re-pointed at the row each poll returns, so a position that closes
-while the popup is open stops showing a frozen copy of itself.
+**And the glow was the reason the top row looked fused.** The marks were
+clearing each other by a pixel or two and then a 7px gaussian halo painted
+straight across the gap. Blur is not free real estate: it now gets only the room
+left beside the mark once the mark's own radius comes out of the spacing, which
+at a tight zoom is zero and the glow simply does not draw. The ring still marks
+the leader.
 
-## 2026-08-29 - Earnings board polish: logos survive the screenshot, tiles are logo + ticker, full weekday
+Verified in the bubble lab against `fri-pin` at three zooms: full session 5m/195
+dots with visible size spread, last 2h and last 30m both discrete circles with
+gaps rather than bars. Screenshot in `generated/`.
 
-Edited: `server-v2/ticker-logo.js`, `server-v2/server-with-proxy.js`,
-`components/shared/ChipLogo.tsx`, `lib/snapshot.ts`,
-`components/pages/EconomicCalendar.tsx`.
-
-Six things off the board, five of them alignment and one of them the reason the
-copied PNG had almost no logos in it.
-
-**Logos in the screenshot.** `/proxy/ticker-logo` answers a 302 to GitHub or
-Commons, so the image is cross-origin however same-origin the `<img src>` looks;
-drawing one taints the capture canvas and `toBlob()` throws. `lib/snapshot.ts`
-therefore strips every `/proxy/*` image and swaps in the ticker-text chip, which
-is why only the handful of names mirrored into `public/logos` had marks. The
-route now takes `&raw=1` and STREAMS the bytes itself - genuinely same-origin,
-so it draws. The 302 stays the default, so nothing else that calls the endpoint
-changes. `fetchLogoBytes` caches buffers (500 entries, 512KB each, misses cached
-too) and rejects a non-image content type, because Commons FilePath can answer
-with an HTML error page at 200. `ChipLogo` uses the raw form, trades
-`data-snap-untrusted` for a new `data-snap-safe` that opts one image out of
-snapshot's `/proxy/` blanket rule (an explicit untrusted tag still wins), and
-takes a `lazy` prop - the board passes `lazy={false}`, since html2canvas clones
-the DOM as it stands and a chip below the fold that was never fetched captures
-empty.
-
-**Alignment.** All three of these are the same html2canvas bug from different
-angles: it ignores the line box and paints each run at `rect.top + baseline`
-using metrics probed in an about:blank iframe where the app's font variables do
-not resolve. The header pills ("44 NAMES", "ANTICIPATED", the cap chip) get
-`data-cap-center`, which is snapshot.ts's existing fix for exactly this, plus
-`text-align:center` because that pass rewrites inline-flex to inline-block and
-flex was the only thing centering them across. The day strip gets symmetric
-padding and the same tag, and its two runs move from baseline to centre
-alignment at `line-height:1` - baseline alignment centred nothing, it just hung
-the 10px weekday off the 13px date. The session dot moves INSIDE its label: as a
-flex sibling it centred on the row while the all-caps label's cap band sits
-above that, and nested in a `line-height:1` inline-block a 6px square resting on
-the baseline lands within a third of a pixel of the cap centre. `data-cap-swatch`
-carries that into the PNG via `alignCapSwatches`.
-
-**Tiles.** Logo and ticker, nothing else - the market-cap line said the same
-thing the ordering and the chip selection already said, and cost a third line on
-every tile. Cap and EPS estimate stay in the `title` hover. Day headers read
-MONDAY, not MON.
+v2 and v3 carry identical numbers, as always - a change to one is a change to
+both.
 
 ## 2026-08-29 - v2 ES Candles gets the v3 bubble engine
 

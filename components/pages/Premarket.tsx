@@ -210,7 +210,12 @@ import { isStale } from "@/lib/econCalendar";
 import { SCANNER_MAIN } from "@/lib/scannerTickers";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
-import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
+// GEX Watch was removed from this page on 2026-08-29 (see section 5). Its
+// component and stylesheet still exist at
+// components/pages/premarket/GexWatchFeed and are unchanged — nothing mounts
+// them. Bringing it back is this import plus the two lines in section 5, and
+// GEX_WATCH_CSS has to go back into the <style> concat below or it returns
+// unstyled.
 import CbContracts, { CB_CONTRACTS_CSS } from "@/components/pages/premarket/CbContracts";
 import { GexChurnHistory, useGexChurnHistory } from "@/components/shared/GexHeatBar";
 // The replay transport is /es-candles' transport, part for part — see the
@@ -2189,7 +2194,7 @@ export default function Premarket() {
 
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
-      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GAMMA_BELL_CSS + CB_CONTRACTS_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GAMMA_BELL_CSS + CB_CONTRACTS_CSS }} />
       <div className="wrap">
 
         <div className="pagehead">
@@ -3110,32 +3115,26 @@ export default function Premarket() {
             axisAnchor={replayAxisAnchor}
           />
 
-          {/* Which strikes grew far more than normal at yesterday's close.
-              Reads the recorder's log via /api/gex-watch-feed — no live scan,
-              and opex sessions are filtered out server-side, so this never
-              shows the calendar and calls it a signal. Sits at the bottom
-              because it is context for the session, not a number to trade off. */}
           {/* ── 5 · WHAT CHANGED IN THE BOOK ────────────────────────────────
-              Two readings of the same question, side by side: which strikes
-              across the watchlist grew far more than normal at yesterday's
-              close, and how much of THIS ticker's whole book has been rewriting
-              itself session by session. */}
-          <div className="body two">
-            <div className="col">
-              <GexWatchFeed />
-            </div>
+              GAMMA BOOK CHURN — the SAME component the level log mounts
+              (components/shared/GexHeatBar), keyed to the symbol on screen
+              instead of to a clicked row: how much of THIS ticker's whole book
+              has been rewriting itself, session by session.
 
-            <div className="col">
-              {/* GAMMA BOOK CHURN — the SAME component the level log mounts
-                  (components/shared/GexHeatBar), keyed to the symbol on screen
-                  instead of to a clicked row. GEX Watch says which strikes grew
-                  far more than normal at yesterday's close; this says how much
-                  of this ticker's whole book rewrote itself, session by
-                  session. Two answers to "what changed", so they share a row.
+              GEX WATCH USED TO SHARE THIS ROW and was removed on 2026-08-29.
+              It answered a different question — which strikes across the
+              WATCHLIST grew far more than normal at yesterday's close — and
+              pairing a roster-wide feed with this ticker's own history read as
+              one panel about two things. The component
+              (components/pages/premarket/GexWatchFeed) still exists and is
+              unchanged; nothing on this page mounts it. Sits near the bottom
+              because it is context for the session, not a number to trade off.
 
-                  The component draws its own card padding and top rule for the
-                  log page's layout; inside a .col both are already there, so
-                  they are zeroed rather than doubled. */}
+              The component draws its own card padding and top rule for the log
+              page's layout; the row it sits in supplies both, so they are
+              zeroed rather than doubled. */}
+          <div className="body">
+            <div className="col" style={{ gridColumn: "1 / -1", borderRight: 0 }}>
               <GexChurnHistory
                 symbol={sym}
                 rows={churnRows}

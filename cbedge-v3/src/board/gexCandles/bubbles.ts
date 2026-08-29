@@ -283,6 +283,10 @@ interface SizeProfile {
   capPx: number
   floorPx: number
   topBoost: number
+  /** Hard ceiling on the boosted leader — its own share of the spacing. */
+  topCapPx: number
+  /** Blur allowed under the leader, bounded by the room left beside it. */
+  glowPx: number
   ringPx: number
 }
 
@@ -312,12 +316,37 @@ function sizeFor(bucketMs: number, pxPerDot: number): SizeProfile {
   // sized by a profile meant for a coarser one.
   const rung = [...rungs].reverse().find((r) => r <= mins) ?? rungs[0]!
   const p = BUBBLES.profiles[rung]!
-  const room = pxPerDot > 0 ? (BUBBLES.capOfSpacing * pxPerDot) / p.topBoost : p.capPx
+  // TWO spacing bounds, because the leader and its peers are answering
+  // different questions.
+  //
+  // The peers get `capOfSpacing`. This used to be divided by `topBoost` so the
+  // boosted leader would also land inside it — which meant ONE dot per bucket
+  // set the size of every other dot in it, and the whole ladder paid a 30-40%
+  // tax for a mark that already has a ring and a glow to set it apart.
+  //
+  // The leader gets its own, larger share (`topOfSpacing`) instead. Larger, but
+  // still a bound: let it off the leash entirely and at a tight zoom it draws at
+  // the profile cap x boost — 14px of radius into 15px of spacing — and the top
+  // row fuses into one continuous sausage, which is the exact failure this layer
+  // was rebuilt to stop.
+  const room = pxPerDot > 0 ? BUBBLES.capOfSpacing * pxPerDot : p.capPx
   const capPx = Math.max(BUBBLES.minPx, Math.min(p.capPx, room))
+  const topRoom = pxPerDot > 0 ? BUBBLES.topOfSpacing * pxPerDot : p.capPx * p.topBoost
+  const topCapPx = Math.max(capPx, Math.min(p.capPx * p.topBoost, topRoom))
+  // And the GLOW gets whatever is left over, which is often nothing.
+  //
+  // This was the real reason the leader's row looked like one continuous
+  // sausage rather than a row of dots: the marks themselves were clearing each
+  // other by a pixel or two, and then a 7px gaussian halo painted straight
+  // across the gap. Blur is not free real estate — it has to come out of the
+  // same spacing everything else is measured against.
+  const spare = pxPerDot > 0 ? pxPerDot / 2 - topCapPx : BUBBLES.glowMaxPx
   return {
     capPx,
-    floorPx: Math.max(BUBBLES.minPx, Math.min(p.floorPx, capPx * 0.45)),
+    floorPx: Math.max(BUBBLES.minPx, Math.min(p.floorPx, capPx * BUBBLES.floorOfCap)),
     topBoost: p.topBoost,
+    topCapPx,
+    glowPx: Math.max(0, Math.min(BUBBLES.glowMaxPx, spare)),
     ringPx: p.ringPx,
   }
 }
@@ -333,13 +362,13 @@ interface Placed {
  * One bucket's marks, sized and then fitted so they do not overlap.
  *
  * ── The size law ──────────────────────────────────────────────────────────
- *   r = floorPx + sqrt(|gex| / windowMax) x (capPx - floorPx),  x1.38 if top
+ *   r = floorPx + (|gex| / windowMax) ** sizeCurve x (capPx - floorPx),  x boost
  *
- * sqrt rather than linear because the top strike is routinely five to ten times
- * its neighbours: a linear law hands it the whole budget and leaves everything
- * else as identical specks at the floor. Under the root a strike holding a
- * quarter of the max still draws at half the range, so the ladder stays
- * rankable — and the top still stands apart, by the boost and the ring rather
+ * Compressive rather than linear because the top strike is routinely five to ten
+ * times its neighbours: a linear law hands it the whole budget and leaves
+ * everything else as identical specks at the floor. Under the curve a strike
+ * holding a quarter of the max still draws at about two fifths of the range, so
+ * the ladder stays rankable — and the top still stands apart, by the boost and the ring rather
  * than by flattening everything under it.
  *
  * ── Then the fit ──────────────────────────────────────────────────────────
@@ -356,8 +385,9 @@ function placeBucket(snap: BubbleSnapshot, geo: BubbleGeometry, size: SizeProfil
   for (const mark of snap.marks) {
     const y = geo.yOfPrice(mark.strike)
     if (y == null) continue
-    const base = size.floorPx + Math.sqrt(mark.ratio) * (size.capPx - size.floorPx)
-    rows.push({ mark, y, r: mark.isTop ? base * size.topBoost : base, dx: 0 })
+    const base = size.floorPx + Math.pow(mark.ratio, BUBBLES.sizeCurve) * (size.capPx - size.floorPx)
+    const r = mark.isTop ? Math.min(base * size.topBoost, size.topCapPx) : base
+    rows.push({ mark, y, r, dx: 0 })
   }
   rows.sort((a, b) => a.y - b.y)
 
@@ -482,7 +512,7 @@ export function drawBubbles(
         ctx.beginPath()
         ctx.fillStyle = rgba(hot, alpha)
         ctx.shadowColor = rgba(base, 0.95)
-        ctx.shadowBlur = Math.min(BUBBLES.glowMaxPx, Math.max(1.5, r * BUBBLES.glowFactor))
+        ctx.shadowBlur = Math.min(size.glowPx, r * BUBBLES.glowFactor)
         ctx.arc(cx, y, r, 0, Math.PI * 2)
         ctx.fill()
         ctx.shadowBlur = 0
