@@ -26,6 +26,32 @@ export const INTERVAL_LABEL: Record<Interval, string> = {
   60: '1h',
 }
 
+/**
+ * Which time bucket the bubbles aggregate at. Storage is always one column per
+ * MINUTE; this is a DRAW-time aggregation.
+ *
+ * 'auto' is the default and the right answer almost always: the bucket is a
+ * question about how much room a dot has, and only the chart knows how wide the
+ * pane is. It picks the smallest rung of `BUBBLES.bucketRungsMin` whose dots
+ * land far enough apart, and re-picks on every zoom.
+ *
+ * 1 and 5 are MANUAL overrides, and they override the RUNG, not the stride: a
+ * forced 1m on a whole session still strides, because 975 dots do not fit in
+ * 1500px whatever anyone picked. So the honest description of a pinned value is
+ * "never coarser than this", and at a wide zoom it lands on the same picture
+ * auto would have drawn.
+ *
+ * (v2's slotStore carries the same three values plus a legacy 'bar' spelling,
+ * which is the pre-rename name for 'auto'. v3 has no blobs old enough to hold
+ * it, so it is not accepted here.)
+ */
+export type BubbleBucket = 1 | 5 | 'auto'
+export const isBubbleBucket = (v: unknown): v is BubbleBucket => v === 1 || v === 5 || v === 'auto'
+/** Does this bucket follow the pane, rather than pin a rung? */
+export const isAutoBucket = (v: BubbleBucket): boolean => v === 'auto'
+/** What a fresh card starts on. */
+export const BUBBLE_BUCKET_DEFAULT: BubbleBucket = 'auto'
+
 export interface ChartSettings {
   symbol: string
   session: Session
@@ -289,31 +315,6 @@ export const BUBBLES = {
  */
 export const BUBBLE_LADDER_REQUEST = 30
 
-/**
- * Which time bucket the bubbles aggregate at. Storage is always one column per
- * MINUTE; this is a DRAW-time aggregation.
- *
- * 'auto' is the default and the right answer almost always: the bucket is a
- * question about how much room a dot has, and only the chart knows how wide the
- * pane is. It picks the smallest rung of `BUBBLES.bucketRungsMin` whose dots
- * land far enough apart, and re-picks on every zoom.
- *
- * 1 and 5 are MANUAL overrides, and they override the RUNG, not the stride: a
- * forced 1m on a whole session still strides, because 975 dots do not fit in
- * 1500px whatever anyone picked. So the honest description of a pinned value is
- * "never coarser than this", and at a wide zoom it lands on the same picture
- * auto would have drawn.
- *
- * (v2's slotStore carries the same three values plus a legacy 'bar' spelling,
- * which is the pre-rename name for 'auto'. v3 has no blobs old enough to hold
- * it, so it is not accepted here.)
- */
-export type BubbleBucket = 1 | 5 | 'auto'
-export const isBubbleBucket = (v: unknown): v is BubbleBucket => v === 1 || v === 5 || v === 'auto'
-/** Does this bucket follow the pane, rather than pin a rung? */
-export const isAutoBucket = (v: BubbleBucket): boolean => v === 'auto'
-/** What a fresh card starts on. */
-export const BUBBLE_BUCKET_DEFAULT: BubbleBucket = 'auto'
 
 /** How far back the bubble history reaches, minutes. One full session + pre. */
 export const GEX_HISTORY_MINUTES = 720

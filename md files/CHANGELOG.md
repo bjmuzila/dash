@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-08-29 - Fix: v3 page dead on load, `Cannot access 'Ie' before initialization`
+
+Edited: `cbedge-v3/src/board/gexCandles/settings.ts`.
+
+The bucket-picker change put `BubbleBucket` and `BUBBLE_BUCKET_DEFAULT` at the
+BOTTOM of settings.ts, beside `BUBBLE_LADDER_REQUEST` — and `DEFAULT_SETTINGS`,
+250 lines above, reads `BUBBLE_BUCKET_DEFAULT` in its initialiser. `const` is
+not hoisted the way `function` is: at module-evaluation time that name is still
+in its temporal dead zone, so the module threw before it finished loading and
+the whole route came back blank. Minified, it reads as the mangled name —
+`Cannot access 'Ie' before initialization` — which says nothing about which
+constant, so: **the one that throws is always the one being READ too early, not
+the one doing the reading.**
+
+The block moved above `ChartSettings`, which is also where it belongs on merit —
+the interface uses the type. Nothing else changed.
+
+`tsc` does not catch this. It is an evaluation-ORDER fact, and TypeScript is
+checking types; the build was clean. Guarding against the next one is cheap
+though, and worth doing before this file grows again: requiring the bundled
+module and reading one field off it is a two-line smoke test that fails loudly
+on exactly this class of bug.
+
 ## 2026-08-29 - v3: the bubble bucket picker (Auto / 1m / 5m), like v2
 
 Edited: `cbedge-v3/src/board/gexCandles/settings.ts`, `chart.ts`,
