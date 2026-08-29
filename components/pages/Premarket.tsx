@@ -3146,17 +3146,21 @@ export default function Premarket() {
             </div>
           </div>
 
-          {/* ── 6 · TODAY'S CONTRACTS ───────────────────────────────────────
-              What the CB-strike 0DTE actually did at each of today's
-              checkpoints — the same rows the owner Contracts board keeps,
-              read-only and today only (/api/cb-contracts). Clicking a contract
-              opens its probe curve.
+          {/* ── 6 · CONTRACTS ───────────────────────────────────────────────
+              What the CB-strike 0DTE actually did at each checkpoint — the same
+              rows the owner Contracts board keeps, read-only
+              (/api/cb-contracts). Clicking a contract opens its probe curve.
 
-              NOT rendered on a frozen or replayed session: the route answers
-              for the current ET date whatever the session picker says, so
-              mounting it under a past date would file today's contracts under
-              yesterday's header. It sits last because it is the session's
-              record, not a number to trade off at 9:00. */}
+              It shows TODAY the moment today has a row and the LAST SESSION
+              until then, so a Saturday or a 6am Monday reads Friday's board and
+              09:45 flips it on its own — the card polls every 60s and the
+              server picks the session. See the notes on both.
+
+              NOT rendered on a frozen or replayed session: the route ignores
+              the page's date picker entirely, so mounting it under a past date
+              would file one day's contracts under another day's header. It sits
+              last because it is the session's record, not a number to trade off
+              at 9:00. */}
           {!frozen && !replay && <CbContracts />}
 
           <div className="footbar">

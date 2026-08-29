@@ -9063,26 +9063,49 @@ if (libDb) {
     // the Contracts card on the premarket page
     // (components/pages/premarket/CbContracts.tsx).
     //
-    //   GET                  → { date, trades, config }  — TODAY only
-    //   GET ?ticks=<tradeId> → { ticks }                 — today's rows only
+    //   GET                  → { date, today, trades, config }
+    //   GET ?ticks=<tradeId> → { ticks }   — only for a row of that same session
+    //
+    // ONE SESSION, AND IT IS TODAY THE MOMENT TODAY HAS ONE. Today's rows are
+    // asked for first; only if there are none does it fall back to the most
+    // recent date that has any, and `today` says which of the two happened.
+    // That is what makes the card live without the page doing anything: at
+    // 09:45 ET the recorder writes the first row of the session and the very
+    // next 60s poll switches the card from Friday's board to this morning's,
+    // then fills in 10:30 and 12:00 as they print. A today-only route went dark
+    // every evening, all weekend, and every morning until 09:45 — which is most
+    // of the hours anyone actually reads a premarket page.
+    //
+    // The fallback is LAST SESSION WITH ROWS, not "yesterday": Monday premarket
+    // has to show Friday, and the day after a holiday has to skip it. `since:1`
+    // resolves that off the data instead of off a calendar this route would
+    // otherwise have to keep.
     //
     // Deliberately a second route rather than a widened auth on /api/cb-trades:
     // that one also carries the POST recorder actions (tick / checkpoint /
     // poll / settle), the ?diag= dump, and any date range going back a year.
     // Widening it would hand all of that to every subscriber as a side effect
-    // of wanting one table on one page. This is GET, this session, nothing
-    // else.
+    // of wanting one table on one page. This is GET, one session, nothing else.
     //
-    // The ?ticks= id is checked against today's rows before the curve is
-    // returned. Without that check the parameter is a free index into the whole
-    // trade history — the exact history this route exists not to expose.
+    // The ?ticks= id is checked against the rows of the session being served
+    // before the curve is returned. Without that check the parameter is a free
+    // index into the whole trade history — the exact history this route exists
+    // not to expose.
     register('/api/cb-contracts', {
       auth: 'subscriber', methods: ['GET'],
       async handler(req, res) {
         try {
           const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-          const date = cbTrack.etParts().date;
-          const trades = await cbTrack.listTrades({ date });
+          const etDate = cbTrack.etParts().date;
+          let trades = await cbTrack.listTrades({ date: etDate });
+          let today = true;
+          if (!trades.length) {
+            // since:1 = the single most recent date that has rows, whenever it
+            // was. listTrades already orders by checkpoint within the date.
+            trades = await cbTrack.listTrades({ since: 1 });
+            today = false;
+          }
+          const date = trades.length ? String(trades[0].date) : etDate;
           const ticksFor = sp.get('ticks');
           if (ticksFor) {
             if (!trades.some((t) => String(t.id) === String(ticksFor))) {
@@ -9096,7 +9119,7 @@ if (libDb) {
           // friends — the rule the card describes in its own header, not a
           // secret), and the card reads MULTIPLIER off it to turn a price
           // difference into dollars.
-          send(res, 200, { date, trades, config: cbTrack.CONFIG }, { 'Cache-Control': NO_STORE });
+          send(res, 200, { date, today, trades, config: cbTrack.CONFIG }, { 'Cache-Control': NO_STORE });
         } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });

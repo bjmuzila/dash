@@ -11,12 +11,19 @@
  * WHAT THIS IS NOT: the owner board's range picker, its per-checkpoint roll-up
  * cards, and its recorder controls (Run now / Diagnose) are all deliberately
  * absent. Those are operator tools for a table that spans twenty sessions; this
- * is today, read-only. Widening this card back into that one is how a customer
- * surface ends up with a "Run now" button on it.
+ * is one session, read-only. Widening this card back into that one is how a
+ * customer surface ends up with a "Run now" button on it.
+ *
+ * WHICH SESSION: today's, the moment today has one — and the last session that
+ * has rows until then. The server decides that (see the note on the route) and
+ * says which it gave; the card only labels it. So on a Saturday, or at 6am
+ * Monday, the card is Friday's board, and at 09:45 ET the next 60s poll flips it
+ * to this morning and fills in 10:30 and 12:00 as they print. Nothing here
+ * schedules anything: the poll is the whole mechanism.
  *
  * DATA: GET /api/cb-contracts (server-v2/api-router.js, auth:'subscriber') —
- * today's rows only, and ?ticks=<id> only for a row dated today. It is NOT
- * /api/cb-trades: that route is owner-gated, also carries the POST recorder
+ * one session's rows, and ?ticks=<id> only for a row of that same session. It is
+ * NOT /api/cb-trades: that route is owner-gated, also carries the POST recorder
  * actions and the ?diag= dump, and answers for any date. Read the note on the
  * route before pointing this anywhere else.
  *
@@ -25,10 +32,10 @@
  * disqualified it. Dropping them is what makes "nothing set up today" look
  * exactly like "the recorder was down".
  *
- * TODAY ONLY, SO: the caller mounts this only on a live (non-frozen) session.
- * The route answers for the current ET date whatever the page's session picker
- * says, so rendering it under a frozen date would put today's contracts under
- * yesterday's header.
+ * THE CALLER MOUNTS THIS ONLY ON A LIVE (non-frozen, non-replayed) session. The
+ * route picks its own session and ignores the page's date picker entirely, so
+ * rendering it under a frozen date would file one day's contracts under another
+ * day's header. The card stamps the session it is showing for the same reason.
  *
  * COLOURS: every value below is a var(--…) token off the page's own .pmk block
  * (which interpolates components/shared/homeTheme). Nothing here types a hex —
@@ -76,6 +83,20 @@ const n = (v: unknown): number | null => {
 const contractLabel = (t: CbTrade) =>
   t.strike ? `${Number(t.strike).toFixed(0)}${t.side}` : "—";
 
+/**
+ * "2026-08-28" → "Fri Aug 28". Built off Date.UTC and formatted in UTC on
+ * purpose: `new Date("2026-08-28")` is midnight UTC, which is the 27th in ET, so
+ * formatting it in America/New_York would label every session as the day before.
+ */
+function sessionLabel(date: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!m) return date;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC", weekday: "short", month: "short", day: "numeric",
+  }).format(d);
+}
+
 function etClock(ts: number) {
   const t = Number(ts);
   if (!Number.isFinite(t) || t <= 0) return "—";
@@ -86,6 +107,7 @@ function etClock(ts: number) {
 
 export default function CbContracts() {
   const [trades, setTrades] = useState<CbTrade[]>([]);
+  const [session, setSession] = useState<{ date: string; today: boolean } | null>(null);
   const [mult, setMult] = useState(100);
   const [state, setState] = useState<"loading" | "ok" | "denied" | "error">("loading");
   const [open, setOpen] = useState<CbTrade | null>(null);
@@ -99,14 +121,21 @@ export default function CbContracts() {
       if (r.status === 401 || r.status === 403) { setState("denied"); return; }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
-      setTrades(Array.isArray(j.trades) ? j.trades : []);
+      const rows: CbTrade[] = Array.isArray(j.trades) ? j.trades : [];
+      setTrades(rows);
+      setSession(j?.date ? { date: String(j.date), today: j.today !== false } : null);
       if (Number.isFinite(Number(j?.config?.MULTIPLIER))) setMult(Number(j.config.MULTIPLIER));
       setState("ok");
+      // An open row that closes, or a checkpoint that prints while the card is
+      // open, would otherwise leave the popup showing a frozen copy of the row
+      // it was opened from. Re-point it at the row the server just sent.
+      setOpen((cur) => (cur ? rows.find((t) => t.id === cur.id) ?? cur : cur));
     } catch { setState("error"); }
   }, []);
 
-  // 60s, the same cadence the recorder polls an open position at. Anything
-  // faster re-renders the table between writes.
+  // 60s, the same cadence the recorder polls an open position at — and the only
+  // mechanism by which this card goes live: today's first row lands at 09:45 ET
+  // and the next poll picks it up. Anything faster re-renders between writes.
   useEffect(() => { void load(); const id = setInterval(() => void load(), 60_000); return () => clearInterval(id); }, [load]);
 
   const totals = useMemo(() => {
@@ -124,7 +153,18 @@ export default function CbContracts() {
   return (
     <div className="cbc">
       <div className="cbchead">
-        <h3>Contracts · today</h3>
+        {/* The session is in the HEADING, not a footnote: this table is
+            yesterday's board until 09:45 and today's after it, and a reader who
+            has to work out which one they are looking at will assume the wrong
+            one. */}
+        <h3>
+          Contracts · {!session ? "session" : session.today ? "today" : sessionLabel(session.date)}
+        </h3>
+        {session && !session.today && (
+          <span className="cbclast" title="Today has no checkpoints yet. This flips to today's session on its own as soon as the 9:45 row prints.">
+            last session
+          </span>
+        )}
         <span className="tiny">
           0DTE probed at 9:45 / 10:30 / 12:00 · from the CB, walked toward the money to the first strike
           that qualified · held and re-priced to the bell
@@ -135,7 +175,8 @@ export default function CbContracts() {
         <div className="cbcnote">Loading contracts…</div>
       ) : trades.length === 0 ? (
         <div className="cbcnote">
-          No checkpoints recorded for this session yet — the first row prints at 9:45 ET.
+          No checkpoints recorded yet. The first row of a session prints at 9:45 ET — this table fills
+          itself in as they do.
         </div>
       ) : (
         <div className="cbcwrap">
@@ -497,6 +538,11 @@ export const CB_CONTRACTS_CSS = `
 .pmk .cbchead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;flex-wrap:wrap}
 .pmk .cbchead h3{margin:0;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:600}
 .pmk .cbchead .tiny{text-transform:none;letter-spacing:0;font-size:11px}
+/* Amber, the page's "check this" colour: the table is real, it is just not
+   today's. It disappears the moment today has a row. */
+.pmk .cbchead .cbclast{font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--amber);border:1px solid var(--amberEdge);background:var(--amberWash);
+  border-radius:999px;padding:2px 8px;white-space:nowrap}
 
 .pmk .cbcnote{font-size:11.5px;color:var(--dim2);padding:10px 0}
 .pmk .cbcnote.bad{color:var(--neg)}

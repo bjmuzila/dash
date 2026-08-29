@@ -87,7 +87,7 @@ import type { RailRow } from "@/components/dashboard/EsGexRail";
 import type { EsCandleRecord } from "@/lib/snapdb";
 
 import {
-  toChartTime, etDayKey, fmtEtHM, isPlausibleBasis, etMinutesOfDay, gexTodScale,
+  toChartTime, etDayKey, fmtEtHM, isPlausibleBasis, etMinutesOfDay,
   isCashOpen, etSessionStarted, isEtWeekend, etMinutes, RTH_OPEN_MIN, RTH_CLOSE_MIN, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
   SPOT_LINE_GRAY, EM_VIOLET, parseLevelNum, applyDefaultView,
   deriveColumnLevels, gexAlphaOf, gexPaint,
@@ -100,13 +100,10 @@ import {
 import { SymbolListDropdown, symbolDef, candleSymbolOf, isChartSymbol, normalizeSymbol, type ChartSymbol } from "./symbols";
 import { PanelSection, PanelChip, SLIDER_LABEL_W } from "./panelUi";
 import {
-  BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_REF_START_MIN, BUBBLE_REF_CUTOFF_MIN,
-  BUBBLE_LEVELS_RANGE, BUBBLE_INTENSITY_RANGE, BUBBLE_SIZE_RANGE, BUBBLE_CURVE_RANGE,
-  BUBBLE_MIN_PER_SIDE, BUBBLE_BUCKET_DEFAULT,
-  autoBubbleLevels, autoBubbleTopPx, autoBubbleCurve, autoBubbleIntensity,
+  BUBBLES,
   SHARED_SLOT,
   readSlot, writeSlot, writeSlotQuiet, broadcastSlot, subscribeSlot,
-  isBubbleBucket, isAutoBucket,
+  isBubbleBucket, isAutoBucket, BUBBLE_BUCKET_DEFAULT,
   subscribeReplayCmd, broadcastReplayCmd, INDICATORS_DEFAULT,
   type BubbleBucket, type SlotId, type SlotBlob, type IndicatorCfg,
 } from "./slotStore";
@@ -294,6 +291,42 @@ export interface EsChartCardProps {
    */
   pageSections?: DockCogSection[];
 }
+
+/**
+ * The bubble palette, as [r,g,b] so a per-mark alpha can be applied.
+ *
+ * The same four tokens v3 reads out of tokens.css — this app has no token file
+ * for them, so they are literals here and must be kept level with
+ * cbedge-v3/src/board/gexCandles/chart.ts. Positive gamma is the blue, negative
+ * the red; the "hot" pair is the bucket's own leader.
+ */
+const POS_RGB: [number, number, number] = [41, 182, 246];
+const POS_HOT_RGB: [number, number, number] = [200, 245, 255];
+const NEG_RGB: [number, number, number] = [255, 71, 87];
+const NEG_HOT_RGB: [number, number, number] = [255, 205, 210];
+
+/** One bucket's mark, sized against the window's biggest |netGex|. */
+interface BubbleMark {
+  strike: number;
+  value: number;
+  /** |value| over the window's biggest, 0..1. This is what sets the radius. */
+  ratio: number;
+  /** The largest |netGex| in this bucket — the one that gets the ring. */
+  isTop: boolean;
+}
+
+/**
+ * The bubble model, cached on its own signature. Rebuilt when the minute store,
+ * the metric, the bucket or the replay cursor moves — never when the viewport
+ * does, so panning a loaded session repaints without re-picking a single strike.
+ */
+const BUBBLE_PREP_INIT = null as null | {
+  sig: string;
+  bucketMs: number;
+  /** Bucket start times, ascending. The draw strides over this. */
+  order: number[];
+  marksAt: Map<number, BubbleMark[]>;
+};
 
 /**
  * Index of the last frame at or before `ts`, on THIS card's own bar grid.
@@ -825,48 +858,8 @@ function EsChartCard({
   const basisFnRef = useRef<{ sig: string; fn: (tsMs: number) => number } | null>(null);
   // Memoised flip-cross series — viewport-independent, was rebuilt every frame.
   const flipPtsRef = useRef<{ sig: string; pts: Array<{ ts: number; es: number }> } | null>(null);
-  const bubblePrepRef = useRef<{
-    sig: string;
-    mins: GexColumn[];
-    /** Session reference, TIME-OF-DAY DETRENDED. See the bubble draw. */
-    sessRef: number;
-    /** Expanding detrended reference as of each bucket, keyed by slotTs. */
-    runRef: Map<number, number>;
-    shownAt: Map<number, Set<number>>;
-    wallAt: Map<number, Map<number, number>>;
-    /**
-     * Per-bucket cells to draw, already filtered to the shown strikes and sorted
-     * biggest-first. Lives here rather than in draw() because it is a pure
-     * function of (cells, shownAt, metric) — every one of which is already in
-     * this memo's signature. In draw() it was a filter + a sort per bucket, per
-     * frame: ~100k predicate calls and several hundred array allocations and
-     * sorts on a full session.
-     */
-    orderAt: Map<number, GexCell[]>;
-    /** gexTodScale() for each bucket, cached — it formats a Date to get ET. */
-    todAt: Map<number, number>;
-    strikeStep: number;
-    /**
-     * What AUTO decided from the board, for the frame to use. Both are read off
-     * the NEWEST bucket — the live board — and then held for the whole trail:
-     * re-deciding per bucket would make rows blink in and out and the curve
-     * breathe as you scroll back through the session.
-     *
-     * `levels` is also what the selection above actually used, auto or not, so
-     * the draw never has to ask which mode it is in to know the row count.
-     */
-    levels: number;
-    autoCurve: number;
-  } | null>(null);
-  // Pre-rendered glow sprites for the highlighted walls. `ctx.shadowBlur` is a
-  // per-fill gaussian blur — the single most expensive thing this overlay did,
-  // paid once per wall bubble per column per frame. Rendering the blur ONCE per
-  // (size, colour, blur) into an offscreen canvas and blitting it turns that
-  // into a drawImage, which is effectively free.
-  const glowSpriteRef = useRef<Map<string, { cv: HTMLCanvasElement; w: number; h: number }>>(new Map());
-  // True while a pan/zoom gesture is in flight. Used to trade a little precision
-  // for cache hits in the glow-sprite path, where a continuously-changing size
-  // otherwise misses on every frame of a zoom.
+  const bubblePrepRef = useRef(BUBBLE_PREP_INIT);
+  // True while a pan/zoom gesture is in flight.
   const interactingRef = useRef(false);
   const interactEndRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Dedupe key for the heatmap backfill fetch: front mode ignores `expiry`
@@ -892,12 +885,6 @@ function EsChartCard({
   // says Friday, and they'd disagree forever.
   const lastWallDayRef = useRef<string>("");
   const bubbleMinsRef = useRef<BubbleBucket>(BUBBLE_BUCKET_DEFAULT);
-  const bubbleLevelsRef = useRef(BUBBLE_STYLE.topStrikes);
-  const bubbleIntensityRef = useRef(BUBBLE_STYLE.intensity);
-  const bubbleSizeRef = useRef(BUBBLE_STYLE.size);
-  // Explicit <number>: BUBBLE_CURVE_RANGE is `as const`, so `min` infers as the
-  // literal 1 and the ref would refuse every other value.
-  const bubbleCurveRef = useRef<number>(BUBBLE_CURVE_RANGE.min);
   // Replay cursor, mirrored for the imperative overlay draw (null = live).
   // Only the ENGAGED flag is mirrored: nothing imperative cares whether the
   // transport is merely open. (replayOnRef used to exist here and became dead
@@ -1087,10 +1074,6 @@ function EsChartCard({
   //   size      — multiplier on the size BUDGET, not on any single mark.
   // None of them changes what size MEANS: radius stays straight proportional to
   // |net GEX| against the session reference at every setting.
-  const [bubbleLevels, setBubbleLevels] = useState(BUBBLE_STYLE.topStrikes);
-  const [bubbleIntensity, setBubbleIntensity] = useState(BUBBLE_STYLE.intensity);
-  const [bubbleSize, setBubbleSize] = useState(BUBBLE_STYLE.size);
-  const [bubbleCurve, setBubbleCurve] = useState<number>(BUBBLE_CURVE_RANGE.min);
   // Bubble time bucket. Storage is always 1-min; this aggregates at DRAW time.
   // At 1m the bubbles sit a few px apart and overlap into solid rails, which is
   // the whole reason a bucket exists.
@@ -1672,18 +1655,6 @@ function EsChartCard({
     // carries them; the style is frozen now, so they are inert rather than a
     // hidden per-card override that would make two cards size differently.
     if (isBubbleBucket(p.mins)) setBubbleMins(p.mins);
-    if (typeof p.bLevels === "number" && Number.isFinite(p.bLevels)) {
-      setBubbleLevels(Math.round(Math.min(BUBBLE_LEVELS_RANGE.max, Math.max(BUBBLE_LEVELS_RANGE.min, p.bLevels))));
-    }
-    if (typeof p.bInt === "number" && Number.isFinite(p.bInt)) {
-      setBubbleIntensity(Math.min(BUBBLE_INTENSITY_RANGE.max, Math.max(BUBBLE_INTENSITY_RANGE.min, p.bInt)));
-    }
-    if (typeof p.bSize === "number" && Number.isFinite(p.bSize)) {
-      setBubbleSize(Math.min(BUBBLE_SIZE_RANGE.max, Math.max(BUBBLE_SIZE_RANGE.min, p.bSize)));
-    }
-    if (typeof p.bCurve === "number" && Number.isFinite(p.bCurve)) {
-      setBubbleCurve(Math.min(BUBBLE_CURVE_RANGE.max, Math.max(BUBBLE_CURVE_RANGE.min, p.bCurve)));
-    }
     if (typeof p.on === "boolean") setShowGexBubbles(p.on);
     if (typeof p.cb === "boolean") setShowCb(p.cb);
 
@@ -1764,26 +1735,6 @@ function EsChartCard({
   // one remaining preference in the panel, the bucket, already persists per slot
   // on every change.)
   //
-  const updateBubbleLevels = useCallback((n: number) => {
-    const v = Math.round(Math.min(BUBBLE_LEVELS_RANGE.max, Math.max(BUBBLE_LEVELS_RANGE.min, n)));
-    setBubbleLevels(v);
-    saveSetting({ bLevels: v });
-  }, [saveSetting]);
-  const updateBubbleIntensity = useCallback((n: number) => {
-    const v = Math.min(BUBBLE_INTENSITY_RANGE.max, Math.max(BUBBLE_INTENSITY_RANGE.min, n));
-    setBubbleIntensity(v);
-    saveSetting({ bInt: v });
-  }, [saveSetting]);
-  const updateBubbleSize = useCallback((n: number) => {
-    const v = Math.min(BUBBLE_SIZE_RANGE.max, Math.max(BUBBLE_SIZE_RANGE.min, n));
-    setBubbleSize(v);
-    saveSetting({ bSize: v });
-  }, [saveSetting]);
-  const updateBubbleCurve = useCallback((n: number) => {
-    const v = Math.min(BUBBLE_CURVE_RANGE.max, Math.max(BUBBLE_CURVE_RANGE.min, n));
-    setBubbleCurve(v);
-    saveSetting({ bCurve: v });
-  }, [saveSetting]);
 
   // ── Snap back to the forming candle ────────────────────────────────────────
   // Pan a few sessions left and there was no way back except double-clicking the
@@ -1856,10 +1807,6 @@ function EsChartCard({
   // Mirrored into refs so the imperative overlay draw reads them without
   // re-subscribing.
   useEffect(() => { bubbleMinsRef.current = bubbleMins; }, [bubbleMins]);
-  useEffect(() => { bubbleLevelsRef.current = bubbleLevels; }, [bubbleLevels]);
-  useEffect(() => { bubbleIntensityRef.current = bubbleIntensity; }, [bubbleIntensity]);
-  useEffect(() => { bubbleSizeRef.current = bubbleSize; }, [bubbleSize]);
-  useEffect(() => { bubbleCurveRef.current = bubbleCurve; }, [bubbleCurve]);
   // Auto-collapse the side panel when it would starve the candles.
   //
   // This used to be one flat number (560px of total card width, whatever the
@@ -4479,779 +4426,268 @@ function EsChartCard({
       // CURRENT (latest) GEX column, line weight + opacity ∝ |net GEX| for the
       // active metric. Same data the heatmap/rail use; cyan = +GEX (calls),
       // red = −GEX (puts). Thicker = larger gamma at that strike.
+      // Spot in STRIKE space: the ladder is SPX and the price axis is ES, so a
+      // bar's close comes back across the same basisAt() the marks are drawn
+      // through. Bars are ascending, hence the binary search rather than a keyed
+      // map — the bar grid changes with the timeframe and rebuilding a map per
+      // frame is the thing the prep cache exists to avoid.
+      const spotKAt = (tMs: number): number | null => {
+        const bars = rowsRef.current;
+        if (!bars.length) return null;
+        let lo = 0, hi = bars.length - 1;
+        if (tMs > bars[0].timestamp) {
+          while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (bars[mid].timestamp <= tMs) lo = mid; else hi = mid - 1;
+          }
+        }
+        const close = bars[lo]?.close;
+        if (!Number.isFinite(close)) return null;
+        return (close as number) - basisAt(tMs);
+      };
+
       {
-        // ── 1b) 1-minute per-strike GEX bubbles ─────────────────────────────
-        // One bubble per shown strike per bucket. Radius is a function of that
-        // strike's |net GEX| measured against ONE reference for the whole
-        // expiration, so the biggest gamma on the board draws the biggest mark
-        // and every other bubble on the chart — earlier in the day, at another
-        // strike — is directly comparable to it.
+        // ── 1b) Per-strike GEX bubbles ──────────────────────────────────────
         //
-        // The reference is TIME-OF-DAY DETRENDED (gexTodScale, chartMath). See
-        // the long note at the scale itself for why, and for the calibration.
-        // There is no user control over any of this any more: style is the
-        // frozen BUBBLE_STYLE, and the scale is measured rather than tuned.
+        // The v3 engine, ported. See BUBBLES in slotStore for the rules and the
+        // reasoning; cbedge-v3/src/board/gexCandles/bubbles.ts is the original
+        // and the two must stay the same chart.
+        //
+        // What is v2-specific and stays here: the strikes are SPX and the price
+        // axis is ES, so every y goes through basisAt(); and the replay cursor
+        // clamps which buckets exist.
         if (showGexBubbles) {
-          // Aggregate the 1-min store into the selected bucket. We keep the LAST
-          // minute in each bucket (the freshest read of that strike's gamma), not
-          // a mean — averaging smears the very spikes we're trying to show.
-          //
-          // "Auto" tracks the chart's own bar size, which is the only setting
-          // that holds across the timeframe switcher: a fixed 5m bucket puts
-          // twelve bubble columns inside one 1h candle and merges them back into
-          // the solid rail the bucket exists to prevent.
-          //
-          // It buckets by the CONTAINING BAR via barAt(), not by
-          // floor(ts / candleMs): 15m/30m/1h bars are anchored to 09:30 ET and
-          // the RTH close forces a short bar, so an epoch-aligned bucket would
-          // straddle two candles and put one bubble column half over each.
-          //
-          // isAutoBucket, not `=== "auto"`: a blob saved before the rename still
-          // says "bar", and that has always meant this exact bucketer.
-          const bucketOf = isAutoBucket(bubbleMinsRef.current)
-            ? (t: number) => barAt(t) ?? t
-            : (t: number) => Math.floor(t / (bubbleMinsRef.current as number * 60_000)) * (bubbleMinsRef.current as number * 60_000);
           const metric = gexMetricRef.current;
           const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
 
-          // ── Everything below is MEMOISED on the data, not the viewport ────
-          // Bucketing, the session reference, its expanding form and the per-
-          // bucket ranking all depend only on (minute store, metric, bucket
-          // size, replay cursor, bar grid) — never on where
-          // the chart is scrolled. They used to be rebuilt inside every draw(),
-          // and draw() is wired to wheel/pointermove/range-change, so panning a
-          // loaded session re-sorted the whole strike list a few hundred times
-          // per frame. That was the lag. Now a frame that only moved the
-          // viewport reuses this wholesale and just paints.
-          //
-          // minuteColsVerRef is bumped at every write to the minute store, so a
-          // live column landing (or a backfill) invalidates this immediately —
-          // the cache can never serve stale gamma.
-          const barsSig = rowsRef.current;
-          const prepSig = [
-            minuteColsVerRef.current,
-            metric,
-            String(bubbleMinsRef.current),
-            // Auto decides the level count from the board, so the mode is part
-            // of the key — flipping it has to re-rank, not repaint.
-            "auto",
-            replayTsRef.current ?? "-",
-            // barAt() is the "bar" bucketer, so the bar grid is part of the key.
-            barsSig.length,
-            barsSig.length ? barsSig[barsSig.length - 1].timestamp : 0,
-            candleMsRef.current,
-            // Spot, QUANTISED TO 5 POINTS — the strike pitch. The min-per-side
-            // swap below is a function of where price sits in the ladder, so the
-            // cache has to see price move; keying on the raw close would rebuild
-            // the whole ranking on every tick, and keying on nothing would leave
-            // the swap frozen at whatever the last GEX minute saw. A crossing can
-            // only change the answer when it clears a strike.
-            barsSig.length ? Math.round(barsSig[barsSig.length - 1].close / 5) : 0,
-          ].join("|");
+          // ── The rung ─────────────────────────────────────────────────────
+          // Auto: the smallest rung whose dots own `bucketPxPerDot` at this
+          // zoom. The picker can force 1m or 5m, and the stride below keeps a
+          // forced rung legible when it does not fit.
+          const msPerPx = (() => {
+            const a = ts.coordinateToTime(2 as never);
+            const b = ts.coordinateToTime(Math.max(3, w - 60) as never);
+            if (typeof a !== "number" || typeof b !== "number" || b <= a) return 0;
+            return ((b - a) * 1000) / Math.max(1, w - 62);
+          })();
+          const forced = bubbleMinsRef.current;
+          const bucketMs = (() => {
+            if (forced === 1 || forced === 5) return forced * 60_000;
+            if (msPerPx <= 0) return 5 * 60_000;
+            const need = BUBBLES.bucketPxPerDot * msPerPx;
+            const rung = BUBBLES.bucketRungsMin.find((m) => m * 60_000 >= need)
+              ?? BUBBLES.bucketRungsMin[BUBBLES.bucketRungsMin.length - 1]!;
+            return rung * 60_000;
+          })();
 
+          // ── One column per bucket, LAST PRINT WINS ───────────────────────
+          // Not a mean: the bucket is a sample of the board, and averaging five
+          // minutes of a wall being built smears the move the dot exists to show.
+          const prepSig = [
+            minuteColsVerRef.current, metric, bucketMs,
+            replayTsRef.current ?? "-",
+            BUBBLES.strikeMode, BUBBLES.levels, BUBBLES.minPerSide,
+          ].join("|");
           let prep = bubblePrepRef.current;
           if (!prep || prep.sig !== prepSig) {
             const byBucket = new Map<number, GexColumn>();
             for (const m of [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs)) {
-              if (replayTsRef.current != null && m.slotTs > replayTsRef.current) continue; // replay clamp
-              byBucket.set(bucketOf(m.slotTs), m);
+              if (replayTsRef.current != null && m.slotTs > replayTsRef.current) continue;
+              byBucket.set(Math.floor(m.slotTs / bucketMs) * bucketMs, m);
             }
-            const pMins = [...byBucket.values()].sort((a, b) => a.slotTs - b.slotTs);
-            // ── THE SIZE REFERENCE ────────────────────────────────────────
-            // One number for the whole expiration: the biggest |net GEX| the
-            // board has carried this session. The strike holding it draws at
-            // full size, and every other bubble — any strike, any minute — is
-            // measured against the SAME number, which is what makes two marks
-            // on this chart comparable at all.
-            //
-            // It is measured in DETRENDED units. Gamma at the top strike grows
-            // ~4.7x from the open to the bell every single session (see
-            // gexTodScale in chartMath, calibrated off six sessions of real
-            // per-strike history), so a raw session max is really just "what
-            // 15:55 looked like" and normalising against it squashes the entire
-            // morning to dust. Dividing each bucket by its expected time-of-day
-            // level removes that, and the reference becomes "the biggest gamma
-            // this board has carried, relative to the clock".
-            //
-            // This replaces the old 15:30 cliff, which fixed the squashing by
-            // throwing the last half hour out of the scale entirely — so every
-            // closing wall clamped to the same maximum and the most interesting
-            // half hour of the day carried no size information at all.
-            //
-            // ── OUT OF CASH HOURS the clock is a LIE ──────────────────────
-            // gexTodScale is a CASH-SESSION profile. Outside 09:30–16:00 the
-            // history writer has no market-hours gate: it republishes the last
-            // cash book once a minute, frozen (same reason isEtWeekend exists).
-            // An 03:00 row is therefore a 16:00 BOOK wearing an 03:00 stamp —
-            // and putting a closing-auction number on the 0.72 open scale
-            // inflated it ~4.7x, which made the pre-open trail the biggest
-            // thing on the chart and dragged the reference up with it.
-            // Judge those on the CLOSE scale, which is the book they actually
-            // are.
-            const todOf = (ts: number) => {
-              const mod = etMinutesOfDay(ts);
-              if (mod < 0) return 1;
-              return (mod < RTH_OPEN_MIN || mod >= RTH_CLOSE_MIN)
-                ? gexTodScale(RTH_CLOSE_MIN)
-                : gexTodScale(mod);
-            };
-            const pTodAt = new Map<number, number>();
-            for (const m of pMins) pTodAt.set(m.slotTs, todOf(m.slotTs));
-            const detrendedMaxOf = (m: GexColumn) => {
-              let mx = 0;
-              for (const c of m.cells) {
+            const buckets = [...byBucket.entries()].sort((a, b) => a[0] - b[0]);
+
+            // ONE denominator for every mark on screen. Per bucket it would
+            // renormalise every quiet minute back up to full size, which is what
+            // made the trail bulge and pinch instead of tapering.
+            let windowMax = 0;
+            for (const [, col] of buckets) {
+              for (const c of col.cells) {
                 const a = Math.abs(valOf(c));
-                if (a > mx) mx = a;
-              }
-              return mx / (pTodAt.get(m.slotTs) || 1);
-            };
-            // ── WHO IS ALLOWED TO SET THE REFERENCE ───────────────────────
-            // Only cash-session buckets before the closing-auction cutoff (see
-            // BUBBLE_REF_START_MIN / BUBBLE_REF_CUTOFF_MIN). Everything still
-            // DRAWS; this decides whose gamma defines "full size".
-            //
-            // Necessary because the reference is a RUNNING MAXIMUM: a bucket
-            // that sets a new max draws at ratio 1 — the cap — by construction.
-            // Into the bell gamma climbs faster than the median profile the
-            // detrend divides out, so minute after minute set a new detrended
-            // max and every one printed at full size: an hour of identical
-            // maximum marks, with the inflated max then feeding the session
-            // floor below and fading the whole morning out from under them.
-            //
-            // The detrend still measures the excluded buckets — a 15:50 column
-            // is judged against `reference x 3.10` and only clamps if it really
-            // is running ~3x above the day's detrended peak. The window governs
-            // the DIVISOR, not the encoding.
-            const setsRef = (m: GexColumn) => {
-              const mod = etMinutesOfDay(m.slotTs);
-              return mod >= BUBBLE_REF_START_MIN && mod < BUBBLE_REF_CUTOFF_MIN;
-            };
-            let pSessRef = 0;
-            for (const m of pMins) {
-              if (!setsRef(m)) continue;
-              const d = detrendedMaxOf(m);
-              if (d > pSessRef) pSessRef = d;
-            }
-            // Fallback: nothing inside the window yet — an overnight chart, a
-            // replay cursor parked before 09:30, a pre-open reload. Better a
-            // reference from the wrong hour than no bubbles at all (the draw is
-            // gated on `sessRef > 0`).
-            if (pSessRef <= 0) {
-              for (const m of pMins) {
-                const d = detrendedMaxOf(m);
-                if (d > pSessRef) pSessRef = d;
+                if (a > windowMax) windowMax = a;
               }
             }
-            // EXPANDING, not session-wide: a bucket is scaled against the
-            // reference known up to and including itself, so the divisor can
-            // never grow after the fact and an already-printed bubble can never
-            // shrink. A strong 10:00 wall is exactly as fat at 15:50 as it was
-            // at 10:00; a bigger wall later just clamps from its own bucket on.
-            //
-            // Floored at a fraction of the session reference so the first few
-            // buckets of the day — where the running max is one or two prints —
-            // don't render everything at full size.
-            const pRunRef = new Map<number, number>();
-            {
-              let acc = 0;
-              for (const m of pMins) {
-                if (setsRef(m)) {
-                  const d = detrendedMaxOf(m);
-                  if (d > acc) acc = d;
-                }
-                pRunRef.set(m.slotTs, Math.max(acc, pSessRef * BUBBLE_REF_FLOOR_FRAC));
-              }
-            }
-            // Spot in STRIKE space, for the min-per-side rule below: the
-            // bubbles live in SPX strikes and the candles are ES, so the bar's
-            // close comes back across the same basisAt() the marks are drawn
-            // through. Bars are ascending, hence the binary search rather than a
-            // keyed map — the bar grid changes with the timeframe and rebuilding
-            // a map per prep is the thing this cache exists to avoid.
-            const pBars = rowsRef.current;
-            const spotKAt = (tMs: number): number | null => {
-              if (!pBars.length) return null;
-              let lo = 0, hi = pBars.length - 1;
-              if (tMs > pBars[0].timestamp) {
-                while (lo < hi) {
-                  const mid = (lo + hi + 1) >> 1;
-                  if (pBars[mid].timestamp <= tMs) lo = mid; else hi = mid - 1;
+
+            // The bucket's strikes: FORCE one above spot and one below, then
+            // fill from the ranking. Forced first, not swapped in afterwards —
+            // gamma is routinely lopsided enough that every top strike sits on
+            // one side of price, and a chart of only the resistance overhead is
+            // half a picture.
+            const pick = (col: GexColumn) => {
+              const spot = spotKAt(col.slotTs);
+              const ranked = col.cells
+                .map((c) => ({ strike: c.strike, value: valOf(c) }))
+                .filter((x) => x.value !== 0)
+                .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+              const out: Array<{ strike: number; value: number }> = [];
+              const taken = new Set<number>();
+              if (spot != null && spot > 0) {
+                for (let i = 0; i < BUBBLES.minPerSide; i++) {
+                  const above = ranked.find((x) => x.strike >= spot && !taken.has(x.strike));
+                  if (above) { out.push(above); taken.add(above.strike); }
+                  const below = ranked.find((x) => x.strike < spot && !taken.has(x.strike));
+                  if (below) { out.push(below); taken.add(below.strike); }
                 }
               }
-              const close = pBars[lo]?.close;
-              if (!Number.isFinite(close)) return null;
-              return (close as number) - basisAt(tMs);
+              for (const x of ranked) {
+                if (out.length >= BUBBLES.levels) break;
+                if (taken.has(x.strike)) continue;
+                out.push(x);
+                taken.add(x.strike);
+              }
+              return out.slice(0, BUBBLES.levels);
             };
-            // ── AUTO: how many rows, and how steep ─────────────────────────
-            // Both read off the NEWEST bucket — the live board — and then held
-            // for the whole trail.
-            //
-            // levels: how many strikes this board actually HAS, by share of its
-            // own gamma. A quiet two-wall board draws the four-row minimum; a
-            // flat one where six strikes each hold 5%+ widens to six.
-            //
-            // curve: how bunched the drawn strikes are. The median row's ratio
-            // to the top IS the spread — near 1 means near-identical bands under
-            // a straight-proportional law, which is unrankable, so the exponent
-            // steepens. A real wall pulls the median down and the law goes back
-            // to linear, because the numbers already separate.
-            let autoCurve = BUBBLE_CURVE_RANGE.min;
-            let nLevels = Math.max(0, bubbleLevelsRef.current);
-            {
-              const live = pMins[pMins.length - 1];
-              const absDesc = live
-                ? live.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0).sort((a, b) => b - a)
-                : [];
-              const total = absDesc.reduce((sum, v) => sum + v, 0);
-              nLevels = total > 0
-                ? autoBubbleLevels(absDesc.map((v) => v / total))
-                : BUBBLE_STYLE.topStrikes;
-              const drawn = absDesc.slice(0, nLevels);
-              const topAbs = drawn[0] ?? 0;
-              const median = drawn.length && topAbs > 0
-                ? drawn[Math.floor(drawn.length / 2)]! / topAbs
-                : 0;
-              autoCurve = autoBubbleCurve(median);
-            }
-            // ── TOP N AT EVERY MOMENT, AND THE HISTORY IS KEPT ───────────
-            //
-            // The selection is made PER BUCKET, and a strike is drawn only over
-            // the stretch where it was actually in the top N. So a vertical
-            // slice anywhere on the chart holds exactly N rows — never the
-            // union of everything that was ever a level — while a wall that
-            // dominated the 11:00 high keeps its trail up at the high, where it
-            // happened, instead of being deleted because the afternoon's book
-            // is bigger.
-            //
-            // This is what a session-wide ranking cannot do, and why the one
-            // tried before this failed: ranked over the whole day, gamma's own
-            // growth into the bell (~4.7x, see gexTodScale) meant the afternoon
-            // won every comparison it was in, an entire morning of levels ranked
-            // below a mediocre 15:00 strike, and the chart quietly became "the
-            // last hour, drawn wide". Ranking WITHIN a bucket never makes that
-            // comparison at all: 11:00's strikes are ranked against 11:00's.
-            //
-            // ── INCUMBENTS GET HYSTERESIS ─────────────────────────────────
-            // A hard top-N boundary is a coin flip for the strikes sitting on
-            // it: rank N and N+1 swap for a minute, both rows break, and the
-            // trail comes out as dashes — which is exactly what the wings looked
-            // like. A strike already being drawn keeps its place while it stays
-            // inside N + HYST, so it takes a real fall out of the ladder, not a
-            // tick of noise, to end a row.
-            const HYST = 2;
-            const pShownAt = new Map<number, Set<number>>();
-            const pWallAt = new Map<number, Map<number, number>>();
-            const pOrderAt = new Map<number, GexCell[]>();
-            let prevShown: Set<number> = new Set();
-            for (const m of pMins) {
-              // Raw |GEX|: every strike here shares one bucket, so the
-              // time-of-day scale would divide the whole list by one constant
-              // and change no order. It belongs on the SIZE reference, which
-              // does compare across time, and it is applied there.
-              const scored: Array<{ strike: number; a: number }> = [];
-              for (const c of m.cells) {
-                const a = Math.abs(valOf(c));
-                if (a > 0) scored.push({ strike: c.strike, a });
-              }
-              scored.sort((x, y) => y.a - x.a);
-              const rankOf = new Map<number, number>();
-              scored.forEach((x, i) => rankOf.set(x.strike, i));
 
-              // Incumbents first, in their current order, then fill from the
-              // ranking. A newcomer only takes a slot an incumbent has vacated.
-              const keep = [...prevShown]
-                .filter((k) => (rankOf.get(k) ?? Infinity) < nLevels + HYST)
-                .sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0));
-              const set = new Set<number>(keep.slice(0, nLevels));
-              for (const x of scored) {
-                if (set.size >= nLevels) break;
-                set.add(x.strike);
-              }
+            const latestSet = buckets.length
+              ? new Set(pick(buckets[buckets.length - 1]![1]).map((x) => x.strike))
+              : new Set<number>();
 
-              // ── The min-per-side swap, against THIS bucket's spot ────────
-              // Where price was at 11:00 is what decides which side an 11:00
-              // row is on. Using the live spot would rewrite the morning's
-              // sides every time the afternoon moved.
-              const spotK = nLevels >= 2 * BUBBLE_MIN_PER_SIDE ? spotKAt(m.slotTs) : null;
-              if (spotK != null && set.size >= 2 * BUBBLE_MIN_PER_SIDE) {
-                const inSet = [...set].sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0));
-                let nAbove = 0;
-                for (const k of inSet) if (k >= spotK) nAbove++;
-                const nBelow = inSet.length - nAbove;
-                if (nAbove < BUBBLE_MIN_PER_SIDE || nBelow < BUBBLE_MIN_PER_SIDE) {
-                  const wantAbove = nAbove < BUBBLE_MIN_PER_SIDE;
-                  const swapIn = scored.find((x) => (wantAbove ? x.strike >= spotK : x.strike < spotK) && !set.has(x.strike));
-                  if (swapIn) {
-                    set.delete(inSet[inSet.length - 1]!);
-                    set.add(swapIn.strike);
-                  }
-                }
-              }
-
-              prevShown = set;
-              pShownAt.set(m.slotTs, set);
-              // The wall is this bucket's own leader among the drawn rows —
-              // which is the point of a glow on a trail: it shows WHEN a level
-              // was the one running the board.
-              const wall = new Map<number, number>();
-              [...set]
-                .sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0))
-                .slice(0, Math.max(0, BUBBLE_STYLE.highlight))
-                .forEach((k, i) => wall.set(k, i));
-              pWallAt.set(m.slotTs, wall);
-              // Biggest first, so a mark that grows toward the strike pitch lets
-              // the smaller rows land ON TOP of it rather than disappearing
-              // underneath.
-              pOrderAt.set(
-                m.slotTs,
-                m.cells
-                  .filter((c) => set.has(c.strike))
-                  .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a))),
-              );
+            const marksAt = new Map<number, BubbleMark[]>();
+            for (const [bts, col] of buckets) {
+              const chosen = BUBBLES.strikeMode === "latest"
+                ? col.cells
+                    .filter((c) => latestSet.has(c.strike))
+                    .map((c) => ({ strike: c.strike, value: valOf(c) }))
+                    .filter((x) => x.value !== 0)
+                : pick(col);
+              if (!chosen.length) continue;
+              let top = 0;
+              for (const x of chosen) top = Math.max(top, Math.abs(x.value));
+              let tagged = false;
+              marksAt.set(bts, chosen
+                .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+                .map((x) => {
+                  const isTop = !tagged && Math.abs(x.value) === top;
+                  if (isTop) tagged = true;
+                  return {
+                    strike: x.strike,
+                    value: x.value,
+                    ratio: windowMax > 0 ? Math.min(1, Math.abs(x.value) / windowMax) : 0,
+                    isTop,
+                  };
+                }));
             }
-            // The chain's own strike increment. Data, not viewport — but it used
-            // to be recomputed per frame by flat-mapping every cell of every
-            // bucket (tens of thousands of entries on a full session) just to
-            // find a number that changes once a day.
-            let pStrikeStep = 0;
-            {
-              const ks = [...new Set(pMins.flatMap((m) => m.cells.map((c) => c.strike)))].sort((a, b) => a - b);
-              let dK = Infinity;
-              for (let i = 1; i < ks.length; i++) {
-                const d = ks[i] - ks[i - 1];
-                if (d > 0 && d < dK) dK = d;
-              }
-              if (Number.isFinite(dK) && ks.length > 1) pStrikeStep = dK;
-            }
-            prep = { sig: prepSig, mins: pMins, sessRef: pSessRef, runRef: pRunRef, shownAt: pShownAt, wallAt: pWallAt, orderAt: pOrderAt, todAt: pTodAt, strikeStep: pStrikeStep, levels: nLevels, autoCurve };
+            prep = { sig: prepSig, bucketMs, order: [...marksAt.keys()].sort((a, b) => a - b), marksAt };
             bubblePrepRef.current = prep;
           }
-          const { mins, sessRef, runRef, shownAt, wallAt, orderAt, todAt, strikeStep } = prep;
-          // Always on. The manual path is gone from the panel; the branches
-          // below stay because they are how the pitch caps and the manual
-          // budget differ, and collapsing them would inline a decision that is
-          // worth being able to read.
-          const autoOn = true;
 
-          if (mins.length) {
-            if (sessRef > 0) {
-              // ── THE SIZE LAW ──────────────────────────────────────────────
-              //   r = maxPx * (|net GEX| / reference),  floored at minPx
-              //
-              // STRAIGHT PROPORTIONAL. Twice the gamma is twice the radius and
-              // four times the area. There is no exponent and no log — the mark
-              // IS the number, and a strike carrying almost double its
-              // neighbour's gamma draws almost double its neighbour's mark.
-              //
-              // This was a log scale with an exponent on top, on the reasoning
-              // that a chain's gamma spans four orders of magnitude so a linear
-              // scale would hand the whole budget to the peak. True of the whole
-              // chain, false of what is DRAWN: only the top five strikes render
-              // and they sit within ~2.3x of each other. Log squeezed that into
-              // a 1.5x spread of pixels and every row looked identical — the
-              // exact complaint this layer keeps coming back for. Straight
-              // proportional gives the top strike a median 1.9x the third and
-              // 2.4x the fifth, which is what their gamma actually is.
-              const minPx = Math.max(0, BUBBLE_STYLE.minPx);
-              // Opacity gradient: the weakest visible row fades to 1 − fade, the
-              // strongest is fully opaque, so magnitude reads twice (size and
-              // brightness) without either channel carrying it alone.
-              const minOpacity = Math.max(0.1, 1 - Math.max(0, Math.min(1, BUBBLE_STYLE.fade)));
-              // Overall opacity of the layer, from the "intensity" control. It
-              // multiplies the whole thing — the magnitude gradient above still
-              // runs underneath, so turning the layer down dims the wings and
-              // the wall together instead of flattening one into the other.
-              const layerAlpha = Math.max(0.05, Math.min(1,
-                autoOn ? autoBubbleIntensity(prep.levels) : bubbleIntensityRef.current));
-              // ── SIZE MEANS ONE THING: |net GEX| AT THAT STRIKE ────────────
-              // Highlight no longer touches the radius. It used to multiply it
-              // (1.35x flat, then 2.6x graduated, then 1.45x), and every one of
-              // those made a strike bigger for a reason that has nothing to do
-              // with its gamma — so the size scale silently stopped meaning what
-              // the legend says it means. A wall that is 1.4x a neighbour's
-              // gamma but drew 2x its size is a lie, and it is exactly why the
-              // ladder stopped being rankable by eye.
-              //
-              // The two channels are now cleanly split:
-              //   SIZE  = |net GEX|, nothing else. Read it like the reference
-              //           bubble column: bigger dot = more gamma, always.
-              //   COLOR = the Highlight-top-N selection. The chosen ranks go
-              //           white-hot with a glow; everything else stays base
-              //           blue/red with opacity tracking magnitude.
-              // Keeping them orthogonal means turning Highlight up or down can
-              // never change what the sizes are telling you.
-              // The wall's glow is PROPORTIONAL to its own mark now, not a
-              // fixed 24px. At the small marks a tight column pitch forces, a
-              // fixed bloom was several times the size of the thing it was
-              // highlighting and welded the whole row into one lit bar.
-              const glowBlurFor = (r: number, hiT: number) => Math.min(
-                BUBBLE_STYLE.glowMaxPx,
-                Math.max(1.5, r * (BUBBLE_STYLE.glowTopFactor
-                  - (BUBBLE_STYLE.glowTopFactor - BUBBLE_STYLE.glowMinFactor) * hiT)),
-              );
+          const order = prep.order;
+          if (order.length) {
+            const first = order[0]!;
+            const last = order[order.length - 1]!;
+            const span = Math.max(1, last - first);
 
-              // ── Mark geometry + the two no-overlap caps ────────────────────
-              // ROUND. The mark was briefly stretched 2.2x horizontally, on the
-              // theory that a row should read as a dashed level rather than a
-              // string of beads. It was wrong: the stretch closed the gaps
-              // between marks, every row fused into a continuous ribbon, and the
-              // trail lost the dotted texture that made the chart legible in the
-              // first place. The gaps ARE the design — they are what lets ten
-              // rows sit over the candles without burying them.
-              //
-              // BUBBLE_ASPECT is left as a named constant rather than deleted:
-              // it is the one number to change if a slightly oval mark is ever
-              // wanted again. 1.0 = circle.
-              //
-              // Separation in BOTH directions is protected UP FRONT, by capping
-              // the size budget against the two pitches — never by clamping a
-              // mark after its size has been decided. That ordering is what
-              // silently threw the encoding away for so long.
-              const BUBBLE_ASPECT = 1.0;  // 1 = round; >1 stretches horizontally
-              const COL_GAP_PX = 0.8;     // clear space left between neighbours
-              // Column pitch: the smallest gap between two adjacent bucket x's.
-              // Sampled from the newest ~40 buckets rather than the whole
-              // session — the pitch is uniform (one column per bar) and this
-              // runs on every frame, so walking 400 buckets to learn the same
-              // number is pure overhead.
-              let colPitch = Infinity;
-              {
-                let prevX: number | null = null;
-                let seen = 0;
-                for (let i = Math.max(0, mins.length - 40); i < mins.length; i++) {
-                  const xx = xAt(bucketOf(mins[i].slotTs));
-                  if (xx == null) continue;
-                  if (prevX != null) {
-                    const d = Math.abs(xx - prevX);
-                    if (d > 0 && d < colPitch) colPitch = d;
-                    if (++seen >= 12) break;
-                  }
-                  prevX = xx;
-                }
-                if (!Number.isFinite(colPitch) || colPitch <= 0) colPitch = 8;
-              }
-              // Strike pitch: the chain's own strike increment, projected to px
-              // through the SAME priceToCoordinate the bubbles use, so it tracks
-              // zoom. Measured off the strike grid rather than the shown rows —
-              // the shown set changes per bucket, and a cap that changes with it
-              // would make a row breathe as its neighbours come and go.
-              let rowPitch = 24;
-              if (strikeStep > 0) {
-                const b0 = basisAt(mins[mins.length - 1].slotTs);
-                const k0 = mins[mins.length - 1].cells[0]?.strike ?? 0;
-                const yA = series.priceToCoordinate(k0 + b0);
-                const yB = series.priceToCoordinate(k0 + strikeStep + b0);
-                if (yA != null && yB != null && Math.abs(yA - yB) > 0) rowPitch = Math.abs(yA - yB);
-              }
-              // ── ONE MARK PER BUCKET. NO DECIMATION. ───────────────────────
-              // The bucket picker is the only thing that decides how many
-              // columns there are: pick 1m and you get a bubble every minute,
-              // pick Bar and you get one per candle. That is what the control
-              // says it does, so that is what it does.
-              //
-              // This used to skip columns — a stride wide enough for two
-              // full-size marks to sit side by side with a gap. It was there to
-              // stop a row fusing into a solid ribbon, and it had a real cost:
-              // at 1m on a zoomed-out chart the stride ran to 3 or 4, so "1
-              // minute" quietly drew a bubble every third or fourth minute.
-              //
-              // Horizontal overlap is now simply ALLOWED. A row of overlapping
-              // marks is a thick tube and a row of small ones is a thin dotted
-              // line, and since thickness is exactly what the size law encodes,
-              // the fused row is still telling you the truth — a fat tube IS the
-              // dominant level. What must never fuse is two ROWS into one band,
-              // and that is handled up front by maxPxRowFrac.
-              //
-              // Marks are drawn newest-first within a column and biggest-first
-              // within a bucket, so where they do overlap the smaller neighbour
-              // lands on top rather than vanishing underneath.
-              const colStride = 1;
-              // ── The size BUDGET, bounded by the room that actually exists ──
-              // MARKS MUST NEVER TOUCH — not in a row, not between rows. The
-              // budget is therefore capped by BOTH pitches, and every rank
-              // scales with it, so the ladder shrinks as ONE THING and the
-              // ratios survive. Zoom in and the marks grow back.
-              //
-              // Bounding the budget is what lets the decimation go. The old code
-              // held the mark size fixed and skipped columns until a full-size
-              // mark had room — which made the bucket picker lie ("1m" drawing a
-              // bubble every third minute). Capping the size instead keeps one
-              // mark per bucket exactly as the picker promises.
-              //
-              // Clamping AFTER the radius is computed — which is what the old
-              // rx/ry caps did — is the thing to never go back to: the top of the
-              // ladder lands on the clip while everything under it is untouched,
-              // so the encoding is silently thrown away and every rework of the
-              // size curve comes out invisible.
-              //
-              // The "size" control multiplies the budget AFTER the pitch caps,
-              // not before. Capping after the multiply would mean dragging the
-              // slider up did nothing whenever a pitch cap was binding — which
-              // is most of the time on a zoomed-out chart — and a slider that
-              // silently does nothing is the exact failure this layer keeps
-              // being rebuilt to escape. The honest consequence: at or below
-              // 1.00x marks are guaranteed never to touch; above it they may,
-              // which is the user asking for bigger and accepting fused rows.
-              const manualSizeMul = Math.max(BUBBLE_SIZE_RANGE.min, Math.min(BUBBLE_SIZE_RANGE.max, bubbleSizeRef.current));
-              // ── The column term has a FLOOR ────────────────────────────────
-              // The note above says horizontal overlap is allowed and that the
-              // only thing which must never fuse is two ROWS — yet the budget
-              // still let the column pitch bound it without limit, which
-              // contradicted that and was the whole reason a 1-minute bucket
-              // drew invisible dots. Adjacent 1m columns can sit 2-3px apart, so
-              // `colPitch * 0.45` drove the budget under a pixel and no amount
-              // of `size` could rescue it: the multiplier is applied after the
-              // Math.min, so it was scaling a number that had already collapsed.
-              //
-              // The floor is inert wherever there is real room (it only binds
-              // below ~15px of column pitch) and the ROW bound is untouched, so
-              // the one guarantee that matters still holds exactly.
-              //
-              // ── …AND THE FLOOR IS OFF WHEN THE BUCKET IS AUTO ──────────────
-              // On Auto the column pitch IS the bar spacing, and a 1m session
-              // fitted to the pane puts the bars ~4px apart. The floor then
-              // handed every mark a 7px radius inside a 4px slot — nearly 4x
-              // overlap — and the whole layer fused into the solid horizontal
-              // rails this bucket exists to prevent. That is the state the
-              // screenshot showed.
-              //
-              // The floor was written for the MANUAL 1m/5m buckets, where the
-              // columns are deliberately denser than the candles and the user
-              // has asked for sub-bar detail and accepted fused rows to get it.
-              // On Auto nobody asked for that: one column per candle is exactly
-              // as much detail as the chart itself carries, so the pitch is a
-              // real constraint and marks shrink to fit it. Zoom in and they
-              // grow back, which is the honest behaviour — a 1m chart squeezed
-              // into a session's width has ~4px per bar and a bubble cannot
-              // truthfully be wider than its own bar.
-              const colBound = isAutoBucket(bubbleMinsRef.current)
-                ? Math.max(0.6, colPitch * BUBBLE_STYLE.maxPxColFrac)
-                : Math.max(colPitch * BUBBLE_STYLE.maxPxColFrac, BUBBLE_STYLE.colBoundFloorPx);
-              // The budget the pitches allow, before anyone's multiplier.
-              const budgetPx = Math.min(
-                BUBBLE_STYLE.maxPx,
-                rowPitch * BUBBLE_STYLE.maxPxRowFrac,
-                colBound,
-              );
-              // ── AUTO SIZE ONLY EVER SHRINKS ────────────────────────────────
-              // The pitch caps say what CAN be drawn without two rows fusing;
-              // they say nothing about what SHOULD be. Zoomed in, `budgetPx`
-              // runs to the full 20px and six 20px blobs bury the candles they
-              // are drawn over. So auto picks a target from the pane's own
-              // height and the row count, and takes `min(1, target / budget)` —
-              // it can ask for less than the caps allow, never for more. Asking
-              // for more is what the manual slider is for, and it is the one
-              // setting that can make rows touch.
-              const sizeMul = autoOn
-                ? Math.min(1, autoBubbleTopPx(h, prep.levels) / Math.max(0.5, budgetPx))
-                : manualSizeMul;
-              const maxPx = Math.max(1.2, sizeMul * budgetPx);
-              // Rails, not policy. The budget above already guarantees the gap
-              // at 1.00x; these exist only so a degenerate projection (a chart
-              // squeezed to a few pixels) cannot paint over everything. They
-              // scale with `size` for the same reason the budget does — a rail
-              // that does not move turns the top of the slider's travel dead.
-              // Floored the same way, and for the same reason: a rail that
-              // collapses with the column pitch is not a rail, it is the clip
-              // that made the marks disappear. At a 2px column pitch the old
-              // expression evaluated to ~0.2px.
-              //
-              // On Auto the rail is a REAL cap, not a rescue: half the column
-              // pitch less the gap, with no floor under it, so two neighbouring
-              // columns are guaranteed to clear each other however tight the
-              // bars are. Same reasoning as `colBound` above — see the note
-              // there for why the floor is a manual-bucket concession.
-              const rxCap = isAutoBucket(bubbleMinsRef.current)
-                ? Math.max(0.35, sizeMul * Math.max(0.6, colPitch / 2 - COL_GAP_PX))
-                : Math.max(0.35, sizeMul * Math.max(colPitch / 2 - COL_GAP_PX, BUBBLE_STYLE.colBoundFloorPx / 2));
-              // ── The vertical bound is a SAFETY RAIL, not a size policy ─────
-              // It used to be `rowPitch / 2`, a hard clip at half the strike
-              // spacing, and the walls sat ON it — so the size scale was
-              // computed correctly and then thrown away one line later, and the
-              // biggest rows never changed by a pixel however the encoding was
-              // reworked. The pitch is respected UP FRONT now, in `maxPx` above.
-              const ryCap = Math.max(0.35, sizeMul * (rowPitch / 2 - COL_GAP_PX));
+            // Pixels a bucket owns AT THIS ZOOM, measured locally. Off the whole
+            // data span it would be wrong the moment you zoomed in, because xAt
+            // clamps to what the series holds.
+            const pxPerDot = (() => {
+              const a = xAt(last - bucketMs);
+              const b = xAt(last);
+              return a != null && b != null ? Math.abs(b - a) : 0;
+            })();
 
-              // Glow sprites (see glowSpriteRef). Sizes are quantised to a half
-              // pixel so a wall that breathes by a hundredth of a px between
-              // buckets reuses one sprite instead of minting hundreds.
-              const glowCache = glowSpriteRef.current;
-              // While the user is actively panning/zooming, snap sizes to whole
-              // pixels instead of half pixels. During a zoom rowPitch changes
-              // continuously, so rx/ry change continuously, so the half-pixel
-              // quantisation missed the cache on EVERY frame and every
-              // highlighted bubble re-rendered a shadowBlur ellipse. A 1px step
-              // is invisible mid-gesture and lands on ~half as many keys; the
-              // settled frame after the gesture repaints at full precision.
-              const qStep = interactingRef.current ? 1 : 2;
-              const glowSprite = (rx: number, ry: number, base: number[], fill: number[], blur: number) => {
-                const qx = Math.round(rx * qStep) / qStep;
-                const qy = Math.round(ry * qStep) / qStep;
-                const qb = Math.round(blur);
-                const key = `${qx}|${qy}|${qb}|${base[0]},${base[1]},${base[2]}|${fill[0]},${fill[1]},${fill[2]}|${Math.round(dpr * 100)}`;
-                const hit = glowCache.get(key);
-                if (hit) {
-                  // Re-insert to move it to the back of the iteration order —
-                  // Map.set on an EXISTING key does not reorder, so without this
-                  // the eviction below is FIFO and throws out the sprite being
-                  // asked for every frame.
-                  glowCache.delete(key);
-                  glowCache.set(key, hit);
-                  return hit;
-                }
-                const pad = qb + 2;
-                const cw = Math.ceil((qx + pad) * 2);
-                const ch = Math.ceil((qy + pad) * 2);
-                const cv = document.createElement("canvas");
-                cv.width = Math.max(1, Math.round(cw * dpr));
-                cv.height = Math.max(1, Math.round(ch * dpr));
-                const cx = cv.getContext("2d");
-                if (cx) {
-                  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                  cx.shadowColor = `rgba(${base[0]},${base[1]},${base[2]},0.95)`;
-                  cx.shadowBlur = qb;
-                  cx.fillStyle = `rgb(${fill[0]},${fill[1]},${fill[2]})`;
-                  cx.beginPath();
-                  cx.ellipse(cw / 2, ch / 2, qx, qy, 0, 0, Math.PI * 2);
-                  cx.fill();
-                }
-                // Bounded, by LRU eviction rather than by wiping the map.
-                //
-                // `glowCache.clear()` threw away all 96 entries at once, and a
-                // zoom sweep is exactly the case that hits the bound — so it
-                // repeatedly discarded sprites it was about to ask for again,
-                // and each miss allocates a canvas and renders a shadowBlur
-                // ellipse, the most expensive primitive in this file. A Map
-                // iterates in insertion order, so the first key is the coldest.
-                const rec = { cv, w: cw, h: ch };
-                glowCache.set(key, rec);
-                while (glowCache.size > 192) {
-                  const k = glowCache.keys().next();
-                  if (k.done) break;
-                  glowCache.delete(k.value);
-                }
-                return rec;
+            // ── Fewer dots, not smaller ones ─────────────────────────────────
+            // 975 samples across 1,500px is 1.5px each and you cannot draw 975
+            // distinguishable circles in that; two 1.2px dots 1.5px apart still
+            // touch. So when they do not fit, only every Nth bucket is drawn —
+            // strided to the spacing the auto rung targets, so a forced rung
+            // lands on exactly the picture auto would have drawn. Nothing is
+            // faked: each drawn dot is still one real bucket.
+            const stride = pxPerDot > 0
+              ? Math.max(1, Math.ceil(BUBBLES.bucketPxPerDot / pxPerDot))
+              : 1;
+
+            // The size profile for the EFFECTIVE cadence — the bucket as drawn,
+            // not as bucketed — then shrunk to the room that actually exists.
+            const size = (() => {
+              const mins = Math.max(1, Math.round((prep.bucketMs * stride) / 60_000));
+              const rungs = Object.keys(BUBBLES.profiles).map(Number).sort((a, b) => a - b);
+              const rung = [...rungs].reverse().find((r) => r <= mins) ?? rungs[0]!;
+              const pr = BUBBLES.profiles[rung]!;
+              const room = pxPerDot > 0 ? (BUBBLES.capOfSpacing * pxPerDot * stride) / pr.topBoost : pr.capPx;
+              const capPx = Math.max(BUBBLES.minPx, Math.min(pr.capPx, room));
+              return {
+                capPx,
+                floorPx: Math.max(BUBBLES.minPx, Math.min(pr.floorPx, capPx * 0.45)),
+                topBoost: pr.topBoost,
+                ringPx: pr.ringPx,
               };
+            })();
 
-              ctx.save();
-              for (let mi = mins.length - 1; mi >= 0; mi--) {
-                // colStride is 1 — every bucket draws. Kept as a named constant
-                // rather than deleted so the intent is greppable if the ribbon
-                // question ever comes back.
-                if ((mins.length - 1 - mi) % colStride !== 0) continue;
-                const m = mins[mi];
-                // xAt, not timeToCoordinate: these are sub-bar buckets. Snap x to
-                // the bucket's own start so the newest column lands on its candle,
-                // not in the right-axis gap ("newest bubbles render strange").
-                const x = xAt(bucketOf(m.slotTs));
-                if (x == null || x < -20 || x > w + 20) continue;
-                const mBasis = basisAt(m.slotTs);
-                // ── This bucket's slice of the absolute scale ─────────────
-                // The reference is carried in DETRENDED units, so it has to be
-                // put back on the clock before |GEX| can be measured against
-                // it: at 15:50 the same reference means a number ~3x the one it
-                // means at noon, which is exactly the correction that stops the
-                // last half hour from swallowing the chart.
-                //
-                // Both ends are frozen at print time (runRef is expanding), so
-                // a bubble already on screen can never resize.
-                const domainMax = Math.max(
-                  (runRef.get(m.slotTs) || sessRef) * (todAt.get(m.slotTs) || 1),
-                  Number.MIN_VALUE,
-                );
-                const shownStrikes = shownAt.get(m.slotTs);
-                const wallStrikes = wallAt.get(m.slotTs);
-                if (!shownStrikes || !wallStrikes) continue;
-                // Prepared in the memo above — see `orderAt`.
-                const drawOrder = orderAt.get(m.slotTs);
-                if (!drawOrder) continue;
-                for (const cell of drawOrder) {
-                  const v = valOf(cell);
-                  if (!v) continue;
-                  // (Walls draw a FULL ROW, same as every other strike. A
-                  // single-bubble-per-wall variant was tried and reverted:
-                  // every comparable platform — Bullflow, SpotGamma, the SPY
-                  // GEX overlay — draws each level as a continuous row of dots
-                  // across the session. The row IS the level; one dot at the
-                  // right edge reads as an annotation, not a level.)
-                  const y = series.priceToCoordinate(cell.strike + mBasis);
-                  if (y == null || y < -20 || y > h + 20) continue;
-                  // ── Where this strike sits on the absolute scale ────────
-                  // 1 = it IS the biggest gamma the expiration has carried
-                  // (adjusted for the clock). The reference came from the memo
-                  // and does not depend on which other strikes happen to be in
-                  // this column — that is the whole point. A strike's mark
-                  // changes when ITS gamma changes, never because a
-                  // neighbour's did.
-                  const ratio = Math.min(Math.abs(v) / domainMax, 1);
-                  const wallRank = wallStrikes.get(cell.strike);
-                  const isHi = wallRank != null;
-                  // ── SIZE MEANS ONE THING ───────────────────────────────
-                  // Radius is a pure function of this strike's own |net GEX|
-                  // against the session reference. No rank term, no highlight
-                  // term, no top boost. Highlight used to multiply the radius
-                  // (1.35x, then 2.6x graduated, then 1.45x) and every version
-                  // made a strike bigger for a reason that has nothing to do
-                  // with its gamma, which is what stopped the ladder being
-                  // rankable by eye. The two channels stay orthogonal:
-                  //   SIZE  = |net GEX|, always. Bigger dot = more gamma.
-                  //   COLOR = the top-N wall selection. White-hot with a glow.
-                  // `curve` is an EXPONENT, not a rank bonus (see the note
-                  // above, and BUBBLE_CURVE_RANGE). At 1.00 this is the straight
-                  // proportional law unchanged. Above it the top of the ladder
-                  // keeps the full budget while the wings shrink, so the
-                  // dominant strikes pull away without everything bloating with
-                  // them — and because x^k is monotonic on [0,1], more gamma is
-                  // still strictly more radius at every setting.
-                  // On Auto the exponent is measured off the live board's own
-                  // spread once per prep (see prep.autoCurve), so a bunched
-                  // ladder separates and a ladder with a real wall stays linear.
-                  const curve = autoOn ? prep.autoCurve : bubbleCurveRef.current;
-                  const shaped = curve === 1 ? ratio : Math.pow(ratio, curve);
-                  const r = Math.max(minPx, maxPx * shaped);
-                  // Rank only drives how hard this row GLOWS (#1 brightest).
-                  let hiT = 0;
-                  if (isHi) {
-                    const nWalls = Math.max(1, wallStrikes.size);
-                    hiT = nWalls > 1 ? (wallRank as number) / (nWalls - 1) : 0;
-                  }
-                  // Cull only degenerate radii — canvas antialiases arcs well
-                  // below 1px, so let them draw and skip only the invisible.
-                  if (r < 0.12) continue;
-                  // Opacity: smallest → minOpacity, largest → 1.0. Walls always full.
-                  const opacity = (isHi ? 1 : minOpacity + ratio * (1 - minOpacity)) * layerAlpha;
-                  // Sign sets hue (blue = +GEX, red = −GEX). Walls shift toward white
-                  // and get a glow so they read as the dominant levels at a glance.
-                  const base = v >= 0 ? [41, 182, 246] : [255, 71, 87];
-                  const hot  = v >= 0 ? [200, 245, 255] : [255, 205, 210];
-                  const col = isHi ? hot : base;
-                  // Round mark, capped on both axes — see BUBBLE_ASPECT above.
-                  const ry = Math.min(r, ryCap);
-                  const rx = Math.min(r * BUBBLE_ASPECT, rxCap);
-                  if (isHi) {
-                    // Blitted, not blurred. The glow still tapers with rank, so
-                    // the #1 wall is the brightest bloom on the chart — it's
-                    // just baked into a sprite instead of re-blurred per bubble.
-                    // Walls are always opacity 1, so the sprite is exact.
-                    const sp = glowSprite(rx, ry, base, col, glowBlurFor(Math.max(rx, ry), hiT));
-                    // The sprite is baked opaque (it has to be — it is cached by
-                    // size and colour, not by alpha), so the intensity control is
-                    // applied to the BLIT instead. Restored immediately: this is
-                    // inside the per-cell loop and a leaked globalAlpha would tint
-                    // every overlay drawn after it.
-                    const prevAlpha = ctx.globalAlpha;
-                    if (layerAlpha < 1) ctx.globalAlpha = prevAlpha * layerAlpha;
-                    ctx.drawImage(sp.cv, x - sp.w / 2, y - sp.h / 2, sp.w, sp.h);
-                    ctx.globalAlpha = prevAlpha;
-                  } else {
-                    ctx.beginPath();
-                    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-                    ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${opacity})`;
-                    ctx.fill();
-                  }
+            const minOpacity = 1 - BUBBLES.fade;
+
+            for (let i = 0; i < order.length; i += stride) {
+              const bts = order[i]!;
+              const cx0 = xAt(bts);
+              if (cx0 == null || cx0 < -40 || cx0 > w + 40) continue;
+              const marks = prep.marksAt.get(bts);
+              if (!marks) continue;
+              // Age fades opacity only a LITTLE. A trail that fades to nothing
+              // cannot be read for the morning, and the morning is half of why
+              // it is drawn.
+              const age = BUBBLES.ageKeep + (1 - BUBBLES.ageKeep) * ((bts - first) / span);
+              // SPX strike -> ES price, the same conversion every other overlay
+              // on this card uses.
+              const basis = basisAt(bts);
+
+              // Place, then fit: same-bucket neighbours shrink toward the floor,
+              // and a pair that still cannot fit takes a few px of X jitter.
+              const rows: Array<{ m: BubbleMark; y: number; r: number; dx: number }> = [];
+              for (const m of marks) {
+                const y = series.priceToCoordinate(m.strike + basis);
+                if (y == null || y < -20 || y > h + 20) continue;
+                const base = size.floorPx + Math.sqrt(m.ratio) * (size.capPx - size.floorPx);
+                rows.push({ m, y, r: m.isTop ? base * size.topBoost : base, dx: 0 });
+              }
+              rows.sort((a, b) => a.y - b.y);
+              for (let pass = 0; pass < BUBBLES.fitPasses; pass++) {
+                let tightened = false;
+                for (let k = 1; k < rows.length; k++) {
+                  const a = rows[k - 1]!;
+                  const b = rows[k]!;
+                  const room = b.y - a.y - BUBBLES.gapPx;
+                  const sum = a.r + b.r;
+                  if (sum <= room) continue;
+                  const f = room > 0 ? room / sum : 0;
+                  a.r = Math.max(BUBBLES.minPx, a.r * f);
+                  b.r = Math.max(BUBBLES.minPx, b.r * f);
+                  tightened = true;
+                }
+                if (!tightened) break;
+              }
+              for (let k = 1; k < rows.length; k++) {
+                const a = rows[k - 1]!;
+                const b = rows[k]!;
+                if (b.y - a.y - BUBBLES.gapPx >= a.r + b.r) continue;
+                b.dx = a.dx >= 0 ? -BUBBLES.jitterPx : BUBBLES.jitterPx;
+              }
+
+              for (const { m, y, r, dx } of rows) {
+                const positive = m.value >= 0;
+                const base = positive ? POS_RGB : NEG_RGB;
+                const hot = positive ? POS_HOT_RGB : NEG_HOT_RGB;
+                const alpha = (m.isTop ? 1 : minOpacity + m.ratio * (1 - minOpacity)) * age;
+                const cx = cx0 + dx;
+                ctx.beginPath();
+                if (m.isTop) {
+                  ctx.fillStyle = `rgba(${hot[0]},${hot[1]},${hot[2]},${alpha})`;
+                  ctx.shadowColor = `rgba(${base[0]},${base[1]},${base[2]},0.95)`;
+                  ctx.shadowBlur = Math.min(BUBBLES.glowMaxPx, Math.max(1.5, r * BUBBLES.glowFactor));
+                  ctx.arc(cx, y, r, 0, Math.PI * 2);
+                  ctx.fill();
+                  ctx.shadowBlur = 0;
+                  ctx.shadowColor = "transparent";
+                  ctx.beginPath();
+                  ctx.lineWidth = size.ringPx;
+                  ctx.strokeStyle = `rgba(255,255,255,${0.85 * age})`;
+                  ctx.arc(cx, y, r, 0, Math.PI * 2);
+                  ctx.stroke();
+                } else {
+                  ctx.fillStyle = `rgba(${base[0]},${base[1]},${base[2]},${alpha})`;
+                  ctx.arc(cx, y, r, 0, Math.PI * 2);
+                  ctx.fill();
                 }
               }
-              ctx.restore();
             }
           }
         }
@@ -5613,7 +5049,7 @@ function EsChartCard({
     // read by draw() (they key the basis memo), so they belong here even though
     // their sources already are — exhaustive-deps is right about that, and
     // listing them costs nothing: each is stable whenever its source is.
-  }, [schedulePaint, showHeatmap, showGexBubbles, bubbleMins, bubbleLevels, bubbleIntensity, bubbleSize, bubbleCurve, intensity, gexMetric, rows, rowsHash, interval, showProfile, profile, showTpo, tpoProfiles, showFlipCross, mvcHistory, mvcHistoryHash, showCb, bb, weeklyEm]);
+  }, [schedulePaint, showHeatmap, showGexBubbles, bubbleMins, intensity, gexMetric, rows, rowsHash, interval, showProfile, profile, showTpo, tpoProfiles, showFlipCross, mvcHistory, mvcHistoryHash, showCb, bb, weeklyEm]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef

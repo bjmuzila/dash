@@ -329,6 +329,14 @@ function downscaleCanvas(src: HTMLCanvasElement, factor: number): HTMLCanvasElem
  * `alt` text — visually the same fallback ChipLogo shows when a logo 404s, so a
  * capture degrades to "ticker instead of logo" rather than failing outright.
  *
+ * `[data-snap-safe]` opts a single image OUT of the `/proxy/` blanket rule. The
+ * rule is a heuristic about redirects, not about the path, and it costs a real
+ * picture whenever a proxy endpoint answers with the bytes itself — which is
+ * what `/proxy/ticker-logo?raw=1` does, and why the earnings board's PNG used to
+ * come out with ticker text where every unmirrored logo should have been. An
+ * explicit `data-snap-untrusted` still wins, so the tag can never be used to
+ * force a genuinely cross-origin image through.
+ *
  * Runs on the CLONE only; the live page keeps its logos.
  */
 function stripUntrustedImages(doc: Document, root: HTMLElement) {
@@ -343,6 +351,7 @@ function stripUntrustedImages(doc: Document, root: HTMLElement) {
     const raw = img.getAttribute("src") || "";
     if (!raw || raw.startsWith("data:")) continue;
     let risky = img.hasAttribute("data-snap-untrusted");
+    if (!risky && img.hasAttribute("data-snap-safe")) continue;
     if (!risky) {
       try {
         // Resolve against the LIVE page URL. `doc.baseURI` in the clone is

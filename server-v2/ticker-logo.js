@@ -121,11 +121,82 @@ async function resolveLogo(symbol, name) {
   return url;
 }
 
+// ── Raw byte path (?raw=1) ───────────────────────────────────────────────────
+/**
+ * Same resolution, but WE fetch the image and hand back the bytes instead of
+ * 302-ing the browser to GitHub or Commons.
+ *
+ * The redirect is cheaper for us and worse for everything downstream. A 302 to a
+ * third-party host makes the image cross-origin no matter how same-origin the
+ * `<img src>` looked, and drawing a cross-origin image into a canvas TAINTS it —
+ * `toBlob()` then throws SecurityError and the whole screenshot dies. So
+ * lib/snapshot.ts strips every `/proxy/*` image out of the capture and swaps in
+ * the ticker-text chip, which is why the earnings board's PNG showed marks only
+ * for the handful of names mirrored into public/logos and plain text for the
+ * rest. Streaming the bytes makes the response genuinely same-origin, so the
+ * capture can draw it.
+ *
+ * The 302 is still the default — `resolveLogo` and the plain route are
+ * untouched, so anything already pointing at this endpoint behaves exactly as
+ * before. `?raw=1` is opt-in.
+ *
+ * Bounded on purpose: logos are small, but the calendar's ticker list is now the
+ * whole Nasdaq universe, so the buffer cache is capped by count and each image
+ * by size. A miss (no logo, a non-image content type, a fetch that throws) is
+ * cached as null too — otherwise every render of a logo-less ticker would walk
+ * the GitHub HEAD + Wikidata path again.
+ */
+const RAW_MAX_ENTRIES = 500;
+const RAW_MAX_BYTES = 512 * 1024;
+const rawMem = new Map(); // symbol → { buf, type } | null
+
+function rawRemember(sym, val) {
+  rawMem.set(sym, val);
+  // Map preserves insertion order, so the first key is the oldest.
+  while (rawMem.size > RAW_MAX_ENTRIES) {
+    const oldest = rawMem.keys().next().value;
+    if (oldest === undefined) break;
+    rawMem.delete(oldest);
+  }
+  return val;
+}
+
+/**
+ * @returns {Promise<{buf: Buffer, type: string} | null>} null = no logo, and the
+ *          caller should 404 (the client falls back to its ticker-text chip).
+ */
+async function fetchLogoBytes(symbol, name) {
+  const sym = String(symbol || '').toUpperCase().trim();
+  if (!sym) return null;
+  if (rawMem.has(sym)) return rawMem.get(sym);
+
+  let url = null;
+  try { url = await resolveLogo(sym, name); }
+  catch (e) { console.warn('[ticker-logo] resolve', sym, e.message); }
+  if (!url) return rawRemember(sym, null);
+
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'image/*' } });
+    if (!r.ok) return rawRemember(sym, null);
+    const type = String(r.headers.get('content-type') || '').split(';')[0].trim();
+    // Commons FilePath can answer with an HTML error page at 200; an <img> of
+    // that renders as a broken icon, and caching it would pin the breakage.
+    if (!type.startsWith('image/')) return rawRemember(sym, null);
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!buf.length || buf.length > RAW_MAX_BYTES) return rawRemember(sym, null);
+    return rawRemember(sym, { buf, type });
+  } catch (e) {
+    console.warn('[ticker-logo] raw', sym, e.message);
+    return rawRemember(sym, null);
+  }
+}
+
 /** Clear a bad/stale entry so the next request re-resolves. */
 async function forgetLogo(symbol) {
   const sym = String(symbol || '').toUpperCase().trim();
   mem.delete(sym);
+  rawMem.delete(sym);
   if (await ensureSchema()) await getPool().query('DELETE FROM ticker_logos WHERE symbol = $1', [sym]);
 }
 
-module.exports = { resolveLogo, forgetLogo, ensureSchema, getPool };
+module.exports = { resolveLogo, fetchLogoBytes, forgetLogo, ensureSchema, getPool };

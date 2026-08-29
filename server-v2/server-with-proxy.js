@@ -1992,15 +1992,47 @@ async function main() {
         })();
         return;
       }
-      // Logo resolver: GET /proxy/ticker-logo?sym=ASML&name=ASML+Holding
-      // 302 → transparent PNG (ticker-logos repo, else Wikidata/Commons P154).
+      // Logo resolver: GET /proxy/ticker-logo?sym=ASML&name=ASML+Holding[&raw=1]
+      //
+      // Default: 302 → transparent PNG (ticker-logos repo, else Wikidata/Commons
+      // P154). Unchanged, so every existing caller behaves as before.
+      //
+      // `&raw=1`: we fetch the resolved image and STREAM THE BYTES instead. The
+      // redirect is what made the earnings board screenshot logo-less — a 302 to
+      // a third-party host makes the image cross-origin whatever the src looked
+      // like, drawing it taints the capture canvas, and lib/snapshot.ts
+      // therefore swaps every /proxy/* image for a ticker-text chip rather than
+      // lose the PNG to a SecurityError on toBlob(). Bytes served from here are
+      // genuinely same-origin and draw. See fetchLogoBytes for the caching.
       if (pathname === '/proxy/ticker-logo' && req.method === 'GET') {
         (async () => {
           try {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const sym = (u.searchParams.get('sym') || '').toUpperCase().trim();
             const name = u.searchParams.get('name') || '';
-            const url = await require('./ticker-logo').resolveLogo(sym, name);
+            const mod = require('./ticker-logo');
+
+            if (u.searchParams.get('raw') === '1') {
+              const hit = await mod.fetchLogoBytes(sym, name);
+              if (!hit) {
+                // Short negative cache: a ticker with no logo today may get one
+                // when the mirror or Wikidata catches up, and an immutable 404
+                // here would hide it for a year (the same trap next.config.js
+                // sprung on /logos/*.png — see ChipLogo's LOGO_REV note).
+                res.writeHead(404, { 'Cache-Control': 'public, max-age=3600' });
+                res.end('no logo');
+                return;
+              }
+              res.writeHead(200, {
+                'Content-Type': hit.type,
+                'Content-Length': hit.buf.length,
+                'Cache-Control': 'public, max-age=604800',
+              });
+              res.end(hit.buf);
+              return;
+            }
+
+            const url = await mod.resolveLogo(sym, name);
             if (!url) { res.writeHead(404); res.end('no logo'); return; }
             res.writeHead(302, { Location: url, 'Cache-Control': 'public, max-age=86400' });
             res.end();

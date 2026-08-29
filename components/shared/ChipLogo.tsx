@@ -45,8 +45,17 @@ function localLogoUrl(sym: string) {
   return `/logos/${encodeURIComponent(sym.toUpperCase())}.png?v=${LOGO_REV}`;
 }
 
+/**
+ * `raw=1` — the resolver STREAMS the image instead of 302-ing to GitHub or
+ * Commons. The redirect form was same-origin only in the src string: the bytes
+ * came from a third-party host, which taints a capture canvas, so lib/snapshot
+ * replaced every one of these chips with its ticker-text fallback and the
+ * earnings board's PNG came out with almost no logos. Bytes served by our own
+ * process are genuinely same-origin and draw into the canvas — which is why the
+ * `data-snap-untrusted` tag is gone and `data-snap-safe` is here instead.
+ */
 function proxyLogoUrl(sym: string, name?: string) {
-  return `/proxy/ticker-logo?sym=${encodeURIComponent(sym.toUpperCase())}&name=${encodeURIComponent(name || "")}`;
+  return `/proxy/ticker-logo?raw=1&sym=${encodeURIComponent(sym.toUpperCase())}&name=${encodeURIComponent(name || "")}`;
 }
 
 export default function ChipLogo({
@@ -54,11 +63,19 @@ export default function ChipLogo({
   company,
   size = 30,
   radius = 7,
+  lazy = true,
 }: {
   sym: string;
   company?: string;
   size?: number;
   radius?: number;
+  /**
+   * Off for anything that gets screenshotted. html2canvas clones the DOM as it
+   * stands, so a chip below the fold that the browser has not fetched yet is
+   * captured empty — on the earnings week board that was most of Wednesday and
+   * Thursday. The home panel's scrolling strip keeps the default.
+   */
+  lazy?: boolean;
 }) {
   const [stage, setStage] = useState<"local" | "proxy" | "text">("local");
 
@@ -91,16 +108,17 @@ export default function ChipLogo({
         alt={sym}
         width={size}
         height={size}
-        // Stage 2 is a same-origin URL that 302s to a third-party host, and
-        // drawing the result TAINTS a capture canvas — html2canvas cannot tell,
-        // because it classifies images by the src string (lib/snapshot.ts
-        // gotcha 9). Tagging it lets the snapshot engine swap this chip for its
-        // ticker-text form instead of losing the whole PNG to a SecurityError
-        // on toBlob(). Stage 1 is a real same-origin file and always draws.
-        {...(stage === "proxy" ? { "data-snap-untrusted": "1" } : {})}
+        // Stage 2 used to 302 to a third-party host, which taints a capture
+        // canvas, so it carried `data-snap-untrusted` and the snapshot engine
+        // dropped it (lib/snapshot.ts gotcha 9). It now streams the bytes from
+        // our own process, so it is same-origin for real — `data-snap-safe`
+        // tells the engine's blanket "anything under /proxy/ redirects" rule
+        // that this one does not. Stage 1 is a plain same-origin file.
+        {...(stage === "proxy" ? { "data-snap-safe": "1" } : {})}
         // The chips sit inside a scrolling week strip — most are off-screen at
         // first paint, so let the browser defer them instead of racing them all.
-        loading="lazy"
+        // Except where the surface gets screenshotted; see `lazy`.
+        loading={lazy ? "lazy" : "eager"}
         decoding="async"
         style={{ width: size, height: size, objectFit: "contain" }}
         onError={() => setStage((s) => (s === "local" ? "proxy" : "text"))}

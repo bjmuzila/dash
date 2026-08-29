@@ -107,19 +107,18 @@ function fmtMcap(n: number) {
   return `$${Math.round(n / 1e6)}M`;
 }
 
-/** Compact cap for the chip's second line — one line, never wraps a column. */
-function fmtMcapShort(n: number) {
-  if (!n) return "";
-  if (n >= 1e12) return `${(n / 1e12).toFixed(1)}T`;
-  if (n >= 1e9) return `${Math.round(n / 1e9)}B`;
-  if (n >= 1e8) return `${Math.round(n / 1e6)}M`;
-  return `${(n / 1e6).toFixed(0)}M`;
-}
-
-/** "MON" / "AUG 24" for the earnings week board's day headers. */
-function dayShort(dateStr: string) {
+/**
+ * "MONDAY" / "AUG 24" for the earnings week board's day headers.
+ *
+ * Full weekday, not the three-letter form. The board is five wide columns and
+ * the abbreviation was reading as a label on the date rather than as the day —
+ * "MONDAY AUG 31" is what a week board says. It fits: the header is a
+ * three-column grid whose middle track sizes to content, and the longest pair
+ * (WEDNESDAY SEP 2) is still well inside the 210px column minimum.
+ */
+function dayFull(dateStr: string) {
   return new Date(dateStr + "T12:00:00")
-    .toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
+    .toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
 }
 function dayDate(dateStr: string) {
   return new Date(dateStr + "T12:00:00")
@@ -691,14 +690,28 @@ export default function EconomicCalendarPage() {
             </span>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-            {/* PILL TEXT CENTERING. A <span> with vertical padding centers its
-                LINE BOX, not its glyphs — the font's ascent/descent metrics
-                decide where the text sits inside that box, and for this mono
-                stack they push it high, which is why the count read as sitting
-                above the middle of its own button. inline-flex + a 1 line-height
-                makes the glyph box the thing being centered. */}
-            <span style={{
+            {/* PILL TEXT CENTERING, both halves.
+
+                LIVE PAGE: a <span> with vertical padding centers its LINE BOX,
+                not its glyphs — the font's ascent/descent metrics decide where
+                the text sits inside that box, and for this mono stack they push
+                it high. inline-flex + `line-height:1` + a fixed height makes the
+                glyph box the thing being centered.
+
+                PNG: none of that survives the capture. html2canvas ignores the
+                line box entirely and paints each run at `rect.top + baseline`
+                using metrics it probed in an about:blank iframe where
+                `var(--font-mono)` does not resolve, so the label lands off the
+                pill's middle by a px or two — which at 11px in a 22px pill is
+                exactly the "words are not in the center of the button" in the
+                report. `data-cap-center` is snapshot.ts's fix for it (gotcha
+                10): on the clone it collapses the line box and re-splits the
+                slack by the measured error. It also rewrites inline-flex to
+                inline-block, hence `text-align:center` — flex was the only thing
+                centering these horizontally. */}
+            <span data-cap-center style={{
               display: "inline-flex", alignItems: "center", justifyContent: "center",
+              textAlign: "center",
               lineHeight: 1, height: 22, boxSizing: "border-box",
               fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
               color: HT.cyan, background: `${HT.cyan}1A`, border: `1px solid ${HT.cyan}55`,
@@ -709,8 +722,9 @@ export default function EconomicCalendarPage() {
             {/* Both of these are captured into the copied PNG on purpose: a
                 board pasted into a chat has to say what it is a board OF, or
                 "14 names on Wednesday" reads as the whole day's calendar. */}
-            <span style={{
+            <span data-cap-center style={{
               display: "inline-flex", alignItems: "center", justifyContent: "center",
+              textAlign: "center",
               lineHeight: 1, height: 22, boxSizing: "border-box",
               fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono)",
               color: HT.text, border: `1px solid ${BOARD.edge}`,
@@ -719,8 +733,9 @@ export default function EconomicCalendarPage() {
               {earnView === "all" ? "ALL NAMES" : "ANTICIPATED"}
             </span>
             {mcapMin > 0 && (
-              <span style={{
+              <span data-cap-center style={{
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
+                textAlign: "center",
                 lineHeight: 1, height: 22, boxSizing: "border-box",
                 fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono)",
                 color: HT.text, border: `1px solid ${BOARD.edge}`,
@@ -1044,18 +1059,20 @@ export default function EconomicCalendarPage() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * One ticker tile.
+ * One ticker tile: LOGO, then TICKER. Nothing else.
  *
- * Every box is a fixed-width grid cell and everything inside is centered on the
- * cell's axis — logo, ticker, cap. The old chip centered a 34px logo inside a
- * 46px column but let the ticker text start at the column's left edge, so any
- * symbol narrower or wider than the logo sat visibly off-axis (the "words not in
- * the middle of the boxes" in the report). `textAlign:center` + `width:100%` on
- * the label is what actually fixes it: align-items only centers the SPAN, not
- * the text inside a span that stretches.
+ * The market cap line is gone. It was the same number three times over — the
+ * board is already ordered by cap, the chips are already picked by it, and
+ * "5B" under a mark nobody was reading it against told you nothing you could
+ * act on. It cost a third line on every tile, which is what made a nine-name
+ * Wednesday taller than the fold. Cap and EPS estimate are still one hover away
+ * in `title`, which is where a per-name detail belongs on a board this dense.
+ *
+ * Everything inside is centered on the cell's axis. `textAlign:center` +
+ * `width:100%` on the label is what actually does it: align-items only centers
+ * the SPAN, not the text inside a span that stretches to the column.
  */
 function EarnChip({ row }: { row: EarnRow }) {
-  const cap = fmtMcapShort(row.market_cap);
   return (
     <a
       href={`https://finance.yahoo.com/quote/${row.symbol}`}
@@ -1064,29 +1081,24 @@ function EarnChip({ row }: { row: EarnRow }) {
       title={`${row.company || row.symbol} · ${fmtMcap(row.market_cap)}${row.eps_est ? ` · est ${row.eps_est}` : ""}`}
       style={{
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start",
-        gap: 5, minWidth: 0, padding: "7px 3px 6px", textDecoration: "none",
+        gap: 6, minWidth: 0, padding: "7px 3px", textDecoration: "none",
         borderRadius: 9,
         background: BOARD.tile,
         border: `1px solid ${BOARD.rule}`,
       }}
     >
-      <ChipLogo sym={row.symbol} company={row.company} size={CHIP_LOGO} radius={10} />
+      {/* lazy={false}: this board is the screenshot target, and html2canvas
+          clones the DOM as it stands — a chip the browser has not fetched yet
+          captures empty. */}
+      <ChipLogo sym={row.symbol} company={row.company} size={CHIP_LOGO} radius={10} lazy={false} />
       <span style={{
-        width: "100%", textAlign: "center", lineHeight: 1.2,
+        width: "100%", textAlign: "center", lineHeight: 1,
         fontSize: 11, fontWeight: 800, color: HT.text,
         fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
       }}>
         {row.symbol}
       </span>
-      {cap && (
-        <span style={{
-          width: "100%", textAlign: "center", lineHeight: 1,
-          fontSize: 9, color: HT.text, fontFamily: "var(--font-mono)",
-        }}>
-          {cap}
-        </span>
-      )}
     </a>
   );
 }
@@ -1096,17 +1108,44 @@ function EarnSession({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
   const k = EARN_KIND[kind];
   return (
     <div style={{ padding: "8px 9px 10px", borderTop: `1px solid ${BOARD.rule}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 7 }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: k.color, flexShrink: 0 }} />
-        <span style={{
-          fontSize: 9, fontWeight: 900, color: k.color,
-          textTransform: "uppercase", letterSpacing: "0.12em",
-        }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 7 }}>
+        {/* The dot lives INSIDE the label, not beside it.
+
+            As a flex sibling it was centred on the ROW, and the row's height is
+            set by the tallest line box — so the 6px dot sat on the line's middle
+            while the 9px all-caps label's own cap band sits above that, which is
+            the "dot not aligned with the font" in the report. Nested in a
+            `line-height:1` inline-block it is baseline-aligned instead: with no
+            leading, a 6px square whose bottom rests on the baseline centres to
+            within a third of a pixel of the cap band. Same trick the day header
+            above uses, one level down.
+
+            `data-cap-swatch` + `data-cap-center` carry it into the PNG:
+            html2canvas draws the run lower than the browser does, and
+            alignCapSwatches re-pins anything marked as a swatch onto the cap
+            band it actually painted (snapshot.ts gotcha 10b). The wrapper is an
+            inline-block, so the engine's flex→inline-block rewrite is a no-op
+            and the row's `margin-left:auto` count is untouched. */}
+        <span
+          data-cap-center
+          style={{
+            display: "inline-block", lineHeight: 1,
+            fontSize: 9, fontWeight: 900, color: k.color,
+            textTransform: "uppercase", letterSpacing: "0.12em",
+          }}
+        >
+          <span
+            data-cap-swatch
+            style={{
+              display: "inline-block", width: 6, height: 6, borderRadius: "50%",
+              background: k.color, marginRight: 6,
+            }}
+          />
           {k.board}
         </span>
         <span style={{
           marginLeft: "auto", fontSize: 9, color: HT.text, fontWeight: 700,
-          fontFamily: "var(--font-mono)",
+          fontFamily: "var(--font-mono)", lineHeight: 1,
         }}>
           {rows.length}
         </span>
@@ -1146,26 +1185,39 @@ function EarnDayColumn({
           The date is WHITE on every day — the cyan weekday and the TODAY pill
           already carry the emphasis, and the old #3a5570 made every day that was
           not today read as a disabled row. */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center",
-        padding: "9px 10px 8px",
-        background: isToday ? BOARD.headToday : BOARD.head,
-      }}>
+      <div
+        // SYMMETRIC padding and `data-cap-center`. The strip was padded
+        // 9px/8px and its glyphs then landed higher still in the PNG, because
+        // html2canvas draws every run a px or two below where the browser puts
+        // it (gotcha 10) — so the date read as sitting near the top of its own
+        // bar rather than in the middle of it. The tag re-splits THIS box's
+        // padding by the measured bias; it is a grid, not a flex, so the
+        // engine's inline-block rewrite does not apply and the three tracks
+        // survive. `alignItems:center` + `lineHeight:1` on the two runs is the
+        // live-page half of the same fix: baseline alignment centred nothing,
+        // it just hung the 10px weekday off the 13px date's baseline.
+        data-cap-center
+        style={{
+          display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center",
+          padding: "9px 10px",
+          background: isToday ? BOARD.headToday : BOARD.head,
+        }}
+      >
         <span />
-        <span style={{ display: "flex", alignItems: "baseline", gap: 7, justifyContent: "center" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 7, justifyContent: "center" }}>
           <span style={{
-            fontSize: 10, fontWeight: 900, color: HT.cyan,
+            fontSize: 10, fontWeight: 900, color: HT.cyan, lineHeight: 1,
             letterSpacing: "0.14em", fontFamily: "var(--font-mono)",
           }}>
-            {dayShort(date)}
+            {dayFull(date)}
           </span>
-          <span style={{ fontSize: 13, fontWeight: 800, color: HT.text, letterSpacing: "0.04em" }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: HT.text, letterSpacing: "0.04em", lineHeight: 1 }}>
             {dayDate(date)}
           </span>
           {isToday && (
             <span style={{
               fontSize: 9, fontWeight: 900, background: HT.cyan, color: "#05080d",
-              padding: "1px 5px", borderRadius: 3, letterSpacing: "0.1em",
+              padding: "1px 5px", borderRadius: 3, letterSpacing: "0.1em", lineHeight: 1,
             }}>
               TODAY
             </span>
@@ -1173,7 +1225,7 @@ function EarnDayColumn({
         </span>
         <span style={{
           justifySelf: "end", fontSize: 10, color: HT.text, fontWeight: 700,
-          fontFamily: "var(--font-mono)",
+          fontFamily: "var(--font-mono)", lineHeight: 1,
         }}>
           {n}
         </span>
