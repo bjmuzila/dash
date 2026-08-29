@@ -796,7 +796,7 @@ var TPL={
   ]},
 
   /* Weekend estimated-moves scoreboard — the Saturday "here is how the week
-     graded" post, ending in the sign-up ask. Same deal as `alerts`: two image
+     graded" post, ending in the sign-up ask. Same deal as 'alerts': two image
      slots, everything else rendered, and Auto-fill reads the numbers off the
      shots into the [data-k] layers.
 

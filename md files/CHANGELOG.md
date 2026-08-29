@@ -1,35 +1,47 @@
 # Changelog
 
-## 2026-08-29 - Level Log: wall-migration legend swatches now sit on their labels in the PNG
+## 2026-08-29 - Build fix: stray backtick killed the owner-vite build
 
-Edited: `lib/snapshot.ts`, `components/pages/LevelLog.tsx`.
+Edited: `owner-vite/src/pages/studioHtml.ts`.
 
-Expand the wall-migration chart, hit PNG, and the four colour squares floated
-several pixels above "Put Wall" / "Call Wall" / "CORE" / "spot". On the live page
-they are dead centre — the drift is the capture's.
+The whole file is one `String.raw` template literal. A comment added inside it
+referred to another template as 'alerts' wrapped in backticks — those backticks
+closed the template early, so esbuild hit a bare `alerts` identifier and the VPS
+deploy of v8.29.2 failed at `owners build 6/6` (Expected ";" but found "alerts",
+line 799). Swapped them for single quotes.
 
-Cause: html2canvas does not draw text where the box puts it. It paints each run
-at `textRect.top + baseline`, and `baseline` comes from a probe html2canvas builds
-with the **page** document (`new FontMetrics(document)`) inside a container that
-inherits the BODY's line-height. The existing `data-cap-center` rewrite collapses
-a chip to `line-height:1` and re-splits its padding to compensate — but the
-padding can only give back what the declared height reserved, which is 3px on a
-16px legend chip. The rest of the drop stays, the glyphs land low, and the swatch
-— pinned to the middle of the BOX — stays where it was.
+Rule for this file: no backticks anywhere inside STUDIO_HTML, comments included.
 
-Fix: aim at the error instead of modelling it. `captureBaselineBias` became
-`captureFontProbe` and now returns the raw `baseline` html2canvas will use as well
-as the `bias`, and a second clone-only pass (`alignCapSwatches`) re-pins anything
-marked `data-cap-swatch` onto the cap band of the run beside it — baseline minus
-half a cap height (0.72em, which is Inter/Arial/Helvetica to within a tenth of a
-pixel). Absolutely positioned swatches get a new `top`; an in-flow one is nudged
-with `position:relative`. The box, its border and its size are untouched, the live
-page is untouched, and a probe that fails to lay out returns `baseline: 0`, which
-switches the pass off rather than flinging the square somewhere.
+## 2026-08-29 - Bubbles: when the dots do not fit, draw FEWER — not smaller
 
-Opted in so far: the wall-migration legend swatch in `LevelLog.tsx`. Verified
-against a real html2canvas render — swatch centre vs label cap centre went 3.0px →
-0.5px (cap-center alone) → 0.0px.
+Edited: `cbedge-v3/src/board/gexCandles/bubbles.ts`.
+
+1m looked right zoomed in and horrible zoomed out, and shrinking the marks did
+not fix it — which is the clue. There is a hard limit here worth stating plainly:
+**975 samples across 1,500 pixels is 1.5px each, and you cannot draw 975
+distinguishable circles in that.** Two 1.2px dots 1.5px apart still touch, so the
+ribbon comes back whatever the size numbers say. The problem was never the size.
+
+So when the dots cannot all fit, only some of them are drawn: every Nth bucket,
+strided so the ones that ARE drawn clear each other. Nothing is faked — each
+drawn dot is still one real bucket, last print and all — the trail is simply
+sampled at the resolution the pane can actually show.
+
+**The stride targets the spacing the auto rung is chosen for**, not a bare "they
+do not touch" minimum. Striding to the minimum was the first attempt and it is
+barely better than the ribbon: 3px dots across a session are a dotted line you
+cannot read a size off, and size is the entire signal. At the auto spacing a
+forced rung lands on exactly the picture auto would have drawn — which is
+correct, because at that width there is only one legible answer, and pretending
+otherwise is what made this look horrible zoomed out.
+
+The size profile is then chosen for the EFFECTIVE cadence — the bucket as drawn,
+not as bucketed — so a strided 1m trail is sized like the rung it is actually
+showing.
+
+Net effect: every combination of bar size, bucket and zoom now draws separated
+bubbles. Forcing 1m and zooming out converges on auto; zooming back in drops the
+stride to 1 and every minute is there again.
 
 ## 2026-08-29 - Bubbles: one size profile per bucket rung, plus a spacing shrink
 

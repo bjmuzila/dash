@@ -421,10 +421,39 @@ export function drawBubbles(
   const bucketMs = diffs.length ? diffs[diffs.length >> 1]! : 60_000
   const pxSpan = Math.abs(xAtTime(win, geo, last.ts) - xAtTime(win, geo, first.ts))
   const pxPerDot = span > 0 ? (pxSpan * bucketMs) / span : 0
-  const size = sizeFor(bucketMs, pxPerDot)
+
+  // ── THE DOTS ARE STRIDED WHEN THERE IS NOT ROOM FOR ALL OF THEM ───────────
+  //
+  // There is a hard physical limit here and it is worth stating plainly: 975
+  // samples across 1,500 pixels is 1.5px each, and you cannot draw 975
+  // distinguishable circles in that. Shrinking them does not help — two 1.2px
+  // dots 1.5px apart still touch, which is the ribbon. Neither does any size
+  // number, because the problem is not the size.
+  //
+  // So when the dots cannot all fit, only some of them are drawn: every Nth
+  // bucket, chosen so the ones that ARE drawn clear each other. Nothing is
+  // faked — each drawn dot is still one real bucket, last print and all — the
+  // trail is simply sampled at the resolution the pane can actually show.
+  //
+  // This is what makes a forced rung safe at any zoom. Force 1m and zoom out and
+  // it lands on the same picture the auto rule would have picked, because at
+  // that width there IS only one legible answer. Zoom in and the stride falls
+  // back to 1 and every minute is there again.
+  // The stride targets the SAME spacing the auto rung is chosen for, not a bare
+  // "they don't touch" minimum. Striding to the minimum was the first attempt
+  // and it is barely better than the ribbon: 3px dots across a session are a
+  // dotted line you cannot read a size off, and size is the entire signal. At
+  // the auto spacing a forced rung lands on exactly the picture auto would have
+  // drawn — which is correct, because at that width there is only one legible
+  // answer and pretending otherwise is what made this look horrible zoomed out.
+  const stride = pxPerDot > 0 ? Math.max(1, Math.ceil(BUBBLES.bucketPxPerDot / pxPerDot)) : 1
+  // The profile is chosen for the EFFECTIVE cadence — the bucket as drawn, not
+  // as bucketed — so a strided 1m trail is sized like the rung it is showing.
+  const size = sizeFor(bucketMs * stride, pxPerDot * stride)
 
   let drew = 0
-  for (const snap of snaps) {
+  for (let i = 0; i < snaps.length; i += stride) {
+    const snap = snaps[i]!
     const x = xAtTime(win, geo, snap.ts)
     if (x < -40 || x > w + 40) continue
     // Age fades opacity only a LITTLE — the oldest bucket keeps `ageKeep` of it.
