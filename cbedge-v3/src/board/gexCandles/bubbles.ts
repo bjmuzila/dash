@@ -419,8 +419,15 @@ export function drawBubbles(
   for (let i = 1; i < snaps.length; i++) diffs.push(snaps[i]!.ts - snaps[i - 1]!.ts)
   diffs.sort((a, b) => a - b)
   const bucketMs = diffs.length ? diffs[diffs.length >> 1]! : 60_000
-  const pxSpan = Math.abs(xAtTime(win, geo, last.ts) - xAtTime(win, geo, first.ts))
-  const pxPerDot = span > 0 ? (pxSpan * bucketMs) / span : 0
+  // Pixels a bucket owns AT THE CURRENT ZOOM, measured locally rather than from
+  // the data's whole span. The span version was wrong in a way that only showed
+  // up zoomed in: xAtTime CLAMPS to the visible window, so a whole day of
+  // snapshots reports the plot's own width no matter how far in you are, the
+  // bucket looks a fraction of a pixel wide, and the stride throws away almost
+  // everything. Two times one bucket apart, in the middle of the plot, is the
+  // question actually being asked.
+  const tMid = geo.timeAtX((win.xLo + win.xHi) / 2) ?? first.ts
+  const pxPerDot = Math.abs(xAtTime(win, geo, tMid + bucketMs) - xAtTime(win, geo, tMid))
 
   // ── THE DOTS ARE STRIDED WHEN THERE IS NOT ROOM FOR ALL OF THEM ───────────
   //

@@ -9058,6 +9058,48 @@ if (libDb) {
         } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });
+
+    // /api/cb-contracts — the SUBSCRIBER-FACING slice of the route above, for
+    // the Contracts card on the premarket page
+    // (components/pages/premarket/CbContracts.tsx).
+    //
+    //   GET                  → { date, trades, config }  — TODAY only
+    //   GET ?ticks=<tradeId> → { ticks }                 — today's rows only
+    //
+    // Deliberately a second route rather than a widened auth on /api/cb-trades:
+    // that one also carries the POST recorder actions (tick / checkpoint /
+    // poll / settle), the ?diag= dump, and any date range going back a year.
+    // Widening it would hand all of that to every subscriber as a side effect
+    // of wanting one table on one page. This is GET, this session, nothing
+    // else.
+    //
+    // The ?ticks= id is checked against today's rows before the curve is
+    // returned. Without that check the parameter is a free index into the whole
+    // trade history — the exact history this route exists not to expose.
+    register('/api/cb-contracts', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const date = cbTrack.etParts().date;
+          const trades = await cbTrack.listTrades({ date });
+          const ticksFor = sp.get('ticks');
+          if (ticksFor) {
+            if (!trades.some((t) => String(t.id) === String(ticksFor))) {
+              send(res, 404, { error: 'not in this session' });
+              return;
+            }
+            send(res, 200, { ticks: await cbTrack.listTicks(ticksFor) }, { 'Cache-Control': NO_STORE });
+            return;
+          }
+          // CONFIG is passed whole (it is BUY_MIN / STRIKE_STEP / MULTIPLIER and
+          // friends — the rule the card describes in its own header, not a
+          // secret), and the card reads MULTIPLIER off it to turn a price
+          // difference into dollars.
+          send(res, 200, { date, trades, config: cbTrack.CONFIG }, { 'Cache-Control': NO_STORE });
+        } catch (err) { send(res, 500, { error: String(err) }); }
+      },
+    });
   }
 
   // /api/bzila-alerts — owner-authored toolbar broadcasts. GET (paid/owner see

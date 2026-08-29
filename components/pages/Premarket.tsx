@@ -211,6 +211,7 @@ import { SCANNER_MAIN } from "@/lib/scannerTickers";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import HistoricalRecap, { HISTORICAL_CSS } from "@/components/pages/premarket/HistoricalRecap";
 import GexWatchFeed, { GEX_WATCH_CSS } from "@/components/pages/premarket/GexWatchFeed";
+import CbContracts, { CB_CONTRACTS_CSS } from "@/components/pages/premarket/CbContracts";
 import { GexChurnHistory, useGexChurnHistory } from "@/components/shared/GexHeatBar";
 // The replay transport is /es-candles' transport, part for part — see the
 // comment on the docked bar at the bottom of this file.
@@ -2188,7 +2189,7 @@ export default function Premarket() {
 
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
-      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GAMMA_BELL_CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GEX_WATCH_CSS + GAMMA_BELL_CSS + CB_CONTRACTS_CSS }} />
       <div className="wrap">
 
         <div className="pagehead">
@@ -3144,6 +3145,19 @@ export default function Premarket() {
               />
             </div>
           </div>
+
+          {/* ── 6 · TODAY'S CONTRACTS ───────────────────────────────────────
+              What the CB-strike 0DTE actually did at each of today's
+              checkpoints — the same rows the owner Contracts board keeps,
+              read-only and today only (/api/cb-contracts). Clicking a contract
+              opens its probe curve.
+
+              NOT rendered on a frozen or replayed session: the route answers
+              for the current ET date whatever the session picker says, so
+              mounting it under a past date would file today's contracts under
+              yesterday's header. It sits last because it is the session's
+              record, not a number to trade off at 9:00. */}
+          {!frozen && !replay && <CbContracts />}
 
           <div className="footbar">
             <span className="l mono">

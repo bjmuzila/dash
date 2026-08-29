@@ -1,16 +1,32 @@
 # Changelog
 
-## 2026-08-29 - Build fix: stray backtick killed the owner-vite build
+## 2026-08-29 - Bubbles: zooming in adds DOTS, not size
 
-Edited: `owner-vite/src/pages/studioHtml.ts`.
+Edited: `cbedge-v3/src/board/gexCandles/settings.ts`, `bubbles.ts`.
 
-The whole file is one `String.raw` template literal. A comment added inside it
-referred to another template as 'alerts' wrapped in backticks — those backticks
-closed the template early, so esbuild hit a bare `alerts` identifier and the VPS
-deploy of v8.29.2 failed at `owners build 6/6` (Expected ";" but found "alerts",
-line 799). Swapped them for single quotes.
+Zoom out and see fewer, zoom into the candles and see all of them. Two changes,
+one of them a real bug.
 
-Rule for this file: no backticks anywhere inside STUDIO_HTML, comments included.
+**1. The rung threshold was set from a FULL-SIZE mark.** `bucketPxPerDot` was
+`2 x capPx x topBoost + gap` — about 37px — so a 1m rung had to earn room for a
+top-sized bubble before it was allowed at all. A two-hour window drew 5m, a
+half-hour window drew 1m, and there was nothing in between. It is now 11px,
+derived from the SMALLEST legible mark: the finer rung is allowed as soon as its
+dots can be told apart, and `capOfSpacing` shrinks the marks to fit the room. So
+zooming in adds dots first and size second, which is the way round you want it.
+The 1m profile's cap went 5.5 -> 9 to match, since it now has to look right at
+both ends of that range.
+
+**2. `pxPerDot` was measured off the data's whole span, and `xAtTime` CLAMPS.**
+A whole day of snapshots therefore reported the plot's own width no matter how
+far in you were zoomed — so a bucket looked a fraction of a pixel wide, the
+stride went to dozens, and zooming in threw away almost everything it should have
+been revealing. Now it measures two times one bucket apart in the middle of the
+plot, which is the question actually being asked. This only showed up zoomed in,
+which is exactly where nobody was looking while the zoomed-out case was broken.
+
+On the fixture at three zooms: full session 15m / 65 dots, last 2h 5m / dense,
+last 30m 1m / every minute.
 
 ## 2026-08-29 - Bubbles: when the dots do not fit, draw FEWER — not smaller
 

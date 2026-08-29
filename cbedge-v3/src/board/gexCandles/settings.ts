@@ -129,11 +129,22 @@ export const BUBBLES = {
    */
   bucketRungsMin: [1, 5, 15, 30, 60],
   /**
-   * Pixels a bucket must own before its rung is allowed. Set from the mark
-   * itself — a top mark is `capPx * topBoost` in radius, so this is its
-   * diameter plus the hairline, and dots at this cadence can never fuse.
+   * Pixels a bucket must own before its rung is allowed.
+   *
+   * Set from the SMALLEST legible mark, not from a full-size one. That is the
+   * difference between "zoom in and see more dots" and "zoom in and see the same
+   * dots, bigger": at a full-size threshold (~37px) a 1m rung needed two hours
+   * of chart to earn its place, so a 2h window drew 5m and a 30m window drew 1m
+   * and there was nothing in between. At ~11px the finer rung is allowed as soon
+   * as its dots can be told apart, and `capOfSpacing` shrinks the marks to fit
+   * the room — so zooming in adds dots first and size second, which is the way
+   * round you want it.
+   *
+   * 2 x minLegiblePx x a typical topBoost, plus the hairline.
    */
-  bucketPxPerDot: 2 * 13 * 1.38 + 0.8,
+  bucketPxPerDot: 11,
+  /** The smallest radius a mark can have and still read as a mark. */
+  minLegiblePx: 3.5,
 
   // ── The strike set ───────────────────────────────────────────────────────
   /** Rows per bucket. The design range is 4–10; four is the resting value. */
@@ -165,7 +176,7 @@ export const BUBBLES = {
   // the auto rule would pick it. Rungs between the listed ones take the nearest
   // profile below.
   profiles: {
-    1: { capPx: 5.5, floorPx: 1.2, topBoost: 1.5, ringPx: 1.0 },
+    1: { capPx: 9, floorPx: 1.6, topBoost: 1.45, ringPx: 1.1 },
     5: { capPx: 13, floorPx: 2.5, topBoost: 1.38, ringPx: 1.4 },
     15: { capPx: 16, floorPx: 3, topBoost: 1.34, ringPx: 1.6 },
     30: { capPx: 18, floorPx: 3.5, topBoost: 1.3, ringPx: 1.8 },

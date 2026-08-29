@@ -2,6 +2,12 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Saturday 8/29/2026
+
+* **Level Log:** the coloured squares in the wall migration legend now line up with their labels in the downloaded PNG.
+
+* **Economic Calendar — the Earnings tab was hiding most of the week.** It now covers every reporting company, defaults to the most-watched names, and adds a next-week view.
+
 ## Friday 8/28/2026
 
 * **Click any label on the wall migration chart to hide or show that line** — call wall, put wall, CORE or price.
