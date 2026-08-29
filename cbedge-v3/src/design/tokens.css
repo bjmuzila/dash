@@ -121,6 +121,15 @@
   --color-gexbar-pos: #29b6f6;
   --color-gexbar-neg: #ffb300;
 
+  /* ── DEX overlay ──────────────────────────────────────────────────────
+     The net-delta line the GEX Chart draws across its bars, on its own
+     normalised scale. A THIRD hue on purpose: the line is not a bar and
+     does not share the bars' sign convention, so borrowing either gexbar
+     colour would read as "same series, different shape." v2's home chart
+     uses rgb(18,103,131); this is that value one notch brighter, so it
+     still reads where it crosses a 90%-opacity bar.                        */
+  --color-dex: #1f8dad;
+
   /* ── Key levels ───────────────────────────────────────────────────────
      The wall palette shared by the Key Levels tiles, the Multi Greek
      ladder badges and any future levels rail. cb = Core Bullseye /

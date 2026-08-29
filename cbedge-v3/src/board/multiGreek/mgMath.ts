@@ -41,6 +41,7 @@ export const MAX_COLS = MAX_EXP_COLS + 1
 
 interface RawLeg {
   gamma?: unknown
+  delta?: unknown
   'open-interest'?: unknown
   volume?: unknown
   mark?: unknown
@@ -62,6 +63,15 @@ export interface ChainResponse {
 
 export interface Leg {
   gamma: number
+  /**
+   * Per-contract delta, signed as the feed gives it (calls positive, puts
+   * negative). Nothing on the Multi Greek ladder reads it — it is here for the
+   * GEX Chart's DEX line, which needs `delta × contracts × spot × 100` for a
+   * ticker that is not on the socket and therefore has no server-computed
+   * `netDEX` to fall back on. 0 when the feed omits it, which the chart treats
+   * as "no DEX to draw" rather than "DEX is flat".
+   */
+  delta: number
   oi: number
   vol: number
   /**
@@ -98,7 +108,13 @@ function leg(raw: RawLeg | undefined): Leg | null {
   const bid = num(raw.bid)
   const ask = num(raw.ask)
   const mark = num(raw.mark) || (bid > 0 && ask > 0 ? (bid + ask) / 2 : 0)
-  return { gamma: num(raw.gamma), oi: num(raw['open-interest']), vol: num(raw.volume), mark }
+  return {
+    gamma: num(raw.gamma),
+    delta: num(raw.delta),
+    oi: num(raw['open-interest']),
+    vol: num(raw.volume),
+    mark,
+  }
 }
 
 export function parseChain(json: unknown): ParsedChain {

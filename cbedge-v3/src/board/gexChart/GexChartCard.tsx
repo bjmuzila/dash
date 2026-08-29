@@ -1,46 +1,103 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
+import { Chip, PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
 import { watchFrame } from '@/data/hooks'
 import { isSocketSymbol, usePageSymbol } from '@/data/symbol'
-import type { GexData, GexFrame, SpotFrame } from '@/contract/frames'
+import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
 import { chainGexUrl, chainToGex, EMPTY_CHAIN_GEX } from '../chainGex'
-import {
-  EMPTY_MODEL,
-  fmtGexShort,
-  mountGexChart,
-  netOf,
-  type GexChartHandle,
-  type GexChartModel,
-} from './gexChartRender'
+import { EMPTY_MODEL, mountGexChart, type GexChartHandle, type GexChartModel } from './gexChartRender'
+import { BASIS_LABEL, flowSupported, fmtGexShort, totalNet } from './values'
+import { loadSettings, saveSettings, STAT_KEYS, type GexChartSettings, type StatKey } from './settings'
+import { StatCards, STAT_LABEL } from './StatCards'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX Chart — v2's home-page chart, as a board card.
 //
-// NO TOGGLES. v2's chart has none either: `mode`, `dataMode`, `showOI`,
-// `showDex` and the rest are PROPS the home page passes from its own cog, and
-// the home page passes net GEX on the OI+VOL basis. That is what this draws, so
-// there is nothing left for a toolbar to switch. The header carries the board
-// total and, off-socket, where the numbers came from.
+// v2 drives its chart entirely through PROPS from the home page's own toolbar:
+// `mode`, `dataMode`, `showDex`, the expiry label and the row of stat cards all
+// live on the page, not in the chart. v3 has no home page to hang them on, so
+// the card owns them — the toolbar, the cog, the ten tiles and the settings
+// blob that remembers all of it are here.
 //
-// The chart itself — pan, zoom, y-scale, recentre, the bar gradients — is
-// gexChartRender.ts, which owns its canvas and its listeners. A pan is sixty
-// pointer events a second; none of them reach React.
+// The chart itself — pan, zoom, y-scale, recentre, the bar gradients, the DEX
+// line, the core badge — is gexChartRender.ts, which owns its canvas and its
+// listeners. A pan is sixty pointer events a second; none of them reach React.
+//
+// ── The four controls ────────────────────────────────────────────────────────
+//   BASIS   OI+VOL · VOL · FLOW — which contracts the bars are priced on
+//   SPLIT   NET · C/P          — one net bar, or the call and put legs
+//   DEX     the net-delta overlay line, on its own normalised scale
+//   ⚙       the ten stat cards, individually
+//
+// Basis, split and DEX sit in the toolbar because each is one click and each
+// changes what the bars MEAN. The cards go behind the cog because there are ten
+// of them and they are a layout choice, not a reading of the market.
 //
 // ── Two sources, one shape ───────────────────────────────────────────────────
 // SPX comes off the socket. Any other page symbol comes from /api/chains
 // through board/chainGex.ts, which produces the identical row shape. Spot
 // follows the same split: the `spot` frame for SPX (the live print, which the
-// gex frame does not carry), the chain's own underlyingPrice otherwise.
+// gex frame does not carry), the chain's own underlyingPrice otherwise. The
+// EXPIRY follows it too — the socket publishes which one it is streaming, and
+// the chain path reports the front expiry it picked.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One settings blob for the card type, not per placed instance.
+ *
+ * Two GEX Charts on one board therefore share a basis. That is the same choice
+ * GEX Candles made, and for the same reason: the id a board item carries is a
+ * catalog id, and there is no per-instance key to hang a second blob on without
+ * inventing one.
+ */
+const CARD_ID = 'gex-chart'
+
+/**
+ * ONE empty array, not a fresh one per call.
+ *
+ * `view` bails out of a re-render by reference-comparing its rows, and a new
+ * `[]` on every empty push would defeat that on exactly the path where it
+ * matters most — a symbol with no data yet, being polled.
+ */
+const EMPTY_ROWS: GexRow[] = []
 
 export function GexChartCard() {
   const { symbol } = usePageSymbol()
   const onSocket = isSocketSymbol(symbol)
 
-  /** The one number worth a re-render: the board total, printed in the header. */
-  const [total, setTotal] = useState<number | null>(null)
+  const [settings, setSettings] = useState<GexChartSettings>(() => loadSettings(CARD_ID))
+  const [cogOpen, setCogOpen] = useState(false)
+
+  const patch = useCallback((p: Partial<GexChartSettings>) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...p }
+      saveSettings(CARD_ID, next)
+      return next
+    })
+  }, [])
+
+  /**
+   * ── What React IS allowed to re-render on ──────────────────────────────────
+   * The rows themselves never go through state — they are a ref the renderer
+   * reads. But the ten tiles are React, and they need the ladder. So the card
+   * keeps ONE piece of state for them: the current rows and spot, set from the
+   * same push() the chart is fed from.
+   *
+   * That is a re-render per LADDER, which is once every few seconds — never per
+   * spot tick. `spot` is a 10Hz topic; if a tick refreshed the tiles, ten
+   * strike-comparisons × ten tiles would run sixty times for every one time the
+   * numbers actually changed. So the spot watcher repaints the CHART (which is
+   * imperative and cheap) and leaves this state alone; the tiles pick the new
+   * spot up on the next gex frame, seconds later, which is also the only
+   * cadence at which a wall can actually move.
+   */
+  const [view, setView] = useState<{ rows: GexRow[]; spot: number; expiry: string }>({
+    rows: EMPTY_ROWS,
+    spot: 0,
+    expiry: '',
+  })
 
   const handleRef = useRef<GexChartHandle | null>(null)
   const modelRef = useRef<GexChartModel>(EMPTY_MODEL)
@@ -66,39 +123,53 @@ export function GexChartCard() {
     handle.setModel(modelRef.current)
   }, [])
 
+  // The settings the renderer needs, in one object so `push` takes a stable
+  // dependency rather than three.
+  const drawOpts = useMemo(
+    () => ({ basis: settings.basis, split: settings.split, showDex: settings.showDex }),
+    [settings.basis, settings.split, settings.showDex],
+  )
+  const drawOptsRef = useRef(drawOpts)
+  drawOptsRef.current = drawOpts
+
   const push = useCallback(
-    (rows: GexData['gexRows'] | null, spot: number, sym: string) => {
-      const model: GexChartModel = rows?.length ? { rows, spot, symbol: sym } : { ...EMPTY_MODEL, symbol: sym }
-      modelRef.current = model
+    (rows: GexRow[] | null, spot: number, sym: string, expiry: string, syncTiles = true) => {
+      const o = drawOptsRef.current
+      const safe = rows?.length ? rows : EMPTY_ROWS
+      modelRef.current = { rows: safe, spot, symbol: sym, expiry, ...o }
       paint()
-      let sum: number | null = null
-      if (rows?.length) {
-        sum = 0
-        for (const r of rows) sum += netOf(r)
-      }
-      // Left ungated on purpose: it is the header number, it must be right the
-      // instant the card is scrolled back into view, and React bails out on an
+      if (!syncTiles) return
+      // Ungated by visibility on purpose: the tiles must be right the instant
+      // the card is scrolled back into view, and React bails out on an
       // unchanged value anyway.
-      setTotal(sum)
+      setView((prev) =>
+        prev.rows === safe && prev.spot === spot && prev.expiry === expiry
+          ? prev
+          : { rows: safe, spot, expiry },
+      )
     },
     [paint],
   )
 
-  const onMount = useCallback(
-    (frame: ChartHandle): (() => void) => {
-      const created = mountGexChart(frame.el)
-      handleRef.current = created
-      visibleRef.current = frame.visible()
-      // Replay whatever arrived before the frame mounted, so the first paint is
-      // never an empty chart that fills in a beat later.
-      created.setModel(modelRef.current)
-      return () => {
-        created.destroy()
-        handleRef.current = null
-      }
-    },
-    [],
-  )
+  // A settings change does not bring new rows — it changes how the ones already
+  // in the model are drawn. Re-model and repaint without touching the sources.
+  useEffect(() => {
+    modelRef.current = { ...modelRef.current, ...drawOpts }
+    paint()
+  }, [drawOpts, paint])
+
+  const onMount = useCallback((frame: ChartHandle): (() => void) => {
+    const created = mountGexChart(frame.el)
+    handleRef.current = created
+    visibleRef.current = frame.visible()
+    // Replay whatever arrived before the frame mounted, so the first paint is
+    // never an empty chart that fills in a beat later.
+    created.setModel(modelRef.current)
+    return () => {
+      created.destroy()
+      handleRef.current = null
+    }
+  }, [])
 
   const onResize = useCallback(() => {
     if (!visibleRef.current) {
@@ -121,11 +192,14 @@ export function GexChartCard() {
   // narrows the socket's derived topic scope — the card stops asking for `gex`
   // the moment it stops reading it.
   const spotRef = useRef(0)
+  const socketRef = useRef<{ rows: GexRow[]; expiry: string }>({ rows: [], expiry: '' })
   useEffect(() => {
     if (!onSocket) return
     return watchFrame<GexFrame>('gex', (frame) => {
-      const d = frame?.data
-      if (d) push(d.gexRows, spotRef.current, symbol)
+      const d: GexData | undefined = frame?.data
+      if (!d) return
+      socketRef.current = { rows: d.gexRows ?? [], expiry: d.expiry ?? '' }
+      push(socketRef.current.rows, spotRef.current, symbol, socketRef.current.expiry)
     })
   }, [onSocket, push, symbol])
 
@@ -135,8 +209,8 @@ export function GexChartCard() {
       const px = frame?.data.spot
       if (typeof px !== 'number' || !(px > 0)) return
       spotRef.current = px
-      const m = modelRef.current
-      if (m.rows.length) push(m.rows, px, symbol)
+      const s = socketRef.current
+      if (s.rows.length) push(s.rows, px, symbol, s.expiry, false)
     })
   }, [onSocket, push, symbol])
 
@@ -146,32 +220,153 @@ export function GexChartCard() {
 
   useEffect(() => {
     if (onSocket) return
-    push(chain.rows, chain.spot, symbol)
+    push(chain.rows, chain.spot, symbol, chain.expiry)
   }, [onSocket, chain, push, symbol])
 
   // A symbol change must not leave the previous ticker's ladder on screen while
   // the next source warms up.
   useEffect(() => {
     spotRef.current = 0
-    push(null, 0, symbol)
+    socketRef.current = { rows: [], expiry: '' }
+    push(null, 0, symbol, '')
   }, [symbol, push])
 
+  // ── Header numbers ─────────────────────────────────────────────────────────
+  // Resolved once, here, and handed to the tiles: FLOW is only really flow when
+  // the rows carry the tape-derived leg, and the chart, the header total and
+  // the ten cards all have to agree about that or the basis half-applies.
+  const flowActive = useMemo(
+    () => settings.basis === 'flow' && flowSupported(view.rows),
+    [settings.basis, view.rows],
+  )
+  const total = useMemo(
+    () => (view.rows.length ? totalNet(view.rows, settings.basis, flowActive) : null),
+    [view.rows, settings.basis, flowActive],
+  )
+
+  const cardsShown = settings.cardsOn && STAT_KEYS.some((k) => settings.cards[k])
+  const allCardsOn = STAT_KEYS.every((k) => settings.cards[k])
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col gap-1.5">
       <CardToolbar>
+        {/* WHICH EXPIRY THESE BARS ARE. The rows look identical whichever one
+            they came from, so without this the chart is a ladder with no date
+            on it — and on SPX, where the socket can be streaming 0DTE or the
+            next session, that is the difference between two very different
+            pictures. Blank until a source has said. */}
         <span
           title={
             onSocket
-              ? 'Live off the WebSocket — SPX is the one underlying it streams'
-              : `Derived from ${symbol}'s option chain, polled every 15s. The socket only streams SPX`
+              ? 'The expiry the WebSocket is streaming'
+              : `The front expiry of ${symbol}'s option chain — the one this ladder is built from`
           }
-          className="text-[10px] uppercase tracking-[0.1em] text-muted opacity-60"
+          className="tabular shrink-0 rounded-sm border border-line px-1.5 py-0.5 font-mono text-[10px] font-bold text-muted"
         >
-          Net GEX · OI+VOL{onSocket ? '' : ' · chain'}
+          {view.expiry || '—'}
         </span>
+
+        <SegGroup
+          title="Which contracts the bars are priced on"
+          options={[
+            { label: 'OI+VOL', value: 'oi-vol', title: 'Open interest plus today’s volume — what the rest of the board means by GEX' },
+            { label: 'VOL', value: 'vol-only', title: 'Today’s volume alone, without the standing book behind it' },
+            {
+              label: 'FLOW',
+              value: 'flow',
+              title:
+                'Gamma against the dealer’s own signed inventory, built from the classified tape. Only the socket symbol has a tape; elsewhere the chart says so and falls back to OI+VOL',
+            },
+          ]}
+          value={settings.basis}
+          onChange={(v) => patch({ basis: v })}
+        />
+
+        <SegGroup
+          title="One net bar per strike, or the call leg up and the put leg down"
+          options={[
+            { label: 'NET', value: 'net' },
+            { label: 'C/P', value: 'call-put' },
+          ]}
+          value={settings.split}
+          onChange={(v) => patch({ split: v })}
+        />
+
+        <Chip
+          label="DEX"
+          on={settings.showDex}
+          onClick={() => patch({ showDex: !settings.showDex })}
+          title="Net dealer DELTA exposure as a line across the bars, on its own normalised scale — it answers which way delta leans and where it turns, not how many dollars"
+        />
+
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => setCogOpen((v) => !v)}
+            title="Which stat cards to show above the chart"
+            className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg"
+          >
+            ⚙ Cards
+          </button>
+          <Popover open={cogOpen} onClose={() => setCogOpen(false)}>
+            <div className="flex w-64 flex-col gap-2">
+              <PanelSection title="Stat cards">
+                <div className="flex flex-wrap gap-1">
+                  <Chip
+                    label={settings.cardsOn ? 'Row on' : 'Row off'}
+                    on={settings.cardsOn}
+                    onClick={() => patch({ cardsOn: !settings.cardsOn })}
+                    title="The whole row. Turning it off keeps every individual choice below for when it comes back"
+                  />
+                  <Chip
+                    label={allCardsOn ? 'None' : 'All'}
+                    on={false}
+                    onClick={() =>
+                      patch({
+                        cards: STAT_KEYS.reduce(
+                          (acc, k) => ((acc[k] = !allCardsOn), acc),
+                          {} as Record<StatKey, boolean>,
+                        ),
+                      })
+                    }
+                    title="Select or clear every card at once"
+                  />
+                </div>
+              </PanelSection>
+
+              <PanelSection title="Which cards">
+                <div className="flex flex-wrap gap-1">
+                  {STAT_KEYS.map((k) => (
+                    <Chip
+                      key={k}
+                      label={STAT_LABEL[k]}
+                      on={settings.cards[k]}
+                      onClick={() => patch({ cards: { ...settings.cards, [k]: !settings.cards[k] } })}
+                    />
+                  ))}
+                </div>
+              </PanelSection>
+            </div>
+          </Popover>
+        </div>
+
+        {/* WHERE the rows came from — shown only when it is not the obvious
+            answer. The basis is already on the segmented control beside this,
+            so printing it again here would be the same word twice; what the
+            toolbar cannot otherwise say is that these bars are a polled chain
+            rather than the live socket. */}
+        {!onSocket && (
+          <span
+            title={`Derived from ${symbol}'s option chain, polled every 15s. The socket only streams SPX`}
+            className="shrink-0 text-[10px] uppercase tracking-[0.1em] text-muted opacity-60"
+          >
+            chain
+          </span>
+        )}
         <span
+          title={`Every strike on the ladder summed, on the ${BASIS_LABEL[flowActive ? 'flow' : settings.basis]} basis`}
           className={[
-            'tabular font-mono text-[11px] font-extrabold',
+            'tabular shrink-0 font-mono text-[11px] font-extrabold',
             total == null ? 'text-muted opacity-50' : total >= 0 ? 'text-gexbar-pos' : 'text-gexbar-neg',
           ].join(' ')}
         >
@@ -179,13 +374,19 @@ export function GexChartCard() {
         </span>
       </CardToolbar>
 
-      <div className="relative min-h-0 flex-1">
-        <ChartFrame
-          onMount={onMount}
-          onResize={onResize}
-          onVisibility={onVisibility}
-          className="absolute inset-0"
+      {cardsShown && (
+        <StatCards
+          rows={view.rows}
+          spot={view.spot}
+          symbol={symbol}
+          basis={settings.basis}
+          flowActive={flowActive}
+          enabled={settings.cards}
         />
+      )}
+
+      <div className="relative min-h-0 flex-1">
+        <ChartFrame onMount={onMount} onResize={onResize} onVisibility={onVisibility} className="absolute inset-0" />
         {total == null && (
           <span className="pointer-events-none absolute left-1 top-1 text-[10px] text-muted opacity-50">
             {onSocket ? 'Waiting for the feed…' : `Loading ${symbol}'s chain…`}

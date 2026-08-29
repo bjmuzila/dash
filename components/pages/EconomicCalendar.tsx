@@ -57,6 +57,23 @@ const CHIP_GAP = 10;
 const CHIP_LOGO = 42;
 const CHIP_MIN = 52;
 
+/**
+ * Mono stack with REAL fallbacks, for everything inside the screenshot target.
+ *
+ * `font-family: var(--font-mono)` alone is a trap in a capture. html2canvas
+ * clones the page into an about:blank iframe where the :root custom properties
+ * are not defined, so the declaration resolves to nothing: the CLONE lays the
+ * text out in the inherited sans, while html2canvas paints it with whatever its
+ * own parse of the family string produced. Different metrics for measuring and
+ * for drawing is how a pill ends up hugging a width its own text then overflows,
+ * and how two runs at different sizes drift apart vertically.
+ *
+ * Naming concrete families after the variable costs nothing on the live page —
+ * `var(--font-mono)` still wins there — and gives the clone something real to
+ * fall back to, so the box it measures is the box the glyphs get drawn in.
+ */
+const MONO = "var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace";
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  EARNINGS BOARD SURFACES
 //
@@ -685,37 +702,40 @@ export default function EconomicCalendarPage() {
             <span style={{ fontSize: 13, fontWeight: 900, color: HT.text, letterSpacing: "0.14em" }}>
               {earnWeek === 0 ? "EARNINGS THIS WEEK" : "EARNINGS NEXT WEEK"}
             </span>
-            <span style={{ fontSize: 11, color: HT.text, fontFamily: "var(--font-mono)", letterSpacing: "0.04em" }}>
+            <span style={{ fontSize: 11, color: HT.text, fontFamily: MONO, letterSpacing: "0.04em", lineHeight: 1.3 }}>
               {dayDate(first)} – {dayDate(last)}
             </span>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-            {/* PILL TEXT CENTERING, both halves.
+            {/* PILL TEXT CENTERING — sized by PADDING, never by `height`.
 
-                LIVE PAGE: a <span> with vertical padding centers its LINE BOX,
-                not its glyphs — the font's ascent/descent metrics decide where
-                the text sits inside that box, and for this mono stack they push
-                it high. inline-flex + `line-height:1` + a fixed height makes the
-                glyph box the thing being centered.
+                A fixed `height` + `line-height` is the CSS way to centre a badge
+                and it is the wrong way here, because it hands the capture a
+                number it has to reconcile against its own font metrics.
+                snapshot.ts's `data-cap-center` does try: it swaps the declared
+                height for `height:auto` and re-expresses the slack as padding.
+                But the slack is `height − borders − font-size`, and if the clone
+                measured the run in a DIFFERENT font from the one html2canvas
+                paints with, that arithmetic lands on a box the glyphs do not fit
+                — which is exactly what the last PNG showed, ANTICIPATED sitting
+                low and overflowing its own pill.
 
-                PNG: none of that survives the capture. html2canvas ignores the
-                line box entirely and paints each run at `rect.top + baseline`
-                using metrics it probed in an about:blank iframe where
-                `var(--font-mono)` does not resolve, so the label lands off the
-                pill's middle by a px or two — which at 11px in a 22px pill is
-                exactly the "words are not in the center of the button" in the
-                report. `data-cap-center` is snapshot.ts's fix for it (gotcha
-                10): on the clone it collapses the line box and re-splits the
-                slack by the measured error. It also rewrites inline-flex to
-                inline-block, hence `text-align:center` — flex was the only thing
-                centering these horizontally. */}
+                Padding sizing removes the arithmetic. The box is text + 5px + 5px
+                by construction, so it is centred on the live page whatever the
+                font does, and `data-cap-center` falls to its no-height branch,
+                which only RE-SPLITS the padding by the measured drawing error and
+                cannot change the box. `MONO` names real families so the clone and
+                the painter agree on the metrics in the first place.
+
+                `text-align:center` because the pass rewrites inline-flex to
+                inline-block on the clone, and flex was the only thing centring
+                these across. */}
             <span data-cap-center style={{
               display: "inline-flex", alignItems: "center", justifyContent: "center",
-              textAlign: "center",
-              lineHeight: 1, height: 22, boxSizing: "border-box",
-              fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
+              textAlign: "center", lineHeight: 1,
+              fontSize: 11, fontWeight: 800, fontFamily: MONO,
               color: HT.cyan, background: `${HT.cyan}1A`, border: `1px solid ${HT.cyan}55`,
-              padding: "0 10px", borderRadius: 999, letterSpacing: "0.06em",
+              padding: "5px 10px", borderRadius: 999, letterSpacing: "0.06em",
             }}>
               {shown} NAMES
             </span>
@@ -724,27 +744,25 @@ export default function EconomicCalendarPage() {
                 "14 names on Wednesday" reads as the whole day's calendar. */}
             <span data-cap-center style={{
               display: "inline-flex", alignItems: "center", justifyContent: "center",
-              textAlign: "center",
-              lineHeight: 1, height: 22, boxSizing: "border-box",
-              fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono)",
+              textAlign: "center", lineHeight: 1,
+              fontSize: 11, fontWeight: 700, fontFamily: MONO,
               color: HT.text, border: `1px solid ${BOARD.edge}`,
-              padding: "0 10px", borderRadius: 999,
+              padding: "5px 10px", borderRadius: 999,
             }}>
               {earnView === "all" ? "ALL NAMES" : "ANTICIPATED"}
             </span>
             {mcapMin > 0 && (
               <span data-cap-center style={{
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
-                textAlign: "center",
-                lineHeight: 1, height: 22, boxSizing: "border-box",
-                fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono)",
+                textAlign: "center", lineHeight: 1,
+                fontSize: 11, fontWeight: 700, fontFamily: MONO,
                 color: HT.text, border: `1px solid ${BOARD.edge}`,
-                padding: "0 10px", borderRadius: 999,
+                padding: "5px 10px", borderRadius: 999,
               }}>
                 {mcapLabel}
               </span>
             )}
-            <span style={{ fontSize: 11, fontWeight: 800, color: HT.text, fontFamily: "var(--font-mono)" }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: HT.text, fontFamily: MONO, lineHeight: 1 }}>
               cbedge.net
             </span>
           </div>
@@ -1094,7 +1112,7 @@ function EarnChip({ row }: { row: EarnRow }) {
       <span style={{
         width: "100%", textAlign: "center", lineHeight: 1,
         fontSize: 11, fontWeight: 800, color: HT.text,
-        fontFamily: "var(--font-mono)", letterSpacing: "0.02em",
+        fontFamily: MONO, letterSpacing: "0.02em",
         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
       }}>
         {row.symbol}
@@ -1145,7 +1163,7 @@ function EarnSession({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
         </span>
         <span style={{
           marginLeft: "auto", fontSize: 9, color: HT.text, fontWeight: 700,
-          fontFamily: "var(--font-mono)", lineHeight: 1,
+          fontFamily: MONO, lineHeight: 1, opacity: 0.6,
         }}>
           {rows.length}
         </span>
@@ -1186,16 +1204,20 @@ function EarnDayColumn({
           already carry the emphasis, and the old #3a5570 made every day that was
           not today read as a disabled row. */}
       <div
-        // SYMMETRIC padding and `data-cap-center`. The strip was padded
-        // 9px/8px and its glyphs then landed higher still in the PNG, because
-        // html2canvas draws every run a px or two below where the browser puts
-        // it (gotcha 10) — so the date read as sitting near the top of its own
-        // bar rather than in the middle of it. The tag re-splits THIS box's
-        // padding by the measured bias; it is a grid, not a flex, so the
-        // engine's inline-block rewrite does not apply and the three tracks
-        // survive. `alignItems:center` + `lineHeight:1` on the two runs is the
-        // live-page half of the same fix: baseline alignment centred nothing,
-        // it just hung the 10px weekday off the 13px date's baseline.
+        // SYMMETRIC padding, `data-cap-center`, and — the part that actually
+        // squares the weekday with the date — ONE FONT SIZE AND ONE FAMILY for
+        // every run in the strip.
+        //
+        // They used to be 10px mono and 13px sans. On the live page
+        // `align-items:center` reconciles that; in the PNG nothing does.
+        // html2canvas paints each run at `rect.top + baseline`, and `baseline`
+        // is a per-font, per-SIZE probe — so two runs of different sizes get two
+        // different drops and separate by a px or more, which is MONDAY riding
+        // above AUG 31 in the report. A box-level fix cannot reach it: the tag
+        // below re-splits the strip's own padding, moving both runs together.
+        // Making them the same size and family makes the two drops identical, so
+        // they cannot drift apart at all — the contrast between them is carried
+        // by weight and colour instead, which the capture reproduces exactly.
         data-cap-center
         style={{
           display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center",
@@ -1206,26 +1228,32 @@ function EarnDayColumn({
         <span />
         <span style={{ display: "flex", alignItems: "center", gap: 7, justifyContent: "center" }}>
           <span style={{
-            fontSize: 10, fontWeight: 900, color: HT.cyan, lineHeight: 1,
-            letterSpacing: "0.14em", fontFamily: "var(--font-mono)",
+            fontSize: 12, fontWeight: 900, color: HT.cyan, lineHeight: 1,
+            letterSpacing: "0.1em", fontFamily: MONO,
           }}>
             {dayFull(date)}
           </span>
-          <span style={{ fontSize: 13, fontWeight: 800, color: HT.text, letterSpacing: "0.04em", lineHeight: 1 }}>
+          <span style={{
+            fontSize: 12, fontWeight: 800, color: HT.text, lineHeight: 1,
+            letterSpacing: "0.04em", fontFamily: MONO,
+          }}>
             {dayDate(date)}
           </span>
           {isToday && (
             <span style={{
-              fontSize: 9, fontWeight: 900, background: HT.cyan, color: "#05080d",
-              padding: "1px 5px", borderRadius: 3, letterSpacing: "0.1em", lineHeight: 1,
+              fontSize: 10, fontWeight: 900, background: HT.cyan, color: "#05080d",
+              fontFamily: MONO, padding: "3px 5px", borderRadius: 3,
+              letterSpacing: "0.1em", lineHeight: 1,
             }}>
               TODAY
             </span>
           )}
         </span>
+        {/* Same 12px mono for the same reason — a 10px run here would sit on
+            its own baseline and read as a half-line above the date. */}
         <span style={{
-          justifySelf: "end", fontSize: 10, color: HT.text, fontWeight: 700,
-          fontFamily: "var(--font-mono)", lineHeight: 1,
+          justifySelf: "end", fontSize: 12, color: HT.text, fontWeight: 700,
+          fontFamily: MONO, lineHeight: 1, opacity: 0.6,
         }}>
           {n}
         </span>

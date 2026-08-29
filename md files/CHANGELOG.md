@@ -1,5 +1,153 @@
 # Changelog
 
+## 2026-08-29 - v3 GEX Chart: DEX line, three bases, call/put split, ten cards, core badge
+
+New: `cbedge-v3/src/design/primitives/Controls.tsx`,
+`cbedge-v3/src/board/gexChart/{settings.ts,values.ts,StatCards.tsx}`.
+Edited: `cbedge-v3/src/board/gexChart/{gexChartRender.ts,GexChartCard.tsx}`,
+`cbedge-v3/src/board/gexCandles/controls.tsx`, `cbedge-v3/src/board/chainGex.ts`,
+`cbedge-v3/src/board/multiGreek/mgMath.ts`, `cbedge-v3/src/contract/frames.ts`,
+`cbedge-v3/src/design/tokens.css`, `cbedge-v3/scripts/mock-server.mjs`.
+
+The v3 card had NO toggles — it drew net GEX on OI+VOL and that was the whole
+feature, because v2 drives all of this through props from the home page's own
+toolbar and v3 has no home page to hang them on. The card owns them now.
+
+**Basis — OI+VOL · VOL · FLOW.** A segmented control in the toolbar. FLOW is
+gamma against the dealer's own signed inventory (`flowGEX`), which only exists
+for the socket symbol: on a chain-derived ticker the chart says "No classified
+flow for this symbol — showing OI+VOL" on the pane rather than falling back
+silently, because bars a user has not been told are OI+VOL will be read as a
+flow book. v2 falls back silently; this is the one place v3 deliberately does
+more than transcribe.
+
+**Split — NET · C/P.** One net bar per strike, or |call| up and −|put| down.
+The Y scale in the split is set by the taller LEG, not by their net, or a strike
+whose two sides nearly cancel would draw two bars off the top of a pane scaled
+to almost nothing.
+
+**DEX line.** v2's overlay, transcribed: `netDEX + volNetDEX` on OI+VOL,
+`volNetDEX` alone on VOL, quadratic-smoothed, on its OWN scale at 60% of the
+half-height with no gridlines — delta exposure is orders of magnitude off gamma
+in dollars and would pin flat to the zero line on the bars' axis. Suppressed
+entirely when every value is 0, since a flat line on zero reads as "delta is
+balanced" rather than "there is no delta here". New `--color-dex` token: a THIRD
+hue, because the line is not a bar and does not share the bars' sign convention.
+
+**Core marked like v2.** A labelled box pinned above the bar carrying the
+biggest |net| on the whole ladder — `CB`, `CB·Vol` or `CB·Flow`, since it is a
+different claim on each basis. Whole-board, not the visible window, so panning
+away hides the badge instead of quietly relabelling whatever is on screen.
+
+**Expiry in the toolbar.** A pill showing which expiration the bars are, plus
+the same string top-left on the pane beside the series label. The chart cannot
+work it out for itself — the rows look identical whichever expiry they came from
+— so the card passes it in: `GexData.expiry` on the socket, the front expiry
+`chainToGex` picked otherwise.
+
+**The ten cards.** Net GEX · Call Wall · Put Wall · Flip · CB · Max Pain · +1σ ·
+−1σ · +GEX % · Bull/Bear, above the chart, each individually toggleable from a
+new ⚙ Cards popover (plus a master row on/off and an All/None). Eight of the ten
+are derived from the same rows on the same basis through the same accessors the
+bars use, so switching to VOL moves the walls, the core and the flip with it —
+v2's comment on this block says "the cards can never disagree with the chart
+beneath them" and one shared definition is the only way that stays true. The
+other two are `/api/em-tracker` (the weekly EM band, same row Key Levels reads)
+and `/proxy/flow-history` (the classified tape, socket symbol only).
+
+**One definition, three consumers.** `values.ts` is the whole point of the
+diff: the renderer, the ten tiles and the header total all read it. Net is READ
+off the wire (`netGEX + netVolGEX`) because every other v3 surface does and a
+chart that recomputed its own net would be the one card able to disagree about
+where the core is. The per-SIDE figures have no wire field on the volume basis
+— there is no `callVolGEX` — so the split recomputes γ × contracts × spot², at
+the row's OWN `spotPrice` rather than the live tick, which is what makes
+`call + put === net` to the cent instead of drifting as spot moves.
+
+**Perf.** The tiles are React and need the ladder, so the card keeps one piece
+of state for them — and the spot watcher deliberately does NOT touch it. `spot`
+is 10Hz; the tiles refresh on the gex frame only, which is also the only cadence
+at which a wall can actually move. The chart still takes every tick imperatively.
+
+**Contract + chain path.** `GexRow` gains `spotPrice`, `netDEX`, `volNetDEX`,
+`flowGEX` — all real wire fields from `computeGexRows()`, the last three
+optional because `chainGex.ts` cannot always fill them. `mgMath`'s `Leg` gains
+`delta` so the chain path can compute the DEX legs for a non-socket ticker;
+`flowGEX` is left ABSENT there rather than zeroed, since a column of zeroes
+looks like a flat flow book and "absent" is what the fallback tests.
+
+**Controls promoted.** `SegGroup`, `Chip`, `Popover` and `PanelSection` moved
+from `gexCandles/controls.tsx` to `design/primitives/Controls.tsx`, under the
+note in that file saying to move them the moment a second card wanted one. The
+old path re-exports them, so no existing import changed.
+
+**Mock.** `gexPayload()` now emits `spotPrice`, `netDEX`, `volNetDEX` and
+`flowGEX`, and `/proxy/flow-history` is mocked — otherwise VOL, FLOW, the DEX
+line and the Bull/Bear tile are all untestable without a backend, which is the
+one thing `npm run mock` exists to prevent.
+
+Typechecked against the full v3 tree: no new errors (the two `import.meta.env`
+reports and the pre-existing `BubbleBucket` mismatch in `GexCandlesCard.tsx:408`
+are present on an unmodified checkout too).
+
+## 2026-08-29 - Earnings board: pills sized by padding, one font size across the day strip
+
+Edited: `components/pages/EconomicCalendar.tsx`.
+
+Two alignment complaints survived the last pass, both in the copied PNG, both
+the same underlying thing: the board declared sizes in one font and html2canvas
+painted them in another.
+
+**The header pills.** They were `height:22` + `line-height:1`, the CSS way to
+centre a badge, and `data-cap-center` tried to reconcile that on the clone by
+swapping the height for `height:auto` and re-expressing the slack
+(`height - borders - font-size`) as padding. That arithmetic only holds if the
+clone measured the run in the font the painter uses, and it did not: the clone
+lives in an about:blank iframe where `var(--font-mono)` resolves to nothing. The
+result in the PNG was ANTICIPATED sitting low in a pill it also overflowed
+sideways. The pills are now sized by symmetric `padding: 5px 10px` with no
+declared height, so the box is text-plus-padding by construction and
+`data-cap-center` falls to its no-height branch, which only RE-SPLITS that
+padding by the measured drawing error and cannot resize the box.
+
+**The day strip.** MONDAY rode above AUG 31 because they were 10px mono and 13px
+sans, and html2canvas's `baseline` is a per-font, per-size probe - two sizes get
+two different drops and separate vertically. No box-level fix reaches that; the
+strip's own `data-cap-center` moves both runs together. Both runs (and the count,
+and the TODAY pill) are now 12px on one family, with weight and colour carrying
+the contrast instead of size.
+
+**`MONO`.** New const naming real fallbacks after `var(--font-mono)`
+(`ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace`),
+applied to every mono run inside the capture target. The variable still wins on
+the live page; the clone now has something real to fall back to, so the box it
+measures is the box the glyphs get drawn in.
+
+## 2026-08-29 - v3 GEX rail: bare bars, all facing right
+
+Edited: `cbedge-v3/src/board/gexCandles/GexRail.tsx`.
+
+Stripped the rail down to tags + bars. The strike column (46px) and the dollar
+value column (38px) are gone, and the diverging layout around the centre
+hairline is gone with them — every bar now anchors to the same left edge and
+grows RIGHT, positive or negative, with sign carried by colour alone.
+
+Why: the chart's price axis already labels the row's height, so the strike text
+was the axis printed twice; and the bar length already encodes size, so the
+figure beside it was the same fact in a second notation. Removing both frees the
+whole column for magnitude and lets the eye compare lengths off ONE baseline
+instead of two half-width scales pointing opposite ways.
+
+Rail width 184px → 96px. The tag column keeps its fixed 22px whether or not the
+strike is tagged, so every bar starts on the same x. The exact strike and value
+survive as the row's hover `title` — `fmtRail` is now title-only and prints
+nothing. `spotStrike` was deleted (it only bolded the strike text) along with
+the now-unused `spot` destructure.
+
+Untouched: `buildRail`, the level picks (CB/CW/PW), the RailSink positioning and
+the priority thinning pass — the rail still reads `priceToCoordinate` once per
+frame and still hides rows that would collide.
+
 ## 2026-08-29 - Fix: v3 page dead on load, `Cannot access 'Ie' before initialization`
 
 Edited: `cbedge-v3/src/board/gexCandles/settings.ts`.

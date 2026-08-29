@@ -1,13 +1,26 @@
 import type { GexRow } from '@/contract/frames'
+import type { GexBasis, GexSplit } from './settings'
+import {
+  BASIS_LABEL,
+  callGexOf,
+  coreStrike,
+  dexOf,
+  dexSupported,
+  flowSupported,
+  fmtGexShort,
+  netGexOf,
+  putGexOf,
+} from './values'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX Chart — a port of v2's home-page chart (components/dashboard/GexChart.tsx),
-// scaled down to the bars and the interaction.
+// scaled down to the bars, the overlays that matter and the interaction.
 //
 // Transcribed, not reinvented: the padding, the bar gradients, the 1.25 y
 // headroom, the 1.16/0.86 zoom factors, the 1.003^dy y-scale, the ~$200 default
-// window, the densify step detection and the ATM centring are v2's numbers.
-// They are the result of a lot of looking at the thing.
+// window, the densify step detection, the ATM centring, the DEX line's 60%
+// scale and the CB badge are v2's numbers. They are the result of a lot of
+// looking at the thing.
 //
 // ── The interaction is the point ─────────────────────────────────────────────
 //   wheel        zoom, cursor-anchored — the strike under the pointer stays put
@@ -23,11 +36,23 @@ import type { GexRow } from '@/contract/frames'
 // exactly as chart.ts does for the candles (AGENTS.md rule 4). The card hands
 // it a model and gets a handle back.
 //
-// ── What was NOT ported ──────────────────────────────────────────────────────
-// Everything the home page drives through props rather than the chart owning:
-// the call/put split, the DEX metric, the flow basis, the OI area overlays, the
-// flip curve, the 5/15/30 ghost layers and the MVC touch tracking. The card has
-// no toggles, so it draws one thing: net GEX on the OI+VOL basis.
+// ── What the model carries now ───────────────────────────────────────────────
+// The card used to have NO toggles, so this drew exactly one thing: net GEX on
+// the OI+VOL basis. It now carries v2's four home-page props —
+//
+//   basis    OI+VOL · VOL · FLOW   which contracts the bars are priced on
+//   split    net · call/put        one net bar, or the two legs back to back
+//   showDex  the net-delta overlay line
+//   expiry   drawn top-left beside the series label
+//
+// — and the per-strike arithmetic for all of them lives in values.ts, shared
+// with the stat cards so the chart and the tiles above it cannot disagree.
+//
+// ── Still NOT ported ─────────────────────────────────────────────────────────
+// The OI area overlays, the BS flip curve, the 5/15/30 prior-state ghost layers
+// and the MVC touch-tracking overlay. Each is a real feature with its own data
+// dependency (a baselines history, a 401-point spot sweep, a session-scoped
+// latch), not a toggle over rows this card already has.
 //
 // ── Two deliberate deviations from v2 ────────────────────────────────────────
 // 1. X labels use a nice step derived from the VISIBLE strike range. v2
@@ -57,22 +82,34 @@ export interface GexChartModel {
   spot: number
   /** Labels the spot line. */
   symbol: string
+  /** Drawn top-left. '' while the source has not said which expiry it is. */
+  expiry: string
+  basis: GexBasis
+  split: GexSplit
+  showDex: boolean
 }
 
-export const EMPTY_MODEL: GexChartModel = { rows: [], spot: 0, symbol: '' }
+export const EMPTY_MODEL: GexChartModel = {
+  rows: [],
+  spot: 0,
+  symbol: '',
+  expiry: '',
+  basis: 'oi-vol',
+  split: 'net',
+  showDex: false,
+}
 
-/** OI+VOL — the OI net PLUS the volume net, per the server's oiVolNet(). */
+export { fmtGexShort }
+
+/**
+ * OI+VOL net, the card's original single basis.
+ *
+ * Kept as a named export because it is the shape older callers imported. New
+ * code should call values.ts's `netGexOf(row, basis, flowActive)` so it follows
+ * the basis switch.
+ */
 export function netOf(r: GexRow): number {
   return (Number(r.netGEX) || 0) + (Number(r.netVolGEX) || 0)
-}
-
-export function fmtGexShort(v: number): string {
-  const a = Math.abs(v)
-  const s = v >= 0 ? '+' : '−'
-  if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`
-  if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(2)}M`
-  if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(2)}K`
-  return `${s}$${a.toFixed(2)}`
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -197,6 +234,8 @@ interface Palette {
   neg: [number, number, number]
   fg: [number, number, number]
   line: [number, number, number]
+  dex: [number, number, number]
+  core: [number, number, number]
   surface: string
 }
 
@@ -206,6 +245,8 @@ function readPalette(el: HTMLElement): Palette {
     neg: hexToRgb(cssVar(el, '--color-gexbar-neg', '#ffb300'), [255, 179, 0]),
     fg: hexToRgb(cssVar(el, '--color-fg', '#ffffff'), [255, 255, 255]),
     line: hexToRgb(cssVar(el, '--color-line', '#23272e'), [35, 39, 46]),
+    dex: hexToRgb(cssVar(el, '--color-dex', '#1f8dad'), [31, 141, 173]),
+    core: hexToRgb(cssVar(el, '--color-level-cb', '#ffd600'), [255, 214, 0]),
     surface: cssVar(el, '--color-surface', '#0f1117'),
   }
 }
@@ -277,6 +318,19 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     const { rows: allRows, step: detectedStep } = densified()
     if (!allRows.length) return
 
+    // ── What this ladder can actually support ──────────────────────────────
+    // Resolved ONCE, from the raw rows, and passed down. A basis that half
+    // applies — flow in the bars, OI+VOL in the core badge — is the exact bug
+    // this single resolution exists to make impossible.
+    const flowActive = model.basis === 'flow' && flowSupported(model.rows)
+    const flowMissing = model.basis === 'flow' && !flowActive
+    const dexActive = model.showDex && dexSupported(model.rows, model.basis)
+    const splitting = model.split === 'call-put'
+
+    const getNet = (r: GexRow) => netGexOf(r, model.basis, flowActive)
+    const getCall = (r: GexRow) => callGexOf(r, model.spot, model.basis)
+    const getPut = (r: GexRow) => putGexOf(r, model.spot, model.basis)
+
     // ── Viewport ──
     const dynCount = Math.max(MIN_COUNT, Math.round(TARGET_RANGE / detectedStep) + 1)
     if (vp.start === null) vp.count = dynCount
@@ -296,9 +350,18 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
 
     // ── Y scale: robustMax × 1.25 / yScale ──
     // The 1.25 headroom keeps the tallest bar at ~80% of the half-height so it
-    // never touches the frame.
+    // never touches the frame. In the split the scale is set by the taller of
+    // the two LEGS, not by their net — otherwise a strike whose call and put
+    // nearly cancel would draw two bars off the top of a pane scaled to a net
+    // of almost nothing.
     let netMax = 1
-    for (const r of data) netMax = Math.max(netMax, Math.abs(netOf(r)))
+    for (const r of data) {
+      if (splitting) {
+        netMax = Math.max(netMax, Math.abs(getCall(r)), Math.abs(getPut(r)))
+      } else {
+        netMax = Math.max(netMax, Math.abs(getNet(r)))
+      }
+    }
     const maxG = (netMax * 1.25) / yScale
     const yFor = (v: number) => yZero - (v / maxG) * (cH / 2)
 
@@ -344,16 +407,16 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // v2's gradient, value for value: the lit end of the bar lightens toward
     // white by up to 28% of the bar's share of the column max, so the big
     // strikes read hotter without a second colour.
-    const hoverStrike = hover?.row.strike
-    data.forEach((r, i) => {
-      const v = netOf(r)
+    //
+    // In the split the SIGN still picks the colour, and the two legs already
+    // carry opposite signs by construction — so a call bar is blue above the
+    // line and a put bar amber below it, with no second rule to remember.
+    const drawBar = (x: number, v: number, highlighted: boolean) => {
       if (!v) return
-      const x = xAt(i)
       const yTop = v >= 0 ? clamp(yFor(v), PAD_T, yZero) : yZero
       const yBot = v >= 0 ? yZero : clamp(yFor(v), yZero, PAD_T + cH)
       const h = Math.abs(yBot - yTop)
       if (h < 0.5) return
-      const highlighted = r.strike === hoverStrike
       const grad = ctx.createLinearGradient(0, yTop, 0, yTop + h)
       const base = v >= 0 ? p.pos : p.neg
       if (highlighted) {
@@ -377,7 +440,55 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
       ctx.fillStyle = grad
       ctx.fillRect(x - barW / 2, yTop, barW, h)
       if (highlighted) ctx.shadowBlur = 0
+    }
+
+    const hoverStrike = hover?.row.strike
+    data.forEach((r, i) => {
+      const x = xAt(i)
+      const highlighted = r.strike === hoverStrike
+      if (splitting) {
+        drawBar(x, Math.abs(getCall(r)), highlighted)
+        drawBar(x, -Math.abs(getPut(r)), highlighted)
+      } else {
+        drawBar(x, getNet(r), highlighted)
+      }
     })
+
+    // ── DEX line — its OWN scale, 60% of the half-height, centred on zero ─────
+    // Normalised to its own max on purpose: delta exposure is orders of
+    // magnitude away from gamma exposure in dollars, and plotting it on the
+    // bars' axis would pin it flat to the zero line. That is also why it gets
+    // no gridlines — it answers "which way is delta leaning, and where does it
+    // turn", not "how many dollars".
+    if (dexActive) {
+      const dexVals = data.map((r) => dexOf(r, model.basis))
+      let maxDex = 1
+      for (const v of dexVals) maxDex = Math.max(maxDex, Math.abs(v))
+      const yDex = (v: number) => yZero - (v / maxDex) * (cH / 2) * 0.6
+      ctx.strokeStyle = rgba(p.dex, 0.95)
+      ctx.lineWidth = 2
+      ctx.shadowColor = rgba(p.dex, 0.35)
+      ctx.shadowBlur = 10
+      const pts = dexVals.map((v, i) => ({ x: xAt(i), y: yDex(v) }))
+      if (pts.length > 1) {
+        ctx.beginPath()
+        const head = pts[0]!
+        ctx.moveTo(head.x, head.y)
+        for (let i = 0; i < pts.length - 1; i++) {
+          const a = pts[i]!
+          const b = pts[i + 1]!
+          ctx.quadraticCurveTo(a.x, a.y, (a.x + b.x) / 2, (a.y + b.y) / 2)
+        }
+        const tail = pts[pts.length - 1]!
+        ctx.lineTo(tail.x, tail.y)
+        ctx.stroke()
+      }
+      ctx.shadowBlur = 0
+      ctx.fillStyle = rgba(p.dex, 0.85)
+      ctx.font = 'bold 8px ui-monospace, monospace'
+      ctx.textAlign = 'left'
+      ctx.fillText('+NET DEX', PAD_L + 3, yDex(0) - 3)
+    }
 
     // ── Spot, interpolated between the two strikes that bracket it ──
     if (model.spot > 0) {
@@ -415,6 +526,42 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     }
     ctx.restore()
 
+    // ── The CORE, marked the way v2 marks it ─────────────────────────────────
+    // A labelled box pinned just above the bar carrying the biggest |net| on
+    // the WHOLE ladder — not just the visible window, so panning away from it
+    // hides the badge instead of quietly relabelling whatever is on screen.
+    //
+    // The name follows the basis, because it is a different claim on each:
+    // "CB" is v2's Core Bullseye on the standing book, "CB·Vol" is the day's
+    // volume alone, "CB·Flow" is the dealer's own inventory.
+    const core = coreStrike(model.rows, model.basis, flowActive)
+    const coreIdx = core == null ? -1 : data.findIndex((r) => r.strike === core)
+    const coreRow = coreIdx >= 0 ? data[coreIdx] : undefined
+    if (coreRow) {
+      const cv = getNet(coreRow)
+      const cy = clamp(yFor(cv), PAD_T + 2, PAD_T + cH - 2)
+      const col = cv >= 0 ? p.pos : p.neg
+      ctx.save()
+      ctx.font = 'bold 10px ui-monospace, monospace'
+      const tag = flowActive ? 'CB·Flow' : model.basis === 'vol-only' ? 'CB·Vol' : 'CB'
+      const lbl = `${tag} ${coreRow.strike.toLocaleString('en-US')}`
+      const bw = ctx.measureText(lbl).width + 10
+      const bh = 15
+      const bx = clamp(xAt(coreIdx) - bw / 2, 2, Math.max(2, W - bw - 2))
+      const by = Math.max(2, cy - 20)
+      ctx.fillStyle = rgba(p.core, 0.12)
+      ctx.fillRect(bx, by, bw, bh)
+      ctx.strokeStyle = rgba(col, 0.95)
+      ctx.lineWidth = 1
+      ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1)
+      ctx.fillStyle = rgba(col, 0.98)
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(lbl, bx + bw / 2, by + bh / 2 + 0.5)
+      ctx.textBaseline = 'alphabetic'
+      ctx.restore()
+    }
+
     // ── X labels, inside the plot near the bottom ──
     // A nice step over the VISIBLE range rather than v2's hardcoded multiples of
     // 50, so a 40-point-wide AMZN window is labelled as well as a 200-point SPX
@@ -432,6 +579,27 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
       })
     }
 
+    // ── Series label, top-left: what is drawn, and for which expiry ──────────
+    // The chart cannot work the expiry out for itself — the rows look the same
+    // whichever one they came from — so the card passes it in, the same reason
+    // v2's chart takes a `seriesLabel` prop rather than deriving one.
+    const seriesBits = [splitting ? 'CALL/PUT' : 'NET GEX', BASIS_LABEL[flowActive ? 'flow' : model.basis]]
+    if (model.expiry) seriesBits.push(model.expiry)
+    ctx.fillStyle = rgba(p.fg, 0.55)
+    ctx.font = 'bold 9px ui-monospace, monospace'
+    ctx.textAlign = 'left'
+    ctx.fillText(seriesBits.join(' · '), PAD_L + 2, PAD_T - 8)
+
+    // Asked for flow, and these rows have none. Said out loud rather than drawn
+    // as a silent fallback: the bars in front of you are OI+VOL, and a user who
+    // is not told that will read them as a flow book.
+    if (flowMissing) {
+      ctx.fillStyle = rgba(p.fg, 0.45)
+      ctx.font = 'bold 9px ui-monospace, monospace'
+      ctx.textAlign = 'center'
+      ctx.fillText('No classified flow for this symbol — showing OI+VOL', W / 2, PAD_T + 24)
+    }
+
     // ── The hint, very dim, bottom-right ──
     ctx.fillStyle = rgba(p.fg, 0.22)
     ctx.font = 'bold 8px ui-monospace, monospace'
@@ -440,8 +608,10 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
 
     // ── Hover readout ──
     if (hover) {
-      const v = netOf(hover.row)
-      const label = `${hover.row.strike.toLocaleString('en-US')}   ${fmtGexShort(v)}`
+      const v = getNet(hover.row)
+      const label = splitting
+        ? `${hover.row.strike.toLocaleString('en-US')}   C ${fmtGexShort(Math.abs(getCall(hover.row)))}   P ${fmtGexShort(-Math.abs(getPut(hover.row)))}`
+        : `${hover.row.strike.toLocaleString('en-US')}   ${fmtGexShort(v)}`
       ctx.font = 'bold 10px ui-monospace, monospace'
       const tw = ctx.measureText(label).width
       const bw = tw + 14

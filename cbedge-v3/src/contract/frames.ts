@@ -51,6 +51,13 @@ export interface SpotFrame extends BaseFrame {
 // future consumer isn't blocked on this file, but nothing here is invented.
 export interface GexRow {
   strike: number
+  /**
+   * The spot computeGexRows() priced THIS row at. Not the live tick — the live
+   * tick is the `spot` frame, and it has moved since. It is here so a consumer
+   * recomputing a leg (the GEX Chart's call/put split) can price it at the same
+   * spot the row's own `netGEX` was priced at and land on the same number.
+   */
+  spotPrice?: number
   netGEX: number
   netVolGEX: number
   callGEX: number
@@ -62,6 +69,29 @@ export interface GexRow {
   callGamma: number
   putGamma: number
   dte: number
+  /**
+   * ── The three OPTIONAL exposure legs ──────────────────────────────────────
+   *
+   * All three come off computeGexRows() unconditionally, so on the socket path
+   * they are always there. They are optional HERE because the other producer of
+   * this shape — board/chainGex.ts, which derives a ladder from /api/chains for
+   * every non-socket ticker — cannot always fill them:
+   *
+   *   netDEX / volNetDEX  delta × contracts × spot × 100 — the OI leg and the
+   *                       volume leg of dealer DELTA exposure. The chain path
+   *                       fills them when the feed carries a delta on the leg.
+   *   flowGEX             gamma × the DEALER'S OWN signed inventory, built from
+   *                       the classified tape. There is no tape for anything
+   *                       but the socket symbol, so the chain path never fills
+   *                       it — which is why the chart's FLOW basis falls back
+   *                       to net instead of drawing an empty pane.
+   *
+   * Read them through gexChart/gexChartRender.ts's accessors rather than
+   * inline, so "which fields make up which basis" is answered in one place.
+   */
+  netDEX?: number
+  volNetDEX?: number
+  flowGEX?: number
   [k: string]: unknown
 }
 export interface GexData {

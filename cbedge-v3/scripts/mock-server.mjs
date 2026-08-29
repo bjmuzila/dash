@@ -294,6 +294,31 @@ function mockEmTracker(ticker) {
   }
 }
 
+/**
+ * /proxy/flow-history — the classified options tape, for the GEX Chart's
+ * Bull/Bear tile.
+ *
+ * Only `premium`, `type` and `side` are read: the tile sums bought calls plus
+ * sold puts against everything else. Weighted toward the bull side on purpose,
+ * so the mock exercises the "≥50%, colour it up" branch rather than sitting on
+ * a coin-flip that flickers between the two on every poll.
+ */
+function mockFlowHistory() {
+  const tape = []
+  for (let i = 0; i < 400; i++) {
+    const bullish = Math.random() < 0.58
+    const isPut = Math.random() < 0.5
+    tape.push({
+      premium: Math.round(5_000 + Math.random() * 250_000),
+      type: isPut ? 'P' : 'C',
+      // A bullish print is a bought call or a sold put; flip the side for a put
+      // so the tile's own classification is what decides, not this line.
+      side: bullish === !isPut ? 'buy' : 'sell',
+    })
+  }
+  return { tape }
+}
+
 /** /api/premarket-baseline — the Key Levels "was → now" lines. */
 function mockBaseline(symbol, expiry) {
   const { price: spot, step } = universe(symbol)
@@ -393,6 +418,9 @@ function api(req, res, path, params) {
   }
   if (path === '/api/premarket-baseline') {
     return json(res, mockBaseline(params.get('symbol') || '$SPX', params.get('expiry') || '')), true
+  }
+  if (path === '/proxy/flow-history') {
+    return json(res, mockFlowHistory()), true
   }
   if (path === '/api/calendar') return json(res, mockCalendar()), true
   if (path === '/proxy/earnings-week') return json(res, mockEarnings()), true
@@ -624,6 +652,10 @@ function gexPayload() {
   const rows = ladder('SPX', spot, 121)
   const gexRows = rows.map((r) => ({
     strike: r.strike,
+    // The spot the row was PRICED at. The GEX Chart's call/put split recomputes
+    // each leg from gamma × contracts × spot² and reads this so its two bars
+    // still sum to `netGEX` after the live spot has ticked away from it.
+    spotPrice: spot,
     netGEX: Math.round(r.value),
     netVolGEX: Math.round(r.value * 0.4),
     callGEX: Math.round(Math.max(0, r.value)),
@@ -634,6 +666,16 @@ function gexPayload() {
     putVolume: Math.round(Math.random() * 20000),
     callGamma: 0.0012,
     putGamma: 0.0011,
+    // The three optional legs the GEX Chart's basis switch and DEX line read.
+    // Present here because a mock that omits them makes VOL, FLOW and the DEX
+    // overlay untestable without a backend — which is the one thing the mock
+    // exists to prevent. Shapes only; the numbers are synthetic.
+    //   netDEX / volNetDEX  leans one way either side of spot, so the overlay
+    //                       actually crosses its zero line somewhere on screen.
+    //   flowGEX             a fraction of net, sign preserved.
+    netDEX: Math.round((r.strike - spot) * 900_000),
+    volNetDEX: Math.round((r.strike - spot) * 300_000),
+    flowGEX: Math.round(r.value * 0.25),
     dte: 0,
   }))
   const byAbs = [...gexRows].sort((a, b) => Math.abs(b.netGEX) - Math.abs(a.netGEX))

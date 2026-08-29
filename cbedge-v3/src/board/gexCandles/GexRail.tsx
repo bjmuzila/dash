@@ -6,11 +6,13 @@ import type { EsChartHandle, RailSink } from './chart'
 // ─────────────────────────────────────────────────────────────────────────────
 // The GEX rail — the live strike ladder, pinned to the chart's price axis.
 //
-// Shape is v2's "By expiration" ladder on the analysis page (Analytics.tsx's
-// TlLadder): strike and its level tag on the left, a diverging bar around a
-// centre hairline, the dollar value on the right, one strike per line, and the
-// tag is the ONLY thing that marks a level — no row wash, no bar outline. A
-// strike can be two levels at once and each gets its own tag.
+// Shape is a bare magnitude ladder: the level tag on the left, then a single
+// left-anchored bar that always grows to the RIGHT, one strike per line. The
+// strike price and the dollar value are deliberately absent — the chart's own
+// price axis already labels the height, and the bar's length already says the
+// size, so printing either again is noise in a 96px column. Sign survives in
+// the bar's colour. The tag is the ONLY thing that marks a level — no row wash,
+// no bar outline. A strike can be two levels at once and each gets its own tag.
 //
 // ── WHY THE ROWS ARE ABSOLUTELY POSITIONED ───────────────────────────────────
 //
@@ -125,7 +127,11 @@ export function buildRail(columns: GexColumn[], metric: GexMetric): RailModel {
   return { rows, levels: { cb, cw, pw }, spot, maxAbs }
 }
 
-/** `$1.2B`, compact enough for a 52px column. */
+/**
+ * `+1.2B`. Nothing in the rail PRINTS this any more — it is the row's hover
+ * title, so the exact figure is still one hover away without spending a column
+ * on it.
+ */
 function fmtRail(v: number): string {
   if (!Number.isFinite(v) || v === 0) return '—'
   const abs = Math.abs(v)
@@ -156,7 +162,7 @@ export interface GexRailProps {
 export function GexRail({ model, applyChart }: GexRailProps) {
   const nodes = useRef(new Map<number, HTMLDivElement>())
 
-  const { rows, levels, spot, maxAbs } = model
+  const { rows, levels, maxAbs } = model
 
   /**
    * The order the thinning pass walks. Named levels first so a squeeze can
@@ -214,14 +220,8 @@ export function GexRail({ model, applyChart }: GexRailProps) {
     for (const strike of [...nodes.current.keys()]) if (!live.has(strike)) nodes.current.delete(strike)
   }, [rows])
 
-  const spotStrike = useMemo(() => {
-    let best: number | null = null
-    for (const r of rows) if (best == null || Math.abs(r.strike - spot) < Math.abs(best - spot)) best = r.strike
-    return best
-  }, [rows, spot])
-
   return (
-    <div className="relative w-[184px] shrink-0 overflow-hidden border-l border-line pl-1.5">
+    <div className="relative w-[96px] shrink-0 overflow-hidden border-l border-line pl-1.5">
       {rows.length === 0 && (
         <span className="absolute inset-x-1.5 top-1 text-[10px] text-muted opacity-50">No ladder yet</span>
       )}
@@ -229,7 +229,6 @@ export function GexRail({ model, applyChart }: GexRailProps) {
         const pos = r.value >= 0
         const hue = pos ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
         const pct = maxAbs > 0 ? Math.max(2, (Math.abs(r.value) / maxAbs) * 100) : 0
-        const isSpot = r.strike === spotStrike
         const marks = TAGS.filter((t) => levels[t.key] === r.strike)
         return (
           <div
@@ -238,26 +237,16 @@ export function GexRail({ model, applyChart }: GexRailProps) {
               if (el) nodes.current.set(r.strike, el)
               else nodes.current.delete(r.strike)
             }}
+            title={`${r.strike.toLocaleString('en-US', { maximumFractionDigits: 2 })}  ${fmtRail(r.value)}`}
             // `visibility: hidden` and no transform until the first frame
             // positions it — otherwise every row paints stacked at the top of
             // the rail for one frame on mount.
             style={{ height: ROW_H, visibility: 'hidden', willChange: 'transform' }}
             className="absolute inset-x-0 top-0 flex items-center gap-1 whitespace-nowrap"
           >
-            {/* ONE STRIKE = ONE LINE. The tags are annotations on the strike
-                beside them; wrapping one to a second line would read as a
-                second strike with a blank number. */}
-            <span
-              className={[
-                'w-[46px] shrink-0 text-right font-mono text-[10px] leading-none',
-                isSpot ? 'font-extrabold text-accent' : 'font-semibold text-fg',
-              ].join(' ')}
-            >
-              {r.strike.toLocaleString('en-US', { maximumFractionDigits: 2 })}
-            </span>
-
             {/* Named tags, not anonymous dots. Three dot colours is a legend to
-                memorise; "CB" is not. */}
+                memorise; "CB" is not. The column keeps its width whether or not
+                this strike is tagged, so every bar starts on the same x. */}
             <span className="flex w-[22px] shrink-0 items-center gap-px">
               {marks.map((m) => (
                 <span
@@ -271,24 +260,14 @@ export function GexRail({ model, applyChart }: GexRailProps) {
               ))}
             </span>
 
-            {/* The bar is UNTOUCHED by the level marking — no outline, no glow.
-                Its job is magnitude and sign; which level it is gets said by the
-                tag and nowhere else. */}
+            {/* ONE DIRECTION. Every bar is anchored to the same left edge and
+                grows right, positive or negative — the centre hairline is gone,
+                so the full width is spent on magnitude and the eye compares
+                lengths off one baseline instead of two. Sign is the colour.
+                The bar is still UNTOUCHED by the level marking — no outline, no
+                glow; which level it is gets said by the tag and nowhere else. */}
             <span className="flex min-w-0 flex-1 items-center">
-              <span className="flex flex-1 justify-end">
-                {!pos && <span className="h-[7px] rounded-l-[2px]" style={{ width: `${pct}%`, background: hue }} />}
-              </span>
-              <span className="h-[9px] w-px shrink-0 bg-line" />
-              <span className="flex flex-1">
-                {pos && <span className="h-[7px] rounded-r-[2px]" style={{ width: `${pct}%`, background: hue }} />}
-              </span>
-            </span>
-
-            <span
-              className="tabular w-[38px] shrink-0 text-right font-mono text-[9px] font-bold leading-none"
-              style={{ color: hue }}
-            >
-              {fmtRail(r.value)}
+              <span className="h-[7px] rounded-r-[2px]" style={{ width: `${pct}%`, background: hue }} />
             </span>
           </div>
         )

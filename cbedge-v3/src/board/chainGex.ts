@@ -94,6 +94,24 @@ export function chainToGex(json: unknown): ChainGex {
       putVolume: row.put?.vol ?? 0,
       callGamma: row.call?.gamma ?? 0,
       putGamma: row.put?.gamma ?? 0,
+      // ── The DEX legs ────────────────────────────────────────────────────
+      // The server's own formula, transcribed from gex-calculator.js:
+      //   netDEX    = callDelta·callOI·spot·100 − |putDelta|·putOI·spot·100
+      //   volNetDEX = the same with volume in place of open interest
+      // The put term takes |delta| and an explicit minus for the same reason
+      // strikeGex() takes |gamma| — a feed that signs put deltas positive must
+      // not silently flip the side.
+      //
+      // `flowGEX` is deliberately ABSENT rather than 0. There is no classified
+      // tape for a non-socket ticker, so the honest answer is "not available",
+      // and a column of zeroes would look like a flat flow book instead. It is
+      // what the chart's FLOW basis tests to decide whether to fall back.
+      netDEX:
+        (row.call?.delta ?? 0) * (row.call?.oi ?? 0) * spot * 100 -
+        Math.abs(row.put?.delta ?? 0) * (row.put?.oi ?? 0) * spot * 100,
+      volNetDEX:
+        (row.call?.delta ?? 0) * (row.call?.vol ?? 0) * spot * 100 -
+        Math.abs(row.put?.delta ?? 0) * (row.put?.vol ?? 0) * spot * 100,
       dte,
     })
   }
