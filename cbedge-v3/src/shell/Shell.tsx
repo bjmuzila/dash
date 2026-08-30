@@ -4,6 +4,7 @@ import { NavLink } from 'react-router-dom'
 import { preload } from '@/data/api'
 import { AuthProvider } from '@/data/auth'
 import { PAGE_TICKER_RE, PageSymbolProvider, usePageSymbol } from '@/data/symbol'
+import { TickerPicker } from '@/design/primitives/TickerPicker'
 import { UserMenu } from '@/shell/UserMenu'
 
 // The persistent frame: mounts once and never unmounts, so the socket, the
@@ -216,50 +217,38 @@ function EtClock() {
 }
 
 function Toolbar() {
-  // The search is THE ticker control for the whole board. Every card that can
-  // follow a symbol follows this one, which is why no card carries its own
-  // dropdown — see src/data/symbol.tsx for which cards can and which cannot.
+  // THE ticker control for the whole board. Every card that can follow a symbol
+  // follows this one, which is why no card carries its own dropdown — see
+  // src/data/symbol.tsx for which cards can and which cannot.
   //
-  // Enter commits. Escape puts back what is actually showing, so a half-typed
-  // symbol never becomes the board's state by walking away from the box.
+  // It used to be a bare text box beside a read-only pill: two slots, and
+  // between them they could not answer "what CAN I put in here?". You had to
+  // already know a symbol to change the board, and there was nowhere to keep
+  // the handful you actually watch. So the box and the pill are one control
+  // now — the TickerPicker primitive, which was written for this job and had
+  // been sitting unused:
+  //
+  //   · the trigger IS the readout (its label defaults to the active ticker),
+  //     so the board's symbol still reads at a glance from the same corner;
+  //   · opening it lists the whole scanner universe, fetched from the server on
+  //     FIRST OPEN so no page load pays for a menu nobody opened;
+  //   · typing filters it, and Enter takes the first row;
+  //   · ★ pins a ticker, and pinned ones sort to the top of every open, in
+  //     every page, persisted per browser.
+  //
+  // PAGE_TICKER_RE goes in as `allowCustom` so the one thing the old box could
+  // do that a closed list cannot — jump to a symbol that is not on the server's
+  // watchlist — still works: type it and take the "USE" row.
   const { symbol, setSymbol } = usePageSymbol()
-  const [query, setQuery] = useState('')
-  const commit = () => {
-    const next = query.trim().toUpperCase()
-    if (!next) return
-    if (!PAGE_TICKER_RE.test(next)) return
-    setSymbol(next)
-    setQuery('')
-  }
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
       <span className="text-sm font-semibold tracking-tight">CB Edge</span>
       <div className="flex-1" />
-      {/* What the board is actually showing, beside the box you change it with.
-          An empty search input cannot say which symbol is loaded, and "which
-          symbol am I looking at" is the one question a board-wide ticker has to
-          answer at a glance. */}
-      <span
-        title="The board's symbol — every card that can follow a ticker is showing this one"
-        className="tabular shrink-0 rounded-full border border-accent bg-raised px-2.5 py-0.5 text-xs font-bold tracking-wide text-fg"
-      >
-        {symbol}
-      </span>
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value.toUpperCase())}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') commit()
-          if (e.key === 'Escape') {
-            setQuery('')
-            e.currentTarget.blur()
-          }
-        }}
-        onBlur={() => setQuery('')}
-        placeholder="Search ticker…"
-        spellCheck={false}
-        autoCapitalize="characters"
-        className="w-52 shrink rounded-full border border-line bg-surface px-3 py-1 text-xs uppercase text-fg outline-none placeholder:normal-case placeholder:text-muted focus:border-accent"
+      <TickerPicker
+        activeTicker={symbol}
+        onSelect={setSymbol}
+        allowCustom={PAGE_TICKER_RE}
+        title="The board's symbol — every card that can follow a ticker is showing this one. Click to search the list or star a ticker to keep it on top."
       />
       <EtClock />
       {/* The account dropdown — same rows as v2's UserMenu, on v3 tokens. The

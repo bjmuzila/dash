@@ -12,6 +12,11 @@
 // from whatever the RECORDER has, which is a different and usually shorter list
 // than the board's, so it passes its own `universe`.
 //
+// The scanner universe is the server's WATCHLIST, not the set of symbols the app
+// can price, so the toolbar also passes `allowCustom`: a typed symbol that is
+// valid but off-list is offered as a "USE" row rather than reading "No match".
+// A consumer whose list really is closed (the replay ladder) leaves it off.
+//
 // The scanner list is fetched on FIRST OPEN, not on mount. This control renders
 // on every route, so an unconditional fetch here is a request on the critical
 // path of every page load for a list nobody has asked to see — and the static
@@ -29,6 +34,9 @@ import { useScannerUniverse } from '@/data/scannerUniverse'
 
 /** Above every other layer the app can raise, including a page's own popovers. */
 const MENU_Z = 100010
+
+/** Menu width, in one place: the anchor has to clamp against it. */
+const MENU_W = 200
 
 /**
  * Board-wide, not page-scoped: the picker is app chrome now, so a ticker you
@@ -64,6 +72,7 @@ export function TickerPicker({
   onSelect,
   triggerLabel,
   title,
+  allowCustom,
 }: {
   activeTicker: string
   /** Omit to use the scanner universe, fetched on first open. The replay ladder
@@ -76,6 +85,15 @@ export function TickerPicker({
    *  which symbol the board is on. */
   triggerLabel?: string
   title?: string
+  /** When set, a typed symbol that matches this pattern but is NOT in the
+   *  universe is still offered, as a "Use XYZ" row at the top of the list.
+   *
+   *  The toolbar passes PAGE_TICKER_RE because the box it replaced took any
+   *  valid ticker, universe or not. The scanner list is what the SERVER sweeps,
+   *  not the set of symbols the app can price — dropping to a closed list would
+   *  have quietly removed the ability to look up anything off the watchlist.
+   *  Consumers with a genuinely closed list (the replay ladder) omit it. */
+  allowCustom?: RegExp
 }) {
   const [open, setOpen] = useState(false)
   // Sticky: once the menu has been opened the list stays live, so reopening it
@@ -98,7 +116,11 @@ export function TickerPicker({
     if (!open) return
     const update = () => {
       const r = btnRef.current?.getBoundingClientRect()
-      if (r) setRect({ left: r.left, top: r.bottom + 3 })
+      // Clamped to the viewport: in the app toolbar this trigger sits a few
+      // hundred pixels from the right edge, and a menu hung off its left corner
+      // would run off screen — where a fixed-position child cannot be scrolled
+      // back into view.
+      if (r) setRect({ left: Math.max(8, Math.min(r.left, window.innerWidth - MENU_W - 8)), top: r.bottom + 3 })
     }
     update()
     window.addEventListener('scroll', update, true)
@@ -150,7 +172,14 @@ export function TickerPicker({
   const matches = list.filter((t) => !q || t.includes(q))
   const favList = matches.filter((t) => favSet.has(t)).sort()
   const rest = matches.filter((t) => !favSet.has(t)).sort()
-  const rows: Array<{ t: string; fav: boolean; divider?: boolean }> = [
+  // An off-universe symbol the caller is willing to accept. Suppressed once the
+  // list already holds it exactly, so a symbol never appears twice.
+  const custom = allowCustom && q && !list.includes(q) && allowCustom.test(q) ? q : null
+  const rows: Array<{ t: string; fav: boolean; divider?: boolean; custom?: boolean }> = [
+    ...(custom ? [{ t: custom, fav: false, custom: true }] : []),
+    ...(custom && (favList.length || rest.length)
+      ? [{ t: '__divider_custom__', fav: false, divider: true }]
+      : []),
     ...favList.map((t) => ({ t, fav: true })),
     // Only when BOTH groups have something — a divider above an empty list is a
     // rule that separates nothing.
@@ -203,7 +232,7 @@ export function TickerPicker({
               left: rect.left,
               top: rect.top,
               zIndex: MENU_Z,
-              width: 200,
+              width: MENU_W,
               background: T.panel,
               border: `1px solid ${T.border}`,
               borderTop: `2px solid ${alpha(T.cyan, 0.5)}`,
@@ -252,7 +281,9 @@ export function TickerPicker({
               )}
               {rows.map((row) => {
                 if (row.divider) {
-                  return <div key="div" style={{ height: 1, background: T.border, margin: '3px 8px' }} />
+                  // Keyed by its own sentinel, not a constant — there can be two
+                  // rules in the list at once (above the favourites, and below).
+                  return <div key={row.t} style={{ height: 1, background: T.border, margin: '3px 8px' }} />
                 }
                 const active = row.t === activeTicker.toUpperCase()
                 return (
@@ -276,24 +307,42 @@ export function TickerPicker({
                       letterSpacing: '0.04em',
                     }}
                   >
-                    <span
-                      onClick={(e) => {
-                        // Starring must not also select — they are the two
-                        // things you can do to a row and they are 12px apart.
-                        e.stopPropagation()
-                        toggleFav(row.t)
-                      }}
-                      title={row.fav ? 'Unfavorite' : 'Favorite'}
-                      className="text-sm"
-                      style={{
-                        cursor: 'pointer',
-                        lineHeight: 1,
-                        color: row.fav ? LEVEL_COLORS.cb : alpha(T.text, 0.28),
-                      }}
-                    >
-                      {row.fav ? '★' : '☆'}
-                    </span>
+                    {row.custom ? (
+                      // No star: a symbol that is not in the universe cannot be
+                      // pinned to the top of a list it is not in. Star it after
+                      // selecting, once the server list carries it.
+                      <span
+                        aria-hidden
+                        className="text-sm"
+                        style={{ lineHeight: 1, color: alpha(T.text, 0.45) }}
+                      >
+                        ⌕
+                      </span>
+                    ) : (
+                      <span
+                        onClick={(e) => {
+                          // Starring must not also select — they are the two
+                          // things you can do to a row and they are 12px apart.
+                          e.stopPropagation()
+                          toggleFav(row.t)
+                        }}
+                        title={row.fav ? 'Unfavorite' : 'Favorite'}
+                        className="text-sm"
+                        style={{
+                          cursor: 'pointer',
+                          lineHeight: 1,
+                          color: row.fav ? LEVEL_COLORS.cb : alpha(T.text, 0.28),
+                        }}
+                      >
+                        {row.fav ? '★' : '☆'}
+                      </span>
+                    )}
                     <span>{row.t}</span>
+                    {row.custom && (
+                      <span className="text-3xs" style={{ marginLeft: 'auto', color: T.muted }}>
+                        USE
+                      </span>
+                    )}
                   </div>
                 )
               })}

@@ -1,5 +1,99 @@
 # Changelog
 
+## 2026-08-30 - v3 toolbar: the ticker box becomes a real picker
+
+The top toolbar's symbol control was two slots that between them could not
+answer "what can I put in here?" - a read-only pill showing the board's symbol,
+and a bare text input beside it. You had to already know a ticker to change the
+board, there was nowhere to keep the handful you actually watch, and a typo just
+did nothing.
+
+`src/design/primitives/TickerPicker.tsx` was written for exactly this job (its
+own header says "the APP TOOLBAR owns it") and was imported by NOTHING. The pill
+and the input are gone; `src/shell/Shell.tsx` mounts the picker instead:
+
+  - the trigger IS the readout - `triggerLabel` defaults to the active ticker,
+    so the board's symbol still reads at a glance from the same corner;
+  - opening it lists the whole scanner universe, fetched from
+    /proxy/scanner-tickers on FIRST OPEN (never on mount - this control renders
+    on every route, so an unconditional fetch would sit on the critical path of
+    every page load for a menu nobody opened);
+  - typing filters, Enter takes the first row;
+  - the star pins a ticker; pinned ones sort above a divider at the top of every
+    open, on every page, persisted per browser under `cb-v3-fav-tickers`.
+
+Three changes inside the primitive so it could take the toolbar slot without
+losing what the old box could do:
+
+1. NEW `allowCustom?: RegExp`. The scanner list is the server's WATCHLIST, not
+   the set of symbols the app can price - going to a closed list would have
+   quietly removed the ability to look up anything off it. When a typed symbol
+   matches the pattern and is not already in the list, it is offered as a "USE"
+   row at the top. The toolbar passes `PAGE_TICKER_RE`, the same rule the old
+   input validated against, so nothing that used to be typeable stopped being.
+   The replay ladder's list really is closed (a session can only be replayed for
+   a root the recorder swept) and it omits the prop.
+
+2. The divider is keyed by its own sentinel, not the constant `"div"` - there
+   can now be two rules in one list (under the USE row, and between favourites
+   and the rest) and React would have collided them.
+
+3. The menu's left edge is clamped to the viewport. In the toolbar the trigger
+   sits a few hundred px from the right edge, and a 200px menu hung off its left
+   corner ran off screen - a fixed-position child cannot be scrolled back.
+
+No new colour literal: everything reads `T.*` / `alpha()` / `LEVEL_COLORS`, so
+`check:theme` is untouched.
+
+## 2026-08-30 - Bzila Alerts: "Reactions by user" stops reading 0
+
+The owner card at owner.cbedge.net -> Bzila Alerts sat at 0 forever because the
+endpoint it fetches, `/api/bzila-alerts/history`, DID NOT EXIST. The page has
+shipped since day one calling it, falling through to Next as a 404, and
+rendering an empty `users` array as "No reactions yet."
+
+Underneath that there was a second, worse problem: nothing durable was being
+recorded. `bzila_alert_reactions` holds exactly ONE row per (alert, user), and
+`deleteBzilaAlert()` deletes an alert's reaction rows along with the alert. So
+even a working scoreboard built on that table could only ever count reactions
+still attached to a LIVING broadcast - delete the alert and the thumbs vanished
+with it. That is the case Brandon explicitly wants counted.
+
+Three changes, all in `server-v2/api-router.js` (the DB bundle
+`server-v2/_lib-db.cjs` is deliberately NOT regenerated - the checked-in
+`lib/db.ts` is behind it and rebuilding would drop unrelated hand-patches, same
+reasoning as `/api/strike-gex-series` and `customer_feedback_messages`):
+
+1. NEW append-only table `bzila_alert_reaction_log`, created lazily via the
+   `ensureBzilaLog(pool)` pattern. One row per TAP, with the alert's title/body
+   SNAPSHOTTED at click time, plus user_id, email, clicks and timestamp. It is
+   never touched by the alert delete path, so it outlives the broadcast.
+   On first run it SEEDS itself from every reaction currently in
+   `bzila_alert_reactions` (carrying original click counts and timestamps), so
+   the card shows real numbers immediately instead of starting from zero. The
+   seed is idempotent - `NOT EXISTS` on (alert_id, user_id) - so it can run on
+   every boot without double-counting or resurrecting a toggled-off reaction.
+
+2. `/api/bzila-alerts/react` now writes to that log on every tap, best-effort
+   (a log failure is warned and swallowed - it is the owner's card, it must
+   never turn a subscriber's click into a 500).
+
+3. NEW `GET /api/bzila-alerts/history` (auth: owner) returning exactly the
+   shape `BzilaAlerts.tsx` already expects:
+   `{ users: [{ email, userId, up, down, total, alerts, clicks, firstAt,
+   lastAt, items: [{ alertId, title, body, reaction, at, deleted }] }] }`
+   sorted by total desc. `deleted` is DERIVED from a LEFT JOIN against
+   `bzila_alerts`, so an alert removed tomorrow flips its historical rows with
+   no backfill, and the expanded per-user list still shows the alert text from
+   the snapshot with a "Deleted alert" pill.
+
+Counting rule: `up`/`down` count DISTINCT alerts, not taps - pressing thumbs-up
+twice is a toggle OFF, not two likes. Every tap still counts toward `clicks`,
+which is what the Taps column measures.
+
+No front-end change was needed; `owner-vite/src/pages/BzilaAlerts.tsx` was
+already correct and was left untouched.
+
 ## 2026-08-30 - v3 Analysis: the parity check (step 4 of the port)
 
 `cbedge-v3/scripts/parity-check-analysis.mjs` + `.test.mjs`, wired into

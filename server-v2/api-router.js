@@ -9125,6 +9125,62 @@ if (libDb) {
     });
   }
 
+  // ── Bzila alert reaction LOG ───────────────────────────────────────────────
+  // bzila_alert_reactions holds exactly ONE row per (alert, user) and
+  // deleteBzilaAlert wipes an alert's rows outright, so the owner's "Reactions
+  // by user" card had nothing durable to count: deleting a broadcast erased its
+  // 👍/👎 with it, and /report can only ever see reactions still attached to a
+  // LIVING alert. That is why the card sat at 0.
+  //
+  // bzila_alert_reaction_log is append-only — one row per TAP, with the alert's
+  // text snapshotted at click time — so a subscriber keeps credit for every
+  // reaction they have ever given even after the alert is gone.
+  //
+  // Created LAZILY here rather than in lib/db.ts: the checked-in lib/db.ts is
+  // BEHIND server-v2/_lib-db.cjs (see the /api/strike-gex-series note above), so
+  // regenerating that bundle to add a helper would drop unrelated hand-patches.
+  // Same ensureX(pool) pattern as customer_feedback_messages.
+  let bzLogEnsured = false;
+  const ensureBzilaLog = async (pool) => {
+    if (bzLogEnsured) return;
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS bzila_alert_reaction_log (
+        id       SERIAL PRIMARY KEY,
+        alert_id INTEGER NOT NULL,
+        user_id  TEXT NOT NULL DEFAULT '',
+        email    TEXT NOT NULL DEFAULT '',
+        reaction TEXT NOT NULL,
+        title    TEXT NOT NULL DEFAULT '',
+        body     TEXT NOT NULL DEFAULT '',
+        clicks   INTEGER NOT NULL DEFAULT 1,
+        at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS bzila_reaction_log_user_idx  ON bzila_alert_reaction_log (user_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS bzila_reaction_log_alert_idx ON bzila_alert_reaction_log (alert_id)`);
+    // Seed from the live table so the scoreboard is not empty the day this
+    // ships — every reaction still sitting in bzila_alert_reactions becomes a
+    // log row, carrying its original click count and timestamp. Idempotent: the
+    // NOT EXISTS is on (alert_id, user_id), so a subscriber already logged live
+    // is never double-counted, and one who toggled their reaction back off
+    // (reaction = '') is not resurrected.
+    await pool.query(`
+      INSERT INTO bzila_alert_reaction_log (alert_id, user_id, email, reaction, title, body, clicks, at)
+      SELECT r.alert_id, r.user_id, COALESCE(r.email, ''), r.reaction,
+             COALESCE(a.title, ''), COALESCE(a.body, ''),
+             GREATEST(COALESCE(r.clicks, 1), 1),
+             COALESCE(r.updated_at, CURRENT_TIMESTAMP)
+        FROM bzila_alert_reactions r
+        LEFT JOIN bzila_alerts a ON a.id = r.alert_id
+       WHERE r.reaction IN ('up', 'down')
+         AND NOT EXISTS (
+           SELECT 1 FROM bzila_alert_reaction_log l
+            WHERE l.alert_id = r.alert_id AND l.user_id = r.user_id
+         )
+    `);
+    bzLogEnsured = true;
+  };
+
   // /api/bzila-alerts — owner-authored toolbar broadcasts. GET (paid/owner see
   // latest 5; others empty), POST/PATCH/DELETE owner-only. Ported verbatim from
   // app/api/bzila-alerts/route.ts; getServerSession replaced by ctx.verifyWsRequest
@@ -9206,6 +9262,20 @@ if (libDb) {
         const user = userId ? await libDb.getUserById(userId) : null;
         const email = user?.email ?? null;
         const mine = await libDb.reactBzilaAlert(alertId, userId, email, reaction);
+        // Append to the durable log while the alert still exists, so its text is
+        // captured for the owner scoreboard even if the broadcast is deleted
+        // later. Best-effort: the log is the OWNER's card, and a failure here
+        // must never turn a subscriber's tap into an error.
+        try {
+          const pool = await libDb.getDb();
+          await ensureBzilaLog(pool);
+          const snap = (await pool.query(`SELECT title, body FROM bzila_alerts WHERE id = $1`, [alertId])).rows[0] || {};
+          await pool.query(
+            `INSERT INTO bzila_alert_reaction_log (alert_id, user_id, email, reaction, title, body, clicks)
+             VALUES ($1, $2, $3, $4, $5, $6, 1)`,
+            [alertId, String(userId ?? ''), String(email ?? ''), reaction, String(snap.title ?? ''), String(snap.body ?? '')],
+          );
+        } catch (e) { console.warn('[bzila] reaction log write failed:', e.message); }
         const counts = await libDb.getBzilaAlertCounts();
         const c = counts.find((x) => x.alert_id === alertId);
         send(res, 200, { ok: true, mine, up: c?.up ?? 0, down: c?.down ?? 0 });
@@ -9223,6 +9293,78 @@ if (libDb) {
       const limit = Number.isFinite(q) && q > 0 ? q : 50;
       try { const alerts = await libDb.getBzilaAlertReport(limit); send(res, 200, { alerts }); }
       catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/bzila-alerts/history — owner-only ALL-TIME scoreboard behind the
+  // "Reactions by user" card on owner.cbedge.net → Bzila Alerts. Reads the
+  // append-only log above, NOT the live reaction table, so a subscriber's 👍/👎
+  // survives the alert being deleted or edited. Shape the card expects:
+  //   { users: [{ email, userId, up, down, total, alerts, clicks,
+  //               firstAt, lastAt, items: [{alertId,title,body,reaction,at,deleted}] }] }
+  //
+  // up/down count DISTINCT alerts, not taps: pressing 👍 twice is a toggle off,
+  // not two likes. Every tap still counts toward `clicks`, which is what the
+  // Taps column measures. `deleted` is derived from the join, so an alert that
+  // is removed tomorrow flips its old rows without any backfill.
+  register('/api/bzila-alerts/history', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const q = Number(new URL(req.url || '/', 'http://localhost').searchParams.get('limit'));
+        const limit = Math.min(Number.isFinite(q) && q > 0 ? q : 20000, 100000);
+        const pool = await libDb.getDb();
+        await ensureBzilaLog(pool);
+        const rows = (await pool.query(
+          `SELECT l.alert_id, l.user_id, l.email, l.reaction, l.clicks, l.at,
+                  COALESCE(NULLIF(a.title, ''), l.title) AS title,
+                  COALESCE(NULLIF(a.body,  ''), l.body)  AS body,
+                  (a.id IS NULL) AS deleted
+             FROM bzila_alert_reaction_log l
+             LEFT JOIN bzila_alerts a ON a.id = l.alert_id
+            WHERE l.reaction IN ('up', 'down')
+            ORDER BY l.at DESC
+            LIMIT $1`,
+          [limit],
+        )).rows;
+
+        const byUser = new Map();
+        for (const r of rows) {
+          const key = (r.email || '').trim().toLowerCase() || r.user_id || '(unknown)';
+          let u = byUser.get(key);
+          if (!u) {
+            u = { email: r.email || '', userId: r.user_id || '', up: 0, down: 0, total: 0,
+                  alerts: 0, clicks: 0, firstAt: r.at, lastAt: r.at, items: [], _seen: new Set(), _alerts: new Set() };
+            byUser.set(key, u);
+          }
+          if (!u.email && r.email) u.email = r.email;
+          if (!u.userId && r.user_id) u.userId = r.user_id;
+          u.clicks += Number(r.clicks || 1);
+          u._alerts.add(r.alert_id);
+          if (new Date(r.at) < new Date(u.firstAt)) u.firstAt = r.at;
+          if (new Date(r.at) > new Date(u.lastAt)) u.lastAt = r.at;
+          // Rows arrive newest-first, so the first (alert, reaction) pair seen is
+          // the one kept — repeat taps collapse into a single scoreboard entry.
+          const pair = `${r.alert_id}|${r.reaction}`;
+          if (u._seen.has(pair)) continue;
+          u._seen.add(pair);
+          if (r.reaction === 'up') u.up += 1; else u.down += 1;
+          u.items.push({
+            alertId: r.alert_id,
+            title: r.title || '',
+            body: r.body || '',
+            reaction: r.reaction,
+            at: r.at,
+            deleted: Boolean(r.deleted),
+          });
+        }
+        const users = [...byUser.values()].map((u) => {
+          const { _seen, _alerts, ...rest } = u;
+          return { ...rest, total: u.up + u.down, alerts: _alerts.size };
+        }).sort((a, b) => (b.total - a.total) || (new Date(b.lastAt) - new Date(a.lastAt)));
+
+        send(res, 200, { users }, { 'Cache-Control': NO_STORE });
+      } catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
     },
   });
 
