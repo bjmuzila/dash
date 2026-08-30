@@ -42,7 +42,12 @@ const SKY = "#8ECAE6";
 export const MOBILE_TABS: MobileTab[] = [
   { id: "gex",     path: "/m/gex",     label: "GEX",   title: "Gamma Exposure",     icon: "bars",     accent: CYAN },
   { id: "heatmap", path: "/m/heatmap", label: "Heat",  title: "GEX Heatmap",        icon: "grid",     accent: ORANGE },
-  { id: "es",      path: "/m/es",      label: "ES",    title: "ES Candles",         icon: "candles",  accent: BLUE },
+  // Charts SPX cash, not the ES future (2026-08-30 — see the SPX CASH note in
+  // components/mobile/pages/MobileEsCandles.tsx). The id and path stay `es`:
+  // they are in DESKTOP_TO_MOBILE, in app/app/m/es/route.ts and in every link
+  // anyone has already shared, and renaming a route to relabel a tab is not a
+  // trade worth making.
+  { id: "es",      path: "/m/es",      label: "SPX",   title: "SPX Candles",        icon: "candles",  accent: BLUE },
   { id: "chain",   path: "/m/chain",   label: "Chain", title: "Option Chain",       icon: "chain",    accent: GREEN },
   // Replaced the Estimated Moves tab on 2026-08-20. EM was one number a day and
   // it still has a phone page at /m/em (route kept, just not in the bar) plus

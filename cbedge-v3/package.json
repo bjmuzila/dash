@@ -18,24 +18,27 @@
     "lab:capture": "node tools/bubble-lab/capture.mjs",
     "check:ws": "node scripts/ws-scope-check.mjs",
     "perf": "node scripts/perf-check.mjs",
-    "check": "npm run typecheck && npm run check:theme && npm run build:fast && npm run budgets && npm run check:ws && npm run perf",
+    "check:casing": "node scripts/check-casing.mjs",
+    "check:parity": "node scripts/parity-check.mjs",
+    "check:parity:self": "node scripts/parity-check.test.mjs",
+    "check": "npm run check:casing && npm run typecheck && npm run check:theme && npm run build:fast && npm run budgets && npm run check:ws && npm run perf && npm run check:parity:self",
     "preview": "vite preview --port 4173"
   },
   "dependencies": {
     "lightweight-charts": "^5.0.9",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "react-router-dom": "^7.9.1"
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.3"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.14",
     "@types/node": "^26.2.0",
-    "@types/react": "^19.2.2",
-    "@types/react-dom": "^19.2.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
     "@vitejs/plugin-react": "^5.0.4",
     "playwright": "^1.62.1",
     "tailwindcss": "^4.1.14",
-    "typescript": "^5.9.3",
+    "typescript": "5.9",
     "vite": "^7.1.9"
   }
 }

@@ -30,14 +30,18 @@ export interface NavItem {
   comingSoon?: boolean
 }
 
-// The full icon set from v2's toolbar (GlobalToolbar.tsx NAV_ITEMS), so the
-// rail is recognizable from day one. Only "/" has a page behind it in v3 so
-// far — see the `comingSoon` note above. Add routes here as you build them;
-// this list is also what NavLink/App.tsx get checked against, per the note
-// in App.tsx about v2's silent catch-all bug.
+// v3's rail. It started as a copy of v2's toolbar icon set so the rail was
+// recognizable from day one; six of those slots came back out on 2026-08-30 —
+// Scanner and Test Lab (built, now retired) and Multi Greek, Board, ES Candles
+// and ICT (never more than a dimmed "coming soon" icon). v3 is not shipping
+// those pages, and an icon for a page nobody is going to build is the same lie
+// `comingSoon` exists to avoid.
+//
+// The BOARD CARDS named Multi Greek / GEX Candles / Key Levels are a different
+// thing and they stay — see src/board/catalog.tsx. This list, App.tsx's routes
+// and ALL_PAGES/LIVE_ROUTES in pages/TradersDashboard.tsx move together.
 export const NAV: NavItem[] = [
   { to: '/', label: 'Home', icon: '🏠' },
-  { to: '/mult-greek', label: 'Multi Greek', icon: '🧮', comingSoon: true },
   {
     to: '/traders-dashboard',
     label: 'Traders Dash',
@@ -45,16 +49,11 @@ export const NAV: NavItem[] = [
     prefetch: ['/api/traders-dashboard/overview'],
   },
   { to: '/premarket', label: 'Premarket', icon: '🌅', prefetch: ['/api/scanner/market-quality'] },
-  { to: '/board', label: 'Board', icon: '🧩', comingSoon: true },
   { to: '/options-chain', label: 'Options Chain', icon: '⛓️', prefetch: ['/api/expirations?ticker=SPX'] },
   { to: '/em', label: 'Est. Moves', icon: '↔️', comingSoon: true },
   { to: '/analytics', label: 'Analysis', icon: '📈', prefetch: ['/api/premarket-summary'] },
   { to: '/replay', label: 'Replay', icon: '⏱️', comingSoon: true },
   { to: '/flow', label: 'Flow', icon: '🌊' },
-  { to: '/es-candles', label: 'ES Candles', icon: '🕯️', comingSoon: true },
-  { to: '/scanner', label: 'Scanner', icon: '🔍', prefetch: ['/api/far-cb-tickers'] },
-  { to: '/ict', label: 'ICT', icon: '🎯', comingSoon: true },
-  { to: '/test', label: 'Test Lab', icon: '⚗️' },
   { to: '/trading', label: 'Journal', icon: '📓', prefetch: ['/api/journal'] },
 ]
 

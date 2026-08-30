@@ -1,5 +1,461 @@
 # Changelog
 
+## 2026-08-30 - v3 Traders Dashboard: casing collision fixed, check:casing added
+
+Follow-up to the port below. `npm run check` failed on the laptop with TS1149
+and "Property 'default' is missing" on the wheel's `lazy()` import.
+
+Cause: the wheel shipped as `sectorWheel.ts` beside `SectorWheel.tsx`. Those
+basenames differ only in case, so on Windows the resolver turns
+`import('./SectorWheel')` into `SectorWheel.ts` and the case-insensitive
+filesystem hands back the MATHS module. It typechecks clean on a case-sensitive
+filesystem - which is how it got committed, and also means the Docker deploy
+(Linux) would never have caught it. Only the laptop would, after the fact.
+
+- `cbedge-v3/src/pages/tradersDashboard/wheelMath.ts` (was `sectorWheel.ts`) and
+  `SectorWheelCard.tsx` (was `SectorWheel.tsx`) - renamed, contents unchanged
+  apart from the import line and a header note explaining the trap.
+- `cbedge-v3/src/pages/TradersDashboard.tsx` - both imports repointed.
+- `cbedge-v3/scripts/check-casing.mjs` (new) - fails on any two modules in one
+  folder whose names differ only in case, per directory, comparing basenames
+  WITHOUT their extension because it is the module specifier that collides and a
+  specifier carries no extension. Wired in as `check:casing` and placed FIRST in
+  `npm run check`, so the next one of these reports a named collision and a
+  `git rm` line instead of a TS1149 stack.
+
+Two files need deleting by hand - the shell on this machine was down again, so
+they were emptied to `export {}` tombstones carrying their own `git rm` line:
+
+    git rm cbedge-v3/src/pages/tradersDashboard/sectorWheel.ts
+    git rm cbedge-v3/src/pages/tradersDashboard/SectorWheel.tsx
+
+**`npm run check:casing` fails until those two are removed.** Deliberate: they
+are dead, and they are a live trap for the next `./SectorWheel` import.
+
+Re-run in isolation after the rename and clean: `typecheck`, `check-theme.mjs`,
+`parity-check.test.mjs`. Still not run against the real tree: `build`,
+`budgets`, `perf`, `check:ws`, `check:parity`.
+
+## 2026-08-30 - v3 Traders Dashboard: ported from v2, sector wheel included
+
+Step 2-4 of the port. The spec is `cbedge-v3/docs/parity/traders-dashboard.md`
+(168 checklist rows, written first); Part J of that file is the build log and is
+the authority on what landed and what did not.
+
+Brandon's three calls, taken before any code:
+
+1. **Up is blue, down is red.** v2's `HOME_THEME.green` is a light blue
+   (`#8ECAE6`) and the sector wheel's whole diverging ramp hangs off it, so it
+   came across verbatim as two new tokens rather than being remapped onto v3's
+   green `--color-up`.
+2. **Early closes stay unhandled** - the countdown still targets 16:00 on a
+   13:00 half day, as v2 did. Now written down in the code, not only in the
+   parity doc.
+3. **Trending Now is one ranking**, highest positive to lowest negative. This is
+   the only behavioural change to a rendered value in the port: v2 printed
+   `/api/premarket-movers`'s array untouched, which is top-5 best-first followed
+   by bottom-5 worst-first - two descents with a cliff between them.
+
+New:
+
+- `cbedge-v3/src/pages/tradersDashboard/sectorWheel.ts` - the wheel's maths,
+  transcribed 1:1 from v2's `components/dashboard/SectorSunburst.tsx`: ring
+  radii, cap-weighted angles, both colour ramps, the bar clamp, the label fit
+  tests, the greedy non-overlapping callout placer, the sector leaderboard.
+- `cbedge-v3/src/pages/tradersDashboard/SectorWheel.tsx` - the render layer on
+  v3 primitives. Tooltip, Top/Bottom, coverage footer, `⤢ Expand` pop-out and
+  the Fullscreen API all present. The SVG is `memo()`d away from the hover
+  state, so a mousemove repaints one div instead of ~200 arcs (v2 repainted all
+  of them). Behind `lazy()` - it is the heaviest thing on the page and sits
+  below the fold.
+- `cbedge-v3/scripts/parity-check.mjs` + `parity-check.test.mjs` - 43 probes.
+  Drives `/app/traders-dashboard` and `/v3/traders-dashboard` in one browser
+  against ONE backend in the same minute and fails on anything v2 renders and
+  v3 does not. Keys on visible text (emoji card headings, the futures tile
+  symbols, the uppercase section runs, the hub `<text>` nodes, the
+  `{covered}/{universe} names` footer) rather than class names, which the port
+  replaces by design. `npm run check:parity` needs `PARITY_ORIGIN` and a
+  `PARITY_COOKIE` session; a run that cannot read both pages exits 2 and is
+  never reported as a pass. `npm run check:parity:self` runs the fixture test
+  and is wired into `npm run check` - it needs no browser and no backend, and it
+  proves the checker catches the un-ported wheel.
+
+Changed:
+
+- `cbedge-v3/src/design/tokens.css` - `--color-move-up` / `--color-move-down`,
+  v2's pair verbatim. Same precedent as the candle pair beside them.
+- `cbedge-v3/src/design/theme.ts` - `MOVE_UP` / `MOVE_DOWN`, plus a numeric
+  colour kit (`tokenRgb`, `mixRgb`, `rgbHex`, `isLightRgb`). The wheel needs
+  colour as NUMBERS for two jobs CSS cannot do: a magnitude ramp that stays
+  opaque under text, and the luminance test that picks dark or light ink for a
+  label printed on it. These READ the live custom property, so tokens.css is
+  still the only place a value is written.
+- `cbedge-v3/src/pages/TradersDashboard.tsx` - rewritten against the checklist.
+  Prefs are server-backed again (`/api/traders-dashboard`) with localStorage
+  demoted to a mirror, so a 401 or a dead route no longer silently reverts a
+  trader to the sample schedule; Premarket Prep is a real link; Trending Now is
+  back to v2's row list (18-char truncation, PM tag) with the new sort; the
+  countdown's `clamp(48px,8vw,84px)` ramp, the 3px driver accent bars, the
+  cyan-to-blue task progress fill and the mono schedule times are all restored.
+  Prefs saves are now debounced for real (400ms) - v2's helper was captioned
+  "(debounced)" and was not, so every keystroke was its own POST.
+- `cbedge-v3/package.json` - `check:parity`, `check:parity:self`, and the
+  self-test added to `check`.
+
+Not ported, knowingly: the two snapshot buttons (page and wheel). They need a
+DOM-to-canvas renderer v3 does not ship and that is not worth a dependency for
+one button. It is the only v2 row this port drops, and `parity-check.mjs`
+reports it as a declared departure rather than a failure. The Economic Calendar
+header button also stays a dimmed pill - v3 has no `/economic-calendar` route,
+and App.tsx's no-catch-all rule means a live link would 404.
+
+Route work: none needed. `/v3/traders-dashboard` was already wired all four ways
+(page, `lazy()` route, `NAV` entry, `app/v3/traders-dashboard/route.ts`).
+
+Two caveats:
+
+- The local shell on this machine was unavailable again this session, so
+  **nothing was run against the repo**: no `npm run typecheck`, `check:theme`,
+  `build`, `budgets`, `perf` or `check:parity`. The new files typecheck clean
+  and pass `check-theme.mjs` in isolation under an identical config, and the
+  parity self-test passes, but none of that is the real tree. Run
+  `npm run check` in `cbedge-v3/` before pushing.
+- The `2026-08-30 - v3: six pages retired` entry below describes edits to
+  `App.tsx`, `Shell.tsx`, `TradersDashboard.tsx`, `Scanner.tsx`, `TestLab.tsx`
+  and two `app/v3/*/route.ts` files that are **not present in the working tree**
+  - `/scanner` and `/test` are still routed, `NAV` still carries every
+  `comingSoon` icon, and both page files are still full. That session's caveat
+  says its shell was down too. This port was built against what is actually on
+  disk, so `ALL_PAGES` and `LIVE_ROUTES` in the rewritten
+  `TradersDashboard.tsx` still match the live `App.tsx`. If the retirement was
+  meant to land, it needs redoing - and this file should be updated to match.
+
+## 2026-08-30 - v3: six pages retired (Scanner, Test Lab, ICT, ES Candles, Board, Multi Greek)
+
+Pages only. The Home board and every card in `cbedge-v3/src/board/catalog.tsx` -
+including the Multi Greek, GEX Candles and Key Levels cards - are untouched.
+
+Two of the six were real, built v3 pages and are gone:
+
+- `cbedge-v3/src/App.tsx` - dropped the `lazy()` imports and the `<Route>`s for
+  `/scanner` and `/test`.
+- `cbedge-v3/src/pages/Scanner.tsx` and `.../TestLab.tsx` - emptied to a
+  tombstone comment (`export {}`); nothing imports them. `git rm` both.
+- `app/v3/scanner/route.ts` and `app/v3/test/route.ts` - the SPA shell handlers
+  now answer 404 instead of serving a shell that would only render NotFound.
+  Both folders are `git rm -r`-able.
+
+The other four never had a v3 page - only a dimmed `comingSoon` rail icon and a
+row in the destination picker. Those are gone too, so nothing advertises a page
+that is not coming:
+
+- `cbedge-v3/src/shell/Shell.tsx` - `NAV` drops `/mult-greek`, `/board`,
+  `/es-candles`, `/scanner`, `/ict`, `/test`. The rail is now Home, Traders
+  Dash, Premarket, Options Chain, Est. Moves, Analysis, Replay, Flow, Journal.
+  A saved rail order containing a removed slot drops it silently - `loadOrder()`
+  already filters against `NAV`.
+- `cbedge-v3/src/pages/TradersDashboard.tsx` - same six out of `ALL_PAGES`,
+  `/scanner` and `/test` out of `LIVE_ROUTES`, and the default Quick Link
+  "Multi Greek" swapped for "Options Chain" (the default set has to point at
+  routes that exist).
+
+Not touched, deliberately: `src/data/scannerTickers.ts` (shared ticker universe,
+read by Premarket and the board cards), the `'es-candles' -> 'gex-candles'` card-id
+migration in `catalog.tsx`, and all of v2 - `components/pages/Scanner.tsx`,
+`components/pages/TestLab.tsx`, `components/scanner/*`, `app/test/*` and the
+`/app/*` routes are a separate app and still live.
+
+Caveat: the local shell on this machine was down for this session, so the four
+files above could not actually be deleted from disk - they were emptied or
+turned into 404 handlers instead, each with a `git rm` line in its header.
+
+## 2026-08-30 - v3 Analysis: parity inventory written (step 1 of the port, no code yet)
+
+`cbedge-v3/docs/parity/analysis.md` (new, 359 checklist rows). The spec for
+porting v2's `/app/analytics` to v3's `/v3/analytics`, written BEFORE any v3
+code so the port is construction rather than re-deciding what the page contains.
+
+Scope: `components/pages/Analytics.tsx` (3,445 lines) plus everything it
+composes - `EconCalendarPanel` (mounted `todayOnly hideToolbar`), `computeAmt`
+from `lib/failLevels`, `useEsCandles`, `useScannerTickers`, `useRefreshButton`,
+`PageCard`, `homeTheme` and the `.analytics-grid` / global-collapse CSS.
+
+Eighteen parts, one row per rendered value: page frame + embed mode, the shared
+primitives (`Label`/`Value`/`Stat`/`fmtBig`/`useLiveData`/`CardState`/
+`UpdatedStamp`), then all ten cards. Ticker Lookup takes six parts (~126 rows) -
+controls, replay transport, identity line, both ladder panes, `TlLadder` itself,
+the chips/read/disclaimer, and a maths part transcribing
+`accumulateChainGreeks`, `tlLevelsFrom` (incl. the CB-collision rule and the
+flip port of `findGexFlip`), `tlAtm`, `tlWindow` and `useTlAnchor` 1:1.
+
+Things the inventory pinned that a rebuild would have lost:
+
+- `POS_GREEN #22C55E` is page-local because `HOME_THEME.green` is a light blue.
+  `T.green` is used exactly ONCE on the page - the "Confirmation triggers"
+  section title.
+- `useLiveData(null)` never clears `loading` (the guard returns before the
+  `finally`), so every card that passes null gates on something else.
+- The Delta 1D column stays OFF until a second EOD session lands - a column of
+  zeros reads as "the board didn't move", not "we don't know yet".
+- Unrecorded replay strikes render an em dash, never 0.
+- Three comment-vs-code conflicts, code wins: MVC checkpoints are 9:45 (not the
+  commented 9:35), `TL_CHIP_MIN_H` is 106 (comment computes 92), and the file
+  header's "MOCK data" claim is stale.
+
+Also recorded: the v3 starting point. `src/pages/Analysis.tsx` already ports
+Estimated Move, Premarket, Confidence, Net Greeks and Strategy Builder; Ticker
+Lookup, Multi Greek, Econ Calendar and Initial Balance are stubs, and Ticker
+Levels regressed from v2's searchable/favourite/add-your-own picker to a fixed
+four-pill row. That regression is the exact failure this document exists to
+catch.
+
+Next: review the inventory, then port the logic verbatim into `cbedge-v3/src/`
+(step 2) - no v2 JSX, no `@/app/...` alias, no colour literals.
+
+## 2026-08-30 - Weekly Edge: Estimated Move for Aug 24-28 (82.4%)
+
+`lib/emails/weekly-edge.ts`. Real numbers replace the EM placeholder.
+
+- Tile: 82.4%, sub "192-41 - 233 of 404 tickers scored".
+- Tile colour back to green `#00E676` (it was red `#FF4757` for last issue's 41%).
+  The colour tracks the week, not the metric.
+- Core Board (17-3, 85.0%, 20 of 22 tickers) goes in the NOTE, not a third tile -
+  the tile row stays a clean two-up and the second number reads better as prose
+  next to the first.
+
+THE POINT OF THE NOTE - 41.0% one week, 82.4% the next, on a VIX that stayed low
+BOTH weeks. So "low vol" does not explain either number, and the letter should
+not pretend it does. What changed is the RANGE:
+
+- Week of 8/21: vol crush narrowed the bands while the tape kept covering the
+  same distance -> price walked out of them early -> breaches -> 41.0%.
+- Week of 8/28: SPX sat between the call and put walls all week -> the bands
+  mostly held -> 82.4%.
+
+Same model, different range behaviour. The note says so and points at the
+wall-migration chart directly BELOW it, which is that story as a picture. If the
+wall-chart section is ever reordered, the copy says "the chart below" and will
+need fixing - there is a comment in `withDefaults()` flagging it.
+
+The note also states outright that the prior week printed 41.0% and went in the
+letter the same way. Keep that. The scorecard is only worth something if the bad
+week and the good week get the same treatment, and naming the 41% in the middle
+of an 82% week is the cheapest possible proof that they do.
+
+Preview regenerated: `generated/2026-08-30-weekly-edge-preview.html` / `.jpg`.
+
+REMAINING PLACEHOLDER: Core Bullseye tile, the confidence table, and
+`resultsNote` are still bracketed - plus the scanner catch.
+
+## 2026-08-30 - v3 Flow: parity inventory written (step 1 of the port, no code yet)
+
+`cbedge-v3/docs/parity/flow.md` (new, 214 checklist rows). The spec for porting
+v2's `/app/flow` to `/v3/flow`, written BEFORE any v3 code, in the same shape as
+`parity/premarket.md` and `parity/traders-dashboard.md`: one row per rendered
+value with its label, source endpoint + field, number format, threshold/colour
+rule, sort order and empty/loading state.
+
+- Scope: `components/pages/Flow.tsx` (1534 lines) plus everything it renders -
+  `ContractDrawer.tsx` (515), `useContractStats.ts`, `lib/dislocationVelocity.ts`,
+  `ThemedDatePicker`, and the `@media (max-width:899px)` block in `globals.css`
+  that `.flow-root` / `.flow-topbar` / `.flow-filter-grid` opt into.
+- 15 parts: page frame + URL params (`?chartonly`, `?ticker`, `?dteMax`), top bar,
+  filters card, filter grid, Net Drift chart chrome, chart series/scales, the
+  crosshair tooltip, Premium Split, Dislocation Velocity, Combined split, tape
+  header, 16 tape columns, tape rows, ContractDrawer, and data plumbing.
+- Every constant, formatter and threshold transcribed verbatim (WHALE_FLOOR 500K,
+  CHART_MIN_PREMIUM 1K decoupled from the tape slider, BIN_SEC 60, NET_LATE_SEC
+  900, MAX_TAPE_ROWS 800, the GRID track widths, fmtPremium/fmtStat/fmtContractCost/
+  fmtSpot/fmtEtHm rules, the RTH vs 24H axis-bound maths).
+- Appendix 1 records 10 v2 behaviours that are bugs, so the port makes a decision
+  instead of silently reproducing or silently fixing them. Two are server-side:
+  `parseFlowFilters()` in `server-v2/server-with-proxy.js` hardcodes `exIdx:false`
+  and defaults `underlying` to SPX, so the Combined view's Premium Split and its
+  tape-header totals are SPX-only numbers under an "All Tickers" heading.
+- Appendix 2 records the v3 contract gaps that cost the last attempt its columns:
+  `FlowTapePrint` carries no `symbol`, no `fills`, no `spot`, and types as
+  `'call'|'put'` not `'C'|'P'`; there is no `useContractStats` equivalent, so
+  Vol/OI/IV/%OTM and two drawer tiles have no source yet.
+- The existing `cbedge-v3/src/pages/Flow.tsx` (30.5KB) is a prior port that
+  resolved those gaps by dropping the Net Drift chart, the Vol/OI/IV columns, the
+  dislocation-velocity card and the contract drawer. Flagged as a draft to finish
+  against this checklist, not as the port.
+- Route wiring for `/v3/flow` is already complete on all four steps (page, App.tsx
+  route, Shell NAV entry, `app/v3/flow/route.ts`); the NAV entry has no `prefetch`
+  URLs, which v3's no-waterfall rule wants.
+
+No source files changed. Next step is review of the inventory, then the verbatim
+logic port under `cbedge-v3/src/`.
+
+## 2026-08-30 - Weekly Edge: wall-migration chart added to the results band
+
+`lib/emails/weekly-edge.ts`. The 5-session wall-migration chart for Aug 24-28 now
+sits in the results band, ABOVE the Core Wall auto-buy table. That order is the
+argument: here are the walls, then here is what the wall bought inside them.
+
+- New opts `showWallChart` (defaults TRUE), `wallChartUrl`, `wallChartHeadline`,
+  `wallChartNote`, plus a matching plain-text block.
+- Headline: "Five sessions, and price never left the walls". Note explains the
+  colours (green call wall, red put wall, white spot, 391 min/session) and walks
+  the week: chop between them Mon-Wed, walls stepping up ahead of the tape
+  Thursday with the rally stalling into the call wall, Friday's spike tagging it
+  and reverting same session. Closes with 7,711.48 spot vs 7,700 put / 7,720
+  call.
+- The note says the levels are RECORDED - written down at the time and
+  timestamped, not redrawn afterwards. Keep that clause. A levels chart with no
+  claim about when the levels were set is worth nothing as proof, and it is the
+  one thing a sceptical reader will ask about first.
+
+IMAGE: `public/wall-migration-2026-08-28.png` (1200x627, ~105 KB), served from
+`https://cbedge.net/wall-migration-2026-08-28.png`.
+
+DATED FILENAME, ON PURPOSE. A new chart ships every issue. A generic
+`wall-migration.png` would be overwritten on the next push and would then
+retro-change the art inside every previously sent letter still sitting in
+subscribers' inboxes - last week's email would silently start showing this
+week's chart. Date every issue-specific image. (The affiliate banner is
+undated because it is evergreen; that is the exception, not the pattern.)
+
+Preview regenerated: `generated/2026-08-30-weekly-edge-preview.html` / `.jpg`.
+
+## 2026-08-30 - The Weekly Edge rebuilt for the week of Aug 31 - Sep 4
+
+`lib/emails/weekly-edge.ts`. New issue. Markup reused; the data and one new
+section changed.
+
+Subject: "The Weekly Edge - Warsh put a September hike back on the table, and
+jobs Friday decides it". Issue pill "Week of Aug 31 - Sep 4".
+
+RECAP (Aug 24-28) - two events pulling opposite ways:
+- NVIDIA Wed night: $96.2B revenue (~$4B past consensus), $89.0B data centre,
+  guided ~70% revenue growth next FY vs 44% expected. Stock +~9% Thursday, best
+  day since Apr 2025. CRM +~23%, CRWD +~21%.
+- Friday: Warsh's FIRST Jackson Hole keynote as Chair - "predominant focus right
+  now should be on prices". July PCE 3.7%, headline and core both UNCHANGED from
+  June (stalled, not falling). September HIKE odds 35% -> 57%; short-end +~8bp.
+- Index tiles are S&P +0.5% / Nasdaq +0.9% / RUSSELL 2000 -1.5%, not the usual
+  Dow. The mega-cap-vs-small-cap gap IS the week; a flat Dow tile would hide it.
+- Gold -3.3%, bitcoin -3.2% to ~$78k, VIX closed 14.35.
+
+WEEK AHEAD - four labour prints then the jobs report: Chicago PMI/Dallas Fed Mon;
+ISM Mfg + JOLTS Tue (DELL, PANW after); ADP + factory orders + Beige Book Wed
+(AVGO, SNOW, HPE after); ISM Services + claims + Challenger Thu (LULU, DOCU
+after); AUGUST JOBS REPORT Fri. Framing: seven days ago the argument was how big
+the September cut would be, now it is whether they hike.
+
+OIL - deliberately de-escalated. WTI ~$83.44, flat on the week, -1.2% on the
+month. Market has re-rated Iran from imminent physical-supply threat to an
+economic/sanctions confrontation; Goldman has Persian Gulf exports back at 15-16
+mb/d (vs 22-24 pre-conflict, 5-6 at the March trough). Iran-Oman revenue-sharing
+framework agreed, Tehran says that is not a reopening. Explicit line that crude
+is no longer what sets overnight gap risk - the labour data is.
+
+NEW SECTION - Core Wall auto buy (real data, gold box):
+
+| Date  | CB    | Contract | Entry -> Peak    | Best  |
+|-------|-------|----------|------------------|-------|
+| 08-28 | 10:30 | 7750C    | $4.65 -> $25.15  | +441% |
+| 08-26 | 12:00 | 7685C    | $1.83 -> $7.70   | +321% |
+| 08-27 | 10:30 | 7730C    | $4.55 -> $14.20  | +212% |
+| 08-27 | 9:45  | 7725C    | $6.95 -> $18.50  | +166% |
+| 08-28 | 12:00 | 7720P    | $8.75 -> $23.00  | +163% |
+
+Five of the fifteen the wall took. New `AutoBuyRow` type plus `showAutoBuy`,
+`autoBuyRows`, `autoBuyNote` opts and a plain-text block.
+
+TWO THINGS IN THAT SECTION ARE NOT DECORATION:
+1. PEAK IS AN INTRADAY HIGH AFTER ENTRY, NOT AN EXIT. The note says so in bold.
+   Presenting a peak column as realized P&L is the fastest way to make this
+   letter dishonest - it is the difference between "what the wall bought" and a
+   returns claim.
+2. The note also gives the FULL fifteen: 6 peaked at 2x+, 14 traded above entry,
+   and the 8/24 10:30 read (7630P) never ticked up at all. Printing five winners
+   without that split is cherry-picking with extra steps.
+
+DASHBOARD PLACEHOLDERS (all three render as dashed blocks, nothing stale ships):
+- `DEFAULT_CONF_ROWS` emptied - confidence table is the dashed placeholder.
+- Both result tiles "-" / "[fill before send]".
+- `resultsNote` / `estMoveNote` are bracketed prompts.
+- `showScannerProof` DEFAULT FLIPPED to `=== true` (was `!== false`) so the
+  scanner card is OFF unless opted in; a new dashed "[ADD THIS WEEK'S SCANNER
+  CATCH]" block renders in its place. Last week's MRNA card no longer leaks
+  forward into a new issue by default.
+
+Also: `SANS` const added (the font stack the older blocks spell out inline);
+CTA headline now "Jobs Friday, with a hike on the table" and the feature list
+mentions the Core Wall auto buy. Affiliate and Tradeify bands unchanged.
+
+Preview: `generated/2026-08-30-weekly-edge-preview.html` / `.jpg`.
+
+## 2026-08-30 - phone candles: RTH/ETH removed, and the SPX labels that were missed
+
+Edited: `components/mobile/pages/MobileEsCandles.tsx`.
+
+**RTH/ETH is gone.** It was added earlier today while this page still charted
+ES, where the distinction is real. On SPX cash it is not: the index prints 09:30
+to ~16:55 ET, so there is no globex tape for the switch to include or exclude,
+and its only remaining job was hiding the last few post-close prints - a control
+that has to be explained every time it is seen. Out with it: the `SessionMode`
+type, `SESSIONS`, `RTH_OPEN`/`RTH_CLOSE`, `etClockOf`, the session state, the
+filter in `chartCandles`, the refit dependency, the RTH badge in the header and
+the SESSION section in the sheet. The sheet is back to three things. The live
+tip on the newest bar is untouched.
+
+**Labels that should have landed with the SPX switch.** An edit script aborted
+partway through the previous change and took its whole batch with it, so the
+page shipped SPX data under ES chrome: the shell still read "ES Candles", the
+ticker chip still read "ES", and the gamma-levels hint still said "converted
+from SPX to ES" for lines that are no longer converted at all. All three now say
+what the page actually does. (`mobileNav.ts` was a separate write and was
+already correct.)
+
+## 2026-08-30 - phone candles are SPX cash, not ES
+
+Edited: `components/mobile/pages/MobileEsCandles.tsx`,
+`components/mobile/mobileNav.ts`.
+
+The phone chart drew ES and converted everything else - GEX bubbles, gamma
+levels, both gutter panels - through the live ES/SPX basis. That conversion is
+the reason the page had a `basisOk` gate, and the reason every overlay VANISHED
+whenever the pair went stale: overnight, at weekends, and in the hour before the
+bell - most of the time a phone is actually open. Charting SPX itself deletes
+the problem. Gamma is recorded against SPX strikes, so a bubble goes at its
+strike and a wall goes at its price. Nothing to fetch, nothing to convert, and
+no state where the overlays are dark because a second instrument is quiet.
+
+- Bars now come from `useEtfCandles("SPX", ...)` - the same cash rows v3 charts,
+  written by `server-v2/etf-candle-recorder.js` and read over HTTP. Verified
+  live: 252 rows over 3 sessions at 5m, 412 over one at 1m, 09:30-16:55 ET.
+  History depth 5 calendar days at 5m / 3 at 1m, so BUBBLE_DAYS still has two
+  sessions of bars to land on across a weekend.
+- `basisOk` is gone entirely, with the in-plot "SPX overlays need a live ES/SPX
+  pair" note and the sheet's warning subtitle. The gutter panels now gate on the
+  only honest question left - is there a ladder to draw.
+- Both rails take `basis={0}`: structurally zero now, not "zero because we lack
+  one".
+
+**The 60s poll, and the live tip.** SPX cash has no candle stream on /ws/gex, so
+the bars arrive on a 60s poll instead of the socket. The rows are WRITTEN once a
+minute, so there is no finer SPX bar to be had - but a chart whose last bar only
+moves once a minute reads as frozen. So the newest bar's close is redrawn from
+the socket's `spot` frame (same index, live) with its high/low widened to
+contain it, exactly as the recorder will write it. Guarded on that bar being
+TODAY's: at a weekend the newest bar is a previous close and dragging it to spot
+would invent a print that never happened.
+
+Side effect worth noting: this page no longer subscribes `esCandles` /
+`es1mCandles`, so `/m/es` narrows the shared socket's topic scope instead of
+widening it.
+
+**RTH/ETH, honestly relabelled.** SPX prints 09:30 to ~16:55 ET - there is no
+overnight tape to include. The switch stays because the post-close tail is still
+a real thing to want off a 5-minute chart, but it now means "stop at the 4:00
+close" vs "keep the post-close prints", and the hint says so.
+
+The tab is labelled SPX and titled "SPX Candles". The id and path stay `/m/es`:
+they are in `DESKTOP_TO_MOBILE`, in `app/app/m/es/route.ts` and in every link
+already shared - renaming a route to relabel a tab is not a trade worth making.
+
 ## 2026-08-30 - v3 check-theme: two blind spots fixed, and --muted was undeclared
 
 Edited: `cbedge-v3/scripts/check-theme.mjs`, `cbedge-v3/src/pages/Premarket.tsx`,

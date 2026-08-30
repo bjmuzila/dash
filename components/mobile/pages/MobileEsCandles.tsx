@@ -18,7 +18,7 @@ import type {
   ISeriesApi,
   UTCTimestamp,
 } from "lightweight-charts";
-import { useEsCandles } from "@/hooks/useEsCandles";
+import { useEtfCandles } from "@/hooks/useEtfCandles";
 import { useMobileGex } from "@/hooks/useMobileGex";
 import { useGexBubbleHistory } from "@/hooks/useGexBubbleHistory";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
@@ -31,7 +31,7 @@ import { MEmpty, MSegmented, MSheet, MSlider, MStatusDot } from "../MobileUI";
 import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../mobileTheme";
 
 /**
- * MobileEsCandles — the ES chart, phone edition.
+ * MobileEsCandles — the SPX chart, phone edition.
  *
  * WHY NOT REUSE EsChartCard
  * -------------------------
@@ -43,26 +43,17 @@ import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../
  * smudge"). Its side rail also auto-suppresses below 340px of chart, so most of
  * what makes it expensive wouldn't even render.
  *
- * What is reused is the part that matters: `useEsCandles`, the same hook the
- * desktop page feeds from — shared refcounted socket, 250ms render coalescing,
- * cross-instance load sharing, and the `useWsLifecycle` bandwidth gate that
- * drops the connection when the tab is backgrounded. That gate matters far more
- * on a phone than a desktop, where "backgrounded" happens every time a
- * notification arrives.
- *
- * `historyDays = 2` rather than the hook's default 20: the 20-day pull exists
- * to compute per-slot volume baselines that this chart never draws, and it is
- * ~114KB over what may be a cellular link.
+ * The bars come from `useEtfCandles` — the SPX cash recorder over HTTP. See the
+ * SPX CASH note below for why this page is not on the futures socket any more,
+ * and what that costs (a 60s write cadence, covered by a live tip off the
+ * socket's `spot` frame).
  *
  * OVERLAYS
  * --------
  * The desktop card's Overlays menu is a portal-positioned dropdown with seven
  * chips and five slider sub-panels; that is not a phone control. This is a
- * bottom sheet with the four things worth having at 390px:
+ * bottom sheet with the three things worth having at 390px:
  *
- *   - SESSION, RTH or ETH. ETH is the default and is what this page always
- *     showed; RTH filters the rolling window to the cash session (see
- *     SessionMode).
  *   - a SIDE PANEL choice (none / GEX rail / 0DTE ladder). One at a time, not
  *     two toggles: each costs 46px of a 390px screen, and the desktop's own
  *     geometry table treats the gutter as a single-choice slot for the same
@@ -77,9 +68,9 @@ import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../
  *
  * SPX LEVEL LINES
  * ---------------
- * Gamma flip and the two walls are SPX prices; this chart is ES. They are drawn
- * only when the live ES/SPX pair gives a trustworthy basis (see useMobileGex).
- * Off-hours the lines disappear rather than sit at a wrong price.
+ * Gamma flip and both walls are SPX prices and so is this chart, so they are
+ * drawn at their own values, always — no conversion, and nothing to go stale.
+ * See the SPX CASH note below for what that replaced.
  *
  * PRICE-AXIS ZOOM
  * ---------------
@@ -109,6 +100,44 @@ import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../
  * gesture is confined to the axis strip.
  */
 
+/**
+ * SPX CASH, NOT ES.
+ *
+ * This page charted the ES future and drew everything else — the GEX bubbles,
+ * the gamma levels, both gutter panels — by converting SPX strikes through the
+ * live ES/SPX basis. That conversion is why the page had a `basisOk` gate and
+ * why every overlay VANISHED whenever the pair went stale, which is most of the
+ * time a phone is actually open: overnight, weekends, and the hour before the
+ * bell.
+ *
+ * Charting SPX itself deletes the whole problem. Gamma is recorded against SPX
+ * strikes, so a bubble goes at its strike, a wall goes at its price, and there
+ * is nothing to fetch, nothing to convert, and no state where the overlays are
+ * off because a second instrument is quiet.
+ *
+ * TWO CONSEQUENCES, both real:
+ *
+ *   1. The bars come from the recorder over HTTP (`useEtfCandles`, 60s poll),
+ *      not from the /ws/gex socket — SPX cash has no candle stream on that
+ *      feed. The rows are WRITTEN once a minute, so there is no finer SPX bar
+ *      to have; the live tip below is what keeps the newest bar moving between
+ *      polls.
+ *   2. SPX cash has no overnight session — it prints 09:30 to ~16:55 ET. So
+ *      there is no RTH/ETH switch on this page: there is no globex tape for it
+ *      to include or exclude, and a control whose only remaining job is hiding
+ *      the last few post-close prints is a control that has to be explained
+ *      every time it is seen. It existed briefly while this page charted ES,
+ *      where the distinction was real.
+ */
+const SPX_SYMBOL = "SPX";
+/**
+ * Calendar days of bars to pull, by interval. Enough that BUBBLE_DAYS has two
+ * sessions of bars to land on across a weekend; 1m is a third the reach because
+ * it is five times the rows and the phone only ever frames a session of it.
+ */
+const SPX_DAYS_5M = 5;
+const SPX_DAYS_1M = 3;
+
 const INTERVALS: { id: "1" | "5"; label: string }[] = [
   { id: "1", label: "1 min" },
   { id: "5", label: "5 min" },
@@ -116,35 +145,6 @@ const INTERVALS: { id: "1" | "5"; label: string }[] = [
 
 function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
-}
-
-/**
- * RTH / ETH.
- *
- * The bars this page holds are a rolling ~30h window — the overnight tape and
- * the cash session together — so it was always ETH and there was no way to say
- * otherwise. RTH filters to the New York cash session, 09:30-16:00 ET.
- *
- * Filtered on the bar's own ET clock string (`slotKey` is "YYYY-MM-DDTHH:MM" in
- * ET, `time` is the same "HH:MM" and is the fallback — the pairing `slotTimeOf`
- * in useEsCandles uses), NOT by converting the timestamp: a per-bar Intl
- * conversion over a few thousand bars would re-run on every coalesced publish,
- * four times a second while the tape is live, to recover a string the row is
- * already carrying.
- */
-type SessionMode = "rth" | "eth";
-
-const SESSIONS: { id: SessionMode; label: string }[] = [
-  { id: "eth", label: "ETH" },
-  { id: "rth", label: "RTH" },
-];
-
-const RTH_OPEN = "09:30";
-const RTH_CLOSE = "16:00";
-
-/** The bar's ET wall-clock "HH:MM", or "" when the row carries neither field. */
-function etClockOf(r: { slotKey?: string; time?: string }): string {
-  return (r.slotKey ?? "").slice(11, 16) || (r.time ?? "").slice(0, 5);
 }
 
 type SidePanel = "none" | "rail" | "chain";
@@ -345,8 +345,7 @@ export default function MobileEsCandles() {
   const [sidePanel, setSidePanel] = useState<SidePanel>("none");
   // Bubbles default ON. They are the reason to open this page on a phone — the
   // candles alone are available in any broker app — and the history hook is
-  // already gated on `enabled`, so nothing is fetched when the basis check
-  // later turns them off anyway.
+  // gated on `enabled`, so turning them off stops the fetch too.
   const [showBubbles, setShowBubbles] = useState(true);
   const [bubbleScale, setBubbleScale] = useState(BUBBLE_SCALE_DEFAULT);
   const [yZoom, setYZoom] = useState(Y_ZOOM_DEFAULT);
@@ -355,50 +354,58 @@ export default function MobileEsCandles() {
   // newest bars, which sit right against the axis).
   const [axisW, setAxisW] = useState(46);
   const [zooming, setZooming] = useState(false);
-  const [session, setSession] = useState<SessionMode>("eth");
   const [ovlOpen, setOvlOpen] = useState(false);
-  // History depth in CALENDAR days, and it has to clear a weekend: asking for 2
-  // on a Sunday reaches back to Friday and can miss the last session entirely on
-  // a long (holiday Monday) weekend, leaving the chart with nothing to draw. 4
-  // at 5m is ~400 rows; 1m is capped at 3 because it is 5x denser and the phone
-  // only ever shows a session or two of it.
-  // `historical` is taken only to tell the two empty states apart below: rows in
-  // hand means the DB answered and the chart is empty for a windowing/session
-  // reason, not because the socket is down.
-  const { sessionCandles, historical, connected } = useEsCandles(
-    true,
-    interval === "1" ? 3 : 4,
+  // `loaded` only tells the two empty states apart below: a response in hand
+  // means the recorder answered and the chart is empty for a session/window
+  // reason rather than because nothing has arrived yet.
+  //
+  // `connected` here means "the recorder answered WITH rows", not "a socket is
+  // open" — this page no longer holds one. LIVE is still the honest label on
+  // the status dot: bars arriving on the poll plus a spot-driven tip on the
+  // newest one is what live looks like for SPX cash.
+  const { rows: spxCandles, loaded, connected } = useEtfCandles(
+    SPX_SYMBOL,
+    interval === "1" ? SPX_DAYS_1M : SPX_DAYS_5M,
     interval === "1" ? 1 : 5,
   );
 
+  const g = useMobileGex("oi-vol");
+
   /**
-   * The bars the chart actually draws.
+   * The bars the chart actually draws: the recorder's rows, plus a LIVE TIP.
    *
-   * `sessionCandles` is the rolling ~30h window: the overnight tape and the
-   * cash session together. RTH keeps 09:30-16:00 ET of it; ETH is the window
-   * untouched and stays the DEFAULT, because the overnight is most of why
-   * anyone opens a futures chart on a phone before the bell.
+   * The tip is why this page does not feel frozen on a 60s poll. The recorder
+   * writes SPX bars once a minute, so between polls the newest bar is up to a
+   * minute stale — but the socket's `spot` frame is the same index, live. So
+   * the last bar's close is redrawn from spot, with its high/low widened to
+   * contain it, exactly the way the bar itself will be written when the
+   * recorder catches up.
    *
-   * Everything downstream reads this rather than the raw window - the bubble
+   * Guarded on the bar being TODAY's: off-hours and at weekends the newest bar
+   * is a previous session's close, and dragging that to the current spot would
+   * invent a print that never happened.
+   *
+   * Everything downstream reads this rather than the raw rows — the bubble
    * trail maps each column to the bar it falls in, so a trail drawn against
    * bars the chart is not showing would sit at the wrong x.
    */
   const chartCandles = useMemo(() => {
-    if (session === "eth") return sessionCandles;
-    return sessionCandles.filter((r) => {
-      const hm = etClockOf(r);
-      // A row carrying neither field is KEPT: punching a hole in the series to
-      // enforce a filter we cannot evaluate is the worse of the two failures.
-      if (!hm) return true;
-      return hm >= RTH_OPEN && hm < RTH_CLOSE;
-    });
-  }, [sessionCandles, session]);
-  const g = useMobileGex("oi-vol");
+    const base = spxCandles;
+    const spot = g.spot;
+    if (!base.length || !spot || !Number.isFinite(spot)) return base;
+    const tail = base[base.length - 1];
+    if (etDayKey(tail.timestamp) !== etDayKey(Date.now())) return base;
+    if (spot === tail.close) return base;
+    return [
+      ...base.slice(0, -1),
+      { ...tail, close: spot, high: Math.max(tail.high, spot), low: Math.min(tail.low, spot) },
+    ];
+  }, [spxCandles, g.spot]);
 
   // Which ET days the chart actually has bars for — the bubble history needs
   // this to pick the days the trail can be drawn on (see the hook's header).
-  // Taken from the DRAWN bars: under RTH there is no overnight bar to hang an
-  // overnight column on, and a bubble with no bar under it is dropped anyway.
+  // Taken from the DRAWN bars: a bubble with no bar under it is dropped by the
+  // renderer anyway.
   const barDayKeys = useMemo(() => {
     const set = new Set<string>();
     for (const r of chartCandles) set.add(etDayKey(r.timestamp));
@@ -438,11 +445,12 @@ export default function MobileEsCandles() {
     [g.chain, g.spot],
   );
 
-  // Both gutter panels and the bubble layer are SPX-derived, so they share the
-  // level lines' policy: no trustworthy basis → don't draw rather than draw
-  // wrong. `basisOk` gates all three.
-  const basisOk = g.basis != null;
-  const panelOn = sidePanel !== "none" && basisOk;
+  // No basis gate any more. Every overlay on this page is SPX-denominated and
+  // so is the chart, so there is nothing to convert and nothing that can go
+  // stale between two instruments — the old `basisOk` was the single reason the
+  // bubbles, levels and gutter panels all went dark off-hours. What is left is
+  // the honest question: is there a ladder to draw?
+  const panelOn = sidePanel !== "none" && g.chain.length > 0;
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -594,12 +602,10 @@ export default function MobileEsCandles() {
     };
   }, []);
 
-  // Switching aggregation OR session replaces the whole series — refit to the
-  // new bars. Without the session here, flipping to RTH keeps the logical range
-  // the ETH bars were framed with and lands the view on empty space.
+  // Switching aggregation replaces the whole series — refit to the new bars.
   useEffect(() => {
     didFitRef.current = false;
-  }, [interval, session]);
+  }, [interval]);
 
   // ── price-axis zoom ────────────────────────────────────────────────────────
   /**
@@ -736,8 +742,8 @@ export default function MobileEsCandles() {
     const axisRaf = requestAnimationFrame(() => measureAxisRef.current?.());
     if (data.length && !didFitRef.current) {
       didFitRef.current = true;
-      // Open on the most recent stretch rather than the whole session: 30h of
-      // 1-minute bars fitted into 390px is an unreadable grey band.
+      // Open on the most recent stretch rather than the whole pull: several
+      // sessions of 1-minute bars fitted into 390px is an unreadable grey band.
       const bars = interval === "1" ? 90 : 70;
       const to = data.length - 1;
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, to - bars), to: to + 2 });
@@ -771,7 +777,7 @@ export default function MobileEsCandles() {
    * priceToCoordinate call per frame; it does not redraw a still chart.
    */
   useEffect(() => {
-    if (!panelOn && !(showBubbles && basisOk)) return;
+    if (!panelOn && !showBubbles) return;
     let raf = 0;
     let lastKey = "";
     const tick = () => {
@@ -792,19 +798,17 @@ export default function MobileEsCandles() {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [panelOn, showBubbles, basisOk]);
+  }, [panelOn, showBubbles]);
 
   // ── bubbles ────────────────────────────────────────────────────────────────
   const bubbleCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const bubbleDataRef = useRef({
     cols: bubbleCols,
-    basis: g.basis ?? 0,
     rows: chartCandles,
     scale: bubbleScale,
   });
   bubbleDataRef.current = {
     cols: bubbleCols,
-    basis: g.basis ?? 0,
     rows: chartCandles,
     scale: bubbleScale,
   };
@@ -831,7 +835,7 @@ export default function MobileEsCandles() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
-    const { cols, basis, rows, scale } = bubbleDataRef.current;
+    const { cols, rows, scale } = bubbleDataRef.current;
     if (!cols.length || !rows.length) return;
 
     /**
@@ -911,7 +915,8 @@ export default function MobileEsCandles() {
     for (const b of byBar.values()) {
       const x = xOfBar(b.bar);
       if (x == null || x < -MAX_R || x > w + MAX_R) continue;
-      const y = priceToY(b.strike + basis);
+      // The strike IS the price now — chart and ladder are both SPX.
+      const y = priceToY(b.strike);
       if (y == null || y < -MAX_R || y > h + MAX_R) continue;
       const mag = Math.abs(b.net);
       if (!mag) continue;
@@ -933,17 +938,17 @@ export default function MobileEsCandles() {
   useEffect(() => {
     bubbleDrawRef.current = drawBubbles;
     drawBubbles();
-  }, [drawBubbles, bubbleCols, g.basis, chartCandles, bubbleScale]);
+  }, [drawBubbles, bubbleCols, chartCandles, bubbleScale]);
 
-  // ── SPX level lines, converted to ES ───────────────────────────────────────
+  // ── SPX level lines, drawn where they are ──────────────────────────────────
   const levels = useMemo(() => {
-    if (!showLevels || g.basis == null) return [];
+    if (!showLevels) return [];
     const out: { price: number; color: string; title: string }[] = [];
-    if (g.flip != null) out.push({ price: g.flip + g.basis, color: M_COLOR.orange, title: "FLIP" });
-    if (g.callWall != null) out.push({ price: g.callWall + g.basis, color: M_COLOR.pos, title: "CW" });
-    if (g.putWall != null) out.push({ price: g.putWall + g.basis, color: M_COLOR.neg, title: "PW" });
+    if (g.flip != null) out.push({ price: g.flip, color: M_COLOR.orange, title: "FLIP" });
+    if (g.callWall != null) out.push({ price: g.callWall, color: M_COLOR.pos, title: "CW" });
+    if (g.putWall != null) out.push({ price: g.putWall, color: M_COLOR.neg, title: "PW" });
     return out;
-  }, [showLevels, g.basis, g.flip, g.callWall, g.putWall]);
+  }, [showLevels, g.flip, g.callWall, g.putWall]);
 
   useEffect(() => {
     const series = seriesRef.current;
@@ -973,14 +978,13 @@ export default function MobileEsCandles() {
   const chgPct = chg != null && first && first.open > 0 ? (chg / first.open) * 100 : null;
   const up = (chg ?? 0) >= 0;
   // Badge on the Overlays button so the sheet's state is visible without
-  // opening it — the count is what's actually drawing, not what's toggled on,
-  // which is why the basis gate is part of it.
+  // opening it — the count is what is actually DRAWING, not what is toggled on.
   const overlayCount =
-    (showLevels && basisOk ? 1 : 0) + (panelOn ? 1 : 0) + (showBubbles && basisOk ? 1 : 0);
+    (showLevels && levelLines.length > 0 ? 1 : 0) + (panelOn ? 1 : 0) + (showBubbles ? 1 : 0);
 
   return (
     <MobileShell
-      title="ES Candles"
+      title="SPX Candles"
       fill
       right={<MStatusDot live={connected} label={connected ? "LIVE" : "…"} />}
       sticky={
@@ -990,7 +994,7 @@ export default function MobileEsCandles() {
               and the interval control started overlapping the change figure. */}
           <div style={{ display: "flex", alignItems: "baseline", gap: 7, minWidth: 0 }}>
             <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.1em", color: M_COLOR.faint }}>
-              ES
+              SPX
             </span>
             <span style={{ ...MONO, fontSize: TYPE.hero - 4, fontWeight: 800, lineHeight: 1 }}>
               {last ? fmtPrice(last.close) : "—"}
@@ -1016,27 +1020,6 @@ export default function MobileEsCandles() {
             <div style={{ width: 130, flexShrink: 0 }}>
               <MSegmented options={INTERVALS} value={interval} onChange={setInterval} accent={M_COLOR.blue} />
             </div>
-            {/* Shown only on RTH, which is the non-default. A chart quietly
-                missing its overnight with nothing on screen saying so is the
-                kind of setting you rediscover an hour later wondering why the
-                gap is gone; the default needs no badge. */}
-            {session === "rth" && (
-              <span
-                style={{
-                  ...MONO,
-                  flexShrink: 0,
-                  padding: "2px 6px",
-                  borderRadius: RADIUS.sm,
-                  border: `1px solid ${rgba(M_COLOR.blue, 0.45)}`,
-                  color: M_COLOR.blue,
-                  fontSize: TYPE.micro,
-                  fontWeight: 800,
-                  letterSpacing: "0.08em",
-                }}
-              >
-                RTH
-              </span>
-            )}
             <span style={{ flex: 1 }} />
           <button
             type="button"
@@ -1089,7 +1072,7 @@ export default function MobileEsCandles() {
             strike's y here is a strike's y there. */}
         <div style={{ position: "relative", flex: 1, minWidth: 0, height: "100%" }}>
           <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />
-          {showBubbles && basisOk && (
+          {showBubbles && (
             <canvas
               ref={bubbleCanvasRef}
               style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2 }}
@@ -1168,33 +1151,14 @@ export default function MobileEsCandles() {
             <div style={{ position: "absolute", inset: 0, display: "flex" }}>
               {/* Say which of the two it actually is. This used to read
                   "Connecting to the live feed…" for ANY empty chart, so a
-                  windowing problem (or a quiet weekend) was indistinguishable
-                  from a dead socket — and it is what made this page look like
-                  it could not reconnect when the socket was fine. */}
+                  quiet weekend was indistinguishable from a dead feed — and it
+                  is what made this page look like it could not reconnect when
+                  nothing was wrong with it. */}
               <MEmpty tall>
-                {connected
-                  ? "Loading ES candles…"
-                  : historical.length > 0
-                    ? "No ES bars in range — waiting for the next session"
-                    : "Connecting to the live feed…"}
+                {loaded
+                  ? "No SPX bars in range — waiting for the next session"
+                  : "Loading the SPX tape…"}
               </MEmpty>
-            </div>
-          )}
-          {(showLevels || showBubbles || sidePanel !== "none") && !basisOk && chartCandles.length > 0 && (
-            <div
-              style={{
-                position: "absolute",
-                left: 8,
-                bottom: 26,
-                fontSize: TYPE.micro,
-                color: M_COLOR.faint,
-                background: "rgba(5,8,13,0.72)",
-                padding: "2px 7px",
-                borderRadius: RADIUS.sm,
-                pointerEvents: "none",
-              }}
-            >
-              SPX overlays need a live ES/SPX pair
             </div>
           )}
         </div>
@@ -1209,7 +1173,9 @@ export default function MobileEsCandles() {
               putWall={g.putWall}
               gexFlip={g.flip}
               spot={g.spot || null}
-              basis={g.basis ?? 0}
+              // Chart and ladder are the same instrument now — the rail's basis
+              // offset is structurally zero, not "zero because we lack one".
+              basis={0}
               priceToY={priceToY}
               drawRef={railDrawRef}
             />
@@ -1219,7 +1185,7 @@ export default function MobileEsCandles() {
           <MobileChainRail
             chain={g.chain}
             spot={g.spot}
-            basis={g.basis ?? 0}
+            basis={0}
             width={GUTTER_W}
             priceToY={priceToY}
             drawRef={chainDrawRef}
@@ -1230,19 +1196,8 @@ export default function MobileEsCandles() {
       <MSheet
         open={ovlOpen}
         title="Overlays"
-        subtitle={basisOk ? undefined : "SPX overlays are off — no live ES/SPX pair right now"}
         onClose={() => setOvlOpen(false)}
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.1em", color: M_COLOR.faint }}>
-            SESSION
-          </span>
-          <MSegmented options={SESSIONS} value={session} onChange={setSession} accent={M_COLOR.blue} />
-          <span style={{ fontSize: TYPE.micro, color: M_COLOR.faint, lineHeight: 1.4 }}>
-            RTH is the cash session, 9:30–4:00 ET. ETH adds the overnight tape.
-          </span>
-        </div>
-
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.1em", color: M_COLOR.faint }}>
             SIDE PANEL
@@ -1278,7 +1233,7 @@ export default function MobileEsCandles() {
         )}
         <OverlayToggle
           label="γ levels"
-          hint="Gamma flip and both walls, converted from SPX to ES."
+          hint="Gamma flip and both walls, at their own SPX prices."
           on={showLevels}
           onToggle={() => setShowLevels((v) => !v)}
         />

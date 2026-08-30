@@ -97,6 +97,24 @@
   --color-candle-up: #30d158;
   --color-candle-down: #ff5b5b;
 
+  /* ── Move up / move down ──────────────────────────────────────────────
+     The directional pair the Traders Dashboard and its S&P Sector Wheel
+     paint with, carried across from v2 VERBATIM (HOME_THEME.green /
+     HOME_THEME.red in components/shared/homeTheme.ts).
+
+     Brandon, 2026-08-30, on the port: "up is blue, down is red". v2's token
+     is NAMED green and is in fact a light blue, and the wheel's entire
+     diverging ramp — arc fill, ring wash, callout ink, the hub number —
+     is built on that pair, so it comes across as-is rather than being
+     recoloured to --color-up / --color-down (green/red, and still
+     provisional). Same reasoning as the candle pair above: this is a place
+     where matching v2 beats internal consistency.
+
+     If --color-up / --color-down are ever settled as blue/red, this pair is
+     the one to delete.                                                     */
+  --color-move-up: #8ecae6;
+  --color-move-down: #ef4444;
+
   /* ── GEX bubbles ──────────────────────────────────────────────────────
      Sign sets the hue, wall rank swaps base → hot. Same four values v2's
      EsChartCard draws with. Read as hex here and converted to rgba() at

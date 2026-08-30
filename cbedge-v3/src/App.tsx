@@ -27,9 +27,13 @@ const Premarket = lazy(() => import('@/pages/Premarket'))
 const OptionsChain = lazy(() => import('@/pages/OptionsChain'))
 const Analysis = lazy(() => import('@/pages/Analysis'))
 const Flow = lazy(() => import('@/pages/Flow'))
-const Scanner = lazy(() => import('@/pages/Scanner'))
 const Journal = lazy(() => import('@/pages/Journal'))
-const TestLab = lazy(() => import('@/pages/TestLab'))
+
+// RETIRED 2026-08-30 — Scanner (/scanner) and Test Lab (/test) are gone from
+// v3, along with the ICT, ES Candles, Board and Multi Greek rail slots (they
+// never had pages here, only "coming soon" icons). The BOARD CARDS of the same
+// names — Multi Greek, GEX Candles, Key Levels — are deliberately untouched:
+// see src/board/catalog.tsx. Pages out, cards in.
 
 export default function App() {
   return (
@@ -46,15 +50,13 @@ export default function App() {
                 Miss #4 and the page works in-app but 404s on a hard refresh. */}
             {/* Paths match v2's /app/* routes exactly, so a bookmark, a doc
                 link or a habit transfers by swapping one path segment. That is
-                also why Journal is at /trading and Test Lab at /test. */}
+                also why Journal is at /trading. */}
             <Route path="/traders-dashboard" element={<TradersDashboard />} />
             <Route path="/premarket" element={<Premarket />} />
             <Route path="/options-chain" element={<OptionsChain />} />
             <Route path="/analytics" element={<Analysis />} />
             <Route path="/flow" element={<Flow />} />
-            <Route path="/scanner" element={<Scanner />} />
             <Route path="/trading" element={<Journal />} />
-            <Route path="/test" element={<TestLab />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

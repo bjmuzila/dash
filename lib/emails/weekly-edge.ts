@@ -7,11 +7,15 @@
 // gets reused week to week without touching markup. Sensible defaults are
 // filled in from the most recent week so a blank call still renders.
 //
-// CURRENT ISSUE: week of Aug 24–28, 2026. Recap covers Aug 17–21 (S&P -1.4%
-// snapping a 3-week streak on a bond selloff); the week ahead is July PCE +
-// Q2 GDP revision Wed, NVIDIA/CRM/CRWD Wed after the close, Jackson Hole
-// Thu–Fri with Chair Warsh. DEFAULT_CONF_ROWS is intentionally empty so the
-// results table renders as the dashed placeholder — fill it before sending.
+// CURRENT ISSUE: week of Aug 31 – Sep 4, 2026. Recap covers Aug 24–28 (NVIDIA
+// blowout, hot July PCE, and Warsh's first Jackson Hole flipping September from
+// a cut to a possible HIKE); the week ahead is ISM Mfg + JOLTS Tue, ADP + Beige
+// Book + Broadcom Wed, ISM Services Thu, and the August jobs report Friday.
+//
+// DASHBOARD PLACEHOLDERS: `DEFAULT_CONF_ROWS` is empty, the two result tiles
+// read "[fill before send]", and `showScannerProof` is FALSE — all three render
+// as dashed placeholder blocks so nothing stale ships. Fill them from the owner
+// Results / Scanner pages. The Core Wall auto-buy table below them IS real.
 //
 // Same brand shell/conventions as cb-confidence.ts (see EMAILS_HANDOFF.md),
 // with one deliberate deviation: logo is TOP-LEFT (not centered) per request.
@@ -28,6 +32,12 @@ const AFFILIATE_URL = "https://affiliate.cbedge.net";
 /** Banner art lives in `public/`, so it is served from the main site root. */
 const AFFILIATE_BANNER_URL = `${SITE_URL}/affiliate-program-banner.jpg`;
 /**
+ * Wall-migration chart for the recapped week, also out of `public/`. DATED
+ * FILENAME on purpose — a new one ships each issue, so a generic name would
+ * overwrite the art in every previously sent letter still sitting in inboxes.
+ */
+const WALL_CHART_URL = `${SITE_URL}/wall-migration-2026-08-28.png`;
+/**
  * Tradeify partner link. Third-party host, so `lib/emails/utm.ts` leaves it
  * alone by design (rule 4: never tag someone else's site) — the `?ref=Bzila`
  * is the attribution and must survive untouched.
@@ -40,6 +50,9 @@ function escapeHtml(s: string): string {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string)
   );
 }
+
+/** Same stack the rest of the file spells out inline; newer blocks use this. */
+const SANS = "-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif";
 
 export interface IndexMove { name: string; pct: string; }
 export interface CalendarEvent { day: string; desc: string; }
@@ -75,6 +88,29 @@ export interface ScannerProof {
   resultPct: string;
 }
 
+/**
+ * One Core Wall auto-buy print: the contract the wall bought at a CB window,
+ * what it cost, and its intraday high AFTER entry.
+ *
+ * `peak` IS NOT AN EXIT. It is the highest the contract traded after the buy —
+ * you would have had to sell there to get it. The copy under the table says so,
+ * and it stays there; a peak column presented as realized P&L is the single
+ * easiest way to make this letter dishonest.
+ */
+export interface AutoBuyRow {
+  date: string;
+  /** CB window — "9:45", "10:30" or "12:00". */
+  time: string;
+  /** Contract as the dashboard renders it, e.g. "7750C". */
+  contract: string;
+  entry: string;
+  peak: string;
+  /** Time of that high, e.g. "11:01 AM". */
+  peakAt: string;
+  /** Pre-computed so the template does no arithmetic, e.g. "+441%". */
+  gain: string;
+}
+
 export interface WeeklyEdgeOpts {
   issueLabel?: string;              // e.g. "Week of Jul 27"
   recapHeadline?: string;
@@ -96,9 +132,18 @@ export interface WeeklyEdgeOpts {
   resultsNote?: string;
   /** Second paragraph under the results table — the Estimated Move read. */
   estMoveNote?: string;
-  /** Set false to drop the scanner-proof card from the results section. */
+  /** Scanner-proof card. Defaults FALSE — opt in once there's a catch to show. */
   showScannerProof?: boolean;
   scannerProof?: Partial<ScannerProof>;
+  /** Set false to drop the wall-migration chart. */
+  showWallChart?: boolean;
+  wallChartUrl?: string;
+  wallChartHeadline?: string;
+  wallChartNote?: string;
+  /** Set false to drop the Core Wall auto-buy table. */
+  showAutoBuy?: boolean;
+  autoBuyRows?: AutoBuyRow[];
+  autoBuyNote?: string;
   ctaUrl?: string;
   /** Set false to drop the affiliate-program band entirely. */
   showAffiliate?: boolean;
@@ -116,48 +161,61 @@ export interface WeeklyEdgeOpts {
   email?: string | null;
 }
 
+// Russell rather than the Dow this week on purpose: the gap between mega-cap AI
+// and small caps IS the story, and a flat Dow tile would hide it.
 const DEFAULT_INDEX_MOVES: IndexMove[] = [
-  { name: "S&amp;P 500", pct: "-1.4%" },
-  { name: "Nasdaq", pct: "-2.1%" },
-  { name: "Dow", pct: "-0.9%" },
+  { name: "S&amp;P 500", pct: "+0.5%" },
+  { name: "Nasdaq", pct: "+0.9%" },
+  { name: "Russell 2000", pct: "-1.5%" },
 ];
 
 const DEFAULT_CALENDAR: CalendarEvent[] = [
-  { day: "MON 8/24", desc: "Quiet macro open — <strong>Chicago Fed National Activity Index</strong> and remarks from Treasury Secretary Bessent. PDD and XPEV report; the tape mostly positions for Wednesday." },
-  { day: "TUE 8/25", desc: "<strong>New Home Sales</strong>, the <strong>Richmond Fed</strong> survey and the FHFA House Price Index. Dick's Sporting Goods before the bell, Intuit and Zoom after it." },
-  { day: "WED 8/26", desc: "The heavy one — <strong>July PCE</strong>, Personal Income &amp; Spending and Durable Goods at 8:30, plus the second estimate of <strong>Q2 GDP</strong>. Then <strong>NVIDIA</strong>, Salesforce and CrowdStrike after the close." },
-  { day: "THU 8/27", desc: "<strong>Jobless Claims</strong> and the Kansas City Fed survey, and the <strong>Jackson Hole symposium</strong> opens — this year's theme is financial innovation and its implications for payments and policy." },
-  { day: "FRI 8/28", desc: "Preliminary <strong>benchmark revision to Non-Farm Payrolls</strong> and the Chicago Business Barometer, with <strong>Chair Warsh</strong> speaking from Jackson Hole." },
+  { day: "MON 8/31", desc: "Month-end. <strong>Chicago PMI</strong> and the <strong>Dallas Fed</strong> manufacturing survey, plus August auto sales. Light on catalysts — the tape spends it repricing Friday's Warsh speech." },
+  { day: "TUE 9/1", desc: "<strong>ISM Manufacturing</strong> and <strong>JOLTS job openings</strong> at 10:00, with construction spending and the final August S&amp;P Global manufacturing PMI. JOLTS is the week's first labour read and it now matters more than it did a week ago. Dell and Palo Alto after the close." },
+  { day: "WED 9/2", desc: "<strong>ADP private payrolls</strong> at 8:15, factory orders, and the <strong>Fed's Beige Book</strong>. Then <strong>Broadcom</strong> after the bell — the next real AI-capex read after NVIDIA, alongside Snowflake and HPE." },
+  { day: "THU 9/3", desc: "<strong>ISM Services</strong>, <strong>jobless claims</strong>, the trade balance, productivity and unit labour costs, plus Challenger layoffs. The Cleveland and Chicago Fed presidents speak. Lululemon and DocuSign after the close." },
+  { day: "FRI 9/4", desc: "<strong>The August jobs report</strong> at 8:30 — payrolls, unemployment rate and average hourly earnings. With September now a live hike-or-hold argument, this is the print the whole week is built around." },
 ];
 
 const DEFAULT_EARNINGS: EarningsDay[] = [
-  { label: "Mon 8/24", tickers: [{ symbol: "PDD" }, { symbol: "XPEV" }] },
-  { label: "Tue 8/25", tickers: [{ symbol: "DKS" }, { symbol: "INTU" }, { symbol: "ZM" }, { symbol: "BMO" }, { symbol: "HEI" }] },
-  { label: "Wed 8/26 — NVIDIA reports after the close", tickers: [{ symbol: "NVDA" }, { symbol: "CRM" }, { symbol: "CRWD" }, { symbol: "SNPS" }, { symbol: "KSS" }, { symbol: "ANF" }] },
-  { label: "Thu 8/27 — retail + software double header", tickers: [{ symbol: "BBY" }, { symbol: "DG" }, { symbol: "DLTR" }, { symbol: "MRVL" }, { symbol: "WDAY" }, { symbol: "ADSK" }] },
-  { label: "Fri 8/28", tickers: [{ symbol: "MNSO" }] },
+  { label: "Mon 8/31", tickers: [{ symbol: "SAIC" }] },
+  { label: "Tue 9/1", tickers: [{ symbol: "DELL" }, { symbol: "PANW" }, { symbol: "MDB" }, { symbol: "MDT" }, { symbol: "NIO" }, { symbol: "GTLB" }] },
+  { label: "Wed 9/2 — Broadcom after the close", tickers: [{ symbol: "AVGO" }, { symbol: "SNOW" }, { symbol: "HPE" }, { symbol: "NTAP" }, { symbol: "OLLI" }] },
+  { label: "Thu 9/3", tickers: [{ symbol: "LULU" }, { symbol: "DOCU" }, { symbol: "CIEN" }, { symbol: "CPB" }, { symbol: "ASAN" }] },
+  { label: "Fri 9/4", tickers: [{ symbol: "ABM" }] },
 ];
 
 /**
- * Daily Core Bullseye rows for Aug 17–21, newest first, taken off the owner
- * Results page.
+ * Core Wall auto-buy prints, week of Aug 24–28. These are the FIVE BEST of the
+ * fifteen the wall took that week — 6 of the 15 peaked at 2x or better, 14 of 15
+ * peaked above entry, and one (8/24 10:30, 7630P) never ticked up at all. The
+ * note under the table states that split; do not print the winners without it.
+ */
+const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [
+  { date: "08-28", time: "10:30", contract: "7750C", entry: "$4.65", peak: "$25.15", peakAt: "11:01 AM", gain: "+441%" },
+  { date: "08-26", time: "12:00", contract: "7685C", entry: "$1.83", peak: "$7.70", peakAt: "3:04 PM", gain: "+321%" },
+  { date: "08-27", time: "10:30", contract: "7730C", entry: "$4.55", peak: "$14.20", peakAt: "1:10 PM", gain: "+212%" },
+  { date: "08-27", time: "9:45", contract: "7725C", entry: "$6.95", peak: "$18.50", peakAt: "1:10 PM", gain: "+166%" },
+  { date: "08-28", time: "12:00", contract: "7720P", entry: "$8.75", peak: "$23.00", peakAt: "1:10 PM", gain: "+163%" },
+];
+
+/**
+ * Daily Core Bullseye rows, newest first, off the owner Results page.
+ *
+ * EMPTY ON PURPOSE for this issue — that renders the dashed "[ADD CB EDGE
+ * SCREENSHOT / CONFIDENCE TABLE HERE]" block rather than last week's numbers.
+ * Fill from the Results page for Aug 24–28. Row shape:
+ *   { date: "08-28", s945: "7790", c945: "2.1", hit945: true,
+ *                    s1030: "7750", c1030: "3.1", hit1030: true,
+ *                    s1200: "7720", c1200: "0.1", hit1200: true },
  *
  * THE ✓/✗ IS THE ≤5-POINT COLUMN. The Results page scores three thresholds per
  * window (≤5 / ≤10 / ≤15); this table has room for one, and every previous
- * issue used ≤5, so ≤5 it stays. Where that hides something — the 9:45 read on
- * 8/21 and 8/20 missed ≤5 but cleared ≤15 — `resultsNote` says so in words
- * rather than the table quietly implying a whiff.
- *
- * Empty array is still meaningful: it renders the dashed
- * "[ADD CB EDGE SCREENSHOT / CONFIDENCE TABLE HERE]" placeholder instead.
+ * issue used ≤5, so ≤5 it stays — do not switch to ≤15 to flatter a week.
+ * Where ≤5 hides something (a read that missed 5 but cleared 15), say it in
+ * `resultsNote` rather than letting the table imply a clean whiff.
  */
-const DEFAULT_CONF_ROWS: ConfRow[] = [
-  { date: "08-21", s945: "7640", c945: "14.7", hit945: false, s1030: "7680", c1030: "0.3", hit1030: true, s1200: "7700", c1200: "4.4", hit1200: true },
-  { date: "08-20", s945: "7710", c945: "12.2", hit945: false, s1030: "7700", c1030: "2.2", hit1030: true, s1200: "7670", c1200: "0.6", hit1200: true },
-  { date: "08-19", s945: "7730", c945: "0.1", hit945: true, s1030: "7730", c1030: "0.1", hit1030: true, s1200: "7740", c1200: "1.6", hit1200: true },
-  { date: "08-18", s945: "7700", c945: "0.0", hit945: true, s1030: "7700", c1030: "0.0", hit1030: true, s1200: "7700", c1200: "0.0", hit1200: true },
-  { date: "08-17", s945: "7800", c945: "19.5", hit945: false, s1030: "7770", c1030: "0.0", hit1030: true, s1200: "7770", c1200: "0.0", hit1200: true },
-];
+const DEFAULT_CONF_ROWS: ConfRow[] = [];
 
 /**
  * The week's scanner example. Flagged Aug 14 on the 2026-08-21 expiry, so the
@@ -185,50 +243,67 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "issueLabel" | "recapHeadline" | "recapBody" | "indexMoves" | "aheadHeadline" | "calendarEvents" |
   "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
   "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
-  "confRows" | "resultsNote" | "estMoveNote" | "showScannerProof" | "ctaUrl" |
+  "confRows" | "resultsNote" | "estMoveNote" | "showScannerProof" |
+  "showWallChart" | "wallChartUrl" | "wallChartHeadline" | "wallChartNote" |
+  "showAutoBuy" | "autoBuyRows" | "autoBuyNote" | "ctaUrl" |
   "showAffiliate" | "affiliateHeadline" | "affiliateBody" | "affiliateUrl" | "affiliateBannerUrl" |
   "showTradeify" | "tradeifyHeadline" | "tradeifyBody" | "tradeifyUrl" | "tradeifyCode">>
   // scannerProof is Partial<> on the way in and complete on the way out, so it
   // is intersected rather than Pick'd — Required<Partial<X>> is still Partial<X>.
   & { scannerProof: ScannerProof } {
   return {
-    issueLabel: opts.issueLabel || "Week of Aug 24–28",
-    recapHeadline: opts.recapHeadline || "Bonds broke the streak — yields ripped and the Nasdaq wore it",
+    issueLabel: opts.issueLabel || "Week of Aug 31 – Sep 4",
+    recapHeadline: opts.recapHeadline || "NVIDIA carried the week. Then Warsh put a rate hike back on the table.",
     recapBody: opts.recapBody || [
-      "The S&amp;P 500 fell 1.4% on the week, snapping a three-week winning streak and leaving it about 1.6% below the record close it set on August 13. The Nasdaq took the worst of it at -2.1%; the Dow got off lightest at -0.9%. The damage was rate-driven: the 10-year yield pushed to 4.737%, its biggest one-week gain since July 31, as a wave of AI-related debt issuance and renewed inflation anxiety hit the long end.",
-      "Treasury Secretary Bessent tried to steady the tape — doubling long-term buybacks to at least $4 billion per operation through November — but yields snapped straight back to their highs. Away from equities the risk bid was alive and well: gold added 2.4% to $4,680.60 for a third straight winning week, bitcoin ran nearly 20% in 48 hours to almost $80,000 (its best week in two years), and WTI gained 6.9% to $87.06 as Iran headlines stayed live. Friday finally caught a bid — Dow +0.98%, S&amp;P and Nasdaq both +0.43% — but not enough to save the week.",
+      "Two events, and they pulled in opposite directions. NVIDIA reported Wednesday night with $96.2 billion in revenue — about $4 billion past consensus, $89.0 billion of it data centre — and then guided to roughly 70% revenue growth next fiscal year against the 44% the street had penciled in. The stock ran nearly 9% Thursday, its best day since April 2025. Salesforce added about 23% and CrowdStrike about 21% on their own prints. The Nasdaq closed the week +0.9%, the S&amp;P +0.5%.",
+      "Friday took some of it back. In his first Jackson Hole keynote as Chair, Kevin Warsh said the Fed's predominant focus right now should be on prices — with July PCE running 3.7% and both headline and core unchanged from June, inflation has stopped improving rather than kept falling. Odds of a September <em>hike</em> jumped from 35% to 57%, short-end yields added about 8bp, and the Russell 2000 finished the week -1.5% while the mega-caps held their gains. Gold fell 3.3%, bitcoin 3.2% to about $78,000, and the VIX closed at 14.35 — a market pricing very little fear into a September meeting that just became a live argument.",
     ],
     indexMoves: opts.indexMoves || DEFAULT_INDEX_MOVES,
-    aheadHeadline: opts.aheadHeadline || "PCE Wednesday morning, NVIDIA Wednesday night, Jackson Hole Thursday — three events set the tape",
+    aheadHeadline: opts.aheadHeadline || "Four labour prints in four days, and the August jobs report on Friday",
     calendarEvents: opts.calendarEvents || DEFAULT_CALENDAR,
     earningsDays: opts.earningsDays || DEFAULT_EARNINGS,
-    aheadNote: opts.aheadNote || "Three things do the work this week. Wednesday's July PCE is the last major inflation print before the September meeting, with consensus at +0.2% on core. Wednesday night NVIDIA reports into an expectation of roughly 97% revenue growth — the same AI-capex story the long end of the curve has spent two weeks repricing. Then Jackson Hole hands Chair Warsh the microphone with rates already coming off their sharpest one-week move since July. Expect gap risk Thursday morning and again into Friday's benchmark payroll revision.",
-    oilHeadline: opts.oilHeadline || "Hormuz still isn't open — but Tehran is finally talking about ending it",
-    oilPrice: opts.oilPrice || "$94.39",
-    oilChangeNote: opts.oilChangeNote || "Brent, Aug 21 · +0.7% on the day, +39.4% YoY · WTI $87.06, +6.9% on the week",
+    aheadNote: opts.aheadNote || "Warsh changed what this week is about. Seven days ago the argument was how big the September cut would be; it is now whether the Fed hikes, and every labour print between here and Friday feeds it — JOLTS Tuesday, ADP Wednesday, claims and ISM Services Thursday, then the August employment report Friday morning. A hot number and the hike odds keep climbing into the meeting. Broadcom Wednesday night is the separate question: whether NVIDIA's guide was company-specific or the whole AI-capex cycle re-accelerating. Expect the 9:45 window to open into a gap on Wednesday and Friday in particular.",
+    oilHeadline: opts.oilHeadline || "The war premium is draining out of crude",
+    oilPrice: opts.oilPrice || "$83.44",
+    oilChangeNote: opts.oilChangeNote || "WTI, Aug 28 · roughly flat on the week · −1.2% on the month · +30.4% YoY",
     oilBody: opts.oilBody || [
-      "Crude posted its biggest weekly gain since late July as the Strait of Hormuz standoff dragged into another week. President Trump threatened \"TREMENDOUS Economic Consequences\" for any nation still trading with Iran, and the Treasury followed with a tighter sanctions package — enough to keep a war premium in every barrel even as tanker traffic through the region held up better than the headlines implied.",
-      "Friday brought the first real crack in the deadlock: Iranian President Pezeshkian said Tehran would rather conclude the war while it still holds a position of strength. Oil barely moved on it, which tells you how little this market is willing to price a deal it hasn't seen. Until the strait actually reopens, crude stays a headline-driven overnight risk — and that is gap risk landing straight into the 9:45 CB window.",
+      "This is the first week in months that oil was not the story. Crude finished around $83.44 and barely moved, down about a percent on the month — because the market has quietly re-rated the Iran situation from an imminent threat to physical supply into an economic and sanctions confrontation. Goldman puts Persian Gulf exports back at 15–16 million barrels a day. That is still well under the 22–24 million before the conflict, but it is a long way from March's 5–6 million trough.",
+      "Iran and Oman have agreed a revenue-sharing framework for the strait, though Tehran was careful to say that does not mean an immediate reopening, and the administration has shown no interest in reviving the June agreement that collapsed. Chevron and Halliburton caught a bid on reports of expanded Venezuelan production. The practical read for the open: crude is no longer the thing setting overnight gap risk. This week that job belongs to the labour data.",
     ],
-    // 12 of 15 reads inside 5 points: 5/5 at 10:30, 5/5 at 12:00, 2/5 at 9:45.
-    // The headline number is the two clean windows; 9:45 is stated in the note
-    // rather than averaged away.
-    coreBullseyePct: opts.coreBullseyePct || "100%",
-    coreBullseyeSub: opts.coreBullseyeSub || "&le;5 pts &middot; 10:30 &amp; 12:00 CB &middot; 5 of 5 sessions",
-    // A losing week, reported as one. 96-138 on 234 scored names.
-    // A "loss" here is a BREACH — price left the estimated-move band. Low VIX
-    // narrows the band while realized range stays put, so breaches come earlier
-    // and the score falls. Do not rewrite the note as "failed to reach" — that
-    // is the opposite of what happened.
-    estMovePct: opts.estMovePct || "41.0%",
-    estMoveSub: opts.estMoveSub || "96-138 &middot; 234 scored (week of 8/21)",
+    coreBullseyePct: opts.coreBullseyePct || "—",
+    coreBullseyeSub: opts.coreBullseyeSub || "[fill before send]",
+    // A "loss" here is a BREACH — price left the estimated-move band. Do not
+    // write the note as "failed to reach"; that is the opposite of what happens.
+    //
+    // 82.4% (192-41 of 233 scored) after 41.0% the week before, on a VIX that
+    // stayed low both weeks — so low vol alone does not explain either number.
+    // What changed is the RANGE: last week the tape kept travelling through
+    // narrowed bands, this week it sat between the walls. Note ties it to the
+    // wall-migration chart directly BELOW it, which is the same story in a
+    // picture — if that section ever moves, fix "the chart below" in the copy.
+    // Core Board is 17-3 / 85.0% on 20 of 22 tickers; it rides in the note
+    // rather than a third tile, so the tile row stays a clean two-up.
+    estMovePct: opts.estMovePct || "82.4%",
+    estMoveSub: opts.estMoveSub || "192-41 &middot; 233 of 404 tickers scored",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
-    resultsNote: opts.resultsNote ||
-      "A ✓ means the Core Bullseye landed within 5 points of where SPX actually printed. Across Aug 17–21 that was 12 of 15 reads — 5 of 5 at both 10:30 and 12:00, and 2 of 5 at 9:45. The two 9:45 misses (8/20 and 8/21) still came in inside 15 points; the 8/17 open at 19.5 was the only genuine whiff of the week. Five sessions is a small sample, which is why the daily rows are printed rather than summarised.",
+    resultsNote: opts.resultsNote || "[ADD CORE BULLSEYE SUMMARY — hit rate per window, what a ✓ means, and the week's misses]",
     estMoveNote: opts.estMoveNote ||
-      "Estimated Move had a bad week, and it goes in the letter the same as a good one: <strong style=\"color:#ffffff;\">96 wins against 138 losses</strong> on 234 scored names, 41.0%. The mechanism is simple. The VIX got destroyed, so the bands price narrower — but the tape is still travelling the same distance it was. Same range, smaller box: names breach the estimated move earlier in the session and the read scores as a miss. That is an implied-versus-realized gap, not a broken model, and it closes when implied vol catches back up to what the market is actually doing.",
-    showScannerProof: opts.showScannerProof !== false,
+      "Estimated Move turned it around: <strong style=\"color:#ffffff;\">192 wins against 41 losses</strong> on 233 scored names, 82.4% — and <strong style=\"color:#ffffff;\">17-3, 85.0%</strong>, on the 20 scored names of the Core Board. The week before that number was 41.0%, and it went in this letter the same way this one does. The reason for the swing is the chart below. A win is price staying inside the band; with SPX living between the call and put walls all week, the bands mostly held. The week before, the vol crush had narrowed those bands while the tape kept covering the same distance, so price walked out of them early. Same model — the range behaved differently.",
+    // OFF for this issue — no scanner catch supplied yet, so the section renders
+    // a dashed placeholder instead of last week's MRNA card. Flip to true (or
+    // just delete the `showScannerProof: false` at the call site) once there is
+    // one, and override `scannerProof` with the new numbers.
+    showScannerProof: opts.showScannerProof === true,
     scannerProof: { ...DEFAULT_SCANNER_PROOF, ...(opts.scannerProof || {}) },
+    showWallChart: opts.showWallChart !== false,
+    wallChartUrl: opts.wallChartUrl || WALL_CHART_URL,
+    wallChartHeadline: opts.wallChartHeadline || "Five sessions, and price never left the walls",
+    wallChartNote: opts.wallChartNote ||
+      "Green is the call wall, red is the put wall, white is spot — 391 minutes of price per session, Aug 24 through Aug 28. Price spent the week inside the band. Monday through Wednesday it chopped between them; Thursday the walls stepped up ahead of the tape and the rally stalled into the call wall; Friday's spike tagged it and reverted the same session. These are the <strong style=\"color:#ffffff;\">recorded</strong> levels — written down at the time and timestamped, not redrawn afterwards to fit the chart. It closed the week at 7,711.48 with the put wall at 7,700 and the call wall at 7,720.",
+    showAutoBuy: opts.showAutoBuy !== false,
+    autoBuyRows: opts.autoBuyRows || DEFAULT_AUTO_BUY_ROWS,
+    autoBuyNote: opts.autoBuyNote ||
+      "Five of the fifteen auto-buys the wall took last week. The other ten: <strong style=\"color:#ffffff;\">six of the fifteen peaked at 2x or better</strong>, fourteen traded above entry at some point, and one — the 10:30 read on 8/24 — never ticked up at all. <strong style=\"color:#ffffff;\">Peak is the contract's intraday high after entry, not an exit.</strong> Nobody sells the high; you would have had to be there and take it. This is what the wall bought and what it was worth at its best, printed so the good days and the flat one sit in the same table.",
     ctaUrl: opts.ctaUrl || PRICING_URL,
     // `!== false` rather than `||` — the band is on by default, and passing
     // showAffiliate: false has to actually turn it off.
@@ -249,7 +324,7 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   };
 }
 
-export const WEEKLY_EDGE_SUBJECT = "The Weekly Edge — NVIDIA, PCE and Jackson Hole all land in one week";
+export const WEEKLY_EDGE_SUBJECT = "The Weekly Edge — Warsh put a September hike back on the table, and jobs Friday decides it";
 
 /** Plain-text fallback. */
 export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
@@ -297,6 +372,21 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     "",
     strip(o.estMoveNote),
     "",
+    ...(o.showWallChart ? [
+      "WALL MIGRATION — AUG 24–28",
+      strip(o.wallChartHeadline),
+      strip(o.wallChartNote),
+      o.wallChartUrl,
+      "",
+    ] : []),
+    ...(o.showAutoBuy && o.autoBuyRows.length ? [
+      "CORE WALL AUTO BUY — LAST WEEK'S BEST",
+      ...o.autoBuyRows.map((r) =>
+        `  ${r.date} ${r.time.padEnd(5)} ${r.contract.padEnd(6)} ${r.entry} -> ${r.peak}  ${r.gain}`
+      ),
+      strip(o.autoBuyNote),
+      "",
+    ] : []),
     ...(o.showScannerProof ? (() => {
       const p = o.scannerProof;
       return [
@@ -345,6 +435,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
   const affiliateHref = escapeHtml(o.affiliateUrl);
   const affiliateBanner = escapeHtml(o.affiliateBannerUrl);
   const tradeifyHref = escapeHtml(o.tradeifyUrl);
+  const wallChart = escapeHtml(o.wallChartUrl);
   // Every scanner field is interpolated into the card below, so escape once
   // here rather than at each of the dozen call sites.
   const sp = Object.fromEntries(
@@ -444,7 +535,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
 <title>${escapeHtml(WEEKLY_EDGE_SUBJECT)}</title>
 </head>
 <body style="margin:0;padding:0;background:#05060A;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Bonds snapped the win streak and oil ripped 7%, this week brings July PCE, NVIDIA and Jackson Hole — plus the affiliate program is now live.</div>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">NVIDIA blew the doors off and Warsh took the September cut away — now four labour prints and Friday's jobs report decide it.</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#05060A;">
     <tr>
       <td align="center" style="padding:32px 16px;">
@@ -516,7 +607,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               <div style="font:800 17px/1.35 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:8px;">The dashboard called it — here's the scorecard</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr>
                 ${resultTile("Core Bullseye", o.coreBullseyePct, o.coreBullseyeSub, "#38BDF8", "50%")}
-                ${resultTile("Estimated Move", o.estMovePct, o.estMoveSub, "#FF4757", "50%")}
+                ${resultTile("Estimated Move", o.estMovePct, o.estMoveSub, "#00E676", "50%")}
               </tr></table>
 
               ${o.confRows.length ? `
@@ -529,6 +620,42 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               </table>`}
               <div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:14px;">${o.resultsNote}</div>
               <div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:12px;">${o.estMoveNote}</div>
+
+              <!-- Wall migration. The chart IS the argument for the section, so
+                   it sits above the auto-buy table: here are the walls, then
+                   here is what the wall bought inside them. -->
+              ${o.showWallChart ? `
+              <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">Wall migration &mdash; Aug 24&ndash;28</div>
+              <div style="font:800 15px/1.35 ${SANS};color:#ffffff;margin-bottom:10px;">${o.wallChartHeadline}</div>
+              <img src="${wallChart}" alt="SPX wall migration, five sessions to 2026-08-28 — call wall, put wall and spot" width="584" style="display:block;width:100%;max-width:584px;height:auto;border:1px solid rgba(255,255,255,0.10);border-radius:10px;">
+              <div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.wallChartNote}</div>` : ""}
+
+              <!-- Core Wall auto-buy. Gold box — the one thing on the page a
+                   reader should stop on. The PEAK column is an intraday high,
+                   never an exit; the note below the table says so. -->
+              ${o.showAutoBuy && o.autoBuyRows.length ? `
+              <div style="font:800 10px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">Core Wall auto buy — last week's best</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:2px solid #FFB300;border-radius:12px;background:#080B11;border-collapse:separate;box-shadow:0 0 0 1px rgba(255,179,0,0.18);">
+                <tr>
+                  <td style="padding:9px 10px 9px 14px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Date</td>
+                  <td style="padding:9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">CB</td>
+                  <td style="padding:9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Contract</td>
+                  <td align="right" style="padding:9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Entry &rarr; Peak</td>
+                  <td align="right" style="padding:9px 14px 9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Best</td>
+                </tr>
+                ${o.autoBuyRows.map((r, i) => {
+                  const edge = i < o.autoBuyRows.length - 1 ? "border-bottom:1px solid rgba(255,255,255,0.06);" : "";
+                  return `
+                <tr>
+                  <td style="padding:9px 10px 9px 14px;font:700 12px/1.4 ${SANS};color:#ffffff;white-space:nowrap;${edge}">${escapeHtml(r.date)}</td>
+                  <td style="padding:9px 10px;font:600 12px/1.4 ${SANS};color:#9fb3c8;white-space:nowrap;${edge}">${escapeHtml(r.time)}</td>
+                  <td style="padding:9px 10px;font:700 12px/1.4 ${SANS};color:#8ECAE6;white-space:nowrap;${edge}">${escapeHtml(r.contract)}</td>
+                  <td align="right" style="padding:9px 10px;font:600 12px/1.4 ${SANS};color:#d4dde6;white-space:nowrap;${edge}">${escapeHtml(r.entry)} <span style="color:#6b7d8f;">&rarr;</span> <span style="color:#ffffff;font-weight:700;">${escapeHtml(r.peak)}</span></td>
+                  <td align="right" style="padding:9px 14px 9px 10px;font:800 12px/1.4 ${SANS};color:#00E676;white-space:nowrap;${edge}">${escapeHtml(r.gain)}</td>
+                </tr>`;
+                }).join("")}
+              </table>
+              <div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.autoBuyNote}</div>` : ""}
 
               ${o.showScannerProof ? `
               <!-- Flow-scanner example. The card is rebuilt in HTML, not
@@ -567,7 +694,11 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               </table>
               <div style="font:400 12px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;margin-top:10px;">
                 Flagged on the ${sp.expiry} expiry with ${sp.ticker} at ${sp.spot} — off the scanner in real time, not a backtest. One contract is not a track record, and options can and do go to zero.
-              </div>` : ""}
+              </div>` : `
+              <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">What the flow scanner caught</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed rgba(255,255,255,0.18);border-radius:10px;">
+                <tr><td align="center" style="padding:22px 16px;font:600 12px/1.5 ${SANS};color:#6b7d8f;">[ADD THIS WEEK'S SCANNER CATCH]</td></tr>
+              </table>`}
             </td>
           </tr>
 
@@ -578,8 +709,8 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                 <tr>
                   <td align="center" style="padding:26px 20px;">
                     <div style="font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.16em;text-transform:uppercase;color:#00E676;">Code EDGE3 · $400/yr instead of $1,000</div>
-                    <div style="font:900 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:10px;">NVIDIA, PCE and Jackson Hole in one week. <span style="color:#00E676;">Don't trade it blind.</span></div>
-                    <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">Live GEX levels, Core Bullseye confidence scoring and estimated-move tracking — full annual access for $400 with code <strong style="color:#ffffff;">EDGE3</strong>, instead of $1,000.</div>
+                    <div style="font:900 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:10px;">Jobs Friday, with a hike on the table. <span style="color:#00E676;">Don't trade it blind.</span></div>
+                    <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">Live GEX levels, Core Bullseye confidence scoring, the Core Wall auto buy and estimated-move tracking — full annual access for $400 with code <strong style="color:#ffffff;">EDGE3</strong>, instead of $1,000.</div>
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;"><tr>
                       <td align="center" style="border-radius:12px;background:#00C853;">
                         <a href="${cta}" style="display:inline-block;padding:14px 34px;font:800 15px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#04140A;text-decoration:none;border-radius:12px;">Get Annual Access →</a>
