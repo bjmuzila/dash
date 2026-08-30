@@ -639,17 +639,31 @@ export default function GammaBellCurve({
             {/* ONE BELL PER SIDE. Amber on this card means "the fitted normal"
                 — the mass curve above is amber for the same reason — so the
                 three curves read as one idea applied three times rather than
-                three unrelated overlays. Thinner than the mass fit (1.8 vs
-                2.2) because these two sit ON their bars rather than over a
-                single histogram, and a heavy stroke there hides the bars it is
-                describing. */}
+                three unrelated overlays.
+
+                ── 2026-08-29: THESE TWO ARE BACKGROUND, THE BARS ARE THE SUBJECT
+                They were 1.8px at 0.95 opacity, which is nearly the weight of
+                the mass fit above — and on this pane that is wrong twice over.
+                The mass curve sits OVER one histogram in its own space; these
+                two are drawn straight THROUGH the green and red bars they are
+                describing, and at full amber they were the first thing the eye
+                landed on. Two bright curves also read as a second series rather
+                than as a summary of the bars underneath.
+
+                Now 1.1px at 0.42 with a long dash: still unmistakably the same
+                amber idea, still traceable end to end, but the bars carry the
+                pane and the fit is what you look for rather than what looks at
+                you. The dash does the heavy lifting — it says "this is a model,
+                not data" without needing weight to say it. The numbers are on
+                the pane labels below either way, so nothing here is the only
+                copy of anything. */}
             {longPath && (
-              <path d={longPath} fill="none" stroke="var(--amber)" strokeWidth={1.8}
-                strokeLinejoin="round" opacity={0.95} />
+              <path d={longPath} fill="none" stroke="var(--amber)" strokeWidth={1.1}
+                strokeDasharray="7 5" strokeLinejoin="round" strokeLinecap="round" opacity={0.42} />
             )}
             {shortPath && (
-              <path d={shortPath} fill="none" stroke="var(--amber)" strokeWidth={1.8}
-                strokeLinejoin="round" opacity={0.95} />
+              <path d={shortPath} fill="none" stroke="var(--amber)" strokeWidth={1.1}
+                strokeDasharray="7 5" strokeLinejoin="round" strokeLinecap="round" opacity={0.42} />
             )}
           </g>
           {/* The two sides named on the pane itself, so "green/red" never has

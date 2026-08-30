@@ -1,95 +1,79 @@
 # Changelog
 
-## 2026-08-30 - Deploy fix: a backtick in a comment ended the studio's template literal
+## 2026-08-30 - Logo 404 on owner.cbedge.net, and re-applying two fixes a rollback dropped
 
-Edited: `owner-vite/src/pages/studioHtml.ts`.
+Edited: `owner-vite/nginx.conf`, `owner-vite/src/pages/studioHtml.ts`,
+`cbedge-v3/src/board/gexCandles/settings.ts`.
 
-The VPS build failed at `owners build 6/6`:
+**The logo.** `public/cbedge3.0.png` is in the repo root's `public/`, which
+belongs to the Next app. The owners container only holds owner-vite's own
+`dist`, and its nginx has an explicit allowlist of root-public paths to proxy
+back to the dashboard - `signals.txt`, `landing-bg.png`, `cb-edge-logo.png`.
+`cbedge3.0.png` was not on it, so the request fell through to `location /` and
+`try_files ... /index.html`, and the `<img>` was handed a page of HTML. That is
+why it rendered as a broken icon rather than 404ing: nginx answered 200 with the
+SPA shell.
 
-```
-/app/src/pages/studioHtml.ts:351:41: ERROR: Expected ";" but found "vals"
-```
+Added to the allowlist, with a comment saying what the list is for so the next
+brand asset does not repeat this.
 
-My fault, and worth writing down because the trap is not obvious. The entire
-studio document is one `String.raw` template literal, so a backtick ANYWHERE in
-it - including inside a `//` comment in the studio's own JavaScript - closes the
-literal early and everything after it becomes broken TypeScript. Two comments I
-added yesterday used backticks for code-quoting out of habit: one on `bestSnap`,
-one in the emweek template's header. Both are now plain text, with a note at the
-first one saying why.
+Also: a logo that fails to load now says so on the canvas - "Logo not found at
+/cbedge3.0.png - double-click to load one" - instead of drawing a 12px broken
+glyph that reads like a layout bug. Re-attached on restore, and it stands down
+for a hand-loaded image so a user's own failed upload keeps its own error.
 
-Why my checks missed it: I was validating with
-`src.match(/String\.raw\`([\s\S]*)\`;/)`, which is greedy - it matched from the
-first backtick all the way to the last one in the file, so the stray ticks in
-the middle were swallowed and the extracted HTML looked fine. The check could
-not see the bug it was supposed to catch.
+**Two fixes came back from the dead.** The deploy script's suggested
+`git reset --hard HEAD~1` rolled the working tree back past both of yesterday's
+build fixes. Re-applied, unchanged:
 
-Replaced with `verify.mjs`, which runs what the build actually runs:
+- `studioHtml.ts` - two comments were using backticks to quote code. The whole
+  document is one `String.raw` template literal, so the first one closed it
+  mid-file and esbuild died with `Expected ";" but found "vals"`. Plain text
+  now, with a note at the spot saying why.
+- `settings.ts` - `isAutoBucket` back to `(v: BubbleBucket): v is 'auto'`. As a
+  plain `boolean` it does not narrow, and `tsc --noEmit` fails the v3 build at
+  `GexCandlesCard.tsx:408` handing `'auto'` to a `1 | 5 | null`.
 
-1. `esbuild.transform(src, {loader:'ts'})` - the exact step that failed, so a
-   syntax error surfaces here instead of on the VPS.
-2. Backtick count must be exactly 2, and `${` must not appear at all - the two
-   ways a String.raw document can be broken from the inside.
-3. Every inline `<script>` still parses.
+The studio's own feature work (undo/redo, the FX board, guides, the keyed logo)
+survived on disk; only its changelog entry was lost with the reset.
 
-All four pass, and a browser smoke test after the fix loads clean: 16 templates,
-28 FX buttons, the keyed logo, and emweek rendering 26 layers with FX and a 4px
-border, no page errors.
+Verified: `verify.mjs` clean on all four checks including the real
+`esbuild.transform`; the `tsc --strict` repro for the bucket narrowing still
+passes and still fails when reverted; and the studio loaded twice in a browser -
+once with the logo served, once with the server deliberately answering
+`index.html` for it the way nginx was - giving `naturalWidth 2064` and the
+fallback message respectively, no page errors either way.
 
-Nothing but the two comments changed - no behaviour touched. Rerun the deploy.
+## 2026-08-29 - v3 Multi Greek: a third of the card was chrome; ladder pans by hand
 
-## 2026-08-30 - v3 build fix: isAutoBucket has to be a type predicate
+Edited: `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`.
 
-Edited: `cbedge-v3/src/board/gexCandles/settings.ts`.
+On a three-column-wide card the stack above the ladder — card header, panel
+header, column header, TOTAL row — was taking about a third of the card, and
+every row of it was one fewer strike on screen.
 
-`npm run build` failed on `tsc --noEmit`:
+**Column headers and TOTAL are one block now.** They were two grids with their
+own padding and their own bottom border; they are one grid with three lines per
+column (expiry, date, net). Nothing was dropped.
 
-```
-GexCandlesCard.tsx:408:11 - error TS2322: Type 'BubbleBucket | null' is not
-assignable to type '1 | 5 | null'.  Type '"auto"' is not assignable...
-    bucketMin: isAutoBucket(settings.bubbleBucket) ? null : settings.bubbleBucket,
-```
+**The panel header is one tight row.** The `BOARD` badge is gone — the board's
+panel is marked by an accent border on its ticker box instead, which says the
+same thing in no horizontal space and was the element pushing that row to wrap.
+The ticker box is 14px in 76px (was 17px in 92px) and the paddings are halved.
 
-`isAutoBucket` was declared `(v: BubbleBucket): boolean`. A plain boolean tells
-the compiler nothing, so the false branch of the ternary still had the full
-`1 | 5 | 'auto'` — and `ChartDrawOpts.bucketMin` is `1 | 5 | null`. The runtime
-behaviour was already correct; only the type was silent about it.
+**Toolbar buttons are short.** `+ Ticker 1/4` and `⚙ Board` wrapped the card
+header onto a second row at this width; they are `＋ 1/4` and `⚙`, with the full
+sentence in each `title`.
 
-Signature is now `(v: BubbleBucket): v is 'auto'`, which narrows the else branch
-to `1 | 5` and lets the call site stay as written. Nothing else changed, and the
-one other caller (the select's `value=` on line 549) is unaffected.
-
-Verified against an isolated repro carrying the exact declarations from
-`settings.ts` and `chart.ts` plus line 408 verbatim: clean under `tsc --strict`
-with the predicate, and swapping the return type back to `boolean` reproduces
-TS2322 at the same position — so this is the whole fix, not a symptom of it.
-
-## 2026-08-30 - Logo mirror: 811 on disk, and --from-earnings now gets past the prod auth gate
-
-Edited: `scripts/fetch-ticker-logos.mjs`.
-
-The `--all` run against prod answered **401** on the earnings leg.
-`server-v2/proxy-auth.js` runs with `PROXY_AUTH_REQUIRED=1` there, so `/proxy/*`
-wants a session cookie the script has no way to hold. It has one bypass built for
-exactly this - the `x-internal-token` shared secret its own in-process cron
-callers use - so the script sends it when `INTERNAL_API_TOKEN` is set locally,
-and says so by name when a 401 comes back without one. Unset, nothing changes:
-a run against localhost behaves as before.
-
-Skipping that leg is survivable, since `--from-anticipated` covers the board's
-default view. It is just the only leg that catches a name the anticipated list
-has not been taught about yet.
-
-**Where the mirror stands.** 424 from the zip + 188 from this run = ~811 on disk.
-`WB` came back as non-image bytes from the GitHub set and was correctly rejected
-rather than written as a broken file.
-
-**95 with no source in either GitHub or Wikidata.** Ten are on the current board
-and will keep drawing ticker-text chips until someone crops them into
-`public/logos` and adds them to `MANUAL`: AGX DOO HMR KNOP MMED PL RZLV SSL VSCO
-WLY. Six more are S&P names that have been in `SEED` all along and simply are not
-in the upstream repo under those keys - BRK.B, ELV, CNQ, TRP, SNDK, IDXX - so
-their absence is upstream, not a bad guess in the seed list.
+**No scrollbar. Grab and drag, or wheel.** The track was eating a visible slice
+of the numbers. The box is still `overflow-y-auto` — only the bar is hidden, so
+the wheel is unchanged — and press-and-drag now pans it like a chart. Three
+details keep that from eating the cell click: a 4px threshold so a wobbly click
+is still a click, pointer capture taken only once that threshold is crossed, and
+a suppress flag consumed in the CLICK CAPTURE phase, since click fires after
+pointerup and that is the last moment it can be stopped. A real pan also sets the
+re-centring latch, so the ladder stops pulling itself back to the money under
+the user's hand.
 
 ## 2026-08-29 - v3 board: cards show where they will land while you drag
 

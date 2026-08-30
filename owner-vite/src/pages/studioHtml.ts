@@ -115,6 +115,7 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
   .ly[data-t=image] img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
   .ly[data-t=image] .ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:14px;font-weight:700;letter-spacing:.02em;text-align:center;padding:10px}
   .ly[data-t=logo] img{width:100%;height:100%;object-fit:contain;object-position:left center;display:block;pointer-events:none}
+  .ly[data-t=logo] .ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px;font-weight:700;text-align:center;padding:8px}
   .ly[data-t=box]{border-radius:18px}
   .ly[data-t=list] ul{list-style:none;margin:0;padding:0}
   .ly[data-t=list] li{display:flex;align-items:center;gap:14px;margin-bottom:16px}
@@ -685,6 +686,7 @@ function mkLayer(o){
   if(o.t==='logo'){
     d.innerHTML='<img src="'+LOGO_SRC+'">';
     d.style.background='none'; d.style.border='0';
+    logoFallback(d);
     d.addEventListener('dblclick',function(){pick(d)});
   }
   if(o.t==='box'){
@@ -705,6 +707,16 @@ function styleBox(d){
   var w=+d.dataset.bw||0;
   d.style.background=d.dataset.fill==='0' ? 'transparent' : d.dataset.bgc;
   d.style.border=w ? (w+'px solid '+d.dataset.bd) : '0 solid transparent';
+}
+// If LOGO_SRC 404s the browser draws a 12px broken-image glyph, which looks
+// like a layout bug rather than a missing file. Say what happened instead —
+// and the layer still takes a double-click to load one by hand.
+function logoFallback(d){
+  var im=d.querySelector('img'); if(!im) return;
+  im.onerror=function(){
+    if(im.dataset.url) return;                 // a hand-loaded image that failed is its own problem
+    d.innerHTML='<div class="ph" style="border:1px dashed '+C.line+';border-radius:12px">Logo not found at '+LOGO_SRC+' — double-click to load one</div>';
+  };
 }
 function styleList(d){
   d.querySelectorAll('.dot').forEach(function(x){x.style.background=accent()});
@@ -1543,6 +1555,7 @@ function restore(s){
     // which would make those layers undraggable again.
     d.querySelectorAll('.ed').forEach(function(n){n.contentEditable='false'});
     wire(d);
+    if(d.dataset.t==='logo') logoFallback(d);
     if(d.dataset.t==='image'||d.dataset.t==='logo') d.addEventListener('dblclick',function(){pick(d)});
   });
   setSize(); fit(); select(null); syncSelects();

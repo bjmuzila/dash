@@ -1,3 +1,4 @@
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
 import { useQuery } from '@/data/api'
@@ -304,6 +305,61 @@ function TickerPanel({
     }
   }, [])
 
+  // ── Grab-and-drag the ladder ───────────────────────────────────────────────
+  //
+  // The scrollbar is hidden (it cost a visible slice of a narrow panel), so the
+  // ladder needs a way to move that is not the wheel. Press and drag, like a
+  // chart. Three details make it not fight the cell click:
+  //
+  //   - a 4px threshold, so a click that wobbles is still a click;
+  //   - pointer capture taken only ONCE the threshold is crossed, so the press
+  //     that turns out to be a click never leaves the element;
+  //   - a suppress flag consumed in the CLICK CAPTURE phase, because click fires
+  //     after pointerup and that is the last moment it can be stopped.
+  const panRef = useRef<{ id: number; y: number; top: number; moved: boolean } | null>(null)
+  const suppressClickRef = useRef(false)
+
+  const onPanDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // Primary button / touch only, and never from the header inputs.
+    if (e.button !== 0) return
+    const el = bodyRef.current
+    if (!el) return
+    panRef.current = { id: e.pointerId, y: e.clientY, top: el.scrollTop, moved: false }
+  }
+
+  const onPanMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const p = panRef.current
+    const el = bodyRef.current
+    if (!p || !el || p.id !== e.pointerId) return
+    const dy = e.clientY - p.y
+    if (!p.moved) {
+      if (Math.abs(dy) < 4) return
+      p.moved = true
+      // A deliberate pan is exactly the gesture the re-centring latch exists
+      // for — stop pulling the ladder back to the money underneath the hand.
+      userScrolledRef.current = true
+      el.setPointerCapture?.(e.pointerId)
+    }
+    el.scrollTop = p.top - dy
+  }
+
+  const onPanUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const p = panRef.current
+    if (!p || p.id !== e.pointerId) return
+    if (p.moved) {
+      suppressClickRef.current = true
+      bodyRef.current?.releasePointerCapture?.(e.pointerId)
+    }
+    panRef.current = null
+  }
+
+  const onPanClickCapture = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (!suppressClickRef.current) return
+    suppressClickRef.current = false
+    e.stopPropagation()
+    e.preventDefault()
+  }
+
   const commit = () => {
     const next = draft.trim().toUpperCase()
     if (!next || next === ticker) {
@@ -328,8 +384,11 @@ function TickerPanel({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-surface2">
-      {/* header — every panel is typeable; panel one types the BOARD's ticker */}
-      <div className="flex shrink-0 select-none items-center justify-between gap-1.5 border-b border-line px-2.5 py-1.5">
+      {/* Header — every panel is typeable; panel one types the BOARD's ticker.
+          Kept to a single tight row: on a 3-column-wide card the chrome above
+          the ladder was taking a third of the card, and every row of it was one
+          fewer strike. */}
+      <div className="flex shrink-0 select-none items-center justify-between gap-1 border-b border-line px-1.5 py-0.5">
         <input
           value={draft}
           maxLength={6}
@@ -356,18 +415,17 @@ function TickerPanel({
               e.currentTarget.blur()
             }
           }}
-          className="w-[92px] shrink-0 select-text rounded-md border border-line bg-bg px-1.5 py-px text-[17px] font-extrabold uppercase tracking-[0.1em] text-accent outline-none focus:border-accent"
+          // The board panel is marked by an ACCENT border rather than a "BOARD"
+          // badge beside it. The badge cost ~40px of a narrow panel's header to
+          // say something the tooltip says anyway, and it was the thing pushing
+          // this row to wrap.
+          className={[
+            'w-[76px] min-w-0 shrink select-text rounded-md border bg-bg px-1 py-px text-[14px] font-extrabold uppercase leading-[1.4] tracking-[0.08em] text-accent outline-none focus:border-accent',
+            isPageSymbol ? 'border-accent' : 'border-line',
+          ].join(' ')}
         />
-        <div className="flex min-w-0 items-center gap-1.5">
-          {isPageSymbol && (
-            <span
-              title="This panel is the board's ticker"
-              className="shrink-0 rounded-sm border border-line px-1 py-px text-[8px] font-black uppercase tracking-[0.08em] text-faint"
-            >
-              Board
-            </span>
-          )}
-          <span className="tabular text-xs font-semibold text-fg">
+        <div className="flex min-w-0 items-center gap-1">
+          <span className="tabular truncate text-[11px] font-semibold text-fg">
             {spot > 0 ? spot.toLocaleString('en-US', { maximumFractionDigits: 2 }) : q.loading ? '…' : '—'}
           </span>
           {onRemove && (
@@ -380,7 +438,7 @@ function TickerPanel({
                 e.stopPropagation()
                 onRemove()
               }}
-              className="shrink-0 rounded-sm px-1 text-[11px] font-bold leading-none text-faint hover:bg-raised hover:text-down"
+              className="shrink-0 rounded-sm px-0.5 text-[10px] font-bold leading-none text-faint hover:bg-raised hover:text-down"
             >
               ✕
             </button>
@@ -388,53 +446,69 @@ function TickerPanel({
         </div>
       </div>
 
-      {/* column headers */}
+      {/* Column headers AND totals, in ONE block.
+          They were two grids with their own padding and their own bottom border
+          — four rows of chrome above the ladder on a card that only has room for
+          twelve strikes. One block, one border, three lines per column: the
+          expiry, its date, and its net. Nothing was dropped. */}
       <div
-        className="grid shrink-0 gap-px border-b border-line bg-surface px-1 py-1"
+        className="grid shrink-0 gap-px border-b border-line bg-surface px-1 py-0.5"
         style={{ gridTemplateColumns: gridCols }}
       >
-        <span className="self-center text-center text-[11px] font-extrabold uppercase tracking-[0.06em] text-fg">
-          Strike
-        </span>
-        {display.map((c) => (
-          <div key={c.key} className="min-w-0 text-center leading-[1.15]">
-            <div className="truncate text-[11px] font-extrabold tracking-[0.04em] text-accent">{c.label}</div>
-            <div className="truncate text-[9px] font-bold text-fg">{c.subLabel}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* totals */}
-      <div className="grid shrink-0 gap-px border-b border-line px-1 py-1" style={{ gridTemplateColumns: gridCols }}>
-        <span className="text-center text-[11px] font-extrabold uppercase tracking-[0.06em] text-fg">Total</span>
+        <div className="flex flex-col justify-between text-center leading-[1.15]">
+          <span className="text-[10px] font-extrabold uppercase tracking-[0.06em] text-fg">Strike</span>
+          <span className="text-[9px] font-extrabold uppercase tracking-[0.06em] text-muted">Total</span>
+        </div>
         {display.map((c) => {
           const s = stats.get(c.key)
           const net = s?.netTotal ?? null
           const f = fmtGex(net)
           return (
-            <div
-              key={c.key}
-              className={[
-                'tabular min-w-0 truncate text-center font-mono text-[11px] font-extrabold',
-                net == null || net === 0 ? 'text-flat' : net > 0 ? 'text-gex-pos' : 'text-gex-neg',
-              ].join(' ')}
-            >
-              {f.sign}
-              {f.text}
-              {s && s.netTotal !== 0 && (
-                <span
-                  className={['ml-1 text-[9px] font-extrabold', s.posPct >= 50 ? 'text-up' : 'text-down'].join(' ')}
-                >
-                  {Math.round(s.posPct)}%
-                </span>
-              )}
+            <div key={c.key} className="flex min-w-0 flex-col justify-between text-center leading-[1.15]">
+              <div className="truncate text-[10px] font-extrabold tracking-[0.04em] text-accent">{c.label}</div>
+              <div className="truncate text-[9px] font-bold text-fg">{c.subLabel}</div>
+              <div
+                className={[
+                  'tabular min-w-0 truncate font-mono text-[10px] font-extrabold',
+                  net == null || net === 0 ? 'text-flat' : net > 0 ? 'text-gex-pos' : 'text-gex-neg',
+                ].join(' ')}
+              >
+                {f.sign}
+                {f.text}
+                {s && s.netTotal !== 0 && (
+                  <span
+                    className={['ml-0.5 text-[8px] font-extrabold', s.posPct >= 50 ? 'text-up' : 'text-down'].join(' ')}
+                  >
+                    {Math.round(s.posPct)}%
+                  </span>
+                )}
+              </div>
             </div>
           )
         })}
       </div>
 
-      {/* ladder — `relative` so a row's offsetTop is measured from this box */}
-      <div ref={bodyRef} className="relative min-h-0 flex-1 overflow-y-auto px-1">
+      {/* Ladder — `relative` so a row's offsetTop is measured from this box.
+          No scrollbar: on a three-column panel the track was eating a visible
+          slice of the numbers. The wheel still scrolls it natively (the box is
+          still `overflow-y-auto`, only the bar is hidden), and the pointer
+          handlers below add grab-and-drag for the same reason a chart pans. */}
+      <div
+        ref={bodyRef}
+        onPointerDown={onPanDown}
+        onPointerMove={onPanMove}
+        onPointerUp={onPanUp}
+        onPointerCancel={onPanUp}
+        // Capture phase: a drag that happens to end over a cell must not also
+        // open that cell's card. The flag is set on pointerup and cleared here,
+        // because click fires after pointerup and this is the last chance.
+        onClickCapture={onPanClickCapture}
+        className="relative min-h-0 flex-1 cursor-grab select-none overflow-y-auto px-1 active:cursor-grabbing [&::-webkit-scrollbar]:hidden"
+        // Firefox and old Edge hide their bar through properties Tailwind cannot
+        // spell as a utility (the leading dash reads as a negative value), so
+        // those two go inline; WebKit's is the arbitrary variant above.
+        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+      >
         {rows.length === 0 && (
           <div className="px-1 py-3 text-[11px] text-muted opacity-50">
             {q.error ? 'Chain unavailable' : q.loading ? 'Waiting for the chain…' : 'No strikes'}
@@ -733,12 +807,14 @@ export function MultiGreekCard() {
                 : 'Add another ticker panel'
             }
             className={[
-              'rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]',
+              'rounded-sm border border-line px-1.5 py-0.5 text-[10px] font-semibold',
               full ? 'cursor-not-allowed text-muted opacity-40' : 'text-muted hover:bg-raised hover:text-fg',
             ].join(' ')}
           >
-            + Ticker
-            <span className="ml-1 opacity-60">
+            {/* Short label on purpose. Spelled out, this button plus the cog
+                wrapped the card header onto a second row at three columns wide,
+                which cost the ladder a whole strike to say "Ticker". */}＋
+            <span className="ml-0.5 opacity-60">
               {tickers.length}/{MAX_EXTRA_PANELS + 1}
             </span>
           </button>
@@ -778,10 +854,10 @@ export function MultiGreekCard() {
         <button
           type="button"
           onClick={() => setCogOpen((v) => !v)}
-          title={`${BASIS_LABEL[basis]} · ${colCount + (showEx0 ? 1 : 0)} of ${MAX_COLS} col`}
-          className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted hover:bg-raised hover:text-fg"
+          title={`Board settings — ${BASIS_LABEL[basis]} · ${colCount + (showEx0 ? 1 : 0)} of ${MAX_COLS} col`}
+          className="rounded-sm border border-line px-1.5 py-0.5 text-[10px] font-semibold text-muted hover:bg-raised hover:text-fg"
         >
-          ⚙ Board
+          ⚙
         </button>
         <Popover open={cogOpen} onClose={() => setCogOpen(false)}>
           <div className="flex w-60 flex-col gap-2">

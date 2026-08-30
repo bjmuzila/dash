@@ -52,7 +52,8 @@ export const isBubbleBucket = (v: unknown): v is BubbleBucket => v === 1 || v ==
  *
  * A type predicate, not a plain boolean: the false branch is where a pinned
  * bucket gets handed to ChartDrawOpts.bucketMin, which is `1 | 5 | null`.
- * Returning boolean leaves 'auto' in the type there and the build fails.
+ * Returning boolean leaves 'auto' in the type there and `tsc --noEmit` fails
+ * the v3 build at GexCandlesCard.tsx:408.
  */
 export const isAutoBucket = (v: BubbleBucket): v is 'auto' => v === 'auto'
 /** What a fresh card starts on. */
