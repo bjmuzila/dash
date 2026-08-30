@@ -1,5 +1,133 @@
 # Changelog
 
+## 2026-08-30 - Missing ticker logos: 424 mirrored, and the mirror script's earnings read was dead
+
+Edited: `scripts/fetch-ticker-logos.mjs`, `components/shared/ChipLogo.tsx`.
+Added: `ticker-logos-2026-08-30.zip` (424 PNGs for `public/logos/`).
+
+`--from-earnings` never worked. It read `j.earnings` (falling back to a bare
+array) and `/proxy/earnings-week` has always answered `{ ok, minMcap, rows }` -
+so neither shape matched, `rows` came back `[]`, no warning printed, and the flag
+quietly mirrored nothing but the SEED list. That is most of why the board kept
+drawing ticker-TEXT chips for names that had been in the feed for weeks. It now
+reads `rows`, asks for `?week=both` (mirroring next week's names before Monday is
+the point of running it on a Saturday), and prints how many it got.
+
+New `--from-anticipated` seeds from `ANTICIPATED_SYMBOLS` in `lib/econCalendar.ts`
+- the list the board's default view is actually built from, so every name in it
+WILL appear the week that company reports. `--all` does both; that is the command
+to run after a deploy. The run also now NAMES what it could not resolve instead
+of printing a count, because that list is the hand-crop todo, and reminds you to
+bump `LOGO_REV` (`/logos/*.png` is served immutable, so a browser holding a 404
+for a symbol you just mirrored will not re-ask for a year).
+
+**The 424.** Checked every symbol in `ANTICIPATED_SYMBOLS` plus this week's board
+against `davidepalazzo/ticker-logos` and pulled the hits - unzip
+`ticker-logos-2026-08-30.zip` into `public/logos/` and commit. `LOGO_REV` is
+already bumped to 3. Note these were resolvable BEFORE this too, live through
+`/proxy/ticker-logo?raw=1`; mirroring turns two round trips per chip into one
+same-origin file, it does not change what renders.
+
+**The 100 with no source** (GitHub set has nothing, and Wikidata was unreachable
+from where this ran - the VPS can still try it, so run `--all` there before
+treating any of these as final):
+
+AGX ALAB AOUT AU AUR AZPN BF.B BIRD BTDR BYON CATO CAVA CHRN CHS CRTO DECK DIDIY
+DOO DOV DQ DXPE EVR FFAI FIGS FLS FSM GDS GLXY GVA GWW HLI HMR IAS IDXX INGR IRS
+JACK JEF JKHY KMT KNOP KVYO LANC LAZ LEU LOVE MAG MMED MPWR NCNO NNE NTGR NVMI
+NXT OKLO ONTO OUST PAYC PCTY PIPR PL PNR POOL PTC PTLO PWR RELY RGR RZLV SFD SG
+SGH SITE SMR SPRINKLR SSL STRL TEM THS TLYS TOAST TREX TT TTEK TW TYL UCTT URBN
+VSCO WB WH WLY WMS WOLF WSO XPOF XYZ YUM ZK ZWS
+
+Twelve of those are on the current board (AGX CHRN DOO HMR IRS KNOP MMED PL RZLV
+SSL VSCO WLY) and will keep rendering as ticker-text chips until someone crops
+one into `public/logos` and adds it to `MANUAL`. Two are typos in
+`ANTICIPATED_SYMBOLS` worth fixing rather than sourcing: `SPRINKLR` should be
+`CXM`, and `XYZ`/`TOAST` duplicate `SQ`/`TOST`.
+
+## 2026-08-30 - Traders Dashboard: Economic Calendar link in the header
+
+Edited: `components/pages/TradersDashboard.tsx`.
+
+The dashboard already pulls `/api/calendar` to build "Key Drivers Today" but had
+no way to get to the full calendar page. Added an **Economic Calendar** button in
+the header next to Premarket Prep, linking to `/economic-calendar` (the route
+already exists in `app-vite/src/App.tsx`).
+
+Uses `next/link` like the Premarket Prep button, so it router-pushes inside the
+SPA instead of reloading the bundle. Styled on the purple accent from
+`homeTheme` (same padding/border/hover pattern as its orange neighbour) so the
+two read as separate destinations. No hardcoded hex.
+
+## 2026-08-29 - v3 Multi Greek: opens on the board's ticker, panels are add/remove
+
+Edited: `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`.
+
+The card used to open on four hardcoded slots (SPX / SPY / QQQ / NDX). It now
+opens on ONE panel — the board's own ticker — and every other panel is one the
+user added.
+
+**Panel one is the page symbol.** It reads `usePageSymbol()` rather than storing
+its own ticker, so the card can never open contradicting the rest of the board.
+Its header carries a small `BOARD` mark, and typing in its box calls
+`setSymbol()` — it moves the whole board, because that panel IS the page symbol
+rather than a copy of it.
+
+**Up to three added panels, each removable.** A `+ Ticker n/4` button in the card
+toolbar opens a one-field popover; the button greys out at four panels and says
+why. Every added panel's header carries a ✕. Duplicates are refused in all
+directions — against the page symbol and against the other extras — since two
+identical ladders remove a comparison rather than adding one.
+
+**Storage split, and the old blob is carried over, not dropped.** Extras live in
+`cb-v3-mg-extra-tickers`; the pre-split `cb-v3-mg-tickers` is read once when the
+new key is absent, and slots 2-4 of it become the extras (slot 1 is discarded —
+that seat belongs to the page symbol now).
+
+**Two duplicate paths closed.** The board ticker can be moved from anywhere (the
+toolbar search, another card) onto a symbol already added here, so an effect
+drops the matching extra. Removing a panel also closes the cell card if it was
+read from that panel's ladder, so nothing on screen outlives the ladder behind
+it.
+
+Columns, basis, heat, the CB/CW/PW marks and the SPX-anchored expiry pick are
+untouched.
+
+## 2026-08-29 - v3 GEX Chart: FLOW is unclickable when there is no flow GEX
+
+Edited: `cbedge-v3/src/design/primitives/Controls.tsx`,
+`cbedge-v3/src/board/gexChart/GexChartCard.tsx`.
+
+`SegGroup` options take a `disabled` flag: inert, `cursor-not-allowed`, dimmed,
+and still carrying a `title` that says why. The FLOW basis sets it whenever the
+current ladder has no `flowGEX` leg — which is every symbol but the one the
+socket streams, since flow GEX is built from the classified tape and there is no
+per-ticker tape in server-v2.
+
+Three decisions worth keeping:
+
+**Disabled, not hidden.** A control whose buttons appear and disappear is a
+control you cannot learn, and a vanished option gives no reason for being gone.
+The greyed button plus its tooltip — "No classified options tape for AMZN" — is
+the honest version.
+
+**Gated on the ladder having ARRIVED.** `flowSupported([])` is false, and an
+empty ladder is the state the card is in for the first second of every load, so
+testing without a length check would grey FLOW out on arrival and un-grey it a
+beat later. Before any rows exist the answer is "not yet", not "no", and the
+button stays live.
+
+**A stored FLOW choice is not rewritten.** When it is the selected option AND
+disabled it stays highlighted (at 50% rather than 25%, so it still reads as
+selected) and the pane keeps saying it is drawing OI+VOL. Snapping the setting
+back to OI+VOL would have silently destroyed the preference the first time the
+board looked at a ticker, and it would come back on the next SPX board expecting
+flow and finding OI+VOL. The other two options are one click away, so nothing is
+stranded. `SegGroup` therefore has four visual states, not two — that is why the
+class list is a small table rather than one ternary.
+
+Typechecked against the full v3 tree: no new errors.
+
 ## 2026-08-29 - v3 GEX Chart: DEX line, three bases, call/put split, ten cards, core badge
 
 New: `cbedge-v3/src/design/primitives/Controls.tsx`,

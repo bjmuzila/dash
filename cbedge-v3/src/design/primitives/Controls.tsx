@@ -24,7 +24,25 @@ export function SegGroup<T extends string>({
   onChange,
   title,
 }: {
-  options: Array<{ label: string; value: T; title?: string }>
+  options: Array<{
+    label: string
+    value: T
+    title?: string
+    /**
+     * Inert and dimmed — the option is REAL but the data behind it is not
+     * there right now (a basis the current rows cannot support, say).
+     *
+     * Deliberately not "hidden": a control whose buttons come and go is a
+     * control you cannot learn, and the option vanishing gives no reason. A
+     * greyed button with a `title` saying why is the honest version.
+     *
+     * A disabled option that is also the SELECTED one stays highlighted and
+     * stays readable. That combination is legal on purpose — a stored choice
+     * must not be silently rewritten just because this ticker cannot serve it,
+     * and the other options are still one click away, so nobody is stranded.
+     */
+    disabled?: boolean
+  }>
   value: T
   onChange: (v: T) => void
   title?: string
@@ -35,11 +53,26 @@ export function SegGroup<T extends string>({
         <button
           key={o.value}
           type="button"
-          onClick={() => onChange(o.value)}
+          disabled={o.disabled}
+          // Guarded as well as `disabled`, because a disabled button still
+          // fires nothing but a future refactor to a div would.
+          onClick={() => {
+            if (!o.disabled) onChange(o.value)
+          }}
           title={o.title}
           className={[
             'px-1.5 py-0.5 text-[10px] font-semibold tracking-wide transition-colors first:rounded-l-sm last:rounded-r-sm',
-            o.value === value ? 'bg-raised text-fg' : 'text-muted opacity-60 hover:opacity-100',
+            o.value === value ? 'bg-raised text-fg' : 'text-muted',
+            // Four states, and the selected-but-disabled one is why this is a
+            // table rather than one ternary: it must still read as SELECTED
+            // (that is what the chart is showing) while reading as unavailable.
+            o.disabled
+              ? o.value === value
+                ? 'cursor-not-allowed opacity-50'
+                : 'cursor-not-allowed opacity-25'
+              : o.value === value
+                ? ''
+                : 'opacity-60 hover:opacity-100',
           ].join(' ')}
         >
           {o.label}

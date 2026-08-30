@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CardToolbar } from '@/design/primitives/Card'
 import { useQuery } from '@/data/api'
+import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
 import { SegGroup, Slider, Popover, PanelSection, Chip } from '../gexCandles/controls'
 import { CellCard } from './CellCard'
 import {
@@ -23,10 +24,22 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 // Multi Greek — v2's /mult-greek board, as a single card.
 //
-// Four ticker panels side by side. Each is a strike ladder read DOWN, with one
-// column per upcoming expiry read ACROSS, and the cell is that strike's net GEX
-// at that expiry. The whole point is the across-read: the same strike on four
-// symbols at the same DTE.
+// Up to four ticker panels side by side. Each is a strike ladder read DOWN, with
+// one column per upcoming expiry read ACROSS, and the cell is that strike's net
+// GEX at that expiry. The whole point is the across-read: the same strike on
+// several symbols at the same DTE.
+//
+// ── Which symbols ────────────────────────────────────────────────────────────
+// The FIRST panel is the BOARD's ticker — the card opens on whatever the page is
+// already showing rather than on a hardcoded SPX, so it never contradicts the
+// rest of the board on load. Typing in that panel's box moves the whole board,
+// which is the only honest thing it can do: the panel IS the page symbol, not a
+// copy of it.
+//
+// Every other panel is one the user ADDED — up to three of them, each removable
+// with the ✕ in its header. That is why this card no longer ships four fixed
+// slots: three of those four were guesses, and a guess that costs a quarter of
+// the board is worse than an empty seat the user fills themselves.
 //
 // That is also why the column count is ONE setting for the whole board rather
 // than one per panel — four panels on different counts stop lining up, and a
@@ -53,10 +66,12 @@ import {
 // what "the Multi Greek page" means.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Slot defaults. Every slot is editable; these are only the starting point. */
-const DEFAULT_TICKERS = ['SPX', 'SPY', 'QQQ', 'NDX']
+/** Panels beyond the board's own ticker. Four panels total is the board's width. */
+const MAX_EXTRA_PANELS = 3
 
-const TICKERS_KEY = 'cb-v3-mg-tickers'
+/** The pre-split key: four fixed slots. Read once, to carry a saved board over. */
+const LEGACY_TICKERS_KEY = 'cb-v3-mg-tickers'
+const EXTRA_TICKERS_KEY = 'cb-v3-mg-extra-tickers'
 const COLS_KEY = 'cb-v3-mg-col-count'
 const EX0_STORE_KEY = 'cb-v3-mg-ex0'
 const BASIS_STORE_KEY = 'cb-v3-mg-basis'
@@ -85,30 +100,38 @@ function write(key: string, value: string): void {
   }
 }
 
-function loadTickers(): string[] {
+function readList(key: string): string[] {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(TICKERS_KEY) ?? 'null')
-    if (!Array.isArray(parsed)) return [...DEFAULT_TICKERS]
-    const out = DEFAULT_TICKERS.map((d, i) => {
-      const v = parsed[i]
-      return typeof v === 'string' && v.trim() ? v.trim().toUpperCase() : d
-    })
-    // De-duplicate on restore as well as on commit: a stored blob from an older
-    // build could hold the same symbol twice, and two identical panels is a
-    // board that silently answers half the question.
-    const seen = new Set<string>()
-    return out.map((t, i) => {
-      if (seen.has(t)) {
-        const fallback = DEFAULT_TICKERS[i] ?? t
-        seen.add(fallback)
-        return fallback
-      }
-      seen.add(t)
-      return t
-    })
+    const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? 'null')
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((v): v is string => typeof v === 'string' && PAGE_TICKER_RE.test(v.trim().toUpperCase()))
+      .map((v) => v.trim().toUpperCase())
   } catch {
-    return [...DEFAULT_TICKERS]
+    return []
   }
+}
+
+/**
+ * The ADDED panels — never the board's own ticker, which is panel one and is
+ * held by the page, not by this card.
+ *
+ * A board saved by the four-fixed-slots build is carried over rather than
+ * dropped: slots 2-4 of that blob were the user's own choices and are exactly
+ * what the extras list means now. Slot 1 is discarded — that seat belongs to the
+ * page symbol from here on.
+ */
+function loadExtras(pageSymbol: string): string[] {
+  const migrated = readStored(EXTRA_TICKERS_KEY, '') !== ''
+  const raw = migrated ? readList(EXTRA_TICKERS_KEY) : readList(LEGACY_TICKERS_KEY).slice(1)
+  const seen = new Set<string>([pageSymbol.toUpperCase()])
+  const out: string[] = []
+  for (const t of raw) {
+    if (seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+    if (out.length >= MAX_EXTRA_PANELS) break
+  }
+  return out
 }
 
 /**
@@ -140,6 +163,14 @@ interface PanelProps {
   showLevels: boolean
   /** Returns false when the symbol was refused (a duplicate), so the box snaps back. */
   onCommitTicker: (next: string) => boolean
+  /**
+   * Present only on ADDED panels. The first panel is the board's ticker and has
+   * nothing to remove — closing it would leave the card showing a symbol the
+   * rest of the board is not on.
+   */
+  onRemove?: () => void
+  /** Panel one carries a mark saying it follows the board rather than itself. */
+  isPageSymbol?: boolean
   /** A cell was clicked — the card opens above the whole board, not per panel. */
   onOpenCell: (cell: OpenCell) => void
 }
@@ -165,6 +196,8 @@ function TickerPanel({
   intensity,
   showLevels,
   onCommitTicker,
+  onRemove,
+  isPageSymbol,
   onOpenCell,
 }: PanelProps) {
   // 15s, matching v2's auto-refresh. staleMs alone would never refetch — it is
@@ -295,7 +328,7 @@ function TickerPanel({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-surface2">
-      {/* header — every slot is typeable, SPX/SPY/QQQ are only defaults */}
+      {/* header — every panel is typeable; panel one types the BOARD's ticker */}
       <div className="flex shrink-0 select-none items-center justify-between gap-1.5 border-b border-line px-2.5 py-1.5">
         <input
           value={draft}
@@ -303,7 +336,11 @@ function TickerPanel({
           spellCheck={false}
           autoCapitalize="characters"
           placeholder="TICKER"
-          title="This panel's ticker — type a symbol and press Enter"
+          title={
+            isPageSymbol
+              ? "This panel follows the board's ticker — typing here moves the whole board"
+              : "This panel's ticker — type a symbol and press Enter"
+          }
           onChange={(e) => setDraft(e.target.value.toUpperCase())}
           onFocus={(e) => e.currentTarget.select()}
           onBlur={commit}
@@ -321,9 +358,34 @@ function TickerPanel({
           }}
           className="w-[92px] shrink-0 select-text rounded-md border border-line bg-bg px-1.5 py-px text-[17px] font-extrabold uppercase tracking-[0.1em] text-accent outline-none focus:border-accent"
         />
-        <span className="tabular text-xs font-semibold text-fg">
-          {spot > 0 ? spot.toLocaleString('en-US', { maximumFractionDigits: 2 }) : q.loading ? '…' : '—'}
-        </span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          {isPageSymbol && (
+            <span
+              title="This panel is the board's ticker"
+              className="shrink-0 rounded-sm border border-line px-1 py-px text-[8px] font-black uppercase tracking-[0.08em] text-faint"
+            >
+              Board
+            </span>
+          )}
+          <span className="tabular text-xs font-semibold text-fg">
+            {spot > 0 ? spot.toLocaleString('en-US', { maximumFractionDigits: 2 }) : q.loading ? '…' : '—'}
+          </span>
+          {onRemove && (
+            <button
+              type="button"
+              title={`Remove the ${ticker} panel`}
+              aria-label={`Remove the ${ticker} panel`}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                onRemove()
+              }}
+              className="shrink-0 rounded-sm px-1 text-[11px] font-bold leading-none text-faint hover:bg-raised hover:text-down"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
 
       {/* column headers */}
@@ -527,7 +589,12 @@ function TickerPanel({
 // ── The card ─────────────────────────────────────────────────────────────────
 
 export function MultiGreekCard() {
-  const [tickers, setTickers] = useState<string[]>(() => loadTickers())
+  // Panel one. Read from the page rather than stored here, so the card opens on
+  // whatever the board is already showing.
+  const { symbol: pageSymbol, setSymbol: setPageSymbol } = usePageSymbol()
+  const [extras, setExtras] = useState<string[]>(() => loadExtras(pageSymbol))
+  const [addOpen, setAddOpen] = useState(false)
+  const [addDraft, setAddDraft] = useState('')
   // A blob written before the split stored 4 here; it clamps to 3, which is the
   // same number of expiry columns that setting ever actually drew.
   const [colCount, setColCount] = useState(() => {
@@ -570,21 +637,81 @@ export function MultiGreekCard() {
     write(BASIS_STORE_KEY, b)
   }
 
-  /**
-   * A symbol already on the board is refused. Four panels are read ACROSS, so
-   * the same ticker twice does not add a comparison — it removes one, silently.
-   */
-  const commitTicker = useCallback((slot: number, next: string): boolean => {
-    let accepted = false
-    setTickers((prev) => {
-      if (prev.some((t, i) => i !== slot && t === next)) return prev
-      const out = prev.map((t, i) => (i === slot ? next : t))
-      write(TICKERS_KEY, JSON.stringify(out))
-      accepted = true
+  // The board's ticker can be moved from anywhere — the toolbar search, another
+  // card — onto a symbol this card already has as an added panel. Drop the
+  // duplicate rather than draw the same ladder twice.
+  useEffect(() => {
+    const s = pageSymbol.toUpperCase()
+    setExtras((prev) => {
+      if (!prev.includes(s)) return prev
+      const out = prev.filter((t) => t !== s)
+      write(EXTRA_TICKERS_KEY, JSON.stringify(out))
       return out
     })
-    return accepted
+  }, [pageSymbol])
+
+  /** Panel one, then the added ones. */
+  const tickers = useMemo(() => [pageSymbol.toUpperCase(), ...extras], [pageSymbol, extras])
+
+  const writeExtras = useCallback((next: string[]) => {
+    write(EXTRA_TICKERS_KEY, JSON.stringify(next))
   }, [])
+
+  /**
+   * A symbol already on the board is refused. The panels are read ACROSS, so the
+   * same ticker twice does not add a comparison — it removes one, silently.
+   *
+   * Slot 0 is the page symbol: committing it moves the BOARD. That is why the
+   * refusal check there is against the extras only, and why nothing is written
+   * to this card's own storage for it.
+   */
+  const commitTicker = useCallback(
+    (slot: number, next: string): boolean => {
+      if (!PAGE_TICKER_RE.test(next)) return false
+      if (slot === 0) {
+        if (extras.includes(next)) return false
+        setPageSymbol(next)
+        return true
+      }
+      const i = slot - 1
+      if (next === pageSymbol.toUpperCase()) return false
+      if (extras.some((t, j) => j !== i && t === next)) return false
+      const out = extras.map((t, j) => (j === i ? next : t))
+      setExtras(out)
+      writeExtras(out)
+      return true
+    },
+    [extras, pageSymbol, setPageSymbol, writeExtras],
+  )
+
+  const addTicker = useCallback(() => {
+    const next = addDraft.trim().toUpperCase()
+    if (!PAGE_TICKER_RE.test(next)) return
+    if (extras.length >= MAX_EXTRA_PANELS) return
+    if (next === pageSymbol.toUpperCase() || extras.includes(next)) {
+      setAddDraft('')
+      return
+    }
+    const out = [...extras, next]
+    setExtras(out)
+    writeExtras(out)
+    setAddDraft('')
+    setAddOpen(false)
+  }, [addDraft, extras, pageSymbol, writeExtras])
+
+  const removeTicker = useCallback(
+    (i: number) => {
+      const out = extras.filter((_, j) => j !== i)
+      setExtras(out)
+      writeExtras(out)
+      // The open card belongs to a panel that may have just gone; nothing on
+      // screen should outlive the ladder it was read from.
+      setOpenCell((prev) => (prev && prev.ticker === extras[i] ? null : prev))
+    },
+    [extras, writeExtras],
+  )
+
+  const full = extras.length >= MAX_EXTRA_PANELS
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -593,6 +720,60 @@ export function MultiGreekCard() {
           only thing the toolbar needs to carry is the way in to the settings,
           and it goes in the Card's header rather than in a second bar under it. */}
       <CardToolbar>
+        {/* Add a panel. Capped at three beyond the board's own ticker: a fifth
+            ladder on a 12-column card is narrower than the numbers in it. */}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setAddOpen((v) => !v)}
+            disabled={full}
+            title={
+              full
+                ? 'Four panels is the most this card draws — remove one with its ✕ first'
+                : 'Add another ticker panel'
+            }
+            className={[
+              'rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]',
+              full ? 'cursor-not-allowed text-muted opacity-40' : 'text-muted hover:bg-raised hover:text-fg',
+            ].join(' ')}
+          >
+            + Ticker
+            <span className="ml-1 opacity-60">
+              {tickers.length}/{MAX_EXTRA_PANELS + 1}
+            </span>
+          </button>
+          <Popover open={addOpen && !full} onClose={() => setAddOpen(false)} align="left">
+            <div className="flex w-48 flex-col gap-1.5">
+              <PanelSection title="Add panel">
+                <input
+                  autoFocus
+                  value={addDraft}
+                  maxLength={6}
+                  spellCheck={false}
+                  autoCapitalize="characters"
+                  placeholder="TICKER"
+                  onChange={(e) => setAddDraft(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      addTicker()
+                    }
+                    if (e.key === 'Escape') setAddOpen(false)
+                  }}
+                  className="w-full rounded-sm border border-line bg-bg px-1.5 py-1 text-[13px] font-extrabold uppercase tracking-[0.1em] text-accent outline-none focus:border-accent"
+                />
+                <button
+                  type="button"
+                  onClick={addTicker}
+                  className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted hover:bg-raised hover:text-fg"
+                >
+                  Add
+                </button>
+              </PanelSection>
+            </div>
+          </Popover>
+        </div>
         <div className="relative">
         <button
           type="button"
@@ -660,8 +841,10 @@ export function MultiGreekCard() {
       <div className="flex min-h-0 flex-1 gap-2 overflow-x-auto">
         {tickers.map((t, i) => (
           <TickerPanel
-            key={i}
+            key={i === 0 ? '__page__' : t}
             ticker={t}
+            isPageSymbol={i === 0}
+            onRemove={i === 0 ? undefined : () => removeTicker(i - 1)}
             anchor={anchor}
             colCount={colCount}
             showEx0={showEx0}

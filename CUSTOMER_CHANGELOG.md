@@ -4,6 +4,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Saturday 8/29/2026
 
+* **GEX Chart (v3 preview):** switch between OI+Volume, volume-only and flow GEX, split calls and puts, add a net delta line, see the expiration in use, and turn ten key-level cards on or off.
+
+* **GEX Candles (v3 preview):** the strike rail is now just bars — all facing one direction, so sizes are easier to compare at a glance. Hover any row for the exact numbers.
+
 * **Level Log:** the coloured squares in the wall migration legend now line up with their labels in the downloaded PNG.
 
 * **Economic Calendar — the Earnings tab was hiding most of the week.** It now covers every reporting company, defaults to the most-watched names, and adds a next-week view.

@@ -340,6 +340,31 @@ export default function TradersDashboardPage() {
             <span>Premarket Prep</span>
             <span style={{ color: HT.orange }}>→</span>
           </Link>
+          {/* Economic Calendar — the day's macro schedule behind "Key Drivers
+              Today" below. Same header-button pattern as Premarket Prep, on the
+              purple accent so the two read as separate destinations. */}
+          <Link
+            href="/economic-calendar"
+            prefetch={false}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 8,
+              padding: "9px 14px", borderRadius: 8,
+              border: `1px solid ${rgba(HT.purple, 0.55)}`,
+              background: `linear-gradient(180deg, ${rgba(HT.purple, 0.20)}, ${rgba(HT.purple, 0.06)})`,
+              color: HT.text, textDecoration: "none",
+              fontWeight: 700, fontSize: 13, letterSpacing: "0.04em",
+              whiteSpace: "nowrap", transition: "background .15s, border-color .15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = HT.purple; e.currentTarget.style.background = rgba(HT.purple, 0.28); }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = rgba(HT.purple, 0.55);
+              e.currentTarget.style.background = `linear-gradient(180deg, ${rgba(HT.purple, 0.20)}, ${rgba(HT.purple, 0.06)})`;
+            }}
+          >
+            <span aria-hidden>🗓</span>
+            <span>Economic Calendar</span>
+            <span style={{ color: HT.purple }}>→</span>
+          </Link>
           <CopySnapButton targetRef={snapRef} filename="traders-dashboard.png" />
           <div style={{ textAlign: "right" }}>
             {weather ? (

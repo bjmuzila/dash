@@ -39,7 +39,7 @@ import { HOME_THEME as HT } from "@/components/shared/homeTheme";
  * VERSIONED form immutable now, so this is belt and braces — but the belt is
  * what fixes the browsers that already hold the bad entry.
  */
-export const LOGO_REV = 2;
+export const LOGO_REV = 3;   // 2026-08-30: +424 mirrored logos
 
 function localLogoUrl(sym: string) {
   return `/logos/${encodeURIComponent(sym.toUpperCase())}.png?v=${LOGO_REV}`;

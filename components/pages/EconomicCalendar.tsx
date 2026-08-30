@@ -791,11 +791,20 @@ export default function EconomicCalendarPage() {
             competing with it. Down here it reads as the source of the board,
             which is what it is once the image is pasted somewhere else. Inside
             earnRef, so the capture carries it. */}
-        <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 10 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 12 }}>
           {/* Same-origin file in public/ — a real image the capture can draw,
-              unlike the 302'd ticker logos. */}
+              unlike the 302'd ticker logos.
+
+              cbedge3.0 is a 3:1 banner (2448×816) on a black plate with a white
+              keyline, so 56px tall lands it at ~168px wide. That is the whole
+              reason it can be this much bigger than the 26px mark it replaces:
+              the old asset was a compact logotype that turned into a smudge at
+              any size worth reading, while this one is built to be read as a
+              band. The plate is black on the board's near-black ground, so what
+              actually reads at the bottom of a pasted PNG is the keyline and the
+              wordmark inside it — a signature rather than a watermark. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 26, width: "auto", display: "block" }} />
+          <img src="/cbedge3.0.jpg" alt="CB Edge" style={{ height: 56, width: "auto", display: "block" }} />
         </div>
       </div>
     );

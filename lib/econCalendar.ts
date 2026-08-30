@@ -224,7 +224,7 @@ export const ANTICIPATED_SYMBOLS: ReadonlySet<string> = new Set([
   "ZI", "BILL", "PCTY", "PAYC", "VEEV", "TYL", "SPSC", "AZPN", "PTC", "ANSS", "CDNS",
   "SNPS", "KEYS", "APPF", "BLKB", "DBX", "BOX", "ZM", "DOCU", "RNG", "FIVN", "NICE",
   "PEGA", "VERX", "NCNO", "OLO", "TOST", "SQ", "XYZ", "SHOP", "WIX", "SQSP", "YEXT",
-  "SPRT", "CXM", "SPRINKLR", "KVYO", "ZETA", "APP", "U", "RBLX", "TTD", "MGNI", "CRTO",
+  "SPRT", "CXM", "KVYO", "ZETA", "APP", "U", "RBLX", "TTD", "MGNI", "CRTO",
   "DV", "PUBM", "IAS", "RZLV", "BBAI", "SOUN", "TEM", "IONQ", "RGTI", "QBTS", "QUBT",
   "AUR", "LAZR", "OUST", "INVZ", "MVIS",
   // ── Internet / media ──
@@ -239,7 +239,7 @@ export const ANTICIPATED_SYMBOLS: ReadonlySet<string> = new Set([
   // ── Crypto / fintech ──
   "COIN", "MARA", "RIOT", "CLSK", "HUT", "BITF", "CIFR", "WULF", "IREN", "HIVE", "BTBT",
   "CAN", "BTDR", "GLXY", "MSTR", "HOOD", "PYPL", "SOFI", "AFRM", "UPST", "LC", "NU",
-  "MQ", "DLO", "PAGS", "STNE", "FOUR", "FI", "GPN", "TOAST", "RELY", "FLYW", "EVTC",
+  "MQ", "DLO", "PAGS", "STNE", "FOUR", "FI", "GPN", "RELY", "FLYW", "EVTC",
   "WEX", "JKHY", "ACIW", "ALLY", "SYF", "COF", "DFS", "AXP",
   // ── Retail / consumer ──
   "LULU", "NKE", "DECK", "ONON", "CROX", "SKX", "BIRD", "VFC", "PVH", "RL", "GPS", "ANF",

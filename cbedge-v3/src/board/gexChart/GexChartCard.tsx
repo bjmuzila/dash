@@ -231,14 +231,23 @@ export function GexChartCard() {
     push(null, 0, symbol, '')
   }, [symbol, push])
 
+  // ── Can these rows do FLOW at all? ─────────────────────────────────────────
+  //
+  // Gated on `view.rows.length` on purpose. `flowSupported([])` is false, and
+  // an empty ladder is the state this card is in for the first second of every
+  // load — so testing without the length check would report "no flow" before
+  // any data existed, grey the button out on arrival, and un-grey it a beat
+  // later. Until a ladder has actually arrived the answer is not "no", it is
+  // "not yet", and the control stays live.
+  const flowKnown = view.rows.length > 0
+  const flowHasData = useMemo(() => flowSupported(view.rows), [view.rows])
+  const flowOff = flowKnown && !flowHasData
+
   // ── Header numbers ─────────────────────────────────────────────────────────
   // Resolved once, here, and handed to the tiles: FLOW is only really flow when
   // the rows carry the tape-derived leg, and the chart, the header total and
   // the ten cards all have to agree about that or the basis half-applies.
-  const flowActive = useMemo(
-    () => settings.basis === 'flow' && flowSupported(view.rows),
-    [settings.basis, view.rows],
-  )
+  const flowActive = settings.basis === 'flow' && flowHasData
   const total = useMemo(
     () => (view.rows.length ? totalNet(view.rows, settings.basis, flowActive) : null),
     [view.rows, settings.basis, flowActive],
@@ -274,8 +283,19 @@ export function GexChartCard() {
             {
               label: 'FLOW',
               value: 'flow',
-              title:
-                'Gamma against the dealer’s own signed inventory, built from the classified tape. Only the socket symbol has a tape; elsewhere the chart says so and falls back to OI+VOL',
+              // Not selectable when this ladder carries no `flowGEX` leg —
+              // there is no tape for anything but the socket symbol, so on a
+              // chain-derived ticker the button would only ever have picked a
+              // basis that immediately falls back to OI+VOL.
+              //
+              // A stored FLOW choice is NOT rewritten when that happens: it
+              // stays selected (dimmed, and the pane says why it is drawing
+              // OI+VOL) so it comes back intact on the next symbol that has a
+              // tape. The other two options are still one click away.
+              disabled: flowOff,
+              title: flowOff
+                ? `No classified options tape for ${symbol} — flow GEX only exists for the symbol the socket streams`
+                : 'Gamma against the dealer’s own signed inventory, built from the classified tape',
             },
           ]}
           value={settings.basis}

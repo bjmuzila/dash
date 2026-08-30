@@ -22,10 +22,15 @@
  * files are skipped unless --force).
  *
  * USAGE
- *   node scripts/fetch-ticker-logos.mjs                    # seed list + PG cache
- *   node scripts/fetch-ticker-logos.mjs --from-earnings    # + this week's earnings
- *   node scripts/fetch-ticker-logos.mjs --force            # re-download everything
- *   node scripts/fetch-ticker-logos.mjs AAPL MSFT NVDA     # just these
+ *   node scripts/fetch-ticker-logos.mjs                     # seed list + PG cache
+ *   node scripts/fetch-ticker-logos.mjs --from-anticipated  # + lib/econCalendar's list
+ *   node scripts/fetch-ticker-logos.mjs --from-earnings     # + this week AND next
+ *   node scripts/fetch-ticker-logos.mjs --all               # both of the above
+ *   node scripts/fetch-ticker-logos.mjs --force             # re-download everything
+ *   node scripts/fetch-ticker-logos.mjs AAPL MSFT NVDA      # just these
+ *
+ * The one to run after a deploy is:
+ *   node scripts/fetch-ticker-logos.mjs --all
  *
  * Needs DATABASE_URL for the PG logo cache (optional — falls back to live
  * resolution) and, for --from-earnings, a reachable backend at
@@ -112,7 +117,9 @@ const MANUAL = new Set(['SPCX', 'PBR.A', 'HEI.A']);
 
 const args = process.argv.slice(2);
 const FORCE = args.includes('--force');
-const FROM_EARNINGS = args.includes('--from-earnings');
+const ALL = args.includes('--all');
+const FROM_EARNINGS = ALL || args.includes('--from-earnings');
+const FROM_ANTICIPATED = ALL || args.includes('--from-anticipated');
 const EXPLICIT = args.filter((a) => !a.startsWith('--')).map((s) => s.toUpperCase());
 
 /** Symbols already resolved into the PG cache — cheap to mirror, zero lookups. */
@@ -129,17 +136,62 @@ async function symbolsFromCache() {
   }
 }
 
-/** This week's earnings names, straight off the running backend. */
+/**
+ * The earnings names, straight off the running backend — BOTH weeks.
+ *
+ * This read was broken from the day it was written: it looked for `j.earnings`
+ * (or a bare array) and `/proxy/earnings-week` has always answered
+ * `{ ok, minMcap, rows }`. Neither shape matched, so `rows` was `[]` every time
+ * and `--from-earnings` silently contributed nothing — the flag looked like it
+ * ran, printed no warning, and mirrored only the SEED list. That is most of why
+ * the board kept showing ticker-text chips for names that had been in the feed
+ * for weeks.
+ *
+ * `?week=both` because the recorder now stores this week and next; mirroring
+ * next week's names before Monday is the entire point of running this on a
+ * Saturday.
+ */
 async function symbolsFromEarnings() {
   const base = process.env.PROXY_URL || `http://127.0.0.1:${process.env.PROXY_PORT || 3002}`;
   try {
-    const r = await fetch(`${base}/proxy/earnings-week`, { headers: { 'User-Agent': UA } });
+    const r = await fetch(`${base}/proxy/earnings-week?week=both`, { headers: { 'User-Agent': UA } });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
-    const rows = Array.isArray(j?.earnings) ? j.earnings : Array.isArray(j) ? j : [];
-    return rows.map((e) => String(e?.symbol || '')).filter(Boolean);
+    const rows = Array.isArray(j?.rows) ? j.rows
+      : Array.isArray(j?.earnings) ? j.earnings
+      : Array.isArray(j) ? j : [];
+    const syms = rows.map((e) => String(e?.symbol || '')).filter(Boolean);
+    console.log(`[logos] --from-earnings: ${syms.length} names from ${base}`);
+    return syms;
   } catch (e) {
     console.warn(`[logos] --from-earnings skipped (${e.message}) — is the backend running?`);
+    return [];
+  }
+}
+
+/**
+ * The maintained "names traders position for" list in lib/econCalendar.ts.
+ *
+ * That list is what the earnings board's default view is BUILT from, so it is
+ * the best possible seed: every symbol in it will appear on the board the week
+ * that company reports, whether or not it happens to be in the feed today. Read
+ * out of the TS source with a regex rather than imported — this is a plain .mjs
+ * script with no TS pipeline, and a build step to read one array would be worse
+ * than the regex.
+ */
+async function symbolsFromAnticipated() {
+  try {
+    const { readFile } = await import('node:fs/promises');
+    const src = await readFile(path.join(REPO_ROOT, 'lib', 'econCalendar.ts'), 'utf8');
+    const i = src.indexOf('ANTICIPATED_SYMBOLS');
+    if (i < 0) return [];
+    const j = src.indexOf(']);', i);
+    if (j < 0) return [];
+    const syms = [...src.slice(i, j).matchAll(/"([A-Z0-9.\-]{1,10})"/g)].map((m) => m[1]);
+    console.log(`[logos] --from-anticipated: ${syms.length} names from lib/econCalendar.ts`);
+    return syms;
+  } catch (e) {
+    console.warn(`[logos] --from-anticipated skipped (${e.message})`);
     return [];
   }
 }
@@ -177,6 +229,7 @@ async function main() {
     : [
         ...SEED,
         ...(await symbolsFromCache()),
+        ...(FROM_ANTICIPATED ? await symbolsFromAnticipated() : []),
         ...(FROM_EARNINGS ? await symbolsFromEarnings() : []),
       ];
 
@@ -187,6 +240,7 @@ async function main() {
   console.log(`[logos] ${symbols.length} symbols → ${path.relative(REPO_ROOT, OUT_DIR)}`);
 
   const tally = { ok: 0, skip: 0, none: 0, fail: 0 };
+  const unresolved = [];
   let cursor = 0;
   await Promise.all(
     Array.from({ length: CONCURRENCY }, async () => {
@@ -196,6 +250,7 @@ async function main() {
           const r = await mirror(sym);
           tally[r] += 1;
           if (r === 'ok') console.log(`  ✓ ${sym}`);
+          if (r === 'none') unresolved.push(sym);
           if (r === 'fail') console.log(`  ✗ ${sym} (bad bytes)`);
         } catch (e) {
           tally.fail += 1;
@@ -209,7 +264,16 @@ async function main() {
     `[logos] done — ${tally.ok} written, ${tally.skip} already present, ` +
     `${tally.none} unresolved, ${tally.fail} failed`,
   );
+  if (unresolved.length) {
+    // Named, not counted. These are the symbols that will keep rendering as
+    // ticker-text chips until someone crops one by hand into public/logos and
+    // adds it to MANUAL — so the list IS the todo, and a bare count hides it.
+    console.log(`[logos] no source for: ${unresolved.sort().join(' ')}`);
+  }
   console.log('[logos] commit public/logos/ so the chips ship with the build.');
+  console.log('[logos] BUMP LOGO_REV in components/shared/ChipLogo.tsx if you added files —');
+  console.log('[logos] /logos/*.png is served immutable, so a browser holding a 404 for a');
+  console.log('[logos] symbol you just mirrored will not re-ask for a year without it.');
 
   try { await getPool()?.end(); } catch { /* pool may never have opened */ }
   process.exit(0);
