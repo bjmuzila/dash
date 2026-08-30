@@ -124,7 +124,10 @@ let socket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let closeTimer: ReturnType<typeof setTimeout> | null = null;
 let rescopeTimer: ReturnType<typeof setTimeout> | null = null;
+let connectWatchdog: ReturnType<typeof setTimeout> | null = null;
 let attempts = 0;
+/** Date.now() of the last frame actually received on the live socket. */
+let lastFrameAt = 0;
 
 /**
  * The topic scope the LIVE connection was opened with: a sorted CSV, or null
@@ -168,6 +171,31 @@ const CLOSE_GRACE_MS = 500;
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30_000;
 
+/**
+ * How long a socket may sit in CONNECTING before we give up on it.
+ *
+ * MOBILE. A phone that changed radio (wifi <-> cell, or a lock/unlock that
+ * re-homed the connection) routinely leaves a WebSocket stuck in CONNECTING
+ * with no error and no close event — the TCP handshake is simply never
+ * answered. `openSocket()` refuses to open a second connection while one is
+ * CONNECTING, and `scheduleReconnect()` only ever runs from `onclose`, so
+ * without this watchdog that one hung handshake wedges the feed permanently
+ * and the page sits on "Connecting to the live feed…" until a manual reload.
+ * Desktop rarely hits it, which is why this only ever looked like a phone bug.
+ */
+const CONNECT_TIMEOUT_MS = 12_000;
+
+/**
+ * On resume, how stale an OPEN socket may be before we distrust it.
+ *
+ * A backgrounded phone gets its socket reaped server-side (websocket-server.js
+ * ping/terminate), but the browser can hand the frozen page back with the
+ * WebSocket still reading OPEN — a half-open socket that will never deliver
+ * another frame. If nothing has arrived in this long when we come back to the
+ * foreground, reopen rather than trust readyState.
+ */
+const RESUME_STALE_MS = 20_000;
+
 function emitStatus(connected: boolean) {
   for (const s of [...subscribers]) {
     try {
@@ -180,6 +208,37 @@ function emitStatus(connected: boolean) {
 
 function isLive() {
   return socket?.readyState === WebSocket.OPEN;
+}
+
+/**
+ * Is `socket` a connection we can still expect frames from?
+ *
+ * `socket !== null` is NOT the same question, and conflating the two is what
+ * broke the feed on phones. A socket the OS killed while the tab was frozen
+ * comes back CLOSED, and its `onclose` — the only thing that nulls the ref and
+ * arms the backoff — may never be delivered for a page that was frozen when it
+ * fired. Every guard that used to test `socket` now tests this instead, so a
+ * dead ref is treated as no connection rather than as a live one.
+ */
+function hasUsableSocket() {
+  const rs = socket?.readyState;
+  return rs === WebSocket.CONNECTING || rs === WebSocket.OPEN;
+}
+
+/** Drop a ref to a socket that is already CLOSING/CLOSED. */
+function dropDeadSocket() {
+  if (socket && !hasUsableSocket()) {
+    socket.onmessage = socket.onerror = socket.onclose = socket.onopen = null;
+    socket = null;
+    currentScope = null;
+  }
+}
+
+function clearConnectWatchdog() {
+  if (connectWatchdog) {
+    clearTimeout(connectWatchdog);
+    connectWatchdog = null;
+  }
 }
 
 function clearReconnect() {
@@ -244,6 +303,7 @@ function clearRescope() {
 function reopenWithScope() {
   clearRescope();
   clearReconnect();
+  clearConnectWatchdog();
   lastByType.clear();
   const sock = socket;
   socket = null;
@@ -281,7 +341,8 @@ function reconcileScope() {
   }
   // No live connection yet: scheduleConnect() owns this case and will read
   // desiredScope() when its settle timer fires.
-  if (!socket) {
+  dropDeadSocket();
+  if (!hasUsableSocket()) {
     clearRescope();
     return;
   }
@@ -294,7 +355,7 @@ function reconcileScope() {
   rescopeTimer = setTimeout(() => {
     rescopeTimer = null;
     // Re-check: the subscriber set may have changed again while we waited.
-    if (socket && desiredScope() !== currentScope) reopenWithScope();
+    if (hasUsableSocket() && desiredScope() !== currentScope) reopenWithScope();
   }, delay);
 }
 
@@ -306,7 +367,11 @@ function reconcileScope() {
  * ordering is exactly what produced the doubled connection count.
  */
 function scheduleConnect() {
-  if (socket || reconnectTimer || rescopeTimer) return;
+  // A CLOSED ref must not be mistaken for "already connected" — see
+  // hasUsableSocket(). This early-return on a zombie socket was the phone bug:
+  // resume re-subscribed, found a dead ref, and never opened anything.
+  dropDeadSocket();
+  if (hasUsableSocket() || reconnectTimer || rescopeTimer) return;
   rescopeTimer = setTimeout(() => {
     rescopeTimer = null;
     openSocket();
@@ -339,9 +404,27 @@ function openSocket() {
   socket = sock;
   currentScope = scope;
 
+  // Give up on a handshake that never completes (see CONNECT_TIMEOUT_MS).
+  clearConnectWatchdog();
+  connectWatchdog = setTimeout(() => {
+    connectWatchdog = null;
+    if (socket !== sock) return;
+    if (sock.readyState !== WebSocket.CONNECTING) return;
+    // Abandon it: detach so the late close can't double-fire the backoff, then
+    // go straight to the normal retry path.
+    sock.onopen = sock.onmessage = sock.onerror = sock.onclose = null;
+    try { sock.close(); } catch { /* ignore */ }
+    socket = null;
+    currentScope = null;
+    emitStatus(false);
+    scheduleReconnect();
+  }, CONNECT_TIMEOUT_MS);
+
   sock.onopen = () => {
     if (socket !== sock) return;
+    clearConnectWatchdog();
     attempts = 0;
+    lastFrameAt = Date.now();
     // Flush before emitStatus so a consumer re-asserting state in its onStatus
     // handler lands AFTER anything queued while we were down (last write wins).
     while (pendingSends.length) {
@@ -353,6 +436,7 @@ function openSocket() {
 
   sock.onmessage = (evt) => {
     if (socket !== sock) return;
+    lastFrameAt = Date.now();
     let msg: GexMessage;
     // Parsed ONCE for all subscribers (previously once per socket per frame).
     try {
@@ -381,15 +465,69 @@ function openSocket() {
 
   sock.onclose = () => {
     if (socket !== sock) return;
+    clearConnectWatchdog();
     socket = null;
+    currentScope = null;
     emitStatus(false);
     scheduleReconnect();
   };
 }
 
+/**
+ * Come back from a background/offline stretch immediately.
+ *
+ * WHY (this is the mobile fix). Two things happen to a phone that a desktop tab
+ * almost never sees:
+ *
+ *   1. The tab is frozen. Timers stop, so a pending backoff — already out at
+ *      several seconds, and up to 30 — does not run while hidden and then runs
+ *      out its FULL remaining delay after the user is looking at the page
+ *      again. That is the "keeps struggling to reconnect" wait.
+ *   2. The socket is killed underneath the frozen page (the server's own
+ *      ping/terminate reaper does it), and the close event that would have
+ *      armed a retry is delivered to a frozen page, or not at all.
+ *
+ * So on any resume signal: forget the backoff (this is a fresh attempt, not the
+ * n-th failure of the old one), drop a dead or stale socket, and reconnect now.
+ * Idempotent and cheap — several of these events fire together on a real wake.
+ */
+function handleWake() {
+  if (typeof window === "undefined") return;
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+  if (!subscribers.size) return;
+
+  // A wake is not a failure: never make the user wait out the old backoff.
+  attempts = 0;
+  clearReconnect();
+  dropDeadSocket();
+
+  // An OPEN socket that has gone quiet across the background stretch is
+  // half-open — readyState lies. Reopen instead of trusting it.
+  if (isLive() && lastFrameAt && Date.now() - lastFrameAt > RESUME_STALE_MS) {
+    reopenWithScope();
+    return;
+  }
+  if (hasUsableSocket()) return;
+  openSocket();
+}
+
+if (typeof window !== "undefined") {
+  // visibilitychange = unlock / app switch back; pageshow = bfcache restore
+  // (iOS Safari's back-swipe and app-switcher path, where no visibilitychange
+  // is guaranteed); online = radio came back; focus = catch-all.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") handleWake();
+  });
+  window.addEventListener("pageshow", handleWake);
+  window.addEventListener("online", handleWake);
+  window.addEventListener("focus", handleWake);
+}
+
 function teardown() {
   clearReconnect();
   clearRescope();
+  clearConnectWatchdog();
+  lastFrameAt = 0;
   // The next connection recomputes its own scope from whoever is mounted then.
   currentScope = null;
   const sock = socket;

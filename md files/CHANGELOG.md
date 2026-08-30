@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-08-30 - mobile ES Candles: fix the wedged live-feed reconnect
+
+Edited: `lib/gexSocket.ts`.
+
+The phone build's ES Candles page could come back from a lock or an app switch
+and sit on "Connecting to the live feed..." forever. Desktop was fine, which is
+why it read as a mobile bug - the two conditions that trigger it are a frozen
+tab and a radio change, and a laptop tab sees neither.
+
+Three defects in the shared socket, all on the resume path:
+
+1. **A dead socket ref counted as a live connection.** `scheduleConnect()` and
+   `reconcileScope()` tested `socket !== null`. When the OS kills the socket
+   under a frozen page, the ref survives as CLOSED and its `onclose` - the only
+   thing that nulls the ref and arms a retry - is delivered to a frozen page or
+   dropped. Resume then re-subscribed, hit that zombie ref, and returned without
+   opening anything. Added `hasUsableSocket()` (CONNECTING or OPEN) and
+   `dropDeadSocket()`, and every guard now tests those.
+
+2. **No connect timeout.** A wifi<->cell handoff routinely leaves a socket stuck
+   in CONNECTING with no error and no close. `openSocket()` refuses to open a
+   second one while that is true and the backoff only ever runs from `onclose`,
+   so one hung handshake wedged the feed permanently. Added a 12s watchdog that
+   abandons the handshake and falls into the normal retry.
+
+3. **The backoff ran out its full delay after the user was back.** Timers are
+   frozen while hidden, so a pending retry already out at 2-30s resumed and then
+   made the user wait the remainder. Added `handleWake()` on visibilitychange /
+   pageshow / online / focus: resets `attempts`, clears the pending backoff,
+   drops a dead socket and reconnects immediately. It also reopens an OPEN
+   socket that has delivered nothing for 20s across the background stretch -
+   readyState lies about half-open sockets on mobile.
+
+No behaviour change for a tab that stays visible; `lastFrameAt` is the only new
+state. Desktop gets the same resilience, it just rarely needed it.
+
 ## 2026-08-30 - v3: eight customer pages, the account menu, and the owner gate
 
 Added to `cbedge-v3/`: `src/pages/TradersDashboard.tsx`, `Premarket.tsx`,
