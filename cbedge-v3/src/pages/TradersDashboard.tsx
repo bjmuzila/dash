@@ -317,7 +317,7 @@ function hasEventsField(v: unknown): v is { events: unknown } {
 // ── Header widgets ───────────────────────────────────────────────────────────
 
 const HEADER_BTN =
-  'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md border px-3.5 py-2 text-[13px] font-bold tracking-[0.04em] no-underline transition-colors'
+  'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md border px-3.5 py-2 text-sm font-bold tracking-[0.04em] no-underline transition-colors'
 
 /** v2's resting fill for the Premarket Prep button. */
 const PREMARKET_BG = `linear-gradient(180deg, ${alpha(T.orange, 0.2)}, ${alpha(T.orange, 0.06)})`
@@ -351,7 +351,7 @@ function WeatherWidget({
   if (weather) {
     return (
       <div className="text-right">
-        <div className="text-[22px] font-bold leading-tight" style={{ color: MOVE_UP }}>
+        <div className="text-xl font-bold leading-tight" style={{ color: MOVE_UP }}>
           <span aria-hidden>☀</span> {weather.tempF}°F
         </div>
         <div className="text-xs text-muted">
@@ -475,7 +475,7 @@ function CountdownCard({
   return (
     <Card>
       <div className="flex flex-col items-center gap-2 px-5 py-7 text-center">
-        <div className="text-[17px] font-semibold text-fg">
+        <div className="text-lg font-semibold text-fg">
           {phase === 'close' ? 'Countdown to Market Close' : 'Countdown to Market Open'}
         </div>
         <div
@@ -546,7 +546,7 @@ function OverviewCard({
       title={<span>📈 Overnight Market Overview</span>}
       actions={
         overview && Number(overview.generated_at) > 0 ? (
-          <span className="text-[10px] text-muted">
+          <span className="text-2xs text-muted">
             Generated{' '}
             {new Date(Number(overview.generated_at)).toLocaleTimeString('en-US', {
               timeZone: 'America/New_York',
@@ -590,7 +590,7 @@ function OverviewCard({
             })}
           </div>
           {quotesFailed && (
-            <div className="mb-2 text-xs" style={{ color: MOVE_DOWN }}>
+            <div className="mb-2 text-sm" style={{ color: MOVE_DOWN }}>
               Live quotes unavailable — showing last known values.
             </div>
           )}
@@ -606,7 +606,7 @@ function OverviewCard({
                     className="flex items-center justify-between rounded-sm border border-line bg-surface2 px-2 py-1"
                   >
                     <div className="min-w-0">
-                      <span className="text-xs font-bold" style={{ color: T.cyan }}>
+                      <span className="text-sm font-bold" style={{ color: T.cyan }}>
                         {m.symbol}
                       </span>
                       {/* v2 truncates at 18 characters. /api/premarket-movers
@@ -614,22 +614,22 @@ function OverviewCard({
                           twice; only the 07:00 overview payload carries a real
                           company name. Kept as v2 had it — see the parity
                           file's build log. */}
-                      <span className="ml-1.5 text-[10px] text-muted">
+                      <span className="ml-1.5 text-2xs text-muted">
                         {m.name.length > 18 ? `${m.name.slice(0, 18)}…` : m.name}
                       </span>
                     </div>
                     <div className="shrink-0 text-right">
-                      <span className="tabular text-xs font-bold" style={{ color: moveColor(displayPct) }}>
+                      <span className="tabular text-sm font-bold" style={{ color: moveColor(displayPct) }}>
                         {fmtPct(displayPct)}
                       </span>
-                      {m.preMarketPct != null && <span className="ml-1 text-[10px] text-muted">PM</span>}
+                      {m.preMarketPct != null && <span className="ml-1 text-2xs text-muted">PM</span>}
                     </div>
                   </div>
                 )
               })}
             </div>
           ) : (
-            <div className="rounded-md border border-dashed border-line bg-surface2 px-3 py-3.5 text-center text-xs text-muted">
+            <div className="rounded-md border border-dashed border-line bg-surface2 px-3 py-3.5 text-center text-sm text-muted">
               Available after 7 AM ET overview generates.
             </div>
           )}
@@ -644,18 +644,18 @@ function OverviewCard({
                 return (
                   <div key={d.title + i} className="border-l-[3px] py-2 pl-3" style={{ borderColor: c }}>
                     <div
-                      className="text-[10px] font-bold uppercase tracking-[0.08em]"
+                      className="text-2xs font-bold uppercase tracking-[0.08em]"
                       style={{ color: c }}
                     >
                       {d.when}
                     </div>
                     <div className="my-0.5 font-bold text-fg">{d.title}</div>
-                    <div className="text-xs leading-snug text-muted">{d.body}</div>
+                    <div className="text-sm leading-snug text-muted">{d.body}</div>
                   </div>
                 )
               })
             ) : (
-              <div className="text-xs text-muted">No major USD events scheduled today.</div>
+              <div className="text-sm text-muted">No major USD events scheduled today.</div>
             )}
           </div>
         </div>
@@ -677,7 +677,7 @@ function ScheduleCard({ schedule, onChange }: { schedule: ScheduleItem[]; onChan
       title={<span style={{ color: T.red }}>🕐 Morning Schedule</span>}
       actions={<Chip label={editing ? 'Done' : 'Edit'} on={editing} onClick={() => setEditing((v) => !v)} />}
     >
-      <div className="mb-3 text-xs text-muted">
+      <div className="mb-3 text-sm text-muted">
         These are sample times — tap{' '}
         <span className="font-bold" style={{ color: T.cyan }}>
           Edit
@@ -712,7 +712,7 @@ function ScheduleCard({ schedule, onChange }: { schedule: ScheduleItem[]; onChan
             <div key={s.id} className="flex items-center gap-3">
               {/* Mono and nowrap, no fixed width — v2's rule. A width would
                   clip a longer time string rather than pushing the label. */}
-              <span className="shrink-0 whitespace-nowrap font-mono text-xs font-bold text-muted">{s.time}</span>
+              <span className="shrink-0 whitespace-nowrap font-mono text-sm font-bold text-muted">{s.time}</span>
               {/* The last row is the one that matters — "Market Open". */}
               <span className={i === schedule.length - 1 ? 'font-bold text-fg' : 'font-medium text-fg'}>
                 {s.label}
@@ -745,7 +745,7 @@ function TasksCard({ tasks, onChange }: { tasks: TaskItem[]; onChange: (next: Ta
       title={<span style={{ color: MOVE_UP }}>✅ Pre-Market Tasks</span>}
       actions={<Chip label={editing ? 'Done' : 'Edit'} on={editing} onClick={() => setEditing((v) => !v)} />}
     >
-      <div className="mb-3 text-xs text-muted">
+      <div className="mb-3 text-sm text-muted">
         Sample tasks — tap{' '}
         <span className="font-bold" style={{ color: MOVE_UP }}>
           Edit
@@ -890,7 +890,7 @@ function QuickLinksCard({ links, onChange }: { links: LinkItem[]; onChange: (nex
 function WheelFallback() {
   return (
     <Card title="S&P Sector Wheel">
-      <div className="px-3 py-12 text-center text-xs text-muted opacity-60">Loading sector data…</div>
+      <div className="px-3 py-12 text-center text-sm text-muted opacity-60">Loading sector data…</div>
     </Card>
   )
 }

@@ -126,7 +126,7 @@ function Rail() {
             <span aria-hidden className="text-base leading-none">
               {item.icon}
             </span>
-            <span className="max-w-full truncate text-[9px] font-semibold leading-tight">{item.label}</span>
+            <span className="max-w-full truncate text-3xs font-semibold leading-tight">{item.label}</span>
           </>
         )
         const dragProps = {

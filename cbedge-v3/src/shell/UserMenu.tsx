@@ -248,7 +248,7 @@ export function UserMenu() {
           >
             <span>My Tickets</span>
             {unread > 0 && (
-              <span className="tabular inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-warn px-1.5 text-[10px] font-extrabold text-bg">
+              <span className="tabular inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-warn px-1.5 text-2xs font-extrabold text-bg">
                 {unread > 99 ? '99+' : unread}
               </span>
             )}

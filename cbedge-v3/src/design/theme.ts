@@ -78,120 +78,6 @@ export const LIGHT_BLUE = 'var(--color-series-5)'
 export const ES_CANDLE_UP = 'var(--color-candle-up)'
 export const ES_CANDLE_DOWN = 'var(--color-candle-down)'
 
-/**
- * MOVE COLOURS — the directional pair the Traders Dashboard and its S&P Sector
- * Wheel paint with. Blue up, red down, carried across from v2 verbatim; see the
- * note beside --color-move-up in tokens.css for why this is not T.green/T.red.
- */
-export const MOVE_UP = 'var(--color-move-up)'
-export const MOVE_DOWN = 'var(--color-move-down)'
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NUMERIC COLOUR.
-//
-// Everything above hands out a CSS string, which is all a class name or an
-// inline `background` ever needs. Two jobs need the value as NUMBERS instead:
-//
-//   • a diverging ramp that mixes toward a hue by MAGNITUDE and has to stay
-//     opaque, because it is painted under text;
-//   • the luminance test that decides whether the label printed on that mix
-//     should be dark or light.
-//
-// color-mix() can do the first and cannot do the second — CSS has no way to
-// ask "is this light?". So these read the token's actual value off :root
-// rather than duplicating it. tokens.css is still the only place the value is
-// written, and moving a token still moves everything derived from it.
-//
-// Cached per token name: the read is a getComputedStyle call, and the wheel
-// asks for the same four tokens on every repaint.
-// ─────────────────────────────────────────────────────────────────────────────
-
-export type RGB = readonly [number, number, number]
-
-const rgbCache = new Map<string, RGB | null>()
-
-function parseColor(raw: string): RGB | null {
-  const s = raw.trim()
-  if (!s) return null
-  if (s.startsWith('#')) {
-    const h = s.slice(1)
-    if (h.length === 3 || h.length === 4) {
-      const r = h[0], g = h[1], b = h[2]
-      if (!r || !g || !b) return null
-      return [parseInt(r + r, 16), parseInt(g + g, 16), parseInt(b + b, 16)]
-    }
-    if (h.length === 6 || h.length === 8) {
-      return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
-    }
-    return null
-  }
-  // Defensive: a browser that normalised the custom property to a functional
-  // notation. Pull the first three numbers out of it rather than naming the
-  // function, which check-theme.mjs bans from source on sight.
-  const m = s.match(/(\d+(?:\.\d+)?)[,\s/]+(\d+(?:\.\d+)?)[,\s/]+(\d+(?:\.\d+)?)/)
-  if (!m || !m[1] || !m[2] || !m[3]) return null
-  return [Math.round(Number(m[1])), Math.round(Number(m[2])), Math.round(Number(m[3]))]
-}
-
-/**
- * A token's literal value, as r/g/b. Pass the custom-property NAME
- * (`'--color-move-up'`), not a `var()` string.
- *
- * Returns null before the stylesheet is live (a test renderer, a first tick in
- * a jsdom): callers fall back to the plain `var()` string, which still paints
- * the right colour — they just lose the ramp for that frame.
- */
-export function tokenRgb(name: string): RGB | null {
-  const hit = rgbCache.get(name)
-  if (hit !== undefined) return hit
-  let out: RGB | null = null
-  if (typeof window !== 'undefined' && typeof getComputedStyle === 'function') {
-    out = parseColor(getComputedStyle(document.documentElement).getPropertyValue(name))
-  }
-  rgbCache.set(name, out)
-  return out
-}
-
-/** Drop every cached token read. Only needed if the palette is swapped live. */
-export function clearTokenCache(): void {
-  rgbCache.clear()
-}
-
-const clamp01 = (t: number) => (t < 0 ? 0 : t > 1 ? 1 : t)
-
-/** Linear blend, `t` of the way from `a` to `b`. */
-export function mixRgb(a: RGB, b: RGB, t: number): RGB {
-  const k = clamp01(t)
-  return [
-    Math.round(a[0] + (b[0] - a[0]) * k),
-    Math.round(a[1] + (b[1] - a[1]) * k),
-    Math.round(a[2] + (b[2] - a[2]) * k),
-  ]
-}
-
-/** `[142,202,230]` → the hex string a `fill=` attribute wants. */
-export function rgbHex(c: RGB): string {
-  const two = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')
-  return `#${two(c[0])}${two(c[1])}${two(c[2])}`
-}
-
-/**
- * Is this colour light enough that dark ink reads better on it?
- *
- * Relative luminance (sRGB → linear, Rec.709 weights) against v2's 0.32
- * threshold, transcribed from SectorSunburst.tsx's `inkOn`. The threshold is
- * deliberately above 0.5's "mathematically neutral" point: the wheel's plates
- * are washes over a near-black panel, and white ink holds on a lot more of
- * them than a midpoint test would allow.
- */
-export function isLightRgb(c: RGB): boolean {
-  const lin = (v: number) => {
-    const x = v / 255
-    return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4)
-  }
-  return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]) > 0.32
-}
-
 /** CB / CW / PW wall colours. cb = Core Bullseye, cw = call wall, pw = put wall. */
 export const LEVEL_COLORS = {
   cb: 'var(--color-level-cb)',
@@ -225,6 +111,96 @@ export const CAL = {
   actual: 'var(--color-cal-actual)',
   forecast: 'var(--color-cal-forecast)',
   previous: 'var(--color-cal-previous)',
+} as const
+
+/**
+ * ── THE v2 PARITY PALETTE ────────────────────────────────────────────────────
+ *
+ * For the Analysis page (/v3/analytics) ONLY, which is a 1:1 port of v2's
+ * /app/analytics and is required to render v2's colours rather than v3's.
+ *
+ * READ THIS BEFORE USING `T` ON THAT PAGE. `T` deliberately maps v2's names
+ * onto v3's values, so on a page that must match v2 these four are traps:
+ *
+ *   T.cyan   → #5b8cff  where v2 is #219EBC (a teal)
+ *   T.orange → #e0a44a  where v2 is #FB8501
+ *   T.red    → #e0645f  where v2 is #EF4444
+ *   T.green  → #35c28e  where v2 is #8ECAE6 — a LIGHT BLUE, not a green
+ *
+ * …and `T.border` / `T.panelBg` are opaque slate where v2 is a white wash and a
+ * 45%-translucent plate. Use `V2.*` and the `alpha()` recipes below instead.
+ *
+ * `text` / `muted` need no override: v3's are already #ffffff, which is what
+ * v2's are. v2 has no grey secondary — "muted" there is white at an opacity,
+ * which is why the port carries v2's opacities rather than inventing a grey.
+ */
+export const V2 = {
+  cyan: 'var(--color-v2-cyan)',
+  orange: 'var(--color-v2-orange)',
+  red: 'var(--color-v2-red)',
+  /** v2's HOME_THEME.green — a light blue. Not a positive/up colour. */
+  green: 'var(--color-v2-green)',
+  /** v2's page-local POS_GREEN. THIS is the page's up/positive colour. */
+  pos: 'var(--color-v2-pos)',
+  purple: 'var(--color-v2-purple)',
+  bg: 'var(--color-v2-bg)',
+  panel: 'var(--color-v2-panel)',
+  /** Ink on a solid fill — a level tag, an active transport button. */
+  ink: 'var(--color-v2-ink)',
+  refresh: 'var(--color-v2-refresh)',
+  /** The refresh button's "refreshing" grey — v2's inline #888. */
+  dim: 'var(--color-v2-dim)',
+  badgeInk: 'var(--color-v2-badge-ink)',
+  lightBlue: 'var(--color-v2-lightblue)',
+  /** Already identical in both palettes. Aliased so a ported file reads V2.* throughout. */
+  text: T.text,
+  muted: T.muted,
+} as const
+
+/**
+ * The v2 washes, by name, so no component re-derives one.
+ *
+ * v2 builds these with a local `themeRgba()` helper or a typed rgba(); here
+ * they are `alpha()` over a token, which is color-mix() underneath and keeps
+ * tracking the token if it ever moves.
+ *
+ * NOT here on purpose: anything that sits ON TOP of a coloured bar. The ladder's
+ * CB/CW/PW tags and the spot-price chip take a SOLID fill — a translucent plate
+ * lets the bar read through it and the label stops being legible. v2 does not
+ * make those translucent and neither may v3.
+ */
+export const V2W = {
+  /** v2's T.border — a white hairline, not a slate line. */
+  border: alpha(T.text, 0.1),
+  /** v2's T.panelBg — THE CARD FILL. The frosted look is the translucency. */
+  panelBg: alpha(V2.panel, 0.45),
+  /** v2's T.panelBgStrong — the econ header bar, the replay date select. */
+  panelBgStrong: alpha(V2.panel, 0.72),
+  /** The portal'd ticker-picker panel. */
+  panelSolid: alpha(V2.panel, 0.97),
+  /** Faint white washes: input/button fills, row hovers, the read block. */
+  wash04: alpha(T.text, 0.04),
+  wash05: alpha(T.text, 0.05),
+  wash03: alpha(T.text, 0.03),
+  /** The picker's unfavourited star. */
+  star: alpha(T.text, 0.28),
+  /** The premarket bullet list's scrollbar thumb. */
+  scrollThumb: alpha(T.text, 0.12),
+  /** The ladder's spot row. */
+  spotRow: alpha(V2.cyan, 0.08),
+  /** Picker active row, and its hover. */
+  pickRow: alpha(V2.cyan, 0.1),
+  pickRowHover: alpha(V2.cyan, 0.15),
+  /** The econ calendar's TODAY day-separator plate. */
+  todayRow: alpha(V2.cyan, 0.06),
+  /** The replay bar's plate and its border. `${T.orange}55` is 0x55/255. */
+  replayBg: alpha(V2.orange, 0.07),
+  replayEdge: alpha(V2.orange, 0.333),
+  /** The two page-background radials in v2's homeShellStyle. */
+  glowA: alpha(V2.cyan, 0.04),
+  glowB: alpha(V2.purple, 0.05),
+  /** The embed-mode card radial. */
+  embedGlow: alpha(V2.lightBlue, 0.1),
 } as const
 
 /**

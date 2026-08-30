@@ -87,7 +87,7 @@ function FlowTapeCard() {
         <CardToolbar>
           <span
             title={`Options flow is only recorded for ${SOCKET_SYMBOL}. This card does not follow the board's ticker`}
-            className="rounded-sm border border-warn px-1.5 py-px text-[9px] font-bold uppercase tracking-[0.08em] text-warn"
+            className="rounded-sm border border-warn px-1.5 py-px text-3xs font-bold uppercase tracking-[0.08em] text-warn"
           >
             {SOCKET_SYMBOL} only
           </span>

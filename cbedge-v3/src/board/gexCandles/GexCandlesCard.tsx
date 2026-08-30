@@ -528,7 +528,7 @@ export function GexCandlesCard() {
             title="Chart layers and bubble settings"
             className={[
               'rounded-sm border border-line font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg',
-              phone ? 'min-h-[34px] px-3 py-1.5 text-[12px]' : 'px-2 py-0.5 text-[10px]',
+              phone ? 'min-h-[34px] px-3 py-1.5 text-sm' : 'px-2 py-0.5 text-2xs',
             ].join(' ')}
           >
             {/* On a phone this button IS the toolbar, so it has to say what the
@@ -648,14 +648,14 @@ export function GexCandlesCard() {
             ref={countdownRef}
             className={[
               'tabular pointer-events-none absolute top-1.5 z-10 font-mono font-extrabold text-accent opacity-90',
-              phone ? 'right-2 text-[12px]' : 'right-16 text-[11px]',
+              phone ? 'right-2 text-sm' : 'right-16 text-xs',
             ].join(' ')}
           />
 
           {/* An empty bubble layer that HAS data is indistinguishable from a
               broken one, and that ambiguity cost real debugging time. Say it. */}
           {bubblesOutOfRange && settings.bubblesOn && (
-            <span className="pointer-events-none absolute left-2 top-1.5 z-10 text-[10px] text-muted opacity-55">
+            <span className="pointer-events-none absolute left-2 top-1.5 z-10 text-2xs text-muted opacity-55">
               no GEX history in view
             </span>
           )}

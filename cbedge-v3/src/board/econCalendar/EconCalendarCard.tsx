@@ -203,17 +203,17 @@ function EventRow({ ev, faded }: { ev: CalEvent; faded: boolean }) {
         transition: 'opacity 400ms',
       }}
     >
-      <div className="tabular flex items-center justify-center border-r border-line px-1 font-mono text-[13px] text-fg">
+      <div className="tabular flex items-center justify-center border-r border-line px-1 font-mono text-sm text-fg">
         {ev.time_formatted || ev.time || 'TBD'}
       </div>
       <div className="flex min-w-0 flex-col justify-center gap-0.5 px-2 py-1.5">
         <div className="flex items-center gap-1.5">
-          <span className="text-[10px] font-extrabold uppercase tracking-[0.1em]" style={{ color: col }}>
+          <span className="text-2xs font-extrabold uppercase tracking-[0.1em]" style={{ color: col }}>
             {ev.impact}
           </span>
           <span className="text-xs font-semibold text-fg opacity-80">{ev.country}</span>
         </div>
-        <div className={['text-[13px] leading-tight text-fg', ev.impact === 'High' ? 'font-bold' : ''].join(' ')}>
+        <div className={['text-sm leading-tight text-fg', ev.impact === 'High' ? 'font-bold' : ''].join(' ')}>
           {ev.title}
         </div>
         {hasValues && (
@@ -255,7 +255,7 @@ function EarningsBlock({ rows, kind }: { rows: EarnRow[]; kind: EarnKind }) {
       title={kind.title}
     >
       <div
-        className="flex flex-col items-center justify-center border-r border-line font-mono text-[10px] font-bold leading-tight"
+        className="flex flex-col items-center justify-center border-r border-line font-mono text-2xs font-bold leading-tight"
         style={{ color: col }}
       >
         <span>{kind.head}</span>
@@ -269,7 +269,7 @@ function EarningsBlock({ rows, kind }: { rows: EarnRow[]; kind: EarnKind }) {
             target="_blank"
             rel="noreferrer"
             title={`${r.company}${fmtMcap(r.market_cap) ? ` · ${fmtMcap(r.market_cap)}` : ''}${r.eps_est ? ` · est ${r.eps_est}` : ''}`}
-            className="rounded-sm border border-line bg-surface2 px-1.5 py-0.5 font-mono text-[10px] font-bold text-fg hover:bg-raised"
+            className="rounded-sm border border-line bg-surface2 px-1.5 py-0.5 font-mono text-2xs font-bold text-fg hover:bg-raised"
           >
             {r.symbol}
           </a>
@@ -379,7 +379,7 @@ export function EconCalendarCard() {
           </span>
           {date === today && (
             <span
-              className="rounded-sm px-1 py-px text-[10px] font-black tracking-[0.1em]"
+              className="rounded-sm px-1 py-px text-2xs font-black tracking-[0.1em]"
               style={{ background: 'var(--color-cal-accent)', color: 'var(--color-bg)' }}
             >
               TODAY
@@ -420,12 +420,12 @@ export function EconCalendarCard() {
       {/* One toolbar per card: the window caption and the filter go in the
           Card's header, not in a second bar underneath it. */}
       <CardToolbar>
-        <span className="text-[10px] uppercase tracking-[0.1em] text-muted opacity-60">Today · ET</span>
+        <span className="text-2xs uppercase tracking-[0.1em] text-muted opacity-60">Today · ET</span>
         <div className="relative">
           <button
             type="button"
             onClick={() => setMenuOpen((v) => !v)}
-            className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted hover:bg-raised hover:text-fg"
+            className="rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold uppercase tracking-[0.08em] text-muted hover:bg-raised hover:text-fg"
           >
             Filter ({filters.length})
           </button>
@@ -439,7 +439,7 @@ export function EconCalendarCard() {
                   className="flex items-center gap-2 rounded-sm px-1.5 py-1 text-left text-xs hover:bg-raised"
                 >
                   <span
-                    className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[2px] text-[9px] leading-none"
+                    className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[2px] text-3xs leading-none"
                     style={{
                       border: `2px solid var(${o.varName})`,
                       background: active.has(o.value) ? `var(${o.varName})` : 'transparent',

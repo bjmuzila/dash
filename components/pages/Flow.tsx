@@ -496,6 +496,11 @@ export default function FlowPage() {
     if (view !== "combined") { setCombinedSplit(null); return; }
     let cancelled = false;
     const qp = new URLSearchParams({ date });
+    // underlying=ALL is the server's explicit "no ticker filter" opt-out. Sending
+    // NOTHING here used to fall through to parseFlowFilters()'s SPX default, so
+    // this whole card — and the tape header totals that prefer this split — read
+    // SPX-only numbers under an "All Tickers" heading. Keep this param.
+    qp.set("underlying", "ALL");
     if (scope === "exIdx") qp.set("exIdx", "1");
     if (side !== "all") qp.set("side", side);
     if (optType !== "all") qp.set("type", optType);

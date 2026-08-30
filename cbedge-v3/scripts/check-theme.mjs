@@ -9,7 +9,7 @@
 // `muted` and `faint` all resolve to white, and the surface ladder is six named
 // steps. None of that helps if a new page can still write `text-gray-400`.
 //
-// So this script fails the build on three things, anywhere under `src/`:
+// So this script fails the build on four things, anywhere under `src/`:
 //
 //   1. COLOUR LITERALS — `#rrggbb`, `rgb()`, `rgba()`, `hsl()`, `hsla()`.
 //      tokens.css is the one file allowed to have them. A colour needed as a JS
@@ -34,6 +34,16 @@
 //      that page reads those names from its OWN file. Cross-file by design, and
 //      correct. Scoping the rule per file would flag every one of them, and a
 //      check that cries wolf on working code gets switched off.
+//
+//   4. TYPE SIZES OFF THE SCALE — `text-[10px]`, `font-size:11.5px`,
+//      `fontSize: 12`. Same disease as the colours, and the one that actually
+//      gets felt: v2's pages each picked their own sizes and no two agreed, so
+//      "make the font the same throughout" became a permanent chore. The scale
+//      in tokens.css is the answer — `text-3xs` 9, `text-2xs` 10, `text-xs` 11,
+//      `text-sm` 13, `text-base` 15, `text-lg` 18, `text-xl` 24, `text-2xl` 32
+//      — and this rule is what stops a page quietly adding a ninth size. Canvas
+//      and SVG cannot use a class, so they read the number off the same scale
+//      rather than typing one.
 //
 // ── Why there is a baseline ──────────────────────────────────────────────────
 //
@@ -83,6 +93,14 @@ const TW_PROP =
 // The trailing shade number is what separates Tailwind's palette from ours:
 // `text-violet` is a v3 token, `text-violet-400` is Tailwind's.
 const TW_CLASS = new RegExp(`\\b(?:${TW_PROP})-(?:${TW_PALETTE})-(?:50|[1-9]00|950)\\b`, 'g')
+
+// Rule 4. An arbitrary Tailwind size, a CSS declaration, or a JS/canvas number.
+// The JS form is deliberately narrow — `fontSize:` with a bare number — so it
+// catches style objects and ctx.font builders without touching anything that
+// interpolates a scale constant.
+const TYPE_ARBITRARY = /\btext-\[[0-9.]+(?:px|rem|em)\]/g
+const TYPE_CSS = /font-size\s*:\s*[0-9.]+(?:px|rem|em)/g
+const TYPE_JS = /\bfontSize\s*:\s*[0-9.]+/g
 
 const VAR_USE = /var\(\s*(--[a-zA-Z0-9_-]+)/g
 // A declaration, in either of the two forms this codebase writes them.
@@ -168,6 +186,15 @@ function scan() {
       hits.push({ line: lineOf(text, m.index), rule: 'tailwind-palette', found: m[0] })
     }
 
+    // tokens.css owns the scale, so it is the one file allowed to state a size.
+    if (!LITERAL_EXEMPT.has(rel)) {
+      for (const re of [TYPE_ARBITRARY, TYPE_CSS, TYPE_JS]) {
+        for (const m of text.matchAll(re)) {
+          hits.push({ line: lineOf(text, m.index), rule: 'type-scale', found: m[0].trim() })
+        }
+      }
+    }
+
     for (const m of text.matchAll(VAR_USE)) {
       const name = m[1]
       // `var(--color-level-${level})` — a name built by interpolation. The
@@ -215,6 +242,8 @@ const RULE_HELP = {
     'colour literal — put the colour in src/design/tokens.css and use the token utility, or T.*/alpha() from src/design/theme.ts for a JS string',
   'tailwind-palette':
     "Tailwind's default palette — this is what made v2's text grey. Use the app's tokens: text-fg / text-muted / text-faint, bg-bg / bg-surface / bg-surface2 / bg-raised, border-line",
+  'type-scale':
+    'type size off the scale — use a scale utility (text-3xs 9 / text-2xs 10 / text-xs 11 / text-sm 13 / text-base 15 / text-lg 18 / text-xl 24 / text-2xl 32). Canvas and SVG read the number off the same scale rather than typing one',
   'unknown-var':
     'no such CSS variable — nothing under src/ or in index.html declares it, so this renders as nothing at all, silently. Check the spelling against src/design/tokens.css',
 }

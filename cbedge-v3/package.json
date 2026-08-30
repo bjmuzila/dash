@@ -21,7 +21,9 @@
     "check:casing": "node scripts/check-casing.mjs",
     "check:parity": "node scripts/parity-check.mjs",
     "check:parity:self": "node scripts/parity-check.test.mjs",
-    "check": "npm run check:casing && npm run typecheck && npm run check:theme && npm run build:fast && npm run budgets && npm run check:ws && npm run perf && npm run check:parity:self",
+    "check:parity:chain": "node scripts/parity-check-chain.mjs",
+    "check:parity:chain:self": "node scripts/parity-check-chain.test.mjs",
+    "check": "npm run check:casing && npm run typecheck && npm run check:theme && npm run build:fast && npm run budgets && npm run check:ws && npm run perf && npm run check:parity:self && npm run check:parity:chain:self",
     "preview": "vite preview --port 4173"
   },
   "dependencies": {

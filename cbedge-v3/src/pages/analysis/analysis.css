@@ -1,0 +1,96 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Analysis (/v3/analytics) — the page frame and the responsive collapse.
+
+   Part A of docs/parity/analysis.md. v2 gets all of this from `homeShellStyle` +
+   `homeContentStyle` in components/shared/homeTheme.ts and from a handful of
+   rules in app/globals.css; v3's Page primitive is a different frame, so the
+   page carries its own.
+
+   NO COLOUR LITERALS. The two background radials are v2's `shellGlow`, built
+   from the v2 tokens in tokens.css — same values, same positions.
+
+   ⚠ v2 ALSO relies on globals.css's GLOBAL GRID COLLAPSE, which flattens inline
+   grid-template-columns by SUBSTRING MATCH on the style attribute. v3 has no
+   such rule and is not getting one — matching on inline styles is exactly the
+   kind of action at a distance v3 exists to avoid — so every collapse v2 got for
+   free is written out explicitly below. They are:
+
+     repeat(4, 1fr)  the page grid                  → 1fr   (@899)
+     1fr 1fr         .tl-split, and the 2×2 tiles   → 1fr   (@899)
+     repeat(3, 1fr)  the 3-stat rows                → 1fr   (@899)
+     auto-fit        the level chip rows            → already reflows, untouched
+   ──────────────────────────────────────────────────────────────────────────── */
+
+.cb-analysis-page {
+  /* v2's homeShellStyle + homeContentStyle, collapsed into one frame. */
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: clamp(14px, 2vw, 24px);
+  gap: clamp(16px, 2vw, 32px);
+  background-color: var(--color-v2-bg);
+  background-image:
+    radial-gradient(
+      circle at 15% 50%,
+      color-mix(in srgb, var(--color-v2-cyan) 4%, transparent) 0%,
+      transparent 50%
+    ),
+    radial-gradient(
+      circle at 85% 30%,
+      color-mix(in srgb, var(--color-v2-purple) 5%, transparent) 0%,
+      transparent 50%
+    );
+  color: var(--color-fg);
+}
+
+/* Embedded in the GEX dock (?embed=1). The cards are 45% translucent, so
+   stacked in a narrow column they show through to each other and read as
+   smeared. Opaque plate, single column. */
+.analysis-embed {
+  grid-template-columns: 1fr !important;
+  align-items: start !important;
+}
+.analysis-embed > * {
+  background:
+    radial-gradient(
+      circle at 50% 0%,
+      color-mix(in srgb, var(--color-v2-lightblue) 10%, transparent) 0%,
+      transparent 60%
+    ),
+    var(--color-v2-panel) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* ── Phones ────────────────────────────────────────────────────────────────
+   A single column. v2 steps 4 → 2 (the generic collapse) → 1 (@899); the
+   intermediate 2-column step crushes these dense cards, so v3 goes straight to
+   one and skips it. */
+@media (max-width: 899px) {
+  .analysis-grid {
+    grid-template-columns: 1fr !important;
+    align-items: start !important;
+  }
+
+  /* The two ladder panes stack rather than halving. */
+  .cb-analysis-page .tl-split {
+    grid-template-columns: 1fr !important;
+    /* The fixed `clamp(838px, 86vh, 1500px)` is solved for two panes side by
+       side. Stacked, it would clip the second one to nothing. */
+    height: auto !important;
+    grid-template-rows: auto auto !important;
+  }
+  .cb-analysis-page .tl-split > * {
+    min-height: 70vh;
+  }
+
+  /* Everything v2 got from the global inline-style collapse: the 2×2 greek tile
+     grids, the 3-up stat rows, and the Strategy card's two-column body. */
+  .cb-analysis-page [style*='grid-template-columns: 1fr 1fr'],
+  .cb-analysis-page [style*='grid-template-columns: 1fr 1fr 1fr'],
+  .cb-analysis-page [style*='grid-template-columns: repeat(3, 1fr)'] {
+    grid-template-columns: 1fr !important;
+  }
+}

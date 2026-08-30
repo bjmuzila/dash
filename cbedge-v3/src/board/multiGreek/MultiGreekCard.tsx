@@ -437,7 +437,7 @@ function TickerPanel({
             // Underline, not a box: the field is only on screen while it is
             // focused, so the border was decorating a state that already has
             // the caret in it.
-            className="w-[58px] min-w-0 shrink select-text border-0 border-b border-accent bg-transparent p-0 text-[13px] font-extrabold uppercase leading-none tracking-[0.06em] text-accent outline-none"
+            className="w-[58px] min-w-0 shrink select-text border-0 border-b border-accent bg-transparent p-0 text-sm font-extrabold uppercase leading-none tracking-[0.06em] text-accent outline-none"
           />
         ) : (
           <button
@@ -456,7 +456,7 @@ function TickerPanel({
             // plain. That is the only mark either needs — an added panel also
             // carries the ✕ that panel one does not have.
             className={[
-              'min-w-0 shrink truncate text-left text-[13px] font-extrabold uppercase leading-none tracking-[0.06em] hover:underline',
+              'min-w-0 shrink truncate text-left text-sm font-extrabold uppercase leading-none tracking-[0.06em] hover:underline',
               isPageSymbol ? 'text-accent' : 'text-fg',
             ].join(' ')}
           >
@@ -464,7 +464,7 @@ function TickerPanel({
           </button>
         )}
         <div className="flex min-w-0 items-center gap-1">
-          <span className="tabular truncate text-[11px] font-semibold text-fg">
+          <span className="tabular truncate text-xs font-semibold text-fg">
             {spot > 0 ? spot.toLocaleString('en-US', { maximumFractionDigits: 2 }) : q.loading ? '…' : '—'}
           </span>
           {onRemove && (
@@ -477,7 +477,7 @@ function TickerPanel({
                 e.stopPropagation()
                 onRemove()
               }}
-              className="shrink-0 rounded-sm px-0.5 text-[10px] font-bold leading-none text-faint hover:bg-raised hover:text-down"
+              className="shrink-0 rounded-sm px-0.5 text-2xs font-bold leading-none text-faint hover:bg-raised hover:text-down"
             >
               ✕
             </button>
@@ -495,8 +495,8 @@ function TickerPanel({
         style={{ gridTemplateColumns: gridCols }}
       >
         <div className="flex flex-col justify-between text-center leading-[1.15]">
-          <span className="text-[10px] font-extrabold uppercase tracking-[0.06em] text-fg">Strike</span>
-          <span className="text-[9px] font-extrabold uppercase tracking-[0.06em] text-muted">Total</span>
+          <span className="text-2xs font-extrabold uppercase tracking-[0.06em] text-fg">Strike</span>
+          <span className="text-3xs font-extrabold uppercase tracking-[0.06em] text-muted">Total</span>
         </div>
         {display.map((c) => {
           const s = stats.get(c.key)
@@ -504,11 +504,11 @@ function TickerPanel({
           const f = fmtGex(net)
           return (
             <div key={c.key} className="flex min-w-0 flex-col justify-between text-center leading-[1.15]">
-              <div className="truncate text-[10px] font-extrabold tracking-[0.04em] text-accent">{c.label}</div>
-              <div className="truncate text-[9px] font-bold text-fg">{c.subLabel}</div>
+              <div className="truncate text-2xs font-extrabold tracking-[0.04em] text-accent">{c.label}</div>
+              <div className="truncate text-3xs font-bold text-fg">{c.subLabel}</div>
               <div
                 className={[
-                  'tabular min-w-0 truncate font-mono text-[10px] font-extrabold',
+                  'tabular min-w-0 truncate font-mono text-2xs font-extrabold',
                   net == null || net === 0 ? 'text-flat' : net > 0 ? 'text-gex-pos' : 'text-gex-neg',
                 ].join(' ')}
               >
@@ -516,7 +516,7 @@ function TickerPanel({
                 {f.text}
                 {s && s.netTotal !== 0 && (
                   <span
-                    className={['ml-0.5 text-[8px] font-extrabold', s.posPct >= 50 ? 'text-up' : 'text-down'].join(' ')}
+                    className={['ml-0.5 text-3xs font-extrabold', s.posPct >= 50 ? 'text-up' : 'text-down'].join(' ')}
                   >
                     {Math.round(s.posPct)}%
                   </span>
@@ -549,7 +549,7 @@ function TickerPanel({
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       >
         {rows.length === 0 && (
-          <div className="px-1 py-3 text-[11px] text-muted opacity-50">
+          <div className="px-1 py-3 text-xs text-muted opacity-50">
             {q.error ? 'Chain unavailable' : q.loading ? 'Waiting for the chain…' : 'No strikes'}
           </div>
         )}
@@ -577,7 +577,7 @@ function TickerPanel({
               {/* No ATM chip. The row's white ring already says which strike is
                   at the money, and a badge in the rail cost the strike number
                   half its width on four ladders at once. */}
-              <span className="truncate border-r border-line px-1 text-center font-mono text-[11px] font-extrabold text-muted">
+              <span className="truncate border-r border-line px-1 text-center font-mono text-xs font-extrabold text-muted">
                 {Number.isInteger(strike) ? strike : strike.toFixed(2)}
               </span>
 
@@ -618,7 +618,7 @@ function TickerPanel({
                         : undefined
                     }
                     className={[
-                      'tabular relative min-w-0 truncate rounded-[2px] px-1 text-center font-mono text-[10px] text-fg',
+                      'tabular relative min-w-0 truncate rounded-[2px] px-1 text-center font-mono text-2xs text-fg',
                       isCb ? 'mg-cb-glow font-extrabold' : '',
                       clickable ? 'cursor-pointer' : '',
                     ].join(' ')}
@@ -668,7 +668,7 @@ function TickerPanel({
                     {isCb && !isFront && (
                       <span
                         title="Core Bullseye"
-                        className="pointer-events-none absolute left-0.5 top-px text-[10px] leading-none"
+                        className="pointer-events-none absolute left-0.5 top-px text-2xs leading-none"
                         style={{
                           color: 'var(--color-app)',
                           textShadow: '0 0 2px color-mix(in srgb, var(--color-fg) 55%, transparent)',
@@ -682,7 +682,7 @@ function TickerPanel({
                     {level && isFront && (
                       <span
                         title={{ cb: 'Core Bullseye', cw: 'Call Wall', pw: 'Put Wall' }[level]}
-                        className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 rounded-[3px] bg-app px-[3px] text-[8px] font-black leading-[1.3] tracking-[0.04em] text-fg"
+                        className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 rounded-[3px] bg-app px-[3px] text-3xs font-black leading-[1.3] tracking-[0.04em] text-fg"
                         style={{ boxShadow: `inset 0 0 0 1px var(--color-level-${level})` }}
                       >
                         {level.toUpperCase()}
@@ -846,7 +846,7 @@ export function MultiGreekCard() {
                 : 'Add another ticker panel'
             }
             className={[
-              'rounded-sm border border-line px-1.5 py-0.5 text-[10px] font-semibold',
+              'rounded-sm border border-line px-1.5 py-0.5 text-2xs font-semibold',
               full ? 'cursor-not-allowed text-muted opacity-40' : 'text-muted hover:bg-raised hover:text-fg',
             ].join(' ')}
           >
@@ -876,12 +876,12 @@ export function MultiGreekCard() {
                     }
                     if (e.key === 'Escape') setAddOpen(false)
                   }}
-                  className="w-full rounded-sm border border-line bg-bg px-1.5 py-1 text-[13px] font-extrabold uppercase tracking-[0.1em] text-accent outline-none focus:border-accent"
+                  className="w-full rounded-sm border border-line bg-bg px-1.5 py-1 text-sm font-extrabold uppercase tracking-[0.1em] text-accent outline-none focus:border-accent"
                 />
                 <button
                   type="button"
                   onClick={addTicker}
-                  className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted hover:bg-raised hover:text-fg"
+                  className="rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold uppercase tracking-[0.08em] text-muted hover:bg-raised hover:text-fg"
                 >
                   Add
                 </button>
@@ -894,7 +894,7 @@ export function MultiGreekCard() {
           type="button"
           onClick={() => setCogOpen((v) => !v)}
           title={`Board settings — ${BASIS_LABEL[basis]} · ${colCount + (showEx0 ? 1 : 0)} of ${MAX_COLS} col`}
-          className="rounded-sm border border-line px-1.5 py-0.5 text-[10px] font-semibold text-muted hover:bg-raised hover:text-fg"
+          className="rounded-sm border border-line px-1.5 py-0.5 text-2xs font-semibold text-muted hover:bg-raised hover:text-fg"
         >
           ⚙
         </button>

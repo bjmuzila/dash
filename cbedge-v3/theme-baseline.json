@@ -3,7 +3,26 @@
   "files": {
     "src/board/chart-render.ts": 8,
     "src/board/gexCandles/bubbles.ts": 6,
-    "src/board/gexCandles/chart.ts": 8,
-    "src/board/gexChart/gexChartRender.ts": 32
+    "src/board/gexCandles/chart.ts": 9,
+    "src/board/gexChart/gexChartRender.ts": 32,
+    "src/design/primitives/Dock.tsx": 4,
+    "src/pages/OptionsChain.tsx": 16,
+    "src/pages/Premarket.tsx": 67,
+    "src/pages/optionsChain/ChainMatrix.tsx": 16,
+    "src/pages/optionsChain/LadderModal.tsx": 18,
+    "src/pages/optionsChain/ReplayBar.tsx": 5,
+    "src/pages/optionsChain/StrikeHoverCard.tsx": 9,
+    "src/pages/optionsChain/heatSkins.ts": 2,
+    "src/pages/optionsChain/pickers.tsx": 9,
+    "src/pages/premarket/GammaBellCurve.tsx": 11,
+    "src/pages/premarket/GexChurnFeed.tsx": 10,
+    "src/pages/premarket/GexHeatBar.tsx": 15,
+    "src/pages/premarket/GexProfile.tsx": 1,
+    "src/pages/premarket/GexWatchFeed.tsx": 10,
+    "src/pages/premarket/PostMarketTab.tsx": 2,
+    "src/pages/premarket/cbContracts.css.ts": 24,
+    "src/pages/premarket/historicalRecap.css.ts": 6,
+    "src/pages/premarket/postMarketTab.css.ts": 29,
+    "src/pages/tradersDashboard/SectorWheelCard.tsx": 10
   }
 }

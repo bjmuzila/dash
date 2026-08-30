@@ -298,12 +298,18 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     showWallChart: opts.showWallChart !== false,
     wallChartUrl: opts.wallChartUrl || WALL_CHART_URL,
     wallChartHeadline: opts.wallChartHeadline || "Five sessions, and price never left the walls",
-    wallChartNote: opts.wallChartNote ||
-      "Green is the call wall, red is the put wall, white is spot — 391 minutes of price per session, Aug 24 through Aug 28. Price spent the week inside the band. Monday through Wednesday it chopped between them; Thursday the walls stepped up ahead of the tape and the rally stalled into the call wall; Friday's spike tagged it and reverted the same session. These are the <strong style=\"color:#ffffff;\">recorded</strong> levels — written down at the time and timestamped, not redrawn afterwards to fit the chart. It closed the week at 7,711.48 with the put wall at 7,700 and the call wall at 7,720.",
+    // Empty by design — the chart carries its own legend and axis labels, so a
+    // paragraph under it only repeats what the reader can already see. Pass a
+    // string to bring the caption back for an issue that needs one.
+    wallChartNote: opts.wallChartNote ?? "",
     showAutoBuy: opts.showAutoBuy !== false,
     autoBuyRows: opts.autoBuyRows || DEFAULT_AUTO_BUY_ROWS,
-    autoBuyNote: opts.autoBuyNote ||
-      "Five of the fifteen auto-buys the wall took last week. The other ten: <strong style=\"color:#ffffff;\">six of the fifteen peaked at 2x or better</strong>, fourteen traded above entry at some point, and one — the 10:30 read on 8/24 — never ticked up at all. <strong style=\"color:#ffffff;\">Peak is the contract's intraday high after entry, not an exit.</strong> Nobody sells the high; you would have had to be there and take it. This is what the wall bought and what it was worth at its best, printed so the good days and the flat one sit in the same table.",
+    // Empty by design — no paragraph under the table. The two things that
+    // paragraph used to carry are NOT optional, so they moved into the furniture
+    // instead of disappearing: "5 of 15" is in the eyebrow, and "peak = intraday
+    // high after entry, not an exit" is the PEAK column's own subhead. Pass a
+    // string here to bring a caption back.
+    autoBuyNote: opts.autoBuyNote ?? "",
     ctaUrl: opts.ctaUrl || PRICING_URL,
     // `!== false` rather than `||` — the band is on by default, and passing
     // showAffiliate: false has to actually turn it off.
@@ -375,16 +381,17 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     ...(o.showWallChart ? [
       "WALL MIGRATION — AUG 24–28",
       strip(o.wallChartHeadline),
-      strip(o.wallChartNote),
+      ...(o.wallChartNote ? [strip(o.wallChartNote)] : []),
       o.wallChartUrl,
       "",
     ] : []),
     ...(o.showAutoBuy && o.autoBuyRows.length ? [
-      "CORE WALL AUTO BUY — LAST WEEK'S BEST",
+      "CORE WALL AUTO BUY — BEST 5 OF 15 LAST WEEK",
+      "  (peak = intraday high after entry, not an exit)",
       ...o.autoBuyRows.map((r) =>
         `  ${r.date} ${r.time.padEnd(5)} ${r.contract.padEnd(6)} ${r.entry} -> ${r.peak}  ${r.gain}`
       ),
-      strip(o.autoBuyNote),
+      ...(o.autoBuyNote ? [strip(o.autoBuyNote)] : []),
       "",
     ] : []),
     ...(o.showScannerProof ? (() => {
@@ -628,20 +635,20 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">Wall migration &mdash; Aug 24&ndash;28</div>
               <div style="font:800 15px/1.35 ${SANS};color:#ffffff;margin-bottom:10px;">${o.wallChartHeadline}</div>
               <img src="${wallChart}" alt="SPX wall migration, five sessions to 2026-08-28 — call wall, put wall and spot" width="584" style="display:block;width:100%;max-width:584px;height:auto;border:1px solid rgba(255,255,255,0.10);border-radius:10px;">
-              <div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.wallChartNote}</div>` : ""}
+              ${o.wallChartNote ? `<div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.wallChartNote}</div>` : ""}` : ""}
 
               <!-- Core Wall auto-buy. Gold box — the one thing on the page a
                    reader should stop on. The PEAK column is an intraday high,
                    never an exit; the note below the table says so. -->
               ${o.showAutoBuy && o.autoBuyRows.length ? `
-              <div style="font:800 10px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">Core Wall auto buy — last week's best</div>
+              <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">Core Wall auto buy — best 5 of 15 last week</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:2px solid #FFB300;border-radius:12px;background:#080B11;border-collapse:separate;box-shadow:0 0 0 1px rgba(255,179,0,0.18);">
                 <tr>
                   <td style="padding:9px 10px 9px 14px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Date</td>
                   <td style="padding:9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">CB</td>
                   <td style="padding:9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Contract</td>
-                  <td align="right" style="padding:9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Entry &rarr; Peak</td>
-                  <td align="right" style="padding:9px 14px 9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Best</td>
+                  <td align="right" style="padding:9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Entry &rarr; peak<br><span style="font-weight:400;letter-spacing:0.02em;text-transform:none;color:#6b7d8f;">intraday high, not an exit</span></td>
+                  <td align="right" style="padding:9px 14px 9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">At peak</td>
                 </tr>
                 ${o.autoBuyRows.map((r, i) => {
                   const edge = i < o.autoBuyRows.length - 1 ? "border-bottom:1px solid rgba(255,255,255,0.06);" : "";
@@ -655,7 +662,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                 </tr>`;
                 }).join("")}
               </table>
-              <div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.autoBuyNote}</div>` : ""}
+              ${o.autoBuyNote ? `<div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.autoBuyNote}</div>` : ""}` : ""}
 
               ${o.showScannerProof ? `
               <!-- Flow-scanner example. The card is rebuilt in HTML, not

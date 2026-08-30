@@ -216,11 +216,11 @@ export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsPr
           // what actually lets a flex item go below its content width.
           className="flex min-w-0 flex-1 flex-col items-center justify-center gap-px rounded-sm border border-line bg-raised px-1 py-1"
         >
-          <span className="truncate text-[9px] font-bold uppercase tracking-[0.08em] text-muted opacity-70">
+          <span className="truncate text-3xs font-bold uppercase tracking-[0.08em] text-muted opacity-70">
             {t.label}
           </span>
           <span
-            className="tabular truncate font-mono text-[12px] font-extrabold"
+            className="tabular truncate font-mono text-sm font-extrabold"
             style={{ color: `var(${t.colour})` }}
           >
             {t.value}

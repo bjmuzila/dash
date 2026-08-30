@@ -97,24 +97,6 @@
   --color-candle-up: #30d158;
   --color-candle-down: #ff5b5b;
 
-  /* ── Move up / move down ──────────────────────────────────────────────
-     The directional pair the Traders Dashboard and its S&P Sector Wheel
-     paint with, carried across from v2 VERBATIM (HOME_THEME.green /
-     HOME_THEME.red in components/shared/homeTheme.ts).
-
-     Brandon, 2026-08-30, on the port: "up is blue, down is red". v2's token
-     is NAMED green and is in fact a light blue, and the wheel's entire
-     diverging ramp — arc fill, ring wash, callout ink, the hub number —
-     is built on that pair, so it comes across as-is rather than being
-     recoloured to --color-up / --color-down (green/red, and still
-     provisional). Same reasoning as the candle pair above: this is a place
-     where matching v2 beats internal consistency.
-
-     If --color-up / --color-down are ever settled as blue/red, this pair is
-     the one to delete.                                                     */
-  --color-move-up: #8ecae6;
-  --color-move-down: #ef4444;
-
   /* ── GEX bubbles ──────────────────────────────────────────────────────
      Sign sets the hue, wall rank swaps base → hot. Same four values v2's
      EsChartCard draws with. Read as hex here and converted to rgba() at
@@ -192,6 +174,53 @@
   --color-cal-actual: #22c55e;
   --color-cal-forecast: #f59e0b;
   --color-cal-previous: #8a9ab8;
+
+  /* ── v2 parity ────────────────────────────────────────────────────────
+     The Analysis page (/v3/analytics) is a 1:1 port of v2's /app/analytics and
+     carries a REQUIREMENT that it render v2's colours, not v3's dark-slate
+     palette (Brandon, 2026-08-30: "keep colors the same as the v2 version").
+     Same reasoning as --color-candle-up/down above: where matching v2
+     value-for-value is the spec, the v2 value gets its own token rather than a
+     component typing a hex.
+
+     Why these are NOT just T.cyan / T.orange / T.red / T.green: theme.ts maps
+     v2's NAMES onto v3's VALUES on purpose, so those four resolve to #5b8cff,
+     #e0a44a, #e0645f and #35c28e — four different colours. Reaching for them on
+     that page is the one mistake this block exists to prevent.
+
+     SCOPE: this page only. Nothing else in v3 reads them, and no existing token
+     changed value to make them exist. If v3 ever adopts v2's palette wholesale,
+     this block is what gets promoted — and then deleted.
+
+     Three of these duplicate a value that is already here under a different
+     name: v2-cyan == cal-accent, v2-red == impact-high, v2-pos == cal-actual.
+     Deliberate. A card title is not a calendar accent and the page's positive
+     figure is not an econ "actual"; they happen to agree today and must be free
+     to move apart tomorrow.                                                  */
+  --color-v2-cyan: #219ebc; /* every card title. v2's HOME_THEME.cyan */
+  --color-v2-orange: #fb8501; /* replay, BETA tags, warnings. v2's .orange */
+  --color-v2-red: #ef4444; /* every negative figure. v2's .red */
+  --color-v2-green: #8ecae6; /* v2's .green — a LIGHT BLUE. One use: the
+                                Strategy card's "Confirmation triggers" title */
+  --color-v2-pos: #22c55e; /* v2's page-local POS_GREEN. The page declares its
+                              own green precisely BECAUSE .green is a blue */
+  --color-v2-purple: #126783; /* the page-background glow's second radial */
+  --color-v2-bg: #05060a; /* page canvas, and a faded econ row's plate */
+  --color-v2-panel: #0d1119; /* the ladder's spot-price chip, and the base for
+                                the 45% / 72% / 97% panel washes */
+  --color-v2-ink: #0b0f1a; /* ink ON a solid fill: the CB/CW/PW ladder tags, an
+                              active replay button, the active Replay toggle */
+  --color-v2-refresh: #1fd98a; /* the refresh button's success state + glow.
+                                  v2's REFRESH_GREEN */
+  --color-v2-dim: #888888; /* the refresh button's "refreshing" grey. v2 types
+                              #888 inline; --color-flat (#7a828d) is close but
+                              not the same and parity is the requirement */
+  --color-v2-badge-ink: #05080d; /* ink on the econ calendar's solid TODAY badge */
+  --color-v2-lightblue: #7ed3fc; /* the embed-mode card radial. NOTE: v2's
+                                    homeTheme.LIGHT_BLUE is #7dd3fc, but the
+                                    .analytics-embed CSS paints
+                                    rgba(126,211,252,.10) = #7ed3fc. The CSS is
+                                    what reaches the screen, so it wins. */
 
   /* ── Type scale ───────────────────────────────────────────────────────
      Numbers use the tabular font so columns do not jitter as prices tick.  */

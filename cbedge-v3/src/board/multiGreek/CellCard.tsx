@@ -90,13 +90,13 @@ function LegBox({ label, leg, tone }: { label: string; leg: Leg | null; tone: 'p
   const colour = tone === 'pos' ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
   const row = (k: string, v: string) => (
     <div className="flex items-baseline justify-between gap-2">
-      <span className="text-[9px] uppercase tracking-[0.06em] text-muted opacity-60">{k}</span>
-      <span className="tabular font-mono text-[10.5px] font-bold text-fg">{v}</span>
+      <span className="text-3xs uppercase tracking-[0.06em] text-muted opacity-60">{k}</span>
+      <span className="tabular font-mono text-2xs font-bold text-fg">{v}</span>
     </div>
   )
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-md border border-line bg-surface2 px-2 py-1.5">
-      <span className="text-[9px] font-black uppercase tracking-[0.1em]" style={{ color: colour }}>
+      <span className="text-3xs font-black uppercase tracking-[0.1em]" style={{ color: colour }}>
         {label}
       </span>
       {row('Volume', fmtInt(leg?.vol))}
@@ -163,8 +163,8 @@ export function CellCard({ ticker, strike, expiry, daysTo, call, put, netGex, x,
     }
     return (
       <div key={label} className="flex items-baseline justify-between gap-2">
-        <span className="text-[10px] text-muted opacity-70">{label}</span>
-        <span className={['tabular font-mono text-[10.5px] font-bold', tone].join(' ')}>{text}</span>
+        <span className="text-2xs text-muted opacity-70">{label}</span>
+        <span className={['tabular font-mono text-2xs font-bold', tone].join(' ')}>{text}</span>
       </div>
     )
   }
@@ -181,11 +181,11 @@ export function CellCard({ ticker, strike, expiry, daysTo, call, put, netGex, x,
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div className="flex items-baseline justify-between gap-2">
-        <span className="tabular truncate font-mono text-[14px] font-extrabold text-fg">
+        <span className="tabular truncate font-mono text-sm font-extrabold text-fg">
           {ticker} {Number.isInteger(strike) ? strike.toLocaleString('en-US') : strike.toFixed(2)}
         </span>
         <span className="flex shrink-0 items-baseline gap-2">
-          <span className="whitespace-nowrap text-[10px] text-muted opacity-60">
+          <span className="whitespace-nowrap text-2xs text-muted opacity-60">
             {Math.max(0, daysTo)}DTE · {fmtExpiry(expiry)}
           </span>
           <button
@@ -193,7 +193,7 @@ export function CellCard({ ticker, strike, expiry, daysTo, call, put, netGex, x,
             onClick={onClose}
             title="Close"
             aria-label="Close"
-            className="text-[11px] leading-none text-faint hover:text-fg"
+            className="text-xs leading-none text-faint hover:text-fg"
           >
             ✕
           </button>
@@ -207,10 +207,10 @@ export function CellCard({ ticker, strike, expiry, daysTo, call, put, netGex, x,
 
       <div className="flex flex-col gap-1 border-t border-line pt-2">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-[10px] text-muted opacity-70">Net Prem (C−P)</span>
+          <span className="text-2xs text-muted opacity-70">Net Prem (C−P)</span>
           <span
             className={[
-              'tabular font-mono text-[11px] font-bold',
+              'tabular font-mono text-xs font-bold',
               premDiff == null || premDiff === 0
                 ? 'text-muted opacity-50'
                 : premDiff > 0
@@ -222,10 +222,10 @@ export function CellCard({ ticker, strike, expiry, daysTo, call, put, netGex, x,
           </span>
         </div>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-muted opacity-80">Net GEX</span>
+          <span className="text-2xs font-bold uppercase tracking-[0.06em] text-muted opacity-80">Net GEX</span>
           <span
             className={[
-              'tabular font-mono text-[12px] font-extrabold',
+              'tabular font-mono text-sm font-extrabold',
               netGex === 0 ? 'text-muted opacity-50' : netGex > 0 ? 'text-gex-pos' : 'text-gex-neg',
             ].join(' ')}
           >

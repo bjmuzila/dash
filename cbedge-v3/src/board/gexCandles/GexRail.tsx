@@ -223,7 +223,7 @@ export function GexRail({ model, applyChart }: GexRailProps) {
   return (
     <div className="relative w-[96px] shrink-0 overflow-hidden border-l border-line pl-1.5">
       {rows.length === 0 && (
-        <span className="absolute inset-x-1.5 top-1 text-[10px] text-muted opacity-50">No ladder yet</span>
+        <span className="absolute inset-x-1.5 top-1 text-2xs text-muted opacity-50">No ladder yet</span>
       )}
       {rows.map((r) => {
         const pos = r.value >= 0
@@ -252,7 +252,7 @@ export function GexRail({ model, applyChart }: GexRailProps) {
                 <span
                   key={m.key}
                   title={m.title}
-                  className="rounded-[2px] px-[3px] text-[8px] font-black leading-[1.5] tracking-[0.04em]"
+                  className="rounded-[2px] px-[3px] text-3xs font-black leading-[1.5] tracking-[0.04em]"
                   style={{ background: `var(--color-level-${m.key})`, color: 'var(--color-app)' }}
                 >
                   {m.key.toUpperCase()}

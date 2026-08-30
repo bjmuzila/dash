@@ -43,6 +43,14 @@ not by memory.
    `bg-surface2` → `bg-raised`, and `border-line`. Anything with a border and a
    background is a `Card`; the page frame is `Page`. Never invent a plate colour.
 
+   **Type sizes come from the scale, too** — `text-3xs` 9, `text-2xs` 10,
+   `text-xs` 11, `text-sm` 13, `text-base` 15, `text-lg` 18, `text-xl` 24,
+   `text-2xl` 32. No `text-[10px]`, no `font-size:11.5px`, no `fontSize: 12`.
+   Canvas and SVG cannot use a class, so they read the number off the same
+   scale rather than typing one. Text that names no size gets 13px from `body`
+   in tokens.css — it does NOT fall through to the browser's 16px, which is
+   what used to put a 16px label next to an 11px one in the same row.
+
    And `var(--typo)` is caught too — an unknown custom property renders as
    nothing at all, silently, which is the most expensive five minutes in a
    stylesheet.

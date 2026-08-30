@@ -146,7 +146,7 @@ export function LevelsAxis({ marks, spotPrice }: { marks: AxisMark[]; spotPrice:
   }, [marks, spotPrice, width])
 
   if (!model) {
-    return <div className="px-1 py-3 text-[11px] text-muted opacity-50">Waiting for levels…</div>
+    return <div className="px-1 py-3 text-xs text-muted opacity-50">Waiting for levels…</div>
   }
 
   const { lo, hi, rows, corridor, spotPct } = model
@@ -157,7 +157,7 @@ export function LevelsAxis({ marks, spotPrice }: { marks: AxisMark[]; spotPrice:
           its own — the Card already says "Key Levels", and a second heading
           inside it is the two-toolbar problem in a different costume. */}
       <CardToolbar>
-        <span className="tabular font-mono text-[10px] text-muted opacity-60">
+        <span className="tabular font-mono text-2xs text-muted opacity-60">
           {lo.toFixed(2)} – {hi.toFixed(2)} · {(hi - lo).toFixed(2)} PTS
         </span>
       </CardToolbar>
@@ -205,17 +205,17 @@ export function LevelsAxis({ marks, spotPrice }: { marks: AxisMark[]; spotPrice:
                 style={{ left: `${labelPct}%`, width: LABEL_W }}
               >
                 <span
-                  className="whitespace-nowrap text-[8px] font-black uppercase tracking-[0.08em]"
+                  className="whitespace-nowrap text-3xs font-black uppercase tracking-[0.08em]"
                   style={{ color: colour }}
                 >
                   {mark.code} · {mark.name}
                 </span>
-                <span className="tabular font-mono text-[15px] font-extrabold text-fg">{mark.text}</span>
-                <span className="tabular whitespace-nowrap font-mono text-[9px]" style={{ color: colour }}>
+                <span className="tabular font-mono text-base font-extrabold text-fg">{mark.text}</span>
+                <span className="tabular whitespace-nowrap font-mono text-3xs" style={{ color: colour }}>
                   {mark.note}
                 </span>
                 {mark.sub && (
-                  <span className="tabular whitespace-nowrap font-mono text-[9px] text-muted opacity-60">
+                  <span className="tabular whitespace-nowrap font-mono text-3xs text-muted opacity-60">
                     {mark.sub}
                   </span>
                 )}

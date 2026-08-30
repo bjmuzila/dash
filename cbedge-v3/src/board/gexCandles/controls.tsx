@@ -58,7 +58,7 @@ export function Slider({
   return (
     <label
       className={[
-        'flex items-center gap-2 text-[10px] text-muted',
+        'flex items-center gap-2 text-2xs text-muted',
         disabled ? 'pointer-events-none opacity-40' : '',
       ].join(' ')}
       title={title}
@@ -108,10 +108,10 @@ export function Dropdown<T extends string>({
         onClick={() => setOpen((v) => !v)}
         title={title}
         disabled={options.length === 0}
-        className="flex items-center gap-1 rounded-sm border border-line px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg disabled:opacity-40"
+        className="flex items-center gap-1 rounded-sm border border-line px-1.5 py-0.5 text-2xs font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg disabled:opacity-40"
       >
         {current?.label ?? empty}
-        <span className="text-[8px] opacity-50">▾</span>
+        <span className="text-3xs opacity-50">▾</span>
       </button>
       <Popover open={open} onClose={() => setOpen(false)}>
         <div className="flex max-h-64 w-36 flex-col overflow-y-auto">
@@ -128,8 +128,8 @@ export function Dropdown<T extends string>({
                 o.value === value ? 'text-fg' : 'text-muted',
               ].join(' ')}
             >
-              <span className="text-[11px] font-semibold">{o.label}</span>
-              {o.sub && <span className="tabular font-mono text-[9px] opacity-60">{o.sub}</span>}
+              <span className="text-xs font-semibold">{o.label}</span>
+              {o.sub && <span className="tabular font-mono text-3xs opacity-60">{o.sub}</span>}
             </button>
           ))}
         </div>
@@ -213,7 +213,7 @@ export function SymbolPicker({ active, onSelect }: { active: string; onSelect: (
         className="flex items-center gap-1 rounded-sm border border-line px-2 py-0.5 text-xs font-bold tracking-wide text-fg hover:bg-raised"
       >
         {symbolDef(active).label}
-        <span className="text-[9px] opacity-50">▾</span>
+        <span className="text-3xs opacity-50">▾</span>
       </button>
       <Popover open={open} onClose={() => setOpen(false)} align="left">
         <div className="w-44">

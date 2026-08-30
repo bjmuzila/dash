@@ -267,7 +267,7 @@ export function GexChartCard() {
               ? 'The expiry the WebSocket is streaming'
               : `The front expiry of ${symbol}'s option chain — the one this ladder is built from`
           }
-          className="tabular shrink-0 rounded-sm border border-line px-1.5 py-0.5 font-mono text-[10px] font-bold text-muted"
+          className="tabular shrink-0 rounded-sm border border-line px-1.5 py-0.5 font-mono text-2xs font-bold text-muted"
         >
           {view.expiry || '—'}
         </span>
@@ -331,7 +331,7 @@ export function GexChartCard() {
         {!onSocket && (
           <span
             title={`Derived from ${symbol}'s option chain, polled every 15s. The socket only streams SPX`}
-            className="shrink-0 text-[10px] uppercase tracking-[0.1em] text-muted opacity-60"
+            className="shrink-0 text-2xs uppercase tracking-[0.1em] text-muted opacity-60"
           >
             chain
           </span>
@@ -339,7 +339,7 @@ export function GexChartCard() {
         <span
           title={`Every strike on the ladder summed, on the ${BASIS_LABEL[flowActive ? 'flow' : settings.basis]} basis`}
           className={[
-            'tabular shrink-0 font-mono text-[11px] font-extrabold',
+            'tabular shrink-0 font-mono text-xs font-extrabold',
             total == null ? 'text-muted opacity-50' : total >= 0 ? 'text-gexbar-pos' : 'text-gexbar-neg',
           ].join(' ')}
         >
@@ -354,7 +354,7 @@ export function GexChartCard() {
       <div className="relative min-h-0 flex-1">
         <ChartFrame onMount={onMount} onResize={onResize} onVisibility={onVisibility} className="absolute inset-0" />
         {total == null && (
-          <span className="pointer-events-none absolute left-1 top-1 text-[10px] text-muted opacity-50">
+          <span className="pointer-events-none absolute left-1 top-1 text-2xs text-muted opacity-50">
             {onSocket ? 'Waiting for the feed…' : `Loading ${symbol}'s chain…`}
           </span>
         )}

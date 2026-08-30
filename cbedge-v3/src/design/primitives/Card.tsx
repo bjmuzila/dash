@@ -1,6 +1,7 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { createContext, useContext, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { alpha, SHADOW, V2W } from '@/design/theme'
 
 // The only container in the app. If something needs a border and a background,
 // it is a Card — there is no second way to draw a panel.
@@ -41,6 +42,22 @@ export function CardToolbar({ children }: { children: ReactNode }) {
   return slot.host ? createPortal(children, slot.host) : null
 }
 
+/**
+ * THE SURFACE. `v3` is the dark-slate plate every board card and page uses and
+ * is the default — passing nothing gets exactly what this component drew before
+ * the prop existed.
+ *
+ * `v2` is the frosted plate v2's `classicCardAccentStyle` draws: a
+ * 45%-translucent panel over a 16px blur, a white hairline, an 18px radius and
+ * a soft drop shadow. It exists for ONE page — /v3/analytics, a 1:1 port that
+ * is required to match v2's colours (see the V2 block in design/theme.ts). It
+ * is a variant of this component rather than a second panel implementation
+ * precisely because "anything with a border and a background is a Card" has to
+ * stay true; a page-local div with its own border would be the thing that rule
+ * is there to stop.
+ */
+export type CardPlate = 'v3' | 'v2'
+
 export interface CardProps {
   title?: ReactNode
   /** Small right-aligned controls in the header. */
@@ -51,8 +68,22 @@ export interface CardProps {
   flush?: boolean
   /** Fill available height rather than sizing to content. */
   fill?: boolean
+  /** Surface treatment. See CardPlate. Defaults to v3's dark-slate plate. */
+  plate?: CardPlate
+  /** Outer overrides — height, grid span. Not a licence to restyle the plate. */
+  style?: CSSProperties
   className?: string
   children: ReactNode
+}
+
+/** v2's classicCardStyle + classicCardAccentStyle, as one object. */
+const V2_PLATE: CSSProperties = {
+  background: V2W.panelBg,
+  backdropFilter: 'blur(16px)',
+  WebkitBackdropFilter: 'blur(16px)',
+  borderRadius: 18,
+  border: `1px solid ${V2W.border}`,
+  boxShadow: `0 18px 40px ${alpha(SHADOW, 0.22)}`,
 }
 
 export function Card({
@@ -61,6 +92,8 @@ export function Card({
   stale = false,
   flush = false,
   fill = false,
+  plate = 'v3',
+  style,
   className = '',
   children,
 }: CardProps) {
@@ -74,8 +107,12 @@ export function Card({
 
   return (
     <section
+      style={plate === 'v2' ? { ...V2_PLATE, ...style } : style}
       className={[
-        'flex flex-col overflow-hidden rounded-md border border-line bg-surface',
+        'flex flex-col overflow-hidden',
+        // The v2 plate carries its own radius, edge and fill as inline style —
+        // these utilities would fight it.
+        plate === 'v2' ? '' : 'rounded-md border border-line bg-surface',
         fill ? 'min-h-0 flex-1' : '',
         className,
       ]

@@ -31,13 +31,13 @@ import { createPortal } from 'react-dom'
 export type ControlSize = 'sm' | 'touch'
 
 const SEG_SIZE: Record<ControlSize, string> = {
-  sm: 'px-1.5 py-0.5 text-[10px]',
-  touch: 'min-h-[34px] flex-1 px-3 py-1.5 text-[12px]',
+  sm: 'px-1.5 py-0.5 text-2xs',
+  touch: 'min-h-[34px] flex-1 px-3 py-1.5 text-sm',
 }
 
 const CHIP_SIZE: Record<ControlSize, string> = {
-  sm: 'px-2 py-0.5 text-[10px]',
-  touch: 'min-h-[34px] px-3 py-1.5 text-[12px]',
+  sm: 'px-2 py-0.5 text-2xs',
+  touch: 'min-h-[34px] px-3 py-1.5 text-sm',
 }
 
 export function SegGroup<T extends string>({
@@ -322,7 +322,7 @@ export function Popover({
 export function PanelSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5 border-t border-line pt-2 first:border-t-0 first:pt-0">
-      <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint opacity-60">{title}</span>
+      <span className="text-3xs font-bold uppercase tracking-[0.12em] text-faint opacity-60">{title}</span>
       {children}
     </div>
   )

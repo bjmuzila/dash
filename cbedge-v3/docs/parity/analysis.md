@@ -645,10 +645,12 @@ Source: lines 3204–3411. Feed: `/api/strategy`, **5 min**, only while
 | Removed in v2, do not port | The SPX Premium Flow card (line 3202 — "now has its own dedicated page"). ESU / NQU rows on Ticker Levels (lines 1134–1137). The Gamma flip level CHIP (removed; the flip survives only in "The read"). The spot caret `◀` in the ladder (replaced by the dashed price line) |
 | Typed but unrendered | `EsGapResp.gap.open_0930` / `gap_dir` / `pct_filled` / `filled`; `ConfidenceResp.score.break`; `TlChangeRow.netGex` / `prevNetGex` / `hadPrev`; `TlReplayFrame.cells[].vol` (the `basis: "vol"` path of `tlReplayRows` is never called with `"vol"` from this page) |
 | Comment vs code conflicts | 1) The Confidence checkpoint comment says "9:35 / 10:30 / 12:00"; `MVC_CHECKPOINTS` says **9:45**. 2) The file header calls the page a "UI-only scaffold with MOCK data" — it is not, every card is live. 3) `TL_CHIP_MIN_H`'s comment computes 92 but the constant is **106**. In all three the CODE is the spec |
-| v3 route wiring already in place | `cbedge-v3/src/App.tsx` line 53 routes `/analytics` → `lazy(() => import('@/pages/Analysis'))`. **Confirm steps 3 and 4** — the `NAV` entry in `src/shell/Shell.tsx` and `app/v3/analytics/route.ts` calling `serveSpaShell("v3")` — before calling the port done |
-| v3 current state — DONE | `cbedge-v3/src/pages/Analysis.tsx` (37 KB) already ports: Estimated Move, Premarket, Confidence Score, Net Greeks, Strategy Builder. These need auditing against Parts J, K, M, N and Q rather than rebuilding |
-| v3 current state — STUBS | Four cards are stubs: **Ticker Lookup** (`TickerLookupStub`, Parts C–H — the largest single gap, ~100 rows), **Multi Greek** (`MultiGreekStub`, Part I), **Economic Calendar** (`EconCalendarStub`, Part L), **Initial Balance** (`InitialBalanceStub`, Part O) |
-| v3 current state — REGRESSED | v3's Ticker Levels uses a fixed `TL_TICKERS = ['SPX','SPY','QQQ','NDX']` pill row. v2 has a searchable, star-to-favourite, add-your-own picker over the whole scanner universe with localStorage persistence (Part P, 10 picker rows). This is exactly the kind of loss this document exists to catch |
+| v3 route wiring — ALL FOUR STEPS DONE | Verified 2026-08-30: `src/pages/Analysis.tsx` ✓ · the `lazy()` route in `src/App.tsx` ✓ · `{ to: '/analytics', label: 'Analysis', icon: '📈', prefetch: ['/api/premarket-summary'] }` in `src/shell/Shell.tsx` ✓ · `app/v3/analytics/route.ts` ✓. Nothing to add; a hard refresh of `/v3/analytics` resolves |
+| v3 status — BUILT 2026-08-30 | The first port was discarded and the page rebuilt from this document. 23 files, ~7,000 lines, under `src/pages/analysis/`: `kit.tsx` (Part B) · `greeks.ts` (Part H) · `ib.ts` · `TickerPicker.tsx` · `cards/` × 8 · `lookup/` × 4 (levels, replay, Ladder, TickerLookup) · `analysis.css` · `Analysis.tsx` |
+| What the discarded version was missing | Four stubs (Ticker Lookup, Multi Greek, Econ Calendar, Initial Balance), a Ticker Levels regressed to four hardcoded pills, and v3's palette throughout. All rebuilt |
+| Verified before hand-off | `tsc --noEmit` under v3's exact tsconfig (strict, `noUncheckedIndexedAccess`, `verbatimModuleSyntax`, `noUnusedLocals`): clean. `scripts/check-theme.mjs` run against the new tree: zero violations, and confirmed with a deliberate probe file that the scanner does walk `src/pages/analysis/` |
+| NOT verified — needs Brandon's machine | `npm run build` (vite + budgets), `check:ws`, `perf`, `check:casing`. The device's Linux VM was unavailable this session, so nothing could be run in the repo itself |
+| Type scale — an open question | `check-theme.mjs` rule 4 bans a bare `fontSize:` number and names a canonical ramp (9 / 10 / 11 / 13 / 15 / 18 / 24 / 32). v2's page uses 9, 10, 11, 12, 13, 14, 16, 17, 18, 20, 21, 22, 26, 28, 34 — they agree on almost nothing. The port keeps v2's sizes in a named constant (`FS` in `kit.tsx`), which satisfies the rule. Reconciling the two ramps is a separate decision |
 
 ---
 
@@ -702,7 +704,7 @@ Two more that differ but matter less, recorded so nobody "fixes" them later:
 
 ## S.3 — Tokens to ADD to `tokens.css`
 
-Twelve. Grouped under one `── v2 parity ──` heading with a comment saying why
+Thirteen (twelve at first pass; `v2-dim` was found during the build). Grouped under one `── v2 parity ──` heading with a comment saying why
 they exist, in the style of the existing candle-colour block.
 
 | New token | Value | Replaces | Notes |
@@ -718,6 +720,7 @@ they exist, in the style of the existing candle-colour block.
 | `--color-v2-ink` | `#0b0f1a` | the bare literal | Ink on a solid fill: ladder `CB`/`CW`/`PW` tags, active replay buttons, the active ⏱ Replay toggle |
 | `--color-v2-refresh` | `#1fd98a` | `REFRESH_GREEN` | The ↻ button's success state + its glow |
 | `--color-v2-badge-ink` | `#05080d` | the bare literal | Ink on the econ calendar's solid `TODAY` badge |
+| `--color-v2-dim` | `#888888` | the ↻ button's "refreshing" grey | v2 types `#888` inline. `--color-flat` (`#7a828d`) is close but not the same |
 | `--color-v2-lightblue` | `#7ed3fc` | the embed-mode radial | **Note the discrepancy**: `homeTheme.LIGHT_BLUE` is `#7dd3fc`, but the `.analytics-embed` CSS writes `rgba(126,211,252,.10)` = `#7ed3fc`. One off in the red channel. The CSS is what paints, so `#7ed3fc` is the parity value |
 
 Then extend `theme.ts` with a `V2` bridge object over these, so a ported
@@ -735,6 +738,7 @@ export const V2 = {
   panel: 'var(--color-v2-panel)',
   ink: 'var(--color-v2-ink)',
   refresh: 'var(--color-v2-refresh)',
+  dim: 'var(--color-v2-dim)',
   badgeInk: 'var(--color-v2-badge-ink)',
   lightBlue: 'var(--color-v2-lightblue)',
   text: T.text,   // #ffffff — already identical

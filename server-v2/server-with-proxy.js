@@ -935,7 +935,17 @@ function parseFlowFilters(searchParams) {
   // is ingested via the shared dxLink connection (see proxy-tastytrade.js
   // _startTtMultiFlow) instead of the Theta-based MultiFlowManager, so
   // flow-netprem / flow-premsplit can return any ticker's tape, not just SPX.
-  const underlying = (searchParams.get('underlying') || 'SPX').trim().toUpperCase();
+  //
+  // `underlying=ALL` is the explicit opt-out: no ticker filter at all, i.e. the
+  // whole market's tape. It exists because /proxy/flow-premsplit's ONLY caller
+  // is /flow's Combined view, which sent no ?underlying at all and therefore
+  // silently got the SPX default back — four "All Tickers" premium-split cards
+  // and a tape header (count / Total / Calls / Puts) showing SPX-only numbers.
+  // Adding an opt-out rather than dropping the default keeps every existing
+  // caller — including /proxy/flow-netprem, which always sends a real ticker —
+  // on exactly the behavior it has today.
+  const underlyingRaw = (searchParams.get('underlying') || 'SPX').trim().toUpperCase();
+  const underlying = underlyingRaw === 'ALL' ? '' : underlyingRaw;
   let minPremium = Number(searchParams.get('minPremium') || 0);
   if (!Number.isFinite(minPremium) || minPremium < 0) minPremium = 0;
   let minSize = Number(searchParams.get('minSize') || 0);
@@ -946,7 +956,11 @@ function parseFlowFilters(searchParams) {
   return {
     date,
     underlying,
-    exIdx: false,
+    // Was hardcoded `false`, which made the "All − Indices" scope a no-op: the
+    // client sent ?exIdx=1, this threw it away, and buildFlowPrintsWhere()'s
+    // exIdx branch was unreachable. A caller that omits the param still gets
+    // false, so nothing that worked before changes.
+    exIdx: searchParams.get('exIdx') === '1',
     side: (searchParams.get('side') || 'all').toLowerCase(),
     type: (searchParams.get('type') || 'all').toUpperCase(),
     minPremium,
