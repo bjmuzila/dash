@@ -1,5 +1,6 @@
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useIsPhone } from '@/design/useIsPhone'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Board — the customizable card grid (terminal home, and anywhere else a page
@@ -108,6 +109,7 @@ export function Board({
   minW = 2,
   minH = 3,
 }: BoardProps) {
+  const phone = useIsPhone()
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(0)
   const [gesture, setGesture] = useState<Gesture>(null)
@@ -237,6 +239,46 @@ export function Board({
       window.removeEventListener('pointercancel', onUp)
     }
   }, [gesture, colW, cols, rowH, gutter, minW, minH, onLayoutChange])
+
+  // ── Phone: one column, no grid ─────────────────────────────────────────────
+  //
+  // The grid above is 12 columns of absolutely-positioned pixels. On a 390px
+  // screen a 4-column card is 97px wide, and there is no arrangement of twelve
+  // of those that is worth looking at — the board does not need to be
+  // responsive so much as it needs to STOP on a phone.
+  //
+  // So: the same cards, in reading order, full width, stacked. Drag and resize
+  // are not wired up at all — they are a pointer gesture the phone would have
+  // to steal from the chart's own pan, and a saved arrangement made by a thumb
+  // is one the desktop then has to live with.
+  //
+  // Height comes from the card's own grid height so a tall card stays tall,
+  // floored at something a chart can actually be read in and capped at 78vh so
+  // one card never fills the screen with no hint that another follows. The cap
+  // is CSS `min()` rather than a measured innerHeight: the browser then
+  // re-evaluates it on rotation and on the URL bar collapsing, neither of which
+  // fires anything React would hear.
+  if (phone) {
+    const ordered = [...active].sort((a, b) => a.y - b.y || a.x - b.x)
+    return (
+      <div ref={wrapRef} className="flex w-full flex-col" style={{ gap: gutter }}>
+        {ordered.map((it) => (
+          <div
+            key={`${baseId}-${it.id}`}
+            // Same attribute the desktop tile carries: scripts/perf-check.mjs
+            // attributes a canvas to a card by walking up to it, and a phone
+            // layout that dropped it would make the card invisible to the perf
+            // budget rather than exempt from it.
+            data-card-id={it.id}
+            className="relative flex w-full flex-col overflow-hidden"
+            style={{ height: `min(${Math.max(280, it.h * (rowH + gutter) - gutter)}px, 78vh)` }}
+          >
+            {render(it.id)}
+          </div>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div ref={wrapRef} className="relative w-full" style={{ height: containerH }}>

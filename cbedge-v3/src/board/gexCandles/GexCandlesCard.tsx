@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
+import { useIsPhone } from '@/design/useIsPhone'
 import { useQuery } from '@/data/api'
 import { usePageSymbol } from '@/data/symbol'
 import { watchFrame } from '@/data/hooks'
@@ -187,7 +188,31 @@ interface ExpirationsResponse {
 }
 
 export function GexCandlesCard() {
+  // ── Phone layout ───────────────────────────────────────────────────────────
+  // One card, three differences, all of them about the hand rather than the
+  // screen size:
+  //
+  //   · The toolbar becomes ONE button and everything moves into a bottom
+  //     sheet. The desktop toolbar is five controls at 10px; on a 390px card it
+  //     wraps to three rows of ~18px targets, eats a third of the chart's
+  //     height to do it, and still cannot be hit reliably.
+  //   · The GEX rail is off. It is a fixed-width column beside the chart —
+  //     affordable at 900px, a quarter of the plot at 390.
+  //   · The overlays move in off the rail's old gutter and grow to a real tap
+  //     target.
+  //
+  // Everything else — the chart, the data path, the settings and their storage
+  // key — is the same card. This is deliberately not a second component: a
+  // phone fork of a 700-line chart card is a second thing to fix every time.
+  const phone = useIsPhone()
   const [settings, setSettings] = useState<ChartSettings>(() => loadSettings(CARD_ID))
+  // The rail is a saved setting, and a phone must not REWRITE it — the same
+  // browser profile opens this card on a desktop. Suppressed for the render,
+  // the stored value untouched.
+  // It is what the REST of the card reads, including the history fetch, so a
+  // phone does not pull the heaviest request on the card for a ladder it will
+  // never draw.
+  const railOn = settings.railOn && !phone
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [latestOffscreen, setLatestOffscreen] = useState(false)
   // The bubble layer has data but none of it falls in the visible window. Set
@@ -271,7 +296,7 @@ export function GexCandlesCard() {
     return Math.min(5760, Math.max(GEX_HISTORY_MINUTES_PREV_DAY, back))
   }, [weekendExpiry, settings.prevDay])
   const gexQ = useQuery<unknown>(
-    (settings.bubblesOn || settings.railOn) && expiry
+    (settings.bubblesOn || railOn) && expiry
       ? gexHistoryUrl(def.gexSymbol, expiry, historyMinutes, BUBBLE_LADDER_REQUEST)
       : null,
     // The recorder writes a column a minute, so asking more often than that
@@ -443,6 +468,48 @@ export function GexCandlesCard() {
   const error = candlesQ.error
   const empty = !error && bars.length === 0
 
+  const ctlSize = phone ? ('touch' as const) : ('sm' as const)
+
+  // Built once and placed by the branch below: the desktop spreads them across
+  // the header, the phone stacks the same elements in the sheet. One instance
+  // each, so there is no chance of the two rows drifting apart.
+  const expiryPicker = (
+    <Dropdown
+      title="Which expiry the GEX bubbles are drawn from. Defaults to the nearest; pinning one keeps it until the symbol changes"
+      value={expiry}
+      options={expiryOptions}
+      onChange={(v) => patch({ expiry: v })}
+      empty="expiry"
+    />
+  )
+  // TESTING PHASE — see the `days` memo. Renders only while the history holds
+  // more than one session, which is only ever true with `Prev day` on.
+  const dayPicker =
+    dayOptions.length > 0 ? (
+      <SegGroup size={ctlSize} title={dayTitle} options={dayOptions} value={settings.bubbleDay} onChange={(v) => patch({ bubbleDay: v })} />
+    ) : null
+  const intervalPicker = (
+    <SegGroup
+      size={ctlSize}
+      title="Bar interval"
+      options={INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
+      value={String(settings.interval)}
+      onChange={(v) => patch({ interval: Number(v) as Interval })}
+    />
+  )
+  const sessionPicker = (
+    <SegGroup
+      size={ctlSize}
+      title="Session — RTH is the New York cash session (9:30am–4:00pm ET); ETH adds the overnight"
+      options={[
+        { label: 'RTH', value: 'rth' },
+        { label: 'ETH', value: 'eth' },
+      ]}
+      value={settings.session}
+      onChange={(v) => patch({ session: v })}
+    />
+  )
+
   return (
     <div className="relative flex min-h-0 flex-1 flex-col gap-1">
       {/* ── Toolbar ──
@@ -450,70 +517,68 @@ export function GexCandlesCard() {
           right under that header, so the board showed two bars stacked and the
           chart lost the height of both. */}
       <CardToolbar>
-        <Dropdown
-          title="Which expiry the GEX bubbles are drawn from. Defaults to the nearest; pinning one keeps it until the symbol changes"
-          value={expiry}
-          options={expiryOptions}
-          onChange={(v) => patch({ expiry: v })}
-          empty="expiry"
-        />
-        {/* TESTING PHASE — see the `days` memo. Renders only while the history
-            holds more than one session, which is only ever true with the
-            `Prev day` reach on. */}
-        {dayOptions.length > 0 && (
-          <SegGroup title={dayTitle} options={dayOptions} value={settings.bubbleDay} onChange={(v) => patch({ bubbleDay: v })} />
-        )}
-        <SegGroup
-          title="Bar interval"
-          options={INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
-          value={String(settings.interval)}
-          onChange={(v) => patch({ interval: Number(v) as Interval })}
-        />
-        <SegGroup
-          title="Session — RTH is the New York cash session (9:30am–4:00pm ET); ETH adds the overnight"
-          options={[
-            { label: 'RTH', value: 'rth' },
-            { label: 'ETH', value: 'eth' },
-          ]}
-          value={settings.session}
-          onChange={(v) => patch({ session: v })}
-        />
+        {!phone && expiryPicker}
+        {!phone && dayPicker}
+        {!phone && intervalPicker}
+        {!phone && sessionPicker}
         <div className="relative shrink-0">
           <button
             type="button"
             onClick={() => setSettingsOpen((v) => !v)}
             title="Chart layers and bubble settings"
-            className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg"
+            className={[
+              'rounded-sm border border-line font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg',
+              phone ? 'min-h-[34px] px-3 py-1.5 text-[12px]' : 'px-2 py-0.5 text-[10px]',
+            ].join(' ')}
           >
-            ⚙ Layers
+            {/* On a phone this button IS the toolbar, so it has to say what the
+                chart is currently set to — otherwise the two settings you
+                change most are invisible until you open the sheet. */}
+            {phone ? `${INTERVAL_LABEL[settings.interval]} · ${settings.session.toUpperCase()} ⚙` : '⚙ Layers'}
           </button>
-          <Popover open={settingsOpen} onClose={() => setSettingsOpen(false)}>
-            <div className="flex w-64 flex-col gap-2">
+          <Popover open={settingsOpen} onClose={() => setSettingsOpen(false)} sheet={phone}>
+            <div className={phone ? 'flex w-full flex-col gap-3' : 'flex w-64 flex-col gap-2'}>
+              {/* The controls the desktop keeps in the header. Same elements,
+                  same handlers — only the placement differs. */}
+              {phone && <PanelSection title="Expiry">{expiryPicker}</PanelSection>}
+              {phone && <PanelSection title="Interval">{intervalPicker}</PanelSection>}
+              {phone && <PanelSection title="Session">{sessionPicker}</PanelSection>}
+              {phone && dayPicker && <PanelSection title="Bubble day">{dayPicker}</PanelSection>}
+
               <PanelSection title="Layer">
                 <div className="flex flex-wrap gap-1">
                   <Chip
+                    size={ctlSize}
                     label="Bubbles"
                     on={settings.bubblesOn}
                     onClick={() => patch({ bubblesOn: !settings.bubblesOn })}
                     title="Draw the GEX ladder over the candles"
                   />
+                  {/* Off the phone sheet entirely: the rail is suppressed on a
+                      phone (see railOn), and a toggle that changes nothing you
+                      can see is worse than no toggle. */}
+                  {!phone && (
+                    <Chip
+                      size={ctlSize}
+                      label="GEX rail"
+                      on={settings.railOn}
+                      onClick={() => patch({ railOn: !settings.railOn })}
+                      title="The strike ladder down the right-hand side. Every row sits at the same height as its strike on the chart — it reads the chart's own price scale, so it stays level through a pan, a zoom and an autoscale"
+                    />
+                  )}
                   <Chip
-                    label="GEX rail"
-                    on={settings.railOn}
-                    onClick={() => patch({ railOn: !settings.railOn })}
-                    title="The strike ladder down the right-hand side. Every row sits at the same height as its strike on the chart — it reads the chart's own price scale, so it stays level through a pan, a zoom and an autoscale"
-                  />
-                  <Chip
+                    size={ctlSize}
                     label="Countdown"
                     on={settings.countdown}
                     onClick={() => patch({ countdown: !settings.countdown })}
                     title="Time left in the forming bar"
                   />
                   <Chip
+                    size={ctlSize}
                     label="Prev day"
                     on={settings.prevDay}
                     onClick={() => patch({ prevDay: !settings.prevDay })}
-                    title="TESTING PHASE — reach 48h back so yesterday's GEX ladder is available alongside today's. This is the REACH; the day picker in the toolbar chooses which of the two actually draws. The finished card shows the current session on the closest expiration only; this chip, that picker and the constant behind them come out then"
+                    title="TESTING PHASE — reach 48h back so yesterday's GEX ladder is available alongside today's. This is the REACH; the day picker chooses which of the two actually draws. The finished card shows the current session on the closest expiration only; this chip, that picker and the constant behind them come out then"
                   />
                 </div>
               </PanelSection>
@@ -522,6 +587,7 @@ export function GexCandlesCard() {
                   with the bubbles would leave the rail's basis unreachable. */}
               <PanelSection title="GEX basis">
                 <SegGroup
+                  size={ctlSize}
                   title="Vol+OI is open interest plus today's volume; Vol drops the open interest term"
                   options={[
                     { label: 'Vol+OI', value: 'voloi' },
@@ -540,6 +606,7 @@ export function GexCandlesCard() {
                   reading sub-bar detail on a wide chart. */}
               <PanelSection title="Bubble bucket">
                 <SegGroup
+                  size={ctlSize}
                   title="How much time one bubble covers. Auto picks the finest rung whose dots still separate at this zoom and re-picks as you zoom; 1m and 5m pin it. A pin sets the rung, not the stride — at a wide zoom a pinned 1m still draws every Nth bucket, which is the same picture Auto would have drawn"
                   options={[
                     { label: 'Auto', value: 'auto' },
@@ -574,9 +641,15 @@ export function GexCandlesCard() {
         <div className="relative min-h-0 flex-1">
           <ChartFrame onMount={onMount} className="absolute inset-0" />
 
+          {/* `right-16` is the gutter the price axis and the rail leave behind.
+              With the rail off on a phone there is no such gutter, and the
+              countdown sat out over the axis labels. */}
           <span
             ref={countdownRef}
-            className="tabular pointer-events-none absolute right-16 top-1.5 z-10 font-mono text-[11px] font-extrabold text-accent opacity-90"
+            className={[
+              'tabular pointer-events-none absolute top-1.5 z-10 font-mono font-extrabold text-accent opacity-90',
+              phone ? 'right-2 text-[12px]' : 'right-16 text-[11px]',
+            ].join(' ')}
           />
 
           {/* An empty bubble layer that HAS data is indistinguishable from a
@@ -593,7 +666,14 @@ export function GexCandlesCard() {
               onClick={() => apply((h) => h.scrollToNow())}
               title="Jump to the current candle — keeps your zoom"
               aria-label="Scroll to the latest candle"
-              className="absolute bottom-8 right-16 z-20 flex h-7 w-7 items-center justify-center rounded-full border border-line bg-surface text-accent shadow-lg transition-colors hover:bg-raised hover:text-fg"
+              className={[
+                'absolute z-20 flex items-center justify-center rounded-full border border-line bg-surface text-accent shadow-lg transition-colors hover:bg-raised hover:text-fg',
+                // 28px is a mouse target. After a pan on a phone this button is
+                // the way back to the live edge, and it has to be hittable
+                // without looking — 36px, clear of the axis, up off the bottom
+                // where a swipe-up gesture starts.
+                phone ? 'bottom-6 right-3 h-9 w-9' : 'bottom-8 right-16 h-7 w-7',
+              ].join(' ')}
             >
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden focusable="false">
                 <path
@@ -609,7 +689,7 @@ export function GexCandlesCard() {
           )}
         </div>
 
-        {settings.railOn && <GexRail model={railModel} applyChart={apply} />}
+        {railOn && <GexRail model={railModel} applyChart={apply} />}
       </div>
     </div>
   )

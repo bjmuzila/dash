@@ -19,12 +19,35 @@ import { createPortal } from 'react-dom'
 // carries a literal.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Control sizing. `sm` is the board's own density — a 10px label in a button two
+ * pixels tall, which is right when a card is one of twelve on a 27" monitor and
+ * wrong the instant a thumb is the pointer.
+ *
+ * `touch` is the same control at a real hit target (34px, where both platforms'
+ * guidelines land). It is a SIZE, not a phone flag: a card asks for it because
+ * it knows it is being touched, and this file stays ignorant of viewports.
+ */
+export type ControlSize = 'sm' | 'touch'
+
+const SEG_SIZE: Record<ControlSize, string> = {
+  sm: 'px-1.5 py-0.5 text-[10px]',
+  touch: 'min-h-[34px] flex-1 px-3 py-1.5 text-[12px]',
+}
+
+const CHIP_SIZE: Record<ControlSize, string> = {
+  sm: 'px-2 py-0.5 text-[10px]',
+  touch: 'min-h-[34px] px-3 py-1.5 text-[12px]',
+}
+
 export function SegGroup<T extends string>({
   options,
   value,
   onChange,
   title,
+  size = 'sm',
 }: {
+  size?: ControlSize
   options: Array<{
     label: string
     value: T
@@ -49,7 +72,15 @@ export function SegGroup<T extends string>({
   title?: string
 }) {
   return (
-    <div className="flex shrink-0 items-center rounded-sm border border-line" title={title}>
+    <div
+      className={[
+        'flex items-center rounded-sm border border-line',
+        // At touch size the group spans its row so each option gets a third of
+        // the width instead of a 28px sliver.
+        size === 'touch' ? 'w-full' : 'shrink-0',
+      ].join(' ')}
+      title={title}
+    >
       {options.map((o) => (
         <button
           key={o.value}
@@ -62,7 +93,8 @@ export function SegGroup<T extends string>({
           }}
           title={o.title}
           className={[
-            'px-1.5 py-0.5 text-[10px] font-semibold tracking-wide transition-colors first:rounded-l-sm last:rounded-r-sm',
+            SEG_SIZE[size],
+            'font-semibold tracking-wide transition-colors first:rounded-l-sm last:rounded-r-sm',
             o.value === value ? 'bg-raised text-fg' : 'text-muted',
             // Four states, and the selected-but-disabled one is why this is a
             // table rather than one ternary: it must still read as SELECTED
@@ -88,11 +120,13 @@ export function Chip({
   on,
   onClick,
   title,
+  size = 'sm',
 }: {
   label: string
   on: boolean
   onClick: () => void
   title?: string
+  size?: ControlSize
 }) {
   return (
     <button
@@ -100,7 +134,8 @@ export function Chip({
       onClick={onClick}
       title={title}
       className={[
-        'rounded-sm border px-2 py-0.5 text-[10px] font-semibold tracking-wide transition-colors',
+        CHIP_SIZE[size],
+        'rounded-sm border font-semibold tracking-wide transition-colors',
         on ? 'border-accent bg-raised text-fg' : 'border-line text-muted opacity-60 hover:opacity-100',
       ].join(' ')}
     >
@@ -150,11 +185,23 @@ export function Popover({
   onClose,
   children,
   align = 'right',
+  sheet = false,
 }: {
   open: boolean
   onClose: () => void
   children: ReactNode
   align?: 'left' | 'right'
+  /**
+   * Bottom sheet instead of an anchored panel.
+   *
+   * A panel anchored under its trigger is the wrong shape on a phone twice
+   * over: it opens at the TOP of the screen (the toolbar is up there) which is
+   * the far end from the thumb, and a 256px panel on a 390px viewport is not a
+   * panel, it is the screen with a margin. A sheet pinned to the bottom edge is
+   * where the hand already is, and it needs no measuring — which is also why
+   * `place()` is skipped entirely in this mode.
+   */
+  sheet?: boolean
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
   const anchorRef = useRef<HTMLSpanElement | null>(null)
@@ -211,6 +258,7 @@ export function Popover({
       setPos(null)
       return
     }
+    if (sheet) return // fixed to the bottom edge — nothing to measure
     place()
     window.addEventListener('resize', place)
     // Capture phase: the board and the ladders scroll in their own containers,
@@ -220,7 +268,7 @@ export function Popover({
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }
-  }, [open, place])
+  }, [open, place, sheet])
 
   if (!open || typeof document === 'undefined') return null
 
@@ -235,17 +283,33 @@ export function Popover({
       {createPortal(
         <div
           ref={ref}
-          style={{
-            position: 'fixed',
-            left: pos?.left ?? 0,
-            top: pos?.top ?? 0,
-            zIndex: POP_Z,
-            maxHeight: pos?.maxH,
-            // Hidden for the one frame between mounting (needed to measure the
-            // panel) and having somewhere to put it.
-            visibility: pos ? 'visible' : 'hidden',
-          }}
-          className="overflow-y-auto rounded-md border border-line bg-surface p-2 shadow-lg"
+          style={
+            sheet
+              ? {
+                  position: 'fixed',
+                  left: POP_EDGE,
+                  right: POP_EDGE,
+                  // Clear of the home indicator / gesture bar, which sits over
+                  // the bottom ~20px and swallows a tap meant for the last row.
+                  bottom: `calc(${POP_EDGE}px + env(safe-area-inset-bottom, 0px))`,
+                  zIndex: POP_Z,
+                  maxHeight: '68vh',
+                }
+              : {
+                  position: 'fixed',
+                  left: pos?.left ?? 0,
+                  top: pos?.top ?? 0,
+                  zIndex: POP_Z,
+                  maxHeight: pos?.maxH,
+                  // Hidden for the one frame between mounting (needed to measure
+                  // the panel) and having somewhere to put it.
+                  visibility: pos ? 'visible' : 'hidden',
+                }
+          }
+          className={[
+            'overflow-y-auto rounded-md border border-line bg-surface shadow-lg',
+            sheet ? 'p-3' : 'p-2',
+          ].join(' ')}
         >
           {children}
         </div>,

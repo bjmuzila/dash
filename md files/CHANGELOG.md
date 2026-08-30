@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-08-30 - v3: the GEX Candles card is now phone-aware
+
+Added: `cbedge-v3/src/design/useIsPhone.ts`. Edited:
+`cbedge-v3/src/design/primitives/Controls.tsx`,
+`cbedge-v3/src/design/primitives/Board.tsx`,
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
+
+v3 had no answer to "is this a phone" anywhere in it. `useIsPhone()` is now the
+one place that decides, and it uses v2's exact test (`mobileNav.ts`): narrow AND
+(coarse pointer OR no hover). Two MediaQueryList objects rather than one
+`(A) and ((B) or (C))` string - boolean `or` in a media query is Media Queries 4
+and it fails CLOSED, so an unparseable query would just never match a phone and
+nothing would say why.
+
+**The card.** Not a fork - the same component, three differences, each about the
+hand rather than the screen:
+
+- The toolbar collapses to ONE button and everything moves into a bottom sheet.
+  Five 10px controls wrap to three rows on a 390px card, eat a third of the
+  chart's height doing it, and still cannot be hit. The button carries the two
+  settings you change most (`1m - RTH`) so they are readable without opening it.
+- The GEX rail is suppressed - a fixed-width column beside the chart is
+  affordable at 900px and a quarter of the plot at 390. `railOn` is derived, not
+  stored, so the same browser profile still gets its rail on the desktop; and it
+  is what the history fetch reads, so a phone stops pulling the heaviest request
+  on the card for a ladder it will not draw.
+- The countdown and the jump-to-live button move in off the rail's old `right-16`
+  gutter, and the button goes 28px -> 36px.
+
+**Controls.** `SegGroup` and `Chip` take `size="touch"` (34px targets, the seg
+group spans its row) - a size, not a phone flag, so `Controls.tsx` stays
+ignorant of viewports. `Popover` takes `sheet`, which pins it to the bottom edge
+inside `env(safe-area-inset-bottom)` and skips measuring entirely. An anchored
+panel is wrong twice on a phone: it opens at the top, the far end from the
+thumb, and 256px on a 390px viewport is not a panel.
+
+**Board.** On a phone the 12-column pixel grid is bypassed for a single-column
+stack in reading order, full width, height from the card's own grid height,
+floored at 280px and capped at `78vh` - CSS `min()`, so rotation and the URL bar
+collapsing re-evaluate it without React hearing anything. Drag and resize are
+not wired up there at all: they would have to steal a gesture from the chart's
+own pan, and an arrangement made by a thumb is one the desktop inherits. Tiles
+keep `data-card-id` so `perf-check.mjs` still attributes their canvases.
+
+Still open: the card charts ETFs/SPX cash via `/api/snapshots/etf-candles`. ES
+futures were deliberately removed from v3 on 2026-08-27 (see the header of
+`gexCandles/symbols.ts`) and re-adding them brings back the ES/SPX basis
+conversion that removal deleted. Not done here - see the note in the session.
+
 ## 2026-08-29 - v3 theme check runs on deploy and on commit, not only on the laptop
 
 Edited: `Dockerfile`, `cbedge-v3/AGENTS.md`. Added: `.githooks/pre-commit`.
