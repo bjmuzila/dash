@@ -795,16 +795,22 @@ export default function EconomicCalendarPage() {
           {/* Same-origin file in public/ — a real image the capture can draw,
               unlike the 302'd ticker logos.
 
-              cbedge3.0 is a 3:1 banner (2448×816) on a black plate with a white
-              keyline, so 56px tall lands it at ~168px wide. That is the whole
+              cbedge3.0.png is a 3.4:1 banner (2064×609) with a TRANSPARENT
+              ground, so 56px tall lands it at ~190px wide. That is the whole
               reason it can be this much bigger than the 26px mark it replaces:
               the old asset was a compact logotype that turned into a smudge at
               any size worth reading, while this one is built to be read as a
-              band. The plate is black on the board's near-black ground, so what
-              actually reads at the bottom of a pasted PNG is the keyline and the
-              wordmark inside it — a signature rather than a watermark. */}
+              band.
+
+              Transparent matters here beyond looking tidier. The .jpg version
+              carried a baked-in black plate, and the board's ground is
+              near-black but not black — so the plate showed as a faintly
+              different rectangle behind the mark. With alpha there is no plate:
+              the keyline and wordmark sit straight on the board and it reads as
+              a signature rather than a pasted-on tile. It also means the same
+              file works if the board's background ever moves. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/cbedge3.0.jpg" alt="CB Edge" style={{ height: 56, width: "auto", display: "block" }} />
+          <img src="/cbedge3.0.png" alt="CB Edge" style={{ height: 56, width: "auto", display: "block" }} />
         </div>
       </div>
     );

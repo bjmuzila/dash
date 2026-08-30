@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-08-30 - v3 build fix: isAutoBucket has to be a type predicate
+
+Edited: `cbedge-v3/src/board/gexCandles/settings.ts`.
+
+`npm run build` failed on `tsc --noEmit`:
+
+```
+GexCandlesCard.tsx:408:11 - error TS2322: Type 'BubbleBucket | null' is not
+assignable to type '1 | 5 | null'.  Type '"auto"' is not assignable...
+    bucketMin: isAutoBucket(settings.bubbleBucket) ? null : settings.bubbleBucket,
+```
+
+`isAutoBucket` was declared `(v: BubbleBucket): boolean`. A plain boolean tells
+the compiler nothing, so the false branch of the ternary still had the full
+`1 | 5 | 'auto'` — and `ChartDrawOpts.bucketMin` is `1 | 5 | null`. The runtime
+behaviour was already correct; only the type was silent about it.
+
+Signature is now `(v: BubbleBucket): v is 'auto'`, which narrows the else branch
+to `1 | 5` and lets the call site stay as written. Nothing else changed, and the
+one other caller (the select's `value=` on line 549) is unaffected.
+
+Verified against an isolated repro carrying the exact declarations from
+`settings.ts` and `chart.ts` plus line 408 verbatim: clean under `tsc --strict`
+with the predicate, and swapping the return type back to `boolean` reproduces
+TS2322 at the same position — so this is the whole fix, not a symptom of it.
+
 ## 2026-08-30 - Logo mirror: 811 on disk, and --from-earnings now gets past the prod auth gate
 
 Edited: `scripts/fetch-ticker-logos.mjs`.

@@ -47,8 +47,14 @@ export const INTERVAL_LABEL: Record<Interval, string> = {
  */
 export type BubbleBucket = 1 | 5 | 'auto'
 export const isBubbleBucket = (v: unknown): v is BubbleBucket => v === 1 || v === 5 || v === 'auto'
-/** Does this bucket follow the pane, rather than pin a rung? */
-export const isAutoBucket = (v: BubbleBucket): boolean => v === 'auto'
+/**
+ * Does this bucket follow the pane, rather than pin a rung?
+ *
+ * A type predicate, not a plain boolean: the false branch is where a pinned
+ * bucket gets handed to ChartDrawOpts.bucketMin, which is `1 | 5 | null`.
+ * Returning boolean leaves 'auto' in the type there and the build fails.
+ */
+export const isAutoBucket = (v: BubbleBucket): v is 'auto' => v === 'auto'
 /** What a fresh card starts on. */
 export const BUBBLE_BUCKET_DEFAULT: BubbleBucket = 'auto'
 
