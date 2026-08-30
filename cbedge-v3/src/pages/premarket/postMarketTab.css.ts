@@ -57,7 +57,7 @@ export const POSTMARKET_CSS = `
    Premarket.tsx carries the same warning on its own CSS for the same reason. */
 .pmk .sechead{display:flex;align-items:baseline;justify-content:flex-start;gap:14px;margin-bottom:11px;flex-wrap:wrap}
 .pmk .sechead .right{margin-left:auto}
-.pmk .sechead h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:0;font-weight:600}
+.pmk .sechead h3{font-size:var(--text-xs);letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:0;font-weight:600}
 .pmk .secn{width:17px;height:17px;border-radius:5px;background:var(--cyanWash);color:var(--cyan);display:inline-grid;
   place-items:center;font-size:9.5px;font-weight:700;margin-right:8px;vertical-align:1px}
 .pmk .warnbar{padding:8px 11px;border-radius:var(--r2);border:1px solid var(--amberEdge);
@@ -93,8 +93,8 @@ export const POSTMARKET_CSS = `
    to be "none of them". Do not add a fourth. */
 .pmk .sc{position:relative;border:1px solid var(--card);
   border-radius:var(--r);background:var(--panel2);padding:10px 11px 11px}
-.pmk .sc .src{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2);margin-top:6px}
-.pmk .sc .nm{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);
+.pmk .sc .src{font-size:var(--text-3xs);letter-spacing:.06em;text-transform:uppercase;color:var(--dim2);margin-top:6px}
+.pmk .sc .nm{font-size:var(--text-2xs);letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);
   display:flex;justify-content:space-between;align-items:center;gap:6px}
 .pmk .sc .px{font-size:20px;font-weight:660;letter-spacing:-.03em;margin:3px 0 1px}
 .pmk .sc .sub{font-size:10.5px;color:var(--dim)}
@@ -116,7 +116,7 @@ export const POSTMARKET_CSS = `
    value — so length always means the same thing. */
 .pmk .evrow{display:grid;grid-template-columns:54px 13px 60px 1fr 78px 112px 76px;
   align-items:center;height:${EV_ROW_H}px;gap:7px}
-.pmk .evrow .sgn{font-size:11px;font-weight:800;text-align:center;line-height:1}
+.pmk .evrow .sgn{font-size:var(--text-xs);font-weight:800;text-align:center;line-height:1}
 .pmk .evrow .sgn.p{color:var(--pos)}
 .pmk .evrow .sgn.n{color:var(--neg)}
 .pmk .evrow .netcol{font-size:9.5px;text-align:right;white-space:nowrap;font-weight:600}
@@ -140,7 +140,7 @@ export const POSTMARKET_CSS = `
 .pmk .builtcol .sep{color:var(--dim2)}
 .pmk .evrow .k{font-size:10.5px;text-align:right;color:var(--dim)}
 .pmk .evrow.key .k{color:var(--txt);font-weight:700}
-.pmk .evrow .tagcol{font-size:9px;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.pmk .evrow .tagcol{font-size:var(--text-3xs);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
 /* ── POWER HOUR, ON ITS OWN SCALE ───────────────────────────────────────────
    15:00→close change in the strike's SHARE OF THE BOARD, in percentage points,
    normalised over its own column and not over the main bar.
@@ -205,7 +205,7 @@ export const POSTMARKET_CSS = `
 .pmk .mrow{display:grid;grid-template-columns:1fr 52px 1fr;align-items:center;height:18px;gap:6px}
 .pmk .mrow .mleft{display:flex;justify-content:flex-end}
 .pmk .mrow .mbar{height:11px;border-radius:2px}
-.pmk .mrow .mk3{font-size:10px;text-align:center;color:var(--dim)}
+.pmk .mrow .mk3{font-size:var(--text-2xs);text-align:center;color:var(--dim)}
 
 /* Positioned vs written — one stacked bar per strike, OI then volume. */
 .pmk .srow{display:grid;grid-template-columns:54px 1fr 128px;align-items:center;height:22px;gap:9px}
@@ -216,7 +216,7 @@ export const POSTMARKET_CSS = `
 
 .pmk .heat{display:grid;gap:2px;margin-top:6px}
 .pmk .heat i{height:22px;border-radius:3px;background:var(--sunken)}
-.pmk .heatx{display:flex;justify-content:space-between;font-size:9px;color:var(--dim2);margin-top:4px}
+.pmk .heatx{display:flex;justify-content:space-between;font-size:var(--text-3xs);color:var(--dim2);margin-top:4px}
 
 /* 4/5/6 */
 .pmk .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
@@ -224,7 +224,7 @@ export const POSTMARKET_CSS = `
   padding:9px 10px;overflow:hidden}
 .pmk .tile .n2{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
 .pmk .tile .v2{font-size:16px;font-weight:640;margin-top:2px;letter-spacing:-.02em}
-.pmk .tile .m2{font-size:10px;color:var(--dim)}
+.pmk .tile .m2{font-size:var(--text-2xs);color:var(--dim)}
 .pmk .split{display:flex;height:9px;border-radius:5px;overflow:hidden;margin-top:10px;border:1px solid var(--line)}
 .pmk .split i{display:block;height:100%}
 .pmk .biasbox{margin-top:10px;padding:10px 12px;border-radius:var(--r);
@@ -253,7 +253,7 @@ export const POSTMARKET_CSS = `
 .pmk .rx{font-size:9.5px;padding:2px 6px;border-radius:5px;white-space:nowrap;border:1px solid var(--line2)}
 .pmk .premlist{display:grid;gap:7px;margin-top:8px}
 .pmk .premrow{display:grid;grid-template-columns:52px 1fr 54px;gap:9px;align-items:center}
-.pmk .premrow .pl{font-size:11px;color:var(--txt);font-weight:600}
+.pmk .premrow .pl{font-size:var(--text-xs);color:var(--txt);font-weight:600}
 .pmk .premrow .ptrack{height:9px;border-radius:5px;background:var(--sunken);overflow:hidden}
 .pmk .premrow .ptrack i{display:block;height:100%;border-radius:5px}
 .pmk .premrow .pu{font-size:10.5px;text-align:right;font-weight:640;white-space:nowrap}

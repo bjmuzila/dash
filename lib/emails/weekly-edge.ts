@@ -100,6 +100,27 @@ export interface ScannerProof {
  * and it stays there; a peak column presented as realized P&L is the single
  * easiest way to make this letter dishonest.
  */
+/**
+ * One GEX-scanner flag. `peak` is the contract's intraday high AFTER the flag,
+ * exactly as on the auto-buy table — not an exit, and the column header says so.
+ */
+export interface GexScannerRow {
+  /** Scanner grade, e.g. "A+" or "B". */
+  grade: string;
+  symbol: string;
+  /** Strike + right, e.g. "875P". */
+  contract: string;
+  /** Contract expiry, e.g. "2026-08-31". */
+  expiry: string;
+  /** When the scanner flagged it, e.g. "10:47 AM". */
+  flagged: string;
+  entry: string;
+  peak: string;
+  peakAt: string;
+  /** Pre-computed, e.g. "+219%". */
+  gain: string;
+}
+
 export interface AutoBuyRow {
   date: string;
   /** CB window — "9:45", "10:30" or "12:00". */
@@ -138,6 +159,9 @@ export interface WeeklyEdgeOpts {
   /** Scanner-proof card. Defaults FALSE — opt in once there's a catch to show. */
   showScannerProof?: boolean;
   scannerProof?: Partial<ScannerProof>;
+  /** GEX-scanner table. Empty array renders the dashed placeholder instead. */
+  gexScannerRows?: GexScannerRow[];
+  gexScannerLabel?: string;
   /** Set false to drop the wall-migration chart. */
   showWallChart?: boolean;
   wallChartUrl?: string;
@@ -186,6 +210,17 @@ const DEFAULT_EARNINGS: EarningsDay[] = [
   { label: "Wed 9/2 — Broadcom after the close", tickers: [{ symbol: "AVGO" }, { symbol: "SNOW" }, { symbol: "HPE" }, { symbol: "NTAP" }, { symbol: "OLLI" }] },
   { label: "Thu 9/3", tickers: [{ symbol: "LULU" }, { symbol: "DOCU" }, { symbol: "CIEN" }, { symbol: "CPB" }, { symbol: "ASAN" }] },
   { label: "Fri 9/4", tickers: [{ symbol: "ABM" }] },
+];
+
+/**
+ * GEX-scanner flags from Friday 8/28 that worked. All three are PUTS, which is
+ * the day: Warsh spoke, the tape rolled over, and the scanner was leaning the
+ * right way. Filtered to winners — the section label says so.
+ */
+const DEFAULT_GEX_SCANNER_ROWS: GexScannerRow[] = [
+  { grade: "B", symbol: "MU", contract: "875P", expiry: "2026-08-31", flagged: "10:47 AM", entry: "$0.63", peak: "$2.01", peakAt: "12:01 PM", gain: "+219%" },
+  { grade: "A+", symbol: "LRCX", contract: "285P", expiry: "2026-09-04", flagged: "11:33 AM", entry: "$1.25", peak: "$3.02", peakAt: "3:55 PM", gain: "+143%" },
+  { grade: "A+", symbol: "HOOD", contract: "99P", expiry: "2026-09-04", flagged: "11:21 AM", entry: "$0.53", peak: "$1.14", peakAt: "3:49 PM", gain: "+117%" },
 ];
 
 /**
@@ -252,6 +287,7 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
   "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
   "confRows" | "resultsNote" | "estMoveNote" | "showScannerProof" |
+  "gexScannerRows" | "gexScannerLabel" |
   "showWallChart" | "wallChartUrl" | "wallChartHeadline" | "wallChartNote" |
   "showAutoBuy" | "autoBuyRows" | "autoBuyNote" | "ctaUrl" |
   "showAffiliate" | "affiliateHeadline" | "affiliateBody" | "affiliateUrl" | "affiliateBannerUrl" |
@@ -307,6 +343,11 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     // one, and override `scannerProof` with the new numbers.
     showScannerProof: opts.showScannerProof === true,
     scannerProof: { ...DEFAULT_SCANNER_PROOF, ...(opts.scannerProof || {}) },
+    gexScannerRows: opts.gexScannerRows || DEFAULT_GEX_SCANNER_ROWS,
+    // The label says "winners" out loud. That is the denominator disclosure for
+    // a filtered list — do not soften it to "flags" or "catches", which would
+    // read as if these were all of them.
+    gexScannerLabel: opts.gexScannerLabel || "GEX scanner — Friday's winners",
     showWallChart: opts.showWallChart !== false,
     wallChartUrl: opts.wallChartUrl || WALL_CHART_URL,
     wallChartHeadline: opts.wallChartHeadline || "Five sessions, and price never left the walls",
@@ -404,6 +445,14 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
         `  ${r.date} ${r.time.padEnd(5)} ${r.contract.padEnd(6)} ${r.entry} -> ${r.peak}  ${r.gain}`
       ),
       ...(o.autoBuyNote ? [strip(o.autoBuyNote)] : []),
+      "",
+    ] : []),
+    ...(!o.showScannerProof && o.gexScannerRows.length ? [
+      strip(o.gexScannerLabel).toUpperCase(),
+      "  (peak = intraday high after the flag, not an exit)",
+      ...o.gexScannerRows.map((r) =>
+        `  [${r.grade}] ${r.symbol} ${r.contract} ${r.expiry} · flagged ${r.flagged} · ${r.entry} -> ${r.peak} (${r.peakAt})  ${r.gain}`
+      ),
       "",
     ] : []),
     ...(o.showScannerProof ? (() => {
@@ -713,7 +762,33 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               </table>
               <div style="font:400 12px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;margin-top:10px;">
                 Flagged on the ${sp.expiry} expiry with ${sp.ticker} at ${sp.spot} — off the scanner in real time, not a backtest. One contract is not a track record, and options can and do go to zero.
-              </div>` : `
+              </div>` : o.gexScannerRows.length ? `
+              <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">${escapeHtml(o.gexScannerLabel)}</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(255,255,255,0.10);border-radius:12px;background:#080B11;border-collapse:separate;">
+                <tr>
+                  <td style="padding:9px 8px 9px 14px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,255,255,0.10);">Grade</td>
+                  <td style="padding:9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,255,255,0.10);">Contract</td>
+                  <td align="right" style="padding:9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,255,255,0.10);">Flagged</td>
+                  <td align="right" style="padding:9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,255,255,0.10);">Entry &rarr; peak<br><span style="font-weight:400;letter-spacing:0.02em;text-transform:none;color:#6b7d8f;">intraday high, not an exit</span></td>
+                  <td align="right" style="padding:9px 14px 9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,255,255,0.10);">At peak</td>
+                </tr>
+                ${o.gexScannerRows.map((r, i) => {
+                  const edge = i < o.gexScannerRows.length - 1 ? "border-bottom:1px solid rgba(255,255,255,0.06);" : "";
+                  // A+ gets the accent; anything else stays grey. The grade is
+                  // the scanner's own conviction and shouldn't be flattened.
+                  const top = r.grade.startsWith("A");
+                  return `
+                <tr>
+                  <td style="padding:9px 8px 9px 14px;${edge}">
+                    <span style="display:inline-block;padding:3px 7px;border-radius:6px;font:800 10px/1 ${SANS};color:${top ? "#8ECAE6" : "#9fb3c8"};background:${top ? "rgba(142,202,230,0.14)" : "rgba(255,255,255,0.05)"};border:1px solid ${top ? "rgba(142,202,230,0.35)" : "rgba(255,255,255,0.10)"};">${escapeHtml(r.grade)}</span>
+                  </td>
+                  <td style="padding:9px 8px;font:700 12px/1.4 ${SANS};color:#ffffff;white-space:nowrap;${edge}">${escapeHtml(r.symbol)} <span style="color:#F2A65A;">${escapeHtml(r.contract)}</span><br><span style="font-weight:400;font-size:10px;color:#6b7d8f;">${escapeHtml(r.expiry)}</span></td>
+                  <td align="right" style="padding:9px 8px;font:600 12px/1.4 ${SANS};color:#9fb3c8;white-space:nowrap;${edge}">${escapeHtml(r.flagged)}</td>
+                  <td align="right" style="padding:9px 8px;font:600 12px/1.4 ${SANS};color:#d4dde6;white-space:nowrap;${edge}">${escapeHtml(r.entry)} <span style="color:#6b7d8f;">&rarr;</span> <span style="color:#ffffff;font-weight:700;">${escapeHtml(r.peak)}</span><br><span style="font-weight:400;font-size:10px;color:#6b7d8f;">peak ${escapeHtml(r.peakAt)}</span></td>
+                  <td align="right" style="padding:9px 14px 9px 8px;font:800 12px/1.4 ${SANS};color:#00E676;white-space:nowrap;${edge}">${escapeHtml(r.gain)}</td>
+                </tr>`;
+                }).join("")}
+              </table>` : `
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">What the flow scanner caught</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed rgba(255,255,255,0.18);border-radius:10px;">
                 <tr><td align="center" style="padding:22px 16px;font:600 12px/1.5 ${SANS};color:#6b7d8f;">[ADD THIS WEEK'S SCANNER CATCH]</td></tr>

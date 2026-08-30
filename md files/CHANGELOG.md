@@ -1,5 +1,105 @@
 # Changelog
 
+## 2026-08-30 - check-theme --fix: stop being taxed for the substitutions a script can make
+
+Rule 4 (type scale) had blocked a commit on four separate pushes today, and
+every time on the same class of thing: a size that is ALREADY ON THE SCALE,
+typed as a literal. `text-[10px]` is not a design decision. It is `text-2xs`
+spelled the way Tailwind teaches you to spell it.
+
+WHY IT KEPT HAPPENING - two causes, and the first one is the embarrassing one:
+
+1. THE SCALE WAS MISSING ITS TWO SMALLEST STEPS. `--text-2xs` and `--text-3xs`
+   were never declared in tokens.css, so in Tailwind v4 `text-2xs` / `text-3xs`
+   were not utilities at all and emitted NOTHING. The check spent months telling
+   authors to use a class that silently did nothing, which made `text-[10px]`
+   the only spelling that actually rendered at 10px. There were 25 of them in
+   src/ - that is the rule punishing the one thing that worked. Both tokens were
+   declared earlier today; this entry is the other half of that fix.
+
+2. THE CHECK RUNS AT THE LAST POSSIBLE MOMENT. `push.ps1` skips the local build
+   by default, so `npm run check` never runs while you are writing and the
+   pre-commit hook is the FIRST time check-theme executes - after the work is
+   done, when you are trying to ship.
+
+`npm run theme:fix` (`node scripts/check-theme.mjs --fix`) now rewrites the
+mechanical ones and then falls through into the ordinary check, so a run ends by
+telling you what is LEFT - the part that needs a person.
+
+  text-[10px]      ->  text-2xs                    (Tailwind arbitrary value)
+  font-size:10px   ->  font-size:var(--text-2xs)    (CSS, incl. template CSS)
+
+A size NOT on the scale is untouched and still fails. That is the point: 11.5px
+is a real decision and belongs to a person, not to a script.
+
+`fontSize: 10` in JS is deliberately NOT auto-fixed. That regex matches two
+different things - a React style object, where `var(--text-2xs)` is right, and a
+chart config, where it must stay a NUMBER (`ctx.font` and lightweight-charts do
+not resolve custom properties). Nothing can tell them apart from the outside,
+and a fix that silently blanks a chart's labels is worse than the lint it
+removes. Those still report; the message now names both answers.
+
+Two properties the fixer has to keep, both of which have bitten this repo:
+
+- LINE ENDINGS SURVIVE. The scan normalises CRLF before matching; the fixer must
+  not, or it rewrites all 900 lines of a file to change one and the diff becomes
+  unreadable. It works on raw bytes and its regexes never span a line. Verified
+  on a uniformly-CRLF tree: endings identical before and after, 18 changed lines
+  in postMarketTab.css.ts rather than 700.
+- COMMENTS ARE OFF LIMITS. A doc comment explaining why `text-[10px]` is banned
+  must not be "fixed" into prose that no longer says what it means. Match
+  positions come from a comment-blanked copy that is the same LENGTH as the raw
+  text, so index N in one is index N in the other. `stripComments` now replaces
+  with spaces rather than deleting, which the scan does not care about and the
+  fixer depends on.
+
+Also: the scale is now DATA (`SCALE`) rather than prose in an error string, and
+the help text is generated from it - so the message and the tokens cannot drift
+again, which is exactly how cause #1 above went unnoticed for months.
+
+Dry run against a copy of the tree: 71 sizes across 8 files, and it pulls
+Premarket.tsx from 67 violations to 39.
+
+Files: `cbedge-v3/scripts/check-theme.mjs`, `cbedge-v3/package.json`.
+
+## 2026-08-30 - Weekly Edge: GEX scanner table replaces the scanner placeholder
+
+`lib/emails/weekly-edge.ts`. The last dashboard placeholder is filled. Friday
+8/28's GEX-scanner winners now render as a table where the "[ADD THIS WEEK'S
+SCANNER CATCH]" block was.
+
+| Grade | Contract          | Flagged  | Entry -> peak   | At peak |
+|-------|-------------------|----------|-----------------|---------|
+| B     | MU 875P 08-31     | 10:47 AM | $0.63 -> $2.01  | +219%   |
+| A+    | LRCX 285P 09-04   | 11:33 AM | $1.25 -> $3.02  | +143%   |
+| A+    | HOOD 99P 09-04    | 11:21 AM | $0.53 -> $1.14  | +117%   |
+
+- New `GexScannerRow` type, `DEFAULT_GEX_SCANNER_ROWS`, and opts
+  `gexScannerRows` / `gexScannerLabel`, plus a plain-text block.
+- Section resolution is now three-way: `showScannerProof` renders the old
+  single-catch card, else a non-empty `gexScannerRows` renders this table, else
+  the dashed placeholder. Emptying the array is still how you get a placeholder.
+- Grade badge: A-anything takes the `#8ECAE6` accent, everything else stays grey.
+  The grade is the scanner's own conviction and flattening it would throw away
+  information the reader can use - note the B graded MU was the biggest mover,
+  which is worth a reader noticing.
+- NOT gold-bordered. Gold is the Core Wall auto-buy table's emphasis and stays
+  unique to it; two gold boxes in one band is no emphasis at all.
+
+TWO HONESTY POINTS, same as the auto-buy table:
+1. Label is "GEX scanner - FRIDAY'S WINNERS". It says winners out loud, because
+   this is a filtered list and there is no denominator available. Do not soften
+   it to "flags" or "catches" - that would read as if these were all of them.
+2. "intraday high, not an exit" is a subhead on the ENTRY -> PEAK column, and the
+   last column is "AT PEAK". Same rule as the auto-buy table.
+
+Worth knowing, not in the letter: all three are PUTS. Warsh spoke Friday, the
+tape rolled over, and the scanner was leaning the right way - if a future issue
+wants a caption, that is the one to write.
+
+Preview regenerated: `generated/2026-08-30-weekly-edge-preview.html` / `.jpg`.
+NO PLACEHOLDERS REMAIN - the issue is complete pending a final read-through.
+
 ## 2026-08-30 - Watch This flag card: P/L graded on the peak, not the live mark
 
 `components/pages/Scanner.tsx` (Watch This tab, expanded flag card).

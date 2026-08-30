@@ -48,7 +48,7 @@ export const GEX_CHURN_CSS = `
 .gcf{margin-top:16px}
 .gcf .gcf-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:9px}
 .gcf .gcf-t{font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--txt)}
-.gcf .gcf-as{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.gcf .gcf-as{font-size:var(--text-xs);color:var(--muted);font-variant-numeric:tabular-nums}
 .gcf .gcf-note{font-size:11.5px;color:var(--muted);line-height:1.55;margin:0 0 10px;max-width:78ch}
 .gcf .gcf-rows{display:flex;flex-direction:column;gap:3px}
 .gcf .gcf-row{display:grid;grid-template-columns:3px 1fr;border-radius:6px;overflow:hidden;
@@ -61,13 +61,13 @@ export const GEX_CHURN_CSS = `
 .gcf .gcf-what{font-size:12px;color:var(--gc-edge);font-weight:700}
 .gcf .gcf-tag{font-size:9.5px;font-weight:800;letter-spacing:.09em;padding:1px 5px;border-radius:4px;
   color:var(--muted);border:1px solid color-mix(in srgb, var(--color-fg) 16%, transparent)}
-.gcf .gcf-l2{display:flex;gap:9px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--muted);
+.gcf .gcf-l2{display:flex;gap:9px;align-items:center;flex-wrap:wrap;font-size:var(--text-xs);color:var(--muted);
   font-variant-numeric:tabular-nums}
 .gcf .gcf-bar{flex:0 1 150px;height:6px;border-radius:4px;background:color-mix(in srgb, var(--color-fg) 7%, transparent);overflow:hidden}
 .gcf .gcf-bar.prov{background-image:repeating-linear-gradient(135deg,color-mix(in srgb, var(--color-fg) 5%, transparent) 0 4px,transparent 4px 8px)}
 .gcf .gcf-bar i{display:block;height:100%;border-radius:4px;background:var(--gc-edge)}
 .gcf .gcf-x{font-weight:800;color:var(--gc-edge)}
-.gcf .gcf-legend{display:flex;align-items:center;gap:9px;font-size:10px;color:var(--muted);margin-top:9px}
+.gcf .gcf-legend{display:flex;align-items:center;gap:9px;font-size:var(--text-2xs);color:var(--muted);margin-top:9px}
 .gcf .gcf-ramp{flex:0 1 120px;height:4px;border-radius:4px}
 .gcf .gcf-empty{font-size:12px;color:var(--muted);padding:12px 0;line-height:1.6}
 `;

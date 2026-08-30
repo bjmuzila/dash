@@ -41,7 +41,7 @@ export const GEX_WATCH_CSS = `
 .gwf{margin-top:14px}
 .gwf .gwf-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:9px}
 .gwf .gwf-t{font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--txt)}
-.gwf .gwf-as{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.gwf .gwf-as{font-size:var(--text-xs);color:var(--muted);font-variant-numeric:tabular-nums}
 .gwf .gwf-note{font-size:11.5px;color:var(--muted);line-height:1.55;margin:0 0 10px;max-width:78ch}
 .gwf .gwf-rows{display:flex;flex-direction:column;gap:3px}
 .gwf .gwf-row{display:grid;grid-template-columns:3px 1fr;border-radius:6px;overflow:hidden;
@@ -51,11 +51,11 @@ export const GEX_WATCH_CSS = `
 .gwf .gwf-l1{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 .gwf .gwf-sym{font-size:13.5px;font-weight:800;letter-spacing:.01em;color:var(--txt)}
 .gwf .gwf-k{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
-.gwf .gwf-vs{font-size:11px;font-variant-numeric:tabular-nums;color:var(--gw-edge);font-weight:700}
+.gwf .gwf-vs{font-size:var(--text-xs);font-variant-numeric:tabular-nums;color:var(--gw-edge);font-weight:700}
 .gwf .gwf-flip{font-size:9.5px;font-weight:800;letter-spacing:.09em;padding:1px 5px;border-radius:4px;
   color:var(--gw-flip);border:1px solid var(--gw-flip)}
 .gwf .gwf-l2{font-size:12.5px;color:var(--txt);line-height:1.5}
-.gwf .gwf-l3{display:flex;gap:9px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--muted);
+.gwf .gwf-l3{display:flex;gap:9px;align-items:center;flex-wrap:wrap;font-size:var(--text-xs);color:var(--muted);
   font-variant-numeric:tabular-nums}
 .gwf .gwf-bar{flex:0 1 130px;height:4px;border-radius:3px;background:color-mix(in srgb, var(--color-fg) 7%, transparent);overflow:hidden}
 .gwf .gwf-bar i{display:block;height:100%;border-radius:3px;background:var(--gw-edge)}

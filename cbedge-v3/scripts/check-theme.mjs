@@ -59,7 +59,33 @@
 // The first run WRITES the baseline and passes, with a loud notice. That is
 // deliberate — installing this must not break the build you are already running.
 //
+// ── Why there is a --fix ─────────────────────────────────────────────────────
+//
+// Rule 4 was blocking a commit a week, and always on the same thing: a size
+// that is ALREADY ON THE SCALE, typed as a literal. `text-[10px]` is not a
+// design decision, it is `text-2xs` spelled the way Tailwind teaches you to
+// spell it — and the rewrite is mechanical, which means a human doing it by
+// hand is a human being taxed for nothing.
+//
+// So --fix does exactly the substitutions that are provably safe and leaves
+// everything else alone:
+//
+//   text-[10px]        →  text-2xs                 (Tailwind arbitrary value)
+//   font-size:10px     →  font-size:var(--text-2xs) (CSS, incl. template CSS)
+//
+// A size that is NOT on the scale is untouched and still fails. That is the
+// point: 11.5px is a real decision and belongs to a person, not to a script.
+//
+// `fontSize: 10` in JS is deliberately NOT auto-fixed. That regex matches two
+// different things — a React style object, where `var(--text-2xs)` is correct,
+// and a chart library's config, where it must stay a NUMBER (`ctx.font` and
+// lightweight-charts do not resolve custom properties). No script can tell
+// them apart from the outside, and a fix that silently blanks a chart's labels
+// is worse than the lint it removed. Those still report, and the message names
+// both answers.
+//
 //   node scripts/check-theme.mjs            check (this is what `npm run build` does)
+//   node scripts/check-theme.mjs --fix      rewrite the mechanical ones, then check
 //   node scripts/check-theme.mjs --update   re-record the baseline after cleaning up
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -73,6 +99,7 @@ const INDEX_HTML = join(ROOT, 'index.html')
 const BASELINE = join(ROOT, 'theme-baseline.json')
 
 const UPDATE = process.argv.includes('--update')
+const FIX = process.argv.includes('--fix')
 
 /** tokens.css is the palette; it is the only file allowed to hold literals. */
 const LITERAL_EXEMPT = new Set(['src/design/tokens.css'])
@@ -101,6 +128,32 @@ const TW_CLASS = new RegExp(`\\b(?:${TW_PROP})-(?:${TW_PALETTE})-(?:50|[1-9]00|9
 const TYPE_ARBITRARY = /\btext-\[[0-9.]+(?:px|rem|em)\]/g
 const TYPE_CSS = /font-size\s*:\s*[0-9.]+(?:px|rem|em)/g
 const TYPE_JS = /\bfontSize\s*:\s*[0-9.]+/g
+
+/**
+ * THE SCALE, as data rather than as prose in an error string. `--fix` rewrites
+ * against this and the help text below is generated from it, so the two cannot
+ * drift — which they did the first time this rule shipped: the message named
+ * `text-3xs` and `text-2xs` for months before tokens.css declared either, and
+ * every author who followed the advice got a class that emitted nothing.
+ */
+const SCALE = [
+  [9, '3xs'],
+  [10, '2xs'],
+  [11, 'xs'],
+  [13, 'sm'],
+  [15, 'base'],
+  [18, 'lg'],
+  [24, 'xl'],
+  [32, '2xl'],
+]
+const STEP = new Map(SCALE.map(([px, name]) => [px, name]))
+const SCALE_HELP = SCALE.map(([px, name]) => `text-${name} ${px}`).join(' / ')
+
+// The two forms --fix is allowed to touch. Both carry a capture group for the
+// number; both are px-only, because a rem/em value depends on a root size this
+// script has no business assuming.
+const FIX_TW = /\btext-\[([0-9.]+)px\]/g
+const FIX_CSS = /(font-size\s*:\s*)([0-9.]+)px/g
 
 const VAR_USE = /var\(\s*(--[a-zA-Z0-9_-]+)/g
 // A declaration, in either of the two forms this codebase writes them.
@@ -133,12 +186,13 @@ function walk(dir, out = []) {
  * line and hide a real literal sitting after it.
  */
 function stripComments(text) {
+  // Every branch REPLACES WITH SPACES rather than deleting, so the result is
+  // the same length as the input and a match at index N is at index N in the
+  // original too. --fix depends on that; the scan does not care either way.
   return text
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ' '))
-    .split('\n')
-    .map((line) => line.replace(/(^|[^:])\/\/.*$/, '$1'))
-    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n\r]/g, ' '))
+    .replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n\r]/g, ' '))
+    .replace(/(^|[^:])(\/\/[^\n\r]*)/g, (_m, pre, cmt) => pre + ' '.repeat(cmt.length))
 }
 
 function lineOf(text, index) {
@@ -209,6 +263,79 @@ function scan() {
   return byFile
 }
 
+// ── Fixing ───────────────────────────────────────────────────────────────────
+
+/**
+ * Rewrite the mechanical type-scale violations in place.
+ *
+ * Two properties this has to keep, and both have bitten this repo before:
+ *
+ *  - LINE ENDINGS SURVIVE. Every source file here is written on Windows. The
+ *    scan normalises CRLF before matching; the fixer must NOT, or it rewrites
+ *    all 900 lines of a file to change one of them and the diff becomes
+ *    unreadable. So it works on the raw bytes and its regexes never span a
+ *    line.
+ *
+ *  - COMMENTS ARE OFF LIMITS. A doc comment explaining why `text-[10px]` is
+ *    banned must not itself be "fixed" into prose that no longer says what it
+ *    means. Positions come from the comment-blanked copy, which is the same
+ *    length as the raw text, and the edit is applied to the raw text at that
+ *    same index.
+ *
+ * Edits are applied BACK TO FRONT so an earlier splice cannot shift the index
+ * of a later one.
+ */
+function applyFixes(files) {
+  const changed = []
+
+  for (const abs of files) {
+    const rel = relative(ROOT, abs).replace(/\\/g, '/')
+    if (LITERAL_EXEMPT.has(rel)) continue // tokens.css declares the scale
+
+    const raw = readFileSync(abs, 'utf8')
+    const masked = stripComments(raw)
+    const edits = []
+
+    for (const m of masked.matchAll(FIX_TW)) {
+      const name = STEP.get(Number(m[1]))
+      if (name) edits.push({ at: m.index, len: m[0].length, text: `text-${name}`, was: m[0] })
+    }
+    for (const m of masked.matchAll(FIX_CSS)) {
+      const name = STEP.get(Number(m[2]))
+      if (name) edits.push({ at: m.index, len: m[0].length, text: `${m[1]}var(--text-${name})`, was: m[0].trim() })
+    }
+    if (!edits.length) continue
+
+    let out = raw
+    for (const e of edits.sort((a, b) => b.at - a.at)) {
+      out = out.slice(0, e.at) + e.text + out.slice(e.at + e.len)
+    }
+    writeFileSync(abs, out)
+    changed.push({ rel, edits })
+  }
+
+  return changed
+}
+
+function reportFixes(changed) {
+  const total = changed.reduce((n, c) => n + c.edits.length, 0)
+  if (!total) {
+    console.log('\ncheck-theme --fix — nothing mechanical to rewrite.\n')
+    return
+  }
+  console.log(`\ncheck-theme --fix — rewrote ${total} size(s) across ${changed.length} file(s):\n`)
+  for (const { rel, edits } of changed) {
+    const tally = new Map()
+    for (const e of edits) {
+      const key = `${e.was} → ${e.text.trim()}`
+      tally.set(key, (tally.get(key) || 0) + 1)
+    }
+    console.log(`  ${rel}`)
+    for (const [key, n] of tally) console.log(`      ${n}×  ${key}`)
+  }
+  console.log('\n  Re-checking with those applied…')
+}
+
 // ── Baseline ─────────────────────────────────────────────────────────────────
 
 function counts(byFile) {
@@ -243,7 +370,11 @@ const RULE_HELP = {
   'tailwind-palette':
     "Tailwind's default palette — this is what made v2's text grey. Use the app's tokens: text-fg / text-muted / text-faint, bg-bg / bg-surface / bg-surface2 / bg-raised, border-line",
   'type-scale':
-    'type size off the scale — use a scale utility (text-3xs 9 / text-2xs 10 / text-xs 11 / text-sm 13 / text-base 15 / text-lg 18 / text-xl 24 / text-2xl 32). Canvas and SVG read the number off the same scale rather than typing one',
+    `type size off the scale — use a scale utility (${SCALE_HELP}). A size that IS ` +
+    'on the scale is rewritten for you by `npm run theme:fix`; if it survived that, ' +
+    'it is off the scale and it is a real decision. In a React style object use ' +
+    "var(--text-…); on a canvas or in a chart config it must stay a NUMBER, so take " +
+    'it off the scale above rather than typing a new one',
   'unknown-var':
     'no such CSS variable — nothing under src/ or in index.html declares it, so this renders as nothing at all, silently. Check the spelling against src/design/tokens.css',
 }
@@ -294,6 +425,12 @@ function report(byFile, base) {
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
+
+if (FIX) {
+  // Fix first, then fall through into the ordinary check — so the run ends by
+  // telling you what is LEFT, which is the part that needs a person.
+  reportFixes(applyFixes(walk(SRC).sort()))
+}
 
 const byFile = scan()
 const base = readBaseline()

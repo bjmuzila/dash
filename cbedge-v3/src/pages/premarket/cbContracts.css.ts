@@ -16,8 +16,8 @@
 export const CB_CONTRACTS_CSS = `
 .pmk .cbc{padding:14px 18px;border-top:1px solid var(--line)}
 .pmk .cbchead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;flex-wrap:wrap}
-.pmk .cbchead h3{margin:0;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:600}
-.pmk .cbchead .tiny{text-transform:none;letter-spacing:0;font-size:11px}
+.pmk .cbchead h3{margin:0;font-size:var(--text-xs);letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:600}
+.pmk .cbchead .tiny{text-transform:none;letter-spacing:0;font-size:var(--text-xs)}
 /* Amber, the page's "check this" colour: the table is real, it is just not
    today's. It disappears the moment today has a row. */
 .pmk .cbchead .cbclast{font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
@@ -29,7 +29,7 @@ export const CB_CONTRACTS_CSS = `
 
 .pmk .cbcwrap{border:1px solid var(--card);border-radius:var(--r);overflow:hidden;background:var(--sunken)}
 .pmk .cbctbl{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
-.pmk .cbctbl th{padding:9px 13px;font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+.pmk .cbctbl th{padding:9px 13px;font-size:var(--text-2xs);font-weight:600;letter-spacing:.09em;text-transform:uppercase;
   color:var(--dim2);text-align:left;white-space:nowrap;border-bottom:1px solid var(--line)}
 .pmk .cbctbl td{padding:9px 13px;font-size:12px;white-space:nowrap;color:var(--txt)}
 .pmk .cbctbl tbody tr + tr td{border-top:1px solid var(--line)}
@@ -68,13 +68,13 @@ export const CB_CONTRACTS_CSS = `
   background:var(--plate);border:1px solid var(--card);border-radius:var(--r);
   display:flex;flex-direction:column;gap:14px}
 .pmk .cbcmhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
-.pmk .cbcmhead .sym{font-size:15px;font-weight:700;color:var(--cyan)}
-.pmk .cbcmhead .sub{font-size:11px;color:var(--dim2)}
-.pmk .cbcmhead .x{margin-left:auto;font:inherit;font-size:15px;font-weight:700;line-height:1;cursor:pointer;
+.pmk .cbcmhead .sym{font-size:var(--text-base);font-weight:700;color:var(--cyan)}
+.pmk .cbcmhead .sub{font-size:var(--text-xs);color:var(--dim2)}
+.pmk .cbcmhead .x{margin-left:auto;font:inherit;font-size:var(--text-base);font-weight:700;line-height:1;cursor:pointer;
   background:transparent;border:1px solid var(--line2);color:var(--dim);border-radius:7px;padding:4px 11px}
 .pmk .cbcmhead .x:hover{background:var(--active)}
 
-.pmk .cbcbig .hl{font-size:24px;font-weight:800;line-height:1;color:var(--txt)}
+.pmk .cbcbig .hl{font-size:var(--text-xl);font-weight:800;line-height:1;color:var(--txt)}
 .pmk .cbcbig .line{font-size:12px;color:var(--dim);margin-top:6px}
 .pmk .cbcbig .line .t{color:var(--dim2);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;margin-right:3px}
 .pmk .cbcbig .line .ar{color:var(--dim2);margin:0 6px}
@@ -91,7 +91,7 @@ export const CB_CONTRACTS_CSS = `
 .pmk .cbc .am{color:var(--amber)}
 
 .pmk .cbctgls{display:flex;gap:8px;flex-wrap:wrap}
-.pmk .cbctgl{font:inherit;font-size:11px;font-weight:600;padding:5px 12px;border-radius:7px;cursor:pointer;
+.pmk .cbctgl{font:inherit;font-size:var(--text-xs);font-weight:600;padding:5px 12px;border-radius:7px;cursor:pointer;
   letter-spacing:.06em;text-transform:uppercase;background:transparent;border:1px solid var(--line2);color:var(--dim)}
 .pmk .cbctgl:hover{background:var(--active)}
 .pmk .cbctgl.on{border-color:var(--cyanEdge);background:var(--cyanWash);color:var(--cyan)}

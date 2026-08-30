@@ -79,16 +79,16 @@ export const GAMMA_BELL_CSS = `
 .gdist .gd-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
   flex-wrap:wrap;margin-bottom:9px}
 .gdist .gd-lh{display:flex;align-items:baseline;gap:9px;min-width:0;flex-wrap:wrap}
-.gdist .gd-lh h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+.gdist .gd-lh h3{font-size:var(--text-xs);letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
   margin:0;font-weight:600;white-space:nowrap}
-.gdist .gd-sub{font-size:10px;letter-spacing:.04em;color:var(--dim2);
+.gdist .gd-sub{font-size:var(--text-2xs);letter-spacing:.04em;color:var(--dim2);
   font-variant-numeric:tabular-nums}
 .gdist .gd-rh{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .gdist .gd-ctl{display:flex;align-items:center;gap:5px}
-.gdist .gd-ctl>b{font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim2);
+.gdist .gd-ctl>b{font-size:var(--text-3xs);letter-spacing:.09em;text-transform:uppercase;color:var(--dim2);
   font-weight:600}
 .gdist .gd-reset{background:transparent;border:1px solid var(--amberEdge);color:var(--amber);
-  font:inherit;font-size:10px;letter-spacing:.05em;padding:3px 9px;border-radius:var(--r2);
+  font:inherit;font-size:var(--text-2xs);letter-spacing:.05em;padding:3px 9px;border-radius:var(--r2);
   cursor:pointer;white-space:nowrap}
 .gdist .gd-reset:hover{background:var(--amberWash)}
 
@@ -101,7 +101,7 @@ export const GAMMA_BELL_CSS = `
   gap:7px;margin-bottom:9px}
 .gdist .gd-kpi{border:1px solid var(--line);border-radius:var(--r2);background:var(--sunken);
   padding:6px 9px;min-width:0}
-.gdist .gd-kpi .n{font-size:9px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);
+.gdist .gd-kpi .n{font-size:var(--text-3xs);letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gdist .gd-kpi .v{font-size:13.5px;font-weight:650;color:var(--txt);margin-top:2px;
   font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -114,7 +114,7 @@ export const GAMMA_BELL_CSS = `
 .gdist svg{display:block;width:100%;height:auto;touch-action:pan-y;cursor:grab;
   user-select:none;-webkit-user-select:none}
 .gdist svg.dragging{cursor:grabbing}
-.gdist .gd-pane-l{font-size:9px;letter-spacing:.09em;text-transform:uppercase;font-weight:700}
+.gdist .gd-pane-l{font-size:var(--text-3xs);letter-spacing:.09em;text-transform:uppercase;font-weight:700}
 .gdist .gd-tip{position:absolute;pointer-events:none;z-index:3;transform:translateX(-50%);
   background:var(--plate);border:1px solid var(--line2);border-radius:var(--r2);
   padding:6px 9px;font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--txt);
@@ -122,7 +122,7 @@ export const GAMMA_BELL_CSS = `
 .gdist .gd-tip b{font-weight:700}
 .gdist .gd-tip .r{display:flex;justify-content:space-between;gap:14px;color:var(--dim2)}
 .gdist .gd-tip .r span:last-child{color:var(--txt)}
-.gdist .gd-foot{font-size:11px;color:var(--dim2);line-height:1.6;margin:9px 0 4px;max-width:104ch}
+.gdist .gd-foot{font-size:var(--text-xs);color:var(--dim2);line-height:1.6;margin:9px 0 4px;max-width:104ch}
 .gdist .gd-foot b{color:var(--dim);font-weight:650}
 .gdist .gd-empty{padding:48px 0;text-align:center;color:var(--dim);font-size:12px}
 @media (max-width:1300px){ .gdist .gd-kpis{--gd-cols:3} }

@@ -422,12 +422,12 @@ const WheelSvg = memo(function WheelSvg({
 function MoverList({ head, rows, dir }: { head: string; rows: WheelRow[]; dir: (v: number) => string }) {
   return (
     <div>
-      <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-muted opacity-55">
+      <div className="mb-1.5 text-2xs font-bold uppercase tracking-[0.08em] text-muted opacity-55">
         {head}
       </div>
       <div className="flex flex-col gap-[3px]">
         {rows.map((m) => (
-          <div key={m.t} className="flex justify-between text-[11px]">
+          <div key={m.t} className="flex justify-between text-xs">
             <span className="font-bold text-fg">{m.t}</span>
             <span className="tabular font-bold" style={{ color: dir(m.c) }}>
               {fmtWheelPct(m.c)}
@@ -569,7 +569,7 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
             type="button"
             onClick={toggleFullscreen}
             title={isFs ? 'Exit full screen' : 'Full screen'}
-            className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold text-muted opacity-75 hover:opacity-100"
+            className="rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold text-muted opacity-75 hover:opacity-100"
           >
             {isFs ? '⤡ Exit full screen' : '⛶ Full screen'}
           </button>
@@ -577,7 +577,7 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
             type="button"
             onClick={close}
             title="Close (Esc)"
-            className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold text-muted opacity-75 hover:opacity-100"
+            className="rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold text-muted opacity-75 hover:opacity-100"
           >
             ✕ Close
           </button>
@@ -587,7 +587,7 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
           type="button"
           onClick={() => setExpanded(true)}
           title="Pop out to a larger window"
-          className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold text-muted opacity-75 hover:opacity-100"
+          className="rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold text-muted opacity-75 hover:opacity-100"
         >
           ⤢ Expand
         </button>
@@ -669,8 +669,8 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
                 style={{ left: Math.max(0, Math.min(tip.x + 12, tip.bw - 150)), top: tip.y + 12 }}
               >
                 <div className="text-xs font-bold text-fg">{tip.title}</div>
-                <div className="mt-px text-[10px] text-muted opacity-60">{tip.sub}</div>
-                <div className="mt-1 text-[15px] font-bold" style={{ color: palette.dir(tip.val) }}>
+                <div className="mt-px text-2xs text-muted opacity-60">{tip.sub}</div>
+                <div className="mt-1 text-base font-bold" style={{ color: palette.dir(tip.val) }}>
                   {fmtWheelPct(tip.val)}
                 </div>
               </div>
@@ -695,7 +695,7 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
           {/* sector leaderboard — only the pop-out has the room for it */}
           {data && expanded && (
             <div className="mt-[18px]">
-              <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-muted opacity-55">
+              <div className="mb-1.5 text-2xs font-bold uppercase tracking-[0.08em] text-muted opacity-55">
                 Sectors
               </div>
               <div className="flex flex-col gap-1">
@@ -706,7 +706,7 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
                     onClick={() => setFocus(focus === s.name ? null : s.name)}
                     title={`${s.n} names · click to zoom the wheel`}
                     className={[
-                      'grid grid-cols-[1fr_56px] items-center gap-2 rounded-sm border px-1.5 py-[3px] text-left text-[11px] font-semibold text-fg',
+                      'grid grid-cols-[1fr_56px] items-center gap-2 rounded-sm border px-1.5 py-[3px] text-left text-xs font-semibold text-fg',
                       focus === s.name ? 'border-accent bg-raised' : 'border-transparent',
                     ].join(' ')}
                   >
@@ -721,7 +721,7 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
           )}
 
           {data && (
-            <div className="mt-2.5 flex justify-between text-[10px] text-muted opacity-50">
+            <div className="mt-2.5 flex justify-between text-2xs text-muted opacity-50">
               <span>
                 {data.covered}/{data.universe} names{data.stale ? ' · cached' : ''}
               </span>

@@ -11,6 +11,7 @@
     "budgets": "node scripts/check-budgets.mjs",
     "budgets:ratchet": "node scripts/check-budgets.mjs --ratchet",
     "check:theme": "node scripts/check-theme.mjs",
+    "theme:fix": "node scripts/check-theme.mjs --fix",
     "theme:update": "node scripts/check-theme.mjs --update",
     "mock": "node scripts/mock-server.mjs 4310",
     "lab": "node tools/bubble-lab/build.mjs",

@@ -383,11 +383,11 @@ const CSS = `
 .pmk .wrap{max-width:1560px;margin:0 auto;padding:18px 20px 60px}
 .pmk .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
 .pmk .muted{color:var(--dim)}
-.pmk .tiny{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
+.pmk .tiny{font-size:var(--text-2xs);letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
 
 .pmk .pagehead{display:flex;align-items:baseline;gap:14px;margin-bottom:14px;flex-wrap:wrap}
 .pmk .pagehead h1{font-size:17px;margin:0;font-weight:650;letter-spacing:-.01em}
-.pmk .badge-concept{font-size:10px;padding:3px 8px;border:1px solid var(--line2);border-radius:999px;color:var(--dim);letter-spacing:.06em}
+.pmk .badge-concept{font-size:var(--text-2xs);padding:3px 8px;border:1px solid var(--line2);border-radius:999px;color:var(--dim);letter-spacing:.06em}
 
 /* SESSION PICKER — the same shell as .tabs so the head reads as one control
    strip: 1px var(--line2) border, 9px radius, 11.5px type. A native select is
@@ -461,20 +461,20 @@ const CSS = `
 .pmk .rplwrap{max-width:1560px;margin:0 auto}
 .pmk .rplrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .pmk .rplrow+.rplrow{margin-top:9px}
-.pmk .rpltag{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+.pmk .rpltag{font-size:var(--text-2xs);font-weight:800;letter-spacing:.08em;text-transform:uppercase;
   color:var(--cyan);white-space:nowrap}
 /* One cluster of keys — /es-candles groups its transport the same way, so the
    bar reads as three controls rather than nine buttons. */
 .pmk .rplgrp{display:flex;align-items:center;gap:4px;flex-shrink:0}
 .pmk .rpldate{font-size:12px;font-weight:800;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
   color:var(--cyan);min-width:78px;text-align:center;white-space:nowrap}
-.pmk .rplsp{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2)}
+.pmk .rplsp{font-size:var(--text-2xs);font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2)}
 /* Close, pinned right. Same shape and reason as /es-candles' ✕: the
    no-frames branch renders one sentence and no transport, so without this the
    bar could be opened and not closed. */
 .pmk .rplx{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;
   background:${ink(0.04)};border:1px solid ${HT.border};color:var(--dim2);cursor:pointer;
-  font:inherit;font-size:15px;line-height:1;font-weight:700;flex-shrink:0}
+  font:inherit;font-size:var(--text-base);line-height:1;font-weight:700;flex-shrink:0}
 .pmk .rplx:hover{background:var(--active);color:var(--txt)}
 /* Transport buttons. Square-ish and monospaced so ▶ / ❚❚ do not change the
    button's width when the state flips — a play control that resizes as you use
@@ -497,7 +497,7 @@ const CSS = `
    spanning the bar reads as "loading forever" rather than "nothing recorded". */
 .pmk .rplmsg{flex:1;min-width:160px;font-size:11.5px;color:var(--dim2)}
 .pmk .rplnote{border-top:1px solid var(--line);padding-top:8px}
-.pmk .rplbar .note{font-size:11px;color:var(--dim2);line-height:1.55;max-width:110ch}
+.pmk .rplbar .note{font-size:var(--text-xs);color:var(--dim2);line-height:1.55;max-width:110ch}
 .pmk .rplbar .note b{color:var(--dim);font-weight:650}
 
 /* OUTER SHELL — the app's card, with a regime tint on top.
@@ -531,9 +531,9 @@ const CSS = `
 .pmk .regbadge .lbl{font-size:19px;font-weight:700;letter-spacing:-.02em;color:var(--pos)}
 .pmk .regbadge .lbl.neg{color:var(--neg)}
 .pmk .regbadge .sub{font-size:10.5px;color:var(--dim)}
-.pmk .kpi .k{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2);margin-bottom:3px}
+.pmk .kpi .k{font-size:var(--text-2xs);letter-spacing:.08em;text-transform:uppercase;color:var(--dim2);margin-bottom:3px}
 .pmk .kpi .v{font-size:19px;font-weight:640;letter-spacing:-.02em}
-.pmk .kpi .v small{font-size:11px;font-weight:500;color:var(--dim)}
+.pmk .kpi .v small{font-size:var(--text-xs);font-weight:500;color:var(--dim)}
 .pmk .chg-pos{color:var(--pos)}
 .pmk .chg-neg{color:var(--neg)}
 .pmk .bias{
@@ -543,7 +543,7 @@ const CSS = `
 .pmk .bias.neg{background:var(--negWash);border-color:var(--negEdge)}
 .pmk .bias .t{font-size:12.5px;font-weight:600;color:var(--pos)}
 .pmk .bias.neg .t{color:var(--neg)}
-.pmk .bias .d{font-size:11px;color:var(--dim);margin-top:2px}
+.pmk .bias .d{font-size:var(--text-xs);color:var(--dim);margin-top:2px}
 
 /* ── GEX LEVEL RAIL ──────────────────────────────────────────────────────────
    ONE price axis carrying every level the page cares about — put wall, gamma
@@ -557,7 +557,7 @@ const CSS = `
    the card. */
 .pmk .gexrail{padding:15px 18px 12px;border-bottom:1px solid var(--line)}
 .pmk .gexrail .rh{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
-.pmk .gexrail .rh h3{margin:0;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:600}
+.pmk .gexrail .rh h3{margin:0;font-size:var(--text-xs);letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:600}
 .pmk .rail{position:relative;height:120px;margin-top:2px}
 .pmk .rail .track2{position:absolute;left:0;right:0;top:54px;height:10px;border-radius:6px;background:var(--sunken);border:1px solid var(--line)}
 .pmk .rail .band{position:absolute;top:-1px;bottom:-1px;border-radius:6px;background:linear-gradient(90deg,var(--negBand),var(--blueBand),var(--posBand))}
@@ -566,18 +566,18 @@ const CSS = `
 .pmk .rail .cap2{position:absolute;transform:translateX(-50%);text-align:center;white-space:nowrap;line-height:1.25}
 .pmk .rail .cap2.up{top:4px}
 .pmk .rail .cap2.dn{top:78px}
-.pmk .rail .cap2 .n2{font-size:9px;letter-spacing:.07em;text-transform:uppercase}
+.pmk .rail .cap2 .n2{font-size:var(--text-3xs);letter-spacing:.07em;text-transform:uppercase}
 .pmk .rail .cap2 .v2{font-size:14px;font-weight:660;letter-spacing:-.02em;color:var(--txt)}
 .pmk .rail .cap2 .d2{font-size:9.5px;color:var(--dim)}
 .pmk .rail-empty{height:120px;display:grid;place-items:center;font-size:12px;color:var(--dim)}
 
 .pmk .levels{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
 .pmk .lvl{position:relative;border:1px solid var(--card);border-radius:var(--r);background:var(--panel2);padding:10px 11px 11px;overflow:hidden}
-.pmk .lvl .name{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);display:flex;justify-content:space-between;align-items:center;gap:6px}
-.pmk .lvl .name em{font-style:normal;font-size:9px;padding:1px 5px;border-radius:4px;background:var(--plate);border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
+.pmk .lvl .name{font-size:var(--text-2xs);letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);display:flex;justify-content:space-between;align-items:center;gap:6px}
+.pmk .lvl .name em{font-style:normal;font-size:var(--text-3xs);padding:1px 5px;border-radius:4px;background:var(--plate);border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
 .pmk .lvl .px{font-size:21px;font-weight:660;letter-spacing:-.03em;margin:4px 0 1px}
 .pmk .lvl .es{font-size:10.5px;color:var(--dim)}
-.pmk .lvl .dist{font-size:11px;margin-top:6px;display:flex;justify-content:space-between;align-items:center;gap:6px}
+.pmk .lvl .dist{font-size:var(--text-xs);margin-top:6px;display:flex;justify-content:space-between;align-items:center;gap:6px}
 
 /* KEY LEVELS HEAD — the basis switch plus what the Δ below is measured against.
    The grid used to start straight after the rail with no header at all, which
@@ -588,9 +588,9 @@ const CSS = `
 .pmk .lvlhead{display:flex;align-items:center;justify-content:space-between;gap:12px;
   padding:12px 18px 0}
 .pmk .lvlhead .lh{display:flex;align-items:baseline;gap:10px;min-width:0}
-.pmk .lvlhead h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+.pmk .lvlhead h3{font-size:var(--text-xs);letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
   margin:0;font-weight:600;white-space:nowrap}
-.pmk .lvlhead .vs{font-size:10px;color:var(--dim2);letter-spacing:.04em;
+.pmk .lvlhead .vs{font-size:var(--text-2xs);color:var(--dim2);letter-spacing:.04em;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pmk .lvlhead .vs b{color:var(--dim);font-weight:600}
 .pmk .lvlhead .vs.warn{color:var(--amber)}
@@ -606,14 +606,14 @@ const CSS = `
 /* Tag = the STATE of the move, one word. Neutral by default; only a move that
    actually means something takes a colour, so a screen of grey tags reads
    correctly as "nothing migrated overnight". */
-.pmk .mtag{font-size:9px;letter-spacing:.06em;text-transform:uppercase;padding:1px 5px;
+.pmk .mtag{font-size:var(--text-3xs);letter-spacing:.06em;text-transform:uppercase;padding:1px 5px;
   border-radius:999px;border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
 .pmk .mtag.up{color:var(--pos);border-color:var(--posEdge);background:var(--posWash)}
 .pmk .mtag.down{color:var(--neg);border-color:var(--negEdge);background:var(--negWash)}
 .pmk .mtag.warnt{color:var(--amber);border-color:var(--amberEdge);background:var(--amberWash)}
 .pmk .mtag.flipt{color:var(--violet);border-color:color-mix(in srgb, var(--color-violet) 35%, transparent);background:color-mix(in srgb, var(--color-violet) 8%, transparent)}
 
-.pmk .pill{font-size:10px;padding:2px 6px;border-radius:5px;border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
+.pmk .pill{font-size:var(--text-2xs);padding:2px 6px;border-radius:5px;border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
 .pmk .pill.hot{border-color:var(--negEdgeUp);color:var(--neg);background:var(--negWash)}
 .pmk .pill.cool{border-color:var(--posEdgeUp);color:var(--pos);background:var(--posWash)}
 .pmk .pill.warn{border-color:var(--amberEdge);color:var(--amber);background:var(--amberWash)}
@@ -635,7 +635,7 @@ const CSS = `
 .pmk .col{padding:14px 18px;border-right:1px solid var(--line);min-width:0}
 .pmk .col:last-child{border-right:0}
 .pmk .colhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px}
-.pmk .colhead h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:0;font-weight:600}
+.pmk .colhead h3{font-size:var(--text-xs);letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:0;font-weight:600}
 .pmk .seg{display:inline-flex;border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden}
 .pmk .seg button{background:transparent;border:0;color:var(--dim);font:inherit;font-size:10.5px;padding:3px 9px;cursor:pointer;border-right:1px solid var(--line2)}
 .pmk .seg button:last-child{border-right:0}
@@ -658,7 +658,7 @@ const CSS = `
 .pmk .chart::-webkit-scrollbar-thumb{background:var(--line2);border-radius:4px}
 .pmk .chart::-webkit-scrollbar-thumb:hover{background:var(--line3)}
 .pmk .chart::-webkit-scrollbar-track{background:transparent}
-.pmk .recenter{position:absolute;right:10px;bottom:8px;z-index:3;font:inherit;font-size:10px;
+.pmk .recenter{position:absolute;right:10px;bottom:8px;z-index:3;font:inherit;font-size:var(--text-2xs);
   letter-spacing:.06em;text-transform:uppercase;color:var(--dim);cursor:pointer;
   background:color-mix(in srgb, var(--color-bg) 92%, transparent);border:1px solid var(--line2);border-radius:6px;padding:3px 8px}
 .pmk .recenter:hover{color:var(--txt);border-color:var(--cyanEdge)}
@@ -708,13 +708,13 @@ const CSS = `
 .pmk .gapbar{display:flex;align-items:center;gap:8px;padding:6px 0 2px}
 .pmk .gapbar .t{flex:1;height:5px;border-radius:3px;background:var(--sunken);overflow:hidden}
 .pmk .gapbar .t .f{height:100%;border-radius:3px;transition:width .3s}
-.pmk .gapbar .lbl{font-size:10px;color:var(--dim2);white-space:nowrap}
+.pmk .gapbar .lbl{font-size:var(--text-2xs);color:var(--dim2);white-space:nowrap}
 
 .pmk .deltas .d{display:grid;grid-template-columns:54px 1fr 66px;align-items:center;gap:8px;padding:4px 0}
-.pmk .deltas .d .s{font-size:11px;color:var(--dim)}
+.pmk .deltas .d .s{font-size:var(--text-xs);color:var(--dim)}
 .pmk .deltas .d .t{height:6px;background:var(--sunken);border-radius:4px;position:relative;overflow:hidden}
 .pmk .deltas .d .t i{position:absolute;top:0;bottom:0;border-radius:4px}
-.pmk .deltas .d .v{font-size:11px;text-align:right}
+.pmk .deltas .d .v{font-size:var(--text-xs);text-align:right}
 
 .pmk .sect{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:4px}
 .pmk .sect .s{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:var(--r2);font-size:11.5px;border:1px solid var(--card);gap:8px;min-width:0}
@@ -722,7 +722,7 @@ const CSS = `
 .pmk .sect .s b{font-weight:600;font-size:11.5px}
 
 .pmk .play{border:1px solid var(--card);border-radius:var(--r);background:var(--panel2);padding:11px 12px;margin-top:10px}
-.pmk .play .h{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2);margin-bottom:6px}
+.pmk .play .h{font-size:var(--text-2xs);letter-spacing:.08em;text-transform:uppercase;color:var(--dim2);margin-bottom:6px}
 .pmk .play p{margin:0;font-size:12.5px;line-height:1.5}
 .pmk .play .k{color:var(--amber);font-weight:600}
 .pmk .play .g{color:var(--pos);font-weight:600}
@@ -738,13 +738,13 @@ const CSS = `
 .pmk .greeks{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
 .pmk .greeks .g{border:1px solid var(--card);border-radius:var(--r2);padding:8px 9px;background:var(--panel2)}
 .pmk .greeks .g .n{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
-.pmk .greeks .g .v{font-size:15px;font-weight:640;margin-top:2px;letter-spacing:-.02em}
-.pmk .greeks .g .m{font-size:10px;color:var(--dim)}
+.pmk .greeks .g .v{font-size:var(--text-base);font-weight:640;margin-top:2px;letter-spacing:-.02em}
+.pmk .greeks .g .m{font-size:var(--text-2xs);color:var(--dim)}
 
 .pmk .footbar{display:flex;justify-content:space-between;align-items:center;padding:9px 18px;border-top:1px solid var(--line);background:var(--plate);gap:10px;flex-wrap:wrap}
 .pmk .footbar .l{font-size:10.5px;color:var(--dim2)}
 .pmk .chips{display:flex;gap:6px;flex-wrap:wrap}
-.pmk .chip{font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--line2);color:var(--dim);cursor:pointer;background:transparent;font:inherit;font-size:10px}
+.pmk .chip{font-size:var(--text-2xs);padding:3px 8px;border-radius:6px;border:1px solid var(--line2);color:var(--dim);cursor:pointer;background:transparent;font:inherit;font-size:var(--text-2xs)}
 .pmk .chip.on{background:var(--cyanWash);color:var(--cyan);border-color:var(--cyanEdge)}
 
 @media (max-width:1180px){ .pmk .body,.pmk .body.two{grid-template-columns:1fr} .pmk .col{border-right:0;border-bottom:1px solid var(--line)}
