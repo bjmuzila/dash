@@ -1,306 +1,132 @@
 # Changelog
 
-## 2026-08-30 - /v3 404: theme.ts was missing nine exports the pages already imported
+## 2026-08-30 - Watch This flag card: P/L graded on the peak, not the live mark
 
-SECOND PASS on the same 404. The check:theme fix below was real and necessary,
-but it only uncovered the next gate. Reproduced the Dockerfile's exact chain
-(`npm install` -> `check:theme` -> `build:fast`) in a clean container: theme
-passes, then `vite build` dies on the first unresolved import.
+`components/pages/Scanner.tsx` (Watch This tab, expanded flag card).
 
-`src/design/theme.ts` never exported nine names that four pages import. NOT a
-rollback - `git log` on the file shows the same 16 exports at every revision, so
-these were written against an API that was never added. That also explains the
-stale `cbedge-v3/dist/`: its newest chunk predates OptionsChain, TradersDashboard,
-Premarket and Flow entirely. **/v3 has not built since those pages landed** - the
-Dockerfile's non-fatal v3 step meant it 404'd quietly instead of failing a deploy.
+CHANGE - `probeStats()` now measures the flagged contract from its entry to the
+BEST mark it has printed since, instead of to the most recent mark. The big
+percentage and the $/ct figure are therefore the peak the flag offered: a flag
+that ran +150% and gave it back still reads +150%, which is what the tab is
+grading. `mark` keeps its name (the card and the PNG capture both read it) and
+now carries the high; a new `last` field keeps the live mark.
 
-Added to `theme.ts`:
+- Header line reads `IN 0.89 -> HIGH 2.58 - +$169/ct`, with the live mark
+  trailing as a muted `NOW 1.35` so the card still says where it is today.
+- `captureFlagCard()` PNG export prints `-> HIGH` to match.
+- Chart, day table and the outcomes table are untouched - they already carried
+  High / Max % columns off `opt_high` / `opt_pct_high`.
 
-- `MOVE_UP` / `MOVE_DOWN` - the directional pair for a % change or a wheel wedge.
-  Needed as TOKENS, not aliases: `wheelMath.ts` calls
-  `tokenRgb('--color-move-up')` by name, and a `var()` that points at another
-  var does not survive `getComputedStyle` reliably. So `--color-move-up` /
-  `--color-move-down` are now declared in `tokens.css`, carrying the same values
-  as the semantic pair. Split them the day one of the two moves.
-- `RGB`, `tokenRgb`, `rgbHex`, `mixRgb`, `isLightRgb` - the channel-level
-  counterpart to `tokenHex()`. The sector wheel blends a wedge from the panel
-  toward the move colour and then picks its ink by luminance; that needs the
-  numbers, not a string. Same cached token read underneath, so the blend still
-  tracks the token. `isLightRgb` uses Rec. 709 luma, not a channel average.
-- `CHAIN` (11 members), `GEX_POS`, `GEX_NEG`, `LEVEL_ON_SOLID` - the options
-  chain's ink. Its greys are a ladder of white opacities tuned for text sitting
-  on a saturated heat fill, shared by the matrix, the hover card and the skins.
-  `LEVEL_ON_SOLID` is `--color-app` (the darkest ground): a CB/CW/PW tag is a
-  bright solid and its label must not be translucent over it.
+## 2026-08-30 - Weekly Edge: metric renamed to "Core", confidence rows for Aug 24-28
 
-VALUES ARE A FIRST PASS, reconstructed from the call sites - the shapes are
-forced by usage, the hues are a judgement call. The chain palette especially is
-worth an eye once /v3 loads.
+`lib/emails/weekly-edge.ts`.
 
-Verified green end to end: `check:theme` clean, `tsc --noEmit` clean,
-`vite build` builds all 17 chunks (OptionsChain, Flow, SectorWheelCard,
-TradersDashboard included).
+RENAME - "Core Bullseye" is now just "Core" in every customer-facing string: the
+result tile label, the plain-text line, and the CTA feature list. The OPTS ARE
+STILL `coreBullseyePct` / `coreBullseyeSub` deliberately - renaming the API would
+churn every call site for a label change. A comment at the top of the file says
+so; if you add a new string, it says "Core".
 
-Files: `cbedge-v3/src/design/theme.ts`, `cbedge-v3/src/design/tokens.css`.
+CONFIDENCE ROWS - `DEFAULT_CONF_ROWS` filled from the Results page:
 
-## 2026-08-30 - /v3 was 404ing: check:theme failed the deploy, and the type scale was two steps short
+| Date  | 9:45          | 10:30          | 12:00        |
+|-------|---------------|----------------|--------------|
+| 08-28 | 7790 / 22.1 X | 7750 / 2.5 v   | 7720 / 0.3 v |
+| 08-27 | 7725 / 0.1 v  | 7730 / 0.6 v   | 7730 / 0.6 v |
+| 08-26 | 7690 / 0.5 v  | 7660 / 0.0 v   | 7685 / 0.4 v |
+| 08-25 | 7700 / 13.7 X | 7650 / 10.7 X  | 7680 / 0.6 v |
+| 08-24 | 7630 / 9.7 X  | 7630 / 15.2 X  | 7670 / 1.4 v |
 
-`https://www.cbedge.net/v3` returned 404 after the last push. Nothing was wrong
-with the server or the route - the Dockerfile's cbedge-v3 step is deliberately
-non-fatal (a v3 build failure must never block a v2 hotfix), so when it fails the
-deploy continues and `/v3` simply is not there. It failed at `npm run check:theme`.
+v/X is the <=5 column, same as every prior issue.
 
-CAUSE. `theme-baseline.json` was re-recorded (rule 4, type-scale, was added to
-`check-theme.mjs` in the same push) and then the flow port landed AFTER that
-snapshot. `src/pages/Flow.tsx` and `src/pages/flow/ContractDrawer.tsx` were never
-in the baseline and carry 21 arbitrary sizes between them, so the check was over
-budget on two files that did not exist when the numbers were taken. The local
-push skipped the build (`push.ps1` skips it by default), so the first place this
-could surface was the VPS.
+- Tile: 100%, sub "<=5 pts - 12:00 CB - 5 of 5 sessions". LAST ISSUE THE SUB SAID
+  "10:30 & 12:00" - this week 10:30 was 3 of 5, so the tile is the 12:00 window
+  only. The sub has to name whichever windows actually cleared; do not carry the
+  previous wording forward.
+- `resultsNote`: 10 of 15 inside 5 points (5/5 at 12:00, 3/5 at 10:30, 2/5 at
+  9:45), 13 of 15 inside 15 points, and it names the only two reads that missed
+  every threshold - 8/28 9:45 at 22.1 and 8/24 10:30 at 15.2.
+- Two genuine callouts, both verified against the rows: the 12:00 read is 10 for
+  10 inside 5 points across the last two weeks, and 9:45 is the weak window two
+  weeks running (2 of 5 both weeks). The second one is not flattering and stays
+  in - a scorecard that only reports its best window is an ad.
 
-FIXED WITHOUT TOUCHING THE BASELINE - the 21 arbitrary sizes are now scale
-utilities: `text-[9px]` -> `text-3xs`, `text-[10px]` -> `text-2xs`,
-`text-[11px]` -> `text-xs`. 17 in `Flow.tsx`, 4 in `ContractDrawer.tsx`.
-`check:theme` passes; `theme-baseline.json` is byte-identical to what was pushed.
+Preview regenerated: `generated/2026-08-30-weekly-edge-preview.html` / `.jpg`.
 
-SECOND BUG, found on the way and the more expensive one. `--text-3xs` and
-`--text-2xs` were NEVER DECLARED in `src/design/tokens.css` - the scale started at
-`--text-xs` (11px). `check-theme.mjs` has been advertising both in its error text,
-and 55 places across `src/` already used `text-2xs` / `text-3xs`: EconCalendarCard,
-CellCard, MultiGreekCard and others. In Tailwind v4 an undeclared step is not a
-utility at all, so those 55 class names emitted NOTHING and the text quietly
-rendered at whatever it inherited. Exactly the silent-miss failure mode the token
-file exists to prevent, and invisible unless you measure it.
+REMAINING PLACEHOLDER: the scanner catch only.
 
-Both steps are now in the `@theme static` block:
+## 2026-08-30 - v3 Flow: Net Drift chart height fixed (lines no longer compressed)
 
-    --text-3xs: 0.5625rem;  /* 9px  */
-    --text-2xs: 0.625rem;   /* 10px */
+The Net Drift (Premium) canvas was collapsing to a sliver, so both premium
+lines rendered as a flat smear pinned under the legend.
 
-VISIBLE CHANGE: those 55 spots now render at their intended 9px / 10px instead of
-inheriting. That is what their authors wrote, but it is a real change to the econ
-calendar, the Multi Greek cells and the GEX rail tags - worth an eyeball on first
-load.
+- `cbedge-v3/src/pages/Flow.tsx` - the chart wrapper was `h-[340px] w-full`, a
+  plain block. `NetDriftChart`'s root and the `ChartFrame` element inside it are
+  both `flex-1 min-h-0`, which resolves to auto height in a non-flex parent, so
+  lightweight-charts' `autoSize` measured almost nothing. Wrapper is now
+  `flex h-[420px] min-h-[420px] w-full flex-col`.
+- `cbedge-v3/src/pages/flow/NetDriftChart.tsx` - root div is now
+  `relative flex h-full min-h-0 flex-1 flex-col` so the height actually reaches
+  the canvas.
+- Same file - `scaleMargins` widened for the lines: `right` 0.08/0.26 -> 0.04/0.16
+  and `vol` top 0.82 -> 0.86. The two bands now sit adjacent instead of leaving
+  a dead gap, giving the drift lines ~80% of the pane instead of 66%.
 
-Files: `cbedge-v3/src/design/tokens.css`, `cbedge-v3/src/pages/Flow.tsx`,
-`cbedge-v3/src/pages/flow/ContractDrawer.tsx`.
+## 2026-08-30 - v3: Journal retired too
 
-## 2026-08-30 - /v3/flow: the full port, and two server bugs it exposed
+Follow-on to the six-page removal below. `/v3/trading` is gone the same way:
 
-Step 2-4 of the flow port. The spec written earlier today
-(`cbedge-v3/docs/parity/flow.md`, 214 rows) was the checklist; every row is now
-on screen. The previous `src/pages/Flow.tsx` had resolved the hard rows by
-dropping them - no chart, no Vol/OI/IV, no dislocation card, no contract drawer -
-and its own header comment said so. That file is replaced.
+- `cbedge-v3/src/App.tsx` - `lazy()` import and `<Route path="/trading">` removed.
+- `cbedge-v3/src/shell/Shell.tsx` - `NAV` drops the Journal slot. The rail is
+  now Home, Traders Dash, Premarket, Options Chain, Est. Moves, Analysis,
+  Replay, Flow.
+- `cbedge-v3/src/pages/TradersDashboard.tsx` - Journal out of `ALL_PAGES`,
+  `/trading` out of `LIVE_ROUTES`.
+- `cbedge-v3/src/pages/Journal.tsx` - emptied to a tombstone (`export {}`);
+  `git rm` it.
+- `app/v3/trading/route.ts` - 404 instead of the SPA shell; `git rm -r` the folder.
 
-SERVER (proxy) - two real bugs, both in `parseFlowFilters()`,
-`server-v2/server-with-proxy.js`:
+Backend untouched: `/api/journal` and `/api/journal/trades` still serve v2's
+`components/pages/Trading.tsx` at `/app/trading`.
 
-- `exIdx` was hardcoded `false`. The client sent `exIdx=1` for the Combined
-  view's "All - Indices" scope and the server threw it away, leaving
-  `buildFlowPrintsWhere()`'s exIdx branch unreachable. Now read from the
-  querystring; a caller that omits it still gets false.
-- `underlying` defaulted to SPX when absent, and the Combined view sent no
-  `underlying`. So `/proxy/flow-premsplit` returned SPX-ONLY totals under an
-  "All Tickers" heading - for the four premium-split tiles AND the tape header's
-  count / Total / Calls / Puts, which prefer that response. Rather than drop the
-  default (flow-netprem and any un-enumerated caller rely on it), `underlying=ALL`
-  is now an explicit no-ticker-filter opt-out. `components/pages/Flow.tsx` sends
-  it. VISIBLE CHANGE on the live v2 page: Combined totals are now market-wide.
+## 2026-08-30 - v3: six pages retired (Scanner, Test Lab, ICT, ES Candles, Board, Multi Greek)
 
-v3 - new files:
+Pages only. The Home board and every card in `cbedge-v3/src/board/catalog.tsx` -
+including the Multi Greek, GEX Candles and Key Levels cards - are untouched.
 
-- `src/data/flowMath.ts` - constants, formats, thresholds, ET/session maths,
-  `dteOf` against the SESSION date (not today), the filter chain, `mergeTape`,
-  the net-drift bin walk, the totals. Pure; no React, fetch or DOM.
-- `src/data/dislocationVelocity.ts` - verbatim from v2's lib/.
-- `src/data/flowData.ts` - two-stage history pull with its ordering guard and
-  first-run-no-debounce; the incremental `?since` net-drift poll with the
-  sessionStorage warm start; `useContractStats` / `useLiveSpots` / `useMinuteBars`.
-- `src/pages/flow/NetDriftChart.tsx`, `src/pages/flow/ContractDrawer.tsx`.
-- `scripts/parity-check-flow.mjs` + `.test.mjs` - 74 probes, `check:parity:flow`
-  and `check:parity:flow:self`, in the shape of the traders-dashboard and chain
-  checkers. Wired into `npm run check`.
+Two of the six were real, built v3 pages and are gone:
 
-v3 - contract fix. `FlowTapePrint` in `src/contract/frames.ts` was missing
-`symbol`, `fills` and `spot`, and typed `type` as `'call' | 'put'`. Transcribed
-properly from the object literal `FlowProcessor.addPrint()` actually pushes
-(`server-v2/computation/flow-processor.js`): the type is `'C' | 'P'`, and `isOtm`
-is TRI-STATE - null when the spot was unknown, never false, because false is a
-claim. Missing `symbol` was the expensive one: it is the merge dedupe key, the
-row-expansion identity, and the `?symbol=` /proxy/option-history needs to tell an
-SPX monthly from an SPXW weekly.
+- `cbedge-v3/src/App.tsx` - dropped the `lazy()` imports and the `<Route>`s for
+  `/scanner` and `/test`.
+- `cbedge-v3/src/pages/Scanner.tsx` and `.../TestLab.tsx` - emptied to a
+  tombstone comment (`export {}`); nothing imports them. `git rm` both.
+- `app/v3/scanner/route.ts` and `app/v3/test/route.ts` - the SPA shell handlers
+  now answer 404 instead of serving a shell that would only render NotFound.
+  Both folders are `git rm -r`-able.
 
-That fix surfaced a silent bug in `src/board/catalog.tsx`: the board's Flow Tape
-card built its Strike cell with `r.type === 'call' ? 'C' : 'P'`. The wire has
-never carried 'call', so that column suffixed EVERY strike 'P', calls included,
-since it was written. Fixed.
+The other four never had a v3 page - only a dimmed `comingSoon` rail icon and a
+row in the destination picker. Those are gone too, so nothing advertises a page
+that is not coming:
 
-`src/design/theme.ts` gains `tokenHex(name)` / `tokenHexAlpha(name, a)`. A canvas
-cannot take `var()` or `color-mix()`, and the four files in theme-baseline.json
-are there because they solved that with a typed hex fallback. These resolve the
-token's own value and emit `#rrggbbaa`, so no literal enters src/ and the chart
-keeps tracking the palette.
+- `cbedge-v3/src/shell/Shell.tsx` - `NAV` drops `/mult-greek`, `/board`,
+  `/es-candles`, `/scanner`, `/ict`, `/test`. The rail is now Home, Traders
+  Dash, Premarket, Options Chain, Est. Moves, Analysis, Replay, Flow, Journal.
+  A saved rail order containing a removed slot drops it silently - `loadOrder()`
+  already filters against `NAV`.
+- `cbedge-v3/src/pages/TradersDashboard.tsx` - same six out of `ALL_PAGES`,
+  `/scanner` and `/test` out of `LIVE_ROUTES`, and the default Quick Link
+  "Multi Greek" swapped for "Options Chain" (the default set has to point at
+  routes that exist).
 
-Recorded, not fixed: `src/data/symbol.tsx` still says the `flow` frame is SPX
-prints only. It is not - proxy-tastytrade.js builds the engine processor with
-`spxOnly: false` and `_startTtMultiFlow` routes every `TT_FLOW_TICKERS_LIST` root
-into that same tape. That stale comment is the premise the previous port's
-"SPX-only ceiling" was built on.
+Not touched, deliberately: `src/data/scannerTickers.ts` (shared ticker universe,
+read by Premarket and the board cards), the `'es-candles' -> 'gex-candles'` card-id
+migration in `catalog.tsx`, and all of v2 - `components/pages/Scanner.tsx`,
+`components/pages/TestLab.tsx`, `components/scanner/*`, `app/test/*` and the
+`/app/*` routes are a separate app and still live.
 
-Declared departures (soft probes in the parity checker): the tape status badge
-has two states, not three - a page that does not own the socket cannot honestly
-report RECONNECTING; and the palette is v3's, though every threshold and colour
-RULE is v2's.
-
-Verified in a clean container (the laptop's shell workspace would not start all
-session, so cbedge-v3 was rebuilt from source and npm installed to run the real
-tooling): `tsc --noEmit` zero errors in all seven new/changed files under strict
-+ noUncheckedIndexedAccess + verbatimModuleSyntax; `check-theme` clean; the
-parity self-test clean at 74 probes - it caught three weak probes of its own on
-the first run and they were tightened. NOT verified here, needs the laptop:
-`npm run build` (budgets), `npm run perf`, `check:ws`, and `check:parity:flow`
-itself, which needs both apps up against one backend and a PARITY_COOKIE.
-
-Note: another session was editing cbedge-v3 throughout this work (it retired
-/scanner and /test, split TradersDashboard and OptionsChain, and moved
-tokenRgb/rgbHex out of theme.ts). Every shared file here was re-staged
-immediately before editing and committed with an mtime guard; nothing was
-overwritten. `src/shell/Shell.tsx` was left alone on purpose - the /flow NAV
-entry still has no prefetch URLs, which non-negotiable 3 would like, and the two
-to add are noted at the end of docs/parity/flow.md.
-
-## 2026-08-30 - v3 Analysis: page rebuilt from the parity doc (step 2)
-
-The earlier v3 Analysis page was wrong and is gone. Rebuilt from
-`cbedge-v3/docs/parity/analysis.md` - 23 files, ~7,000 lines, under
-`cbedge-v3/src/pages/analysis/`.
-
-WHAT THE OLD ONE WAS MISSING: four cards were stubs (Ticker Lookup, Multi Greek,
-Econ Calendar, Initial Balance), Ticker Levels had regressed from v2's
-searchable/star-to-favourite/add-your-own picker to four hardcoded pills, and
-the whole page painted in v3's dark-slate palette.
-
-LAYOUT
-  design/tokens.css        + 13 --color-v2-* tokens (v2 parity block)
-  design/theme.ts          + V2 / V2W / alpha recipes; button styles moved OUT
-  design/primitives/Card   + plate="v2" (the frosted 45% plate). Default unchanged
-  data/useScannerTickers   NEW - v3 had no hook, so every picker was stuck on the
-                           build-time fallback list
-  pages/analysis/kit.tsx   Part B: Label/Value/Stat/Row/PillSelect/CardState/
-                           UpdatedStamp/AnalysisCard + useLiveData + FS type scale
-  pages/analysis/greeks.ts Part H: accumulateChainGreeks + peaks + net + scales
-  pages/analysis/ib.ts     computeAmt, narrowed to the three fields the card reads
-  pages/analysis/cards/    8 cards
-  pages/analysis/lookup/   levels.ts, replay.ts, Ladder.tsx, TickerLookup.tsx
-
-THREE DECISIONS WORTH KNOWING
-
-1. greeks.ts / levels.ts deliberately do NOT reuse board/chainGex.ts. chainGex
-   implements the SERVER's wall definitions - largest positive strictly ABOVE
-   spot, most negative strictly BELOW. v2's Analytics takes the extreme strike
-   ANYWHERE on the ladder and then applies the CB-collision step-down. On a day
-   when the biggest call wall sits under spot the two return different strikes.
-   Reusing chainGex would have been the easiest way to ship a page that looks
-   finished and prints a different Call Wall than v2 did.
-
-2. Card gained `plate="v2"` rather than the page drawing its own panel. AGENTS
-   non-negotiable 1 says anything with a border and a background IS a Card; a
-   page-local bordered div is exactly what that rule exists to stop. Default is
-   'v3' so every board card is byte-identical.
-
-3. ib.ts ports THREE fields out of lib/failLevels' computeAmt (ib, dayTypeLabel,
-   bias) rather than the whole 40KB. dayTypeDetail, levelReads and
-   computeRefLevels are never rendered by this page. If a later v3 page needs the
-   level reads, port computeRefLevels properly into src/data/ - do not widen
-   ib.ts, which is scoped to one card and says so in its header.
-
-CHECK-THEME HAS A FOURTH RULE nobody had hit yet: a bare `fontSize:` number is
-banned, and it names a canonical ramp (9/10/11/13/15/18/24/32). v2's page uses
-9, 10, 11, 12, 13, 14, 16, 17, 18, 20, 21, 22, 26, 28 and 34 - they agree on
-almost nothing. The port keeps v2's sizes in a named constant (`FS` in kit.tsx),
-which is what the rule's own comment says it is written to allow. Reconciling
-the two ramps is a separate decision, flagged in Part R.
-
-VERIFIED HERE
-  - tsc --noEmit under v3's exact tsconfig (strict, noUncheckedIndexedAccess,
-    verbatimModuleSyntax, noUnusedLocals): CLEAN.
-  - scripts/check-theme.mjs against the new tree: ZERO violations. Confirmed with
-    a deliberate probe file that the scanner does walk src/pages/analysis/, so
-    the pass is real and not an empty walk.
-
-NOT VERIFIED - needs the laptop
-  npm run build (vite + budgets), check:ws, perf, check:casing. The device's
-  Linux VM was unavailable this session, so nothing could be run in the repo.
-  Run `npm run check` in cbedge-v3 before pushing. Note Analysis.tsx is NOT in
-  theme-baseline.json, so its literal allowance is zero - never add it.
-
-ROUTE WIRING: all four steps were already in place and are verified - the page,
-the lazy() route in App.tsx, the NAV entry in Shell.tsx, and
-app/v3/analytics/route.ts. Nothing to add.
-
-STILL TO DO: step 4, the automated parity script. package.json already has
-check:parity and check:parity:chain - the new one should follow that shape:
-drive /app/analytics and /v3/analytics against the same backend, extract the
-labelled values from both, and FAIL on anything present in v2 and absent in v3.
-Per Part S it must also sample COMPUTED COLOURS, because check-theme cannot see
-a token that resolves to the wrong colour.
-
-## 2026-08-30 - v3 Analysis parity doc: Part S, colour parity with v2
-
-`cbedge-v3/docs/parity/analysis.md` grows from 359 to 419 rows. Brandon: "keep
-colors the same as the v2 version." Scope decided: THIS PAGE ONLY - no existing
-v3 token changes value, no other v3 page is recoloured.
-
-THE FINDING. `src/design/theme.ts` maps v2's NAMES onto v3's VALUES on purpose
-("only its palette changes, and it changes to v3's"). On this page that intent
-is overridden, and six tokens are a trap:
-
-- `T.cyan`     #219EBC teal        -> #5b8cff blue-violet  (--color-accent)
-- `T.orange`   #FB8501             -> #e0a44a muted amber  (--color-warn)
-- `T.red`      #EF4444             -> #e0645f soft red     (--color-down)
-- `T.green`    #8ECAE6 LIGHT BLUE  -> #35c28e green        (--color-up)
-- `T.border`   rgba(255,255,255,.10) -> #23272e opaque     (--color-line)
-- `T.panelBg`  rgba(13,17,25,.45)  -> #14171d opaque       (--color-surface2)
-
-That last one is the card FILL - the frosted look IS the translucency. And
-`T.green` is inverted in meaning: v2's "green" is a light blue.
-
-Twelve already match exactly and get reused untouched: CB/CW/PW walls, the whole
-econ impact ramp, and the A/F/P trio. Two v2 values are already in tokens.css
-under calendar names - #219EBC as `--color-cal-accent` and #22C55E as
-`--color-cal-actual`. Part S says keep BOTH names anyway: a card title is not a
-calendar accent and the two must be free to move apart.
-
-Twelve tokens to ADD, following the candle-colour precedent already in
-tokens.css ("carried across from v2 VERBATIM"): v2-cyan, v2-orange, v2-red,
-v2-green, v2-pos, v2-purple, v2-bg, v2-panel, v2-ink (#0b0f1a, the ink on solid
-ladder tags), v2-refresh (#1fd98a), v2-badge-ink (#05080d), v2-lightblue. Plus a
-`V2` bridge object in theme.ts so no component types a literal.
-
-Twenty-six washes catalogued as `alpha(token, a)` expressions rather than new
-tokens - card fill, every hairline, the button gradients, the replay bar's
-`${T.orange}55` border (0x55 = 33.3%), the econ row gradients (`${col}0f`,
-`${col}18`, `${k.color}12`). Flagged: the tags and the spot-price chip must use
-mix()/solid, never alpha() - they sit on top of bars and a translucent plate
-lets the bar read through.
-
-Also caught: `homeTheme.LIGHT_BLUE` is #7dd3fc but the `.analytics-embed` CSS
-writes rgba(126,211,252,.10) = #7ed3fc. One off in the red channel. The CSS is
-what paints, so #7ed3fc is the parity value.
-
-WHAT NO CHECK CATCHES. `npm run check:theme` bans literals, the Tailwind palette
-and unknown vars - it cannot see a token that resolves to the WRONG COLOUR.
-`T.cyan` passes the scan and paints #5b8cff. Only this document protects colour
-parity, so the step-4 parity script must sample computed colours on both pages
-and fail on a mismatch, not just compare text values. Note also that
-`src/pages/Analysis.tsx` is NOT in theme-baseline.json, so its literal allowance
-is zero - one hex fails the build. Never add it to the baseline.
-
-Corrected in the same pass: `T.purple` #126783 IS used on this page (the second
-radial in `homeShellStyle`'s background glow), not unused as first recorded.
-
-Still step 1. No v3 code written.
+Caveat: the local shell on this machine was down for this session, so the four
+files above could not actually be deleted from disk - they were emptied or
+turned into 404 handlers instead, each with a `git rm` line in its header.
 
 ## 2026-08-30 - v3 Analysis: parity inventory written (step 1 of the port, no code yet)
 

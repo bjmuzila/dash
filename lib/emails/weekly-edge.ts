@@ -1,7 +1,10 @@
 // Weekly newsletter — "The Weekly Edge". Recaps last week's market action,
 // previews this week's catalysts (FOMC, earnings, econ data), covers the
 // oil/geopolitical situation, and closes with the CB Edge dashboard scorecard
-// (Core Bullseye, Estimated Move) as social proof + a CTA.
+// (Core, Estimated Move) as social proof + a CTA. NOTE: the metric is called
+// "Core" in all customer-facing copy — the opts are still named
+// coreBullseye* so call sites do not churn, but nothing rendered says
+// "Bullseye". Keep it that way.
 //
 // Data-driven via opts — every number below is a parameter so this template
 // gets reused week to week without touching markup. Sensible defaults are
@@ -200,22 +203,27 @@ const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [
 ];
 
 /**
- * Daily Core Bullseye rows, newest first, off the owner Results page.
+ * Daily Core rows, newest first, off the owner Results page.
  *
- * EMPTY ON PURPOSE for this issue — that renders the dashed "[ADD CB EDGE
- * SCREENSHOT / CONFIDENCE TABLE HERE]" block rather than last week's numbers.
- * Fill from the Results page for Aug 24–28. Row shape:
- *   { date: "08-28", s945: "7790", c945: "2.1", hit945: true,
- *                    s1030: "7750", c1030: "3.1", hit1030: true,
- *                    s1200: "7720", c1200: "0.1", hit1200: true },
+ * Aug 24–28. An empty array renders the dashed "[ADD CB EDGE SCREENSHOT /
+ * CONFIDENCE TABLE HERE]" placeholder instead — use that rather than shipping a
+ * stale week.
  *
  * THE ✓/✗ IS THE ≤5-POINT COLUMN. The Results page scores three thresholds per
  * window (≤5 / ≤10 / ≤15); this table has room for one, and every previous
  * issue used ≤5, so ≤5 it stays — do not switch to ≤15 to flatter a week.
- * Where ≤5 hides something (a read that missed 5 but cleared 15), say it in
- * `resultsNote` rather than letting the table imply a clean whiff.
+ * Where ≤5 hides something, say it in `resultsNote` rather than letting the
+ * table imply a clean whiff. This week that matters twice: 8/25 10:30 (10.7)
+ * and 8/24 9:45 (9.7) both cleared ≤15, and only 8/28 9:45 (22.1) and 8/24
+ * 10:30 (15.2) missed every threshold.
  */
-const DEFAULT_CONF_ROWS: ConfRow[] = [];
+const DEFAULT_CONF_ROWS: ConfRow[] = [
+  { date: "08-28", s945: "7790", c945: "22.1", hit945: false, s1030: "7750", c1030: "2.5", hit1030: true, s1200: "7720", c1200: "0.3", hit1200: true },
+  { date: "08-27", s945: "7725", c945: "0.1", hit945: true, s1030: "7730", c1030: "0.6", hit1030: true, s1200: "7730", c1200: "0.6", hit1200: true },
+  { date: "08-26", s945: "7690", c945: "0.5", hit945: true, s1030: "7660", c1030: "0.0", hit1030: true, s1200: "7685", c1200: "0.4", hit1200: true },
+  { date: "08-25", s945: "7700", c945: "13.7", hit945: false, s1030: "7650", c1030: "10.7", hit1030: false, s1200: "7680", c1200: "0.6", hit1200: true },
+  { date: "08-24", s945: "7630", c945: "9.7", hit945: false, s1030: "7630", c1030: "15.2", hit1030: false, s1200: "7670", c1200: "1.4", hit1200: true },
+];
 
 /**
  * The week's scanner example. Flagged Aug 14 on the 2026-08-21 expiry, so the
@@ -270,8 +278,11 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
       "This is the first week in months that oil was not the story. Crude finished around $83.44 and barely moved, down about a percent on the month — because the market has quietly re-rated the Iran situation from an imminent threat to physical supply into an economic and sanctions confrontation. Goldman puts Persian Gulf exports back at 15–16 million barrels a day. That is still well under the 22–24 million before the conflict, but it is a long way from March's 5–6 million trough.",
       "Iran and Oman have agreed a revenue-sharing framework for the strait, though Tehran was careful to say that does not mean an immediate reopening, and the administration has shown no interest in reviving the June agreement that collapsed. Chevron and Halliburton caught a bid on reports of expanded Venezuelan production. The practical read for the open: crude is no longer the thing setting overnight gap risk. This week that job belongs to the labour data.",
     ],
-    coreBullseyePct: opts.coreBullseyePct || "—",
-    coreBullseyeSub: opts.coreBullseyeSub || "[fill before send]",
+    // 10 of 15 inside 5 points: 5/5 at 12:00, 3/5 at 10:30, 2/5 at 9:45. The
+    // tile is the clean window; the other two are stated in the note rather
+    // than blended into one friendlier average.
+    coreBullseyePct: opts.coreBullseyePct || "100%",
+    coreBullseyeSub: opts.coreBullseyeSub || "&le;5 pts &middot; 12:00 CB &middot; 5 of 5 sessions",
     // A "loss" here is a BREACH — price left the estimated-move band. Do not
     // write the note as "failed to reach"; that is the opposite of what happens.
     //
@@ -286,7 +297,8 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     estMovePct: opts.estMovePct || "82.4%",
     estMoveSub: opts.estMoveSub || "192-41 &middot; 233 of 404 tickers scored",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
-    resultsNote: opts.resultsNote || "[ADD CORE BULLSEYE SUMMARY — hit rate per window, what a ✓ means, and the week's misses]",
+    resultsNote: opts.resultsNote ||
+      "A ✓ means the Core read landed within 5 points of where SPX actually printed. Across Aug 24–28 that was 10 of 15 — <strong style=\"color:#ffffff;\">5 of 5 at 12:00</strong>, 3 of 5 at 10:30, and 2 of 5 at 9:45. Widen the tolerance to 15 points and it is 13 of 15: only Friday's 9:45 read (22.1) and Monday's 10:30 (15.2) missed by more than that. The 12:00 read has now gone 10 for 10 inside 5 points across the last two weeks; the 9:45 open is the weak window and has been for a fortnight.",
     estMoveNote: opts.estMoveNote ||
       "Estimated Move turned it around: <strong style=\"color:#ffffff;\">192 wins against 41 losses</strong> on 233 scored names, 82.4% — and <strong style=\"color:#ffffff;\">17-3, 85.0%</strong>, on the 20 scored names of the Core Board. The week before that number was 41.0%, and it went in this letter the same way this one does. The reason for the swing is the chart below. A win is price staying inside the band; with SPX living between the call and put walls all week, the bands mostly held. The week before, the vol crush had narrowed those bands while the tape kept covering the same distance, so price walked out of them early. Same model — the range behaved differently.",
     // OFF for this issue — no scanner catch supplied yet, so the section renders
@@ -372,7 +384,7 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     ...o.oilBody.map(strip),
     "",
     "CB EDGE — THIS WEEK'S RESULTS",
-    `Core Bullseye: ${o.coreBullseyePct} (${strip(o.coreBullseyeSub)})`,
+    `Core: ${o.coreBullseyePct} (${strip(o.coreBullseyeSub)})`,
     `Estimated Move: ${o.estMovePct} (${strip(o.estMoveSub)})`,
     strip(o.resultsNote),
     "",
@@ -613,7 +625,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               <div style="font:800 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.14em;text-transform:uppercase;color:#00E676;">● CB Edge — This Week's Results</div>
               <div style="font:800 17px/1.35 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:8px;">The dashboard called it — here's the scorecard</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr>
-                ${resultTile("Core Bullseye", o.coreBullseyePct, o.coreBullseyeSub, "#38BDF8", "50%")}
+                ${resultTile("Core", o.coreBullseyePct, o.coreBullseyeSub, "#38BDF8", "50%")}
                 ${resultTile("Estimated Move", o.estMovePct, o.estMoveSub, "#00E676", "50%")}
               </tr></table>
 
@@ -717,7 +729,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                   <td align="center" style="padding:26px 20px;">
                     <div style="font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.16em;text-transform:uppercase;color:#00E676;">Code EDGE3 · $400/yr instead of $1,000</div>
                     <div style="font:900 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:10px;">Jobs Friday, with a hike on the table. <span style="color:#00E676;">Don't trade it blind.</span></div>
-                    <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">Live GEX levels, Core Bullseye confidence scoring, the Core Wall auto buy and estimated-move tracking — full annual access for $400 with code <strong style="color:#ffffff;">EDGE3</strong>, instead of $1,000.</div>
+                    <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">Live GEX levels, Core confidence scoring, the Core Wall auto buy and estimated-move tracking — full annual access for $400 with code <strong style="color:#ffffff;">EDGE3</strong>, instead of $1,000.</div>
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;"><tr>
                       <td align="center" style="border-radius:12px;background:#00C853;">
                         <a href="${cta}" style="display:inline-block;padding:14px 34px;font:800 15px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#04140A;text-decoration:none;border-radius:12px;">Get Annual Access →</a>

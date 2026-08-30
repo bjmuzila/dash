@@ -19,10 +19,22 @@
 // harvest therefore opens the cog on both pages (they share the aria-label
 // "Options chain settings") and, on v2, clicks through its tab row as well —
 // v2's DockCogMenu mounts only the ACTIVE tab's body, so Heat/Stamps/Replay are
-// genuinely not in the DOM until you click them. v3's popover stacks all four
+// genuinely not in the DOM until you click them. v3's popover stacks its
 // sections at once, which is why several Part D probes below are `optional`:
 // they are things v3 shows and v2 hides one click deeper, and that direction is
 // never a parity failure.
+//
+// ── Declared departures ──────────────────────────────────────────────────────
+// A `soft` probe reports a v2 value that v3 does NOT have, without failing the
+// run. There are five, and every one is a decision recorded in the spec rather
+// than something the port lost:
+//   C/go, C/recent                       the board owns the symbol now
+//   C/snapshot                           v3 ships no DOM-to-canvas renderer
+//   D/changeModes                        Δ columns removed 2026-08-30
+//   D/stampsSection, D/delta15(+Tip)     Δ15m stickers removed 2026-08-30
+// The point of `soft` rather than `optional` is that the run still PRINTS them.
+// A dropped feature that stops being mentioned is a dropped feature nobody will
+// remember deciding to drop.
 //
 // The spec is docs/parity/options-chain.md. A probe here is a row there; if you
 // add a row, add a probe.
@@ -134,14 +146,29 @@ export const PROBES = [
   },
 
   // ── Part C — toolbar actions ──
-  { id: 'C/tickers', label: 'Ticker picker', get: (h) => hasI(h, 'Tickers') },
+  // The picker itself is still on screen in v3 — it moved to the APP TOOLBAR,
+  // which renders above every page, so this probe passes from the shell rather
+  // than from the page. That is the intended end state and not a departure.
+  // Text OR tooltip: v2 labels its button "Tickers", v3's toolbar trigger IS the
+  // symbol and says what it is in its title. Either counts as "a ticker control
+  // exists"; what would not is neither.
+  {
+    id: 'C/tickers',
+    label: 'Ticker picker (v3: in the app toolbar)',
+    get: (h) => hasI(h, 'Tickers') ?? titleLike(h, /ticker/i),
+  },
   {
     id: 'C/go',
     label: 'GO button',
-    soft: 'not ported — v3 has one board-wide symbol, and the picker commits to it directly',
+    soft: 'dropped — v3 has one board-wide symbol and the picker commits to it directly',
     get: (h) => (/(^|\n)GO(\n|$)/.test(h.text) ? 'GO' : null),
   },
-  { id: 'C/recent', label: 'Recent tickers dropdown', optional: true, get: (h) => hasI(h, 'Recent') },
+  {
+    id: 'C/recent',
+    label: 'Recent tickers dropdown',
+    soft: 'dropped 2026-08-30 — favourites in the toolbar picker replace a recents list',
+    get: (h) => hasI(h, 'Recent'),
+  },
   { id: 'C/refresh', label: 'Refresh button', get: (h) => first(h, /↻ Now|↻ Refreshing…|✓ Refreshed|✗ Failed/) },
   {
     id: 'C/snapshot',
@@ -171,7 +198,7 @@ export const PROBES = [
   {
     id: 'D/changeModes',
     label: 'Δ change modes (Live / 15m Δ / 30m Δ / 60m Δ)',
-    optional: true,
+    soft: 'dropped 2026-08-30 — removed end to end, control and /proxy/strike-growth fetch and Δ columns',
     count: true,
     get: (h) => ['Live', '15m Δ', '30m Δ', '60m Δ'].filter((m) => h.lines.includes(m)).length,
   },
@@ -191,12 +218,22 @@ export const PROBES = [
   },
   { id: 'D/skinClassic', label: 'Skin CLASSIC', optional: true, get: (h) => has(h, 'CLASSIC') },
   { id: 'D/skinVivid', label: 'Skin VIVID', optional: true, get: (h) => has(h, 'VIVID') },
-  { id: 'D/stampsSection', label: '"Stamps" section', optional: true, get: (h) => hasI(h, 'Stamps') },
-  { id: 'D/delta15', label: 'Δ15m toggle', optional: true, get: (h) => has(h, 'Δ15m') },
+  {
+    id: 'D/stampsSection',
+    label: '"Stamps" section',
+    soft: 'dropped 2026-08-30 — removed end to end with the Δ15m stickers below',
+    get: (h) => hasI(h, 'Stamps'),
+  },
+  {
+    id: 'D/delta15',
+    label: 'Δ15m toggle',
+    soft: 'dropped 2026-08-30 — control, /api/mult-greek-gex-grid poll and cell stickers all removed',
+    get: (h) => has(h, 'Δ15m'),
+  },
   {
     id: 'D/delta15Tip',
     label: 'Δ15m tooltip (top 5 strikes per side)',
-    optional: true,
+    soft: 'dropped 2026-08-30 — see D/delta15',
     get: (h) => titleLike(h, /top 5 strikes per side of ATM/),
   },
   { id: 'D/replaySection', label: '"Replay" section', optional: true, get: (h) => hasI(h, 'Replay') },

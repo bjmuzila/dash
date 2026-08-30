@@ -40,9 +40,9 @@ import {
   type Scale,
 } from './chainMath'
 import { CHAIN_CELL, HEAT_SKINS, levelFillBg, skinMetricBg, skinRankBg, type HeatSkin } from './heatSkins'
-import { fmtChg, fmtCount, fmtDeltaChip, fmtExpHeader, fmtMoney, fmtStrike, skinFig } from './format'
+import { fmtChg, fmtCount, fmtExpHeader, fmtMoney, fmtStrike, skinFig } from './format'
 import { etDateKey, etToday, isTradingDay } from './marketSession'
-import type { ChangeMode, Delta15Entry, GreekMode, OiSnapEntry } from './useChainData'
+import type { GreekMode, OiSnapEntry } from './useChainData'
 
 const MONO = 'var(--font-mono)'
 
@@ -81,40 +81,6 @@ function SignVal({ text }: { text: string }) {
       {s && <span style={{ color: c }}>{s}</span>}
       {rest}
     </>
-  )
-}
-
-/**
- * Δ15 sticker — the front-expiry 15-minute NET GEX change. Uniform dark plate so
- * it reads identically on a full-strength wall and on a quiet far strike;
- * direction is carried by the number's colour alone.
- */
-function DeltaStamp({ d, pct, rank }: Delta15Entry) {
-  const text = fmtDeltaChip(d)
-  return (
-    <span
-      title={`Δ15m ${text} · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
-      style={{
-        flexShrink: 0,
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: 14,
-        boxSizing: 'border-box',
-        fontSize: 9,
-        fontWeight: rank === 1 ? 900 : 800,
-        fontFamily: MONO,
-        lineHeight: 1,
-        padding: '0 4px',
-        borderRadius: 4,
-        whiteSpace: 'nowrap',
-        background: HDR_BG,
-        color: d > 0 ? CHAIN.deltaUp : CHAIN.deltaDown,
-        border: 'none',
-      }}
-    >
-      {text}
-    </span>
   )
 }
 
@@ -192,19 +158,12 @@ export interface ChainMatrixProps {
   colScales: Scale[]
   volMvcByCol: Array<number | null>
   mvcByCol: Array<number | null>
-  delta15: Map<number, Delta15Entry>
-  /** Expiration the Δ15 stickers belong to (""when there are none). */
-  delta15Exp: string
   valueAt: (col: ExpColumn, strike: number) => number | null
-  changeMode: ChangeMode
   /** "" when live, or the replayed session's date — decides which column counts
    *  as 0DTE and is therefore excluded from ⅀ Total. */
   sessionDate: string
   showTotalCol: boolean
   layoutExpCols: number
-  changeMeta: { expiries: Set<string>; hasData: boolean }
-  changeMap: Map<string, number>
-  changeScaleByExp: Map<string, Scale>
   emStrikes: { close: number | null; d1: number | null; u1: number | null; d2: number | null; u2: number | null } | null
   anyCurrentWeek: boolean
   emLevels: { close: number; em: number } | null
@@ -231,16 +190,10 @@ export const ChainMatrix = memo(function ChainMatrix({
   colScales,
   volMvcByCol,
   mvcByCol,
-  delta15,
-  delta15Exp,
   valueAt,
-  changeMode,
   sessionDate,
   showTotalCol,
   layoutExpCols,
-  changeMeta,
-  changeMap,
-  changeScaleByExp,
   emStrikes,
   anyCurrentWeek,
   emLevels,
@@ -262,11 +215,6 @@ export const ChainMatrix = memo(function ChainMatrix({
 
   const SK = HEAT_SKINS[heatSkin] ?? HEAT_SKINS.classic
   const CELL = CHAIN_CELL[heatSkin] ?? CHAIN_CELL.classic
-
-  // Δ15 stickers ride the GEX view only — the OI tab's cells are already a
-  // change, and a second, differently-sourced change beside them reads as a
-  // conflict.
-  const hasDelta15 = !isCountMode && greekMode === 'gex' && !!delta15Exp && delta15.size > 0
 
   // Drop holiday / non-trading expirations entirely; keep empty placeholders.
   const renderIdx = Array.from({ length: gridCols })
@@ -293,11 +241,7 @@ export const ChainMatrix = memo(function ChainMatrix({
       const col = columns[colIdx]
       if (!col) return
       if (selMode ? !selExps.has(col.expiration) : col.expiration === todayKey) return
-      // !isCountMode mirrors the per-cell guard: the Δ columns carry volume-GEX
-      // dollars, which must never be summed into a contract-count total.
-      const isCh =
-        !isCountMode && changeMode !== 'live' && changeMeta.hasData && changeMeta.expiries.has(col.expiration)
-      const v = isCh ? (changeMap.get(`${col.expiration}|${strike}`) ?? null) : valueAt(col, strike)
+      const v = valueAt(col, strike)
       if (v != null) sum += v
     })
     rowTotals.set(strike, sum)
@@ -359,15 +303,8 @@ export const ChainMatrix = memo(function ChainMatrix({
     <div
       style={{
         display: 'grid',
-        // The Δ15 column carries a chip AND its value on one line — at 78px that
-        // is the chip overlapping the number, so only that one column widens,
-        // and only while stickers are actually on screen.
         gridTemplateColumns: `${STRIKE_COL}px ${renderIdx
-          .map((i) =>
-            hasDelta15 && columns[i]?.expiration === delta15Exp
-              ? 'minmax(152px, 1.9fr)'
-              : `minmax(${isCountMode ? 84 : 78}px, 1fr)`,
-          )
+          .map(() => `minmax(${isCountMode ? 84 : 78}px, 1fr)`)
           .join(' ')}${
           showTotalCol ? ` minmax(${isCountMode ? 92 : 88}px, 1.15fr)` : ''
         }${ghostTemplate} ${STRIKE_COL}px`,
@@ -387,22 +324,11 @@ export const ChainMatrix = memo(function ChainMatrix({
 
       {renderIdx.map((i) => {
         const col = columns[i]
-        const isChangeCol =
-          !isCountMode &&
-          changeMode !== 'live' &&
-          changeMeta.hasData &&
-          col != null &&
-          changeMeta.expiries.has(col.expiration)
         const colTotal = col
-          ? isChangeCol
-            ? visibleStrikes.reduce<number>(
-                (s, k) => s + (k == null ? 0 : (changeMap.get(`${col.expiration}|${k}`) ?? 0)),
-                0,
-              )
-            : visibleStrikes.reduce<number>((s, k) => {
-                const v = k == null ? null : valueAt(col, k)
-                return s + (v ?? 0)
-              }, 0)
+          ? visibleStrikes.reduce<number>((s, k) => {
+              const v = k == null ? null : valueAt(col, k)
+              return s + (v ?? 0)
+            }, 0)
           : null
         const expSel = col != null && selExps.has(col.expiration)
         const expDim = selMode && !expSel
@@ -419,9 +345,7 @@ export const ChainMatrix = memo(function ChainMatrix({
               padding: '5px 6px',
               background: expSel
                 ? `linear-gradient(180deg, ${alpha(T.cyan, 0.3)} 0%, ${alpha(T.cyan, 0.07)} 100%), ${HDR_BG}`
-                : isChangeCol
-                  ? `linear-gradient(180deg, ${alpha(T.orange, 0.18)} 0%, ${alpha(T.orange, 0.05)} 100%), ${HDR_BG}`
-                  : `linear-gradient(180deg, ${alpha(T.cyan, 0.14)} 0%, ${alpha(T.cyan, 0.04)} 100%), ${HDR_BG}`,
+                : `linear-gradient(180deg, ${alpha(T.cyan, 0.14)} 0%, ${alpha(T.cyan, 0.04)} 100%), ${HDR_BG}`,
               borderBottom: `1px solid ${T.border}`,
               boxShadow: expSel ? `inset 0 -2px 0 ${T.cyan}` : undefined,
               cursor: col ? 'pointer' : undefined,
@@ -429,12 +353,8 @@ export const ChainMatrix = memo(function ChainMatrix({
               transition: 'opacity .12s',
             }}
           >
-            <div style={{ fontSize: 10, fontWeight: 500, color: isChangeCol ? T.orange : T.text }}>
+            <div style={{ fontSize: 10, fontWeight: 500, color: T.text }}>
               {col ? fmtExpHeader(col.expiration) : '—'}
-              {isChangeCol ? ` ·Δ${changeMode}` : ''}
-              {!isChangeCol && hasDelta15 && col?.expiration === delta15Exp && (
-                <span style={{ color: T.muted, fontWeight: 700 }}> ·Δ15m</span>
-              )}
             </div>
             {/* Per-expiry total of the ACTIVE greek across the visible window —
                 the column-wise counterpart to the ⅀ Total column's figure. */}
@@ -594,42 +514,17 @@ export const ChainMatrix = memo(function ChainMatrix({
 
             {renderIdx.map((colIdx, posInRow) => {
               const col = columns[colIdx]
-              const scale = colScales[colIdx] ?? { max: 1, top3: [] as number[] }
-              // The Δ columns carry volume-GEX DOLLARS. On the two count tabs
-              // that is a different quantity in a different unit inside the same
-              // grid, so both count tabs always read live columns.
-              const isChangeCol =
-                !isCountMode &&
-                changeMode !== 'live' &&
-                changeMeta.hasData &&
-                col != null &&
-                changeMeta.expiries.has(col.expiration)
-              const chKey = isChangeCol && col ? `${col.expiration}|${strike}` : ''
-              const value = isChangeCol
-                ? (changeMap.has(chKey) ? (changeMap.get(chKey) as number) : null)
-                : col
-                  ? valueAt(col, strike)
-                  : null
-              const cellScale =
-                isChangeCol && col
-                  ? (changeScaleByExp.get(col.expiration) ?? { max: 1, top3: [] as number[] })
-                  : scale
+              const cellScale = colScales[colIdx] ?? { max: 1, top3: [] as number[] }
+              const value = col ? valueAt(col, strike) : null
 
-              const isMvc = !isChangeCol && greekMode === 'gex' && col != null && mvcByCol[colIdx] === strike
+              const isMvc = greekMode === 'gex' && col != null && mvcByCol[colIdx] === strike
               // ✕ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
               const isVolMvc =
-                !isChangeCol &&
-                greekMode === 'gex' &&
-                dataMode === 'oi-vol' &&
-                col != null &&
-                volMvcByCol[colIdx] === strike
+                greekMode === 'gex' && dataMode === 'oi-vol' && col != null && volMvcByCol[colIdx] === strike
               // …coloured by the SIGN of that volume-only GEX. A fixed-red ✕ said
               // "negative" on every strike it landed on.
               const volMvcVal = isVolMvc && col ? (col.cells.get(strike)?.volGex ?? null) : null
               const volMvcPos = (volMvcVal ?? value ?? 0) >= 0
-
-              const isDelta15Col = hasDelta15 && !isChangeCol && col != null && col.expiration === delta15Exp
-              const dEntry = isDelta15Col ? (delta15.get(strike) ?? null) : null
               const isFirst = posInRow === 0
               // ATM box: box-shadow so it overlays without shifting layout. Top
               // and bottom on every cell, left edge on the first column; the
@@ -662,7 +557,7 @@ export const ChainMatrix = memo(function ChainMatrix({
               // ATM pivot, the one row that renders both call and put.
               const oiBothSides = sides.call && sides.put
 
-              const cellWall = levelsOnly && !isChangeCol && col != null ? wallAt(wallsByCol[colIdx], strike) : null
+              const cellWall = levelsOnly && col != null ? wallAt(wallsByCol[colIdx], strike) : null
               const cellRank = value == null ? 0 : rankOf(value, cellScale.top3)
               // Which level this cell is FILLED as, on a skin that fills levels.
               // Levels-only marks CB/CW/PW; every other slider position marks the
@@ -770,8 +665,6 @@ export const ChainMatrix = memo(function ChainMatrix({
                     </span>
                   )}
 
-                  {dEntry && <DeltaStamp d={dEntry.d} pct={dEntry.pct} rank={dEntry.rank} />}
-
                   {isOiMode ? (
                     !oiHasAny ? (
                       <span style={{ color: CHAIN.none }}>·</span>
@@ -791,17 +684,7 @@ export const ChainMatrix = memo(function ChainMatrix({
                       </div>
                     )
                   ) : (
-                    // With a sticker in the cell the value is pushed right by
-                    // margin, not by a reserved slot — so unstamped rows in the
-                    // same column give all their width to the number and every
-                    // value still ends on the same right edge.
-                    <span
-                      style={
-                        dEntry
-                          ? { marginLeft: 'auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
-                          : undefined
-                      }
-                    >
+                    <span>
                       {CELL.signColors ? (
                         <SignVal text={value == null ? '·' : fmtMoney(value)} />
                       ) : value == null ? (

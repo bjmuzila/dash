@@ -62,15 +62,6 @@ export const DATA_MODE_LABEL: Record<DataMode, string> = {
   flow: 'Flow GEX',
 }
 
-export const CHANGE_MODES = ['live', '15', '30', '60'] as const
-export type ChangeMode = (typeof CHANGE_MODES)[number]
-export const CHANGE_MODE_LABEL: Record<ChangeMode, string> = {
-  live: 'Live',
-  '15': '15m Δ',
-  '30': '30m Δ',
-  '60': '60m Δ',
-}
-
 export const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const
 
 export const REPLAY_SPEEDS = [0.5, 1, 2, 4, 8] as const
@@ -85,8 +76,6 @@ export const REPLAY_SCOPE_LABEL: Record<ReplayScope, string> = { '0dte': '0DTE',
 export const EXP_COLUMNS = 14
 /** Overlapping loads are dropped; non-forced loads are rate-limited to this. */
 const LOAD_MIN_INTERVAL_MS = 5000
-const RECENT_TICKERS_KEY = 'options-chain-recent-tickers-v1'
-const RECENT_TICKERS_MAX = 7
 
 // ── Replay frame ─────────────────────────────────────────────────────────────
 
@@ -117,40 +106,6 @@ export interface DodRow {
   now_delta: number | null
 }
 
-export interface Delta15Entry {
-  d: number
-  pct: number
-  rank: number
-}
-
-// ── Local storage ────────────────────────────────────────────────────────────
-
-function loadRecentTickers(): string[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(RECENT_TICKERS_KEY)
-    const arr: unknown = raw ? JSON.parse(raw) : []
-    return Array.isArray(arr)
-      ? arr.filter((t): t is string => typeof t === 'string').slice(0, RECENT_TICKERS_MAX)
-      : []
-  } catch {
-    return []
-  }
-}
-
-function pushRecentTicker(list: string[], ticker: string): string[] {
-  const t = ticker.toUpperCase()
-  const next = [t, ...list.filter((x) => x !== t)].slice(0, RECENT_TICKERS_MAX)
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.setItem(RECENT_TICKERS_KEY, JSON.stringify(next))
-    } catch {
-      /* ignore */
-    }
-  }
-  return next
-}
-
 // ── Small fetch helpers ──────────────────────────────────────────────────────
 // query() throws on a non-OK response and caches by URL. Every read below wants
 // "give me the value or nothing" rather than an exception, and the live ones
@@ -165,8 +120,9 @@ async function get<T>(url: string, staleMs = 0): Promise<T | null> {
 }
 
 export interface UseChainDataOpts {
-  /** The board's symbol. The chain follows it; there is no per-page ticker box
-   *  in v3 beyond the picker, which writes back through `selectTicker`. */
+  /** The board's symbol, from the app toolbar's picker. The chain FOLLOWS it and
+   *  carries no ticker control of its own — that is the whole point of a
+   *  board-wide symbol. */
   symbol: string
   expirySelection?: 'sequential' | 'key'
   expiryCount?: number
@@ -182,19 +138,12 @@ export function useChainData(opts: UseChainDataOpts) {
   const fallbackExpiries = useMemo(() => buildExpiries(), [])
   const [expiries, setExpiries] = useState<Expiration[]>(fallbackExpiries)
   const [activeTicker, setActiveTicker] = useState(opts.symbol.toUpperCase())
-  const [recentTickers, setRecentTickers] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState(fallbackExpiries[0]?.value ?? '')
-
-  useEffect(() => {
-    setRecentTickers(loadRecentTickers())
-  }, [])
 
   // ── View modes ─────────────────────────────────────────────────────────────
   const [displayPercent, setDisplayPercent] = useState<number>(10)
   const [greekMode, setGreekMode] = useState<GreekMode>('gex')
   const [dataMode, setDataMode] = useState<DataMode>('oi-vol')
-  const [changeMode, setChangeMode] = useState<ChangeMode>('live')
-  const [showDelta15, setShowDelta15] = useState(false)
   const [heatSkin, setHeatSkin] = useState<HeatSkin>(CHAIN_DEFAULT_SKIN)
   const [intensity, setIntensity] = useState(HEAT_SKINS[CHAIN_DEFAULT_SKIN].intensity.def)
 
@@ -356,21 +305,6 @@ export function useChainData(opts: UseChainDataOpts) {
     setRefreshSeed((v) => v + 1)
   }, [loadChain, activeTicker])
 
-  /** Quick-select / picker: same ticker-changed path as a GO. */
-  const selectTicker = useCallback(
-    (raw: string) => {
-      const ticker = raw.toUpperCase()
-      setRecentTickers((list) => pushRecentTicker(list, ticker))
-      if (ticker !== activeTicker) {
-        pendingGoRef.current = true
-        setActiveTicker(ticker)
-      } else if (selectedExpiryRef.current) {
-        void loadChain(ticker, selectedExpiryRef.current, true, true)
-      }
-    },
-    [activeTicker, loadChain],
-  )
-
   // Follow the board's symbol. Same ticker-changed path, triggered by the shell
   // rather than a click.
   useEffect(() => {
@@ -481,25 +415,22 @@ export function useChainData(opts: UseChainDataOpts) {
   const [replayLoading, setReplayLoading] = useState(false)
   const [replayErr, setReplayErr] = useState('')
   const [replayScope, setReplayScope] = useState<ReplayScope>(initialReplayScope)
-  const preReplayModes = useRef<{ greek: GreekMode; change: ChangeMode } | null>(null)
+  const preReplayModes = useRef<{ greek: GreekMode } | null>(null)
 
-  // GEX is the only greek strike_growth records, and a Δ-vs-15-min-ago column
-  // computed against a rewound grid would be comparing two different pasts. So
-  // replay takes both tabs and gives them back on exit. Deliberately NOT a
-  // silent disable — the controls stay visible and inert, with a reason.
+  // GEX is the only greek strike_growth records, so replay takes the greek tab
+  // and gives it back on exit. Deliberately NOT a silent disable — the tiles
+  // stay visible and inert, with a reason.
   useEffect(() => {
     if (replayOn) {
-      if (!preReplayModes.current) preReplayModes.current = { greek: greekMode, change: changeMode }
+      if (!preReplayModes.current) preReplayModes.current = { greek: greekMode }
       if (greekMode !== 'gex') setGreekMode('gex')
-      if (changeMode !== 'live') setChangeMode('live')
     } else if (preReplayModes.current) {
-      const { greek, change } = preReplayModes.current
+      const { greek } = preReplayModes.current
       preReplayModes.current = null
       setGreekMode(greek)
-      setChangeMode(change)
     }
-    // greekMode/changeMode are READ, not tracked — listing them would fight the
-    // pin (set → effect → set) on every tab click while replay is on.
+    // greekMode is READ, not tracked — listing it would fight the pin
+    // (set → effect → set) on every tab click while replay is on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replayOn])
 
@@ -850,148 +781,6 @@ export function useChainData(opts: UseChainDataOpts) {
     [columns, visibleStrikes],
   )
 
-  // ── Δ15 stickers ───────────────────────────────────────────────────────────
-  const frontExp = columns[0]?.expiration ?? ''
-  const [gexBaseline, setGexBaseline] = useState<
-    Record<number, { vNow: number | null; v5: number | null; v15: number | null; v30: number | null }>
-  >({})
-
-  useEffect(() => {
-    // Nothing is polled while the toggle is off, and the stored baselines are
-    // dropped — a stale grid coming back on screen would stamp 15-minute moves
-    // measured from whenever the mode was last switched off.
-    if (!showDelta15 || !frontExp || !activeTicker) {
-      setGexBaseline({})
-      return
-    }
-    let cancelled = false
-    const load = async () => {
-      const j = await get<{ data?: { cells?: Record<string, { vNow: number | null; v5: number | null; v15: number | null; v30: number | null }> } }>(
-        `/api/mult-greek-gex-grid?ticker=${encodeURIComponent(activeTicker)}&expiry=${encodeURIComponent(frontExp)}`,
-      )
-      if (cancelled) return
-      const cells = j?.data?.cells ?? {}
-      const byStrike: typeof gexBaseline = {}
-      for (const [k, v] of Object.entries(cells)) byStrike[Number(k)] = v
-      setGexBaseline(byStrike)
-    }
-    void load()
-    const id = setInterval(() => void load(), 20_000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDelta15, activeTicker, frontExp, refreshSeed])
-
-  /**
-   * Δ per cell on the front column, for the top-5 |GEX| strikes PER SIDE of ATM
-   * only — stamping every strike buries the movers that matter in noise. Rank
-   * runs 1..N WITHIN each sign, so a quiet side still gets its own full scale.
-   */
-  const delta15 = useMemo(() => {
-    const out = new Map<number, Delta15Entry>()
-    const col = columns[0]
-    if (!showDelta15 || !col || !frontExp || replayFrame) return out
-    const above: Array<{ s: number; a: number }> = []
-    const below: Array<{ s: number; a: number }> = []
-    visibleStrikes.forEach((s) => {
-      if (s == null) return
-      const g = col.cells.get(s)?.gex
-      if (g == null) return
-      ;(s >= nearestStrike ? above : below).push({ s, a: Math.abs(g) })
-    })
-    const ranked = new Set<number>()
-    ;[above, below].forEach((arr) =>
-      arr
-        .sort((x, y) => y.a - x.a)
-        .slice(0, 5)
-        .forEach((v) => ranked.add(v.s)),
-    )
-    ranked.forEach((s) => {
-      const live = col.cells.get(s)?.gex
-      const past = gexBaseline[s]?.v15 ?? null
-      if (live == null || past == null) return
-      const d = live - past
-      if (d === 0) return
-      // A baseline at ~0 makes the percent meaningless (a strike coming from
-      // nothing reads as an enormous move) — skip it rather than let it set the
-      // scale and wash out every other stamp in the column.
-      if (!Number.isFinite(past) || Math.abs(past) < 1e-6) return
-      const pct = (d / Math.abs(past)) * 100
-      if (!Number.isFinite(pct) || Math.abs(pct) < 1) return // sub-1% is noise
-      out.set(s, { d, pct, rank: 5 })
-    })
-    for (const sign of [1, -1]) {
-      ;[...out.entries()]
-        .filter(([, v]) => (sign > 0 ? v.pct > 0 : v.pct < 0))
-        .sort((x, y) => Math.abs(y[1].pct) - Math.abs(x[1].pct))
-        .forEach(([k], idx) => {
-          const e = out.get(k)
-          if (e) e.rank = idx + 1
-        })
-    }
-    return out
-  }, [showDelta15, columns, visibleStrikes, nearestStrike, gexBaseline, frontExp, replayFrame])
-
-  // ── Change columns (15/30/60m Δ) ───────────────────────────────────────────
-  const [changeMap, setChangeMap] = useState<Map<string, number>>(new Map())
-  const [changeMeta, setChangeMeta] = useState<{ expiries: Set<string>; hasData: boolean }>({
-    expiries: new Set(),
-    hasData: false,
-  })
-
-  useEffect(() => {
-    if (changeMode === 'live') {
-      setChangeMap(new Map())
-      setChangeMeta({ expiries: new Set(), hasData: false })
-      return
-    }
-    let cancelled = false
-    void (async () => {
-      const j = await get<{ ok?: boolean; rows?: Array<Record<string, unknown>> }>(
-        `/proxy/strike-growth/by-expiry?symbol=${encodeURIComponent(activeTicker)}`,
-      )
-      if (cancelled) return
-      if (!j?.ok || !Array.isArray(j.rows) || !j.rows.length) {
-        setChangeMap(new Map())
-        setChangeMeta({ expiries: new Set(), hasData: false })
-        return
-      }
-      const key = changeMode === '15' ? 'chg15' : changeMode === '30' ? 'chg30' : 'chg60'
-      const m = new Map<string, number>()
-      const exps = new Set<string>()
-      for (const r of j.rows) {
-        const exp = String(r['expiry'] ?? '')
-        if (exp) exps.add(exp)
-        const v = r[key]
-        if (v != null) m.set(`${exp}|${Number(r['strike'])}`, Number(v))
-      }
-      setChangeMap(m)
-      setChangeMeta({ expiries: exps, hasData: m.size > 0 })
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [changeMode, activeTicker, refreshSeed])
-
-  /** Each change column colours against its own |Δ| max over the visible strikes. */
-  const changeScaleByExp = useMemo(() => {
-    const map = new Map<string, Scale>()
-    if (changeMode === 'live' || !changeMeta.hasData) return map
-    changeMeta.expiries.forEach((exp) => {
-      map.set(
-        exp,
-        scaleOf(
-          visibleStrikes
-            .map((s) => (s == null ? undefined : changeMap.get(`${exp}|${s}`)))
-            .filter((v): v is number => v != null),
-        ),
-      )
-    })
-    return map
-  }, [changeMode, changeMeta.hasData, changeMeta.expiries, changeMap, visibleStrikes])
-
   // ── Weekly EM ──────────────────────────────────────────────────────────────
   const [emLevels, setEmLevels] = useState<{ close: number; em: number } | null>(null)
   useEffect(() => {
@@ -1102,11 +891,9 @@ export function useChainData(opts: UseChainDataOpts) {
   return {
     // identity
     activeTicker,
-    selectTicker,
     expiries,
     selectedExpiry,
     setSelectedExpiry,
-    recentTickers,
     // modes
     displayPercent,
     setDisplayPercent,
@@ -1114,10 +901,6 @@ export function useChainData(opts: UseChainDataOpts) {
     setGreekMode,
     dataMode,
     setDataMode,
-    changeMode,
-    setChangeMode,
-    showDelta15,
-    setShowDelta15,
     heatSkin,
     changeHeatSkin,
     intensity,
@@ -1142,11 +925,6 @@ export function useChainData(opts: UseChainDataOpts) {
     mvcByCol,
     volMvcByCol,
     valueAt,
-    delta15,
-    frontExp,
-    changeMap,
-    changeMeta,
-    changeScaleByExp,
     oiSnapshot,
     emLevels,
     emStrikes,

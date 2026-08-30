@@ -1,60 +1,30 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
+import { Table, type Column } from '@/design/primitives/Table'
+import { Stat, type Direction } from '@/design/primitives/Stat'
 import { Chip } from '@/design/primitives/Controls'
-import { MOVE_DOWN, MOVE_UP, T, alpha } from '@/design/theme'
-import { preload, useQuery } from '@/data/api'
-// Type-only, so the wheel's module stays entirely inside its own lazy chunk —
-// a value import here would pull wheelMath.ts into the route chunk.
-import type { WheelPayload } from './tradersDashboard/wheelMath'
+import { useQuery } from '@/data/api'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRADERS DASHBOARD — the pre-market cockpit: a countdown to the next bell, the
-// overnight overview, today's macro drivers, the S&P sector wheel, and the
-// personal widgets (schedule / tasks / quick links) a trader edits once and
-// reloads with every visit.
+// TradersDashboard — the pre-market cockpit: a countdown to the next bell, the
+// overnight overview, today's macro drivers, and personal widgets (schedule /
+// tasks / quick links) a trader edits once and reloads with every visit.
+// Replaces v2's /app/traders-dashboard (components/pages/TradersDashboard.tsx).
 //
-// The port of v2's /app/traders-dashboard (components/pages/TradersDashboard.tsx
-// plus components/dashboard/SectorSunburst.tsx). The spec is
-// docs/parity/traders-dashboard.md — 168 rows, one per rendered value. Change
-// a threshold, a label or a sort here and change it there too; that file is
-// what the next person diffs against, not this one.
-//
-// Deliberate departures from v2, all recorded in that file's build log:
-//
-//  1. TRENDING NOW IS SORTED HIGHEST → LOWEST. v2 rendered the API's
-//     `[...top5, ...bottom5.reverse()]` array as-is, so the list ran best-first
-//     and then worst-first — two descents with a cliff in the middle. Brandon,
-//     2026-08-30: one ranking, positives down to negatives.
-//  2. UP IS BLUE, DOWN IS RED (same call). v2's HOME_THEME.green is in fact a
-//     light blue; it comes across as --color-move-up rather than being
-//     recoloured to v3's green --color-up. See tokens.css.
-//  3. PREFS ARE SERVER-BACKED AGAIN, with localStorage as a mirror rather than
-//     as the store. See loadPrefs/savePrefs below.
-//  4. NO SNAPSHOT BUTTON. v2's CopySnapButton needs a DOM-to-canvas renderer
-//     v3 does not ship. Still open.
-//  5. The Economic Calendar header button is inert — v3 has no /economic-calendar
-//     route yet, and App.tsx's no-catch-all rule means a live link would 404.
-//     Premarket Prep IS routed, so that one is a real link.
+// Two deliberate departures from v2:
+//   1. Prefs (schedule/tasks/links/zip) were server-backed in v2 via
+//      /api/traders-dashboard. v3 has no such route yet, so per the page spec
+//      they live in localStorage under `cb-v3-td-*` keys instead — same
+//      shape, same edit UX, persisted per browser like the Board layout and
+//      rail order already are. Swapping this for a REST save later is a
+//      change to load()/persist() only.
+//   2. v2's gradient-text title and canvas-based snapshot button (homeTheme,
+//      CopySnapButton) don't carry across — colour comes only from
+//      src/design/tokens.css, and the snapshot needs a DOM-to-canvas
+//      renderer this single file can't pull in, so it is left un-ported.
 // ─────────────────────────────────────────────────────────────────────────────
-
-// The wheel is the heaviest thing on the page and it sits third in the right
-// column, below the fold on most windows. Its request is fired here at route
-// entry (no waterfall — AGENTS.md non-negotiable 3); only its rendering waits.
-// `SectorWheelCard`, not `SectorWheel`: a module basename that differs from a
-// sibling's only in casing resolves to the WRONG FILE on Windows. See the
-// header of ./tradersDashboard/wheelMath.ts.
-const SectorWheel = lazy(() => import('./tradersDashboard/SectorWheelCard'))
-
-// Nav intent is not the only place preload() earns its keep: this runs when the
-// route's chunk is parsed, which is before the component has mounted.
-preload('/api/spx-sunburst')
-
-/** Server caches the sweep for 15 min; this just keeps the tab fresh. Mirrors
- *  POLL_MS in ./tradersDashboard/sectorWheel — kept as a literal here so that
- *  module stays out of this chunk. */
-const WHEEL_POLL_MS = 5 * 60_000
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -109,12 +79,6 @@ interface WeatherRow {
   condition: string
   place: string
 }
-interface PrefsRow {
-  zip?: string | null
-  schedule?: unknown
-  tasks?: unknown
-  links?: unknown
-}
 
 // ── Static data ──────────────────────────────────────────────────────────────
 
@@ -142,22 +106,21 @@ const DEFAULT_TASKS: TaskItem[] = [
 // Everything except LIVE_ROUTES below is a page this dashboard can point at
 // once it exists; until then a configured link renders dimmed, the same way
 // Shell.tsx's rail marks an unbuilt icon "coming soon" rather than 404ing.
+//
+// Scanner, Test Lab, Journal, ICT, ES Candles, Board and Multi Greek came out
+// on 2026-08-30 — they are not future destinations any more, they are retired,
+// so they are not in the picker either. Anyone with one saved in Quick Links keeps
+// a dimmed tile (the render path already handles an href that is not in
+// ALL_PAGES) until they edit it away.
 const ALL_PAGES: { label: string; href: string }[] = [
   { label: 'Home', href: '/' },
-  { label: 'Multi Greek', href: '/mult-greek' },
   { label: 'Traders Dashboard', href: '/traders-dashboard' },
   { label: 'Premarket Prep', href: '/premarket' },
-  { label: 'Board', href: '/board' },
   { label: 'Options Chain', href: '/options-chain' },
   { label: 'Est. Moves', href: '/em' },
   { label: 'Analysis', href: '/analytics' },
   { label: 'Replay', href: '/replay' },
   { label: 'Flow', href: '/flow' },
-  { label: 'ES Candles', href: '/es-candles' },
-  { label: 'Scanner', href: '/scanner' },
-  { label: 'ICT', href: '/ict' },
-  { label: 'Test Lab', href: '/test' },
-  { label: 'Journal', href: '/trading' },
 ]
 
 // Which of the above actually have a <Route> in App.tsx today. The rest are
@@ -173,37 +136,36 @@ const LIVE_ROUTES = new Set([
   '/options-chain',
   '/analytics',
   '/flow',
-  '/scanner',
-  '/trading',
-  '/test',
 ])
 
-// Applies only to an account with no saved Quick Links yet. Everyone else keeps
-// the set they arranged — which is why Premarket also gets a header button.
+// Applies only to a browser with no saved Quick Links yet.
 const DEFAULT_LINKS: LinkItem[] = [
   { id: 'l1', label: 'Premarket Prep', href: '/premarket' },
   { id: 'l2', label: 'Home', href: '/' },
-  { id: 'l3', label: 'Multi Greek', href: '/mult-greek' },
+  { id: 'l3', label: 'Options Chain', href: '/options-chain' },
   { id: 'l4', label: 'Analysis', href: '/analytics' },
 ]
 
-/**
- * One accent per driver slot, cycling past four. v2's ramp
- * (cyan · orange · red · purple) through the token bridge — T.purple is
- * --color-dex, which is the closest thing v3 has to v2's dark-teal "purple".
- */
-const DRIVER_COLORS = [T.cyan, T.orange, T.red, T.purple] as const
+// One accent per driver slot, cycling if there are more than four. Kept as
+// token pairs (text + bg) rather than a border colour, since border-<token>
+// is only guaranteed generated for the semantic/level/calendar families.
+const DRIVER_ACCENTS = [
+  { text: 'text-accent', bg: 'bg-accent' },
+  { text: 'text-warn', bg: 'bg-warn' },
+  { text: 'text-down', bg: 'bg-down' },
+  { text: 'text-series-4', bg: 'bg-series-4' },
+] as const
 
-function driverColor(i: number): string {
-  return DRIVER_COLORS[i % DRIVER_COLORS.length] ?? T.cyan
+/** Bounds-safe read of the ramp above: the modulo can only land in range, but
+ *  an array index alone is `| undefined` under noUncheckedIndexedAccess. */
+function driverAccent(i: number): { text: string; bg: string } {
+  return DRIVER_ACCENTS[i % DRIVER_ACCENTS.length] ?? DRIVER_ACCENTS[0]
 }
 
 const uid = () => Math.random().toString(36).slice(2, 9)
 
-// US equity-market full-day closures (NYSE/Cboe), ET date strings. Keep in sync
-// with server-v2. Full-day only — a 13:00 early close still counts down to
-// 16:00, which is v2's behaviour and deliberately kept (Brandon, 2026-08-30:
-// the tape is not moving either way).
+// US equity-market full-day closures (NYSE/Cboe), ET date strings. Keep in
+// sync with whatever server-side calendar v3 eventually gets.
 const MARKET_HOLIDAYS = new Set([
   '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
   '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
@@ -211,35 +173,22 @@ const MARKET_HOLIDAYS = new Set([
   '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24',
 ])
 const etDateStr = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d)
-const etWeekday = (d: Date) =>
-  new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(d)
+const etWeekday = (d: Date) => new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(d)
 const isTradingDay = (d: Date) => {
   const wd = etWeekday(d)
   return wd !== 'Sat' && wd !== 'Sun' && !MARKET_HOLIDAYS.has(etDateStr(d))
 }
 
-// ── Prefs: server first, localStorage as the mirror ──────────────────────────
-//
-// v2 kept schedule/tasks/links/zip in Postgres behind /api/traders-dashboard,
-// keyed on the session user. An earlier cut of this page used localStorage
-// instead, which meant a trader's routine did not follow them to a second
-// browser. The server is the store again — but the local copy stays, as a
-// mirror rather than a fallback:
-//
-//   • it paints the saved widgets on the FIRST render, before the GET returns,
-//     so nobody watches their own schedule get replaced by the sample one;
-//   • it is what is left if the GET 401s or the route is down, which in v2
-//     silently reverted the user to the defaults.
-//
-// The server still wins whenever it answers with usable rows.
+// ── localStorage persistence ─────────────────────────────────────────────────
+// Same shape a server-backed /api/traders-dashboard route would round-trip —
+// see the file header. Each loader validates its shape before trusting it, the
+// same defensiveness Shell.tsx's loadOrder and BoardPage's loadLayout use for
+// their own localStorage reads.
 
-const PREFS_URL = '/api/traders-dashboard'
 const SCHEDULE_KEY = 'cb-v3-td-schedule'
 const TASKS_KEY = 'cb-v3-td-tasks'
 const LINKS_KEY = 'cb-v3-td-links'
 const ZIP_KEY = 'cb-v3-td-zip'
-/** Long enough that typing a task label is one request, short enough to feel instant. */
-const SAVE_DEBOUNCE_MS = 400
 
 function loadJson<T>(key: string, isValid: (v: unknown) => v is T, fallback: T): T {
   try {
@@ -274,11 +223,7 @@ const isLinkItem = (x: unknown): x is LinkItem => {
   const o = asRecord(x)
   return !!o && typeof o.id === 'string' && typeof o.label === 'string' && typeof o.href === 'string'
 }
-// Non-empty on purpose, exactly as v2: an empty saved array falls back to the
-// DEFAULT rather than rendering an empty card, so "delete every task" does not
-// persist. Kept because changing it is a data decision, not a port decision.
-const isScheduleArr = (v: unknown): v is ScheduleItem[] =>
-  Array.isArray(v) && v.length > 0 && v.every(isScheduleItem)
+const isScheduleArr = (v: unknown): v is ScheduleItem[] => Array.isArray(v) && v.length > 0 && v.every(isScheduleItem)
 const isTaskArr = (v: unknown): v is TaskItem[] => Array.isArray(v) && v.length > 0 && v.every(isTaskItem)
 const isLinkArr = (v: unknown): v is LinkItem[] => Array.isArray(v) && v.length > 0 && v.every(isLinkItem)
 
@@ -293,65 +238,57 @@ function loadZip(): string {
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
-/** `"+1.23%"` / `"-1.23%"`, 2dp, em dash when there is nothing to show. */
 function fmtPct(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return '—'
   return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
 }
-/**
- * Blue up, red down, muted when there is no value. Note `0` reads as UP — v2's
- * `(pct ?? 0) >= 0`, kept so a flat future prints "+0.00%" in blue and not in
- * a third colour that means nothing.
- */
-function moveColor(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return T.muted
-  return n >= 0 ? MOVE_UP : MOVE_DOWN
+function pctDirection(n: number | null | undefined): Direction | undefined {
+  if (n == null || Number.isNaN(n)) return undefined
+  return n > 0 ? 'up' : n < 0 ? 'down' : 'flat'
 }
 
-// Calendar's shape is a bare array on some deployments and {events:[…]} on
-// others — the same ambiguity v2 defended against.
+// ── Response guards (calendar's shape is a bare array on some deployments and
+// {events:[...]} on others — the same ambiguity v2 defended against) ─────────
+
 function hasEventsField(v: unknown): v is { events: unknown } {
   return typeof v === 'object' && v !== null && 'events' in v
 }
 
-// ── Header widgets ───────────────────────────────────────────────────────────
-
-const HEADER_BTN =
-  'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md border px-3.5 py-2 text-sm font-bold tracking-[0.04em] no-underline transition-colors'
-
-/** v2's resting fill for the Premarket Prep button. */
-const PREMARKET_BG = `linear-gradient(180deg, ${alpha(T.orange, 0.2)}, ${alpha(T.orange, 0.06)})`
+// ── Small header widgets ─────────────────────────────────────────────────────
 
 function ComingSoonPill({ icon, label }: { icon: string; label: string }) {
   return (
     <span
       title={`${label} — coming soon`}
-      className={`${HEADER_BTN} cursor-not-allowed border-line text-faint opacity-50`}
+      className="inline-flex shrink-0 cursor-not-allowed items-center gap-1.5 whitespace-nowrap rounded-md border border-line px-2.5 py-1 text-xs font-semibold text-faint opacity-50"
     >
       <span aria-hidden>{icon}</span>
       {label}
-      <span>→</span>
     </span>
   )
 }
 
 function WeatherWidget({
+  zip,
   zipInput,
   onZipInput,
   onSubmit,
   onClear,
   weather,
+  stale,
 }: {
+  zip: string
   zipInput: string
   onZipInput: (v: string) => void
   onSubmit: () => void
   onClear: () => void
   weather: WeatherRow | undefined
+  stale: boolean
 }) {
   if (weather) {
     return (
-      <div className="text-right">
-        <div className="text-xl font-bold leading-tight" style={{ color: MOVE_UP }}>
+      <div className={stale ? 'stale text-right' : 'text-right'}>
+        <div className="text-lg font-semibold text-up">
           <span aria-hidden>☀</span> {weather.tempF}°F
         </div>
         <div className="text-xs text-muted">
@@ -378,17 +315,15 @@ function WeatherWidget({
         maxLength={5}
         className="w-20 rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg outline-none focus:border-accent"
       />
-      <button
-        type="submit"
-        className="rounded-sm border border-line px-2 py-1 text-xs font-semibold text-accent"
-      >
+      <button type="submit" className="rounded-sm border border-line px-2 py-1 text-xs font-semibold text-accent">
         Set
       </button>
+      {zip && <span className="text-xs text-faint">loading…</span>}
     </form>
   )
 }
 
-// ── Countdown ────────────────────────────────────────────────────────────────
+// ── Countdown card ───────────────────────────────────────────────────────────
 
 function useCountdown() {
   const [now, setNow] = useState<Date | null>(null)
@@ -400,15 +335,8 @@ function useCountdown() {
 
   return useMemo(() => {
     if (!now) return { countdown: '--:--:--', targetLabel: '9:30 AM EST', phase: 'open' as const, dateStr: '' }
-    // Browser-local, as v2 — this is the visitor's date, not the session's.
-    const dateStr = now.toLocaleDateString('en-US', {
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-    })
+    const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
 
-    // Time-of-day in ET seconds, correct regardless of the browser's zone.
     const p = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York',
       hour12: false,
@@ -418,10 +346,10 @@ function useCountdown() {
     }).formatToParts(now)
     const get = (t: string) => Number(p.find((x) => x.type === t)?.value ?? 0)
     let hh = get('hour')
-    if (hh === 24) hh = 0 // some ICU builds emit 24 for midnight
+    if (hh === 24) hh = 0
     const nowSec = hh * 3600 + get('minute') * 60 + get('second')
-    const OPEN = 9 * 3600 + 30 * 60 // 9:30 AM ET
-    const CLOSE = 16 * 3600 // 4:00 PM ET
+    const OPEN = 9 * 3600 + 30 * 60
+    const CLOSE = 16 * 3600
     const tradingToday = isTradingDay(now)
     const isOpen = tradingToday && nowSec >= OPEN && nowSec < CLOSE
 
@@ -473,26 +401,46 @@ function CountdownCard({
   phase: 'open' | 'close'
 }) {
   return (
-    <Card>
-      <div className="flex flex-col items-center gap-2 px-5 py-7 text-center">
-        <div className="text-lg font-semibold text-fg">
-          {phase === 'close' ? 'Countdown to Market Close' : 'Countdown to Market Open'}
-        </div>
-        <div
-          className="tabular font-extrabold text-fg"
-          style={{ fontSize: 'clamp(48px, 8vw, 84px)', letterSpacing: 2, lineHeight: 1.05 }}
-        >
-          {countdown}
-        </div>
+    <Card title={phase === 'close' ? 'Countdown to Market Close' : 'Countdown to Market Open'}>
+      <div className="flex flex-col items-center gap-2 py-4 text-center">
+        <div className="tabular text-6xl font-extrabold tracking-wide text-fg">{countdown}</div>
         <div className="text-sm text-muted">{targetLabel}</div>
       </div>
     </Card>
   )
 }
 
-// ── Overnight overview ───────────────────────────────────────────────────────
+// ── Overnight overview card ──────────────────────────────────────────────────
 
-const SECTION_LABEL = 'mb-2.5 text-xs font-bold uppercase tracking-[0.12em] text-muted'
+const MOVER_COLUMNS: Column<Mover>[] = [
+  {
+    key: 'symbol',
+    header: 'Sym',
+    width: '64px',
+    cell: (m) => <span className="font-semibold text-accent">{m.symbol}</span>,
+  },
+  {
+    key: 'name',
+    header: 'Name',
+    cell: (m) => <span className="text-faint">{m.name.length > 22 ? `${m.name.slice(0, 22)}…` : m.name}</span>,
+  },
+  {
+    key: 'chg',
+    header: 'Chg',
+    numeric: true,
+    cell: (m) => {
+      const pct = m.preMarketPct ?? m.pct
+      const dir = pctDirection(pct)
+      const cls = dir === 'up' ? 'text-up' : dir === 'down' ? 'text-down' : 'text-flat'
+      return (
+        <span>
+          <span className={cls}>{fmtPct(pct)}</span>
+          {m.preMarketPct != null && <span className="ml-1 text-faint">PM</span>}
+        </span>
+      )
+    },
+  },
+]
 
 function OverviewCard({
   overview,
@@ -512,7 +460,7 @@ function OverviewCard({
   quotesFailed: boolean
 }) {
   // Drivers: the AI overview's own list when it has generated, else today's
-  // high-impact USD calendar rows, so the column is never empty.
+  // high-impact USD calendar rows as a fallback so the card is never empty.
   const drivers: Driver[] = useMemo(() => {
     if (overview?.drivers?.length) return overview.drivers.slice(0, 4)
     const etToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
@@ -522,31 +470,14 @@ function OverviewCard({
       .map((e) => ({ when: e.time_formatted || 'Today', title: e.title, body: `High-impact USD event · ${e.country}` }))
   }, [overview, events])
 
-  // ONE ranking, highest positive down to lowest negative (Brandon,
-  // 2026-08-30). v2 printed the API's array untouched, which was five winners
-  // best-first followed by five losers worst-first — a second descent starting
-  // over halfway down the list.
-  const shownMovers = useMemo(() => {
-    const src = movers.length ? movers : (overview?.movers ?? [])
-    const pctOf = (m: Mover) => m.preMarketPct ?? m.pct
-    return [...src].sort((a, b) => {
-      const x = pctOf(a)
-      const y = pctOf(b)
-      // A row with no percent cannot be ranked; park it at the bottom rather
-      // than letting NaN scramble the comparator.
-      if (x == null && y == null) return 0
-      if (x == null) return 1
-      if (y == null) return -1
-      return y - x
-    })
-  }, [movers, overview])
+  const shownMovers = movers.length ? movers : (overview?.movers ?? [])
 
   return (
     <Card
-      title={<span>📈 Overnight Market Overview</span>}
+      title="Overnight Market Overview"
       actions={
         overview && Number(overview.generated_at) > 0 ? (
-          <span className="text-2xs text-muted">
+          <span className="text-xs text-faint">
             Generated{' '}
             {new Date(Number(overview.generated_at)).toLocaleTimeString('en-US', {
               timeZone: 'America/New_York',
@@ -558,104 +489,59 @@ function OverviewCard({
         ) : undefined
       }
     >
-      <div className="mb-5 border-l-[3px] pl-3.5 text-sm leading-relaxed text-muted" style={{ borderColor: T.cyan }}>
+      <div className="mb-4 border-l-2 border-accent pl-3 text-sm leading-relaxed text-muted">
         {overview ? (
           <>
             <strong className="text-fg">Sentiment:</strong> {overview.summary}
           </>
         ) : (
-          <span className="text-faint">
-            Today&apos;s overview is generated automatically at 7:00 AM ET. Check back shortly.
-          </span>
+          <span className="text-faint">Today&apos;s overview is generated automatically at 7:00 AM ET. Check back shortly.</span>
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <div className="min-w-0">
-          <div className={SECTION_LABEL}>📉 Overnight Futures (Live)</div>
-          <div className={quotesStale ? 'stale mb-5 flex gap-2.5' : 'mb-5 flex gap-2.5'}>
-            {FUTURES.map((f) => {
-              const pct = quotes[f.yahoo]?.pct ?? null
-              return (
-                <div
-                  key={f.sym}
-                  className="flex-1 rounded-md border border-line bg-surface2 px-1.5 py-2.5 text-center"
-                >
-                  <div className="text-xs font-bold text-muted">{f.sym}</div>
-                  <div className="tabular text-sm font-bold" style={{ color: moveColor(pct) }}>
-                    {fmtPct(pct)}
-                  </div>
-                </div>
-              )
-            })}
+          <div className="mb-2 text-xs font-bold uppercase tracking-wider text-muted">Overnight Futures</div>
+          <div className={quotesStale ? 'stale mb-4 flex gap-2' : 'mb-4 flex gap-2'}>
+            {FUTURES.map((f) => (
+              <div key={f.sym} className="flex-1 rounded-md border border-line bg-surface2 px-1.5 py-2 text-center">
+                <Stat label={f.sym} value={fmtPct(quotes[f.yahoo]?.pct)} direction={pctDirection(quotes[f.yahoo]?.pct)} size="sm" />
+              </div>
+            ))}
           </div>
-          {quotesFailed && (
-            <div className="mb-2 text-sm" style={{ color: MOVE_DOWN }}>
-              Live quotes unavailable — showing last known values.
-            </div>
-          )}
+          {quotesFailed && <div className="mb-2 text-xs text-down">Live quotes unavailable — showing last known values.</div>}
 
-          <div className={SECTION_LABEL}>🔥 Trending Now</div>
+          <div className="mb-2 text-xs font-bold uppercase tracking-wider text-muted">Trending Now</div>
           {shownMovers.length ? (
-            <div className={moversStale ? 'stale flex flex-col gap-1' : 'flex flex-col gap-1'}>
-              {shownMovers.map((m) => {
-                const displayPct = m.preMarketPct ?? m.pct
-                return (
-                  <div
-                    key={m.symbol}
-                    className="flex items-center justify-between rounded-sm border border-line bg-surface2 px-2 py-1"
-                  >
-                    <div className="min-w-0">
-                      <span className="text-sm font-bold" style={{ color: T.cyan }}>
-                        {m.symbol}
-                      </span>
-                      {/* v2 truncates at 18 characters. /api/premarket-movers
-                          sets name = symbol, so a live row prints the ticker
-                          twice; only the 07:00 overview payload carries a real
-                          company name. Kept as v2 had it — see the parity
-                          file's build log. */}
-                      <span className="ml-1.5 text-2xs text-muted">
-                        {m.name.length > 18 ? `${m.name.slice(0, 18)}…` : m.name}
-                      </span>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <span className="tabular text-sm font-bold" style={{ color: moveColor(displayPct) }}>
-                        {fmtPct(displayPct)}
-                      </span>
-                      {m.preMarketPct != null && <span className="ml-1 text-2xs text-muted">PM</span>}
-                    </div>
-                  </div>
-                )
-              })}
+            <div className={moversStale ? 'stale' : ''}>
+              <Table columns={MOVER_COLUMNS} rows={shownMovers} rowKey={(m) => m.symbol} />
             </div>
           ) : (
-            <div className="rounded-md border border-dashed border-line bg-surface2 px-3 py-3.5 text-center text-sm text-muted">
+            <div className="rounded-md border border-dashed border-line bg-surface2 px-3 py-3 text-center text-xs text-faint">
               Available after 7 AM ET overview generates.
             </div>
           )}
         </div>
 
         <div className="min-w-0">
-          <div className={SECTION_LABEL}>🗓 Key Drivers Today</div>
+          <div className="mb-2 text-xs font-bold uppercase tracking-wider text-muted">Key Drivers Today</div>
           <div className="flex flex-col gap-3">
             {drivers.length ? (
               drivers.map((d, i) => {
-                const c = driverColor(i)
+                const accent = driverAccent(i)
                 return (
-                  <div key={d.title + i} className="border-l-[3px] py-2 pl-3" style={{ borderColor: c }}>
-                    <div
-                      className="text-2xs font-bold uppercase tracking-[0.08em]"
-                      style={{ color: c }}
-                    >
-                      {d.when}
+                  <div key={d.title + i} className="flex gap-2.5">
+                    <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${accent.bg}`} aria-hidden />
+                    <div className="min-w-0">
+                      <div className={`text-2xs font-bold uppercase tracking-wider ${accent.text}`}>{d.when}</div>
+                      <div className="my-0.5 font-semibold text-fg">{d.title}</div>
+                      <div className="text-xs leading-snug text-muted">{d.body}</div>
                     </div>
-                    <div className="my-0.5 font-bold text-fg">{d.title}</div>
-                    <div className="text-sm leading-snug text-muted">{d.body}</div>
                   </div>
                 )
               })
             ) : (
-              <div className="text-sm text-muted">No major USD events scheduled today.</div>
+              <div className="text-xs text-faint">No major USD events scheduled today.</div>
             )}
           </div>
         </div>
@@ -664,69 +550,45 @@ function OverviewCard({
   )
 }
 
-// ── Schedule / Tasks / Links ─────────────────────────────────────────────────
-
-const EDIT_INPUT =
-  'min-w-0 rounded-sm border border-line bg-surface2 px-2 py-1 text-sm text-fg outline-none focus:border-accent'
-const ADD_BTN = 'mt-3 self-start rounded-sm border border-line px-2 py-1 text-xs font-semibold'
+// ── Schedule / Tasks / Links cards ───────────────────────────────────────────
 
 function ScheduleCard({ schedule, onChange }: { schedule: ScheduleItem[]; onChange: (next: ScheduleItem[]) => void }) {
   const [editing, setEditing] = useState(false)
   return (
-    <Card
-      title={<span style={{ color: T.red }}>🕐 Morning Schedule</span>}
-      actions={<Chip label={editing ? 'Done' : 'Edit'} on={editing} onClick={() => setEditing((v) => !v)} />}
-    >
-      <div className="mb-3 text-sm text-muted">
-        These are sample times — tap{' '}
-        <span className="font-bold" style={{ color: T.cyan }}>
-          Edit
-        </span>{' '}
-        to swap in your own routine.
+    <Card title="Morning Schedule" actions={<Chip label={editing ? 'Done' : 'Edit'} on={editing} onClick={() => setEditing((v) => !v)} />}>
+      <div className="mb-3 text-xs text-faint">
+        These are sample times — tap <span className="font-semibold text-accent">Edit</span> to swap in your own routine.
       </div>
-      <div className="flex flex-col gap-2.5">
+      <div className="flex flex-col gap-2">
         {schedule.map((s, i) =>
           editing ? (
             <div key={s.id} className="flex items-center gap-1.5">
               <input
                 value={s.time}
                 onChange={(e) => onChange(schedule.map((x) => (x.id === s.id ? { ...x, time: e.target.value } : x)))}
-                className={`${EDIT_INPUT} w-[90px]`}
+                className="w-24 rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg outline-none focus:border-accent"
               />
               <input
                 value={s.label}
                 onChange={(e) => onChange(schedule.map((x) => (x.id === s.id ? { ...x, label: e.target.value } : x)))}
-                className={`${EDIT_INPUT} flex-1`}
+                className="min-w-0 flex-1 rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg outline-none focus:border-accent"
               />
-              <button
-                type="button"
-                onClick={() => onChange(schedule.filter((x) => x.id !== s.id))}
-                className="text-xs"
-                style={{ color: MOVE_DOWN }}
-                title="Remove"
-              >
+              <button onClick={() => onChange(schedule.filter((x) => x.id !== s.id))} className="text-xs text-faint hover:text-down">
                 ✕
               </button>
             </div>
           ) : (
             <div key={s.id} className="flex items-center gap-3">
-              {/* Mono and nowrap, no fixed width — v2's rule. A width would
-                  clip a longer time string rather than pushing the label. */}
-              <span className="shrink-0 whitespace-nowrap font-mono text-sm font-bold text-muted">{s.time}</span>
-              {/* The last row is the one that matters — "Market Open". */}
-              <span className={i === schedule.length - 1 ? 'font-bold text-fg' : 'font-medium text-fg'}>
-                {s.label}
-              </span>
+              <span className="tabular w-20 shrink-0 text-xs font-semibold text-muted">{s.time}</span>
+              <span className={i === schedule.length - 1 ? 'font-semibold text-fg' : 'text-fg'}>{s.label}</span>
             </div>
           ),
         )}
       </div>
       {editing && (
         <button
-          type="button"
           onClick={() => onChange([...schedule, { id: uid(), time: '09:00 AM', label: 'New item' }])}
-          className={ADD_BTN}
-          style={{ color: T.cyan }}
+          className="mt-3 rounded-sm border border-line px-2 py-1 text-xs font-semibold text-accent"
         >
           + Add
         </button>
@@ -741,33 +603,20 @@ function TasksCard({ tasks, onChange }: { tasks: TaskItem[]; onChange: (next: Ta
   const progress = tasks.length ? Math.round((completed / tasks.length) * 100) : 0
 
   return (
-    <Card
-      title={<span style={{ color: MOVE_UP }}>✅ Pre-Market Tasks</span>}
-      actions={<Chip label={editing ? 'Done' : 'Edit'} on={editing} onClick={() => setEditing((v) => !v)} />}
-    >
-      <div className="mb-3 text-sm text-muted">
-        Sample tasks — tap{' '}
-        <span className="font-bold" style={{ color: MOVE_UP }}>
-          Edit
-        </span>{' '}
-        to make them your own.
+    <Card title="Pre-Market Tasks" actions={<Chip label={editing ? 'Done' : 'Edit'} on={editing} onClick={() => setEditing((v) => !v)} />}>
+      <div className="mb-3 text-xs text-faint">
+        Sample tasks — tap <span className="font-semibold text-up">Edit</span> to make them your own.
       </div>
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2.5">
         {tasks.map((t) =>
           editing ? (
             <div key={t.id} className="flex items-center gap-1.5">
               <input
                 value={t.label}
                 onChange={(e) => onChange(tasks.map((x) => (x.id === t.id ? { ...x, label: e.target.value } : x)))}
-                className={`${EDIT_INPUT} flex-1`}
+                className="min-w-0 flex-1 rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg outline-none focus:border-accent"
               />
-              <button
-                type="button"
-                onClick={() => onChange(tasks.filter((x) => x.id !== t.id))}
-                className="text-xs"
-                style={{ color: MOVE_DOWN }}
-                title="Remove"
-              >
+              <button onClick={() => onChange(tasks.filter((x) => x.id !== t.id))} className="text-xs text-faint hover:text-down">
                 ✕
               </button>
             </div>
@@ -777,8 +626,7 @@ function TasksCard({ tasks, onChange }: { tasks: TaskItem[]; onChange: (next: Ta
                 type="checkbox"
                 checked={t.done}
                 onChange={() => onChange(tasks.map((x) => (x.id === t.id ? { ...x, done: !x.done } : x)))}
-                className="mt-0.5 h-4 w-4"
-                style={{ accentColor: MOVE_UP }}
+                className="mt-0.5 h-4 w-4 accent-accent"
               />
               <span className={t.done ? 'text-sm text-muted line-through' : 'text-sm text-fg'}>{t.label}</span>
             </label>
@@ -787,24 +635,19 @@ function TasksCard({ tasks, onChange }: { tasks: TaskItem[]; onChange: (next: Ta
       </div>
       {editing ? (
         <button
-          type="button"
           onClick={() => onChange([...tasks, { id: uid(), label: 'New task', done: false }])}
-          className={ADD_BTN}
-          style={{ color: MOVE_UP }}
+          className="mt-3 rounded-sm border border-line px-2 py-1 text-xs font-semibold text-up"
         >
           + Add
         </button>
       ) : (
-        <div className="mt-[18px]">
+        <div className="mt-4">
           <div className="mb-1.5 flex justify-between text-xs text-muted">
             <span>Task Progress</span>
-            <span className="tabular">{progress}%</span>
+            <span>{progress}%</span>
           </div>
           <div className="h-1 overflow-hidden rounded-full bg-surface2">
-            <div
-              className="h-full transition-[width] duration-300"
-              style={{ width: `${progress}%`, background: `linear-gradient(90deg, ${T.cyan}, ${MOVE_UP})` }}
-            />
+            <div className="h-full bg-accent transition-[width]" style={{ width: `${progress}%` }} />
           </div>
         </div>
       )}
@@ -812,14 +655,25 @@ function TasksCard({ tasks, onChange }: { tasks: TaskItem[]; onChange: (next: Ta
   )
 }
 
+// The sector-rotation sunburst is a bespoke D3/canvas visualisation
+// (components/dashboard/SectorSunburst.tsx in v2) with its own data fetching
+// and rendering pipeline — too much to fold into this file per the page
+// contract's scope rule. The card stays in its v2 position, named honestly.
+// TODO(v3): port components/dashboard/SectorSunburst.tsx as its own module
+// under src/design/ or src/pages/, then render it here.
+function SectorRotationCard() {
+  return (
+    <Card title="Sector Rotation">
+      <div className="py-6 text-center text-xs text-faint">Sector rotation sunburst not yet ported — see v2 SectorSunburst.tsx.</div>
+    </Card>
+  )
+}
+
 function QuickLinksCard({ links, onChange }: { links: LinkItem[]; onChange: (next: LinkItem[]) => void }) {
   const [editing, setEditing] = useState(false)
   return (
-    <Card
-      title={<span style={{ color: T.cyan }}>🔗 Quick Links</span>}
-      actions={<Chip label={editing ? 'Done' : 'Edit'} on={editing} onClick={() => setEditing((v) => !v)} />}
-    >
-      <div className="flex flex-col gap-2.5">
+    <Card title="Quick Links" actions={<Chip label={editing ? 'Done' : 'Edit'} on={editing} onClick={() => setEditing((v) => !v)} />}>
+      <div className="flex flex-col gap-2">
         {links.map((l) =>
           editing ? (
             <div key={l.id} className="flex items-center gap-1.5">
@@ -829,7 +683,7 @@ function QuickLinksCard({ links, onChange }: { links: LinkItem[]; onChange: (nex
                   const page = ALL_PAGES.find((p) => p.href === e.target.value)
                   onChange(links.map((x) => (x.id === l.id ? { ...x, href: e.target.value, label: page?.label ?? x.label } : x)))
                 }}
-                className={`${EDIT_INPUT} flex-1`}
+                className="min-w-0 flex-1 rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg outline-none focus:border-accent"
               >
                 {ALL_PAGES.map((p) => (
                   <option key={p.href} value={p.href}>
@@ -837,13 +691,7 @@ function QuickLinksCard({ links, onChange }: { links: LinkItem[]; onChange: (nex
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
-                onClick={() => onChange(links.filter((x) => x.id !== l.id))}
-                className="text-xs"
-                style={{ color: MOVE_DOWN }}
-                title="Remove"
-              >
+              <button onClick={() => onChange(links.filter((x) => x.id !== l.id))} className="text-xs text-faint hover:text-down">
                 ✕
               </button>
             </div>
@@ -851,16 +699,16 @@ function QuickLinksCard({ links, onChange }: { links: LinkItem[]; onChange: (nex
             <Link
               key={l.id}
               to={l.href}
-              className="flex items-center justify-between rounded-md border border-line bg-surface2 px-3.5 py-2.5 text-sm font-semibold text-fg no-underline transition-colors hover:border-accent hover:bg-raised"
+              className="flex items-center justify-between rounded-md border border-line bg-surface2 px-3 py-2 text-sm font-semibold text-fg no-underline transition-colors hover:border-accent hover:bg-raised"
             >
               <span>{l.label}</span>
-              <span style={{ color: T.cyan }}>→</span>
+              <span className="text-accent">→</span>
             </Link>
           ) : (
             <span
               key={l.id}
               title={`${l.label} — coming soon`}
-              className="flex cursor-not-allowed items-center justify-between rounded-md border border-line bg-surface2 px-3.5 py-2.5 text-sm font-semibold text-faint opacity-50"
+              className="flex cursor-not-allowed items-center justify-between rounded-md border border-line bg-surface2 px-3 py-2 text-sm font-semibold text-faint opacity-50"
             >
               <span>{l.label}</span>
               <span>→</span>
@@ -870,27 +718,16 @@ function QuickLinksCard({ links, onChange }: { links: LinkItem[]; onChange: (nex
       </div>
       {editing && (
         <button
-          type="button"
           onClick={() => {
             const p = ALL_PAGES.find((x) => !links.some((l) => l.href === x.href)) ?? ALL_PAGES[0]
             if (!p) return
             onChange([...links, { id: uid(), label: p.label, href: p.href }])
           }}
-          className={ADD_BTN}
-          style={{ color: T.cyan }}
+          className="mt-3 rounded-sm border border-line px-2 py-1 text-xs font-semibold text-accent"
         >
           + Add
         </button>
       )}
-    </Card>
-  )
-}
-
-/** What the wheel's card looks like while its chunk is still in flight. */
-function WheelFallback() {
-  return (
-    <Card title="S&P Sector Wheel">
-      <div className="px-3 py-12 text-center text-sm text-muted opacity-60">Loading sector data…</div>
     </Card>
   )
 }
@@ -900,104 +737,33 @@ function WheelFallback() {
 export default function TradersDashboardPage() {
   const { countdown, targetLabel, phase, dateStr } = useCountdown()
 
-  // Seeded from the local mirror so the first paint is the user's own widgets,
-  // then reconciled with the server below.
+  // Personal widgets — localStorage only, see the file header for why this
+  // differs from v2's server round trip.
   const [schedule, setSchedule] = useState<ScheduleItem[]>(() => loadJson(SCHEDULE_KEY, isScheduleArr, DEFAULT_SCHEDULE))
   const [tasks, setTasks] = useState<TaskItem[]>(() => loadJson(TASKS_KEY, isTaskArr, DEFAULT_TASKS))
   const [links, setLinks] = useState<LinkItem[]>(() => loadJson(LINKS_KEY, isLinkArr, DEFAULT_LINKS))
   const [zip, setZip] = useState<string>(() => loadZip())
   const [zipInput, setZipInput] = useState(zip)
-  /** Nothing is POSTed before the GET has answered, or the load overwrites the save. */
-  const loadedRef = useRef(false)
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pending = useRef<PrefsRow>({})
 
-  // ── Load ──
-  useEffect(() => {
-    let active = true
-    fetch(PREFS_URL, { cache: 'no-store', credentials: 'same-origin' })
-      .then((r) => (r.ok ? (r.json() as Promise<PrefsRow>) : null))
-      .then((j) => {
-        if (!active || !j) return
-        if (isScheduleArr(j.schedule)) setSchedule(j.schedule)
-        if (isTaskArr(j.tasks)) setTasks(j.tasks)
-        if (isLinkArr(j.links)) setLinks(j.links)
-        if (typeof j.zip === 'string' && /^\d{5}$/.test(j.zip)) {
-          setZip(j.zip)
-          setZipInput(j.zip)
-        }
-      })
-      .catch(() => {
-        /* 401, offline, route down — the local mirror is already on screen */
-      })
-      .finally(() => {
-        if (active) loadedRef.current = true
-      })
-    return () => {
-      active = false
-    }
-  }, [])
-
-  // ── Save ──
-  // Debounced for real. v2's helper was captioned "(debounced)" and was not, so
-  // every keystroke in an edit field was its own POST.
-  const savePrefs = useCallback((patch: PrefsRow) => {
-    if (!loadedRef.current) return
-    pending.current = { ...pending.current, ...patch }
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => {
-      const body = pending.current
-      pending.current = {}
-      fetch(PREFS_URL, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }).catch(() => {
-        /* the local mirror already has it */
-      })
-    }, SAVE_DEBOUNCE_MS)
-  }, [])
-
-  useEffect(
-    () => () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current)
-    },
-    [],
-  )
-
-  const updSchedule = useCallback(
-    (next: ScheduleItem[]) => {
-      setSchedule(next)
-      persistJson(SCHEDULE_KEY, next)
-      savePrefs({ schedule: next })
-    },
-    [savePrefs],
-  )
-  const updTasks = useCallback(
-    (next: TaskItem[]) => {
-      setTasks(next)
-      persistJson(TASKS_KEY, next)
-      savePrefs({ tasks: next })
-    },
-    [savePrefs],
-  )
-  const updLinks = useCallback(
-    (next: LinkItem[]) => {
-      setLinks(next)
-      persistJson(LINKS_KEY, next)
-      savePrefs({ links: next })
-    },
-    [savePrefs],
-  )
-  const submitZip = useCallback(() => {
+  const updSchedule = (next: ScheduleItem[]) => {
+    setSchedule(next)
+    persistJson(SCHEDULE_KEY, next)
+  }
+  const updTasks = (next: TaskItem[]) => {
+    setTasks(next)
+    persistJson(TASKS_KEY, next)
+  }
+  const updLinks = (next: LinkItem[]) => {
+    setLinks(next)
+    persistJson(LINKS_KEY, next)
+  }
+  const submitZip = () => {
     const z = zipInput.trim()
-    if (!/^\d{5}$/.test(z)) return // v2 fails silently here too
+    if (!/^\d{5}$/.test(z)) return
     setZip(z)
     persistJson(ZIP_KEY, z)
-    savePrefs({ zip: z })
-  }, [zipInput, savePrefs])
-  const clearZip = useCallback(() => {
+  }
+  const clearZip = () => {
     setZip('')
     setZipInput('')
     try {
@@ -1005,21 +771,16 @@ export default function TradersDashboardPage() {
     } catch {
       /* best-effort */
     }
-    savePrefs({ zip: null })
-  }, [savePrefs])
+  }
 
-  // Every request this page needs, fired in parallel at the top of the
+  // Every fetch this page needs, fired in parallel at the top of the
   // component — no card below waits on another card's request to resolve.
   const futuresSymbols = FUTURES.map((f) => f.yahoo).join(',')
-  const quotesQ = useQuery<Record<string, QuoteRow>>(
-    `/api/yahoo-quotes?symbols=${encodeURIComponent(futuresSymbols)}`,
-    { pollMs: 60_000 },
-  )
+  const quotesQ = useQuery<Record<string, QuoteRow>>(`/api/yahoo-quotes?symbols=${encodeURIComponent(futuresSymbols)}`, { pollMs: 60_000 })
   const calendarQ = useQuery<unknown>('/api/calendar', { staleMs: 5 * 60_000 })
   const overviewQ = useQuery<{ overview?: OverviewRow }>('/api/traders-dashboard/overview', { staleMs: 5 * 60_000 })
   const moversQ = useQuery<{ movers?: Mover[] }>('/api/premarket-movers', { pollMs: 5 * 60_000 })
   const weatherQ = useQuery<WeatherRow>(zip ? `/api/weather?zip=${zip}` : null)
-  const wheelQ = useQuery<WheelPayload>('/api/spx-sunburst', { pollMs: WHEEL_POLL_MS })
 
   const events = useMemo<CalEvent[]>(() => {
     const j = calendarQ.data
@@ -1041,43 +802,24 @@ export default function TradersDashboardPage() {
         </div>
       }
       actions={
-        <div className="flex flex-wrap items-center justify-end gap-3.5">
-          {/* The page you want BEFORE this one, so it sits in the header rather
-              than down in Quick Links. */}
-          <Link
-            to="/premarket"
-            className={HEADER_BTN}
-            style={{ borderColor: alpha(T.orange, 0.55), background: PREMARKET_BG, color: T.text }}
-            // Inline, as v2 had it: the resting background is a gradient set in
-            // the style attribute, and a :hover class cannot beat that.
-            onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = T.orange
-              e.currentTarget.style.background = alpha(T.orange, 0.28)
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = alpha(T.orange, 0.55)
-              e.currentTarget.style.background = PREMARKET_BG
-            }}
-          >
-            <span aria-hidden>🌅</span>
-            <span>Premarket Prep</span>
-            <span style={{ color: T.orange }}>→</span>
-          </Link>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <ComingSoonPill icon="🌅" label="Premarket Prep" />
           <ComingSoonPill icon="🗓" label="Economic Calendar" />
           <WeatherWidget
+            zip={zip}
             zipInput={zipInput}
             onZipInput={setZipInput}
             onSubmit={submitZip}
             onClear={clearZip}
             weather={weatherQ.data}
+            stale={!!weatherQ.error}
           />
         </div>
       }
     >
-      {/* 17:10 is v2's minmax(0,1.7fr) minmax(0,1fr), to the decimal. */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[17fr_10fr]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[7fr_4fr]">
         {/* LEFT COLUMN */}
-        <div className="flex min-w-0 flex-col gap-5">
+        <div className="flex min-w-0 flex-col gap-4">
           <CountdownCard countdown={countdown} targetLabel={targetLabel} phase={phase} />
           <OverviewCard
             overview={overview}
@@ -1091,12 +833,10 @@ export default function TradersDashboardPage() {
         </div>
 
         {/* RIGHT COLUMN */}
-        <div className="flex min-w-0 flex-col gap-5">
+        <div className="flex min-w-0 flex-col gap-4">
           <ScheduleCard schedule={schedule} onChange={updSchedule} />
           <TasksCard tasks={tasks} onChange={updTasks} />
-          <Suspense fallback={<WheelFallback />}>
-            <SectorWheel payload={wheelQ.data} failed={!!wheelQ.error} />
-          </Suspense>
+          <SectorRotationCard />
           <QuickLinksCard links={links} onChange={updLinks} />
         </div>
       </div>

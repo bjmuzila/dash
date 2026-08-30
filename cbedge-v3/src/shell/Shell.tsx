@@ -31,11 +31,11 @@ export interface NavItem {
 }
 
 // v3's rail. It started as a copy of v2's toolbar icon set so the rail was
-// recognizable from day one; six of those slots came back out on 2026-08-30 —
-// Scanner and Test Lab (built, now retired) and Multi Greek, Board, ES Candles
-// and ICT (never more than a dimmed "coming soon" icon). v3 is not shipping
-// those pages, and an icon for a page nobody is going to build is the same lie
-// `comingSoon` exists to avoid.
+// recognizable from day one; seven of those slots came back out on 2026-08-30 —
+// Scanner, Test Lab and Journal (built, now retired) and Multi Greek, Board,
+// ES Candles and ICT (never more than a dimmed "coming soon" icon). v3 is not
+// shipping those pages, and an icon for a page nobody is going to build is the
+// same lie `comingSoon` exists to avoid.
 //
 // The BOARD CARDS named Multi Greek / GEX Candles / Key Levels are a different
 // thing and they stay — see src/board/catalog.tsx. This list, App.tsx's routes
@@ -54,7 +54,6 @@ export const NAV: NavItem[] = [
   { to: '/analytics', label: 'Analysis', icon: '📈', prefetch: ['/api/premarket-summary'] },
   { to: '/replay', label: 'Replay', icon: '⏱️', comingSoon: true },
   { to: '/flow', label: 'Flow', icon: '🌊' },
-  { to: '/trading', label: 'Journal', icon: '📓', prefetch: ['/api/journal'] },
 ]
 
 function Logo() {

@@ -335,7 +335,12 @@ export default function Flow() {
             {fmtEtHm(netSeries.openSec)}–{fmtEtHm(netSeries.closeSec)} ET
           </p>
         )}
-        <div className="h-[340px] w-full">
+        {/* MUST be a flex column: NetDriftChart's root is `flex-1 min-h-0`, and
+            so is the ChartFrame element lightweight-charts autoSizes to. In a
+            plain block wrapper both resolve to auto height, the canvas collapses
+            to a sliver and the drift lines render as a flat smear at the top of
+            the card. */}
+        <div className="flex h-[420px] min-h-[420px] w-full flex-col">
           <NetDriftChart series={netSeries} ordersByMin={ordersByMin} />
         </div>
         {!netSeries.hasData && (

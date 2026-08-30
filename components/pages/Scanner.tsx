@@ -1116,7 +1116,7 @@ const outcomeKey = (o: OutcomeRow) => `${o.symbol}|${o.expiry}|${o.strike}`;
 // ── probe card ───────────────────────────────────────────────────────────────
 // The owner site's /owner/probe card, ported here so a tracked flag reads
 // EXACTLY like a probed contract: same palette, same mono type, same header
-// (ticker · strike badge, expiry sub, big ▲/▼ %, "in → now · $/ct"), same chart,
+// (ticker · strike badge, expiry sub, big ▲/▼ %, "in → high · $/ct"), same chart,
 // same hint footer, same "⧉ Copy image" PNG. The colors are literals rather
 // than theme tokens on purpose — `captureFlagCard` serializes the SVG standalone
 // and any var() reference would resolve to nothing off-DOM.
@@ -1135,16 +1135,21 @@ const probePx = (v: number | null) => (v == null ? "—" : v.toFixed(2));
 
 /**
  * Header numbers for one tracked flag: the contract's first traded mark is the
- * basis (what taking the flag would have cost), the last traded mark is "now",
- * and P/L is per single contract (×100) — same arithmetic the owner card runs.
+ * basis (what taking the flag would have cost) and the BEST mark it has printed
+ * since is the second leg — the flag is graded on the peak it offered, not on
+ * whatever it happens to be worth right now, because a flag that ran +150% and
+ * gave it all back still handed you the +150%. P/L is per single contract
+ * (×100). `mark` stays the field name so the card and the PNG capture read one
+ * shape; it carries the high, and `last` keeps the live mark for reference.
  */
 function probeStats(days: OutcomeDetailDay[]) {
   const vals = days.map((d) => d.contractClose).filter((v): v is number => v != null && Number.isFinite(v));
   if (!vals.length) return null;
-  const entry = vals[0], mark = vals[vals.length - 1];
+  const entry = vals[0], last = vals[vals.length - 1], mark = Math.max(...vals);
   return {
     entry,
     mark,
+    last,
     pct: entry > 0 ? ((mark - entry) / entry) * 100 : null,
     dollars: (mark - entry) * 100,
   };
@@ -1221,7 +1226,7 @@ async function captureFlagCard(chartId: string, meta: {
 
     ctx.font = `15px ${MONO}`;
     ctx.fillStyle = PROBE_TXT;
-    const line = `IN ${probePx(meta.entry)} → NOW ${probePx(meta.mark)}`;
+    const line = `IN ${probePx(meta.entry)} → HIGH ${probePx(meta.mark)}`;
     ctx.fillText(line, 210, 108);
     if (meta.dollars != null) {
       ctx.fillStyle = probeTone(meta.dollars);
@@ -1515,7 +1520,10 @@ function OutcomeDetailPanel({
           : "Loading…"}
       </div>
 
-      {/* Big row — ▲/▼ % over "in → now · $/ct", per single contract (×100). */}
+      {/* Big row — ▲/▼ % over "in → high · $/ct", per single contract (×100).
+          The percentage is the PEAK the flag offered, measured from the flag
+          price; the live mark trails it as a muted "now" so the card still says
+          where the contract is today. */}
       {stats && (
         <div style={{ margin: "10px 0 8px" }}>
           <div style={{ fontFamily: PROBE_MONO, fontSize: 24, fontWeight: 800, lineHeight: 1, color: probeTone(stats.pct) }}>
@@ -1524,9 +1532,12 @@ function OutcomeDetailPanel({
           <div style={{ fontFamily: PROBE_MONO, fontSize: 14, color: PROBE_TXT, marginTop: 6 }}>
             <span style={lbl}>in</span>{probePx(stats.entry)}
             <span style={{ color: PROBE_MUTED, margin: "0 6px" }}>→</span>
-            <span style={lbl}>now</span>{probePx(stats.mark)}
+            <span style={lbl}>high</span>{probePx(stats.mark)}
             <span style={{ fontWeight: 700, color: probeTone(stats.dollars) }}>
               {` · ${stats.dollars >= 0 ? "+" : "−"}$${Math.abs(stats.dollars).toFixed(0)}/ct`}
+            </span>
+            <span style={{ color: PROBE_MUTED, marginLeft: 10 }}>
+              <span style={lbl}>now</span>{probePx(stats.last)}
             </span>
           </div>
         </div>

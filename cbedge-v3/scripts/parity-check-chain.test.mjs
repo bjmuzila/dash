@@ -37,12 +37,13 @@ Recent
 ↻ Now
 📸`
 
-const TOOLBAR_V3 = `Options Chain
+// v3's page carries no ticker control of its own — the SPX above is the app
+// toolbar's picker trigger, which renders above every page.
+const TOOLBAR_V3 = `SPX
+Options Chain
 SPX
 GEX · OI + Vol · 10%
 LIVE
-Tickers
-Recent
 ↻ Now`
 
 const COG = `Grid
@@ -71,6 +72,29 @@ CLASSIC
 VIVID
 Stamps
 Δ15m
+Replay
+▶ Replay`
+
+/** v3's cog: no Change row, no Stamps row — both dropped 2026-08-30. */
+const COG_V3 = `Grid
+Strikes
+10% strikes
+Greek
+GEX
+DEX
+CHEX
+VEX
+OI
+VOL
+Basis
+OI + Vol
+Vol Only
+Heat
+Intensity
+3.00x
+Skin
+CLASSIC
+VIVID
 Replay
 ▶ Replay`
 
@@ -134,7 +158,12 @@ const TITLES_V2 = [
   "Rewind the grid itself through the session's recorded net-GEX snapshots",
 ]
 
-const TITLES_V3 = [...TITLES_V2]
+const TITLES_V3 = [
+  // The Δ15m tooltip is gone with the control it explained; the toolbar picker's
+  // is new, and is what C/tickers matches on the v3 side.
+  ...TITLES_V2.filter((t) => !/top 5 strikes per side of ATM/.test(t)),
+  "The board's symbol — every page that can follow a ticker is showing this one. Star the ones you rotate between.",
+]
 
 function harvest(text, titles) {
   const lines = text
@@ -145,7 +174,7 @@ function harvest(text, titles) {
 }
 
 const V2 = harvest(`${TOOLBAR_V2}\n${COG}\n${GRID}`, TITLES_V2)
-const V3 = harvest(`${TOOLBAR_V3}\n${COG}\n${GRID}`, TITLES_V3)
+const V3 = harvest(`${TOOLBAR_V3}\n${COG_V3}\n${GRID}`, TITLES_V3)
 
 /** v3 as it stood BEFORE the port: a single-expiry calls/puts ladder. */
 const V3_BEFORE = harvest(
@@ -181,7 +210,8 @@ ${GRID}`,
   TITLES_V2,
 )
 const V3_OI = harvest(
-  `Options Chain
+  `SPX
+Options Chain
 SPX
 OI · OI + Vol · 10%
 LIVE
@@ -211,8 +241,8 @@ console.log('\nparity-check-chain.test — compare() against fixtures\n')
   check('finished port reports no missing values', missing.length === 0, missing.map((m) => m.p.id).join(', '))
   const softIds = softer.map((s) => s.p.id).sort()
   check(
-    'the two declared departures are reported as soft, not as losses',
-    softIds.join(',') === 'C/go,C/snapshot',
+    'all five declared departures are reported as soft, not as losses',
+    softIds.join(',') === 'C/go,C/recent,C/snapshot,D/changeModes,D/delta15,D/delta15Tip,D/stampsSection',
     `got: ${softIds.join(',') || '(none)'}`,
   )
 }

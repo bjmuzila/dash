@@ -1,43 +1,26 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// The chain's two portal'd menus.
+// The chain's value dropdown — the % strikes picker and the replay date picker.
 //
 // Not design/primitives/Controls.tsx's Popover, deliberately: that one is a
-// panel anchored to a card's cog and clamped to the viewport. These two anchor
-// to a toolbar button, re-anchor on scroll (capture phase — the grid scrolls in
-// its own container) and are a LIST, which is a different job. If a third page
-// wants either of them they move to primitives, and not before.
+// panel anchored to a card's cog and clamped to the viewport. This anchors to a
+// toolbar button, re-anchors on scroll in the CAPTURE phase (the grid scrolls in
+// its own container, and that scroll does not bubble to window) and is a LIST,
+// which is a different job.
 //
-// Spec: docs/parity/options-chain.md — Part C1 / C2.
+// The TICKER picker used to live here too. It is now
+// design/primitives/TickerPicker.tsx, because the app toolbar owns the symbol
+// and this page follows it rather than carrying a second control for the same
+// thing.
+//
+// Spec: docs/parity/options-chain.md — Part C2.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { alpha, LEVEL_COLORS, SHADOW, T } from '@/design/theme'
+import { alpha, SHADOW, T } from '@/design/theme'
 
 /** Above every other layer this page can raise. */
 const MENU_Z = 100010
-
-const FAV_TICKERS_KEY = 'options-chain-fav-tickers-v1'
-
-function loadFavTickers(): string[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(FAV_TICKERS_KEY)
-    const arr: unknown = raw ? JSON.parse(raw) : []
-    return Array.isArray(arr) ? arr.filter((t): t is string => typeof t === 'string') : []
-  } catch {
-    return []
-  }
-}
-
-function saveFavTickers(list: string[]): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(FAV_TICKERS_KEY, JSON.stringify(list))
-  } catch {
-    /* ignore */
-  }
-}
 
 /** Keeps a portal'd menu under its trigger through scrolls and resizes. */
 function useAnchor(open: boolean, btnRef: React.RefObject<HTMLButtonElement | null>) {
@@ -180,158 +163,6 @@ export function ChainDropdown<TValue extends string | number>({
                 </div>
               )
             })}
-          </div>,
-          document.body,
-        )}
-    </div>
-  )
-}
-
-// ── The ticker picker ────────────────────────────────────────────────────────
-
-export function TickerListDropdown({
-  activeTicker,
-  universe,
-  onSelect,
-}: {
-  activeTicker: string
-  universe: string[]
-  onSelect: (t: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [queryText, setQueryText] = useState('')
-  const [favs, setFavs] = useState<string[]>([])
-  const hostRef = useRef<HTMLDivElement>(null)
-  const btnRef = useRef<HTMLButtonElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const rect = useAnchor(open, btnRef)
-  useDismiss(hostRef, menuRef, () => setOpen(false))
-
-  useEffect(() => {
-    setFavs(loadFavTickers())
-  }, [])
-
-  // The search box starts EMPTY every time the menu opens. Keeping the last
-  // query is only ever right if the next search is a prefix of the last one;
-  // every other time the list reopens pre-filtered to something stale and the
-  // first thing you have to do is clear a box you did not fill in.
-  //
-  // Cleared on CLOSE rather than on open, so the menu never renders one frame of
-  // stale filtering on the way in.
-  useEffect(() => {
-    if (!open) setQueryText('')
-  }, [open])
-
-  const toggleFav = (t: string) =>
-    setFavs((prev) => {
-      const next = prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
-      saveFavTickers(next)
-      return next
-    })
-
-  const favSet = new Set(favs)
-  const q = queryText.trim().toUpperCase()
-  const matches = universe.filter((t) => !q || t.includes(q))
-  const favList = matches.filter((t) => favSet.has(t)).sort()
-  const rest = matches.filter((t) => !favSet.has(t)).sort()
-  const rows: Array<{ t: string; fav: boolean; divider?: boolean }> = [
-    ...favList.map((t) => ({ t, fav: true })),
-    ...(favList.length && rest.length ? [{ t: '__divider__', fav: false, divider: true }] : []),
-    ...rest.map((t) => ({ t, fav: false })),
-  ]
-
-  return (
-    <div ref={hostRef} style={{ position: 'relative' }}>
-      <button
-        ref={btnRef}
-        onClick={() => setOpen((o) => !o)}
-        style={{
-          fontSize: 10,
-          fontWeight: 700,
-          padding: '5px 10px',
-          border: `1px solid ${T.border}`,
-          borderRadius: 6,
-          background: alpha(T.text, 0.04),
-          color: T.text,
-          cursor: 'pointer',
-          outline: 'none',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 5,
-          whiteSpace: 'nowrap',
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-        }}
-      >
-        Tickers
-        <span style={{ fontSize: 10, opacity: 0.7 }}>▾</span>
-      </button>
-      {open &&
-        rect &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div ref={menuRef} style={menuPanelStyle({ left: rect.left, top: rect.top, width: 200, overflow: 'hidden' })}>
-            <div style={{ padding: 6, borderBottom: `1px solid ${T.border}` }}>
-              <input
-                autoFocus
-                value={queryText}
-                onChange={(e) => setQueryText(e.target.value.toUpperCase())}
-                placeholder="Search…"
-                spellCheck={false}
-                autoComplete="off"
-                style={{
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  padding: '5px 8px',
-                  border: `1px solid ${T.border}`,
-                  borderRadius: 5,
-                  background: alpha(T.text, 0.04),
-                  color: T.text,
-                  outline: 'none',
-                  letterSpacing: '0.06em',
-                }}
-              />
-            </div>
-            <div style={{ maxHeight: 300, overflowY: 'auto', padding: '3px 0' }}>
-              {rows.length === 0 && (
-                <div style={{ padding: '8px 12px', fontSize: 10, color: T.muted }}>No match</div>
-              )}
-              {rows.map((row) => {
-                if (row.divider) {
-                  return <div key="div" style={{ height: 1, background: T.border, margin: '3px 8px' }} />
-                }
-                const active = row.t === activeTicker.toUpperCase()
-                return (
-                  <div
-                    key={row.t}
-                    onClick={() => {
-                      onSelect(row.t)
-                      setOpen(false)
-                    }}
-                    style={{ ...rowStyle(active), display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', fontSize: 11 }}
-                  >
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        toggleFav(row.t)
-                      }}
-                      title={row.fav ? 'Unfavorite' : 'Favorite'}
-                      style={{
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        lineHeight: 1,
-                        color: row.fav ? LEVEL_COLORS.cb : alpha(T.text, 0.28),
-                      }}
-                    >
-                      {row.fav ? '★' : '☆'}
-                    </span>
-                    <span>{row.t}</span>
-                  </div>
-                )
-              })}
-            </div>
           </div>,
           document.body,
         )}

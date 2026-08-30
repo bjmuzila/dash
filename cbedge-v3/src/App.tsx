@@ -27,13 +27,12 @@ const Premarket = lazy(() => import('@/pages/Premarket'))
 const OptionsChain = lazy(() => import('@/pages/OptionsChain'))
 const Analysis = lazy(() => import('@/pages/Analysis'))
 const Flow = lazy(() => import('@/pages/Flow'))
-const Journal = lazy(() => import('@/pages/Journal'))
 
-// RETIRED 2026-08-30 — Scanner (/scanner) and Test Lab (/test) are gone from
-// v3, along with the ICT, ES Candles, Board and Multi Greek rail slots (they
-// never had pages here, only "coming soon" icons). The BOARD CARDS of the same
-// names — Multi Greek, GEX Candles, Key Levels — are deliberately untouched:
-// see src/board/catalog.tsx. Pages out, cards in.
+// RETIRED 2026-08-30 — Scanner (/scanner), Test Lab (/test) and Journal
+// (/trading) are gone from v3, along with the ICT, ES Candles, Board and Multi
+// Greek rail slots (they never had pages here, only "coming soon" icons). The
+// BOARD CARDS of the same names — Multi Greek, GEX Candles, Key Levels — are
+// deliberately untouched: see src/board/catalog.tsx. Pages out, cards in.
 
 export default function App() {
   return (
@@ -49,14 +48,12 @@ export default function App() {
                   4. app/v3/<name>/route.ts in the v2 repo (serveSpaShell)
                 Miss #4 and the page works in-app but 404s on a hard refresh. */}
             {/* Paths match v2's /app/* routes exactly, so a bookmark, a doc
-                link or a habit transfers by swapping one path segment. That is
-                also why Journal is at /trading. */}
+                link or a habit transfers by swapping one path segment. */}
             <Route path="/traders-dashboard" element={<TradersDashboard />} />
             <Route path="/premarket" element={<Premarket />} />
             <Route path="/options-chain" element={<OptionsChain />} />
             <Route path="/analytics" element={<Analysis />} />
             <Route path="/flow" element={<Flow />} />
-            <Route path="/trading" element={<Journal />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

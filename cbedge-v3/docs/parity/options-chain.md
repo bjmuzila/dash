@@ -53,6 +53,30 @@ mode), plus everything it composes:
 
 ---
 
+## Declared departures
+
+Rows below that v3 does **not** ship. Each one is a decision, not a loss, and
+`scripts/parity-check-chain.mjs` reports every one of them on each run as a
+`~ soft` line rather than passing over it — a dropped feature that stops being
+mentioned is a dropped feature nobody will remember deciding to drop.
+
+| Row(s) | What v3 does instead | Decided |
+|---|---|---|
+| **Part C2 — GO button** | The app toolbar owns the board symbol; the picker commits to it directly, so there is nothing left to confirm. | port |
+| **Part C2 — Recent dropdown** | Favourites (★) in the toolbar picker. A recents list and a favourites list are the same shelf filled two ways, and only one of them is a choice you made. | 2026-08-30 |
+| **Part C1 — the ticker picker's location** | Moved out of the page to `design/primitives/TickerPicker.tsx`, mounted in the app toolbar. Same universe, same search, same star-to-favourite; one control for the whole board instead of one per page. Favourites key changed from `options-chain-fav-tickers-v1` to `cb-v3-fav-tickers` — it is board-wide now, and the old name no longer described it. | 2026-08-30 |
+| **Part C2 — Snapshot / Discord** | Not ported: v3 ships no DOM-to-canvas renderer. | port |
+| **Part D — the CHANGE row** (Live / 15m Δ / 30m Δ / 60m Δ) | Removed **end to end** — the control, the `/proxy/strike-growth/by-expiry` fetch, `changeMap` / `changeMeta` / `changeScaleByExp`, the per-column Δ scale, the orange change-column header treatment and the `·Δ15` header suffix. Nothing is left behind as plumbing that cannot be reached. | 2026-08-30 |
+| **Part D — the STAMPS row** (Δ15m) | Removed end to end — the control, the 20 s `/api/mult-greek-gex-grid` poll, the `gexBaseline` state, the top-5-per-side selection, the `DeltaStamp` chip and the 152px column widening that existed only to fit it. | 2026-08-30 |
+| **Part N — ContractFlowPopup** | Not ported: unreachable in v2 (see Part N). | port |
+
+Everything else in this file is live in v3. The rows for the departed features
+stay in the document — this is the record of what v2 did, and a spec that quietly
+deletes the things you chose not to build cannot tell you later what the choice
+was.
+
+---
+
 ## Column meanings
 
 - **Source** — the endpoint AND the field underneath it, or the exact

@@ -186,8 +186,12 @@ export function NetDriftChart({ series, ordersByMin }: NetDriftChartProps) {
         lastValueVisible: false,
         priceFormat: { type: 'volume' },
       })
-      chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } })
-      chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: 0.26 } })
+      // The volume histogram is docked in the bottom band; the drift lines get
+      // everything above it. Keep the two bands adjacent — every point of gap
+      // between `vol.top` and `1 - right.bottom` is vertical range the lines
+      // pay for and nothing draws in.
+      chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.86, bottom: 0 } })
+      chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.04, bottom: 0.16 } })
 
       chartRef.current = chart
       callRef.current = callSeries
@@ -269,7 +273,7 @@ export function NetDriftChart({ series, ordersByMin }: NetDriftChartProps) {
   }, [series])
 
   return (
-    <div className="relative min-h-0 flex-1">
+    <div className="relative flex h-full min-h-0 flex-1 flex-col">
       <ChartFrame
         onMount={onMount}
         onVisibility={(v) => {

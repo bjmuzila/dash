@@ -28,7 +28,7 @@ import { createPortal } from 'react-dom'
 import { alpha, LIGHT_BLUE, MOVE_UP, SHADOW, T } from '@/design/theme'
 import { query } from '@/data/api'
 import { fmtClockHm, fmtExpiryShort, fmtGex, fmtReplayClock, fmtStampDate } from './format'
-import { TickerListDropdown } from './pickers'
+import { TickerPicker } from '@/design/primitives/TickerPicker'
 
 interface Strike {
   strike: number
@@ -71,11 +71,9 @@ const inputStyle: React.CSSProperties = {
 
 export function LadderModal({
   symbol: initialSymbol,
-  universe,
   onClose,
 }: {
   symbol: string
-  universe: string[]
   onClose: () => void
 }) {
   const [symbols, setSymbols] = useState<string[]>([])
@@ -422,10 +420,13 @@ export function LadderModal({
           >
             {symbol || '—'}
           </span>
-          <TickerListDropdown
+          {/* The RECORDER's symbol list, not the board's — a session can only
+              be replayed for a root the recorder actually swept. */}
+          <TickerPicker
             activeTicker={symbol}
-            universe={symbols.length ? symbols : universe}
+            universe={symbols.length ? symbols : undefined}
             onSelect={setSymbol}
+            triggerLabel="Tickers"
           />
           <select value={date} style={{ ...inputStyle, padding: '6px 10px', cursor: 'pointer' }} onChange={(e) => setDate(e.target.value)}>
             {dates.map((d) => (

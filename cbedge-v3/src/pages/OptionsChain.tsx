@@ -3,9 +3,9 @@
 //
 // This page is not a calls-and-puts ladder. It is a GEX MATRIX: one column per
 // expiration across a shared strike axis, every cell painted by a heat skin,
-// with six greek lenses, two contract bases, three Δ-vs-N-minutes-ago columns, a
-// ⅀ Total column that excludes 0DTE, focus selection on rows and columns, and a
-// replay transport that rewinds the whole grid to a recorded snapshot.
+// with six greek lenses, two contract bases, a ⅀ Total column that excludes
+// 0DTE, focus selection on rows and columns, and a replay transport that rewinds
+// the whole grid to a recorded snapshot.
 //
 // Everything above the render layer lives elsewhere:
 //   optionsChain/chainMath.ts     the greek formulas, the walls, the window
@@ -17,66 +17,41 @@
 // chain.mjs drives this page against v2's and fails on anything v2 renders and
 // this does not.
 //
-// ── Two departures from v2, both deliberate ──────────────────────────────────
-//  1. The TICKER comes from the board's symbol (data/symbol.tsx) rather than a
-//     page-local input + GO. The picker writes back through setSymbol, so the
-//     universe and the favourites survive; what is gone is a second place to
-//     change the same thing. v2's GO existed because it had no board symbol.
+// ── Four departures from v2, all deliberate ──────────────────────────────────
+//  1. The TICKER is not a control on this page at all. The app toolbar owns the
+//     board symbol (data/symbol.tsx) and this page follows it, so v2's ticker
+//     dropdown, its GO button and its Recent list are all gone — the picker,
+//     with its favourites, moved to design/primitives/TickerPicker.tsx where the
+//     whole board reads it. v2 had those controls because v2 had no board symbol.
 //  2. ContractFlowPopup is NOT ported. In v2 it is unreachable — ChainMatrix
 //     destructures `onCellClick` and never calls it, so `contractPopup` can
 //     never become non-null. Porting dead UI (and a chart library with it) would
 //     be inventing a feature, not preserving one. Recorded in Part N of the spec.
+//
+// Two v2 controls were dropped at Brandon's call on 2026-08-30 rather than lost
+// in the port, and they are gone end to end — control, state, fetch and column —
+// rather than left as plumbing nothing can reach:
+//  3. The Δ CHANGE columns (Live / 15m / 30m / 60m off /proxy/strike-growth).
+//  4. The Δ15m STAMPS (front-expiry 15-minute net-GEX chips off
+//     /api/mult-greek-gex-grid).
+// Both are recorded as declared departures in the spec and reported as such by
+// scripts/parity-check-chain.mjs, so the checker says they went rather than
+// quietly scoring them as a pass.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { alpha, CHAIN, T } from '@/design/theme'
-import { SCANNER_TICKERS } from '@/data/scannerTickers'
-import { query } from '@/data/api'
 import { usePageSymbol } from '@/data/symbol'
 import { Popover, PanelSection, SegGroup } from '@/design/primitives/Controls'
 import { ChainMatrix } from './optionsChain/ChainMatrix'
 import { LadderModal } from './optionsChain/LadderModal'
-import { ChainDropdown, TickerListDropdown } from './optionsChain/pickers'
+import { ChainDropdown } from './optionsChain/pickers'
 import { ReplayBar } from './optionsChain/ReplayBar'
 import { StrikeHoverCard } from './optionsChain/StrikeHoverCard'
 import { HEAT_SKINS, type HeatSkin } from './optionsChain/heatSkins'
 import { INTENSITY_MIN } from './optionsChain/chainMath'
-import {
-  CHANGE_MODES,
-  CHANGE_MODE_LABEL,
-  DATA_MODE_LABEL,
-  DISPLAY_PERCENTS,
-  GREEK_MODES,
-  useChainData,
-  type GreekMode,
-} from './optionsChain/useChainData'
+import { DATA_MODE_LABEL, DISPLAY_PERCENTS, GREEK_MODES, useChainData, type GreekMode } from './optionsChain/useChainData'
 import type { DataMode } from './optionsChain/chainMath'
-
-// ── The scanner universe behind the ticker picker ────────────────────────────
-// Live from /proxy/scanner-tickers, falling back to the static list, so a dead
-// proxy degrades to a stale picker rather than an empty one.
-function useScannerUniverse(): string[] {
-  const [tickers, setTickers] = useState<string[]>(SCANNER_TICKERS)
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const j = await query<{ tickers?: unknown[] }>('/proxy/scanner-tickers', { staleMs: 300_000 })
-        if (cancelled) return
-        const clean = (Array.isArray(j?.tickers) ? j.tickers : [])
-          .map((t) => String(t).trim().toUpperCase())
-          .filter(Boolean)
-        if (clean.length) setTickers([...new Set(clean)])
-      } catch {
-        /* keep the fallback */
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-  return tickers
-}
 
 /** The ↻ button's four states and its 1800ms revert, transcribed from v2's
  *  useRefreshButton — the labels are what tells you a refresh actually ran. */
@@ -105,8 +80,7 @@ function useRefreshButton(fn: () => Promise<void>) {
 }
 
 export default function OptionsChain() {
-  const { symbol, setSymbol } = usePageSymbol()
-  const universe = useScannerUniverse()
+  const { symbol } = usePageSymbol()
   const c = useChainData({ symbol })
 
   const [cogOpen, setCogOpen] = useState(false)
@@ -122,15 +96,6 @@ export default function OptionsChain() {
   const centeredForRef = useRef<string>('')
 
   const { trigger: refresh, label: refreshLabel, state: refreshState } = useRefreshButton(c.doRefresh)
-
-  /** The picker writes back to the BOARD symbol, so every other card follows. */
-  const pickTicker = useCallback(
-    (t: string) => {
-      setSymbol(t)
-      c.selectTicker(t)
-    },
-    [setSymbol, c],
-  )
 
   // ── Centre the ATM row on load / whenever the window changes ───────────────
   // visibleStrikes always puts the centre at the exact middle index, but the
@@ -209,7 +174,6 @@ export default function OptionsChain() {
   }, [hoverCell, c.columns, c.dodRows])
 
   const replayPinned = c.replay.on
-  const delta15Disabled = replayPinned || c.greekMode !== 'gex'
 
   return (
     <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -357,22 +321,6 @@ export default function OptionsChain() {
             )}
           </div>
 
-          {/* Which ticker the chain is showing is the most-changed thing on this
-              page, so the picker is its own toolbar control rather than a cog
-              setting. It writes to the BOARD symbol. */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            <TickerListDropdown activeTicker={c.activeTicker} universe={universe} onSelect={pickTicker} />
-            {c.recentTickers.length > 0 && (
-              <ChainDropdown
-                value={c.activeTicker}
-                options={c.recentTickers}
-                onChange={(t) => pickTicker(String(t))}
-                triggerLabel="Recent"
-                accent={false}
-              />
-            )}
-          </div>
-
           {/* Refresh is an ACTION, not a setting — it stands on its own rather
               than hiding a click deep in the cog. */}
           <button
@@ -454,18 +402,6 @@ export default function OptionsChain() {
                       onChange={(v) => c.setDataMode(v as DataMode)}
                     />
                   </Field>
-                  <Field label="Change">
-                    <div
-                      style={{ opacity: replayPinned ? 0.4 : 1, pointerEvents: replayPinned ? 'none' : undefined, width: '100%' }}
-                      title={replayPinned ? 'Δ columns are live-only — a Δ against a rewound grid compares two pasts' : undefined}
-                    >
-                      <SegGroup
-                        options={CHANGE_MODES.map((m) => ({ label: CHANGE_MODE_LABEL[m], value: m }))}
-                        value={c.changeMode}
-                        onChange={(v) => c.setChangeMode(v as (typeof CHANGE_MODES)[number])}
-                      />
-                    </div>
-                  </Field>
                 </PanelSection>
 
                 <PanelSection title="Heat">
@@ -508,29 +444,6 @@ export default function OptionsChain() {
                       onChange={(v) => c.changeHeatSkin(v as HeatSkin)}
                     />
                   </Field>
-                </PanelSection>
-
-                <PanelSection title="Stamps">
-                  <button
-                    onClick={() => c.setShowDelta15((v) => !v)}
-                    disabled={delta15Disabled}
-                    style={{
-                      ...segStyle(c.showDelta15 && !delta15Disabled),
-                      height: 26,
-                      fontSize: 10,
-                      opacity: delta15Disabled ? 0.4 : 1,
-                      cursor: delta15Disabled ? 'default' : 'pointer',
-                    }}
-                    title={
-                      replayPinned
-                        ? 'Δ15m stickers are live-only — not available in replay'
-                        : c.greekMode !== 'gex'
-                          ? 'Δ15m stickers are GEX-only'
-                          : 'Stamp each front-expiry cell with its 15-minute net-GEX change (top 5 strikes per side of ATM)'
-                    }
-                  >
-                    Δ15m
-                  </button>
                 </PanelSection>
 
                 <PanelSection title="Replay">
@@ -618,16 +531,10 @@ export default function OptionsChain() {
             colScales={c.colScales}
             volMvcByCol={c.volMvcByCol}
             mvcByCol={c.mvcByCol}
-            delta15={c.delta15}
-            delta15Exp={c.frontExp}
             valueAt={c.valueAt}
-            changeMode={c.changeMode}
             sessionDate={c.sessionDate}
             showTotalCol={c.showTotalCol}
             layoutExpCols={c.layoutExpCols}
-            changeMeta={c.changeMeta}
-            changeMap={c.changeMap}
-            changeScaleByExp={c.changeScaleByExp}
             emStrikes={c.emStrikes}
             anyCurrentWeek={c.anyCurrentWeek}
             emLevels={c.emLevels}
@@ -656,7 +563,7 @@ export default function OptionsChain() {
       )}
 
       {ladderOpen && (
-        <LadderModal symbol={c.activeTicker} universe={universe} onClose={() => setLadderOpen(false)} />
+        <LadderModal symbol={c.activeTicker} onClose={() => setLadderOpen(false)} />
       )}
     </main>
   )
