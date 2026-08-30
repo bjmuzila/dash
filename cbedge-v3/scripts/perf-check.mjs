@@ -225,10 +225,17 @@ const pageErrors = []
 const violations = []
 const notFound = []
 page.on('pageerror', (e) => pageErrors.push(String(e.message ?? e)))
+// A failed fetch logs a console error of its own ("Failed to load resource:
+// …404"). Counting it as a page error contradicted the note further down that
+// 404s are deliberately tolerated here — the check failed on exactly the thing
+// it says it allows, and it failed LOUDLY (four ✗) for a card whose endpoint
+// simply has no mock. Resource-load failures are reported through `notFound`
+// and nowhere else; everything else the page logs as an error still counts.
+const RESOURCE_LOAD_ERROR = /Failed to load resource/i
 page.on('console', (m) => {
   const t = m.text()
   if (/Violation/i.test(t)) violations.push(t)
-  else if (m.type() === 'error') pageErrors.push(t)
+  else if (m.type() === 'error' && !RESOURCE_LOAD_ERROR.test(t)) pageErrors.push(t)
 })
 page.on('response', (r) => {
   if (r.status() === 404) notFound.push(r.url())
@@ -249,12 +256,31 @@ await page.evaluate(() => localStorage.removeItem('cb-v3-board-layout'))
 // this file to keep in sync and no way to forget.
 await page.reload({ waitUntil: 'networkidle' })
 const addButton = page.getByRole('button', { name: '+ Add card' })
-for (let guard = 0; guard < 40; guard++) {
+const MENU = 'div.absolute.right-0.top-full button'
+
+// ONE OF EACH, BY INDEX — not `.first()` forty times.
+//
+// Cards are re-addable, so the menu does not shrink as you add them and its
+// first entry is always the same card. Clicking `.first()` in a loop therefore
+// built a board of forty-one gex-candles and never added gex-chart,
+// multi-greek, flow-tape or econ-calendar at all — so the check measured one
+// card type and silently skipped the rest, which is the opposite of what
+// AGENTS.md promises ("adds every card in the catalog … there is no list to
+// update"). Walking the menu by index adds each catalog entry exactly once.
+await addButton.click()
+const cardCount = await page.locator(MENU).count()
+await page.mouse.click(700, 20) // close before measuring, see the note below
+await page.waitForTimeout(120)
+
+for (let i = 0; i < cardCount; i++) {
   if (await addButton.isDisabled()) break
   await addButton.click()
-  const first = page.locator('div.absolute.right-0.top-full button').first()
-  if ((await first.count()) === 0) break
-  await first.click()
+  const item = page.locator(MENU).nth(i)
+  if ((await item.count()) === 0) {
+    await page.mouse.click(700, 20)
+    break
+  }
+  await item.click()
   await page.waitForTimeout(120)
 }
 // The menu closes on an outside pointerdown; leaving it open would sit over the
@@ -397,7 +423,14 @@ console.log(`  console violations     : ${violations.length ? violations.join('\
 // real API on purpose and logs the rest; a card whose endpoint has no mock is
 // expected to come up empty, and failing on that would make adding a card to
 // the catalog break this check for an unrelated reason.
-console.log(`  unmocked endpoints     : ${notFound.length}`)
+// NAME them. The count alone said "something did not load" and left you to
+// find out which — and an unmocked endpoint is the usual reason a card sits
+// there with no data and never paints, which is what breaks the layer
+// assertions below. Deduped and made relative, because a board with forty
+// cards asks for the same missing URL forty times.
+const missing = [...new Set(notFound.map((u) => u.replace(/^https?:\/\/[^/]+/, '')))]
+console.log(`  unmocked endpoints     : ${missing.length}`)
+for (const u of missing) console.log(`      ${u}`)
 console.log('')
 assert(pageErrors.length === 0, `no page errors (${pageErrors.join('; ') || 'none'})`)
 

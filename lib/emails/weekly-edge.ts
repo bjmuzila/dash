@@ -162,6 +162,7 @@ export interface WeeklyEdgeOpts {
   /** GEX-scanner table. Empty array renders the dashed placeholder instead. */
   gexScannerRows?: GexScannerRow[];
   gexScannerLabel?: string;
+  gexScannerNote?: string;
   /** Set false to drop the wall-migration chart. */
   showWallChart?: boolean;
   wallChartUrl?: string;
@@ -287,7 +288,7 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
   "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
   "confRows" | "resultsNote" | "estMoveNote" | "showScannerProof" |
-  "gexScannerRows" | "gexScannerLabel" |
+  "gexScannerRows" | "gexScannerLabel" | "gexScannerNote" |
   "showWallChart" | "wallChartUrl" | "wallChartHeadline" | "wallChartNote" |
   "showAutoBuy" | "autoBuyRows" | "autoBuyNote" | "ctaUrl" |
   "showAffiliate" | "affiliateHeadline" | "affiliateBody" | "affiliateUrl" | "affiliateBannerUrl" |
@@ -348,6 +349,11 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     // a filtered list — do not soften it to "flags" or "catches", which would
     // read as if these were all of them.
     gexScannerLabel: opts.gexScannerLabel || "GEX scanner — Friday's winners",
+    // The one caption in this band. It earns its place because it says
+    // something the table cannot: the direction was right BEFORE the move, and
+    // the timestamps prove it. Keep the times — they are the whole claim.
+    gexScannerNote: opts.gexScannerNote ||
+      "<strong style=\"color:#ffffff;\">All three were puts</strong>, all three flagged between 10:47 and 11:33 while Warsh was still speaking. The tape rolled over into the afternoon and the scanner was already leaning that way — the flags are timestamped ahead of the move, not written up after it.",
     showWallChart: opts.showWallChart !== false,
     wallChartUrl: opts.wallChartUrl || WALL_CHART_URL,
     wallChartHeadline: opts.wallChartHeadline || "Five sessions, and price never left the walls",
@@ -453,6 +459,7 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
       ...o.gexScannerRows.map((r) =>
         `  [${r.grade}] ${r.symbol} ${r.contract} ${r.expiry} · flagged ${r.flagged} · ${r.entry} -> ${r.peak} (${r.peakAt})  ${r.gain}`
       ),
+      ...(o.gexScannerNote ? [strip(o.gexScannerNote)] : []),
       "",
     ] : []),
     ...(o.showScannerProof ? (() => {
@@ -788,7 +795,8 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                   <td align="right" style="padding:9px 14px 9px 8px;font:800 12px/1.4 ${SANS};color:#00E676;white-space:nowrap;${edge}">${escapeHtml(r.gain)}</td>
                 </tr>`;
                 }).join("")}
-              </table>` : `
+              </table>
+              ${o.gexScannerNote ? `<div style="font:400 12px/1.7 ${SANS};color:#6b7d8f;margin-top:10px;">${o.gexScannerNote}</div>` : ""}` : `
               <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">What the flow scanner caught</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px dashed rgba(255,255,255,0.18);border-radius:10px;">
                 <tr><td align="center" style="padding:22px 16px;font:600 12px/1.5 ${SANS};color:#6b7d8f;">[ADD THIS WEEK'S SCANNER CATCH]</td></tr>

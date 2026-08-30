@@ -88,7 +88,7 @@ export function EconCalendarCard() {
         >
           Economic Calendar
         </span>
-        <span style={{ fontSize: FS.micro, color: CAL.low, marginLeft: 2 }}>{today}</span>
+        <span style={{ fontSize: FS.micro, color: V2.text, opacity: 0.6, marginLeft: 2 }}>{today}</span>
       </div>
 
       {/* Feed health — OWNER ONLY. It names upstream hosts, status codes and
@@ -223,7 +223,11 @@ function DaySections({
           style={{
             fontSize: FS.caption,
             fontWeight: 800,
-            color: isToday ? CAL.accent : CAL.low,
+            // Not-today is WHITE at an opacity, not a slate grey — this page
+            // has no grey text. v2's own "muted" is white plus an opacity and
+            // that is the idiom the whole port follows.
+            color: isToday ? CAL.accent : V2.text,
+            opacity: isToday ? 1 : 0.55,
             letterSpacing: '0.1em',
           }}
         >
@@ -268,7 +272,9 @@ function DaySections({
 
 function EventRow({ ev, faded }: { ev: CalEvent; faded: boolean }) {
   const col = faded ? CAL.faded : impactColor(ev.impact)
-  const ink = faded ? CAL.faded : V2.text
+  // The row already carries `opacity: 0.32`. Painting the text a slate grey ON
+  // TOP of that was grey-on-grey; white at 32% is the fade v2 was reaching for.
+  const ink = V2.text
 
   return (
     <div
@@ -344,7 +350,7 @@ function EventRow({ ev, faded }: { ev: CalEvent; faded: boolean }) {
               <span
                 style={{
                   fontSize: FS.caption,
-                  color: faded ? CAL.faded : CAL.actual,
+                  color: faded ? V2.text : CAL.actual,
                   fontFamily: 'var(--font-mono)',
                 }}
               >
@@ -355,7 +361,7 @@ function EventRow({ ev, faded }: { ev: CalEvent; faded: boolean }) {
               <span
                 style={{
                   fontSize: FS.caption,
-                  color: faded ? CAL.faded : CAL.forecast,
+                  color: faded ? V2.text : CAL.forecast,
                   fontFamily: 'var(--font-mono)',
                 }}
               >
@@ -366,7 +372,7 @@ function EventRow({ ev, faded }: { ev: CalEvent; faded: boolean }) {
               <span
                 style={{
                   fontSize: FS.caption,
-                  color: faded ? CAL.faded : CAL.previous,
+                  color: V2.text,
                   fontFamily: 'var(--font-mono)',
                 }}
               >
@@ -386,7 +392,9 @@ type EarnKind = 'pre' | 'after' | 'tbd'
 const EARN_KIND: Record<EarnKind, { top: string; sub: string; title: string; color: string }> = {
   pre: { top: 'PRE', sub: 'MKT', title: 'Premarket earnings', color: CAL.accent },
   after: { top: 'AFTER', sub: 'HRS', title: 'After-hours earnings', color: CAL.accent },
-  tbd: { top: 'TIME', sub: 'TBD', title: 'Time unconfirmed', color: CAL.previous },
+  // TBD was a grey; it is white now and still reads apart from the cyan of a
+  // CONFIRMED pre/after session, which is the distinction that matters.
+  tbd: { top: 'TIME', sub: 'TBD', title: 'Time unconfirmed', color: V2.text },
 }
 
 function EarnBlock({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
@@ -424,7 +432,11 @@ function EarnBlock({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
         >
           {k.top}
         </span>
-        <span style={{ fontSize: FS.micro, color: CAL.low, fontFamily: 'var(--font-mono)' }}>{k.sub}</span>
+        <span
+          style={{ fontSize: FS.micro, color: V2.text, opacity: 0.55, fontFamily: 'var(--font-mono)' }}
+        >
+          {k.sub}
+        </span>
       </div>
 
       <div

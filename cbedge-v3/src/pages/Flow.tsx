@@ -28,6 +28,7 @@ import {
   PREMIUM_STEP_COMBINED,
   WHALE_FLOOR,
   buildNetSeries,
+  buildSpotSeries,
   dteOf,
   fmtContractCost,
   fmtEtHm,
@@ -244,6 +245,19 @@ export default function Flow() {
     [netBins, isToday, date, chartSpan],
   )
 
+  // Spot overlay for the drift chart. Built from the UNFILTERED active-ticker
+  // tape on purpose: `spot` is the underlying level, identical on every print
+  // in a minute, so narrowing by premium/DTE would only thin the line out for
+  // no gain. Window comes from netSeries so RTH and 24H agree.
+  const spotSeries = useMemo(
+    () =>
+      buildSpotSeries(
+        merged.filter((o) => normTicker(o.underlying) === active),
+        { openSec: netSeries.openSec, closeSec: netSeries.closeSec },
+      ),
+    [merged, active, netSeries.openSec, netSeries.closeSec],
+  )
+
   /**
    * The visible tape indexed by minute bucket, biggest first — what the chart
    * hover lists.
@@ -319,6 +333,11 @@ export default function Flow() {
           <span className="text-up">● Calls {fmtPremium(netSeries.lastCall)}</span>
           <span className="text-down">● Puts {fmtPremium(netSeries.lastPut)}</span>
           <span className="text-muted">Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
+          {spotSeries.last > 0 && (
+            <span className="text-muted">
+              <span className="opacity-40">─</span> {active} {fmtSpot(spotSeries.last)}
+            </span>
+          )}
           {!chartOnly && (
             <SegGroup<ChartSpan>
               value={chartSpan}
@@ -341,7 +360,7 @@ export default function Flow() {
             to a sliver and the drift lines render as a flat smear at the top of
             the card. */}
         <div className="flex h-[420px] min-h-[420px] w-full flex-col">
-          <NetDriftChart series={netSeries} ordersByMin={ordersByMin} />
+          <NetDriftChart series={netSeries} ordersByMin={ordersByMin} spotPts={spotSeries.pts} />
         </div>
         {!netSeries.hasData && (
           <p className="px-3 pb-3 text-center text-xs text-muted">

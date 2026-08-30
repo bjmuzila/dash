@@ -208,6 +208,17 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   overlay.style.position = 'absolute'
   overlay.style.inset = '0'
   overlay.style.pointerEvents = 'none'
+  // Non-negotiable 6: every canvas v3 OWNS carries data-cb-layer. This one is
+  // ours — lightweight-charts made the canvas underneath it, we made this.
+  //
+  // Without the tag scripts/perf-check.mjs skipped it entirely, and because its
+  // interaction assertions sum repaints for the `gex-candles` card, they summed
+  // over nothing: "panning still redraws (0)" and "zooming still redraws (0)"
+  // failed on every run and COULD NOT have passed. A guard that reports zero
+  // because it is measuring an untagged canvas is worse than no guard — it is
+  // the exact failure the tag exists to prevent, on the one card whose bubbles
+  // repaint hardest.
+  overlay.dataset.cbLayer = 'bubbles'
   container.appendChild(overlay)
 
   let snaps: BubbleSnapshot[] = []
@@ -267,6 +278,24 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   let boxW = Math.max(1, Math.round(container.clientWidth))
   let boxH = Math.max(1, Math.round(container.clientHeight))
   let plotH = boxH
+  // The plot's WIDTH — the container minus the right price scale. ts.width() is
+  // the time scale's own width, which is exactly that, and is cached model state
+  // rather than a layout read, so it is safe to ask for per frame. The bubble
+  // layer needs it for the same reason the rail needs plotH: the overlay canvas
+  // spans the whole card and the plot does not, and coordinateToTime() answers
+  // happily for an x that is already underneath the price labels — it is index
+  // arithmetic, not a hit test. Without this the newest buckets were stamped over
+  // the axis. It is re-read every frame rather than only on resize because the
+  // scale widens on its own when the price gains a digit.
+  let plotW = boxW
+  const readPlotW = (): number => {
+    try {
+      const v = ts.width()
+      return v > 0 ? Math.max(1, Math.min(boxW, Math.round(v))) : boxW
+    } catch {
+      return boxW
+    }
+  }
   const measure = () => {
     boxW = Math.max(1, Math.round(container.clientWidth))
     boxH = Math.max(1, Math.round(container.clientHeight))
@@ -275,6 +304,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     } catch {
       plotH = boxH
     }
+    plotW = readPlotW()
   }
   measure()
   const ro = new ResizeObserver(measure)
@@ -365,11 +395,14 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       // the next one finds the loop cancelled.
       return `${version}:torn:${Math.random()}`
     }
-    return `${version}|${boxW}|${boxH}|${from}|${to}|${px(y0)}|${px(y1)}`
+    return `${version}|${boxW}|${boxH}|${plotW}|${from}|${to}|${px(y0)}|${px(y1)}`
   }
 
   function draw() {
     raf = requestAnimationFrame(draw)
+    // Cheap (cached model state, no layout) and in the signature, so the layer
+    // re-clips the frame the price scale changes width on.
+    plotW = readPlotW()
     const sig = viewSignature()
     if (sig === lastSig) return
     lastSig = sig
@@ -424,12 +457,16 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       yOfPrice,
       width: w,
       height: h,
+      plotWidth: plotW,
+      plotHeight: plotH,
     }
     // The visible span decides the bucket. Measured off the plot rather than
-    // the data, because it is a question about how much room a dot has.
+    // the data, because it is a question about how much room a dot has — and off
+    // the real plot width, not a hardcoded "minus 60 for the axis".
+    const right = Math.max(2, plotW - 1)
     const tA = geo.timeAtX(1)
-    const tB = geo.timeAtX(Math.max(2, w - 60))
-    if (tA != null && tB != null && tB > tA) reportBucket(tB - tA, Math.max(2, w - 60))
+    const tB = geo.timeAtX(right)
+    if (tA != null && tB != null && tB > tA) reportBucket(tB - tA, right)
 
     const drew = drawBubbles(ctx, snaps, geo, palette)
     reportOutOfRange(!drew)

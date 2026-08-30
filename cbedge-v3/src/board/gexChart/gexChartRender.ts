@@ -276,6 +276,30 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
   let dense: Densified = { rows: [], step: 5 }
   let denseKey = ''
   const vp = { start: null as number | null, count: 121 }
+  /**
+   * The viewport TRACKS SPOT until the user frames the chart themselves.
+   *
+   * `vp.start` used to be set once — the first draw that had rows — and then
+   * never again. Two things went wrong with that. The first draw usually lands
+   * before the spot frame does, so the window was centred on a spot of 0, which
+   * clamps to the far left of the ladder and stays there; and even when spot did
+   * arrive first, price walks all day while the window it was centred on at
+   * 09:30 does not, so by the afternoon the spot line sat wherever it had
+   * wandered to.
+   *
+   * So the window re-centres on spot on every draw — and a draw is every gex
+   * frame — for as long as this is true. A PAN turns it off, because dragging
+   * the ladder somewhere is a statement about where you want to be looking, and
+   * having it snap back a second later is the chart fighting you. A double
+   * click turns it back on, which is what the on-screen hint has always called
+   * "recenter". A new ladder (a symbol change) turns it back on too: the old
+   * framing was measured against strikes that no longer exist.
+   *
+   * ZOOM DELIBERATELY DOES NOT TURN IT OFF. While following, the fixed point of
+   * a zoom is the centre, which is spot; the cursor-anchored zoom below is what
+   * you get once you have panned and the chart is yours to aim.
+   */
+  let followSpot = true
   let yScale = 1
   let drag: {
     mode: 'pan' | 'yscale'
@@ -294,8 +318,11 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     if (key !== denseKey) {
       dense = densify(model.rows)
       denseKey = key
-      // A new ladder invalidates a viewport measured against the old one.
+      // A new ladder invalidates a viewport measured against the old one — and
+      // any framing the user had made of it, which was aimed at strikes that
+      // are not on this chart.
       vp.start = null
+      followSpot = true
     }
     return dense
   }
@@ -335,6 +362,11 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     const dynCount = Math.max(MIN_COUNT, Math.round(TARGET_RANGE / detectedStep) + 1)
     if (vp.start === null) vp.count = dynCount
     vp.count = clamp(vp.count, MIN_COUNT, allRows.length)
+    // Spot in the middle, re-decided every frame while following. Guarded on a
+    // real spot: the first draws arrive before the spot frame does, and
+    // centring on 0 pins the window to the bottom of the ladder — which is the
+    // left edge, and is where this chart used to open and stay.
+    if (followSpot && model.spot > 0) vp.start = atmStart(allRows, model.spot, vp.count)
     if (vp.start === null) vp.start = atmStart(allRows, model.spot, vp.count)
     vp.start = clamp(vp.start, 0, Math.max(0, allRows.length - vp.count))
 
@@ -604,7 +636,16 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     ctx.fillStyle = rgba(p.fg, 0.22)
     ctx.font = 'bold 8px ui-monospace, monospace'
     ctx.textAlign = 'right'
-    ctx.fillText('scroll=zoom · drag=pan · dbl=recenter', W - 3, PAD_T + cH - 3)
+    // Says which of the two modes you are in, because "why did it stop
+    // following price" and "why did it snap back" are the same question asked
+    // from either side of one silent flag.
+    ctx.fillText(
+      followSpot
+        ? 'spot centred · scroll=zoom · drag=pan'
+        : 'scroll=zoom · drag=pan · dbl=recenter',
+      W - 3,
+      PAD_T + cH - 3,
+    )
 
     // ── Hover readout ──
     if (hover) {
@@ -660,6 +701,15 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     const factor = e.deltaY > 0 ? 1.16 : 0.86
     const next = clamp(Math.round(vp.count * factor), MIN_COUNT, rows.length)
     if (next === vp.count) return
+    // Still following spot: the fixed point is the centre, and the centre is
+    // spot. Widen or narrow around it and let draw() re-centre. Anchoring on
+    // the cursor here would walk the window off spot a notch per wheel tick
+    // and quietly undo the follow without the user ever panning.
+    if (followSpot) {
+      vp.count = next
+      draw()
+      return
+    }
     const rect = container.getBoundingClientRect()
     // The strike under the pointer is the fixed point of the zoom — anchoring
     // on the centre instead makes it walk away from you as you scroll.
@@ -696,6 +746,9 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
         const shift = Math.round(-dx / drag.pxPerStrike)
         const { rows } = densified()
         vp.start = clamp(drag.startStart + shift, 0, Math.max(0, rows.length - vp.count))
+        // Aiming the ladder by hand ends the follow. Only on an actual shift,
+        // so a click that happens to wobble a pixel does not silently unlock it.
+        if (shift !== 0) followSpot = false
       }
       draw()
       return
@@ -727,6 +780,9 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     const initCount = Math.max(MIN_COUNT, Math.round(TARGET_RANGE / step) + 1)
     vp.count = clamp(initCount, MIN_COUNT, Math.max(MIN_COUNT, rows.length))
     vp.start = atmStart(rows, model.spot, vp.count)
+    // "Recenter" means back to the default frame AND back to tracking spot,
+    // which is the state the chart opens in.
+    followSpot = true
     yScale = 1
     draw()
   }

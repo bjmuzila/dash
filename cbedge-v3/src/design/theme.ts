@@ -156,8 +156,6 @@ export const V2 = {
   /** Ink on a solid fill — a level tag, an active transport button. */
   ink: 'var(--color-v2-ink)',
   refresh: 'var(--color-v2-refresh)',
-  /** The refresh button's "refreshing" grey — v2's inline #888. */
-  dim: 'var(--color-v2-dim)',
   badgeInk: 'var(--color-v2-badge-ink)',
   lightBlue: 'var(--color-v2-lightblue)',
   /** Already identical in both palettes. Aliased so a ported file reads V2.* throughout. */

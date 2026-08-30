@@ -10,7 +10,7 @@ import type {
 import type { FlowTapePrint } from '@/contract/frames'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { T, alpha, tokenHex, tokenHexAlpha } from '@/design/theme'
-import { fmtPremium, isBullish, type NetSeries } from '@/data/flowMath'
+import { fmtPremium, fmtSpot, isBullish, type NetPoint, type NetSeries } from '@/data/flowMath'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Net Drift (Premium) — cumulative net call vs net put premium, one point per
@@ -35,6 +35,8 @@ interface TipState {
   timeSec: number
   etLabel: string
   orders: FlowTapePrint[]
+  /** Underlying at that minute, 0 when the overlay has no point there. */
+  spot: number
 }
 
 const TIP_MAX_ROWS = 8
@@ -46,13 +48,21 @@ export interface NetDriftChartProps {
    * the hover tooltip's list of what actually printed in that minute.
    */
   ordersByMin: Map<number, FlowTapePrint[]>
+  /**
+   * The underlying's own path over the same window (buildSpotSeries). Drawn as
+   * a thin overlay on its own HIDDEN price scale — the visible right axis is
+   * premium in dollars, and putting an index level on it would make both
+   * meaningless. Shape is the point; the level is read off the crosshair.
+   */
+  spotPts?: readonly NetPoint[]
 }
 
-export function NetDriftChart({ series, ordersByMin }: NetDriftChartProps) {
+export function NetDriftChart({ series, ordersByMin, spotPts }: NetDriftChartProps) {
   const chartRef = useRef<IChartApi | null>(null)
   const callRef = useRef<ISeriesApi<'Line'> | null>(null)
   const putRef = useRef<ISeriesApi<'Line'> | null>(null)
   const volRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const spotRef = useRef<ISeriesApi<'Line'> | null>(null)
 
   // Read by the crosshair handler, which is created once and must not close
   // over a stale render's props.
@@ -60,14 +70,36 @@ export function NetDriftChart({ series, ordersByMin }: NetDriftChartProps) {
   seriesRef.current = series
   const ordersRef = useRef(ordersByMin)
   ordersRef.current = ordersByMin
+  const spotDataRef = useRef<readonly NetPoint[]>(spotPts ?? [])
+  spotDataRef.current = spotPts ?? []
+
+  // Minute -> spot, for the crosshair readout. Rebuilt only when the overlay
+  // itself changes; the tooltip must not walk an array on every mousemove.
+  const spotByMinRef = useRef<Map<number, number>>(new Map())
 
   const visibleRef = useRef(true)
   /** Set while hidden; applied on the way back in. */
   const pendingRef = useRef<NetSeries | null>(null)
+  const pendingSpotRef = useRef<readonly NetPoint[] | null>(null)
 
   const [tip, setTip] = useState<TipState | null>(null)
   const tipElRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLElement | null>(null)
+
+  const applySpot = (pts: readonly NetPoint[]) => {
+    const spot = spotRef.current
+    if (!spot) return
+    const m = new Map<number, number>()
+    for (const p of pts) if (p.value !== undefined) m.set(p.time, p.value)
+    spotByMinRef.current = m
+    // Value-only points, never whitespace: a Line series joins across a missing
+    // index, which is what keeps the overlay continuous through quiet minutes.
+    spot.setData(
+      pts
+        .filter((p) => p.value !== undefined)
+        .map((p) => ({ time: p.time as UTCTimestamp, value: p.value as number }) as LineData),
+    )
+  }
 
   const apply = (s: NetSeries) => {
     const call = callRef.current
@@ -186,17 +218,34 @@ export function NetDriftChart({ series, ordersByMin }: NetDriftChartProps) {
         lastValueVisible: false,
         priceFormat: { type: 'volume' },
       })
+      // Spot overlay. Its own scale id => an OVERLAY price scale, which is not
+      // rendered — so the index level never lands on the premium axis. Thin and
+      // washed out on purpose: this is context behind the drift lines, not a
+      // fourth thing competing with them.
+      const spotSeries = chart.addSeries(LineSeries, {
+        priceScaleId: 'spot',
+        color: tokenHexAlpha('--color-fg', 0.38),
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      })
       // The volume histogram is docked in the bottom band; the drift lines get
       // everything above it. Keep the two bands adjacent — every point of gap
       // between `vol.top` and `1 - right.bottom` is vertical range the lines
       // pay for and nothing draws in.
       chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.86, bottom: 0 } })
       chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.04, bottom: 0.16 } })
+      // Same band as the drift lines so the two read against each other, inset
+      // a little so a flat spot day does not sit exactly on a drift line.
+      chart.priceScale('spot').applyOptions({ visible: false, scaleMargins: { top: 0.08, bottom: 0.20 } })
 
       chartRef.current = chart
       callRef.current = callSeries
       putRef.current = putSeries
       volRef.current = volSeries
+      spotRef.current = spotSeries
 
       // Non-negotiable 6. These canvases are the library's, but they are the
       // ones that paint on this page's behalf, so scripts/perf-check.mjs has to
@@ -241,11 +290,13 @@ export function NetDriftChart({ series, ordersByMin }: NetDriftChartProps) {
                   timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit',
                 }),
                 orders,
+                spot: spotByMinRef.current.get(t) ?? 0,
               },
         )
       })
 
       apply(seriesRef.current)
+      applySpot(spotDataRef.current)
     })()
 
     return () => {
@@ -254,6 +305,7 @@ export function NetDriftChart({ series, ordersByMin }: NetDriftChartProps) {
       callRef.current = null
       putRef.current = null
       volRef.current = null
+      spotRef.current = null
       hostRef.current = null
       chart?.remove()
     }
@@ -272,6 +324,17 @@ export function NetDriftChart({ series, ordersByMin }: NetDriftChartProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [series])
 
+  // Spot overlay, gated the same way.
+  useEffect(() => {
+    const pts = spotPts ?? []
+    if (!visibleRef.current) {
+      pendingSpotRef.current = pts
+      return
+    }
+    applySpot(pts)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotPts])
+
   return (
     <div className="relative flex h-full min-h-0 flex-1 flex-col">
       <ChartFrame
@@ -282,6 +345,10 @@ export function NetDriftChart({ series, ordersByMin }: NetDriftChartProps) {
             apply(pendingRef.current)
             pendingRef.current = null
           }
+          if (v && pendingSpotRef.current) {
+            applySpot(pendingSpotRef.current)
+            pendingSpotRef.current = null
+          }
         }}
       />
       {tip && (
@@ -290,7 +357,12 @@ export function NetDriftChart({ series, ordersByMin }: NetDriftChartProps) {
           className="pointer-events-none absolute z-20 min-w-[230px] overflow-hidden rounded-md border border-line bg-surface text-sm shadow-lg"
         >
           <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
-            <span className="text-fg">{tip.etLabel}</span>
+            <span className="text-fg">
+              {tip.etLabel}
+              {tip.spot > 0 && (
+                <span className="ml-2 tabular text-xs text-muted">{fmtSpot(tip.spot)}</span>
+              )}
+            </span>
             <span className="tabular text-xs tracking-wider text-muted">
               OTM · {tip.orders.length} print{tip.orders.length === 1 ? '' : 's'}
             </span>

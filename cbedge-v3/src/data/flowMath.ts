@@ -388,6 +388,32 @@ export function buildNetSeries(
   const hasData = netBins.length > 0
 
   const nowSec = Math.floor((opts.now ?? Date.now()) / 1000)
+
+  // ── The fill horizon. ──
+  //
+  // Whitespace exists for ONE reason: to hold the axis open across the part of
+  // the session that has not happened yet. It must never open a hole in the
+  // middle of a line, and `nowSec` on its own is not a safe edge for that.
+  //
+  // This is v2's recurring "gaps in the chart" bug and it has two causes, both
+  // of which put REAL bins past "now":
+  //
+  //   • Clock skew. `nowSec` is the BROWSER's clock. A machine a few minutes
+  //     behind the server turned every bin in that window into whitespace — a
+  //     break in the line that opened and closed as the clock drifted, which is
+  //     exactly the "ever so often" part.
+  //   • The late-print re-scan. The server re-stamps late prints back into
+  //     their own minute (NET_LATE_SEC), so a poll can legitimately return a
+  //     bin stamped ahead of where the client thinks the session edge is.
+  //
+  // So the horizon is the LATER of the clock edge and the last bin that
+  // actually carries data. Past that, everything is genuinely future and draws
+  // as whitespace. A bin holding data is also never whitespaced regardless —
+  // see the `b` test in the loop.
+  let lastDataSec = -Infinity
+  for (const b of netBins) if (b.sec > lastDataSec) lastDataSec = b.sec
+  const horizon = Math.max(nowSec + BIN_SEC, lastDataSec)
+
   const callPts: NetPoint[] = []
   const putPts: NetPoint[] = []
   const volPts: VolPoint[] = []
@@ -400,7 +426,7 @@ export function buildNetSeries(
       call += b.callNet
       put += b.putNet
     }
-    if (t <= nowSec + BIN_SEC) {
+    if (b || t <= horizon) {
       callPts.push({ time: t, value: call })
       putPts.push({ time: t, value: put })
       const cv = b ? b.callVol : 0
@@ -414,6 +440,49 @@ export function buildNetSeries(
   }
 
   return { callPts, putPts, volPts, lastCall: call, lastPut: put, openSec, closeSec, hasData, byBin }
+}
+
+// ── Spot overlay ─────────────────────────────────────────────────────────────
+
+export interface SpotSeries {
+  pts: NetPoint[]
+  /** Newest spot in the window, 0 when the tape carried none. */
+  last: number
+}
+
+/**
+ * The underlying's own path across the session, for the Net Drift overlay.
+ *
+ * Source is the tape's per-print `spot`, which is the underlying level frozen
+ * at print time — the same field the Dislocation Velocity panel rides. There is
+ * no separate per-minute spot feed to pull, and adding one for a decorative
+ * overlay would be a second socket's worth of traffic for a line.
+ *
+ * Bucketed to BIN_SEC so it lands on the drift grid, LAST print in the minute
+ * wins (closest to that minute's close). Minutes with no print emit NO point at
+ * all rather than whitespace: a Line series joins across a missing index, and a
+ * continuous spot line is the whole reason the overlay is here. Whitespace
+ * would reintroduce the gaps this same commit is removing.
+ */
+export function buildSpotSeries(
+  prints: readonly FlowTapePrint[],
+  opts: { openSec: number; closeSec: number },
+): SpotSeries {
+  // minute -> { ts, spot }; ts breaks ties so poll order cannot change the line.
+  const byMin = new Map<number, { ts: number; spot: number }>()
+  for (const o of prints) {
+    if (!o.spot || o.spot <= 0) continue
+    const sec = Math.floor(o.ts / 1000 / BIN_SEC) * BIN_SEC
+    if (sec < opts.openSec || sec > opts.closeSec) continue
+    const cur = byMin.get(sec)
+    if (!cur || o.ts >= cur.ts) byMin.set(sec, { ts: o.ts, spot: o.spot })
+  }
+
+  const pts: NetPoint[] = [...byMin.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([sec, v]) => ({ time: sec, value: v.spot }))
+
+  return { pts, last: pts.length ? (pts[pts.length - 1]?.value ?? 0) : 0 }
 }
 
 // ── Totals ───────────────────────────────────────────────────────────────────

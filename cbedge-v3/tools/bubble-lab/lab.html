@@ -225,6 +225,14 @@
     return {
       width: w,
       height: h,
+      // The plot rect the layer clips to. The real chart takes this from
+      // ts.width() / ts.height(); here it is the sheet minus the gutter. The
+      // real one's timeAtX keeps answering out in the gutter (it is index
+      // arithmetic, not a hit test) where this stand-in returns null, so the
+      // gutter has to be stated rather than probed for — which is exactly the
+      // bug this pair of fields exists to close.
+      plotWidth: x1,
+      plotHeight: h,
       xOfTime: (ms) => x0 + ((ms - tMin) / span) * (x1 - x0),
       timeAtX: (x) => (x < x0 || x > x1 ? null : tMin + ((x - x0) / (x1 - x0)) * span),
       yOfPrice: (p) => y1 - ((p - pLo) / prange) * (y1 - y0),

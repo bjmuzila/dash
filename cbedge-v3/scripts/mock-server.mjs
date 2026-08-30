@@ -422,6 +422,14 @@ function api(req, res, path, params) {
   if (path === '/proxy/flow-history') {
     return json(res, mockFlowHistory()), true
   }
+  // AuthProvider reads this ONCE at boot, on every page including the board.
+  // Unmocked it 404'd on every run — noise in the check's own output, and the
+  // reason a run could report an "unmocked endpoint" that had nothing to do
+  // with the card being measured. Owner:true so owner-gated chrome renders;
+  // /v3 is owner-only anyway, so that is the realistic session.
+  if (path === '/api/auth/me') {
+    return json(res, { user: { id: 'mock-owner', email: 'mock@cbedge.local', isOwner: true, isPaid: true } }), true
+  }
   if (path === '/api/calendar') return json(res, mockCalendar()), true
   if (path === '/proxy/earnings-week') return json(res, mockEarnings()), true
   if (path === '/api/es-candles/tickers') {

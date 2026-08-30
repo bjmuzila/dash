@@ -199,6 +199,19 @@ export interface BubbleGeometry {
   /** CSS pixels. The context is already scaled by devicePixelRatio. */
   width: number
   height: number
+  /**
+   * The PLOT rect, in the same CSS pixels — the canvas minus the right price
+   * scale and the bottom time axis.
+   *
+   * The overlay spans the whole card and the plot does not, and
+   * `coordinateToTime()` keeps answering for an x that is already underneath the
+   * price scale: it is index arithmetic, not a hit test. So probing the canvas
+   * width put the window's right edge out in the axis gutter and the newest
+   * buckets were stamped straight over the price labels. Everything here is
+   * bounded by these two numbers, and the draw clips to them as well.
+   */
+  plotWidth: number
+  plotHeight: number
 }
 
 function rgba(c: [number, number, number], a: number): string {
@@ -223,7 +236,8 @@ interface TimeWindow {
  * every single frame.
  */
 function timeWindow(geo: BubbleGeometry): TimeWindow | null {
-  const w = geo.width
+  // The PLOT's width, never the canvas's. See BubbleGeometry.plotWidth.
+  const w = Math.max(1, Math.min(geo.plotWidth, geo.width))
   const STEPS = 24
   let firstValid = -1
   let lastValid = -1
@@ -263,10 +277,20 @@ function timeWindow(geo: BubbleGeometry): TimeWindow | null {
  * never lands on a bar and the whole layer vanished intermittently on nothing
  * more than whether it did. timeAtX() IS defined across the plot and monotonic
  * in x, so the inverse is a binary search over the window found above.
+ *
+ * ── null OUTSIDE THE WINDOW, NOT CLAMPED TO ITS EDGES ────────────────────────
+ * This used to answer `win.xLo` for anything older than the window and `win.xHi`
+ * for anything newer. That is not a position, it is a pin: every bucket recorded
+ * before the visible range — the whole morning, when you are looking at the last
+ * two hours — was stamped on the left edge, on top of each other, and stayed
+ * glued there through pans and zooms while the candles underneath moved. Same
+ * story on the right, where the pinned column landed in the price-scale gutter.
+ * A bucket that is not in the window is not on the chart; it is skipped.
  */
-function xAtTime(win: TimeWindow, geo: BubbleGeometry, ms: number): number {
-  if (ms <= win.tLo) return win.xLo
-  if (ms >= win.tHi) return win.xHi
+function xAtTime(win: TimeWindow, geo: BubbleGeometry, ms: number): number | null {
+  if (ms < win.tLo || ms > win.tHi) return null
+  if (ms === win.tLo) return win.xLo
+  if (ms === win.tHi) return win.xHi
   let lo = win.xLo
   let hi = win.xHi
   for (let i = 0; i < 20; i++) {
@@ -432,6 +456,10 @@ export function drawBubbles(
 ): boolean {
   const { width: w, height: h } = geo
   if (!snaps.length || w <= 0 || h <= 0) return false
+  // Bounds are the PLOT's, not the canvas's: the price scale owns the right
+  // ~60px and the time axis the bottom ~26px, and a mark belongs in neither.
+  const pw = Math.max(1, Math.min(geo.plotWidth, w))
+  const ph = Math.max(1, Math.min(geo.plotHeight, h))
   const win = timeWindow(geo)
   if (!win) return false
 
@@ -457,7 +485,12 @@ export function drawBubbles(
   // everything. Two times one bucket apart, in the middle of the plot, is the
   // question actually being asked.
   const tMid = geo.timeAtX((win.xLo + win.xHi) / 2) ?? first.ts
-  const pxPerDot = Math.abs(xAtTime(win, geo, tMid + bucketMs) - xAtTime(win, geo, tMid))
+  // One bucket either side of the midpoint, whichever of the two is still inside
+  // the window — xAtTime answers null outside it now, and a clamped answer here
+  // would report a fraction of the real spacing and stride away most of the trail.
+  const xMid = xAtTime(win, geo, tMid)
+  const xStep = xAtTime(win, geo, tMid + bucketMs) ?? xAtTime(win, geo, tMid - bucketMs)
+  const pxPerDot = xMid != null && xStep != null ? Math.abs(xStep - xMid) : 0
 
   // ── THE DOTS ARE STRIDED WHEN THERE IS NOT ROOM FOR ALL OF THEM ───────────
   //
@@ -488,18 +521,31 @@ export function drawBubbles(
   // as bucketed — so a strided 1m trail is sized like the rung it is showing.
   const size = sizeFor(bucketMs * stride, pxPerDot * stride)
 
+  // ── CLIPPED TO THE PLOT ───────────────────────────────────────────────────
+  // A mark whose centre is legally inside the plot still has a radius, a ring
+  // and a glow, and the newest bucket sits within a few pixels of the price
+  // scale. Without this the right-hand marks bled over the axis labels. Clipping
+  // rather than dropping them, so the edge dot is cut off by the axis the way it
+  // is in every other chart, instead of vanishing a bucket early.
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(0, 0, pw, ph)
+  ctx.clip()
+
   let drew = 0
   for (let i = 0; i < snaps.length; i += stride) {
     const snap = snaps[i]!
     const x = xAtTime(win, geo, snap.ts)
-    if (x < -40 || x > w + 40) continue
+    // Outside the visible window entirely: not on this chart. See xAtTime.
+    if (x == null) continue
+    if (x < -40 || x > pw + 40) continue
     // Age fades opacity only a LITTLE — the oldest bucket keeps `ageKeep` of it.
     // A trail that fades to nothing is a trail you cannot read the morning off,
     // and the morning is half of why it is drawn.
     const age = BUBBLES.ageKeep + (1 - BUBBLES.ageKeep) * ((snap.ts - first.ts) / span)
 
     for (const { mark: m, y, r, dx } of placeBucket(snap, geo, size)) {
-      if (y < -20 || y > h + 20) continue
+      if (y < -20 || y > ph + 20) continue
       const positive = m.value >= 0
       const base = positive ? palette.pos : palette.neg
       const hot = positive ? palette.posHot : palette.negHot
@@ -531,5 +577,6 @@ export function drawBubbles(
       drew++
     }
   }
+  ctx.restore()
   return drew > 0
 }

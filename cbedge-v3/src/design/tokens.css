@@ -218,9 +218,6 @@
                               active replay button, the active Replay toggle */
   --color-v2-refresh: #1fd98a; /* the refresh button's success state + glow.
                                   v2's REFRESH_GREEN */
-  --color-v2-dim: #888888; /* the refresh button's "refreshing" grey. v2 types
-                              #888 inline; --color-flat (#7a828d) is close but
-                              not the same and parity is the requirement */
   --color-v2-badge-ink: #05080d; /* ink on the econ calendar's solid TODAY badge */
   --color-v2-lightblue: #7ed3fc; /* the embed-mode card radial. NOTE: v2's
                                     homeTheme.LIGHT_BLUE is #7dd3fc, but the

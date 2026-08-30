@@ -374,35 +374,65 @@ export function UpdatedStamp({ at }: { at: number | null }) {
 // ── The card shell ───────────────────────────────────────────────────────────
 
 /**
- * One of the nine small cards: the v2 frosted plate, 16px padding, a FIXED 480px
- * height, and its own scrollbar.
+ * THE SMALL-CARD HEIGHT. All eight cards under Ticker Lookup are exactly this
+ * tall — not "about" this tall, and not sized to their content.
  *
- * The fixed height is load-bearing, not decoration. The page is a 4-column grid
- * with `alignItems: start`; without it a card that gained a row would grow its
- * whole grid row and shove the two beside it down the page. A card that
- * overflows scrolls inside itself instead.
+ * The page is a four-column grid with `alignItems: start`. Without one fixed
+ * number the tallest card in a row sets that row's height and the three beside
+ * it sit in a box they do not fill, so the second row starts at a different y
+ * from the first and the board reads as ragged. A card whose content is longer
+ * than this scrolls INSIDE itself; nothing pushes anything else.
+ */
+export const CARD_H = 480
+
+/**
+ * One card.
+ *
+ * TWO MODES, and the difference is where the scrollbar lives:
+ *
+ *   height set (the eight small cards) — fixed box, and the card body is the
+ *   scroller. This is the mode that keeps the grid square.
+ *
+ *   height undefined (Ticker Lookup, Strategy Builder) — the card is as tall as
+ *   its content and NEVER scrolls. Ticker Lookup in particular must show all of
+ *   itself: the controls, the identity line, both panes, the read and the
+ *   disclaimer. The only scrollers inside it are the two ladders, which own
+ *   their own fixed-height pane. A scrollbar on the card as well as on the
+ *   ladders inside it is two scrollbars for one gesture.
  */
 export function AnalysisCard({
   children,
   flush = false,
-  height = 480,
+  height = CARD_H,
   span,
   style,
 }: {
   children: ReactNode
   /** Drop the padding + gap — for the econ calendar, which paints edge to edge. */
   flush?: boolean
-  /** Fixed pane height. Pass `undefined` for the two full-width cards. */
+  /** Fixed pane height. Pass `undefined` for a card that sizes to its content. */
   height?: number | undefined
   /** Full-width: `1 / -1`. */
   span?: boolean
   style?: CSSProperties
 }) {
+  const fixed = height != null
   return (
     <Card
       plate="v2"
       flush
-      style={{ ...(span ? { gridColumn: '1 / -1' } : null), ...(height ? { height } : null), ...style }}
+      style={{
+        ...(span ? { gridColumn: '1 / -1' } : null),
+        // min AND max, not just height: `height` alone is a suggestion to a flex
+        // item whose content overflows, and one card growing by a row is the
+        // whole reason this constant exists.
+        ...(fixed ? { height, minHeight: height, maxHeight: height } : null),
+        // A card that sizes to its content must not clip it — Card's own
+        // `overflow-hidden` would cut the bottom off the ladders' pane.
+        ...(fixed ? null : { overflow: 'visible' }),
+        boxSizing: 'border-box',
+        ...style,
+      }}
     >
       <div
         style={
@@ -415,7 +445,7 @@ export function AnalysisCard({
                 padding: 16,
                 minHeight: 0,
                 flex: 1,
-                overflowY: 'auto',
+                overflowY: fixed ? 'auto' : 'visible',
               }
         }
       >
@@ -655,7 +685,7 @@ export function refreshStyle(state: RefreshState): CSSProperties {
         : state === 'error'
           ? V2.red
           : state === 'refreshing'
-            ? V2.dim
+            ? V2.muted
             : V2.cyan,
     textShadow:
       state === 'success'
