@@ -1,5 +1,103 @@
 # Changelog
 
+## 2026-08-30 - Post Studio: the logo is inlined, so there is no path left to break
+
+Edited: `owner-vite/src/pages/studioHtml.ts`.
+
+The nginx allowlist fix was correct but it is the third time this one image has
+gone missing, and every fix so far has been "get the routing right". The logo is
+now a `data:` URI in the studio itself. No request, nothing to misroute, and
+same-origin by construction so html2canvas can never taint the export canvas on
+it.
+
+For the record, the routing problem it retires: this document renders inside
+owner.cbedge.net, whose container holds only owner-vite's `dist`. The repo-root
+`public/` belongs to the Next app and reaches that origin only through an
+allowlist in `owner-vite/nginx.conf`. Miss it and nginx's SPA fallback answers
+**200 with index.html**, so the `<img>` is handed a page of HTML - which is why
+it showed as a broken icon rather than a 404. That allowlist entry stays for
+anything else that wants the file.
+
+The 2064px keyed master resampled to 1200px and quantized: 35KB, well past what
+a logo slot ever displays. The on-canvas fallback message stays, but it can now
+only fire for a logo someone loaded by hand.
+
+**The reason there is anything to re-apply here.** `studioHtml.ts` on disk had
+reverted to its state from three commits back - no embedded font, no
+object-fit export fix, and the backtick build-breaker restored. `nginx.conf`,
+`settings.ts` and this changelog were all untouched, so this was not a git
+rollback; something overwrote that one file, most likely a stale editor buffer
+saved over it. All of it is re-applied and re-verified:
+
+- the two comments that used backticks inside the `String.raw` document
+- the four embedded Inter weights and the `InterCB`-only font stack
+- `exportImagesAsBackgrounds`, `document.fonts.ready`, `scale: 2`, and the
+  Download button disabling mid-render
+
+Verified against a server that deliberately serves **no** `/cbedge3.0.png`: the
+page makes exactly one network request (the document itself), the logo reports
+1200x354 from its data URI, `InterCB` is live, and a 3200x1800 export comes out
+clean with no page errors. Preview at
+`generated/2026-08-30-post-studio-inline-logo.png`.
+
+## 2026-08-30 - v3 Multi Greek: the ticker box is text until you click it
+
+Edited: `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`.
+
+Each panel's ticker was a permanent 76px bordered input. On a three-column
+panel that pill was wider than the ladder's own strike rail and the tallest
+thing in the header row, spending both on three characters that change once a
+session - and it pushed the panel's spot price out to the far edge.
+
+It is bare text now, in the panel's own type, sized to the symbol. Clicking it
+swaps in the input, focused and selected, with an accent underline instead of a
+box; Enter or blur commits, Escape reverts, and the field goes back to text.
+Header padding drops from `py-0.5` to `py-px` since there is no longer a bordered
+control setting the row's height.
+
+The board's panel is still marked by the accent colour - now on the text rather
+than on a border. An added panel's ticker is plain, and it already carries the
+✕ that panel one does not have, so nothing was lost with the border.
+
+## 2026-08-30 - v3 popovers portalled out of the card, and the GEX chart's stat row is all-or-nothing
+
+Edited: `cbedge-v3/src/design/primitives/Controls.tsx`,
+`cbedge-v3/src/board/gexChart/GexChartCard.tsx`,
+`cbedge-v3/src/board/gexChart/settings.ts`,
+`cbedge-v3/src/board/gexChart/StatCards.tsx`.
+
+**The cog panel was cut off on a narrow card.** Opening Multi Greek's settings
+on a three-column card lost the whole left edge of the panel - the section
+headings, and the first half of every control. `Popover` was an `absolute` child
+of the trigger's wrapper, so a 240px panel hanging off a button near the card's
+left edge was clipped twice: by the Card's `overflow-hidden`, and by the board
+tile's stacking context.
+
+`Popover` now portals to `<body>` and positions itself in viewport coordinates.
+It aligns to the trigger's wrapper (`align` still picks which edge), clamps
+horizontally so neither edge can leave the screen, flips above the trigger when
+there is more room up than down, and hands whatever height is left to the panel
+as a max-height with its own scroll - so a tall panel on a short window
+scrolls instead of running off the bottom. A zero-size anchor span stays behind
+in the original DOM position so `offsetParent` still resolves after the panel
+leaves. z-index 250, above the board tiles and above the Multi Greek cell card
+at 200.
+
+This is a shared primitive, so the same fix lands on every popover in v3: the
+GEX candles symbol picker and dropdowns, the Add-panel box, and the board's own
+menus.
+
+**The GEX chart's stat cards are one switch now.** The cog held eleven controls
+- a row on/off, an all/none, and ten individual card toggles. The row shares its
+width evenly between the tiles, so hiding one only made the other nine wider,
+and a stored subset meant no two boards drew the same row. The cog is gone,
+replaced by a single `CARDS` chip in the toolbar beside DEX.
+
+`GexChartSettings.cards` (the per-card map) and `STAT_KEYS` are deleted;
+`cardsOn` is the whole setting. A stored blob still carrying a `cards` map is
+ignored rather than migrated - the key is simply not read, and the next save
+drops it. `StatCards` lost its `enabled` prop and always draws all ten.
+
 ## 2026-08-30 - v3 Multi Greek: the cell card was painting behind the card below it
 
 Edited: `cbedge-v3/src/board/multiGreek/CellCard.tsx`.

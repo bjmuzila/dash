@@ -54,8 +54,6 @@ export interface StatCardsProps {
   basis: GexBasis
   /** Resolved by the card: the basis is FLOW *and* these rows can support it. */
   flowActive: boolean
-  /** Which of the ten to draw, in STAT_KEYS order. */
-  enabled: Record<StatKey, boolean>
 }
 
 interface Tile {
@@ -69,7 +67,7 @@ interface Tile {
 
 const MUTED = '--color-flat'
 
-export function StatCards({ rows, spot, symbol, basis, flowActive, enabled }: StatCardsProps) {
+export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsProps) {
   const onSocket = isSocketSymbol(symbol)
   const kDp = useMemo(() => strikeDp(rows, spot), [rows, spot])
 
@@ -200,8 +198,10 @@ export function StatCards({ rows, spot, symbol, basis, flowActive, enabled }: St
           : 'Options flow is only recorded for the socket symbol — this tile does not follow the board ticker',
       },
     ]
-    return all.filter((t) => enabled[t.key])
-  }, [rows, spot, basis, flowActive, kDp, em, bullPct, onSocket, enabled])
+    // No per-card filter any more: the row is all ten or it is not drawn at
+    // all, and the card's `cardsOn` chip decides which.
+    return all
+  }, [rows, spot, basis, flowActive, kDp, em, bullPct, onSocket])
 
   if (!tiles.length) return null
 
@@ -229,18 +229,4 @@ export function StatCards({ rows, spot, symbol, basis, flowActive, enabled }: St
       ))}
     </div>
   )
-}
-
-/** Toolbar-facing labels for the cog's on/off chips. */
-export const STAT_LABEL: Record<StatKey, string> = {
-  netGex: 'Net GEX',
-  callWall: 'Call Wall',
-  putWall: 'Put Wall',
-  flip: 'Flip',
-  cb: 'CB',
-  maxPain: 'Max Pain',
-  emUp: '+1σ',
-  emDown: '−1σ',
-  posGexPct: '+GEX %',
-  bullBear: 'Bull/Bear',
 }

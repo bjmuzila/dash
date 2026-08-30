@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The small controls a card's toolbar and settings popover are built from.
@@ -108,7 +109,42 @@ export function Chip({
   )
 }
 
-/** A click-outside-to-close popover anchored under its trigger. */
+/** Kept clear of the viewport edge so a popover is never half off-screen. */
+const POP_EDGE = 8
+/** Gap between the trigger and the panel. */
+const POP_GAP = 4
+/**
+ * Above every board tile and above the Multi Greek cell card (200).
+ *
+ * Board.tsx gives each tile `zIndex: 1`, which makes the tile its own stacking
+ * context — a z-index set INSIDE a tile can never beat a later sibling tile,
+ * however large. That is why the panel is portalled to <body>: only at the root
+ * does this number mean anything.
+ */
+const POP_Z = 250
+
+interface PopPos {
+  left: number
+  top: number
+  maxH: number
+}
+
+/**
+ * A click-outside-to-close popover anchored under its trigger.
+ *
+ * Portalled to <body> and positioned in viewport coordinates. It used to be an
+ * `absolute` child of the trigger's wrapper, which meant a wide panel on a
+ * narrow card was clipped twice over: by the Card's `overflow-hidden`, and by
+ * the board tile's stacking context. On a three-column Multi Greek the cog
+ * panel lost its whole left edge — the section labels and the first half of
+ * every control.
+ *
+ * Positioning rules: aligned to the trigger's wrapper (`align` picks which
+ * edge), clamped to the viewport horizontally, and flipped above the trigger
+ * when there is more room up than down. Whatever height is left is handed to
+ * the panel as a max-height with its own scroll, so a tall panel on a short
+ * window is scrollable rather than cut off.
+ */
 export function Popover({
   open,
   onClose,
@@ -121,6 +157,9 @@ export function Popover({
   align?: 'left' | 'right'
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
+  const anchorRef = useRef<HTMLSpanElement | null>(null)
+  const [pos, setPos] = useState<PopPos | null>(null)
+
   useEffect(() => {
     if (!open) return
     const onDown = (e: PointerEvent) => {
@@ -136,17 +175,83 @@ export function Popover({
       window.removeEventListener('keydown', onKey)
     }
   }, [open, onClose])
-  if (!open) return null
+
+  const place = useCallback(() => {
+    const el = ref.current
+    const anchor = anchorRef.current
+    if (!el || !anchor) return
+    // The trigger's wrapper — the `relative` div every call site puts the
+    // button and this popover in. Its box is the thing to align to; the
+    // zero-size anchor span alone would only give the wrapper's BOTTOM edge,
+    // which is not enough to flip the panel above the trigger.
+    const host = (anchor.offsetParent as HTMLElement | null) ?? anchor
+    const a = host.getBoundingClientRect()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+
+    let left = align === 'right' ? a.right - w : a.left
+    left = Math.min(Math.max(POP_EDGE, left), Math.max(POP_EDGE, vw - w - POP_EDGE))
+
+    const below = vh - (a.bottom + POP_GAP) - POP_EDGE
+    const above = a.top - POP_GAP - POP_EDGE
+    // Only flip when it does not fit below AND there is genuinely more room up.
+    const flip = h > below && above > below
+    const maxH = Math.max(120, flip ? above : below)
+    const top = flip ? Math.max(POP_EDGE, a.top - POP_GAP - Math.min(h, maxH)) : a.bottom + POP_GAP
+
+    setPos((prev) =>
+      prev && prev.left === left && prev.top === top && prev.maxH === maxH ? prev : { left, top, maxH },
+    )
+  }, [align])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null)
+      return
+    }
+    place()
+    window.addEventListener('resize', place)
+    // Capture phase: the board and the ladders scroll in their own containers,
+    // and those scrolls do not bubble to window.
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open, place])
+
+  if (!open || typeof document === 'undefined') return null
+
   return (
-    <div
-      ref={ref}
-      className={[
-        'absolute top-full z-30 mt-1 rounded-md border border-line bg-surface p-2 shadow-lg',
-        align === 'right' ? 'right-0' : 'left-0',
-      ].join(' ')}
-    >
-      {children}
-    </div>
+    <>
+      {/*
+        Stays in the DOM where the popover used to be, so `offsetParent` still
+        resolves to the trigger's wrapper after the panel itself has left for
+        <body>. Zero-size and inert — it draws nothing and catches nothing.
+      */}
+      <span ref={anchorRef} aria-hidden className="pointer-events-none absolute left-0 top-0 block h-0 w-0" />
+      {createPortal(
+        <div
+          ref={ref}
+          style={{
+            position: 'fixed',
+            left: pos?.left ?? 0,
+            top: pos?.top ?? 0,
+            zIndex: POP_Z,
+            maxHeight: pos?.maxH,
+            // Hidden for the one frame between mounting (needed to measure the
+            // panel) and having somewhere to put it.
+            visibility: pos ? 'visible' : 'hidden',
+          }}
+          className="overflow-y-auto rounded-md border border-line bg-surface p-2 shadow-lg"
+        >
+          {children}
+        </div>,
+        document.body,
+      )}
+    </>
   )
 }
 

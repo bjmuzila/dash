@@ -210,6 +210,19 @@ function TickerPanel({
   const anchorRef = useRef('')
   const [draft, setDraft] = useState(ticker)
   useEffect(() => setDraft(ticker), [ticker])
+  /**
+   * The ticker is TEXT until you click it, and an input only while you type.
+   *
+   * It used to be a permanent 76px bordered box, which on a three-column panel
+   * was a pill wider than the whole ladder rail holding three characters, with
+   * the panel's price pushed to the far edge. A symbol is read a hundred times
+   * for every time it is changed, so the reading state is the one to optimise:
+   * bare text, its own width, no chrome.
+   */
+  const [editing, setEditing] = useState(false)
+  // Leaving edit mode whenever the ticker changes under us covers the case
+  // where panel one's commit moves the whole board.
+  useEffect(() => setEditing(false), [ticker])
 
   const chain: ParsedChain = useMemo(() => parseChain(q.data), [q.data])
   const spot = chain.underlying
@@ -387,43 +400,69 @@ function TickerPanel({
       {/* Header — every panel is typeable; panel one types the BOARD's ticker.
           Kept to a single tight row: on a 3-column-wide card the chrome above
           the ladder was taking a third of the card, and every row of it was one
-          fewer strike. */}
-      <div className="flex shrink-0 select-none items-center justify-between gap-1 border-b border-line px-1.5 py-0.5">
-        <input
-          value={draft}
-          maxLength={6}
-          spellCheck={false}
-          autoCapitalize="characters"
-          placeholder="TICKER"
-          title={
-            isPageSymbol
-              ? "This panel follows the board's ticker — typing here moves the whole board"
-              : "This panel's ticker — type a symbol and press Enter"
-          }
-          onChange={(e) => setDraft(e.target.value.toUpperCase())}
-          onFocus={(e) => e.currentTarget.select()}
-          onBlur={commit}
-          onMouseDown={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            e.stopPropagation()
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              e.currentTarget.blur()
+          fewer strike.
+
+          The ticker is bare text that becomes an input on click. As a permanent
+          bordered 76px box it was the tallest thing in this row and the widest
+          thing in a narrow panel, spending both on three characters that change
+          once a session. */}
+      <div className="flex shrink-0 select-none items-center justify-between gap-1 border-b border-line px-1.5 py-px">
+        {editing ? (
+          <input
+            autoFocus
+            value={draft}
+            maxLength={6}
+            size={6}
+            spellCheck={false}
+            autoCapitalize="characters"
+            placeholder="TICKER"
+            onChange={(e) => setDraft(e.target.value.toUpperCase())}
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={() => {
+              commit()
+              setEditing(false)
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                e.currentTarget.blur()
+              }
+              if (e.key === 'Escape') {
+                setDraft(ticker)
+                e.currentTarget.blur()
+              }
+            }}
+            // Underline, not a box: the field is only on screen while it is
+            // focused, so the border was decorating a state that already has
+            // the caret in it.
+            className="w-[58px] min-w-0 shrink select-text border-0 border-b border-accent bg-transparent p-0 text-[13px] font-extrabold uppercase leading-none tracking-[0.06em] text-accent outline-none"
+          />
+        ) : (
+          <button
+            type="button"
+            title={
+              isPageSymbol
+                ? "This panel follows the board's ticker — click to type a symbol and the whole board moves"
+                : "This panel's ticker — click to type another symbol"
             }
-            if (e.key === 'Escape') {
-              setDraft(ticker)
-              e.currentTarget.blur()
-            }
-          }}
-          // The board panel is marked by an ACCENT border rather than a "BOARD"
-          // badge beside it. The badge cost ~40px of a narrow panel's header to
-          // say something the tooltip says anyway, and it was the thing pushing
-          // this row to wrap.
-          className={[
-            'w-[76px] min-w-0 shrink select-text rounded-md border bg-bg px-1 py-px text-[14px] font-extrabold uppercase leading-[1.4] tracking-[0.08em] text-accent outline-none focus:border-accent',
-            isPageSymbol ? 'border-accent' : 'border-line',
-          ].join(' ')}
-        />
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              setEditing(true)
+            }}
+            // The board's own panel keeps the ACCENT; an added panel's ticker is
+            // plain. That is the only mark either needs — an added panel also
+            // carries the ✕ that panel one does not have.
+            className={[
+              'min-w-0 shrink truncate text-left text-[13px] font-extrabold uppercase leading-none tracking-[0.06em] hover:underline',
+              isPageSymbol ? 'text-accent' : 'text-fg',
+            ].join(' ')}
+          >
+            {ticker || 'TICKER'}
+          </button>
+        )}
         <div className="flex min-w-0 items-center gap-1">
           <span className="tabular truncate text-[11px] font-semibold text-fg">
             {spot > 0 ? spot.toLocaleString('en-US', { maximumFractionDigits: 2 }) : q.loading ? '…' : '—'}

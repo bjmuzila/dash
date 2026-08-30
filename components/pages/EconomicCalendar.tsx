@@ -683,19 +683,29 @@ export default function EconomicCalendarPage() {
 
     const first = earningsSections[0].date;
     const last  = earningsSections[earningsSections.length - 1].date;
-    const shown = earningsSections.reduce((n, s) => n + s.pre.length + s.after.length + s.tbd.length, 0);
 
     return (
       <div ref={earnRef} style={{ background: HT.bg, padding: 12 }}>
 
         {/* Board header — lives INSIDE the capture target, so the copied image
-            carries the mark and the week it covers without the app chrome. */}
+            carries the mark and the week it covers without the app chrome.
+
+            The right-hand side is ONE run of text now. It used to carry a
+            "N NAMES" pill, an ANTICIPATED / ALL NAMES pill and a cap-floor pill,
+            and every one of them fought the capture: a padded, bordered badge
+            has to agree with html2canvas about where the baseline sits, and
+            three rounds of `data-cap-center` never fully squared them with the
+            plain `cbedge.net` run beside them. They were also telling the reader
+            things the board already says — each day column prints its own count,
+            and the columns themselves ARE the view. A signature does not need a
+            legend, so the pills are gone and the wordmark is the whole of it. */}
         <div style={{
           display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
           padding: "10px 12px", marginBottom: 10,
           borderRadius: 12,
+          // No cyan top accent. It read as a tab edge — an "active panel" cue on
+          // something that is not a panel and has nothing to be active against.
           border: `1px solid ${BOARD.edge}`,
-          borderTop: `2px solid ${HT.cyan}`,
           background: BOARD.header,
         }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
@@ -706,66 +716,12 @@ export default function EconomicCalendarPage() {
               {dayDate(first)} – {dayDate(last)}
             </span>
           </div>
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-            {/* PILL TEXT CENTERING — sized by PADDING, never by `height`.
-
-                A fixed `height` + `line-height` is the CSS way to centre a badge
-                and it is the wrong way here, because it hands the capture a
-                number it has to reconcile against its own font metrics.
-                snapshot.ts's `data-cap-center` does try: it swaps the declared
-                height for `height:auto` and re-expresses the slack as padding.
-                But the slack is `height − borders − font-size`, and if the clone
-                measured the run in a DIFFERENT font from the one html2canvas
-                paints with, that arithmetic lands on a box the glyphs do not fit
-                — which is exactly what the last PNG showed, ANTICIPATED sitting
-                low and overflowing its own pill.
-
-                Padding sizing removes the arithmetic. The box is text + 5px + 5px
-                by construction, so it is centred on the live page whatever the
-                font does, and `data-cap-center` falls to its no-height branch,
-                which only RE-SPLITS the padding by the measured drawing error and
-                cannot change the box. `MONO` names real families so the clone and
-                the painter agree on the metrics in the first place.
-
-                `text-align:center` because the pass rewrites inline-flex to
-                inline-block on the clone, and flex was the only thing centring
-                these across. */}
-            <span data-cap-center style={{
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              textAlign: "center", lineHeight: 1,
-              fontSize: 11, fontWeight: 800, fontFamily: MONO,
-              color: HT.cyan, background: `${HT.cyan}1A`, border: `1px solid ${HT.cyan}55`,
-              padding: "5px 10px", borderRadius: 999, letterSpacing: "0.06em",
-            }}>
-              {shown} NAMES
-            </span>
-            {/* Both of these are captured into the copied PNG on purpose: a
-                board pasted into a chat has to say what it is a board OF, or
-                "14 names on Wednesday" reads as the whole day's calendar. */}
-            <span data-cap-center style={{
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              textAlign: "center", lineHeight: 1,
-              fontSize: 11, fontWeight: 700, fontFamily: MONO,
-              color: HT.text, border: `1px solid ${BOARD.edge}`,
-              padding: "5px 10px", borderRadius: 999,
-            }}>
-              {earnView === "all" ? "ALL NAMES" : "ANTICIPATED"}
-            </span>
-            {mcapMin > 0 && (
-              <span data-cap-center style={{
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                textAlign: "center", lineHeight: 1,
-                fontSize: 11, fontWeight: 700, fontFamily: MONO,
-                color: HT.text, border: `1px solid ${BOARD.edge}`,
-                padding: "5px 10px", borderRadius: 999,
-              }}>
-                {mcapLabel}
-              </span>
-            )}
-            <span style={{ fontSize: 11, fontWeight: 800, color: HT.text, fontFamily: MONO, lineHeight: 1 }}>
-              cbedge.net
-            </span>
-          </div>
+          <span style={{
+            marginLeft: "auto",
+            fontSize: 11, fontWeight: 800, color: HT.text, fontFamily: MONO, lineHeight: 1,
+          }}>
+            cbedge.net
+          </span>
         </div>
 
         <div style={{

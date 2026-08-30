@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
-import { Chip, PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
+import { Chip, SegGroup } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
 import { watchFrame } from '@/data/hooks'
 import { isSocketSymbol, usePageSymbol } from '@/data/symbol'
@@ -9,8 +9,8 @@ import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
 import { chainGexUrl, chainToGex, EMPTY_CHAIN_GEX } from '../chainGex'
 import { EMPTY_MODEL, mountGexChart, type GexChartHandle, type GexChartModel } from './gexChartRender'
 import { BASIS_LABEL, flowSupported, fmtGexShort, totalNet } from './values'
-import { loadSettings, saveSettings, STAT_KEYS, type GexChartSettings, type StatKey } from './settings'
-import { StatCards, STAT_LABEL } from './StatCards'
+import { loadSettings, saveSettings, type GexChartSettings } from './settings'
+import { StatCards } from './StatCards'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX Chart — v2's home-page chart, as a board card.
@@ -29,11 +29,12 @@ import { StatCards, STAT_LABEL } from './StatCards'
 //   BASIS   OI+VOL · VOL · FLOW — which contracts the bars are priced on
 //   SPLIT   NET · C/P          — one net bar, or the call and put legs
 //   DEX     the net-delta overlay line, on its own normalised scale
-//   ⚙       the ten stat cards, individually
+//   CARDS   the stat row above the chart — all ten, or none
 //
-// Basis, split and DEX sit in the toolbar because each is one click and each
-// changes what the bars MEAN. The cards go behind the cog because there are ten
-// of them and they are a layout choice, not a reading of the market.
+// All four sit in the toolbar because each is one click. CARDS used to be a
+// cog holding ten individual switches; the row shares its width evenly, so
+// hiding one tile only made the other nine wider, and a stored subset meant no
+// two boards showed the same row. It is one chip now.
 //
 // ── Two sources, one shape ───────────────────────────────────────────────────
 // SPX comes off the socket. Any other page symbol comes from /api/chains
@@ -68,7 +69,6 @@ export function GexChartCard() {
   const onSocket = isSocketSymbol(symbol)
 
   const [settings, setSettings] = useState<GexChartSettings>(() => loadSettings(CARD_ID))
-  const [cogOpen, setCogOpen] = useState(false)
 
   const patch = useCallback((p: Partial<GexChartSettings>) => {
     setSettings((prev) => {
@@ -253,9 +253,6 @@ export function GexChartCard() {
     [view.rows, settings.basis, flowActive],
   )
 
-  const cardsShown = settings.cardsOn && STAT_KEYS.some((k) => settings.cards[k])
-  const allCardsOn = STAT_KEYS.every((k) => settings.cards[k])
-
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-1.5">
       <CardToolbar>
@@ -319,56 +316,12 @@ export function GexChartCard() {
           title="Net dealer DELTA exposure as a line across the bars, on its own normalised scale — it answers which way delta leans and where it turns, not how many dollars"
         />
 
-        <div className="relative shrink-0">
-          <button
-            type="button"
-            onClick={() => setCogOpen((v) => !v)}
-            title="Which stat cards to show above the chart"
-            className="rounded-sm border border-line px-2 py-0.5 text-[10px] font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg"
-          >
-            ⚙ Cards
-          </button>
-          <Popover open={cogOpen} onClose={() => setCogOpen(false)}>
-            <div className="flex w-64 flex-col gap-2">
-              <PanelSection title="Stat cards">
-                <div className="flex flex-wrap gap-1">
-                  <Chip
-                    label={settings.cardsOn ? 'Row on' : 'Row off'}
-                    on={settings.cardsOn}
-                    onClick={() => patch({ cardsOn: !settings.cardsOn })}
-                    title="The whole row. Turning it off keeps every individual choice below for when it comes back"
-                  />
-                  <Chip
-                    label={allCardsOn ? 'None' : 'All'}
-                    on={false}
-                    onClick={() =>
-                      patch({
-                        cards: STAT_KEYS.reduce(
-                          (acc, k) => ((acc[k] = !allCardsOn), acc),
-                          {} as Record<StatKey, boolean>,
-                        ),
-                      })
-                    }
-                    title="Select or clear every card at once"
-                  />
-                </div>
-              </PanelSection>
-
-              <PanelSection title="Which cards">
-                <div className="flex flex-wrap gap-1">
-                  {STAT_KEYS.map((k) => (
-                    <Chip
-                      key={k}
-                      label={STAT_LABEL[k]}
-                      on={settings.cards[k]}
-                      onClick={() => patch({ cards: { ...settings.cards, [k]: !settings.cards[k] } })}
-                    />
-                  ))}
-                </div>
-              </PanelSection>
-            </div>
-          </Popover>
-        </div>
+        <Chip
+          label="CARDS"
+          on={settings.cardsOn}
+          onClick={() => patch({ cardsOn: !settings.cardsOn })}
+          title="The stat row above the chart — all ten tiles, or none"
+        />
 
         {/* WHERE the rows came from — shown only when it is not the obvious
             answer. The basis is already on the segmented control beside this,
@@ -394,15 +347,8 @@ export function GexChartCard() {
         </span>
       </CardToolbar>
 
-      {cardsShown && (
-        <StatCards
-          rows={view.rows}
-          spot={view.spot}
-          symbol={symbol}
-          basis={settings.basis}
-          flowActive={flowActive}
-          enabled={settings.cards}
-        />
+      {settings.cardsOn && (
+        <StatCards rows={view.rows} spot={view.spot} symbol={symbol} basis={settings.basis} flowActive={flowActive} />
       )}
 
       <div className="relative min-h-0 flex-1">

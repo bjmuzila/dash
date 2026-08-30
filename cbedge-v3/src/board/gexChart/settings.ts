@@ -28,7 +28,10 @@ export type GexBasis = 'oi-vol' | 'vol-only' | 'flow'
 /** One net bar per strike, or the call leg up and the put leg down. */
 export type GexSplit = 'net' | 'call-put'
 
-/** The ten stat cards, in the order v2's home toolbar shows them. */
+/**
+ * The ten stat cards. Identity only — StatCards.tsx builds them in order and
+ * draws all ten or none, so nothing needs the key LIST any more.
+ */
 export type StatKey =
   | 'netGex'
   | 'callWall'
@@ -41,39 +44,27 @@ export type StatKey =
   | 'posGexPct'
   | 'bullBear'
 
-export const STAT_KEYS: StatKey[] = [
-  'netGex',
-  'callWall',
-  'putWall',
-  'flip',
-  'cb',
-  'maxPain',
-  'emUp',
-  'emDown',
-  'posGexPct',
-  'bullBear',
-]
-
 export interface GexChartSettings {
   basis: GexBasis
   split: GexSplit
   /** The net-DEX overlay line. Independent of the bars — see gexChartRender. */
   showDex: boolean
-  /** Master switch for the stat card row. */
+  /**
+   * The stat card row: all ten, or none.
+   *
+   * There used to be a per-card `cards: Record<StatKey, boolean>` behind a cog
+   * as well. Ten individual switches to hide tiles that already share the row
+   * evenly is a setting nobody was reaching for, and a stored subset made the
+   * row a different shape on every board. One chip in the toolbar now.
+   */
   cardsOn: boolean
-  /** Per-card visibility. A key missing from a stored blob defaults to ON. */
-  cards: Record<StatKey, boolean>
 }
-
-const allCards = (on: boolean): Record<StatKey, boolean> =>
-  STAT_KEYS.reduce((acc, k) => ((acc[k] = on), acc), {} as Record<StatKey, boolean>)
 
 export const DEFAULT_SETTINGS: GexChartSettings = {
   basis: 'oi-vol',
   split: 'net',
   showDex: false,
   cardsOn: true,
-  cards: allCards(true),
 }
 
 const KEY_PREFIX = 'cb-v3-gexchart:'
@@ -85,16 +76,15 @@ const isSplit = (v: unknown): v is GexSplit => v === 'net' || v === 'call-put'
 
 function coerce(raw: unknown): GexChartSettings {
   const p = (raw ?? {}) as Partial<GexChartSettings> & { v?: number }
-  const storedCards = (p.cards ?? {}) as Partial<Record<StatKey, boolean>>
   return {
     basis: isBasis(p.basis) ? p.basis : DEFAULT_SETTINGS.basis,
     split: isSplit(p.split) ? p.split : DEFAULT_SETTINGS.split,
     showDex: p.showDex === true,
+    // `!== false`, not `=== true`: a blob written before the row had a switch
+    // at all should come back with the row ON, which is what it was showing.
+    // A stale `cards` map alongside it is simply dropped — an unknown key in
+    // the blob is ignored, and re-saving writes it out.
     cardsOn: p.cardsOn !== false,
-    // `!== false`, not `=== true`: a card added to STAT_KEYS after a user's
-    // blob was written is not in it, and a new card should appear rather than
-    // arrive switched off for everyone who ever opened the chart.
-    cards: STAT_KEYS.reduce((acc, k) => ((acc[k] = storedCards[k] !== false), acc), {} as Record<StatKey, boolean>),
   }
 }
 
@@ -103,7 +93,7 @@ export function loadSettings(cardId: string): GexChartSettings {
     const raw = localStorage.getItem(KEY_PREFIX + cardId)
     return coerce(raw ? JSON.parse(raw) : null)
   } catch {
-    return { ...DEFAULT_SETTINGS, cards: allCards(true) }
+    return { ...DEFAULT_SETTINGS }
   }
 }
 
