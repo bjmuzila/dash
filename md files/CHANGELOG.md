@@ -1,449 +1,216 @@
 # Changelog
 
-## 2026-08-30 - v3 toolbar: the ticker box becomes a real picker
-
-The top toolbar's symbol control was two slots that between them could not
-answer "what can I put in here?" - a read-only pill showing the board's symbol,
-and a bare text input beside it. You had to already know a ticker to change the
-board, there was nowhere to keep the handful you actually watch, and a typo just
-did nothing.
-
-`src/design/primitives/TickerPicker.tsx` was written for exactly this job (its
-own header says "the APP TOOLBAR owns it") and was imported by NOTHING. The pill
-and the input are gone; `src/shell/Shell.tsx` mounts the picker instead:
-
-  - the trigger IS the readout - `triggerLabel` defaults to the active ticker,
-    so the board's symbol still reads at a glance from the same corner;
-  - opening it lists the whole scanner universe, fetched from
-    /proxy/scanner-tickers on FIRST OPEN (never on mount - this control renders
-    on every route, so an unconditional fetch would sit on the critical path of
-    every page load for a menu nobody opened);
-  - typing filters, Enter takes the first row;
-  - the star pins a ticker; pinned ones sort above a divider at the top of every
-    open, on every page, persisted per browser under `cb-v3-fav-tickers`.
-
-Three changes inside the primitive so it could take the toolbar slot without
-losing what the old box could do:
-
-1. NEW `allowCustom?: RegExp`. The scanner list is the server's WATCHLIST, not
-   the set of symbols the app can price - going to a closed list would have
-   quietly removed the ability to look up anything off it. When a typed symbol
-   matches the pattern and is not already in the list, it is offered as a "USE"
-   row at the top. The toolbar passes `PAGE_TICKER_RE`, the same rule the old
-   input validated against, so nothing that used to be typeable stopped being.
-   The replay ladder's list really is closed (a session can only be replayed for
-   a root the recorder swept) and it omits the prop.
-
-2. The divider is keyed by its own sentinel, not the constant `"div"` - there
-   can now be two rules in one list (under the USE row, and between favourites
-   and the rest) and React would have collided them.
-
-3. The menu's left edge is clamped to the viewport. In the toolbar the trigger
-   sits a few hundred px from the right edge, and a 200px menu hung off its left
-   corner ran off screen - a fixed-position child cannot be scrolled back.
-
-No new colour literal: everything reads `T.*` / `alpha()` / `LEVEL_COLORS`, so
-`check:theme` is untouched.
-
-## 2026-08-30 - Bzila Alerts: "Reactions by user" stops reading 0
-
-The owner card at owner.cbedge.net -> Bzila Alerts sat at 0 forever because the
-endpoint it fetches, `/api/bzila-alerts/history`, DID NOT EXIST. The page has
-shipped since day one calling it, falling through to Next as a 404, and
-rendering an empty `users` array as "No reactions yet."
-
-Underneath that there was a second, worse problem: nothing durable was being
-recorded. `bzila_alert_reactions` holds exactly ONE row per (alert, user), and
-`deleteBzilaAlert()` deletes an alert's reaction rows along with the alert. So
-even a working scoreboard built on that table could only ever count reactions
-still attached to a LIVING broadcast - delete the alert and the thumbs vanished
-with it. That is the case Brandon explicitly wants counted.
-
-Three changes, all in `server-v2/api-router.js` (the DB bundle
-`server-v2/_lib-db.cjs` is deliberately NOT regenerated - the checked-in
-`lib/db.ts` is behind it and rebuilding would drop unrelated hand-patches, same
-reasoning as `/api/strike-gex-series` and `customer_feedback_messages`):
-
-1. NEW append-only table `bzila_alert_reaction_log`, created lazily via the
-   `ensureBzilaLog(pool)` pattern. One row per TAP, with the alert's title/body
-   SNAPSHOTTED at click time, plus user_id, email, clicks and timestamp. It is
-   never touched by the alert delete path, so it outlives the broadcast.
-   On first run it SEEDS itself from every reaction currently in
-   `bzila_alert_reactions` (carrying original click counts and timestamps), so
-   the card shows real numbers immediately instead of starting from zero. The
-   seed is idempotent - `NOT EXISTS` on (alert_id, user_id) - so it can run on
-   every boot without double-counting or resurrecting a toggled-off reaction.
-
-2. `/api/bzila-alerts/react` now writes to that log on every tap, best-effort
-   (a log failure is warned and swallowed - it is the owner's card, it must
-   never turn a subscriber's click into a 500).
-
-3. NEW `GET /api/bzila-alerts/history` (auth: owner) returning exactly the
-   shape `BzilaAlerts.tsx` already expects:
-   `{ users: [{ email, userId, up, down, total, alerts, clicks, firstAt,
-   lastAt, items: [{ alertId, title, body, reaction, at, deleted }] }] }`
-   sorted by total desc. `deleted` is DERIVED from a LEFT JOIN against
-   `bzila_alerts`, so an alert removed tomorrow flips its historical rows with
-   no backfill, and the expanded per-user list still shows the alert text from
-   the snapshot with a "Deleted alert" pill.
-
-Counting rule: `up`/`down` count DISTINCT alerts, not taps - pressing thumbs-up
-twice is a toggle OFF, not two likes. Every tap still counts toward `clicks`,
-which is what the Taps column measures.
-
-No front-end change was needed; `owner-vite/src/pages/BzilaAlerts.tsx` was
-already correct and was left untouched.
-
-## 2026-08-30 - v3 Analysis: the parity check (step 4 of the port)
-
-`cbedge-v3/scripts/parity-check-analysis.mjs` + `.test.mjs`, wired into
-`npm run check` as `check:parity:analysis:self`. Same shape as the flow / chain
-/ dashboard checks: drive /app/analytics and /v3/analytics in ONE browser
-against ONE backend in the same minute, harvest the labelled values from both,
-fail on anything v2 renders and v3 does not. 120 probes.
-
-WHAT THIS ONE DOES THAT THE OTHERS DO NOT: it compares COLOURS.
-
-This page carries a requirement the other ports do not - it must render v2's
-palette, not v3's. Nothing else in the repo can enforce that. check-theme.mjs
-bans colour LITERALS; it cannot see a token that resolves to the wrong colour.
-`T.cyan` passes every scan it makes and paints #5b8cff where v2 paints #219EBC.
-So ten probes read getComputedStyle off both pages - card titles, the CB/CW/PW
-tag fills, the ink on a tag, a label, the card plate's fill and edge - and
-compare resolved pixels. A colour that is PRESENT but WRONG fails; it does not
-land in the "differs" bucket with the live ticks, because a resolved colour does
-not tick.
-
-`normColor` exists because the two sides reach the same pixel by different
-routes - v2 types rgba(), v3 goes through color-mix() - and Chrome may print
-either as rgb(), rgba() or color(srgb ...). It compares numbers, not the string
-the engine happened to choose.
-
-THE SELF-TEST DRIVES FIVE CASES, AND FOUR ARE FAILURES THAT ACTUALLY HAPPENED
-ON THIS PORT rather than invented ones:
-
-  1. faithful v3 - clean, bar the one declared departure (the earnings chip
-     logo: v3 renders the text chip v2's ChipLogo falls back to)
-  2. the page as it stood BEFORE the rebuild - Ticker Lookup, Multi Greek, Econ
-     Calendar and Initial Balance all stubs. Reports 44 losses.
-  3. Ticker Levels regressed to four hardcoded pills. Every NUMBER still
-     renders, so a text-only diff passes it - the picker is a CONTROL, and its
-     loss is invisible until you probe for the control itself. Catches it, and
-     reports nothing else, because nothing else was lost.
-  4. a v3 in v3's own palette: every value present, every label right, #5b8cff
-     where v2 is #219EBC. Asserts explicitly that the VALUE diff is clean and
-     only the colour probes fire - which is the whole argument for their
-     existence.
-  5. a grey secondary. v2 has none; "muted" there is white at an opacity, so a
-     slate label is a colour regression too.
-
-Plus a blind-probe guard: every non-optional probe must match the faithful
-fixture. A probe whose regex never matches is silently green on both sides
-forever and reports a value as "ported" that neither page has - the same class
-of false pass as a perf check measuring an untagged canvas.
-
-Step 4 of the original brief is done. The port is complete: inventory (419
-rows), logic transcribed 1:1, built against the checklist, verified
-automatically.
-
-## 2026-08-30 - v3 check is green end to end
-
-`npm run check` passes: casing, typecheck, theme, build, budgets, ws-scope,
-perf, and all three parity self-tests.
-
-perf now reads as a real guard rather than a formality:
-
-    gex-candles/bubbles     on screen   0   ✓ quiet while idle (0 ≤ 23)
-    gex-candles#2/bubbles   off screen  0   ✓ does not paint off screen
-    gex-chart/gex-chart     off screen  0   ✓ does not paint off screen
-    flow-tape/canvas        off screen  0   ✓ does not paint off screen
-    panning: 27 repaints · zooming: 16 repaints   ✓ ✓
-
-The bubbles overlay is measured for the first time, an off-screen second
-instance is proved silent, and the interaction assertions have real numbers
-under them instead of a structural 0.
-
-ONE COSMETIC LINE LEFT: "unmocked endpoints: 1 /api/auth/me". The route IS in
-mock-server.mjs and placed correctly, ahead of the /api/ catch-all. Most likely
-cause is a STALE MOCK SERVER squatting the port - perf-check's own cleanup
-comment warns that on Windows an orphaned child survives to hold the port, and
-the earlier runs all exited through a failed assert. A stale server would still
-serve the NEW dist (static files are read per request, which is why the chart.ts
-fix showed up) while running the OLD route table (no /api/auth/me). Re-run, or
-kill stray node processes, and it should go. It fails nothing either way - 404s
-are logged, not asserted on.
-
-NOT DONE, and the last piece of the original brief: step 4, an automated parity
-script for Analysis. scripts/ now has parity-check, parity-check-chain and
-parity-check-flow with self-tests; analysis should follow that shape. Per Part S
-of the parity doc it must also sample COMPUTED COLOURS, because check-theme
-cannot see a token that resolves to the wrong colour.
-
-## 2026-08-30 - gex-candles bubbles overlay was an UNTAGGED canvas
-
-`src/board/gexCandles/chart.ts` - one line, and it is the reason perf-check's
-interaction assertions had never once been able to pass.
-
-THE BUG. chart.ts:207 creates a transparent overlay canvas above
-lightweight-charts' own canvas and draws the GEX bubbles on it. That canvas is
-ours - the library made the one underneath, we made this one - and it never
-carried `data-cb-layer`. Non-negotiable 6 in AGENTS.md: "Every canvas v3 owns
-carries data-cb-layer. One line where it is created."
-
-WHY IT MATTERED. perf-check only instruments canvases with the tag (correctly -
-hooking every canvas would fold the chart library's per-tick repaints into the
-number and make the guard unreadable). So the bubbles overlay was invisible to
-it. And because the interaction assertions do
-`sumFor(reading, 'gex-candles')` - repaints summed over layers belonging to the
-gex-candles card - they were summing over an empty set:
-
-    panning: 0 repaints · zooming: 0 repaints
-    ✗ panning still redraws (0)
-    ✗ zooming still redraws (0)
-
-Those two could not have passed under any circumstances. A guard reporting zero
-because it is measuring an untagged canvas is worse than no guard, and it was
-sitting on the one card whose overlay repaints hardest.
-
-It only surfaced now because the earlier fix (add one of EACH catalog card
-instead of the first one forty times) put gex-chart and flow-tape on the board -
-they DO tag their canvases, via the helper in board/chart-render.ts - so "at
-least one canvas layer actually painted" started passing and left these two
-alone as the real finding underneath.
-
-Board now: 10 cards covering all 7 catalog entries. Unmocked endpoints down to
-1 (/api/auth/me - the mock route was added but is still 404ing; separate).
-
-## 2026-08-30 - perf-check: add one of EACH card; mock /api/auth/me
-
-Follow-on from the diagnostics edit above, after tracing why a `npm run check`
-came back with four ✗.
-
-THE ADD-CARD LOOP WAS MEASURING ONE CARD TYPE. Cards are re-addable, so the
-"+ Add card" menu does not shrink as you add them and its first entry is always
-the same card. The loop clicked `.first()` forty times, so the board came up as
-41 x gex-candles + key-levels + quick-links, and gex-chart, multi-greek,
-flow-tape and econ-calendar were NEVER added or measured. AGENTS.md promises the
-opposite - "adds every card in the catalog to a board and measures your new one
-automatically, there is no list to update" - so a card could regress badly and
-this check would pass. It now walks the menu BY INDEX and adds each catalog
-entry exactly once.
-
-MOCKED /api/auth/me. AuthProvider reads it once at boot on every page, the mock
-had no route for it, so it 404'd on every run - noise in the check's own output
-and a reason a run could report an unmocked endpoint that had nothing to do with
-the card being measured. Returns an owner session, which is the realistic one:
-/v3 is owner-gated anyway.
-
-WHAT I COULD NOT SETTLE FROM HERE. The empty layer table - no canvas painted at
-all - is not data starvation: every endpoint the board's cards call
-(/api/snapshots/etf-candles, /api/expirations, /api/snapshots/option-strike-gex-
-history, /api/chains, /api/em-tracker) is mocked and returns generated rows for
-any symbol. The most likely remaining explanation is the board being 43 cards
-tall, which the fix above turns into 7. The next run will say - it now prints
-the unmocked URLs by name, and the board it measures is a real one.
-
-## 2026-08-30 - perf-check: name the unmocked endpoints, stop 404s failing the run
-
-Two edits to `cbedge-v3/scripts/perf-check.mjs`, prompted by a `npm run check`
-that came back with four ✗ that were really one missing mock.
-
-1. THE CHECK FAILED ON THE THING IT SAYS IT ALLOWS. Its own comment reads
-   "404s are NOT a failure here … a card whose endpoint has no mock is expected
-   to come up empty, and failing on that would make adding a card to the catalog
-   break this check for an unrelated reason." But the console handler pushed ANY
-   console error into `pageErrors`, and a failed fetch logs one of its own
-   ("Failed to load resource: … 404"). The run that surfaced this had exactly two
-   pageErrors and both were that string. Resource-load failures now report
-   through `notFound` and nowhere else; every other console error still counts.
-
-2. THE COUNT NAMED NOTHING. "unmocked endpoints: 2" told you something did not
-   load and left you to find out what. It now prints each URL, deduped and made
-   relative - a board with forty cards asks for the same missing URL forty times.
-   This matters because an unmocked endpoint is the usual reason a card sits
-   there with no data and never paints, which is what trips the layer
-   assertions: "at least one canvas layer painted", "panning still redraws" and
-   "zooming still redraws" all fall out of one card type having nothing to draw.
-
-NOT FIXED HERE, because it is a real finding and not a script bug: on that run
-41 of the 43 board cards were `gex-candles` and no canvas painted at all. The
-"+ Add card" loop clicks the first menu item forty times rather than each
-distinct card, so gex-chart, multi-greek, flow-tape and econ-calendar were never
-measured. Worth a look - a perf check that only ever exercises one card is not
-measuring the board.
-
-Context: src/board/catalog.tsx was modified 2026-08-30, mock-server.mjs on the
-28th. A card change outrunning the mock fits every symptom. The next run will
-print which endpoints.
-
-## 2026-08-30 - v3 Analysis: card heights, Ticker Lookup scroll, no grey text
-
-Three fixes off Brandon's first look at the rebuilt page.
-
-1. TICKER LOOKUP NO LONGER SCROLLS AS A CARD. `AnalysisCard` now has two modes.
-   With a height (the eight small cards) the body is the scroller. With
-   `height={undefined}` (Ticker Lookup, Strategy Builder) the card is as tall as
-   its content, never scrolls, and gets `overflow: visible` so Card's own
-   `overflow-hidden` cannot clip the bottom off the panes. The ONLY scrollers
-   inside Ticker Lookup are now the two ladders, which own their fixed-height
-   pane - a scrollbar on the card as well as on the bars inside it was two
-   scrollbars for one gesture.
-
-2. THE EIGHT CARDS ARE EXACTLY THE SAME HEIGHT. Hoisted to `CARD_H = 480` in
-   kit.tsx and applied as height + minHeight + maxHeight, not height alone -
-   `height` is only a suggestion to a flex item whose content overflows, and one
-   card growing by a row is the entire reason the constant exists. The page grid
-   is `alignItems: start`, so without one fixed number the tallest card in a row
-   sets that row and the second row starts at a different y from the first.
-
-3. NO GREY TEXT. v2's idiom is white at an opacity, not a grey hue, and a few
-   slate values had come across from the econ calendar. Now white:
-     - the refresh button's "refreshing" state (was #888 - token dropped)
-     - the econ header date and the not-today day-separator label (were #3a5570)
-     - the earnings MKT / HRS / TBD sub-labels (were #3a5570 / #8a9ab8)
-     - the `P:` previous figure (was #8a9ab8)
-     - faded stale rows, which were slate-on-slate: the row already carries
-       opacity 0.32, so white at 32% is the fade that was intended
-   `--color-v2-dim` is gone with its last use. 12 v2 tokens now, not 13.
-
-   LEFT ALONE DELIBERATELY, because these are semantic and not "grey font": the
-   Low-impact colour on an event's chip and left border (it encodes importance,
-   exactly like High red and Medium amber), and the picker's unfilled ☆, which
-   has to read as unfilled.
-
-Re-verified: tsc --noEmit clean, check-theme.mjs zero violations.
-
-## 2026-08-30 - v3 Analysis: page rebuilt from the parity doc (step 2)
-
-The earlier v3 Analysis page was wrong and is gone. Rebuilt from
-`cbedge-v3/docs/parity/analysis.md` - 23 files, ~7,000 lines, under
-`cbedge-v3/src/pages/analysis/`.
-
-WHAT THE OLD ONE WAS MISSING: four cards were stubs (Ticker Lookup, Multi Greek,
-Econ Calendar, Initial Balance), Ticker Levels had regressed from v2's
-searchable/star-to-favourite/add-your-own picker to four hardcoded pills, and
-the whole page painted in v3's dark-slate palette.
-
-LAYOUT
-  design/tokens.css        + 13 --color-v2-* tokens (v2 parity block)
-  design/theme.ts          + V2 / V2W / alpha recipes; button styles moved OUT
-  design/primitives/Card   + plate="v2" (the frosted 45% plate). Default unchanged
-  data/useScannerTickers   NEW - v3 had no hook, so every picker was stuck on the
-                           build-time fallback list
-  pages/analysis/kit.tsx   Part B: Label/Value/Stat/Row/PillSelect/CardState/
-                           UpdatedStamp/AnalysisCard + useLiveData + FS type scale
-  pages/analysis/greeks.ts Part H: accumulateChainGreeks + peaks + net + scales
-  pages/analysis/ib.ts     computeAmt, narrowed to the three fields the card reads
-  pages/analysis/cards/    8 cards
-  pages/analysis/lookup/   levels.ts, replay.ts, Ladder.tsx, TickerLookup.tsx
-
-THREE DECISIONS WORTH KNOWING
-
-1. greeks.ts / levels.ts deliberately do NOT reuse board/chainGex.ts. chainGex
-   implements the SERVER's wall definitions - largest positive strictly ABOVE
-   spot, most negative strictly BELOW. v2's Analytics takes the extreme strike
-   ANYWHERE on the ladder and then applies the CB-collision step-down. On a day
-   when the biggest call wall sits under spot the two return different strikes.
-   Reusing chainGex would have been the easiest way to ship a page that looks
-   finished and prints a different Call Wall than v2 did.
-
-2. Card gained `plate="v2"` rather than the page drawing its own panel. AGENTS
-   non-negotiable 1 says anything with a border and a background IS a Card; a
-   page-local bordered div is exactly what that rule exists to stop. Default is
-   'v3' so every board card is byte-identical.
-
-3. ib.ts ports THREE fields out of lib/failLevels' computeAmt (ib, dayTypeLabel,
-   bias) rather than the whole 40KB. dayTypeDetail, levelReads and
-   computeRefLevels are never rendered by this page. If a later v3 page needs the
-   level reads, port computeRefLevels properly into src/data/ - do not widen
-   ib.ts, which is scoped to one card and says so in its header.
-
-CHECK-THEME HAS A FOURTH RULE nobody had hit yet: a bare `fontSize:` number is
-banned, and it names a canonical ramp (9/10/11/13/15/18/24/32). v2's page uses
-9, 10, 11, 12, 13, 14, 16, 17, 18, 20, 21, 22, 26, 28 and 34 - they agree on
-almost nothing. The port keeps v2's sizes in a named constant (`FS` in kit.tsx),
-which is what the rule's own comment says it is written to allow. Reconciling
-the two ramps is a separate decision, flagged in Part R.
-
-VERIFIED HERE
-  - tsc --noEmit under v3's exact tsconfig (strict, noUncheckedIndexedAccess,
-    verbatimModuleSyntax, noUnusedLocals): CLEAN.
-  - scripts/check-theme.mjs against the new tree: ZERO violations. Confirmed with
-    a deliberate probe file that the scanner does walk src/pages/analysis/, so
-    the pass is real and not an empty walk.
-
-NOT VERIFIED - needs the laptop
-  npm run build (vite + budgets), check:ws, perf, check:casing. The device's
-  Linux VM was unavailable this session, so nothing could be run in the repo.
-  Run `npm run check` in cbedge-v3 before pushing. Note Analysis.tsx is NOT in
-  theme-baseline.json, so its literal allowance is zero - never add it.
-
-ROUTE WIRING: all four steps were already in place and are verified - the page,
-the lazy() route in App.tsx, the NAV entry in Shell.tsx, and
-app/v3/analytics/route.ts. Nothing to add.
-
-STILL TO DO: step 4, the automated parity script. package.json already has
-check:parity and check:parity:chain - the new one should follow that shape:
-drive /app/analytics and /v3/analytics against the same backend, extract the
-labelled values from both, and FAIL on anything present in v2 and absent in v3.
-Per Part S it must also sample COMPUTED COLOURS, because check-theme cannot see
-a token that resolves to the wrong colour.
-
-## 2026-08-30 - v3 Analysis parity doc: Part S, colour parity with v2
-
-`cbedge-v3/docs/parity/analysis.md` grows from 359 to 419 rows. Brandon: "keep
-colors the same as the v2 version." Scope decided: THIS PAGE ONLY - no existing
-v3 token changes value, no other v3 page is recoloured.
-
-THE FINDING. `src/design/theme.ts` maps v2's NAMES onto v3's VALUES on purpose
-("only its palette changes, and it changes to v3's"). On this page that intent
-is overridden, and six tokens are a trap:
-
-- `T.cyan`     #219EBC teal        -> #5b8cff blue-violet  (--color-accent)
-- `T.orange`   #FB8501             -> #e0a44a muted amber  (--color-warn)
-- `T.red`      #EF4444             -> #e0645f soft red     (--color-down)
-- `T.green`    #8ECAE6 LIGHT BLUE  -> #35c28e green        (--color-up)
-- `T.border`   rgba(255,255,255,.10) -> #23272e opaque     (--color-line)
-- `T.panelBg`  rgba(13,17,25,.45)  -> #14171d opaque       (--color-surface2)
-
-That last one is the card FILL - the frosted look IS the translucency. And
-`T.green` is inverted in meaning: v2's "green" is a light blue.
-
-Twelve already match exactly and get reused untouched: CB/CW/PW walls, the whole
-econ impact ramp, and the A/F/P trio. Two v2 values are already in tokens.css
-under calendar names - #219EBC as `--color-cal-accent` and #22C55E as
-`--color-cal-actual`. Part S says keep BOTH names anyway: a card title is not a
-calendar accent and the two must be free to move apart.
-
-Twelve tokens to ADD, following the candle-colour precedent already in
-tokens.css ("carried across from v2 VERBATIM"): v2-cyan, v2-orange, v2-red,
-v2-green, v2-pos, v2-purple, v2-bg, v2-panel, v2-ink (#0b0f1a, the ink on solid
-ladder tags), v2-refresh (#1fd98a), v2-badge-ink (#05080d), v2-lightblue. Plus a
-`V2` bridge object in theme.ts so no component types a literal.
-
-Twenty-six washes catalogued as `alpha(token, a)` expressions rather than new
-tokens - card fill, every hairline, the button gradients, the replay bar's
-`${T.orange}55` border (0x55 = 33.3%), the econ row gradients (`${col}0f`,
-`${col}18`, `${k.color}12`). Flagged: the tags and the spot-price chip must use
-mix()/solid, never alpha() - they sit on top of bars and a translucent plate
-lets the bar read through.
-
-Also caught: `homeTheme.LIGHT_BLUE` is #7dd3fc but the `.analytics-embed` CSS
-writes rgba(126,211,252,.10) = #7ed3fc. One off in the red channel. The CSS is
-what paints, so #7ed3fc is the parity value.
-
-WHAT NO CHECK CATCHES. `npm run check:theme` bans literals, the Tailwind palette
-and unknown vars - it cannot see a token that resolves to the WRONG COLOUR.
-`T.cyan` passes the scan and paints #5b8cff. Only this document protects colour
-parity, so the step-4 parity script must sample computed colours on both pages
-and fail on a mismatch, not just compare text values. Note also that
-`src/pages/Analysis.tsx` is NOT in theme-baseline.json, so its literal allowance
-is zero - one hex fails the build. Never add it to the baseline.
-
-Corrected in the same pass: `T.purple` #126783 IS used on this page (the second
-radial in `homeShellStyle`'s background glow), not unused as first recorded.
-
-Still step 1. No v3 code written.
+## 2026-08-30 - v3 Traders Dashboard: prefs are per USER (Postgres), not per browser
+
+The ZIP - and the schedule, tasks and quick links with it - saves to Postgres
+keyed on the account, and to nothing else.
+
+That chain already existed and the port already pointed at it:
+`/api/traders-dashboard` -> `server-v2/api-router.js` (registered
+`auth: 'subscriber'`) -> `lib/db.ts` `getTdPrefs`/`upsertTdPrefs` ->
+`td_user_prefs`, one row per `clerk_user_id`, upserted with `::jsonb` and
+`ON CONFLICT (clerk_user_id) DO UPDATE`. Nothing new was needed there.
+
+What was wrong is that `cbedge-v3/src/pages/TradersDashboard.tsx` ALSO mirrored
+all four values into `localStorage`, so the first paint showed the saved widgets
+instead of the sample ones. That is a per-BROWSER store wearing a per-user
+store's clothes, and it broke the guarantee twice:
+
+- a second person signing in on the same browser saw the first one's ZIP and
+  routine for as long as the GET took;
+- a ZIP cleared on the server came back. The load only applied `zip` when it
+  matched `/^\d{5}$/`, so a row with `zip: null` left the mirrored value on
+  screen - the page showing a ZIP that is not in the database.
+
+Changed in `cbedge-v3/src/pages/TradersDashboard.tsx`:
+
+- Every `localStorage` read and write removed (`cb-v3-td-schedule`, `-tasks`,
+  `-links`, `-zip`). The defaults render for the few hundred ms the GET takes,
+  as v2 did; `useQuery`'s cache already spares a client-side navigation back to
+  the page from refetching. Those four keys are now orphaned in any browser that
+  used the previous build - harmless, nothing reads them.
+- The row is authoritative for ZIP including its ABSENCE: `zip: null` or a
+  malformed value now clears the field instead of leaving the old one up.
+- New `flush()` posts the queued patch immediately and runs from both the
+  unmount cleanup and a `pagehide` listener, with `keepalive: true` - without
+  which a fetch fired as the document goes away is cancelled and the edit is
+  lost. Set a ZIP and click to another page inside the 400ms debounce: v2 saved
+  it (it posted on every keystroke), the debounced version would have dropped
+  it. Both exits are covered now.
+
+Re-run and clean after the change: `typecheck`, `check-theme.mjs`,
+`parity-check.test.mjs`. Still not run here: `build`, `budgets`, `perf`,
+`check:ws`, `check:parity`, and `check:casing` (which still fails until the two
+tombstones from the entry below are `git rm`-ed).
+
+## 2026-08-30 - v3 Traders Dashboard: casing collision fixed, check:casing added
+
+Follow-up to the port below. `npm run check` failed on the laptop with TS1149
+and "Property 'default' is missing" on the wheel's `lazy()` import.
+
+Cause: the wheel shipped as `sectorWheel.ts` beside `SectorWheel.tsx`. Those
+basenames differ only in case, so on Windows the resolver turns
+`import('./SectorWheel')` into `SectorWheel.ts` and the case-insensitive
+filesystem hands back the MATHS module. It typechecks clean on a case-sensitive
+filesystem - which is how it got committed, and also means the Docker deploy
+(Linux) would never have caught it. Only the laptop would, after the fact.
+
+- `cbedge-v3/src/pages/tradersDashboard/wheelMath.ts` (was `sectorWheel.ts`) and
+  `SectorWheelCard.tsx` (was `SectorWheel.tsx`) - renamed, contents unchanged
+  apart from the import line and a header note explaining the trap.
+- `cbedge-v3/src/pages/TradersDashboard.tsx` - both imports repointed.
+- `cbedge-v3/scripts/check-casing.mjs` (new) - fails on any two modules in one
+  folder whose names differ only in case, per directory, comparing basenames
+  WITHOUT their extension because it is the module specifier that collides and a
+  specifier carries no extension. Wired in as `check:casing` and placed FIRST in
+  `npm run check`, so the next one of these reports a named collision and a
+  `git rm` line instead of a TS1149 stack.
+
+Two files need deleting by hand - the shell on this machine was down again, so
+they were emptied to `export {}` tombstones carrying their own `git rm` line:
+
+    git rm cbedge-v3/src/pages/tradersDashboard/sectorWheel.ts
+    git rm cbedge-v3/src/pages/tradersDashboard/SectorWheel.tsx
+
+**`npm run check:casing` fails until those two are removed.** Deliberate: they
+are dead, and they are a live trap for the next `./SectorWheel` import.
+
+Re-run in isolation after the rename and clean: `typecheck`, `check-theme.mjs`,
+`parity-check.test.mjs`. Still not run against the real tree: `build`,
+`budgets`, `perf`, `check:ws`, `check:parity`.
+
+## 2026-08-30 - v3 Traders Dashboard: ported from v2, sector wheel included
+
+Step 2-4 of the port. The spec is `cbedge-v3/docs/parity/traders-dashboard.md`
+(168 checklist rows, written first); Part J of that file is the build log and is
+the authority on what landed and what did not.
+
+Brandon's three calls, taken before any code:
+
+1. **Up is blue, down is red.** v2's `HOME_THEME.green` is a light blue
+   (`#8ECAE6`) and the sector wheel's whole diverging ramp hangs off it, so it
+   came across verbatim as two new tokens rather than being remapped onto v3's
+   green `--color-up`.
+2. **Early closes stay unhandled** - the countdown still targets 16:00 on a
+   13:00 half day, as v2 did. Now written down in the code, not only in the
+   parity doc.
+3. **Trending Now is one ranking**, highest positive to lowest negative. This is
+   the only behavioural change to a rendered value in the port: v2 printed
+   `/api/premarket-movers`'s array untouched, which is top-5 best-first followed
+   by bottom-5 worst-first - two descents with a cliff between them.
+
+New:
+
+- `cbedge-v3/src/pages/tradersDashboard/sectorWheel.ts` - the wheel's maths,
+  transcribed 1:1 from v2's `components/dashboard/SectorSunburst.tsx`: ring
+  radii, cap-weighted angles, both colour ramps, the bar clamp, the label fit
+  tests, the greedy non-overlapping callout placer, the sector leaderboard.
+- `cbedge-v3/src/pages/tradersDashboard/SectorWheel.tsx` - the render layer on
+  v3 primitives. Tooltip, Top/Bottom, coverage footer, `⤢ Expand` pop-out and
+  the Fullscreen API all present. The SVG is `memo()`d away from the hover
+  state, so a mousemove repaints one div instead of ~200 arcs (v2 repainted all
+  of them). Behind `lazy()` - it is the heaviest thing on the page and sits
+  below the fold.
+- `cbedge-v3/scripts/parity-check.mjs` + `parity-check.test.mjs` - 43 probes.
+  Drives `/app/traders-dashboard` and `/v3/traders-dashboard` in one browser
+  against ONE backend in the same minute and fails on anything v2 renders and
+  v3 does not. Keys on visible text (emoji card headings, the futures tile
+  symbols, the uppercase section runs, the hub `<text>` nodes, the
+  `{covered}/{universe} names` footer) rather than class names, which the port
+  replaces by design. `npm run check:parity` needs `PARITY_ORIGIN` and a
+  `PARITY_COOKIE` session; a run that cannot read both pages exits 2 and is
+  never reported as a pass. `npm run check:parity:self` runs the fixture test
+  and is wired into `npm run check` - it needs no browser and no backend, and it
+  proves the checker catches the un-ported wheel.
+
+Changed:
+
+- `cbedge-v3/src/design/tokens.css` - `--color-move-up` / `--color-move-down`,
+  v2's pair verbatim. Same precedent as the candle pair beside them.
+- `cbedge-v3/src/design/theme.ts` - `MOVE_UP` / `MOVE_DOWN`, plus a numeric
+  colour kit (`tokenRgb`, `mixRgb`, `rgbHex`, `isLightRgb`). The wheel needs
+  colour as NUMBERS for two jobs CSS cannot do: a magnitude ramp that stays
+  opaque under text, and the luminance test that picks dark or light ink for a
+  label printed on it. These READ the live custom property, so tokens.css is
+  still the only place a value is written.
+- `cbedge-v3/src/pages/TradersDashboard.tsx` - rewritten against the checklist.
+  Prefs are server-backed again (`/api/traders-dashboard`) with localStorage
+  demoted to a mirror, so a 401 or a dead route no longer silently reverts a
+  trader to the sample schedule; Premarket Prep is a real link; Trending Now is
+  back to v2's row list (18-char truncation, PM tag) with the new sort; the
+  countdown's `clamp(48px,8vw,84px)` ramp, the 3px driver accent bars, the
+  cyan-to-blue task progress fill and the mono schedule times are all restored.
+  Prefs saves are now debounced for real (400ms) - v2's helper was captioned
+  "(debounced)" and was not, so every keystroke was its own POST.
+- `cbedge-v3/package.json` - `check:parity`, `check:parity:self`, and the
+  self-test added to `check`.
+
+Not ported, knowingly: the two snapshot buttons (page and wheel). They need a
+DOM-to-canvas renderer v3 does not ship and that is not worth a dependency for
+one button. It is the only v2 row this port drops, and `parity-check.mjs`
+reports it as a declared departure rather than a failure. The Economic Calendar
+header button also stays a dimmed pill - v3 has no `/economic-calendar` route,
+and App.tsx's no-catch-all rule means a live link would 404.
+
+Route work: none needed. `/v3/traders-dashboard` was already wired all four ways
+(page, `lazy()` route, `NAV` entry, `app/v3/traders-dashboard/route.ts`).
+
+Two caveats:
+
+- The local shell on this machine was unavailable again this session, so
+  **nothing was run against the repo**: no `npm run typecheck`, `check:theme`,
+  `build`, `budgets`, `perf` or `check:parity`. The new files typecheck clean
+  and pass `check-theme.mjs` in isolation under an identical config, and the
+  parity self-test passes, but none of that is the real tree. Run
+  `npm run check` in `cbedge-v3/` before pushing.
+- The `2026-08-30 - v3: six pages retired` entry below describes edits to
+  `App.tsx`, `Shell.tsx`, `TradersDashboard.tsx`, `Scanner.tsx`, `TestLab.tsx`
+  and two `app/v3/*/route.ts` files that are **not present in the working tree**
+  - `/scanner` and `/test` are still routed, `NAV` still carries every
+  `comingSoon` icon, and both page files are still full. That session's caveat
+  says its shell was down too. This port was built against what is actually on
+  disk, so `ALL_PAGES` and `LIVE_ROUTES` in the rewritten
+  `TradersDashboard.tsx` still match the live `App.tsx`. If the retirement was
+  meant to land, it needs redoing - and this file should be updated to match.
+
+## 2026-08-30 - v3: six pages retired (Scanner, Test Lab, ICT, ES Candles, Board, Multi Greek)
+
+Pages only. The Home board and every card in `cbedge-v3/src/board/catalog.tsx` -
+including the Multi Greek, GEX Candles and Key Levels cards - are untouched.
+
+Two of the six were real, built v3 pages and are gone:
+
+- `cbedge-v3/src/App.tsx` - dropped the `lazy()` imports and the `<Route>`s for
+  `/scanner` and `/test`.
+- `cbedge-v3/src/pages/Scanner.tsx` and `.../TestLab.tsx` - emptied to a
+  tombstone comment (`export {}`); nothing imports them. `git rm` both.
+- `app/v3/scanner/route.ts` and `app/v3/test/route.ts` - the SPA shell handlers
+  now answer 404 instead of serving a shell that would only render NotFound.
+  Both folders are `git rm -r`-able.
+
+The other four never had a v3 page - only a dimmed `comingSoon` rail icon and a
+row in the destination picker. Those are gone too, so nothing advertises a page
+that is not coming:
+
+- `cbedge-v3/src/shell/Shell.tsx` - `NAV` drops `/mult-greek`, `/board`,
+  `/es-candles`, `/scanner`, `/ict`, `/test`. The rail is now Home, Traders
+  Dash, Premarket, Options Chain, Est. Moves, Analysis, Replay, Flow, Journal.
+  A saved rail order containing a removed slot drops it silently - `loadOrder()`
+  already filters against `NAV`.
+- `cbedge-v3/src/pages/TradersDashboard.tsx` - same six out of `ALL_PAGES`,
+  `/scanner` and `/test` out of `LIVE_ROUTES`, and the default Quick Link
+  "Multi Greek" swapped for "Options Chain" (the default set has to point at
+  routes that exist).
+
+Not touched, deliberately: `src/data/scannerTickers.ts` (shared ticker universe,
+read by Premarket and the board cards), the `'es-candles' -> 'gex-candles'` card-id
+migration in `catalog.tsx`, and all of v2 - `components/pages/Scanner.tsx`,
+`components/pages/TestLab.tsx`, `components/scanner/*`, `app/test/*` and the
+`/app/*` routes are a separate app and still live.
+
+Caveat: the local shell on this machine was down for this session, so the four
+files above could not actually be deleted from disk - they were emptied or
+turned into 404 handlers instead, each with a `git rm` line in its header.
 
 ## 2026-08-30 - v3 Analysis: parity inventory written (step 1 of the port, no code yet)
 

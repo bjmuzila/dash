@@ -566,7 +566,7 @@ would otherwise read as drift later:
 |---|---|
 | 1 — S&P Sector Wheel (64 rows) | **Ported.** `src/pages/tradersDashboard/wheelMath.ts` (maths, transcribed 1:1) + `SectorWheelCard.tsx` (render). Rings, weighting, both colour ramps, bar clamp, label fit tests, greedy callout placer, tooltip, Top/Bottom, sector leaderboard, coverage footer, pop-out and fullscreen all present. |
 | 2 — Snapshot buttons | **Still open.** Both of them (page and wheel). Needs a DOM-to-canvas renderer v3 does not ship; not worth a dependency for one button. The only v2 row this port knowingly drops. |
-| 3 — Server-backed prefs | **Restored, improved.** `/api/traders-dashboard` is the store again; `localStorage` stays as a mirror so the first paint is the user's own widgets and a 401 or a dead route no longer silently reverts them to the samples. |
+| 3 — Server-backed prefs | **Restored.** `/api/traders-dashboard` is the store, and the only one — Postgres `td_user_prefs`, one row per `clerk_user_id`. The localStorage mirror an earlier cut added was removed; see "Prefs are per user, not per browser" below. |
 | 4 — Header nav buttons | **Half.** Premarket Prep is a real `<Link>` (v3 has the route). Economic Calendar stays a dimmed pill — no `/economic-calendar` route in v3, and App.tsx's no-catch-all rule means a live link would 404. |
 | 5 — Trending Now shape | **Back to v2's row list** (no table header), 18-char name truncation, PM tag — plus the new sort. |
 | 6 — Countdown type scale | `clamp(48px, 8vw, 84px)` restored. |
@@ -648,6 +648,37 @@ because it needs neither a browser nor a backend:
 
 All three pass. The real browser run against a live backend has **not** been
 executed — see the note at the end of this file.
+
+## Prefs are per user, not per browser
+
+The chain, end to end: `/api/traders-dashboard` → `server-v2/api-router.js`
+(registered `auth: 'subscriber'`) → `lib/db.ts` `getTdPrefs` / `upsertTdPrefs` →
+Postgres **`td_user_prefs`**, one row per `clerk_user_id`, upserted with
+`::jsonb` and `ON CONFLICT (clerk_user_id) DO UPDATE`. ZIP, schedule, tasks and
+quick links are all columns of that row. Nothing about this needed building —
+v2 already had it, and the port already pointed at it.
+
+What did need fixing is that the first cut of this page ALSO mirrored all four
+into `localStorage`, to spare the user watching their own schedule get replaced
+by the sample one on load. That is a per-browser store wearing a per-user
+store's clothes, and it breaks the guarantee in two concrete ways:
+
+- a second person signing in on the same browser sees the first one's ZIP and
+  routine for as long as the GET takes;
+- a value cleared on the server comes back. The load only applied `zip` when it
+  matched `/^\d{5}$/`, so a row with `zip: null` left the mirrored ZIP on
+  screen — the page showing a ZIP that is not in the database.
+
+The mirror is gone. The row is the only truth, the defaults render for the few
+hundred ms the GET takes exactly as v2 did, and `useQuery`'s cache already
+spares a client-side navigation back to the page from refetching.
+
+One thing v2 got wrong that this does not: **a debounced save is no longer lost
+on exit.** `flush()` posts whatever is queued immediately, and runs from both
+the unmount cleanup and a `pagehide` listener with `keepalive: true` — without
+which a fetch fired as the document goes away is cancelled and the edit
+vanishes. Set a ZIP and click to another page inside 400 ms: v2 saved it (it
+posted on every keystroke), the debounced version would not have.
 
 ## The casing trap (found by the first real `npm run check`)
 
