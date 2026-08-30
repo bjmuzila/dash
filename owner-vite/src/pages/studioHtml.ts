@@ -37,7 +37,8 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
   button.pri{background:linear-gradient(180deg,rgba(33,158,188,0.16),rgba(33,158,188,0.04));color:var(--acc);border-color:rgba(33,158,188,0.30);font-weight:800;box-shadow:0 0 14px rgba(33,158,188,0.22)}
   button.pri:hover{background:linear-gradient(180deg,rgba(33,158,188,0.26),rgba(33,158,188,0.08));color:var(--acc)}
   button.on{border-color:rgba(33,158,188,0.30);color:var(--acc);background:linear-gradient(180deg,rgba(33,158,188,0.16),rgba(33,158,188,0.04));box-shadow:0 0 14px rgba(33,158,188,0.22)}
-  button[disabled]{box-shadow:none}
+  button[disabled]{box-shadow:none;opacity:.35;cursor:default}
+  button[disabled]:hover{border-color:var(--line);color:var(--txt);background:rgba(255,255,255,0.04)}
   select,input[type=text],input[type=number]{background:rgba(0,0,0,0.40);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:12px;width:100%;font-family:inherit;font-weight:700}
   input[type=text]::placeholder{color:var(--dim);font-weight:600}
   input[type=text]:focus,input[type=number]:focus{outline:none;border-color:rgba(33,158,188,0.30);box-shadow:0 0 14px rgba(33,158,188,0.22)}
@@ -88,6 +89,9 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
      it loads a background-image fine and the browser rasterises the SVG — so
      turbulence smoke and real gaussian blur survive the export. */
   #stage .fx{position:absolute;inset:0;background-size:100% 100%;background-repeat:no-repeat;pointer-events:none}
+  /* Canvas border — replaced the accent bar. Its own element so the width can
+     change without moving anything inside the canvas. */
+  #stage .frame{position:absolute;inset:0;pointer-events:none;border:0 solid transparent;z-index:40}
   /* Alignment guides. Gold so they never read as content, above every layer,
      and gone the moment the stage goes into export mode. */
   #guides{position:absolute;inset:0;pointer-events:none;z-index:50}
@@ -107,6 +111,7 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
   .ly[data-t=text] .ed{outline:none;white-space:pre-wrap;word-break:break-word}
   .ly .ed[contenteditable="true"]{cursor:text;box-shadow:0 0 0 1px var(--acc) inset}
   .ly[data-t=image]{border-radius:16px;overflow:hidden;background:#0D1119;border:1px solid var(--lineHard)}
+  .ly[data-t=image][data-bare="1"]{background:none;border:0}
   .ly[data-t=image] img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
   .ly[data-t=image] .ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:14px;font-weight:700;letter-spacing:.02em;text-align:center;padding:10px}
   .ly[data-t=logo] img{width:100%;height:100%;object-fit:contain;object-position:left center;display:block;pointer-events:none}
@@ -123,6 +128,12 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
 <body>
 
 <div id="side">
+  <div class="row">
+    <button id="undo" style="flex:1">↶ Back</button>
+    <button id="redo" style="flex:1">Forward ↷</button>
+  </div>
+  <p class="empty" style="margin:-4px 0 0">Ctrl+Z / Ctrl+Shift+Z</p>
+
   <h3>Template</h3>
   <select id="tpl"></select>
   <div class="row" style="margin-top:8px"><button id="apply" class="pri" style="flex:1">Load template</button></div>
@@ -151,20 +162,64 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
   </div>
   <div class="row" style="margin-top:8px">
     <button id="tgrid" class="on">Grid lines</button>
-    <button id="tbar" class="on">Accent bar</button>
   </div>
-  <label>Background FX</label>
+  <div class="f2">
+    <div><label>Border</label><input type="color" id="bd" value="#219EBC"></div>
+    <div><label>Thickness</label><input type="number" id="bw" min="0" max="60" step="1" value="0"></div>
+  </div>
+  <label>FX · light</label>
   <div class="row">
     <button data-fx="lights">Lights</button>
     <button data-fx="rays">Rays</button>
+    <button data-fx="godrays">God rays</button>
+    <button data-fx="bloom">Bloom</button>
+    <button data-fx="leaks">Light leaks</button>
+    <button data-fx="aurora">Aurora</button>
+    <button data-fx="wash">Color wash</button>
+  </div>
+  <label>FX · air</label>
+  <div class="row">
     <button data-fx="smoke">Smoke</button>
+    <button data-fx="fog">Fog</button>
+    <button data-fx="clouds">Clouds</button>
+    <button data-fx="caustics">Caustics</button>
+  </div>
+  <label>FX · particles</label>
+  <div class="row">
+    <button data-fx="dust">Dust</button>
+    <button data-fx="bokeh">Bokeh</button>
+    <button data-fx="embers">Embers</button>
+    <button data-fx="stars">Starfield</button>
+    <button data-fx="rain">Rain</button>
+    <button data-fx="snow">Snow</button>
+  </div>
+  <label>FX · film</label>
+  <div class="row">
     <button data-fx="grain">Grain</button>
+    <button data-fx="scratches">Scratches</button>
+    <button data-fx="burn">Film burn</button>
+    <button data-fx="streak">Anamorphic</button>
     <button data-fx="scan">Scanlines</button>
+  </div>
+  <label>FX · digital</label>
+  <div class="row">
+    <button data-fx="crt">CRT static</button>
+    <button data-fx="glitch">Glitch</button>
+    <button data-fx="rgb">RGB split</button>
+    <button data-fx="vhs">VHS</button>
+    <button data-fx="grid">Scan grid</button>
+  </div>
+  <label>FX · finish</label>
+  <div class="row">
     <button data-fx="vignette">Vignette</button>
   </div>
   <label>FX strength <span id="fxlab" style="color:var(--acc)"></span></label>
   <input type="range" id="fxamt" min="0" max="100" value="45">
-  <p class="empty" style="margin:6px 0 0">Guides are editor-only and never reach the PNG. Grid lines, the accent bar and FX all export. Hold Alt while dragging to ignore the snap.</p>
+  <div class="row" style="margin-top:8px">
+    <button id="fxshuf" style="flex:1">Reshuffle particles</button>
+    <button id="fxclear">Clear FX</button>
+  </div>
+  <p class="empty" style="margin:6px 0 0">Guides are editor-only and never reach the PNG. Grid lines, the canvas border and every FX do export. Hold Alt while dragging to ignore the snap.</p>
 
   <h3>Add layer</h3>
   <div class="row">
@@ -197,7 +252,7 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
     <button id="zfit">Fit</button>
     <span id="zlab" style="color:var(--mut);font-size:12px"></span>
   </div>
-  <div id="hold"><div id="stage"><div class="grid"></div><div class="bar"></div></div></div>
+  <div id="hold"><div id="stage"><div class="grid"></div></div></div>
 </div>
 
 <script>
@@ -229,7 +284,13 @@ var C={
 // Every logo layer starts as the real CB Edge mark. Safe for html2canvas: the
 // srcdoc iframe inherits the site origin, so this is a same-origin image and
 // won't taint the export canvas. Double-click a logo layer to swap it.
-var LOGO_SRC='/cb-edge-logo.png';
+//
+// PNG, not the source cbedge3.0.jpg: JPEG has no alpha, so the mark would carry
+// its black plate onto every card. The PNG is that file keyed off its black
+// background (alpha from the brightest channel, colour unpremultiplied) and
+// trimmed, so the wordmark and the red/green bars sit on whatever is behind
+// them. object-fit:contain absorbs its 3.39:1 ratio in the 3:1 logo slots.
+var LOGO_SRC='/cbedge3.0.png';
 
 function px(v){return v+'px'}
 function setSize(){
@@ -252,9 +313,13 @@ function accent(){return document.getElementById('ac').value}
 // Both live inside #stage so they sit in canvas coordinates and scale with the
 // zoom, and both are re-acquired after restore() replaces stage.innerHTML.
 var guides=null, fxPlate=null;
+var frameEl=null;
 function chrome(){
   fxPlate=stage.querySelector('.fx');
   if(!fxPlate){ fxPlate=document.createElement('div'); fxPlate.className='fx'; stage.insertBefore(fxPlate,stage.firstChild); }
+  frameEl=stage.querySelector('.frame');
+  if(!frameEl){ frameEl=document.createElement('div'); frameEl.className='frame'; stage.appendChild(frameEl); }
+  applyFrame();
   guides=document.getElementById('guides');
   if(!guides){ guides=document.createElement('div'); guides.id='guides'; }
   stage.appendChild(guides);   // last child, so new layers can't paint over it
@@ -283,7 +348,7 @@ function snapTargets(exclude){
   });
   return {xs:xs,ys:ys};
 }
-// Smallest correction that puts any of 'vals' (the moving box's edges/centre)
+// Smallest correction that puts any of `vals` (the moving box's edges/centre)
 // onto any candidate. Returns {d:offset to apply, at:the line to draw}.
 function bestSnap(cands,vals,tol){
   var best=null;
@@ -318,17 +383,66 @@ function hex2rgb(h){
   if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
   return [parseInt(h.slice(0,2),16)||0,parseInt(h.slice(2,4),16)||0,parseInt(h.slice(4,6),16)||0];
 }
+// Deterministic placement: the same seed always lays the particles out the
+// same way, so a saved preset reopens looking identical and "Reshuffle" is the
+// only thing that moves them.
+var FXSEED=7;
+function rng(seed){
+  var t=(seed>>>0)||1;
+  return function(){ t=(t*1664525+1013904223)>>>0; return t/4294967296; };
+}
 function fxSvg(){
   var amt=(+document.getElementById('fxamt').value||0)/100;
   if(!FX.length||amt<=0) return '';
   var has=function(k){return FX.indexOf(k)>=0};
   var ac=accent(), c=hex2rgb(ac);
   var r=(c[0]/255).toFixed(3), g=(c[1]/255).toFixed(3), b=(c[2]/255).toFixed(3);
-  var o=function(v){return (v*amt).toFixed(3)};
-  var defs=[], body=[];
+  var o=function(v){return Math.min(1,v*amt).toFixed(3)};
+  var defs=[], body=[], n=0;
+  var uid=function(){return 'f'+(n++)};
+  var R=rng(FXSEED);
+  var rand=function(lo,hi){return lo+R()*(hi-lo)};
 
-  // Order is fixed, not toggle order: atmosphere first, then the overlays that
-  // are supposed to sit on top of everything.
+  // A turbulence-driven cloud, which is the shared engine behind smoke, fog and
+  // clouds — they differ only in scale, softness and where they sit.
+  function cloud(id,freq,oct,blur,bias,gain,col,maskDir){
+    defs.push('<filter id="'+id+'" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">'
+      +'<feTurbulence type="fractalNoise" baseFrequency="'+freq+'" numOctaves="'+oct+'" seed="'+(FXSEED+oct)+'" result="t"/>'
+      +'<feColorMatrix in="t" type="matrix" values="0 0 0 0 '+col[0]+' 0 0 0 0 '+col[1]+' 0 0 0 0 '+col[2]+' '+gain+' 0 0 0 '+bias+'"/>'
+      +'<feGaussianBlur stdDeviation="'+blur+'"/></filter>');
+    var mid=id+'m';
+    if(maskDir){
+      var y1=maskDir==='up'?1:0, y2=maskDir==='up'?0:1;
+      defs.push('<linearGradient id="'+mid+'g" x1="0" y1="'+y1+'" x2="0" y2="'+y2+'"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="0.8" stop-color="#fff" stop-opacity="0"/></linearGradient>',
+                '<mask id="'+mid+'"><rect width="'+W+'" height="'+H+'" fill="url(#'+mid+'g)"/></mask>');
+    }
+    return '<g'+(maskDir?' mask="url(#'+mid+')"':'')+' opacity="OPACITY"><rect width="'+W+'" height="'+H+'" filter="url(#'+id+')"/></g>';
+  }
+
+  // ── light ────────────────────────────────────────────────────────────────
+  if(has('wash')){
+    defs.push('<linearGradient id="wsh" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="'+ac+'" stop-opacity="'+o(0.30)+'"/><stop offset="0.55" stop-color="#8ECAE6" stop-opacity="'+o(0.10)+'"/><stop offset="1" stop-color="#FB8501" stop-opacity="'+o(0.14)+'"/></linearGradient>');
+    body.push('<rect width="'+W+'" height="'+H+'" fill="url(#wsh)"/>');
+  }
+  if(has('aurora')){
+    defs.push('<filter id="aub" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="'+Math.round(H*0.09)+'"/></filter>');
+    var au='';
+    [['#219EBC',0.16,0.42],['#8ECAE6',0.30,0.26],['#3ddc97',0.46,0.34],['#a06bd6',0.62,0.20]].forEach(function(band,i){
+      var id=uid();
+      defs.push('<linearGradient id="'+id+'" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="'+band[0]+'" stop-opacity="0"/><stop offset="0.5" stop-color="'+band[0]+'" stop-opacity="'+o(band[2])+'"/><stop offset="1" stop-color="'+band[0]+'" stop-opacity="0"/></linearGradient>');
+      au+='<path d="M '+(-W*0.1)+' '+(H*band[1])+' C '+(W*0.25)+' '+(H*(band[1]-0.16))+', '+(W*0.7)+' '+(H*(band[1]+0.18))+', '+(W*1.1)+' '+(H*(band[1]-0.05))
+        +' L '+(W*1.1)+' '+(H*(band[1]+0.16))+' C '+(W*0.7)+' '+(H*(band[1]+0.34))+', '+(W*0.25)+' '+(H*band[1])+', '+(-W*0.1)+' '+(H*(band[1]+0.2))+' Z" fill="url(#'+id+')"/>';
+    });
+    body.push('<g filter="url(#aub)">'+au+'</g>');
+  }
+  if(has('leaks')){
+    defs.push('<filter id="lkb" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="'+Math.round(W*0.045)+'"/></filter>',
+      '<radialGradient id="lk1"><stop offset="0" stop-color="#FF8A3D" stop-opacity="'+o(0.85)+'"/><stop offset="1" stop-color="#FF8A3D" stop-opacity="0"/></radialGradient>',
+      '<radialGradient id="lk2"><stop offset="0" stop-color="#FF3D6E" stop-opacity="'+o(0.55)+'"/><stop offset="1" stop-color="#FF3D6E" stop-opacity="0"/></radialGradient>');
+    body.push('<g filter="url(#lkb)">'
+      +'<ellipse cx="'+(W*1.02)+'" cy="'+(H*0.20)+'" rx="'+(W*0.30)+'" ry="'+(H*0.55)+'" fill="url(#lk1)"/>'
+      +'<ellipse cx="'+(-W*0.02)+'" cy="'+(H*0.85)+'" rx="'+(W*0.22)+'" ry="'+(H*0.40)+'" fill="url(#lk2)"/></g>');
+  }
   if(has('lights')){
     defs.push('<radialGradient id="l1"><stop offset="0" stop-color="'+ac+'" stop-opacity="'+o(0.32)+'"/><stop offset="1" stop-color="'+ac+'" stop-opacity="0"/></radialGradient>',
               '<radialGradient id="l2"><stop offset="0" stop-color="#8ECAE6" stop-opacity="'+o(0.18)+'"/><stop offset="1" stop-color="#8ECAE6" stop-opacity="0"/></radialGradient>',
@@ -336,6 +450,22 @@ function fxSvg(){
     body.push('<ellipse cx="'+(W*0.14)+'" cy="'+(H*0.08)+'" rx="'+(W*0.55)+'" ry="'+(H*0.62)+'" fill="url(#l1)"/>',
               '<ellipse cx="'+(W*0.94)+'" cy="'+(H*0.88)+'" rx="'+(W*0.46)+'" ry="'+(H*0.55)+'" fill="url(#l2)"/>',
               '<ellipse cx="'+(W*0.64)+'" cy="'+(H*0.00)+'" rx="'+(W*0.30)+'" ry="'+(H*0.34)+'" fill="url(#l3)"/>');
+  }
+  if(has('godrays')){
+    // Wide beams fanning from one off-canvas source, which is what separates
+    // these from Rays: those are parallel, these converge.
+    defs.push('<linearGradient id="gr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="'+o(0.34)+'"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></linearGradient>',
+      '<filter id="grb" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="'+Math.round(W*0.020)+'"/></filter>');
+    var gr='';
+    for(var i=0;i<7;i++){
+      var ang=-46+i*13;
+      gr+='<rect x="'+(-W*0.02)+'" y="0" width="'+(W*(i%2?0.05:0.10))+'" height="'+(H*1.9)+'" fill="url(#gr)" transform="rotate('+ang+' '+(W*0.18)+' '+(-H*0.15)+')"/>';
+    }
+    body.push('<g filter="url(#grb)" opacity="'+o(0.9)+'">'+gr+'</g>');
+  }
+  if(has('bloom')){
+    defs.push('<radialGradient id="blm"><stop offset="0" stop-color="#ffffff" stop-opacity="'+o(0.26)+'"/><stop offset="0.6" stop-color="'+ac+'" stop-opacity="'+o(0.10)+'"/><stop offset="1" stop-color="'+ac+'" stop-opacity="0"/></radialGradient>');
+    body.push('<ellipse cx="'+(W*0.5)+'" cy="'+(H*0.42)+'" rx="'+(W*0.72)+'" ry="'+(H*0.80)+'" fill="url(#blm)"/>');
   }
   if(has('rays')){
     defs.push('<linearGradient id="ry" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="'+ac+'" stop-opacity="'+o(0.22)+'"/><stop offset="1" stop-color="'+ac+'" stop-opacity="0"/></linearGradient>',
@@ -346,28 +476,137 @@ function fxSvg(){
     });
     body.push('<g filter="url(#ryb)" transform="rotate(-17 '+(W*0.3)+' 0)">'+rays+'</g>');
   }
-  if(has('smoke')){
-    // Turbulence -> alpha from the red channel -> blur. Masked to fade out
-    // toward the top so it reads as haze pooling low, not fog over the type.
-    defs.push('<filter id="smk" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">'
-      +'<feTurbulence type="fractalNoise" baseFrequency="0.0032 0.0055" numOctaves="5" seed="17" result="t"/>'
-      +'<feColorMatrix in="t" type="matrix" values="0 0 0 0 '+r+' 0 0 0 0 '+g+' 0 0 0 0 '+b+' 1.15 0 0 0 -0.46"/>'
-      +'<feGaussianBlur stdDeviation="'+Math.round(W*0.008)+'"/></filter>',
-      '<linearGradient id="smkg" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="0.75" stop-color="#fff" stop-opacity="0"/></linearGradient>',
-      '<mask id="smkm"><rect width="'+W+'" height="'+H+'" fill="url(#smkg)"/></mask>');
-    body.push('<g mask="url(#smkm)" opacity="'+o(0.55)+'"><rect width="'+W+'" height="'+H+'" filter="url(#smk)"/></g>');
+
+  // ── air ──────────────────────────────────────────────────────────────────
+  if(has('clouds')) body.push(cloud('cld','0.0016 0.0026',6,Math.round(W*0.012),-0.30,1.05,[r,g,b],'down').replace('OPACITY',o(0.50)));
+  if(has('fog'))    body.push(cloud('fg','0.0011 0.0018',4,Math.round(W*0.016),-0.22,0.95,['0.85','0.90','0.95'],null).replace('OPACITY',o(0.42)));
+  if(has('smoke'))  body.push(cloud('smk','0.0032 0.0055',5,Math.round(W*0.008),-0.46,1.15,[r,g,b],'up').replace('OPACITY',o(0.55)));
+  if(has('caustics')){
+    defs.push('<filter id="cau" color-interpolation-filters="sRGB"><feTurbulence type="turbulence" baseFrequency="0.010 0.018" numOctaves="2" seed="'+FXSEED+'" result="t"/>'
+      +'<feColorMatrix in="t" type="matrix" values="0 0 0 0 '+r+' 0 0 0 0 '+g+' 0 0 0 0 '+b+' 2.6 0 0 0 -1.35"/>'
+      +'<feGaussianBlur stdDeviation="1.4"/></filter>');
+    body.push('<rect width="'+W+'" height="'+H+'" filter="url(#cau)" opacity="'+o(0.55)+'"/>');
+  }
+
+  // ── particles ────────────────────────────────────────────────────────────
+  if(has('stars')){
+    var st='';
+    for(var i2=0;i2<260;i2++) st+='<circle cx="'+rand(0,W).toFixed(1)+'" cy="'+rand(0,H).toFixed(1)+'" r="'+rand(0.5,1.9).toFixed(2)+'" fill="#fff" opacity="'+(rand(0.15,1)*amt).toFixed(3)+'"/>';
+    body.push(st);
+  }
+  if(has('bokeh')){
+    defs.push('<filter id="bkb" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="'+Math.round(W*0.004)+'"/></filter>');
+    var bk='';
+    for(var i3=0;i3<16;i3++){
+      var rr=rand(W*0.012,W*0.055), col=[ac,'#8ECAE6','#FFB703'][i3%3];
+      bk+='<circle cx="'+rand(0,W).toFixed(1)+'" cy="'+rand(0,H).toFixed(1)+'" r="'+rr.toFixed(1)+'" fill="'+col+'" fill-opacity="'+(rand(0.05,0.16)*amt).toFixed(3)+'" stroke="'+col+'" stroke-opacity="'+(rand(0.18,0.45)*amt).toFixed(3)+'" stroke-width="'+(rr*0.10).toFixed(1)+'"/>';
+    }
+    body.push('<g filter="url(#bkb)">'+bk+'</g>');
+  }
+  if(has('dust')){
+    defs.push('<filter id="dsb" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="0.9"/></filter>');
+    var ds='';
+    for(var i4=0;i4<220;i4++) ds+='<circle cx="'+rand(0,W).toFixed(1)+'" cy="'+rand(0,H).toFixed(1)+'" r="'+rand(0.8,3.2).toFixed(2)+'" fill="#fff" opacity="'+(rand(0.10,0.55)*amt).toFixed(3)+'"/>';
+    body.push('<g filter="url(#dsb)">'+ds+'</g>');
+  }
+  if(has('embers')){
+    defs.push('<filter id="emb" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="'+Math.round(W*0.002)+'"/></filter>');
+    var em='';
+    for(var i5=0;i5<70;i5++){
+      var ey=H*(1-Math.pow(R(),1.7));           // bottom-weighted, like real embers
+      em+='<circle cx="'+rand(0,W).toFixed(1)+'" cy="'+ey.toFixed(1)+'" r="'+rand(1.2,4).toFixed(2)+'" fill="'+(R()<0.4?'#FFB703':'#FB8501')+'" opacity="'+(rand(0.25,0.95)*amt).toFixed(3)+'"/>';
+    }
+    body.push('<g filter="url(#emb)">'+em+'</g>');
+  }
+  if(has('rain')){
+    var rn='';
+    for(var i6=0;i6<180;i6++){
+      var rx=rand(-W*0.1,W*1.1), ry=rand(-H*0.1,H), len=rand(H*0.03,H*0.10);
+      rn+='<line x1="'+rx.toFixed(1)+'" y1="'+ry.toFixed(1)+'" x2="'+(rx+len*0.28).toFixed(1)+'" y2="'+(ry+len).toFixed(1)+'" stroke="#cfe8f5" stroke-width="'+rand(0.8,1.8).toFixed(2)+'" stroke-opacity="'+(rand(0.12,0.45)*amt).toFixed(3)+'"/>';
+    }
+    body.push(rn);
+  }
+  if(has('snow')){
+    defs.push('<filter id="snb" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="0.7"/></filter>');
+    var sn='';
+    for(var i7=0;i7<200;i7++) sn+='<circle cx="'+rand(0,W).toFixed(1)+'" cy="'+rand(0,H).toFixed(1)+'" r="'+rand(1.2,4.5).toFixed(2)+'" fill="#fff" opacity="'+(rand(0.20,0.80)*amt).toFixed(3)+'"/>';
+    body.push('<g filter="url(#snb)">'+sn+'</g>');
+  }
+
+  // ── film ─────────────────────────────────────────────────────────────────
+  if(has('streak')){
+    defs.push('<linearGradient id="ana" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#5ec8ff" stop-opacity="0"/><stop offset="0.5" stop-color="#9ad9ff" stop-opacity="'+o(0.75)+'"/><stop offset="1" stop-color="#5ec8ff" stop-opacity="0"/></linearGradient>',
+      '<filter id="anb" x="-20%" y="-400%" width="140%" height="900%"><feGaussianBlur stdDeviation="'+Math.round(H*0.012)+'"/></filter>');
+    body.push('<g filter="url(#anb)"><rect x="0" y="'+(H*0.30)+'" width="'+W+'" height="'+Math.max(2,H*0.006)+'" fill="url(#ana)"/></g>');
+  }
+  if(has('burn')){
+    defs.push('<filter id="brb" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="'+Math.round(W*0.035)+'"/></filter>',
+      '<radialGradient id="brn"><stop offset="0" stop-color="#FFE08A" stop-opacity="'+o(0.95)+'"/><stop offset="0.45" stop-color="#FF7A18" stop-opacity="'+o(0.60)+'"/><stop offset="1" stop-color="#B21F1F" stop-opacity="0"/></radialGradient>');
+    body.push('<g filter="url(#brb)"><ellipse cx="'+(W*0.97)+'" cy="'+(H*0.62)+'" rx="'+(W*0.20)+'" ry="'+(H*0.42)+'" fill="url(#brn)"/></g>');
+  }
+  if(has('scratches')){
+    var sc='';
+    for(var i8=0;i8<26;i8++){
+      var sx=rand(0,W), y0=rand(-H*0.1,H*0.6), hh=rand(H*0.25,H*1.2);
+      sc+='<line x1="'+sx.toFixed(1)+'" y1="'+y0.toFixed(1)+'" x2="'+(sx+rand(-3,3)).toFixed(1)+'" y2="'+(y0+hh).toFixed(1)+'" stroke="#fff" stroke-width="'+rand(0.6,1.6).toFixed(2)+'" stroke-opacity="'+(rand(0.10,0.40)*amt).toFixed(3)+'"/>';
+    }
+    for(var i9=0;i9<50;i9++) sc+='<circle cx="'+rand(0,W).toFixed(1)+'" cy="'+rand(0,H).toFixed(1)+'" r="'+rand(0.6,2.2).toFixed(2)+'" fill="#000" opacity="'+(rand(0.2,0.6)*amt).toFixed(3)+'"/>';
+    body.push(sc);
   }
   if(has('scan')){
-    defs.push('<pattern id="sc" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="1" fill="#ffffff" opacity="'+o(0.10)+'"/></pattern>');
+    defs.push('<pattern id="sc" width="5" height="5" patternUnits="userSpaceOnUse"><rect width="5" height="2" fill="#000000" opacity="'+o(0.55)+'"/></pattern>');
     body.push('<rect width="'+W+'" height="'+H+'" fill="url(#sc)"/>');
   }
-  if(has('grain')){
-    defs.push('<filter id="grn" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="5" result="t"/>'
-      +'<feColorMatrix in="t" type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1 0 0 0 -0.5"/></filter>');
-    body.push('<rect width="'+W+'" height="'+H+'" filter="url(#grn)" opacity="'+o(0.14)+'"/>');
+
+  // ── digital ──────────────────────────────────────────────────────────────
+  if(has('grid')){
+    var gs=Math.round(W/40);
+    defs.push('<pattern id="gp" width="'+gs+'" height="'+gs+'" patternUnits="userSpaceOnUse">'
+      +'<path d="M '+gs+' 0 L 0 0 0 '+gs+'" fill="none" stroke="'+ac+'" stroke-width="1" stroke-opacity="'+o(0.40)+'"/></pattern>');
+    body.push('<rect width="'+W+'" height="'+H+'" fill="url(#gp)"/>');
   }
+  if(has('vhs')){
+    var vh='';
+    for(var iA=0;iA<7;iA++){
+      var by=rand(0,H), bh=rand(H*0.004,H*0.03);
+      vh+='<rect x="0" y="'+by.toFixed(1)+'" width="'+W+'" height="'+bh.toFixed(1)+'" fill="#ffffff" opacity="'+(rand(0.05,0.18)*amt).toFixed(3)+'"/>';
+      vh+='<rect x="'+rand(-W*0.03,W*0.03).toFixed(1)+'" y="'+(by+bh).toFixed(1)+'" width="'+W+'" height="'+(bh*0.5).toFixed(1)+'" fill="#5ec8ff" opacity="'+(rand(0.08,0.25)*amt).toFixed(3)+'"/>';
+    }
+    body.push(vh);
+  }
+  if(has('rgb')){
+    // No way to duplicate the page content from a background layer, so this is
+    // the artifact rather than a true split: paired red/cyan edges on a few bands.
+    var rs='';
+    for(var iB=0;iB<6;iB++){
+      var ry2=rand(0,H), rh=rand(H*0.01,H*0.06), off=rand(3,14);
+      rs+='<rect x="'+(-off)+'" y="'+ry2.toFixed(1)+'" width="'+W+'" height="'+rh.toFixed(1)+'" fill="#ff2f45" opacity="'+o(0.16)+'"/>';
+      rs+='<rect x="'+off+'" y="'+ry2.toFixed(1)+'" width="'+W+'" height="'+rh.toFixed(1)+'" fill="#00e5ff" opacity="'+o(0.16)+'"/>';
+    }
+    body.push(rs);
+  }
+  if(has('glitch')){
+    var gl='';
+    for(var iC=0;iC<9;iC++){
+      var gy=rand(0,H), gh=rand(H*0.006,H*0.045);
+      gl+='<rect x="'+rand(-W*0.05,W*0.05).toFixed(1)+'" y="'+gy.toFixed(1)+'" width="'+W+'" height="'+gh.toFixed(1)+'" fill="'+(R()<0.5?ac:'#ff2f45')+'" opacity="'+(rand(0.08,0.30)*amt).toFixed(3)+'"/>';
+    }
+    body.push(gl);
+  }
+  if(has('crt')){
+    defs.push('<filter id="crtf" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="0.62" numOctaves="2" seed="'+(FXSEED+3)+'" result="t"/>'
+      +'<feColorMatrix in="t" type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1.6 0 0 0 -0.55"/></filter>');
+    body.push('<rect width="'+W+'" height="'+H+'" filter="url(#crtf)" opacity="'+o(0.42)+'"/>');
+  }
+  if(has('grain')){
+    defs.push('<filter id="grn" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" seed="'+(FXSEED+1)+'" result="t"/>'
+      +'<feColorMatrix in="t" type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1.35 0 0 0 -0.62"/></filter>');
+    body.push('<rect width="'+W+'" height="'+H+'" filter="url(#grn)" opacity="'+o(0.55)+'"/>');
+  }
+
+  // ── finish ───────────────────────────────────────────────────────────────
   if(has('vignette')){
-    defs.push('<radialGradient id="vg" cx="0.5" cy="0.5" r="0.78"><stop offset="0.42" stop-color="#000000" stop-opacity="0"/><stop offset="1" stop-color="#000000" stop-opacity="'+o(0.62)+'"/></radialGradient>');
+    defs.push('<radialGradient id="vg" cx="0.5" cy="0.5" r="0.72"><stop offset="0.30" stop-color="#000000" stop-opacity="0"/><stop offset="1" stop-color="#000000" stop-opacity="'+o(0.95)+'"/></radialGradient>');
     body.push('<rect width="'+W+'" height="'+H+'" fill="url(#vg)"/>');
   }
 
@@ -375,6 +614,14 @@ function fxSvg(){
     +'<defs>'+defs.join('')+'</defs>'+body.join('')+'</svg>';
   return 'url("data:image/svg+xml,'+encodeURIComponent(svg)+'")';
 }
+function applyFrame(){
+  if(!frameEl) return;
+  var w=Math.max(0,+document.getElementById('bw').value||0);
+  frameEl.style.border=w?(w+'px solid '+document.getElementById('bd').value):'0 solid transparent';
+}
+document.getElementById('bw').oninput=applyFrame;
+document.getElementById('bd').oninput=applyFrame;
+
 function applyFx(){
   if(!fxPlate) return;
   fxPlate.style.backgroundImage=fxSvg()||'none';
@@ -396,6 +643,8 @@ document.querySelectorAll('#side button[data-fx]').forEach(function(b){
   };
 });
 document.getElementById('fxamt').oninput=applyFx;
+document.getElementById('fxshuf').onclick=function(){ FXSEED=(Math.random()*1e6)|0; applyFx(); };
+document.getElementById('fxclear').onclick=function(){ setFx([],null); };
 
 function mkLayer(o){
   var d=document.createElement('div');
@@ -437,14 +686,23 @@ function mkLayer(o){
     d.addEventListener('dblclick',function(){pick(d)});
   }
   if(o.t==='box'){
-    d.style.background=o.bgc||C.panel;
-    d.style.border='1px solid '+(o.bd||C.line);
     d.dataset.bgc=o.bgc||C.panel; d.dataset.bd=o.bd||C.line;
+    d.dataset.fill=o.fill==null?'1':String(o.fill);
+    d.dataset.bw=o.bw==null?'1':String(o.bw);
+    if(o.rad!=null) d.style.borderRadius=px(o.rad);
+    styleBox(d);
   }
   if(o.data) setImg(d,o.data);
   wire(d);
   stage.appendChild(d);
   return d;
+}
+// Fill and border are held on the layer, not read back off the computed style,
+// so "no fill" can be turned off and back on without losing the colour.
+function styleBox(d){
+  var w=+d.dataset.bw||0;
+  d.style.background=d.dataset.fill==='0' ? 'transparent' : d.dataset.bgc;
+  d.style.border=w ? (w+'px solid '+d.dataset.bd) : '0 solid transparent';
 }
 function styleList(d){
   d.querySelectorAll('.dot').forEach(function(x){x.style.background=accent()});
@@ -611,10 +869,16 @@ function inspector(){
       h+='<label>Position — vertical</label><input type="range" id="i_y" min="0" max="100" value="'+parseFloat(op0[1])+'">';
       h+='<div class="row" style="margin-top:8px"><button id="i_snap" class="pri" style="flex:1">Fit box to image</button></div>';
       h+='<div class="row"><button id="i_full">Fill canvas</button><button id="i_reset">Reset image</button></div>';
+      h+='<div class="row"><button id="i_bare" class="'+(sel.dataset.bare==='1'?'on':'')+'" style="flex:1">No frame — drop the border &amp; backing</button></div>';
     }
   }
   if(t==='box'){
-    h+='<div class="f2"><div><label>Fill</label><input type="color" id="b_bg" value="'+sel.dataset.bgc+'"></div><div><label>Border</label><input type="color" id="b_bd" value="'+sel.dataset.bd+'"></div></div>';
+    h+='<div class="f2"><div><label>Fill</label><input type="color" id="b_bg" value="'+(sel.dataset.bgc||C.panel)+'"></div><div><label>Border</label><input type="color" id="b_bd" value="'+(sel.dataset.bd||C.line)+'"></div></div>';
+    h+='<div class="row" style="margin-top:8px">'
+      +'<button id="b_nofill" class="'+(sel.dataset.fill==='0'?'on':'')+'">No fill</button>'
+      +'<button id="b_nobd" class="'+((+sel.dataset.bw||0)===0?'on':'')+'">No border</button></div>';
+    h+='<label>Border thickness</label><input type="range" id="b_bw" min="0" max="14" value="'+(+sel.dataset.bw||0)+'">';
+    h+='<label>Corner radius</label><input type="range" id="b_r" min="0" max="80" value="'+(parseInt(sel.style.borderRadius)||18)+'">';
     h+='<div class="row" style="margin-top:8px"><button id="b_op">Toggle 50% opacity</button></div>';
   }
   var anyG=selSet.some(function(x){return !!x.dataset.g});
@@ -690,12 +954,34 @@ function inspector(){
         m.style.objectPosition='50% 50%'; m.style.objectFit='cover';
         inspector();
       };
+      // A screenshot that already has its own chrome doesn't want a second
+      // frame around it. data-bare, not inline styles, so it survives restore.
+      var ix=sel;
+      g('i_bare').onclick=function(){
+        var on=ix.dataset.bare!=='1'; ix.dataset.bare=on?'1':'0';
+        this.classList.toggle('on',on);
+      };
     }
   }
   if(t==='box'){
-    g('b_bg').oninput=function(){sel.dataset.bgc=this.value; sel.style.background=this.value};
-    g('b_bd').oninput=function(){sel.dataset.bd=this.value; sel.style.border='1px solid '+this.value};
-    g('b_op').onclick=function(){sel.style.opacity = (sel.style.opacity==='0.5'?'1':'0.5')};
+    var bx=sel;
+    g('b_bg').oninput=function(){bx.dataset.bgc=this.value; bx.dataset.fill='1'; g('b_nofill').classList.remove('on'); styleBox(bx)};
+    g('b_bd').oninput=function(){bx.dataset.bd=this.value; if(!(+bx.dataset.bw)){bx.dataset.bw='1'; g('b_bw').value=1; g('b_nobd').classList.remove('on');} styleBox(bx)};
+    g('b_bw').oninput=function(){bx.dataset.bw=this.value; g('b_nobd').classList.toggle('on',+this.value===0); styleBox(bx)};
+    g('b_r').oninput=function(){bx.style.borderRadius=px(this.value)};
+    g('b_nofill').onclick=function(){
+      var off=bx.dataset.fill!=='0'; bx.dataset.fill=off?'0':'1';
+      this.classList.toggle('on',off); styleBox(bx);
+    };
+    g('b_nobd').onclick=function(){
+      // Remember the width you had, so turning the border back on restores it.
+      var off=(+bx.dataset.bw||0)>0;
+      if(off){ bx.dataset.bwPrev=bx.dataset.bw; bx.dataset.bw='0'; }
+      else { bx.dataset.bw=bx.dataset.bwPrev||'1'; }
+      g('b_bw').value=+bx.dataset.bw;
+      this.classList.toggle('on',off); styleBox(bx);
+    };
+    g('b_op').onclick=function(){bx.style.opacity = (bx.style.opacity==='0.5'?'1':'0.5')};
   }
   g('i_grp').onclick=function(){
     if(selSet.length<2) return;
@@ -738,6 +1024,11 @@ function rgb2hex(c){
 }
 
 document.addEventListener('keydown',function(e){
+  if((e.ctrlKey||e.metaKey) && (e.key==='z'||e.key==='Z'||e.key==='y'||e.key==='Y')){
+    e.preventDefault();
+    goHist((e.key==='y'||e.key==='Y'||e.shiftKey)?1:-1);
+    return;
+  }
   if(!sel || document.activeElement.isContentEditable) return;
   if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();selSet.forEach(function(x){x.remove()});select(null);return}
   var k={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];
@@ -989,7 +1280,7 @@ var TPL={
   ]},
 
   /* Weekend estimated-moves scoreboard — the Saturday "here is how the week
-     graded" post, ending in the sign-up ask. Same deal as 'alerts': two image
+     graded" post, ending in the sign-up ask. Same deal as `alerts`: two image
      slots, everything else rendered, and Auto-fill reads the numbers off the
      shots into the [data-k] layers.
 
@@ -1078,7 +1369,9 @@ document.getElementById('tsave').onclick=function(){
   clone.querySelectorAll('.ly[data-t=logo] img').forEach(function(im){ im.src=LOGO_SRC; delete im.dataset.url; });
   var t=customTpls();
   t[n]={W:W,H:H,bg:document.getElementById('bg').value,ac:accent(),
-        fx:{on:FX.slice(),amt:+document.getElementById('fxamt').value},html:clone.innerHTML};
+        fx:{on:FX.slice(),amt:+document.getElementById('fxamt').value,seed:FXSEED},
+        frame:{c:document.getElementById('bd').value,w:+document.getElementById('bw').value},
+        html:clone.innerHTML};
   try{ localStorage.setItem('cbe_tpls',JSON.stringify(t)); }
   catch(e){ alert('Could not save: '+e); return; }
   refreshT();
@@ -1100,17 +1393,15 @@ document.getElementById('size').onchange=function(){
 };
 document.getElementById('bg').oninput=function(){stage.style.background=this.value};
 document.getElementById('ac').oninput=function(){
-  stage.querySelector('.bar').style.background=this.value;
+  // .bar was the old accent strip. New canvases have none, but presets saved
+  // before the border replaced it still carry one, so this stays null-safe.
+  var bar=stage.querySelector('.bar'); if(bar) bar.style.background=this.value;
   stage.querySelectorAll('.ly[data-t=list] .dot').forEach(function(x){x.style.background=this.value}.bind(this));
-  applyFx();   // lights, rays and smoke are all tinted from the accent
+  applyFx();   // lights, rays, smoke and the scan grid are all tinted from the accent
 };
 document.getElementById('tgrid').onclick=function(){
   var g=stage.querySelector('.grid'); var on=g.style.display!=='none';
   g.style.display=on?'none':'block'; this.classList.toggle('on',!on);
-};
-document.getElementById('tbar').onclick=function(){
-  var b=stage.querySelector('.bar'); var on=b.style.display!=='none';
-  b.style.display=on?'none':'block'; this.classList.toggle('on',!on);
 };
 document.getElementById('zin').onclick=function(){Z=Math.min(1.5,Z+0.1);applyZoom()};
 document.getElementById('zout').onclick=function(){Z=Math.max(0.15,Z-0.1);applyZoom()};
@@ -1230,7 +1521,8 @@ document.getElementById('autofill').onclick=function(){
 function serialize(){
   clearGuides();   // never bake an in-progress guide into a saved preset
   return {W:W,H:H,bg:document.getElementById('bg').value,ac:accent(),
-          fx:{on:FX.slice(),amt:+document.getElementById('fxamt').value},
+          fx:{on:FX.slice(),amt:+document.getElementById('fxamt').value,seed:FXSEED},
+          frame:{c:document.getElementById('bd').value,w:+document.getElementById('bw').value},
           html:stage.innerHTML};
 }
 function restore(s){
@@ -1238,7 +1530,9 @@ function restore(s){
   document.getElementById('bg').value=s.bg; stage.style.background=s.bg;
   document.getElementById('ac').value=s.ac;
   stage.innerHTML=s.html;
-  chrome();   // stage.innerHTML just replaced the fx plate and the guide overlay
+  if(s.frame){ document.getElementById('bd').value=s.frame.c; document.getElementById('bw').value=s.frame.w; }
+  if(s.fx&&s.fx.seed!=null) FXSEED=s.fx.seed;
+  chrome();   // stage.innerHTML just replaced the fx plate, frame and guide overlay
   setFx(s.fx&&s.fx.on||[], s.fx?s.fx.amt:null);   // presets saved before FX have none
   stage.querySelectorAll('.ly').forEach(function(d){
     var h=d.querySelector('.hnd'); if(h)h.remove();
@@ -1251,6 +1545,53 @@ function restore(s){
   });
   setSize(); fit(); select(null); syncSelects();
 }
+// ── Undo / redo ─────────────────────────────────────────────────────────────
+// Driven by a MutationObserver on #stage rather than by instrumenting every
+// handler: there are ~30 places that mutate a layer and any new control would
+// have to remember to call in. Watching the canvas catches all of them, and the
+// filter below is what keeps the noise out.
+var HIST=[], HI=-1, applying=false, htimer=null;
+function histBtns(){
+  document.getElementById('undo').disabled=HI<=0;
+  document.getElementById('redo').disabled=HI>=HIST.length-1;
+}
+function pushHist(){
+  if(applying) return;
+  var snap=JSON.stringify(serialize());
+  if(HI>=0 && HIST[HI]===snap) return;
+  HIST=HIST.slice(0,HI+1);
+  HIST.push(snap);
+  if(HIST.length>60) HIST.shift();
+  HI=HIST.length-1;
+  histBtns();
+}
+function goHist(step){
+  var i=HI+step;
+  if(i<0||i>=HIST.length) return;
+  HI=i; applying=true;
+  clearTimeout(htimer); htimer=null;
+  try{ restore(JSON.parse(HIST[i])); }
+  // MutationObserver callbacks run at the microtask checkpoint, so they see
+  // applying=true and bail; this timeout lands after them.
+  finally{ setTimeout(function(){ applying=false; histBtns(); },0); }
+}
+new MutationObserver(function(recs){
+  if(applying){ clearTimeout(htimer); htimer=null; return; }
+  var real=recs.some(function(rec){
+    if(guides && (rec.target===guides || guides.contains(rec.target))) return false;
+    if(rec.type==='attributes'){
+      if(rec.target===stage) return false;                 // zoom transform, canvas size
+      if(rec.attributeName==='class') return false;        // selection outline
+    }
+    return true;
+  });
+  if(!real) return;
+  clearTimeout(htimer);
+  htimer=setTimeout(pushHist,300);
+}).observe(stage,{subtree:true,childList:true,attributes:true,characterData:true});
+document.getElementById('undo').onclick=function(){goHist(-1)};
+document.getElementById('redo').onclick=function(){goHist(1)};
+
 function presets(){ try{return JSON.parse(localStorage.getItem('cbe_posts')||'{}')}catch(e){return {}} }
 function refreshP(){
   var p=presets(), s=document.getElementById('pload');
@@ -1331,11 +1672,11 @@ function syncSelects(){
 }
 
 stage.style.background=C.bg;
-stage.querySelector('.bar').style.background=accent();
 ['tpl','size','pload'].forEach(function(id){ themeSelect(document.getElementById(id)); });
 // 'alerts' is now the first option, so the dropdown has to be pointed at the
 // template we actually load or the label and the canvas disagree on first paint.
 chrome(); setSize(); refreshT(); document.getElementById('tpl').value='levels'; loadTpl('levels'); fit(); refreshP(); syncSelects();
+pushHist(); histBtns();
 window.addEventListener('resize',fit);
 </script>
 </body>

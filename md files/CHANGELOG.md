@@ -1,63 +1,113 @@
 # Changelog
 
-## 2026-08-30 - Missing ticker logos: 424 mirrored, and the mirror script's earnings read was dead
+## 2026-08-30 - Logo mirror: 811 on disk, and --from-earnings now gets past the prod auth gate
 
-Edited: `scripts/fetch-ticker-logos.mjs`, `components/shared/ChipLogo.tsx`.
-Added: `ticker-logos-2026-08-30.zip` (424 PNGs for `public/logos/`).
+Edited: `scripts/fetch-ticker-logos.mjs`.
 
-`--from-earnings` never worked. It read `j.earnings` (falling back to a bare
-array) and `/proxy/earnings-week` has always answered `{ ok, minMcap, rows }` -
-so neither shape matched, `rows` came back `[]`, no warning printed, and the flag
-quietly mirrored nothing but the SEED list. That is most of why the board kept
-drawing ticker-TEXT chips for names that had been in the feed for weeks. It now
-reads `rows`, asks for `?week=both` (mirroring next week's names before Monday is
-the point of running it on a Saturday), and prints how many it got.
+The `--all` run against prod answered **401** on the earnings leg.
+`server-v2/proxy-auth.js` runs with `PROXY_AUTH_REQUIRED=1` there, so `/proxy/*`
+wants a session cookie the script has no way to hold. It has one bypass built for
+exactly this - the `x-internal-token` shared secret its own in-process cron
+callers use - so the script sends it when `INTERNAL_API_TOKEN` is set locally,
+and says so by name when a 401 comes back without one. Unset, nothing changes:
+a run against localhost behaves as before.
 
-New `--from-anticipated` seeds from `ANTICIPATED_SYMBOLS` in `lib/econCalendar.ts`
-- the list the board's default view is actually built from, so every name in it
-WILL appear the week that company reports. `--all` does both; that is the command
-to run after a deploy. The run also now NAMES what it could not resolve instead
-of printing a count, because that list is the hand-crop todo, and reminds you to
-bump `LOGO_REV` (`/logos/*.png` is served immutable, so a browser holding a 404
-for a symbol you just mirrored will not re-ask for a year).
+Skipping that leg is survivable, since `--from-anticipated` covers the board's
+default view. It is just the only leg that catches a name the anticipated list
+has not been taught about yet.
 
-**The 424.** Checked every symbol in `ANTICIPATED_SYMBOLS` plus this week's board
-against `davidepalazzo/ticker-logos` and pulled the hits - unzip
-`ticker-logos-2026-08-30.zip` into `public/logos/` and commit. `LOGO_REV` is
-already bumped to 3. Note these were resolvable BEFORE this too, live through
-`/proxy/ticker-logo?raw=1`; mirroring turns two round trips per chip into one
-same-origin file, it does not change what renders.
+**Where the mirror stands.** 424 from the zip + 188 from this run = ~811 on disk.
+`WB` came back as non-image bytes from the GitHub set and was correctly rejected
+rather than written as a broken file.
 
-**The 100 with no source** (GitHub set has nothing, and Wikidata was unreachable
-from where this ran - the VPS can still try it, so run `--all` there before
-treating any of these as final):
+**95 with no source in either GitHub or Wikidata.** Ten are on the current board
+and will keep drawing ticker-text chips until someone crops them into
+`public/logos` and adds them to `MANUAL`: AGX DOO HMR KNOP MMED PL RZLV SSL VSCO
+WLY. Six more are S&P names that have been in `SEED` all along and simply are not
+in the upstream repo under those keys - BRK.B, ELV, CNQ, TRP, SNDK, IDXX - so
+their absence is upstream, not a bad guess in the seed list.
 
-AGX ALAB AOUT AU AUR AZPN BF.B BIRD BTDR BYON CATO CAVA CHRN CHS CRTO DECK DIDIY
-DOO DOV DQ DXPE EVR FFAI FIGS FLS FSM GDS GLXY GVA GWW HLI HMR IAS IDXX INGR IRS
-JACK JEF JKHY KMT KNOP KVYO LANC LAZ LEU LOVE MAG MMED MPWR NCNO NNE NTGR NVMI
-NXT OKLO ONTO OUST PAYC PCTY PIPR PL PNR POOL PTC PTLO PWR RELY RGR RZLV SFD SG
-SGH SITE SMR SPRINKLR SSL STRL TEM THS TLYS TOAST TREX TT TTEK TW TYL UCTT URBN
-VSCO WB WH WLY WMS WOLF WSO XPOF XYZ YUM ZK ZWS
+## 2026-08-29 - v3 board: cards show where they will land while you drag
 
-Twelve of those are on the current board (AGX CHRN DOO HMR IRS KNOP MMED PL RZLV
-SSL VSCO WLY) and will keep rendering as ticker-text chips until someone crops
-one into `public/logos` and adds it to `MANUAL`. Two are typos in
-`ANTICIPATED_SYMBOLS` worth fixing rather than sourcing: `SPRINKLR` should be
-`CXM`, and `XYZ`/`TOAST` duplicate `SQ`/`TOST`.
+Edited: `cbedge-v3/src/design/primitives/Board.tsx`.
 
-## 2026-08-30 - Traders Dashboard: Economic Calendar link in the header
+Dragging or resizing in edit mode now draws a dashed LANDING SLOT under the
+board, the card in the hand lifts off it, and faint column guides appear for the
+duration of the gesture.
 
-Edited: `components/pages/TradersDashboard.tsx`.
+**Why the slot exists.** The dragged card is pinned to the pointer, but the
+release runs one more compaction and the card floats up to the first free row —
+so the place it is being held is very often not the place it ends up, and letting
+go looks like the board jumping. The slot is computed with the exact release
+maths (`compactBoard(compactBoard(draft, id))`, the same double pass as `onUp`),
+so the outline cannot disagree with where the card lands: it is drawn by the code
+that lands it. It is suppressed when the card is already sitting in its landing
+slot — an outline directly under the card says nothing.
 
-The dashboard already pulls `/api/calendar` to build "Key Drivers Today" but had
-no way to get to the full calendar page. Added an **Economic Calendar** button in
-the header next to Premarket Prep, linking to `/economic-calendar` (the route
-already exists in `app-vite/src/App.tsx`).
+**Guided, not forced.** Nothing is pulled out of the hand and no gesture is
+refused. The card still goes wherever the pointer puts it; the board only says,
+in advance, what it will do on release.
 
-Uses `next/link` like the Premarket Prep button, so it router-pushes inside the
-SPA instead of reloading the bundle. Styled on the purple accent from
-`homeTheme` (same padding/border/hover pattern as its orange neighbour) so the
-two read as separate destinations. No hardcoded hex.
+**Guides only during a gesture.** A grid drawn the whole time is wallpaper; a
+grid that appears under the hand is a ruler. Columns are otherwise invisible, so
+a card taking the next column reads as the board being twitchy rather than as a
+snap.
+
+Drawn at `z-0` under the tiles, `pointer-events-none`, and every colour is a
+`color-mix` on `--color-accent` / `--color-app` — no literals.
+
+## 2026-08-29 - v3 board: the same card can be added more than once
+
+Edited: `cbedge-v3/src/board/catalog.tsx`, `cbedge-v3/src/board/BoardPage.tsx`,
+`cbedge-v3/scripts/perf-check.mjs`, `cbedge-v3/AGENTS.md`.
+
+"+ Add card" no longer removes a card from the list once it is on the board.
+Every catalog entry can be added as many times as wanted — two GEX Charts on
+different bases, three Multi Greek ladders, a second calendar — and each copy
+drags, resizes and removes on its own.
+
+**Instance ids, and no migration.** A grid item's `id` is now an INSTANCE id.
+The first copy of a card keeps the bare catalog id (`gex-chart`); every copy
+after it gets a `#n` suffix (`gex-chart#2`). The catalog is looked up through the
+new `cardTypeOf()`, which strips the suffix. Because the first instance is still
+spelled exactly as it always was, every layout ever saved is still valid and
+still means what it meant — no version field, no migration pass — and the
+`data-card-id` selectors keep resolving. `migrateCardId()` renames the type and
+leaves the suffix alone.
+
+**Numbers count up, they do not backfill.** Removing copy 2 and adding another
+gives 3, not 2. An id in a saved layout stays stable for as long as the card is
+there, which is what makes per-instance state safe to add later.
+
+**What the menu says instead of hiding a row.** Each entry carries a `×n` count
+when the board already has some. A missing row was only ever a refusal; a count
+is information. Copies are numbered in the card header, and only when there is
+more than one — a "1" on a card with no sibling is noise.
+
+**Dedupe on load is now per INSTANCE id, not per type**, so two of the same card
+survive a reload while a genuinely corrupt blob with a repeated instance id
+still gets one of them dropped.
+
+**Known and deliberate:** a card's own settings are stored per card TYPE
+(`cb-v3-mg-basis` and friends), not per instance. Two copies can be set
+differently within a session, but on reload both come back on whichever was
+written last. Fixing that means threading the instance id into every card's
+storage keys — a change to every card, not to the board. Noted in
+`cbedge-v3/AGENTS.md` under "Adding a card to the board".
+
+`perf-check.mjs` matches the GEX Candles tile by prefix now, so a board whose
+only copy is `gex-candles#2` still gets driven.
+
+## 2026-08-29 - v3 Multi Greek: OI-only basis removed
+
+Edited: `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`.
+
+The basis switch is now OI+VOL and VOL. OI-only is gone from the control.
+
+A board that stored `oi` falls back to OI+VOL on load rather than sitting on a
+basis the switch cannot show — a selected value with no button is a control that
+lies about what is on screen. `Basis` in `mgMath` still types `'oi'`; only this
+card's option list dropped it.
 
 ## 2026-08-29 - v3 Multi Greek: opens on the board's ticker, panels are add/remove
 

@@ -17,6 +17,11 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 //   - CARDS NEVER OVERLAP and always compact toward the top-left ("snap close
 //     to the other cards") — every gesture re-runs compaction, so a saved
 //     layout can never come back as a stack.
+//   - GUIDED, NOT FORCED. The card follows the pointer; nothing is dragged out
+//     of the hand. What the board adds is a dashed LANDING SLOT drawn where the
+//     card will actually come to rest, plus column guides for the duration of
+//     the gesture. See the `preview` block below for why the slot is computed
+//     with the release maths rather than approximated.
 //   - locked=true renders statically: no handles, no listeners. Use this
 //     outside "edit layout" mode if the page wants a locked default view.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +143,29 @@ export function Board({
     height: Math.max(0, it.h * (rowH + gutter) - gutter),
   })
 
+  // ── The landing slot ───────────────────────────────────────────────────────
+  //
+  // The card under the pointer is PINNED: it sits exactly where the hand put it,
+  // which is the only way a drag feels like dragging. But the release runs one
+  // more compaction, and the card then floats up to the first free row — so the
+  // place it is being held is very often NOT the place it ends up.
+  //
+  // That gap is the whole complaint about grids that "fight you": you let go and
+  // the card jumps. The fix is not to stop the float (a board with holes in it is
+  // worse) but to SHOW the destination while the drag is still happening. This
+  // runs the exact release maths — the same double compaction as onUp — and
+  // draws the result as an outline underneath everything.
+  //
+  // So the guidance is honest by construction: the outline cannot disagree with
+  // where the card lands, because it is computed by the code that lands it.
+  const preview =
+    gesture && draft
+      ? (compactBoard(compactBoard(draft, gesture.id)).find((i) => i.id === gesture.id) ?? null)
+      : null
+  // Nothing to point at when the card is already sitting in its landing slot.
+  const pinned = gesture ? (byId.get(gesture.id) ?? null) : null
+  const showPreview = preview != null && pinned != null && (preview.x !== pinned.x || preview.y !== pinned.y)
+
   const onDownMove = useCallback(
     (e: ReactPointerEvent, id: string) => {
       if (locked) return
@@ -212,6 +240,40 @@ export function Board({
 
   return (
     <div ref={wrapRef} className="relative w-full" style={{ height: containerH }}>
+      {/* ── Column guides ───────────────────────────────────────────────────
+          Only in edit mode, and only while a card is actually moving. A grid
+          drawn the whole time is wallpaper; a grid that appears under the hand
+          is a ruler. It says what the card is snapping TO — the columns are
+          otherwise invisible, so a card that jumps a column reads as the board
+          being twitchy rather than as the card taking the next slot. */}
+      {!locked && gesture && colW > 0 && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0"
+          style={{
+            zIndex: 0,
+            backgroundImage: `repeating-linear-gradient(to right, color-mix(in srgb, var(--color-accent) 14%, transparent) 0 1px, transparent 1px ${colW}px)`,
+            backgroundSize: `${colW}px 100%`,
+          }}
+        />
+      )}
+
+      {/* The landing slot. Drawn UNDER the tiles (z-0) so it reads as a hole in
+          the board the card is about to drop into, not as a second card. */}
+      {showPreview && preview && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute rounded-md"
+          style={{
+            ...pxBox(preview),
+            zIndex: 0,
+            border: '2px dashed color-mix(in srgb, var(--color-accent) 55%, transparent)',
+            background: 'color-mix(in srgb, var(--color-accent) 7%, transparent)',
+            transition: 'left 90ms ease, top 90ms ease, width 90ms ease, height 90ms ease',
+          }}
+        />
+      )}
+
       {active.map((it) => {
         const box = pxBox(it)
         const isDragging = gesture?.id === it.id
@@ -233,6 +295,16 @@ export function Board({
               transition: isDragging ? 'none' : 'left 120ms ease, top 120ms ease, width 120ms ease, height 120ms ease',
               zIndex: isDragging ? 50 : 1,
               touchAction: locked ? undefined : 'none',
+              // The card in the hand is lifted off the board — it is the only
+              // one not in its final place, and it has to read that way for the
+              // outline underneath to mean anything. Slightly transparent so
+              // the slot stays visible when the two overlap.
+              ...(isDragging
+                ? {
+                    opacity: 0.92,
+                    filter: 'drop-shadow(0 8px 18px color-mix(in srgb, var(--color-app) 65%, transparent))',
+                  }
+                : null),
             }}
           >
             {/*

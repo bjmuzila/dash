@@ -325,7 +325,9 @@ assert(measured > 0, 'at least one canvas layer actually painted and was measure
 // GEX Candles specifically: it is the card with a per-frame loop and a view
 // signature, so it is the one where "quiet" could mean "broken". Its tile is
 // scrolled into view and panned and zoomed like a user would.
-const candles = page.locator('[data-card-id="gex-candles"]')
+// Prefix match: a board card's id is an INSTANCE id, so a second copy of this
+// card is `gex-candles#2`. `.first()` below takes whichever one is on the board.
+const candles = page.locator('[data-card-id^="gex-candles"]').first()
 if ((await candles.count()) > 0) {
   await candles.scrollIntoViewIfNeeded()
   await page.waitForTimeout(800)

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
 import { Board, compactBoard, type BoardItem } from '@/design/primitives/Board'
-import { CARD_CATALOG, CARD_BY_ID, migrateCardId, placeNewCard } from './catalog'
+import { CARD_CATALOG, CARD_BY_ID, cardTypeOf, migrateCardId, placeNewCard } from './catalog'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The terminal home: a customizable card board. Add cards from the catalog,
@@ -13,6 +13,19 @@ import { CARD_CATALOG, CARD_BY_ID, migrateCardId, placeNewCard } from './catalog
 // BoardItem[] a server-backed template would round-trip, so swapping this for
 // a REST-backed save (through src/data/api.ts, once that endpoint exists) is a
 // change to loadLayout/persist only — nothing above this file needs to know.
+//
+// ── The same card, more than once ────────────────────────────────────────────
+// Every catalog entry can be added as many times as the user wants: two GEX
+// Charts on different bases, three ladders, a second calendar. A grid item's id
+// is therefore an INSTANCE id (`gex-chart`, `gex-chart#2`, …) and the catalog is
+// looked up through `cardTypeOf()`. See the block in catalog.tsx for why the
+// first instance keeps the bare id.
+//
+// KNOWN, and deliberate for now: a card's own settings are stored per card TYPE
+// (`cb-v3-mg-basis`, and friends), not per instance. Two copies can be set
+// differently for the session, but on reload both come back on whichever was
+// written last. Fixing that means threading the instance id into every card's
+// storage key, which is a change to every card and not to this file.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const LAYOUT_KEY = 'cb-v3-board-layout'
@@ -38,8 +51,12 @@ function loadLayout(): BoardItem[] {
       // card — dropping it because its id changed would silently empty their
       // board on an upgrade. A card that was genuinely deleted still falls out
       // here, which is what should happen.
+      //
+      // The dedupe is on the INSTANCE id, not the card type: two GEX Charts is
+      // a board the user built on purpose, while the same instance id twice is
+      // a corrupt blob that would collide in the grid.
       const id = migrateCardId(i.id)
-      if (!CARD_BY_ID.has(id) || seen.has(id)) continue
+      if (!CARD_BY_ID.has(cardTypeOf(id)) || seen.has(id)) continue
       seen.add(id)
       kept.push({ id, x: i.x, y: i.y, w: i.w, h: i.h })
     }
@@ -87,8 +104,35 @@ export default function BoardPage() {
     return () => window.removeEventListener('pointerdown', onDown)
   }, [menuOpen])
 
-  const presentIds = useMemo(() => new Set(layout.map((i) => i.id)), [layout])
-  const available = CARD_CATALOG.filter((c) => !presentIds.has(c.id))
+  /**
+   * How many of each card type are on the board. The menu no longer REMOVES an
+   * entry once it is used — every card can be added again — so the count is what
+   * tells the user a second copy is what they are about to get.
+   */
+  const countByType = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const i of layout) {
+      const t = cardTypeOf(i.id)
+      m.set(t, (m.get(t) ?? 0) + 1)
+    }
+    return m
+  }, [layout])
+
+  /**
+   * A card's number within its own type, by instance id — `2` for the second GEX
+   * Chart. Only used when there IS more than one: a lone card is just its name.
+   */
+  const ordinalById = useMemo(() => {
+    const nth = new Map<string, number>()
+    const out = new Map<string, number>()
+    for (const i of layout) {
+      const t = cardTypeOf(i.id)
+      const n = (nth.get(t) ?? 0) + 1
+      nth.set(t, n)
+      out.set(i.id, n)
+    }
+    return out
+  }, [layout])
 
   const addCard = (id: string) => {
     setLayoutState((prev) => compactBoard([...prev, placeNewCard(id, prev)]))
@@ -117,26 +161,30 @@ export default function BoardPage() {
           <div className="relative" ref={menuRef}>
             <button
               onClick={() => setMenuOpen((v) => !v)}
-              disabled={available.length === 0}
-              className="rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-bg disabled:opacity-40"
+              className="rounded-sm bg-accent px-2.5 py-1 text-xs font-medium text-bg"
             >
               + Add card
             </button>
             {menuOpen && (
-              <div className="absolute right-0 top-full z-20 mt-1 w-56 rounded-md border border-line bg-surface py-1 shadow-lg">
-                {available.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-faint">All cards are on the board</div>
-                ) : (
-                  available.map((c) => (
+              <div className="absolute right-0 top-full z-20 mt-1 w-60 rounded-md border border-line bg-surface py-1 shadow-lg">
+                {/* Every card, every time — nothing is removed from this list
+                    once it is on the board. The count on the right is what says
+                    "you already have one of these", which is information; a
+                    missing row was only ever a refusal. */}
+                {CARD_CATALOG.map((c) => {
+                  const n = countByType.get(c.id) ?? 0
+                  return (
                     <button
                       key={c.id}
                       onClick={() => addCard(c.id)}
-                      className="block w-full px-3 py-1.5 text-left text-sm text-fg hover:bg-raised"
+                      title={n > 0 ? `Add another ${c.label} — ${n} on the board` : `Add ${c.label}`}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-fg hover:bg-raised"
                     >
-                      {c.label}
+                      <span className="min-w-0 flex-1 truncate">{c.label}</span>
+                      {n > 0 && <span className="shrink-0 text-xs text-faint">×{n}</span>}
                     </button>
-                  ))
-                )}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -149,13 +197,18 @@ export default function BoardPage() {
           onLayoutChange={setLayoutState}
           locked={locked}
           render={(id) => {
-            const def = CARD_BY_ID.get(id)
+            const def = CARD_BY_ID.get(cardTypeOf(id))
             if (!def) return null
+            // Copies are numbered in the header, and only when there is more
+            // than one — two cards with identical titles is a board you cannot
+            // talk about, and a "1" on a card that has no sibling is noise.
+            const nth = (countByType.get(cardTypeOf(id)) ?? 0) > 1 ? ordinalById.get(id) : undefined
             return (
               <Card
                 title={
                   <span data-board-handle className={locked ? 'block' : 'block cursor-grab select-none'}>
                     {def.label}
+                    {nth != null && <span className="ml-1.5 text-faint">{nth}</span>}
                   </span>
                 }
                 actions={

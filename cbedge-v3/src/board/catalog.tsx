@@ -284,14 +284,64 @@ const RENAMED: Record<string, string> = {
   'multi-chart': 'multi-greek',
 }
 
-export function migrateCardId(id: string): string {
-  return RENAMED[id] ?? id
+// ─────────────────────────────────────────────────────────────────────────────
+// INSTANCE IDS — a board can hold the SAME card more than once.
+//
+// A grid item's `id` is an INSTANCE id, not a catalog id. The first copy of a
+// card keeps the bare catalog id (`gex-chart`); every copy after it gets a
+// `#n` suffix (`gex-chart#2`). Two consequences, both deliberate:
+//
+//   - Every layout ever saved is still valid, and still means what it meant.
+//     No migration pass, no version field.
+//   - Anything keyed on the bare id — a saved board from last week, the
+//     `data-card-id` selectors perf-check drives — keeps working, because the
+//     first instance is still spelled exactly the way it always was.
+//
+// The suffix is a SUFFIX, not a rename: the catalog is looked up through
+// `cardTypeOf()`, which strips it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const INSTANCE_SEP = '#'
+
+/** The catalog id behind an instance id. `gex-chart#2` → `gex-chart`. */
+export function cardTypeOf(instanceId: string): string {
+  const i = instanceId.indexOf(INSTANCE_SEP)
+  return i === -1 ? instanceId : instanceId.slice(0, i)
 }
 
-/** A fresh grid item for a catalog entry, dropped at the bottom of `existing`. */
-export function placeNewCard(id: string, existing: BoardItem[]): BoardItem {
-  const def = CARD_BY_ID.get(id)
+/** Renames apply to the TYPE; an instance suffix rides along untouched. */
+export function migrateCardId(id: string): string {
+  const i = id.indexOf(INSTANCE_SEP)
+  if (i === -1) return RENAMED[id] ?? id
+  const type = id.slice(0, i)
+  return `${RENAMED[type] ?? type}${id.slice(i)}`
+}
+
+/**
+ * A free instance id for `cardId`, given the ids already on the board.
+ *
+ * Counts up rather than reusing the lowest free number, so removing card #2 and
+ * adding another does not resurrect the old name — the ids in a saved layout
+ * stay stable for as long as the card is there, which is what makes per-card
+ * state keyed on them safe to add later.
+ */
+export function newInstanceId(cardId: string, takenIds: Iterable<string>): string {
+  const taken = new Set(takenIds)
+  if (!taken.has(cardId)) return cardId
+  for (let n = 2; ; n++) {
+    const candidate = `${cardId}${INSTANCE_SEP}${n}`
+    if (!taken.has(candidate)) return candidate
+  }
+}
+
+/**
+ * A fresh grid item for a catalog entry, dropped at the bottom of `existing`.
+ * `cardId` is a CATALOG id; the item comes back with an instance id that does
+ * not collide with anything already placed.
+ */
+export function placeNewCard(cardId: string, existing: BoardItem[]): BoardItem {
+  const def = CARD_BY_ID.get(cardId)
   const { w, h } = def?.defaultSize ?? { w: 4, h: 6 }
   const y = existing.reduce((m, i) => Math.max(m, i.y + i.h), 0)
-  return { id, x: 0, y, w, h }
+  return { id: newInstanceId(cardId, existing.map((i) => i.id)), x: 0, y, w, h }
 }

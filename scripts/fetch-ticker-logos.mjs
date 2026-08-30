@@ -34,7 +34,17 @@
  *
  * Needs DATABASE_URL for the PG logo cache (optional — falls back to live
  * resolution) and, for --from-earnings, a reachable backend at
- * PROXY_URL / http://127.0.0.1:3002.
+ * PROXY_URL / http://127.0.0.1:3002. Against PROD that backend is gated
+ * (PROXY_AUTH_REQUIRED=1), so also set INTERNAL_API_TOKEN to the server's value
+ * or that leg answers 401 and is skipped:
+ *
+ *   $env:PROXY_URL = "https://cbedge.net"
+ *   $env:INTERNAL_API_TOKEN = "<same as prod .env.local>"
+ *   node scripts/fetch-ticker-logos.mjs --all
+ *
+ * Skipping it is survivable — --from-anticipated covers the board's default
+ * view — but it is the only leg that catches a name the anticipated list has
+ * not been taught about yet.
  */
 
 import { createRequire } from 'node:module';
@@ -153,8 +163,19 @@ async function symbolsFromCache() {
  */
 async function symbolsFromEarnings() {
   const base = process.env.PROXY_URL || `http://127.0.0.1:${process.env.PROXY_PORT || 3002}`;
+  // Prod runs with PROXY_AUTH_REQUIRED=1, so /proxy/* wants a session cookie and
+  // a bare fetch gets 401 — which is what pointing PROXY_URL at cbedge.net does.
+  // server-v2/proxy-auth.js has one bypass for exactly this case: the
+  // x-internal-token shared secret its own cron callers use. Sent only when the
+  // env var is set locally, so nothing changes for a run against localhost.
+  const internal = (process.env.INTERNAL_API_TOKEN || '').trim();
   try {
-    const r = await fetch(`${base}/proxy/earnings-week?week=both`, { headers: { 'User-Agent': UA } });
+    const r = await fetch(`${base}/proxy/earnings-week?week=both`, {
+      headers: { 'User-Agent': UA, ...(internal ? { 'x-internal-token': internal } : {}) },
+    });
+    if (r.status === 401 && !internal) {
+      throw new Error('HTTP 401 — set INTERNAL_API_TOKEN (same value as the server\'s) to read a gated backend');
+    }
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
     const rows = Array.isArray(j?.rows) ? j.rows

@@ -602,10 +602,10 @@ export function MultiGreekCard() {
     return Number.isFinite(n) ? Math.min(MAX_EXP_COLS, Math.max(1, Math.round(n))) : MAX_EXP_COLS
   })
   const [showEx0, setShowEx0] = useState(() => readStored(EX0_STORE_KEY, '1') !== '0')
-  const [basis, setBasis] = useState<Basis>(() => {
-    const v = readStored(BASIS_STORE_KEY, 'oivol')
-    return v === 'vol' || v === 'oi' ? v : 'oivol'
-  })
+  // OI-only was dropped as an option. A board that stored it falls back to
+  // OI+VOL rather than sitting on a basis with no button — a selected value the
+  // control cannot show is a control that lies about what is on screen.
+  const [basis, setBasis] = useState<Basis>(() => (readStored(BASIS_STORE_KEY, 'oivol') === 'vol' ? 'vol' : 'oivol'))
   const [intensity, setIntensity] = useState(1.75)
   const [showLevels, setShowLevels] = useState(true)
   const [cogOpen, setCogOpen] = useState(false)
@@ -803,11 +803,10 @@ export function MultiGreekCard() {
             </PanelSection>
             <PanelSection title="Basis">
               <SegGroup
-                title="OI+VOL is open interest plus today's volume; OI alone is the apples-to-apples basis against other GEX vendors"
+                title="OI+VOL is open interest plus today's volume; VOL is today's volume alone"
                 options={[
                   { label: 'OI+VOL', value: 'oivol' },
                   { label: 'VOL', value: 'vol' },
-                  { label: 'OI', value: 'oi' },
                 ]}
                 value={basis}
                 onChange={(v) => commitBasis(v as Basis)}

@@ -158,6 +158,14 @@ dropdown, `BoardPage` and `Board` all pick it up. Big cards go behind `lazy()`;
 a card that is a few lines stays static, because a chunk boundary costs more
 than it saves.
 
+**A card can be on the board more than once.** A grid item's `id` is an INSTANCE
+id: the first copy keeps the bare catalog id (`gex-chart`), later copies get a
+`#n` suffix (`gex-chart#2`). Look the catalog up through `cardTypeOf(id)`, never
+with the raw id, and expect your card's component to be mounted several times at
+once. Card settings are still stored per card TYPE, so two copies share whatever
+was written last across a reload — key new per-card storage on the instance id
+if that matters for your card.
+
 Then, before you push:
 
 - Anything that paints must go through `ChartFrame` and honour ONE of its
