@@ -130,6 +130,28 @@
      still reads where it crosses a 90%-opacity bar.                        */
   --color-dex: #1f8dad;
 
+  /* ── Flip / shadow ────────────────────────────────────────────────────
+     Two values the premarket board needs that no existing token covers.
+
+     violet marks the GAMMA FLIP. It is deliberately a third hue: the flip is
+     neither a wall (level-cw / level-pw) nor a sign (candle-up / candle-down),
+     and borrowing either would read as "same series, different shape". Carried
+     across from v2's premarket stylesheet, where it was the only hex typed
+     into the page rather than derived from the theme.
+
+     shadow is pure black, for drop shadows. A shadow is not really a palette
+     colour — it is the absence of light under a raised surface — but a
+     component still may not type `rgba(0,0,0,.35)`, so it lives here with
+     everything else and reaches components as alpha(SHADOW, 0.35).           */
+  --color-violet: #a78bfa;
+  --color-shadow: #000000;
+
+  /* The GEX-watch feed's PUT colour. A clay, not a red: it is paired against
+     --color-accent to encode call-vs-put, and the two separate at ΔE 17.8
+     under deuteranopia where a blue/red pair collapses. Move it and the accent
+     together or not at all. */
+  --color-clay: #c96a3e;
+
   /* ── Key levels ───────────────────────────────────────────────────────
      The wall palette shared by the Key Levels tiles, the Multi Greek
      ladder badges and any future levels rail. cb = Core Bullseye /

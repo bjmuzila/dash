@@ -74,6 +74,7 @@ function adopt(sock: WebSocket): void {
   sock.onerror = () => {}
   sock.onopen = () => {
     reconnectAttempt = 0
+    flushSend()
   }
 }
 
@@ -215,6 +216,9 @@ function connect(topics: Set<string> | null): void {
       }
     }
     adopt(next)
+    // adopt() reassigns onopen, which has already fired for this socket — so
+    // the queue is replayed here rather than relying on that handler.
+    flushSend()
   }
   next.onmessage = (ev) => ingest(ev.data)
   next.onclose = () => {
@@ -232,6 +236,42 @@ function handleClose(): void {
   const backoff = Math.min(10_000, 500 * 2 ** Math.min(reconnectAttempt - 1, 4))
   const jitter = backoff * 0.25 * Math.random()
   setTimeout(() => connect(currentTopics), backoff + jitter)
+}
+
+/**
+ * Send a control message UP the socket.
+ *
+ * The only thing v3 sends is `{ type: "SET_EXPIRY", expiry }` — server-v2
+ * tracks the chosen expiry PER CONNECTION, so a page that needs today's 0DTE
+ * rather than the feed's front expiry has to ask for it, and has to ask again
+ * after every reconnect (including the ones the topic-scope logic above makes).
+ *
+ * Queued while the socket is not open, and replayed on the next `onopen`. A
+ * page must not have to know whether the connection has finished handshaking
+ * to state which expiry it wants, and dropping the request silently is how a
+ * board ends up quietly showing the wrong contract.
+ *
+ * The queue is deliberately keyed by message `type`, keeping only the LAST of
+ * each: three expiry changes made during a reconnect should replay as the one
+ * the user actually landed on, not as three.
+ */
+export function send(msg: { type: string; [k: string]: unknown }): void {
+  pendingSend.set(msg.type, msg)
+  flushSend()
+}
+
+const pendingSend = new Map<string, { type: string; [k: string]: unknown }>()
+
+function flushSend(): void {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return
+  for (const msg of pendingSend.values()) {
+    try {
+      ws.send(JSON.stringify(msg))
+    } catch {
+      return // still not writable — keep the queue for the next open
+    }
+  }
+  pendingSend.clear()
 }
 
 export function socketState(): { ready: number; topics: string[] | null; attempts: number } {

@@ -1,5 +1,77 @@
 # Changelog
 
+## 2026-08-30 - v3 Premarket is the REAL premarket page, not a shell
+
+Added to `cbedge-v3/src/pages/premarket/`: `PostMarketTab.tsx`, `postMarketData.ts`,
+`GammaBellCurve.tsx`, `gammaChartKit.ts`, `GexProfile.tsx`, `CbContracts.tsx`,
+`chainGex.ts`, `HistoricalRecap.tsx`, `GexHeatBar.tsx`, `TickerBoard.tsx`,
+`GexChurnFeed.tsx`, `GexWatchFeed.tsx`, `GammaDistribution.tsx`.
+Added to `cbedge-v3/src/data/`: `liveGex.ts`, `esCandles.ts`, `econCalendar.ts`,
+`calculations.ts`, `dedupeFetch.ts`, `scannerTickers.ts`.
+Added: `cbedge-v3/src/design/theme.ts`, `cbedge-v3/src/design/primitives/Dock.tsx`.
+Replaced: `cbedge-v3/src/pages/Premarket.tsx`.
+Edited: `cbedge-v3/src/data/socket.ts`, `cbedge-v3/src/design/tokens.css`.
+
+Yesterday's v3 premarket was the section list with about half of it wired and
+the rest as named stubs. This is the page itself: all ~11,500 lines of v2's
+`components/pages/Premarket.tsx` + `components/pages/premarket/*` brought
+across, so every card, every dropdown, every tile and both tabs are the ones
+that are on `/app/premarket` today.
+
+What is there now that was not: the symbol picker (SPX plus the MAIN
+watchlist, every name rendering the full board), the session picker over the
+last 40 sessions with its frozen/replay split, the docked replay transport
+(play / step / scrub / speed / clock), the regime strip, the one-axis level
+rail, the six Key Levels tiles with their OI / OI+VOL / VOL basis switch and
+their prior-close migration lines, both scrolling GEX ladders (front expiry
+and ex-0DTE) with the DEX / vanna / call-put tiles, overnight context, biggest
+GEX changes, sector heat, expected range and the playbook one-liner,
+catalysts, the gamma bell curve with its range and basis menus, gamma book
+churn, the CB contracts card, and the whole Post-Market recap tab plus the
+HistoricalRecap fallback for dates with no capture.
+
+HOW IT IS A PORT AND NOT A COPY. The page tree is v2's, line for line, and
+what changed is the seam under it:
+
+- `data/liveGex.ts` replaces `hooks/useMobileGex`. It is a quarter the size
+  because v3's plumbing already owns the parts v2's hook did by hand -
+  subscription and reconnect (`data/socket.ts`), frame coalescing
+  (`data/store.ts`, one rAF for everything), last-known state
+  (`data/cache.ts`). v2's REST watchdog is deliberately NOT reproduced:
+  server-v2 dedupes the `gex` frame, so "silent" is a normal overnight state,
+  and the connect snapshot + the IndexedDB cache answer the same problem
+  without a nightly poll against a working feed.
+- `data/socket.ts` gained a `send()`. It is the one thing v3 needs to say
+  upward - `SET_EXPIRY`, because server-v2 tracks the expiry per connection and
+  premarket wants today's 0DTE rather than the front. Queued while the socket
+  is down and replayed on open, keyed by message type so three changes during
+  a reconnect replay as the one the user landed on.
+- `data/esCandles.ts` merges v2's `useEsCandles` + `useEtfCandles` + the
+  candle half of `lib/snapdb`. One module, two transports, one output shape.
+- `design/theme.ts` is the token bridge. The page is a template-literal
+  stylesheet, which is the one place a colour has to be a JS STRING - so every
+  value it interpolates is now a `var(--color-...)` reference, and its washes
+  and glows come from `alpha()`/`mix()` (color-mix) instead of a hand-rolled
+  hex-to-rgba. The `.pmk` block therefore reads v3's palette, and the
+  no-literal rule survives. Three tokens were added for values nothing covered:
+  `--color-violet` (the flip marker - neither a wall nor a sign, so it gets its
+  own hue), `--color-shadow`, and `--color-clay`.
+- `design/primitives/Dock.tsx` is the transport's button, slider and segmented
+  strip, extracted from v2's `DockToolbar` and rebuilt on tokens. Only the
+  three the page mounts - a primitive nobody renders is one nobody notices has
+  rotted.
+
+The port also had to survive v3's compiler, which is stricter than the one this
+code was written against: `noUncheckedIndexedAccess` alone flagged 159 sites.
+Every one was fixed at the level it deserved - tuple types for the 3x3 solver
+in `gammaChartKit`, hoisted guards in loops, empty-case guards on seeded
+reduces, and a non-null assertion with a stated reason only where the index is
+provably in range. No maths was reordered and no number changed.
+
+Route, nav entry and `app/v3/premarket/route.ts` were already in place from
+yesterday. `npm run build` passes; the premarket route chunk is 61.9kb brotli
+against a 78.1kb budget.
+
 ## 2026-08-30 - mobile ES Candles: fix the wedged live-feed reconnect
 
 Edited: `lib/gexSocket.ts`.
