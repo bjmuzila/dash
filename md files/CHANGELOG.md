@@ -1,404 +1,66 @@
 # Changelog
 
-## 2026-08-30 - v3 Premarket is the REAL premarket page, not a shell
-
-Added to `cbedge-v3/src/pages/premarket/`: `PostMarketTab.tsx`, `postMarketData.ts`,
-`GammaBellCurve.tsx`, `gammaChartKit.ts`, `GexProfile.tsx`, `CbContracts.tsx`,
-`chainGex.ts`, `HistoricalRecap.tsx`, `GexHeatBar.tsx`, `TickerBoard.tsx`,
-`GexChurnFeed.tsx`, `GexWatchFeed.tsx`, `GammaDistribution.tsx`.
-Added to `cbedge-v3/src/data/`: `liveGex.ts`, `esCandles.ts`, `econCalendar.ts`,
-`calculations.ts`, `dedupeFetch.ts`, `scannerTickers.ts`.
-Added: `cbedge-v3/src/design/theme.ts`, `cbedge-v3/src/design/primitives/Dock.tsx`.
-Replaced: `cbedge-v3/src/pages/Premarket.tsx`.
-Edited: `cbedge-v3/src/data/socket.ts`, `cbedge-v3/src/design/tokens.css`.
-
-Yesterday's v3 premarket was the section list with about half of it wired and
-the rest as named stubs. This is the page itself: all ~11,500 lines of v2's
-`components/pages/Premarket.tsx` + `components/pages/premarket/*` brought
-across, so every card, every dropdown, every tile and both tabs are the ones
-that are on `/app/premarket` today.
-
-What is there now that was not: the symbol picker (SPX plus the MAIN
-watchlist, every name rendering the full board), the session picker over the
-last 40 sessions with its frozen/replay split, the docked replay transport
-(play / step / scrub / speed / clock), the regime strip, the one-axis level
-rail, the six Key Levels tiles with their OI / OI+VOL / VOL basis switch and
-their prior-close migration lines, both scrolling GEX ladders (front expiry
-and ex-0DTE) with the DEX / vanna / call-put tiles, overnight context, biggest
-GEX changes, sector heat, expected range and the playbook one-liner,
-catalysts, the gamma bell curve with its range and basis menus, gamma book
-churn, the CB contracts card, and the whole Post-Market recap tab plus the
-HistoricalRecap fallback for dates with no capture.
-
-HOW IT IS A PORT AND NOT A COPY. The page tree is v2's, line for line, and
-what changed is the seam under it:
-
-- `data/liveGex.ts` replaces `hooks/useMobileGex`. It is a quarter the size
-  because v3's plumbing already owns the parts v2's hook did by hand -
-  subscription and reconnect (`data/socket.ts`), frame coalescing
-  (`data/store.ts`, one rAF for everything), last-known state
-  (`data/cache.ts`). v2's REST watchdog is deliberately NOT reproduced:
-  server-v2 dedupes the `gex` frame, so "silent" is a normal overnight state,
-  and the connect snapshot + the IndexedDB cache answer the same problem
-  without a nightly poll against a working feed.
-- `data/socket.ts` gained a `send()`. It is the one thing v3 needs to say
-  upward - `SET_EXPIRY`, because server-v2 tracks the expiry per connection and
-  premarket wants today's 0DTE rather than the front. Queued while the socket
-  is down and replayed on open, keyed by message type so three changes during
-  a reconnect replay as the one the user landed on.
-- `data/esCandles.ts` merges v2's `useEsCandles` + `useEtfCandles` + the
-  candle half of `lib/snapdb`. One module, two transports, one output shape.
-- `design/theme.ts` is the token bridge. The page is a template-literal
-  stylesheet, which is the one place a colour has to be a JS STRING - so every
-  value it interpolates is now a `var(--color-...)` reference, and its washes
-  and glows come from `alpha()`/`mix()` (color-mix) instead of a hand-rolled
-  hex-to-rgba. The `.pmk` block therefore reads v3's palette, and the
-  no-literal rule survives. Three tokens were added for values nothing covered:
-  `--color-violet` (the flip marker - neither a wall nor a sign, so it gets its
-  own hue), `--color-shadow`, and `--color-clay`.
-- `design/primitives/Dock.tsx` is the transport's button, slider and segmented
-  strip, extracted from v2's `DockToolbar` and rebuilt on tokens. Only the
-  three the page mounts - a primitive nobody renders is one nobody notices has
-  rotted.
-
-The port also had to survive v3's compiler, which is stricter than the one this
-code was written against: `noUncheckedIndexedAccess` alone flagged 159 sites.
-Every one was fixed at the level it deserved - tuple types for the 3x3 solver
-in `gammaChartKit`, hoisted guards in loops, empty-case guards on seeded
-reduces, and a non-null assertion with a stated reason only where the index is
-provably in range. No maths was reordered and no number changed.
-
-Route, nav entry and `app/v3/premarket/route.ts` were already in place from
-yesterday. `npm run build` passes; the premarket route chunk is 61.9kb brotli
-against a 78.1kb budget.
-
-## 2026-08-30 - mobile ES Candles: fix the wedged live-feed reconnect
-
-Edited: `lib/gexSocket.ts`.
-
-The phone build's ES Candles page could come back from a lock or an app switch
-and sit on "Connecting to the live feed..." forever. Desktop was fine, which is
-why it read as a mobile bug - the two conditions that trigger it are a frozen
-tab and a radio change, and a laptop tab sees neither.
-
-Three defects in the shared socket, all on the resume path:
-
-1. **A dead socket ref counted as a live connection.** `scheduleConnect()` and
-   `reconcileScope()` tested `socket !== null`. When the OS kills the socket
-   under a frozen page, the ref survives as CLOSED and its `onclose` - the only
-   thing that nulls the ref and arms a retry - is delivered to a frozen page or
-   dropped. Resume then re-subscribed, hit that zombie ref, and returned without
-   opening anything. Added `hasUsableSocket()` (CONNECTING or OPEN) and
-   `dropDeadSocket()`, and every guard now tests those.
-
-2. **No connect timeout.** A wifi<->cell handoff routinely leaves a socket stuck
-   in CONNECTING with no error and no close. `openSocket()` refuses to open a
-   second one while that is true and the backoff only ever runs from `onclose`,
-   so one hung handshake wedged the feed permanently. Added a 12s watchdog that
-   abandons the handshake and falls into the normal retry.
-
-3. **The backoff ran out its full delay after the user was back.** Timers are
-   frozen while hidden, so a pending retry already out at 2-30s resumed and then
-   made the user wait the remainder. Added `handleWake()` on visibilitychange /
-   pageshow / online / focus: resets `attempts`, clears the pending backoff,
-   drops a dead socket and reconnects immediately. It also reopens an OPEN
-   socket that has delivered nothing for 20s across the background stretch -
-   readyState lies about half-open sockets on mobile.
-
-No behaviour change for a tab that stays visible; `lastFrameAt` is the only new
-state. Desktop gets the same resilience, it just rarely needed it.
-
-## 2026-08-30 - v3: eight customer pages, the account menu, and the owner gate
-
-Added to `cbedge-v3/`: `src/pages/TradersDashboard.tsx`, `Premarket.tsx`,
-`OptionsChain.tsx`, `Analysis.tsx`, `Flow.tsx`, `Scanner.tsx`, `Journal.tsx`,
-`TestLab.tsx`; `src/shell/UserMenu.tsx`; `src/data/auth.tsx`.
-Edited: `cbedge-v3/src/App.tsx`, `cbedge-v3/src/shell/Shell.tsx`.
-Added to the v2 repo: `app/v3/<name>/route.ts` for all eight.
-
-v3 had one page (the Home board) and a rail of dimmed icons. These eight are the
-v2 customer pages rebuilt on v3's primitives and tokens, at the same paths v2
-uses (`/v3/traders-dashboard`, `/premarket`, `/options-chain`, `/analytics`,
-`/flow`, `/scanner`, `/trading`, `/test`), so a bookmark or a habit transfers by
-swapping one path segment. All four registration steps from cbedge-v3/AGENTS.md
-are done for each - the page, the `lazy()` route, the NAV entry (comingSoon
-flipped off, with prefetch URLs), and the Next shell route that stops a hard
-refresh 404ing.
-
-Not a copy of v2's code: nothing imports from the Next tree, no colour literal
-appears outside `tokens.css`, no page touches the socket (frames come through
-`useField`/`useFrame`), and every route fires its REST reads in parallel at entry
-through `useQuery`. Same endpoints as v2 in every case.
-
-Where a v2 section is a large bespoke renderer - the premarket bell curve, the
-options-chain heat matrix, Flow's net-drift canvas, the Journal calendar/leaks/
-clock heat maps, most Scanner and Test Lab tab bodies - the section renders as a
-real Card with its real title, a one-line note, and a `TODO(v3):` naming the v2
-symbol still to port. Nothing is faked and nothing is silently dropped; what is
-wired is genuinely wired.
-
-The toolbar's placeholder "B" avatar is now the real account menu, same rows as
-v2's `UserMenu`: display name and email, change password, Stripe portal, Discord
-connect/disconnect, Site Guide, What's New, My Tickets with the polled unread
-badge and its avatar dot, the legal/support links, sign out. Every one of them is
-a native `<a>`, because the router runs with `basename="/v3"` and a `<Link>` to
-`/docs` would resolve to `/v3/docs` and hit NotFound - the same bug v2's UserMenu
-carries three separate comments about.
-
-Owner gating: the "Owner" entry only renders for the owner. `src/data/auth.tsx`
-is v3's own read of `/api/auth/me` (the shared httpOnly session cookie, not a v2
-import) and treats the server's `is_owner` claim OR a match against
-`VITE_OWNER_USER_ID` as owner, the same rule as v2's `useIsOwner`. That is CHROME
-only - `middleware.ts` already hard-blocks `/owner*` and, for now, the whole of
-`/v3*`, and `OwnerGuard` gates the owner layout server-side. A hidden menu item
-is not a permission.
-
-## 2026-08-29 - Gamma Bell Curve: the fit stops following the window
-
-Edited: `components/pages/premarket/GammaBellCurve.tsx`.
-
-All three bells were fitted to `binsIn` - whatever was inside the zoom/pan window
-- so the curve was a function of where you happened to be looking. Pan two strikes
-right and the peak walked right with you; zoom into the call side and the bell
-recentred there and printed a sigma off the half of the board still on screen. The
-KPI tiles moved with it.
-
-The fit, its sigma, the centre of mass, mass-inside-1-sigma and both totals are
-now computed once over `binsFull` - the whole +/- band this card reads, folded
-independently of k0/k1. Panning and zooming are a VIEW over a fixed model: the
-bell stays glued to the strikes it was fitted to and none of the six tiles moves.
-"Net GEX, window" is now "Net GEX, board", because that is what it is.
-
-The two side bells moved to the full board too, where the bug was worse: each side
-has fewer bars to start with, so a window that cropped the long block to four
-strikes did not move its bell, it deleted it (five-bar floor).
-
-Bars, y-scales and bar width still come from the window - those are drawing
-decisions about what is on screen, not claims about the board. One guard follows
-from that: the mass pane only reserves headroom for the fit's amplitude when the
-fit's peak is IN VIEW. Letting a board-wide peak set the scale while you are
-zoomed into a wing would flatten the wing's bars to leave room for a hump nobody
-can see; out of view the curve just runs off the top, which is what looking at the
-tail should look like.
-
-## 2026-08-30 - Post Studio: the logo is inlined, so there is no path left to break
-
-Edited: `owner-vite/src/pages/studioHtml.ts`.
-
-The nginx allowlist fix was correct but it is the third time this one image has
-gone missing, and every fix so far has been "get the routing right". The logo is
-now a `data:` URI in the studio itself. No request, nothing to misroute, and
-same-origin by construction so html2canvas can never taint the export canvas on
-it.
-
-For the record, the routing problem it retires: this document renders inside
-owner.cbedge.net, whose container holds only owner-vite's `dist`. The repo-root
-`public/` belongs to the Next app and reaches that origin only through an
-allowlist in `owner-vite/nginx.conf`. Miss it and nginx's SPA fallback answers
-**200 with index.html**, so the `<img>` is handed a page of HTML - which is why
-it showed as a broken icon rather than a 404. That allowlist entry stays for
-anything else that wants the file.
-
-The 2064px keyed master resampled to 1200px and quantized: 35KB, well past what
-a logo slot ever displays. The on-canvas fallback message stays, but it can now
-only fire for a logo someone loaded by hand.
-
-**The reason there is anything to re-apply here.** `studioHtml.ts` on disk had
-reverted to its state from three commits back - no embedded font, no
-object-fit export fix, and the backtick build-breaker restored. `nginx.conf`,
-`settings.ts` and this changelog were all untouched, so this was not a git
-rollback; something overwrote that one file, most likely a stale editor buffer
-saved over it. All of it is re-applied and re-verified:
-
-- the two comments that used backticks inside the `String.raw` document
-- the four embedded Inter weights and the `InterCB`-only font stack
-- `exportImagesAsBackgrounds`, `document.fonts.ready`, `scale: 2`, and the
-  Download button disabling mid-render
-
-Verified against a server that deliberately serves **no** `/cbedge3.0.png`: the
-page makes exactly one network request (the document itself), the logo reports
-1200x354 from its data URI, `InterCB` is live, and a 3200x1800 export comes out
-clean with no page errors. Preview at
-`generated/2026-08-30-post-studio-inline-logo.png`.
-
-## 2026-08-30 - v3 Multi Greek: the ticker box is text until you click it
-
-Edited: `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`.
-
-Each panel's ticker was a permanent 76px bordered input. On a three-column
-panel that pill was wider than the ladder's own strike rail and the tallest
-thing in the header row, spending both on three characters that change once a
-session - and it pushed the panel's spot price out to the far edge.
-
-It is bare text now, in the panel's own type, sized to the symbol. Clicking it
-swaps in the input, focused and selected, with an accent underline instead of a
-box; Enter or blur commits, Escape reverts, and the field goes back to text.
-Header padding drops from `py-0.5` to `py-px` since there is no longer a bordered
-control setting the row's height.
-
-The board's panel is still marked by the accent colour - now on the text rather
-than on a border. An added panel's ticker is plain, and it already carries the
-✕ that panel one does not have, so nothing was lost with the border.
-
-## 2026-08-30 - v3 popovers portalled out of the card, and the GEX chart's stat row is all-or-nothing
-
-Edited: `cbedge-v3/src/design/primitives/Controls.tsx`,
-`cbedge-v3/src/board/gexChart/GexChartCard.tsx`,
-`cbedge-v3/src/board/gexChart/settings.ts`,
-`cbedge-v3/src/board/gexChart/StatCards.tsx`.
-
-**The cog panel was cut off on a narrow card.** Opening Multi Greek's settings
-on a three-column card lost the whole left edge of the panel - the section
-headings, and the first half of every control. `Popover` was an `absolute` child
-of the trigger's wrapper, so a 240px panel hanging off a button near the card's
-left edge was clipped twice: by the Card's `overflow-hidden`, and by the board
-tile's stacking context.
-
-`Popover` now portals to `<body>` and positions itself in viewport coordinates.
-It aligns to the trigger's wrapper (`align` still picks which edge), clamps
-horizontally so neither edge can leave the screen, flips above the trigger when
-there is more room up than down, and hands whatever height is left to the panel
-as a max-height with its own scroll - so a tall panel on a short window
-scrolls instead of running off the bottom. A zero-size anchor span stays behind
-in the original DOM position so `offsetParent` still resolves after the panel
-leaves. z-index 250, above the board tiles and above the Multi Greek cell card
-at 200.
-
-This is a shared primitive, so the same fix lands on every popover in v3: the
-GEX candles symbol picker and dropdowns, the Add-panel box, and the board's own
-menus.
-
-**The GEX chart's stat cards are one switch now.** The cog held eleven controls
-- a row on/off, an all/none, and ten individual card toggles. The row shares its
-width evenly between the tiles, so hiding one only made the other nine wider,
-and a stored subset meant no two boards drew the same row. The cog is gone,
-replaced by a single `CARDS` chip in the toolbar beside DEX.
-
-`GexChartSettings.cards` (the per-card map) and `STAT_KEYS` are deleted;
-`cardsOn` is the whole setting. A stored blob still carrying a `cards` map is
-ignored rather than migrated - the key is simply not read, and the next save
-drops it. `StatCards` lost its `enabled` prop and always draws all ten.
-
-## 2026-08-30 - v3 Multi Greek: the cell card was painting behind the card below it
-
-Edited: `cbedge-v3/src/board/multiGreek/CellCard.tsx`.
-
-Clicking a GEX cell in the v3 Multi Greek ladder opened the detail card, but its
-bottom half - Net Prem, Net GEX, and all four delta rows - was covered by the
-GEX Chart tile underneath it.
-
-`position: fixed` escaped the ladder's `overflow-hidden`, which is what it was
-there for, but it did not escape the stacking context. `Board.tsx` gives every
-tile `zIndex: 1` (50 while dragged), and a positioned element with a z-index
-creates a stacking context: the card's `z-index: 60` was scoped INSIDE the
-Multi Greek tile, so it could never beat a later sibling tile no matter how big
-the number was. Equal z-index, later in the DOM, wins.
-
-Fixed by portalling the card to `document.body`, where its z-index is measured
-against the page rather than against its own tile, and raising it to 200 so a
-dragged tile at 50 stays under it. React portals still bubble events through the
-React tree, so the existing `onPointerDown` stopPropagation keeps a click inside
-the card from starting a board drag.
-
-Also: the bottom clamp used a hardcoded 300px card height. The card is ~340px,
-so a click low on the screen ran the last delta row off the viewport. Now
-clamped against the real height with the same 8px edge margin as the left/right
-clamp.
-
-## 2026-08-30 - Post Studio export: squashed screenshots and words eating their own spaces
-
-Edited: `owner-vite/src/pages/studioHtml.ts`.
-
-Three reported problems in the downloaded PNG, two causes. Both were html2canvas
-disagreeing with the browser, so the card looked right on screen and wrong in the
-file - the worst kind.
-
-**Screenshots stretched.** html2canvas does not implement `object-fit`. It draws
-an `<img>` stretched to fill its box, full stop. Proved it directly: a 4:1 image
-in a 1:1 box with `object-fit:cover` - the browser centre-crops it, html2canvas
-squashes the whole thing in. The all-tickers slot happened to match its
-screenshot's ratio so it looked fine; the core-board one did not, and got
-squeezed.
-
-Background images it does handle. So for the duration of the export each image
-layer is painted as a background sized the way object-fit actually resolves -
-`cover` takes the larger of the two scales, `contain` the smaller, times the
-layer's zoom - with `background-position` carrying object-position across, and
-the `<img>` hidden. Restored immediately after, and on the failure path too.
-
-**Words eating the space after them.** "233scoredof 404tickers", "Everymove we
-scoredthis week", the % welded onto the 4, the dot vanishing out of cbedge.net.
-
-html2canvas draws each word with `ctx.fillText` at the position the DOM measured
-for it. That only works if the canvas and the layout resolve the same font. The
-stack was `"Inter","Segoe UI",-apple-system,Helvetica,Arial,sans-serif`; Inter
-is not installed anywhere, so the DOM landed on Segoe UI while the canvas
-resolved something else, drew wider glyphs at the correct positions, and each
-word covered the gap after it. Nothing was missing - it was painted over. It
-never showed up in my container because the fallback there happens to match.
-
-Fixed by removing the guesswork: four real weights of Inter (400/600/700/800),
-Latin-subset to the characters the studio can render, embedded as `@font-face`
-data URIs under the name `InterCB`, and that is now the only family in the
-stack. Every machine draws the identical face, nothing is synthesised, and the
-canvas cannot resolve anything the layout did not. ~9KB per weight, 46KB total.
-CSP already allows it: `font-src 'self' data:`. Export also waits on
-`document.fonts.ready`, or the first render after a hard reload draws in a
-fallback.
-
-**Also:** exports render at `scale: 2` now - 3200x1800 for the 16:9 canvas -
-since these get downscaled by whatever they are posted to and the text was
-softer than it needed to be. And the Download button disables while a render is
-in flight.
-
-Verified by rendering the same card twice and stacking the results: the browser's
-own paint versus the html2canvas export, with a deliberately wrong-aspect
-screenshot in the core slot. They now match - same crop, same word spacing, same
-"82.4%". Preview at `generated/2026-08-30-post-studio-export-fixes.png`.
-
-## 2026-08-30 - Logo 404 on owner.cbedge.net, and re-applying two fixes a rollback dropped
-
-Edited: `owner-vite/nginx.conf`, `owner-vite/src/pages/studioHtml.ts`,
-`cbedge-v3/src/board/gexCandles/settings.ts`.
-
-**The logo.** `public/cbedge3.0.png` is in the repo root's `public/`, which
-belongs to the Next app. The owners container only holds owner-vite's own
-`dist`, and its nginx has an explicit allowlist of root-public paths to proxy
-back to the dashboard - `signals.txt`, `landing-bg.png`, `cb-edge-logo.png`.
-`cbedge3.0.png` was not on it, so the request fell through to `location /` and
-`try_files ... /index.html`, and the `<img>` was handed a page of HTML. That is
-why it rendered as a broken icon rather than 404ing: nginx answered 200 with the
-SPA shell.
-
-Added to the allowlist, with a comment saying what the list is for so the next
-brand asset does not repeat this.
-
-Also: a logo that fails to load now says so on the canvas - "Logo not found at
-/cbedge3.0.png - double-click to load one" - instead of drawing a 12px broken
-glyph that reads like a layout bug. Re-attached on restore, and it stands down
-for a hand-loaded image so a user's own failed upload keeps its own error.
-
-**Two fixes came back from the dead.** The deploy script's suggested
-`git reset --hard HEAD~1` rolled the working tree back past both of yesterday's
-build fixes. Re-applied, unchanged:
-
-- `studioHtml.ts` - two comments were using backticks to quote code. The whole
-  document is one `String.raw` template literal, so the first one closed it
-  mid-file and esbuild died with `Expected ";" but found "vals"`. Plain text
-  now, with a note at the spot saying why.
-- `settings.ts` - `isAutoBucket` back to `(v: BubbleBucket): v is 'auto'`. As a
-  plain `boolean` it does not narrow, and `tsc --noEmit` fails the v3 build at
-  `GexCandlesCard.tsx:408` handing `'auto'` to a `1 | 5 | null`.
-
-The studio's own feature work (undo/redo, the FX board, guides, the keyed logo)
-survived on disk; only its changelog entry was lost with the reset.
-
-Verified: `verify.mjs` clean on all four checks including the real
-`esbuild.transform`; the `tsc --strict` repro for the bucket narrowing still
-passes and still fails when reverted; and the studio loaded twice in a browser -
-once with the logo served, once with the server deliberately answering
-`index.html` for it the way nginx was - giving `naturalWidth 2064` and the
-fallback message respectively, no page errors either way.
+## 2026-08-29 - v3 theme check runs on deploy and on commit, not only on the laptop
+
+Edited: `Dockerfile`, `cbedge-v3/AGENTS.md`. Added: `.githooks/pre-commit`.
+
+`npm run build` is not a push, and the VPS builds cbedge-v3 with `build:fast` —
+`vite build` alone, no typecheck, no budgets. So a check that lives only in
+`build` never runs on a push made without building first. Closed at both ends.
+
+**Dockerfile.** The cbedge-v3 step now runs `npm run check:theme` before
+`build:fast`. It reads files and matches regexes — no browser, no typecheck, no
+brotli, about a second — so it is cheap enough to sit in a deploy in a way the
+budget check deliberately is not. The step stays NON-FATAL: a theme violation
+costs that deploy `/v3` and leaves v2 untouched, same as every other v3 build
+failure.
+
+**Pre-commit hook.** `.githooks/pre-commit`, installed once per clone with
+`git config core.hooksPath .githooks` — a hook under `.git/hooks` is untracked
+and would live on one machine only. It runs the check just for commits that touch
+`cbedge-v3/`, and `--no-verify` skips it. Known limitation, written into the hook:
+it checks the files on disk, not the staged index, so a partial `git add -p` can
+disagree with it — the Dockerfile gate is the backstop for that case.
+
+## 2026-08-29 - v3: the theme rule is now checked, not remembered
+
+Added: `cbedge-v3/scripts/check-theme.mjs`. Edited: `cbedge-v3/package.json`,
+`cbedge-v3/AGENTS.md`, `cbedge-v3/src/pages/premarket/GexProfile.tsx`.
+
+Non-negotiable #1 said "enforced by a script, not by memory" and no such script
+existed. `npm run build` now runs `check-theme` before `vite build`.
+
+It fails on three things anywhere under `src/`:
+
+**Colour literals** — `#rrggbb`, `rgb()`, `rgba()`, `hsl()`, `hsla()`, with
+`tokens.css` the one exemption. Comments are stripped first, so a doc comment
+explaining the rule is not itself a breach of it.
+
+**Tailwind's default palette** — `text-gray-400`, `bg-zinc-900`, `border-red-500`.
+Tailwind v4 still ships it, it is NOT a literal, and a hex scan waves it straight
+through. It is also precisely what made v2's text come out grey on every new
+page. The shade number is required by the pattern, so the app's own token
+utilities (`text-muted`, `bg-surface`, `text-violet`) are untouched.
+
+**Unknown CSS variables** — `var(--dim)`. A typo'd or leftover custom property
+renders as nothing at all, with no warning. The first run of the check found
+exactly that in `GexProfile.tsx`: `--dim` is a v2 variable that does not exist in
+v3, so that panel's empty state was drawing with no colour. Fixed to
+`var(--color-faint)`.
+
+**A baseline, so it does not break the build it is installed into.**
+`theme-baseline.json` records existing violations per file, budgets.json style:
+the build fails when a file goes ABOVE its number, and every file not listed must
+stay at zero. It ratchets — a file that comes in under says so and asks for
+`npm run theme:update`, and a file that reaches zero is dropped and can never
+regress. The FIRST run writes the baseline and passes with a loud notice; a check
+that fails on day one is a check that gets switched off on day one.
+
+Three false positives were found and fixed while testing, each worth keeping in
+mind: CRLF (every file here is written on Windows, and a stray `\r` is a line
+terminator to a regex, so the comment stripper silently did nothing);
+`var(--color-level-${level})`, a name built by interpolation, which has nothing
+to check; and `{ '--dim': x }`, a custom property declared as a JS object key.
 
 ## 2026-08-29 - v3 Multi Greek: a third of the card was chrome; ladder pans by hand
 

@@ -305,7 +305,7 @@ export default function GexProfile({
             : undefined}
         >
           {bars.length === 0 && (
-            <div style={{ padding: "40px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
+            <div style={{ padding: "40px 0", textAlign: "center", color: "var(--color-faint)", fontSize: 12 }}>
               {empty}
             </div>
           )}

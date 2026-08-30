@@ -6,17 +6,19 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit && vite build && node scripts/check-budgets.mjs",
+    "build": "tsc --noEmit && node scripts/check-theme.mjs && vite build && node scripts/check-budgets.mjs",
     "build:fast": "vite build",
     "budgets": "node scripts/check-budgets.mjs",
     "budgets:ratchet": "node scripts/check-budgets.mjs --ratchet",
+    "check:theme": "node scripts/check-theme.mjs",
+    "theme:update": "node scripts/check-theme.mjs --update",
     "mock": "node scripts/mock-server.mjs 4310",
     "lab": "node tools/bubble-lab/build.mjs",
     "lab:watch": "node tools/bubble-lab/build.mjs --watch",
     "lab:capture": "node tools/bubble-lab/capture.mjs",
     "check:ws": "node scripts/ws-scope-check.mjs",
     "perf": "node scripts/perf-check.mjs",
-    "check": "npm run typecheck && npm run build:fast && npm run budgets && npm run check:ws && npm run perf",
+    "check": "npm run typecheck && npm run check:theme && npm run build:fast && npm run budgets && npm run check:ws && npm run perf",
     "preview": "vite preview --port 4173"
   },
   "dependencies": {

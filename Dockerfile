@@ -64,6 +64,11 @@ RUN rm -rf public/app && cp -r app-vite/dist public/app
 # bundle must never be able to block a v2 hotfix from reaching the VPS. Run
 # `npm run check` on the laptop before pushing; that is where budgets are enforced.
 #
+# check:theme IS run here, though, and deliberately — it is the one gate that
+# catches a push made without building first. It reads files and matches regexes:
+# no browser, no typecheck, no brotli, about a second. A theme violation joins the
+# other failure modes below and costs the deploy /v3, not the site.
+#
 # PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: cbedge-v3 carries `playwright` as a devDep for
 # scripts/ws-scope-check.mjs (a laptop-only test). `npm install` runs its
 # postinstall, which downloads ~150MB of Chromium — inside a deploy that is at
@@ -99,6 +104,7 @@ RUN set -ux; \
        && cd cbedge-v3 \
        && rm -f package-lock.json \
        && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund \
+       && npm run check:theme \
        && npm run build:fast; then \
       cd /app && rm -rf public/v3 && cp -r cbedge-v3/dist public/v3 && ls public/v3; \
       echo "cbedge-v3: built OK -> public/v3"; \

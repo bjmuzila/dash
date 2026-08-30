@@ -1,0 +1,51 @@
+#!/bin/sh
+# ─────────────────────────────────────────────────────────────────────────────
+# pre-commit — run cbedge-v3's theme check before the commit is written.
+#
+# Install once, per clone:
+#
+#   git config core.hooksPath .githooks
+#
+# (A hook in .git/hooks is not tracked by git, so it would live on exactly one
+# machine and vanish on the next clone. core.hooksPath points git at a directory
+# that IS in the repo, so the hook travels with the code.)
+#
+# Why here as well as in the Dockerfile: the deploy catches a violation about
+# two minutes after you push, in a build log, and costs you /v3 for that deploy.
+# This catches it before the commit exists. Neither one replaces the other.
+#
+# Scope: it only runs when the commit actually touches cbedge-v3, so a v2-only
+# commit pays nothing. `git commit --no-verify` skips it when you genuinely need
+# to commit a work in progress.
+#
+# One honest limitation: this checks the FILES ON DISK, not the staged content.
+# With a partial `git add -p` it can pass on a hunk you did not stage, or fail on
+# one you did. Checking the index properly would mean writing the tree to a
+# temporary directory on every commit, which is a real cost for a rare case —
+# and the Dockerfile gate is the backstop for exactly that case.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Nothing in v3 changed → nothing to check.
+if ! git diff --cached --name-only | grep -q '^cbedge-v3/'; then
+  exit 0
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node not on PATH — skipping cbedge-v3 theme check." >&2
+  exit 0
+fi
+
+ROOT=$(git rev-parse --show-toplevel)
+if [ ! -f "$ROOT/cbedge-v3/scripts/check-theme.mjs" ]; then
+  exit 0
+fi
+
+cd "$ROOT/cbedge-v3" || exit 0
+if ! node scripts/check-theme.mjs; then
+  echo "" >&2
+  echo "pre-commit: cbedge-v3 theme check failed — commit aborted." >&2
+  echo "Fix the lines above, or 'git commit --no-verify' to commit anyway." >&2
+  exit 1
+fi
+
+exit 0

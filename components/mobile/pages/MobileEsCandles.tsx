@@ -300,7 +300,19 @@ export default function MobileEsCandles() {
   const [axisW, setAxisW] = useState(46);
   const [zooming, setZooming] = useState(false);
   const [ovlOpen, setOvlOpen] = useState(false);
-  const { sessionCandles, connected } = useEsCandles(true, 2, interval === "1" ? 1 : 5);
+  // History depth in CALENDAR days, and it has to clear a weekend: asking for 2
+  // on a Sunday reaches back to Friday and can miss the last session entirely on
+  // a long (holiday Monday) weekend, leaving the chart with nothing to draw. 4
+  // at 5m is ~400 rows; 1m is capped at 3 because it is 5x denser and the phone
+  // only ever shows a session or two of it.
+  // `historical` is taken only to tell the two empty states apart below: rows in
+  // hand means the DB answered and the chart is empty for a windowing/session
+  // reason, not because the socket is down.
+  const { sessionCandles, historical, connected } = useEsCandles(
+    true,
+    interval === "1" ? 3 : 4,
+    interval === "1" ? 1 : 5,
+  );
   const g = useMobileGex("oi-vol");
 
   // Which ET days the chart actually has bars for — the bubble history needs
@@ -1027,7 +1039,18 @@ export default function MobileEsCandles() {
           )}
           {sessionCandles.length === 0 && (
             <div style={{ position: "absolute", inset: 0, display: "flex" }}>
-              <MEmpty tall>{connected ? "Loading ES candles…" : "Connecting to the live feed…"}</MEmpty>
+              {/* Say which of the two it actually is. This used to read
+                  "Connecting to the live feed…" for ANY empty chart, so a
+                  windowing problem (or a quiet weekend) was indistinguishable
+                  from a dead socket — and it is what made this page look like
+                  it could not reconnect when the socket was fine. */}
+              <MEmpty tall>
+                {connected
+                  ? "Loading ES candles…"
+                  : historical.length > 0
+                    ? "No ES bars in range — waiting for the next session"
+                    : "Connecting to the live feed…"}
+              </MEmpty>
             </div>
           )}
           {(showLevels || showBubbles || sidePanel !== "none") && !basisOk && sessionCandles.length > 0 && (

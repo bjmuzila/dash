@@ -426,10 +426,28 @@ export function useEsCandles(
   // Rolling continuous-session view: ~30h of bars regardless of ET date, so the
   // overnight (prior-day-dated) session is included and the chart follows into a
   // new day. Merge DB history with the live session map; live wins on slotKey.
+  //
+  // The window is anchored to the NEWEST bar we actually hold, not to
+  // `Date.now()`. Anchoring it to wall-clock time meant the window slid off the
+  // end of the tape whenever the market had been shut for longer than the
+  // window — and 30h is shorter than a weekend. At 03:52 ET on a Sunday the
+  // newest ES bar is Friday 16:55 ET, 35 hours old, so EVERY bar fell outside
+  // `now - 30h` and this returned an empty array with a full, healthy 204-row
+  // response sitting in `historical`. The phone chart then rendered its empty
+  // state, which blames the live feed, and the page looked like a broken
+  // socket every weekend and every holiday. (Only the phone build reads
+  // `sessionCandles`, which is why the desktop page never showed it.)
+  //
+  // Anchoring to the newest bar is a no-op while the tape is live — the newest
+  // bar IS ~now — and shows the last session that exists when it is not.
   const sessionCandles = useMemo<EsCandleRecord[]>(() => {
     void sessionTick; // re-run when live session bars arrive
     const WINDOW_MS = 30 * 60 * 60 * 1000;
-    const cutoff = Date.now() - WINDOW_MS;
+    let newest = 0;
+    for (const c of historical) if (c.timestamp > newest) newest = c.timestamp;
+    for (const c of sessionMapRef.current.values()) if (c.timestamp > newest) newest = c.timestamp;
+    // No bars at all → nothing to window; keep the old wall-clock behaviour.
+    const cutoff = (newest || Date.now()) - WINDOW_MS;
     const map = new Map<string, EsCandleRecord>();
     for (const c of historical) if (c.slotKey && c.timestamp >= cutoff) map.set(c.slotKey, c);
     for (const c of sessionMapRef.current.values()) if (c.timestamp >= cutoff) map.set(c.slotKey, c);

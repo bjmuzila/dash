@@ -30,9 +30,29 @@ v3 is complete. There is no cutover day.
 These are the rules the repo exists to enforce. Each one is enforced by a script,
 not by memory.
 
-1. **No colour literals outside `src/design/tokens.css`.** No hex, no rgb(), no
-   named colours in components. This is what stopped v2 from having a coherent
-   look, and it is the single easiest rule to break by accident.
+1. **Everything follows tokens.css.** No colour literals outside
+   `src/design/tokens.css` — no hex, no `rgb()`, no `hsl()`. A colour needed as
+   a JS string comes from `src/design/theme.ts` (`T.*`, `alpha()`, `mix()`),
+   which is `var(--color-…)` underneath so it keeps tracking the token.
+
+   Also banned: **Tailwind's default palette** (`text-gray-400`, `bg-zinc-900`,
+   `border-red-500`, …). Tailwind v4 still ships it and it is not a literal, so
+   it slips past a hex scan — and it is exactly what made v2's text come out
+   grey. The app's own utilities have no shade number: `text-fg` / `text-muted`
+   / `text-faint` (all white today), the surface ladder `bg-bg` → `bg-surface` →
+   `bg-surface2` → `bg-raised`, and `border-line`. Anything with a border and a
+   background is a `Card`; the page frame is `Page`. Never invent a plate colour.
+
+   And `var(--typo)` is caught too — an unknown custom property renders as
+   nothing at all, silently, which is the most expensive five minutes in a
+   stylesheet.
+
+   `npm run check:theme` enforces all three and `npm run build` runs it. It
+   carries a `theme-baseline.json` in the `budgets.json` style: violations that
+   already existed are grandfathered per file, the build fails when a file goes
+   ABOVE its number, and a file that reaches zero is dropped and can never
+   regress. Clean a file up, then `npm run theme:update`. **Never raise a number
+   to make a build pass.**
 
 2. **Pages never touch the socket.** They call `useFrame` / `useField` /
    `watchFrame` from `src/data/hooks.ts`. There is no topic list to maintain —
@@ -158,14 +178,6 @@ dropdown, `BoardPage` and `Board` all pick it up. Big cards go behind `lazy()`;
 a card that is a few lines stays static, because a chunk boundary costs more
 than it saves.
 
-**A card can be on the board more than once.** A grid item's `id` is an INSTANCE
-id: the first copy keeps the bare catalog id (`gex-chart`), later copies get a
-`#n` suffix (`gex-chart#2`). Look the catalog up through `cardTypeOf(id)`, never
-with the raw id, and expect your card's component to be mounted several times at
-once. Card settings are still stored per card TYPE, so two copies share whatever
-was written last across a reload — key new per-card storage on the instance id
-if that matters for your card.
-
 Then, before you push:
 
 - Anything that paints must go through `ChartFrame` and honour ONE of its
@@ -180,14 +192,30 @@ Then, before you push:
 
 ```
 npm run dev             # dev server on :5273, proxying to VITE_BACKEND_ORIGIN
-npm run build           # typecheck + build + budget check (fails on over-budget)
+npm run build           # typecheck + theme + build + budget check (fails on either)
 npm run mock            # serve dist/ with synthetic data, no backend needed
-npm run check           # typecheck + build + budgets + ws scope + perf
+npm run check           # typecheck + theme + build + budgets + ws scope + perf
+npm run check:theme     # no colour literals, no Tailwind palette, no unknown var
+npm run theme:update    # re-record theme-baseline.json after cleaning a file up
 npm run check:ws        # proves topic derivation is correct
 npm run perf            # per-card redraw guard: idle quiet, offscreen silent,
                         # interaction still paints
 npm run budgets:ratchet # pull budgets.json down to what dist/ actually weighs
 ```
+
+`npm run build` and `npm run check` run `check:theme`. The DEPLOY runs it too —
+the Dockerfile's cbedge-v3 step calls `npm run check:theme` before
+`build:fast` — because that is the one gate that catches a push made without
+building first. A failure there costs the deploy `/v3`, not the site.
+
+To catch it one step earlier, install the repo's pre-commit hook once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+It runs the theme check only when a commit touches `cbedge-v3/`.
+`git commit --no-verify` skips it.
 
 `check:ws` and `perf` are the two that catch silent failures — a wrong topic
 scope and a runaway repaint both look completely fine on screen for a while.
