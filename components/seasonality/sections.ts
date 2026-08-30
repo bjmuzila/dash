@@ -22,6 +22,9 @@ export type SectionKey =
   | "eom"
   | "dow"
   | "vix"
+  | "jh"
+  | "earn"
+  | "aapl"
   | "now"
   | "baro"
   | "cycles"
@@ -63,6 +66,20 @@ export const SECTION_GROUPS: SectionGroup[] = [
       { key: "vix", label: "After a VIX spike", hash: "vix-spike" },
       { key: "now", label: "Where the calendar stands", hash: "now" },
       { key: "baro", label: "Early-year barometers", hash: "barometers" },
+    ],
+  },
+  {
+    // Dated events, not calendar shapes. Everything above answers "what does
+    // the market do at THIS TIME OF YEAR"; everything here answers "what does
+    // it do around THIS EVENT". They are studies of the same kind — an anchor
+    // date, a window before, a window after — so they share a group and a
+    // vocabulary, and they are kept out of "Event triggers" because that group
+    // is about market-generated conditions rather than scheduled dates.
+    label: "Scheduled events",
+    items: [
+      { key: "jh", label: "Jackson Hole", hash: "jackson-hole" },
+      { key: "earn", label: "Earnings reactions", hash: "earnings" },
+      { key: "aapl", label: "Apple events", hash: "apple-events" },
     ],
   },
   {

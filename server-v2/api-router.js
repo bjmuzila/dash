@@ -10616,4 +10616,382 @@ try {
   });
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PUBLIC EVENT-STUDY ROUTES — the data behind /explore/seasonality.
+//
+// /explore/seasonality is the one complete tool this site gives away, and it
+// renders for a SIGNED-OUT visitor off a social link. Everything on it used to
+// be static, compiled into components/seasonality/seasonalityData.ts at build
+// time, which is what made it survive a link storm. These three routes are the
+// narrow exception: the parts of that page that go stale between data regens,
+// or that would bloat the JS bundle if they were baked into it.
+//
+// WHY auth:'public'. Same reason /api/public-levels is: the page they serve is
+// public, so gating them would render an empty page for exactly the visitors
+// the page exists to convert. They match middleware's /^\/api\/public-[a-z-]+$/
+// pattern, which is what keeps them reachable if the API_ROUTER kill-switch is
+// ever flipped off.
+//
+// WHY THEY GIVE NOTHING AWAY. Every number here is free public market data —
+// Yahoo daily closes and a public earnings calendar. There is no GEX, no flow,
+// no options chain, no proxy call, and no database read. The paid product is
+// positioning; this is price history, and price history is the thing you can
+// already get. Keep it that way: DO NOT add a ticker param that reaches the
+// proxy, and do not widen /api/public-daily beyond its allowlist.
+//
+// WHY THEY CACHE HARD. Anonymous traffic can hammer these. Each one holds its
+// result in a module cache and serves every visitor in the window the same
+// bytes, so a hundred readers cost one upstream call. The TTLs are sized to the
+// data: ten minutes for the live index (it moves), six hours for earnings
+// (a calendar), twelve for AAPL history (a decade of closes). The cache IS the
+// rate limit.
+//
+// FAILURE IS A 200 WITH LESS IN IT, never a 500. The page treats every one of
+// these as optional and renders without them; a 500 would turn a freshness call
+// into a visible error on a page that is otherwise entirely static.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const PUB_YH = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    Accept: 'application/json',
+    'Accept-Language': 'en-US,en;q=0.9',
+    Origin: 'https://finance.yahoo.com',
+    Referer: 'https://finance.yahoo.com/',
+  };
+
+  const nyDate = (epochSeconds) =>
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date(epochSeconds * 1000));
+
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const round = (v, d = 4) => (v == null ? null : Math.round(v * 10 ** d) / 10 ** d);
+
+  /**
+   * One symbol's daily bars from Yahoo, as an array of plain rows.
+   *
+   * ADJUSTED CLOSE IS THE SERIES, raw open/high/low are carried alongside for
+   * intraday windows. Anything that spans a split — AAPL 7:1 in 2014, 4:1 in
+   * 2020, NVDA 10:1 in 2024 — is nonsense on raw closes, and every study these
+   * routes serve spans one.
+   *
+   * `adj` is the per-day adjustment factor (adjclose / close). Multiply a raw
+   * open or high by it to put that price on the adjusted series; within a
+   * single session the factor cancels, which is why open→close needs no
+   * adjustment at all and prev-close→open does.
+   */
+  async function pubDaily(symbol, period1) {
+    const p2 = Math.floor(Date.now() / 1000) + 86400;
+    const url =
+      `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+      `?interval=1d&period1=${period1}&period2=${p2}&includePrePost=false&events=split`;
+    const r = await fetch(url, { headers: PUB_YH, cache: 'no-store' });
+    if (!r.ok) throw new Error(`yahoo ${symbol} HTTP ${r.status}`);
+    const j = await r.json();
+    const res = j?.chart?.result?.[0];
+    const ts = res?.timestamp;
+    const q = res?.indicators?.quote?.[0];
+    const adjArr = res?.indicators?.adjclose?.[0]?.adjclose;
+    if (!Array.isArray(ts) || !q) throw new Error(`yahoo ${symbol} empty`);
+    const out = [];
+    for (let i = 0; i < ts.length; i++) {
+      const c = num(q.close?.[i]);
+      if (c == null) continue;                       // Yahoo pads holidays with nulls
+      const adjC = num(Array.isArray(adjArr) ? adjArr[i] : null) ?? c;
+      out.push({
+        d: nyDate(ts[i]),
+        o: num(q.open?.[i]),
+        h: num(q.high?.[i]),
+        l: num(q.low?.[i]),
+        c,
+        adj: c > 0 ? adjC / c : 1,
+        adjC,
+      });
+    }
+    return out;
+  }
+
+  /** A module cache with a TTL and single-flight, so a stampede costs one call. */
+  function cached(ttlMs, load) {
+    let at = 0;
+    let value = null;
+    let inflight = null;
+    return async () => {
+      if (value && Date.now() - at < ttlMs) return value;
+      if (inflight) return inflight;
+      inflight = (async () => {
+        try {
+          const v = await load();
+          value = v;
+          at = Date.now();
+          return v;
+        } finally {
+          inflight = null;
+        }
+      })();
+      return inflight;
+    };
+  }
+
+  const PUB_CACHE = 'public, max-age=60, s-maxage=300, stale-while-revalidate=1800';
+
+  // ── /api/public-seasonality ──────────────────────────────────────────────
+  //
+  // The freshness call. The seasonality page's "this year" line is compiled at
+  // build time and therefore stops moving between regens; this hands back the
+  // sessions after a given cutoff so the client can extend it in place, plus
+  // any VIX +20% spike that fired in the same window.
+  //
+  // Six months of range for a cutoff that is normally days old is deliberate
+  // slack: it costs nothing, and it means a data file that went a whole quarter
+  // without a regen still catches up instead of silently half-updating.
+  {
+    const SPIKE = 0.20;   // must match EXTRAS.vix's +20% bucket, or the list mixes definitions
+    const load = cached(10 * 60 * 1000, async () => {
+      const from = Math.floor(Date.now() / 1000) - 200 * 86400;
+      const [spx, vix] = await Promise.all([pubDaily('^GSPC', from), pubDaily('^VIX', from)]);
+      const spxByDate = new Map(spx.map((r) => [r.d, r]));
+
+      // VIX spikes, on the SAME definition the static study uses: the PRIOR
+      // session's close to this session's high, so an overnight gap counts.
+      const events = [];
+      for (let i = 1; i < vix.length - 1; i++) {
+        const prev = vix[i - 1];
+        const cur = vix[i];
+        if (!prev.c || !cur.h) continue;
+        const pop = cur.h / prev.c - 1;
+        if (pop < SPIKE) continue;
+        const s0 = spxByDate.get(cur.d);
+        const s1 = spxByDate.get(vix[i + 1].d);
+        if (!s0 || !s1 || !s0.l || !s1.h || !s1.o || !s1.c) continue;
+        events.push({
+          date: cur.d,
+          vix_pop: round(pop, 6),
+          vix_open: round(cur.o ?? cur.c, 2),
+          vix_high: round(cur.h, 2),
+          spx_low: round(s0.l, 2),
+          next_high: round(s1.h, 2),
+          low_to_next_high: round(s1.h / s0.l - 1, 6),
+          next_open_close: round(s1.c / s1.o - 1, 6),
+        });
+      }
+      events.sort((a, b) => (a.date < b.date ? 1 : -1));
+      return {
+        // ^GSPC is the cash index and never splits, so the raw close IS the
+        // level the page prints on its right-hand axis. Do not swap this for
+        // adjC — that would silently switch the axis to a total-return series.
+        spx: spx.map((r) => [r.d, round(r.c, 2)]),
+        vix: events,
+        asOf: spx.length ? spx[spx.length - 1].d : null,
+      };
+    });
+
+    register('/api/public-seasonality', {
+      auth: 'public', methods: ['GET'],
+      async handler(req, res) {
+        const since = new URL(req.url || '/', 'http://localhost').searchParams.get('since') || '';
+        const ok = /^\d{4}-\d{2}-\d{2}$/.test(since) ? since : '';
+        try {
+          const data = await load();
+          send(res, 200, {
+            asOf: data.asOf,
+            since: ok || null,
+            spx: ok ? data.spx.filter(([d]) => d > ok) : data.spx,
+            vix: ok ? data.vix.filter((e) => e.date > ok) : data.vix,
+          }, { 'Cache-Control': PUB_CACHE });
+        } catch (e) {
+          // 200 with nothing in it: the client keeps its static arrays and the
+          // page is exactly as correct as it was before this route existed.
+          send(res, 200, { asOf: null, since: ok || null, spx: [], vix: [], error: String(e?.message ?? e) },
+            { 'Cache-Control': 'public, max-age=30' });
+        }
+      },
+    });
+  }
+
+  // ── /api/public-daily ────────────────────────────────────────────────────
+  //
+  // Split-adjusted daily closes for ONE allowlisted symbol, so the client can
+  // run an event study against a calendar it owns. The Apple-events section is
+  // the only consumer: its event list is 70 hand-sourced keynote dates that
+  // live in the bundle, and shipping the price history to meet them beats
+  // shipping the calendar to the server, where it would become a second copy
+  // to keep in step.
+  //
+  // ALLOWLIST, not a param. `symbol` reaching Yahoo unchecked is an open proxy
+  // — someone else's rate limit spent from this box's IP. Adding a symbol here
+  // is a deliberate act; taking the allowlist out is not a refactor.
+  {
+    const ALLOWED = new Set(['AAPL']);
+    const FROM = Math.floor(Date.UTC(2006, 0, 1) / 1000);
+    const loaders = new Map();
+    const loaderFor = (sym) => {
+      if (!loaders.has(sym)) {
+        loaders.set(sym, cached(12 * 60 * 60 * 1000, async () => {
+          const rows = await pubDaily(sym, FROM);
+          return rows.map((r) => [r.d, round(r.adjC, 4)]);
+        }));
+      }
+      return loaders.get(sym);
+    };
+
+    register('/api/public-daily', {
+      auth: 'public', methods: ['GET'],
+      async handler(req, res) {
+        const sym = String(new URL(req.url || '/', 'http://localhost').searchParams.get('symbol') || '').toUpperCase();
+        if (!ALLOWED.has(sym)) return send(res, 400, { error: 'symbol not available' });
+        try {
+          const rows = await loaderFor(sym)();
+          send(res, 200, { symbol: sym, basis: 'split-adjusted close', rows },
+            { 'Cache-Control': 'public, max-age=1800, s-maxage=21600, stale-while-revalidate=86400' });
+        } catch (e) {
+          send(res, 200, { symbol: sym, rows: [], error: String(e?.message ?? e) }, { 'Cache-Control': 'public, max-age=60' });
+        }
+      },
+    });
+  }
+
+  // ── /api/public-earnings ─────────────────────────────────────────────────
+  //
+  // The last ~20 earnings prints for a short list of names, and what the stock
+  // did on the session that ABSORBED each one.
+  //
+  // Which session that is, is the whole subtlety. A company reporting after the
+  // close (AMC) is priced by the NEXT session; one reporting before the open
+  // (BMO) by the same session. Anchoring every row on the report date instead
+  // — the obvious implementation — puts most mega-cap reactions on the day
+  // BEFORE the move, and the resulting table looks plausible and is wrong.
+  //
+  // Computed here rather than in the browser because it needs a calendar query
+  // AND a price history PER TICKER: sixteen names is 32 upstream calls, which
+  // is one cached server job and would be 32 requests per visitor otherwise.
+  {
+    const TICKERS = [
+      'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'AMD',
+      'AVGO', 'NFLX', 'MU', 'PLTR', 'COIN', 'SMCI', 'HOOD', 'MSTR',
+    ];
+    const KEEP = 20;          // prints per ticker
+    const YEARS = 7;          // calendar lookback
+
+    /** Report dates for one ticker from the public earnings calendar. */
+    async function earningsDates(sym) {
+      const to = new Date();
+      const from = new Date(Date.UTC(to.getUTCFullYear() - YEARS, to.getUTCMonth(), to.getUTCDate()));
+      const body = {
+        sortType: 'DESC', entityIdType: 'earnings', sortField: 'startdatetime',
+        includeFields: ['ticker', 'startdatetime', 'startdatetimetype'],
+        query: { operator: 'and', operands: [
+          { operator: 'eq', operands: ['region', 'us'] },
+          { operator: 'eq', operands: ['ticker', sym] },
+          { operator: 'gte', operands: ['startdatetime', from.toISOString()] },
+          { operator: 'lt', operands: ['startdatetime', new Date(to.getTime() + 864e5).toISOString()] },
+        ] },
+        offset: 0, size: 60,
+      };
+      const r = await fetch('https://query1.finance.yahoo.com/v1/finance/visualization?lang=en-US&region=US', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...PUB_YH },
+        body: JSON.stringify(body),
+        cache: 'no-store',
+      });
+      if (!r.ok) throw new Error(`calendar ${sym} HTTP ${r.status}`);
+      const j = await r.json();
+      const doc = j?.finance?.result?.[0]?.documents?.[0];
+      const cols = (doc?.columns ?? []).map((c) => c.id);
+      const ix = (id) => cols.indexOf(id);
+      const rows = doc?.rows ?? [];
+      const out = [];
+      for (const row of rows) {
+        const raw = row[ix('startdatetime')];
+        if (!raw) continue;
+        const dt = new Date(typeof raw === 'number' ? raw : String(raw));
+        if (Number.isNaN(dt.getTime())) continue;
+        const type = String(row[ix('startdatetimetype')] ?? '').toUpperCase();
+        // TNS = "time not supplied". Fall back to the UTC hour: a report filed
+        // at or after 20:00Z is 16:00 ET or later, i.e. after the bell.
+        const when = type === 'BMO' || type === 'AMC' ? type : (dt.getUTCHours() >= 20 ? 'AMC' : 'BMO');
+        out.push({ date: nyDate(Math.floor(dt.getTime() / 1000)), when });
+      }
+      // Yahoo occasionally returns a date twice (a revised entry). Keep one.
+      const seen = new Set();
+      return out.filter((e) => (seen.has(e.date) ? false : (seen.add(e.date), true)));
+    }
+
+    async function forTicker(sym) {
+      const from = Math.floor(Date.now() / 1000) - (YEARS + 1) * 365 * 86400;
+      const [dates, bars] = await Promise.all([earningsDates(sym), pubDaily(sym, from)]);
+      const idxByDate = new Map(bars.map((b, i) => [b.d, i]));
+      const allDates = bars.map((b) => b.d);
+
+      /** First session on or after an ISO date. */
+      const sessionAtOrAfter = (iso) => {
+        const hit = idxByDate.get(iso);
+        if (hit != null) return hit;
+        let lo = 0, hi = allDates.length - 1, ans = -1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (allDates[mid] >= iso) { ans = mid; hi = mid - 1; } else { lo = mid + 1; }
+        }
+        return ans;
+      };
+
+      const out = [];
+      for (const e of dates) {
+        let i = sessionAtOrAfter(e.date);
+        if (i < 0) continue;
+        // AMC on a real session → the market prices it the NEXT session. A
+        // report on a non-session (rare, a holiday) already resolves to the
+        // next one, so it must not be pushed a second time.
+        if (e.when === 'AMC' && allDates[i] === e.date) i += 1;
+        if (i <= 0 || i >= bars.length) continue;
+        const prev = bars[i - 1];
+        const cur = bars[i];
+        if (!prev.adjC || !cur.adjC || !cur.o || !cur.c) continue;
+        // The open is a RAW price; put it on the adjusted series before
+        // comparing it to an adjusted prior close, or every pre-split gap is
+        // off by the split ratio.
+        const adjOpen = cur.o * cur.adj;
+        out.push({
+          date: e.date,
+          session: cur.d,
+          when: e.when,
+          gap: round(adjOpen / prev.adjC - 1, 6),
+          day: round(cur.adjC / prev.adjC - 1, 6),
+          oc: round(cur.c / cur.o - 1, 6),
+        });
+      }
+      out.sort((a, b) => (a.session < b.session ? 1 : -1));
+      return out.slice(0, KEEP);
+    }
+
+    const load = cached(6 * 60 * 60 * 1000, async () => {
+      const tickers = {};
+      // Four at a time. Sixteen parallel calendar POSTs to the same host is how
+      // a public data source starts returning 429s to this box.
+      for (let i = 0; i < TICKERS.length; i += 4) {
+        const chunk = TICKERS.slice(i, i + 4);
+        const settled = await Promise.allSettled(chunk.map((s) => forTicker(s)));
+        settled.forEach((r, k) => {
+          if (r.status === 'fulfilled' && r.value.length) tickers[chunk[k]] = r.value;
+        });
+      }
+      if (!Object.keys(tickers).length) throw new Error('no earnings data');
+      return { tickers, asOf: new Date().toISOString().slice(0, 10) };
+    });
+
+    register('/api/public-earnings', {
+      auth: 'public', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const data = await load();
+          send(res, 200, data, { 'Cache-Control': 'public, max-age=900, s-maxage=10800, stale-while-revalidate=86400' });
+        } catch (e) {
+          send(res, 200, { tickers: {}, asOf: null, error: String(e?.message ?? e) }, { 'Cache-Control': 'public, max-age=60' });
+        }
+      },
+    });
+  }
+}
+
 module.exports = { handleApiRoute, register, _routes: ROUTES };

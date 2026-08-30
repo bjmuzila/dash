@@ -48,10 +48,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { HOME_THEME, ES_CANDLE_UP, ES_CANDLE_DOWN } from "@/components/shared/homeTheme";
-import { ALMANAC, ERA_KEYS, EXTRAS, type Stat } from "./seasonalityData";
+import { ALMANAC, ERA_KEYS, EXTRAS, YTD_LAST_DATE, yearCurve, type Stat } from "./seasonalityData";
 import { SeaCard } from "./Watermark";
 import { SEA } from "./seaTheme";
 import type { SectionKey } from "./sections";
+import {
+  APPLE_EVENTS,
+  APPLE_EVENT_KINDS,
+  EARNINGS_TICKERS,
+  JACKSON_HOLE,
+  type AppleEventKind,
+} from "./eventDates";
+import {
+  calIndex,
+  fmtLongDate,
+  fmtSpan,
+  isLastTradingDayOfMonth,
+  nyTodayISO,
+} from "./calendar";
+import { useLiveYear, type LiveVixEvent } from "./useLiveYear";
 
 const UP = ES_CANDLE_UP;
 const DOWN = ES_CANDLE_DOWN;
@@ -140,6 +155,29 @@ const capLabel: CSSProperties = {
   color: INK,
 };
 
+/**
+ * The toggle used by the event studies.
+ *
+ * Same visual language as <Pills>, but not that component: Pills owns a whole
+ * labelled row and one value, and these sections need several independent
+ * toggles sitting on ONE row (count, measure, ticker, event kind). Sharing the
+ * style and not the layout is the smaller duplication.
+ */
+const pillBtn = (on: boolean): CSSProperties => ({
+  padding: "5px 12px",
+  borderRadius: 8,
+  border: `1px solid ${on ? HOME_THEME.cyan : HOME_THEME.border}`,
+  background: on
+    ? `linear-gradient(180deg, ${HOME_THEME.cyan}33, ${HOME_THEME.cyan}0D)`
+    : "rgba(255,255,255,0.04)",
+  color: on ? HOME_THEME.cyan : INK,
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: "0.04em",
+  cursor: "pointer",
+  fontVariantNumeric: "tabular-nums",
+});
+
 function Pills<T extends string>({
   options,
   value,
@@ -207,6 +245,7 @@ function Collapse({
   hint,
   note,
   open,
+  autoOpen,
   children,
 }: {
   label: string;
@@ -216,14 +255,38 @@ function Collapse({
    *  A literal, never client state: `open` derived at runtime would hydrate
    *  differently on the server and the client. */
   open?: boolean;
+  /**
+   * Open AFTER mount, from something only the client can know — today's date,
+   * a fetched result.
+   *
+   * This is deliberately NOT `open`. `open` is baked into the server-rendered
+   * markup and must therefore be a literal; anything clock-dependent renders
+   * closed on the server (which built the page hours or days ago) and open on
+   * the client, which is React #418 and a hydration mismatch on a page that
+   * prerenders. So the element ships CLOSED in the HTML and is opened by
+   * touching the DOM property in an effect, which React does not diff against.
+   *
+   * One-way on purpose: it opens the disclosure once and never closes it, so a
+   * reader who shuts it does not have it reopened underneath them on the next
+   * render.
+   */
+  autoOpen?: boolean;
   /** The prose that explains this table. Lives INSIDE the disclosure — a card
    *  shows numbers, and the words about them are one click away, not stacked
    *  under every chart. */
   note?: ReactNode;
   children: ReactNode;
 }) {
+  const ref = useRef<HTMLDetailsElement | null>(null);
+  const opened = useRef(false);
+  useEffect(() => {
+    if (!autoOpen || opened.current) return;
+    opened.current = true;
+    if (ref.current) ref.current.open = true;
+  }, [autoOpen]);
+
   return (
-    <details className="sea-disc" open={open} style={{ marginTop: 14, border: `1px solid ${SEA.line}`, borderRadius: 12, background: SEA.card2 }}>
+    <details ref={ref} className="sea-disc" open={open} style={{ marginTop: 14, border: `1px solid ${SEA.line}`, borderRadius: 12, background: SEA.card2 }}>
       <summary
         style={{
           listStyle: "none",
@@ -413,6 +476,343 @@ function PairBars({
       ) : (
         <div style={{ height: height + 20 }} />
       )}
+    </div>
+  );
+}
+
+/**
+ * Two horizontal bar panels sharing one row label — an EVENT LIST, not a
+ * distribution.
+ *
+ * The vertical bar charts above answer "which month / which weekday". This
+ * answers a different question: "what happened at each of the last N events,
+ * in order". Rows are events, newest at the top, and the whole point is that
+ * the trigger and the reaction sit on the SAME ROW so you can read one against
+ * the other — a +40% VIX pop next to the SPX session that followed it, an
+ * earnings gap next to the day's close.
+ *
+ * TWO PANELS, TWO SCALES, and that is not a mistake to be fixed. A VIX pop
+ * runs +20% to +180%; the SPX session after it runs ±5%. Forcing them onto one
+ * axis would render every SPX bar as a hairline. They are different quantities
+ * measured in the same unit, so each panel carries its own axis and prints its
+ * own range in the header — the comparison the chart supports is rank and
+ * sign, not length across the gutter.
+ *
+ * A panel whose values are all one sign puts zero at its left edge and grows
+ * one way; a panel with both signs puts zero in the middle. That is decided
+ * from the data, so a filtered view of only-positive events does not waste half
+ * its width on an empty negative half.
+ */
+function HBars({
+  rows,
+  aTitle,
+  bTitle,
+  fmtA,
+  fmtB,
+  aColor,
+  bColor,
+  maxHeight = 520,
+  rowH = 20,
+}: {
+  rows: { key: string; label: string; sub?: string; a: number | null; b: number | null }[];
+  aTitle: string;
+  bTitle: string;
+  fmtA: (v: number) => string;
+  fmtB: (v: number) => string;
+  /** Fixed hue for panel A. Omit to colour by sign. */
+  aColor?: string;
+  /** Fixed hue for panel B. Omit to colour by sign. */
+  bColor?: string;
+  maxHeight?: number;
+  rowH?: number;
+}) {
+  const [ref, width] = useMeasuredWidth();
+  const [hover, setHover] = useState<number | null>(null);
+
+  const LABEL_W = 104;
+  const GAP = 16;
+  const panelW = Math.max(60, (width - LABEL_W - GAP) / 2);
+
+  /** lo/hi for one panel, with zero always inside the domain. */
+  const domain = (vals: (number | null)[]) => {
+    const ok = vals.filter((v): v is number => v != null && Number.isFinite(v));
+    const lo = Math.min(0, ...ok);
+    const hi = Math.max(0, ...ok);
+    const pad = (hi - lo) * 0.06 || 0.0001;
+    return { lo: lo - (lo < 0 ? pad : 0), hi: hi + (hi > 0 ? pad : 0) };
+  };
+  const dA = useMemo(() => domain(rows.map((r) => r.a)), [rows]);
+  const dB = useMemo(() => domain(rows.map((r) => r.b)), [rows]);
+
+  const scale = (v: number, d: { lo: number; hi: number }, x0: number) =>
+    x0 + ((v - d.lo) / (d.hi - d.lo || 1)) * panelW;
+
+  const H = rows.length * rowH;
+
+  const panelHead = (title: string, d: { lo: number; hi: number }, fmt: (v: number) => string) => (
+    <div style={{ width: panelW, minWidth: 0 }}>
+      <div style={{ ...capLabel, fontSize: 9.5, marginBottom: 2 }}>{title}</div>
+      <div style={{ fontSize: 10, color: INK, opacity: 0.8, display: "flex", justifyContent: "space-between", fontVariantNumeric: "tabular-nums" }}>
+        <span>{fmt(d.lo)}</span>
+        <span>{fmt(d.hi)}</span>
+      </div>
+    </div>
+  );
+
+  return (
+    <div ref={ref} style={{ width: "100%" }}>
+      {width > 0 && rows.length ? (
+        <>
+          {/* Panel headings live in HTML above the SVG rather than as <text>
+              inside it: they are the axis labels, they never need to scroll
+              with the rows, and this way the row area can be a plain
+              overflow:auto box without a sticky-SVG trick. */}
+          <div style={{ display: "flex", gap: GAP, marginBottom: 6 }}>
+            <div style={{ width: LABEL_W, flex: "none" }} />
+            {panelHead(aTitle, dA, fmtA)}
+            {panelHead(bTitle, dB, fmtB)}
+          </div>
+
+          <div style={{ maxHeight, overflowY: "auto", overflowX: "hidden" }}>
+            <svg
+              width={width}
+              height={H}
+              role="img"
+              aria-label={`${aTitle} and ${bTitle} for the last ${rows.length} events`}
+              style={{ display: "block", touchAction: "none" }}
+              onPointerLeave={() => setHover(null)}
+            >
+              {/* zero baselines, drawn once behind everything */}
+              <line x1={scale(0, dA, LABEL_W)} x2={scale(0, dA, LABEL_W)} y1={0} y2={H} stroke="rgba(255,255,255,0.32)" />
+              <line
+                x1={scale(0, dB, LABEL_W + panelW + GAP)}
+                x2={scale(0, dB, LABEL_W + panelW + GAP)}
+                y1={0}
+                y2={H}
+                stroke="rgba(255,255,255,0.32)"
+              />
+
+              {rows.map((r, i) => {
+                const yTop = i * rowH;
+                const on = hover == null || hover === i;
+                const bar = (v: number | null, d: { lo: number; hi: number }, x0: number, fixed?: string, fmt?: (n: number) => string) => {
+                  if (v == null || !Number.isFinite(v)) return null;
+                  const xz = scale(0, d, x0);
+                  const xv = scale(v, d, x0);
+                  const x = Math.min(xz, xv);
+                  const w = Math.max(1.2, Math.abs(xv - xz));
+                  const col = fixed ?? (v >= 0 ? UP : DOWN);
+                  // Value text goes on the far side of the bar's own end, and
+                  // only when there is room for it inside the panel.
+                  const right = xv >= xz;
+                  const tx = right ? xv + 4 : xv - 4;
+                  const room = right ? x0 + panelW - xv > 46 : xv - x0 > 46;
+                  return (
+                    <>
+                      <rect x={x} y={yTop + 3} width={w} height={rowH - 7} rx={2} fill={col} opacity={on ? 1 : 0.45} />
+                      {room && fmt ? (
+                        <text
+                          x={tx}
+                          y={yTop + rowH / 2 + 3}
+                          textAnchor={right ? "start" : "end"}
+                          fontSize={9.5}
+                          fill={INK}
+                          opacity={on ? 0.95 : 0.4}
+                          style={{ fontVariantNumeric: "tabular-nums" }}
+                        >
+                          {fmt(v)}
+                        </text>
+                      ) : null}
+                    </>
+                  );
+                };
+                return (
+                  <g key={r.key} onPointerEnter={() => setHover(i)}>
+                    <rect x={0} y={yTop} width={width} height={rowH} fill={hover === i ? "rgba(255,255,255,0.05)" : "transparent"} />
+                    <text x={0} y={yTop + rowH / 2 + 4} fontSize={10.5} fontWeight={700} fill={INK} opacity={on ? 1 : 0.5} style={{ fontVariantNumeric: "tabular-nums" }}>
+                      {r.label}
+                    </text>
+                    {bar(r.a, dA, LABEL_W, aColor, fmtA)}
+                    {bar(r.b, dB, LABEL_W + panelW + GAP, bColor, fmtB)}
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+
+          <div style={{ minHeight: 20, marginTop: 6, fontSize: 12, color: INK, fontVariantNumeric: "tabular-nums" }}>
+            {hover != null && rows[hover]
+              ? `${rows[hover].label}${rows[hover].sub ? ` · ${rows[hover].sub}` : ""} · ${aTitle} ${rows[hover].a == null ? "—" : fmtA(rows[hover].a as number)} · ${bTitle} ${rows[hover].b == null ? "—" : fmtB(rows[hover].b as number)}`
+              : "Hover a row for the detail."}
+          </div>
+        </>
+      ) : (
+        <div style={{ height: Math.min(maxHeight, rows.length * rowH) + 44 }} />
+      )}
+    </div>
+  );
+}
+
+// ── event studies ───────────────────────────────────────────────────────────
+
+/**
+ * A window return off a cumulative-% curve.
+ *
+ * The curves in seasonalityData are cumulative percent from the prior
+ * year-end, so a return between two days is the RATIO of the two wealth
+ * factors — (100+b)/(100+a) − 1 — and not the difference of the two
+ * percentages. Subtracting them is the classic error here and it is wrong by
+ * the compounding, which on a 30%-up year is a fifth of the answer.
+ */
+function curveWindow(curve: number[] | null, from: number, to: number): number | null {
+  if (!curve) return null;
+  if (from < 0 || to < 0 || from >= curve.length || to >= curve.length) return null;
+  const a = 100 + curve[from];
+  const b = 100 + curve[to];
+  if (!(a > 0) || !(b > 0)) return null;
+  return b / a - 1;
+}
+
+/** Mean of the non-null values, or null when there are none. */
+const mean = (vals: (number | null)[]): number | null => {
+  const ok = vals.filter((v): v is number => v != null && Number.isFinite(v));
+  return ok.length ? ok.reduce((a, b) => a + b, 0) / ok.length : null;
+};
+/** Share of non-null values that are positive. */
+const hitRate = (vals: (number | null)[]): number | null => {
+  const ok = vals.filter((v): v is number => v != null && Number.isFinite(v));
+  return ok.length ? ok.filter((v) => v > 0).length / ok.length : null;
+};
+const countOf = (vals: (number | null)[]) =>
+  vals.filter((v): v is number => v != null && Number.isFinite(v)).length;
+/**
+ * Largest / smallest non-null value, or null.
+ *
+ * Math.max(...[]) is −Infinity and Math.max over an array whose nulls were
+ * coalesced to a sentinel returns the sentinel — both render as a confident,
+ * wrong number rather than as a dash. Hence the explicit filter.
+ */
+const extremeOf = (vals: (number | null)[], which: "max" | "min"): number | null => {
+  const ok = vals.filter((v): v is number => v != null && Number.isFinite(v));
+  if (!ok.length) return null;
+  return which === "max" ? Math.max(...ok) : Math.min(...ok);
+};
+
+/**
+ * One daily price series fetched once per mount, for the client-side event
+ * studies.
+ *
+ * SPLIT-ADJUSTED closes. AAPL split 7:1 in 2014 and 4:1 in 2020, so a study
+ * that reached back past either on raw closes would print a −85% "day of
+ * event" and look like a data bug — because it would be one.
+ *
+ * Returns [] on any failure. The section renders its own empty state; it must
+ * never throw on a page built to serve signed-out visitors.
+ */
+function useDailySeries(symbol: string | null) {
+  const [rows, setRows] = useState<[string, number][]>([]);
+  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+
+  useEffect(() => {
+    if (!symbol) return;
+    const ac = new AbortController();
+    setState("loading");
+    (async () => {
+      try {
+        const r = await fetch(`/api/public-daily?symbol=${encodeURIComponent(symbol)}`, {
+          signal: ac.signal,
+          headers: { Accept: "application/json" },
+        });
+        if (!r.ok) throw new Error(String(r.status));
+        const j = (await r.json()) as { rows?: [string, number][] };
+        const out = Array.isArray(j?.rows)
+          ? j.rows.filter(
+              (x) => Array.isArray(x) && typeof x[0] === "string" && typeof x[1] === "number" && Number.isFinite(x[1]) && x[1] > 0,
+            )
+          : [];
+        if (!out.length) throw new Error("empty");
+        setRows(out);
+        setState("ready");
+      } catch (e) {
+        if ((e as { name?: string })?.name === "AbortError") return;
+        setState("error");
+      }
+    })();
+    return () => ac.abort();
+  }, [symbol]);
+
+  return { rows, state } as const;
+}
+
+/** One earnings print and what the stock did on the session that absorbed it. */
+export type EarningsMove = {
+  /** Report date as Yahoo carries it. */
+  date: string;
+  /** The session the market reacted on — the same day for a BMO print, the next for an AMC one. */
+  session: string;
+  /** "BMO" | "AMC" | "" */
+  when: string;
+  /** Reaction session close vs the prior close. */
+  day: number | null;
+  /** Reaction session open vs the prior close — the gap the print produced. */
+  gap: number | null;
+  /** Reaction session open to close — what was left to trade after the gap. */
+  oc: number | null;
+};
+
+/** The whole earnings study, one cached call. */
+function useEarnings(enabled: boolean) {
+  const [data, setData] = useState<Record<string, EarningsMove[]>>({});
+  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+
+  useEffect(() => {
+    if (!enabled) return;
+    const ac = new AbortController();
+    setState("loading");
+    (async () => {
+      try {
+        const r = await fetch("/api/public-earnings", { signal: ac.signal, headers: { Accept: "application/json" } });
+        if (!r.ok) throw new Error(String(r.status));
+        const j = (await r.json()) as { tickers?: Record<string, EarningsMove[]> };
+        const t = j?.tickers && typeof j.tickers === "object" ? j.tickers : null;
+        if (!t || !Object.keys(t).length) throw new Error("empty");
+        setData(t);
+        setState("ready");
+      } catch (e) {
+        if ((e as { name?: string })?.name === "AbortError") return;
+        setState("error");
+      }
+    })();
+    return () => ac.abort();
+  }, [enabled]);
+
+  return { data, state } as const;
+}
+
+/**
+ * The one place a section is allowed to say "no numbers".
+ *
+ * Every other card on this page renders from static data and therefore cannot
+ * fail. The three event studies fetch, so they can — and a blank card is
+ * indistinguishable from a broken page. This says which of the two it is.
+ */
+function DataState({ state, what }: { state: "idle" | "loading" | "ready" | "error"; what: string }) {
+  if (state === "ready") return null;
+  return (
+    <div
+      style={{
+        padding: "26px 16px",
+        borderRadius: 12,
+        border: `1px dashed ${SEA.line}`,
+        background: SEA.card2,
+        color: INK,
+        fontSize: 13,
+        textAlign: "center",
+      }}
+    >
+      {state === "error"
+        ? `${what} could not be loaded right now. Everything else on this page is static and unaffected — reload to try again.`
+        : `Loading ${what}…`}
     </div>
   );
 }
@@ -664,6 +1064,35 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
   const [era, setEra] = useState<string>(ERA_KEYS[0]);
   const [dowEra, setDowEra] = useState<string>(ERA_KEYS[0]);
 
+  // The live year. Used here for ONE thing — the current year's Jackson Hole
+  // row, which sits days past the static data's cutoff every August — and for
+  // the VIX spikes that happened after that cutoff.
+  const live = useLiveYear();
+
+  /**
+   * Is today the last session of its month?
+   *
+   * EFFECT, not a render-time call: it reads the wall clock, and this page
+   * prerenders. Starts false so the server's HTML and the first client paint
+   * agree, then flips after mount. See Collapse's `autoOpen`.
+   */
+  const [isMonthEnd, setIsMonthEnd] = useState(false);
+  useEffect(() => {
+    try {
+      setIsMonthEnd(isLastTradingDayOfMonth(nyTodayISO()));
+    } catch {
+      /* Intl unavailable — leave the section as it was. */
+    }
+  }, []);
+
+  // Event-study controls. All start from constants; none is seeded from the
+  // URL or storage, for the hydration reason documented in the file header.
+  const [vixCount, setVixCount] = useState<number>(20);
+  const [vixMeasure, setVixMeasure] = useState<"oc" | "lnh">("oc");
+  const [earnTicker, setEarnTicker] = useState<string>(EARNINGS_TICKERS[0]);
+  const [appleKind, setAppleKind] = useState<AppleEventKind | "all">("all");
+  const [appleCount, setAppleCount] = useState<number>(20);
+
   const eraOptions = ERA_KEYS.map((k) => ({ k, label: k }));
   const mt = A.monthTables[era] ?? A.monthTables[ERA_KEYS[0]];
   const dw = A.dow[dowEra] ?? A.dow[ERA_KEYS[0]];
@@ -678,11 +1107,140 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
 
   const vix = EXTRAS.vix;
   const v20 = vix.buckets.find((b) => b.threshold === 0.2) ?? vix.buckets[0];
-  // Bar scale for the events table — the largest move in the list, so the
-  // longest bar is full width and every other bar is read against it.
-  const maxLowNextHigh = Math.max(...vix.events.map((e) => Math.abs(e.low_to_next_high)), 0.0001);
   const eom = EXTRAS.eom;
   const opex = EXTRAS.opex;
+
+  /**
+   * The +20% spike list, with anything that fired after the static cutoff
+   * prepended.
+   *
+   * The TILES and the LADDER above the list stay static: those are aggregates
+   * over 9,000 sessions and a handful of new events cannot move them by a
+   * figure this page prints. The LIST is different — a reader who came here
+   * the week after a spike is looking for that spike, and a list that stops
+   * three weeks ago reads as a broken page rather than a stale one.
+   */
+  const vixEvents = useMemo(() => {
+    if (!live.extraVixEvents.length) return vix.events;
+    const seen = new Set(vix.events.map((e) => e.date));
+    const extra: LiveVixEvent[] = live.extraVixEvents
+      .filter((e) => !seen.has(e.date))
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+    return [...extra, ...vix.events];
+  }, [vix.events, live.extraVixEvents]);
+
+  // Bar scale for the events table — the largest move in the list, so the
+  // longest bar is full width and every other bar is read against it.
+  const maxLowNextHigh = Math.max(...vixEvents.map((e) => Math.abs(e.low_to_next_high)), 0.0001);
+
+  /** The rows the horizontal spike chart draws: newest N, VIX pop vs SPX. */
+  const vixBarRows = useMemo(
+    () =>
+      vixEvents.slice(0, vixCount).map((e) => ({
+        key: e.date,
+        label: fmtUS(e.date),
+        sub: `VIX ${e.vix_open.toFixed(2)} → ${e.vix_high.toFixed(2)}`,
+        a: e.vix_pop,
+        b: vixMeasure === "oc" ? e.next_open_close : e.low_to_next_high,
+      })),
+    [vixEvents, vixCount, vixMeasure],
+  );
+
+  // ── Jackson Hole ─────────────────────────────────────────────────────────
+  //
+  // Computed here rather than baked into seasonalityData, because the only
+  // input that is not already in the bundle is the CALENDAR — the price data
+  // is the same YEAR_CURVES the overlay picker reads. Anchoring on the Friday
+  // keynote (the Chair's speech), the three windows are:
+  //   into  = the week ENDING the session before the speech   (T−8 → T−1)
+  //   day   = the speech session itself                       (T−1 → T)
+  //   after = the week from the speech                        (T   → T+7)
+  // All three are calendar-week offsets on the forward-filled 365-day axis, so
+  // T−8 and T+7 are the same weekday as T and land on real closes.
+  const liveYearNum = Number(YTD_LAST_DATE.slice(0, 4));
+  const jhRows = useMemo(
+    () =>
+      JACKSON_HOLE.map((e) => {
+        const curve = e.year === liveYearNum ? live.pct : yearCurve(e.year);
+        const t = calIndex(e.keynote);
+        return {
+          ...e,
+          into: curveWindow(curve, t - 8, t - 1),
+          day: curveWindow(curve, t - 1, t),
+          after: curveWindow(curve, t, t + 7),
+        };
+      }),
+    // live.pct is a new array only when the extension lands, which is exactly
+    // when this needs recomputing.
+    [live.pct, liveYearNum],
+  );
+
+  // ── Apple product events ─────────────────────────────────────────────────
+  const aapl = useDailySeries(active === "aapl" ? "AAPL" : null);
+  const appleRows = useMemo(() => {
+    if (!aapl.rows.length) return [];
+    const dates = aapl.rows.map((r) => r[0]);
+    const px = aapl.rows.map((r) => r[1]);
+    /** Index of the session the market first reacts on. */
+    const sessionFor = (iso: string): number => {
+      let lo = 0;
+      let hi = dates.length - 1;
+      let ans = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (dates[mid] <= iso) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
+      }
+      if (ans < 0) return -1;
+      // Exact hit = the keynote fell on a session, which is the normal case
+      // (Apple runs these at 10:00 PT, mid-session). Otherwise the reaction is
+      // the NEXT session, not the previous one.
+      return dates[ans] === iso ? ans : ans + 1;
+    };
+    const ret = (a: number, b: number): number | null =>
+      a < 0 || b < 0 || a >= px.length || b >= px.length ? null : px[b] / px[a] - 1;
+
+    return APPLE_EVENTS.map((ev) => {
+      const i = sessionFor(ev.date);
+      if (i < 0 || i >= px.length) {
+        return { ...ev, session: null, into: null, day: null, next: null, week: null, month: null };
+      }
+      return {
+        ...ev,
+        session: dates[i],
+        into: ret(i - 6, i - 1),   // the five sessions before the keynote
+        day: ret(i - 1, i),        // the keynote session
+        next: ret(i, i + 1),       // the morning after
+        week: ret(i, i + 5),       // the week from the keynote
+        month: ret(i, i + 21),     // ~one month from the keynote
+      };
+    });
+  }, [aapl.rows]);
+
+  const appleFiltered = useMemo(
+    () => (appleKind === "all" ? appleRows : appleRows.filter((r) => r.kind === appleKind)),
+    [appleRows, appleKind],
+  );
+
+  /** Averages by event kind — the summary the table is too long to give. */
+  const appleByKind = useMemo(() => {
+    const kinds = APPLE_EVENT_KINDS.filter((k) => k.k !== "all") as { k: AppleEventKind; label: string }[];
+    return kinds.map((k) => {
+      const rows = appleRows.filter((r) => r.kind === k.k);
+      return {
+        key: k.k,
+        label: k.label,
+        n: rows.length,
+        day: mean(rows.map((r) => r.day)) ?? 0,
+        week: mean(rows.map((r) => r.week)) ?? 0,
+        into: mean(rows.map((r) => r.into)) ?? 0,
+        hit: hitRate(rows.map((r) => r.day)),
+      };
+    });
+  }, [appleRows]);
+
+  // ── Earnings ─────────────────────────────────────────────────────────────
+  const earn = useEarnings(active === "earn");
+  const earnRows = earn.data[earnTicker] ?? [];
 
   const SECTIONS: Partial<Record<SectionKey, ReactNode>> = {
     now: (
@@ -762,6 +1320,64 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           />
         </div>
 
+        {/* ── The event chart ──────────────────────────────────────────────
+            The tiles above are averages over 284 events, which is the right
+            number and the wrong picture: an average of +0.35% hides that the
+            distribution runs from −6% to +7%. This draws the last N events
+            individually, the pop beside the session it produced, so the
+            dispersion is the first thing you see and the mean is something you
+            read INTO it rather than instead of it. */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", margin: "18px 0 10px" }}>
+          <span style={capLabel}>Last</span>
+          {[20, 50].map((n) => (
+            <button
+              key={n}
+              type="button"
+              aria-pressed={vixCount === n}
+              onClick={() => setVixCount(n)}
+              style={pillBtn(vixCount === n)}
+            >
+              {n} events
+            </button>
+          ))}
+          <span style={{ ...capLabel, marginLeft: 8 }}>SPX measure</span>
+          {([
+            { k: "oc" as const, label: "Next open → close" },
+            { k: "lnh" as const, label: "Low → next high" },
+          ]).map((m) => (
+            <button
+              key={m.k}
+              type="button"
+              aria-pressed={vixMeasure === m.k}
+              onClick={() => setVixMeasure(m.k)}
+              style={pillBtn(vixMeasure === m.k)}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        <HBars
+          rows={vixBarRows}
+          aTitle="VIX pop (prev close → high)"
+          bTitle={vixMeasure === "oc" ? "SPX next session, open → close" : "SPX low → next session high"}
+          fmtA={(v) => pctp(v, 0)}
+          fmtB={(v) => pct(v, 1)}
+          aColor={A1}
+          maxHeight={vixCount > 20 ? 520 : 460}
+        />
+
+        <div style={{ ...NOTE, marginTop: 8 }}>
+          Left is the trigger, right is what followed — same row, two scales,
+          because a VIX pop is measured in tens of percent and the SPX session
+          after it in tenths. Read the right column for its <em>sign and
+          spread</em>, not its length against the left one. On{" "}
+          <b>next open → close</b> the reaction is tradeable: you know a spike
+          happened before that open. On <b>low → next high</b> it is not — both
+          ends are ticks you can only identify afterwards, which is why that
+          version looks so much better.
+        </div>
+
         <Collapse
           label="Threshold ladder"
           hint="does the effect scale with the size of the pop?"
@@ -807,7 +1423,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
 
         <Collapse
           label="Every +20% session"
-          hint={`${n0(vix.events.length)} events, newest first`}
+          hint={`${n0(vixEvents.length)} events, newest first`}
           note={
             <>
               <strong>VIX up</strong> is the PRIOR session&apos;s close → this session&apos;s high, so an overnight gap counts. <strong>SPX next day</strong> is the
@@ -820,7 +1436,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
         >
           <DataTable
             head={["VIX date", "VIX up", "SPX next day", "Next O→C"]}
-            rows={vix.events.map((e) => [
+            rows={vixEvents.map((e) => [
               fmtUS(e.date),
               pctp(e.vix_pop, 2),
               { t: pct(e.low_to_next_high, 2), c: signColor(e.low_to_next_high), bar: Math.abs(e.low_to_next_high) / maxLowNextHigh },
@@ -831,8 +1447,369 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
 
       </SeaCard>
     ),
+    // ── Jackson Hole ───────────────────────────────────────────────────────
+    jh: (
+      <SeaCard
+        title="Jackson Hole"
+        subtitle={`Kansas City Fed symposium · ${JACKSON_HOLE[JACKSON_HOLE.length - 1].year}–${JACKSON_HOLE[0].year} · SPX around the Friday keynote`}
+        padding={20}
+      >
+        <div style={TILES}>
+          <Tile
+            label="Week into it"
+            value={pct(mean(jhRows.map((r) => r.into)))}
+            sub={`${countOf(jhRows.map((r) => r.into))} symposia · ${pctp(hitRate(jhRows.map((r) => r.into)), 0)} positive`}
+            color={signColor(mean(jhRows.map((r) => r.into)))}
+          />
+          <Tile
+            label="Keynote session"
+            value={pct(mean(jhRows.map((r) => r.day)))}
+            sub={`${pctp(hitRate(jhRows.map((r) => r.day)), 0)} positive · median day ±1%`}
+            color={signColor(mean(jhRows.map((r) => r.day)))}
+          />
+          <Tile
+            label="Week after"
+            value={pct(mean(jhRows.map((r) => r.after)))}
+            sub={`${pctp(hitRate(jhRows.map((r) => r.after)), 0)} positive · ${countOf(jhRows.map((r) => r.after))} years`}
+            color={signColor(mean(jhRows.map((r) => r.after)))}
+          />
+          <Tile
+            label="Next symposium"
+            value={fmtSpan(JACKSON_HOLE[0].start, JACKSON_HOLE[0].end)}
+            sub={`${JACKSON_HOLE[0].year} · keynote ${fmtLongDate(JACKSON_HOLE[0].keynote)}`}
+          />
+        </div>
+
+        <div style={{ marginTop: 18 }}>
+          <HBars
+            rows={jhRows.map((r) => ({
+              key: String(r.year),
+              label: `${r.year}`,
+              sub: fmtSpan(r.start, r.end),
+              a: r.day,
+              b: r.after,
+            }))}
+            aTitle="Keynote session"
+            bTitle="Week after the keynote"
+            fmtA={(v) => pct(v, 1)}
+            fmtB={(v) => pct(v, 1)}
+            maxHeight={520}
+          />
+        </div>
+
+        <Collapse
+          open
+          label="Every symposium"
+          hint="newest first · SPX, price only"
+          note={
+            <>
+              The anchor is the <strong>Friday keynote</strong> — the Chair&apos;s speech — not the
+            opening day, because that is the session the event actually lands in.{" "}
+              <em>Week into it</em> is the calendar week ending the session before the speech;{" "}
+              <em>keynote</em> is that session alone; <em>week after</em> is the speech close to the
+            following Friday&apos;s close. Two years break the pattern and are marked in the table:
+            2020 was virtual with the speech on the Thursday, and 2021 was compressed to one day.
+              <br />
+              <br />
+              What the numbers say is mostly &ldquo;not much&rdquo;. Thirty-seven observations is a
+            small sample for a one-day event, and the standard deviation of the keynote session is
+            several times its mean — which is the honest reading of every &ldquo;Jackson Hole
+            effect&rdquo; you will see quoted. The years that make the average are the ones where
+            the speech carried a policy turn (2010, 2012, 2022); the rest are noise around zero.
+            </>
+          }
+        >
+          <DataTable
+            head={["Year", "Symposium", "Keynote", "Week into", "Keynote day", "Week after", "Theme"]}
+            rows={jhRows.map((r) => [
+              { t: String(r.year) + (r.note ? " *" : ""), c: INK },
+              fmtSpan(r.start, r.end),
+              fmtLongDate(r.keynote),
+              { t: pct(r.into), c: signColor(r.into) },
+              { t: pct(r.day), c: signColor(r.day) },
+              { t: pct(r.after), c: signColor(r.after) },
+              r.theme,
+            ])}
+          />
+          <div style={{ ...NOTE, fontSize: 11.5 }}>
+            * {jhRows.filter((r) => r.note).map((r) => `${r.year}: ${r.note}`).join(" · ")}
+            {live.live ? ` · ${liveYearNum} windows use sessions through ${live.lastDate}.` : ""}
+          </div>
+        </Collapse>
+      </SeaCard>
+    ),
+
+    // ── Earnings ───────────────────────────────────────────────────────────
+    earn: (
+      <SeaCard
+        title="Earnings Reactions"
+        subtitle={`Last ${earnRows.length || 20} prints per name · the session that absorbed the report`}
+        padding={20}
+      >
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+          <span style={{ ...capLabel, marginRight: 2 }}>Ticker</span>
+          {EARNINGS_TICKERS.map((t) => (
+            <button key={t} type="button" aria-pressed={t === earnTicker} onClick={() => setEarnTicker(t)} style={pillBtn(t === earnTicker)}>
+              {t}
+            </button>
+          ))}
+        </div>
+
+        {earn.state !== "ready" ? (
+          <DataState state={earn.state} what="the earnings calendar" />
+        ) : !earnRows.length ? (
+          <DataState state="error" what={`${earnTicker}'s earnings history`} />
+        ) : (
+          <>
+            <div style={TILES}>
+              <Tile label="Prints" value={n0(earnRows.length)} sub={`${earnTicker} · most recent first`} />
+              <Tile
+                label="Average move"
+                value={pct(mean(earnRows.map((r) => (r.day == null ? null : Math.abs(r.day)))), 1)}
+                sub="absolute, reaction session close-to-close"
+              />
+              <Tile
+                label="Up on the print"
+                value={pctp(hitRate(earnRows.map((r) => r.day)), 0)}
+                sub={`${earnRows.filter((r) => (r.day ?? 0) > 0).length} of ${countOf(earnRows.map((r) => r.day))}`}
+              />
+              <Tile
+                label="Biggest / worst"
+                value={
+                  <span>
+                    <span style={{ color: UP }}>{pct(extremeOf(earnRows.map((r) => r.day), "max"), 1)}</span>
+                    <span> / </span>
+                    <span style={{ color: DOWN }}>{pct(extremeOf(earnRows.map((r) => r.day), "min"), 1)}</span>
+                  </span>
+                }
+                sub="in this window"
+              />
+            </div>
+
+            <div style={{ marginTop: 18 }}>
+              <HBars
+                rows={earnRows.map((r) => ({
+                  key: r.session || r.date,
+                  label: fmtUS(r.session || r.date),
+                  sub: r.when || "timing unknown",
+                  a: r.gap,
+                  b: r.day,
+                }))}
+                aTitle="Gap on the open"
+                bTitle="Reaction session, close-to-close"
+                fmtA={(v) => pct(v, 1)}
+                fmtB={(v) => pct(v, 1)}
+                maxHeight={460}
+              />
+            </div>
+
+            <Collapse
+              open
+              label={`${earnTicker} — every print in the window`}
+              hint="newest first"
+              note={
+                <>
+                  <strong>Which session counts.</strong> A company that reports <em>after</em> the
+                close (AMC) is absorbed by the NEXT session; one that reports <em>before</em> the
+                open (BMO) by the same session. The rows below are anchored on that reaction
+                session, not on the report date, which is why the two dates differ for most of
+                these names — the mega-caps almost all report AMC.
+                  <br />
+                  <br />
+                  <strong>Gap vs day.</strong> The gap is the open against the prior close: the part
+                you cannot trade, because it happens while the market is shut. The close-to-close
+                move is the whole reaction. When those two numbers disagree in sign, the session
+                spent the day taking back the print — which is the pattern worth looking for here,
+                and it is far more common than the headline number suggests.
+                  <br />
+                  <br />
+                  Report dates come from the public earnings calendar and prices are split-adjusted.
+                A date the calendar has wrong will put the reaction on the wrong session; cross-check
+                any row that looks extraordinary before you build anything on it.
+                </>
+              }
+            >
+              <DataTable
+                head={["Reaction session", "Reported", "When", "Gap", "Open → close", "Close-to-close"]}
+                rows={earnRows.map((r) => [
+                  fmtUS(r.session || r.date),
+                  fmtUS(r.date),
+                  r.when || "—",
+                  { t: pct(r.gap, 2), c: signColor(r.gap) },
+                  { t: pct(r.oc, 2), c: signColor(r.oc) },
+                  { t: pct(r.day, 2), c: signColor(r.day) },
+                ])}
+              />
+            </Collapse>
+          </>
+        )}
+      </SeaCard>
+    ),
+
+    // ── Apple product events ───────────────────────────────────────────────
+    aapl: (
+      <SeaCard
+        title="Apple Product Events"
+        subtitle={`${APPLE_EVENTS.length} keynotes, ${APPLE_EVENTS[APPLE_EVENTS.length - 1].date.slice(0, 4)}–${APPLE_EVENTS[0].date.slice(0, 4)} · AAPL, split-adjusted`}
+        padding={20}
+      >
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+          <span style={{ ...capLabel, marginRight: 2 }}>Event</span>
+          {APPLE_EVENT_KINDS.map((k) => (
+            <button key={k.k} type="button" aria-pressed={appleKind === k.k} onClick={() => setAppleKind(k.k)} style={pillBtn(appleKind === k.k)}>
+              {k.label}
+            </button>
+          ))}
+          <span style={{ ...capLabel, marginLeft: 8 }}>Chart</span>
+          {[20, 50].map((n) => (
+            <button key={n} type="button" aria-pressed={appleCount === n} onClick={() => setAppleCount(n)} style={pillBtn(appleCount === n)}>
+              last {n}
+            </button>
+          ))}
+        </div>
+
+        {aapl.state !== "ready" ? (
+          <DataState state={aapl.state} what="AAPL price history" />
+        ) : (
+          <>
+            <div style={TILES}>
+              <Tile label="Events" value={n0(appleFiltered.length)} sub={appleKind === "all" ? "all keynotes" : APPLE_EVENT_KINDS.find((k) => k.k === appleKind)?.label} />
+              <Tile
+                label="Week into it"
+                value={pct(mean(appleFiltered.map((r) => r.into)), 1)}
+                sub={`${pctp(hitRate(appleFiltered.map((r) => r.into)), 0)} positive`}
+                color={signColor(mean(appleFiltered.map((r) => r.into)))}
+              />
+              <Tile
+                label="Day of the event"
+                value={pct(mean(appleFiltered.map((r) => r.day)), 1)}
+                sub={`${pctp(hitRate(appleFiltered.map((r) => r.day)), 0)} positive`}
+                color={signColor(mean(appleFiltered.map((r) => r.day)))}
+              />
+              <Tile
+                label="Week after"
+                value={pct(mean(appleFiltered.map((r) => r.week)), 1)}
+                sub={`month after ${pct(mean(appleFiltered.map((r) => r.month)), 1)}`}
+                color={signColor(mean(appleFiltered.map((r) => r.week)))}
+              />
+            </div>
+
+            <div style={{ marginTop: 18 }}>
+              <HBars
+                rows={appleFiltered.slice(0, appleCount).map((r) => ({
+                  key: r.date,
+                  label: fmtUS(r.date),
+                  sub: `${r.name} · ${r.headline}`,
+                  a: r.day,
+                  b: r.week,
+                }))}
+                aTitle="Day of the keynote"
+                bTitle="Week after"
+                fmtA={(v) => pct(v, 1)}
+                fmtB={(v) => pct(v, 1)}
+                maxHeight={520}
+              />
+            </div>
+
+            <Collapse
+              label="By event type"
+              hint="which kind of keynote actually moves it"
+              note={
+                <>
+                  The September iPhone keynote is the one that gets written about and it is not
+                obviously the one that moves the stock. WWDC is a developer conference — no hardware
+                to price in most years — and the spring and fall Mac events are small enough that
+                the market has usually seen the leaks. Sample sizes here are in the teens, so treat
+                the ordering as a description of what happened rather than a prediction.
+                </>
+              }
+            >
+              <DataTable
+                head={["Event type", "n", "Week into", "Day of", "Up on the day", "Week after"]}
+                rows={appleByKind.map((k) => [
+                  k.label,
+                  k.n,
+                  { t: pct(k.into, 1), c: signColor(k.into) },
+                  { t: pct(k.day, 1), c: signColor(k.day) },
+                  pctp(k.hit, 0),
+                  { t: pct(k.week, 1), c: signColor(k.week) },
+                ])}
+              />
+            </Collapse>
+
+            <Collapse
+              label="Every keynote"
+              hint={`${appleFiltered.length} events, newest first`}
+              note={
+                <>
+                  Apple runs these at 10:00 Pacific, so the keynote is <em>inside</em> the cash
+                session — the &ldquo;day of&rdquo; column is a live reaction, not an overnight gap,
+                which is what makes this event different from an earnings print. Where a keynote
+                fell on a market holiday the reaction is measured on the next session.
+                  <br />
+                  <br />
+                  Closes are split-adjusted (7:1 in 2014, 4:1 in 2020); on raw prices those two days
+                would read as −85% and −75% and the whole table would be nonsense. Product events
+                only — no earnings, no shareholder meetings, and no press-release launches, because
+                a study of &ldquo;how does the stock react to a keynote&rdquo; is worthless if half
+                the rows are not keynotes.
+                </>
+              }
+            >
+              <DataTable
+                head={["Date", "Event", "Announced", "Week into", "Day of", "Next day", "Week after", "Month after"]}
+                rows={appleFiltered.map((r) => [
+                  fmtUS(r.date),
+                  r.name,
+                  r.headline,
+                  { t: pct(r.into, 1), c: signColor(r.into) },
+                  { t: pct(r.day, 1), c: signColor(r.day) },
+                  { t: pct(r.next, 1), c: signColor(r.next) },
+                  { t: pct(r.week, 1), c: signColor(r.week) },
+                  { t: pct(r.month, 1), c: signColor(r.month) },
+                ])}
+              />
+            </Collapse>
+          </>
+        )}
+      </SeaCard>
+    ),
+
     eom: (
-      <SeaCard title="Last Day of the Month" subtitle="Return of the final session of a month, close-to-close" padding={20}>
+      <SeaCard
+        title="Last Day of the Month"
+        subtitle={
+          isMonthEnd
+            ? "Return of the final session of a month, close-to-close · TODAY is one"
+            : "Return of the final session of a month, close-to-close"
+        }
+        padding={20}
+      >
+        {/* On the day the study is actually about, say so and open the tables.
+            The rest of the year this card is reference; on a month-end close it
+            is the thing you came for, and making a reader click twice to reach
+            it on the one day it matters is the wrong default. */}
+        {isMonthEnd ? (
+          <div
+            style={{
+              marginBottom: 14,
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: `1px solid ${HOME_THEME.cyan}66`,
+              background: `linear-gradient(180deg, ${HOME_THEME.cyan}1F, ${SEA.card2})`,
+              fontSize: 13,
+              lineHeight: 1.55,
+              color: INK,
+            }}
+          >
+            <b>Today is the last session of the month.</b> Both tables below are open by
+            default today. The base rate for this session is {bp(eom.all.avg, 1)} against
+            roughly +3 bp for an average one, {pctp(eom.all.pos_pct, 1)} positive — and
+            since 1985 that edge is {bp(eom.modern.avg, 1)}, which is most of the way to
+            nothing.
+          </div>
+        ) : null}
+
         <div style={TILES}>
           <Tile label="Every month end" value={bp(eom.all.avg, 1)} sub={`${pctp(eom.all.pos_pct, 1)} positive`} color={signColor(eom.all.avg)} />
           <Tile label="Quarter ends" value={bp(eom.quarter.avg, 1)} sub={`Mar/Jun/Sep/Dec · ${pctp(eom.quarter.pos_pct, 1)} positive`} color={signColor(eom.quarter.avg)} />
@@ -841,6 +1818,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
         </div>
 
         <Collapse
+          autoOpen={isMonthEnd}
           label="Month-end summary"
           hint="all history vs quarter ends vs modern era"
           note={
@@ -864,7 +1842,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           />
         </Collapse>
 
-        <Collapse label="Month-end by calendar month" hint="which month ends carry it">
+        <Collapse autoOpen={isMonthEnd} label="Month-end by calendar month" hint="which month ends carry it">
           <DataTable head={STAT_HEAD} rows={eom.by_month.map((m) => statRow(m.label, m))} />
         </Collapse>
 

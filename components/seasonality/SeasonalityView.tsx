@@ -79,6 +79,7 @@ import {
 } from "./sections";
 import { SeaCard } from "./Watermark";
 import { SEA } from "./seaTheme";
+import { useLiveYear } from "./useLiveYear";
 import {
   ALMANAC,
   DEFAULT_BASELINE,
@@ -86,8 +87,6 @@ import {
   SEASONAL_BASELINES,
   SEASONAL_YEAR_RETURNS,
   YEAR_META,
-  YTD_2026_PCT,
-  YTD_2026_PX,
   YTD_BASE_PX,
   YTD_LAST_DATE,
   yearCurve,
@@ -211,7 +210,13 @@ const MONTHS = [
 ];
 
 const N = 365;                          // calendar days on the axis
-const LIVE = YTD_2026_PCT.length;       // days of 2026 we actually have
+
+// NOTE: there is deliberately no module-level LIVE constant any more. The
+// number of days of the current year we have is no longer fixed at build time —
+// useLiveYear extends it after mount — so it is read per render from the hook.
+// A module const here was the bug: the chart's "not reached yet" shading, the
+// hover cutoff and the headline tiles all pinned themselves to the build date
+// and the orange line stopped moving until somebody regenerated the data.
 
 // right gutter holds the second-unit axis labels. Overlay year labels need a
 // second column out there or they land on top of the price ticks, so the
@@ -357,6 +362,11 @@ const SHELL_CSS = `
 `;
 
 export default function SeasonalityView() {
+  // The current year, extended past the build-time cutoff after mount. Static
+  // on the first render on both sides — see useLiveYear for why that matters.
+  const live = useLiveYear();
+  const LIVE = live.pct.length;
+
   const [mode, setMode] = useState<Mode>("pct");
   const [baselineKey, setBaselineKey] = useState<string>(DEFAULT_BASELINE);
   // Overlay years start EMPTY, from a constant — never seeded from the URL or
@@ -446,7 +456,7 @@ export default function SeasonalityView() {
     () => (mode === "pct" ? SEASONAL_AVG : SEASONAL_AVG.map((p) => YTD_BASE_PX * (1 + p / 100))),
     [mode, SEASONAL_AVG],
   );
-  const yearSeries = mode === "pct" ? YTD_2026_PCT : YTD_2026_PX;
+  const yearSeries = mode === "pct" ? live.pct : live.px;
 
   const padRight = overlaySeries.length ? RIGHT_GUTTER_WIDE : PAD.right;
   const innerW = Math.max(0, width - PAD.left - padRight);
@@ -487,7 +497,7 @@ export default function SeasonalityView() {
 
   // Headline numbers, all measured at the last session we have.
   const last = LIVE - 1;
-  const ytdPct = YTD_2026_PCT[last];
+  const ytdPct = live.pct[last];
   const seasonToDate = SEASONAL_AVG[last];
   const spread = ytdPct - seasonToDate;
   const seasonFull = SEASONAL_AVG[N - 1];
@@ -538,7 +548,11 @@ export default function SeasonalityView() {
         <>
       <SeaCard
         title="S&P 500 Seasonality vs 2026"
-        subtitle={`SPX cash index · ${baseline.label} average (${baseline.span}, ${baseline.years} years) · 2026 through ${dayLabel(last)}`}
+        // The cutoff is stated as a DATE, from the data, not as "today". The
+        // orange line ends at the last close we hold, and after a long weekend
+        // or a failed refresh that is not today — saying so is the difference
+        // between a page that is stale and a page that lies about it.
+        subtitle={`SPX cash index · ${baseline.label} average (${baseline.span}, ${baseline.years} years) · ${LIVE_YEAR} through ${dayLabel(last)}`}
         padding={20}
       >
         {/* Baseline window */}
@@ -974,7 +988,7 @@ export default function SeasonalityView() {
               <span style={{ color: YEAR_COLOR }}>
                 2026{" "}
                 {hover < LIVE
-                  ? `${fmtPct(YTD_2026_PCT[hover])} · SPX ${fmtPx(YTD_2026_PX[hover])}`
+                  ? `${fmtPct(live.pct[hover])} · SPX ${fmtPx(live.px[hover])}`
                   : "—"}
               </span>
               {overlaySeries.map((o) =>
@@ -986,9 +1000,9 @@ export default function SeasonalityView() {
               )}
               {hover < LIVE ? (
                 <span>
-                  Spread {fmtPct(YTD_2026_PCT[hover] - SEASONAL_AVG[hover])} ·{" "}
-                  {`${YTD_2026_PCT[hover] - SEASONAL_AVG[hover] >= 0 ? "+" : ""}${Math.round(
-                    ((YTD_2026_PCT[hover] - SEASONAL_AVG[hover]) / 100) * YTD_BASE_PX,
+                  Spread {fmtPct(live.pct[hover] - SEASONAL_AVG[hover])} ·{" "}
+                  {`${live.pct[hover] - SEASONAL_AVG[hover] >= 0 ? "+" : ""}${Math.round(
+                    ((live.pct[hover] - SEASONAL_AVG[hover]) / 100) * YTD_BASE_PX,
                   )} pts`}
                 </span>
               ) : null}
@@ -1004,7 +1018,7 @@ export default function SeasonalityView() {
           <StatTile
             label="2026 YTD"
             value={fmtPct(ytdPct)}
-            sub={`SPX ${fmtPx(YTD_2026_PX[last])}`}
+            sub={`SPX ${fmtPx(live.px[last])}`}
             color={YEAR_COLOR}
           />
           <StatTile

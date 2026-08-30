@@ -1,5 +1,57 @@
 # Changelog
 
+## 2026-08-30 - v3 Analysis: the parity check (step 4 of the port)
+
+`cbedge-v3/scripts/parity-check-analysis.mjs` + `.test.mjs`, wired into
+`npm run check` as `check:parity:analysis:self`. Same shape as the flow / chain
+/ dashboard checks: drive /app/analytics and /v3/analytics in ONE browser
+against ONE backend in the same minute, harvest the labelled values from both,
+fail on anything v2 renders and v3 does not. 120 probes.
+
+WHAT THIS ONE DOES THAT THE OTHERS DO NOT: it compares COLOURS.
+
+This page carries a requirement the other ports do not - it must render v2's
+palette, not v3's. Nothing else in the repo can enforce that. check-theme.mjs
+bans colour LITERALS; it cannot see a token that resolves to the wrong colour.
+`T.cyan` passes every scan it makes and paints #5b8cff where v2 paints #219EBC.
+So ten probes read getComputedStyle off both pages - card titles, the CB/CW/PW
+tag fills, the ink on a tag, a label, the card plate's fill and edge - and
+compare resolved pixels. A colour that is PRESENT but WRONG fails; it does not
+land in the "differs" bucket with the live ticks, because a resolved colour does
+not tick.
+
+`normColor` exists because the two sides reach the same pixel by different
+routes - v2 types rgba(), v3 goes through color-mix() - and Chrome may print
+either as rgb(), rgba() or color(srgb ...). It compares numbers, not the string
+the engine happened to choose.
+
+THE SELF-TEST DRIVES FIVE CASES, AND FOUR ARE FAILURES THAT ACTUALLY HAPPENED
+ON THIS PORT rather than invented ones:
+
+  1. faithful v3 - clean, bar the one declared departure (the earnings chip
+     logo: v3 renders the text chip v2's ChipLogo falls back to)
+  2. the page as it stood BEFORE the rebuild - Ticker Lookup, Multi Greek, Econ
+     Calendar and Initial Balance all stubs. Reports 44 losses.
+  3. Ticker Levels regressed to four hardcoded pills. Every NUMBER still
+     renders, so a text-only diff passes it - the picker is a CONTROL, and its
+     loss is invisible until you probe for the control itself. Catches it, and
+     reports nothing else, because nothing else was lost.
+  4. a v3 in v3's own palette: every value present, every label right, #5b8cff
+     where v2 is #219EBC. Asserts explicitly that the VALUE diff is clean and
+     only the colour probes fire - which is the whole argument for their
+     existence.
+  5. a grey secondary. v2 has none; "muted" there is white at an opacity, so a
+     slate label is a colour regression too.
+
+Plus a blind-probe guard: every non-optional probe must match the faithful
+fixture. A probe whose regex never matches is silently green on both sides
+forever and reports a value as "ported" that neither page has - the same class
+of false pass as a perf check measuring an untagged canvas.
+
+Step 4 of the original brief is done. The port is complete: inventory (419
+rows), logic transcribed 1:1, built against the checklist, verified
+automatically.
+
 ## 2026-08-30 - v3 check is green end to end
 
 `npm run check` passes: casing, typecheck, theme, build, budgets, ws-scope,
