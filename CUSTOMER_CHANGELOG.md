@@ -4,6 +4,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Saturday 8/29/2026
 
+* **Multi Greek (v3 preview):** now opens on the ticker the board is already on, and you can add up to three more tickers of your choice and remove them any time. Basis is OI+Volume or Volume. More strikes fit on screen, and the ladder scrolls by click-and-drag or mouse wheel.
+
+* **Terminal board (v3 preview):** you can add the same card more than once — two GEX Charts, three ladders — and while editing the layout, a dashed outline shows exactly where a card will land before you let go.
+
 * **GEX Chart (v3 preview):** switch between OI+Volume, volume-only and flow GEX, split calls and puts, add a net delta line, see the expiration in use, and turn ten key-level cards on or off.
 
 * **GEX Candles (v3 preview):** the strike rail is now just bars — all facing one direction, so sizes are easier to compare at a glance. Hover any row for the exact numbers.

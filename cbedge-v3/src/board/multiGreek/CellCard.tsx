@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@/data/api'
 import { fmtGex, type Leg } from './mgMath'
 
@@ -28,6 +29,16 @@ import { fmtGex, type Leg } from './mgMath'
 const CARD_W = 264
 /** Kept clear of the viewport edge so the card is never half off-screen. */
 const EDGE = 8
+/**
+ * Above every board tile. Board.tsx gives each tile `zIndex: 1` (50 while it is
+ * being dragged), which makes every tile its own stacking context — so a
+ * z-index set INSIDE a tile can never beat a later sibling tile, however large.
+ * That is why this card is portalled to <body>: only at the root can this value
+ * mean what it says.
+ */
+const CARD_Z = 200
+/** Card height used to keep the bottom edge on screen; see `pos` below. */
+const CARD_H = 340
 
 interface GexChange {
   vNow: number | null
@@ -130,7 +141,7 @@ export function CellCard({ ticker, strike, expiry, daysTo, call, put, netGex, x,
     // Below-right of the pointer by default; flipped back inside the viewport
     // rather than allowed to run off it.
     const left = Math.min(Math.max(EDGE, x + 14), vw - CARD_W - EDGE)
-    const top = Math.min(Math.max(EDGE, y + 14), vh - 300)
+    const top = Math.min(Math.max(EDGE, y + 14), Math.max(EDGE, vh - CARD_H - EDGE))
     return { left, top }
   }, [x, y])
 
@@ -158,12 +169,14 @@ export function CellCard({ ticker, strike, expiry, daysTo, call, put, netGex, x,
     )
   }
 
-  return (
+  if (typeof document === 'undefined') return null
+
+  const card = (
     <div
       ref={ref}
       // Fixed, not absolute: the Card this ladder lives in has overflow-hidden,
       // and an absolutely-positioned card would be clipped by it at every edge.
-      style={{ position: 'fixed', left: pos.left, top: pos.top, width: CARD_W, zIndex: 60 }}
+      style={{ position: 'fixed', left: pos.left, top: pos.top, width: CARD_W, zIndex: CARD_Z }}
       className="flex flex-col gap-2 rounded-lg border border-line bg-surface p-2.5 shadow-lg"
       onPointerDown={(e) => e.stopPropagation()}
     >
@@ -229,4 +242,10 @@ export function CellCard({ ticker, strike, expiry, daysTo, call, put, netGex, x,
       </div>
     </div>
   )
+
+  // Portalled to <body> so the card escapes the board tile's stacking context.
+  // Rendered in place it sat at z-index 60 INSIDE a tile painted at z-index 1,
+  // so the next tile in the board (the GEX chart below it) covered its bottom
+  // half. At the root there is nothing above it but a dragged tile.
+  return createPortal(card, document.body)
 }

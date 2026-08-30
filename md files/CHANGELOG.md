@@ -1,5 +1,82 @@
 # Changelog
 
+## 2026-08-30 - v3 Multi Greek: the cell card was painting behind the card below it
+
+Edited: `cbedge-v3/src/board/multiGreek/CellCard.tsx`.
+
+Clicking a GEX cell in the v3 Multi Greek ladder opened the detail card, but its
+bottom half - Net Prem, Net GEX, and all four delta rows - was covered by the
+GEX Chart tile underneath it.
+
+`position: fixed` escaped the ladder's `overflow-hidden`, which is what it was
+there for, but it did not escape the stacking context. `Board.tsx` gives every
+tile `zIndex: 1` (50 while dragged), and a positioned element with a z-index
+creates a stacking context: the card's `z-index: 60` was scoped INSIDE the
+Multi Greek tile, so it could never beat a later sibling tile no matter how big
+the number was. Equal z-index, later in the DOM, wins.
+
+Fixed by portalling the card to `document.body`, where its z-index is measured
+against the page rather than against its own tile, and raising it to 200 so a
+dragged tile at 50 stays under it. React portals still bubble events through the
+React tree, so the existing `onPointerDown` stopPropagation keeps a click inside
+the card from starting a board drag.
+
+Also: the bottom clamp used a hardcoded 300px card height. The card is ~340px,
+so a click low on the screen ran the last delta row off the viewport. Now
+clamped against the real height with the same 8px edge margin as the left/right
+clamp.
+
+## 2026-08-30 - Post Studio export: squashed screenshots and words eating their own spaces
+
+Edited: `owner-vite/src/pages/studioHtml.ts`.
+
+Three reported problems in the downloaded PNG, two causes. Both were html2canvas
+disagreeing with the browser, so the card looked right on screen and wrong in the
+file - the worst kind.
+
+**Screenshots stretched.** html2canvas does not implement `object-fit`. It draws
+an `<img>` stretched to fill its box, full stop. Proved it directly: a 4:1 image
+in a 1:1 box with `object-fit:cover` - the browser centre-crops it, html2canvas
+squashes the whole thing in. The all-tickers slot happened to match its
+screenshot's ratio so it looked fine; the core-board one did not, and got
+squeezed.
+
+Background images it does handle. So for the duration of the export each image
+layer is painted as a background sized the way object-fit actually resolves -
+`cover` takes the larger of the two scales, `contain` the smaller, times the
+layer's zoom - with `background-position` carrying object-position across, and
+the `<img>` hidden. Restored immediately after, and on the failure path too.
+
+**Words eating the space after them.** "233scoredof 404tickers", "Everymove we
+scoredthis week", the % welded onto the 4, the dot vanishing out of cbedge.net.
+
+html2canvas draws each word with `ctx.fillText` at the position the DOM measured
+for it. That only works if the canvas and the layout resolve the same font. The
+stack was `"Inter","Segoe UI",-apple-system,Helvetica,Arial,sans-serif`; Inter
+is not installed anywhere, so the DOM landed on Segoe UI while the canvas
+resolved something else, drew wider glyphs at the correct positions, and each
+word covered the gap after it. Nothing was missing - it was painted over. It
+never showed up in my container because the fallback there happens to match.
+
+Fixed by removing the guesswork: four real weights of Inter (400/600/700/800),
+Latin-subset to the characters the studio can render, embedded as `@font-face`
+data URIs under the name `InterCB`, and that is now the only family in the
+stack. Every machine draws the identical face, nothing is synthesised, and the
+canvas cannot resolve anything the layout did not. ~9KB per weight, 46KB total.
+CSP already allows it: `font-src 'self' data:`. Export also waits on
+`document.fonts.ready`, or the first render after a hard reload draws in a
+fallback.
+
+**Also:** exports render at `scale: 2` now - 3200x1800 for the 16:9 canvas -
+since these get downscaled by whatever they are posted to and the text was
+softer than it needed to be. And the Download button disables while a render is
+in flight.
+
+Verified by rendering the same card twice and stacking the results: the browser's
+own paint versus the html2canvas export, with a deliberately wrong-aspect
+screenshot in the core slot. They now match - same crop, same word spacing, same
+"82.4%". Preview at `generated/2026-08-30-post-studio-export-fixes.png`.
+
 ## 2026-08-30 - Logo 404 on owner.cbedge.net, and re-applying two fixes a rollback dropped
 
 Edited: `owner-vite/nginx.conf`, `owner-vite/src/pages/studioHtml.ts`,

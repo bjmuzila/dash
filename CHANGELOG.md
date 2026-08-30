@@ -1,5 +1,49 @@
 # Changelog
 
+## Saturday 8/29/2026 — v3 Multi Greek reworked, and the board can hold the same card twice (`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`, `cbedge-v3/src/board/{BoardPage.tsx,catalog.tsx}`, `cbedge-v3/src/design/primitives/Board.tsx`, `cbedge-v3/scripts/perf-check.mjs`, `cbedge-v3/AGENTS.md`)
+
+**v3 only — nothing in this entry touches the live v2 app at `/app/*`.**
+
+**Multi Greek opens on the board's ticker.** Panel one now reads `usePageSymbol()`
+instead of a hardcoded SPX slot, so the card can never open contradicting the rest
+of the board; typing in its box calls `setSymbol()` and moves the whole board. The
+other three slots are gone as defaults — up to three panels are ADDED by the user
+from a `＋ n/4` toolbar popover and removed with the ✕ in each header. Duplicates
+are refused in every direction, extras persist under `cb-v3-mg-extra-tickers`, and
+a pre-split `cb-v3-mg-tickers` blob is carried over (slots 2-4 become the extras).
+
+**Basis is OI+VOL and VOL.** OI-only was dropped from the switch; a stored `oi`
+falls back to OI+VOL rather than sitting on a value with no button.
+
+**A third of the card was chrome.** Column headers and the TOTAL row merged into
+one grid (three lines per column, nothing dropped), the panel header is one tight
+row with the `BOARD` badge replaced by an accent border on the ticker box, and the
+toolbar buttons shortened to `＋ n/4` and `⚙` so the card header stops wrapping at
+three columns wide.
+
+**The ladder has no scrollbar and pans by hand.** Still `overflow-y-auto` (the
+wheel is unchanged), bar hidden via `[&::-webkit-scrollbar]:hidden` plus inline
+`scrollbarWidth`/`msOverflowStyle`. Press-and-drag scrolls it, with a 4px
+threshold, pointer capture taken only once crossed, and a suppress flag consumed
+in the click CAPTURE phase so a drag ending on a cell does not open that cell.
+
+**The board can hold the same card more than once.** A grid item's `id` is now an
+INSTANCE id: the first copy keeps the bare catalog id, later copies get `#n`, and
+the catalog is read through the new `cardTypeOf()`. Every saved layout stays valid
+with no migration and `data-card-id` selectors keep resolving. "+ Add card" no
+longer removes used entries — each shows a `×n` count — and copies are numbered in
+the card header only when there is more than one. Load-time dedupe is now per
+instance id. Known: card settings are still stored per card TYPE, so two copies
+share whichever was written last across a reload (noted in `cbedge-v3/AGENTS.md`).
+
+**Editing the layout shows where a card will land.** `Board` draws a dashed
+landing slot computed with the exact release maths — the same double
+`compactBoard()` pass as `onUp` — so the outline cannot disagree with where the
+card drops, plus column guides for the duration of the gesture and a lift on the
+dragged tile. Guided, not forced: no gesture is refused. `perf-check.mjs` matches
+the GEX Candles tile by prefix so a board whose only copy is `gex-candles#2` is
+still driven.
+
 ## Saturday 8/29/2026 — v3: GEX Candles rail stripped to bars, and the GEX Chart got v2's toolbar (`cbedge-v3/src/board/gexCandles/GexRail.tsx`, `cbedge-v3/src/board/gexChart/{GexChartCard.tsx,gexChartRender.ts,values.ts,settings.ts,StatCards.tsx}`, `cbedge-v3/src/design/primitives/Controls.tsx`, `cbedge-v3/src/board/gexCandles/controls.tsx`, `cbedge-v3/src/board/chainGex.ts`, `cbedge-v3/src/board/multiGreek/mgMath.ts`, `cbedge-v3/src/contract/frames.ts`, `cbedge-v3/src/design/tokens.css`, `cbedge-v3/scripts/mock-server.mjs`)
 
 **v3 only — nothing in this entry touches the live v2 app at `/app/*`.**
