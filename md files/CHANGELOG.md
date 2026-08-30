@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-08-30 - /v3 404: theme.ts was missing nine exports the pages already imported
+
+SECOND PASS on the same 404. The check:theme fix below was real and necessary,
+but it only uncovered the next gate. Reproduced the Dockerfile's exact chain
+(`npm install` -> `check:theme` -> `build:fast`) in a clean container: theme
+passes, then `vite build` dies on the first unresolved import.
+
+`src/design/theme.ts` never exported nine names that four pages import. NOT a
+rollback - `git log` on the file shows the same 16 exports at every revision, so
+these were written against an API that was never added. That also explains the
+stale `cbedge-v3/dist/`: its newest chunk predates OptionsChain, TradersDashboard,
+Premarket and Flow entirely. **/v3 has not built since those pages landed** - the
+Dockerfile's non-fatal v3 step meant it 404'd quietly instead of failing a deploy.
+
+Added to `theme.ts`:
+
+- `MOVE_UP` / `MOVE_DOWN` - the directional pair for a % change or a wheel wedge.
+  Needed as TOKENS, not aliases: `wheelMath.ts` calls
+  `tokenRgb('--color-move-up')` by name, and a `var()` that points at another
+  var does not survive `getComputedStyle` reliably. So `--color-move-up` /
+  `--color-move-down` are now declared in `tokens.css`, carrying the same values
+  as the semantic pair. Split them the day one of the two moves.
+- `RGB`, `tokenRgb`, `rgbHex`, `mixRgb`, `isLightRgb` - the channel-level
+  counterpart to `tokenHex()`. The sector wheel blends a wedge from the panel
+  toward the move colour and then picks its ink by luminance; that needs the
+  numbers, not a string. Same cached token read underneath, so the blend still
+  tracks the token. `isLightRgb` uses Rec. 709 luma, not a channel average.
+- `CHAIN` (11 members), `GEX_POS`, `GEX_NEG`, `LEVEL_ON_SOLID` - the options
+  chain's ink. Its greys are a ladder of white opacities tuned for text sitting
+  on a saturated heat fill, shared by the matrix, the hover card and the skins.
+  `LEVEL_ON_SOLID` is `--color-app` (the darkest ground): a CB/CW/PW tag is a
+  bright solid and its label must not be translucent over it.
+
+VALUES ARE A FIRST PASS, reconstructed from the call sites - the shapes are
+forced by usage, the hues are a judgement call. The chain palette especially is
+worth an eye once /v3 loads.
+
+Verified green end to end: `check:theme` clean, `tsc --noEmit` clean,
+`vite build` builds all 17 chunks (OptionsChain, Flow, SectorWheelCard,
+TradersDashboard included).
+
+Files: `cbedge-v3/src/design/theme.ts`, `cbedge-v3/src/design/tokens.css`.
+
 ## 2026-08-30 - /v3 was 404ing: check:theme failed the deploy, and the type scale was two steps short
 
 `https://www.cbedge.net/v3` returned 404 after the last push. Nothing was wrong

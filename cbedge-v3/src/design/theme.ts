@@ -66,6 +66,14 @@ export const T = {
   flat: 'var(--color-flat)',
 } as const
 
+/**
+ * THE MOVE PAIR — the directional colour a % change, a wheel wedge or a
+ * dashboard stat is painted with. Separate tokens from T.green / T.red on
+ * purpose; see the note beside --color-move-up in tokens.css.
+ */
+export const MOVE_UP = 'var(--color-move-up)'
+export const MOVE_DOWN = 'var(--color-move-down)'
+
 /** The one card accent — v2's LIGHT_BLUE. */
 export const LIGHT_BLUE = 'var(--color-series-5)'
 
@@ -290,6 +298,101 @@ export function tokenHexAlpha(name: string, a: number): string {
   if (!c) return 'transparent'
   return `#${hexByte(c[0])}${hexByte(c[1])}${hexByte(c[2])}${hexByte(Math.max(0, Math.min(1, a)) * 255)}`
 }
+
+/**
+ * ── THE RGB FAMILY ───────────────────────────────────────────────────────────
+ * tokenHex()/tokenHexAlpha() above hand back a STRING, which is all a canvas
+ * fill needs. Anything that has to do arithmetic on a colour — the sector
+ * wheel blends a wedge from the panel toward the move colour, then picks black
+ * or white ink by luminance — needs the channels, not a string. These expose
+ * the same cached token read as a triple, so the blend still tracks the token
+ * and no component re-parses a hex by hand.
+ */
+export type RGB = Rgb
+
+/**
+ * A token's resolved channels. Pass the custom property NAME, not a var()
+ * string. Falls back to black before the stylesheet is live (jsdom, a test
+ * renderer, the first tick) for the same reason tokenHex() returns
+ * `transparent`: a wrong-but-quiet value beats a thrown render.
+ */
+export function tokenRgb(name: string): RGB {
+  return readToken(name) ?? [0, 0, 0]
+}
+
+/** `#rrggbb` for a triple. */
+export function rgbHex(c: RGB): string {
+  return `#${hexByte(c[0])}${hexByte(c[1])}${hexByte(c[2])}`
+}
+
+/** Linear blend: `t` of 0 is all `a`, 1 is all `b`. */
+export function mixRgb(a: RGB, b: RGB, t: number): RGB {
+  const k = Math.max(0, Math.min(1, t))
+  return [
+    a[0] + (b[0] - a[0]) * k,
+    a[1] + (b[1] - a[1]) * k,
+    a[2] + (b[2] - a[2]) * k,
+  ]
+}
+
+/**
+ * Is this colour light enough that dark ink reads better on it? Rec. 709
+ * luma, which tracks perceived brightness far better than a channel average —
+ * a saturated green and a saturated blue of the same average are nowhere near
+ * equally bright.
+ */
+export function isLightRgb(c: RGB): boolean {
+  return (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255 > 0.6
+}
+
+
+/**
+ * ── THE OPTIONS-CHAIN INK ─────────────────────────────────────────────────────
+ * The chain matrix is thousands of cells, and every one of them is text on a
+ * heat fill. Its greys are therefore not "muted" in the page sense — they are
+ * a ladder of white opacities tuned so a value stays legible on a saturated
+ * cell and a zero recedes without disappearing. Named here rather than typed
+ * per component so the matrix, the hover card and the heat skins agree.
+ */
+export const CHAIN = {
+  /** Strike column, non-ATM. ATM takes T.cyan at the call site. */
+  strike: alpha(T.text, 0.92),
+  /** Hover-card label. */
+  key: T.muted,
+  /** Hover-card value, un-emphasised. */
+  val: alpha(T.text, 0.88),
+  /** Default cell text, and the heat skins' ink. */
+  ink: T.text,
+  /** Empty-state copy — "no chain for this expiry". */
+  empty: T.muted,
+  /** A cell with no data, and the `·` placeholder. Recedes, stays visible. */
+  none: T.flat,
+  /** The MVC outline. A third hue on purpose — neither a wall nor a sign. */
+  mvc: T.purple,
+  /** The +/- sign glyph. */
+  signUp: T.green,
+  signDown: T.red,
+  /** Delta change. Same pair; named apart so one can move without the other. */
+  deltaUp: T.green,
+  deltaDown: T.red,
+} as const
+
+/**
+ * GEX sign colours, for a cell fill rather than a chart. These are the bubble
+ * hues the ES chart already uses, so a positive strike is the same blue in the
+ * chain as it is on the candles.
+ */
+export const GEX_POS = 'var(--color-gex-pos)'
+export const GEX_NEG = 'var(--color-gex-neg)'
+
+/**
+ * Ink for a SOLID level tag (CB gold, CW blue, PW red). Those fills are bright
+ * and the label sits directly on them, so it takes the darkest ground in the
+ * palette rather than a white at an opacity — a translucent label lets the tag
+ * read through it and stops being legible. Same reasoning as V2W's note about
+ * the ladder tags.
+ */
+export const LEVEL_ON_SOLID = 'var(--color-app)'
 
 /** Drop every cached token read. Only needed if the palette is swapped live. */
 export function clearTokenCache(): void {

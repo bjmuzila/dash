@@ -73,6 +73,12 @@
      pick a pair that survives a colourblind check before you commit.       */
   --color-up: #35c28e;
   --color-down: #e0645f;
+  /* The directional pair the traders dashboard and the sector wheel read.
+     Separate names from --color-up/--color-down on purpose: those are the UI's
+     provisional semantic pair, these are the MOVE colours (a % change, a wheel
+     wedge). Same values today; split them the day one of the two moves.      */
+  --color-move-up: #35c28e;
+  --color-move-down: #e0645f;
   --color-flat: #7a828d;
   --color-accent: #5b8cff;
   --color-warn: #e0a44a;
