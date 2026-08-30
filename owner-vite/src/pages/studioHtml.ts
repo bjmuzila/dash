@@ -348,8 +348,10 @@ function snapTargets(exclude){
   });
   return {xs:xs,ys:ys};
 }
-// Smallest correction that puts any of `vals` (the moving box's edges/centre)
-// onto any candidate. Returns {d:offset to apply, at:the line to draw}.
+// Smallest correction that puts any of the moving box's edges/centres onto any
+// candidate. Returns {d:offset to apply, at:[lines to draw]}.
+// NOTE: no backticks anywhere below — this whole document is inside a
+// String.raw template literal and one would end it mid-file.
 function bestSnap(cands,vals,tol){
   var best=null;
   vals.forEach(function(v){
@@ -1280,7 +1282,7 @@ var TPL={
   ]},
 
   /* Weekend estimated-moves scoreboard — the Saturday "here is how the week
-     graded" post, ending in the sign-up ask. Same deal as `alerts`: two image
+     graded" post, ending in the sign-up ask. Same deal as the alerts card: two image
      slots, everything else rendered, and Auto-fill reads the numbers off the
      shots into the [data-k] layers.
 

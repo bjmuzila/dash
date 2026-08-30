@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-08-30 - Deploy fix: a backtick in a comment ended the studio's template literal
+
+Edited: `owner-vite/src/pages/studioHtml.ts`.
+
+The VPS build failed at `owners build 6/6`:
+
+```
+/app/src/pages/studioHtml.ts:351:41: ERROR: Expected ";" but found "vals"
+```
+
+My fault, and worth writing down because the trap is not obvious. The entire
+studio document is one `String.raw` template literal, so a backtick ANYWHERE in
+it - including inside a `//` comment in the studio's own JavaScript - closes the
+literal early and everything after it becomes broken TypeScript. Two comments I
+added yesterday used backticks for code-quoting out of habit: one on `bestSnap`,
+one in the emweek template's header. Both are now plain text, with a note at the
+first one saying why.
+
+Why my checks missed it: I was validating with
+`src.match(/String\.raw\`([\s\S]*)\`;/)`, which is greedy - it matched from the
+first backtick all the way to the last one in the file, so the stray ticks in
+the middle were swallowed and the extracted HTML looked fine. The check could
+not see the bug it was supposed to catch.
+
+Replaced with `verify.mjs`, which runs what the build actually runs:
+
+1. `esbuild.transform(src, {loader:'ts'})` - the exact step that failed, so a
+   syntax error surfaces here instead of on the VPS.
+2. Backtick count must be exactly 2, and `${` must not appear at all - the two
+   ways a String.raw document can be broken from the inside.
+3. Every inline `<script>` still parses.
+
+All four pass, and a browser smoke test after the fix loads clean: 16 templates,
+28 FX buttons, the keyed logo, and emweek rendering 26 layers with FX and a 4px
+border, no page errors.
+
+Nothing but the two comments changed - no behaviour touched. Rerun the deploy.
+
 ## 2026-08-30 - v3 build fix: isAutoBucket has to be a type predicate
 
 Edited: `cbedge-v3/src/board/gexCandles/settings.ts`.
