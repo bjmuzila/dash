@@ -2,6 +2,12 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Sunday 8/30/2026
+
+* **Multi Greek (v3 preview):** the strike detail popup no longer gets covered by the card below it, the settings panel opens fully instead of running off the edge of a narrow card, and the ticker box is now plain text you click to change — freeing up space for the ladder.
+
+* **GEX Chart (v3 preview):** the key-level cards are now one on/off button instead of ten separate switches.
+
 ## Saturday 8/29/2026
 
 * **Multi Greek (v3 preview):** now opens on the ticker the board is already on, and you can add up to three more tickers of your choice and remove them any time. Basis is OI+Volume or Volume. More strikes fit on screen, and the ladder scrolls by click-and-drag or mouse wheel.

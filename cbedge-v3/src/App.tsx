@@ -19,6 +19,18 @@ import Home from '@/pages/Home'
 
 const PerfOverlay = import.meta.env.DEV ? lazy(() => import('@/dev/PerfOverlay')) : null
 
+// Every page below is lazy() — see rule 1 above. The chunk names fall out of
+// the file names, which is what makes an over-budget route legible in
+// check-budgets.mjs output.
+const TradersDashboard = lazy(() => import('@/pages/TradersDashboard'))
+const Premarket = lazy(() => import('@/pages/Premarket'))
+const OptionsChain = lazy(() => import('@/pages/OptionsChain'))
+const Analysis = lazy(() => import('@/pages/Analysis'))
+const Flow = lazy(() => import('@/pages/Flow'))
+const Scanner = lazy(() => import('@/pages/Scanner'))
+const Journal = lazy(() => import('@/pages/Journal'))
+const TestLab = lazy(() => import('@/pages/TestLab'))
+
 export default function App() {
   return (
     <BrowserRouter basename="/v3">
@@ -32,6 +44,17 @@ export default function App() {
                   3. the page itself in src/pages/
                   4. app/v3/<name>/route.ts in the v2 repo (serveSpaShell)
                 Miss #4 and the page works in-app but 404s on a hard refresh. */}
+            {/* Paths match v2's /app/* routes exactly, so a bookmark, a doc
+                link or a habit transfers by swapping one path segment. That is
+                also why Journal is at /trading and Test Lab at /test. */}
+            <Route path="/traders-dashboard" element={<TradersDashboard />} />
+            <Route path="/premarket" element={<Premarket />} />
+            <Route path="/options-chain" element={<OptionsChain />} />
+            <Route path="/analytics" element={<Analysis />} />
+            <Route path="/flow" element={<Flow />} />
+            <Route path="/scanner" element={<Scanner />} />
+            <Route path="/trading" element={<Journal />} />
+            <Route path="/test" element={<TestLab />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

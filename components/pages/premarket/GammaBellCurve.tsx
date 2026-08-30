@@ -16,8 +16,8 @@
  * GEX on the main axis with the mass as an overlay. Two cards of the same board
  * at half width each read worse than one at full width, and the second card's
  * bottom pane was already here — so it was removed and its three KPI tiles
- * (center of mass, net GEX over the window, total gamma mass) were folded into
- * this card's strip. The shared math still lives in `gammaChartKit.ts`, which
+ * (center of mass, net GEX, total gamma mass) were folded into this card's
+ * strip. The shared math still lives in `gammaChartKit.ts`, which
  * is also where a future second view would take it from.
  *
  * ── WHY LEAST SQUARES AND NOT THE MOMENT FIT ────────────────────────────────
@@ -32,6 +32,11 @@
  * ── PAN / ZOOM ──────────────────────────────────────────────────────────────
  * Wheel zooms cursor-anchored, drag pans, a drag in the left gutter scales both
  * panes vertically, double-click resets. GexChart's constants, via the kit.
+ *
+ * THE WINDOW IS A VIEW, NOT AN INPUT. All three fits and all six KPI tiles are
+ * computed over the whole ±band this card reads, so panning and zooming cannot
+ * change what the card is claiming — see the note on `fit`. Only the bars, the
+ * y-scales and the bar width come from what is on screen.
  *
  * ── SCALES ──────────────────────────────────────────────────────────────────
  * The two panes have SEPARATE y scales and that is deliberate: mass is always
@@ -244,23 +249,51 @@ export default function GammaBellCurve({
   }, [wide, k0, k1, gridStep]);
   const binsIn = useMemo(() => binsAll.filter((b) => b.k >= k0 && b.k <= k1), [binsAll, k0, k1]);
 
-  // ── the fit, on what is inside the window ─────────────────────────────────
+  /**
+   * THE WHOLE BOARD, independent of the window. This is what the fit is
+   * computed on — see below. `binsAll` is not it: that one is still cut to the
+   * view (plus two strikes of bleed for the bars at the edges), so it moves
+   * when the view moves.
+   */
+  const binsFull = useMemo<Bin[]>(() => (wide.length ? foldBins(wide) : []), [wide]);
+
+  /**
+   * ── THE FIT IS ON THE WHOLE BOARD, NOT ON THE WINDOW ──────────────────────
+   *
+   * It used to be fitted to `binsIn` — whatever was inside the zoom/pan window
+   * — and that made the bell a function of where you happened to be looking.
+   * Pan two strikes right and the peak walked right with you; zoom into the
+   * call side and the curve recentred there and reported a σ off the half of
+   * the board still on screen. The bell is supposed to say where this board's
+   * gamma sits; a curve that re-derives itself from the crop says only where
+   * you scrolled to, and every number in the KPI strip moved with it.
+   *
+   * So the fit, its σ, its centre of mass, the mass-inside-1σ share and both
+   * totals are all computed once over the full ±band this card reads. Panning
+   * and zooming are now purely a VIEW over a fixed model: the curve stays glued
+   * to the strikes it was fitted to, the tiles hold still, and moving the chart
+   * cannot change what the card is claiming.
+   *
+   * (The bars, the y-scales and the bar width still come from the window —
+   * those are drawing decisions about what is on screen, not claims about the
+   * board.)
+   */
   const fit = useMemo(() => {
-    const g = lsqGaussian(binsIn);
+    const g = lsqGaussian(binsFull);
     if (!g) return null;
     // The MOMENT centre is kept alongside the fitted peak on purpose. They are
     // different questions — "where would you draw the bell" vs "where does the
     // dollar-weighted mass actually sit" — and on a board with a fat wing they
     // separate. Two tiles, both labelled, neither pretending to be the other.
-    const m = moments(binsIn);
+    const m = moments(binsFull);
     return {
       ...g,
       com: m ? m.mu : g.mu,
-      insidePct: massInside(binsIn, g.mu, g.sigma),
-      totalMass: binsIn.reduce((s, b) => s + b.mass, 0),
-      netTotal: binsIn.reduce((s, b) => s + b.net, 0),
+      insidePct: massInside(binsFull, g.mu, g.sigma),
+      totalMass: binsFull.reduce((s, b) => s + b.mass, 0),
+      netTotal: binsFull.reduce((s, b) => s + b.net, 0),
     };
-  }, [binsIn]);
+  }, [binsFull]);
 
   /**
    * ONE BELL PER SIDE, on the net pane.
@@ -280,11 +313,16 @@ export default function GammaBellCurve({
    * Under five bars a side gets no curve at all rather than a fitted line
    * through three points: that is `lsqGaussian`'s own floor before it falls
    * back to the moment fit, and on a one-sided 0DTE board it fires often.
+   *
+   * On `binsFull` for the same reason the mass fit is — and the effect was
+   * worse here, because each side has fewer bars to begin with: a window that
+   * cropped the long block down to four strikes did not just move its bell, it
+   * deleted it.
    */
   const sideFits = useMemo(() => {
     const sideOf = (sign: 1 | -1) => {
-      if (!binsIn.length) return null;
-      const rows: Bin[] = binsIn
+      if (!binsFull.length) return null;
+      const rows: Bin[] = binsFull
         .map((b) => ({ k: b.k, net: b.net, mass: Math.max(0, sign * b.net) }))
         .filter((b) => b.mass > 0);
       if (rows.length < 5) return null;
@@ -293,7 +331,7 @@ export default function GammaBellCurve({
       return { ...g, total: rows.reduce((acc, b) => acc + b.mass, 0) };
     };
     return { long: sideOf(1), short: sideOf(-1) };
-  }, [binsIn]);
+  }, [binsFull]);
 
   // ── scales ────────────────────────────────────────────────────────────────
   const geo = useMemo(() => {
@@ -304,7 +342,16 @@ export default function GammaBellCurve({
     // below it, which is the interesting case), so the pane is scaled to
     // whichever is larger — clipping the fit would hide exactly the mismatch
     // this card exists to show.
-    const maxMass = Math.max(...binsIn.map((b) => b.mass), fit.a, 1);
+    //
+    // ONLY WHEN THE PEAK IS ON SCREEN, though. The fit is now over the whole
+    // board, so its amplitude is the board's peak — and letting that set the
+    // scale while you are zoomed into a wing would flatten the wing's bars
+    // against the floor to leave headroom for a hump nobody can see. In view,
+    // the fit still gets its room; out of view, the bars own the pane and the
+    // curve simply runs off the top, which is what "you are looking at the
+    // tail" should look like.
+    const peakInView = fit.mu >= k0 && fit.mu <= k1;
+    const maxMass = Math.max(...binsIn.map((b) => b.mass), peakInView ? fit.a : 0, 1);
     const massPx = (topH / maxMass) * yScale;
     const yTop = (m: number) => topY1 - m * massPx;
 
@@ -516,14 +563,16 @@ export default function GammaBellCurve({
         </div>
         {/* The three below came off the net-GEX card when it was removed. They
             describe the BOARD rather than the fit, which is why they sit as
-            their own run of tiles instead of being mixed into the first three. */}
+            their own run of tiles instead of being mixed into the first three.
+            Like the fit, they are over the whole ±band this card reads — none
+            of the six tiles changes when the window does. */}
         <div className="gd-kpi">
           <div className="n">Center of mass</div>
           <div className="v">{nfp(com)}</div>
           <div className="m">{com >= spot ? "+" : "−"}{nfp(Math.abs(com - spot))} vs spot</div>
         </div>
         <div className="gd-kpi">
-          <div className="n">Net GEX, window</div>
+          <div className="n">Net GEX, board</div>
           <div className={`v ${netTotal >= 0 ? "chg-pos" : "chg-neg"}`}>{fmtB(netTotal)}</div>
           <div className="m">{netTotal >= 0 ? "dealers dampen" : "dealers amplify"}</div>
         </div>

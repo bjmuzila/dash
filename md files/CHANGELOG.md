@@ -1,5 +1,78 @@
 # Changelog
 
+## 2026-08-30 - v3: eight customer pages, the account menu, and the owner gate
+
+Added to `cbedge-v3/`: `src/pages/TradersDashboard.tsx`, `Premarket.tsx`,
+`OptionsChain.tsx`, `Analysis.tsx`, `Flow.tsx`, `Scanner.tsx`, `Journal.tsx`,
+`TestLab.tsx`; `src/shell/UserMenu.tsx`; `src/data/auth.tsx`.
+Edited: `cbedge-v3/src/App.tsx`, `cbedge-v3/src/shell/Shell.tsx`.
+Added to the v2 repo: `app/v3/<name>/route.ts` for all eight.
+
+v3 had one page (the Home board) and a rail of dimmed icons. These eight are the
+v2 customer pages rebuilt on v3's primitives and tokens, at the same paths v2
+uses (`/v3/traders-dashboard`, `/premarket`, `/options-chain`, `/analytics`,
+`/flow`, `/scanner`, `/trading`, `/test`), so a bookmark or a habit transfers by
+swapping one path segment. All four registration steps from cbedge-v3/AGENTS.md
+are done for each - the page, the `lazy()` route, the NAV entry (comingSoon
+flipped off, with prefetch URLs), and the Next shell route that stops a hard
+refresh 404ing.
+
+Not a copy of v2's code: nothing imports from the Next tree, no colour literal
+appears outside `tokens.css`, no page touches the socket (frames come through
+`useField`/`useFrame`), and every route fires its REST reads in parallel at entry
+through `useQuery`. Same endpoints as v2 in every case.
+
+Where a v2 section is a large bespoke renderer - the premarket bell curve, the
+options-chain heat matrix, Flow's net-drift canvas, the Journal calendar/leaks/
+clock heat maps, most Scanner and Test Lab tab bodies - the section renders as a
+real Card with its real title, a one-line note, and a `TODO(v3):` naming the v2
+symbol still to port. Nothing is faked and nothing is silently dropped; what is
+wired is genuinely wired.
+
+The toolbar's placeholder "B" avatar is now the real account menu, same rows as
+v2's `UserMenu`: display name and email, change password, Stripe portal, Discord
+connect/disconnect, Site Guide, What's New, My Tickets with the polled unread
+badge and its avatar dot, the legal/support links, sign out. Every one of them is
+a native `<a>`, because the router runs with `basename="/v3"` and a `<Link>` to
+`/docs` would resolve to `/v3/docs` and hit NotFound - the same bug v2's UserMenu
+carries three separate comments about.
+
+Owner gating: the "Owner" entry only renders for the owner. `src/data/auth.tsx`
+is v3's own read of `/api/auth/me` (the shared httpOnly session cookie, not a v2
+import) and treats the server's `is_owner` claim OR a match against
+`VITE_OWNER_USER_ID` as owner, the same rule as v2's `useIsOwner`. That is CHROME
+only - `middleware.ts` already hard-blocks `/owner*` and, for now, the whole of
+`/v3*`, and `OwnerGuard` gates the owner layout server-side. A hidden menu item
+is not a permission.
+
+## 2026-08-29 - Gamma Bell Curve: the fit stops following the window
+
+Edited: `components/pages/premarket/GammaBellCurve.tsx`.
+
+All three bells were fitted to `binsIn` - whatever was inside the zoom/pan window
+- so the curve was a function of where you happened to be looking. Pan two strikes
+right and the peak walked right with you; zoom into the call side and the bell
+recentred there and printed a sigma off the half of the board still on screen. The
+KPI tiles moved with it.
+
+The fit, its sigma, the centre of mass, mass-inside-1-sigma and both totals are
+now computed once over `binsFull` - the whole +/- band this card reads, folded
+independently of k0/k1. Panning and zooming are a VIEW over a fixed model: the
+bell stays glued to the strikes it was fitted to and none of the six tiles moves.
+"Net GEX, window" is now "Net GEX, board", because that is what it is.
+
+The two side bells moved to the full board too, where the bug was worse: each side
+has fewer bars to start with, so a window that cropped the long block to four
+strikes did not move its bell, it deleted it (five-bar floor).
+
+Bars, y-scales and bar width still come from the window - those are drawing
+decisions about what is on screen, not claims about the board. One guard follows
+from that: the mass pane only reserves headroom for the fit's amplitude when the
+fit's peak is IN VIEW. Letting a board-wide peak set the scale while you are
+zoomed into a wing would flatten the wing's bars to leave room for a hump nobody
+can see; out of view the curve just runs off the top, which is what looking at the
+tail should look like.
+
 ## 2026-08-30 - Post Studio: the logo is inlined, so there is no path left to break
 
 Edited: `owner-vite/src/pages/studioHtml.ts`.

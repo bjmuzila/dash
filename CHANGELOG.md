@@ -1,5 +1,49 @@
 # Changelog
 
+## Sunday 8/30/2026 — v3 popover/cell-card stacking, GEX chart stat row simplified, Multi Greek ticker input (`cbedge-v3/src/board/multiGreek/{CellCard.tsx,MultiGreekCard.tsx}`, `cbedge-v3/src/design/primitives/Controls.tsx`, `cbedge-v3/src/board/gexChart/{GexChartCard.tsx,StatCards.tsx,settings.ts}`)
+
+**v3 only — nothing in this entry touches the live v2 app at `/app/*`.**
+
+**The Multi Greek cell card was painting behind the card below it.** `CellCard`
+was `position: fixed` at `z-index: 60`, rendered inline inside the Multi Greek
+tile. `Board.tsx` gives every tile `zIndex: 1`, which makes the tile its own
+stacking context — so the card's z-index was scoped to that tile and the next
+tile in the board (the GEX Chart) covered its bottom half. Now portalled to
+`document.body` at `z-index: 200`, where the number means what it says. The
+bottom viewport clamp also used a hardcoded 300px card height against a ~340px
+card; clamped against `CARD_H` with the same 8px margin as the left/right clamp.
+
+**Popovers were clipped by their own card.** `Popover` in
+`design/primitives/Controls.tsx` was an `absolute` child of the trigger's
+wrapper, so the Multi Greek cog panel on a three-column card lost its whole left
+edge — section headings and the first half of every control — to the Card's
+`overflow-hidden` plus the same tile stacking context. It now portals to
+`<body>` and positions in viewport coordinates: aligned to the trigger's
+`offsetParent` (a zero-size anchor span stays behind so that still resolves),
+clamped horizontally, flipped above the trigger when there is more room up than
+down, and given the remaining height as a `max-height` with its own scroll.
+`z-index: 250`, above the tiles and above `CellCard`. Shared primitive, so the
+fix lands on every v3 popover — the symbol picker, the dropdowns, the Add-panel
+box.
+
+**GEX Chart stat cards are all-or-nothing.** The `⚙ Cards` cog held eleven
+controls: a row on/off, an all/none, and ten per-card chips. The row shares its
+width evenly between tiles, so hiding one only widened the other nine, and a
+stored subset meant no two boards drew the same row. Replaced with a single
+`CARDS` chip in the toolbar. `GexChartSettings.cards` and `STAT_KEYS` are
+deleted, `cardsOn` is the whole setting, and `StatCards` lost its `enabled`
+prop. A stored blob still carrying a `cards` map is ignored rather than
+migrated — `coerce()` does not read the key and the next save drops it.
+
+**Multi Greek's ticker box is text until you click it.** Each panel's ticker was
+a permanent 76px bordered input — on a three-column panel, wider than the strike
+rail and the tallest thing in the header, for three characters that change once
+a session. Bare text now, sized to the symbol; clicking swaps in a focused,
+selected input with an accent underline instead of a box (Enter/blur commits,
+Escape reverts). Header padding drops to `py-px`. The board's own panel keeps
+the accent colour on the text rather than on a border; an added panel is plain
+and already carries the ✕ that panel one does not have.
+
 ## Saturday 8/29/2026 — v3 Multi Greek reworked, and the board can hold the same card twice (`cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx`, `cbedge-v3/src/board/{BoardPage.tsx,catalog.tsx}`, `cbedge-v3/src/design/primitives/Board.tsx`, `cbedge-v3/scripts/perf-check.mjs`, `cbedge-v3/AGENTS.md`)
 
 **v3 only — nothing in this entry touches the live v2 app at `/app/*`.**

@@ -2,7 +2,9 @@ import type { DragEvent as ReactDragEvent, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { preload } from '@/data/api'
+import { AuthProvider } from '@/data/auth'
 import { PAGE_TICKER_RE, PageSymbolProvider, usePageSymbol } from '@/data/symbol'
+import { UserMenu } from '@/shell/UserMenu'
 
 // The persistent frame: mounts once and never unmounts, so the socket, the
 // store and any dock state survive navigation. Routes render inside it.
@@ -36,19 +38,24 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   { to: '/', label: 'Home', icon: '🏠' },
   { to: '/mult-greek', label: 'Multi Greek', icon: '🧮', comingSoon: true },
-  { to: '/traders-dashboard', label: 'Traders Dash', icon: '📊', comingSoon: true },
-  { to: '/premarket', label: 'Premarket', icon: '🌅', comingSoon: true },
+  {
+    to: '/traders-dashboard',
+    label: 'Traders Dash',
+    icon: '📊',
+    prefetch: ['/api/traders-dashboard/overview'],
+  },
+  { to: '/premarket', label: 'Premarket', icon: '🌅', prefetch: ['/api/scanner/market-quality'] },
   { to: '/board', label: 'Board', icon: '🧩', comingSoon: true },
-  { to: '/options-chain', label: 'Options Chain', icon: '⛓️', comingSoon: true },
+  { to: '/options-chain', label: 'Options Chain', icon: '⛓️', prefetch: ['/api/expirations?ticker=SPX'] },
   { to: '/em', label: 'Est. Moves', icon: '↔️', comingSoon: true },
-  { to: '/analytics', label: 'Analysis', icon: '📈', comingSoon: true },
+  { to: '/analytics', label: 'Analysis', icon: '📈', prefetch: ['/api/premarket-summary'] },
   { to: '/replay', label: 'Replay', icon: '⏱️', comingSoon: true },
-  { to: '/flow', label: 'Flow', icon: '🌊', comingSoon: true },
+  { to: '/flow', label: 'Flow', icon: '🌊' },
   { to: '/es-candles', label: 'ES Candles', icon: '🕯️', comingSoon: true },
-  { to: '/scanner', label: 'Scanner', icon: '🔍', comingSoon: true },
+  { to: '/scanner', label: 'Scanner', icon: '🔍', prefetch: ['/api/far-cb-tickers'] },
   { to: '/ict', label: 'ICT', icon: '🎯', comingSoon: true },
-  { to: '/test', label: 'Test Lab', icon: '⚗️', comingSoon: true },
-  { to: '/trading', label: 'Journal', icon: '📓', comingSoon: true },
+  { to: '/test', label: 'Test Lab', icon: '⚗️' },
+  { to: '/trading', label: 'Journal', icon: '📓', prefetch: ['/api/journal'] },
 ]
 
 function Logo() {
@@ -257,29 +264,31 @@ function Toolbar() {
         className="w-52 shrink rounded-full border border-line bg-surface px-3 py-1 text-xs uppercase text-fg outline-none placeholder:normal-case placeholder:text-muted focus:border-accent"
       />
       <EtClock />
-      {/* Account — decorative placeholder until v3 has its own auth/user menu. */}
-      <div
-        title="Account — coming soon"
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-raised text-xs font-bold text-fg"
-      >
-        B
-      </div>
+      {/* The account dropdown — same rows as v2's UserMenu, on v3 tokens. The
+          Owner entry inside is owner-gated (chrome only; middleware.ts is the
+          real gate). See shell/UserMenu.tsx. */}
+      <UserMenu />
     </header>
   )
 }
 
 export function Shell({ children }: { children: ReactNode }) {
-  // The provider wraps BOTH the toolbar and the page: the search sets the
-  // symbol and the cards read it, and they have to be looking at one value.
+  // Two providers, both above the toolbar AND the page:
+  //   PageSymbolProvider — the search sets the symbol and the cards read it,
+  //     and they have to be looking at one value.
+  //   AuthProvider — one /api/auth/me read for the whole session. The account
+  //     menu needs it, and so does anything that draws owner-only chrome.
   return (
-    <PageSymbolProvider>
-      <div className="cb-viewport flex overflow-hidden bg-bg text-fg">
-        <Rail />
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <Toolbar />
-          {children}
+    <AuthProvider>
+      <PageSymbolProvider>
+        <div className="cb-viewport flex overflow-hidden bg-bg text-fg">
+          <Rail />
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <Toolbar />
+            {children}
+          </div>
         </div>
-      </div>
-    </PageSymbolProvider>
+      </PageSymbolProvider>
+    </AuthProvider>
   )
 }
