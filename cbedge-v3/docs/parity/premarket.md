@@ -888,3 +888,25 @@ Fallback view rendered when the picked past date has **no `premarket_freeze` cap
 This banner is the fallback's explicit acknowledgment of every PostMarketTab panel it does **not** attempt to reproduce: Section 3's Written-vs-Traded and Wall Migration-adjacent detail beyond the ladder table, Section 4's Positioned-vs-Written split, Section 5 (Tomorrow's Map) in its entirety, and Section 6's Premium panel. HistoricalRecap's Level-accuracy and "Auto-read" journal stat (PostMarketTab Section 6) also have no counterpart here.
 
 ---
+
+---
+
+# Deliberate divergences from v2
+
+Seven inconsistencies surfaced while writing this inventory. Five were bugs and
+are fixed in v3; two turned out to be correct and are now commented in the code
+so nobody "fixes" them later. v2 is untouched in every case — these are v3
+behaviours, and the rows above describe v2's, so this section is the diff.
+
+| # | Where | v2 behaviour | v3 behaviour | Why |
+|---|---|---|---|---|
+| 1 | Ladder axis labels (`GexProfile`) | `FLIP` printed at `kDp` (strike decimals), `SPOT` at `pxDp` (price decimals) | Both at `pxDp`; every other flip readout on the page moved to `pxDp` too | The gamma flip is an INTERPOLATED price, not a listed strike — `findGEXFlip` keeps a tenth of a point and `kDp` threw it away. On SPX both constants are 0 so nothing moves; on a sub-$1000 name with dollar strikes the flip printed "49" for 48.83 beside a SPOT label reading "48.75" on the same axis. |
+| 2 | "Leaves at the bell" tile | Rendered in plain text while its two sibling tiles carried `chg-pos` / `chg-neg` | Same sign colour as its siblings | It is the same kind of number they are — a signed net-gamma figure whose sign is the read. A front tranche leaving NEGATIVE gamma behind looked neutral next to two coloured tiles. |
+| 3 | Catalysts pills | `High → hot`, `Medium → warn`, everything else → bare pill, so a **President** entry looked like a Low-impact housing print | `President → vio` (violet), via the new `.pill.vio` | The impact ramp has carried `--color-impact-president` the whole time and nothing read it. Holiday and Low keep the bare pill — those genuinely are the quiet ones. |
+| 4 | `HistoricalRecap` section 4 | `useIntradayLadder(true, date, date)` — the 4th argument (`symbol`) omitted, so the hook's `"SPX"` default drew SPX's ladder under whatever ticker was picked | `useIntradayLadder(true, date, date, symbol)`, and the section's heading and all three empty states now name the symbol | The one section that read the picker WRONG. Sections 1 and 2 are SPX-pinned by their stores and say so in the banner, which is a different and honest thing — the banner now distinguishes the two cases instead of claiming everything below is SPX. |
+| 5 | Formatters | `Premarket.tsx` and `PostMarketTab.tsx` declared byte-identical copies; `HistoricalRecap.tsx` had drifted in four ways — `fmtUsd` at 1dp for millions and never a `+`, `fmtPts` with no `" pts"` suffix, `fmtPx` with no `v <= 0` guard, `pillClass` losing the violet on `vio` | One `pages/premarket/format.ts`, imported by all three | The same net-gamma figure changed its precision AND its sign convention depending on which tab you were on. Nobody decided that; it is what three copies of twenty lines turn into. |
+| 6 | Footer `spot` / `ES` | Hardcoded 2dp, ignoring `pxDp` | **Unchanged** — comment added | Not a bug. spot, ES and basis are one arithmetic line there (`basis = ES − spot`) and the point of a diagnostic footer is that it adds up. At `pxDp` the SPX row would read `6799 · ES 6843.19 · basis +45.60`, which does not. |
+| 7 | Overnight `VIX` change | Coloured red on a RISE, green on a FALL — inverted against every other change row on the panel | **Unchanged** — comment added | Not a bug. Colour on this page means "good or bad for the book", not "the number went up", and a VIX spike is the tape getting worse. |
+
+Rows 1–5 mean the checklist above is the v2 spec, not the v3 one, in those five
+places. Everything else on this page is 1:1.

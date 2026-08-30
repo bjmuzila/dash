@@ -58,14 +58,17 @@ import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../
  * --------
  * The desktop card's Overlays menu is a portal-positioned dropdown with seven
  * chips and five slider sub-panels; that is not a phone control. This is a
- * bottom sheet with the three things worth having at 390px:
+ * bottom sheet with the four things worth having at 390px:
  *
+ *   - SESSION, RTH or ETH. ETH is the default and is what this page always
+ *     showed; RTH filters the rolling window to the cash session (see
+ *     SessionMode).
  *   - a SIDE PANEL choice (none / GEX rail / 0DTE ladder). One at a time, not
  *     two toggles: each costs 46px of a 390px screen, and the desktop's own
  *     geometry table treats the gutter as a single-choice slot for the same
  *     reason.
- *   - BUBBLES — the per-minute GEX trail. ON by default, with a size-variance
- *     slider (see BUBBLE_SCALE_*).
+ *   - BUBBLES — the per-minute GEX trail, over the last BUBBLE_DAYS sessions.
+ *     ON by default, with a size-variance slider (see BUBBLE_SCALE_*).
  *   - the γ level lines.
  *
  * The GEX rail is the desktop `EsGexRail` component, imported unchanged: it is
@@ -115,6 +118,35 @@ function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
 }
 
+/**
+ * RTH / ETH.
+ *
+ * The bars this page holds are a rolling ~30h window — the overnight tape and
+ * the cash session together — so it was always ETH and there was no way to say
+ * otherwise. RTH filters to the New York cash session, 09:30-16:00 ET.
+ *
+ * Filtered on the bar's own ET clock string (`slotKey` is "YYYY-MM-DDTHH:MM" in
+ * ET, `time` is the same "HH:MM" and is the fallback — the pairing `slotTimeOf`
+ * in useEsCandles uses), NOT by converting the timestamp: a per-bar Intl
+ * conversion over a few thousand bars would re-run on every coalesced publish,
+ * four times a second while the tape is live, to recover a string the row is
+ * already carrying.
+ */
+type SessionMode = "rth" | "eth";
+
+const SESSIONS: { id: SessionMode; label: string }[] = [
+  { id: "eth", label: "ETH" },
+  { id: "rth", label: "RTH" },
+];
+
+const RTH_OPEN = "09:30";
+const RTH_CLOSE = "16:00";
+
+/** The bar's ET wall-clock "HH:MM", or "" when the row carries neither field. */
+function etClockOf(r: { slotKey?: string; time?: string }): string {
+  return (r.slotKey ?? "").slice(11, 16) || (r.time ?? "").slice(0, 5);
+}
+
 type SidePanel = "none" | "rail" | "chain";
 
 const SIDE_PANELS: { id: SidePanel; label: string }[] = [
@@ -147,6 +179,30 @@ const GUTTER_W = 46;
  * buckets touch but never merge. Above ~1.4 they do overlap; that is the point
  * of the control and it is the user's call, so the cap is generous.
  */
+/**
+ * How many trading days of GEX bubbles the phone asks for.
+ *
+ * Was one - today's trail only, so the chart showed two sessions of candles
+ * with bubbles on the newer one. Two is the minimum that lets you see where the
+ * ladder sat yesterday against where it sits now, which is most of the reason
+ * to draw the trail at all.
+ *
+ * Two things make it work, and both matter before changing either:
+ *
+ *   - REACH. The route is windowed in MINUTES from now, so the request has to
+ *     span both sessions AND the night between them. Computed from the days the
+ *     chart actually has bars for (`bubbleMinutes`), so a weekend or a holiday
+ *     stretches it instead of quietly returning one day.
+ *   - `anyExpiry=1`, which the request already carried. Yesterday's columns were
+ *     recorded against YESTERDAY's expiry; pinned to today's the second day
+ *     comes back empty. This is the one place that flag earns its cost.
+ */
+const BUBBLE_DAYS = 2;
+/** Hard ceiling on the reach, ~4 days. Guards against an absurd bar-day list. */
+const BUBBLE_MINUTES_MAX = 5760;
+/** Reach before the chart has bars to measure from - the hook's own default. */
+const BUBBLE_MINUTES_MIN = 420;
+
 const BUBBLE_SCALE_MIN = 0.4;
 const BUBBLE_SCALE_MAX = 3;
 const BUBBLE_SCALE_STEP = 0.1;
@@ -299,6 +355,7 @@ export default function MobileEsCandles() {
   // newest bars, which sit right against the axis).
   const [axisW, setAxisW] = useState(46);
   const [zooming, setZooming] = useState(false);
+  const [session, setSession] = useState<SessionMode>("eth");
   const [ovlOpen, setOvlOpen] = useState(false);
   // History depth in CALENDAR days, and it has to clear a weekend: asking for 2
   // on a Sunday reaches back to Friday and can miss the last session entirely on
@@ -313,19 +370,66 @@ export default function MobileEsCandles() {
     interval === "1" ? 3 : 4,
     interval === "1" ? 1 : 5,
   );
+
+  /**
+   * The bars the chart actually draws.
+   *
+   * `sessionCandles` is the rolling ~30h window: the overnight tape and the
+   * cash session together. RTH keeps 09:30-16:00 ET of it; ETH is the window
+   * untouched and stays the DEFAULT, because the overnight is most of why
+   * anyone opens a futures chart on a phone before the bell.
+   *
+   * Everything downstream reads this rather than the raw window - the bubble
+   * trail maps each column to the bar it falls in, so a trail drawn against
+   * bars the chart is not showing would sit at the wrong x.
+   */
+  const chartCandles = useMemo(() => {
+    if (session === "eth") return sessionCandles;
+    return sessionCandles.filter((r) => {
+      const hm = etClockOf(r);
+      // A row carrying neither field is KEPT: punching a hole in the series to
+      // enforce a filter we cannot evaluate is the worse of the two failures.
+      if (!hm) return true;
+      return hm >= RTH_OPEN && hm < RTH_CLOSE;
+    });
+  }, [sessionCandles, session]);
   const g = useMobileGex("oi-vol");
 
   // Which ET days the chart actually has bars for — the bubble history needs
-  // this to pick a day the trail can be drawn on (see the hook's header).
+  // this to pick the days the trail can be drawn on (see the hook's header).
+  // Taken from the DRAWN bars: under RTH there is no overnight bar to hang an
+  // overnight column on, and a bubble with no bar under it is dropped anyway.
   const barDayKeys = useMemo(() => {
     const set = new Set<string>();
-    for (const r of sessionCandles) set.add(etDayKey(r.timestamp));
+    for (const r of chartCandles) set.add(etDayKey(r.timestamp));
     return [...set];
-  }, [sessionCandles]);
+  }, [chartCandles]);
+
+  /**
+   * Minutes of history to ask for — the reach that makes BUBBLE_DAYS real.
+   *
+   * Counted from 04:00 ET on the OLDEST day we want, forward to now, rather
+   * than `days x 1440`: a Monday has to reach back to Friday, and a holiday
+   * Monday to the Friday before that. The bar-day list already encodes which
+   * days traded, so it answers both without a market calendar.
+   *
+   * 08:00Z is 04:00 EDT — before any session column of that day, and early
+   * enough that the EST/EDT hour makes no difference at this resolution.
+   */
+  const bubbleMinutes = useMemo(() => {
+    const oldest = [...barDayKeys].sort().slice(-BUBBLE_DAYS)[0];
+    if (!oldest) return BUBBLE_MINUTES_MIN;
+    const start = Date.parse(`${oldest}T08:00:00Z`);
+    if (!Number.isFinite(start)) return BUBBLE_MINUTES_MIN;
+    const mins = Math.ceil((Date.now() - start) / 60_000) + 60;
+    return Math.min(BUBBLE_MINUTES_MAX, Math.max(BUBBLE_MINUTES_MIN, mins));
+  }, [barDayKeys]);
 
   const bubbleCols = useGexBubbleHistory({
     enabled: showBubbles,
     expiry: g.expiry,
+    minutes: bubbleMinutes,
+    days: BUBBLE_DAYS,
     barDayKeys,
   });
 
@@ -490,10 +594,12 @@ export default function MobileEsCandles() {
     };
   }, []);
 
-  // Switching aggregation replaces the whole series — refit to the new bars.
+  // Switching aggregation OR session replaces the whole series — refit to the
+  // new bars. Without the session here, flipping to RTH keeps the logical range
+  // the ETH bars were framed with and lands the view on empty space.
   useEffect(() => {
     didFitRef.current = false;
-  }, [interval]);
+  }, [interval, session]);
 
   // ── price-axis zoom ────────────────────────────────────────────────────────
   /**
@@ -616,7 +722,7 @@ export default function MobileEsCandles() {
     const series = seriesRef.current;
     const chart = chartRef.current;
     if (!series || !chart) return;
-    const data: CandlestickData[] = sessionCandles.map((r) => ({
+    const data: CandlestickData[] = chartCandles.map((r) => ({
       time: toChartTime(r.timestamp),
       open: r.open,
       high: r.high,
@@ -637,7 +743,7 @@ export default function MobileEsCandles() {
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, to - bars), to: to + 2 });
     }
     return () => cancelAnimationFrame(axisRaf);
-  }, [sessionCandles, interval]);
+  }, [chartCandles, interval]);
 
   // ── the gutter panels' link to the price axis ──────────────────────────────
   // Both EsGexRail and MobileChainRail place a strike by asking the CANDLE
@@ -693,13 +799,13 @@ export default function MobileEsCandles() {
   const bubbleDataRef = useRef({
     cols: bubbleCols,
     basis: g.basis ?? 0,
-    rows: sessionCandles,
+    rows: chartCandles,
     scale: bubbleScale,
   });
   bubbleDataRef.current = {
     cols: bubbleCols,
     basis: g.basis ?? 0,
-    rows: sessionCandles,
+    rows: chartCandles,
     scale: bubbleScale,
   };
 
@@ -827,7 +933,7 @@ export default function MobileEsCandles() {
   useEffect(() => {
     bubbleDrawRef.current = drawBubbles;
     drawBubbles();
-  }, [drawBubbles, bubbleCols, g.basis, sessionCandles, bubbleScale]);
+  }, [drawBubbles, bubbleCols, g.basis, chartCandles, bubbleScale]);
 
   // ── SPX level lines, converted to ES ───────────────────────────────────────
   const levels = useMemo(() => {
@@ -861,8 +967,8 @@ export default function MobileEsCandles() {
     );
   }, [levels]);
 
-  const last = sessionCandles.length ? sessionCandles[sessionCandles.length - 1] : null;
-  const first = sessionCandles.length ? sessionCandles[0] : null;
+  const last = chartCandles.length ? chartCandles[chartCandles.length - 1] : null;
+  const first = chartCandles.length ? chartCandles[0] : null;
   const chg = last && first ? last.close - first.open : null;
   const chgPct = chg != null && first && first.open > 0 ? (chg / first.open) * 100 : null;
   const up = (chg ?? 0) >= 0;
@@ -910,6 +1016,27 @@ export default function MobileEsCandles() {
             <div style={{ width: 130, flexShrink: 0 }}>
               <MSegmented options={INTERVALS} value={interval} onChange={setInterval} accent={M_COLOR.blue} />
             </div>
+            {/* Shown only on RTH, which is the non-default. A chart quietly
+                missing its overnight with nothing on screen saying so is the
+                kind of setting you rediscover an hour later wondering why the
+                gap is gone; the default needs no badge. */}
+            {session === "rth" && (
+              <span
+                style={{
+                  ...MONO,
+                  flexShrink: 0,
+                  padding: "2px 6px",
+                  borderRadius: RADIUS.sm,
+                  border: `1px solid ${rgba(M_COLOR.blue, 0.45)}`,
+                  color: M_COLOR.blue,
+                  fontSize: TYPE.micro,
+                  fontWeight: 800,
+                  letterSpacing: "0.08em",
+                }}
+              >
+                RTH
+              </span>
+            )}
             <span style={{ flex: 1 }} />
           <button
             type="button"
@@ -1037,7 +1164,7 @@ export default function MobileEsCandles() {
               {!zooming && <span style={{ fontWeight: 900, opacity: 0.8 }}>✕</span>}
             </button>
           )}
-          {sessionCandles.length === 0 && (
+          {chartCandles.length === 0 && (
             <div style={{ position: "absolute", inset: 0, display: "flex" }}>
               {/* Say which of the two it actually is. This used to read
                   "Connecting to the live feed…" for ANY empty chart, so a
@@ -1053,7 +1180,7 @@ export default function MobileEsCandles() {
               </MEmpty>
             </div>
           )}
-          {(showLevels || showBubbles || sidePanel !== "none") && !basisOk && sessionCandles.length > 0 && (
+          {(showLevels || showBubbles || sidePanel !== "none") && !basisOk && chartCandles.length > 0 && (
             <div
               style={{
                 position: "absolute",
@@ -1108,6 +1235,16 @@ export default function MobileEsCandles() {
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.1em", color: M_COLOR.faint }}>
+            SESSION
+          </span>
+          <MSegmented options={SESSIONS} value={session} onChange={setSession} accent={M_COLOR.blue} />
+          <span style={{ fontSize: TYPE.micro, color: M_COLOR.faint, lineHeight: 1.4 }}>
+            RTH is the cash session, 9:30–4:00 ET. ETH adds the overnight tape.
+          </span>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.1em", color: M_COLOR.faint }}>
             SIDE PANEL
           </span>
           <MSegmented options={SIDE_PANELS} value={sidePanel} onChange={setSidePanel} />
@@ -1118,7 +1255,7 @@ export default function MobileEsCandles() {
 
         <OverlayToggle
           label="Bubbles"
-          hint="Per-minute GEX trail for today, sized by magnitude."
+          hint={`Per-minute GEX trail over the last ${BUBBLE_DAYS} sessions, sized by magnitude.`}
           on={showBubbles}
           onToggle={() => setShowBubbles((v) => !v)}
         />

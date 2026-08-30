@@ -50,7 +50,13 @@
  * and one stray backtick ends it. Same warning, same reason, as the other two.
  */
 
+import { HISTORICAL_CSS } from "@/pages/premarket/historicalRecap.css";
+// Re-exported so the old import path still resolves; Premarket.tsx takes the
+// stylesheet from the .css module so it can lazy() this file.
+export { HISTORICAL_CSS };
+
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { fmtPts, fmtPx, fmtUsd, nf, pillClass } from "@/pages/premarket/format";
 import {
   etHm,
   sessionLabel,
@@ -72,33 +78,6 @@ import {
 //  CSS — appended to the Premarket + Post-Market blocks, same .pmk scope
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const HISTORICAL_CSS = `
-.pmk .hgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-.pmk .hev{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
-.pmk .hrow{display:grid;grid-template-columns:64px 1fr 104px 96px;align-items:center;height:22px;gap:9px}
-.pmk .hrow .k{font-size:10.5px;text-align:right;color:var(--dim)}
-.pmk .hrow .v{font-size:10px;text-align:right;white-space:nowrap}
-.pmk .hrow .track{position:relative;height:13px;border-radius:3px;background:var(--bg);
-  box-shadow:inset 1px 0 0 var(--line2)}
-.pmk .hrow .track i{position:absolute;left:0;top:2px;bottom:2px;border-radius:2px}
-.pmk .hrow .track i.p{background:var(--pos)}
-.pmk .hrow .track i.n{background:var(--neg)}
-/* Level strip: the day's five SPX levels as one row of labelled figures. */
-.pmk .hlev{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px}
-.pmk .hlev .l{border:1px solid var(--card);border-radius:var(--r2);background:var(--panel2);padding:9px 10px}
-.pmk .hlev .l .n2{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
-.pmk .hlev .l .v2{font-size:17px;font-weight:640;margin-top:2px;letter-spacing:-.02em}
-.pmk .hlev .l .m2{font-size:10px;color:var(--dim)}
-/* Cumulative gamma curve. Sized by its wrapper, drawn edge to edge. */
-.pmk .hcurve{margin-top:12px;border:1px solid var(--card);border-radius:var(--r);
-  background:var(--panel2);padding:10px 12px 8px}
-.pmk .hcurve svg{display:block;width:100%;height:132px}
-.pmk .hcurvex{display:flex;justify-content:space-between;font-size:9px;color:var(--dim2);margin-top:4px}
-@media (max-width:1180px){
-  .pmk .hgrid{grid-template-columns:1fr}
-  .pmk .hlev{grid-template-columns:repeat(2,1fr)}
-}
-`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  helpers
@@ -109,23 +88,6 @@ const LEVEL_COLOR: Record<WallLevel, string> = {
   call_wall: "var(--cw)", put_wall: "var(--pw)", cb: "var(--violet)",
 };
 
-const nf = (v: number, dp = 0) =>
-  v.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
-const fmtPx = (v: number | null | undefined, dp = 0) =>
-  v == null || !Number.isFinite(v) ? "—" : nf(v, dp);
-const fmtPts = (v: number) => `${v >= 0 ? "+" : "−"}${nf(Math.abs(v), 0)}`;
-function fmtUsd(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return "—";
-  const a = Math.abs(v);
-  const s = v < 0 ? "−" : "";
-  if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
-  if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(1)}M`;
-  if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(0)}K`;
-  return `${s}$${a.toFixed(0)}`;
-}
-
-const pillClass = (tone: "ok" | "bad" | "warn" | "vio") =>
-  tone === "ok" ? "pill cool" : tone === "bad" ? "pill hot" : tone === "warn" ? "pill warn" : "pill";
 
 /**
  * The cumulative gamma curve for the session, with the day's levels ticked on
@@ -214,7 +176,15 @@ export default function HistoricalRecap({ date, symbol = "SPX" }: { date: string
   // The 0DTE contract of a past session IS that session's date — the ladder is
   // written under the front expiry of the day it was recorded, so asking for
   // `date` as the expiry asks for exactly the book that expired that afternoon.
-  const { cols, state: ladderState } = useIntradayLadder(true, date, date);
+  //
+  // The fourth argument is `symbol`, and it used to be OMITTED — which meant
+  // the hook fell back to its "SPX" default and section 4 drew SPX's ladder
+  // under whatever ticker was picked, silently, with the section heading and
+  // the empty-state text both still naming the date rather than the symbol. It
+  // was the only section here that read the picker wrong; sections 1 and 5 are
+  // SPX-pinned by their STORES and say so in the banner above, which is a
+  // different and honest thing.
+  const { cols, state: ladderState } = useIntradayLadder(true, date, date, symbol);
 
   // ── ES session range ──────────────────────────────────────────────────────
   const es = useMemo(() => {
@@ -313,8 +283,9 @@ export default function HistoricalRecap({ date, symbol = "SPX" }: { date: string
 
         {spxOnly && (
           <div className="warnbar" style={{ marginBottom: 11 }}>
-            The per-day history is SPX only — the levels recorder is single-symbol. Everything below
-            describes SPX regardless of the symbol picked above.
+            The per-day history is SPX only — the levels recorder is single-symbol. Sections 1 and 2
+            below describe SPX regardless of the symbol picked above; the wall log and the strike
+            ladder do read {symbol}.
           </div>
         )}
 
@@ -534,18 +505,20 @@ export default function HistoricalRecap({ date, symbol = "SPX" }: { date: string
       <div className="sec">
         <div className="sechead">
           <h3><span className="secn">4</span>Where the gamma sat</h3>
-          {ladderPath && <span className="tiny right">ladder covers {ladderPath.from}–{ladderPath.to} ET</span>}
+          {ladderPath
+            ? <span className="tiny right">{symbol} · ladder covers {ladderPath.from}–{ladderPath.to} ET</span>
+            : <span className="tiny right">{symbol}</span>}
         </div>
 
-        {ladderState === "loading" && <div className="warnbar">Reading the {date} strike ladder…</div>}
+        {ladderState === "loading" && <div className="warnbar">Reading the {symbol} {date} strike ladder…</div>}
         {ladderState === "error" && (
-          <div className="warnbar">The strike ladder could not be read for {date}.</div>
+          <div className="warnbar">The {symbol} strike ladder could not be read for {date}.</div>
         )}
         {(ladderState === "empty" || (ladderState === "ok" && !ladderRows.length)) && (
           <div className="warnbar">
-            No per-minute ladder retained for {date}. That history is pruned to roughly the last two
-            sessions — it is the one store here that does not go back, and section 1 does not depend
-            on it.
+            No per-minute {symbol} ladder retained for {date}. That history is pruned to roughly the
+            last two sessions — it is the one store here that does not go back, and section 1 does
+            not depend on it.
           </div>
         )}
 

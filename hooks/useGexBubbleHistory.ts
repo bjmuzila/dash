@@ -26,9 +26,25 @@ import { etDayKey } from "@/components/dashboard/es-candles/chartMath";
  *    a day with no candles, whose every minute collapses onto the final bar as
  *    one meaningless stack. The answer is the newest non-weekend day that the
  *    CHART ALSO HAS BARS FOR, which additionally handles holidays.
+ *
+ *    `days` extends that to the newest N such days instead of exactly one. The
+ *    rule is unchanged — it just does not stop at the first match.
  */
 
+/**
+ * Poll cadence.
+ *
+ * The route returns ONE COLUMN PER MINUTE, so the payload is linear in
+ * `minutes`: a two-day window is roughly 4× a one-day one, over what is usually
+ * a cellular link. It is also almost entirely IMMUTABLE — yesterday's columns
+ * cannot change and only the newest minute is ever new — so re-pulling all of it
+ * every 60s to learn one minute is the wrong trade at that size. A wide window
+ * polls at half the rate; a today-only window keeps the cadence it had.
+ */
 const REFRESH_MS = 60_000;
+const REFRESH_MS_WIDE = 120_000;
+/** Reach above which the slower cadence kicks in — about a session and a half. */
+const WIDE_MINUTES = 700;
 
 export type BubbleColumn = {
   /** Minute-floored timestamp, ms. */
@@ -50,13 +66,24 @@ export function useGexBubbleHistory({
   expiry,
   minutes = 420,
   top = 8,
-  /** ET day keys the chart has candles for — used to pick the day to draw. */
+  /**
+   * How many trading days of trail to keep, newest first. A MINIMUM in intent
+   * and a maximum in effect: you get this many if the response and the chart
+   * both have them, fewer if they do not.
+   *
+   * `minutes` still has to REACH those days — this only decides how much of
+   * what came back is kept. Asking for 2 days over a 420-minute window returns
+   * one, because that is all the server was asked for.
+   */
+  days = 1,
+  /** ET day keys the chart has candles for — used to pick the days to draw. */
   barDayKeys,
 }: {
   enabled: boolean;
   expiry: string;
   minutes?: number;
   top?: number;
+  days?: number;
   barDayKeys: string[];
 }): BubbleColumn[] {
   const [cols, setCols] = useState<BubbleColumn[]>([]);
@@ -101,29 +128,33 @@ export function useGexBubbleHistory({
         }
         const newestFirst = [...raw].sort((a, b) => b.slotTs - a.slotTs);
 
-        // See note 2 in the header.
+        // See note 2 in the header. Same rule, N days deep instead of one.
+        const want = Math.max(1, Math.floor(days));
         const barDays = new Set(barDaysRef.current);
-        let picked = "";
-        let traded = "";
+        const picked: string[] = [];
+        const traded: string[] = [];
         for (const col of newestFirst) {
           if (isEtWeekend(col.slotTs)) continue;
           const k = etDayKey(col.slotTs);
-          if (!traded) traded = k;
-          if (!barDays.size || barDays.has(k)) {
-            picked = k;
-            break;
+          if (!traded.includes(k)) traded.push(k);
+          if ((!barDays.size || barDays.has(k)) && !picked.includes(k)) {
+            picked.push(k);
+            if (picked.length >= want) break;
           }
         }
-        const target = picked || traded;
-        if (!target) {
+        // `traded` is the fallback for the case the original comment describes:
+        // columns exist but the chart has no bars on any of those days yet.
+        const targets = new Set((picked.length ? picked : traded).slice(0, want));
+        if (!targets.size) {
           setCols([]);
           return;
         }
 
-        // One column per minute; newest snapshot in a minute wins.
+        // One column per minute; newest snapshot in a minute wins. Keyed on the
+        // absolute minute, so spanning days needs nothing extra.
         const byMinute = new Map<number, BubbleColumn>();
         for (const col of newestFirst) {
-          if (etDayKey(col.slotTs) !== target) continue;
+          if (!targets.has(etDayKey(col.slotTs))) continue;
           const ts = Math.floor(col.slotTs / 60_000) * 60_000;
           if (byMinute.has(ts)) continue;
           const cells = col.cells
@@ -139,13 +170,13 @@ export function useGexBubbleHistory({
     };
 
     void load();
-    const id = setInterval(load, REFRESH_MS);
+    const id = setInterval(load, minutes > WIDE_MINUTES ? REFRESH_MS_WIDE : REFRESH_MS);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
     // barDaysKey (not the array) so a re-render with an equal list is inert.
-  }, [enabled, expiry, minutes, top, barDaysKey]);
+  }, [enabled, expiry, minutes, top, days, barDaysKey]);
 
   return cols;
 }

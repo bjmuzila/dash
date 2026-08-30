@@ -305,7 +305,7 @@ export default function GexProfile({
             : undefined}
         >
           {bars.length === 0 && (
-            <div style={{ padding: "40px 0", textAlign: "center", color: "var(--color-faint)", fontSize: 12 }}>
+            <div style={{ padding: "40px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
               {empty}
             </div>
           )}
@@ -360,7 +360,11 @@ export default function GexProfile({
           )}
           {rowTop(flipStrike) != null && (
             <div className="flipline" style={{ top: rowTop(flipStrike) as number }}>
-              <span>FLIP {fmtPx(flip, kDp)}</span>
+              {/* pxDp, not kDp — the flip is an interpolated PRICE, not a
+                  listed strike, and it sits on the same axis as the SPOT
+                  label directly above it. See the note on pxDp in
+                  Premarket.tsx. */}
+              <span>FLIP {fmtPx(flip, pxDp)}</span>
             </div>
           )}
         </div>

@@ -1,53 +1,83 @@
 # Changelog
 
-## 2026-08-30 - v3: the GEX Candles card is now phone-aware
+## 2026-08-30 - v3 check-theme: two blind spots fixed, and --muted was undeclared
 
-Added: `cbedge-v3/src/design/useIsPhone.ts`. Edited:
-`cbedge-v3/src/design/primitives/Controls.tsx`,
-`cbedge-v3/src/design/primitives/Board.tsx`,
-`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`.
+Edited: `cbedge-v3/scripts/check-theme.mjs`, `cbedge-v3/src/pages/Premarket.tsx`,
+`cbedge-v3/theme-baseline.json`.
 
-v3 had no answer to "is this a phone" anywhere in it. `useIsPhone()` is now the
-one place that decides, and it uses v2's exact test (`mobileNav.ts`): narrow AND
-(coarse pointer OR no hover). Two MediaQueryList objects rather than one
-`(A) and ((B) or (C))` string - boolean `or` in a media query is Media Queries 4
-and it fails CLOSED, so an unparseable query would just never match a phone and
-nothing would say why.
+The first real run of the pre-commit hook produced one true failure and a pile of
+noise. Both causes are gone.
 
-**The card.** Not a fork - the same component, three differences, each about the
-hand rather than the screen:
+**Computed-key declarations were invisible to it.** `style={{ ["--gw-edge" as
+string]: edge }}` declares a custom property, but TypeScript needs that cast
+(CSSProperties has no index signature) and it puts ` as string]` between the name
+and its colon, which the declaration pattern could not see past. So the check
+reported `--gc-edge`, `--gw-edge` and `--gw-flip` as undefined in the very panels
+that define them — the most misleading answer it could give. Second pattern
+added for that form.
 
-- The toolbar collapses to ONE button and everything moves into a bottom sheet.
-  Five 10px controls wrap to three rows on a 390px card, eat a third of the
-  chart's height doing it, and still cannot be hit. The button carries the two
-  settings you change most (`1m - RTH`) so they are readable without opening it.
-- The GEX rail is suppressed - a fixed-width column beside the chart is
-  affordable at 900px and a quarter of the plot at 390. `railOn` is derived, not
-  stored, so the same browser profile still gets its rail on the desktop; and it
-  is what the history fetch reads, so a phone stops pulling the heaviest request
-  on the card for a ladder it will not draw.
-- The countdown and the jump-to-live button move in off the rail's old `right-16`
-  gutter, and the button goes 28px -> 36px.
+**`--muted` really was undeclared.** The premarket page's `.pmk` alias layer
+declares `--dim` and `--dim2` but never `--muted`, and both GexChurnFeed and
+GexWatchFeed style their secondary text with it. An undefined custom property
+makes the whole colour declaration invalid, so those lines fell back to the
+inherited colour instead of the muted one — v2's grey-text bug, running the other
+way. Declared now, from `HT.muted`.
 
-**Controls.** `SegGroup` and `Chip` take `size="touch"` (34px targets, the seg
-group spans its row) - a size, not a phone flag, so `Controls.tsx` stays
-ignorant of viewports. `Popover` takes `sheet`, which pins it to the bottom edge
-inside `env(safe-area-inset-bottom)` and skips measuring entirely. An anchored
-panel is wrong twice on a phone: it opens at the top, the far end from the
-thumb, and 256px on a 390px viewport is not a panel.
+**The baseline was recorded under the old, wrong rule** — 376 violations across
+twelve files, almost all of them the `.pmk` alias layer being read from a child
+component, which is correct and deliberate. Reset to empty: the tree is CLEAN
+under the corrected rule, so nothing is grandfathered and every file is bound
+from here.
 
-**Board.** On a phone the 12-column pixel grid is bypassed for a single-column
-stack in reading order, full width, height from the card's own grid height,
-floored at 280px and capped at `78vh` - CSS `min()`, so rotation and the URL bar
-collapsing re-evaluate it without React hearing anything. Drag and resize are
-not wired up there at all: they would have to steal a gesture from the chart's
-own pan, and an arrangement made by a thumb is one the desktop inherits. Tiles
-keep `data-card-id` so `perf-check.mjs` still attributes their canvases.
+## 2026-08-29 - v3 Premarket: three tabs lazy-split, and two silent colour bugs
 
-Still open: the card charts ETFs/SPX cash via `/api/snapshots/etf-candles`. ES
-futures were deliberately removed from v3 on 2026-08-27 (see the header of
-`gexCandles/symbols.ts`) and re-adding them brings back the ES/SPX basis
-conversion that removal deleted. Not done here - see the note in the session.
+Edited: `cbedge-v3/src/pages/Premarket.tsx`,
+`cbedge-v3/src/pages/premarket/{PostMarketTab,HistoricalRecap,CbContracts}.tsx`,
+`cbedge-v3/scripts/check-theme.mjs`. Added:
+`cbedge-v3/src/pages/premarket/{postMarketTab,historicalRecap,cbContracts}.css.ts`.
+
+**The three heavy panels are `lazy()` now.** None of them is on screen when the
+page opens — the post-market tab needs the tab switched, the historical recap
+only appears for a date with no capture, and the contracts panel is hidden while
+frozen or replaying — yet every visitor downloaded all three to look at the
+pre-open view. PostMarketTab alone was 119KB of the route.
+
+That required splitting each component's `*_CSS` constant into a sibling
+`.css.ts` module, because the page concatenates every premarket stylesheet into
+one `<style>` block on first paint and the cascade depends on them all arriving
+together. Importing the constant from the component would drag the component
+back into the entry chunk and undo the `lazy()`. Each component re-exports the
+name, so nothing that imported it from there had to change. `EV_ROW_H` moved
+with the stylesheet it is interpolated into — it is also read by `centerEv`'s
+scroll maths, and the comment saying the two must not drift moved with it.
+
+**`hexA()` was producing invalid CSS at nineteen call sites.** It parsed a hex,
+but v3's `HOME_THEME` is v2's name for `T`, whose values are `var(--color-…)`
+STRINGS. `parseInt("var(--color-accent)", 16)` is NaN, so `--cyanEdge`,
+`--cyanWash`, `--posDim`, `--negDim` and the rest came out `rgba(NaN,NaN,NaN,a)`
+— invalid, dropped by the browser, and the variable then resolved to nothing
+wherever it was used. Now a one-line wrapper over `alpha()` from
+`design/theme.ts`, which takes the token straight and keeps tracking it. `ink()`
+is `alpha(T.text, a)` for the same reason. Both names kept, so the call sites
+read unchanged.
+
+**Sector Heat had two hardcoded colours** — raw RGB channel strings for green
+and red. Now `T.green` / `T.red` through `alpha()`.
+
+**check-theme's unknown-variable rule was wrong.** It resolved a `var(--x)`
+against tokens.css plus the file itself, which flags a pattern that is correct
+and deliberate here: the premarket page declares a v2-compatible alias layer on
+`.pmk` (`--panel`, `--dim`, `--line2`, built from v3 tokens) and every component
+rendered inside that page reads those names from its own file. Cross-file by
+design. A variable now counts as declared if anything under `src/` or
+`index.html` declares it. With that fixed the whole tree is CLEAN — zero
+violations, so the baseline starts empty and the rule binds everything at once.
+
+NOT done, and worth its own pass: `Premarket.tsx` still uses no `Page` and no
+`Card` — its panel plates and gutters are hand-rolled, which is the v2 problem
+arriving through ported code where `check:theme` cannot see it (the values are
+correct tokens applied in the wrong place). `ChartFrame` does not apply here:
+the page has no canvas, every panel is DOM/SVG.
 
 ## 2026-08-29 - v3 theme check runs on deploy and on commit, not only on the laptop
 

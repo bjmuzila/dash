@@ -25,8 +25,15 @@
 //
 //   3. UNKNOWN CSS VARIABLES — `var(--color-mutedd)`. A typo here does not throw
 //      and does not warn; the element just renders with no colour at all, which
-//      is a very expensive five minutes to find. Every `var(--…)` must resolve
-//      to something declared in tokens.css, index.html, or the file itself.
+//      is a very expensive five minutes to find. Every `var(--…)` must be
+//      DECLARED SOMEWHERE under src/ (or in index.html).
+//
+//      App-wide, not per file, and that is not laziness. The premarket page
+//      declares a v2-compatible alias layer on `.pmk` — `--panel`, `--dim`,
+//      `--line2`, built out of v3 tokens — and every component rendered inside
+//      that page reads those names from its OWN file. Cross-file by design, and
+//      correct. Scoping the rule per file would flag every one of them, and a
+//      check that cries wolf on working code gets switched off.
 //
 // ── Why there is a baseline ──────────────────────────────────────────────────
 //
@@ -52,7 +59,6 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SRC = join(ROOT, 'src')
-const TOKENS = join(SRC, 'design', 'tokens.css')
 const INDEX_HTML = join(ROOT, 'index.html')
 const BASELINE = join(ROOT, 'theme-baseline.json')
 
@@ -79,9 +85,16 @@ const TW_PROP =
 const TW_CLASS = new RegExp(`\\b(?:${TW_PROP})-(?:${TW_PALETTE})-(?:50|[1-9]00|950)\\b`, 'g')
 
 const VAR_USE = /var\(\s*(--[a-zA-Z0-9_-]+)/g
-// The optional quote is for a JS style object — `{ '--dim': x }` declares a
-// custom property just as much as a stylesheet line does.
+// A declaration, in either of the two forms this codebase writes them.
+// The optional quote on the first is for `{ '--dim': x }` in a style object.
 const VAR_DECL = /(--[a-zA-Z0-9_-]+)['"`]?\s*:/g
+// The second is a COMPUTED KEY: `style={{ ["--gw-edge" as string]: edge }}`.
+// TypeScript needs the cast because CSSProperties has no index signature, and
+// the cast puts ` as string]` between the name and its colon — which the
+// pattern above cannot see past. Missing this reported three variables that a
+// panel declares on itself as undefined, which is the most misleading answer
+// this check could give.
+const VAR_DECL_KEY = /\[\s*['"`](--[a-zA-Z0-9_-]+)['"`]/g
 
 // ── Reading ──────────────────────────────────────────────────────────────────
 
@@ -114,11 +127,13 @@ function lineOf(text, index) {
   return text.slice(0, index).split('\n').length
 }
 
-function collectDeclared() {
+function collectDeclared(files) {
   const declared = new Set()
-  for (const f of [TOKENS, INDEX_HTML]) {
+  for (const f of [INDEX_HTML, ...files]) {
     if (!existsSync(f)) continue
-    for (const m of readFileSync(f, 'utf8').matchAll(VAR_DECL)) declared.add(m[1])
+    const src = readFileSync(f, 'utf8')
+    for (const m of src.matchAll(VAR_DECL)) declared.add(m[1])
+    for (const m of src.matchAll(VAR_DECL_KEY)) declared.add(m[1])
   }
   return declared
 }
@@ -126,8 +141,8 @@ function collectDeclared() {
 // ── Scanning ─────────────────────────────────────────────────────────────────
 
 function scan() {
-  const declaredGlobal = collectDeclared()
   const files = walk(SRC).sort()
+  const declaredGlobal = collectDeclared(files)
   const byFile = new Map()
 
   for (const abs of files) {
@@ -153,15 +168,12 @@ function scan() {
       hits.push({ line: lineOf(text, m.index), rule: 'tailwind-palette', found: m[0] })
     }
 
-    // A file may declare its own custom property (a grid width, a chart var);
-    // that counts as declared for its own uses.
-    const declaredHere = new Set([...text.matchAll(VAR_DECL)].map((m) => m[1]))
     for (const m of text.matchAll(VAR_USE)) {
       const name = m[1]
       // `var(--color-level-${level})` — a name built by interpolation. The
       // static half is not a variable and there is nothing to check.
       if (text[m.index + m[0].length] === '$') continue
-      if (declaredGlobal.has(name) || declaredHere.has(name)) continue
+      if (declaredGlobal.has(name)) continue
       hits.push({ line: lineOf(text, m.index), rule: 'unknown-var', found: `var(${name})` })
     }
 
@@ -204,7 +216,7 @@ const RULE_HELP = {
   'tailwind-palette':
     "Tailwind's default palette — this is what made v2's text grey. Use the app's tokens: text-fg / text-muted / text-faint, bg-bg / bg-surface / bg-surface2 / bg-raised, border-line",
   'unknown-var':
-    'no such CSS variable — check the spelling against src/design/tokens.css (an unknown var renders as nothing, silently)',
+    'no such CSS variable — nothing under src/ or in index.html declares it, so this renders as nothing at all, silently. Check the spelling against src/design/tokens.css',
 }
 
 function report(byFile, base) {

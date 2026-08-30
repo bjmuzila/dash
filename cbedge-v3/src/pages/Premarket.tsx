@@ -199,28 +199,45 @@
  * `.pmk`, not `:root`) so its generic class names cannot leak into the app.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMobileGex } from "@/data/liveGex";
 import { useEsCandles } from "@/data/esCandles";
 import { useEtfCandles } from "@/data/esCandles";
 import { useEconCalendar } from "@/data/econCalendar";
 import { isStale } from "@/data/econCalendar";
 import { SCANNER_MAIN } from "@/data/scannerTickers";
-import PostMarketTab, { POSTMARKET_CSS } from "@/pages/premarket/PostMarketTab";
-import HistoricalRecap, { HISTORICAL_CSS } from "@/pages/premarket/HistoricalRecap";
+// ── The three heavy panels are lazy() ────────────────────────────────────────
+//
+// Between them these are most of this route's weight, and NONE of them is on
+// screen when the page opens: the post-market tab needs the tab switched, the
+// historical recap only appears for a date with no capture, and the contracts
+// panel is hidden while the page is frozen or replaying. Statically imported,
+// every visitor downloaded all three to look at the pre-open view.
+//
+// Their STYLESHEETS still load eagerly, from the sibling .css modules — the page
+// concatenates every premarket stylesheet into one <style> block on first paint
+// and the cascade depends on them all being there. Splitting the CSS out of the
+// components is what makes that possible: importing the constant from the
+// component would drag the component back into this chunk and undo the lazy().
+import { POSTMARKET_CSS } from "@/pages/premarket/postMarketTab.css";
+const PostMarketTab = lazy(() => import("@/pages/premarket/PostMarketTab"));
+import { HISTORICAL_CSS } from "@/pages/premarket/historicalRecap.css";
+const HistoricalRecap = lazy(() => import("@/pages/premarket/HistoricalRecap"));
 // GEX Watch was removed from this page on 2026-08-29 (see section 5). Its
 // component and stylesheet still exist at
 // components/pages/premarket/GexWatchFeed and are unchanged — nothing mounts
 // them. Bringing it back is this import plus the two lines in section 5, and
 // GEX_WATCH_CSS has to go back into the <style> concat below or it returns
 // unstyled.
-import CbContracts, { CB_CONTRACTS_CSS } from "@/pages/premarket/CbContracts";
+import { CB_CONTRACTS_CSS } from "@/pages/premarket/cbContracts.css";
+const CbContracts = lazy(() => import("@/pages/premarket/CbContracts"));
 import { GexChurnHistory, useGexChurnHistory } from "@/pages/premarket/GexHeatBar";
 // The replay transport is /es-candles' transport, part for part — see the
 // comment on the docked bar at the bottom of this file.
 import { DockButton, DockSlider, SegGroup } from "@/design/primitives/Dock";
 import GammaBellCurve, { GAMMA_BELL_CSS } from "@/pages/premarket/GammaBellCurve";
 import GexProfile, { PROFILE_ROW_H } from "@/pages/premarket/GexProfile";
+import { fmtPct, fmtPts, fmtPx, fmtUsd, nf } from "@/pages/premarket/format";
 import { useChainGex, useMultiExpiryGex } from "@/pages/premarket/chainGex";
 import {
   GEX_HISTORY_LIMIT,
@@ -245,6 +262,7 @@ import {
 import {
   HOME_THEME as HT,
   T,
+  alpha,
   LIGHT_BLUE,
   ES_CANDLE_UP,
   ES_CANDLE_DOWN,
@@ -262,14 +280,22 @@ import {
  * a hand-typed rgba() in the stylesheet is a hardcoded colour that stops
  * tracking the theme the moment the theme moves (AGENTS.md).
  */
-function hexA(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
-}
+// hexA() USED TO PARSE A HEX. It cannot any more, and it was silently producing
+// invalid CSS: v3's HOME_THEME is v2's name for `T`, whose values are
+// `var(--color-…)` STRINGS, not hexes. `parseInt("var(--color-accent)", 16)` is
+// NaN, so every `--cyanEdge`, `--cyanWash`, `--posDim` … came out as
+// `rgba(NaN,NaN,NaN,0.45)` — invalid, so the browser dropped the declaration and
+// the variable resolved to nothing wherever it was used.
+//
+// `alpha()` from design/theme.ts is the sanctioned version and takes the token
+// straight: `color-mix(in srgb, var(--color-accent) 45%, transparent)`. It also
+// keeps tracking the token, which parsing a hex could never do.
+//
+// The name is kept so the call sites below read unchanged.
+const hexA = (color: string, a: number) => alpha(color, a);
 
 /** White alpha — the app's neutral surface rung (borders, sunken tracks, hover). */
-const ink = (a: number) => `rgba(255,255,255,${a})`;
+const ink = (a: number) => alpha(T.text, a);
 
 // PROFILE_ROW_H is imported from GexProfile — the ladder owns its own geometry
 // now, and the stylesheet below interpolates the row pitch from it so the CSS
@@ -302,6 +328,12 @@ const CSS = `
   --plate:${HT.panel};
   --cyan:${HT.cyan}; --cyanEdge:${hexA(HT.cyan, 0.45)}; --cyanWash:${hexA(HT.cyan, 0.1)};
   --txt:${HT.text}; --dim:${HT.text}; --dim2:${HT.muted};
+  /* --muted was MISSING from this alias layer while GexChurnFeed and
+     GexWatchFeed both style their secondary text with it. An undefined
+     custom property makes the whole color declaration invalid, so those
+     lines silently fell back to the inherited colour instead of the muted
+     one — the same class of bug as v2's grey text, in the other direction. */
+  --muted:${HT.muted};
   /* The +/- gamma pair is the app's CANDLE pair now (homeTheme ES_CANDLE_UP /
      ES_CANDLE_DOWN), not this page's private green/red — so a bar on the
      premarket ladder is the same green as an up-candle two tabs over. */
@@ -585,6 +617,14 @@ const CSS = `
 .pmk .pill.hot{border-color:var(--negEdgeUp);color:var(--neg);background:var(--negWash)}
 .pmk .pill.cool{border-color:var(--posEdgeUp);color:var(--pos);background:var(--posWash)}
 .pmk .pill.warn{border-color:var(--amberEdge);color:var(--amber);background:var(--amberWash)}
+/* The fourth tone. PINNED (a level that held price against it) and a
+   PRESIDENTIAL calendar entry both take it: neither is good news or bad
+   news, which is what hot/cool/warn are for — they are the third thing,
+   and violet is the hue this page already gives the third thing (the
+   gamma flip, the CORE marker). Was an inline style in PostMarketTab and
+   nothing at all in HistoricalRecap, which is how the Recap tab quietly
+   lost the violet on every PINNED row. */
+.pmk .pill.vio{border-color:color-mix(in srgb, var(--color-violet) 45%, transparent);color:var(--violet);background:color-mix(in srgb, var(--color-violet) 9%, transparent)}
 
 .pmk .body{display:grid;grid-template-columns:1.55fr 1fr 1fr;gap:0}
 /* Two equal columns. A CLASS, not an inline style: an inline
@@ -808,31 +848,8 @@ function etWall(now = Date.now()): { date: string; minutes: number } {
   return { date, minutes: (h ?? 0) * 60 + (m ?? 0) };
 }
 
-const nf = (v: number, dp = 0) =>
-  v.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
-
 /** Stable empty ladder, so an absent ex-0DTE board never churns the memos. */
 const EMPTY_BARS: { strike: number; net: number }[] = [];
-
-/** $1.92B / $840M / $12.4K, signed. */
-function fmtUsd(v: number | null | undefined, signed = true): string {
-  if (v == null || !Number.isFinite(v)) return "—";
-  const abs = Math.abs(v);
-  const sign = v < 0 ? "−" : signed ? "+" : "";
-  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(0)}M`;
-  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
-  return `${sign}$${abs.toFixed(0)}`;
-}
-
-const fmtPts = (v: number | null | undefined) =>
-  v == null || !Number.isFinite(v) ? "—" : `${v >= 0 ? "+" : "−"}${nf(Math.abs(v), 0)} pts`;
-
-const fmtPx = (v: number | null | undefined, dp = 0) =>
-  v == null || !Number.isFinite(v) || v <= 0 ? "—" : nf(v, dp);
-
-const fmtPct = (v: number | null | undefined, dp = 2) =>
-  v == null || !Number.isFinite(v) ? "—" : `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(dp)}%`;
 
 /** Strike in `chain` nearest to `px`. */
 function nearestStrike(strikes: number[], px: number): number | null {
@@ -1596,6 +1613,19 @@ export default function Premarket() {
   /** Traded-price decimals. SPX/NDX print whole; anything under 1000 prints cents. */
   const pxDp = spot >= 1000 ? 0 : 2;
   /**
+   * WHICH OF THE TWO A LEVEL TAKES.
+   *
+   * kDp is for a level that IS a listed strike — the walls, CORE, max pain.
+   * pxDp is for a traded price — spot, ES, and the GAMMA FLIP.
+   *
+   * The flip is the one that reads like a strike and is not one: findGEXFlip
+   * INTERPOLATES between two strikes and keeps a tenth of a point. Rounding it
+   * to the strike grid throws away the interpolation it just did and prints a
+   * strike that is not the answer. On SPX both constants are 0 so nothing
+   * moves; on a sub-$1000 name with dollar strikes the flip was printing "49"
+   * for 48.83, next to a SPOT label on the same axis reading "48.75".
+   */
+  /**
    * One "point" on THIS symbol, as a share of price rather than a literal.
    * 0.015% of spot is 1.0 on a 6,800 SPX — i.e. the constant it replaces — and
    * 0.03 on a $180 name, which is what "no move" actually looks like there.
@@ -2095,6 +2125,15 @@ export default function Premarket() {
   const ex0 = multiGex.ex0dte;
   const exRows = ex0?.rows ?? EMPTY_BARS;
   /**
+   * The front tranche's share of the whole board's net gamma — what actually
+   * expires at this afternoon's bell. Named here rather than inlined in its
+   * tile so the tile can colour by its sign like the two beside it.
+   */
+  const leavesAtBell =
+    multiGex.all?.totalNetGex != null && ex0?.totalNetGex != null
+      ? multiGex.all.totalNetGex - ex0.totalNetGex
+      : null;
+  /**
    * The ex-0DTE ladder wears ITS OWN walls and flip — the ones the server
    * computed on that ladder, not the front board's. Reading the front expiry's
    * pin against the standing book's bars is the exact mistake this panel
@@ -2344,38 +2383,45 @@ export default function Premarket() {
              stores per-strike marks and volume for a past session, so both tabs
              would have to invent the chain they render. HistoricalRecap shows
              the per-date stores that DO go back instead. */
-          <HistoricalRecap date={sessionDate} symbol={sym} />
+          /* fallback null, not a spinner: the frame is already drawn around
+             this and a spinner inside a frame reads as an error. Same call the
+             board's Deferred makes. */
+          <Suspense fallback={null}>
+            <HistoricalRecap date={sessionDate} symbol={sym} />
+          </Suspense>
         ) : tab === "post" ? (
-          <PostMarketTab
-            /* The recap runs for every symbol now — same component, same
-               panels, that symbol's own recorded ladder, price path and wall
-               log. `symbol` is what routes all three; it is not a label. */
-            symbol={sym}
-            spot={spot}
-            /* The symbol's OWN prior close, from /api/quotes-batch. The recap
-               takes no ES prop at all — a futures price run through a basis is
-               not a cash price, and doing that is what once graded a put wall
-               BROKEN off a low SPX never traded. See PostMarketTab's header. */
-            prevClose={symQ?.prevClose ?? null}
-            flip={flip}
-            callWall={callWall}
-            putWall={putWall}
-            totalNetGex={totalNetGex ?? null}
-            perStrike={perStrike}
-            chain={chain}
-            coreBullseye={coreBullseye}
-            maxPain={maxPain}
-            em={em}
-            totals={totals}
-            expiry={expiry || ""}
-            etDate={viewDate}
-            etMin={viewMin}
-            hasData={hasData}
-            /* A replayed PAST session is a captured session too, so the recap
-               labels itself the same way. Replaying TODAY is not: the date is
-               today and the tab should read as the live recap it is. */
-            frozenDate={frozen || (replay && isHistorical) ? sessionDate : undefined}
-          />
+          <Suspense fallback={null}>
+            <PostMarketTab
+              /* The recap runs for every symbol now — same component, same
+                 panels, that symbol's own recorded ladder, price path and wall
+                 log. `symbol` is what routes all three; it is not a label. */
+              symbol={sym}
+              spot={spot}
+              /* The symbol's OWN prior close, from /api/quotes-batch. The recap
+                 takes no ES prop at all — a futures price run through a basis is
+                 not a cash price, and doing that is what once graded a put wall
+                 BROKEN off a low SPX never traded. See PostMarketTab's header. */
+              prevClose={symQ?.prevClose ?? null}
+              flip={flip}
+              callWall={callWall}
+              putWall={putWall}
+              totalNetGex={totalNetGex ?? null}
+              perStrike={perStrike}
+              chain={chain}
+              coreBullseye={coreBullseye}
+              maxPain={maxPain}
+              em={em}
+              totals={totals}
+              expiry={expiry || ""}
+              etDate={viewDate}
+              etMin={viewMin}
+              hasData={hasData}
+              /* A replayed PAST session is a captured session too, so the recap
+                 labels itself the same way. Replaying TODAY is not: the date is
+                 today and the tab should read as the live recap it is. */
+              frozenDate={frozen || (replay && isHistorical) ? sessionDate : undefined}
+            />
+          </Suspense>
         ) : (
         <section className={`prep${posGamma ? "" : " is-neg"}`}>
 
@@ -2412,7 +2458,7 @@ export default function Premarket() {
             <div className="kpi">
               <div className="k">Gamma Flip</div>
               <div className="v mono">
-                {fmtPx(flip, kDp)}{" "}
+                {fmtPx(flip, pxDp)}{" "}
                 <small className={distFlip == null ? undefined : distFlip >= 0 ? "chg-pos" : "chg-neg"}>
                   {distFlip == null ? "" : `${fmtPts(distFlip)} / ${fmtPct((distFlip / spot) * 100)}`}
                 </small>
@@ -2438,8 +2484,8 @@ export default function Premarket() {
               <div className="d">
                 {distFlip == null ? "Flip unavailable — no crossing in the current chain."
                   : `${distFlip >= 0 ? "Above" : "Below"} flip by ${nf(Math.abs(distFlip), pxDp)} pts. ${posGamma
-                    ? `Suppression regime until ${fmtPx(flip, kDp)} breaks.`
-                    : `Acceleration regime until ${fmtPx(flip, kDp)} is reclaimed.`}`}
+                    ? `Suppression regime until ${fmtPx(flip, pxDp)} breaks.`
+                    : `Acceleration regime until ${fmtPx(flip, pxDp)} is reclaimed.`}`}
               </div>
             </div>
           </div>
@@ -2635,7 +2681,7 @@ export default function Premarket() {
 
             <div className="lvl flip">
               <div className="name">Gamma Flip <em>regime</em></div>
-              <div className="px mono">{fmtPx(flip, kDp)}</div>
+              <div className="px mono">{fmtPx(flip, pxDp)}</div>
               <div className="es mono">{es(flip) != null ? `ES ${fmtPx(es(flip), 0)} · zero γ` : "zero γ"}</div>
               <div className="dist">
                 <span className={`mono ${distFlip != null && distFlip >= 0 ? "chg-pos" : "chg-neg"}`}>{fmtPts(distFlip)}</span>
@@ -2798,10 +2844,14 @@ export default function Premarket() {
                 </div>
                 <div className="g">
                   <div className="n">Leaves at the bell</div>
-                  <div className="v mono">
-                    {multiGex.all?.totalNetGex != null && ex0?.totalNetGex != null
-                      ? fmtUsd(multiGex.all.totalNetGex - ex0.totalNetGex)
-                      : "—"}
+                  {/* Signed like its two siblings. This is the same KIND of
+                      number they are — a net gamma figure whose sign is the
+                      whole read — and it was the only one of the three
+                      rendering in plain text, so a front tranche that leaves
+                      NEGATIVE gamma behind looked neutral next to two coloured
+                      tiles. */}
+                  <div className={`v mono ${leavesAtBell == null ? "" : leavesAtBell >= 0 ? "chg-pos" : "chg-neg"}`}>
+                    {fmtUsd(leavesAtBell)}
                   </div>
                   <div className="m">the front tranche&apos;s share of the net</div>
                 </div>
@@ -2872,6 +2922,11 @@ export default function Premarket() {
               </div>
               <div className="stat"><span className="l">VIX</span><span className="r mono">
                 {vixQ?.last != null ? vixQ.last.toFixed(2) : "—"}{" "}
+                {/* INVERTED against every other change row on this panel, and
+                    correct. Up is red because a rising VIX is the tape getting
+                    worse, not better — the colour on this page means "good or
+                    bad for the book", not "the number went up". Do not
+                    "fix" this to match its neighbours. */}
                 {vixQ?.change != null && (
                   <span className={vixQ.change >= 0 ? "chg-neg" : "chg-pos"}>
                     {vixQ.change >= 0 ? "+" : "−"}{Math.abs(vixQ.change).toFixed(2)}
@@ -2970,10 +3025,13 @@ export default function Premarket() {
                   {sectorRows.map((s) => {
                     const v = s.chg5d ?? 0;
                     const a = Math.min(0.35, Math.abs(v) / 12);
-                    const c = v >= 0 ? "46,204,143" : "255,92,108";
+                    // Was a pair of raw RGB channel strings — a hand-typed green
+                    // and red that stopped tracking the theme the day it moved.
+                    // Same two tokens the rest of the page reads direction from.
+                    const c = v >= 0 ? T.green : T.red;
                     return (
                       <div className="s" key={s.symbol}
-                        style={{ borderColor: `rgba(${c},${0.15 + a})`, background: `rgba(${c},${a * 0.25})` }}>
+                        style={{ borderColor: alpha(c, 0.15 + a), background: alpha(c, a * 0.25) }}>
                         <span>{s.name} <span className="muted">{s.symbol}</span></span>
                         <b className={v >= 0 ? "chg-pos" : "chg-neg"}>{fmtPct(v)}</b>
                       </div>
@@ -3080,7 +3138,7 @@ export default function Premarket() {
                     <b>{fmtPx(putWall, kDp)}–{fmtPx(callWall, kDp)}</b> — base case. {posGamma ? `Fade the edges, target ${magnet ? nf(magnet.strike, kDp) : "the magnet"}.` : "Two-sided and fast; size down."}
                   </span></div>
                   <div><span className="r">▼</span><span>
-                    <b>Below {fmtPx(flip, kDp)}</b> — flip breached, regime turns negative. Stop fading; trend short toward {fmtPx(putWall, kDp)}.
+                    <b>Below {fmtPx(flip, pxDp)}</b> — flip breached, regime turns negative. Stop fading; trend short toward {fmtPx(putWall, kDp)}.
                   </span></div>
                 </div>
               </div>
@@ -3092,7 +3150,14 @@ export default function Premarket() {
               {todayEvents.map((e, i) => (
                 <div className="stat" key={`${e.time}-${e.title}-${i}`} style={{ opacity: isStale(e, calNow) ? 0.5 : 1 }}>
                   <span className="l">
-                    <span className={`pill ${e.impact === "High" ? "hot" : e.impact === "Medium" ? "warn" : ""}`}>
+                    {/* Four tones, not three. A "President" entry used to fall
+                        through to the bare pill, which put a Trump headline on
+                        the same visual footing as a Low-impact housing print —
+                        and the impact ramp has carried a distinct colour for it
+                        (--color-impact-president) the whole time. Holiday and
+                        Low keep the bare pill: they genuinely are the quiet
+                        ones. */}
+                    <span className={`pill ${e.impact === "High" ? "hot" : e.impact === "Medium" ? "warn" : e.impact === "President" ? "vio" : ""}`}>
                       {e.time_formatted || e.time}
                     </span>{" "}{e.title}
                   </span>
@@ -3185,12 +3250,22 @@ export default function Premarket() {
               would file one day's contracts under another day's header. It sits
               last because it is the session's record, not a number to trade off
               at 9:00. */}
-          {!frozen && !replay && <CbContracts />}
+          {!frozen && !replay && (
+            <Suspense fallback={null}>
+              <CbContracts />
+            </Suspense>
+          )}
 
           <div className="footbar">
             <span className="l mono">
               {/* viewDate, not etDate: on a frozen or replayed session the footer
                   must stamp the session on screen, not the wall-clock day. */}
+              {/* 2dp on both, deliberately, and NOT pxDp: spot, ES and basis
+                  are one arithmetic line here — basis = ES − spot — and the
+                  point of a diagnostic footer is that you can check it adds up.
+                  At pxDp the SPX row would read "6799 · ES 6843.19 · basis
+                  +45.60", which does not. This is the one place on the page
+                  that wants more precision than the instrument trades at. */}
               {viewDate} · {sym} · {feedLabel} · spot {fmtPx(spot, 2)} · ES {fmtPx(footEs, 2)}
               {basis != null ? ` · basis ${basis >= 0 ? "+" : "−"}${Math.abs(basis).toFixed(2)}` : ""}
               {" · "}{chain.length} strikes
