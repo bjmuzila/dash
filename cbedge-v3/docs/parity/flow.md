@@ -559,19 +559,26 @@ Transcribe the logic verbatim per the porting rule, but these need a decision
 before build, not after. Each one is a place where "port it exactly" and "port
 it correctly" disagree.
 
-1. **`/proxy/flow-premsplit` ignores `exIdx` entirely.**
-   `parseFlowFilters()` in `server-v2/server-with-proxy.js:949` hardcodes
-   `exIdx: false`, and `handleFlowPremSplit` uses the parsed object directly.
-   The client sends `exIdx=1` for the "All − Indices" scope and the server drops
-   it. **The tape honours the scope client-side; the Premium Split above it does
-   not.**
+1. **`/proxy/flow-premsplit` ignored `exIdx` entirely.** — **FIXED 2026-08-30.**
+   `parseFlowFilters()` in `server-v2/server-with-proxy.js` hardcoded
+   `exIdx: false`, so the client's `exIdx=1` was dropped and
+   `buildFlowPrintsWhere()`'s exIdx branch was unreachable. The tape honoured
+   the "All − Indices" scope client-side; the Premium Split above it did not.
+   Now read from the querystring. A caller that omits the param still gets
+   `false`, so nothing that worked before changed.
 
-2. **`/proxy/flow-premsplit` defaults `underlying` to `SPX`.**
-   Same function, line 938. The Combined view sends no `underlying` param, so
-   the split it gets back is **SPX-only** while the card header says
-   "All Tickers". The four Combined split cards, and the `count` / `Total` /
-   `Calls` / `Puts` figures in the tape header (which prefer the SQL split), are
-   therefore SPX numbers over a market-wide tape.
+2. **`/proxy/flow-premsplit` defaulted `underlying` to `SPX`.** — **FIXED
+   2026-08-30.** Same function. The Combined view sent no `underlying`, so the
+   split came back **SPX-only** while the card header said "All Tickers" — and
+   that response also feeds the tape header's `count` / `Total` / `Calls` /
+   `Puts`. Rather than dropping the default (which `/proxy/flow-netprem` and any
+   un-enumerated caller rely on), `underlying=ALL` was added as an explicit
+   "no ticker filter" opt-out, and both the v2 page and v3 now send it. Omitting
+   the param still means SPX.
+
+   **This changed what v2's live Combined view displays.** The four split tiles
+   and the four header figures were SPX numbers under a market-wide heading and
+   are now market-wide.
 
 3. **`.flow-tape-row` is dead CSS.** `globals.css:289–294` defines the row hover
    highlight; no element in `Flow.tsx` carries the class. The tape has no hover
@@ -611,6 +618,25 @@ it correctly" disagree.
     (short of the Recent dropdown, which `selectTicker` does populate — but only
     once the user clicks something).
 
+11. **`src/board/catalog.tsx`'s Flow Tape card compares `type` to `'call'`.** —
+    **FIXED 2026-08-30**, and found only because the contract fix in Appendix 2
+    turned it into a type error. The wire has never carried `'call'`; the field
+    is `'C' | 'P'`. The board card's Strike column therefore suffixed **every**
+    strike `P`, calls included, and had done since it was written. A comparison
+    that is always false is invisible until something types it.
+
+12. **`src/data/symbol.tsx` says the `flow` frame is SPX-only. It is not.**
+    Not fixed — recorded, because it is the premise the previous port built its
+    "SPX-only ceiling" on. `server-v2/proxy-tastytrade.js` constructs the engine
+    processor as `new FlowProcessor({ spxOnly: false })` and `_startTtMultiFlow`
+    routes every root in `TT_FLOW_TICKERS_LIST` into **that same tape** — the
+    one `bucket()` ships as the `flow` frame. `FlowProcessor.bucket()` says so
+    in its own comment: *"Multi-underlying: SPX (engine) + FLOW_TICKERS roots
+    (MultiFlowManager) all feed addPrint; each entry carries its own
+    `underlying`."* The frame is SPX-only when that env list is empty, and not
+    otherwise. The port therefore filters the live tape by `underlying` like v2
+    does, rather than assuming one ticker.
+
 ---
 
 # Appendix 2 — v3 contract gaps
@@ -634,22 +660,94 @@ the build step, and the answer is a row on this checklist, not a silent drop.
 | `ThemedDatePicker` | check `src/design/primitives/Controls.tsx` | The Session control |
 | `localStorage` / `sessionStorage` caches | v3 has `src/data/cache.ts` (last-known-state) | Decide whether recents and the netbins warm start go through it or stay raw |
 
-**The current `cbedge-v3/src/pages/Flow.tsx` (30 593 bytes) is a prior port that
-resolved most of the above by dropping them** — its own header comment lists the
-Net Drift canvas chart, the per-contract Vol/OI/IV poller and the dislocation
-velocity indicator as "machinery [that] does not exist on this side of the
-port". That is the failure this document exists to stop. Treat that file as a
-draft to be finished against this checklist, not as the port.
+**The `cbedge-v3/src/pages/Flow.tsx` that stood before this port (30 593 bytes)
+resolved most of the above by dropping them** — its own header comment listed
+the Net Drift canvas chart, the per-contract Vol/OI/IV poller and the
+dislocation velocity indicator as "machinery [that] does not exist on this side
+of the port". That is the failure this document exists to stop. Every row of the
+table above is now closed; see the port outcome below.
 
 ---
 
-# Appendix 3 — route wiring status
+# Appendix 3 — port outcome (2026-08-30)
+
+**What landed.**
+
+| File | Role |
+|---|---|
+| `src/data/flowMath.ts` | every constant, format, threshold, the ET/session maths, `dteOf` against the SESSION date, the filter chain, `mergeTape`, the net-drift bin walk, the totals. Pure — no React, no fetch, no DOM |
+| `src/data/dislocationVelocity.ts` | verbatim from v2's `lib/dislocationVelocity.ts` |
+| `src/data/flowData.ts` | the two-stage history pull with its ordering guard and first-run-no-debounce; the incremental `?since` net-drift poll with the sessionStorage warm start; the combined pulls; `useContractStats` / `useLiveSpots` / `useMinuteBars` |
+| `src/pages/flow/NetDriftChart.tsx` | the chart, through `ChartFrame` |
+| `src/pages/flow/ContractDrawer.tsx` | all 25 rows of Part N, behind its own `lazy()` |
+| `src/pages/Flow.tsx` | the page |
+| `scripts/parity-check-flow.mjs` + `.test.mjs` | 74 probes, and a self-test that proves they fail on the right things |
+
+**How the v3 rules were met.**
+
+- **Tokens.** `check-theme` clean, zero new violations. Two helpers were added to
+  `design/theme.ts` — `tokenHex(name)` and `tokenHexAlpha(name, a)` — because a
+  canvas cannot take `var()` or `color-mix()`, and the four files already in
+  `theme-baseline.json` are there precisely because they solved that with a
+  typed hex fallback. `#rrggbbaa` is built from the token's own resolved value,
+  so nothing in `src/` carries a literal and the chart still tracks the palette.
+- **Socket.** The page opens nothing; live prints arrive as the `flow` frame via
+  `useFrame`. No topic list to maintain.
+- **Waterfalls.** All four feeds fire at entry, each gated by an `enabled` flag
+  so the inactive view's queries are skipped rather than raced.
+- **Charts.** Both are imperative inside `ChartFrame`. Both honour
+  `onVisibility` — the net-drift chart queues its latest series while hidden and
+  applies it on the way back in — and both tag their canvases `data-cb-layer`,
+  which is what lets `npm run perf` see them at all.
+- **Budget.** `lightweight-charts` is a DYNAMIC import in both chart files, and
+  the drawer is behind `lazy()`, so the route chunk does not carry either.
+
+**Verified in a clean container** (the laptop's shell workspace would not start,
+so `cbedge-v3` was rebuilt from source and `npm install`ed to run the real
+tooling against the real `tsconfig`):
+
+- `tsc --noEmit` — **zero errors in any of the seven new or changed files**,
+  under `strict`, `noUncheckedIndexedAccess`, `noUnusedLocals` and
+  `verbatimModuleSyntax`.
+- `node scripts/check-theme.mjs` — clean.
+- `node scripts/parity-check-flow.test.mjs` — clean, 74 probes. The self-test
+  found three weak probes on its first run and they were tightened: the chart
+  legend matched the tape header's identical wording, and `SELL CALL` matched a
+  tidied-up `SELL CALLS`.
+
+**Not verified here** — needs the laptop: `npm run build` (budgets), `npm run
+perf`, `npm run check:ws`, and `npm run check:parity:flow`, which needs both
+apps up against one backend and a signed-in `PARITY_COOKIE`.
+
+**Declared departures** — the only rows where v3 deliberately differs, both
+recorded as `soft` probes so the checker reports them without failing:
+
+1. **The tape status badge has two states, not three.** v2 owns its socket and
+   can say `RECONNECTING`; a v3 page reads a frame and cannot. `LIVE` once a
+   frame has arrived, `WAITING` before, and the historical badge unchanged.
+2. **The palette is v3's.** Bullish is `--color-up`, not v2's hand-typed
+   `#22c55e` beside a `C.green` that was a light blue. Every threshold and
+   colour RULE is v2's; the hexes are not.
+
+**Left alone deliberately.** `src/shell/Shell.tsx` already carries the `/flow`
+NAV entry but no `prefetch` URLs, which non-negotiable 3 would like. It was not
+touched: another session was actively rewriting that file, and a prefetch hint
+is not worth a collision on it. The two URLs to add when it is quiet are
+`/proxy/flow-history?underlying=SPX&limit=1000` and
+`/proxy/flow-netprem?underlying=SPX&bin=60&minPremium=1000&otmOnly=1`.
+
+---
+
+# Appendix 4 — route wiring status
 
 All four steps already exist for `/v3/flow`; none needs adding.
 
+All four steps already existed for `/v3/flow` before this port; none needed
+adding.
+
 | Step | File | Status |
 |---|---|---|
-| 1 | `cbedge-v3/src/pages/Flow.tsx` | exists (partial — see Appendix 2) |
-| 2 | `cbedge-v3/src/App.tsx:29,54` — `lazy()` + `<Route path="/flow">` | done |
-| 3 | `cbedge-v3/src/shell/Shell.tsx:53` — `{ to: '/flow', label: 'Flow', icon: '🌊' }` | done, **no `prefetch` URLs** — v3 rule 3 (no request waterfalls, `preload()` on nav intent) wants `/proxy/flow-history` and `/proxy/flow-netprem` listed here |
-| 4 | `app/v3/flow/route.ts` (480 bytes) | done |
+| 1 | `cbedge-v3/src/pages/Flow.tsx` | **rewritten against this checklist** |
+| 2 | `cbedge-v3/src/App.tsx` — `lazy()` + `<Route path="/flow">` | already done |
+| 3 | `cbedge-v3/src/shell/Shell.tsx` — `{ to: '/flow', label: 'Flow', icon: '🌊' }` | already done, still **no `prefetch` URLs** — see "Left alone deliberately" in Appendix 3 |
+| 4 | `app/v3/flow/route.ts` | already done |

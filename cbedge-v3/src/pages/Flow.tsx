@@ -1,180 +1,291 @@
-import type { ReactNode } from 'react'
-import { useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
-import { Table, type Column } from '@/design/primitives/Table'
-import { Stat } from '@/design/primitives/Stat'
 import { SegGroup, Chip } from '@/design/primitives/Controls'
-import { useQuery } from '@/data/api'
-import { useFrame, useField } from '@/data/hooks'
-import { isSocketSymbol } from '@/data/symbol'
-import type { FlowFrame, FlowTapePrint, SpotFrame } from '@/contract/frames'
+import { useFrame } from '@/data/hooks'
+import type { FlowFrame, FlowTapePrint } from '@/contract/frames'
+import { T, alpha } from '@/design/theme'
+import {
+  useCombinedHistory,
+  useContractStats,
+  useFlowHistory,
+  useLiveSpots,
+  useMinuteBars,
+  useNetPremBins,
+  usePremSplit,
+  type ContractStat,
+} from '@/data/flowData'
+import { initDV, pushDV } from '@/data/dislocationVelocity'
+import {
+  BIN_SEC,
+  DEFAULT_MIN_PREMIUM,
+  DEFAULT_TICKERS,
+  INDEX_TICKERS,
+  MAX_TAPE_ROWS,
+  PREMIUM_MAX,
+  PREMIUM_MAX_COMBINED,
+  PREMIUM_STEP,
+  PREMIUM_STEP_COMBINED,
+  WHALE_FLOOR,
+  buildNetSeries,
+  dteOf,
+  fmtContractCost,
+  fmtEtHm,
+  fmtPremium,
+  fmtSpot,
+  fmtStat,
+  fmtTime,
+  isBullish,
+  loadRecentTickers,
+  mergeTape,
+  normTicker,
+  passesFilters,
+  printIdentity,
+  pushRecentTicker,
+  sumTotals,
+  todayYmdET,
+  totalsFromSplit,
+  type ChartSpan,
+  type FlowFilters,
+  type Scope,
+  type SideFilter,
+  type TypeFilter,
+  type View,
+} from '@/data/flowMath'
+import { NetDriftChart } from '@/pages/flow/NetDriftChart'
+
+const ContractDrawer = lazy(() =>
+  import('@/pages/flow/ContractDrawer').then((m) => ({ default: m.ContractDrawer })),
+)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /v3/flow — replaces v2's /app/flow (components/pages/Flow.tsx).
+// /v3/flow — the port of v2's /app/flow (components/pages/Flow.tsx).
 //
-// v2's page carried its own WebSocket, its own lightweight-charts renderer, a
-// per-contract chain-stats poller (useContractStats/useLiveSpots) and a
-// dislocation-velocity indicator built on local 1-minute bars. None of that
-// machinery exists on this side of the port: live data comes ONLY through the
-// `flow` frame (useFrame/useField), and REST history comes ONLY through the
-// three /proxy endpoints v2 used, fetched with useQuery. What follows is the
-// same filter strip, the same four-way premium split, the same tape columns —
-// wired to what the v3 contract actually carries, with the gaps (the canvas
-// chart, per-contract Vol/OI/IV) called out where they are rather than faked.
+// The spec is docs/parity/flow.md: 214 rows, one per rendered value, and this
+// file is finished when every one of them is on screen. The maths, the
+// thresholds and the wording were transcribed into src/data/flowMath.ts rather
+// than re-derived here — re-deriving from a description is exactly how the
+// previous attempt lost the chart, three columns and the whole drawer.
 //
-// ── The SPX-only ceiling ─────────────────────────────────────────────────────
-// src/data/symbol.tsx says it plainly: "the `flow` frame is SPX prints only and
-// there is no per-ticker source for them." v2 got away with a multi-ticker tape
-// because its own WS pushed every root the recorder watched; v3's `flow` frame
-// (contract/frames.ts) carries one tape for whatever the server is streaming,
-// which today is SPX. A watchlist ticker other than SPX therefore shows
-// whatever /proxy/flow-history has recorded for it and nothing live — this page
-// says so on its face (below) instead of quietly relabeling SPX prints.
+// What is deliberately NOT v2:
+//   • the socket. Live prints arrive as the `flow` frame through useFrame; this
+//     page opens nothing (non-negotiable 2).
+//   • the charts. Both go through ChartFrame, honour its visibility signal and
+//     tag their canvases (non-negotiables 4, 5, 6).
+//   • the palette. Every colour is a token. v2's `C.green` was a LIGHT BLUE and
+//     its bullish accent was a hand-typed hex beside it; here bullish is
+//     --color-up and that is the end of it.
+//
+// Known, recorded departures (docs/parity/flow.md, Appendix 1):
+//   • the tape status badge has two states, not three — a page that does not own
+//     the socket cannot honestly report RECONNECTING.
 // ─────────────────────────────────────────────────────────────────────────────
 
-type View = 'ticker' | 'combined'
-type Scope = 'all' | 'exIdx'
-type SideFilter = 'all' | 'buy' | 'sell'
-type TypeFilter = 'all' | 'call' | 'put'
-type ChartSpan = 'rth' | '24h'
-
-const DEFAULT_TICKERS = [
-  'SPX', 'SPY', 'QQQ', 'META', 'TSLA', 'AMZN', 'AAPL', 'NVDA', 'MSFT', 'GOOGL', 'AMD', 'NDX',
-] as const
-
-// Streamer roots carry suffixes a chip doesn't (SPX prints as "SPXW", etc.) —
-// same table v2's Flow.tsx normalized with.
-const ROOT_TO_TICKER: Record<string, string> = { SPXW: 'SPX', NDXP: 'NDX', RUTW: 'RUT', XSPW: 'XSP' }
-const INDEX_TICKERS = new Set(['SPX', 'NDX', 'RUT', 'XSP', 'VIX', 'DJX'])
-function normTicker(u: string): string {
-  const up = u.toUpperCase()
-  return ROOT_TO_TICKER[up] ?? up
+interface Row extends FlowTapePrint {
+  tickerNorm: string
 }
 
-const DEFAULT_MIN_PREMIUM = 15_000
-// Net-drift floor, decoupled from the tape's Min Premium slider — same reasoning
-// as v2: the drift read tracks the whole session's directional positioning, so
-// cranking the tape's whale floor should not flatten it to zero.
-const CHART_MIN_PREMIUM = 1_000
-const WHALE_FLOOR = 500_000
-
-function fmtPremium(val: number): string {
-  const a = Math.abs(val)
-  const sign = val < 0 ? '-' : ''
-  if (a >= 1_000_000) return `${sign}$${(a / 1_000_000).toFixed(2)}M`
-  if (a >= 1_000) return `${sign}$${(a / 1_000).toFixed(1)}K`
-  return `${sign}$${a.toFixed(0)}`
-}
-function fmtContractCost(price: number): string {
-  const cost = price * 100
-  if (cost >= 1_000_000) return `$${(cost / 1_000_000).toFixed(2)}M`
-  if (cost >= 1_000) return `$${(cost / 1_000).toFixed(1)}K`
-  return `$${cost.toFixed(2)}`
-}
-function fmtTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString('en-US', {
-    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit',
-  })
-}
-
-// ── ET day/session math, ported verbatim in spirit from v2's Flow.tsx (same
-// DST-safe wall-clock trick) — needed for DTE (measured from TODAY, not from
-// each print's own stamp) and for the RTH window the net-drift readout sums. ──
-function etDateParts(now: Date): { y: number; m: number; d: number } {
-  const p = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(now)
-  const get = (t: string) => Number(p.find((x) => x.type === t)?.value ?? '0')
-  return { y: get('year'), m: get('month'), d: get('day') }
-}
-function etWallToUtcSec(y: number, m: number, d: number, hh: number, mm: number): number {
-  const guess = Date.UTC(y, m - 1, d, hh, mm)
-  const asET = new Date(new Date(guess).toLocaleString('en-US', { timeZone: 'America/New_York' })).getTime()
-  const asUTC = new Date(new Date(guess).toLocaleString('en-US', { timeZone: 'UTC' })).getTime()
-  return Math.floor((guess + (asUTC - asET)) / 1000)
-}
-function todayYmdET(): string {
-  const { y, m, d } = etDateParts(new Date())
-  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-}
-function rthBoundsTodaySec(): { openSec: number; closeSec: number } {
-  const { y, m, d } = etDateParts(new Date())
-  return { openSec: etWallToUtcSec(y, m, d, 9, 30), closeSec: etWallToUtcSec(y, m, d, 16, 0) }
-}
-// DTE relative to TODAY's ET date, not to each print's own timestamp — a
-// yesterday's-session 0DTE print must not read as -1DTE today. Both sides
-// parsed as UTC midnight so the subtraction is a clean whole-day count.
-function dteOf(expiration: string | undefined, todayYmd: string): number | null {
-  if (!expiration) return null
-  const exp = Date.parse(`${expiration}T00:00:00Z`)
-  const base = Date.parse(`${todayYmd}T00:00:00Z`)
-  if (!Number.isFinite(exp) || !Number.isFinite(base)) return null
-  return Math.round((exp - base) / 86_400_000)
-}
-
-function buildQuery(params: Record<string, string | number | undefined | null>): string {
-  const sp = new URLSearchParams()
-  for (const [k, v] of Object.entries(params)) {
-    if (v === undefined || v === null || v === '') continue
-    sp.set(k, String(v))
-  }
-  return sp.toString()
-}
-
-interface NetBin {
-  sec: number
-  callNet: number
-  putNet: number
-}
-interface FlowHistoryResponse {
-  tape: FlowTapePrint[]
-}
-interface NetPremResponse {
-  bins: NetBin[]
-}
-interface PremSplit {
-  count: number
-  prem: number
-  buyCall: number
-  buyPut: number
-  sellCall: number
-  sellPut: number
-}
-interface PremSplitResponse {
-  split: PremSplit
-}
-
-type FlowRow = FlowTapePrint & { tickerNorm: string }
-
-function toRow(p: FlowTapePrint): FlowRow {
-  return { ...p, tickerNorm: normTicker(p.underlying) }
-}
-function rowKey(r: FlowTapePrint): string {
-  return `${r.ts}|${r.underlying}|${r.side}|${r.strike}|${r.type}`
+function urlParam(name: string): string | null {
+  if (typeof window === 'undefined') return null
+  return new URLSearchParams(window.location.search).get(name)
 }
 
 export default function Flow() {
+  // ?chartonly=1 renders ONLY the Net Drift card — the capture embed.
+  // ?ticker= presets the active ticker. ?dteMax= presets Max DTE.
+  const [chartOnly] = useState(() => urlParam('chartonly') === '1')
+
+  const [date, setDate] = useState<string>(() => todayYmdET())
+  const isToday = date === todayYmdET()
+
   const [view, setView] = useState<View>('ticker')
   const [scope, setScope] = useState<Scope>('all')
 
   const [tickerList, setTickerList] = useState<string[]>([...DEFAULT_TICKERS])
-  const [active, setActive] = useState<string>(DEFAULT_TICKERS[0])
+  const [active, setActive] = useState<string>(() => {
+    const t = urlParam('ticker')
+    return t ? t.toUpperCase() : DEFAULT_TICKERS[0]
+  })
   const [tickerInput, setTickerInput] = useState('')
+  const [recentTickers, setRecentTickers] = useState<string[]>([])
+  const [recentOpen, setRecentOpen] = useState(false)
+  // Hydrated after mount so a server render and the first client render agree.
+  useEffect(() => setRecentTickers(loadRecentTickers()), [])
 
   const [side, setSide] = useState<SideFilter>('all')
   const [optType, setOptType] = useState<TypeFilter>('all')
-  const [minPremium, setMinPremium] = useState(DEFAULT_MIN_PREMIUM)
-  const [minSize, setMinSize] = useState(0)
-  const [expiry, setExpiry] = useState('all')
-  const [dteMin, setDteMin] = useState(0)
-  const [dteMax, setDteMax] = useState<number | null>(null)
+  const [minPremium, setMinPremium] = useState<number>(DEFAULT_MIN_PREMIUM)
+  const [minSize, setMinSize] = useState<number>(0)
+  const [expiry, setExpiry] = useState<string>('all')
+  const [dteMin, setDteMin] = useState<number>(0)
+  const [dteMax, setDteMax] = useState<number | null>(() => {
+    const v = urlParam('dteMax')
+    return v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v)
+  })
   const [otmOnly, setOtmOnly] = useState(true)
   const [chartSpan, setChartSpan] = useState<ChartSpan>('rth')
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
-  const todayYmd = todayYmdET()
-  const premiumMax = view === 'combined' ? 5_000_000 : 1_000_000
-  const premiumStep = view === 'combined' ? 50_000 : 10_000
+  const filters: FlowFilters = useMemo(
+    () => ({ side, optType, minPremium, minSize, expiry, dteMin, dteMax, otmOnly }),
+    [side, optType, minPremium, minSize, expiry, dteMin, dteMax, otmOnly],
+  )
+
+  // Switching back to a single ticker clamps the floor to that view's range.
+  useEffect(() => {
+    if (view === 'ticker' && minPremium > PREMIUM_MAX) setMinPremium(PREMIUM_MAX)
+  }, [view, minPremium])
+
+  // ── Data. Everything the active view needs is fired in parallel at entry;
+  // the `enabled` flags are how a view's unused feeds are skipped rather than
+  // raced (non-negotiable 3). ──
+  const { tape: history, switching: historySwitching } = useFlowHistory(
+    active, date, minPremium, view === 'ticker',
+  )
+  const combinedHistory = useCombinedHistory(date, minPremium, isToday, view === 'combined')
+  const combinedSplit = usePremSplit(date, scope, filters, isToday, view === 'combined')
+  const { bins: netBins, switching: netSwitching } = useNetPremBins(
+    active, date, isToday, filters, view === 'ticker',
+  )
+
+  const flowFrame = useFrame<FlowFrame>('flow')
+  const liveTape = useMemo(() => flowFrame?.data.tape ?? [], [flowFrame])
+  // Two states, not v2's three — see the header note.
+  const status: 'LIVE' | 'WAITING' = flowFrame ? 'LIVE' : 'WAITING'
+
+  // ── Merge, scope, filter. ──
+  const merged = useMemo(() => mergeTape(history, liveTape, isToday), [history, liveTape, isToday])
+  const mergedCombined = useMemo(
+    () => mergeTape(combinedHistory, liveTape, isToday),
+    [combinedHistory, liveTape, isToday],
+  )
+
+  const expiryOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const o of merged) {
+      if (o.underlying && normTicker(o.underlying) === active && o.expiration) set.add(o.expiration)
+    }
+    return [...set].sort()
+  }, [merged, active])
+
+  const combinedExpiryOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const o of mergedCombined) {
+      if (scope === 'exIdx' && INDEX_TICKERS.has(normTicker(o.underlying))) continue
+      if (o.expiration) set.add(o.expiration)
+    }
+    return [...set].sort()
+  }, [mergedCombined, scope])
+
+  /** Active ticker, all filters, OLDEST first — feeds the chart's hover index. */
+  const filteredAsc = useMemo(
+    () =>
+      merged.filter(
+        (o) => normTicker(o.underlying) === active && passesFilters(o, filters, date),
+      ),
+    [merged, active, filters, date],
+  )
+  const filtered = useMemo(() => [...filteredAsc].reverse(), [filteredAsc])
+
+  const filteredCombined = useMemo(() => {
+    const rows = mergedCombined.filter((o) => {
+      if (scope === 'exIdx' && INDEX_TICKERS.has(normTicker(o.underlying))) return false
+      return passesFilters(o, filters, date)
+    })
+    return rows.reverse()
+  }, [mergedCombined, scope, filters, date])
+
+  const tapeRows = view === 'combined' ? filteredCombined : filtered
+  const visibleRows: Row[] = useMemo(
+    () => tapeRows.slice(0, MAX_TAPE_ROWS).map((o) => ({ ...o, tickerNorm: normTicker(o.underlying) })),
+    [tapeRows],
+  )
+
+  // 0DTE = today's expiration if there is one, else the soonest future one.
+  const nearestExpiry = useMemo(() => {
+    const opts = view === 'combined' ? combinedExpiryOptions : expiryOptions
+    if (!opts.length) return null
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+    return opts.find((x) => x >= today) ?? opts[opts.length - 1]
+  }, [view, combinedExpiryOptions, expiryOptions])
+
+  // ── Live per-contract stats and spots, driven by the VISIBLE rows only: the
+  // fetch groups by (ticker, expiry), so this is a few calls however many
+  // prints are on screen. ──
+  const lookupStat = useContractStats(visibleRows, true)
+  const visibleTickers = useMemo(
+    () => [...new Set(visibleRows.map((o) => o.tickerNorm).filter(Boolean))],
+    [visibleRows],
+  )
+  const spotByTicker = useLiveSpots(visibleTickers, true)
+
+  // ── Dislocation velocity. A print's own `spot` is the SPX level on every
+  // frame, so the newest live print is the freshest source; /proxy/quotes
+  // returns last=0 for the SPX index, which is why it is the fallback and not
+  // the other way round. ──
+  const spxSpotFallback = useLiveSpots(['SPX'], true)
+  const liveSpx = useMemo(() => {
+    let px = 0
+    let ts = 0
+    for (const o of liveTape) if (o.spot && o.ts > ts) { ts = o.ts; px = o.spot }
+    return px || spxSpotFallback['SPX']
+  }, [liveTape, spxSpotFallback])
+  const dvBars = useMinuteBars(liveSpx)
+  const dv = useMemo(() => {
+    let st = initDV()
+    let out
+    for (const b of dvBars) ({ state: st, out } = pushDV(st, b, { lambda: 0.05, zThresh: 2 }))
+    return out
+  }, [dvBars])
+
+  // ── Net drift. ──
+  const netSeries = useMemo(
+    () => buildNetSeries(netBins, { isToday, date, chartSpan }),
+    [netBins, isToday, date, chartSpan],
+  )
+
+  /**
+   * The visible tape indexed by minute bucket, biggest first — what the chart
+   * hover lists.
+   *
+   * Built from `filtered` (the ACTIVE-TICKER list) exactly as v2 built it, which
+   * has two consequences worth knowing rather than quietly fixing: it respects
+   * the tape's Min Premium slider while the line behind it uses the fixed chart
+   * floor, and in Combined view it still lists the active ticker's prints. Both
+   * are recorded in docs/parity/flow.md, Appendix 1.
+   */
+  const ordersByMin = useMemo(() => {
+    const idx = new Map<number, FlowTapePrint[]>()
+    for (const o of filtered) {
+      if (!o.isOtm) continue // the tooltip lists OTM prints only
+      const minSec = Math.floor(o.ts / 1000 / BIN_SEC) * BIN_SEC
+      const arr = idx.get(minSec)
+      if (arr) arr.push(o)
+      else idx.set(minSec, [o])
+    }
+    for (const arr of idx.values()) arr.sort((a, b) => (b.premium || 0) - (a.premium || 0))
+    return idx
+  }, [filtered])
+
+  // ── Totals. Combined prefers the SQL split — exact, over the full filtered
+  // session — and falls back to summing the capped tape only while that request
+  // is in flight. ──
+  const totals = useMemo(
+    () => (view === 'combined' && combinedSplit ? totalsFromSplit(combinedSplit) : sumTotals(tapeRows)),
+    [view, combinedSplit, tapeRows],
+  )
+
+  function resetFilters() {
+    setSide('all'); setOptType('all'); setMinPremium(DEFAULT_MIN_PREMIUM); setMinSize(0)
+    setExpiry('all'); setDteMin(0); setDteMax(null); setOtmOnly(true)
+  }
+  function applyBigOtmPreset() {
+    setView('combined'); setScope('all')
+    setSide('all'); setOptType('all'); setMinSize(0); setExpiry('all')
+    setMinPremium(500_000); setDteMin(0); setDteMax(7); setOtmOnly(true)
+  }
+  const bigOtmActive =
+    view === 'combined' && minPremium === 500_000 && dteMin === 0 && dteMax === 7 && otmOnly
 
   function selectTicker(raw: string) {
     const t = raw.trim().toUpperCase()
@@ -182,453 +293,720 @@ export default function Flow() {
     setTickerList((prev) => (prev.includes(t) ? prev : [...prev, t]))
     setActive(t)
     setTickerInput('')
+    setRecentTickers((prev) => pushRecentTicker(prev, t))
   }
-  function resetFilters() {
-    setSide('all'); setOptType('all'); setMinPremium(DEFAULT_MIN_PREMIUM); setMinSize(0)
-    setExpiry('all'); setDteMin(0); setDteMax(null); setOtmOnly(true)
-  }
-  function applyBigOtmPreset() {
-    setView('combined'); setScope('all'); setSide('all'); setOptType('all')
-    setMinSize(0); setExpiry('all'); setMinPremium(500_000); setDteMin(0); setDteMax(7); setOtmOnly(true)
-  }
-  const presetActive = view === 'combined' && minPremium === 500_000 && dteMin === 0 && dteMax === 7 && otmOnly
-
-  // ── Fetches, fired in parallel, no waterfall. Each url is null when the
-  // active view has no use for it, which is how useQuery is told to skip it. ──
-  const historyUrl = useMemo(() => {
-    const params: Record<string, string | number | undefined> = {
-      limit: view === 'combined' ? 2000 : 1000,
-      minPremium: minPremium > 0 ? minPremium : undefined,
-    }
-    if (view === 'ticker') params.underlying = active
-    return `/proxy/flow-history?${buildQuery(params)}`
-  }, [view, active, minPremium])
-
-  const netBinsUrl = useMemo(() => {
-    if (view !== 'ticker') return null
-    return `/proxy/flow-netprem?${buildQuery({
-      underlying: active,
-      bin: 60,
-      minPremium: CHART_MIN_PREMIUM,
-      side: side !== 'all' ? side : undefined,
-      type: optType !== 'all' ? optType : undefined,
-      expiry: expiry !== 'all' ? expiry : undefined,
-      dteMin: dteMin > 0 ? dteMin : undefined,
-      dteMax: dteMax ?? undefined,
-      otmOnly: otmOnly ? 1 : undefined,
-    })}`
-  }, [view, active, side, optType, expiry, dteMin, dteMax, otmOnly])
-
-  const premSplitUrl = useMemo(() => {
-    if (view !== 'combined') return null
-    return `/proxy/flow-premsplit?${buildQuery({
-      exIdx: scope === 'exIdx' ? 1 : undefined,
-      side: side !== 'all' ? side : undefined,
-      type: optType !== 'all' ? optType : undefined,
-      minPremium: minPremium > 0 ? minPremium : undefined,
-      minSize: minSize > 0 ? minSize : undefined,
-      expiry: expiry !== 'all' ? expiry : undefined,
-      dteMin: dteMin > 0 ? dteMin : undefined,
-      dteMax: dteMax ?? undefined,
-      otmOnly: otmOnly ? 1 : undefined,
-    })}`
-  }, [view, scope, side, optType, minPremium, minSize, expiry, dteMin, dteMax, otmOnly])
-
-  const historyQ = useQuery<FlowHistoryResponse>(historyUrl, { pollMs: 15_000 })
-  const netBinsQ = useQuery<NetPremResponse>(netBinsUrl, { pollMs: 5_000 })
-  const premSplitQ = useQuery<PremSplitResponse>(premSplitUrl, { pollMs: 15_000 })
-
-  // Live prints. The frame is SPX-only today (see the header note above), but
-  // reading it through useFrame rather than inventing a per-ticker filter here
-  // means this page picks up more tickers for free the day the server does.
-  const flowFrame = useFrame<FlowFrame>('flow')
-  const liveTape = flowFrame?.data.tape ?? []
-  // Live SPX spot — the one underlying with a real-time price on this socket —
-  // used below to turn %OTM from a frozen print-time flag into a live figure.
-  const spot = useField<SpotFrame, number | undefined>('spot', (f) => f?.data.spot)
-
-  // ── Merge persisted ∪ live, deduped by print identity (live wins), newest
-  // first — same shape as v2's `merged`/`mergedCombined`. ──
-  const rowsAll = useMemo(() => {
-    const byKey = new Map<string, FlowRow>()
-    for (const p of historyQ.data?.tape ?? []) byKey.set(rowKey(p), toRow(p))
-    for (const p of liveTape) byKey.set(rowKey(p), toRow(p))
-    return [...byKey.values()].sort((a, b) => b.ts - a.ts)
-  }, [historyQ.data, liveTape])
-
-  const scopedRows = useMemo(() => {
-    if (view === 'ticker') return rowsAll.filter((r) => r.tickerNorm === active)
-    if (scope === 'exIdx') return rowsAll.filter((r) => !INDEX_TICKERS.has(r.tickerNorm))
-    return rowsAll
-  }, [rowsAll, view, active, scope])
-
-  const expiryOptions = useMemo(() => {
-    const set = new Set<string>()
-    for (const r of scopedRows) if (r.expiration) set.add(r.expiration)
-    return [...set].sort()
-  }, [scopedRows])
-
-  const filteredRows = useMemo(() => {
-    return scopedRows.filter((r) => {
-      if (side !== 'all' && r.side !== side) return false
-      if (optType !== 'all' && r.type !== optType) return false
-      if (otmOnly && !r.isOtm) return false
-      if (r.premium < minPremium) return false
-      if (r.size < minSize) return false
-      if (expiry !== 'all' && r.expiration !== expiry) return false
-      if (dteMin > 0 || dteMax != null) {
-        const d = dteOf(r.expiration, todayYmd)
-        if (d == null) return false
-        if (d < dteMin) return false
-        if (dteMax != null && d > dteMax) return false
-      }
-      return true
-    })
-  }, [scopedRows, side, optType, otmOnly, minPremium, minSize, expiry, dteMin, dteMax, todayYmd])
-
-  const MAX_TAPE_ROWS = 500
-  const visibleRows = filteredRows.slice(0, MAX_TAPE_ROWS)
-
-  // ── Premium split (the four totals tiles). Combined view prefers the SQL
-  // split — exact over the FULL filtered session — and only falls back to
-  // summing the capped tape while that request is in flight. ──
-  const totals = useMemo(() => {
-    if (view === 'combined' && premSplitQ.data) {
-      const s = premSplitQ.data.split
-      return { count: s.count, prem: s.prem, buyCall: s.buyCall, buyPut: s.buyPut, sellCall: s.sellCall, sellPut: s.sellPut }
-    }
-    let prem = 0, buyCall = 0, buyPut = 0, sellCall = 0, sellPut = 0
-    for (const r of filteredRows) {
-      prem += r.premium
-      if (r.type === 'call') { if (r.side === 'buy') buyCall += r.premium; else sellCall += r.premium }
-      else { if (r.side === 'buy') buyPut += r.premium; else sellPut += r.premium }
-    }
-    return { count: filteredRows.length, prem, buyCall, buyPut, sellCall, sellPut }
-  }, [view, premSplitQ.data, filteredRows])
-
-  // ── Net-drift totals for the ticker view. Sums the SQL-aggregated bins from
-  // /proxy/flow-netprem — the same source v2's canvas chart drew from — so the
-  // readout stays right even though the chart itself is a stub below. ──
-  const netTotals = useMemo(() => {
-    const bins = netBinsQ.data?.bins ?? []
-    let call = 0, put = 0
-    if (chartSpan === 'rth') {
-      const { openSec, closeSec } = rthBoundsTodaySec()
-      for (const b of bins) if (b.sec >= openSec && b.sec <= closeSec) { call += b.callNet; put += b.putNet }
-    } else {
-      for (const b of bins) { call += b.callNet; put += b.putNet }
-    }
-    return { call, put }
-  }, [netBinsQ.data, chartSpan])
-
-  function otmCell(r: FlowRow): ReactNode {
-    // Live percentage only where a live spot exists at all — SPX, off the
-    // `spot` frame. Every other ticker falls back to the print-time OTM flag,
-    // which is honest about being frozen rather than quietly wrong.
-    if (isSocketSymbol(r.tickerNorm) && spot != null && spot > 0) {
-      const pct = ((r.type === 'call' ? r.strike - spot : spot - r.strike) / spot) * 100
-      return <span className={pct >= 0 ? 'text-accent' : 'text-down'}>{pct.toFixed(1)}%</span>
-    }
-    return <span className="text-muted">{r.isOtm ? 'OTM' : 'ITM'}</span>
-  }
-
-  // Vol / OI / IV have no source in the v3 contract: FlowTapePrint carries the
-  // print itself, not a live per-contract chain lookup. v2 filled these from
-  // useContractStats/useLiveSpots (hooks/useContractStats.ts), which resolves
-  // Vol/OI/IV per (ticker, expiry) off /api/chains — a REST surface this file
-  // cannot reach without turning into that hook's whole batching machinery.
-  // TODO(v3): port useContractStats/useLiveSpots from v2's
-  // hooks/useContractStats.ts so these three columns read live instead of "—".
-  const columns: Column<FlowRow>[] = useMemo(
-    () => [
-      { key: 'time', header: 'Time', cell: (r) => fmtTime(r.ts), width: '76px' },
-      { key: 'ticker', header: 'Ticker', cell: (r) => r.tickerNorm, width: '64px' },
-      { key: 'exp', header: 'Exp', cell: (r) => r.expiration || '—', width: '84px' },
-      { key: 'strike', header: 'Strike', cell: (r) => r.strike.toLocaleString(), numeric: true },
-      {
-        key: 'cp', header: 'C/P', align: 'center', width: '40px',
-        cell: (r) => (
-          <span className={r.type === 'call' ? 'text-up' : r.type === 'put' ? 'text-down' : 'text-muted'}>
-            {r.type === 'call' ? 'C' : r.type === 'put' ? 'P' : r.type}
-          </span>
-        ),
-      },
-      {
-        key: 'side', header: 'Side', width: '52px',
-        cell: (r) => <span className={r.side === 'buy' ? 'text-up' : 'text-down'}>{r.side.toUpperCase()}</span>,
-      },
-      { key: 'price', header: 'Price', cell: (r) => `$${r.price.toFixed(2)}`, numeric: true },
-      { key: 'size', header: 'Size', cell: (r) => r.size.toLocaleString(), numeric: true },
-      {
-        key: 'premium', header: 'Premium', numeric: true,
-        cell: (r) => (
-          <span className={r.premium >= WHALE_FLOOR ? 'font-bold' : undefined}>{fmtPremium(r.premium)}</span>
-        ),
-      },
-      {
-        key: 'costctr', numeric: true,
-        header: <span title="Cost of one contract (price × 100)">Cost/Ctr</span>,
-        cell: (r) => fmtContractCost(r.price),
-      },
-      {
-        key: 'vol', numeric: true,
-        header: <span title="Contract's traded volume today — not wired in v3 yet, see the TODO above the column list">Vol</span>,
-        cell: () => '—',
-      },
-      {
-        key: 'oi', numeric: true,
-        header: <span title="Contract's current open interest — not wired in v3 yet, see the TODO above the column list">OI</span>,
-        cell: () => '—',
-      },
-      {
-        key: 'iv', numeric: true,
-        header: <span title="Current implied volatility — not wired in v3 yet, see the TODO above the column list">IV</span>,
-        cell: () => '—',
-      },
-      {
-        key: 'otm', numeric: true,
-        header: <span title="Strike vs LIVE underlying spot. + = OTM, − = now ITM. Live only for SPX; other tickers show the print-time flag.">%OTM</span>,
-        cell: otmCell,
-      },
-      {
-        key: 'dte', numeric: true,
-        header: <span title="Calendar days to expiration">DTE</span>,
-        cell: (r) => { const d = dteOf(r.expiration, todayYmd); return d == null ? '—' : `${d}d` },
-      },
-    ],
-    [todayYmd, spot],
-  )
 
   const combinedLabel = scope === 'exIdx' ? 'All − Indices' : 'All Tickers'
   const tapeLabel = view === 'combined' ? combinedLabel : active
+  const premiumMax = view === 'combined' ? PREMIUM_MAX_COMBINED : PREMIUM_MAX
+  const premiumStep = view === 'combined' ? PREMIUM_STEP_COMBINED : PREMIUM_STEP
+
+  // ── The Net Drift card, shared by both layouts. Kept MOUNTED in Combined view
+  // (hidden, not unmounted) so the once-created chart keeps its instance. ──
+  const netDriftCard = (
+    <Card
+      flush
+      className={view !== 'ticker' && !chartOnly ? 'hidden' : undefined}
+      title={
+        <span>
+          Net Drift (Premium) — <span className="text-accent">{active}</span>
+          {netSwitching && <span className="ml-2 text-xs text-muted">· loading…</span>}
+        </span>
+      }
+    >
+      <div className={netSwitching ? 'stale flex min-h-0 flex-1 flex-col' : 'flex min-h-0 flex-1 flex-col'}>
+        <div className="flex flex-wrap items-center justify-center gap-6 px-3 py-2 text-xs font-semibold">
+          <span className="text-up">● Calls {fmtPremium(netSeries.lastCall)}</span>
+          <span className="text-down">● Puts {fmtPremium(netSeries.lastPut)}</span>
+          <span className="text-muted">Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
+          {!chartOnly && (
+            <SegGroup<ChartSpan>
+              value={chartSpan}
+              onChange={setChartSpan}
+              options={[
+                { label: 'RTH', value: 'rth', title: 'Regular trading hours only (9:30–4:00 ET)' },
+                { label: '24H', value: '24h', title: 'Full session — includes pre-open and the overnight global session' },
+              ]}
+            />
+          )}
+        </div>
+        {chartSpan === '24h' && netSeries.hasData && (
+          <p className="px-3 pb-2 text-center text-xs tabular text-muted">
+            {fmtEtHm(netSeries.openSec)}–{fmtEtHm(netSeries.closeSec)} ET
+          </p>
+        )}
+        <div className="h-[340px] w-full">
+          <NetDriftChart series={netSeries} ordersByMin={ordersByMin} />
+        </div>
+        {!netSeries.hasData && (
+          <p className="px-3 pb-3 text-center text-xs text-muted">
+            {!isToday
+              ? `No ${active} flow recorded for ${date}.`
+              : status === 'LIVE'
+                ? `No ${active} flow yet for the current filters.`
+                : 'Connecting to feed…'}
+          </p>
+        )}
+        {view === 'ticker' && !chartOnly && (
+          <PremiumSplit totals={totals} caption="(Filtered Tape)" />
+        )}
+      </div>
+    </Card>
+  )
+
+  if (chartOnly) {
+    return (
+      <Page fill>
+        <div id="flow-chart-capture" className="flex min-h-0 flex-1 flex-col p-3">
+          {netDriftCard}
+        </div>
+      </Page>
+    )
+  }
 
   return (
     <Page title="Options Flow">
-      {/* ── View, watchlist/scope, and the full filter strip. ── */}
-      <Card
-        title="Flow — Filters"
-        actions={<Chip label="Reset" on={false} onClick={resetFilters} title="Clear side/type/premium/size/expiry/DTE/moneyness back to defaults" />}
-      >
-        <div className="flex flex-wrap items-center gap-3">
-          <SegGroup
-            options={[{ label: 'By Ticker', value: 'ticker' as View }, { label: 'Combined', value: 'combined' as View }]}
-            value={view}
-            onChange={setView}
+      {/* ── View tabs, preset, session date ── */}
+      <div className="flex flex-wrap items-center gap-3">
+        <SegGroup<View>
+          size="touch"
+          value={view}
+          onChange={setView}
+          options={[
+            { label: 'By Ticker', value: 'ticker' },
+            { label: 'Combined', value: 'combined' },
+          ]}
+        />
+        <Chip
+          size="touch"
+          label="0–7DTE ≥$500K OTM"
+          on={bigOtmActive}
+          onClick={applyBigOtmPreset}
+          title="Combined · 0–7 DTE · ≥$500K premium · OTM only"
+        />
+        <div className="flex items-center gap-2">
+          <label htmlFor="flow-session" className="text-2xs font-bold uppercase tracking-[0.08em] text-muted">
+            Session
+          </label>
+          <input
+            id="flow-session"
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value || todayYmdET())}
+            className="tabular rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg"
           />
-          <Chip
-            label="0–7DTE ≥$500K OTM"
-            on={presetActive}
-            onClick={applyBigOtmPreset}
-            title="Combined · 0–7 DTE · ≥$500K premium · OTM only"
-          />
+          {!isToday && (
+            <>
+              <Chip label="Today" on={false} onClick={() => setDate(todayYmdET())} />
+              <span className="tabular rounded-sm bg-raised px-2 py-0.5 text-2xs text-accent">
+                HISTORICAL
+              </span>
+            </>
+          )}
         </div>
+      </div>
 
-        {/* The ceiling described at the top of this file — said once, here,
-            rather than left for the tape to imply by going quiet. */}
-        <p className="mt-2 text-xs text-faint">
-          Live prints stream for SPX only (the `flow` frame carries no other ticker). Watchlist tickers besides SPX
-          show historical prints from /proxy/flow-history only — nothing arrives for them live.
+      {/* ── Filters ── */}
+      <Card
+        title="Options Flow — Filters"
+        actions={<Chip label="Reset" on={false} onClick={resetFilters} title="Side, type, premium, size, expiry, DTE and moneyness back to defaults" />}
+      >
+        <p className="mb-3 text-xs text-muted">
+          {view === 'combined'
+            ? 'Every ticker on one tape. Choose the scope, then filter.'
+            : 'Live order flow off the shared feed. Pick a watched ticker to drive the chart + tape.'}
         </p>
 
-        {view === 'ticker' ? (
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted">
-              Watchlist ({tickerList.length})
-            </span>
-            {tickerList.map((t) => (
-              <Chip key={t} label={t} on={t === active} onClick={() => selectTicker(t)} />
-            ))}
-            <input
-              value={tickerInput}
-              onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
-              onKeyDown={(e) => { if (e.key === 'Enter') selectTicker(tickerInput) }}
-              placeholder="+ add ticker"
-              spellCheck={false}
-              autoCapitalize="characters"
-              className="w-28 rounded-sm border border-line bg-surface px-2 py-0.5 text-xs uppercase text-fg outline-none placeholder:normal-case placeholder:text-muted focus:border-accent"
-            />
-            <Chip label="Go" on={false} onClick={() => selectTicker(tickerInput)} />
-          </div>
-        ) : (
-          <div className="mt-3">
-            <SegGroup
-              options={[{ label: 'All', value: 'all' as Scope }, { label: 'All − Indices', value: 'exIdx' as Scope }]}
+        {view === 'combined' ? (
+          <Field label="Scope">
+            <SegGroup<Scope>
+              size="touch"
               value={scope}
               onChange={setScope}
-              title="Combined tape scope"
+              options={[
+                { label: 'All', value: 'all' },
+                { label: 'All − Indices', value: 'exIdx' },
+              ]}
             />
-          </div>
+          </Field>
+        ) : (
+          <Field label={`Watchlist (${tickerList.length})`}>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {tickerList.map((t) => (
+                <Chip key={t} label={t} on={t === active} onClick={() => selectTicker(t)} />
+              ))}
+              <input
+                list="flow-ticker-suggestions"
+                value={tickerInput}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="+ add ticker"
+                onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
+                onKeyDown={(e) => { if (e.key === 'Enter') selectTicker(tickerInput) }}
+                className="w-28 rounded-sm border border-line bg-surface2 px-2 py-0.5 text-2xs uppercase text-fg"
+              />
+              <datalist id="flow-ticker-suggestions">
+                {DEFAULT_TICKERS.map((t) => <option key={t} value={t} />)}
+              </datalist>
+              <button
+                type="button"
+                onClick={() => selectTicker(tickerInput)}
+                disabled={!tickerInput.trim()}
+                className="rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold tracking-wide text-accent disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                GO
+              </button>
+              {recentTickers.length > 0 && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setRecentOpen((o) => !o)}
+                    // The blur is delayed so the dropdown's own mousedown lands
+                    // first — without it the panel closes before the click.
+                    onBlur={() => setTimeout(() => setRecentOpen(false), 120)}
+                    className="rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold text-muted"
+                  >
+                    Recent ▾
+                  </button>
+                  {recentOpen && (
+                    <div className="absolute left-0 top-[calc(100%+4px)] z-50 min-w-[120px] overflow-hidden rounded-sm border border-line bg-surface shadow-lg">
+                      {recentTickers.map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onMouseDown={() => { selectTicker(t); setRecentOpen(false) }}
+                          className={[
+                            'block w-full px-3 py-1.5 text-left text-xs font-semibold',
+                            t === active ? 'bg-raised text-fg' : 'text-muted',
+                          ].join(' ')}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </Field>
         )}
 
-        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
-          <div>
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Side</span>
-            <SegGroup
-              options={[
-                { label: 'All', value: 'all' as SideFilter },
-                { label: 'Buy', value: 'buy' as SideFilter },
-                { label: 'Sell', value: 'sell' as SideFilter },
-              ]}
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3">
+          <Field label="Side">
+            <SegGroup<SideFilter>
+              size="touch"
               value={side}
               onChange={setSide}
-            />
-          </div>
-          <div>
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Type</span>
-            <SegGroup
               options={[
-                { label: 'All', value: 'all' as TypeFilter },
-                { label: 'Call', value: 'call' as TypeFilter },
-                { label: 'Put', value: 'put' as TypeFilter },
+                { label: 'ALL', value: 'all' },
+                { label: 'BUY', value: 'buy' },
+                { label: 'SELL', value: 'sell' },
               ]}
+            />
+          </Field>
+
+          <Field label="Type">
+            <SegGroup<TypeFilter>
+              size="touch"
               value={optType}
               onChange={setOptType}
+              options={[
+                { label: 'ALL', value: 'all' },
+                { label: 'CALL', value: 'C' },
+                { label: 'PUT', value: 'P' },
+              ]}
             />
+          </Field>
+
+          <div className="col-span-1 sm:col-span-2">
+            <Field
+              label={
+                <>
+                  Min Premium{' '}
+                  <span className="text-accent">
+                    {minPremium === 0 ? 'Any' : fmtPremium(minPremium)}
+                  </span>
+                </>
+              }
+            >
+              <input
+                type="range"
+                min={0}
+                max={premiumMax}
+                step={premiumStep}
+                value={minPremium}
+                onChange={(e) => setMinPremium(Number(e.target.value))}
+                className="w-full accent-[var(--color-accent)]"
+              />
+            </Field>
           </div>
-          <div className="col-span-2">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
-              Min Premium <span className="text-accent">{minPremium === 0 ? 'Any' : fmtPremium(minPremium)}</span>
-            </span>
-            <input
-              type="range" min={0} max={premiumMax} step={premiumStep}
-              value={minPremium}
-              onChange={(e) => setMinPremium(Number(e.target.value))}
-              className="w-full accent-[color:var(--color-accent)]"
-            />
-          </div>
-          <div>
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Min Size</span>
-            <input
-              type="number" min={0} placeholder="contracts" value={minSize || ''}
-              onChange={(e) => setMinSize(Number(e.target.value) || 0)}
-              className="w-full rounded-sm border border-line bg-surface px-2 py-1 text-xs text-fg outline-none focus:border-accent"
-            />
-          </div>
-          <div>
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Expiry</span>
+
+          <Field label="Min Size">
+            <NumField placeholder="contracts" value={minSize || ''} onChange={(v) => setMinSize(Number(v) || 0)} />
+          </Field>
+
+          <Field
+            label={
+              <>
+                Expiry
+                <button
+                  type="button"
+                  disabled={!nearestExpiry}
+                  title={nearestExpiry ? `0DTE / nearest expiry: ${nearestExpiry}` : 'no expirations loaded'}
+                  onClick={() => {
+                    if (!nearestExpiry) return
+                    // Toggle off leaves the DTE bounds alone; toggle on clears
+                    // them, because an expiry and a DTE window are two ways of
+                    // saying the same thing and they fight.
+                    if (expiry === nearestExpiry) { setExpiry('all'); return }
+                    setExpiry(nearestExpiry); setDteMin(0); setDteMax(null)
+                  }}
+                  className={[
+                    'ml-2 rounded-sm border px-1.5 py-px text-3xs font-semibold',
+                    nearestExpiry && expiry === nearestExpiry
+                      ? 'border-accent bg-raised text-fg'
+                      : 'border-line text-muted disabled:opacity-40',
+                  ].join(' ')}
+                >
+                  0DTE
+                </button>
+              </>
+            }
+          >
             <select
-              value={expiry} onChange={(e) => setExpiry(e.target.value)}
-              className="w-full rounded-sm border border-line bg-surface px-2 py-1 text-xs text-fg outline-none focus:border-accent"
+              value={expiry}
+              onChange={(e) => setExpiry(e.target.value)}
+              className="tabular w-full rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg"
             >
               <option value="all">All</option>
-              {expiryOptions.map((x) => <option key={x} value={x}>{x}</option>)}
+              {(view === 'combined' ? combinedExpiryOptions : expiryOptions).map((x) => (
+                <option key={x} value={x}>{x}</option>
+              ))}
             </select>
-          </div>
-          <div>
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Min DTE</span>
-            <input
-              type="number" min={0} placeholder="days" value={dteMin || ''}
-              onChange={(e) => setDteMin(Number(e.target.value) || 0)}
-              className="w-full rounded-sm border border-line bg-surface px-2 py-1 text-xs text-fg outline-none focus:border-accent"
+          </Field>
+
+          <Field label="Min DTE">
+            <NumField placeholder="days" value={dteMin || ''} onChange={(v) => setDteMin(Number(v) || 0)} />
+          </Field>
+
+          <Field label="Max DTE">
+            {/* `0` is a real value here (0DTE only) and must not be coerced to
+                "unset" — only an empty string means unset. */}
+            <NumField
+              placeholder="days"
+              value={dteMax ?? ''}
+              onChange={(v) => setDteMax(v === '' ? null : Number(v))}
             />
-          </div>
-          <div>
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Max DTE</span>
-            <input
-              type="number" min={0} placeholder="days" value={dteMax ?? ''}
-              onChange={(e) => setDteMax(e.target.value === '' ? null : Number(e.target.value))}
-              className="w-full rounded-sm border border-line bg-surface px-2 py-1 text-xs text-fg outline-none focus:border-accent"
-            />
-          </div>
-          <div>
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Moneyness</span>
-            <SegGroup
-              options={[{ label: 'All', value: 'all' }, { label: 'OTM', value: 'otm' }]}
+          </Field>
+
+          <Field label="Moneyness">
+            <SegGroup<'all' | 'otm'>
+              size="touch"
               value={otmOnly ? 'otm' : 'all'}
               onChange={(v) => setOtmOnly(v === 'otm')}
-            />
-          </div>
-          <div>
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Chart Span</span>
-            <SegGroup
               options={[
-                { label: 'RTH', value: 'rth' as ChartSpan, title: 'Regular trading hours only (9:30–4:00 ET)' },
-                { label: '24H', value: '24h' as ChartSpan, title: 'Full session, including pre-open and overnight prints' },
+                { label: 'ALL', value: 'all' },
+                { label: 'OTM', value: 'otm' },
               ]}
-              value={chartSpan}
-              onChange={setChartSpan}
             />
-          </div>
+          </Field>
         </div>
-        {historyQ.error && (
-          <p className="mt-3 text-xs text-down">History fetch failed — filters above are working from live prints only.</p>
-        )}
       </Card>
 
-      {/* ── Totals tiles ── */}
-      <Card
-        title="Premium Split"
-        actions={<span className="text-xs text-muted">{view === 'combined' ? 'Full session — SQL' : 'Filtered tape'}</span>}
-        stale={view === 'combined' && premSplitQ.loading && !premSplitQ.data}
-      >
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <Stat label="BUY CALLS" value={fmtPremium(totals.buyCall)} direction="up" />
-          <Stat label="BUY PUTS" value={fmtPremium(totals.buyPut)} direction="down" />
-          <Stat label="SELL CALL" value={fmtPremium(totals.sellCall)} direction="down" />
-          <Stat label="SELL PUT" value={fmtPremium(totals.sellPut)} direction="up" />
+      {netDriftCard}
+
+      {/* ── Dislocation velocity ── */}
+      <Card>
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <div>
+            <div className="text-2xs uppercase tracking-[0.08em] text-muted">
+              Dislocation Velocity · SPX 1m
+            </div>
+            <div
+              className={[
+                'text-3xl font-bold leading-tight tabular',
+                dv && dv.velocity > 0 ? 'text-up' : dv && dv.velocity < 0 ? 'text-down' : 'text-muted',
+              ].join(' ')}
+            >
+              {dv ? dv.velocity.toFixed(2) : '—'}
+            </div>
+          </div>
+          <div className="text-right text-xs tabular text-muted">
+            <div>
+              z {dv ? dv.z.toFixed(1) : '—'} · clv {dv ? dv.clv.toFixed(2) : '—'}
+            </div>
+            <div
+              className={[
+                'font-semibold',
+                !dv || dv.regime === 'quiet'
+                  ? 'text-muted'
+                  : dv.regime === 'two-sided'
+                    ? 'text-accent'
+                    : dv.velocity > 0
+                      ? 'text-up'
+                      : 'text-down',
+              ].join(' ')}
+            >
+              {dv ? dv.regime : 'building bars…'}
+            </div>
+          </div>
         </div>
-        {view === 'combined' && premSplitQ.error && (
-          <p className="mt-3 text-xs text-down">Premium-split query failed — totals above are summed from the capped tape instead.</p>
-        )}
       </Card>
 
-      {/* ── Net Drift (Premium) — canvas chart NOT ported, see TODO below. ── */}
-      {view === 'ticker' && (
-        <Card title={<>Net Drift (Premium) — <span className="text-accent">{active}</span></>}>
-          <div className="flex flex-wrap items-center justify-center gap-6 pb-2 text-xs font-semibold">
-            <span className="text-up">● Calls {fmtPremium(netTotals.call)}</span>
-            <span className="text-down">● Puts {fmtPremium(netTotals.put)}</span>
-            <span className="text-muted">Net {fmtPremium(netTotals.call + netTotals.put)}</span>
-          </div>
-          {/*
-            v2 drew this as a lightweight-charts line/histogram pair — cumulative
-            call vs put net premium per minute bin, plus a volume histogram and a
-            crosshair tooltip listing the OTM prints in the hovered minute (the
-            `createChart`/callSeries/putSeries/volSeries effect and the
-            subscribeCrosshairMove tooltip builder in components/pages/Flow.tsx,
-            roughly lines 780–926). That renderer is not ported here; the two
-            totals above come from the SAME /proxy/flow-netprem bins the chart
-            drew from, summed client-side over whichever window (RTH/24H) is
-            selected above.
-          */}
-          <p className="text-xs text-faint">
-            The cumulative net-drift line chart itself is not yet ported to v3 — the totals above are real, aggregated
-            from the same {chartSpan === 'rth' ? 'RTH (9:30–4:00 ET)' : '24-hour'} bins the v2 chart drew.
-          </p>
-          {/* TODO(v3): port FlowPage's lightweight-charts net-drift renderer
-              (createChart + LineSeries/HistogramSeries + subscribeCrosshairMove,
-              components/pages/Flow.tsx ~L780–926) once a charting primitive
-              exists in v3's design system. */}
-          {netBinsQ.error && (
-            <p className="text-xs text-down">Net-drift history unavailable — totals above may be stale.</p>
-          )}
+      {view === 'combined' && (
+        <Card flush title={<span>Premium Split — <span className="text-accent">{combinedLabel}</span></span>}>
+          <PremiumSplit totals={totals} caption="(Full Session — SQL)" />
         </Card>
       )}
 
       {/* ── Tape ── */}
-      <Card
-        title={`Flow Tape — ${tapeLabel}`}
-        actions={
-          <span className="tabular text-xs text-muted">
-            <strong className="text-fg">{totals.count.toLocaleString()}</strong> orders · Total{' '}
-            <strong className="text-fg">{fmtPremium(totals.prem)}</strong>
+      <Card flush>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+          <div className="flex flex-wrap items-baseline gap-5">
+            <span className="text-sm font-bold uppercase tracking-[0.12em] text-fg">
+              Flow Tape — {tapeLabel}
+            </span>
+            {view === 'ticker' && historySwitching && (
+              <span className="text-xs font-semibold text-muted">loading…</span>
+            )}
+            <span className="text-xs text-muted">
+              <strong className="tabular text-fg">{totals.count.toLocaleString()}</strong> orders
+            </span>
+            <span className="text-xs text-muted">
+              Total <strong className="tabular text-fg">{fmtPremium(totals.prem)}</strong>
+            </span>
+            <span className="text-xs text-muted">
+              Calls <strong className="tabular text-up">{fmtPremium(totals.callPrem)}</strong>
+            </span>
+            <span className="text-xs text-muted">
+              Puts <strong className="tabular text-down">{fmtPremium(totals.putPrem)}</strong>
+            </span>
+          </div>
+          <span
+            className={[
+              'tabular rounded-sm px-2 py-0.5 text-2xs',
+              !isToday || status === 'LIVE' ? 'bg-raised text-accent' : 'bg-raised text-down',
+            ].join(' ')}
+          >
+            {isToday ? status : `${date} · HISTORICAL`}
           </span>
-        }
-        flush
-        stale={historyQ.loading && filteredRows.length === 0}
-      >
-        <Table
-          columns={columns}
+        </div>
+
+        <Tape
           rows={visibleRows}
-          rowKey={(r, i) => `${rowKey(r)}-${i}`}
-          empty={<span>No {tapeLabel} flow matches the current filters.</span>}
+          totalRows={tapeRows.length}
+          view={view}
+          date={date}
+          isToday={isToday}
+          status={status}
+          label={tapeLabel}
+          expandedKey={expandedKey}
+          onToggle={setExpandedKey}
+          lookupStat={lookupStat}
+          spotByTicker={spotByTicker}
         />
-        {filteredRows.length > MAX_TAPE_ROWS && (
-          <p className="p-2 text-center text-xs text-faint">
-            Showing newest {MAX_TAPE_ROWS.toLocaleString()} of {filteredRows.length.toLocaleString()} — tighten filters to narrow.
-          </p>
-        )}
       </Card>
     </Page>
+  )
+}
+
+// ── Small building blocks ────────────────────────────────────────────────────
+
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="mb-3">
+      <div className="mb-1 text-2xs font-bold uppercase tracking-[0.08em] text-muted">{label}</div>
+      {children}
+    </div>
+  )
+}
+
+function NumField({
+  value, onChange, placeholder,
+}: {
+  value: number | string
+  onChange: (v: string) => void
+  placeholder: string
+}) {
+  return (
+    <input
+      type="number"
+      min={0}
+      placeholder={placeholder}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="tabular w-full rounded-sm border border-line bg-surface2 px-2 py-1 text-xs text-fg"
+    />
+  )
+}
+
+/**
+ * Buy/sell × call/put, coloured and heat-barred by DIRECTIONAL BIAS — so "sell
+ * puts" reads bullish, which is the whole reason this is four tiles and not a
+ * two-way split.
+ */
+function PremiumSplit({
+  totals, caption,
+}: {
+  totals: { buyCall: number; buyPut: number; sellCall: number; sellPut: number }
+  caption: string
+}) {
+  const cards = [
+    { label: 'BUY CALLS', value: totals.buyCall, bull: true },
+    { label: 'BUY PUTS', value: totals.buyPut, bull: false },
+    { label: 'SELL CALL', value: totals.sellCall, bull: false },
+    { label: 'SELL PUT', value: totals.sellPut, bull: true },
+  ]
+  const max = Math.max(1, ...cards.map((c) => c.value))
+  return (
+    <div className="px-4 pb-4 pt-1">
+      <div className="mb-2 text-2xs font-bold uppercase tracking-[0.08em] text-muted">
+        Premium Split {caption}
+      </div>
+      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+        {cards.map((c) => {
+          // A 2% floor so a zero tile still shows a sliver — an empty track and
+          // a missing track look the same and one of them is a bug.
+          const pct = Math.max(2, (c.value / max) * 100)
+          return (
+            <div key={c.label} className="flex flex-col gap-2 rounded-md border border-line bg-surface2 px-3 py-3">
+              <div className="flex items-center justify-between">
+                <span className="text-2xs font-bold uppercase tracking-[0.08em] text-muted">
+                  {c.label}
+                </span>
+                <span className={['text-2xs font-bold tracking-wide', c.bull ? 'text-up' : 'text-down'].join(' ')}>
+                  {c.bull ? '▲ BULL' : '▼ BEAR'}
+                </span>
+              </div>
+              <span className={['text-lg font-bold tabular', c.bull ? 'text-up' : 'text-down'].join(' ')}>
+                {fmtPremium(c.value)}
+              </span>
+              <div className="h-1.5 overflow-hidden rounded-full bg-raised">
+                <div
+                  className={['h-full rounded-full', c.bull ? 'bg-up' : 'bg-down'].join(' ')}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── The tape ─────────────────────────────────────────────────────────────────
+//
+// A grid rather than the Table primitive: a row here can EXPAND into a contract
+// drawer, and a <tbody> that grows a full-width panel between two rows is a
+// colspan trick that fights every other thing Table does well.
+
+/** Ticker Time Side Strike Spot Type Size Cost/Ctr Premium | Vol OI IV %OTM DTE | Expiry Bias */
+const GRID = '78px 56px 84px 72px 46px 74px 88px 96px 74px 68px 58px 66px 44px 88px 74px'
+const GRID_COMBINED = `64px ${GRID}`
+
+const HEADERS: Array<{ label: string; align?: 'right' | 'center'; title?: string }> = [
+  { label: 'Time' },
+  { label: 'Side' },
+  { label: 'Strike', align: 'right' },
+  { label: 'Spot', align: 'right' },
+  { label: 'Type', align: 'center' },
+  { label: 'Size', align: 'right' },
+  { label: 'Cost/Ctr', align: 'right', title: 'Cost of one contract (price × 100)' },
+  { label: 'Premium', align: 'right' },
+  { label: 'Vol', align: 'right', title: "Contract's traded volume TODAY (live, not at print time)" },
+  { label: 'OI', align: 'right', title: "Contract's current open interest" },
+  { label: 'IV', align: 'right', title: 'Current implied volatility' },
+  { label: '% OTM', align: 'right', title: 'Strike vs LIVE underlying spot. + = OTM, − = now ITM' },
+  { label: 'DTE', align: 'right', title: 'Calendar days to expiration' },
+  { label: 'Expiry', align: 'right' },
+  { label: 'Bias', align: 'center' },
+]
+
+const CELL_ALIGN = { right: 'text-right', center: 'text-center' } as const
+
+function Tape({
+  rows, totalRows, view, date, isToday, status, label,
+  expandedKey, onToggle, lookupStat, spotByTicker,
+}: {
+  rows: Row[]
+  totalRows: number
+  view: View
+  date: string
+  isToday: boolean
+  status: string
+  label: string
+  expandedKey: string | null
+  onToggle: (k: string | null) => void
+  lookupStat: (r: Row) => ContractStat | null
+  spotByTicker: Record<string, number>
+}) {
+  const template = view === 'combined' ? GRID_COMBINED : GRID
+
+  if (totalRows === 0) {
+    return (
+      <p className="p-6 text-xs text-muted">
+        {!isToday
+          ? `No ${label} flow recorded for ${date}.`
+          : status === 'LIVE'
+            ? `No ${label} flow matches the current filters.`
+            : 'Connecting to feed…'}
+      </p>
+    )
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <div style={{ minWidth: view === 'combined' ? 1180 : 1116 }}>
+        <div
+          className="grid gap-2 border-b border-line px-4 py-2 text-2xs font-bold uppercase tracking-[0.06em] text-muted"
+          style={{ gridTemplateColumns: template }}
+        >
+          {view === 'combined' && <span>Ticker</span>}
+          {HEADERS.map((h) => (
+            <span key={h.label} className={h.align ? CELL_ALIGN[h.align] : undefined} title={h.title}>
+              {h.label}
+            </span>
+          ))}
+        </div>
+
+        <div>
+          {rows.map((o, i) => (
+            <TapeRow
+              key={`${o.ts}-${o.symbol}-${i}`}
+              row={o}
+              view={view}
+              date={date}
+              template={template}
+              expandedKey={expandedKey}
+              onToggle={onToggle}
+              stat={lookupStat(o)}
+              spotByTicker={spotByTicker}
+            />
+          ))}
+          {totalRows > MAX_TAPE_ROWS && (
+            <p className="px-4 py-2.5 text-center text-xs text-muted">
+              Showing newest {MAX_TAPE_ROWS.toLocaleString()} of {totalRows.toLocaleString()} — tighten
+              filters to narrow.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TapeRow({
+  row: o, view, date, template, expandedKey, onToggle, stat, spotByTicker,
+}: {
+  row: Row
+  view: View
+  date: string
+  template: string
+  expandedKey: string | null
+  onToggle: (k: string | null) => void
+  stat: ContractStat | null
+  spotByTicker: Record<string, number>
+}) {
+  const bull = isBullish(o.side, o.type)
+  const sideClass = o.side === 'buy' ? 'text-up' : 'text-down'
+
+  // The EXPANSION key is the print's identity, never its index: the tape
+  // re-sorts on every refresh, and an index-keyed drawer would silently
+  // re-point at whatever print landed in that slot.
+  const identity = printIdentity(o)
+  const open = expandedKey === identity
+
+  // A whale is a print big enough to be worth inspecting. Only these expand;
+  // making every row expandable would invite a chain fetch for $50K of noise.
+  const whale = Number(o.premium || 0) >= WHALE_FLOOR
+
+  const d = dteOf(o.expiration, date)
+  // Live moneyness: + = still OTM, − = has gone ITM since the print.
+  const liveSpot = spotByTicker[o.tickerNorm] ?? o.spot ?? 0
+  const otmPct =
+    liveSpot > 0 && o.strike
+      ? ((o.type === 'C' ? o.strike - liveSpot : liveSpot - o.strike) / liveSpot) * 100
+      : null
+
+  return (
+    <div>
+      <div
+        onClick={whale ? () => onToggle(open ? null : identity) : undefined}
+        role={whale ? 'button' : undefined}
+        tabIndex={whale ? 0 : undefined}
+        onKeyDown={
+          whale
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onToggle(open ? null : identity)
+                }
+              }
+            : undefined
+        }
+        title={whale ? 'Click to expand contract detail' : undefined}
+        style={{
+          gridTemplateColumns: template,
+          ...(open ? { background: alpha(T.cyan, 0.1), outline: `1px solid ${alpha(T.cyan, 0.4)}` } : {}),
+        }}
+        className={[
+          'grid items-center gap-2 border-b border-line px-4 py-2 text-xs tabular',
+          whale ? 'cursor-pointer' : '',
+          'hover:bg-raised',
+        ].filter(Boolean).join(' ')}
+      >
+        {view === 'combined' && <span className="font-semibold text-accent">{o.tickerNorm}</span>}
+        <span className="text-muted">{fmtTime(o.ts)}</span>
+        <span className={['font-semibold', sideClass].join(' ')}>{o.side.toUpperCase()}</span>
+        <span className="text-right text-fg">{o.strike.toLocaleString()}</span>
+        <span className="text-right text-muted">{fmtSpot(o.spot)}</span>
+        <span className={['text-center font-semibold', sideClass].join(' ')}>{o.type}</span>
+        <span className="text-right text-fg" title={o.fills && o.fills > 1 ? `${o.fills} fills aggregated` : undefined}>
+          {o.size.toLocaleString()}
+          {o.fills && o.fills > 1 ? <span className="text-2xs text-muted"> ×{o.fills}</span> : null}
+        </span>
+        <span className="text-right text-fg">{fmtContractCost(o.price)}</span>
+        {/* Whale premium reads bold — the one column you scan down. */}
+        <span className={['text-right', sideClass, whale ? 'text-sm font-black' : 'font-semibold'].join(' ')}>
+          {whale ? '▸ ' : ''}
+          {fmtPremium(o.premium)}
+        </span>
+        <span className="text-right text-fg">{fmtStat(stat?.vol)}</span>
+        <span className="text-right text-muted">{fmtStat(stat?.oi)}</span>
+        <span className="text-right text-fg">
+          {stat?.iv != null ? `${(stat.iv * 100).toFixed(1)}%` : '—'}
+        </span>
+        <span
+          className={[
+            'text-right font-semibold',
+            otmPct == null ? 'text-muted' : otmPct >= 0 ? 'text-accent' : 'text-down',
+          ].join(' ')}
+          title={
+            liveSpot > 0
+              ? `Strike ${o.strike} vs live spot ${liveSpot.toFixed(2)} — ${otmPct != null && otmPct < 0 ? 'now ITM' : 'OTM'}`
+              : 'No live spot yet'
+          }
+        >
+          {otmPct == null ? '—' : `${otmPct.toFixed(1)}%`}
+        </span>
+        <span className="text-right text-muted">{d == null ? '—' : `${d}d`}</span>
+        <span className="text-right text-muted">{o.expiration ?? '—'}</span>
+        <span className={['text-center font-bold', bull ? 'text-up' : 'text-down'].join(' ')}>
+          {bull ? '▲ BULL' : '▼ BEAR'}
+        </span>
+      </div>
+      {open && (
+        <Suspense fallback={<div className="border-b border-line px-4 py-3 text-xs text-muted">Loading contract detail…</div>}>
+          <ContractDrawer
+            order={o}
+            ticker={o.tickerNorm}
+            stat={stat}
+            liveSpot={liveSpot}
+            onClose={() => onToggle(null)}
+          />
+        </Suspense>
+      )}
+    </div>
   )
 }

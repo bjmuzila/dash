@@ -203,6 +203,99 @@ export const V2W = {
   embedGlow: alpha(V2.lightBlue, 0.1),
 } as const
 
+// ─────────────────────────────────────────────────────────────────────────────
+// COLOURS FOR A CANVAS.
+//
+// Everything above hands out `var(--color-…)` or `color-mix(…)`, which is
+// exactly right for a class name, an inline `background` or a `<style>` block —
+// and useless to a canvas. `ctx.fillStyle = 'var(--color-up)'` does not throw;
+// it silently leaves the previous fill in place. `color-mix()` is not a canvas
+// colour either. Chart libraries (lightweight-charts included) take plain
+// colour STRINGS and hand them straight to a 2D context, so they need a
+// RESOLVED value.
+//
+// These two resolve one out of tokens.css at call time, which keeps the single
+// source of truth intact: the token is still the only place the value is
+// written, and moving it still moves the chart. This is the sanctioned way to
+// colour a canvas. A hex fallback typed into a chart file is not — that is what
+// put src/board/chart-render.ts, gexCandles/bubbles.ts, gexCandles/chart.ts and
+// gexChart/gexChartRender.ts into theme-baseline.json between them.
+//
+// Call them at MOUNT, not per frame. Each is a getComputedStyle read behind a
+// cache, and a chart resolving its palette inside its draw loop is doing layout
+// work sixty times a second for a value that never changes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type Rgb = readonly [number, number, number]
+
+const rgbCache = new Map<string, Rgb | null>()
+
+function parseTokenColor(raw: string): Rgb | null {
+  const s = raw.trim()
+  if (!s) return null
+  if (s.startsWith('#')) {
+    const h = s.slice(1)
+    if (h.length === 3 || h.length === 4) {
+      const r = h[0], g = h[1], b = h[2]
+      if (!r || !g || !b) return null
+      return [parseInt(r + r, 16), parseInt(g + g, 16), parseInt(b + b, 16)]
+    }
+    if (h.length === 6 || h.length === 8) {
+      return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
+    }
+    return null
+  }
+  // Defensive: a browser that normalised the custom property to a functional
+  // notation. The first three numbers are pulled out WITHOUT naming the
+  // function, which check-theme.mjs bans from src/ on sight.
+  const m = s.match(/(\d+(?:\.\d+)?)[,\s/]+(\d+(?:\.\d+)?)[,\s/]+(\d+(?:\.\d+)?)/)
+  if (!m || !m[1] || !m[2] || !m[3]) return null
+  return [Math.round(Number(m[1])), Math.round(Number(m[2])), Math.round(Number(m[3]))]
+}
+
+function readToken(name: string): Rgb | null {
+  const hit = rgbCache.get(name)
+  if (hit !== undefined) return hit
+  let out: Rgb | null = null
+  if (typeof window !== 'undefined' && typeof getComputedStyle === 'function') {
+    out = parseTokenColor(getComputedStyle(document.documentElement).getPropertyValue(name))
+  }
+  rgbCache.set(name, out)
+  return out
+}
+
+const hexByte = (n: number) =>
+  Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')
+
+/**
+ * A token's resolved value, as the hex string a canvas wants. Pass the custom
+ * property NAME (`'--color-up'`), not a `var()` string.
+ *
+ * `transparent` before the stylesheet is live (a test renderer, jsdom, the
+ * first tick before styles apply): a chart that paints nothing for one frame is
+ * recoverable, one that paints an invented colour is not.
+ */
+export function tokenHex(name: string): string {
+  const c = readToken(name)
+  return c ? `#${hexByte(c[0])}${hexByte(c[1])}${hexByte(c[2])}` : 'transparent'
+}
+
+/**
+ * The same, at an alpha — as `#rrggbbaa`, which every canvas and every chart
+ * library accepts. Written this way rather than as a functional notation on
+ * purpose: that notation is banned from src/ by check-theme.mjs, and rightly so.
+ */
+export function tokenHexAlpha(name: string, a: number): string {
+  const c = readToken(name)
+  if (!c) return 'transparent'
+  return `#${hexByte(c[0])}${hexByte(c[1])}${hexByte(c[2])}${hexByte(Math.max(0, Math.min(1, a)) * 255)}`
+}
+
+/** Drop every cached token read. Only needed if the palette is swapped live. */
+export function clearTokenCache(): void {
+  rgbCache.clear()
+}
+
 /**
  * v2's HOME_THEME, under its old name, so a ported page's
  * `import { HOME_THEME as HT }` keeps working unchanged. New code should use

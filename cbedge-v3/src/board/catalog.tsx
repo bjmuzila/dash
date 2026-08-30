@@ -108,7 +108,10 @@ function FlowTapeCard() {
       </div>
       <Table
         columns={[
-          { key: 'strike', header: 'Strike', cell: (r) => `${r.strike}${r.type === 'call' ? 'C' : 'P'}`, width: '64px' },
+          // `r.type` is already 'C' | 'P' — see FlowTapePrint. It used to be
+          // compared against 'call', which the wire has never carried, so this
+          // column suffixed every strike 'P' regardless of what printed.
+          { key: 'strike', header: 'Strike', cell: (r) => `${r.strike}${r.type}`, width: '64px' },
           { key: 'side', header: 'Side', cell: (r) => r.side, width: '48px' },
           { key: 'premium', header: 'Premium', cell: (r) => `$${(r.premium / 1000).toFixed(0)}k`, numeric: true },
         ]}

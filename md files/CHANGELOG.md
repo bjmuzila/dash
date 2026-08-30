@@ -1,5 +1,132 @@
 # Changelog
 
+## 2026-08-30 - /v3 was 404ing: check:theme failed the deploy, and the type scale was two steps short
+
+`https://www.cbedge.net/v3` returned 404 after the last push. Nothing was wrong
+with the server or the route - the Dockerfile's cbedge-v3 step is deliberately
+non-fatal (a v3 build failure must never block a v2 hotfix), so when it fails the
+deploy continues and `/v3` simply is not there. It failed at `npm run check:theme`.
+
+CAUSE. `theme-baseline.json` was re-recorded (rule 4, type-scale, was added to
+`check-theme.mjs` in the same push) and then the flow port landed AFTER that
+snapshot. `src/pages/Flow.tsx` and `src/pages/flow/ContractDrawer.tsx` were never
+in the baseline and carry 21 arbitrary sizes between them, so the check was over
+budget on two files that did not exist when the numbers were taken. The local
+push skipped the build (`push.ps1` skips it by default), so the first place this
+could surface was the VPS.
+
+FIXED WITHOUT TOUCHING THE BASELINE - the 21 arbitrary sizes are now scale
+utilities: `text-[9px]` -> `text-3xs`, `text-[10px]` -> `text-2xs`,
+`text-[11px]` -> `text-xs`. 17 in `Flow.tsx`, 4 in `ContractDrawer.tsx`.
+`check:theme` passes; `theme-baseline.json` is byte-identical to what was pushed.
+
+SECOND BUG, found on the way and the more expensive one. `--text-3xs` and
+`--text-2xs` were NEVER DECLARED in `src/design/tokens.css` - the scale started at
+`--text-xs` (11px). `check-theme.mjs` has been advertising both in its error text,
+and 55 places across `src/` already used `text-2xs` / `text-3xs`: EconCalendarCard,
+CellCard, MultiGreekCard and others. In Tailwind v4 an undeclared step is not a
+utility at all, so those 55 class names emitted NOTHING and the text quietly
+rendered at whatever it inherited. Exactly the silent-miss failure mode the token
+file exists to prevent, and invisible unless you measure it.
+
+Both steps are now in the `@theme static` block:
+
+    --text-3xs: 0.5625rem;  /* 9px  */
+    --text-2xs: 0.625rem;   /* 10px */
+
+VISIBLE CHANGE: those 55 spots now render at their intended 9px / 10px instead of
+inheriting. That is what their authors wrote, but it is a real change to the econ
+calendar, the Multi Greek cells and the GEX rail tags - worth an eyeball on first
+load.
+
+Files: `cbedge-v3/src/design/tokens.css`, `cbedge-v3/src/pages/Flow.tsx`,
+`cbedge-v3/src/pages/flow/ContractDrawer.tsx`.
+
+## 2026-08-30 - /v3/flow: the full port, and two server bugs it exposed
+
+Step 2-4 of the flow port. The spec written earlier today
+(`cbedge-v3/docs/parity/flow.md`, 214 rows) was the checklist; every row is now
+on screen. The previous `src/pages/Flow.tsx` had resolved the hard rows by
+dropping them - no chart, no Vol/OI/IV, no dislocation card, no contract drawer -
+and its own header comment said so. That file is replaced.
+
+SERVER (proxy) - two real bugs, both in `parseFlowFilters()`,
+`server-v2/server-with-proxy.js`:
+
+- `exIdx` was hardcoded `false`. The client sent `exIdx=1` for the Combined
+  view's "All - Indices" scope and the server threw it away, leaving
+  `buildFlowPrintsWhere()`'s exIdx branch unreachable. Now read from the
+  querystring; a caller that omits it still gets false.
+- `underlying` defaulted to SPX when absent, and the Combined view sent no
+  `underlying`. So `/proxy/flow-premsplit` returned SPX-ONLY totals under an
+  "All Tickers" heading - for the four premium-split tiles AND the tape header's
+  count / Total / Calls / Puts, which prefer that response. Rather than drop the
+  default (flow-netprem and any un-enumerated caller rely on it), `underlying=ALL`
+  is now an explicit no-ticker-filter opt-out. `components/pages/Flow.tsx` sends
+  it. VISIBLE CHANGE on the live v2 page: Combined totals are now market-wide.
+
+v3 - new files:
+
+- `src/data/flowMath.ts` - constants, formats, thresholds, ET/session maths,
+  `dteOf` against the SESSION date (not today), the filter chain, `mergeTape`,
+  the net-drift bin walk, the totals. Pure; no React, fetch or DOM.
+- `src/data/dislocationVelocity.ts` - verbatim from v2's lib/.
+- `src/data/flowData.ts` - two-stage history pull with its ordering guard and
+  first-run-no-debounce; the incremental `?since` net-drift poll with the
+  sessionStorage warm start; `useContractStats` / `useLiveSpots` / `useMinuteBars`.
+- `src/pages/flow/NetDriftChart.tsx`, `src/pages/flow/ContractDrawer.tsx`.
+- `scripts/parity-check-flow.mjs` + `.test.mjs` - 74 probes, `check:parity:flow`
+  and `check:parity:flow:self`, in the shape of the traders-dashboard and chain
+  checkers. Wired into `npm run check`.
+
+v3 - contract fix. `FlowTapePrint` in `src/contract/frames.ts` was missing
+`symbol`, `fills` and `spot`, and typed `type` as `'call' | 'put'`. Transcribed
+properly from the object literal `FlowProcessor.addPrint()` actually pushes
+(`server-v2/computation/flow-processor.js`): the type is `'C' | 'P'`, and `isOtm`
+is TRI-STATE - null when the spot was unknown, never false, because false is a
+claim. Missing `symbol` was the expensive one: it is the merge dedupe key, the
+row-expansion identity, and the `?symbol=` /proxy/option-history needs to tell an
+SPX monthly from an SPXW weekly.
+
+That fix surfaced a silent bug in `src/board/catalog.tsx`: the board's Flow Tape
+card built its Strike cell with `r.type === 'call' ? 'C' : 'P'`. The wire has
+never carried 'call', so that column suffixed EVERY strike 'P', calls included,
+since it was written. Fixed.
+
+`src/design/theme.ts` gains `tokenHex(name)` / `tokenHexAlpha(name, a)`. A canvas
+cannot take `var()` or `color-mix()`, and the four files in theme-baseline.json
+are there because they solved that with a typed hex fallback. These resolve the
+token's own value and emit `#rrggbbaa`, so no literal enters src/ and the chart
+keeps tracking the palette.
+
+Recorded, not fixed: `src/data/symbol.tsx` still says the `flow` frame is SPX
+prints only. It is not - proxy-tastytrade.js builds the engine processor with
+`spxOnly: false` and `_startTtMultiFlow` routes every `TT_FLOW_TICKERS_LIST` root
+into that same tape. That stale comment is the premise the previous port's
+"SPX-only ceiling" was built on.
+
+Declared departures (soft probes in the parity checker): the tape status badge
+has two states, not three - a page that does not own the socket cannot honestly
+report RECONNECTING; and the palette is v3's, though every threshold and colour
+RULE is v2's.
+
+Verified in a clean container (the laptop's shell workspace would not start all
+session, so cbedge-v3 was rebuilt from source and npm installed to run the real
+tooling): `tsc --noEmit` zero errors in all seven new/changed files under strict
++ noUncheckedIndexedAccess + verbatimModuleSyntax; `check-theme` clean; the
+parity self-test clean at 74 probes - it caught three weak probes of its own on
+the first run and they were tightened. NOT verified here, needs the laptop:
+`npm run build` (budgets), `npm run perf`, `check:ws`, and `check:parity:flow`
+itself, which needs both apps up against one backend and a PARITY_COOKIE.
+
+Note: another session was editing cbedge-v3 throughout this work (it retired
+/scanner and /test, split TradersDashboard and OptionsChain, and moved
+tokenRgb/rgbHex out of theme.ts). Every shared file here was re-staged
+immediately before editing and committed with an mtime guard; nothing was
+overwritten. `src/shell/Shell.tsx` was left alone on purpose - the /flow NAV
+entry still has no prefetch URLs, which non-negotiable 3 would like, and the two
+to add are noted at the end of docs/parity/flow.md.
+
 ## 2026-08-30 - v3 Analysis: page rebuilt from the parity doc (step 2)
 
 The earlier v3 Analysis page was wrong and is gone. Rebuilt from
