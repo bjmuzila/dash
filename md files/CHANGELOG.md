@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-08-31 - GEX Candles: the leader is the only white mark; peers go back to red and blue
+
+Edited: `cbedge-v3/src/board/gexCandles/bubbles.ts`, `settings.ts`, `chart.ts`.
+Preview: `generated/2026-08-31-gex-bubble-final.png`.
+
+Filling EVERY mark with the pale `-hot` tint, earlier today, made a quieter chart
+and cost the sign. At the small end the two tints desaturate toward the
+background and a pale pink 2px dot is not distinguishable from a pale blue one —
+so the ladder stopped saying which side of the book it was on, which is its first
+statement.
+
+- **Peers** are the saturated `--color-gex-pos` `#29b6f6` / `--color-gex-neg`
+  `#ff4757` again, as they were.
+- **The leader** keeps the pale tint pushed toward white by `topTint` (0.45), so
+  it is the one WHITE mark in a column of blue and red. That is what makes the
+  biggest wall findable at a glance, in a way a slightly larger dot of the same
+  colour is not.
+
+`fade` (0.30 -> **0.45**) and `ageKeep` (0.85 -> **0.75**) are back to their
+tuned values too. They were only raised because a near-white fill at half alpha
+goes grey on this background, and with the peers saturated again that reason is
+gone.
+
+Kept from the earlier pass, because neither depended on the pale fill:
+`glowAlpha: 0.6` multiplied by age — at the old un-named 0.95 the halo bled
+THROUGH a core the age fade had made translucent, which is the "white outline,
+red inside" leader — and the whole size system (`topOfSpacing: 0.44`,
+`sizeCurve: 0.75`, `floorOfCap: 0.14`), which is unchanged and still gives the
+approved 4.4x leader-to-4th-row spread.
+
+`BubblePalette` documents the split: `pos`/`neg` fill the peers and light the
+glow, `-hot` belongs to the leader alone.
+
+
 ## 2026-08-31 - GEX Candles: the leader-to-4th-row size spread, widened to the approved picture
 
 Edited: `cbedge-v3/src/board/gexCandles/settings.ts`.
