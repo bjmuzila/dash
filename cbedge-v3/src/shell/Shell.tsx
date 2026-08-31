@@ -248,12 +248,6 @@ function Toolbar() {
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
       <span className="text-sm font-semibold tracking-tight">CB Edge</span>
       <div className="flex-1" />
-      <TickerPicker
-        activeTicker={symbol}
-        onSelect={setSymbol}
-        allowCustom={PAGE_TICKER_RE}
-        title="The board's symbol — every card that can follow a ticker is showing this one. Click to search the list or star a ticker to keep it on top."
-      />
       {/* ── Back to SPX in one click ───────────────────────────────────────────
           SPX is not just the most-used ticker, it is the only one the socket
           streams: on it the GEX cards are live and free, and off it they fall
@@ -272,6 +266,12 @@ function Toolbar() {
         on={isSocketSymbol(symbol)}
         onClick={() => setSymbol(SOCKET_SYMBOL)}
         title="Put the whole board back on SPX — the one symbol the live socket streams, where every GEX card is on the feed rather than a chain poll"
+      />
+      <TickerPicker
+        activeTicker={symbol}
+        onSelect={setSymbol}
+        allowCustom={PAGE_TICKER_RE}
+        title="The board's symbol — every card that can follow a ticker is showing this one. Click to search the list or star a ticker to keep it on top."
       />
       <EtClock />
       {/* The account dropdown — same rows as v2's UserMenu, on v3 tokens. The

@@ -264,9 +264,30 @@ export function GexCandlesCard() {
   // nearest tradeable one. `expiries.includes` still guards the pin, so a symbol
   // change cannot leave the card on a date that symbol does not trade.
   const weekendExpiry = useMemo(() => etWeekendSessionDay(), [])
+
+  // ── DON'T WAIT ON /api/expirations TO ASK FOR THE HISTORY ──────────────────
+  // The bubble history is keyed by expiry, so it used to sit behind the
+  // expirations request: switch ticker, wait a round trip for the list, THEN
+  // start the request that actually draws the layer. Two serial hops, and the
+  // card was blank for both of them — which is what "switching tickers doesn't
+  // load the bubbles" was.
+  //
+  // On a trading day the answer is already known without asking anyone: 0DTE is
+  // today's ET date, and today is the first entry the list comes back with. So
+  // guess it and fire immediately. The moment the real list lands, `expiries[0]`
+  // takes over — and on a trading day it IS this date, so the URL does not
+  // change, nothing refetches, and the guess cost nothing.
+  //
+  // Only while the list is genuinely unknown, and never on a weekend (that has
+  // its own answer, above). On a holiday the guess is wrong once: the route
+  // answers with no rows and the real list corrects it a moment later, which is
+  // the same blank the card would have shown anyway while waiting.
+  const provisionalExpiry =
+    !expiries.length && !weekendExpiry ? ET_DATE.format(new Date()) : ''
+
   const expiry = settings.expiry && expiries.includes(settings.expiry)
     ? settings.expiry
-    : weekendExpiry || expiries[0] || ''
+    : weekendExpiry || expiries[0] || provisionalExpiry
   // Either layer keeps this alive: the rail reads the newest column of the same
   // history the bubbles are drawn from, so turning the bubbles off with the
   // rail on must not take the request — and its data — away with them.
@@ -288,10 +309,14 @@ export function GexCandlesCard() {
     const back = Math.ceil((Date.now() - preOpen) / 60_000) + 60
     return Math.min(5760, Math.max(GEX_HISTORY_MINUTES, back))
   }, [weekendExpiry])
-  const gexQ = useQuery<unknown>(
+  // Held in a variable rather than inlined, because the NULL case has to be
+  // readable downstream — see `allColumns`.
+  const gexUrl =
     (settings.bubblesOn || railOn) && expiry
       ? gexHistoryUrl(def.gexSymbol, expiry, historyMinutes, BUBBLE_LADDER_REQUEST)
-      : null,
+      : null
+  const gexQ = useQuery<unknown>(
+    gexUrl,
     // The recorder writes a column a minute, so asking more often than that
     // returns the same ladder twice — and it is the heaviest request the card
     // makes.
@@ -322,7 +347,17 @@ export function GexCandlesCard() {
   // The weekend branch stays explicit: on Sat/Sun the expiry has been pinned to
   // that Friday, so the columns are pinned to the same date rather than to
   // whatever the newest row happens to be.
-  const allColumns = useMemo(() => parseGexHistory(gexQ.data), [gexQ.data])
+  // ── NOT THE PREVIOUS TICKER'S LADDER ───────────────────────────────────────
+  // `useQuery(null)` cannot fetch, so it returns the last value its ref happened
+  // to be holding — and on a symbol switch the URL IS null for a moment, because
+  // it needs the new ticker's expiry and /api/expirations has not answered yet.
+  // Without this gate the card kept drawing the OLD symbol's bubbles through
+  // that window: real columns, at the old symbol's strikes, over the new
+  // symbol's candles. On SPX -> AMZN the strikes are off-scale and it reads as
+  // "the bubbles did not load"; between two similarly-priced tickers it would
+  // read as something much worse, which is a live chart showing another
+  // instrument's gamma without saying so.
+  const allColumns = useMemo(() => (gexUrl ? parseGexHistory(gexQ.data) : []), [gexUrl, gexQ.data])
   const columns = useMemo(
     () =>
       weekendExpiry

@@ -1,129 +1,109 @@
 # Changelog
 
-## 2026-08-31 - Toolbar: an SPX chip beside the ticker picker
+## 2026-08-31 - GEX Candles: switching tickers loads the bubbles, at once
 
-Edited: `cbedge-v3/src/shell/Shell.tsx`.
+Edited: `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`, `chart.ts`.
 
-One click back to SPX, next to the board's ticker dropdown.
+Switch the board's ticker and the bubble layer did not come back. Four separate
+reasons, and none of them was the bubble layer.
 
-SPX is not just the most-used ticker, it is the only one the socket streams: on
-it every GEX card is live and free, and off it they fall back to a REST chain
-poll (see `data/symbol.tsx`). So leaving a symbol is something you do to go and
-look at one thing, and coming back is something you do constantly — and it was
-two clicks plus a scan of a list for the one row that is always in it.
+**1. The history request waited on a round trip it did not need.** The bubble
+history is keyed by expiry, so it sat behind `/api/expirations`: switch ticker,
+wait a hop for the list, THEN start the request that actually draws the layer.
+Two serial hops with a blank card for both.
 
-A `Chip` rather than a pinned row in the picker: the picker's list is
-alphabetical under the starred ones, and this has to be in the same place every
-time. It lights up when SPX is already the board's symbol, so it doubles as
-"am I on the live feed or the poll?" — the other question people were opening
-the dropdown to answer.
+On a trading day the answer is already known without asking anyone — 0DTE is
+today's ET date, and today is the first entry the list comes back with. The card
+guesses it and fires immediately; when the real list lands `expiries[0]` takes
+over, and on a trading day it IS that date, so the URL does not change and
+nothing refetches. Only while the list is genuinely unknown, and never on a
+weekend (which has its own answer). On a holiday the guess is wrong once and the
+route answers with no rows — the same blank the card would have shown waiting.
 
-Uses the existing `Chip` primitive and `SOCKET_SYMBOL` / `isSocketSymbol`, so no
-new styling and no ticker literal.
+**2. It drew the PREVIOUS ticker's ladder in the meantime.** `useQuery(null)`
+cannot fetch, so it returns the last value its ref was holding — and the URL is
+null for exactly that window above. The card kept drawing the old symbol's
+columns, at the old symbol's strikes, over the new symbol's candles. Going SPX →
+AMZN the strikes are off-scale and it reads as "the bubbles did not load"; going
+between two similarly-priced tickers it would read as something much worse,
+which is a live chart showing another instrument's gamma without saying so.
+`allColumns` is gated on the URL being live.
 
+**3. The candles had the same leak, and I put it there this morning.** The
+empty-payload guard added with the stranded-view fix ("an empty payload is 'no
+answer', not 'no bars'") is right for a poll and wrong for a symbol change: it
+held the old ticker's candles under the new ticker's heading. It now yields when
+`reframe` is set, which is precisely the flag meaning the context changed.
 
-## 2026-08-31 - GEX Candles: the stranded view, and the bucket picker that did nothing
+**4. And what you did finally get was five days of bars.** A reframe called
+`ts.fitContent()`, which fits EVERYTHING — the candles route pulls
+`HISTORY_DAYS` = 5, so at 1m that is ~1,950 bars in ~900px: half a pixel each, a
+wall, and the bubbles strided down to almost nothing because the layer sizes and
+strides off the room per bucket.
 
-Edited: `cbedge-v3/src/board/gexCandles/chart.ts`, `bubbles.ts`, `settings.ts`.
-
-Two reports, and the first one turned out to explain half of the second.
-
-### 1. Come back to the tab and there is a huge gap
-
-Whitespace on both sides with the candles squeezed into the middle, the time
-axis still labelling the empty part, and the bubble trail gone thin.
-
-Not a drawing fault. The visible LOGICAL RANGE is in bar indices and survives a
-`setData` that hands the series a different number of bars — nothing in
-lightweight-charts re-anchors it, and this card's `reframe` only fires on a
-symbol / interval / session change. So the pane ends up looking at indices the
-series no longer has.
-
-Two changes:
-
-**`setBars` no longer wipes the series on an empty payload.** `parseCandles`
-returns `[]` for `undefined`, and the card holds `undefined` whenever the query
-cache has no value for that URL — including straight after a failed fetch,
-because `query()`'s catch writes `value: undefined` over the good value it was
-holding. That `[]` went through as `setData([])`, emptying the series, and the
-next poll repopulated it with a different bar count a moment later. An empty
-payload is "no answer", not "no bars": it now keeps what is drawn and waits.
-
-**And when the view IS stranded, it re-anchors.** New `visibleDataFraction()`
-(the overlap between the logical range and `[0, barCount)`, as a fraction of the
-range's own width) and `reanchorIfStranded()`. Deliberately narrow, because
-`setBars` runs every thirty seconds and yanking a view the user chose would be
-worse than the bug:
-
-* nothing at all on screen — always. A pane showing no candles is not a view
-  anyone chose.
-* the series SHRANK and under 30% of the pane is data. Growth cannot strand a
-  range; only losing bars out from under it can.
-
-A deliberate scroll into the whitespace beside a stable series matches neither
-and is left alone.
-
-**This is also why the bubbles went thin at the same time.** The layer measures
-`pxPerDot` off the CURRENT zoom and strides the trail to fit, so a range
-stretched far past the data reports almost no room per bucket and throws most of
-the dots away. One fix, both symptoms.
-
-### 2. Clicking between 1m and 5m changed nothing
-
-Working as designed, and the design made the control inert almost everywhere.
-
-The stride is chosen so the dots that ARE drawn clear each other, and it was
-measured against `bucketPxPerDot` (11px, the legible target) whether the rung
-was picked by the pane or pinned by the user. A 1m bucket then strides to every
-Nth minute and a 5m bucket to every Nth/5 — and the two land on the same dots.
-Dots actually drawn, 1000px pane:
-
-| view | OLD 1m | OLD 5m | NEW 1m | NEW 5m |
-|------|--------|--------|--------|--------|
-| 30 min | 30 | 6 | 30 | 6 |
-| 90 min | 90 | 18 | 90 | 18 |
-| 4 h | 80 | 48 | **240** | 48 |
-| full session | 78 | 78 | **390** | 78 |
-
-At a full session the two settings were drawing the identical 78 dots. That is
-indistinguishable from a broken control, and it was reported as one.
-
-New `BUBBLES.pinnedPxPerDot` (2.5px) is the stride target for a PINNED bucket.
-Auto keeps 11px — nobody asked for detail, so the honest answer is the legible
-one. A pin IS somebody asking, the same opt-in the Bubble size slider is, so its
-only remaining job is to stop the dots literally merging into a line: a spacing
-floor rather than a legibility target. The marks then shrink to fit, because
-`capOfSpacing` sizes them off the EFFECTIVE spacing — a pinned rung comes out
-small and dense rather than fused, and the size slider is there for anyone who
-wants to trade that back.
-
-Note the first two rows: where the picker already worked (stride was already 1)
-nothing changes.
-
-`drawBubbles` takes a `pinned` flag; `chart.ts` passes `drawOpts.bucketMin != null`.
+New `frameRecent()` frames one session instead (390 minutes at the active
+interval, floored at 30 bars so an hourly chart still opens on several days).
+That is also the window the GEX history actually covers
+(`GEX_HISTORY_MINUTES`, 12h), so the bubbles fill the pane they are drawn in
+rather than being crushed against the right edge.
 
 
-## 2026-08-31 - Premarket GEX profile (v3): same bar-scale fix, applied to the live copy
+## 2026-08-31 - GEX Candles: the stranded view repairs itself on the way back
 
-The earlier fix today landed on `components/pages/premarket/GexProfile.tsx`.
-The page actually being served is the v3 one, so the ex-0DTE ladder still drew
-most of its board at the same length. Same change, applied to the v3 copy:
+Edited: `cbedge-v3/src/board/gexCandles/chart.ts`.
 
-- `cbedge-v3/src/pages/premarket/GexProfile.tsx` - `maxP` / `maxN` (and
-  `bigCut`) are taken over `bars`, the rendered +/-60 window, instead of a
-  separate +/-12 `nearBars`. Exactly one positive bar and one negative bar now
-  reach the full half track; `NEAR_HALF` and `nearBars` are gone. Bar width is
-  clamped to 50% as a guard.
-- `cbedge-v3/src/pages/Premarket.tsx` - `.pmk .chart` declares
-  `overflow-x:hidden` explicitly, so the ladder can never grow a horizontal
-  scrollbar from an over-wide bar.
+Follow-up to the stranded-range fix earlier today. That one only ran inside
+`setBars`, which left a timing hole: a stranded view stayed stranded until the
+next poll happened to change the bar count in the one way the guard tests for.
+Come back to the tab and you sat looking at the gap until something else moved.
 
-Why it looked "maxed": the scale was normalised over a +/-12 window while the
-ladder renders +/-60. On the ex-0DTE board the standing walls sit outside that
-narrow window, so most rows computed a width above 100%. Nothing clamped it and
-`.chart` is a scroll box, so those bars ran past the right edge and were sliced
-to the same pixel - the axis said $678M while bars several times that were drawn
-the same length as it.
+The moment of coming back is exactly when the view should be checked, so it is
+checked there too. New `recoverView()`, on two signals:
+
+* **`visibilitychange` → visible.** The browser tab is being looked at again.
+* **A card that had NO SIZE getting a real box.** A board page you were not on,
+  a collapsed panel — same "I am looking at this again" moment, and the view can
+  have been stranded the whole time it was away. Detected off the existing
+  `ResizeObserver` as a 0 → real transition, so it costs nothing.
+
+Looser than the `setBars` rule, deliberately. There the guard has to survive
+running every thirty seconds, so it demands the series SHRANK before it will
+touch a partly-empty pane. Here it is a deliberate return to a chart: under 30%
+candles and it re-anchors, full stop. If under a third of the pane is data, that
+is not a view anyone chose to come back to.
+
+Deferred one frame. While the tab was hidden rAF was stopped, and asking the
+time scale where it is before the browser has re-laid the chart out gets an
+answer from before the resize.
+
+The listener comes off in `destroy()` with the ResizeObserver.
+
+
+## 2026-08-31 - Premarket GEX profile: the ladder cannot scroll sideways, full stop
+
+The bar scale fix earlier today stopped bars from being computed wider than
+their track. This closes the other half: the panel is no longer ALLOWED to
+scroll horizontally at all.
+
+`.pmk .chart` declares `overflow-y:auto`. Declaring one axis makes the other
+compute to `auto` as well, so any child a pixel too wide - a bar, a tag, a
+badge - quietly turned the ladder into a horizontally scrolling box: a
+scrollbar under the chart, and every over-wide bar sliced to the same length at
+the right edge. That slice is what "all the bars are maxed out" actually was.
+
+`overflow-x:hidden` is now set INLINE on the chart element in
+`GexProfile.tsx` (both the v3 copy and the legacy one), not only in the
+stylesheet, so the guarantee travels with the component and cannot be lost to a
+stale, cached or competing `.pmk .chart` rule.
+
+Changed:
+
+- `cbedge-v3/src/pages/premarket/GexProfile.tsx`
+- `components/pages/premarket/GexProfile.tsx`
+
+Note: this is a Vite build. The stylesheet-only version of this fix will not
+appear until the SPA is rebuilt - `npm run build` in `cbedge-v3` (or the Docker
+deploy, which rebuilds it).
 
 ## 2026-08-31 - v3 Traders Dashboard: prefs are per USER (Postgres), not per browser
 

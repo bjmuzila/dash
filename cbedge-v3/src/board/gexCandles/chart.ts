@@ -233,10 +233,22 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   let railSink: RailSink | null = null
   let raf = 0
   // The forming bar, kept here so a live tick can extend it without going back
-  // through React. `openMs` is its wall-clock open, which is what decides
-  // whether it is still forming; `time` is the seconds value the series is
-  // keyed by.
-  let live: { time: UTCTimestamp; openMs: number; open: number; high: number; low: number; close: number } | null = null
+  // through React.
+  // A named type rather than the inline object, because `synth` below needs the
+  // SAME one. `typeof live` looked like the obvious way to say that and is not:
+  // TypeScript resolved it against the initializer, so `synth` came out as
+  // `null` and every field access on it was an error.
+  interface FormingBar {
+    /** The seconds value the series is keyed by. */
+    time: UTCTimestamp
+    /** Its wall-clock open, which is what decides whether it is still forming. */
+    openMs: number
+    open: number
+    high: number
+    low: number
+    close: number
+  }
+  let live: FormingBar | null = null
   /**
    * The forming bar, when this chart INVENTED it (setLivePrice's roll-forward)
    * rather than receiving it from the feed. Held separately from `live` — which
@@ -249,7 +261,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
    * the same thing for the same reason. The bar arrived on time and its OHLC
    * restarted, which is exactly what it looked like.
    */
-  let synth: typeof live = null
+  let synth: FormingBar | null = null
   let intervalMs = 5 * 60_000
 
   const ts = chart.timeScale()
@@ -324,6 +336,51 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     const shown = visibleDataFraction()
     const shrank = barCount < prevCount || prevCount === 0
     if (shown > 0 && !(shrank && shown < 0.3)) return
+    anchorToNow()
+  }
+
+  /**
+   * Frame the most recent SESSION, not the whole series.
+   *
+   * `fitContent()` was what a reframe did, and it fits EVERYTHING — the candles
+   * route pulls five days (`HISTORY_DAYS`), so at 1m that is ~1,950 bars in
+   * ~900px: half a pixel each, a solid wall, and the bubble layer strided down
+   * to almost nothing because it sizes and strides off the room per bucket.
+   * Switch ticker or interval and that was the first thing you saw.
+   *
+   * A session's worth is the honest default. It is also the window the GEX
+   * history actually covers (GEX_HISTORY_MINUTES, 12h), so the bubbles fill the
+   * pane they are drawn in instead of being crushed against the right edge.
+   *
+   * 390 minutes is the RTH session; at coarser intervals that is few enough
+   * bars to be worth a floor, so a 1h chart still opens on several days rather
+   * than seven candles.
+   */
+  function frameRecent() {
+    const perSession = Math.max(30, Math.round(390 / Math.max(1, intervalMs / 60_000)))
+    const n = Math.min(barCount, perSession)
+    if (n < 2) {
+      try {
+        ts.fitContent()
+      } catch {
+        /* nothing to frame */
+      }
+      return
+    }
+    try {
+      // A little room past the newest bar, the way every chart leaves it.
+      ts.setVisibleLogicalRange({ from: barCount - n, to: barCount + Math.max(2, Math.round(n * 0.03)) })
+    } catch {
+      try {
+        ts.fitContent()
+      } catch {
+        /* nothing to frame */
+      }
+    }
+  }
+
+  /** Newest bar back at the right edge, keeping the user's bar spacing. */
+  function anchorToNow() {
     try {
       ts.scrollToRealTime()
     } catch {
@@ -333,6 +390,36 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         /* the chart is gone; nothing to re-frame */
       }
     }
+  }
+
+  /**
+   * ── THE ACTIVATION PATH ──────────────────────────────────────────────────
+   *
+   * Same repair, run when the chart comes BACK: the browser tab is shown again,
+   * or the card is laid out after having had no size at all (a board page it was
+   * not on, a collapsed panel).
+   *
+   * `reanchorIfStranded` alone was not enough, and the reason is a timing one:
+   * it only runs inside `setBars`, so a stranded view stays stranded until the
+   * next poll happens to change the bar count in the one way it tests for. Come
+   * back to the tab and you are looking at the gap until something else moves.
+   * The moment of coming back is exactly when the view should be checked, so it
+   * is checked there too.
+   *
+   * Looser than the setBars rule on purpose. There the guard has to survive
+   * running every thirty seconds, so it demands a shrink before it will touch a
+   * partly-empty pane. Here it is a deliberate return to a chart — if under 30%
+   * of it is candles, that is not a view anyone chose to come back to.
+   *
+   * Deferred a frame: while the tab was hidden rAF was stopped, and asking the
+   * time scale where it is before the browser has re-laid the chart out gets an
+   * answer from before the resize.
+   */
+  function recoverView() {
+    if (barCount <= 0) return
+    requestAnimationFrame(() => {
+      if (barCount > 0 && visibleDataFraction() < 0.3) anchorToNow()
+    })
   }
 
   // A steady rAF loop rather than chasing every event that can move the price
@@ -393,8 +480,24 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     plotW = readPlotW()
   }
   measure()
-  const ro = new ResizeObserver(measure)
+
+  // A card with NO SIZE is a card that is not on screen — a board page you are
+  // not looking at, a collapsed panel. Going from that back to a real box is
+  // the same "I am looking at this again" moment as un-hiding the tab, and the
+  // view can have been stranded the whole time it was away.
+  let hadBox = container.clientWidth > 0 && container.clientHeight > 0
+  const ro = new ResizeObserver(() => {
+    measure()
+    const has = container.clientWidth > 0 && container.clientHeight > 0
+    if (has && !hadBox) recoverView()
+    hadBox = has
+  })
   ro.observe(container)
+
+  const onVisible = () => {
+    if (document.visibilityState === 'visible') recoverView()
+  }
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
 
   /**
    * Bumped by every setter, so a DATA change always redraws even when the view
@@ -569,7 +672,12 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       // the series and then repopulated it a moment later with a different bar
       // count, which is precisely how a visible range ends up stranded (see
       // reanchorIfStranded). Keep what is drawn and wait for a real answer.
-      if (!bars.length && barCount > 0) return
+      // …unless `reframe` is set. That flag means the card's CONTEXT changed —
+      // a new symbol, interval or session — and an empty payload there is not a
+      // failed poll, it is "the new thing has not answered yet". Holding the old
+      // bars through it would draw one ticker's candles under another ticker's
+      // heading, which is worse than a blank pane for a few hundred ms.
+      if (!bars.length && barCount > 0 && !reframe) return
 
       const prevCount = barCount
       barCount = bars.length
@@ -611,13 +719,9 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         try {
           series.priceScale().applyOptions({ autoScale: true })
         } catch {
-          /* the scale is gone; fitContent below still frames the time axis */
+          /* the scale is gone; frameRecent below still frames the time axis */
         }
-        try {
-          ts.fitContent()
-        } catch {
-          /* nothing to frame */
-        }
+        frameRecent()
       } else {
         reanchorIfStranded(prevCount)
       }
@@ -725,6 +829,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     },
     destroy() {
       railSink = null
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
       ro.disconnect()
       cancelAnimationFrame(raf)
       try {

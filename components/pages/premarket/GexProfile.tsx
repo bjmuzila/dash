@@ -307,7 +307,17 @@ export default function GexProfile({
         {/* Fixed height + half a viewport of padding at each end, so the
             centring write is never clamped and SPOT lands dead centre on every
             ticker. Skipped while the ladder is empty — 210px of padding over
-            "Waiting for the chain" is just a hole. */}
+            "Waiting for the chain" is just a hole.
+
+            overflowX is pinned INLINE, not left to the stylesheet. This ladder
+            scrolls in ONE direction and only ever has: `overflow-y:auto` on its
+            own makes the other axis compute to `auto` as well, so any child
+            that is a pixel too wide — a bar, a tag, a badge — silently turns
+            the panel into a horizontally scrolling box with a scrollbar under
+            it and every over-wide bar sliced to the same length at the edge.
+            That is what "all the bars are maxed out" actually was. Setting it
+            here means the guarantee travels with the component and cannot be
+            lost to a stale or competing `.pmk .chart` rule. */}
         <div
           className="chart"
           ref={chartRef}
@@ -317,8 +327,8 @@ export default function GexProfile({
           onPointerDown={markGesture}
           onKeyDown={markGesture}
           style={bars.length
-            ? { height: PROFILE_VIEW_H, paddingTop: PROFILE_PAD, paddingBottom: PROFILE_PAD }
-            : undefined}
+            ? { height: PROFILE_VIEW_H, paddingTop: PROFILE_PAD, paddingBottom: PROFILE_PAD, overflowX: "hidden" }
+            : { overflowX: "hidden" }}
         >
           {bars.length === 0 && (
             <div style={{ padding: "40px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
