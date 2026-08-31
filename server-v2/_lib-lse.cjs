@@ -146,6 +146,34 @@ function isoify(rows) {
   return rows;
 }
 
+/**
+ * Give every row a `timestamp`, whatever the vault called its time column.
+ *
+ * WHY: candles() renames the vault's `ts` to `timestamp` because that has
+ * always been this API's contract — but the OPTIONS endpoints were left
+ * un-renamed, and their rows come back keyed on something else (a live probe
+ * of /options/candles returned a row whose `timestamp` was undefined). Two
+ * things broke on that: the page printed an empty time column, and — worse and
+ * silently — pageOptionsFlow() reads `timestamp` as its paging cursor, so an
+ * `all=1` sweep of the tape read one page, computed an empty cursor, filtered
+ * every subsequent row out and stopped, reporting a complete pull.
+ *
+ * MIRRORS rather than renames: the vault's own column stays in the row (and in
+ * the CSV) so nothing about the upstream shape is hidden, and `timestamp` is
+ * added alongside as the one key every consumer here can rely on.
+ */
+const TIME_CANDIDATES = ['timestamp', 'ts', 'minute', 'datetime', 'time', 'bar_time', 'traded_at'];
+
+function withTimestamp(rows) {
+  for (const r of rows) {
+    if (r.timestamp !== undefined && r.timestamp !== null) continue;
+    for (const k of TIME_CANDIDATES) {
+      if (k !== 'timestamp' && r[k] !== undefined && r[k] !== null) { r.timestamp = r[k]; break; }
+    }
+  }
+  return rows;
+}
+
 function clampLimit(n, fallback = MAX_LIMIT) {
   const v = Number(n);
   if (!Number.isFinite(v) || v <= 0) return fallback;
@@ -377,7 +405,7 @@ async function optionsChain({ underlying, type, expiry, strike, strikeMin, strik
   if (strikeMax !== undefined && strikeMax !== null && strikeMax !== '') params.strike_max = strikeMax;
   if (minDte !== undefined && minDte !== null && minDte !== '') params.min_dte = parseInt(minDte, 10);
   if (maxDte !== undefined && maxDte !== null && maxDte !== '') params.max_dte = parseInt(maxDte, 10);
-  return isoify(await vaultGet('/options/chain', params, { timeoutMs: 90000 }));
+  return withTimestamp(isoify(await vaultGet('/options/chain', params, { timeoutMs: 90000 })));
 }
 
 /** Option prints (time and sales) — trailing week. Omit underlying to sweep all. */
@@ -389,7 +417,7 @@ async function optionsFlow({ underlying, type, minPremium, expiry, maxDte, start
   if (minPremium !== undefined && minPremium !== null && minPremium !== '') params.min_premium = minPremium;
   if (expiry) params.expiry = expiry;
   if (maxDte !== undefined && maxDte !== null && maxDte !== '') params.max_dte = parseInt(maxDte, 10);
-  return isoify(await vaultGet('/options/flow', params, { timeoutMs: 90000 }));
+  return withTimestamp(isoify(await vaultGet('/options/flow', params, { timeoutMs: 90000 })));
 }
 
 /** Page the tape backwards on print time — flow is served newest-first. */
@@ -401,7 +429,13 @@ async function* pageOptionsFlow(opts = {}) {
   for (;;) {
     const page = await optionsFlow({ ...opts, end, order: 'desc', limit: MAX_LIMIT });
     if (!page.length) return;
-    const stampOf = (r) => String(r.timestamp ?? r.ts ?? '');
+    const stampOf = (r) => String(r.timestamp ?? '');
+    if (!stampOf(page[0])) {
+      // No time column to page on. Yield what we have and stop, flagged — the
+      // alternative is an infinite loop or a partial pull reported as whole.
+      yield { rows: page, truncated: true };
+      return;
+    }
     const fresh = lastStamp ? page.filter((r) => stampOf(r) < lastStamp) : page;
     if (!fresh.length) return;
     lastStamp = stampOf(fresh[fresh.length - 1]);
@@ -419,9 +453,9 @@ async function* pageOptionsFlow(opts = {}) {
 /** 1m premium OHLC for one contract, with volume, premium and averaged greeks. */
 async function optionCandles({ contract, strike, expiry, type, start, end, order = 'asc', limit } = {}) {
   const ticker = await toOsi(contract, { strike, expiry, type });
-  return isoify(await vaultGet('/options/candles', {
+  return withTimestamp(isoify(await vaultGet('/options/candles', {
     ticker, order, limit: clampLimit(limit), start, end,
-  }, { timeoutMs: 90000 }));
+  }, { timeoutMs: 90000 })));
 }
 
 /** The vault's own shape report — datasets, candle classes, timeframes. */
@@ -472,6 +506,7 @@ function toCsv(rows) {
 }
 
 module.exports = {
+  withTimestamp,
   VAULT_URL,
   MAX_LIMIT,
   TIMEFRAMES,

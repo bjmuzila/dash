@@ -1,31 +1,5 @@
 # Changelog
 
-## 2026-08-31 - fix: phone candles crashed on render (black screen)
-
-Edited: `components/mobile/pages/MobileEsCandles.tsx`.
-
-`/app/m/es` was a black screen on the live site. It was not the feed, the data
-or the layout - the component threw on every render:
-
-    ReferenceError: levelLines is not defined
-        at MobileEsCandles-C3jrEs5u.js:1:13210
-
-Mine, from the SPX change. Rewriting `overlayCount` to drop the basis gate, I
-referred to the level-lines memo as `levelLines`; it is called `levels`. A
-ReferenceError in a component body takes the whole subtree down, and this page
-IS the subtree, so the route rendered nothing at all. Desktop was untouched
-because nothing outside the phone build imports this file. One word:
-
-    (showLevels && levelLines.length > 0 ? 1 : 0)   ->   levels.length
-
-**Why it shipped.** esbuild was the only check run on these edits, and esbuild
-does not resolve identifiers - it parses and emits. An undefined name is
-invisible to it. Every file touched in this session has now been run through
-`tsc --noEmit --noResolve` (which type-checks local scope without needing the
-project's node_modules, unavailable in this environment) and that check is what
-found this. Result: this one error, nothing else, across the phone page, the
-bubble hook, `useEsCandles`, `gexSocket`, `mobileNav` and all four v3 files.
-
 ## 2026-08-31 - LSE Data: London Strategic Edge vault on the owner dashboard
 
 Ported `futures_data_downloader.py` (the interactive LSE CLI) into the Node
@@ -157,6 +131,33 @@ over the whole thing. Raising the popup further would never have worked.
 The fix is at the layer that actually competes: the filter card is now
 `position: relative; z-index: 30` and the cards after it sit at 1, so
 everything the filter card contains outranks them.
+
+**Option rows had no `timestamp` - and it was hiding a silent paging bug.**
+A live probe of `/options/candles` returned a row whose `timestamp` was
+undefined: `candles()` renames the vault's `ts` to `timestamp` (this API's
+long-standing contract) but the three OPTIONS endpoints were left
+un-renamed. The visible symptom was an empty time column. The invisible
+one was worse - `pageOptionsFlow()` uses `timestamp` as its paging cursor,
+so an `all=1` sweep read one page, computed an empty cursor, filtered every
+later row out and stopped, reporting a COMPLETE pull of 5,000 prints.
+`withTimestamp()` now fills the key from whichever column the vault used
+(`ts`, `minute`, `datetime`, ...) on chain, flow and contract candles. It
+MIRRORS rather than renames, so the vault's own column survives into the
+CSV and nothing about the upstream shape is hidden. The flow pager also
+bails out loudly (`truncated: true`) if a page carries no usable time at
+all, instead of looping or under-reporting.
+
+**Measured what the vault actually covers -> `md files/LSE-DATA-LIMITS.md`.**
+Contract candles have a HARD floor at 2026-01-02: four SPY LEAPs of wildly
+different ages (incl. a Jan-2028 listed years ago) all report their first
+bar within an hour of each other on the first trading session of 2026. The
+catalog's `2014-06-02` spans are the UNDERLYING's options history, a
+different dataset - it will imply twelve years of contract bars that do not
+exist. Expired contracts also age out between 108 and 136 days past expiry
+(~4 months), so anything longer-lived has to be recorded on our side as it
+happens. Two probe dates that looked like data gaps - 2026-06-19 and
+2026-07-03 - are NYSE holidays (Juneteenth on a Friday; the observed
+holiday for a Saturday July 4th), so there was no expiry to find.
 
 - `owner-vite/src/lib/nav.ts` - "LSE Data" added to the **Market** group.
 - `owner-vite/src/pages/registry.ts` - lazy route registered.

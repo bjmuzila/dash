@@ -249,6 +249,81 @@
   --radius-lg: 12px;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   SCROLLBARS — app-wide, once, instead of per panel.
+
+   Every scroller in v3 (the board, the econ calendar card, the flow tape, the
+   chain, the premarket page, every popover list) was painting the platform's
+   DEFAULT bar: a light grey track and a mid-grey thumb on Windows, which is the
+   one bright rectangle on a #07080b dashboard and reads as a piece of another
+   app leaking through. Nothing declared it — the bar is simply what you get
+   when nobody says otherwise.
+
+   Two halves, because the two engines expose different things:
+
+     · `color-scheme: dark` tells the browser the whole document is dark. That
+       alone fixes the bars Firefox and Safari draw, plus every other bit of
+       native UI we do not style — <select> popups, autofill, form controls,
+       the overscroll gutter. index.html carries the same value as a <meta> so
+       the first frame is right; this is the CSS half, which is what actually
+       binds once the sheet loads.
+
+     · `::-webkit-scrollbar` is Chrome/Edge, where a dark color-scheme still
+       leaves a bar lighter than these surfaces. Track is transparent so it
+       takes whatever card it sits on; the thumb is a white wash so it works
+       on every step of the surface ladder without a second rule.
+
+   No token is hardcoded here — thumb and hover are color-mix() over
+   --color-fg, so they follow the palette if it ever moves.
+
+   OPT-OUT: a panel that must hide its bar keeps doing it locally and still
+   wins — a class + pseudo-element selector outranks the bare `*` below (see
+   the Multi Greek ladder, which hides the bar so the track stops eating a
+   slice of a three-column ladder).
+   ──────────────────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: dark;
+  /* Firefox / Safari. `thin` rather than `auto`: these are panel scrollers on a
+     dense board, not a document scrollbar. */
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-fg) 18%, transparent) transparent;
+}
+
+/* Chrome / Edge. The `*` is deliberate: the rule has to reach every scroller,
+   including the ones inside components that never think about their bar. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--color-fg) 14%, transparent);
+  border-radius: 999px;
+  /* A transparent border + padding-box clip is what insets the thumb inside the
+     10px gutter. Without it the thumb is a full-width slab that touches the
+     card's edge on both sides. */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--color-fg) 26%, transparent);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background-color: color-mix(in srgb, var(--color-fg) 34%, transparent);
+}
+
+/* Where a vertical and a horizontal bar meet. Left unpainted it is a light
+   square in the corner of the one panel that scrolls both ways. */
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* Numbers must not jitter as they tick. Any element showing a live figure
    should carry .tabular (or font-mono). */
 .tabular {
