@@ -182,31 +182,110 @@ async function waitForPort(url, timeoutMs = 30_000) {
 
 // ── boot the two servers ─────────────────────────────────────────────────────
 
-// ── nothing may already be on our ports ──────────────────────────────────────
+// ── the ports must be OURS, and free ─────────────────────────────────────────
 //
 // waitForPort() below cannot tell OUR mock from a stale one left behind by an
-// earlier run, so without this it happily proceeds against a process that is
-// about to be killed — and the run dies later with an ECONNRESET that looks
-// like a bug in the app. Check first, and say what to do about it.
-async function answers(url) {
+// earlier run: it just asks the port a question and takes the answer. Without
+// this block the run proceeds against a process that is on its way out, and
+// collapses several seconds later with an ECONNRESET that looks like a bug in
+// the app. That has now cost two debugging sessions.
+//
+// So: check first, and RECLAIM rather than lecture. A leftover from a previous
+// run is this script's own mess, and telling a human to open Task Manager
+// every time is not a fix. Three escalating steps, and each one is only taken
+// against a process this script has IDENTIFIED as the thing it was going to
+// start anyway — never against whatever happens to own the port.
+async function answers(port) {
   try {
-    await fetch(url)
+    await fetch(`http://localhost:${port}/`)
     return true
   } catch {
     return false
   }
 }
-for (const [port, what] of [[MOCK_PORT, 'mock server'], [DEV_PORT, 'vite dev server']]) {
-  if (await answers(`http://localhost:${port}/`)) {
-    console.error(`\nport ${port} is already in use — something is answering there before the ${what} started.`)
-    console.error(
-      process.platform === 'win32'
-        ? 'A previous run probably left a node/vite process behind. Close it (Task Manager, or `taskkill /F /IM node.exe`) and run again.\n'
-        : 'A previous run probably left a process behind. Kill it and run again.\n',
-    )
-    process.exit(1)
+
+/** Ours? `/__connections` is the mock's own endpoint and returns an array. */
+async function isOurMock(port) {
+  try {
+    const res = await fetch(`http://localhost:${port}/__connections`)
+    return Array.isArray(await res.json())
+  } catch {
+    return false
   }
 }
+
+/** Ours? Only a vite dev server serves /@vite/client as JavaScript. */
+async function isViteDev(port) {
+  try {
+    const res = await fetch(`http://localhost:${port}/@vite/client`)
+    return res.ok && (res.headers.get('content-type') || '').includes('javascript')
+  } catch {
+    return false
+  }
+}
+
+/** Listening pids on a port. Empty when the OS tooling is not there. */
+function pidsOnPort(port) {
+  if (process.platform === 'win32') {
+    const out = spawnSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8' }).stdout || ''
+    const pids = new Set()
+    for (const line of out.split(/\r?\n/)) {
+      const m = /^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i.exec(line)
+      if (m && Number(m[1]) === port) pids.add(m[2])
+    }
+    return [...pids]
+  }
+  const out =
+    spawnSync('sh', ['-c', `lsof -ti tcp:${port} -sTCP:LISTEN || true`], { encoding: 'utf8' }).stdout || ''
+  return [...new Set(out.split(/\s+/).filter(Boolean))]
+}
+
+function killPids(pids) {
+  for (const pid of pids) {
+    if (process.platform === 'win32') spawnSync('taskkill', ['/pid', pid, '/T', '/F'], { stdio: 'ignore' })
+    else spawnSync('kill', ['-9', pid], { stdio: 'ignore' })
+  }
+}
+
+async function waitGone(port, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!(await answers(port))) return true
+    await sleep(200)
+  }
+  return !(await answers(port))
+}
+
+async function reclaim(port, what, identify) {
+  if (!(await answers(port))) return
+  if (!(await identify(port))) {
+    console.error(`\nport ${port} is in use by something that is NOT a ${what}.`)
+    console.error(`Free it (or change the port in ${'scripts/ws-scope-check.mjs'}) and run again.\n`)
+    process.exit(1)
+  }
+  console.log(`  ! port ${port}: a ${what} from an earlier run is still listening — reclaiming it`)
+  // Ask first. The mock's own /__quit needs no OS tooling and cannot possibly
+  // pick the wrong process; a vite from before this endpoint existed will not
+  // answer it, which is what the pid kill below is for.
+  try {
+    await fetch(`http://localhost:${port}/__quit`)
+  } catch {
+    /* no such endpoint, or it exited before answering — both fine */
+  }
+  if (await waitGone(port, 4000)) return
+  killPids(pidsOnPort(port))
+  if (await waitGone(port, 6000)) return
+  console.error(`\ncould not free port ${port} — a ${what} is still listening there.`)
+  console.error(
+    process.platform === 'win32'
+      ? 'Close it from Task Manager (or `taskkill /F /IM node.exe`) and run again.\n'
+      : 'Kill it and run again.\n',
+  )
+  process.exit(1)
+}
+
+await reclaim(MOCK_PORT, 'mock server', isOurMock)
+await reclaim(DEV_PORT, 'vite dev server', isViteDev)
 
 const mock = run('mock server', 'node', [join(ROOT, 'scripts/mock-server.mjs'), String(MOCK_PORT)])
 // Run the locally-installed vite binary directly instead of `npx vite` —

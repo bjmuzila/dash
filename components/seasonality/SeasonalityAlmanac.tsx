@@ -1718,8 +1718,36 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
           />
         </div>
 
-        {/* The whole question, in one chart: does what the Fed DID change what
-            the tape did around it? */}
+        {/* THE headline chart: the three windows, whole sample, three bars.
+            Deliberately the first thing under the tiles and deliberately dumber
+            than the grouped chart below it — "what does SPX do into, on, and
+            after an FOMC" is the question people actually arrive with, and it
+            should not require reading a nine-bar chart to answer. The split by
+            what the Fed did is the follow-up question, so it comes second. */}
+        <div style={{ marginTop: 20 }}>
+          <div style={{ ...capLabel, marginBottom: 8 }}>
+            Every decision in this sample &middot; n={n0(fomcFiltered.length)}
+          </div>
+          <DivBars
+            labels={[L_INTO, L_DAY, L_AFTER]}
+            values={[
+              mean(fomcFiltered.map((r) => r.into)) ?? 0,
+              mean(fomcFiltered.map((r) => r.day)) ?? 0,
+              mean(fomcFiltered.map((r) => r.after)) ?? 0,
+            ]}
+            fmt={(v) => bp(v, 0)}
+            height={230}
+            readout={(i) => {
+              const key = (["into", "day", "after"] as const)[i];
+              const label = [L_INTO, L_DAY, L_AFTER][i];
+              const vals = fomcFiltered.map((r) => r[key]);
+              return `${label} · mean ${pct(mean(vals))} · ${pctp(hitRate(vals), 1)} positive · best ${pct(extremeOf(vals, "max"), 1)} · worst ${pct(extremeOf(vals, "min"), 1)} · n=${countOf(vals)}`;
+            }}
+          />
+        </div>
+
+        {/* The follow-up question: does what the Fed DID change what the tape
+            did around it? */}
         <div style={{ marginTop: 20 }}>
           <Legend
             items={[
@@ -2276,6 +2304,38 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
             ]}
           />
         </Collapse>
+
+        {/* A BAR chart, not a line. Twelve month-ends are twelve independent
+            samples, not a series — a line between the January bar and the
+            February bar would draw a trend through two numbers that have
+            nothing to do with each other. Bars off a zero baseline also carry
+            the sign in the direction, which matters because half of these are
+            negative. */}
+        <div style={{ marginTop: 20 }}>
+          <div style={{ ...capLabel, marginBottom: 8 }}>
+            The month-end session, by calendar month &middot; mean return
+          </div>
+          <Legend items={[{ color: UP, label: "Positive mean" }, { color: DOWN, label: "Negative mean" }]} />
+          <DivBars
+            labels={eom.by_month.map((m) => m.label)}
+            values={eom.by_month.map((m) => m.avg)}
+            fmt={(v) => bp(v, 0)}
+            height={260}
+            readout={(i) => {
+              const m = eom.by_month[i];
+              return `${m.label} month-end · mean ${pct(m.avg)} · median ${pct(m.median)} · ${pctp(m.pos_pct, 1)} positive · best ${pct(m.best, 1)} · worst ${pct(m.worst, 1)} · n=${m.n}`;
+            }}
+          />
+          <div style={{ ...NOTE, marginTop: 6 }}>
+            Each bar is one calendar month&apos;s final session, averaged across
+            every year on record — around {n0(Math.round(eom.by_month.reduce((a, m) => a + m.n, 0) / 12))}{" "}
+            observations apiece. At that sample size the standard error is wide
+            enough that most of the differences between these bars are not
+            distinguishable from each other; the honest reading is the SIGN and
+            the rough size, not the ranking. Hover any bar for its <i>n</i> and
+            its hit rate.
+          </div>
+        </div>
 
         <Collapse autoOpen={isMonthEnd} label="Month-end by calendar month" hint="which month ends carry it">
           <DataTable head={STAT_HEAD} rows={eom.by_month.map((m) => statRow(m.label, m))} />

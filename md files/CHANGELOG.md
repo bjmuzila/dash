@@ -1,58 +1,5 @@
 # Changelog
 
-## 2026-08-31 - check:ws no longer dies on a stale process, and the mock tells the truth about flow
-
-`npm run check` failed at `check:ws` with `mock server unreachable (ECONNRESET)
-- it exited mid-run` and every assertion red. The board changes were not the
-cause - the same commit passes `check:ws` and `perf` cleanly on Linux. The
-harness was.
-
-**The failure.** `cleanup()` killed its children with an ASYNC
-`spawn('taskkill', ...)` fired from an `exit` handler, which is not guaranteed
-to land before the process goes away - so on Windows the mock outlived its run
-and kept squatting :4311. The next run's mock then hit EADDRINUSE, which
-`server.on('error')` was not listening for, so it was thrown, SWALLOWED by the
-`uncaughtException` handler, and the process stayed alive serving nothing.
-`waitForPort()` cannot tell one mock from another: it got its answer from the
-STALE process, declared the mock up, and the run collapsed with an
-unexplained ECONNRESET the moment that stale process finally died. Nothing
-about it pointed at the real cause, which is why it has now been chased twice.
-
-- `cbedge-v3/scripts/mock-server.mjs` - `server.on('error')` added. A mock that
-  cannot listen prints why (naming EADDRINUSE explicitly) and EXITS. A dead
-  mock must look dead.
-- `cbedge-v3/scripts/ws-scope-check.mjs` -
-  - `cleanup()` uses `spawnSync` for the Windows taskkill, so a run cannot
-    leave its children behind for the next one.
-  - Pre-flight: if anything already answers on :4311 or :5274 the run stops
-    immediately and says a previous run probably left a process behind, with
-    the command to clear it.
-  - Child stdout/stderr are DRAINED and kept (last 200 lines). They were piped
-    and never read, which meant two things: the mock's own crash message went
-    into a pipe nobody looked at, and a child that filled the 64KB Windows pipe
-    buffer would block forever and be indistinguishable from a dead one.
-    `childReport()` now prints the tail plus the exit code on any failure.
-
-**The mock's flow tape was lying.** Its socket `flow` frame sent
-`type: 'call'|'put'`, `side: 'ask'|'bid'` and `expiration: '0DTE'`, and carried
-no `symbol` or `spot` at all - none of which the real server has ever sent
-(`src/contract/frames.ts`, `FlowTapePrint`, which warns about this exact
-thing). A card written against the REAL wire matched nothing locally; a card
-written against the mock would ship broken. Fixed to the contract.
-
-- `cbedge-v3/scripts/mock-server.mjs` - `mockFlowHistory()` now takes the
-  ticker and premium floor and emits full-shape prints spread across RTH so
-  far today (DST-correct bounds, same correction `flowMath.ts` uses), and four
-  endpoints the new board cards need are mocked instead of 404ing:
-  `/proxy/flow-netprem` (derived from the same synthetic tape, so the chart and
-  the tape agree), `/proxy/contract-stats`, `/proxy/quotes` and
-  `/api/quotes-batch`. `npm run perf` is down from 6 unmocked endpoints to the
-  2 pre-existing shell ones.
-
-Verified end to end on a Linux checkout of this exact tree: `check:casing`,
-`typecheck`, `check:theme`, `build`, `budgets`, `check:ws`, `perf` and all four
-parity self-tests pass, with all 11 catalog cards on the board.
-
 ## 2026-08-31 - LSE Data: London Strategic Edge vault on the owner dashboard
 
 Ported `futures_data_downloader.py` (the interactive LSE CLI) into the Node
@@ -103,6 +50,29 @@ Options Flow / Contract Candles), its `input()` prompts became fields, and
 with `format=csv` - so the browser streams the file to disk and a big pull
 never enters the tab's memory. Preview caps at 300 rows. All colors and
 surfaces come from `owner-vite/src/lib/theme.ts`; nothing is hardcoded.
+
+**Filter bar alignment (same day).** The first pass sized each control to its
+content and aligned the row on `flex-end`, so a field with a hint sat lower
+than one without and the labels staggered across the row. Now one
+`CONTROL_H` (40px) for every input, select, checkbox and button, a
+fixed-height label block, and the row aligned to the TOP - labels share a
+line, inputs share a line, and a hint can wrap to two lines without moving
+anything above it. The two "walk the whole range" checkboxes became a
+`CheckField` that fills one control slot and turns cyan when checked, and
+the buttons ride the same label+control grid instead of the bottom of
+whichever field happened to be tallest.
+
+**Dropdowns and text contrast (same day).** A native `<select>` draws its
+popup with the OS widget, so on Windows the open list was a light-grey menu
+hanging off a dark control. `color-scheme: dark` on the select is what
+Chrome honours there (it repaints the popup, its scrollbar and the
+highlight row), with explicit per-`<option>` colors as the fallback, and
+`appearance: none` plus an inline SVG caret so the arrow is themed rather
+than a grey OS triangle. Every translucent-white text color on the page
+(labels, hints, table headers, result counts) is now full `OWNER_THEME.text`
+- the theme already declares `textMuted`/`textSecondary` as `#FFFFFF`, so
+this page was the odd one out. Input placeholders keep the browser's grey,
+deliberately: a placeholder that matches typed text reads as a value.
 
 - `owner-vite/src/lib/nav.ts` - "LSE Data" added to the **Market** group.
 - `owner-vite/src/pages/registry.ts` - lazy route registered.

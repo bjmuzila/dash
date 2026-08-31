@@ -51,7 +51,10 @@ export const NAV: NavItem[] = [
   },
   { to: '/premarket', label: 'Premarket', icon: '🌅', prefetch: ['/api/scanner/market-quality'] },
   { to: '/options-chain', label: 'Options Chain', icon: '⛓️', prefetch: ['/api/expirations?ticker=SPX'] },
-  { to: '/em', label: 'Est. Moves', icon: '↔️', comingSoon: true },
+  // Prefetches the default chip's levels row on hover — the page's own lookup
+  // reads it back out of the api.ts cache, so the click lands on data that is
+  // already home. See src/pages/em/emData.ts (LEVELS_STALE_MS).
+  { to: '/em', label: 'Est. Moves', icon: '↔️', prefetch: ['/api/levels?ticker=SPX'] },
   { to: '/analytics', label: 'Analysis', icon: '📈', prefetch: ['/api/premarket-summary'] },
   { to: '/replay', label: 'Replay', icon: '⏱️', comingSoon: true },
   { to: '/flow', label: 'Flow', icon: '🌊' },

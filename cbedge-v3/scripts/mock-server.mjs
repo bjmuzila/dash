@@ -513,6 +513,21 @@ function mockEarnings() {
 function api(req, res, path, params) {
   if (path === '/__connections') return json(res, connectionLog), true
 
+  // ── /__quit — hand the port back ───────────────────────────────────────────
+  //
+  // Dev-only, and it exists because of a real failure: on Windows a mock that
+  // outlived its run kept squatting :4311, and the NEXT run then had no way to
+  // tell "my mock started" from "the last one never died". ws-scope-check's
+  // pre-flight asks this endpoint to stand down before it resorts to killing a
+  // pid, which is the version that needs no OS tooling and cannot possibly kill
+  // the wrong process. Nothing ships this file.
+  if (path === '/__quit') {
+    json(res, { ok: true, pid: process.pid })
+    // After the response is on the wire, not before.
+    setTimeout(() => process.exit(0), 50).unref?.()
+    return true
+  }
+
   if (path === '/api/snapshots/etf-candles') {
     const symbol = (params.get('symbol') || 'SPX').toUpperCase()
     const days = Math.min(30, Math.max(1, Number(params.get('days') || 5)))

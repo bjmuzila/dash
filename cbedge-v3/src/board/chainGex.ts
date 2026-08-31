@@ -162,6 +162,41 @@ export function findPutWall(rows: GexRow[], spot: number, exclude: number | null
 }
 
 /**
+ * The negative→positive crossing NEAREST SPOT, same walk and same
+ * interpolation as findGexFlip().
+ *
+ * Not a replacement for it — a REPAIR, and used only when the first crossing
+ * came back somewhere nobody would trade. "First crossing wins" is the server's
+ * rule and it is the right one in the body of a ladder, but at the very bottom
+ * of one the running total is a few far-OTM strikes hovering around zero, so a
+ * single positive strike down there wins the race and returns a flip a thousand
+ * points from the money. KeyLevelsCard tests the reported flip against its own
+ * distance band first and only falls back to this; see the block there.
+ *
+ * Ties go to the first crossing found, which for a symmetric pair means the
+ * lower strike. There is no better answer in that case and picking one keeps
+ * the number stable across polls.
+ */
+export function findGexFlipNearSpot(rows: GexRow[], spot: number): number | null {
+  if (!(spot > 0)) return null
+  let cum = 0
+  let prevCum = 0
+  let prevStrike: number | null = null
+  let best: number | null = null
+  for (const r of rows) {
+    prevCum = cum
+    cum += oiVolNet(r)
+    if (prevStrike !== null && prevCum < 0 && cum >= 0) {
+      const range = cum - prevCum
+      const x = Math.abs(range) > 0 ? prevStrike + (r.strike - prevStrike) * (-prevCum / range) : r.strike
+      if (best === null || Math.abs(x - spot) < Math.abs(best - spot)) best = x
+    }
+    prevStrike = r.strike
+  }
+  return best
+}
+
+/**
  * The FIRST negative→positive crossing of the running OI+VOL total, walking
  * strikes ascending, interpolated between the bracketing strikes.
  *

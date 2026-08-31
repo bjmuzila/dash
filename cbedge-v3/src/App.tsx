@@ -27,6 +27,9 @@ const Premarket = lazy(() => import('@/pages/Premarket'))
 const OptionsChain = lazy(() => import('@/pages/OptionsChain'))
 const Analysis = lazy(() => import('@/pages/Analysis'))
 const Flow = lazy(() => import('@/pages/Flow'))
+// /em — Estimated Moves. A 1:1 port of v2's /app/em against the checklist in
+// docs/parity/em.md; REST-only, opens no socket, mounts no canvas.
+const Em = lazy(() => import('@/pages/Em'))
 
 // RETIRED 2026-08-30 — Scanner (/scanner), Test Lab (/test) and Journal
 // (/trading) are gone from v3, along with the ICT, ES Candles, Board and Multi
@@ -54,6 +57,7 @@ export default function App() {
             <Route path="/options-chain" element={<OptionsChain />} />
             <Route path="/analytics" element={<Analysis />} />
             <Route path="/flow" element={<Flow />} />
+            <Route path="/em" element={<Em />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

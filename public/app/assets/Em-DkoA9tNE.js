@@ -1,0 +1,1 @@
+import{j as r}from"./vendor-react-1B7PQhyt.js";import{E as t}from"./EmCustomer-kXyP4pxo.js";import"./index-vzAwk_43.js";import"./vendor-router-DfYQ9NBI.js";import"./DataBox-DjpEcrZP.js";import"./useEmLookup-faZ7AAY5.js";function a(){return r.jsx(t,{})}export{a as default};

@@ -1,6 +1,6 @@
 {
     "name":  "bzila-dashboard",
-    "version":  "v8.30.19",
+    "version":  "v8.30.20",
     "private":  true,
     "workspaces":  [
 
@@ -10,6 +10,7 @@
                     "dev:full":  "node server-v2/server-with-proxy.js",
                     "prebuild":  "node scripts/audit-ui.mjs --strict",
                     "build":  "next build --no-lint",
+                    "build:spa":  "node scripts/build-spa.mjs",
                     "analyze":  "node -e \"process.env.ANALYZE=\u0027true\u0027;require(\u0027child_process\u0027).execSync(\u0027next build --no-lint\u0027,{stdio:\u0027inherit\u0027,env:process.env})\"",
                     "test":  "tsx --test tests/**/*.test.ts",
                     "test:snapshot":  "node scripts/snapshot-fixtures.mjs",

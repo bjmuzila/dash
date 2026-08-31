@@ -174,6 +174,7 @@ const LIVE_ROUTES = new Set([
   '/options-chain',
   '/analytics',
   '/flow',
+  '/em',
   '/scanner',
   '/trading',
   '/test',

@@ -63,7 +63,10 @@ these names. Note the page also hardcodes **eight literals that are NOT in
 HOME_THEME** — they are the page's real palette and they must all land in
 `tokens.css` before any of this can be written in v3.
 
-| v2 value | Where used | Exists in v3 `tokens.css`? | Proposed v3 token |
+**DECIDED 2026-08-31 (Brandon): re-key onto v3's tokens.** No `--color-v2-*`
+were added for this page. The right-hand column below is what the port ships.
+
+| v2 value | Where used | Exists in v3 `tokens.css`? | v3 token used |
 |---|---|---|---|
 | `HT.bg` `#05060A` | page canvas | yes — `--color-v2-bg` | `V2.bg` |
 | `HT.panelBg` `rgba(13,17,25,0.45)` | every card plate | no exact | `alpha(V2.panel, .45)` |
@@ -72,21 +75,26 @@ HOME_THEME** — they are the page's real palette and they must all land in
 | `HT.cyan` `#219EBC` | card titles, chips | yes — `--color-v2-cyan` | `V2.cyan` |
 | `HT.red` `#EF4444` | error banner, **Sell Zone card border only** | yes — `--color-v2-red` | `V2.red` |
 | `HT.shellGlow` | page background radials | no | new token or literal-free gradient built from `V2.cyan` / `V2.purple` |
-| `#cbd5e1` | Close stat value | **no** | needs `--color-v2-slate` |
-| `#e8c060` | EM stat value | **no** (nearest `--color-warn` `#e0a44a`) | needs `--color-v2-gold` |
-| `#00e676` | Up stat, Buy Zone, HIT, ≥65% hit rate, snap-ok | **no** (nearest `--color-v2-pos` `#22c55e`) | needs `--color-v2-emgreen` |
-| `#ff5a6a` | Down stat, Sell Zone text, MISS, <50% trailing | **no** (nearest `--color-candle-down` `#ff5b5b`) | needs `--color-v2-emred` |
-| `#ffc107` | 50–64% hit rate | **no** (nearest `--color-cal-forecast` `#f59e0b`) | needs `--color-v2-amber` |
-| `#0f1a28` | zone-line divider | no | `--color-line` is the honest substitute |
+| `#cbd5e1` | Close stat value | no | **`CAL.previous`** → `--color-cal-previous` `#8a9ab8` |
+| `#e8c060` | EM stat value | no | **`T.orange`** → `--color-warn` `#e0a44a` |
+| `#00e676` | Up stat, Buy Zone, HIT, ≥65% hit rate | no | **`MOVE_UP`** → `--color-move-up` `#35c28e` |
+| `#ff5a6a` | Down stat, Sell Zone text, MISS, <50% trailing | no | **`MOVE_DOWN`** → `--color-move-down` `#e0645f` |
+| `#EF4444` | Sell Zone card BORDER, and <50% hit rate | yes — `--color-v2-red` | **`MOVE_DOWN`** — see the note below |
+| `#ffc107` | 50–64% hit rate | no | **`CAL.medium`** → `--color-impact-medium` `#f59e0b` |
+| `#0f1a28` | zone-line divider | no | `--color-line` |
 | `rgba(0,0,0,0.4)` | stat plate, input background | yes — `--color-shadow` is `#000000` | `alpha(T.shadow, .4)` |
 | `#a78bfa` | snapshot button idle | yes — `--color-violet` | `T.violet` |
 
-**Decision needed before Part 2 (porting):** whether the five missing colours go
-in as new `--color-v2-*` tokens (exact parity, my recommendation — this page's
-palette is deliberately louder than the board's) or whether v3 re-keys them onto
-`--color-up` / `--color-down` / `--color-warn` (coherent with the rest of v3, but
-a visible change). **Do not let this get decided implicitly by whoever writes
-the first line of CSS.**
+**The two-reds / two-greens inconsistency collapses by construction.** v2 painted
+the Sell Zone's border `#EF4444` and its text `#ff5a6a`, and used `#EF4444` for
+the sub-50% hit rate but `#ff5a6a` for the sub-50% trailing rate — the same
+semantic, four values. Re-keying maps every one of them onto `MOVE_DOWN`, so the
+distinction disappears rather than being carried over. Rows below still record
+what v2 did, because the record is the point; the "v3 token used" column is what
+shipped.
+
+The two threshold ladders are now **one function**, `hitRateColor()` in
+`src/pages/Em.tsx`, used by both Part E2 and Part H.
 
 ---
 
@@ -116,7 +124,7 @@ Source: `EmCustomer.tsx` lines 31–42, 249–276, 299–316.
 | `<h1>` title | Static string | `"Weekly Estimated Move & Zones"` — `26px / 800`, `margin:0`, `letterSpacing .01em` | `HT.text` | Always renders |
 | Sub-line | Static string | `"Enter a ticker to see this week's estimated move and the buy / sell zones."` (apostrophe is `&apos;`) — `14px`, `marginTop:8` | `HT.text` | Always renders |
 | Deep-link on mount | `new URLSearchParams(window.location.search).get("ticker")` | If present: `setInput(t.toUpperCase())` **and** `lookup(t)` | Effect deps `[lookup]`; `lookup` is `useCallback(…, [])` so it fires exactly once | No param → nothing happens, the empty state renders |
-| URL is never written back | — | Choosing a chip or submitting the form does **not** push a `?ticker=` | — | A looked-up page cannot be shared by copying the address bar. **Known v2 gap — flag for v3, do not silently fix during the port** |
+| URL is never written back | — | Choosing a chip or submitting the form does **not** push a `?ticker=` | — | A looked-up page cannot be shared by copying the address bar. **FIXED IN v3 (Brandon, 2026-08-31).** v3 routes every lookup through `useSearchParams`, so the query string is the source of truth and back/forward work. A re-submit of the SAME ticker re-runs the lookup directly, because the param does not change and the effect would not fire |
 | Page chrome above this | `GlobalToolbar` / `LayoutShell` (v2) | Outside `EmCustomer` entirely | — | In v3 the equivalent is `Shell.tsx`'s rail + toolbar; the page contributes nothing to it |
 
 ---
@@ -171,6 +179,7 @@ disclaimer, and NOT the search card or the page header.
 | Week label | `/api/levels → row.exp_label` | `` `Week of {exp_label}` `` — `12px / 700; uppercase; letterSpacing .1em` | `HT.text` | Span omitted entirely when `exp_label` is falsy |
 | Updated stamp | `/api/levels → row.updated_at` | `` `Updated {fmtUpdated(updated_at)}` `` — `12px`, `marginLeft:auto` | `HT.text` | Span omitted entirely when `updated_at` is falsy |
 | `fmtUpdated` format | `hooks/useEmLookup.ts` | `new Date(ts).toLocaleString("en-US", {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"})` → `"Aug 28, 04:19 PM"` — **browser-local timezone, not ET** | none | Unparseable date → `""`, so the span renders the bare word `"Updated "` |
+| **SNAPSHOT — NOT PORTED** | — | v2's `BoxSnapBtn` is html2canvas, a v2 dependency. v3 has no snapshot stack, and adding one is a budget decision rather than a side effect of this port. `parity-check-em.mjs` carries it as a declared `soft` departure (`D/snapshot`), so **every run prints it** instead of passing over it. The five rows below record what would have to be rebuilt | — | — |
 | Snapshot slot | `<span>` wrapper | `marginLeft: data.updated_at ? 8 : "auto"` — the button takes over the right-push when there is no stamp | Carries `data-html2canvas-ignore="true"` so it is not in its own PNG | Always renders inside the result block |
 | Snapshot button component | `BoxSnapBtn` (`components/shared/DataBox.tsx`) | `targetRef={snapRef}`, `title={`${data.label \|\| data.ticker} • EM & Zones`}` — the title is baked into the PNG's frame band | — | — |
 | Snap button — idle | `s === "idle"` | Glyph `📸`, `padding 2px 5px; fontSize 14; radius 2; 1px border` | colour `#a78bfa`, border `#a78bfa40` | — |
@@ -249,7 +258,7 @@ letterSpacing .1em`; value `22px/700 mono`.
 | Sell `FAR` | `→ row.sell_far` | Raw string, `22px/700` mono | `#ff5a6a`, `opacity .7` | `"--"` |
 | Zone line order | — | `Near` then `Far`, top to bottom, in both cards | — | — |
 | Zone line divider | — | `borderTop: 1px solid #0f1a28` on **every** line, including the first — so there is a rule between the hint and `Near` | — | — |
-| `pivot` | `/api/levels → row.pivot` | **Fetched and merged into `data`, and used in the `hasZones` test, but never rendered.** `S.pivot` / `S.pivotVal` exist and are referenced by nothing | — | See Part K |
+| `pivot` | `/api/levels → row.pivot` | In v2: **fetched and merged into `data`, used in the `hasZones` test, and rendered nowhere** — `S.pivot` / `S.pivotVal` are wired to nothing. **v3 RENDERS IT** (Brandon, 2026-08-31: "keep pivot"): a centred `PIVOT` label with the raw string beside it, under the zone row | Label `text-muted`; value `font-mono text-lg text-fg` | `"--"` |
 | Zones source when the published row has none | `fetchZones(sym)` → `/api/em-zones?ticker=` | Merged as `{...prev, ...zones}` — zones **overwrite** the published row's fields | — | Merge is silent; there is no indicator that a zone was computed on demand rather than published |
 
 ---
@@ -340,12 +349,18 @@ requests per lookup, in three waves.
 `/api/em/ticker-em-stats`, `/api/em-tracker`, `/api/em-tracker/history`,
 1–2 × `/api/em-tracker?ticker=`, plus the fire-and-forget `/api/ticker-event`.
 
-**Waterfall note for v3 rule 3.** J3 → J5/J6 → J10 is a genuine three-stage
-waterfall: the enrichment wave waits on `/api/levels` even though it needs
-nothing from it (every enrichment URL is built from `sym`, which is known at
-J1). **In v3 the enrichment wave should fire in parallel with `/api/levels`.**
-That is a permitted change — it alters the dependency graph, not the math or
-any rendered value — but call it out in the port so it is a deliberate diff.
+**Waterfall note for v3 rule 3 — CHANGED IN v3 (approved 2026-08-31).** J3 →
+J5/J6 → J10 is a genuine waterfall in v2: the enrichment wave waits on
+`/api/levels` even though it needs nothing from it (every enrichment URL is
+built from `sym`, known at J1). `src/pages/em/emData.ts` starts the enrichment
+wave BEFORE awaiting the levels read. Same requests, same results, one round
+trip less. It alters the dependency graph, not the maths and not a rendered
+value.
+
+**Second, smaller v3 diff:** v2 reads `/api/levels` with `cache: "no-store"`;
+v3 goes through `query()` with a 10s stale window so the rail's
+`prefetch: ['/api/levels?ticker=SPX']` on hover actually pays. The row is
+published weekly — ten seconds is not an observable staleness.
 
 ---
 
@@ -353,7 +368,7 @@ any rendered value — but call it out in the port so it is a deliberate diff.
 
 | Item | Where | What it is | Action for v3 |
 |---|---|---|---|
-| **`/api/em-tracker` + `/api/em-tracker/history` are `auth: 'owner'`** | `server-v2/api-router.js` lines 8629, 8725 | A subscriber gets 403 on both, and on the per-ticker rows (J14). `winRate` and `recentRec` therefore both stay `null`, so **the EM Hit Rate meter (Part E2) and the entire Recent Track Record card (Part H) do not render for any customer.** The attached screenshots show them because they were captured as owner | **BLOCKING QUESTION for Brandon.** Either (a) v3 reproduces this and those two blocks are owner-only, or (b) a read-only subscriber path is added server-side. Do not guess. A v3 build verified while signed in as owner will look complete and ship two invisible blocks |
+| ~~`/api/em-tracker` + `/api/em-tracker/history` are `auth: 'owner'`~~ **FIXED 2026-08-31** | `server-v2/api-router.js` | A subscriber got 403 on both, and on the per-ticker rows (J14). `winRate` and `recentRec` therefore both stayed `null`, so **the EM Hit Rate meter (Part E2) and the entire Recent Track Record card (Part H) rendered for nobody but the owner** — on the v2 page, for as long as it has existed. The screenshots show them because they were captured as owner | **DONE (Brandon: "sub read path is fine").** Both routes are now `auth: 'subscriber'` for GET; POST/DELETE on `/api/em-tracker` keep an in-handler owner gate (internal-token bypass preserved for the weekly evaluator), and `/evaluate`, `/commit-history` and `/discord-preview` are untouched. This fixes the v2 page as well as enabling the v3 one |
 | `/api/confidence` "CB Confidence" tile | Removed from `useEmLookup` before this port | The route returns `score: ConfidenceResult` (an object) where the reader expected a scalar, so the tile never rendered — on any surface, ever. It also cost a 120-session server-side scan per lookup | **Do not re-add.** Recorded here so nobody "restores" it from an old screenshot |
 | `S.kicker` | `EmCustomer.tsx` line 261 | A styled uppercase cyan eyebrow. Referenced by nothing | Do not port |
 | `S.pivot` / `S.pivotVal` | lines 430–439 | Styles for a pivot readout that no JSX renders. `row.pivot` **is** fetched and merged and does participate in the `hasZones` test | Keep the `hasZones` behaviour; do not port the styles. **Ask whether the pivot readout should come back** — the data is already on the wire |
@@ -366,35 +381,62 @@ any rendered value — but call it out in the port so it is a deliberate diff.
 
 # Appendix — the four v3 edits this port will need
 
-Recorded now so step 3 of the build is mechanical. **Not done yet.**
+**ALL FOUR DONE, 2026-08-31.**
 
-1. `cbedge-v3/src/pages/Em.tsx` — the page, plus `src/pages/em/*` for the data
-   layer transcribed from Part J.
-2. `cbedge-v3/src/App.tsx` — `const Em = lazy(() => import('@/pages/Em'))` and
-   `<Route path="/em" element={<Em />} />`.
-3. `cbedge-v3/src/shell/Shell.tsx` — the NAV entry **already exists** at
-   `{ to: '/em', label: 'Est. Moves', icon: '↔️', comingSoon: true }`. Flip
-   `comingSoon` off and add `prefetch: ['/api/levels?ticker=SPX']`.
-4. `app/v3/em/route.ts` in the v2 repo — three lines calling
-   `serveSpaShell("v3")`, matching `app/v3/flow/route.ts`.
+1. ✅ `cbedge-v3/src/pages/Em.tsx` + `cbedge-v3/src/pages/em/emData.ts`.
+2. ✅ `cbedge-v3/src/App.tsx` — `lazy()` import and `<Route path="/em">`.
+3. ✅ `cbedge-v3/src/shell/Shell.tsx` — `comingSoon` removed,
+   `prefetch: ['/api/levels?ticker=SPX']` added. Also `LIVE_ROUTES` in
+   `src/pages/TradersDashboard.tsx`, which that file's own comment says moves
+   with the other two.
+4. ✅ `app/v3/em/route.ts` — `serveSpaShell("v3")`.
 
-Plus `cbedge-v3/scripts/parity-check-em.mjs` (+ its `.test.mjs`) in the style of
-`parity-check-flow.mjs`, driving `/app/em?ticker=SPX` and `/v3/em?ticker=SPX`
-against the same backend and failing on any label present in v2 and absent in
-v3. Note it must be run **as owner** to exercise Parts E2 and H at all — which
-is the same trap as the first row of Part K.
+✅ `cbedge-v3/scripts/parity-check-em.mjs` + `parity-check-em.test.mjs`, wired
+into `npm run check` as `check:parity:em:self`. 49 probes. Two things it does
+that the other parity checkers do not:
+
+- **Case-insensitive matching.** v2 uppercases its card titles in CSS and
+  `innerText` returns text AS RENDERED, so v2 says `ESTIMATED MOVE` where v3
+  says `Estimated Move`. A case-sensitive probe would report ten false losses.
+- **A SET probe over the level figures** (`E/levelNumbers`). Every number this
+  page shows is a comma-grouped string straight out of `ticker_levels`. Rather
+  than pairing each number with its label across two different DOMs, the probe
+  asserts that every figure v2 printed also appears in v3 — so **a tile that
+  renders its label and prints `--` fails**, which is the exact failure a
+  label-only probe sails past.
+
+The enrichment probes (E2, G, H) are deliberately **not** `optional`: `compare()`
+only fails when v2 HAS a value and v3 lacks it, so "this ticker has no evaluated
+weeks" is already handled, and marking them optional would only buy silence on
+the loss the file exists to catch. The run also prints an explicit `i` notice
+when v2 rendered no hit-rate meter, so a run that did not exercise Parts E2/H
+cannot be mistaken for one that did.
 
 ---
 
-## Open questions — answer before Part 2
+## Decisions — answered by Brandon, 2026-08-31
 
-1. **Owner-gated blocks.** Reproduce the 403 behaviour, or open a subscriber
-   read path for `/api/em-tracker`? (Part K, row 1.)
-2. **The five missing colours.** New `--color-v2-*` tokens for exact parity, or
-   re-key onto v3's `--color-up` / `--color-down` / `--color-warn`?
-3. **Pivot.** It is fetched today and rendered nowhere. Bring the readout back
-   in v3, or keep it invisible?
-4. **Deep link.** v2 reads `?ticker=` but never writes it. Should v3 push the
-   ticker into the URL so a looked-up page is shareable?
-5. **Enrichment waterfall.** Confirm the J10 wave may fire in parallel with
-   `/api/levels` (v3 non-negotiable 3) rather than after it.
+1. **Owner-gated blocks** → open a subscriber read path. Done in
+   `server-v2/api-router.js`; writes stay owner-only. Part K row 1.
+2. **The five missing colours** → re-key onto v3's tokens. No `--color-v2-*`
+   added. See the colour table above.
+3. **Pivot** → keep it. v3 renders it; Part F.
+4. **Deep link** → write `?ticker=` into the URL. Part A.
+5. **Enrichment waterfall** → fire in parallel. Part J.
+
+### The one thing NOT ported
+
+The **snapshot (📸) button**. v2's `BoxSnapBtn` is html2canvas; v3 has no
+snapshot stack and pulling one in is a dependency and a budget decision, not a
+side effect of a port. It is declared in the parity script as a `soft`
+departure, so it is printed on every run rather than forgotten. If it should
+come across, that is its own change — and the shared `lib/snapshot.ts` capture
+engine is what would need a v3 equivalent, not just the button.
+
+### Not addressed by this port
+
+`LIVE_ROUTES` in `src/pages/TradersDashboard.tsx` still lists `/scanner`,
+`/trading` and `/test`, which App.tsx retired on 2026-08-30. That is a
+pre-existing drift between the three lists that file's comment says move
+together; `/em` was added to it, the stale three were left alone rather than
+folded into an unrelated diff.

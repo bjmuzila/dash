@@ -5,7 +5,7 @@ import { useField } from '@/data/hooks'
 import { useQuery } from '@/data/api'
 import { isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
-import { chainGexUrl, chainToGex, findCallWall, findPutWall } from '../chainGex'
+import { chainGexUrl, chainToGex, findCallWall, findGexFlipNearSpot, findPutWall } from '../chainGex'
 import { parseChain } from '../multiGreek/mgMath'
 import { CardHeading } from '../cardTitle'
 import { computeMagnet, computeMaxPain, fmtPts, fmtPx, priceDp, strikeDp } from './levelsMath'
@@ -21,6 +21,10 @@ import { computeMagnet, computeMaxPain, fmtPts, fmtPx, priceDp, strikeDp } from 
 // The core and a wall never share a strike: when they collide the core keeps the
 // top node and the wall steps down to the second on its own side. See the block
 // on that in LevelsBody.
+//
+// A level FURTHER FROM SPOT THAN `MAX_DIST_PCT` is left off entirely. See the
+// block on that below — an axis is a picture of distance, and one outlier sets
+// the scale for everything else.
 //
 // Was six tiles in a row. Tiles answer "what is the call wall" one at a time,
 // and the question actually being asked is "where is price sitting inside the
@@ -172,6 +176,25 @@ function ChainTitle({ symbol }: { symbol: string }) {
   return <CardHeading symbol={symbol} label="Key Levels" date={expiry} />
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HOW FAR IS TOO FAR
+//
+// The axis spans its own marks, so the FURTHEST one sets the scale for all of
+// them. One level a thousand points from spot therefore does not just add a
+// label out on the left — it compresses put wall, max pain, core, spot and call
+// wall into a few pixels at the other end, and the card stops being able to
+// answer the only question it exists for.
+//
+// So a level beyond this fraction of spot is not drawn at all. 2.5% is ~190
+// points on a 7,650 SPX, which comfortably contains a real day's walls, and
+// scales on its own for a $214 name (~$5) — a fixed point budget would be
+// nonsense on anything but the index.
+//
+// Dropping a level is honest here in a way it would not be in a table: this is
+// a picture of where price sits inside the gamma, and something a thousand
+// points away is not part of that picture. SPOT is never dropped.
+const MAX_DIST_PCT = 0.025
+
 function LevelsBody({
   symbol,
   rows,
@@ -211,9 +234,31 @@ function LevelsBody({
   const callWall = core != null && rawCallWall === core ? findCallWall(rows, spot, core) : rawCallWall
   const putWall = core != null && rawPutWall === core ? findPutWall(rows, spot, core) : rawPutWall
 
+  // ── The flip, when the reported one is not credible ────────────────────────
+  //
+  // Gamma flip is "walking strikes ascending, the FIRST place the running
+  // OI+VOL total crosses from negative to positive" — the server's rule, and
+  // the right one in the middle of a ladder. At the BOTTOM of one it is noise:
+  // the running total down there is a handful of far-OTM strikes, near zero,
+  // and a single positive one flips it. That is how this card drew a flip 1,075
+  // points under a 7,660 spot while every other level sat within 50 — a number
+  // nobody could trade, dragging the whole axis with it.
+  //
+  // So the server's flip is used whenever it is plausible, and only when it
+  // lands outside the band is the crossing NEAREST SPOT used instead. Not a
+  // silent re-derivation: the first-crossing answer still wins every time it is
+  // anywhere near the money, so this cannot quietly disagree with v2 or with
+  // server-v2 about a flip either of them would actually draw.
+  const flipBand = spot > 0 ? spot * MAX_DIST_PCT : 0
+  const flipCredible = flip != null && spot > 0 && Math.abs(flip - spot) <= flipBand
+  const flipShown = useMemo(
+    () => (flipCredible ? flip : spot > 0 ? findGexFlipNearSpot(rows, spot) : null),
+    [flipCredible, flip, rows, spot],
+  )
+
   const distCall = callWall == null || !spot ? null : callWall - spot
   const distPut = putWall == null || !spot ? null : putWall - spot
-  const distFlip = flip == null || !spot ? null : spot - flip
+  const distFlip = flipShown == null || !spot ? null : spot - flipShown
 
   const emptyFeed = rows.length === 0 && !spot
 
@@ -251,11 +296,15 @@ function LevelsBody({
       dp = kDp,
     ) => {
       if (price == null || !Number.isFinite(price) || price <= 0) return
+      // Too far to be part of the picture — see MAX_DIST_PCT. `spot` itself is
+      // exempt by definition: it is the thing everything else is measured from,
+      // and an axis without it is unreadable.
+      if (key !== 'spot' && spot > 0 && Math.abs(price - spot) > spot * MAX_DIST_PCT) return
       out.push({ key, code, name, price, text: fmtPx(price, dp), colourVar, note, sub })
     }
 
     add('pw', 'PW', 'Put Wall', putWall, '--color-level-pw', fmtPts(distPut))
-    add('flip', 'FLIP', 'Gamma Flip', flip, '--color-accent', fmtPts(distFlip))
+    add('flip', 'FLIP', 'Gamma Flip', flipShown, '--color-accent', fmtPts(distFlip))
     add('pain', 'PAIN', 'Max Pain', maxPain, '--color-muted', maxPain != null && spot ? fmtPts(maxPain - spot) : '')
     add(
       'core',
@@ -289,7 +338,7 @@ function LevelsBody({
     }
 
     return out
-  }, [putWall, distPut, flip, distFlip, maxPain, spot, magnet, callWall, distCall, kDp, pDp, weeklyEm])
+  }, [putWall, distPut, flipShown, distFlip, maxPain, spot, magnet, callWall, distCall, kDp, pDp, weeklyEm])
 
   return (
     <div className={['flex min-h-0 flex-1 flex-col', emptyFeed ? 'stale' : ''].join(' ')}>

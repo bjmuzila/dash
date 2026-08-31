@@ -42,46 +42,155 @@ const PREVIEW_ROWS = 300;
 
 const cardStyle: CSSProperties = { ...classicCardStyle, padding: 18 };
 
+/**
+ * ONE control height for every input, select, checkbox row and button in the
+ * filter bar. The first version let each control size itself and aligned the
+ * row on `flex-end`, which meant a field WITH a hint sat lower than one
+ * without, and the labels staggered across the row. Fixing the label block and
+ * the control to the same height in every field, then aligning the row to the
+ * TOP, makes the labels share a line and the inputs share a line — hints can
+ * then wrap to two lines without moving anything above them.
+ */
+const CONTROL_H = 40;
+const LABEL_H = 14;
+
 const labelStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
   letterSpacing: "0.08em",
   textTransform: "uppercase",
-  color: ownerRgba(OWNER_THEME.text, 0.55),
-  marginBottom: 6,
+  color: OWNER_THEME.text,
   display: "block",
+  height: LABEL_H,
+  lineHeight: `${LABEL_H}px`,
+  marginBottom: 7,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const hintStyle: CSSProperties = {
+  fontSize: 11,
+  lineHeight: "14px",
+  color: OWNER_THEME.text,
+  marginTop: 5,
 };
 
 const fieldRowStyle: CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
-  gap: 14,
-  alignItems: "flex-end",
+  alignItems: "flex-start",
+  columnGap: 14,
+  rowGap: 16,
 };
 
 function Field({
   label,
   hint,
   width = 160,
+  grow = false,
   children,
 }: {
   label: string;
   hint?: string;
   width?: number;
+  grow?: boolean;
   children: ReactNode;
 }) {
   return (
-    <div style={{ minWidth: width, flex: `0 1 ${width}px` }}>
+    <div style={{ flex: `${grow ? 1 : 0} 1 ${width}px`, minWidth: width, maxWidth: grow ? undefined : width }}>
       <label style={labelStyle}>{label}</label>
       {children}
-      {hint ? (
-        <div style={{ fontSize: 11, color: ownerRgba(OWNER_THEME.text, 0.4), marginTop: 4 }}>{hint}</div>
-      ) : null}
+      {hint ? <div style={hintStyle}>{hint}</div> : null}
     </div>
   );
 }
 
-const inputStyle: CSSProperties = { ...homeInputStyle, width: "100%", boxSizing: "border-box" };
+const inputStyle: CSSProperties = {
+  ...homeInputStyle,
+  width: "100%",
+  height: CONTROL_H,
+  padding: "0 12px",
+  boxSizing: "border-box",
+  color: OWNER_THEME.text,
+};
+
+/**
+ * A native <select> renders its popup with the OS's own widget, which on
+ * Windows is a light-grey menu no matter what the closed control looks like.
+ * `color-scheme: dark` is the property Chrome honours there - it repaints the
+ * popup, its scrollbar and the highlight row dark. The explicit per-<option>
+ * colors back it up in browsers that ignore it. `appearance: none` drops the
+ * native arrow so the caret below can be a themed one instead of a grey OS
+ * triangle sitting on a dark field.
+ */
+const selectStyle: CSSProperties = {
+  ...homeInputStyle,
+  width: "100%",
+  height: CONTROL_H,
+  boxSizing: "border-box",
+  color: OWNER_THEME.text,
+  colorScheme: "dark",
+  appearance: "none",
+  WebkitAppearance: "none",
+  MozAppearance: "none",
+  padding: "0 30px 0 12px",
+  backgroundImage:
+    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='white'/></svg>\")",
+  backgroundRepeat: "no-repeat",
+  backgroundPosition: "right 11px center",
+  cursor: "pointer",
+};
+
+const optionStyle: CSSProperties = {
+  background: OWNER_THEME.panelBgStrong,
+  color: OWNER_THEME.text,
+};
+
+/** A checkbox styled to occupy exactly one control slot, so it lines up. */
+function CheckField({
+  label,
+  hint,
+  text,
+  checked,
+  onChange,
+  width = 190,
+}: {
+  label: string;
+  hint?: string;
+  text: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  width?: number;
+}) {
+  return (
+    <Field label={label} hint={hint} width={width}>
+      <label
+        style={{
+          ...inputStyle,
+          display: "flex",
+          alignItems: "center",
+          gap: 9,
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 600,
+          color: checked ? OWNER_THEME.cyan : OWNER_THEME.text,
+          borderColor: checked ? ownerRgba(OWNER_THEME.cyan, 0.45) : OWNER_THEME.border,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          style={{ accentColor: OWNER_THEME.cyan, width: 15, height: 15, flexShrink: 0, cursor: "pointer" }}
+        />
+        {text}
+      </label>
+    </Field>
+  );
+}
 
 /** Cells: numbers get thousands separators, ISO stamps get trimmed, rest clipped. */
 function fmt(v: unknown): string {
@@ -137,7 +246,7 @@ function DataTable({ rows }: { rows: Row[] }) {
                   fontSize: 11,
                   letterSpacing: "0.06em",
                   textTransform: "uppercase",
-                  color: ownerRgba(OWNER_THEME.text, 0.6),
+                  color: OWNER_THEME.text,
                   borderBottom: `1px solid ${OWNER_THEME.border}`,
                   whiteSpace: "nowrap",
                 }}
@@ -362,7 +471,7 @@ export default function LseData() {
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: "0.01em", color: OWNER_THEME.text }}>
           LSE Data
         </h1>
-        <div style={{ fontSize: 13, color: ownerRgba(OWNER_THEME.text, 0.55), marginTop: 4 }}>
+        <div style={{ fontSize: 13, color: OWNER_THEME.text, marginTop: 4 }}>
           London Strategic Edge vault — catalog, candles, option chains, flow and contract bars. Preview here,
           download the full pull as CSV.
         </div>
@@ -405,7 +514,7 @@ export default function LseData() {
       </div>
 
       <div style={cardStyle}>
-        <div style={{ fontSize: 12.5, color: ownerRgba(OWNER_THEME.text, 0.45), marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, color: OWNER_THEME.text, marginBottom: 14 }}>
           {TABS.find((t) => t.id === tab)?.hint}
         </div>
 
@@ -413,10 +522,10 @@ export default function LseData() {
           {tab === "catalog" ? (
             <>
               <Field label="Dataset" width={200}>
-                <select style={inputStyle} value={catDataset} onChange={(e) => setCatDataset(e.target.value)}>
-                  <option value="">All datasets</option>
+                <select style={selectStyle} value={catDataset} onChange={(e) => setCatDataset(e.target.value)}>
+                  <option style={optionStyle} value="">All datasets</option>
                   {datasets.map((d) => (
-                    <option key={d.id} value={d.id}>{`${d.label} (${d.count.toLocaleString("en-US")})`}</option>
+                    <option style={optionStyle} key={d.id} value={d.id}>{`${d.label} (${d.count.toLocaleString("en-US")})`}</option>
                   ))}
                 </select>
               </Field>
@@ -433,32 +542,34 @@ export default function LseData() {
 
           {tab === "candles" ? (
             <>
-              <Field label="Symbol" width={140} hint="exact catalog symbol">
+              <Field label="Symbol" width={130} hint="exact catalog symbol">
                 <input style={inputStyle} value={cSymbol} onChange={(e) => setCSymbol(e.target.value)} placeholder="NQ" />
               </Field>
-              <Field label="Timeframe" width={130}>
-                <select style={inputStyle} value={cTimeframe} onChange={(e) => setCTimeframe(e.target.value)}>
-                  {timeframes.map((t) => <option key={t} value={t}>{t}</option>)}
+              <Field label="Timeframe" width={120}>
+                <select style={selectStyle} value={cTimeframe} onChange={(e) => setCTimeframe(e.target.value)}>
+                  {timeframes.map((t) => <option style={optionStyle} key={t} value={t}>{t}</option>)}
                 </select>
               </Field>
-              <Field label="Start" width={150} hint="YYYY-MM-DD, MAX, or blank for 30d">
+              <Field label="Start" width={150} hint="YYYY-MM-DD, MAX, or blank">
                 <input style={inputStyle} value={cStart} onChange={(e) => setCStart(e.target.value)} placeholder="MAX" />
               </Field>
               <Field label="End" width={150} hint="optional">
                 <input style={inputStyle} value={cEnd} onChange={(e) => setCEnd(e.target.value)} placeholder="" />
               </Field>
-              <Field label="Dataset" width={170} hint="pin the asset class (rarely needed)">
-                <select style={inputStyle} value={cDataset} onChange={(e) => setCDataset(e.target.value)}>
-                  <option value="">auto</option>
-                  {datasets.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+              <Field label="Dataset" width={150} hint="pin the asset class">
+                <select style={selectStyle} value={cDataset} onChange={(e) => setCDataset(e.target.value)}>
+                  <option style={optionStyle} value="">auto</option>
+                  {datasets.map((d) => <option style={optionStyle} key={d.id} value={d.id}>{d.label}</option>)}
                 </select>
               </Field>
-              <Field label="Range" width={200} hint="the vault caps one call at 5,000 bars">
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: OWNER_THEME.text }}>
-                  <input type="checkbox" checked={cAll} onChange={(e) => setCAll(e.target.checked)} />
-                  Walk the whole range
-                </label>
-              </Field>
+              <CheckField
+                label="Range"
+                hint="one call caps at 5,000 bars"
+                text="Walk it all"
+                checked={cAll}
+                onChange={setCAll}
+                width={150}
+              />
             </>
           ) : null}
 
@@ -468,10 +579,10 @@ export default function LseData() {
                 <input style={inputStyle} value={chUnderlying} onChange={(e) => setChUnderlying(e.target.value)} placeholder="SPY" />
               </Field>
               <Field label="Type" width={120}>
-                <select style={inputStyle} value={chType} onChange={(e) => setChType(e.target.value)}>
-                  <option value="">Both</option>
-                  <option value="call">Calls</option>
-                  <option value="put">Puts</option>
+                <select style={selectStyle} value={chType} onChange={(e) => setChType(e.target.value)}>
+                  <option style={optionStyle} value="">Both</option>
+                  <option style={optionStyle} value="call">Calls</option>
+                  <option style={optionStyle} value="put">Puts</option>
                 </select>
               </Field>
               <Field label="Expiry" width={150} hint="one date, optional">
@@ -492,10 +603,10 @@ export default function LseData() {
                 <input style={inputStyle} value={flUnderlying} onChange={(e) => setFlUnderlying(e.target.value)} placeholder="" />
               </Field>
               <Field label="Type" width={120}>
-                <select style={inputStyle} value={flType} onChange={(e) => setFlType(e.target.value)}>
-                  <option value="">Both</option>
-                  <option value="call">Calls</option>
-                  <option value="put">Puts</option>
+                <select style={selectStyle} value={flType} onChange={(e) => setFlType(e.target.value)}>
+                  <option style={optionStyle} value="">Both</option>
+                  <option style={optionStyle} value="call">Calls</option>
+                  <option style={optionStyle} value="put">Puts</option>
                 </select>
               </Field>
               <Field label="Min premium" width={150}>
@@ -510,12 +621,14 @@ export default function LseData() {
               <Field label="End" width={150} hint="optional">
                 <input style={inputStyle} value={flEnd} onChange={(e) => setFlEnd(e.target.value)} />
               </Field>
-              <Field label="Range" width={190}>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: OWNER_THEME.text }}>
-                  <input type="checkbox" checked={flAll} onChange={(e) => setFlAll(e.target.checked)} />
-                  Walk the whole tape
-                </label>
-              </Field>
+              <CheckField
+                label="Range"
+                hint="one call caps at 5,000 prints"
+                text="Walk it all"
+                checked={flAll}
+                onChange={setFlAll}
+                width={150}
+              />
             </>
           ) : null}
 
@@ -534,21 +647,37 @@ export default function LseData() {
                 <input style={inputStyle} value={ctExpiry} onChange={(e) => setCtExpiry(e.target.value)} placeholder="2026-06-12" disabled={!!ctTicker.trim()} />
               </Field>
               <Field label="Type" width={110}>
-                <select style={inputStyle} value={ctType} onChange={(e) => setCtType(e.target.value)} disabled={!!ctTicker.trim()}>
-                  <option value="call">Call</option>
-                  <option value="put">Put</option>
+                <select style={selectStyle} value={ctType} onChange={(e) => setCtType(e.target.value)} disabled={!!ctTicker.trim()}>
+                  <option style={optionStyle} value="call">Call</option>
+                  <option style={optionStyle} value="put">Put</option>
                 </select>
               </Field>
             </>
           ) : null}
 
-          <div style={{ display: "flex", gap: 10, marginLeft: "auto" }}>
-            <button type="button" style={{ ...homeSecondaryButtonStyle, opacity: busy ? 0.5 : 1 }} onClick={preview} disabled={busy}>
-              {busy ? "Loading…" : "Preview"}
-            </button>
-            <button type="button" style={homeButtonStyle} onClick={download} disabled={busy}>
-              Download CSV
-            </button>
+          {/* Actions ride the same label + control grid as the fields, so the
+              buttons sit on the inputs' line rather than on the bottom of
+              whichever field happens to be tallest. */}
+          <div style={{ marginLeft: "auto", flex: "0 0 auto" }}>
+            <div style={{ ...labelStyle, visibility: "hidden" }}>.</div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button"
+                style={{ ...homeSecondaryButtonStyle, height: CONTROL_H, padding: "0 18px", opacity: busy ? 0.5 : 1 }}
+                onClick={preview}
+                disabled={busy}
+              >
+                {busy ? "Loading…" : "Preview"}
+              </button>
+              <button
+                type="button"
+                style={{ ...homeButtonStyle, height: CONTROL_H, padding: "0 18px", opacity: busy ? 0.5 : 1 }}
+                onClick={download}
+                disabled={busy}
+              >
+                Download CSV
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -561,7 +690,7 @@ export default function LseData() {
 
       {rows.length ? (
         <div style={cardStyle}>
-          <div style={{ fontSize: 12.5, color: ownerRgba(OWNER_THEME.text, 0.55), marginBottom: 12 }}>
+          <div style={{ fontSize: 12.5, color: OWNER_THEME.text, marginBottom: 12 }}>
             {meta}
             {rows.length > PREVIEW_ROWS
               ? ` · showing the first ${PREVIEW_ROWS.toLocaleString("en-US")}`
@@ -572,7 +701,7 @@ export default function LseData() {
       ) : null}
 
       {!rows.length && !busy && !error ? (
-        <div style={{ ...cardStyle, color: ownerRgba(OWNER_THEME.text, 0.45), fontSize: 13 }}>
+        <div style={{ ...cardStyle, color: OWNER_THEME.text, fontSize: 13 }}>
           Set the filters above, then Preview to see the rows or Download CSV to pull the file.
           Large pulls stream straight to disk — they never load into this tab.
         </div>
