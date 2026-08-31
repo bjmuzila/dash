@@ -1,5 +1,12 @@
 import type { GexRow } from '@/contract/frames'
+import { deriveLevels, type CoreNode } from '@/data/levels'
 import { daysBetween, parseChain, strikeGex, todayEt } from './multiGreek/mgMath'
+
+// The level finders live in data/levels.ts now — ONE definition of a wall, a
+// CORE and a flip for every surface. Re-exported here so the existing
+// `from './chainGex'` imports keep resolving; see that module for the reasons.
+export { findCallWall, findCore, findPutWall, oiVolNet, deriveLevels, findGexFlip } from '@/data/levels'
+export { findCumulativeFlip as findGexFlipNearSpot } from '@/data/levels'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // A GEX ladder for ANY ticker, derived from /api/chains.
@@ -40,6 +47,8 @@ export interface ChainGex {
   rows: GexRow[]
   callWall: number | null
   putWall: number | null
+  /** Biggest |OI+VOL| on the board. Same definition the socket path uses. */
+  core: CoreNode | null
   flip: number | null
   spot: number
   expiry: string
@@ -49,6 +58,7 @@ export const EMPTY_CHAIN_GEX: ChainGex = {
   rows: [],
   callWall: null,
   putWall: null,
+  core: null,
   flip: null,
   spot: 0,
   expiry: '',
@@ -63,11 +73,6 @@ export const EMPTY_CHAIN_GEX: ChainGex = {
  */
 export function chainGexUrl(ticker: string): string {
   return `/api/chains?ticker=${encodeURIComponent(ticker)}&range=all&live=0`
-}
-
-/** OI+VOL: the two summed, per the server's oiVolNet(). */
-export function oiVolNet(r: GexRow): number {
-  return (Number(r.netGEX) || 0) + (Number(r.netVolGEX) || 0)
 }
 
 export function chainToGex(json: unknown): ChainGex {
@@ -117,105 +122,8 @@ export function chainToGex(json: unknown): ChainGex {
   }
   rows.sort((a, b) => a.strike - b.strike)
 
-  return {
-    rows,
-    callWall: findCallWall(rows, spot),
-    putWall: findPutWall(rows, spot),
-    flip: findGexFlip(rows),
-    spot,
-    expiry: front.expiration,
-  }
-}
-
-/**
- * Largest positive OI+VOL strictly above spot.
- *
- * `exclude` takes one strike out of the running first — pass the CORE, and a
- * call wall that would have landed on the same strike becomes the SECOND
- * largest positive above spot instead. The server's own findCallWall has this
- * parameter for exactly this reason; KeyLevelsCard is where the core and the
- * walls are actually reconciled, since only it knows both.
- */
-export function findCallWall(rows: GexRow[], spot: number, exclude: number | null = null): number | null {
-  let best: GexRow | null = null
-  for (const r of rows) {
-    if (!(r.strike > spot)) continue
-    if (exclude != null && r.strike === exclude) continue
-    const v = oiVolNet(r)
-    if (v <= 0) continue
-    if (!best || v > oiVolNet(best)) best = r
-  }
-  return best?.strike ?? null
-}
-
-/** Most negative OI+VOL strictly below spot. `exclude` as above. */
-export function findPutWall(rows: GexRow[], spot: number, exclude: number | null = null): number | null {
-  let best: GexRow | null = null
-  for (const r of rows) {
-    if (!(r.strike < spot)) continue
-    if (exclude != null && r.strike === exclude) continue
-    const v = oiVolNet(r)
-    if (v >= 0) continue
-    if (!best || v < oiVolNet(best)) best = r
-  }
-  return best?.strike ?? null
-}
-
-/**
- * The negative→positive crossing NEAREST SPOT, same walk and same
- * interpolation as findGexFlip().
- *
- * Not a replacement for it — a REPAIR, and used only when the first crossing
- * came back somewhere nobody would trade. "First crossing wins" is the server's
- * rule and it is the right one in the body of a ladder, but at the very bottom
- * of one the running total is a few far-OTM strikes hovering around zero, so a
- * single positive strike down there wins the race and returns a flip a thousand
- * points from the money. KeyLevelsCard tests the reported flip against its own
- * distance band first and only falls back to this; see the block there.
- *
- * Ties go to the first crossing found, which for a symmetric pair means the
- * lower strike. There is no better answer in that case and picking one keeps
- * the number stable across polls.
- */
-export function findGexFlipNearSpot(rows: GexRow[], spot: number): number | null {
-  if (!(spot > 0)) return null
-  let cum = 0
-  let prevCum = 0
-  let prevStrike: number | null = null
-  let best: number | null = null
-  for (const r of rows) {
-    prevCum = cum
-    cum += oiVolNet(r)
-    if (prevStrike !== null && prevCum < 0 && cum >= 0) {
-      const range = cum - prevCum
-      const x = Math.abs(range) > 0 ? prevStrike + (r.strike - prevStrike) * (-prevCum / range) : r.strike
-      if (best === null || Math.abs(x - spot) < Math.abs(best - spot)) best = x
-    }
-    prevStrike = r.strike
-  }
-  return best
-}
-
-/**
- * The FIRST negative→positive crossing of the running OI+VOL total, walking
- * strikes ascending, interpolated between the bracketing strikes.
- *
- * "First crossing wins" is the server's own rule, not a simplification — a
- * choppy ladder can cross more than once and picking the nearest to spot
- * instead would put v3's flip on a different strike from every other surface's.
- */
-export function findGexFlip(rows: GexRow[]): number | null {
-  let cum = 0
-  let prevCum = 0
-  let prevStrike: number | null = null
-  for (const r of rows) {
-    prevCum = cum
-    cum += oiVolNet(r)
-    if (prevStrike !== null && prevCum < 0 && cum >= 0) {
-      const range = cum - prevCum
-      return Math.abs(range) > 0 ? prevStrike + (r.strike - prevStrike) * (-prevCum / range) : r.strike
-    }
-    prevStrike = r.strike
-  }
-  return null
+  // No profile flip on this path: /api/chains rows carry no IV, so the spot
+  // sweep has nothing to price and deriveLevels falls to the next rung on its
+  // own. Same function, same order, one fewer answer available.
+  return { rows, ...deriveLevels(rows, spot), spot, expiry: front.expiration }
 }

@@ -99,18 +99,18 @@ export function valueOf(cell: GexCell, metric: GexMetric): number {
 }
 
 // ── Which SESSION DAY a column belongs to ────────────────────────────────────
-// TESTING PHASE companion to GEX_HISTORY_MINUTES_PREV_DAY. With the 48h reach
-// on, the history spans two sessions and the bubble layer draws both at once
-// with nothing on screen saying so — a Thursday wall and a Friday wall look
-// identical. These split the columns by ET calendar date so the card can NAME
-// the days it is holding and draw one of them.
+// The card draws ONE session — the newest one the history came back holding —
+// so all that is needed here is the day key a column belongs to.
 //
 // ET CALENDAR DATE, not a session window: the recorder's overnight columns
 // already carry the date of the session they lead into, so the calendar date IS
 // the session day and there is no 18:00 roll to get wrong.
 //
-// Retire with the rest of the testing phase — one session means one day, the
-// picker never renders, and this block has no callers left.
+// This block used to also carry `sessionDays`, `GexDay`, `filterByDay`,
+// `etDayShort` and `etDayLong` — the naming and picking machinery behind the
+// toolbar's Sun/Mon/Both day picker, which existed only so the 48h testing
+// reach could show two sessions at once. The card follows the selected
+// expiration now; the picker, the reach and those helpers are gone with it.
 
 const ET_DAY = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/New_York',
@@ -119,50 +119,30 @@ const ET_DAY = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 })
 
-const ET_WEEKDAY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' })
-
 /** `YYYY-MM-DD` in New York for a column's timestamp. */
 export function etDay(ts: number): string {
   return ET_DAY.format(new Date(ts))
 }
 
-/** `Fri` — the weekday a `YYYY-MM-DD` day key falls on. */
-export function etDayShort(day: string): string {
-  // Noon UTC, so neither the ET offset nor a DST edge can move the date.
-  const t = Date.parse(`${day}T12:00:00Z`)
-  return Number.isFinite(t) ? ET_WEEKDAY.format(new Date(t)) : day
-}
-
-/** `Fri 8/28` — what the picker's tooltip spells out. */
-export function etDayLong(day: string): string {
-  const [, m, d] = day.split('-')
-  return m && d ? `${etDayShort(day)} ${Number(m)}/${Number(d)}` : day
-}
-
-/** Distinct ET days present in the history, OLDEST first. */
-export function sessionDays(columns: GexColumn[]): string[] {
-  const seen = new Set<string>()
-  for (const c of columns) seen.add(etDay(c.slotTs))
-  return [...seen].sort()
-}
-
 /**
- * Which day the bubbles draw.
+ * The columns belonging to the NEWEST ET session day in `columns`.
  *
- * Semantic, never a stored date: 'latest' has to keep meaning the newest
- * session in the data after a rollover, and — the case this was built for — the
- * newest session is FRIDAY when the card is opened on a Saturday, so anything
- * anchored to the wall clock draws an empty layer all weekend.
+ * The one rule the card needs, and it has to stay semantic rather than "today":
+ * the newest session is FRIDAY when the card is opened on a Saturday, so
+ * anything anchored to the wall clock draws an empty layer all weekend.
+ *
+ * It is also what keeps the weekend's republished book off a Monday chart. The
+ * recorder re-publishes the last cash book once a minute all weekend, so a
+ * request made on Monday morning still comes back holding Sunday rows — real
+ * rows, and a picture of nothing happening, drawn wider than the session that
+ * did happen.
  */
-export type GexDay = 'latest' | 'prev' | 'both'
-
-/**
- * The columns for `day`. A no-op unless the history actually spans two
- * sessions, so with the 48h reach off this returns its input untouched.
- */
-export function filterByDay(columns: GexColumn[], day: GexDay, days: string[]): GexColumn[] {
-  if (day === 'both' || days.length < 2) return columns
-  const pick = day === 'latest' ? days[days.length - 1] : days[days.length - 2]
-  if (!pick) return columns
-  return columns.filter((c) => etDay(c.slotTs) === pick)
+export function latestSession(columns: GexColumn[]): GexColumn[] {
+  let newest = ''
+  for (const c of columns) {
+    const d = etDay(c.slotTs)
+    if (d > newest) newest = d
+  }
+  if (!newest) return columns
+  return columns.filter((c) => etDay(c.slotTs) === newest)
 }

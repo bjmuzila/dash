@@ -3,9 +3,12 @@ import { CardToolbar } from '@/design/primitives/Card'
 import { useFrame } from '@/data/hooks'
 import { usePageSymbol } from '@/data/symbol'
 import type { FlowFrame } from '@/contract/frames'
-import { useContractStats, useFlowHistory, useLiveSpots } from '@/data/flowData'
+import { useContractStats, useFlowHistory, useLiveSpots, useTick } from '@/data/flowData'
 import {
+  STALE_AFTER_SEC,
+  fmtAgo,
   fmtPremium,
+  fmtTime,
   mergeTape,
   normTicker,
   passesFilters,
@@ -143,12 +146,22 @@ export function FlowTapeCard() {
     [minPremium],
   )
 
-  const { tape: history, switching } = useFlowHistory(active, date, minPremium, true)
+  const { tape: history, switching, error } = useFlowHistory(active, date, minPremium, true)
   const flowFrame = useFrame<FlowFrame>('flow')
   const liveTape = useMemo(() => flowFrame?.data.tape ?? [], [flowFrame])
   const status: 'LIVE' | 'WAITING' = flowFrame ? 'LIVE' : 'WAITING'
 
   const merged = useMemo(() => mergeTape(history, liveTape, true), [history, liveTape])
+
+  /**
+   * Every print for this ticker, before the premium floor. Only used for the
+   * staleness read below — "when did anything last print" must not move when
+   * the slider does, or raising the floor would look like the feed dying.
+   */
+  const own = useMemo(
+    () => merged.filter((o) => normTicker(o.underlying) === active),
+    [merged, active],
+  )
 
   /** Newest first, which is the order a tape is read in. */
   const filtered = useMemo(
@@ -175,6 +188,27 @@ export function FlowTapeCard() {
   const spotByTicker = useLiveSpots(visibleTickers, true)
 
   const totals = useMemo(() => sumTotals(filtered), [filtered])
+
+  // ── When did anything last print ───────────────────────────────────────────
+  //
+  // An empty tape and a stalled feed look the same, and a tape that stops
+  // filling is the single easiest thing on this board to misread. So the card
+  // says how old its newest print is, always. `useTick` drives it: once the
+  // feed stops there is nothing else to re-render this card, so an age that
+  // only recomputed on new data would freeze at whatever it last said.
+  const tick = useTick()
+  const lastTs = useMemo(() => {
+    let ts = 0
+    for (const o of own) if (o.ts > ts) ts = o.ts
+    return ts || null
+  }, [own])
+  const ageSec = useMemo(
+    () => (lastTs == null ? null : Math.max(0, (Date.now() - lastTs) / 1000)),
+    // `tick` is the trigger, not an input — see above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lastTs, tick],
+  )
+  const stale = ageSec != null && ageSec >= STALE_AFTER_SEC
   // The label follows the THUMB, not the data — a drag has to read back the
   // value under your finger, not the one the tape is still showing.
   const stopLabel = draftPremium === 0 ? 'Any' : fmtPremium(draftPremium)
@@ -187,12 +221,13 @@ export function FlowTapeCard() {
             status widgets to its left hold a fixed width so they cannot shove it
             around as they change. */}
         <span
+          title={error ? 'The last backfill request failed — showing the last data that arrived' : undefined}
           className={[
             'tabular w-[54px] rounded-sm bg-raised px-2 py-0.5 text-center text-3xs',
-            status === 'LIVE' ? 'text-accent' : 'text-down',
+            error ? 'text-warn' : status === 'LIVE' ? 'text-accent' : 'text-down',
           ].join(' ')}
         >
-          {status}
+          {error ? 'ERROR' : status}
         </span>
         {/* Always rendered, so the row never changes width. `visibility` rather
             than a conditional: the box is reserved either way. */}
@@ -248,6 +283,14 @@ export function FlowTapeCard() {
         <span>
           Puts <strong className="tabular text-down">{fmtPremium(totals.putPrem)}</strong>
         </span>
+        {lastTs != null && (
+          <span
+            className={['tabular ml-auto', stale ? 'text-warn' : 'text-faint'].join(' ')}
+            title="When this ticker last printed, at any premium"
+          >
+            last {fmtTime(lastTs)} · {fmtAgo(ageSec)} ago
+          </span>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">

@@ -28,11 +28,30 @@ import {
   NETBINS_CACHE_KEY,
   NET_LATE_SEC,
   normTicker,
+  printIdentity,
   type FlowFilters,
   type NetBin,
   type PremSplit,
   type Scope,
 } from '@/data/flowMath'
+
+// ── A slow clock ─────────────────────────────────────────────────────────────
+
+/**
+ * Re-render every `ms`, so a component can show HOW OLD something is.
+ *
+ * Needed precisely when everything else has stopped: a card that only
+ * re-renders on a socket frame cannot report that the socket frames stopped —
+ * its "last print 3m ago" would freeze at 3m and stay there all afternoon.
+ */
+export function useTick(ms = 15_000): number {
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setN((x) => x + 1), ms)
+    return () => clearInterval(id)
+  }, [ms])
+  return n
+}
 
 // ── Shared query building ────────────────────────────────────────────────────
 
@@ -82,13 +101,31 @@ interface PremSplitResponse { date: string; split: PremSplit | null }
  *
  * `minPremium` is pushed to SQL so the server's 20k cap keeps the BIGGEST
  * prints across the whole session rather than the most recent slice.
+ *
+ * ── It also POLLS, and that is not belt-and-braces ───────────────────────────
+ * This used to fetch exactly once per (ticker, date, floor) and then rely
+ * entirely on the socket's `flow` frame for everything after page load. That is
+ * fine right up until the socket goes quiet — and then the tape freezes at the
+ * moment the page opened and there is NOTHING on screen that says so. A market
+ * that has genuinely stopped printing and a feed that has stopped arriving look
+ * identical, which is the worst property a live panel can have.
+ *
+ * So the newest slice is re-asked for every HISTORY_POLL_MS and MERGED into
+ * what is already held (by the same `ts|symbol|side` identity flow_prints uses
+ * as its primary key, persisted winning, since it is the coalesced version).
+ * The expensive 20k pull still happens only on a real change of ticker, date or
+ * floor. `error` reports a poll that came back wrong, so a caller can say
+ * "the feed is down" instead of drawing a flat line.
  */
+/** How often the backfill re-asks for the newest slice. See the note below. */
+const HISTORY_POLL_MS = 45_000
+
 export function useFlowHistory(
   active: string,
   date: string,
   minPremium: number,
   enabled: boolean,
-): { tape: FlowTapePrint[]; switching: boolean } {
+): { tape: FlowTapePrint[]; switching: boolean; error: boolean } {
   const [tape, setTape] = useState<FlowTapePrint[]>([])
   // Seeded from `enabled`, not `false`. The effect below only sets it a tick
   // later, so a `false` seed made the very first render say "loaded, and
@@ -96,6 +133,7 @@ export function useFlowHistory(
   // (the board's Net Premium card says "not available" for a ticker the
   // recorder has never seen) would flash it on every mount.
   const [switching, setSwitching] = useState(enabled)
+  const [error, setError] = useState(false)
   // The first run fires immediately: the 400ms debounce exists for slider
   // drags, and paying it on mount just delays first paint for nothing.
   const firstRunRef = useRef(true)
@@ -113,39 +151,78 @@ export function useFlowHistory(
       fetch(`/proxy/flow-history?${base}&limit=${limit}`, { credentials: 'same-origin' })
         .then((r) => (r.ok ? (r.json() as Promise<FlowHistoryResponse>) : null))
 
+    /** Persisted ∪ held, newest version of a print winning. Ascending by ts. */
+    const mergeIn = (incoming: FlowTapePrint[]) =>
+      setTape((prev) => {
+        if (!prev.length) return incoming
+        const byKey = new Map(prev.map((o) => [printIdentity(o), o]))
+        for (const o of incoming) byKey.set(printIdentity(o), o)
+        return [...byKey.values()].sort((a, b) => a.ts - b.ts)
+      })
+
     let full = false
     const run = () => {
       void pull(1000)
         .then((j) => {
           if (cancelled || full) return
-          if (j && Array.isArray(j.tape)) setTape(j.tape)
+          if (j && Array.isArray(j.tape)) {
+            setTape(j.tape)
+            setError(false)
+          } else setError(true)
           setSwitching(false)
         })
         .catch(() => {
-          if (!cancelled && !full) setSwitching(false)
+          if (cancelled || full) return
+          setError(true)
+          setSwitching(false)
         })
       void pull(20000)
         .then((j) => {
           if (cancelled) return
           full = true
-          if (j && Array.isArray(j.tape)) setTape(j.tape)
+          if (j && Array.isArray(j.tape)) {
+            setTape(j.tape)
+            setError(false)
+          } else setError(true)
           setSwitching(false)
         })
         .catch(() => {
-          if (!cancelled) setSwitching(false)
+          if (cancelled) return
+          setError(true)
+          setSwitching(false)
+        })
+    }
+
+    // The refresh. Newest slice only, merged — the 20k pull is for a real
+    // change of ticker/date/floor, not for keeping up with the session.
+    const refresh = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      void pull(1000)
+        .then((j) => {
+          if (cancelled) return
+          if (j && Array.isArray(j.tape)) {
+            mergeIn(j.tape)
+            setError(false)
+          } else setError(true)
+        })
+        .catch(() => {
+          // Keep what is on screen — one failed refresh must not blank a tape.
+          if (!cancelled) setError(true)
         })
     }
 
     const wasFirst = firstRunRef.current
     firstRunRef.current = false
     const kick = setTimeout(run, wasFirst ? 0 : 400)
+    const poll = setInterval(refresh, HISTORY_POLL_MS)
     return () => {
       cancelled = true
       clearTimeout(kick)
+      clearInterval(poll)
     }
   }, [active, date, minPremium, enabled])
 
-  return { tape, switching }
+  return { tape, switching, error }
 }
 
 // ── Combined (all tickers) day backfill ──────────────────────────────────────
@@ -259,9 +336,14 @@ export function useNetPremBins(
   isToday: boolean,
   f: FlowFilters,
   enabled: boolean,
-): { bins: NetBin[]; switching: boolean } {
+): { bins: NetBin[]; switching: boolean; error: boolean } {
   const [bins, setBins] = useState<NetBin[]>([])
   const [switching, setSwitching] = useState(false)
+  // A poll that comes back wrong used to be swallowed whole: the chart kept the
+  // bins it had and drew a flat line to the horizon, which is EXACTLY what a
+  // quiet market looks like. A dead endpoint must not be indistinguishable from
+  // no prints.
+  const [error, setError] = useState(false)
   const keyRef = useRef('')
   const binsRef = useRef<NetBin[]>([])
 
@@ -316,11 +398,16 @@ export function useNetPremBins(
             binsRef.current = merged
             setBins(merged)
             writeNetBinsCache(key, merged)
+            setError(false)
+          } else {
+            setError(true)
           }
           setSwitching(false)
         })
         .catch(() => {
-          if (!cancelled) setSwitching(false)
+          if (cancelled) return
+          setError(true)
+          setSwitching(false)
         })
     }
 
@@ -332,7 +419,7 @@ export function useNetPremBins(
     }
   }, [key, isToday, enabled])
 
-  return { bins, switching }
+  return { bins, switching, error }
 }
 
 // ── Per-contract Vol / OI / IV ───────────────────────────────────────────────

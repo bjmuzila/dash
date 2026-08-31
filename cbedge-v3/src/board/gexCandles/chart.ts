@@ -84,11 +84,11 @@ export interface EsChartHandle {
    * makes the price move between candle refreshes — the REST feed only ever
    * hands over closed bars.
    *
-   * It EXTENDS the last bar, and never invents a new one. Bars above 5m are
-   * anchored to 09:30 ET, so guessing the next boundary here would put a bar in
-   * the wrong place on exactly the intervals where that is most visible; once
-   * the last bar's window has elapsed this goes quiet and waits for the poll to
-   * bring the real next bar.
+   * It extends the last bar, and when that bar's window has elapsed it opens
+   * the NEXT one — stepping a single interval from the last bar's own open, so
+   * the new bar stays on whatever grid the feed is anchored to (09:30 ET for
+   * 15m and coarser) instead of guessing an absolute boundary. Strictly one bar
+   * ahead: past that there is a gap in the data and the poll owns it.
    */
   setLivePrice: (price: number) => void
   /** Bar width in ms — needed to know when the last bar has stopped forming. */
@@ -507,9 +507,43 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     },
     setLivePrice(price) {
       if (!live || !Number.isFinite(price) || price <= 0) return
-      // Only while the bar is genuinely still open. Past that, a REST poll owns
-      // the next bar — see the note on this method in EsChartHandle.
-      if (Date.now() >= live.openMs + intervalMs) return
+      // ── Has the bar this is extending already closed? ──────────────────────
+      // It usually HAS. The candle feed hands over CLOSED bars only, so `live`
+      // is the last FINISHED bar and `openMs + intervalMs` is already in the
+      // past the moment it arrives. The old guard returned here on that, which
+      // meant that on a 1m chart every live tick was dropped and the price only
+      // ever moved when the 30s poll landed — the whole point of this method,
+      // silently inert on the timeframe it matters most on.
+      //
+      // So OPEN THE NEXT BAR instead of going quiet. Stepping one interval from
+      // the last bar's own open keeps the new bar on the feed's grid whatever
+      // that grid is anchored to (09:30 ET for 15m and coarser), which is what
+      // the original note was right to be careful about — it is guessing an
+      // ABSOLUTE boundary that gets 15m/30m/60m wrong, not a relative one.
+      //
+      // Strictly the NEXT bar, never a later one: if more than one interval has
+      // elapsed there is a gap — an overnight, a halt, a tab asleep — and the
+      // honest answer is to wait for the poll rather than paint a bar over it.
+      const now = Date.now()
+      if (now >= live.openMs + intervalMs) {
+        const nextOpen = live.openMs + intervalMs
+        if (now >= nextOpen + intervalMs) return
+        live = {
+          time: Math.floor(nextOpen / 1000) as UTCTimestamp,
+          openMs: nextOpen,
+          open: price,
+          high: price,
+          low: price,
+          close: price,
+        }
+        barCount++
+        // A bump HERE only — once an interval, not once a tick. A new bar moves
+        // the time axis, and the bubble band is positioned against it.
+        version++
+        series.update({ time: live.time, open: price, high: price, low: price, close: price })
+        checkOffscreen()
+        return
+      }
       if (price === live.close) return
       live.close = price
       if (price > live.high) live.high = price

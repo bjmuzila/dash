@@ -21,6 +21,9 @@
  * FAIL-CLOSED
  *   Anything we can't positively verify → denied. The owner is allowed on a
  *   billing-lookup hiccup (verifyWsRequest already encodes that).
+ *   Still denied, but a failure we could not EVALUATE (DB unreachable, pool
+ *   exhausted) answers 503 rather than 401, so the caller retries instead of
+ *   treating a transient outage as a permanent auth failure.
  *
  * KILL SWITCH
  *   PROXY_AUTH_REQUIRED must be "1" to enforce. Left unset/0 the gate is a
@@ -28,7 +31,7 @@
  *   before the env is in place. Flip to "1" in prod .env.local to enforce.
  */
 
-const { verifyWsRequest } = require('./ws-auth');
+const { verifyWsRequest, isTransientAuthFailure } = require('./ws-auth');
 
 const OWNER_USER_ID = (process.env.OWNER_USER_ID || '').trim();
 
@@ -75,9 +78,13 @@ async function checkProxyAccess(req, pathname, method) {
   // 3) Everything else needs a verified session.
   let access;
   try {
-    access = await verifyWsRequest(req); // { ok, userId?, reason }
+    access = await verifyWsRequest(req); // { ok, userId?, reason, transient? }
   } catch (e) {
-    return { ok: false, code: 401, reason: 'verify-error' };
+    return { ok: false, code: 503, reason: 'verify-error' };
+  }
+  if (!access.ok && isTransientAuthFailure(access)) {
+    // Could not evaluate (DB down / pool exhausted) — retryable, not a denial.
+    return { ok: false, code: 503, reason: access.reason || 'verify-error' };
   }
   if (!access.ok) {
     return { ok: false, code: 401, reason: access.reason || 'unauthorized' };

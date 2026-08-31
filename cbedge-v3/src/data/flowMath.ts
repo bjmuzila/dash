@@ -139,6 +139,31 @@ export function fmtEtHm(utcSec: number): string {
   }).format(new Date(utcSec * 1000))
 }
 
+/**
+ * `12s` / `5m` / `1h 4m` — how long ago something was, for a staleness read.
+ *
+ * Coarse on purpose. The question a live panel has to answer is "is this feed
+ * still arriving", and to the second is noise for that; a minute count is the
+ * granularity anyone actually acts on.
+ */
+export function fmtAgo(sec: number | null | undefined): string {
+  if (sec == null || !Number.isFinite(sec) || sec < 0) return '—'
+  if (sec < 60) return `${Math.floor(sec)}s`
+  const m = Math.floor(sec / 60)
+  if (m < 60) return `${m}m`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+/**
+ * How long a live surface may go without a new print before it says so.
+ *
+ * Three minutes. Not an error — a genuinely quiet name goes minutes between
+ * prints and that is information too. It is the line past which "nothing is
+ * happening" and "nothing is arriving" stop being distinguishable by looking,
+ * so the card stops making the reader guess and prints the age.
+ */
+export const STALE_AFTER_SEC = 180
+
 /** `+12.3%` / `-4.0%` — the drawer's since-fill figures, which DO carry a `+`. */
 export function fmtPct(v: number): string {
   return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`

@@ -10,7 +10,6 @@
 // that replaced six sliders and an Auto mode, and for why each one survived.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { GexDay } from './gexHistory'
 import { normalizeSymbol } from './symbols'
 
 export type Session = 'rth' | 'eth'
@@ -71,19 +70,6 @@ export interface ChartSettings {
   countdown: boolean
   /** The strike ladder down the right-hand side, pinned to the price axis. */
   railOn: boolean
-  /** TESTING PHASE ONLY — reach back 48h so yesterday's bubbles draw too. */
-  prevDay: boolean
-  /**
-   * TESTING PHASE ONLY — which of the days the 48h reach returned actually
-   * draws. `prevDay` is the REACH (how far back the request asks); this is the
-   * DISPLAY (which of what came back is on the chart), and the toolbar's day
-   * picker is where it is set. Two controls because they answer two questions
-   * and only one of them costs a request.
-   *
-   * Semantic rather than a date — see GexDay. With `prevDay` off there is only
-   * one session in the data, the picker does not render and this is inert.
-   */
-  bubbleDay: GexDay
   /**
    * Which expiry the bubbles draw. '' follows the NEAREST, which is the
    * default and the eventual permanent behaviour; a value pins it, which is
@@ -112,14 +98,6 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   // On by default: the rail is the numbers behind the bubbles, and a bubble
   // layer with no way to read the figure it is drawn from is half a feature.
   railOn: true,
-  // ON for the testing phase, so the layer has something to draw at any hour.
-  // The default flips to false when this is retired — see the note on
-  // GEX_HISTORY_MINUTES_PREV_DAY.
-  prevDay: true,
-  // BOTH days while the layer is being tuned — the point of the 48h reach is
-  // seeing a whole day of gamma migration at once. The finished card has one
-  // session and no picker; 'latest' is what that collapses to.
-  bubbleDay: 'both',
   expiry: '',
   bubbleBucket: BUBBLE_BUCKET_DEFAULT,
 }
@@ -323,32 +301,23 @@ export const BUBBLES = {
 export const BUBBLE_LADDER_REQUEST = 30
 
 
-/** How far back the bubble history reaches, minutes. One full session + pre. */
-export const GEX_HISTORY_MINUTES = 720
-
 /**
- * ── TESTING PHASE ONLY ───────────────────────────────────────────────────────
- * 48 hours, so the bubble layer carries YESTERDAY's ladder as well as today's.
+ * How far back the bubble history reaches, minutes. One full session + pre.
  *
- * This exists to give the layer something to draw outside market hours and to
- * make a day's worth of gamma migration visible while the card is being built.
- * It is not what the card is for: the finished version shows the current
- * session, which is `GEX_HISTORY_MINUTES` above.
+ * This used to have a 48h TESTING PHASE partner (`GEX_HISTORY_MINUTES_PREV_DAY`)
+ * behind a `Prev day` chip, so the layer could hold two sessions at once and a
+ * Sun/Mon/Both picker chose between them. It was the single biggest cost on the
+ * card — the history route returns one column PER MINUTE, so 2880 was four
+ * times the columns, four times the payload and four times the parse of this
+ * 720 — and the second session it bought was usually the recorder's frozen
+ * weekend republish rather than a real one. The card follows the selected
+ * expiration's session now; the reach, the chip and the picker are all gone.
  *
- * It is also the single biggest cost on this card: the history route returns one
- * column PER MINUTE, so 2880 is four times the columns — and four times the
- * payload and parse — of the 720 default. If the bubbles feel slow, this is the
- * first thing to turn off.
- *
- * To retire it: delete this constant, the `prevDay` and `bubbleDay` settings,
- * the `Prev day` chip in GexCandlesCard's Layers panel, the day picker beside
- * the expiry dropdown, and the session-day block at the foot of gexHistory.ts.
- * (The other half of that eventual change — one expiry instead of
- * `anyExpiry=1` — is already done; the toolbar's expiry dropdown names it.)
- *
- * The route clamps `minutes` to 5760, so this is well inside what it will serve.
+ * The route clamps `minutes` to 5760, comfortably above anything asked here —
+ * the weekend branch in GexCandlesCard reaches further than this to clear a
+ * Saturday or Sunday and still lands well inside it.
  */
-export const GEX_HISTORY_MINUTES_PREV_DAY = 2880
+export const GEX_HISTORY_MINUTES = 720
 
 // ── Persistence ──────────────────────────────────────────────────────────────
 
@@ -356,6 +325,11 @@ const KEY_PREFIX = 'cb-v3-gex-candles:'
 
 /**
  * Blob version, written alongside the settings and checked on load.
+ *
+ * v5 (2026-08-31): `prevDay` and `bubbleDay` removed with the 48h testing reach
+ * and the Sun/Mon/Both day picker. Both are listed in STALE_ON_UPGRADE so the
+ * dead keys are dropped from the blob on first load rather than riding along
+ * forever — nothing reads them either way, this just keeps the blob honest.
  *
  * v4 (2026-08-29): `bubbleBucket` added — the one bubble setting there is. An
  * older blob has no such key, `coerce` falls back to 'auto', and that is the
@@ -366,8 +340,8 @@ const KEY_PREFIX = 'cb-v3-gex-candles:'
  * simply never read. Kept because the next default that needs pushing will need
  * this, and re-deriving the mechanism is worse than leaving it inert.
  */
-const SETTINGS_V = 4
-const STALE_ON_UPGRADE: string[] = []
+const SETTINGS_V = 5
+const STALE_ON_UPGRADE: string[] = ['prevDay', 'bubbleDay']
 
 /** Coerce an unknown parsed blob into a complete, in-range settings object. */
 function coerce(raw: unknown): ChartSettings {
@@ -389,8 +363,6 @@ function coerce(raw: unknown): ChartSettings {
     gexMetric: p.gexMetric === 'vol' ? 'vol' : 'voloi',
     countdown: p.countdown !== false,
     railOn: p.railOn !== false,
-    prevDay: p.prevDay !== false,
-    bubbleDay: p.bubbleDay === 'latest' || p.bubbleDay === 'prev' ? p.bubbleDay : 'both',
     expiry: typeof p.expiry === 'string' ? p.expiry : '',
     bubbleBucket: isBubbleBucket(p.bubbleBucket) ? p.bubbleBucket : DEFAULT_SETTINGS.bubbleBucket,
   }

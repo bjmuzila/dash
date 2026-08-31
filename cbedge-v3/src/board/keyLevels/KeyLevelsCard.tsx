@@ -3,12 +3,14 @@ import { useMemo } from 'react'
 import { LevelsAxis, type AxisMark } from './LevelsAxis'
 import { useField } from '@/data/hooks'
 import { useQuery } from '@/data/api'
+import { useLiveGex } from '@/data/liveGex'
 import { isSocketSymbol, usePageSymbol } from '@/data/symbol'
-import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
-import { chainGexUrl, chainToGex, findCallWall, findGexFlipNearSpot, findPutWall } from '../chainGex'
+import type { GexFrame, GexRow } from '@/contract/frames'
+import type { CoreNode } from '@/data/levels'
+import { chainGexUrl, chainToGex } from '../chainGex'
 import { parseChain } from '../multiGreek/mgMath'
 import { CardHeading } from '../cardTitle'
-import { computeMagnet, computeMaxPain, fmtPts, fmtPx, priceDp, strikeDp } from './levelsMath'
+import { computeMaxPain, fmtPts, fmtPx, priceDp, strikeDp } from './levelsMath'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Key Levels — every level on ONE horizontal price axis.
@@ -42,12 +44,15 @@ import { computeMagnet, computeMaxPain, fmtPts, fmtPx, priceDp, strikeDp } from 
 // the whole /proxy/es-spx-basis path went with it.
 //
 // ── Where the numbers come from ──────────────────────────────────────────────
-//   the live `gex` frame     rows, callWall, putWall, gexFlip — SPX ONLY
-//   the live `spot` frame    spot — SPX ONLY
-//   /api/chains              the same, derived, for every other page symbol
-//                            (board/chainGex.ts). The socket streams one
-//                            underlying, so this is what lets the card follow
-//                            the toolbar's ticker at all.
+//   useLiveGex (data/liveGex.ts)  rows, spot, and every LEVEL — SPX ONLY.
+//                            The hook derives the walls, the CORE and the flip
+//                            through data/levels.ts; this card reads them and
+//                            draws them. It does not compute a level of its own
+//                            except max pain.
+//   /api/chains              the same shape, through the same deriveLevels(),
+//                            for every other page symbol (board/chainGex.ts).
+//                            The socket streams one underlying, so this is what
+//                            lets the card follow the toolbar's ticker at all.
 //   /api/em-tracker          this week's estimated-move band (Postgres)
 //
 // The `/api/premarket-baseline` fetch went with the migration notes. A level's
@@ -56,8 +61,11 @@ import { computeMagnet, computeMaxPain, fmtPts, fmtPx, priceDp, strikeDp } from 
 // fed. A word that says a wall is thickening is a second reading laid on top of
 // a price, and this card is the price.
 //
-// Max pain and the magnet are computed here rather than read: the server does
-// not publish either, and both are a few lines over a chain we already have.
+// Max pain is computed here rather than read: the server does not publish it,
+// it is pure open interest with no gamma in it, and no other surface draws it.
+// The walls, the CORE and the flip are NOT computed here — they arrive derived
+// from data/levels.ts, which is the one place they are defined. See the block
+// in LevelsBody for what used to happen here and why it moved.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -83,6 +91,7 @@ interface LevelsSource {
   rows: GexRow[]
   callWall: number | null
   putWall: number | null
+  core: CoreNode | null
   flip: number | null
   spot: number
 }
@@ -97,16 +106,22 @@ interface LevelsSource {
  * component is what unsubscribes.
  */
 function SocketLevels({ render }: { render: (s: LevelsSource) => ReactNode }) {
-  const frame = useField<GexFrame, GexData | null>('gex', (f) => f?.data ?? null)
-  const spot = useField<SpotFrame, number>('spot', (f) => f?.data.spot ?? 0)
+  // useLiveGex, NOT the raw `gex` frame. The hook is the ONE place the walls,
+  // the CORE and the flip are derived (data/levels.ts) — this card used to pull
+  // the frame's own callWall/putWall/gexFlip and then patch them locally, which
+  // is how it and the premarket rail ended up printing different levels off one
+  // feed. It subscribes to the same frames this component did, so the topic
+  // scope is unchanged.
+  const g = useLiveGex()
   return (
     <>
       {render({
-        rows: frame?.gexRows ?? [],
-        callWall: frame?.callWall ?? null,
-        putWall: frame?.putWall ?? null,
-        flip: frame?.gexFlip ?? null,
-        spot,
+        rows: g.chain as unknown as GexRow[],
+        callWall: g.callWall,
+        putWall: g.putWall,
+        core: g.core,
+        flip: g.flip,
+        spot: g.spot,
       })}
     </>
   )
@@ -198,63 +213,39 @@ const MAX_DIST_PCT = 0.025
 function LevelsBody({
   symbol,
   rows,
-  callWall: rawCallWall,
-  putWall: rawPutWall,
-  flip,
+  callWall,
+  putWall,
+  core,
+  flip: flipShown,
   spot,
 }: LevelsSource & { symbol: string }) {
   const kDp = useMemo(() => strikeDp(rows, spot), [rows, spot])
   const pDp = priceDp(spot)
 
+  // The only level still computed here: max pain is pure open interest, has
+  // nothing to do with gamma, and no other surface draws it.
   const maxPain = useMemo(() => computeMaxPain(rows), [rows])
-  const magnet = useMemo(() => computeMagnet(rows, spot, 'oivol'), [rows, spot])
 
-  // ── The core and a wall must never be the same strike ──────────────────────
+  // ── Where these come from ──────────────────────────────────────────────────
+  // All of them arrive DERIVED — from useLiveGex on SPX, from chainToGex on
+  // every other symbol, and both of those call the same deriveLevels(). This
+  // component used to do three jobs here that are now done once, upstream:
   //
-  // They land on one strike often: the CORE is the biggest |OI+VOL| node near
-  // spot, and the biggest node near spot is frequently also the biggest on one
-  // SIDE of it. When that happens the axis drew one level where there should be
-  // two — and the price that is lost is the one that actually has to get
-  // through AFTER the core, which is the more useful of the pair.
+  //   * bump a wall off the CORE when the two collided. Still happens; it is
+  //     the `exclude` inside deriveLevels. The premarket rail never did it,
+  //     which is why the two surfaces disagreed about the put wall.
+  //   * take the CORE as the biggest node within ±12 strikes of spot. That
+  //     window moves with price, so the CORE could jump twenty points on a
+  //     quote with nothing having changed in the book. It is the whole-board
+  //     maximum now — the server's Core Bullseye, and what the premarket rail
+  //     already documented itself as drawing.
+  //   * repair an implausible flip. Also upstream, and better: the first answer
+  //     is now the spot-sweep profile's zero rather than the server's
+  //     first-crossing-from-the-bottom, so there is usually nothing to repair.
+  //     This card drew NO flip at all on a positive-gamma board, because every
+  //     rung it had tested for a cumulative crossing that does not exist there.
   //
-  // So the core keeps the top node and the wall steps down to the SECOND on its
-  // own side: second-largest positive above spot for the call wall,
-  // second-most-negative below spot for the put wall.
-  //
-  // Only on a collision. When they already differ the value is passed through
-  // untouched — that matters on the SPX path, where the wall was computed
-  // server-side and silently replacing it with a local re-derivation would be a
-  // way for the two to drift apart without anyone noticing. Here the local
-  // re-pick runs only in the one case the server's own findCallWall() has an
-  // `exclude` parameter for and this caller never passes.
-  //
-  // Null is a legitimate answer: if the core was the ONLY qualifying strike on
-  // that side, there is no second wall, and no mark is better than a wrong one.
-  const core = magnet?.strike ?? null
-  const callWall = core != null && rawCallWall === core ? findCallWall(rows, spot, core) : rawCallWall
-  const putWall = core != null && rawPutWall === core ? findPutWall(rows, spot, core) : rawPutWall
-
-  // ── The flip, when the reported one is not credible ────────────────────────
-  //
-  // Gamma flip is "walking strikes ascending, the FIRST place the running
-  // OI+VOL total crosses from negative to positive" — the server's rule, and
-  // the right one in the middle of a ladder. At the BOTTOM of one it is noise:
-  // the running total down there is a handful of far-OTM strikes, near zero,
-  // and a single positive one flips it. That is how this card drew a flip 1,075
-  // points under a 7,660 spot while every other level sat within 50 — a number
-  // nobody could trade, dragging the whole axis with it.
-  //
-  // So the server's flip is used whenever it is plausible, and only when it
-  // lands outside the band is the crossing NEAREST SPOT used instead. Not a
-  // silent re-derivation: the first-crossing answer still wins every time it is
-  // anywhere near the money, so this cannot quietly disagree with v2 or with
-  // server-v2 about a flip either of them would actually draw.
-  const flipBand = spot > 0 ? spot * MAX_DIST_PCT : 0
-  const flipCredible = flip != null && spot > 0 && Math.abs(flip - spot) <= flipBand
-  const flipShown = useMemo(
-    () => (flipCredible ? flip : spot > 0 ? findGexFlipNearSpot(rows, spot) : null),
-    [flipCredible, flip, rows, spot],
-  )
+  // What is left is distance, formatting and the axis.
 
   const distCall = callWall == null || !spot ? null : callWall - spot
   const distPut = putWall == null || !spot ? null : putWall - spot
@@ -310,9 +301,9 @@ function LevelsBody({
       'core',
       'CORE',
       'Max γ Strike',
-      magnet?.strike ?? null,
+      core?.strike ?? null,
       '--color-level-cb',
-      magnet && spot ? fmtPts(magnet.strike - spot) : '',
+      core && spot ? fmtPts(core.strike - spot) : '',
     )
     add('spot', 'SPOT', 'Spot', spot || null, '--color-fg', 'live', undefined, pDp)
     add('cw', 'CW', 'Call Wall', callWall, '--color-level-cw', fmtPts(distCall))
@@ -338,7 +329,7 @@ function LevelsBody({
     }
 
     return out
-  }, [putWall, distPut, flipShown, distFlip, maxPain, spot, magnet, callWall, distCall, kDp, pDp, weeklyEm])
+  }, [putWall, distPut, flipShown, distFlip, maxPain, spot, core, callWall, distCall, kDp, pDp, weeklyEm])
 
   return (
     <div className={['flex min-h-0 flex-1 flex-col', emptyFeed ? 'stale' : ''].join(' ')}>

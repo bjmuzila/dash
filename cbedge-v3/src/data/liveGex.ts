@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useFrame } from './hooks'
 import { send } from './socket'
-import { computeGEXProfile, findGEXFlip, type ChainRow, type GEXProfile } from './calculations'
-import type { AuxFrame, GexFrame, SpotFrame, StatusFrame } from '@/contract/frames'
+import { computeGEXProfile, type ChainRow, type GEXProfile } from './calculations'
+import { deriveLevels, type CoreNode } from './levels'
+import type { AuxFrame, GexFrame, GexRow, SpotFrame, StatusFrame } from '@/contract/frames'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // useLiveGex — the live-GEX layer, in the shape the premarket board reads.
@@ -41,6 +42,12 @@ export interface LiveGexState {
   flip: number | null
   callWall: number | null
   putWall: number | null
+  /**
+   * The Core Bullseye — biggest |OI+VOL| on the board. Derived here rather than
+   * by each page, because two surfaces used to compute it two different ways
+   * and print both under the label "CORE". See data/levels.ts.
+   */
+  core: CoreNode | null
   totalNetGex: number | null
   /** The expiry on screen. Always today's when the market lists one. */
   expiry: string
@@ -84,12 +91,11 @@ export function useLiveGex(dataMode: GexDataMode = 'oi-vol'): LiveGexState {
   const aux = useFrame<AuxFrame>('aux')
   const status = useFrame<StatusFrame>('status')
 
-  const chain = (gex?.data?.gexRows ?? []) as ChainRow[]
+  const rows = (gex?.data?.gexRows ?? []) as GexRow[]
+  const chain = rows as unknown as ChainRow[]
   const spot = num(spotFrame?.data?.spot)
   const prevClose = num(spotFrame?.data?.prevClose)
   const esFut = num(aux?.data?.esFut)
-  const callWall = gex?.data?.callWall ?? null
-  const putWall = gex?.data?.putWall ?? null
   const serverFlip = gex?.data?.gexFlip ?? null
   const totalNetGex = gex?.data?.totalNetGex ?? null
   const updatedAt = gex?.data?.updatedAt ?? gex?.ts ?? null
@@ -122,14 +128,31 @@ export function useLiveGex(dataMode: GexDataMode = 'oi-vol'): LiveGexState {
 
   const expiry = wantToday ? today : feedExpiry
 
-  // findGEXFlip is a pure client computation, and preferred over the server's
-  // value because it is derived from the exact rows on screen — so the flip
-  // line and the bars under it can never disagree.
-  const flip = useMemo(() => findGEXFlip(chain, spot) ?? serverFlip, [chain, spot, serverFlip])
   const profile = useMemo(
     () => (chain.length ? computeGEXProfile(chain, spot, dataMode) : null),
     [chain, spot, dataMode],
   )
+
+  // ── THE LEVELS ─────────────────────────────────────────────────────────────
+  // Derived here, once, and read by everything downstream — the premarket rail,
+  // Home's Key Levels card and the playbook all take these and none of them
+  // computes its own any more. data/levels.ts holds the definitions and the
+  // reasons; the two that matter at the call site:
+  //
+  //   * The walls are re-derived from the ROWS against the spot on screen, not
+  //     taken from the frame. server-v2 computed its callWall/putWall against
+  //     the spot it held when it built that frame, and pages drew them beside a
+  //     `spot` that had since ticked — which is how a PUT WALL ABOVE SPOT got
+  //     onto the premarket rail, a thing findPutWall cannot produce.
+  //   * The flip prefers the spot-sweep profile's zero, which is the same
+  //     number the chart's flip CURVE is drawn from, so the tile and the line
+  //     under it cannot disagree. The server's value is the last fallback, not
+  //     the first answer.
+  const levels = useMemo(
+    () => deriveLevels(rows, spot, { profileFlip: profile?.flipPoint ?? null, serverFlip }),
+    [rows, spot, profile, serverFlip],
+  )
+  const { callWall, putWall, core, flip } = levels
 
   // Live pair only, and only when the difference is in the range a real ES−SPX
   // basis occupies. Anything outside it means one of the two legs is stale.
@@ -148,6 +171,7 @@ export function useLiveGex(dataMode: GexDataMode = 'oi-vol'): LiveGexState {
     flip,
     callWall,
     putWall,
+    core,
     totalNetGex,
     expiry,
     isZeroDte: expiry === today,

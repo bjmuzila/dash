@@ -54,6 +54,11 @@
 const fs = require('fs');
 const nodePath = require('path');
 const nodeCrypto = require('crypto');
+// Session verification itself still comes through ctx.verifyWsRequest (injected
+// by server-with-proxy.js). This import is only the classifier that tells a
+// "could not check" failure apart from a "checked and denied" one — see the
+// TRANSIENT vs. DENIED note in ws-auth.js.
+const { isTransientAuthFailure } = require('./ws-auth');
 
 let libDb = null;
 try { libDb = require('./_lib-db.cjs'); }
@@ -197,9 +202,17 @@ async function enforceAuth(level, req, ctx, identify = false) {
   }
   let access;
   try {
-    access = await ctx.verifyWsRequest(req); // { ok, userId?, reason }
+    access = await ctx.verifyWsRequest(req); // { ok, userId?, reason, transient? }
   } catch {
-    return { ok: false, code: 401, reason: 'verify-error' };
+    // The call itself threw — infrastructure, not a rejected session.
+    return { ok: false, code: 503, reason: 'verify-error' };
+  }
+  // A DB hiccup is NOT "unauthorized". ws-auth flags failures it could not
+  // actually evaluate (no pool, query error, DATABASE_URL missing); those get a
+  // 503 so the client retries, instead of a 401 the UI renders as a permanent
+  // auth error. Access is still denied — only the status code differs.
+  if (!access.ok && isTransientAuthFailure(access)) {
+    return { ok: false, code: 503, reason: access.reason || 'verify-error' };
   }
   // 'user' = any valid session (paid OR unpaid). verifyWsRequest returns a userId
   // for a valid session even when it's unpaid (ok:false, reason 'inactive'); only

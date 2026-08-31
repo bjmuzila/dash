@@ -3,12 +3,15 @@ import { CardToolbar } from '@/design/primitives/Card'
 import { useFrame } from '@/data/hooks'
 import { usePageSymbol } from '@/data/symbol'
 import type { FlowFrame, FlowTapePrint } from '@/contract/frames'
-import { useFlowHistory, useNetPremBins } from '@/data/flowData'
+import { useFlowHistory, useNetPremBins, useTick } from '@/data/flowData'
 import {
   BIN_SEC,
   CHART_MIN_PREMIUM,
+  STALE_AFTER_SEC,
   buildNetSeries,
   buildSpotSeries,
+  fmtAgo,
+  fmtEtHm,
   fmtPremium,
   fmtSpot,
   mergeTape,
@@ -63,7 +66,7 @@ export function NetPremiumCard() {
 
   // The tape. Floored at the chart's own noise floor, not the page's slider —
   // this card has no slider and the drift line is meant to carry everything.
-  const { tape: history, switching: historySwitching } = useFlowHistory(
+  const { tape: history, switching: historySwitching, error: historyError } = useFlowHistory(
     active, date, CHART_MIN_PREMIUM, true,
   )
 
@@ -104,7 +107,7 @@ export function NetPremiumCard() {
     [expiry],
   )
 
-  const { bins, switching: binsSwitching } = useNetPremBins(
+  const { bins, switching: binsSwitching, error: binsError } = useNetPremBins(
     active, date, true, filters, expiry != null,
   )
 
@@ -142,6 +145,28 @@ export function NetPremiumCard() {
   // once it has SETTLED — useFlowHistory reports `switching` from its very
   // first render, so this cannot flash on the way in.
   const unavailable = !historySwitching && own.length === 0
+
+  // ── How old is the last thing this chart drew ──────────────────────────────
+  //
+  // The line runs flat from the newest bin to the current minute, which is the
+  // right picture for a market that has stopped printing and an IDENTICAL one
+  // for a feed that has stopped arriving. Without an age on the card there is
+  // no way to tell those apart by looking, and this chart spent an afternoon
+  // being read as the first when it was the second.
+  //
+  // `useTick` is what keeps this honest: when the feed dies nothing else
+  // re-renders the card, so an age computed only on new data would freeze at
+  // whatever it said when the data stopped.
+  const tick = useTick()
+  const lastBinSec = bins.length ? (bins[bins.length - 1]?.sec ?? null) : null
+  const binAgeSec = useMemo(
+    () => (lastBinSec == null ? null : Math.max(0, Date.now() / 1000 - lastBinSec)),
+    // `tick` is the trigger, not an input — see above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lastBinSec, tick],
+  )
+  const feedError = binsError || historyError
+  const stale = binAgeSec != null && binAgeSec >= STALE_AFTER_SEC
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -189,6 +214,20 @@ export function NetPremiumCard() {
               {expiry
                 ? `No ${active} OTM flow yet for ${fmtContractDate(expiry)}.`
                 : 'Waiting for the first print…'}
+            </p>
+          )}
+          {/* The staleness read. Always shown once there is a bin, because the
+              age is the number that tells a quiet tape from a dead one. */}
+          {(feedError || lastBinSec != null) && (
+            <p
+              className={[
+                'pt-1 text-center text-2xs tabular',
+                feedError || stale ? 'text-warn' : 'text-faint',
+              ].join(' ')}
+            >
+              {feedError
+                ? 'Feed error — showing the last data that arrived.'
+                : `Last print ${fmtEtHm(lastBinSec as number)} ET · ${fmtAgo(binAgeSec)} ago`}
             </p>
           )}
         </div>

@@ -12,7 +12,6 @@ import {
   BUBBLE_LADDER_REQUEST,
   BUBBLES,
   GEX_HISTORY_MINUTES,
-  GEX_HISTORY_MINUTES_PREV_DAY,
   INTERVALS,
   INTERVAL_LABEL,
   isAutoBucket,
@@ -22,16 +21,7 @@ import {
   type Interval,
 } from './settings'
 import { candlesUrl, filterSession, fmtCountdown, parseCandles, rollup, type Bar } from './candles'
-import {
-  etDay,
-  etDayLong,
-  etDayShort,
-  filterByDay,
-  gexHistoryUrl,
-  parseGexHistory,
-  sessionDays,
-  type GexDay,
-} from './gexHistory'
+import { etDay, gexHistoryUrl, latestSession, parseGexHistory } from './gexHistory'
 import { buildBubbleModel } from './bubbles'
 import { buildRail, GexRail } from './GexRail'
 import { mountEsChart, type EsChartHandle } from './chart'
@@ -277,24 +267,24 @@ export function GexCandlesCard() {
   // Either layer keeps this alive: the rail reads the newest column of the same
   // history the bubbles are drawn from, so turning the bubbles off with the
   // rail on must not take the request — and its data — away with them.
-  // TESTING PHASE: 48h instead of the session's 12, so the layer carries
-  // yesterday's ladder too. See GEX_HISTORY_MINUTES_PREV_DAY for what has to go
-  // when this is retired.
-  // The REACH of the request. Which of the days that come back is drawn is the
-  // toolbar day picker's decision, downstream of this and free.
-  // ON A WEEKEND THE REACH HAS TO CLEAR THE WEEKEND.
-  // 48h is enough on a Saturday and not on a Sunday evening — 48h back from
-  // Sunday 20:00 lands at Friday 20:00, four hours after the close, so the card
-  // would reach past the whole session it is trying to show and come back with
-  // nothing but the frozen post-close book. Ask for the distance to that
-  // Friday's pre-open plus an hour, instead of a constant that cannot know what
-  // day it is. The route clamps at 5760, which is comfortably above a Sunday.
+  //
+  // The REACH of the request: ONE session. This used to be a 48h testing reach
+  // behind the `Prev day` chip, with a Sun/Mon/Both picker deciding which of
+  // the two days that came back actually drew. Both are gone — the card follows
+  // the selected expiration, so a second session in the payload was four times
+  // the columns to parse for rows that were then filtered straight back out.
+  //
+  // ON A WEEKEND THE REACH STILL HAS TO CLEAR THE WEEKEND. 12h back from a
+  // Sunday evening lands nowhere near Friday's session, so on Sat/Sun ask for
+  // the distance to that Friday's pre-open plus an hour instead of a constant
+  // that cannot know what day it is. The route clamps at 5760, comfortably
+  // above a Sunday.
   const historyMinutes = useMemo(() => {
-    if (!weekendExpiry) return settings.prevDay ? GEX_HISTORY_MINUTES_PREV_DAY : GEX_HISTORY_MINUTES
+    if (!weekendExpiry) return GEX_HISTORY_MINUTES
     const preOpen = Date.parse(`${weekendExpiry}T08:00:00Z`) // 04:00 ET, before any session column
     const back = Math.ceil((Date.now() - preOpen) / 60_000) + 60
-    return Math.min(5760, Math.max(GEX_HISTORY_MINUTES_PREV_DAY, back))
-  }, [weekendExpiry, settings.prevDay])
+    return Math.min(5760, Math.max(GEX_HISTORY_MINUTES, back))
+  }, [weekendExpiry])
   const gexQ = useQuery<unknown>(
     (settings.bubblesOn || railOn) && expiry
       ? gexHistoryUrl(def.gexSymbol, expiry, historyMinutes, BUBBLE_LADDER_REQUEST)
@@ -313,49 +303,30 @@ export function GexCandlesCard() {
 
   barsRef.current = bars
 
-  // ── Which session day draws ────────────────────────────────────────────────
-  // TESTING PHASE. With `Prev day` on the history spans two sessions and the
-  // layer used to draw both with nothing saying so. `days` is what the request
-  // actually came back holding, and the toolbar picker names them.
+  // ── Which session draws ────────────────────────────────────────────────────
+  // ONE session, always: the newest one the history came back holding. There is
+  // no user choice here any more — the Sun/Mon/Both picker that used to sit
+  // beside the expiry dropdown is gone, along with the 48h reach that was the
+  // only reason two sessions were ever in the payload together.
   //
-  // The picker filters what is DRAWN; `prevDay` still decides what is FETCHED.
-  // Deliberately not folded into one control: narrowing the request to 12h to
-  // mean "latest" returns nothing at all on a Saturday, when the newest session
-  // is Friday's — which is exactly the weekend this is being tested over.
+  // `latestSession` rather than "today" for two reasons. On a weekend the
+  // newest session is Friday's, and anything anchored to the wall clock draws
+  // an empty layer. And on a Monday the recorder's weekend republish — the last
+  // cash book, re-emitted once a minute all weekend — is still inside the
+  // reach; taking only the newest ET day drops it, where 'both' used to draw it
+  // as a flat rail running across Saturday and Sunday.
+  //
+  // The weekend branch stays explicit: on Sat/Sun the expiry has been pinned to
+  // that Friday, so the columns are pinned to the same date rather than to
+  // whatever the newest row happens to be.
   const allColumns = useMemo(() => parseGexHistory(gexQ.data), [gexQ.data])
-  const days = useMemo(() => sessionDays(allColumns), [allColumns])
-  // On a weekend, draw THAT session and nothing else. The recorder republishes
-  // the last cash book once a minute all weekend, so without this the trail runs
-  // flat across Saturday and Sunday to the right of the close — real rows, and a
-  // picture of nothing happening, drawn wider than the day that did happen.
-  const weekendColumns = useMemo(
-    () => (weekendExpiry ? allColumns.filter((c) => etDay(c.slotTs) === weekendExpiry) : null),
+  const columns = useMemo(
+    () =>
+      weekendExpiry
+        ? allColumns.filter((c) => etDay(c.slotTs) === weekendExpiry)
+        : latestSession(allColumns),
     [allColumns, weekendExpiry],
   )
-  const columns = useMemo(
-    () => weekendColumns ?? filterByDay(allColumns, settings.bubbleDay, days),
-    [weekendColumns, allColumns, settings.bubbleDay, days],
-  )
-
-  // Only when there is a choice to make. One session in the data — the finished
-  // card's permanent state — and this is empty, so the picker does not render.
-  const dayOptions = useMemo(() => {
-    if (days.length < 2) return []
-    const latest = days[days.length - 1]!
-    const prev = days[days.length - 2]!
-    return [
-      { label: etDayShort(prev), value: 'prev' as GexDay },
-      { label: etDayShort(latest), value: 'latest' as GexDay },
-      { label: 'Both', value: 'both' as GexDay },
-    ]
-  }, [days])
-
-  const dayTitle =
-    days.length < 2
-      ? ''
-      : `Which session's GEX the bubbles and the rail draw — the history reaches back ${
-          settings.prevDay ? '48h' : '12h'
-        } and came back holding ${days.map(etDayLong).join(' and ')}. TESTING PHASE: the finished card draws the current session only`
 
   // No bars, no interval, no bucket in these deps: the bubble model is a pure
   // function of the GEX history now, so a candle poll or a timeframe change no
@@ -482,12 +453,6 @@ export function GexCandlesCard() {
       empty="expiry"
     />
   )
-  // TESTING PHASE — see the `days` memo. Renders only while the history holds
-  // more than one session, which is only ever true with `Prev day` on.
-  const dayPicker =
-    dayOptions.length > 0 ? (
-      <SegGroup size={ctlSize} title={dayTitle} options={dayOptions} value={settings.bubbleDay} onChange={(v) => patch({ bubbleDay: v })} />
-    ) : null
   const intervalPicker = (
     <SegGroup
       size={ctlSize}
@@ -518,7 +483,6 @@ export function GexCandlesCard() {
           chart lost the height of both. */}
       <CardToolbar>
         {!phone && expiryPicker}
-        {!phone && dayPicker}
         {!phone && intervalPicker}
         {!phone && sessionPicker}
         <div className="relative shrink-0">
@@ -543,7 +507,6 @@ export function GexCandlesCard() {
               {phone && <PanelSection title="Expiry">{expiryPicker}</PanelSection>}
               {phone && <PanelSection title="Interval">{intervalPicker}</PanelSection>}
               {phone && <PanelSection title="Session">{sessionPicker}</PanelSection>}
-              {phone && dayPicker && <PanelSection title="Bubble day">{dayPicker}</PanelSection>}
 
               <PanelSection title="Layer">
                 <div className="flex flex-wrap gap-1">
@@ -572,13 +535,6 @@ export function GexCandlesCard() {
                     on={settings.countdown}
                     onClick={() => patch({ countdown: !settings.countdown })}
                     title="Time left in the forming bar"
-                  />
-                  <Chip
-                    size={ctlSize}
-                    label="Prev day"
-                    on={settings.prevDay}
-                    onClick={() => patch({ prevDay: !settings.prevDay })}
-                    title="TESTING PHASE — reach 48h back so yesterday's GEX ladder is available alongside today's. This is the REACH; the day picker chooses which of the two actually draws. The finished card shows the current session on the closest expiration only; this chip, that picker and the constant behind them come out then"
                   />
                 </div>
               </PanelSection>

@@ -2168,16 +2168,30 @@ export default function Premarket() {
     px == null || basis == null ? null : px + basis;
 
   // ── GEX LEVEL RAIL ─────────────────────────────────────────────────────────
-  /** CORE (CB) — the single strike carrying the most ABSOLUTE gamma in
-   *  the whole chain. Same definition the Board's levels panel uses, so the two
-   *  surfaces can never print a different CORE. Deliberately NOT the "0DTE magnet"
-   *  card below: that one is capped to the ±12-strike window the profile draws,
-   *  which can miss a bigger strike further out. */
+  /** CORE (CB) — the single strike carrying the most ABSOLUTE gamma in the whole
+   *  chain. Deliberately NOT a window around spot: a ±N-strike window moves its
+   *  own edges as price ticks, so the CORE can jump twenty points on a quote
+   *  with nothing having changed in the book.
+   *
+   *  Taken from the feed's derived levels when the source carries them — the
+   *  live socket path, via data/levels.ts — so this rail and the Board's Key
+   *  Levels card cannot print a different CORE. That claim used to be in this
+   *  comment and was not true: the Board was on the ±12-strike magnet.
+   *
+   *  The local reduce is the fallback for the sources that do not derive levels
+   *  (a frozen capture, a replay frame, a non-SPX chain board). It is the same
+   *  definition written out, not a second one — perStrike is OI+VOL net, and
+   *  the biggest |value| in it is what findCore() returns. */
+  const feedCore = "core" in gex ? (gex as { core?: { strike: number; value: number } | null }).core : null;
   const coreBullseye = useMemo(() => {
+    if (feedCore) {
+      const row = perStrike.find((r) => r.strike === feedCore.strike);
+      return row ?? { strike: feedCore.strike, net: feedCore.value };
+    }
     if (!perStrike.length) return null;
     // perStrike[0] is safe: guarded by the length check above.
     return perStrike.reduce((b, r) => (Math.abs(r.net) > Math.abs(b.net) ? r : b), perStrike[0]!);
-  }, [perStrike]);
+  }, [feedCore, perStrike]);
 
   /** Everything the rail needs: the five levels on ONE shared price domain. */
   const rail = useMemo(() => {
