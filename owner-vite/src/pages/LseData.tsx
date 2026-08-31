@@ -53,7 +53,23 @@ const PREVIEW_ROWS = 300;
 
 // ── shared bits of chrome ────────────────────────────────────────────────────
 
-const cardStyle: CSSProperties = { ...classicCardStyle, padding: 18 };
+const cardStyle: CSSProperties = { ...classicCardStyle, padding: 18, position: "relative", zIndex: 1 };
+
+/**
+ * The filter card, raised above every card below it.
+ *
+ * WHY THIS IS NOT JUST A z-index ON THE DROPDOWN. `classicCardStyle` carries
+ * `backdrop-filter: blur(16px)`, and a backdrop-filter creates a STACKING
+ * CONTEXT. That makes each card an atomic layer: the z-index on the popup
+ * inside this card only orders it against its siblings INSIDE this card, and
+ * the results card below — a later sibling, its own stacking context — still
+ * paints over the whole thing. The popup was drawing correctly and getting
+ * covered anyway.
+ *
+ * The fix has to be at the layer that actually competes: this card outranks
+ * the ones after it, so anything it contains does too.
+ */
+const filterCardStyle: CSSProperties = { ...cardStyle, zIndex: 30 };
 
 /**
  * ONE control height for every input, select, checkbox row and button in the
@@ -923,7 +939,7 @@ export default function LseData() {
         </div>
       ) : null}
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", position: "relative", zIndex: 2 }}>
         {TABS.map((t) => {
           const on = t.id === tab;
           return (
@@ -944,7 +960,7 @@ export default function LseData() {
         })}
       </div>
 
-      <div style={cardStyle}>
+      <div style={filterCardStyle}>
         <div style={{ fontSize: 12.5, color: OWNER_THEME.text, marginBottom: 14 }}>
           {TABS.find((t) => t.id === tab)?.hint}
         </div>

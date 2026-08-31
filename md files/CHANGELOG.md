@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-08-31 - fix: phone candles crashed on render (black screen)
+
+Edited: `components/mobile/pages/MobileEsCandles.tsx`.
+
+`/app/m/es` was a black screen on the live site. It was not the feed, the data
+or the layout - the component threw on every render:
+
+    ReferenceError: levelLines is not defined
+        at MobileEsCandles-C3jrEs5u.js:1:13210
+
+Mine, from the SPX change. Rewriting `overlayCount` to drop the basis gate, I
+referred to the level-lines memo as `levelLines`; it is called `levels`. A
+ReferenceError in a component body takes the whole subtree down, and this page
+IS the subtree, so the route rendered nothing at all. Desktop was untouched
+because nothing outside the phone build imports this file. One word:
+
+    (showLevels && levelLines.length > 0 ? 1 : 0)   ->   levels.length
+
+**Why it shipped.** esbuild was the only check run on these edits, and esbuild
+does not resolve identifiers - it parses and emits. An undefined name is
+invisible to it. Every file touched in this session has now been run through
+`tsc --noEmit --noResolve` (which type-checks local scope without needing the
+project's node_modules, unavailable in this environment) and that check is what
+found this. Result: this one error, nothing else, across the phone page, the
+bubble hook, `useEsCandles`, `gexSocket`, `mobileNav` and all four v3 files.
+
 ## 2026-08-31 - LSE Data: London Strategic Edge vault on the owner dashboard
 
 Ported `futures_data_downloader.py` (the interactive LSE CLI) into the Node
@@ -120,6 +146,17 @@ deliberately: a placeholder that matches typed text reads as a value.
   missing key, vault unreachable, owner gate refused (401/403), and
   "the running build does not have these routes yet" (non-JSON body) -
   the last one saying in as many words that it is a deploy, not a key.
+
+**Dropdowns were painting UNDER the card below them (same day).** Not a
+missing z-index on the popup - `classicCardStyle` carries
+`backdrop-filter: blur(16px)`, and a backdrop-filter creates a STACKING
+CONTEXT. That makes each card an atomic layer, so the popup's z-index only
+ordered it against its siblings INSIDE the filter card, while the results
+card below - a later sibling with its own stacking context - still painted
+over the whole thing. Raising the popup further would never have worked.
+The fix is at the layer that actually competes: the filter card is now
+`position: relative; z-index: 30` and the cards after it sit at 1, so
+everything the filter card contains outranks them.
 
 - `owner-vite/src/lib/nav.ts` - "LSE Data" added to the **Market** group.
 - `owner-vite/src/pages/registry.ts` - lazy route registered.

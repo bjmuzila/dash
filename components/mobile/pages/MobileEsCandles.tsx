@@ -980,7 +980,7 @@ export default function MobileEsCandles() {
   // Badge on the Overlays button so the sheet's state is visible without
   // opening it — the count is what is actually DRAWING, not what is toggled on.
   const overlayCount =
-    (showLevels && levelLines.length > 0 ? 1 : 0) + (panelOn ? 1 : 0) + (showBubbles ? 1 : 0);
+    (showLevels && levels.length > 0 ? 1 : 0) + (panelOn ? 1 : 0) + (showBubbles ? 1 : 0);
 
   return (
     <MobileShell
