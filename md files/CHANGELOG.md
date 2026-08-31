@@ -1,362 +1,129 @@
 # Changelog
 
-## 2026-08-31 - One definition of a wall, a CORE and a flip: data/levels.ts
-
-New: `cbedge-v3/src/data/levels.ts`.
-Edited: `cbedge-v3/src/data/liveGex.ts`, `data/calculations.ts`,
-`board/chainGex.ts`, `board/keyLevels/KeyLevelsCard.tsx`, `pages/Premarket.tsx`.
-
-Home's Key Levels card and the Premarket "GEX Levels - one axis" rail read the
-same feed, print the same six labels, and disagreed. Three screenshots five
-minutes apart had Home on CORE 7,680 / PW 7,650, then Home on CORE 7,650 /
-PW 7,670, with the premarket rail in between on CORE 7,680 / PW 7,680 - a put
-wall ABOVE a 7,677 spot, which `findPutWall` cannot produce.
-
-Four separate causes, all of them "two implementations of one number".
-
-**1. The walls were never re-anchored to the spot on screen.** server-v2
-computes `callWall` / `putWall` / `gexFlip` against the spot it held when it
-built the `gex` frame. Both pages then drew those numbers beside the newest
-`spot` frame, which ticks several times a second. Nothing reconciled the two, so
-on a fast move a level crossed to the wrong side of price. That is the put wall
-above spot. Both surfaces now derive the walls from the ROWS against the spot
-they are rendering, so the level and the price it is measured from are the same
-instant. The server's values survive only as a fallback.
-
-**2. Home bumped a wall off the CORE; the rail did not.** When the CORE and a
-wall land on one strike the wall steps to the second on its own side - correct,
-and the server's own `findCallWall` has an `exclude` parameter for exactly it -
-but only Home did it. Same feed, two put walls, guaranteed. It also explains the
-pic 1 -> pic 3 jump: 7,650 was the put wall, the CORE moved onto it, and PW
-stepped to 7,670. Nothing moved twenty points; a label handed off. The exclusion
-is inside `deriveLevels` now, so both get it.
-
-**3. Two CORES under one label.** The rail took the whole-board maximum |OI+VOL|
-(the server's Core Bullseye); Home took the biggest node within +/-12 strikes of
-spot (`computeMagnet`, a "0DTE magnet"). The window version is the unstable one
-- its edges move with price, so a strike enters and leaves the running on a
-quote with nothing having changed in the book. Canonical is the whole-board
-maximum: it is what the server means by CORE and what the rail's own comment
-already claimed both surfaces used.
-
-**4. Four gamma flips, and Home drew none.** Home used the server's
-first-crossing-from-the-bottom, falling back to a nearest-spot cumulative
-crossing. Both test `prevCum < 0 && cum >= 0` - an UP crossing of the running
-total - and on a positive-gamma board that total never dips below zero, so there
-is no crossing and the FLIP tile silently vanished. That is both Home
-screenshots. The rail meanwhile showed 7,685 from `findGEXFlip`, the per-strike
-sign change, which is not a gamma flip at all - it finds where an individual
-strike's net flips sign, not where cumulative exposure crosses zero.
-
-Meanwhile the canonical one - `computeGEXProfile`, the Black-Scholes spot sweep,
-picked as canonical earlier today - was already being computed in `liveGex.ts`
-for the flip curve and thrown away on the very next line.
-
-`deriveLevels` now tries, in order: the spot-sweep profile's zero (so the tile
-and the curve drawn under it are one number by construction), then
-`findGEXFlip`, then the nearest cumulative crossing, then the server's value.
-Whichever rung answers, BOTH surfaces get that rung.
-
-**Also:** `data/calculations.ts` is v3's own copy of `computeGEXProfile` and
-carried both defects fixed in `lib/calculations/calculations.ts` earlier today -
-call and put legs priced off different IVs (gamma is identical for a call and a
-put on one strike; the difference was pure skew artifact) and calendar `dte`
-annualized as trading days. Same fix, so the canonical flip is actually correct
-on the surface that now depends on it.
-
-Wiring:
-
-- `data/levels.ts` - `oiVolNet`, `findCore`, `findCallWall`, `findPutWall`,
-  `findCumulativeFlip`, `findGexFlip`, and `deriveLevels(rows, spot, opts)`.
-  Pure functions of (rows, spot); no fetch, no frame, no hook.
-- `data/liveGex.ts` - derives once and exposes `core` alongside
-  `callWall` / `putWall` / `flip`. This is the single source.
-- `board/chainGex.ts` - its local finders deleted, re-exported from levels.ts so
-  existing imports still resolve; `chainToGex` spreads `deriveLevels`, so
-  non-SPX symbols follow the same rules. No profile flip there - /api/chains
-  rows carry no IV, so it falls to the next rung on its own.
-- `KeyLevelsCard` - `SocketLevels` reads `useLiveGex()` instead of the raw `gex`
-  frame; `LevelsBody` computes nothing but max pain (pure OI, no gamma in it,
-  and no other surface draws it).
-- `Premarket` - `coreBullseye` takes the feed's derived CORE, keeping its
-  `{strike, net}` shape. The local whole-board reduce stays as the fallback for
-  the sources that do not derive levels (a frozen capture, a replay frame, a
-  non-SPX chain board); it is the same definition written out, not a second one.
-
-Checked on a synthetic board whose biggest node sits ON the put wall: CORE 7,650,
-PW steps to 7,645, CW 7,700, and PW stays below spot as spot moves 7,690 -> 7,677.
-
-
-## 2026-08-31 - Flow Tape / Net Premium: a stalled feed no longer looks like a quiet market
-
-Both cards flat-lined mid-session with no orders for five minutes and nothing
-on screen said why. The reason it could not be diagnosed by looking is the bug
-worth fixing: **a dead feed and a quiet market rendered identically.**
-
-- `buildNetSeries` runs the drift line flat from the newest bin to the current
-  minute, which is correct for a market that has stopped printing and
-  indistinguishable from one that has stopped arriving.
-- `useNetPremBins` swallowed a failed poll whole - `r.ok ? json : null`, then
-  `if (j && ...)`. A 500 or a 401 left the chart on its last good bins forever,
-  silently.
-- `useFlowHistory` fetched ONCE per (ticker, date, floor) and never again,
-  relying entirely on the socket's `flow` frame for everything after page load.
-  When the socket goes quiet the tape freezes at the moment the page opened.
-
-Fixes, in `cbedge-v3/src/data/`:
-
-- `flowData.ts` - `useFlowHistory` now REFRESHES. The newest slice
-  (`limit=1000`) is re-asked for every 45s and merged into what is held, by the
-  same `ts|symbol|side` identity flow_prints uses as its primary key. The
-  expensive 20k pull still happens only on a real change of ticker, date or
-  floor. The tape self-heals when the socket drops instead of sitting frozen.
-- `flowData.ts` - both `useFlowHistory` and `useNetPremBins` return `error`.
-  A failed request is a state a card can render, not a silence.
-- `flowData.ts` - `useTick()`: a slow re-render so a card can report an AGE.
-  This is the load-bearing part - when the feed dies nothing else re-renders
-  the card, so an age computed only on new data freezes at whatever it last
-  said, which is worse than not showing one.
-- `flowMath.ts` - `fmtAgo()` and `STALE_AFTER_SEC` (3 minutes). Not an error
-  threshold; a genuinely quiet name goes minutes between prints. It is the line
-  past which the reader can no longer tell by looking, so the card stops making
-  them guess.
-
-And in the cards:
-
-- `board/flowTape/FlowTapeCard.tsx` - `last 09:54:29 AM · 0s ago` on the totals
-  row, computed from every print for the ticker BEFORE the premium floor, so
-  raising the slider cannot look like the feed dying. Amber past 3 minutes; the
-  status badge reads ERROR when a request failed.
-- `board/netPremium/NetPremiumCard.tsx` - the same read under the chart:
-  `Last print 09:42 ET · 5m ago`, or `Feed error - showing the last data that
-  arrived`.
-
-**On the outage itself:** the tape and the chart do not share a transport - the
-tape rides the socket, the chart polls `/proxy/flow-netprem` every 5s - so both
-stopping at the same minute is upstream of v3, in server-v2's flow recorder or
-the writer behind `flow_prints`. Nothing here can fix that; what it does is
-make the next one legible in one glance instead of an afternoon.
-
-Full `check` green on a Linux checkout.
-
-## 2026-08-31 - v3 GEX Candles: the day picker is gone, and the live price actually ticks
-
-Edited: `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`, `settings.ts`,
-`gexHistory.ts`, `chart.ts`.
-
-**1. The Sun / Mon / Both picker is out, with the 48h reach behind it.**
-`settings.ts` has carried the retirement instructions for this since it was
-built: "To retire it: delete this constant, the `prevDay` and `bubbleDay`
-settings, the `Prev day` chip in GexCandlesCard's Layers panel, the day picker
-beside the expiry dropdown, and the session-day block at the foot of
-gexHistory.ts." That is what this is. The card follows the expiration in the
-toolbar dropdown - 0DTE on a trading day - and draws that session, full stop.
-
-Gone: `GEX_HISTORY_MINUTES_PREV_DAY` (2880), the `prevDay` and `bubbleDay`
-settings, the `Prev day` chip, the day picker (header AND the phone sheet's
-"Bubble day" section), and `sessionDays` / `GexDay` / `filterByDay` /
-`etDayShort` / `etDayLong` from gexHistory.ts.
-
-Two things it fixes beyond the clutter:
-
-- **Load time.** The history route returns one column PER MINUTE, so the 48h
-  reach was four times the columns, four times the payload and four times the
-  parse of the 720-minute default - and it was ON by default. settings.ts named
-  it "the single biggest cost on this card. If the bubbles feel slow, this is
-  the first thing to turn off."
-- **Sunday's ghost session.** `bubbleDay` defaulted to `'both'`, and the
-  recorder re-publishes the last cash book once a minute all weekend. A Monday
-  request reaching 48h back therefore came home holding Sunday rows - real rows,
-  and a picture of nothing happening. `latestSession()` (new, replacing
-  `filterByDay`) takes the newest ET day in the payload and nothing else.
-
-Semantic, not "today": the newest session is FRIDAY when the card is opened on a
-Saturday, so anything anchored to the wall clock draws an empty layer all
-weekend. The weekend branch is unchanged - on Sat/Sun the expiry is pinned to
-that Friday and the columns are pinned to the same date. The weekend REACH still
-computes the distance to that Friday's pre-open (12h back from a Sunday evening
-lands nowhere near it); only the weekday branch is now a flat 720.
-
-`SETTINGS_V` 4 -> 5, with `prevDay` and `bubbleDay` in `STALE_ON_UPGRADE` so the
-dead keys are dropped from stored blobs rather than riding along forever.
-
-**2. The live price was inert on every timeframe.** `setLivePrice` opened with
-
-    if (Date.now() >= live.openMs + intervalMs) return
-
-and `live` is set from the last bar the REST feed handed over - which hands over
-CLOSED bars only. So `openMs + intervalMs` is already in the past the moment the
-bar arrives, that guard fires on every tick, and the socket's `spot` frame never
-reached the chart. The price moved only when the 30-second candle poll landed,
-which is exactly what "seems very slow" looks like on a 1m chart.
-
-It now OPENS THE NEXT BAR instead of going quiet: one interval on from the last
-bar's own open, seeded o=h=l=c from the tick and extended by the ticks after it.
-
-Stepping RELATIVE to the last bar is what makes this safe. The original note was
-right that 15m and coarser are anchored to 09:30 ET and guessing an absolute
-boundary would put a bar in the wrong place - but one interval on from a bar the
-feed itself placed is on the feed's grid by construction, whatever that grid is
-anchored to. And strictly ONE bar ahead: if more than an interval has elapsed
-there is a gap (overnight, a halt, a sleeping tab) and the poll owns it.
-
-`version++` fires when a bar is CREATED - once an interval, not once a tick, so
-the full-band repaint the old comment warns about is not reintroduced.
-
-**Not changed: the bubble stride at a wide zoom.** Bubbles thinning out until
-you zoom in is the stride doing its job, not overlap - `bubbles.ts` draws every
-Nth bucket when `pxPerDot` falls below `BUBBLES.bucketPxPerDot` (11px), so a
-whole session at 1m draws a sample rather than 390 fused dots. Zoom in and the
-stride falls back to 1. If the thinning is too aggressive, the number to move is
-`bucketPxPerDot`, and it is a deliberate tuning decision rather than a bug fix.
-
-
-## 2026-08-31 - Auth gate: an 8s session cache, a pool that isn't capped at 2, and 503 instead of 401 on a DB hiccup
-
-Customers hit sporadic `401 Unauthorized` on the ICT page while the same page
-was fine for the owner. The 401s in the console were on `/api/tt-quotes` and
-`/api/quotes-batch`, which is the tell: `quotes-batch`'s handler never returns
-401 - it only ever sends 200 - so that status came from the auth gate, not from
-upstream data. Same gate fronts `/api/ict-setups` and `/api/ict-prefs`, and
-`Ict.tsx` renders `Error: HTTP 401` on a failed setups fetch while
-`ToolbarTicker.tsx` swallows it (`if (!r.ok) return`) - so the identical failure
-is a hard error on one surface and invisible on the other.
-
-Root cause in `server-v2/ws-auth.js`. That file started life as the WS upgrade
-gate - one query per connection - and is now also the gate for every `/api/*`
-route (`api-router.js` `enforceAuth`) and the whole `/proxy/*` surface
-(`proxy-auth.js`). In production api-router intercepts `/api/*` BEFORE Next
-middleware runs, so `lib/auth/session.ts`'s 8s cache never covers those
-requests. Result: every gated request was a fresh Postgres round trip, through
-a pool still declared `max: 2` and shared across all concurrent users. A page
-like `/app/ict` mounts ~10 gated requests plus two interval pollers; past the
-pool cap pg queues and eventually errors, `verifyWsRequest` fails closed, and
-whatever was in flight 401s - usually the two pollers.
-
-Three changes:
-
-**1. Short-lived validation cache in `ws-auth.js`.** Keyed on the token hash,
-8s TTL, 5000-entry cap - the same shape and TTL as `lib/auth/session.ts`, for
-the same reason. Bounds DB load to ~1 query per session per 8s while keeping
-paid/owner revocation effectively near-instant. Verified: 6 consecutive
-requests for one token now issue 1 query. `invalidateSessionCache(token)` is
-exported for logout / plan changes.
-
-**2. Pool `max` 2 -> 16**, overridable with `AUTH_POOL_MAX`. Sized for the ~10
-parallel gated requests a dashboard page mounts with, not for one socket.
-
-**3. A DB hiccup answers 503, not 401.** `getSessionForToken` now throws a
-`TransientAuthError` when the lookup could not be performed at all (no pool,
-missing `DATABASE_URL`, query error) instead of returning null, which had been
-indistinguishable from "no such session". `verifyWsRequest` carries a
-`transient` flag; `isTransientAuthFailure()` classifies it; `api-router.js`
-`enforceAuth` and `proxy-auth.js` `checkProxyAccess` map those to 503 so the
-client retries rather than rendering a permanent auth error. Fail-closed is
-unchanged - access is still denied, only the status code differs. Transient
-failures are never cached, so a blip can't pin a user to "denied" for 8s.
-
-Genuine denials are untouched and still 401: `no-token`,
-`invalid-or-expired-session`, `inactive`. Owner-only stays 403.
-
-Files: `server-v2/ws-auth.js`, `server-v2/api-router.js`,
-`server-v2/proxy-auth.js`.
-
-## 2026-08-31 - Gamma flip: one IV per strike, and calendar days stop counting as trading days
-
-The home GEX chart's flip line and the Flip tile both read
-`computeGEXProfile().flipPoint` - the Black-Scholes spot-sweep model, dealer
-gamma re-priced at 60 hypothetical spot levels, zero of total exposure. It was
-landing off the level the bars actually cross at.
-
-Two defects in the model, both in `lib/calculations/calculations.ts`.
-
-**1. The two legs were priced off different vols.** Gamma is identical for a
-call and a put on the same strike + expiry - put-call parity, it is a property
-of the contract, not of which side you look at. `netAt()` was calling
-`bsGamma(..., r.callIV)` for the call term and `bsGamma(..., r.putIV)` for the
-put term, so the two legs came out with DIFFERENT gammas. A strike holding
-equal call and put size therefore produced non-zero net GEX purely from the
-skew between the two quotes: a quoting artifact, not dealer positioning. And
-because gamma is proportional to phi(d1)/(S*sigma*sqrt(T)) the artifact's sign
-flips with moneyness - it damps the put leg near ATM and inflates it in the
-wings - so it does not wash out, it walks the zero crossing.
-
-How big: on a synthetic SPX 7700 book with a realistic put-over-call skew of
-+/-0.6 vol points, sweeping the book from perfectly balanced size to strongly
-asymmetric:
-
-| net positioning | old flip | new flip | artifact |
-|-----------------|----------|----------|----------|
-| balanced (no real flip exists) | 7848.72 | null | invented one 149pts up |
-| very flat | 7685.69 | 7700.73 | -15.0 pts |
-| flat | 7693.16 | 7700.73 | -7.6 pts |
-| moderate | 7696.88 | 7700.73 | -3.8 pts |
-| strong | 7699.89 | 7700.73 | -0.8 pts |
-
-The flatter the real positioning, the more the skew dominates - which is
-exactly the 0DTE case near spot, where the flip matters most. On a book with
-no net positioning at all the old code invented a flip 149 points above spot;
-the new code correctly reports that there isn't one.
-
-**2. Calendar days were annualized as trading days.** `dte` arrives from the
-feed in calendar days; `T = dte / 262` divides by trading days per year. A
-Friday-to-Monday expiry was priced with 3 days of time instead of 1, which
-flattens gamma and drags the crossing. Only affects the tile on non-0DTE
-expiries (the chart line is drawn for 0DTE only), but it was wrong either way.
-
-Changed:
-
-- `lib/calculations/calculations.ts` - new `ivOf(row)` resolves ONE IV per
-  strike (average when both sides are live, otherwise whichever is quoted).
-  `netAt()` computes a single `bsGamma` per strike and applies it to
-  `callContracts - putContracts`, so dealer polarity is the only thing
-  separating the two terms - which is what the flip is supposed to measure.
-- `lib/calculations/calculations.ts` - the row filter required BOTH `callIV`
-  and `putIV` to be positive, silently dropping every strike with one dead
-  side out of the profile entirely. Now accepts a strike with either, via the
-  same `ivOf`.
-- `lib/calculations/calculations.ts` - new `yearsTo(dte)` converts calendar
-  days to trading days (252/365) before the /262 annualization. The 0DTE
-  branch (live RTH fraction remaining) is unchanged.
-
-Not changed, deliberately: the contract basis stays OI+Volume, matching the
-bar chart's OI+Vol toggle, so the flip line stays on the same basis as the bars
-underneath it. The two other flip implementations in the repo -
-`findGEXFlip` (per-strike sign change, the fallback when the profile can't
-build) and `server-v2/computation/gex-calculator.js findGexFlip` (cumulative
-running-sum crossing, first-from-the-bottom by default) - are untouched and
-still disagree with this one by definition.
-
-
-## 2026-08-31 - Premarket GEX profile: the bar scale now covers every row it draws
-
-On the ex-0DTE ladder most of the board came out at the same length: twenty
-strikes all ending at the exact right edge of the panel, all of them different
-numbers, and a horizontal scrollbar under the chart.
-
-`GexProfile` normalised bar width over a NARROW +/-12 "near" window while
-RENDERING +/-60. The theory was that a monster strike far from the money would
-otherwise flatten everything near it. What it produced was the opposite failure:
-on the ex-0DTE board - 55 expirations stacked, so the standing walls sit well
-outside +/-12 - most rows computed a width above 100%. Nothing clamped it, and
-`.pmk .chart` declares `overflow-y:auto`, which makes the OTHER axis compute to
-auto as well, so the over-wide bars ran off the right edge and were sliced to
-the same pixel. The axis read $473M while bars nearly three times that were
-drawn the same length as it.
-
-Changed:
-
-- `components/pages/premarket/GexProfile.tsx` - `maxP` / `maxN` (and `bigCut`)
-  are taken over `bars`, the rendered +/-60 window, instead of a separate
-  +/-12 `nearBars`. Exactly one positive bar and one negative bar now reach the
-  full half track; `NEAR_HALF` and `nearBars` are gone. Bar width is also
-  clamped to 50% as a guard, so the sliced-flat picture cannot return.
-- `components/pages/Premarket.tsx` - `.pmk .chart` declares `overflow-x:hidden`
-  explicitly, so the ladder can never grow a horizontal scrollbar.
-
-Both ladders are the same component, so the front-expiry chart is scaled the
-same way - the two boards stay pixel-comparable, which is the whole point of
-mounting one component twice.
+## 2026-08-31 - Toolbar: an SPX chip beside the ticker picker
+
+Edited: `cbedge-v3/src/shell/Shell.tsx`.
+
+One click back to SPX, next to the board's ticker dropdown.
+
+SPX is not just the most-used ticker, it is the only one the socket streams: on
+it every GEX card is live and free, and off it they fall back to a REST chain
+poll (see `data/symbol.tsx`). So leaving a symbol is something you do to go and
+look at one thing, and coming back is something you do constantly — and it was
+two clicks plus a scan of a list for the one row that is always in it.
+
+A `Chip` rather than a pinned row in the picker: the picker's list is
+alphabetical under the starred ones, and this has to be in the same place every
+time. It lights up when SPX is already the board's symbol, so it doubles as
+"am I on the live feed or the poll?" — the other question people were opening
+the dropdown to answer.
+
+Uses the existing `Chip` primitive and `SOCKET_SYMBOL` / `isSocketSymbol`, so no
+new styling and no ticker literal.
+
+
+## 2026-08-31 - GEX Candles: the stranded view, and the bucket picker that did nothing
+
+Edited: `cbedge-v3/src/board/gexCandles/chart.ts`, `bubbles.ts`, `settings.ts`.
+
+Two reports, and the first one turned out to explain half of the second.
+
+### 1. Come back to the tab and there is a huge gap
+
+Whitespace on both sides with the candles squeezed into the middle, the time
+axis still labelling the empty part, and the bubble trail gone thin.
+
+Not a drawing fault. The visible LOGICAL RANGE is in bar indices and survives a
+`setData` that hands the series a different number of bars — nothing in
+lightweight-charts re-anchors it, and this card's `reframe` only fires on a
+symbol / interval / session change. So the pane ends up looking at indices the
+series no longer has.
+
+Two changes:
+
+**`setBars` no longer wipes the series on an empty payload.** `parseCandles`
+returns `[]` for `undefined`, and the card holds `undefined` whenever the query
+cache has no value for that URL — including straight after a failed fetch,
+because `query()`'s catch writes `value: undefined` over the good value it was
+holding. That `[]` went through as `setData([])`, emptying the series, and the
+next poll repopulated it with a different bar count a moment later. An empty
+payload is "no answer", not "no bars": it now keeps what is drawn and waits.
+
+**And when the view IS stranded, it re-anchors.** New `visibleDataFraction()`
+(the overlap between the logical range and `[0, barCount)`, as a fraction of the
+range's own width) and `reanchorIfStranded()`. Deliberately narrow, because
+`setBars` runs every thirty seconds and yanking a view the user chose would be
+worse than the bug:
+
+* nothing at all on screen — always. A pane showing no candles is not a view
+  anyone chose.
+* the series SHRANK and under 30% of the pane is data. Growth cannot strand a
+  range; only losing bars out from under it can.
+
+A deliberate scroll into the whitespace beside a stable series matches neither
+and is left alone.
+
+**This is also why the bubbles went thin at the same time.** The layer measures
+`pxPerDot` off the CURRENT zoom and strides the trail to fit, so a range
+stretched far past the data reports almost no room per bucket and throws most of
+the dots away. One fix, both symptoms.
+
+### 2. Clicking between 1m and 5m changed nothing
+
+Working as designed, and the design made the control inert almost everywhere.
+
+The stride is chosen so the dots that ARE drawn clear each other, and it was
+measured against `bucketPxPerDot` (11px, the legible target) whether the rung
+was picked by the pane or pinned by the user. A 1m bucket then strides to every
+Nth minute and a 5m bucket to every Nth/5 — and the two land on the same dots.
+Dots actually drawn, 1000px pane:
+
+| view | OLD 1m | OLD 5m | NEW 1m | NEW 5m |
+|------|--------|--------|--------|--------|
+| 30 min | 30 | 6 | 30 | 6 |
+| 90 min | 90 | 18 | 90 | 18 |
+| 4 h | 80 | 48 | **240** | 48 |
+| full session | 78 | 78 | **390** | 78 |
+
+At a full session the two settings were drawing the identical 78 dots. That is
+indistinguishable from a broken control, and it was reported as one.
+
+New `BUBBLES.pinnedPxPerDot` (2.5px) is the stride target for a PINNED bucket.
+Auto keeps 11px — nobody asked for detail, so the honest answer is the legible
+one. A pin IS somebody asking, the same opt-in the Bubble size slider is, so its
+only remaining job is to stop the dots literally merging into a line: a spacing
+floor rather than a legibility target. The marks then shrink to fit, because
+`capOfSpacing` sizes them off the EFFECTIVE spacing — a pinned rung comes out
+small and dense rather than fused, and the size slider is there for anyone who
+wants to trade that back.
+
+Note the first two rows: where the picker already worked (stride was already 1)
+nothing changes.
+
+`drawBubbles` takes a `pinned` flag; `chart.ts` passes `drawOpts.bucketMin != null`.
+
+
+## 2026-08-31 - Premarket GEX profile (v3): same bar-scale fix, applied to the live copy
+
+The earlier fix today landed on `components/pages/premarket/GexProfile.tsx`.
+The page actually being served is the v3 one, so the ex-0DTE ladder still drew
+most of its board at the same length. Same change, applied to the v3 copy:
+
+- `cbedge-v3/src/pages/premarket/GexProfile.tsx` - `maxP` / `maxN` (and
+  `bigCut`) are taken over `bars`, the rendered +/-60 window, instead of a
+  separate +/-12 `nearBars`. Exactly one positive bar and one negative bar now
+  reach the full half track; `NEAR_HALF` and `nearBars` are gone. Bar width is
+  clamped to 50% as a guard.
+- `cbedge-v3/src/pages/Premarket.tsx` - `.pmk .chart` declares
+  `overflow-x:hidden` explicitly, so the ladder can never grow a horizontal
+  scrollbar from an over-wide bar.
+
+Why it looked "maxed": the scale was normalised over a +/-12 window while the
+ladder renders +/-60. On the ex-0DTE board the standing walls sit outside that
+narrow window, so most rows computed a width above 100%. Nothing clamped it and
+`.chart` is a scroll box, so those bars ran past the right edge and were sliced
+to the same pixel - the axis said $678M while bars several times that were drawn
+the same length as it.
 
 ## 2026-08-31 - v3 Traders Dashboard: prefs are per USER (Postgres), not per browser
 

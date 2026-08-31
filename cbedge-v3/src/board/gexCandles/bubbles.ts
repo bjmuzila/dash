@@ -331,7 +331,7 @@ interface SizeProfile {
  *    turns fused ribbons into a fine dotted trail, which is the truthful picture
  *    of 975 samples in 1500 pixels.
  */
-function sizeFor(bucketMs: number, pxPerDot: number): SizeProfile {
+function sizeFor(bucketMs: number, pxPerDot: number, scale = 1): SizeProfile {
   const mins = Math.max(1, Math.round(bucketMs / 60_000))
   const rungs = Object.keys(BUBBLES.profiles)
     .map(Number)
@@ -353,10 +353,24 @@ function sizeFor(bucketMs: number, pxPerDot: number): SizeProfile {
   // the profile cap x boost — 14px of radius into 15px of spacing — and the top
   // row fuses into one continuous sausage, which is the exact failure this layer
   // was rebuilt to stop.
-  const room = pxPerDot > 0 ? BUBBLES.capOfSpacing * pxPerDot : p.capPx
-  const capPx = Math.max(BUBBLES.minPx, Math.min(p.capPx, room))
-  const topRoom = pxPerDot > 0 ? BUBBLES.topOfSpacing * pxPerDot : p.capPx * p.topBoost
-  const topCapPx = Math.max(capPx, Math.min(p.capPx * p.topBoost, topRoom))
+  //
+  // 3. THE USER'S OWN MULTIPLIER (`scale`, the Layers panel's Bubble size
+  //    slider). It multiplies BOTH sides of the min above — the profile cap and
+  //    the share of the spacing — rather than being applied to the finished
+  //    radius, and the difference matters: scaling the answer would let the
+  //    spacing bound silently eat the whole adjustment at a tight zoom, so the
+  //    slider would do nothing exactly where someone reaches for it. Scaling
+  //    both means it reads as "give every mark N× the room it was allotted",
+  //    and it is inert at 1 by construction — the arithmetic is the same
+  //    expression it always was.
+  //
+  //    Above 1 the marks CAN fuse horizontally. That is the user asking for it,
+  //    the same bargain the manual 1m/5m bucket already offers, and the vertical
+  //    fit below still stops two strikes being drawn as one blob.
+  const room = pxPerDot > 0 ? BUBBLES.capOfSpacing * pxPerDot * scale : p.capPx * scale
+  const capPx = Math.max(BUBBLES.minPx, Math.min(p.capPx * scale, room))
+  const topRoom = pxPerDot > 0 ? BUBBLES.topOfSpacing * pxPerDot * scale : p.capPx * p.topBoost * scale
+  const topCapPx = Math.max(capPx, Math.min(p.capPx * p.topBoost * scale, topRoom))
   // And the GLOW gets whatever is left over, which is often nothing.
   //
   // This was the real reason the leader's row looked like one continuous
@@ -367,11 +381,11 @@ function sizeFor(bucketMs: number, pxPerDot: number): SizeProfile {
   const spare = pxPerDot > 0 ? pxPerDot / 2 - topCapPx : BUBBLES.glowMaxPx
   return {
     capPx,
-    floorPx: Math.max(BUBBLES.minPx, Math.min(p.floorPx, capPx * BUBBLES.floorOfCap)),
+    floorPx: Math.max(BUBBLES.minPx, Math.min(p.floorPx * scale, capPx * BUBBLES.floorOfCap)),
     topBoost: p.topBoost,
     topCapPx,
     glowPx: Math.max(0, Math.min(BUBBLES.glowMaxPx, spare)),
-    ringPx: p.ringPx,
+    ringPx: p.ringPx * scale,
   }
 }
 
@@ -453,6 +467,13 @@ export function drawBubbles(
   snaps: BubbleSnapshot[],
   geo: BubbleGeometry,
   palette: BubblePalette,
+  /** The Bubble size slider, 1 = the tuned default. See sizeFor. */
+  scale = 1,
+  /**
+   * True when the BUCKET was pinned by the user (the 1m / 5m tiles) rather than
+   * chosen by the pane. It loosens the stride — see BUBBLES.pinnedPxPerDot.
+   */
+  pinned = false,
 ): boolean {
   const { width: w, height: h } = geo
   if (!snaps.length || w <= 0 || h <= 0) return false
@@ -516,10 +537,16 @@ export function drawBubbles(
   // the auto spacing a forced rung lands on exactly the picture auto would have
   // drawn — which is correct, because at that width there is only one legible
   // answer and pretending otherwise is what made this look horrible zoomed out.
-  const stride = pxPerDot > 0 ? Math.max(1, Math.ceil(BUBBLES.bucketPxPerDot / pxPerDot)) : 1
+  //
+  // A PINNED rung strides against a much smaller target (see
+  // BUBBLES.pinnedPxPerDot). Measuring a pin against the same legible spacing
+  // Auto uses is what made the 1m / 5m picker do nothing: 1m strides to every
+  // Nth minute, 5m to every Nth/5, and both land on the same dots.
+  const strideTarget = pinned ? BUBBLES.pinnedPxPerDot : BUBBLES.bucketPxPerDot
+  const stride = pxPerDot > 0 ? Math.max(1, Math.ceil(strideTarget / pxPerDot)) : 1
   // The profile is chosen for the EFFECTIVE cadence — the bucket as drawn, not
   // as bucketed — so a strided 1m trail is sized like the rung it is showing.
-  const size = sizeFor(bucketMs * stride, pxPerDot * stride)
+  const size = sizeFor(bucketMs * stride, pxPerDot * stride, scale)
 
   // ── CLIPPED TO THE PLOT ───────────────────────────────────────────────────
   // A mark whose centre is legally inside the plot still has a radius, a ring

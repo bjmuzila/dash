@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { preload } from '@/data/api'
 import { AuthProvider } from '@/data/auth'
-import { PAGE_TICKER_RE, PageSymbolProvider, usePageSymbol } from '@/data/symbol'
+import { PAGE_TICKER_RE, PageSymbolProvider, SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
+import { Chip } from '@/design/primitives/Controls'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
 import { UserMenu } from '@/shell/UserMenu'
 
@@ -252,6 +253,25 @@ function Toolbar() {
         onSelect={setSymbol}
         allowCustom={PAGE_TICKER_RE}
         title="The board's symbol — every card that can follow a ticker is showing this one. Click to search the list or star a ticker to keep it on top."
+      />
+      {/* ── Back to SPX in one click ───────────────────────────────────────────
+          SPX is not just the most-used ticker, it is the only one the socket
+          streams: on it the GEX cards are live and free, and off it they fall
+          back to a REST chain poll (see data/symbol.tsx). So leaving a symbol
+          is a thing you do to look at something, and coming back is a thing you
+          do constantly — two clicks and a scan of the list for the one row that
+          is always in it.
+
+          A Chip rather than a row in the picker: the picker's own list is
+          alphabetical-under-the-stars and this has to be in the same place
+          every time. It lights up when SPX is already the board's symbol, so it
+          doubles as "am I on the live feed or the poll?" — which is the other
+          question people were opening the dropdown to answer. */}
+      <Chip
+        label={SOCKET_SYMBOL}
+        on={isSocketSymbol(symbol)}
+        onClick={() => setSymbol(SOCKET_SYMBOL)}
+        title="Put the whole board back on SPX — the one symbol the live socket streams, where every GEX card is on the feed rather than a chain poll"
       />
       <EtClock />
       {/* The account dropdown — same rows as v2's UserMenu, on v3 tokens. The

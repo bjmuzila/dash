@@ -6,10 +6,13 @@ import { useQuery } from '@/data/api'
 import { usePageSymbol } from '@/data/symbol'
 import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
-import { SegGroup, Chip, Popover, PanelSection, Dropdown } from './controls'
+import { SegGroup, Chip, Popover, PanelSection, Dropdown, Slider } from './controls'
 import { chainTicker, symbolDef } from './symbols'
 import {
   BUBBLE_LADDER_REQUEST,
+  BUBBLE_SCALE_MAX,
+  BUBBLE_SCALE_MIN,
+  BUBBLE_SCALE_STEP,
   BUBBLES,
   GEX_HISTORY_MINUTES,
   INTERVALS,
@@ -402,9 +405,10 @@ export function GexCandlesCard() {
         h.setDrawOpts({
           on: settings.bubblesOn,
           bucketMin: isAutoBucket(settings.bubbleBucket) ? null : settings.bubbleBucket,
+          bubbleScale: settings.bubbleScale,
         }),
       ),
-    [settings.bubblesOn, settings.bubbleBucket, apply],
+    [settings.bubblesOn, settings.bubbleBucket, settings.bubbleScale, apply],
   )
 
   // ── Countdown ──────────────────────────────────────────────────────────────
@@ -571,6 +575,23 @@ export function GexCandlesCard() {
                   ]}
                   value={isAutoBucket(settings.bubbleBucket) ? 'auto' : String(settings.bubbleBucket)}
                   onChange={(v) => patch({ bubbleBucket: v === 'auto' ? 'auto' : v === '1' ? 1 : 5 })}
+                />
+              </PanelSection>
+
+              {/* One dial over the whole size system — see ChartSettings.
+                  Disabled rather than hidden with the layer off: the value it
+                  holds is the value that comes back when you turn it on. */}
+              <PanelSection title="Bubble size">
+                <Slider
+                  label="Size"
+                  title="Scales every mark together — cap, floor, the top mark's boost and its ring — against the room the zoom leaves them. 1.0 is the tuned default. Above it the marks can start to touch at a wide zoom, which is the same trade the manual 1m/5m bucket offers: you asked for detail and accepted the crowding to get it"
+                  value={settings.bubbleScale}
+                  min={BUBBLE_SCALE_MIN}
+                  max={BUBBLE_SCALE_MAX}
+                  step={BUBBLE_SCALE_STEP}
+                  format={(v) => `${v.toFixed(1)}x`}
+                  disabled={!settings.bubblesOn}
+                  onChange={(v) => patch({ bubbleScale: v })}
                 />
               </PanelSection>
 

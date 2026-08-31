@@ -58,6 +58,27 @@ export const isAutoBucket = (v: BubbleBucket): v is 'auto' => v === 'auto'
 /** What a fresh card starts on. */
 export const BUBBLE_BUCKET_DEFAULT: BubbleBucket = 'auto'
 
+/**
+ * The Bubble size slider's range.
+ *
+ * Half-size to two-and-a-half. The bottom is where a mark is still a mark
+ * rather than a speck — BUBBLES.minPx is the hard floor underneath it and no
+ * scale can go below that. The top is generous on purpose: at a wide zoom the
+ * spacing bound has already shrunk the marks hard, so a 1.4 that looks big on a
+ * half-hour view is barely visible across a session, and a ceiling tuned for
+ * the tight case would make the slider useless in the loose one.
+ */
+export const BUBBLE_SCALE_MIN = 0.5
+export const BUBBLE_SCALE_MAX = 2.5
+export const BUBBLE_SCALE_STEP = 0.1
+
+/** A stored (or absent) scale, coerced into range. Anything unusable is 1. */
+export function clampScale(v: unknown): number {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 1
+  return Math.min(BUBBLE_SCALE_MAX, Math.max(BUBBLE_SCALE_MIN, n))
+}
+
 export interface ChartSettings {
   symbol: string
   session: Session
@@ -82,10 +103,25 @@ export interface ChartSettings {
   expiry: string
   /**
    * The bubble time bucket: 'auto' follows the pane, 1 or 5 pins the rung.
-   * See BubbleBucket. This is the ONLY bubble setting the user has — everything
-   * else about the layer is the frozen BUBBLES block above.
+   * See BubbleBucket.
    */
   bubbleBucket: BubbleBucket
+  /**
+   * Overall bubble size, as a MULTIPLIER on the tuned defaults. 1 is those
+   * defaults exactly — sizeFor()'s arithmetic is the same expression at 1, so
+   * this cannot drift the resting look.
+   *
+   * A multiplier rather than a pixel size on purpose. The numbers in BUBBLES
+   * are a system: cap, floor, boost, ring and glow are in proportion to each
+   * other AND to the measured spacing between dots, and handing one of them out
+   * to be set absolutely breaks every relationship the layer was tuned around.
+   * One dial over the whole system keeps them and just makes the picture bigger
+   * or smaller, which is what "I want them bigger" actually means.
+   *
+   * These two are now the only bubble settings the user has; everything else
+   * about the layer is the frozen BUBBLES block above.
+   */
+  bubbleScale: number
 }
 
 export const DEFAULT_SETTINGS: ChartSettings = {
@@ -100,6 +136,7 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   railOn: true,
   expiry: '',
   bubbleBucket: BUBBLE_BUCKET_DEFAULT,
+  bubbleScale: 1,
 }
 
 /**
@@ -170,6 +207,31 @@ export const BUBBLES = {
    * 2 x minLegiblePx x a typical topBoost, plus the hairline.
    */
   bucketPxPerDot: 11,
+  /**
+   * The same target, for a PINNED bucket — the stride the 1m / 5m tiles get
+   * instead of `bucketPxPerDot`.
+   *
+   * WHY THE PIN NEEDS ITS OWN NUMBER. The stride is chosen so the dots that ARE
+   * drawn clear each other, and it was measured against `bucketPxPerDot` (11px,
+   * the legible target) whether the rung was picked by the pane or by the user.
+   * That made the picker inert almost everywhere: a 1m bucket strides to every
+   * Nth minute and a 5m bucket strides to every Nth/5, and the two land on the
+   * SAME dots. Clicking between 1m and 5m changed nothing on screen at any zoom
+   * wider than about ninety minutes, which is indistinguishable from a broken
+   * control — and it was reported as one.
+   *
+   * Auto keeps 11px: nobody asked for detail, so the honest answer is the
+   * legible one. A PIN is somebody asking, the same opt-in the Bubble size
+   * slider is, so its only remaining job is to stop the dots from literally
+   * merging into a line — hence a spacing floor rather than a legibility
+   * target. At 2.5px a pinned 1m draws every minute down to a ~90-minute view
+   * and thins from there, instead of matching Auto from the first pixel.
+   *
+   * The marks then shrink to fit, because `capOfSpacing` sizes them off the
+   * EFFECTIVE spacing — so a pinned rung is small and dense rather than fused,
+   * and the size slider is there for anyone who wants to trade that back.
+   */
+  pinnedPxPerDot: 2.5,
   /** The smallest radius a mark can have and still read as a mark. */
   minLegiblePx: 3.5,
 
@@ -326,6 +388,9 @@ const KEY_PREFIX = 'cb-v3-gex-candles:'
 /**
  * Blob version, written alongside the settings and checked on load.
  *
+ * v6 (2026-08-31): `bubbleScale` added. An older blob has no such key,
+ * clampScale falls back to 1, and 1 is the size those blobs already drew.
+ *
  * v5 (2026-08-31): `prevDay` and `bubbleDay` removed with the 48h testing reach
  * and the Sun/Mon/Both day picker. Both are listed in STALE_ON_UPGRADE so the
  * dead keys are dropped from the blob on first load rather than riding along
@@ -340,7 +405,7 @@ const KEY_PREFIX = 'cb-v3-gex-candles:'
  * simply never read. Kept because the next default that needs pushing will need
  * this, and re-deriving the mechanism is worse than leaving it inert.
  */
-const SETTINGS_V = 5
+const SETTINGS_V = 6
 const STALE_ON_UPGRADE: string[] = ['prevDay', 'bubbleDay']
 
 /** Coerce an unknown parsed blob into a complete, in-range settings object. */
@@ -365,6 +430,7 @@ function coerce(raw: unknown): ChartSettings {
     railOn: p.railOn !== false,
     expiry: typeof p.expiry === 'string' ? p.expiry : '',
     bubbleBucket: isBubbleBucket(p.bubbleBucket) ? p.bubbleBucket : DEFAULT_SETTINGS.bubbleBucket,
+    bubbleScale: clampScale(p.bubbleScale),
   }
 }
 

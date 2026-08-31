@@ -50,6 +50,12 @@ export interface ChartDrawOpts {
    * every Nth bucket and lands on the picture auto would have drawn anyway.
    */
   bucketMin: 1 | 5 | null
+  /**
+   * The Bubble size slider — a straight multiplier on every mark's radius
+   * budget. 1 is the tuned default and is inert; see sizeFor() in bubbles.ts
+   * for where it lands and why it scales the spacing share too.
+   */
+  bubbleScale: number
 }
 
 /**
@@ -223,7 +229,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
 
   let snaps: BubbleSnapshot[] = []
   let barCount = 0
-  let drawOpts: ChartDrawOpts = { on: true, bucketMin: null }
+  let drawOpts: ChartDrawOpts = { on: true, bucketMin: null, bubbleScale: 1 }
   let railSink: RailSink | null = null
   let raf = 0
   // The forming bar, kept here so a live tick can extend it without going back
@@ -231,6 +237,19 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   // whether it is still forming; `time` is the seconds value the series is
   // keyed by.
   let live: { time: UTCTimestamp; openMs: number; open: number; high: number; low: number; close: number } | null = null
+  /**
+   * The forming bar, when this chart INVENTED it (setLivePrice's roll-forward)
+   * rather than receiving it from the feed. Held separately from `live` — which
+   * is the same object while it is current — so a poll can hand it back.
+   *
+   * Without this, every candle refresh dropped the forming bar's accumulated
+   * high/low on the floor: `setBars` rebuilds `live` from the newest CLOSED bar
+   * the poll returned, which is the one BEFORE the bar being drawn, and the
+   * next tick then started the minute over from scratch. Reloading the page did
+   * the same thing for the same reason. The bar arrived on time and its OHLC
+   * restarted, which is exactly what it looked like.
+   */
+  let synth: typeof live = null
   let intervalMs = 5 * 60_000
 
   const ts = chart.timeScale()
@@ -248,6 +267,73 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     mountOpts.onLatestOffscreen(off)
   }
   ts.subscribeVisibleLogicalRangeChange(checkOffscreen)
+
+  /**
+   * How much of the pane is actually showing DATA, 0..1.
+   *
+   * The logical range is in bar indices and is free to sit anywhere, including
+   * entirely outside `[0, barCount)` — that is what a pan into the whitespace
+   * past either end of the series is. This is the overlap between the range and
+   * the data, as a fraction of the range's own width, so 1 means the pane is
+   * full of candles and 0 means it is empty.
+   */
+  function visibleDataFraction(): number {
+    let r: { from: number; to: number } | null = null
+    try {
+      r = ts.getVisibleLogicalRange()
+    } catch {
+      return 1
+    }
+    if (!r || barCount <= 0) return 1
+    const span = r.to - r.from
+    if (!(span > 0)) return 1
+    const lo = Math.max(r.from, 0)
+    const hi = Math.min(r.to, barCount)
+    return Math.max(0, hi - lo) / span
+  }
+
+  /**
+   * Put the newest bar back on screen when the view has been STRANDED — left
+   * looking at bar indices the series no longer has.
+   *
+   * This is the "come back to the tab and there is a huge gap" bug. Whitespace
+   * on both sides with the candles squeezed into the middle, or an empty pane
+   * with the time axis still labelling it, is not a drawing fault: it is the
+   * visible LOGICAL RANGE surviving a `setData` that gave the series a
+   * different number of bars. Nothing in lightweight-charts re-anchors it, and
+   * `reframe` only fires on a symbol/interval/session change.
+   *
+   * It takes the bubbles down with it, which is why they went thin at the same
+   * time: the layer measures `pxPerDot` off the CURRENT zoom and strides the
+   * trail to fit, so a range stretched far past the data reports almost no room
+   * per bucket and throws most of the dots away.
+   *
+   * Deliberately narrow, because `setBars` runs every 30 seconds and yanking a
+   * view the user chose would be worse than the bug:
+   *
+   *   • nothing at all on screen — always. A pane showing no candles is not a
+   *     view anyone chose.
+   *   • the series SHRANK and most of the pane is now empty. Growth cannot
+   *     strand a range; only losing bars out from under it can.
+   *
+   * A deliberate scroll into the whitespace beside a stable series matches
+   * neither, and is left alone.
+   */
+  function reanchorIfStranded(prevCount: number) {
+    if (barCount <= 0) return
+    const shown = visibleDataFraction()
+    const shrank = barCount < prevCount || prevCount === 0
+    if (shown > 0 && !(shrank && shown < 0.3)) return
+    try {
+      ts.scrollToRealTime()
+    } catch {
+      try {
+        ts.fitContent()
+      } catch {
+        /* the chart is gone; nothing to re-frame */
+      }
+    }
+  }
 
   // A steady rAF loop rather than chasing every event that can move the price
   // axis — pan, zoom, autoscale and resize all qualify, and enumerating them one
@@ -468,13 +554,24 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     const tB = geo.timeAtX(right)
     if (tA != null && tB != null && tB > tA) reportBucket(tB - tA, right)
 
-    const drew = drawBubbles(ctx, snaps, geo, palette)
+    const drew = drawBubbles(ctx, snaps, geo, palette, drawOpts.bubbleScale, drawOpts.bucketMin != null)
     reportOutOfRange(!drew)
   }
   raf = requestAnimationFrame(draw)
 
   return {
     setBars(bars, reframe = false) {
+      // ── An empty payload is "no answer", not "no bars" ─────────────────────
+      // `parseCandles` returns [] for undefined, and the card holds undefined
+      // whenever the query cache has no value for the URL — including right
+      // after a failed fetch, because query()'s catch writes `value: undefined`
+      // over the good one it was holding. Passing that straight through wiped
+      // the series and then repopulated it a moment later with a different bar
+      // count, which is precisely how a visible range ends up stranded (see
+      // reanchorIfStranded). Keep what is drawn and wait for a real answer.
+      if (!bars.length && barCount > 0) return
+
+      const prevCount = barCount
       barCount = bars.length
       version++
       series.setData(
@@ -490,6 +587,25 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       live = last
         ? { time: Math.floor(last.t / 1000) as UTCTimestamp, openMs: last.t, open: last.o, high: last.h, low: last.l, close: last.c }
         : null
+
+      // ── Hand the invented forming bar back ─────────────────────────────────
+      // `setData` above replaced the whole series, so a bar this chart was
+      // drawing that the feed has not published yet is now gone from it. If the
+      // clock is still inside that bar, put it back with the high and low it
+      // had accumulated — dropping them would restart the candle's range on
+      // every poll, and the poll runs every 30 seconds.
+      //
+      // Retired the moment the feed catches up: once a real bar covers that
+      // open (or a later one), the published bar is the truth and the invention
+      // has nothing left to say.
+      if (synth && live && synth.openMs <= live.openMs) synth = null
+      if (synth && Date.now() < synth.openMs + intervalMs && live && synth.openMs === live.openMs + intervalMs) {
+        live = synth
+        barCount++
+        series.update({ time: synth.time, open: synth.open, high: synth.high, low: synth.low, close: synth.close })
+      } else if (synth) {
+        synth = null
+      }
       pickProbes()
       if (reframe && bars.length) {
         try {
@@ -502,6 +618,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         } catch {
           /* nothing to frame */
         }
+      } else {
+        reanchorIfStranded(prevCount)
       }
       checkOffscreen()
     },
@@ -528,19 +646,38 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       if (now >= live.openMs + intervalMs) {
         const nextOpen = live.openMs + intervalMs
         if (now >= nextOpen + intervalMs) return
+        // ── THE OPEN IS THE PREVIOUS CLOSE, not the first tick we happened to
+        // see ─────────────────────────────────────────────────────────────────
+        // Seeding o=h=l=c from the arriving price makes the bar a function of
+        // WHEN THIS TAB STARTED WATCHING: reload the page mid-minute and the
+        // forming candle begins again from whatever price was printing at that
+        // instant, and two tabs open a few seconds apart disagree about a bar
+        // they can both see. That is the refresh symptom.
+        //
+        // The previous bar's close is a function of the DATA, so every tab
+        // reconstructs the same bar from the same closed history however late it
+        // arrives. It is also the honest continuation of an intraday series —
+        // the true open is the first trade of the minute, which nobody watching
+        // from the middle of it can know, and on a continuous session it is the
+        // prior close to within a tick. The high and low then take the ticks
+        // this tab HAS seen, so a late loader gets a narrower range rather than
+        // a wrong one, and the poll replaces the whole bar with the published
+        // truth a few seconds after it closes.
+        const open = live.close
         live = {
           time: Math.floor(nextOpen / 1000) as UTCTimestamp,
           openMs: nextOpen,
-          open: price,
-          high: price,
-          low: price,
+          open,
+          high: Math.max(open, price),
+          low: Math.min(open, price),
           close: price,
         }
+        synth = live
         barCount++
         // A bump HERE only — once an interval, not once a tick. A new bar moves
         // the time axis, and the bubble band is positioned against it.
         version++
-        series.update({ time: live.time, open: price, high: price, low: price, close: price })
+        series.update({ time: live.time, open: live.open, high: live.high, low: live.low, close: live.close })
         checkOffscreen()
         return
       }
