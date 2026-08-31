@@ -7902,6 +7902,65 @@ if (libDb) {
   }
 
 
+  // /api/owner/todo — the Personal · To-Do board.
+  //
+  // It used to live in localStorage, which meant it existed on exactly one
+  // browser on one machine and vanished with a cleared cache. Now Postgres.
+  //
+  // Whole-document GET/PUT rather than a route per gesture: the page holds one
+  // object and tick / drag / rename / reorder all mutate it, so per-gesture
+  // endpoints would be a dozen routes racing each other over the same ordering.
+  // The client debounces and posts the board; the DB layer upserts and then
+  // deletes what is gone, so a read can never land on an empty table.
+  //
+  // GET             → { items, titles }
+  // POST { items, titles }
+  {
+    register('/api/owner/todo', {
+      auth: 'owner', methods: ['GET', 'POST'],
+      async handler(req, res) {
+        try {
+          const D = libDb;
+          if (req.method === 'GET') {
+            const { items, lists } = await D.listOwnerTodo();
+            const titles = {};
+            for (const l of lists || []) titles[l.list_key] = l.title || '';
+            send(res, 200, {
+              items: (items || []).map((r) => ({
+                id: String(r.id),
+                listKey: String(r.list_key),
+                text: String(r.text || ''),
+                checked: !!r.checked,
+                status: String(r.status || 'All Todo'),
+              })),
+              titles,
+            });
+            return;
+          }
+
+          const body = await readJson(req, 2_000_000);
+          const incoming = Array.isArray(body?.items) ? body.items : null;
+          // A malformed or missing items array must NOT be read as "the board
+          // is empty now" — that would wipe it. Only an explicit array writes.
+          if (!incoming) { send(res, 400, { error: 'items array required' }); return; }
+          const result = await D.replaceOwnerTodo(
+            incoming.map((i) => ({
+              id: i?.id,
+              list_key: i?.listKey ?? i?.list_key,
+              text: i?.text,
+              checked: i?.checked,
+              status: i?.status,
+            })),
+            body?.titles && typeof body.titles === 'object' ? body.titles : {}
+          );
+          send(res, 200, { ok: true, ...result });
+        } catch (err) {
+          send(res, 500, { error: req.method === 'GET' ? 'To-Do load failed' : 'To-Do save failed', detail: String(err?.message || err) });
+        }
+      },
+    });
+  }
+
   // /api/budget/real — owner-only "Real Month" store: transactions read off an
   // actual bank/card statement, kept in budget_statement_tx.
   //
@@ -8501,6 +8560,148 @@ if (libDb) {
         }));
         send(res, 200, { ok: true, rows: rows.filter((r) => r.email) });
       } catch (err) { send(res, 500, { error: 'Activity load failed', detail: String(err) }); }
+    },
+  });
+
+  // /api/admin/signups — accounts created that never became customers.
+  //
+  // The Sales page could answer "how much did we make" and "who is paying", but
+  // not the question that actually matters on a day with four new accounts and
+  // zero sales: WHO were those four. An account exists the moment someone sets
+  // a password; paying is a separate act, and the gap between the two is the
+  // only funnel step this dashboard could not see.
+  //
+  // "Not signed up" = no subscriptions row, or one whose status is not in
+  // PAID_STATUSES — the same test /pricing gates on, so this list can never
+  // include somebody the app already treats as a customer.
+  //
+  // Each row is enriched from page_visits so a name comes with a story: where
+  // they came from, how much they looked at, and — the one that decides the
+  // follow-up — whether they ever reached /pricing or /checkout. Somebody who
+  // signed up and never opened the pricing page is a different problem from
+  // somebody who opened checkout and walked.
+  //
+  // GET ?days=1|7|30|90|0   (0 = all time, default 7)
+  register('/api/admin/signups', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const url = new URL(req.url || '/', 'http://localhost');
+        const rawDays = Number(url.searchParams.get('days') ?? 7);
+        const days = Number.isFinite(rawDays) && rawDays >= 0 ? Math.min(rawDays, 3650) : 7;
+        // days=0 means all time. Kept as an explicit branch rather than a huge
+        // interval so the query plan is honest about what it is scanning.
+        // `?` placeholders — libDb.queryAll rewrites them to $n in order, so a
+        // literal $1 here would collide with that rewrite.
+        const windowSql = days > 0 ? `AND u.created_at >= NOW() - (? || ' days')::interval` : '';
+        const params = days > 0 ? [String(days)] : [];
+
+        const users = await libDb.queryAll(
+          `SELECT u.id, u.email, u.created_at, u.email_verified_at,
+                  u.discord_username, u.discord_connected_at,
+                  s.last_login_at, s.session_count,
+                  sub.status AS sub_status, sub.stripe_customer_id, sub.created_at AS sub_created_at
+             FROM users u
+             LEFT JOIN (
+               SELECT user_id, MAX(created_at) AS last_login_at, COUNT(*)::int AS session_count
+                 FROM sessions GROUP BY user_id
+             ) s ON s.user_id = u.id
+             LEFT JOIN subscriptions sub ON sub.clerk_user_id = u.id
+            WHERE u.is_owner = FALSE ${windowSql}
+            ORDER BY u.created_at DESC`,
+          params
+        );
+
+        // Only the ones who never paid. Done in JS rather than SQL so the
+        // paid test stays the single PAID_STATUSES set instead of a status
+        // list copy-pasted into a WHERE clause that will drift from it.
+        const unpaid = users.filter((u) => !(u.sub_status && libDb.PAID_STATUSES.has(u.sub_status)));
+        const ids = unpaid.map((u) => u.id);
+
+        // Behaviour, one aggregate row per user. Attribution columns are only
+        // written on a session's entry row (see page_visits), hence the
+        // FILTER (WHERE is_entry) — reading them off every row would report
+        // one Google visit as twenty.
+        const behaviour = new Map();
+        if (ids.length) {
+          try {
+            const rows = await libDb.queryAll(
+              `SELECT user_id,
+                      COUNT(*)::int                                   AS views,
+                      COUNT(*) FILTER (WHERE is_entry)::int           AS sessions,
+                      MIN(created_at)                                 AS first_seen,
+                      MAX(created_at)                                 AS last_seen,
+                      BOOL_OR(path ILIKE '%pricing%')                 AS saw_pricing,
+                      BOOL_OR(path ILIKE '%checkout%')                AS saw_checkout,
+                      (ARRAY_AGG(country     ORDER BY created_at ASC) FILTER (WHERE country IS NOT NULL))[1]      AS country,
+                      (ARRAY_AGG(region      ORDER BY created_at ASC) FILTER (WHERE region IS NOT NULL))[1]       AS region,
+                      (ARRAY_AGG(city        ORDER BY created_at ASC) FILTER (WHERE city IS NOT NULL))[1]         AS city,
+                      (ARRAY_AGG(channel     ORDER BY created_at ASC) FILTER (WHERE is_entry AND channel IS NOT NULL))[1]       AS channel,
+                      (ARRAY_AGG(utm_source  ORDER BY created_at ASC) FILTER (WHERE is_entry AND utm_source IS NOT NULL))[1]    AS utm_source,
+                      (ARRAY_AGG(utm_campaign ORDER BY created_at ASC) FILTER (WHERE is_entry AND utm_campaign IS NOT NULL))[1] AS utm_campaign,
+                      (ARRAY_AGG(referrer_host ORDER BY created_at ASC) FILTER (WHERE is_entry AND referrer_host IS NOT NULL))[1] AS referrer_host,
+                      (ARRAY_AGG(path        ORDER BY created_at DESC) FILTER (WHERE path IS NOT NULL))[1]        AS last_path
+                 FROM page_visits
+                WHERE user_id = ANY(?::text[]) AND COALESCE(is_bot, FALSE) = FALSE
+                GROUP BY user_id`,
+              [ids]
+            );
+            for (const r of rows) behaviour.set(r.user_id, r);
+          } catch (e) {
+            // Enrichment only. A schema drift here must degrade to a plain
+            // list of names, never 500 the answer to "who signed up today".
+            console.warn('[api-router] signups behaviour lookup failed:', e?.message || e);
+          }
+        }
+
+        const rows = unpaid.map((u) => {
+          const b = behaviour.get(u.id) || {};
+          return {
+            id: u.id,
+            email: u.email,
+            createdAt: u.created_at,
+            verified: !!u.email_verified_at,
+            lastLoginAt: u.last_login_at ?? null,
+            logins: Number(u.session_count) || 0,
+            discord: u.discord_username ?? null,
+            // Present but not paying: 'canceled', 'past_due', 'incomplete'.
+            // A null here is the pure never-started case.
+            subStatus: u.sub_status ?? null,
+            startedCheckout: !!u.stripe_customer_id,
+            views: Number(b.views) || 0,
+            sessions: Number(b.sessions) || 0,
+            firstSeen: b.first_seen ?? null,
+            lastSeen: b.last_seen ?? null,
+            sawPricing: !!b.saw_pricing,
+            sawCheckout: !!b.saw_checkout,
+            lastPath: b.last_path ?? null,
+            channel: b.channel ?? null,
+            utmSource: b.utm_source ?? null,
+            utmCampaign: b.utm_campaign ?? null,
+            referrerHost: b.referrer_host ?? null,
+            country: b.country ?? null,
+            region: b.region ?? null,
+            city: b.city ?? null,
+          };
+        });
+
+        send(res, 200, {
+          ok: true,
+          days,
+          rows,
+          totals: {
+            signups: users.length,
+            paid: users.length - unpaid.length,
+            unpaid: unpaid.length,
+            sawPricing: rows.filter((r) => r.sawPricing).length,
+            sawCheckout: rows.filter((r) => r.sawCheckout).length,
+            startedCheckout: rows.filter((r) => r.startedCheckout).length,
+            neverReturned: rows.filter((r) => r.logins <= 1).length,
+          },
+        }, { 'Cache-Control': NO_STORE });
+      } catch (err) {
+        send(res, 500, { error: 'Signups load failed', detail: String(err?.message || err) });
+      }
     },
   });
 

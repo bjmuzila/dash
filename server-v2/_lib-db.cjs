@@ -202,6 +202,8 @@ __export(db_exports, {
   insertWatchSnapshot: () => insertWatchSnapshot,
   linkStripeCustomer: () => linkStripeCustomer,
   listAllUsersForBroadcast: () => listAllUsersForBroadcast,
+  listOwnerTodo: () => listOwnerTodo,
+  replaceOwnerTodo: () => replaceOwnerTodo,
   listAmazonGasByMonth: () => listAmazonGasByMonth,
   listAmazonRows: () => listAmazonRows,
   listBudgetCategories: () => listBudgetCategories,
@@ -796,6 +798,31 @@ async function ensureAllTables(pool) {
       model TEXT,
       generated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(profile_id, month)
+    );
+
+    -- Owner To-Do. Was localStorage-only, which meant the list existed on one
+    -- browser on one machine and silently reset when that storage was cleared.
+    -- One row per item; the client's generated id (c_xxxx) IS the primary key,
+    -- so a drag, a rename and a reload all address the same row without any
+    -- id remapping. sort_order is the position WITHIN list_key, which is what
+    -- makes reordering survive a refresh.
+    CREATE TABLE IF NOT EXISTS owner_todo_item (
+      id TEXT PRIMARY KEY,
+      list_key TEXT NOT NULL,
+      text TEXT NOT NULL DEFAULT '',
+      checked BOOLEAN NOT NULL DEFAULT FALSE,
+      status TEXT NOT NULL DEFAULT 'All Todo',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_owner_todo_item_list ON owner_todo_item(list_key, sort_order);
+
+    -- The four list headings, renameable in place.
+    CREATE TABLE IF NOT EXISTS owner_todo_list (
+      list_key TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
     -- \u2500\u2500 Reta (retatrutide) protocol tracker \u2014 owner-only \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -5004,6 +5031,66 @@ async function deleteAmazonRow(profileId, id) {
   const pool = await getDb();
   await pool.query(`DELETE FROM budget_amazon WHERE id = $1 AND profile_id = $2`, [id, profileId]);
 }
+// ── Owner To-Do ─────────────────────────────────────────────────────────────
+async function listOwnerTodo() {
+  const [items, lists] = await Promise.all([
+    queryAll("SELECT * FROM owner_todo_item ORDER BY list_key ASC, sort_order ASC, created_at ASC"),
+    queryAll("SELECT * FROM owner_todo_list"),
+  ]);
+  return { items, lists };
+}
+
+/**
+ * Write the whole board.
+ *
+ * The page holds one object and every gesture — tick, drag, rename, reorder —
+ * mutates it, so a per-gesture endpoint would be a dozen routes racing each
+ * other over the same ordering. This takes the document instead: upsert every
+ * item, then delete whatever is no longer in it.
+ *
+ * Deliberately upsert-then-delete rather than delete-then-insert. The latter
+ * leaves a window where the table is empty, and a read landing in that window
+ * (or a crash inside it) shows an empty board — the exact failure this table
+ * exists to prevent.
+ */
+async function replaceOwnerTodo(items, titles) {
+  const pool = await getDb();
+  const rows = Array.isArray(items) ? items : [];
+  const seen = new Map();
+  for (const it of rows) {
+    const listKey = String(it?.list_key ?? '').slice(0, 40);
+    const id = String(it?.id ?? '').slice(0, 60);
+    if (!id || !listKey) continue;
+    const order = seen.get(listKey) ?? 0;
+    seen.set(listKey, order + 1);
+    await pool.query(
+      `INSERT INTO owner_todo_item (id, list_key, text, checked, status, sort_order, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,CURRENT_TIMESTAMP)
+       ON CONFLICT(id) DO UPDATE SET
+         list_key   = EXCLUDED.list_key,
+         text       = EXCLUDED.text,
+         checked    = EXCLUDED.checked,
+         status     = EXCLUDED.status,
+         sort_order = EXCLUDED.sort_order,
+         updated_at = CURRENT_TIMESTAMP`,
+      [id, listKey, String(it?.text ?? '').slice(0, 500), !!it?.checked, String(it?.status ?? 'All Todo').slice(0, 30), order]
+    );
+  }
+  const keep = rows.map((it) => String(it?.id ?? '')).filter(Boolean);
+  if (keep.length) await pool.query(`DELETE FROM owner_todo_item WHERE NOT (id = ANY($1::text[]))`, [keep]);
+  else await pool.query(`DELETE FROM owner_todo_item`);
+
+  for (const [k, v] of Object.entries(titles || {})) {
+    if (!k) continue;
+    await pool.query(
+      `INSERT INTO owner_todo_list (list_key, title) VALUES ($1,$2)
+       ON CONFLICT(list_key) DO UPDATE SET title = EXCLUDED.title, updated_at = CURRENT_TIMESTAMP`,
+      [String(k).slice(0, 40), String(v ?? '').slice(0, 120)]
+    );
+  }
+  return { items: keep.length, lists: Object.keys(titles || {}).length };
+}
+
 // Amazon Flex gas per calendar month, over a YYYY-MM window.
 //
 // Feeds the fuel-category correction on /api/budget/real: every Sheetz swipe

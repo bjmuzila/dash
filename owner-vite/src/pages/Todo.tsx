@@ -12,10 +12,19 @@
  * writes back to the item it came from, and Completed ⇔ the checkbox — tick the
  * box and the card lands in Completed, drag it out and the box clears.
  *
- * Storage is v2-keyed (hub_checklists_v2 / hub_pillar_titles_v2). The old
- * hub_checklists / hub_pillar_titles / hub_tasks keys are left untouched on
- * purpose — the old five-pillar shape doesn't map onto these four lists, so the
- * old data is preserved rather than half-migrated.
+ * Storage is POSTGRES, via /api/owner/todo (owner_todo_item + owner_todo_list).
+ * It was localStorage-only, which meant the board existed on exactly one
+ * browser on one machine and vanished with a cleared cache. localStorage is
+ * still written, but only as an offline cache and as the one-time migration
+ * source for a board that predates the table — the database is the truth.
+ *
+ * The whole document is saved on a debounce rather than a request per gesture:
+ * every mutation here rewrites one object, so per-gesture calls would race each
+ * other over the same ordering.
+ *
+ * The v1 keys (hub_checklists / hub_pillar_titles / hub_tasks) are left
+ * untouched on purpose — the old five-pillar shape doesn't map onto these four
+ * lists, so the old data is preserved rather than half-migrated.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -152,8 +161,29 @@ function SectionTitle({ text, accent }: { text: string; accent: string }) {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
+type SaveState = "idle" | "saving" | "saved" | "error";
+
+/** The board as the API carries it: flat, ordered, list tagged per item. */
+type WireItem = { id: string; listKey: string; text: string; checked: boolean; status: Status };
+
+function flatten(lists: Checklists): WireItem[] {
+  return BOXES.flatMap((b) =>
+    (lists[b.key] ?? []).map((i) => ({ id: i.id, listKey: b.key, text: i.text, checked: i.checked, status: i.status })),
+  );
+}
+function unflatten(items: WireItem[]): Checklists {
+  const out: Checklists = { work: [], family: [], ideas: [], weekly: [] };
+  for (const i of items) {
+    if (!out[i.listKey]) continue;
+    const status: Status = STATUSES.includes(i.status) ? i.status : i.checked ? "Completed" : "All Todo";
+    out[i.listKey].push({ id: i.id, text: String(i.text ?? ""), checked: status === "Completed" ? true : !!i.checked, status });
+  }
+  return out;
+}
+
 export default function Todo() {
   const [hydrated, setHydrated] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [checklists, setChecklists] = useState<Checklists>(DEFAULT_CHECKLISTS);
   const [titles, setTitles] = useState<PillarTitles>(DEFAULT_TITLES);
   const [showCreate, setShowCreate] = useState(false);
@@ -166,20 +196,95 @@ export default function Todo() {
   const [overCol, setOverCol] = useState<Status | null>(null);
 
   const inlineRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  /** The last body successfully written, so an unchanged board never re-posts. */
+  const lastSaved = useRef<string | null>(null);
+  /** A read failed — the screen is the local cache and must not be saved up. */
+  const [loadFailed, setLoadFailed] = useState(false);
+  /** The pre-database local board is being adopted into Postgres. */
+  const [migrating, setMigrating] = useState(false);
 
+  /**
+   * Load from Postgres, falling back to the local cache.
+   *
+   * A first load that comes back EMPTY while localStorage still holds a board
+   * is the pre-database state: the local copy is adopted and pushed up once.
+   * That check is `items.length === 0` and nothing else — a genuinely emptied
+   * board with nothing in localStorage stays empty, and a board that already
+   * exists server-side always wins.
+   */
   useEffect(() => {
-    setChecklists(normalizeLists(loadLS<unknown>(LS_LISTS, null)));
-    setTitles({ ...DEFAULT_TITLES, ...loadLS<PillarTitles>(LS_TITLES, {}) });
-    setHydrated(true);
+    let dead = false;
+    (async () => {
+      const cachedLists = normalizeLists(loadLS<unknown>(LS_LISTS, null));
+      const cachedTitles = { ...DEFAULT_TITLES, ...loadLS<PillarTitles>(LS_TITLES, {}) };
+      try {
+        const res = await fetch("/api/owner/todo", { cache: "no-store" });
+        if (!res.ok) throw new Error(String(res.status));
+        const data = await res.json();
+        if (dead) return;
+        const items: WireItem[] = Array.isArray(data?.items) ? data.items : [];
+        const serverTitles = data?.titles && typeof data.titles === "object" ? data.titles : {};
+        const cachedCount = BOXES.reduce((n, b) => n + (cachedLists[b.key]?.length ?? 0), 0);
+        if (items.length === 0 && cachedCount > 0) {
+          // Adopt the local board and let the save effect below write it up.
+          setChecklists(cachedLists);
+          setTitles(cachedTitles);
+          setMigrating(true);
+        } else {
+          setChecklists(unflatten(items));
+          setTitles({ ...DEFAULT_TITLES, ...serverTitles });
+        }
+      } catch {
+        // Offline or the endpoint is down. Show the cache and DON'T save over
+        // the database with it — saving is gated on a load having succeeded.
+        if (dead) return;
+        setChecklists(cachedLists);
+        setTitles(cachedTitles);
+        setLoadFailed(true);
+      } finally {
+        if (!dead) setHydrated(true);
+      }
+    })();
+    return () => { dead = true; };
   }, []);
 
+  /**
+   * Save on a debounce. Gated on `loadFailed` being false: writing the local
+   * cache over the database after a failed read is how a board gets silently
+   * rolled back to whatever the last-used browser happened to hold.
+   */
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || loadFailed) return;
+    // localStorage stays current regardless — it is the offline cache, and it
+    // costs nothing to keep it honest.
     try {
       localStorage.setItem(LS_LISTS, JSON.stringify(checklists));
       localStorage.setItem(LS_TITLES, JSON.stringify(titles));
-    } catch { /* unavailable */ }
-  }, [hydrated, checklists, titles]);
+    } catch { /* private mode — the database is still the truth */ }
+
+    const body = JSON.stringify({ items: flatten(checklists), titles });
+    if (body === lastSaved.current) return;
+    const t = setTimeout(() => {
+      setSaveState("saving");
+      fetch("/api/owner/todo", { method: "POST", headers: { "Content-Type": "application/json" }, body })
+        .then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          lastSaved.current = body;
+          setMigrating(false);
+          setSaveState("saved");
+        })
+        .catch(() => setSaveState("error"));
+    }, 600);
+    return () => clearTimeout(t);
+  }, [hydrated, loadFailed, checklists, titles]);
+
+  // The browser's own guard, for the 600ms a change has not reached Postgres.
+  useEffect(() => {
+    if (saveState !== "saving" && saveState !== "error") return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [saveState]);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   /** Apply a patch to one item wherever it lives, without knowing its list. */
@@ -278,6 +383,34 @@ export default function Todo() {
           <span style={{ fontSize: 17, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>Personal · To-Do</span>
           <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.85, fontFamily: "var(--font-mono)" }}>
             {checked}/{total} done · {pct}%
+          </span>
+          {/* Where the board lives, said out loud. It used to be this browser
+              only, so "is this actually saved" is a fair question to answer on
+              screen rather than in a tooltip. */}
+          <span
+            title={
+              loadFailed
+                ? "Could not reach the database — you are looking at this browser's cached copy and nothing is being saved."
+                : "Saved to Postgres, so the board is the same on every device."
+            }
+            style={{
+              fontSize: 12, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase",
+              padding: "3px 9px", borderRadius: 999,
+              border: `1px solid ${rgba(
+                loadFailed || saveState === "error" ? HOME_THEME.orange : HOME_THEME.cyan,
+                0.45,
+              )}`,
+              color: loadFailed || saveState === "error" ? HOME_THEME.orange : HOME_THEME.cyan,
+              opacity: 0.9,
+            }}
+          >
+            {loadFailed
+              ? "Offline · cached"
+              : saveState === "error"
+                ? "Save failed"
+                : saveState === "saving"
+                  ? migrating ? "Moving to database…" : "Saving…"
+                  : "Saved"}
           </span>
         </div>
         <button style={btnPrimary} onClick={() => setShowCreate(true)}>

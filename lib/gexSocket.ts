@@ -125,9 +125,20 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let closeTimer: ReturnType<typeof setTimeout> | null = null;
 let rescopeTimer: ReturnType<typeof setTimeout> | null = null;
 let connectWatchdog: ReturnType<typeof setTimeout> | null = null;
+let healthyTimer: ReturnType<typeof setTimeout> | null = null;
 let attempts = 0;
 /** Date.now() of the last frame actually received on the live socket. */
 let lastFrameAt = 0;
+/** Date.now() the live socket reached OPEN — 0 if it never got there. */
+let openedAt = 0;
+/** Frames received on the live socket. 1 = "the connect snapshot and nothing else". */
+let framesThisSocket = 0;
+/**
+ * Consecutive connections that opened and then died without proving themselves.
+ * Drives the BROKEN_TRANSPORT_FLOOR_MS escalation; cleared by any connection
+ * that survives HEALTHY_CONNECTION_MS.
+ */
+let shortLivedStreak = 0;
 
 /**
  * The topic scope the LIVE connection was opened with: a sorted CSV, or null
@@ -170,6 +181,55 @@ const RESCOPE_NARROW_DEBOUNCE_MS = 1200;
 const CLOSE_GRACE_MS = 500;
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30_000;
+
+/**
+ * How long a connection must SURVIVE before its backoff credit is restored.
+ *
+ * WHY THIS EXISTS (2026-08-31, the 53GB/day Cloudflare bill).
+ * `attempts = 0` used to live in `onopen`, which assumes "the handshake
+ * succeeded" means "the connection works". Twice now it has not:
+ *
+ *   open   @136ms
+ *   msg    @183ms   snapshot, 218,529 bytes
+ *   close  @183ms   code 1006, wasClean=false
+ *
+ * The 101 succeeds, the server hands over the full connect snapshot, and the
+ * socket is reset in the same millisecond — so every single retry reset the
+ * backoff to its first rung and this "exponential" backoff was a flat 2s loop,
+ * forever, at 218KB a go. That is 6.5MB/min PER OPEN TAB (9.4GB/day), and the
+ * server's own accounting confirmed the shape of it: 99.96% of all /ws/gex
+ * egress was connect snapshots, with `clients: 0` — nobody was ever actually
+ * connected, everyone was looping.
+ *
+ * So: a connection earns back its backoff credit by staying up, not by opening.
+ * Under a healthy server this changes nothing (sockets live for hours). Under a
+ * broken transport the retry curve actually climbs, which is the whole point.
+ */
+const HEALTHY_CONNECTION_MS = 10_000;
+
+/**
+ * Consecutive open-then-die connections before we treat the transport itself as
+ * broken and stop paying full price for the discovery.
+ *
+ * A socket that opens, takes the snapshot and dies is the most expensive failure
+ * mode there is — it costs the FULL connect payload and delivers nothing. Three
+ * in a row is not a blip, it is a broken pipe (tunnel, edge, proxy), and no
+ * retry cadence we can pick will fix it from in here. Back off hard and let the
+ * wake handlers (visibilitychange / online / focus) provide the fast path back
+ * the moment it is actually repaired.
+ */
+const BROKEN_TRANSPORT_STREAK = 3;
+const BROKEN_TRANSPORT_FLOOR_MS = 60_000;
+
+/**
+ * Up to +30% random padding on every retry delay.
+ *
+ * Every open tab of this app runs the same timer against the same server. When
+ * the backend blinks they all fail together, all schedule the same delay, and
+ * all come back in the same instant — a self-inflicted thundering herd on top of
+ * whatever the original fault was. Jitter smears them out.
+ */
+const RECONNECT_JITTER = 0.3;
 
 /**
  * How long a socket may sit in CONNECTING before we give up on it.
@@ -248,12 +308,26 @@ function clearReconnect() {
   }
 }
 
+function clearHealthyTimer() {
+  if (healthyTimer) {
+    clearTimeout(healthyTimer);
+    healthyTimer = null;
+  }
+}
+
 function scheduleReconnect() {
   if (!subscribers.size) return;
   clearReconnect();
   // Exponential backoff, capped. The old per-consumer sockets each retried on a
   // flat 2-2.5s forever, so a backend outage meant N sockets hammering it.
-  const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempts);
+  let delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempts);
+  // Transport is open-then-die (see BROKEN_TRANSPORT_STREAK): every retry costs
+  // a full connect snapshot and returns nothing, so stop paying 30s-often for
+  // an answer that is not going to change without a server-side fix.
+  if (shortLivedStreak >= BROKEN_TRANSPORT_STREAK) {
+    delay = Math.max(delay, BROKEN_TRANSPORT_FLOOR_MS);
+  }
+  delay = Math.round(delay * (1 + Math.random() * RECONNECT_JITTER));
   attempts += 1;
   reconnectTimer = setTimeout(openSocket, delay);
 }
@@ -304,6 +378,11 @@ function reopenWithScope() {
   clearRescope();
   clearReconnect();
   clearConnectWatchdog();
+  clearHealthyTimer();
+  // This close is ours, not a failure — it must not feed the broken-transport
+  // streak, so the per-socket counters are cleared before the detach below.
+  openedAt = 0;
+  framesThisSocket = 0;
   lastByType.clear();
   const sock = socket;
   socket = null;
@@ -423,7 +502,18 @@ function openSocket() {
   sock.onopen = () => {
     if (socket !== sock) return;
     clearConnectWatchdog();
-    attempts = 0;
+    // NOT `attempts = 0` — see HEALTHY_CONNECTION_MS. Opening is not working.
+    // The credit is restored on a timer, and only if this socket is still the
+    // live one and still OPEN when it fires.
+    openedAt = Date.now();
+    framesThisSocket = 0;
+    clearHealthyTimer();
+    healthyTimer = setTimeout(() => {
+      healthyTimer = null;
+      if (socket !== sock || sock.readyState !== WebSocket.OPEN) return;
+      attempts = 0;
+      shortLivedStreak = 0;
+    }, HEALTHY_CONNECTION_MS);
     lastFrameAt = Date.now();
     // Flush before emitStatus so a consumer re-asserting state in its onStatus
     // handler lands AFTER anything queued while we were down (last write wins).
@@ -437,6 +527,7 @@ function openSocket() {
   sock.onmessage = (evt) => {
     if (socket !== sock) return;
     lastFrameAt = Date.now();
+    framesThisSocket += 1;
     let msg: GexMessage;
     // Parsed ONCE for all subscribers (previously once per socket per frame).
     try {
@@ -466,6 +557,21 @@ function openSocket() {
   sock.onclose = () => {
     if (socket !== sock) return;
     clearConnectWatchdog();
+    clearHealthyTimer();
+    // Classify the death before wiping the per-socket counters. `openedAt === 0`
+    // means the handshake never completed — that is a plain connect failure and
+    // costs nothing, so it rides the ordinary exponential curve. The expensive
+    // one is open -> snapshot -> 1006, which is what this streak counts.
+    if (openedAt) {
+      const lifetime = Date.now() - openedAt;
+      if (lifetime < HEALTHY_CONNECTION_MS && framesThisSocket <= 1) {
+        shortLivedStreak += 1;
+      } else if (lifetime >= HEALTHY_CONNECTION_MS) {
+        shortLivedStreak = 0;
+      }
+    }
+    openedAt = 0;
+    framesThisSocket = 0;
     socket = null;
     currentScope = null;
     emitStatus(false);
@@ -496,7 +602,12 @@ function handleWake() {
   if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
   if (!subscribers.size) return;
 
-  // A wake is not a failure: never make the user wait out the old backoff.
+  // A wake is not a failure: never make the user wait out the old backoff. This
+  // is also the fast path back from BROKEN_TRANSPORT_FLOOR_MS — the moment the
+  // pipe is fixed, looking at the page reconnects immediately instead of waiting
+  // out the floor. `shortLivedStreak` is deliberately NOT cleared here: a wake
+  // buys one immediate attempt, not a fresh licence to loop, so if the transport
+  // is still broken the next failure lands straight back on the floor.
   attempts = 0;
   clearReconnect();
   dropDeadSocket();
@@ -527,7 +638,11 @@ function teardown() {
   clearReconnect();
   clearRescope();
   clearConnectWatchdog();
+  clearHealthyTimer();
   lastFrameAt = 0;
+  openedAt = 0;
+  framesThisSocket = 0;
+  shortLivedStreak = 0;
   // The next connection recomputes its own scope from whoever is mounted then.
   currentScope = null;
   const sock = socket;

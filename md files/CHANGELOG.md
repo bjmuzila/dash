@@ -1,5 +1,178 @@
 # Changelog
 
+## 2026-08-31 - WebSocket reconnect storm: the 53GB/day Cloudflare bill
+
+Cloudflare egress hit 53GB in 24h. It was not the feed. `/proxy/self-metrics`
+reported `clients: 0` alongside 19.3MB/min of outbound, and the all-time split
+was `snapshot: 382,852,473` bytes against `gex: 139,369` / `flow: 219` - 99.96%
+of every byte /ws/gex has ever sent was the connect-time snapshot. Nobody was
+ever connected. Everybody was looping.
+
+Probed from a browser against the live socket, 5/5 identical:
+
+    open   @136ms
+    msg    @183ms   type=snapshot   218,529 bytes
+    close  @183ms   code 1006, wasClean=false
+
+The 101 succeeds, the full 218KB snapshot is delivered, the socket is reset in
+the same millisecond. `?topics=spot,status` (1.3KB snapshot) dies the same way at
++1ms, so it is not payload size, and `ws.extensions` is `""` - permessage-deflate
+is not negotiated, so this is NOT the 2026-08-21 `WS_DEFLATE` bug. Same symptom,
+different cause. Server uptime advances normally across the deaths, so the
+process is not crash-looping; the sockets are. Path is CF edge -> cloudflared ->
+127.0.0.1 with no nginx hop, and nothing in `websocket-server.js` terminates a
+fresh socket, so the reset is upstream of Node.
+
+That is the bug. This entry is about the amplifier, which is what turned it into
+a bill.
+
+`lib/gexSocket.ts` reset `attempts = 0` inside `sock.onopen`, i.e. it treated "the
+handshake succeeded" as "the connection works". Since the handshake succeeds
+every time here, the exponential backoff never left its first rung: a flat 2s
+retry, forever, at 218KB a go. 6.5MB/min per open tab, 9.4GB/day per open tab.
+
+Changed, client-side only, no server or proxy changes:
+
+- Backoff credit is now earned by SURVIVING, not by opening. `onopen` arms a
+  `HEALTHY_CONNECTION_MS` (10s) timer and only zeroes `attempts` if the socket is
+  still the live one and still OPEN when it fires.
+- Broken-transport escalation. Three consecutive connections that open and then
+  die inside 10s having delivered <=1 frame (the snapshot and nothing else) floor
+  the retry at `BROKEN_TRANSPORT_FLOOR_MS` (60s). Any connection that survives 10s
+  clears the streak.
+- +0..30% jitter on every retry delay, so N tabs failing together stop coming
+  back in the same instant.
+- The wake handlers (visibilitychange / pageshow / online / focus) stay the fast
+  path back: a wake still reconnects immediately, so a repaired transport
+  recovers on the next glance instead of waiting out the floor. The streak is
+  deliberately not cleared there - a wake buys one attempt, not a fresh licence
+  to loop.
+- Handshakes that never complete are unaffected: `openedAt === 0` means the
+  socket never opened, which costs nothing and rides the ordinary curve.
+
+Simulated against the observed failure (open -> 1 snapshot -> die @50ms), per
+open tab over 24h: 42,147 reconnects / 9.21GB before, 1,441 / 0.31GB after -
+29x. At the ~5-6 tabs the 53GB implies, that is ~53GB -> ~2GB while the
+transport is still broken.
+
+Under a healthy server this is a no-op: sockets live for hours, the 10s timer
+fires, the curve resets exactly as before.
+
+Still open: who sends the RST. Next step is the loopback probe inside the
+container (the one that isolated the deflate outage, where CF and the tunnel are
+not in the path) plus `docker logs bzila-dashboard 2>&1 | grep '\[WS\]'` for the
+`socket error` line that `ws.on('error')` was added to catch.
+
+## 2026-08-31 - August written up, and linked from Real Month
+
+Wrote the August 2026 statement review and put it where the data is rather than
+in a chat log: `owner-vite/public/reports/2026-08.html`, linked from the Real
+Month view switch as "Aug '26 report".
+
+The tab shows what happened; the review says what it meant - the $5,151.50
+outflow ranked by category (after the Flex-gas correction), the fuel line spelled
+out ($510.15 filed over 38 Sheetz stops, minus $370 Flex, $140.15 real), daily
+outflow with the rent day carrying 45% of the month, every category against its
+own Jan-Jun average, and seven ranked things to fix.
+
+The headline it exists to make: the month reads as -$498.97, but Flex earned
+$1,949 across 26 days while only $1,042 of Flex money reached the account inside
+August. That is a deposit-timing gap, not overspending - discretionary spending
+was at or near a record low (Dining Out -76%, Online Shopping -63%).
+
+Mechanics: a static page under `public/`, so nginx's `try_files $uri` serves the
+real file before the SPA fallback ever sees the path - no route, no build step,
+no backend. The link is driven by a `MONTH_REPORTS` map keyed YYYY-MM and only
+renders for a month that has one; a dead link to a review nobody wrote is worse
+than no link. Next month is one line plus the file.
+
+## 2026-08-31 - Sales: who signed up and did not buy
+
+The Sales page could answer "how much did we make" and "who is paying". It
+could not answer the question a day with four new accounts and zero sales
+actually raises: who were the four. An account exists the moment someone sets a
+password; paying is a separate act, and the gap between the two was the one
+funnel step nothing on this dashboard could see.
+
+New owner-gated route `/api/admin/signups` (`server-v2/api-router.js`): the
+users table LEFT JOINed to `subscriptions` and to a per-user session rollup,
+windowed by `?days=1|7|30|0`. The unpaid filter runs in JS against
+`libDb.PAID_STATUSES` rather than as a status list in the WHERE clause, so it
+stays the same test `/pricing` gates on and cannot drift from it - nobody the
+app already treats as a customer can appear on this list.
+
+Each row is then enriched from `page_visits`, because a name without a story is
+not actionable. Attribution columns are read with `FILTER (WHERE is_entry)`,
+per that table's design note: they are only written on a session's first beacon,
+so reading them off every row would report one Google visit as twenty. The
+enrichment is wrapped - a schema drift there degrades to a plain list of names
+rather than 500ing the answer.
+
+The panel (`owner-vite/src/pages/Sales.tsx`) sits directly under the KPI row,
+above the profit chart: below the fold is the wrong place for the thing you
+open the page for on a bad day. It self-fetches on its own range so the rest of
+the dashboard never waits on it.
+
+The column that does the work is "Got as far as", which sorts every name into
+the follow-up it deserves:
+
+- **Never saw pricing** - made an account, never opened the pricing page. They
+  may not know there is anything to buy.
+- **Saw pricing** - looked at the cost and did not proceed.
+- **Reached checkout** - a Stripe customer id exists or they hit /checkout.
+  The warmest name on the list.
+- **Payment failed** - `past_due` / `unpaid`. A billing fix, not a sales problem.
+- **Cancelled** - subscribed once, gone now.
+
+Alongside it: verified-email dot, Discord handle, where they came from (utm →
+referrer host → channel → direct), page views, last seen, and location. A
+summary line carries created / became customers / still unpaid / saw pricing /
+reached checkout / never came back, and a Copy emails button puts the whole
+list on the clipboard for follow-up.
+
+## 2026-08-31 - Owner To-Do moves off localStorage into Postgres
+
+The Personal · To-Do board was localStorage-only. That meant it existed on
+exactly one browser on one machine, was invisible from the phone, and would
+vanish the next time site data was cleared - a to-do list that can silently
+delete itself is not a to-do list.
+
+Two tables in `_lib-db.cjs`: `owner_todo_item` (one row per item; the client's
+generated `c_xxxx` id IS the primary key, so a drag, a rename and a reload all
+address the same row with no id remapping) and `owner_todo_list` for the four
+renameable headings. `sort_order` is the position WITHIN `list_key`, which is
+what makes a reorder survive a refresh.
+
+New owner-only route `/api/owner/todo`, GET and POST. Whole-document rather
+than a route per gesture: the page holds one object and tick / drag / rename /
+reorder all rewrite it, so per-gesture endpoints would be a dozen routes racing
+each other over the same ordering. A POST without an explicit `items` array is
+a 400, never "the board is empty now".
+
+`replaceOwnerTodo` upserts every item and THEN deletes what is no longer in the
+document - deliberately not delete-then-insert, which leaves a window where the
+table is empty and a read landing in it (or a crash inside it) shows an empty
+board, the exact failure the table exists to prevent.
+
+Client (`owner-vite/src/pages/Todo.tsx`) loads from the API and saves on a
+600ms debounce, skipping the post when the serialized board is unchanged. Two
+guards worth naming:
+
+- **Migration is one-way and one-shot.** A first load that comes back with zero
+  items while localStorage still holds a board is the pre-database state: the
+  local copy is adopted and pushed up. A board that already exists server-side
+  always wins.
+- **A failed read disables saving.** localStorage is kept as an offline cache,
+  but writing that cache over the database after a failed GET is how a board
+  gets rolled back to whatever the last-used browser happened to hold. On a
+  read failure the page shows the cache, says "Offline · cached", and writes
+  nothing.
+
+The header carries a Saved / Saving… / Save failed / Offline · cached pill, and
+a beforeunload guard covers the 600ms a change has not reached Postgres yet.
+The v1 `hub_checklists` / `hub_pillar_titles` / `hub_tasks` keys are still left
+alone - the old five-pillar shape does not map onto these four lists.
+
 ## 2026-08-31 - Sheetz minus Flex gas is a READ, not an import step
 
 Answering the question directly: it was not happening on import OR on read,

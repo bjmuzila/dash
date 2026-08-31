@@ -302,6 +302,21 @@ function mKey(v: string): string {
 }
 /** Whether a category edit spreads to every month. See the state comment. */
 const ALL_MONTHS_KEY = "budget:real:cat-all-months";
+
+/**
+ * Written-up month reviews, keyed YYYY-MM.
+ *
+ * The tab shows what happened; a review says what it MEANT — where the month
+ * went, what moved against its own average, what to do about it. That is a
+ * piece of writing, not a computed panel, so it lives as a static page under
+ * owner-vite/public/reports/ and this is the index. nginx serves a real file at
+ * that path before the SPA fallback sees it, so the link just works.
+ *
+ * Adding next month's review is one line here plus the file.
+ */
+const MONTH_REPORTS: Record<string, string> = {
+  "2026-08": "/reports/2026-08.html",
+};
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
@@ -1154,6 +1169,28 @@ export default function RealMonth({
             <button key={k} onClick={() => setView(k)} style={pill(view === k)}>{l}</button>
           ))}
           <div style={{ flex: 1 }} />
+          {/* Only rendered for a month that actually has one — a dead link to a
+              review nobody wrote is worse than no link. */}
+          {MONTH_REPORTS[month] && (
+            <a
+              href={MONTH_REPORTS[month]}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`Read the written review of ${monthLabel(month)} — where it went, what moved, what to fix`}
+              style={{
+                ...ghost(),
+                textDecoration: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 7,
+                color: ACCENT,
+                borderColor: rgba(ACCENT, 0.45),
+                background: rgba(ACCENT, 0.08),
+              }}
+            >
+              {monthLabel(month)} report ↗
+            </a>
+          )}
           <button onClick={() => void clearMonth()} disabled={saving} style={{ ...ghost(), color: HOME_THEME.red, borderColor: rgba(HOME_THEME.red, 0.35) }}>
             Clear {monthLabel(month)}
           </button>
