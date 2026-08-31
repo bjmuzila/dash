@@ -41,13 +41,15 @@ export interface ChartDrawOpts {
   /** Master on/off for the bubble layer. */
   on: boolean
   /**
-   * Pin the bubble bucket to a rung, in minutes, or null to let the pane choose.
+   * Pin the bubble bucket to a rung, in minutes, or null to follow the BAR
+   * INTERVAL (the default — see reportBucket).
    *
-   * The chart owns this rather than the model because the auto answer is a
-   * question about PIXELS — how much room a dot has — and the model has no idea
-   * how wide the pane is. Pinning short-circuits that measurement; it does NOT
-   * short-circuit the stride, so a pinned 1m on a whole session still draws
-   * every Nth bucket and lands on the picture auto would have drawn anyway.
+   * The chart owns this rather than the model because the model does not know
+   * the interval and cannot measure the pane. A pin overrides the bucket only;
+   * it does NOT override the stride, and it additionally loosens the stride's
+   * spacing target to BUBBLES.pinnedPxPerDot — which is the "I asked for the
+   * detail and I accept the crowding" bargain, and is why it must stay tied to
+   * an explicit pin rather than applying to the interval-driven default.
    */
   bucketMin: 1 | 5 | null
   /**
@@ -141,6 +143,11 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   const muted = cssVar(container, '--color-muted', '#ffffff')
   const up = cssVar(container, '--color-candle-up', '#30d158')
   const down = cssVar(container, '--color-candle-down', '#ff5b5b')
+  // `pos` / `neg` are the SATURATED sign colours and are the glow only; the
+  // `-hot` pair are the pale tints every mark is filled with. See BubblePalette
+  // in bubbles.ts. Both pairs still come from tokens.css — the marks are white
+  // with a tint because of how they are USED, not because a lighter colour was
+  // hardcoded here.
   const palette: BubblePalette = {
     pos: hexToRgb(cssVar(container, '--color-gex-pos', '#29b6f6'), [41, 182, 246]),
     posHot: hexToRgb(cssVar(container, '--color-gex-pos-hot', '#c8f5ff'), [200, 245, 255]),
@@ -667,11 +674,17 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     // the click by reportBucket(). The draw loop's only remaining size decision
     // is the stride, which drawBubbles measures for itself.
     //
-    // `true`: the bucket is always a chosen cadence now (the interval, or the
-    // 1m/5m override), never one the pane picked, so it always strides against
-    // BUBBLES.pinnedPxPerDot. Measuring it against the legible target instead is
-    // what used to make a finer bucket land on the same dots as a coarser one.
-    const drew = drawBubbles(ctx, snaps, geo, palette, drawOpts.bubbleScale, true)
+    // The last argument is the PIN, and it must stay the pin. It loosens the
+    // stride to BUBBLES.pinnedPxPerDot (2.5px), and for a few hours this said
+    // `true` unconditionally, on the theory that an interval-driven bucket is a
+    // chosen cadence too. It is — but the loosened stride is a size decision,
+    // not a cadence one: at 2.5px a 1m bucket keeps every minute, the spacing
+    // bound (capOfSpacing x pxPerDot) then crushes every mark onto minPx, and on
+    // any window past ~2h all four rows of a bucket drew at 1.2px. That is the
+    // whole size signal gone. The interval still moves the bubbles either way,
+    // because the BUCKET is what changed; the stride only decides how many of
+    // them are legible, and 11px is the answer to that.
+    const drew = drawBubbles(ctx, snaps, geo, palette, drawOpts.bubbleScale, drawOpts.bucketMin != null)
     reportOutOfRange(!drew)
   }
   raf = requestAnimationFrame(draw)

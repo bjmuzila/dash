@@ -1,5 +1,141 @@
 # Changelog
 
+## 2026-08-31 - GEX Candles: the leader-to-4th-row size spread, widened to the approved picture
+
+Edited: `cbedge-v3/src/board/gexCandles/settings.ts`.
+Preview: `generated/2026-08-31-gex-bubble-sizes.png` (rendered with the real
+clamped `sizeFor` arithmetic at five zoom/interval combinations, not sketched).
+
+The colour study approved earlier today drew the marks from the raw profile with
+NO spacing clamp, which is why its rows stepped down so hard: top 20.2px against
+a 4th row of 5.1px, a 3.98x spread. The chart could not reach that at any
+ordinary zoom, and `topOfSpacing` was the reason.
+
+`topOfSpacing` is the leader's share of the measured gap between two dots, and
+it clips the leader before anything else clips the peers. At 0.38 against a
+`capOfSpacing` of 0.28 the leader could never draw more than 1.36x the peers'
+bound however big its gamma was — so the profiles' own `topBoost` (1.42-1.6) was
+being thrown away at every zoom where the spacing bound bound, which is most of
+them. Raised to **0.44**, the ratio is 1.57 and the boost finally lands.
+
+Three numbers, measured across a 770px plot (radius px, four rows of a bucket):
+
+| window · bars | before | after |
+|---|---|---|
+| 70min · 5m  | 20.15 / 5.06 = **3.98x** | 20.15 / 4.51 = **4.46x** |
+| 150min · 5m | 9.75 / 2.80 = **3.49x**  | 11.14 / 2.64 = **4.21x** |
+| 150min · 1m | 5.85 / 1.99 = **2.93x**  | 6.78 / 1.95 = **3.47x** |
+| 390min · 5m | 7.50 / 2.30 = **3.26x**  | 8.57 / 2.24 = **3.82x** |
+| 390min · 1m | 4.50 / 1.74 = **2.59x**  | 5.14 / 1.71 = **3.01x** |
+
+- `topOfSpacing` 0.38 -> **0.44**. Not higher: 0.5 is where consecutive leaders
+  TOUCH, and at 0.44 a leader's diameter is ~0.88 of the spacing — a visible
+  hairline between one bucket and the next. No hairline is the sausage this bound
+  exists to prevent. If it ever needs to go further, the honest lever is the
+  stride (`bucketPxPerDot`), which BUYS room rather than spending room that is
+  not there.
+- `sizeCurve` 0.72 -> **0.75**, deliberately on the documented ceiling. Past it
+  the law is linear again and everything under the leader collapses onto the
+  floor — two sizes instead of four, for the opposite reason.
+- `floorOfCap` 0.18 -> **0.14**, to drop the 4th row the rest of the way. At the
+  wider zooms `minPx` (1.2) is what binds, not this.
+
+The 1m rows still land lower than the 5m ones (3.0-3.5x against 3.8-4.5x). That
+is the geometry, not a miss: a 1m bucket owns a fifth of the pixels a 5m bucket
+does at the same zoom, the stride hands some of them back, and `minPx` catches
+the 4th row first. The big picture is what 5m bars draw, which is the default.
+
+
+## 2026-08-31 - GEX Candles: the bubbles are white with a tint, not blue and red dots
+
+Edited: `cbedge-v3/src/board/gexCandles/bubbles.ts`, `settings.ts`, `chart.ts`.
+Preview: `generated/2026-08-31-gex-bubble-tint.png`.
+
+Every mark is now filled with the PALE token (`--color-gex-pos-hot` `#c8f5ff` /
+`--color-gex-neg-hot` `#ffcdd2`) — white with a cool or warm cast. The saturated
+`--color-gex-pos` / `-neg` are no longer used as a fill anywhere; they appear
+only in the glow under the bucket's leader, where the full-strength colour reads
+as a halo around a bright mark instead of as the mark itself. Both pairs still
+come from tokens.css: the marks are white because of how the tokens are USED, not
+because a lighter colour was hardcoded in the renderer.
+
+A saturated blue-and-red ladder reads as two categories competing with the
+candles behind it. Size is the signal this layer carries, and size is easiest to
+judge between marks of the same colour.
+
+Three supporting numbers, all in the frozen `BUBBLES` block:
+
+- `topTint: 0.45` — how much whiter the LEADER's core is than its peers'. Small
+  on purpose, since the leader already has the size boost, the white ring and the
+  glow. It exists because the two hot tints are not equally light (`#c8f5ff` is
+  nearly white already, `#ffcdd2` is not), and without it the negative leader
+  read as the reddest mark on the chart at the moment it should read as the
+  brightest.
+- `glowAlpha: 0.6`, multiplied by age — was an un-named `0.95` in the draw call.
+  At 0.95, under a core the age fade had made translucent, the halo showed
+  THROUGH the mark. That is the "white outline, red inside" leader: a pale pink
+  fill at ~0.75 alpha over a near-opaque red shadow.
+- `fade` 0.45 → 0.30 and `ageKeep` 0.75 → 0.85. These multiply, so the weakest
+  mark in the oldest bucket was drawing at 0.41 of a near-white fill — over this
+  background that is grey, and a grey mark has no sign. Opacity was carrying rank
+  alongside size back when the fill was saturated and stayed legible at half
+  strength; it no longer can, and size still ranks.
+
+`BubblePalette` is documented with the new contract (`pos`/`neg` = glow only,
+`-hot` = the fill) and its shape is unchanged, so `tools/bubble-lab` still drives
+the same renderer.
+
+
+## 2026-08-31 - GEX Candles: full audit, and the stride regression from this morning
+
+Edited: `cbedge-v3/src/board/gexCandles/chart.ts`, `settings.ts`, `bubbles.ts`.
+Added: `md files/GEX-CANDLES-AUDIT-2026-08-31.md`.
+
+**The bug I shipped this morning.** Moving the bubble bucket onto the bar
+interval was right; passing `pinned = true` to `drawBubbles` along with it was
+not. That flag loosens the stride to `pinnedPxPerDot` (2.5px), and the stride is
+a SIZE decision as much as a density one — marks are capped at `capOfSpacing`
+(0.28) of the spacing they are strided to, with `minPx` (1.2) underneath. Below
+~4.3px per drawn dot the cap has already fallen to the floor and every row of a
+bucket draws identically.
+
+Measured with the real `sizeFor` arithmetic, 770px plot, 1m bars, radius in px:
+
+| window | 2.5px target (shipped) | 11px target (now) |
+|---|---|---|
+| 2.5 h | top 1.95 / 4th 1.26 | top 5.85 / 4th 1.99 |
+| 6.5 h | top 1.50 / 4th 1.20 | top 4.50 / 4th 1.74 |
+| 13 h  | top 1.20 / 4th 1.20 | top 4.50 / 4th 1.74 |
+
+At 13h every bubble on the chart was the same 1.2px dot. It also explains why the
+`sizeCurve` 0.62 → 0.72 and `floorOfCap` 0.25 → 0.18 tuning from the same morning
+looked inert: the spacing bound was holding the cap at ~1.4px against a 1.2px
+floor, so the curve had 0.2px of range to work in.
+
+`drawBubbles` now gets `drawOpts.bucketMin != null` again, so the loose stride
+belongs to the explicit 1m/5m pin and the interval-driven default strides against
+the legible 11px. The interval picker still visibly moves the bubbles, because
+what the interval changes is the BUCKET, not the stride: at a 2.5h window 1m
+draws every 3rd minute at 5.85px and 5m every 5th at 9.75px. Different dots,
+different sizes, both legible. `ChartDrawOpts.bucketMin`'s doc — which still
+described the pane-picked rule that was removed this morning — is corrected too.
+
+**The audit.** `md files/GEX-CANDLES-AUDIT-2026-08-31.md` covers the card, chart,
+bubbles, rail, settings, the client data layer and the three `server-v2` routes
+plus the `spot` frame, verified with `tsc --noEmit` under the repo's real strict
+config (0 errors). Six P0s where the card draws data that is silently wrong
+rather than visibly broken — `useQuery` has no sequence guard so a superseded
+response overwrites the current one; the one reframe a symbol switch gets is
+spent on the previous symbol's bars; the invented forming bar is not cleared on a
+symbol change, so one instrument's price lands on another's series; `weekendExpiry`
+is frozen at mount, so a card left open over a weekend draws Friday's gamma over
+Monday's candles; `liveGex` reads the status frame one level too high, so
+`SET_EXPIRY` is never sent; and RTH + 1h admits 15:30-16:29. Plus every server
+failure returning 200 with empty rows (a backend outage renders as "No candles
+recorded yet"), an unbounded `heatmapCache`, and a heatmap query with no
+supporting index. Nothing outside the stride fix was changed.
+
+
 ## Monday 8/31/2026 - Comped users were 401'd out of every API: ws-auth was missing the comp_access join
 
 The real cause of the ICT `Couldn't load today's plays: Error: HTTP 401` a

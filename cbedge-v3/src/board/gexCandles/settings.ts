@@ -154,8 +154,12 @@ export const DEFAULT_SETTINGS: ChartSettings = {
  *   4-10 strikes, 1 a side     rank by |netGex|, force one above spot and one
  *                              below, then fill from the ranking.
  *   grow with net GEX          r = floor + sqrt(|gex| / windowMax) x (cap-floor)
- *   the top strike stands out  the bucket's largest gets x1.38, a white ring
- *                              and a bright core - about 18px against 7px peers
+ *   white marks, tinted by sign every mark is filled with the pale hot token,
+ *                              not the saturated one; the sign is a cool or warm
+ *                              cast and the full-strength colour appears only in
+ *                              the leader's glow
+ *   the top strike stands out  the bucket's largest gets the size boost, a white
+ *                              ring, a whiter core (topTint) and that glow
  *   old dots survive           never below minPx, and age only fades opacity a
  *                              little
  *   no overlap if possible     same-bucket neighbours shrink toward the floor,
@@ -197,31 +201,46 @@ export const BUBBLES = {
    */
   bucketRungsMin: [1, 5],
   /**
-   * The legible spacing target. NO LONGER PICKS THE BUCKET — the bar interval
-   * does — and nothing reads this now that the stride always measures against
-   * `pinnedPxPerDot`. Kept as the documented number for what "far enough apart
-   * to read a size off" means: 2 x minLegiblePx x a typical topBoost, plus the
-   * hairline.
+   * THE STRIDE TARGET: the spacing the drawn dots are thinned to. It no longer
+   * picks the bucket (the bar interval does) but it is still the number that
+   * decides how many of those buckets are drawn, and therefore how big they are.
+   *
+   * Set from the SMALLEST legible mark, not a full-size one: 2 x minLegiblePx x
+   * a typical topBoost, plus the hairline. At ~11px a mark can still be told
+   * apart from its neighbour AND `capOfSpacing` leaves it a real radius to vary
+   * within — which is the whole point, because size is the signal.
+   *
+   * WHY IT IS NOT SMALLER. `capOfSpacing` (0.28) sizes every mark off the
+   * EFFECTIVE spacing, and `minPx` (1.2) is the hard floor underneath. Below
+   * ~4.3px per drawn dot the cap has fallen to the floor and every row of the
+   * bucket draws at 1.2px: four levels, one size, no ranking. Measured across a
+   * 770px plot: at a 2.5px target a 1m bucket gives top 1.95px / 4th 1.26px on a
+   * 2.5h window and 1.20px / 1.20px on a session. At 11px the same window gives
+   * 5.85 / 1.99 and a session 4.50 / 1.74. The spread survives.
+   *
+   * This does NOT make the interval picker inert. That used to be the trade —
+   * when AUTO also picked the bucket from the zoom, 1m and 5m collapsed onto the
+   * same rung and then onto the same dots. Now the bucket is the interval, so at
+   * a 2.5h window 1m draws every 3rd minute at 5.85px and 5m every 5th at
+   * 9.75px: different dots, visibly different sizes, both legible.
    */
   bucketPxPerDot: 11,
   /**
-   * The stride target: the spacing the drawn dots are thinned to.
+   * The same target for an explicitly PINNED bucket — the 1m / 5m tiles only.
    *
-   * The bucket is a CADENCE (the bar interval) and this is the LEGIBILITY bound
-   * underneath it — 975 samples do not fit in 1500px whatever anyone picked, so
-   * every Nth is drawn and each drawn dot is still one real bucket.
+   * A pin is somebody asking for sub-bar detail on a coarser chart, the same
+   * opt-in the Bubble size slider is, so its only remaining job is to stop the
+   * dots literally merging into a line — a spacing floor rather than a
+   * legibility target. At 2.5px a pinned 1m draws every minute down to a
+   * ~90-minute view and thins from there, and the marks shrink to fit.
    *
-   * It is deliberately a spacing floor rather than a legibility target. Striding
-   * against the legible 11px is what made a finer bucket land on the same dots
-   * as a coarser one: 1m strides to every Nth minute, 5m to every Nth/5, and the
-   * two draw the same picture at any zoom wider than about ninety minutes. That
-   * is indistinguishable from a broken control, and it was reported as one —
-   * twice, once for the 1m/5m tiles and once for the bar interval itself.
-   *
-   * At 2.5px a 1m bucket draws every minute down to a ~90-minute view and thins
-   * from there. The marks then shrink to fit, because `capOfSpacing` sizes them
-   * off the EFFECTIVE spacing — small and dense rather than fused, with the size
-   * slider there for anyone who wants to trade that back.
+   * DO NOT apply this to the interval-driven default. It was, for a few hours on
+   * 2026-08-31, on the reasoning that an interval-driven bucket is a chosen
+   * cadence too — and it is, but the loosened stride is a SIZE decision, not a
+   * cadence one. The result was the numbers above: every mark on the floor past
+   * a ~2h window, the size channel dead, and the sizeCurve / floorOfCap tuning
+   * that shipped the same morning completely inert because the spacing bound was
+   * what was binding.
    */
   pinnedPxPerDot: 2.5,
   /** The smallest radius a mark can have and still read as a mark. */
@@ -279,10 +298,13 @@ export const BUBBLES = {
    * the top at 100%, and on screen that is two sizes, not four. At 0.72 the 4th
    * is ~39% and the rows rank by eye. Paired with a lower `floorOfCap`.
    *
-   * Do not go past ~0.75. Beyond that the law is effectively linear again and
-   * everything below the leader collapses onto the floor.
+   * 0.75 (2026-08-31, later the same day): deliberately ON the ceiling below,
+   * because the requested picture is the one where the four rows step down
+   * hard. Do not go past it — beyond ~0.75 the law is effectively linear again
+   * and everything below the leader collapses onto the floor, at which point the
+   * ladder has two sizes instead of four for the opposite reason.
    */
-  sizeCurve: 0.72,
+  sizeCurve: 0.75,
   /**
    * The floor, as a fraction of whatever cap survived the spacing shrink.
    *
@@ -290,12 +312,13 @@ export const BUBBLES = {
    * range between the smallest mark and the largest — under a hairline of
    * separation once the ring is on.
    *
-   * 0.18 (2026-08-31): the other half of the `sizeCurve` bump. The floor is the
+   * 0.14 (2026-08-31): the other half of the `sizeCurve` bump. The floor is the
    * bottom of the range the curve spreads things over, so raising the exponent
    * alone only moves the marks a little — most of the budget was still spent
-   * before the smallest row got there. `minPx` is still the hard bottom.
+   * before the smallest row got there. `minPx` is still the hard bottom, and at
+   * the wider zooms it is what binds, not this.
    */
-  floorOfCap: 0.18,
+  floorOfCap: 0.14,
   /**
    * …and the profile is then SHRUNK to the room that actually exists.
    *
@@ -324,12 +347,23 @@ export const BUBBLES = {
    * zoom, where the profile cap binds instead of the spacing and the boost then
    * put 14px of radius into 15px of room.
    *
-   * 0.38 (2026-08-31): the leader is the row the spacing bound clips first, so
-   * at a tight zoom it was capped back to ~1.2x the peers' bound and the extra
-   * spread the curve bought below it stopped short of the top mark. Still well
-   * under the 0.5 limit.
+   * 0.44 (2026-08-31, later the same day). THIS is the number that sets the
+   * leader-to-4th-row spread, and it had been the thing holding it down: the
+   * leader is the row the spacing bound clips first, so at every ordinary zoom
+   * the boost was being thrown away and the top mark drew at
+   * `topOfSpacing / capOfSpacing` = 1.36x the peers' bound however big its gamma
+   * was. At 0.44 the ratio to `capOfSpacing` is 1.57, which is finally the
+   * profiles' own `topBoost` (1.42-1.6) — so the boost lands instead of being
+   * clipped, and the leader draws at 3.0-4.5x the 4th row across every zoom
+   * instead of 2.5-4.0.
+   *
+   * 0.44 and not higher, because 0.5 is where consecutive leaders TOUCH. At 0.44
+   * a leader's diameter is ~0.88 of the spacing: a visible hairline between one
+   * bucket and the next, and no hairline is the sausage. If this needs to go
+   * further the honest lever is the STRIDE (`bucketPxPerDot`), which buys room
+   * rather than spending room that is not there.
    */
-  topOfSpacing: 0.38,
+  topOfSpacing: 0.44,
   /** Absolute floor. Old dots never shrink past this, whatever the fit does. */
   minPx: 1.2,
 
@@ -342,21 +376,56 @@ export const BUBBLES = {
   jitterPx: 3,
 
   // ── Colour ───────────────────────────────────────────────────────────────
+  //
+  // WHITE MARKS WITH A TINT, not blue and red dots. Every mark is filled with
+  // the pale `--color-gex-*-hot` token; the saturated `--color-gex-pos` /
+  // `-neg` appear only in the leader's glow. See BubblePalette in bubbles.ts for
+  // why, and change the tints there rather than reintroducing a saturated fill.
+  /**
+   * How much whiter the LEADER's core is than its peers', 0..1 toward white.
+   *
+   * The leader has three other ways to stand apart — the size boost, the white
+   * ring and the glow — so this is deliberately small. It exists because the two
+   * hot tints are not equally light (`#c8f5ff` is nearly white already,
+   * `#ffcdd2` is not), and without it the negative leader read as the reddest
+   * mark on the chart at the exact moment it should read as the brightest.
+   */
+  topTint: 0.45,
   /** The weakest mark fades to 1 - fade. */
-  fade: 0.45,
-  /** The oldest bucket keeps this much of its opacity. Age reads, faintly. */
-  ageKeep: 0.75,
+  //
+  // 0.30, not the old 0.45. Opacity was carrying rank alongside size back when
+  // the fill was a saturated colour that stayed legible at half strength. A
+  // near-white mark at 0.55 alpha on this background is grey, and grey loses the
+  // tint that is now the only thing saying which sign it is. Size still ranks.
+  fade: 0.3,
+  /**
+   * The oldest bucket keeps this much of its opacity. Age reads, faintly.
+   *
+   * 0.85, not 0.75, for the same reason `fade` moved: the two multiply, so the
+   * weakest mark in the oldest bucket was drawing at 0.41 of a near-white fill —
+   * which over this background is grey, and a grey mark has no sign.
+   */
+  ageKeep: 0.85,
   /**
    * The glow under the top mark. Its ring width is per-rung, in `profiles`.
    *
-   * Both of these are CEILINGS, not amounts: the blur actually drawn is also
-   * held to the room left beside the mark once its own radius is taken out of
-   * the spacing, and at a tight zoom that room is zero and the glow simply does
-   * not draw. A 7px halo painted across a 2px gap is what turned the leader's
-   * row into one continuous sausage — the marks were clearing, the blur was not.
+   * `glowFactor` and `glowMaxPx` are CEILINGS, not amounts: the blur actually
+   * drawn is also held to the room left beside the mark once its own radius is
+   * taken out of the spacing, and at a tight zoom that room is zero and the glow
+   * simply does not draw. A 7px halo painted across a 2px gap is what turned the
+   * leader's row into one continuous sausage — the marks were clearing, the blur
+   * was not.
+   *
+   * `glowAlpha` is the strength of the saturated sign colour in that halo, and
+   * it was an un-named 0.95 in the draw call. At 0.95, under a core that the age
+   * fade has made translucent, the halo shows THROUGH the mark — which is how
+   * the negative leader came to look like a red dot with a white outline. It is
+   * also multiplied by age now, so an old leader's halo fades with the rest of
+   * it instead of outliving its own core.
    */
   glowFactor: 0.6,
   glowMaxPx: 7,
+  glowAlpha: 0.6,
 } as const
 
 /**

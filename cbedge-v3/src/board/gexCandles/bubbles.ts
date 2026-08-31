@@ -9,8 +9,9 @@
 // See BUBBLES in settings.ts for the seven rules this implements and the numbers
 // behind them. The short version: one bubble per bucket, last print wins; four
 // strikes with one forced on each side of spot; radius by sqrt of |gex| over the
-// window max; the bucket's biggest gets a boost and a white ring; same-bucket
-// neighbours shrink and then jitter rather than overlap; nothing is ever spliced.
+// window max; every mark is white with a tint for its sign; the bucket's biggest
+// gets a boost, a whiter core and a white ring; same-bucket neighbours shrink and
+// then jitter rather than overlap; nothing is ever spliced.
 //
 // ── WHY IT IS STAMPED AND NOT DRAWN ──────────────────────────────────────────
 //
@@ -184,11 +185,32 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
 
 // ── Drawing ──────────────────────────────────────────────────────────────────
 
+/**
+ * ── THE MARKS ARE WHITE; THE SIGN IS A TINT ──────────────────────────────────
+ *
+ * `pos` / `neg` are the SATURATED sign colours and are never used as a fill any
+ * more. They are the glow under the leader — the one place the full-strength
+ * colour appears, where it reads as a coloured halo around a bright mark rather
+ * than as the mark itself.
+ *
+ * `posHot` / `negHot` are the pale tints (`--color-gex-pos-hot` / `-neg-hot`,
+ * near-white with a cool or warm cast) and they are what every mark is actually
+ * filled with. A ladder of saturated blue and red dots reads as two categories
+ * competing with the candles behind them; a ladder of white dots with a tint
+ * reads as one instrument with a sign, which is what it is. Size is the signal,
+ * and size is easiest to judge between marks of the same colour.
+ */
 export interface BubblePalette {
   pos: [number, number, number]
   posHot: [number, number, number]
   neg: [number, number, number]
   negHot: [number, number, number]
+}
+
+/** Toward white. 0 = the colour untouched, 1 = pure white. */
+function toWhite(c: [number, number, number], t: number): [number, number, number] {
+  const k = clamp(t, 0, 1)
+  return [c[0] + (255 - c[0]) * k, c[1] + (255 - c[1]) * k, c[2] + (255 - c[2]) * k]
 }
 
 export interface BubbleGeometry {
@@ -472,12 +494,13 @@ export function drawBubbles(
   /** The Bubble size slider, 1 = the tuned default. See sizeFor. */
   scale = 1,
   /**
-   * True when the BUCKET is a chosen cadence rather than one the pane picked.
-   * It loosens the stride — see BUBBLES.pinnedPxPerDot.
+   * True only when the user PINNED the bucket with the 1m / 5m tiles. It
+   * loosens the stride to BUBBLES.pinnedPxPerDot, which trades size for density
+   * — read that constant before passing this.
    *
-   * Since the bucket follows the bar interval (chart.ts reportBucket) this is
-   * always true from the chart. The false branch is the old pane-picked rule and
-   * is kept only for the bubble lab, which drives this function directly.
+   * NOT true for the ordinary interval-driven bucket. The interval changes the
+   * bucket, which is what makes the picker visible; the stride is a separate,
+   * legibility question and its answer is BUBBLES.bucketPxPerDot.
    */
   pinned = false,
 ): boolean {
@@ -535,12 +558,17 @@ export function drawBubbles(
   // This is what makes any rung safe at any zoom: zoom in and the stride falls
   // back to 1 and every bucket is there again.
   //
-  // The target is a SPACING FLOOR, not the legible spacing (BUBBLES.bucketPxPerDot).
-  // Striding a chosen cadence against the legible target is what made the
-  // cadence controls do nothing: 1m strides to every Nth minute, 5m to every
-  // Nth/5, and both land on the same dots — so neither the 1m/5m tiles nor the
-  // bar interval changed anything on screen at any zoom wider than about ninety
-  // minutes. See BUBBLES.pinnedPxPerDot.
+  // The target is the LEGIBLE spacing (BUBBLES.bucketPxPerDot, 11px), not a bare
+  // "they don't touch" minimum, and that is a size decision as much as a density
+  // one: the marks are capped at `capOfSpacing` of the spacing they are strided
+  // to, so a smaller target buys more dots by making every one of them smaller,
+  // until they are all sitting on `minPx` and the four rows of a bucket are one
+  // size. Striding to a 2.5px floor did exactly that past a ~2h window.
+  //
+  // It no longer flattens the cadence controls, because the BUCKET is no longer
+  // chosen by the pane: a 1m bucket strided to 11px still draws different dots,
+  // at a different size, from a 5m bucket strided to 11px. Only an explicit PIN
+  // loosens this — see BUBBLES.pinnedPxPerDot.
   const strideTarget = pinned ? BUBBLES.pinnedPxPerDot : BUBBLES.bucketPxPerDot
   const stride = pxPerDot > 0 ? Math.max(1, Math.ceil(strideTarget / pxPerDot)) : 1
   // The profile is chosen for the EFFECTIVE cadence — the bucket as drawn, not
@@ -573,17 +601,26 @@ export function drawBubbles(
     for (const { mark: m, y, r, dx } of placeBucket(snap, geo, size)) {
       if (y < -20 || y > ph + 20) continue
       const positive = m.value >= 0
+      // The SATURATED sign colour. Glow only — see BubblePalette. Filling a mark
+      // with it is what made the ladder read as two competing categories, and on
+      // the negative side it was also what showed through the leader's core: a
+      // translucent pale fill over a 0.95 red shadow is a red dot with a white
+      // outline, which is not what "the biggest wall" should look like.
       const base = positive ? palette.pos : palette.neg
+      // The fill, for EVERY mark: white with a cool or warm cast.
       const hot = positive ? palette.posHot : palette.negHot
       const alpha = (m.isTop ? 1 : minOpacity + m.ratio * (1 - minOpacity)) * age
       const cx = x + dx
 
       if (m.isTop) {
-        // Bright core, white ring. Colour and the boost carry "this is the one",
-        // so the size law underneath it stays readable for everything else.
+        // Whiter still, and opaque. The leader is the brightest thing in its
+        // bucket and it must not be the reddest — so the tint steps toward white
+        // rather than toward the sign, and the glow underneath is held to
+        // `glowAlpha` so it stays a halo AROUND the mark instead of bleeding
+        // through a core the age fade has made translucent.
         ctx.beginPath()
-        ctx.fillStyle = rgba(hot, alpha)
-        ctx.shadowColor = rgba(base, 0.95)
+        ctx.fillStyle = rgba(toWhite(hot, BUBBLES.topTint), alpha)
+        ctx.shadowColor = rgba(base, BUBBLES.glowAlpha * age)
         ctx.shadowBlur = Math.min(size.glowPx, r * BUBBLES.glowFactor)
         ctx.arc(cx, y, r, 0, Math.PI * 2)
         ctx.fill()
@@ -596,7 +633,7 @@ export function drawBubbles(
         ctx.stroke()
       } else {
         ctx.beginPath()
-        ctx.fillStyle = rgba(base, alpha)
+        ctx.fillStyle = rgba(hot, alpha)
         ctx.arc(cx, y, r, 0, Math.PI * 2)
         ctx.fill()
       }
