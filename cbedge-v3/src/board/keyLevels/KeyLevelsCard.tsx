@@ -6,6 +6,8 @@ import { useQuery } from '@/data/api'
 import { isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
 import { chainGexUrl, chainToGex, findCallWall, findPutWall } from '../chainGex'
+import { parseChain } from '../multiGreek/mgMath'
+import { CardHeading } from '../cardTitle'
 import { computeMagnet, computeMaxPain, fmtPts, fmtPx, priceDp, strikeDp } from './levelsMath'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,6 +128,48 @@ export function KeyLevelsCard() {
   ) : (
     <ChainLevels key={symbol} symbol={symbol} render={body} />
   )
+}
+
+// ── The heading ──────────────────────────────────────────────────────────────
+//
+//   AMZN - Key Levels - 8-31-26
+//
+// A separate component from the card, mounted by BoardPage into the Card
+// header (CardDef.Title), because a board tile's title is drawn by the board
+// and not by the card body. It costs nothing extra to read the expiry twice:
+// on SPX both readers are the same store subscription, and off SPX both are the
+// same /api/chains URL, which useQuery dedupes to ONE request.
+//
+// Split the same way the card is, and for the same reason — see SocketLevels:
+// an unconditional useField('gex') would keep SPX frames on the wire while the
+// board is looking at AMZN.
+
+export function KeyLevelsTitle() {
+  const { symbol } = usePageSymbol()
+  return isSocketSymbol(symbol) ? (
+    <SocketTitle symbol={symbol} />
+  ) : (
+    <ChainTitle key={symbol} symbol={symbol} />
+  )
+}
+
+/** SPX: the expiry the socket says it is streaming. */
+function SocketTitle({ symbol }: { symbol: string }) {
+  const expiry = useField<GexFrame, string>('gex', (f) => f?.data.expiry ?? '')
+  return <CardHeading symbol={symbol} label="Key Levels" date={expiry} />
+}
+
+/**
+ * Everything else: the FRONT expiry of the chain the ladder was derived from —
+ * `chainToGex()` picks `expiries[0]` and this reads the same element, so the
+ * heading can never name an expiry the axis was not built from. Parsed rather
+ * than re-derived through chainToGex(), which would recompute every strike's
+ * gamma to read one string.
+ */
+function ChainTitle({ symbol }: { symbol: string }) {
+  const q = useQuery<unknown>(chainGexUrl(symbol), { staleMs: 15_000, pollMs: 15_000 })
+  const expiry = useMemo(() => parseChain(q.data).expiries[0]?.expiration ?? '', [q.data])
+  return <CardHeading symbol={symbol} label="Key Levels" date={expiry} />
 }
 
 function LevelsBody({

@@ -393,12 +393,22 @@ export const CARD_H = 480
  *   height set (the eight small cards) — fixed box, and the card body is the
  *   scroller. This is the mode that keeps the grid square.
  *
- *   height undefined (Ticker Lookup, Strategy Builder) — the card is as tall as
- *   its content and NEVER scrolls. Ticker Lookup in particular must show all of
+ *   height="auto" (Ticker Lookup, Strategy Builder) — the card is as tall as its
+ *   content and NEVER scrolls. Ticker Lookup in particular must show all of
  *   itself: the controls, the identity line, both panes, the read and the
  *   disclaimer. The only scrollers inside it are the two ladders, which own
  *   their own fixed-height pane. A scrollbar on the card as well as on the
  *   ladders inside it is two scrollbars for one gesture.
+ *
+ * ⚠ IT IS THE STRING 'auto', NOT `undefined`, AND THAT IS THE WHOLE POINT.
+ * This prop used to be `height?: number` with a `= CARD_H` default, and the two
+ * wide cards passed `height={undefined}` to mean "no height". A default
+ * parameter fires on an explicit `undefined` exactly as it does on an omitted
+ * one, so those cards silently got 480px and Ticker Lookup was clipped at the
+ * seventh rung with a scrollbar of its own — the bug this prop was added to fix,
+ * surviving the fix, because the opt-out was spelled as the thing that opts in.
+ * A sentinel cannot be `undefined` when `undefined` already means "use the
+ * default".
  */
 export function AnalysisCard({
   children,
@@ -410,13 +420,13 @@ export function AnalysisCard({
   children: ReactNode
   /** Drop the padding + gap — for the econ calendar, which paints edge to edge. */
   flush?: boolean
-  /** Fixed pane height. Pass `undefined` for a card that sizes to its content. */
-  height?: number | undefined
+  /** Fixed pane height, or 'auto' for a card that sizes to its content. */
+  height?: number | 'auto'
   /** Full-width: `1 / -1`. */
   span?: boolean
   style?: CSSProperties
 }) {
-  const fixed = height != null
+  const fixed = height !== 'auto'
   return (
     <Card
       plate="v2"

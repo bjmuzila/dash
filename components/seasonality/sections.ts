@@ -23,6 +23,7 @@ export type SectionKey =
   | "dow"
   | "vix"
   | "jh"
+  | "fomc"
   | "earn"
   | "aapl"
   | "now"
@@ -77,6 +78,7 @@ export const SECTION_GROUPS: SectionGroup[] = [
     // is about market-generated conditions rather than scheduled dates.
     label: "Scheduled events",
     items: [
+      { key: "fomc", label: "FOMC decisions", hash: "fomc" },
       { key: "jh", label: "Jackson Hole", hash: "jackson-hole" },
       { key: "earn", label: "Earnings reactions", hash: "earnings" },
       { key: "aapl", label: "Apple events", hash: "apple-events" },

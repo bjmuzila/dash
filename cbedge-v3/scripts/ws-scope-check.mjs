@@ -20,7 +20,7 @@
 // Requires a chromium available to playwright.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -40,7 +40,22 @@ try {
 }
 
 const procs = []
-function run(cmd, args, env) {
+
+/**
+ * Spawn a child, and REMEMBER WHAT IT SAID.
+ *
+ * Two things this fixes, both of which have cost a debugging session:
+ *
+ *  - The pipes are now DRAINED. `stdio: [.., 'pipe', 'pipe']` with nobody
+ *    reading them is a child that blocks forever the moment it fills the OS
+ *    pipe buffer (64KB on Windows, and the mock prints a line per unmocked
+ *    endpoint). A hung mock and a dead mock look identical from out here.
+ *  - The output is KEPT. When the mock dies, its own crash message — the one
+ *    thing that says WHY — used to go into a pipe nobody ever read. Every
+ *    failure downstream was therefore an unexplained ECONNRESET. `childReport()`
+ *    prints the tail of it instead.
+ */
+function run(name, cmd, args, env) {
   const p = spawn(cmd, args, {
     cwd: ROOT,
     env: { ...process.env, ...env },
@@ -51,8 +66,29 @@ function run(cmd, args, env) {
     // arguments, so it's simplest to always match the platform.
     shell: process.platform === 'win32',
   })
+  p.label = name
+  p.output = []
+  p.exitInfo = null
+  const keep = (buf) => {
+    for (const line of String(buf).split(/\r?\n/)) if (line.trim()) p.output.push(line)
+    if (p.output.length > 200) p.output.splice(0, p.output.length - 200)
+  }
+  p.stdout?.on('data', keep)
+  p.stderr?.on('data', keep)
+  p.on('exit', (code, signal) => {
+    p.exitInfo = signal ? `killed by ${signal}` : `exit code ${code}`
+  })
+  p.on('error', (err) => keep(`spawn error: ${err.message}`))
   procs.push(p)
   return p
+}
+
+/** The tail of a child's output, for when something has gone wrong. */
+function childReport(p) {
+  const tail = p.output.slice(-25)
+  const head = `      ${p.label}: ${p.exitInfo ? `EXITED (${p.exitInfo})` : 'still running'}`
+  if (!tail.length) return `${head}\n      | (no output)`
+  return [head, ...tail.map((l) => `      | ${l}`)].join('\n')
 }
 function cleanup() {
   for (const p of procs) {
@@ -66,7 +102,13 @@ function cleanup() {
       // ECONNREFUSED on the next `npm run check`. taskkill with /T (kill
       // the whole tree) is the reliable way to actually end it.
       if (process.platform === 'win32' && p.pid) {
-        spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' })
+        // spawnSync, not spawn: an async taskkill fired from an 'exit' handler
+        // is not guaranteed to land before this process goes away, so the
+        // child outlived the run and squatted the port. The NEXT run then found
+        // something already answering on MOCK_PORT, believed its own mock had
+        // started, and fell over with an unexplained ECONNRESET the moment the
+        // stale process finally died. Wait for the kill.
+        spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' })
       } else {
         p.kill('SIGTERM')
       }
@@ -87,9 +129,42 @@ function assert(cond, msg) {
   }
 }
 
+/**
+ * The mock server's connection log.
+ *
+ * Never throws. If the mock has died mid-run — it has, on Windows, once the
+ * browser starts dropping sockets — an uncaught `TypeError: fetch failed` took
+ * the whole script down with a stack trace, losing every assertion result and
+ * the clean non-zero exit this check exists to give. A dead mock is a FAILURE,
+ * reported like one, not a crash.
+ */
+let mockDead = null
 async function connections() {
-  const res = await fetch(`http://localhost:${MOCK_PORT}/__connections`)
-  return res.json()
+  if (mockDead) return []
+  try {
+    const res = await fetch(`http://localhost:${MOCK_PORT}/__connections`)
+    return await res.json()
+  } catch (err) {
+    mockDead = err?.cause?.code || err?.message || 'unknown'
+    console.log(`  ! mock server unreachable (${mockDead}) — it exited mid-run`)
+    console.log(childReport(mock))
+    failures.push(`mock server died mid-run (${mockDead})`)
+    return []
+  }
+}
+
+/**
+ * Every scope the client has ever asked for, oldest first.
+ *
+ * Printed on a scope failure because the interesting question is never "what is
+ * the scope now" but "did this type ever make it in". `ALL -> gex -> aux,gex,spot
+ * -> gex,spot` (requested, then narrowed away) and `ALL -> gex -> gex,spot`
+ * (never derived at all) are completely different bugs and the final scope alone
+ * cannot tell them apart.
+ */
+function scopeHistory(log) {
+  if (!log.length) return '(no connections logged)'
+  return log.map((c) => (c.topics === null ? 'ALL' : c.topics.join(',') || '(empty)')).join('  ->  ')
 }
 
 async function waitForPort(url, timeoutMs = 30_000) {
@@ -107,23 +182,51 @@ async function waitForPort(url, timeoutMs = 30_000) {
 
 // ── boot the two servers ─────────────────────────────────────────────────────
 
-run('node', [join(ROOT, 'scripts/mock-server.mjs'), String(MOCK_PORT)])
+// ── nothing may already be on our ports ──────────────────────────────────────
+//
+// waitForPort() below cannot tell OUR mock from a stale one left behind by an
+// earlier run, so without this it happily proceeds against a process that is
+// about to be killed — and the run dies later with an ECONNRESET that looks
+// like a bug in the app. Check first, and say what to do about it.
+async function answers(url) {
+  try {
+    await fetch(url)
+    return true
+  } catch {
+    return false
+  }
+}
+for (const [port, what] of [[MOCK_PORT, 'mock server'], [DEV_PORT, 'vite dev server']]) {
+  if (await answers(`http://localhost:${port}/`)) {
+    console.error(`\nport ${port} is already in use — something is answering there before the ${what} started.`)
+    console.error(
+      process.platform === 'win32'
+        ? 'A previous run probably left a node/vite process behind. Close it (Task Manager, or `taskkill /F /IM node.exe`) and run again.\n'
+        : 'A previous run probably left a process behind. Kill it and run again.\n',
+    )
+    process.exit(1)
+  }
+}
+
+const mock = run('mock server', 'node', [join(ROOT, 'scripts/mock-server.mjs'), String(MOCK_PORT)])
 // Run the locally-installed vite binary directly instead of `npx vite` —
 // `npx` is a .cmd shim on Windows that node's spawn() can't exec without a
 // shell (ENOENT). Vite 7 also locks down its package "exports", so
 // require.resolve('vite/bin/vite.js') is blocked too. node_modules/.bin/vite
 // is just a file on disk, not subject to either restriction.
 const viteBin = join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'vite.cmd' : 'vite')
-run(viteBin, ['--port', String(DEV_PORT), '--strictPort'], {
+const dev = run('vite dev server', viteBin, ['--port', String(DEV_PORT), '--strictPort'], {
   VITE_BACKEND_ORIGIN: `http://localhost:${MOCK_PORT}`,
 })
 
 if (!(await waitForPort(`http://localhost:${MOCK_PORT}/__connections`))) {
   console.error('mock server did not start')
+  console.error(childReport(mock))
   process.exit(1)
 }
 if (!(await waitForPort(`http://localhost:${DEV_PORT}/v3/`))) {
   console.error('vite dev server did not start')
+  console.error(childReport(dev))
   process.exit(1)
 }
 
@@ -173,9 +276,13 @@ log = await connections()
 const scoped = log.filter((c) => c.topics !== null)
 assert(scoped.length >= 1, 'the socket reconnected with a scope once something subscribed')
 const gotTopics = scoped.at(-1)?.topics ?? []
+const missing = ['aux', 'spot'].filter((t) => !gotTopics.includes(t))
 assert(
-  ['aux', 'spot'].every((t) => gotTopics.includes(t)),
-  `scope includes our subscribed types (got ${JSON.stringify(gotTopics)})`,
+  missing.length === 0,
+  missing.length === 0
+    ? 'scope includes our subscribed types'
+    : `scope includes our subscribed types (missing ${missing.join(',')}; got ${JSON.stringify(gotTopics)})\n` +
+      `      scope history: ${scopeHistory(log)}`,
 )
 
 // 3 — a broadcast-only type must never be requested

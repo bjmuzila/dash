@@ -103,6 +103,20 @@ const ET_TIME_12 = new Intl.DateTimeFormat('en-US', {
 const etDate = (ms) => ET_DATE.format(new Date(ms))
 const etTime = (ms) => ET_TIME.format(new Date(ms))
 
+/**
+ * A wall-clock ET time on `ymd`, as epoch ms. Corrects a UTC guess against the
+ * ET offset rather than assuming one, so it survives both DST transitions —
+ * the same trick src/data/flowMath.ts uses, and the reason the mock's session
+ * bounds line up with the axis the chart draws.
+ */
+function etWallToUtcMs(ymd, hh, mm) {
+  const [y, mo, d] = String(ymd).split('-').map(Number)
+  const guess = Date.UTC(y, (mo || 1) - 1, d || 1, hh, mm)
+  const asET = new Date(new Date(guess).toLocaleString('en-US', { timeZone: 'America/New_York' })).getTime()
+  const asUTC = new Date(new Date(guess).toLocaleString('en-US', { timeZone: 'UTC' })).getTime()
+  return guess + (asUTC - asET)
+}
+
 function json(res, body, status = 200) {
   res.writeHead(status, { 'content-type': 'application/json' })
   res.end(JSON.stringify(body))
@@ -303,20 +317,126 @@ function mockEmTracker(ticker) {
  * so the mock exercises the "≥50%, colour it up" branch rather than sitting on
  * a coin-flip that flickers between the two on every poll.
  */
-function mockFlowHistory() {
+function mockFlowHistory(underlying = 'SPX', minPremium = 0) {
+  const root = String(underlying || 'SPX').replace(/^[$/]/, '').toUpperCase()
+  const { price: px, step } = universe(root)
+  // RTH so far today, so the drift chart has a session to draw across rather
+  // than 400 prints stacked on one minute.
+  const openMs = etWallToUtcMs(expiry, 9, 30)
+  const span = Math.max(60_000, Math.min(Date.now(), openMs + 6.5 * 3_600_000) - openMs)
+
   const tape = []
   for (let i = 0; i < 400; i++) {
     const bullish = Math.random() < 0.58
     const isPut = Math.random() < 0.5
+    const premium = Math.round(5_000 + Math.random() * 250_000)
+    if (premium < minPremium) continue
+    const ts = Math.round(openMs + Math.random() * span)
+    // OTM on the correct side, so an OTM-only filter keeps them and a %OTM
+    // column has something to compute.
+    const offset = (1 + Math.floor(Math.random() * 8)) * step
+    const strike = Math.round((isPut ? px - offset : px + offset) / step) * step
+    const size = Math.round(50 + Math.random() * 500)
     tape.push({
-      premium: Math.round(5_000 + Math.random() * 250_000),
+      ts,
+      // The dxFeed streamer symbol. Two thirds of the ts|symbol|side identity
+      // the tape dedupes and expands rows by — without it every print in a
+      // millisecond collapses into one.
+      symbol: `.${root}${expiry.slice(2).replace(/-/g, '')}${isPut ? 'P' : 'C'}${strike}`,
+      underlying: root,
+      expiration: expiry,
+      strike,
+      // 'C' | 'P' and 'buy' | 'sell' — the ONLY spellings on the wire. See the
+      // note on FlowTapePrint in src/contract/frames.ts: a mock that says
+      // 'call'/'ask' here lets a card ship with a comparison that never matches.
       type: isPut ? 'P' : 'C',
       // A bullish print is a bought call or a sold put; flip the side for a put
       // so the tile's own classification is what decides, not this line.
       side: bullish === !isPut ? 'buy' : 'sell',
+      action: 'sweep',
+      bucket: bullish ? 'bull' : 'bear',
+      price: Number((premium / size / 100).toFixed(2)),
+      size,
+      premium,
+      isOtm: true,
+      fills: 1 + Math.floor(Math.random() * 3),
+      spot: Number(px.toFixed(2)),
     })
   }
-  return { tape }
+  tape.sort((a, b) => a.ts - b.ts)
+  return { date: expiry, tape }
+}
+
+/**
+ * /proxy/flow-netprem — the per-minute aggregate behind the Net Drift chart.
+ *
+ * Derived from the same synthetic tape rather than invented separately, so the
+ * chart, the tape and the totals agree with each other the way they do against
+ * the real server.
+ */
+function mockFlowNetPrem(underlying, binSec) {
+  const bin = Number(binSec) > 0 ? Number(binSec) : 60
+  const { tape } = mockFlowHistory(underlying)
+  const byBin = new Map()
+  for (const o of tape) {
+    const sec = Math.floor(o.ts / 1000 / bin) * bin
+    const b = byBin.get(sec) ?? { sec, callNet: 0, putNet: 0, callVol: 0, putVol: 0 }
+    // Net = bought minus sold, which is what makes the two lines diverge.
+    const signed = (o.side === 'buy' ? 1 : -1) * o.premium
+    if (o.type === 'C') {
+      b.callNet += signed
+      b.callVol += o.size
+    } else {
+      b.putNet += signed
+      b.putVol += o.size
+    }
+    byBin.set(sec, b)
+  }
+  return {
+    date: expiry,
+    binSec: bin,
+    partial: false,
+    bins: [...byBin.values()].sort((a, b) => a.sec - b.sec),
+  }
+}
+
+/**
+ * /proxy/contract-stats — live Vol / OI / IV per contract, grouped by
+ * `TICKER:EXPIRY`. Keyed `TICKER|EXPIRY` -> `STRIKE|TYPE` in the response,
+ * which is NOT the same separator the request uses; the tape joins on the
+ * response's spelling.
+ */
+function mockContractStats(groups) {
+  const stats = {}
+  for (const g of String(groups || '').split(',').filter(Boolean)) {
+    const [root, exp] = g.split(':')
+    if (!root || !exp) continue
+    const { price: px, step } = universe(root)
+    const cell = {}
+    for (let i = -12; i <= 12; i++) {
+      const strike = Math.round((px + i * step) / step) * step
+      for (const type of ['C', 'P']) {
+        cell[`${strike}|${type}`] = {
+          vol: Math.round(500 + Math.random() * 40_000),
+          oi: Math.round(1_000 + Math.random() * 60_000),
+          iv: Number((0.1 + Math.random() * 0.35).toFixed(4)),
+          mark: Number((Math.random() * 12 + 0.5).toFixed(2)),
+        }
+      }
+    }
+    stats[`${root}|${exp}`] = cell
+  }
+  return { stats }
+}
+
+/** /proxy/quotes and /api/quotes-batch — live last per symbol, same shape. */
+function mockQuotes(symbols) {
+  const items = String(symbols || '')
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean)
+    .map((sym) => ({ symbol: sym, last: Number(universe(sym).price.toFixed(2)) }))
+  return { data: { items } }
 }
 
 /** /api/premarket-baseline — the Key Levels "was → now" lines. */
@@ -420,7 +540,16 @@ function api(req, res, path, params) {
     return json(res, mockBaseline(params.get('symbol') || '$SPX', params.get('expiry') || '')), true
   }
   if (path === '/proxy/flow-history') {
-    return json(res, mockFlowHistory()), true
+    return json(res, mockFlowHistory(params.get('underlying') || 'SPX', Number(params.get('minPremium') || 0))), true
+  }
+  if (path === '/proxy/flow-netprem') {
+    return json(res, mockFlowNetPrem(params.get('underlying') || 'SPX', params.get('bin'))), true
+  }
+  if (path === '/proxy/contract-stats') {
+    return json(res, mockContractStats(params.get('groups'))), true
+  }
+  if (path === '/proxy/quotes' || path === '/api/quotes-batch') {
+    return json(res, mockQuotes(params.get('symbols'))), true
   }
   // AuthProvider reads this ONCE at boot, on every page including the board.
   // Unmocked it 404'd on every run — noise in the check's own output, and the
@@ -723,20 +852,33 @@ setInterval(() => {
   const putBuyVol = Math.round(Math.random() * 5000)
   const putSellVol = Math.round(Math.random() * 5000)
   const netPremium = Math.round((Math.random() - 0.45) * 3_000_000)
-  const tape = Array.from({ length: 5 }, (_, i) => ({
-    ts: Date.now() - i * 4000,
-    underlying: 'SPX',
-    expiration: '0DTE',
-    strike: Math.round(spot / 5) * 5 + (Math.random() > 0.5 ? 25 : -25),
-    type: Math.random() > 0.5 ? 'call' : 'put',
-    side: Math.random() > 0.5 ? 'ask' : 'bid',
-    action: 'sweep',
-    bucket: '0DTE',
-    price: Number((Math.random() * 5 + 1).toFixed(2)),
-    size: Math.round(50 + Math.random() * 500),
-    premium: Math.round(50_000 + Math.random() * 2_000_000),
-    isOtm: true,
-  }))
+  // ⚠ THE SPELLINGS ARE THE CONTRACT. This used to emit type 'call'/'put',
+  // side 'ask'/'bid' and expiration '0DTE' — none of which the real server has
+  // ever sent (src/contract/frames.ts, FlowTapePrint). A card comparing against
+  // the REAL values therefore matched nothing here and looked broken locally,
+  // and one comparing against these shipped broken. `symbol` and `spot` were
+  // missing outright, which cost the tape its row identity and its Spot column.
+  const tape = Array.from({ length: 5 }, (_, i) => {
+    const isPut = Math.random() > 0.5
+    const strike = Math.round(spot / 5) * 5 + (isPut ? -25 : 25)
+    return {
+      ts: Date.now() - i * 4000,
+      symbol: `.SPXW${expiry.slice(2).replace(/-/g, '')}${isPut ? 'P' : 'C'}${strike}`,
+      underlying: 'SPXW',
+      expiration: expiry,
+      strike,
+      type: isPut ? 'P' : 'C',
+      side: Math.random() > 0.5 ? 'buy' : 'sell',
+      action: 'sweep',
+      bucket: isPut ? 'bear' : 'bull',
+      price: Number((Math.random() * 5 + 1).toFixed(2)),
+      size: Math.round(50 + Math.random() * 500),
+      premium: Math.round(50_000 + Math.random() * 2_000_000),
+      isOtm: true,
+      fills: 1,
+      spot: Number(spot.toFixed(2)),
+    }
+  })
   broadcast({
     type: 'flow',
     symbol: 'SPX',
@@ -764,6 +906,23 @@ process.on('uncaughtException', (err) => {
 })
 process.on('unhandledRejection', (err) => {
   console.error(`  mock server unhandled rejection: ${err}`)
+})
+
+// ── listen, or say so and STOP ───────────────────────────────────────────────
+//
+// An 'error' on the server emitter (EADDRINUSE, above all) is thrown when
+// nothing is listening for it, and the uncaughtException handler above then
+// SWALLOWS it — leaving this process alive and not serving anything. A caller
+// polling the port gets an answer from whatever else is on it (a stale mock
+// from the previous run) and believes its own mock came up; the run then dies
+// later with an ECONNRESET that has nothing to do with the code under test.
+// A mock that cannot listen is a dead mock, and it exits like one.
+server.on('error', (err) => {
+  console.error(`  mock server cannot listen on ${PORT}: ${err?.code ?? err?.message ?? err}`)
+  if (err?.code === 'EADDRINUSE') {
+    console.error('  something else is already on that port — a leftover process from an earlier run?')
+  }
+  process.exit(1)
 })
 
 server.listen(PORT, () => {

@@ -781,7 +781,7 @@ export function TickerLookupCard({
   const replayBase = replayOn && replayDate ? replayDate : today
 
   return (
-    <AnalysisCard span={!embedded} height={undefined}>
+    <AnalysisCard span={!embedded} height="auto">
       {/* Controls: ticker menu, one refresh for the whole card, the replay
           toggle, and the mark. The identity line that used to sit up here moved
           DOWN to rest directly on top of the ladders — see below. */}

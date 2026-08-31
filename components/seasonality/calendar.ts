@@ -88,6 +88,21 @@ function dayOfWeek(y: number, m: number, d: number): number {
   return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
 }
 
+const DOW_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * Weekday of an ISO date, as "Mon".."Sun".
+ *
+ * DERIVED, never stored alongside the date in a data file. A weekday written
+ * down next to a date is a second copy of the same fact, and the two drift the
+ * first time somebody corrects the date and not the label — which on the FOMC
+ * table would silently move a decision in or out of the Wednesday sample.
+ */
+export const dowOf = (iso: string): string => {
+  const [y, m, d] = parseISO(iso);
+  return DOW_ABBR[dayOfWeek(y, m, d)];
+};
+
 const daysInMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 
 /** Easter Sunday (Gregorian, anonymous algorithm) as [month, day]. */

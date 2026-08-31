@@ -92,6 +92,10 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Est. Moves BE", href: "/estimated-move", glyph: "⇄", key: "EstimatedMove" },
       { label: "Watchlists", href: "/owner/watchlists", glyph: "☰", key: "Watchlists" },
       { label: "Chart Types", href: "/owner/charts-ui", glyph: "▦", key: "ChartsUI" },
+      // London Strategic Edge vault browser — catalog, candles, chains, flow.
+      // Market rather than System: you open it to go looking for data on an
+      // instrument, not to service the machine.
+      { label: "LSE Data", href: "/owner/lse-data", glyph: "⇩", key: "LseData" },
     ],
   },
   {

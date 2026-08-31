@@ -203,11 +203,17 @@ export default function BoardPage() {
             // than one — two cards with identical titles is a board you cannot
             // talk about, and a "1" on a card that has no sibling is noise.
             const nth = (countByType.get(cardTypeOf(id)) ?? 0) > 1 ? ordinalById.get(id) : undefined
+            // A card may supply a LIVE header (the page ticker, the contract
+            // date its numbers came from) in place of the static label — see
+            // CardDef.Title. Rendered as an element, never called: it holds
+            // hooks of its own and calling it here would make them this
+            // component's, conditionally.
+            const Title = def.Title
             return (
               <Card
                 title={
                   <span data-board-handle className={locked ? 'block' : 'block cursor-grab select-none'}>
-                    {def.label}
+                    {Title ? <Title /> : def.label}
                     {nth != null && <span className="ml-1.5 text-faint">{nth}</span>}
                   </span>
                 }

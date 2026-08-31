@@ -34,18 +34,42 @@ export function read(type: string): unknown {
   return state.get(type)
 }
 
-/** Subscribe to one frame type. Returns an unsubscribe fn. */
+/**
+ * Subscribe to one frame type. Returns an unsubscribe fn.
+ *
+ * Two details here are load-bearing for TOPIC DERIVATION, not for the store's
+ * own bookkeeping — get either wrong and a type silently leaves the socket's
+ * ?topics= scope while a live listener is still waiting on it. That is the
+ * exact v2 failure this whole mechanism exists to prevent: nothing throws, the
+ * frames just stop, and a panel shows stale numbers.
+ *
+ *  1. NOTIFY AFTER THE LISTENER IS IN THE SET. The old order announced the type
+ *     while its set was still empty, so any activeTypes() consumer that ever
+ *     learns to skip empty sets would read a half-built map.
+ *
+ *  2. THE UNSUBSCRIBE MUST OWN ITS SET. A closure captures the Set it was
+ *     created against. If that set empties, the type is deleted; a LATER
+ *     subscribe for the same type installs a BRAND NEW set. A stale closure
+ *     from the first generation firing after that — a double-call, a component
+ *     torn down out of order, a StrictMode remount — used to run
+ *     `listeners.delete(type)` and retire a type that had live listeners in the
+ *     new set. Comparing identity makes a stale unsubscribe a no-op, and makes
+ *     unsubscribing twice harmless.
+ */
 export function subscribe(type: string, fn: Listener): () => void {
   let set = listeners.get(type)
   if (!set) {
     set = new Set()
     listeners.set(type, set)
-    notifyActiveTypes()
   }
-  set.add(fn)
+  const owned = set
+  owned.add(fn)
+  if (owned.size === 1) notifyActiveTypes()
+
   return () => {
-    set.delete(fn)
-    if (set.size === 0) {
+    owned.delete(fn)
+    // `listeners.get(type) === owned` — see 2 above.
+    if (owned.size === 0 && listeners.get(type) === owned) {
       listeners.delete(type)
       notifyActiveTypes()
     }

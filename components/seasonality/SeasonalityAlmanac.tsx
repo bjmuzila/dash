@@ -56,11 +56,15 @@ import {
   APPLE_EVENTS,
   APPLE_EVENT_KINDS,
   EARNINGS_TICKERS,
+  FOMC_UPCOMING,
   JACKSON_HOLE,
+  fomcDecisions,
   type AppleEventKind,
+  type FomcDecision,
 } from "./eventDates";
 import {
   calIndex,
+  dowOf,
   fmtLongDate,
   fmtSpan,
   isLastTradingDayOfMonth,
@@ -72,6 +76,12 @@ const UP = ES_CANDLE_UP;
 const DOWN = ES_CANDLE_DOWN;
 const A1 = HOME_THEME.cyan;    // "all history" series
 const A2 = HOME_THEME.orange;  // "modern era" series
+// A third series hue, for the one chart that needs three (FOMC: before, during,
+// after). Deliberately outside HOME_THEME, which carries no third categorical
+// colour — its remaining slots are the up/down status pair and reusing either
+// would put a sign meaning on a bar that has none. Same argument, and the same
+// exception, as the overlay slots in SeasonalityView.
+const A3 = "#8b6fe0";
 const INK = HOME_THEME.text;   // #FFFFFF — the only text color on this page
 
 const pct = (v: number | null | undefined, d = 2) =>
@@ -466,6 +476,102 @@ function PairBars({
                     {lab}
                   </text>
                 ) : null}
+              </g>
+            ))}
+          </svg>
+          <div style={{ minHeight: 20, fontSize: 12, color: INK, fontVariantNumeric: "tabular-nums" }}>
+            {hover != null ? readout(hover) : "Hover a group for the detail."}
+          </div>
+        </>
+      ) : (
+        <div style={{ height: height + 20 }} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * N series side by side within each group — the three windows of an event
+ * study, per outcome.
+ *
+ * PairBars does two. This does three, and the reason it is a separate component
+ * rather than a generalisation of that one is that PairBars is used by four
+ * cards whose layout is tuned to two bars; widening it to N would change the
+ * bar width on every one of them to buy nothing.
+ *
+ * IDENTITY IS CARRIED BY POSITION FIRST. Within every group the bars are always
+ * in the same order — before, during, after — so the chart reads correctly in
+ * greyscale and for a colourblind reader. Hue is the secondary cue and the
+ * printed value is the third. That is what makes three series acceptable here
+ * when the overlay chart caps itself at four lines: bars in a fixed order are a
+ * far weaker demand on colour than lines crossing each other.
+ */
+function MultiBars({
+  groups,
+  series,
+  fmt,
+  readout,
+  height = 280,
+}: {
+  groups: string[];
+  series: { label: string; color: string; values: (number | null)[] }[];
+  fmt: (v: number) => string;
+  readout: (i: number) => string;
+  height?: number;
+}) {
+  const [ref, width] = useMeasuredWidth();
+  const [hover, setHover] = useState<number | null>(null);
+  const PAD = { top: 22, right: 10, bottom: 28, left: 62 };
+  const innerW = Math.max(0, width - PAD.left - PAD.right);
+  const innerH = height - PAD.top - PAD.bottom;
+
+  const { lo, hi } = useMemo(() => {
+    const all = series.flatMap((s) => s.values).filter((v): v is number => v != null && Number.isFinite(v));
+    const l = Math.min(0, ...all);
+    const h = Math.max(0, ...all);
+    const p = (h - l) * 0.18 || 1;
+    return { lo: l - p, hi: h + p };
+  }, [series]);
+
+  const y = (v: number) => PAD.top + innerH - ((v - lo) / (hi - lo)) * innerH;
+  const ticks = niceTicks(lo, hi, 5);
+  const gw = groups.length ? innerW / groups.length : 0;
+  const inner = gw * 0.74;
+  const bw = Math.max(1, (inner - (series.length - 1) * 3) / series.length);
+
+  return (
+    <div ref={ref} style={{ width: "100%" }}>
+      {innerW > 0 ? (
+        <>
+          <svg width={width} height={height} role="img" style={{ display: "block", touchAction: "none" }} onPointerLeave={() => setHover(null)}>
+            {ticks.map((t) => (
+              <g key={`t${t}`}>
+                <line x1={PAD.left} x2={PAD.left + innerW} y1={y(t)} y2={y(t)} stroke={t === 0 ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.08)"} />
+                <text x={PAD.left - 8} y={y(t) + 4} textAnchor="end" fontSize={10} fill={INK} style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {fmt(t)}
+                </text>
+              </g>
+            ))}
+            {groups.map((g, i) => (
+              <g key={g} onPointerEnter={() => setHover(i)}>
+                <rect x={PAD.left + i * gw} y={PAD.top} width={gw} height={innerH} fill="transparent" />
+                {series.map((s, k) => {
+                  const v = s.values[i];
+                  if (v == null || !Number.isFinite(v)) return null;
+                  const x = PAD.left + i * gw + (gw - inner) / 2 + k * (bw + 3);
+                  const up = v >= 0;
+                  return (
+                    <g key={s.label}>
+                      <path d={barPath(x, bw, up ? y(v) : y(0), Math.abs(y(v) - y(0)), up)} fill={s.color} opacity={hover == null || hover === i ? 1 : 0.45} />
+                      <text x={x + bw / 2} y={up ? y(v) - 6 : y(v) + 13} textAnchor="middle" fontSize={9.5} fill={INK} style={{ fontVariantNumeric: "tabular-nums" }}>
+                        {fmt(v)}
+                      </text>
+                    </g>
+                  );
+                })}
+                <text x={PAD.left + i * gw + gw / 2} y={height - 9} textAnchor="middle" fontSize={11} fontWeight={800} fill={INK}>
+                  {g}
+                </text>
               </g>
             ))}
           </svg>
@@ -1056,6 +1162,15 @@ const statRow = (label: string, s: Stat): Cell[] => [
   { t: pct(s.worst), c: DOWN },
 ];
 
+/**
+ * Which decisions the FOMC study counts.
+ *
+ * "wed" is the default because it is the only sample where the Mon-Tue /
+ * Wednesday / Thu-Fri framing is literally true. The other two are there so a
+ * reader can see what the restriction costs — and it costs a lot of the 1990s.
+ */
+type FomcSample = "wed" | "scheduled" | "all";
+
 // ── the almanac ─────────────────────────────────────────────────────────────
 
 export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
@@ -1077,9 +1192,15 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
    * agree, then flips after mount. See Collapse's `autoOpen`.
    */
   const [isMonthEnd, setIsMonthEnd] = useState(false);
+  // Empty until mount, and that is the correct server value: FOMC_UPCOMING
+  // holds only future meetings, so "the first one after ''" is the first one,
+  // which is what the server should render anyway. The effect only narrows it.
+  const [todayISO, setTodayISO] = useState("");
   useEffect(() => {
     try {
-      setIsMonthEnd(isLastTradingDayOfMonth(nyTodayISO()));
+      const t = nyTodayISO();
+      setTodayISO(t);
+      setIsMonthEnd(isLastTradingDayOfMonth(t));
     } catch {
       /* Intl unavailable — leave the section as it was. */
     }
@@ -1090,6 +1211,8 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
   const [vixCount, setVixCount] = useState<number>(20);
   const [vixMeasure, setVixMeasure] = useState<"oc" | "lnh">("oc");
   const [earnTicker, setEarnTicker] = useState<string>(EARNINGS_TICKERS[0]);
+  const [fomcSample, setFomcSample] = useState<FomcSample>("wed");
+  const [fomcCount, setFomcCount] = useState<number>(20);
   const [appleKind, setAppleKind] = useState<AppleEventKind | "all">("all");
   const [appleCount, setAppleCount] = useState<number>(20);
 
@@ -1174,6 +1297,98 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
     // when this needs recomputing.
     [live.pct, liveYearNum],
   );
+
+  // ── FOMC ─────────────────────────────────────────────────────────────────
+  //
+  // Same machinery as Jackson Hole — an anchor date and three calendar windows
+  // off the forward-filled 365-day axis — over 269 announced decisions.
+  //
+  //   into  = D-5 -> D-1   the two sessions before the statement
+  //   day   = D-1 -> D     the statement session itself
+  //   after = D   -> D+2   the two sessions after
+  //
+  // For a WEDNESDAY decision those are exactly Mon+Tue, the Wednesday, and
+  // Thu+Fri, which is why the default sample is Wednesdays only. Widen the
+  // sample and the windows are still right — they are just no longer those
+  // weekdays, so the column headers change with the toggle rather than lying.
+  const fomcRows = useMemo(
+    () =>
+      fomcDecisions()
+        .map((d) => {
+          const y = Number(d.date.slice(0, 4));
+          const curve = y === liveYearNum ? live.pct : yearCurve(y);
+          const t = calIndex(d.date);
+          return {
+            ...d,
+            dow: dowOf(d.date),
+            action: d.bps > 0 ? "Hike" : d.bps < 0 ? "Cut" : ("Hold" as const),
+            into: curveWindow(curve, t - 5, t - 1),
+            day: curveWindow(curve, t - 1, t),
+            after: curveWindow(curve, t, t + 2),
+          };
+        })
+        // Newest first, to match every other event list on this page.
+        .reverse(),
+    [live.pct, liveYearNum],
+  );
+
+  const fomcWedOnly = fomcSample === "wed";
+  const fomcFiltered = useMemo(
+    () =>
+      fomcRows.filter((r) =>
+        fomcSample === "all" ? true : fomcSample === "scheduled" ? r.scheduled : r.scheduled && r.dow === "Wed",
+      ),
+    [fomcRows, fomcSample],
+  );
+
+  /** Column headings. They MUST follow the sample — see the note above. */
+  const L_INTO = fomcWedOnly ? "Mon\u2013Tue" : "Two sessions before";
+  const L_DAY = fomcWedOnly ? "Wednesday" : "Decision day";
+  const L_AFTER = fomcWedOnly ? "Thu\u2013Fri" : "Two sessions after";
+
+  const fomcByAction = useMemo(
+    () =>
+      (["Hike", "Hold", "Cut"] as const).map((a) => {
+        const rows = fomcFiltered.filter((r) => r.action === a);
+        return {
+          label: a,
+          n: rows.length,
+          into: mean(rows.map((r) => r.into)),
+          day: mean(rows.map((r) => r.day)),
+          after: mean(rows.map((r) => r.after)),
+          hitDay: hitRate(rows.map((r) => r.day)),
+          hitAfter: hitRate(rows.map((r) => r.after)),
+        };
+      }),
+    [fomcFiltered],
+  );
+
+  /** Does the SIZE of the move matter, or only its direction? */
+  const fomcBySize = useMemo(() => {
+    const buckets: { label: string; test: (b: number) => boolean }[] = [
+      { label: "Hike 50bp or more", test: (b) => b >= 50 },
+      { label: "Hike 25bp", test: (b) => b > 0 && b < 50 },
+      { label: "Hold", test: (b) => b === 0 },
+      { label: "Cut 25bp", test: (b) => b < 0 && b > -50 },
+      { label: "Cut 50bp or more", test: (b) => b <= -50 },
+    ];
+    return buckets.map((k) => {
+      const rows = fomcFiltered.filter((r) => k.test(r.bps));
+      return {
+        label: k.label,
+        n: rows.length,
+        into: mean(rows.map((r) => r.into)),
+        day: mean(rows.map((r) => r.day)),
+        after: mean(rows.map((r) => r.after)),
+        hitDay: hitRate(rows.map((r) => r.day)),
+      };
+    });
+  }, [fomcFiltered]);
+
+  /** The next scheduled meeting, for the tile. */
+  const fomcNext = FOMC_UPCOMING.find((m) => m.date > todayISO) ?? null;
+  /** Where the target sits now — read from the last decision, never typed in. */
+  const fomcLast = fomcRows[0];
 
   // ── Apple product events ─────────────────────────────────────────────────
   const aapl = useDailySeries(active === "aapl" ? "AAPL" : null);
@@ -1447,6 +1662,226 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
 
       </SeaCard>
     ),
+    // ── FOMC ───────────────────────────────────────────────────────────────
+    fomc: (
+      <SeaCard
+        title="FOMC Decisions"
+        subtitle={`${n0(fomcRows.length)} announced decisions since ${fomcRows[fomcRows.length - 1].date.slice(0, 4)} · SPX around the statement`}
+        padding={20}
+      >
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+          <span style={{ ...capLabel, marginRight: 2 }}>Sample</span>
+          {([
+            { k: "wed" as FomcSample, label: "Wednesday decisions" },
+            { k: "scheduled" as FomcSample, label: "All scheduled meetings" },
+            { k: "all" as FomcSample, label: "Incl. emergency cuts" },
+          ]).map((o) => (
+            <button key={o.k} type="button" aria-pressed={fomcSample === o.k} onClick={() => setFomcSample(o.k)} style={pillBtn(fomcSample === o.k)}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={TILES}>
+          <Tile
+            label="Decisions"
+            value={n0(fomcFiltered.length)}
+            sub={fomcWedOnly ? "statement landed on a Wednesday" : fomcSample === "scheduled" ? "scheduled meetings only" : "every announced decision"}
+          />
+          <Tile
+            label={L_INTO}
+            value={pct(mean(fomcFiltered.map((r) => r.into)))}
+            sub={`${pctp(hitRate(fomcFiltered.map((r) => r.into)), 0)} positive`}
+            color={signColor(mean(fomcFiltered.map((r) => r.into)))}
+          />
+          <Tile
+            label={L_DAY}
+            value={pct(mean(fomcFiltered.map((r) => r.day)))}
+            sub={`${pctp(hitRate(fomcFiltered.map((r) => r.day)), 0)} positive`}
+            color={signColor(mean(fomcFiltered.map((r) => r.day)))}
+          />
+          <Tile
+            label={L_AFTER}
+            value={pct(mean(fomcFiltered.map((r) => r.after)))}
+            sub={`${pctp(hitRate(fomcFiltered.map((r) => r.after)), 0)} positive`}
+            color={signColor(mean(fomcFiltered.map((r) => r.after)))}
+          />
+          <Tile
+            label="Next meeting"
+            value={fomcNext ? fmtSpan(fomcNext.start, fomcNext.date) : "TBA"}
+            sub={fomcNext ? `decision ${fmtLongDate(fomcNext.date)}${fomcNext.sep ? " · with projections" : ""}` : "calendar not yet published"}
+          />
+          <Tile
+            label="Target now"
+            value={`${fomcLast.level.toFixed(2)}%`}
+            sub={`upper bound · set ${fmtUS(fomcLast.date)}`}
+          />
+        </div>
+
+        {/* The whole question, in one chart: does what the Fed DID change what
+            the tape did around it? */}
+        <div style={{ marginTop: 20 }}>
+          <Legend
+            items={[
+              { color: A1, label: L_INTO },
+              { color: A2, label: L_DAY },
+              { color: A3, label: L_AFTER },
+            ]}
+          />
+          <MultiBars
+            groups={fomcByAction.map((a) => `${a.label} (n=${a.n})`)}
+            series={[
+              { label: L_INTO, color: A1, values: fomcByAction.map((a) => a.into) },
+              { label: L_DAY, color: A2, values: fomcByAction.map((a) => a.day) },
+              { label: L_AFTER, color: A3, values: fomcByAction.map((a) => a.after) },
+            ]}
+            fmt={(v) => bp(v, 0)}
+            height={280}
+            readout={(i) => {
+              const a = fomcByAction[i];
+              return `${a.label} · n=${a.n} · ${L_INTO} ${pct(a.into)} · ${L_DAY} ${pct(a.day)} (${pctp(a.hitDay, 0)} positive) · ${L_AFTER} ${pct(a.after)} (${pctp(a.hitAfter, 0)})`;
+            }}
+          />
+        </div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", margin: "18px 0 10px" }}>
+          <span style={capLabel}>Last</span>
+          {[20, 50].map((n) => (
+            <button key={n} type="button" aria-pressed={fomcCount === n} onClick={() => setFomcCount(n)} style={pillBtn(fomcCount === n)}>
+              {n} decisions
+            </button>
+          ))}
+        </div>
+
+        <HBars
+          rows={fomcFiltered.slice(0, fomcCount).map((r) => ({
+            key: r.date,
+            label: fmtUS(r.date),
+            sub: `${r.bps === 0 ? "hold" : `${r.bps > 0 ? "+" : ""}${r.bps}bp`} to ${r.level.toFixed(2)}%`,
+            a: r.day,
+            b: r.after,
+          }))}
+          aTitle={L_DAY}
+          bTitle={L_AFTER}
+          fmtA={(v) => pct(v, 1)}
+          fmtB={(v) => pct(v, 1)}
+          maxHeight={fomcCount > 20 ? 520 : 460}
+        />
+
+        <Collapse
+          open
+          label="By what the Fed did"
+          hint="direction of the decision"
+          note={
+            <>
+              <strong>The windows.</strong> {L_INTO} is the two sessions before the statement, {L_DAY} is
+            the statement session itself, {L_AFTER} is the two sessions after. With the sample set to
+              <em> Wednesday decisions</em> those are literally Monday–Tuesday, the Wednesday and
+            Thursday–Friday; widen the sample and the headings change with it, because the one-day
+            meetings of the 1990s and mid-2000s were routinely TUESDAYS — {n0(fomcRows.filter((r) => r.dow === "Tue").length)}{" "}
+              of the {n0(fomcRows.length)} decisions here, against {n0(fomcRows.filter((r) => r.dow === "Wed").length)}{" "}
+            Wednesdays.
+              <br />
+              <br />
+              <strong>What it says.</strong> Nothing dramatic, which is the honest answer. The statement
+            session is the loudest of the three by dispersion, not by mean — the averages here are
+            tens of basis points and the individual days run from −4.9% (17 Sep 2001, the session
+            equities reopened after 9/11) to +5.1% (16 Dec 2008, the cut to zero). And the sign of the decision is
+            not the sign of the tape: the market has fallen on cuts and rallied on hikes often enough
+            that the split below is a description of what happened, not a rule. Read the <i>n</i>
+            column on every row before you read the mean.
+              <br />
+              <br />
+              A decision is dated by the day the STATEMENT was released. The Fed&apos;s own rate-change
+            table is dated by the day the new target takes EFFECT, which is the day after — anchoring
+            on that column puts every window one session late.
+            </>
+          }
+        >
+          <DataTable
+            head={["Decision", "n", L_INTO, L_DAY, "positive", L_AFTER, "positive"]}
+            rows={fomcByAction.map((a) => [
+              a.label,
+              a.n,
+              { t: pct(a.into), c: signColor(a.into) },
+              { t: pct(a.day), c: signColor(a.day) },
+              pctp(a.hitDay, 0),
+              { t: pct(a.after), c: signColor(a.after) },
+              pctp(a.hitAfter, 0),
+            ])}
+          />
+        </Collapse>
+
+        <Collapse
+          label="By size of the move"
+          hint="does 50bp land differently from 25bp?"
+          note={
+            <>
+              Splitting the cuts is where the sample thins fastest, and it is also where the selection
+            problem bites: a 50bp+ cut is not a bigger version of a 25bp cut, it is what the Fed does
+            when something is already breaking. 2008 and March 2020 are most of that row, so
+            whatever sign it carries is the crisis talking and not the cut — which is also why it
+            flips when you change the sample.
+            </>
+          }
+        >
+          <DataTable
+            head={["Move", "n", L_INTO, L_DAY, "positive", L_AFTER]}
+            rows={fomcBySize.map((k) => [
+              k.label,
+              k.n,
+              { t: pct(k.into), c: signColor(k.into) },
+              { t: pct(k.day), c: signColor(k.day) },
+              pctp(k.hitDay, 0),
+              { t: pct(k.after), c: signColor(k.after) },
+            ])}
+          />
+        </Collapse>
+
+        <Collapse
+          label="Every decision"
+          hint={`${n0(fomcFiltered.length)} in this sample, newest first`}
+          note={
+            <>
+              Holds are rows. {n0(fomcRows.filter((r) => r.bps === 0).length)} of the{" "}
+              {n0(fomcRows.length)} decisions changed nothing, and dropping them would turn this from
+            &ldquo;what does SPX do around an FOMC&rdquo; into &ldquo;what does it do around a rate
+            change&rdquo; — a different, much smaller and much more selected study.
+              <br />
+              <br />
+              The record starts at <strong>4 February 1994</strong>, the first decision the Fed ever
+            announced. Before that a change had to be inferred from open-market operations days
+            later, so there is no honest event date to anchor on. Rate levels are the target through
+            2008 and the upper bound of the range after it.
+            </>
+          }
+        >
+          <DataTable
+            head={["Statement", "Day", "Meeting", "Move", "Target", L_INTO, L_DAY, L_AFTER]}
+            rows={fomcFiltered.map((r) => [
+              fmtUS(r.date) + (r.scheduled ? "" : " *"),
+              r.dow,
+              r.start === r.date ? "one day" : fmtSpan(r.start, r.date),
+              {
+                t: r.bps === 0 ? "hold" : `${r.bps > 0 ? "+" : ""}${r.bps} bp`,
+                c: r.bps > 0 ? DOWN : r.bps < 0 ? UP : INK,
+              },
+              `${r.level.toFixed(2)}%`,
+              { t: pct(r.into, 2), c: signColor(r.into) },
+              { t: pct(r.day, 2), c: signColor(r.day) },
+              { t: pct(r.after, 2), c: signColor(r.after) },
+            ])}
+          />
+          <div style={{ ...NOTE, fontSize: 11.5 }}>
+            * an intermeeting action — a conference call, not a scheduled meeting. There are{" "}
+            {n0(fomcRows.filter((r) => !r.scheduled).length)} of them, and the emergency cut of
+            15 March 2020 fell on a <b>Sunday</b>, so its one-session window is empty by
+            construction.
+          </div>
+        </Collapse>
+      </SeaCard>
+    ),
+
     // ── Jackson Hole ───────────────────────────────────────────────────────
     jh: (
       <SeaCard

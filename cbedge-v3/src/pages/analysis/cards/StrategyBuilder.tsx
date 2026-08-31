@@ -136,7 +136,7 @@ export function StrategyBuilderCard() {
   const ready = !!plan && (!!plan.summary || !!plan.headline)
 
   return (
-    <AnalysisCard span height={undefined}>
+    <AnalysisCard span height="auto">
       <Row>
         <CardTitle>
           Strategy Builder

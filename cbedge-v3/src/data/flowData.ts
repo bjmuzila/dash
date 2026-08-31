@@ -90,7 +90,12 @@ export function useFlowHistory(
   enabled: boolean,
 ): { tape: FlowTapePrint[]; switching: boolean } {
   const [tape, setTape] = useState<FlowTapePrint[]>([])
-  const [switching, setSwitching] = useState(false)
+  // Seeded from `enabled`, not `false`. The effect below only sets it a tick
+  // later, so a `false` seed made the very first render say "loaded, and
+  // empty" — the one frame in which a consumer that renders an empty state
+  // (the board's Net Premium card says "not available" for a ticker the
+  // recorder has never seen) would flash it on every mount.
+  const [switching, setSwitching] = useState(enabled)
   // The first run fires immediately: the 400ms debounce exists for slider
   // drags, and paying it on mount just delays first paint for nothing.
   const firstRunRef = useRef(true)

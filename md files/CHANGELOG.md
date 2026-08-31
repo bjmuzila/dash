@@ -1,177 +1,229 @@
 # Changelog
 
-## 2026-08-30 - v3 Traders Dashboard: prefs are per USER (Postgres), not per browser
+## 2026-08-31 - check:ws no longer dies on a stale process, and the mock tells the truth about flow
 
-The ZIP - and the schedule, tasks and quick links with it - saves to Postgres
-keyed on the account, and to nothing else.
+`npm run check` failed at `check:ws` with `mock server unreachable (ECONNRESET)
+- it exited mid-run` and every assertion red. The board changes were not the
+cause - the same commit passes `check:ws` and `perf` cleanly on Linux. The
+harness was.
 
-That chain already existed and the port already pointed at it:
-`/api/traders-dashboard` -> `server-v2/api-router.js` (registered
-`auth: 'subscriber'`) -> `lib/db.ts` `getTdPrefs`/`upsertTdPrefs` ->
-`td_user_prefs`, one row per `clerk_user_id`, upserted with `::jsonb` and
-`ON CONFLICT (clerk_user_id) DO UPDATE`. Nothing new was needed there.
+**The failure.** `cleanup()` killed its children with an ASYNC
+`spawn('taskkill', ...)` fired from an `exit` handler, which is not guaranteed
+to land before the process goes away - so on Windows the mock outlived its run
+and kept squatting :4311. The next run's mock then hit EADDRINUSE, which
+`server.on('error')` was not listening for, so it was thrown, SWALLOWED by the
+`uncaughtException` handler, and the process stayed alive serving nothing.
+`waitForPort()` cannot tell one mock from another: it got its answer from the
+STALE process, declared the mock up, and the run collapsed with an
+unexplained ECONNRESET the moment that stale process finally died. Nothing
+about it pointed at the real cause, which is why it has now been chased twice.
 
-What was wrong is that `cbedge-v3/src/pages/TradersDashboard.tsx` ALSO mirrored
-all four values into `localStorage`, so the first paint showed the saved widgets
-instead of the sample ones. That is a per-BROWSER store wearing a per-user
-store's clothes, and it broke the guarantee twice:
+- `cbedge-v3/scripts/mock-server.mjs` - `server.on('error')` added. A mock that
+  cannot listen prints why (naming EADDRINUSE explicitly) and EXITS. A dead
+  mock must look dead.
+- `cbedge-v3/scripts/ws-scope-check.mjs` -
+  - `cleanup()` uses `spawnSync` for the Windows taskkill, so a run cannot
+    leave its children behind for the next one.
+  - Pre-flight: if anything already answers on :4311 or :5274 the run stops
+    immediately and says a previous run probably left a process behind, with
+    the command to clear it.
+  - Child stdout/stderr are DRAINED and kept (last 200 lines). They were piped
+    and never read, which meant two things: the mock's own crash message went
+    into a pipe nobody looked at, and a child that filled the 64KB Windows pipe
+    buffer would block forever and be indistinguishable from a dead one.
+    `childReport()` now prints the tail plus the exit code on any failure.
 
-- a second person signing in on the same browser saw the first one's ZIP and
-  routine for as long as the GET took;
-- a ZIP cleared on the server came back. The load only applied `zip` when it
-  matched `/^\d{5}$/`, so a row with `zip: null` left the mirrored value on
-  screen - the page showing a ZIP that is not in the database.
+**The mock's flow tape was lying.** Its socket `flow` frame sent
+`type: 'call'|'put'`, `side: 'ask'|'bid'` and `expiration: '0DTE'`, and carried
+no `symbol` or `spot` at all - none of which the real server has ever sent
+(`src/contract/frames.ts`, `FlowTapePrint`, which warns about this exact
+thing). A card written against the REAL wire matched nothing locally; a card
+written against the mock would ship broken. Fixed to the contract.
 
-Changed in `cbedge-v3/src/pages/TradersDashboard.tsx`:
+- `cbedge-v3/scripts/mock-server.mjs` - `mockFlowHistory()` now takes the
+  ticker and premium floor and emits full-shape prints spread across RTH so
+  far today (DST-correct bounds, same correction `flowMath.ts` uses), and four
+  endpoints the new board cards need are mocked instead of 404ing:
+  `/proxy/flow-netprem` (derived from the same synthetic tape, so the chart and
+  the tape agree), `/proxy/contract-stats`, `/proxy/quotes` and
+  `/api/quotes-batch`. `npm run perf` is down from 6 unmocked endpoints to the
+  2 pre-existing shell ones.
 
-- Every `localStorage` read and write removed (`cb-v3-td-schedule`, `-tasks`,
-  `-links`, `-zip`). The defaults render for the few hundred ms the GET takes,
-  as v2 did; `useQuery`'s cache already spares a client-side navigation back to
-  the page from refetching. Those four keys are now orphaned in any browser that
-  used the previous build - harmless, nothing reads them.
-- The row is authoritative for ZIP including its ABSENCE: `zip: null` or a
-  malformed value now clears the field instead of leaving the old one up.
-- New `flush()` posts the queued patch immediately and runs from both the
-  unmount cleanup and a `pagehide` listener, with `keepalive: true` - without
-  which a fetch fired as the document goes away is cancelled and the edit is
-  lost. Set a ZIP and click to another page inside the 400ms debounce: v2 saved
-  it (it posted on every keystroke), the debounced version would have dropped
-  it. Both exits are covered now.
+Verified end to end on a Linux checkout of this exact tree: `check:casing`,
+`typecheck`, `check:theme`, `build`, `budgets`, `check:ws`, `perf` and all four
+parity self-tests pass, with all 11 catalog cards on the board.
 
-Re-run and clean after the change: `typecheck`, `check-theme.mjs`,
-`parity-check.test.mjs`. Still not run here: `build`, `budgets`, `perf`,
-`check:ws`, `check:parity`, and `check:casing` (which still fails until the two
-tombstones from the entry below are `git rm`-ed).
+## 2026-08-31 - LSE Data: London Strategic Edge vault on the owner dashboard
 
-## 2026-08-30 - v3 Traders Dashboard: casing collision fixed, check:casing added
+Ported `futures_data_downloader.py` (the interactive LSE CLI) into the Node
+stack so the pulls run from `owner.cbedge.net` instead of a laptop terminal.
+No Python was added to the image: the `lse-data` SDK is a thin wrapper over a
+plain HTTP API, so we speak that API directly.
 
-Follow-up to the port below. `npm run check` failed on the laptop with TS1149
-and "Property 'default' is missing" on the wheel's `lazy()` import.
+**Backend - `server-v2/_lib-lse.cjs` (new).** Vault client, read straight out of
+`lse/client.py` + `lse/vault.py` so rows match the Python call-for-call.
+Base `https://api.londonstrategicedge.com/vault`, `x-api-key` header, and an
+explicit User-Agent (the CDN in front of the vault 403s the default one - do
+not remove it). Covers `/catalog`, `/meta`, `/candles`, `/options/chain`,
+`/options/flow`, `/options/candles`, plus the SDK's name resolution
+("apple" -> AAPL, prefix match first then shortest name) and OSI contract
+assembly.
 
-Cause: the wheel shipped as `sectorWheel.ts` beside `SectorWheel.tsx`. Those
-basenames differ only in case, so on Windows the resolver turns
-`import('./SectorWheel')` into `SectorWheel.ts` and the case-insensitive
-filesystem hands back the MATHS module. It typechecks clean on a case-sensitive
-filesystem - which is how it got committed, and also means the Docker deploy
-(Linux) would never have caught it. Only the laptop would, after the fact.
+- **The 5,000-row cap is the whole design.** Every vault call is capped, so
+  "download all the history" is a walk, not a request. `pageCandles()` /
+  `pageOptionsFlow()` are async generators that page on the time cursor and
+  dedupe the seam row (`start` is inclusive), yielding page by page so the
+  route can STREAM CSV instead of buffering a decade of 1m bars in the heap.
+- `maxRows` is a seatbelt, not a feature - without it a fat-fingered
+  "1s since 2003" walks for hours. The response says when it trips.
 
-- `cbedge-v3/src/pages/tradersDashboard/wheelMath.ts` (was `sectorWheel.ts`) and
-  `SectorWheelCard.tsx` (was `SectorWheel.tsx`) - renamed, contents unchanged
-  apart from the import line and a header note explaining the trap.
-- `cbedge-v3/src/pages/TradersDashboard.tsx` - both imports repointed.
-- `cbedge-v3/scripts/check-casing.mjs` (new) - fails on any two modules in one
-  folder whose names differ only in case, per directory, comparing basenames
-  WITHOUT their extension because it is the module specifier that collides and a
-  specifier carries no extension. Wired in as `check:casing` and placed FIRST in
-  `npm run check`, so the next one of these reports a named collision and a
-  `git rm` line instead of a TS1149 stack.
+**Backend - `server-v2/api-router.js`.** Eight owner-gated routes appended as a
+new top-level block (the module is `require`d defensively like every other
+`_lib-*.cjs`; no module = no routes, rest of the router untouched):
 
-Two files need deleting by hand - the shell on this machine was down again, so
-they were emptied to `export {}` tombstones carrying their own `git rm` line:
+| Route | What |
+|---|---|
+| `/api/lse/status` | key present + vault reachable |
+| `/api/lse/catalog` | symbols, datasets, history spans (`?datasets=1` for the picker) |
+| `/api/lse/candles` | OHLCV; `start=MAX` reads first_tick from the catalog |
+| `/api/lse/options-chain` | IV, greeks, day volume/premium |
+| `/api/lse/options-flow` | the print tape |
+| `/api/lse/option-candles` | 1m bars for one contract (OSI or by parts) |
+| `/api/lse/resolve` | name -> ticker |
+| `/api/lse/timeframes` | the resolution list |
 
-    git rm cbedge-v3/src/pages/tradersDashboard/sectorWheel.ts
-    git rm cbedge-v3/src/pages/tradersDashboard/SectorWheel.tsx
+`format=csv` on any of them returns a download; `all=1` on candles/flow walks
+the whole range. No proxy file was touched - `server-with-proxy.js`,
+`proxy-tastytrade.js` and `proxy-thetadata.js` are unchanged.
 
-**`npm run check:casing` fails until those two are removed.** Deliberate: they
-are dead, and they are a live trap for the next `./SectorWheel` import.
+**Frontend - `owner-vite/src/pages/LseData.tsx` (new), at `/owner/lse-data`.**
+The CLI's menu became a tab strip (Catalog / Candles / Options Chain /
+Options Flow / Contract Candles), its `input()` prompts became fields, and
+`save_to_csv()` became a Download CSV button that navigates to the same URL
+with `format=csv` - so the browser streams the file to disk and a big pull
+never enters the tab's memory. Preview caps at 300 rows. All colors and
+surfaces come from `owner-vite/src/lib/theme.ts`; nothing is hardcoded.
 
-Re-run in isolation after the rename and clean: `typecheck`, `check-theme.mjs`,
-`parity-check.test.mjs`. Still not run against the real tree: `build`,
-`budgets`, `perf`, `check:ws`, `check:parity`.
+- `owner-vite/src/lib/nav.ts` - "LSE Data" added to the **Market** group.
+- `owner-vite/src/pages/registry.ts` - lazy route registered.
 
-## 2026-08-30 - v3 Traders Dashboard: ported from v2, sector wheel included
+**Setup.** The key lives in `LSE_API_KEY` in `.env.local` (git-ignored, mounted
+at runtime, never baked into the image or shipped to the browser). It must be
+added on the VPS too - `.env.local` does not travel through GitHub. Until it
+is, the page shows a red banner saying exactly that instead of five identical
+503s. The key that was hardcoded in the original .py should be rotated.
 
-Step 2-4 of the port. The spec is `cbedge-v3/docs/parity/traders-dashboard.md`
-(168 checklist rows, written first); Part J of that file is the build log and is
-the authority on what landed and what did not.
+## 2026-08-31 - v3 board: Key Levels heading, new Net Premium card, real Flow Tape
 
-Brandon's three calls, taken before any code:
+Three board changes, all in `cbedge-v3`.
 
-1. **Up is blue, down is red.** v2's `HOME_THEME.green` is a light blue
-   (`#8ECAE6`) and the sector wheel's whole diverging ramp hangs off it, so it
-   came across verbatim as two new tokens rather than being remapped onto v3's
-   green `--color-up`.
-2. **Early closes stay unhandled** - the countdown still targets 16:00 on a
-   13:00 half day, as v2 did. Now written down in the code, not only in the
-   parity doc.
-3. **Trending Now is one ranking**, highest positive to lowest negative. This is
-   the only behavioural change to a rendered value in the port: v2 printed
-   `/api/premarket-movers`'s array untouched, which is top-5 best-first followed
-   by bottom-5 worst-first - two descents with a cliff between them.
+**1. Key Levels now says which ticker and which contract.** The card header
+reads `AMZN - Key Levels - 8-31-26` instead of a bare "Key Levels".
 
-New:
+- `cbedge-v3/src/board/cardTitle.tsx` (new) - `fmtContractDate()` (ISO ->
+  `M-D-YY`) and `<CardHeading>`, so every card that grows a contract date
+  spells it the same way.
+- `cbedge-v3/src/board/catalog.tsx` - `CardDef` gains an optional `Title`
+  COMPONENT (not a render function - it holds hooks, and calling it inline from
+  BoardPage would make them BoardPage's hooks, conditionally).
+- `cbedge-v3/src/board/BoardPage.tsx` - renders `def.Title` in place of
+  `def.label` inside the drag handle when a card supplies one.
+- `cbedge-v3/src/board/keyLevels/KeyLevelsCard.tsx` - exports `KeyLevelsTitle`,
+  split the same way the card is: SPX reads the socket's `gex.data.expiry`,
+  every other ticker reads the front expiry of the same `/api/chains` URL the
+  ladder was built from (deduped by useQuery, so it is one request). It can
+  never name an expiry the axis was not built from.
 
-- `cbedge-v3/src/pages/tradersDashboard/sectorWheel.ts` - the wheel's maths,
-  transcribed 1:1 from v2's `components/dashboard/SectorSunburst.tsx`: ring
-  radii, cap-weighted angles, both colour ramps, the bar clamp, the label fit
-  tests, the greedy non-overlapping callout placer, the sector leaderboard.
-- `cbedge-v3/src/pages/tradersDashboard/SectorWheel.tsx` - the render layer on
-  v3 primitives. Tooltip, Top/Bottom, coverage footer, `⤢ Expand` pop-out and
-  the Fullscreen API all present. The SVG is `memo()`d away from the hover
-  state, so a mousemove repaints one div instead of ~200 arcs (v2 repainted all
-  of them). Behind `lazy()` - it is the heaviest thing on the page and sits
-  below the fold.
-- `cbedge-v3/scripts/parity-check.mjs` + `parity-check.test.mjs` - 43 probes.
-  Drives `/app/traders-dashboard` and `/v3/traders-dashboard` in one browser
-  against ONE backend in the same minute and fails on anything v2 renders and
-  v3 does not. Keys on visible text (emoji card headings, the futures tile
-  symbols, the uppercase section runs, the hub `<text>` nodes, the
-  `{covered}/{universe} names` footer) rather than class names, which the port
-  replaces by design. `npm run check:parity` needs `PARITY_ORIGIN` and a
-  `PARITY_COOKIE` session; a run that cannot read both pages exits 2 and is
-  never reported as a pass. `npm run check:parity:self` runs the fixture test
-  and is wired into `npm run check` - it needs no browser and no backend, and it
-  proves the checker catches the un-ported wheel.
+**2. Net Premium - new card.** The /flow page's Net Drift chart, on the board.
 
-Changed:
+- `cbedge-v3/src/board/netPremium/NetPremiumCard.tsx` (new) - same
+  `NetDriftChart` component and same `/proxy/flow-netprem` aggregate the page
+  uses, so the two cannot disagree. Follows the board's page ticker.
+  Narrowed on purpose: **closest expiration only**, **OTM calls and puts only**,
+  RTH span with no 24H toggle.
+  A ticker the flow recorder has never seen gets an honest
+  `<TICKER> - not available. Coming soon.` rather than an empty grid that reads
+  as a quiet day.
+- The one accepted hop: "the closest expiration" is not knowable until the tape
+  says which expirations exist, so the bins request stays disabled until the
+  expiry is known instead of firing an unscoped one that would be thrown away.
+- `cbedge-v3/src/data/flowData.ts` - `useFlowHistory` seeds `switching` from
+  `enabled` instead of `false`. With a `false` seed the very first render said
+  "loaded, and empty", which flashed the not-available message on every mount.
 
-- `cbedge-v3/src/design/tokens.css` - `--color-move-up` / `--color-move-down`,
-  v2's pair verbatim. Same precedent as the candle pair beside them.
-- `cbedge-v3/src/design/theme.ts` - `MOVE_UP` / `MOVE_DOWN`, plus a numeric
-  colour kit (`tokenRgb`, `mixRgb`, `rgbHex`, `isLightRgb`). The wheel needs
-  colour as NUMBERS for two jobs CSS cannot do: a magnitude ramp that stays
-  opaque under text, and the luminance test that picks dark or light ink for a
-  label printed on it. These READ the live custom property, so tokens.css is
-  still the only place a value is written.
-- `cbedge-v3/src/pages/TradersDashboard.tsx` - rewritten against the checklist.
-  Prefs are server-backed again (`/api/traders-dashboard`) with localStorage
-  demoted to a mirror, so a 401 or a dead route no longer silently reverts a
-  trader to the sample schedule; Premarket Prep is a real link; Trending Now is
-  back to v2's row list (18-char truncation, PM tag) with the new sort; the
-  countdown's `clamp(48px,8vw,84px)` ramp, the 3px driver accent bars, the
-  cyan-to-blue task progress fill and the mono schedule times are all restored.
-  Prefs saves are now debounced for real (400ms) - v2's helper was captioned
-  "(debounced)" and was not, so every keystroke was its own POST.
-- `cbedge-v3/package.json` - `check:parity`, `check:parity:self`, and the
-  self-test added to `check`.
+**3. Flow Tape - the real one, with a min-premium slider.**
 
-Not ported, knowingly: the two snapshot buttons (page and wheel). They need a
-DOM-to-canvas renderer v3 does not ship and that is not worth a dependency for
-one button. It is the only v2 row this port drops, and `parity-check.mjs`
-reports it as a declared departure rather than a failure. The Economic Calendar
-header button also stays a dimmed pill - v3 has no `/economic-calendar` route,
-and App.tsx's no-catch-all rule means a live link would 404.
+- `cbedge-v3/src/pages/flow/FlowTape.tsx` (new) - the fifteen-column print
+  table lifted out of `pages/Flow.tsx` unchanged, so the page and the board card
+  render the SAME table (all columns, tooltips, whale rows and the contract
+  drawer). Two copies of a table this wide is two places for a column to go
+  wrong.
+- `cbedge-v3/src/pages/Flow.tsx` - imports it; ~215 lines and eight now-unused
+  imports removed. No behaviour change.
+- `cbedge-v3/src/board/flowTape/FlowTapeCard.tsx` (new) - replaces the old
+  "Flow Tape (Net Premium)" sparkline card. Follows the page ticker (flow IS
+  recorded per ticker via `/proxy/flow-history?underlying=`), merges live
+  socket prints for the index, and exposes ONE control: a **Min Premium slider
+  with six detents - Any / $50K / $100K / $250K / $500K / $1M**, defaulting to
+  $100K and remembered per browser. The floor is pushed into SQL, so raising it
+  makes the server's 20k-row cap keep the biggest prints of the session rather
+  than the most recent slice. Everything else stays the page's default: both
+  sides, both types, OTM only, every expiry. Card caps at 250 rendered rows.
+- `cbedge-v3/src/board/catalog.tsx` - `flow-tape` keeps its id (saved boards
+  survive), relabelled "Flow Tape" and resized to 12x12; `net-premium` added at
+  8x12. Both are `lazy()` - the tape pulls the drawer, Net Premium pulls
+  lightweight-charts, and neither belongs in the board's route chunk.
 
-Route work: none needed. `/v3/traders-dashboard` was already wired all four ways
-(page, `lazy()` route, `NAV` entry, `app/v3/traders-dashboard/route.ts`).
+`tsc --noEmit` and `check:theme` clean. Run `npm run check` before pushing -
+`perf` and `check:ws` are the two that catch what looks fine on screen.
 
-Two caveats:
+## 2026-08-30 - v3: store subscribe hardened, ws-scope-check no longer crashes
 
-- The local shell on this machine was unavailable again this session, so
-  **nothing was run against the repo**: no `npm run typecheck`, `check:theme`,
-  `build`, `budgets`, `perf` or `check:parity`. The new files typecheck clean
-  and pass `check-theme.mjs` in isolation under an identical config, and the
-  parity self-test passes, but none of that is the real tree. Run
-  `npm run check` in `cbedge-v3/` before pushing.
-- The `2026-08-30 - v3: six pages retired` entry below describes edits to
-  `App.tsx`, `Shell.tsx`, `TradersDashboard.tsx`, `Scanner.tsx`, `TestLab.tsx`
-  and two `app/v3/*/route.ts` files that are **not present in the working tree**
-  - `/scanner` and `/test` are still routed, `NAV` still carries every
-  `comingSoon` icon, and both page files are still full. That session's caveat
-  says its shell was down too. This port was built against what is actually on
-  disk, so `ALL_PAGES` and `LIVE_ROUTES` in the rewritten
-  `TradersDashboard.tsx` still match the live `App.tsx`. If the retirement was
-  meant to land, it needs redoing - and this file should be updated to match.
+`npm run check` failed at `check:ws` with `scope includes our subscribed types
+(got ["gex","spot"])` - the test subscribes to `spot` AND `aux`, and `aux` was
+missing from the derived scope - then the script died outright with an uncaught
+`TypeError: fetch failed / ECONNRESET` before it could report.
+
+- `cbedge-v3/src/data/store.ts` - `subscribe()` had a stale-generation bug in
+  exactly the mechanism that derives `?topics=`. The returned unsubscribe closure
+  captured a Set; if that Set emptied, the type was deleted from `listeners` and
+  a later `subscribe()` for the same type installed a BRAND NEW Set. A stale
+  closure from the first generation firing after that ran
+  `listeners.delete(type)` and retired a type that had live listeners in the new
+  Set - so the type left `activeTypes()`, left `desired`, and after NARROW_MS the
+  socket reconnected without it. Nothing throws; the frames just stop. That is
+  the v2 silent-stale-panel failure this whole system exists to prevent.
+  The closure now compares identity (`listeners.get(type) === owned`) before
+  retiring the type, which also makes a double-unsubscribe harmless.
+  `notifyActiveTypes()` also moved to AFTER `set.add(fn)` so the type is never
+  announced while its Set is still empty.
+- `cbedge-v3/scripts/ws-scope-check.mjs` - `connections()` no longer throws. A
+  mock server that exits mid-run is recorded as a normal failure with its errno
+  instead of taking the script down with a stack trace and losing every
+  assertion result. The scope assertion now names which topics are MISSING and
+  prints the full scope history (`ALL -> gex -> aux,gex,spot -> gex,spot`),
+  because "requested then narrowed away" and "never derived at all" are
+  different bugs and the final scope alone cannot tell them apart.
+
+Not yet re-run end to end here - `npm run check` on the laptop is the verdict.
+If `check:ws` still fails, the printed scope history says which of the two it is.
+
+## 2026-08-30 - v3: Journal retired too
+
+Follow-on to the six-page removal below. `/v3/trading` is gone the same way:
+
+- `cbedge-v3/src/App.tsx` - `lazy()` import and `<Route path="/trading">` removed.
+- `cbedge-v3/src/shell/Shell.tsx` - `NAV` drops the Journal slot. The rail is
+  now Home, Traders Dash, Premarket, Options Chain, Est. Moves, Analysis,
+  Replay, Flow.
+- `cbedge-v3/src/pages/TradersDashboard.tsx` - Journal out of `ALL_PAGES`,
+  `/trading` out of `LIVE_ROUTES`.
+- `cbedge-v3/src/pages/Journal.tsx` - emptied to a tombstone (`export {}`);
+  `git rm` it.
+- `app/v3/trading/route.ts` - 404 instead of the SPA shell; `git rm -r` the folder.
+
+Backend untouched: `/api/journal` and `/api/journal/trades` still serve v2's
+`components/pages/Trading.tsx` at `/app/trading`.
 
 ## 2026-08-30 - v3: six pages retired (Scanner, Test Lab, ICT, ES Candles, Board, Multi Greek)
 

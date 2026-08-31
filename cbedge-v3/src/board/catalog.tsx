@@ -1,14 +1,6 @@
-import type { ReactNode } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import { Suspense, lazy, useEffect, useState } from 'react'
-import { ChartFrame } from '@/design/primitives/ChartFrame'
-import { Stat } from '@/design/primitives/Stat'
-import { Table } from '@/design/primitives/Table'
-import { watchFrame } from '@/data/hooks'
-import { CardToolbar } from '@/design/primitives/Card'
-import { SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
-import type { FlowFrame } from '@/contract/frames'
 import type { BoardItem } from '@/design/primitives/Board'
-import { useCanvasRenderer, drawLines } from './chart-render'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The board's card catalog — the "+ Add card" dropdown lists exactly this
@@ -16,111 +8,67 @@ import { useCanvasRenderer, drawLines } from './chart-render'
 // BoardPage and Board never need to change.
 //
 // THE BIG ONES ARE lazy(). GEX Candles, Multi Greek, Key Levels, the Economic
-// Calendar and now the GEX Chart are each a real feature with its own module
-// tree — GEX Candles alone pulls lightweight-charts. Static imports would put
-// all of them in the board's route chunk and every user would pay for the cards
-// they do not have on their board. lazy() means a card's code arrives when the
-// card does. The Suspense fallback is a blank fill, not a spinner: the card
-// frame is already drawn around it, and a spinner inside a frame reads as an
-// error.
+// Calendar, the GEX Chart, Net Premium and the Flow Tape are each a real
+// feature with its own module tree — GEX Candles and Net Premium each pull
+// lightweight-charts, the Flow Tape pulls the whole print table and its
+// contract drawer. Static imports would put all of them in the board's route
+// chunk and every user would pay for the cards they do not have on their board.
+// lazy() means a card's code arrives when the card does. The Suspense fallback
+// is a blank fill, not a spinner: the card frame is already drawn around it,
+// and a spinner inside a frame reads as an error.
 //
-// GEX Chart joined the list when it stopped being four lines of
-// drawDivergingBars and became a real chart with its own renderer, two axes and
-// a basis switch.
-//
-// The small ones (Flow Tape, Quick Links) stay static — they are a few lines
-// each and a chunk boundary would cost more than it saves.
+// Quick Links stays static — it is a few lines and a chunk boundary would cost
+// more than it saves.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GexCandlesCard = lazy(() => import('./gexCandles/GexCandlesCard').then((m) => ({ default: m.GexCandlesCard })))
 const MultiGreekCard = lazy(() => import('./multiGreek/MultiGreekCard').then((m) => ({ default: m.MultiGreekCard })))
 const KeyLevelsCard = lazy(() => import('./keyLevels/KeyLevelsCard').then((m) => ({ default: m.KeyLevelsCard })))
+const KeyLevelsTitle = lazy(() => import('./keyLevels/KeyLevelsCard').then((m) => ({ default: m.KeyLevelsTitle })))
 const EconCalendarCard = lazy(() =>
   import('./econCalendar/EconCalendarCard').then((m) => ({ default: m.EconCalendarCard })),
 )
 const GexChartCard = lazy(() => import('./gexChart/GexChartCard').then((m) => ({ default: m.GexChartCard })))
+const NetPremiumCard = lazy(() => import('./netPremium/NetPremiumCard').then((m) => ({ default: m.NetPremiumCard })))
+const FlowTapeCard = lazy(() => import('./flowTape/FlowTapeCard').then((m) => ({ default: m.FlowTapeCard })))
 
 function Deferred({ children }: { children: ReactNode }) {
   return <Suspense fallback={<div className="min-h-0 flex-1" />}>{children}</Suspense>
 }
 
+/**
+ * A dynamic title falls back to the PLAIN LABEL while its chunk loads, never to
+ * a blank: the header is the only thing on a card that is readable before the
+ * body arrives, and a title that appears a beat after the card does is the
+ * board looking broken for a beat.
+ */
+function KeyLevelsHeading() {
+  return (
+    <Suspense fallback={<>Key Levels</>}>
+      <KeyLevelsTitle />
+    </Suspense>
+  )
+}
+
 export interface CardDef {
   id: string
   label: string
+  /**
+   * A live header for cards whose subject is not fixed — the page ticker, the
+   * contract date the numbers came from. Rendered by BoardPage IN PLACE OF
+   * `label`, inside the drag handle, so it must stay one line of text.
+   *
+   * A COMPONENT, never a render function: it holds hooks of its own, and a
+   * function called inline from BoardPage's render would make them BoardPage's
+   * hooks — conditionally, which is the rules-of-hooks violation that only
+   * shows up when a card is added or removed.
+   *
+   * `label` is still required, and still what the "+ Add card" menu lists.
+   */
+  Title?: ComponentType
   /** Default footprint in grid units when first added to a board. */
   defaultSize: { w: number; h: number }
   render: () => ReactNode
-}
-
-// ── Flow Tape (Net Premium) — live rolling chart + recent prints ────────────
-//
-// THE ONE CARD THAT CANNOT FOLLOW THE PAGE TICKER. The `flow` frame is SPX
-// prints and there is no per-ticker source for options flow anywhere in
-// server-v2 — unlike the gex cards, which have /api/chains to fall back on.
-// So it says SPX on its face when the board is on something else, rather than
-// quietly showing SPX's tape under an AMZN heading.
-const FLOW_HISTORY_MAX = 120
-
-function FlowTapeCard() {
-  const { onMount, onResize, onVisibility, setDraw } = useCanvasRenderer()
-  const { symbol } = usePageSymbol()
-  const following = isSocketSymbol(symbol)
-  const [snapshot, setSnapshot] = useState<{ netPremium: number; buyPct: number; prints: number } | null>(null)
-  const [tape, setTape] = useState<FlowFrame['data']['tape']>([])
-
-  useEffect(() => {
-    const history: number[] = []
-    return watchFrame<FlowFrame>('flow', (frame) => {
-      const d = frame?.data
-      if (!d) return
-      history.push(d.netPremium)
-      if (history.length > FLOW_HISTORY_MAX) history.shift()
-      setDraw((canvas, w, h) => drawLines(canvas, w, h, [{ color: '--color-accent', points: [...history] }]))
-      setSnapshot({ netPremium: d.netPremium, buyPct: d.buyPct, prints: d.prints })
-      setTape(d.tape ?? [])
-    })
-  }, [setDraw])
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
-      {!following && (
-        <CardToolbar>
-          <span
-            title={`Options flow is only recorded for ${SOCKET_SYMBOL}. This card does not follow the board's ticker`}
-            className="rounded-sm border border-warn px-1.5 py-px text-3xs font-bold uppercase tracking-[0.08em] text-warn"
-          >
-            {SOCKET_SYMBOL} only
-          </span>
-        </CardToolbar>
-      )}
-      <div className="grid shrink-0 grid-cols-3 gap-2">
-        <Stat
-          label="Net premium"
-          value={snapshot ? `$${(snapshot.netPremium / 1000).toFixed(0)}k` : undefined}
-          direction={snapshot ? (snapshot.netPremium >= 0 ? 'up' : 'down') : undefined}
-          size="sm"
-        />
-        <Stat label="Buy %" value={snapshot ? `${(snapshot.buyPct * 100).toFixed(0)}%` : undefined} size="sm" />
-        <Stat label="Prints" value={snapshot?.prints} size="sm" />
-      </div>
-      <div className="h-16 shrink-0">
-        <ChartFrame onMount={onMount} onResize={onResize} onVisibility={onVisibility} />
-      </div>
-      <Table
-        columns={[
-          // `r.type` is already 'C' | 'P' — see FlowTapePrint. It used to be
-          // compared against 'call', which the wire has never carried, so this
-          // column suffixed every strike 'P' regardless of what printed.
-          { key: 'strike', header: 'Strike', cell: (r) => `${r.strike}${r.type}`, width: '64px' },
-          { key: 'side', header: 'Side', cell: (r) => r.side, width: '48px' },
-          { key: 'premium', header: 'Premium', cell: (r) => `$${(r.premium / 1000).toFixed(0)}k`, numeric: true },
-        ]}
-        rows={[...tape].slice(-25).reverse()}
-        rowKey={(r, i) => `${r.ts}-${i}`}
-        empty="No prints this window"
-      />
-    </div>
-  )
 }
 
 // ── Quick Links — fully local: user-editable, persisted per browser. ─────────
@@ -243,11 +191,31 @@ export const CARD_CATALOG: CardDef[] = [
       </Deferred>
     ),
   },
-  { id: 'flow-tape', label: 'Flow Tape (Net Premium)', defaultSize: { w: 6, h: 9 }, render: () => <FlowTapeCard /> },
+  {
+    id: 'net-premium',
+    label: 'Net Premium',
+    defaultSize: { w: 8, h: 12 },
+    render: () => (
+      <Deferred>
+        <NetPremiumCard />
+      </Deferred>
+    ),
+  },
+  {
+    id: 'flow-tape',
+    label: 'Flow Tape',
+    defaultSize: { w: 12, h: 12 },
+    render: () => (
+      <Deferred>
+        <FlowTapeCard />
+      </Deferred>
+    ),
+  },
   { id: 'quick-links', label: 'Quick Links', defaultSize: { w: 3, h: 6 }, render: () => <QuickLinksCard /> },
   {
     id: 'key-levels',
     label: 'Key Levels',
+    Title: KeyLevelsHeading,
     defaultSize: { w: 12, h: 6 },
     render: () => (
       <Deferred>

@@ -450,6 +450,20 @@ export interface SpotSeries {
   last: number
 }
 
+/** Half-width of the keep band, in MADs. See buildSpotSeries. */
+const SPOT_MAD_K = 8
+/** Floor on the keep band as a fraction of the median, for a quiet session. */
+const SPOT_BAND_MIN = 0.015
+/** Ceiling on the keep band. Nothing legitimate is ±12% intraday on an index. */
+const SPOT_BAND_MAX = 0.12
+
+function median(sorted: readonly number[]): number {
+  const n = sorted.length
+  if (n === 0) return 0
+  const mid = n >> 1
+  return n % 2 ? (sorted[mid] ?? 0) : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2
+}
+
 /**
  * The underlying's own path across the session, for the Net Drift overlay.
  *
@@ -458,29 +472,73 @@ export interface SpotSeries {
  * no separate per-minute spot feed to pull, and adding one for a decorative
  * overlay would be a second socket's worth of traffic for a line.
  *
- * Bucketed to BIN_SEC so it lands on the drift grid, LAST print in the minute
- * wins (closest to that minute's close). Minutes with no print emit NO point at
- * all rather than whitespace: a Line series joins across a missing index, and a
- * continuous spot line is the whole reason the overlay is here. Whitespace
- * would reintroduce the gaps this same commit is removing.
+ * Bucketed to BIN_SEC so it lands on the drift grid. Minutes with no print emit
+ * NO point at all rather than whitespace: a Line series joins across a missing
+ * index, and a continuous spot line is the whole reason the overlay is here.
+ *
+ * ── Why this is not just "take the last print's spot" ──
+ *
+ * `spot` is per-print and it is NOT clean. flow-processor.js writes whatever
+ * the underlying quote said at coalesce time, and that goes wrong in ways this
+ * repo has already been bitten by once — see the ⚠ note on `isOtm` in
+ * contract/frames.ts, where a stuck spot mislabelled a whole midday SPX
+ * session. Taking the last print in the minute therefore lets ONE bad quote own
+ * a whole minute, and because the overlay is autoscaled a single 2× outlier
+ * flattens the real intraday range into a straight line and draws the rest as
+ * square-wave spikes.
+ *
+ * So, two passes, both robust rather than clever:
+ *
+ *   1. MEDIAN WITHIN THE MINUTE, not the last print. A minute normally carries
+ *      many prints and they all quote the same underlying, so the median throws
+ *      out a lone bad quote for free and only loses if most of the minute is
+ *      wrong.
+ *   2. MAD BAND ACROSS THE SESSION. Take the median of those per-minute
+ *      medians, then the median absolute deviation from it, and keep only
+ *      minutes within SPOT_MAD_K MADs. MAD is used rather than a fixed percent
+ *      because it ADAPTS: a wide-range day widens the band on its own, so a
+ *      real selloff is not clipped. It is clamped to [1.5%, 12%] of the median
+ *      so a dead-flat session does not collapse the band to nothing and a
+ *      session with many outliers cannot blow it wide open.
+ *
+ * Both passes are pure order statistics — no smoothing, no interpolation. A
+ * rejected minute is dropped, not replaced with a guess, and the Line series
+ * joins across it.
  */
 export function buildSpotSeries(
   prints: readonly FlowTapePrint[],
   opts: { openSec: number; closeSec: number },
 ): SpotSeries {
-  // minute -> { ts, spot }; ts breaks ties so poll order cannot change the line.
-  const byMin = new Map<number, { ts: number; spot: number }>()
+  // ── Pass 1: every quote in the minute, then that minute's median. ──
+  const samples = new Map<number, number[]>()
   for (const o of prints) {
-    if (!o.spot || o.spot <= 0) continue
+    if (!o.spot || !Number.isFinite(o.spot) || o.spot <= 0) continue
     const sec = Math.floor(o.ts / 1000 / BIN_SEC) * BIN_SEC
     if (sec < opts.openSec || sec > opts.closeSec) continue
-    const cur = byMin.get(sec)
-    if (!cur || o.ts >= cur.ts) byMin.set(sec, { ts: o.ts, spot: o.spot })
+    const arr = samples.get(sec)
+    if (arr) arr.push(o.spot)
+    else samples.set(sec, [o.spot])
   }
+  if (samples.size === 0) return { pts: [], last: 0 }
 
-  const pts: NetPoint[] = [...byMin.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([sec, v]) => ({ time: sec, value: v.spot }))
+  const minutes = [...samples.entries()]
+    .map(([sec, arr]) => ({ sec, v: median([...arr].sort((a, b) => a - b)) }))
+    .filter((m) => m.v > 0)
+    .sort((a, b) => a.sec - b.sec)
+  if (minutes.length === 0) return { pts: [], last: 0 }
+
+  // ── Pass 2: the robust band. ──
+  const vals = minutes.map((m) => m.v).sort((a, b) => a - b)
+  const med = median(vals)
+  const mad = median(minutes.map((m) => Math.abs(m.v - med)).sort((a, b) => a - b))
+  const tol = Math.min(
+    med * SPOT_BAND_MAX,
+    Math.max(mad * SPOT_MAD_K, med * SPOT_BAND_MIN),
+  )
+
+  const pts: NetPoint[] = minutes
+    .filter((m) => Math.abs(m.v - med) <= tol)
+    .map((m) => ({ time: m.sec, value: m.v }))
 
   return { pts, last: pts.length ? (pts[pts.length - 1]?.value ?? 0) : 0 }
 }
