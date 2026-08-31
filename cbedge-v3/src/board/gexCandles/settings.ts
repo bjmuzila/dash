@@ -29,16 +29,18 @@ export const INTERVAL_LABEL: Record<Interval, string> = {
  * Which time bucket the bubbles aggregate at. Storage is always one column per
  * MINUTE; this is a DRAW-time aggregation.
  *
- * 'auto' is the default and the right answer almost always: the bucket is a
- * question about how much room a dot has, and only the chart knows how wide the
- * pane is. It picks the smallest rung of `BUBBLES.bucketRungsMin` whose dots
- * land far enough apart, and re-picks on every zoom.
+ * 'auto' is the default and the right answer almost always: FOLLOW THE BAR
+ * INTERVAL, clamped into `BUBBLES.bucketRungsMin` — one bubble per bar on 1m and
+ * 5m, and a 5m bucket on 15m and coarser, where the ladder caps.
  *
- * 1 and 5 are MANUAL overrides, and they override the RUNG, not the stride: a
+ * It used to mean "follow the pane": the smallest rung whose dots landed far
+ * enough apart, re-picked on every zoom. That is why the interval picker did
+ * nothing to this layer, and why 1m bubbles only appeared once you had zoomed
+ * most of the way in.
+ *
+ * 1 and 5 are MANUAL overrides, and they override the BUCKET, not the stride: a
  * forced 1m on a whole session still strides, because 975 dots do not fit in
- * 1500px whatever anyone picked. So the honest description of a pinned value is
- * "never coarser than this", and at a wide zoom it lands on the same picture
- * auto would have drawn.
+ * 1500px whatever anyone picked.
  *
  * (v2's slotStore carries the same three values plus a legacy 'bar' spelling,
  * which is the pre-rename name for 'auto'. v3 has no blobs old enough to hold
@@ -47,7 +49,7 @@ export const INTERVAL_LABEL: Record<Interval, string> = {
 export type BubbleBucket = 1 | 5 | 'auto'
 export const isBubbleBucket = (v: unknown): v is BubbleBucket => v === 1 || v === 5 || v === 'auto'
 /**
- * Does this bucket follow the pane, rather than pin a rung?
+ * Does this bucket follow the bar interval, rather than pin a rung?
  *
  * A type predicate, not a plain boolean: the false branch is where a pinned
  * bucket gets handed to ChartDrawOpts.bucketMin, which is `1 | 5 | null`.
@@ -102,8 +104,8 @@ export interface ChartSettings {
    */
   expiry: string
   /**
-   * The bubble time bucket: 'auto' follows the pane, 1 or 5 pins the rung.
-   * See BubbleBucket.
+   * The bubble time bucket: 'auto' follows the BAR INTERVAL, 1 or 5 pins the
+   * rung. See BubbleBucket.
    */
   bubbleBucket: BubbleBucket
   /**
@@ -147,8 +149,8 @@ export const DEFAULT_SETTINGS: ChartSettings = {
  * name. The rules it implements, in order:
  *
  *   1 bubble per bucket        the trail is a SAMPLE, not a line. Bucket to 1m
- *                              or 5m by how wide the window is, last print in
- *                              the bucket wins.
+ *                              or 5m by the BAR INTERVAL, last print in the
+ *                              bucket wins; the zoom strides what is drawn.
  *   4-10 strikes, 1 a side     rank by |netGex|, force one above spot and one
  *                              below, then fill from the ranking.
  *   grow with net GEX          r = floor + sqrt(|gex| / windowMax) x (cap-floor)
@@ -173,17 +175,19 @@ export const DEFAULT_SETTINGS: ChartSettings = {
 export const BUBBLES = {
   // ── 1 bubble per bucket ──────────────────────────────────────────────────
   /**
-   * The bucket ladder, in minutes. The layer picks the SMALLEST rung whose dots
-   * land far enough apart for a full-size mark to fit between them — see
-   * `bucketPxPerDot`. One bubble per rung, last print in it wins.
+   * The bucket ladder, in minutes. The rung is the BAR INTERVAL, clamped into
+   * this list — one bubble per bar, last print in it wins.
    *
-   * Not a fixed 1m or 5m: 1m is right on a half-hour view and 390 overlapping
-   * dots across a session, and 5m is right on a session and six dots on a
-   * half-hour. The rung is a consequence of the zoom, which is the only thing
-   * that knows how much room a dot has.
+   * It used to be a consequence of the ZOOM (the smallest rung whose dots landed
+   * `bucketPxPerDot` apart), and the bar interval had nothing to do with it.
+   * That made the interval picker inert on this layer: 1m -> 5m moved nothing,
+   * and 5m -> 1m only came back after zooming most of the way in, which is where
+   * the span rule finally allowed the finer rung. The zoom still decides how
+   * many of the buckets FIT — that is the stride in drawBubbles — but it no
+   * longer decides how often a reading is taken.
    *
-   * CAPPED AT 5m. 15m and coarser were reachable on a wide view and the result
-   * was a scatter of lonely dots with the session's shape missing between them —
+   * CAPPED AT 5m — so 15m/30m/1h bars all draw a 5m bucket. 15m and coarser
+   * buckets give a scatter of lonely dots with the session's shape missing —
    * technically legible, useless to read. Past 5m the answer is not a coarser
    * BUCKET (which throws away the prints) but the stride (which keeps the
    * bucketing honest and just draws every Nth), so the ladder stops here and the
@@ -193,43 +197,31 @@ export const BUBBLES = {
    */
   bucketRungsMin: [1, 5],
   /**
-   * Pixels a bucket must own before its rung is allowed.
-   *
-   * Set from the SMALLEST legible mark, not from a full-size one. That is the
-   * difference between "zoom in and see more dots" and "zoom in and see the same
-   * dots, bigger": at a full-size threshold (~37px) a 1m rung needed two hours
-   * of chart to earn its place, so a 2h window drew 5m and a 30m window drew 1m
-   * and there was nothing in between. At ~11px the finer rung is allowed as soon
-   * as its dots can be told apart, and `capOfSpacing` shrinks the marks to fit
-   * the room — so zooming in adds dots first and size second, which is the way
-   * round you want it.
-   *
-   * 2 x minLegiblePx x a typical topBoost, plus the hairline.
+   * The legible spacing target. NO LONGER PICKS THE BUCKET — the bar interval
+   * does — and nothing reads this now that the stride always measures against
+   * `pinnedPxPerDot`. Kept as the documented number for what "far enough apart
+   * to read a size off" means: 2 x minLegiblePx x a typical topBoost, plus the
+   * hairline.
    */
   bucketPxPerDot: 11,
   /**
-   * The same target, for a PINNED bucket — the stride the 1m / 5m tiles get
-   * instead of `bucketPxPerDot`.
+   * The stride target: the spacing the drawn dots are thinned to.
    *
-   * WHY THE PIN NEEDS ITS OWN NUMBER. The stride is chosen so the dots that ARE
-   * drawn clear each other, and it was measured against `bucketPxPerDot` (11px,
-   * the legible target) whether the rung was picked by the pane or by the user.
-   * That made the picker inert almost everywhere: a 1m bucket strides to every
-   * Nth minute and a 5m bucket strides to every Nth/5, and the two land on the
-   * SAME dots. Clicking between 1m and 5m changed nothing on screen at any zoom
-   * wider than about ninety minutes, which is indistinguishable from a broken
-   * control — and it was reported as one.
+   * The bucket is a CADENCE (the bar interval) and this is the LEGIBILITY bound
+   * underneath it — 975 samples do not fit in 1500px whatever anyone picked, so
+   * every Nth is drawn and each drawn dot is still one real bucket.
    *
-   * Auto keeps 11px: nobody asked for detail, so the honest answer is the
-   * legible one. A PIN is somebody asking, the same opt-in the Bubble size
-   * slider is, so its only remaining job is to stop the dots from literally
-   * merging into a line — hence a spacing floor rather than a legibility
-   * target. At 2.5px a pinned 1m draws every minute down to a ~90-minute view
-   * and thins from there, instead of matching Auto from the first pixel.
+   * It is deliberately a spacing floor rather than a legibility target. Striding
+   * against the legible 11px is what made a finer bucket land on the same dots
+   * as a coarser one: 1m strides to every Nth minute, 5m to every Nth/5, and the
+   * two draw the same picture at any zoom wider than about ninety minutes. That
+   * is indistinguishable from a broken control, and it was reported as one —
+   * twice, once for the 1m/5m tiles and once for the bar interval itself.
    *
-   * The marks then shrink to fit, because `capOfSpacing` sizes them off the
-   * EFFECTIVE spacing — so a pinned rung is small and dense rather than fused,
-   * and the size slider is there for anyone who wants to trade that back.
+   * At 2.5px a 1m bucket draws every minute down to a ~90-minute view and thins
+   * from there. The marks then shrink to fit, because `capOfSpacing` sizes them
+   * off the EFFECTIVE spacing — small and dense rather than fused, with the size
+   * slider there for anyone who wants to trade that back.
    */
   pinnedPxPerDot: 2.5,
   /** The smallest radius a mark can have and still read as a mark. */
@@ -254,7 +246,7 @@ export const BUBBLES = {
   // Compressive, not linear: the top strike is routinely 5-10x its neighbours
   // and a linear law spends the whole budget on it, leaving the rest as
   // identical specks. Under the curve a 25%-of-max strike still draws at
-  // roughly two fifths of the range.
+  // roughly a third of the range.
   //
   // ── AND THE NUMBERS ARE PER BUCKET SIZE ──────────────────────────────────
   // A 13px cap is right at 5m and absurd at 1m: five times the dots in the same
@@ -275,27 +267,35 @@ export const BUBBLES = {
   /**
    * The exponent on `|gex| / windowMax`.
    *
-   * Was a plain square root (0.5). At 0.5 a strike holding 5% of the max still
-   * draws at 22% of the range and one holding 30% at 55%, which is most of the
-   * ladder bunched in the top half of the size budget — every mark roughly the
-   * same dot, the top one distinguishable only by its ring. Steeper spreads the
-   * middle back out: 5% -> 16%, 30% -> 48%, and the biggest wall of the day
-   * reads as bigger from across the room, which is the entire job of the layer.
+   * Was a plain square root (0.5), then 0.62. At 0.5 a strike holding 5% of the
+   * max still draws at 22% of the range and one holding 30% at 55%, which is
+   * most of the ladder bunched in the top half of the size budget — every mark
+   * roughly the same dot, the top one distinguishable only by its ring. Steeper
+   * spreads the middle back out, and the biggest wall of the day reads as bigger
+   * from across the room, which is the entire job of the layer.
+   *
+   * 0.72 (2026-08-31): at 0.62 the four rows of a bucket were still landing too
+   * close together — with `levels: 4` the 4th row drew at ~48% of the cap and
+   * the top at 100%, and on screen that is two sizes, not four. At 0.72 the 4th
+   * is ~39% and the rows rank by eye. Paired with a lower `floorOfCap`.
    *
    * Do not go past ~0.75. Beyond that the law is effectively linear again and
    * everything below the leader collapses onto the floor.
    */
-  sizeCurve: 0.62,
+  sizeCurve: 0.72,
   /**
    * The floor, as a fraction of whatever cap survived the spacing shrink.
    *
-   * Was 0.45, which at a wide zoom (cap ~4.6px) left a 2.5px range between the
-   * smallest mark and the largest — under a hairline of separation once the ring
-   * is on. At 0.25 the small end goes properly small and the spread is visible
-   * at the zoom where the whole session is on screen. `minPx` is still the hard
-   * bottom underneath it.
+   * Was 0.45, then 0.25. At 0.45, on a wide zoom (cap ~4.6px), there was a 2.5px
+   * range between the smallest mark and the largest — under a hairline of
+   * separation once the ring is on.
+   *
+   * 0.18 (2026-08-31): the other half of the `sizeCurve` bump. The floor is the
+   * bottom of the range the curve spreads things over, so raising the exponent
+   * alone only moves the marks a little — most of the budget was still spent
+   * before the smallest row got there. `minPx` is still the hard bottom.
    */
-  floorOfCap: 0.25,
+  floorOfCap: 0.18,
   /**
    * …and the profile is then SHRUNK to the room that actually exists.
    *
@@ -323,8 +323,13 @@ export const BUBBLES = {
    * looked fine on a session view and drew a continuous sausage at a 30-minute
    * zoom, where the profile cap binds instead of the spacing and the boost then
    * put 14px of radius into 15px of room.
+   *
+   * 0.38 (2026-08-31): the leader is the row the spacing bound clips first, so
+   * at a tight zoom it was capped back to ~1.2x the peers' bound and the extra
+   * spread the curve bought below it stopped short of the top mark. Still well
+   * under the 0.5 limit.
    */
-  topOfSpacing: 0.34,
+  topOfSpacing: 0.38,
   /** Absolute floor. Old dots never shrink past this, whatever the fit does. */
   minPx: 1.2,
 

@@ -211,11 +211,12 @@ export function GexCandlesCard() {
   // The bubble layer has data but none of it falls in the visible window. Set
   // from the draw loop, but only when it CHANGES — see onBubblesOutOfRange.
   const [bubblesOutOfRange, setBubblesOutOfRange] = useState(false)
-  // One bubble per bucket, and the bucket comes from how wide the visible window
-  // is — the chart reports it, debounced to the value itself, so this changes
-  // twice a session rather than on every wheel tick.
+  // One bubble per bucket, and the bucket is the BAR INTERVAL clamped to the
+  // ladder — the chart owns that mapping and reports it on the click (see
+  // reportBucket), de-duped to the value, so this changes when the interval or
+  // the manual override does and not on wheel ticks.
   // Seeded at the coarsest rung the ladder has, so the first frame — drawn
-  // before the chart has measured anything — errs toward too few dots rather
+  // before setIntervalMs has reached the chart — errs toward too few dots rather
   // than a 1m firehose that is replaced a frame later.
   const [bucketMs, setBucketMs] = useState(
     BUBBLES.bucketRungsMin[BUBBLES.bucketRungsMin.length - 1]! * 60_000,
@@ -366,9 +367,10 @@ export function GexCandlesCard() {
     [allColumns, weekendExpiry],
   )
 
-  // No bars, no interval, no bucket in these deps: the bubble model is a pure
-  // function of the GEX history now, so a candle poll or a timeframe change no
-  // longer rebuilds it.
+  // No bars in these deps: a candle POLL is not a reason to re-bucket the GEX
+  // history. `bucketMs` is how the interval gets in — the chart maps interval ->
+  // rung and reports it — so a timeframe change rebuilds the model exactly once,
+  // through the one value that actually changed.
   const snapshots = useMemo(
     () =>
       buildBubbleModel(columns, { metric: settings.gexMetric, bucketMs }),
@@ -404,6 +406,13 @@ export function GexCandlesCard() {
   const viewKey = `${symbol}|${settings.interval}|${settings.session}`
   const framedRef = useRef('')
 
+  // BEFORE the setBars effect below, deliberately. The interval is what the
+  // chart re-frames against (frameRecent sizes the window in bars) and what it
+  // picks the bubble bucket from, so handing it over after the reframe would
+  // spend one frame on the previous timeframe's numbers. Effects run in source
+  // order, so this ordering is the mechanism, not a comment about one.
+  useEffect(() => apply((h) => h.setIntervalMs(settings.interval * 60_000)), [settings.interval, apply])
+
   useEffect(() => {
     const reframe = viewKey !== framedRef.current
     apply((h) => h.setBars(bars, reframe))
@@ -411,7 +420,6 @@ export function GexCandlesCard() {
   }, [bars, viewKey, apply])
 
   useEffect(() => apply((h) => h.setSnapshots(snapshots)), [snapshots, apply])
-  useEffect(() => apply((h) => h.setIntervalMs(settings.interval * 60_000)), [settings.interval, apply])
 
   // ── The live price ─────────────────────────────────────────────────────────
   // The candle feed only ever hands over CLOSED bars, so between polls the last
@@ -593,16 +601,15 @@ export function GexCandlesCard() {
                 />
               </PanelSection>
 
-              {/* The ONLY bubble setting. Six sliders came out of this panel and
-                  this is what replaced them, because it is the one question the
-                  layer cannot answer for itself from the pane alone: whether
-                  you want the rung it would pick, or a finer one held to the
-                  floor. Auto is right nearly always — a pinned rung is for
-                  reading sub-bar detail on a wide chart. */}
+              {/* Auto = one bubble per BAR, so the interval picker in the header
+                  is the control most people want and this one is the override:
+                  read 1m gamma under 15m candles, or hold a 5m cadence on 1m
+                  candles. Six sliders came out of this panel and this is what
+                  replaced them. */}
               <PanelSection title="Bubble bucket">
                 <SegGroup
                   size={ctlSize}
-                  title="How much time one bubble covers. Auto picks the finest rung whose dots still separate at this zoom and re-picks as you zoom; 1m and 5m pin it. A pin sets the rung, not the stride — at a wide zoom a pinned 1m still draws every Nth bucket, which is the same picture Auto would have drawn"
+                  title="How much time one bubble covers. Auto follows the bar interval — one bubble per candle, capped at 5m — so switching 1m/5m up in the header moves the bubbles with it. 1m and 5m pin the bucket instead, which is for reading sub-bar detail under coarser candles. Either way the zoom only thins what is drawn: at a wide zoom a 1m bucket still draws every Nth"
                   options={[
                     { label: 'Auto', value: 'auto' },
                     { label: '1m', value: '1' },

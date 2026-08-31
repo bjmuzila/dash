@@ -24,7 +24,9 @@
 // exceeded the radius: the same failure from the other side.
 //
 // The bucket is the cadence now, which is what "1 bubble per timeframe" means,
-// and the caller picks it from how wide the visible window is.
+// and the caller takes it from the BAR INTERVAL — so the timeframe picker moves
+// the bubbles, which is what anyone clicking it expects. The zoom decides only
+// how many of those buckets fit, via the stride in drawBubbles.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { BUBBLES, type GexMetric } from './settings'
@@ -405,7 +407,7 @@ interface Placed {
  * Compressive rather than linear because the top strike is routinely five to ten
  * times its neighbours: a linear law hands it the whole budget and leaves
  * everything else as identical specks at the floor. Under the curve a strike
- * holding a quarter of the max still draws at about two fifths of the range, so
+ * holding a quarter of the max still draws at about a third of the range, so
  * the ladder stays rankable — and the top still stands apart, by the boost and the ring rather
  * than by flattening everything under it.
  *
@@ -470,8 +472,12 @@ export function drawBubbles(
   /** The Bubble size slider, 1 = the tuned default. See sizeFor. */
   scale = 1,
   /**
-   * True when the BUCKET was pinned by the user (the 1m / 5m tiles) rather than
-   * chosen by the pane. It loosens the stride — see BUBBLES.pinnedPxPerDot.
+   * True when the BUCKET is a chosen cadence rather than one the pane picked.
+   * It loosens the stride — see BUBBLES.pinnedPxPerDot.
+   *
+   * Since the bucket follows the bar interval (chart.ts reportBucket) this is
+   * always true from the chart. The false branch is the old pane-picked rule and
+   * is kept only for the bubble lab, which drives this function directly.
    */
   pinned = false,
 ): boolean {
@@ -526,22 +532,15 @@ export function drawBubbles(
   // faked — each drawn dot is still one real bucket, last print and all — the
   // trail is simply sampled at the resolution the pane can actually show.
   //
-  // This is what makes a forced rung safe at any zoom. Force 1m and zoom out and
-  // it lands on the same picture the auto rule would have picked, because at
-  // that width there IS only one legible answer. Zoom in and the stride falls
-  // back to 1 and every minute is there again.
-  // The stride targets the SAME spacing the auto rung is chosen for, not a bare
-  // "they don't touch" minimum. Striding to the minimum was the first attempt
-  // and it is barely better than the ribbon: 3px dots across a session are a
-  // dotted line you cannot read a size off, and size is the entire signal. At
-  // the auto spacing a forced rung lands on exactly the picture auto would have
-  // drawn — which is correct, because at that width there is only one legible
-  // answer and pretending otherwise is what made this look horrible zoomed out.
+  // This is what makes any rung safe at any zoom: zoom in and the stride falls
+  // back to 1 and every bucket is there again.
   //
-  // A PINNED rung strides against a much smaller target (see
-  // BUBBLES.pinnedPxPerDot). Measuring a pin against the same legible spacing
-  // Auto uses is what made the 1m / 5m picker do nothing: 1m strides to every
-  // Nth minute, 5m to every Nth/5, and both land on the same dots.
+  // The target is a SPACING FLOOR, not the legible spacing (BUBBLES.bucketPxPerDot).
+  // Striding a chosen cadence against the legible target is what made the
+  // cadence controls do nothing: 1m strides to every Nth minute, 5m to every
+  // Nth/5, and both land on the same dots — so neither the 1m/5m tiles nor the
+  // bar interval changed anything on screen at any zoom wider than about ninety
+  // minutes. See BUBBLES.pinnedPxPerDot.
   const strideTarget = pinned ? BUBBLES.pinnedPxPerDot : BUBBLES.bucketPxPerDot
   const stride = pxPerDot > 0 ? Math.max(1, Math.ceil(strideTarget / pxPerDot)) : 1
   // The profile is chosen for the EFFECTIVE cadence — the bucket as drawn, not

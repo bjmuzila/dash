@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-08-31 - GEX Candles: the interval picker moves the bubbles, and the four rows rank by size
+
+Edited: `cbedge-v3/src/board/gexCandles/chart.ts`, `settings.ts`, `bubbles.ts`,
+`GexCandlesCard.tsx`.
+
+**The bubble bucket follows the BAR INTERVAL now, not the zoom.** Switching 1m →
+5m left the bubbles exactly where they were, and 5m → 1m only came back after
+zooming most of the way in. That is because the bucket was picked from the
+visible SPAN — the smallest rung whose dots landed `bucketPxPerDot` apart — so
+the interval picker had no path to this layer at all, and the zoom was the only
+thing that could move it.
+
+Two different questions were being answered by one number. "How often is a
+reading taken" is the cadence, and the interval answers it. "How many of those
+fit on screen" is the zoom, and the stride in `drawBubbles` already answers it
+and is unchanged. `reportBucket()` now maps `intervalMs` into
+`BUBBLES.bucketRungsMin` (still capped at 5m, so 15m/30m/1h bars all draw a 5m
+bucket) and is called from `setIntervalMs` / `setDrawOpts` rather than from the
+draw loop — so the model rebuilds on the click, not on the next frame that
+happens to move. The manual 1m/5m tiles still override it; `auto` now means
+"one bubble per bar".
+
+Two supporting changes fell out of that. The stride always measures against
+`pinnedPxPerDot` (2.5px) rather than the legible `bucketPxPerDot` (11px) —
+measuring a chosen cadence against the legible target is exactly what made a
+finer bucket land on the same dots as a coarser one, which is why the 1m/5m
+tiles had needed their own number in the first place. And `setIntervalMs` is now
+applied to the chart BEFORE `setBars`, so a reframe is sized against the
+timeframe you just picked instead of the one you left.
+
+**More spread between the top bubble and the 4th row.** With `levels: 4` the
+fourth row was drawing at ~48% of the cap against the leader's 100%, which on
+screen is two sizes, not four. `sizeCurve` 0.62 → 0.72 (0.75 is still the stated
+ceiling), `floorOfCap` 0.25 → 0.18 — the floor is the bottom of the range the
+curve spreads over, so raising the exponent alone only moves things a little —
+and `topOfSpacing` 0.34 → 0.38, because the leader is the row the spacing bound
+clips first and it was being held to ~1.2x the peers' bound at a tight zoom. The
+4th row now lands at ~39% of the cap and the rows rank by eye.
+
+
 ## 2026-08-31 - GEX Candles: switching tickers loads the bubbles, at once
 
 Edited: `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`, `chart.ts`.

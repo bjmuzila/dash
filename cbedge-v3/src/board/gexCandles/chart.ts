@@ -97,7 +97,11 @@ export interface EsChartHandle {
    * ahead: past that there is a gap in the data and the poll owns it.
    */
   setLivePrice: (price: number) => void
-  /** Bar width in ms — needed to know when the last bar has stopped forming. */
+  /**
+   * Bar width in ms. Needed to know when the last bar has stopped forming —
+   * and, since 2026-08-31, it is also what picks the bubble BUCKET: one bubble
+   * per bar, so the interval picker moves the bubbles the moment it is clicked.
+   */
   setIntervalMs: (ms: number) => void
   setSnapshots: (snaps: BubbleSnapshot[]) => void
   setDrawOpts: (opts: ChartDrawOpts) => void
@@ -112,13 +116,13 @@ export interface MountOpts {
   /** Fired whenever the newest bar moves on or off screen. */
   onLatestOffscreen: (off: boolean) => void
   /**
-   * Fired when the visible span changes enough to move the bubble BUCKET onto a
-   * different rung of BUBBLES.bucketRungsMin. The model needs it and the model has
-   * no idea how wide the pane is; the chart does, and it already gets a callback
-   * on every range change.
+   * Fired when the bubble BUCKET moves onto a different rung of
+   * BUBBLES.bucketRungsMin. The model needs the value; the model does not know
+   * the bar interval, and the chart does.
    *
-   * Debounced to the bucket value itself, not the span, so it fires twice a
-   * session instead of on every wheel tick.
+   * The bucket follows the BAR INTERVAL now, not the zoom — see reportBucket —
+   * so this fires when the interval picker (or the manual 1m/5m override)
+   * changes, not on wheel ticks. Still de-duped to the value itself.
    */
   onBucketMs?: (ms: number) => void
   /**
@@ -528,18 +532,28 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   }
 
   // ── The bucket, reported to the model ─────────────────────────────────────
-  // Debounced to the BUCKET VALUE, not the span: it changes twice a session
-  // rather than on every wheel tick, and each change rebuilds the model.
+  // ONE BUBBLE PER BAR. The bucket is the bar interval, clamped to the rungs
+  // the ladder actually offers (BUBBLES.bucketRungsMin, capped at 5m), and the
+  // manual 1m / 5m tiles override it.
+  //
+  // It used to be picked from the visible SPAN — pixels per dot — and the zoom
+  // was the only thing that could move it. That made the interval picker inert:
+  // switching 1m -> 5m left the bubbles exactly where they were, and 5m -> 1m
+  // only came back if you zoomed most of the way in, because that is when the
+  // span rule finally allowed the finer rung. The cadence question is "how
+  // often is a reading taken", which the interval answers; the zoom question is
+  // "how many of them fit on screen", and the STRIDE in drawBubbles already
+  // answers that and is unchanged.
+  //
+  // Called from setIntervalMs / setDrawOpts rather than from the draw loop, so
+  // the model rebuilds on the click instead of on the next frame that happens
+  // to move. Still de-duped to the value, so a no-op click costs nothing.
   let lastBucket = 0
-  function reportBucket(spanMs: number, plotPx: number) {
-    const forced = drawOpts.bucketMin
-    const ms = forced ? forced * 60_000 : (() => {
-      const msPerPx = spanMs / Math.max(1, plotPx)
-      const need = BUBBLES.bucketPxPerDot * msPerPx
-      const rungs = BUBBLES.bucketRungsMin
-      const rung = rungs.find((m) => m * 60_000 >= need) ?? rungs[rungs.length - 1]!
-      return rung * 60_000
-    })()
+  function reportBucket() {
+    const rungs = BUBBLES.bucketRungsMin
+    const barMin = Math.max(1, Math.round(intervalMs / 60_000))
+    const rung = drawOpts.bucketMin ?? (rungs.find((m) => m >= barMin) ?? rungs[rungs.length - 1]!)
+    const ms = rung * 60_000
     if (ms === lastBucket) return
     lastBucket = ms
     mountOpts.onBucketMs?.(ms)
@@ -649,15 +663,15 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       plotWidth: plotW,
       plotHeight: plotH,
     }
-    // The visible span decides the bucket. Measured off the plot rather than
-    // the data, because it is a question about how much room a dot has — and off
-    // the real plot width, not a hardcoded "minus 60 for the axis".
-    const right = Math.max(2, plotW - 1)
-    const tA = geo.timeAtX(1)
-    const tB = geo.timeAtX(right)
-    if (tA != null && tB != null && tB > tA) reportBucket(tB - tA, right)
-
-    const drew = drawBubbles(ctx, snaps, geo, palette, drawOpts.bubbleScale, drawOpts.bucketMin != null)
+    // The bucket is NOT measured here any more — it is the bar interval, set on
+    // the click by reportBucket(). The draw loop's only remaining size decision
+    // is the stride, which drawBubbles measures for itself.
+    //
+    // `true`: the bucket is always a chosen cadence now (the interval, or the
+    // 1m/5m override), never one the pane picked, so it always strides against
+    // BUBBLES.pinnedPxPerDot. Measuring it against the legible target instead is
+    // what used to make a finer bucket land on the same dots as a coarser one.
+    const drew = drawBubbles(ctx, snaps, geo, palette, drawOpts.bubbleScale, true)
     reportOutOfRange(!drew)
   }
   raf = requestAnimationFrame(draw)
@@ -799,6 +813,9 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     },
     setIntervalMs(ms) {
       if (ms > 0) intervalMs = ms
+      // The interval IS the bubble cadence, so the bucket is re-picked here and
+      // not on the next frame — the model rebuild starts on the click.
+      reportBucket()
     },
     setSnapshots(next) {
       snaps = next
@@ -811,6 +828,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     setDrawOpts(next) {
       drawOpts = next
       version++
+      // `bucketMin` is the manual override of the same value.
+      reportBucket()
     },
     setRailSink(sink) {
       railSink = sink

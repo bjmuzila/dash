@@ -4,6 +4,18 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Monday 8/31/2026
 
+* **Home — GEX Chart:** the gamma flip was landing in the wrong place, and on some days did not show at all. Corrected, and it now matches the flip line drawn on the chart.
+
+* **Home & Premarket — Key Levels:** the two pages could show a different put wall or CORE at the same moment, and a put wall occasionally appeared above the current price. Both now read the same levels.
+
+* **GEX Candles (v3 preview):** price ticks live again instead of jumping every 30 seconds, and the forming candle no longer restarts when you refresh. Added a bubble size slider, the 1m/5m bubble picker now actually changes the chart, and the day picker is gone — it follows the 0DTE expiration. Come back to the tab and a blank or gapped chart fixes itself; switching tickers loads the bubbles straight away, on one session rather than five days.
+
+* **Top toolbar:** added an SPX button beside the ticker picker — one click back to the live feed from any symbol.
+
+* **ICT (and every page):** fixed the random "unauthorized" errors some of you hit on load. Pages now retry a hiccup instead of failing outright.
+
+* **Seasonality (free almanac):** new FOMC, Jackson Hole and Apple event studies — the S&P before, during and after each. The current-year line now updates daily; month-end gained charts.
+
 * **Traders Dashboard (v3 preview):** the S&P sector wheel is back — click a sector to zoom, or pop it out full screen. Trending Now sorts high to low, and your ZIP, schedule and tasks save to your account.
 
 ## Sunday 8/30/2026

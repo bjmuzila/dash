@@ -1,5 +1,19 @@
 # Changelog
 
+## Monday 8/31/2026 — Gamma flip made correct and made singular; GEX Candles live bar, bubble size slider, stranded-view recovery (`lib/calculations/calculations.ts`, `cbedge-v3/src/data/{calculations.ts,levels.ts,liveGex.ts}`, `cbedge-v3/src/board/{chainGex.ts,keyLevels/KeyLevelsCard.tsx,gexCandles/{chart.ts,bubbles.ts,settings.ts,gexHistory.ts,GexCandlesCard.tsx}}`, `cbedge-v3/src/pages/Premarket.tsx`, `cbedge-v3/src/shell/Shell.tsx`)
+
+Fixed two modelling defects in `computeGEXProfile` (both copies) — call and put legs were priced off different IVs, so equal size at a strike produced net GEX purely from skew, and calendar `dte` was annualized as trading days — then made that spot-sweep flip canonical through a new `cbedge-v3/src/data/levels.ts`, which now derives the wall / CORE / flip once for both Home's Key Levels and the Premarket rail (they had three definitions each, a CORE that jumped on a quote, and a put wall printing above spot because the server's levels were never re-anchored to the spot on screen).
+
+On v3 GEX Candles: retired the Sun/Mon/Both day picker and its 48h reach (the card follows the 0DTE expiration), fixed `setLivePrice` being inert on every timeframe and then restarting the forming bar's OHLC on each poll and refresh, added a Bubble size slider and a pinned-bucket stride so the 1m/5m picker is no longer a no-op, and made a stranded visible range repair itself on `setBars`, on `visibilitychange` and on a card regaining size — plus `frameRecent()` so a reframe opens on one session instead of five days. Also added an SPX chip left of the toolbar's ticker picker. `npm run check` green.
+
+## Monday 8/31/2026 — Auth gate: 8s session cache, pool max 2 → 16, 503 (not 401) on a DB hiccup (`server-v2/{ws-auth.js,api-router.js,proxy-auth.js}`)
+
+Traced intermittent customer `401`s on `/app/ict` to `server-v2/ws-auth.js`: it fronts every `/api/*` and `/proxy/*` request (api-router intercepts before Next middleware, so `lib/auth/session.ts`'s cache never applies) but did a fresh Postgres lookup per request through a pool still capped at `max: 2`, failing closed as 401 under contention. Added an 8s token-hash cache (6 requests → 1 query, verified), raised the pool to 16 via `AUTH_POOL_MAX`, and made unevaluable failures throw `TransientAuthError` so `enforceAuth` / `checkProxyAccess` answer 503 instead of 401; `no-token` / `invalid-or-expired-session` / `inactive` still 401.
+
+## Monday 8/31/2026 — Seasonality event studies: FOMC, Jackson Hole, Apple events, earnings (`components/seasonality/{eventDates.ts,calendar.ts,useLiveYear.ts,sections.ts,SeasonalityAlmanac.tsx,SeasonalityView.tsx}`, `server-v2/api-router.js`, `package.json`)
+
+Added four event-study sections to the seasonality almanac plus `useLiveYear` so the current-year line extends past the build-time cutoff, backed by three new `auth:'public'` routes in `server-v2/api-router.js` (`/api/public-seasonality`, `/api/public-daily`, `/api/public-earnings`); month-end now auto-opens on the last session of a month and gained a by-month bar chart, and FOMC carries 269 Fed decisions back to 1994 with a lead-up / decision / after bar chart. Also diagnosed Yahoo gating `/v1/finance/visualization` behind a crumb — the same 401 that has the pre-existing `/api/earnings-today` route returning empty in production, left unfixed and flagged — and wired the missing `build:spa` script into `package.json`.
+
 ## Monday 8/31/2026 — v3 Traders Dashboard ported from v2, sector wheel and all (`cbedge-v3/src/pages/TradersDashboard.tsx`, `cbedge-v3/src/pages/tradersDashboard/{wheelMath.ts,SectorWheelCard.tsx}`, `cbedge-v3/src/design/{tokens.css,theme.ts}`, `cbedge-v3/scripts/{parity-check.mjs,parity-check.test.mjs,check-casing.mjs}`, `cbedge-v3/docs/parity/traders-dashboard.md`)
 
 **v3 only — nothing in this entry touches the live v2 app at `/app/*`.**
