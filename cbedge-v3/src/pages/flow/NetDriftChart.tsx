@@ -92,12 +92,17 @@ export function NetDriftChart({ series, ordersByMin, spotPts }: NetDriftChartPro
     const m = new Map<number, number>()
     for (const p of pts) if (p.value !== undefined) m.set(p.time, p.value)
     spotByMinRef.current = m
-    // Value-only points, never whitespace: a Line series joins across a missing
-    // index, which is what keeps the overlay continuous through quiet minutes.
+    // Whitespace is passed straight through, exactly as the drift lines pass
+    // theirs. buildSpotSeries now carries the last known level forward across
+    // quiet minutes, so a gap in here is never a quiet minute — it is the part
+    // of the axis before the first level or after the fill horizon, and the
+    // overlay must stop there rather than be joined across it.
     spot.setData(
-      pts
-        .filter((p) => p.value !== undefined)
-        .map((p) => ({ time: p.time as UTCTimestamp, value: p.value as number }) as LineData),
+      pts.map((p) =>
+        p.value === undefined
+          ? ({ time: p.time as UTCTimestamp } as WhitespaceData)
+          : ({ time: p.time as UTCTimestamp, value: p.value } as LineData),
+      ),
     )
   }
 
@@ -108,8 +113,9 @@ export function NetDriftChart({ series, ordersByMin, spotPts }: NetDriftChartPro
     const chart = chartRef.current
     if (!call || !put || !vol || !chart) return
 
-    const up = tokenHexAlpha('--color-up', 0.55)
-    const down = tokenHexAlpha('--color-down', 0.55)
+    // v2's rgba(34,197,94,.55) / rgba(239,68,68,.55), via the tokens.
+    const up = tokenHexAlpha('--color-netdrift-call', 0.55)
+    const down = tokenHexAlpha('--color-netdrift-put', 0.55)
 
     call.setData(
       s.callPts.map((p) =>
@@ -200,14 +206,16 @@ export function NetDriftChart({ series, ordersByMin, spotPts }: NetDriftChartPro
         },
       })
 
+      // The call/put pair is v2's, not v3's directional pair — see
+      // NET_DRIFT_CALL in design/theme.ts.
       const callSeries = chart.addSeries(LineSeries, {
-        color: tokenHex('--color-up'),
+        color: tokenHex('--color-netdrift-call'),
         lineWidth: 2,
         priceLineVisible: false,
         lastValueVisible: true,
       })
       const putSeries = chart.addSeries(LineSeries, {
-        color: tokenHex('--color-down'),
+        color: tokenHex('--color-netdrift-put'),
         lineWidth: 2,
         priceLineVisible: false,
         lastValueVisible: true,

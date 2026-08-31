@@ -342,6 +342,15 @@ export interface NetBin {
   putNet: number
   callVol: number
   putVol: number
+  /**
+   * The underlying's level during this minute — the mean of `spot` over the
+   * bin's prints, which is that minute's level (spot is stamped identically on
+   * every print in a minute). Absent when no print in the bin carried one.
+   *
+   * Served by /proxy/flow-netprem. It rides in the SAME aggregate as the drift
+   * numbers on purpose: see buildSpotSeries.
+   */
+  spot?: number
 }
 
 export interface NetPoint {
@@ -470,8 +479,13 @@ export function buildNetSeries(
 // ── Spot overlay ─────────────────────────────────────────────────────────────
 
 export interface SpotSeries {
+  /**
+   * On the drift chart's exact minute grid: a value at every minute from the
+   * first bin that carried a level up to the fill horizon, whitespace either
+   * side. See buildSpotSeries.
+   */
   pts: NetPoint[]
-  /** Newest spot in the window, 0 when the tape carried none. */
+  /** Newest level in the window, 0 when no bin carried one. */
   last: number
 }
 
@@ -492,80 +506,98 @@ function median(sorted: readonly number[]): number {
 /**
  * The underlying's own path across the session, for the Net Drift overlay.
  *
- * Source is the tape's per-print `spot`, which is the underlying level frozen
- * at print time — the same field the Dislocation Velocity panel rides. There is
- * no separate per-minute spot feed to pull, and adding one for a decorative
- * overlay would be a second socket's worth of traffic for a line.
+ * ── Same rows, same grid, same span as the drift lines ───────────────────────
  *
- * Bucketed to BIN_SEC so it lands on the drift grid. Minutes with no print emit
- * NO point at all rather than whitespace: a Line series joins across a missing
- * index, and a continuous spot line is the whole reason the overlay is here.
+ * This reads /proxy/flow-netprem's per-bin `spot` — the SAME aggregate, over
+ * the SAME rows, that buildNetSeries walks into the call and put lines. That is
+ * the whole point of it living here rather than in a second fetch.
  *
- * ── Why this is not just "take the last print's spot" ──
+ * It used to be derived from the raw tape (/proxy/flow-history), and that tape
+ * is capped at the newest 20k rows. On a busy ticker the cap lands mid-morning,
+ * so the overlay began at 10:50 while the drift lines — fed by the uncapped
+ * aggregate — began at 9:30: two lines on one x-axis covering different spans.
+ * Reading the bins removes the possibility rather than papering over it, since
+ * there is now exactly one source for where this chart's minutes are.
  *
- * `spot` is per-print and it is NOT clean. flow-processor.js writes whatever
- * the underlying quote said at coalesce time, and that goes wrong in ways this
- * repo has already been bitten by once — see the ⚠ note on `isOtm` in
- * contract/frames.ts, where a stuck spot mislabelled a whole midday SPX
- * session. Taking the last print in the minute therefore lets ONE bad quote own
- * a whole minute, and because the overlay is autoscaled a single 2× outlier
- * flattens the real intraday range into a straight line and draws the rest as
- * square-wave spikes.
+ * ── The grid ─────────────────────────────────────────────────────────────────
  *
- * So, two passes, both robust rather than clever:
+ * Identical walk to buildNetSeries: openSec → closeSec in BIN_SEC steps, values
+ * up to the same horizon (the later of the clock edge and the last bin holding
+ * data, so a skewed browser clock or a late-stamped print cannot punch a hole),
+ * whitespace past it. A minute with no print carries the last known level
+ * forward rather than being dropped — the level did not stop existing because
+ * nobody traded, and a held value keeps the line on the grid instead of letting
+ * the series interpolate a straight diagonal across the gap.
  *
- *   1. MEDIAN WITHIN THE MINUTE, not the last print. A minute normally carries
- *      many prints and they all quote the same underlying, so the median throws
- *      out a lone bad quote for free and only loses if most of the minute is
- *      wrong.
- *   2. MAD BAND ACROSS THE SESSION. Take the median of those per-minute
- *      medians, then the median absolute deviation from it, and keep only
- *      minutes within SPOT_MAD_K MADs. MAD is used rather than a fixed percent
- *      because it ADAPTS: a wide-range day widens the band on its own, so a
- *      real selloff is not clipped. It is clamped to [1.5%, 12%] of the median
- *      so a dead-flat session does not collapse the band to nothing and a
- *      session with many outliers cannot blow it wide open.
+ * Nothing is held BACKWARD: before the first bin that carried a spot there is
+ * whitespace, not a flat lead-in inventing an opening level.
  *
- * Both passes are pure order statistics — no smoothing, no interpolation. A
- * rejected minute is dropped, not replaced with a guess, and the Line series
- * joins across it.
+ * ── Why the outlier band survived the rewrite ────────────────────────────────
+ *
+ * `spot` is not clean. flow-processor.js writes whatever the underlying quote
+ * said at coalesce time, and a stuck quote has already mislabelled a whole
+ * midday SPX session once (see the ⚠ note on `isOtm` in contract/frames.ts).
+ * The server's per-bin mean handles a single bad print inside a minute; it does
+ * nothing about a minute that is wholly wrong, and because the overlay is
+ * autoscaled ONE 2× outlier flattens the real intraday range into a straight
+ * line and draws the rest as square-wave spikes.
+ *
+ * So the session-level pass stays: take the median of the per-minute levels,
+ * then the median absolute deviation from it, and keep only minutes within
+ * SPOT_MAD_K MADs. MAD rather than a fixed percent because it ADAPTS — a
+ * wide-range day widens the band on its own, so a real selloff is not clipped.
+ * Clamped to [1.5%, 12%] of the median so a dead-flat session cannot collapse
+ * the band to nothing and an outlier-heavy one cannot blow it wide open.
+ *
+ * A rejected minute is dropped, not replaced with a guess; the carry-forward
+ * then bridges it with the last level that passed.
  */
 export function buildSpotSeries(
-  prints: readonly FlowTapePrint[],
-  opts: { openSec: number; closeSec: number },
+  netBins: readonly NetBin[],
+  opts: { openSec: number; closeSec: number; now?: number },
 ): SpotSeries {
-  // ── Pass 1: every quote in the minute, then that minute's median. ──
-  const samples = new Map<number, number[]>()
-  for (const o of prints) {
-    if (!o.spot || !Number.isFinite(o.spot) || o.spot <= 0) continue
-    const sec = Math.floor(o.ts / 1000 / BIN_SEC) * BIN_SEC
+  // ── Pass 1: the bins that carry a level, on the grid. ──
+  const byBin = new Map<number, number>()
+  for (const b of netBins) {
+    const v = b.spot
+    if (v == null || !Number.isFinite(v) || v <= 0) continue
+    const sec = Math.floor(b.sec / BIN_SEC) * BIN_SEC
     if (sec < opts.openSec || sec > opts.closeSec) continue
-    const arr = samples.get(sec)
-    if (arr) arr.push(o.spot)
-    else samples.set(sec, [o.spot])
+    byBin.set(sec, v)
   }
-  if (samples.size === 0) return { pts: [], last: 0 }
-
-  const minutes = [...samples.entries()]
-    .map(([sec, arr]) => ({ sec, v: median([...arr].sort((a, b) => a - b)) }))
-    .filter((m) => m.v > 0)
-    .sort((a, b) => a.sec - b.sec)
-  if (minutes.length === 0) return { pts: [], last: 0 }
+  if (byBin.size === 0) return { pts: [], last: 0 }
 
   // ── Pass 2: the robust band. ──
-  const vals = minutes.map((m) => m.v).sort((a, b) => a - b)
+  const vals = [...byBin.values()].sort((a, b) => a - b)
   const med = median(vals)
-  const mad = median(minutes.map((m) => Math.abs(m.v - med)).sort((a, b) => a - b))
+  const mad = median(vals.map((v) => Math.abs(v - med)).sort((a, b) => a - b))
   const tol = Math.min(
     med * SPOT_BAND_MAX,
     Math.max(mad * SPOT_MAD_K, med * SPOT_BAND_MIN),
   )
+  for (const [sec, v] of [...byBin]) if (Math.abs(v - med) > tol) byBin.delete(sec)
+  if (byBin.size === 0) return { pts: [], last: 0 }
 
-  const pts: NetPoint[] = minutes
-    .filter((m) => Math.abs(m.v - med) <= tol)
-    .map((m) => ({ time: m.sec, value: m.v }))
+  // ── Pass 3: the same walk buildNetSeries makes. ──
+  const nowSec = Math.floor((opts.now ?? Date.now()) / 1000)
+  let lastDataSec = -Infinity
+  for (const sec of byBin.keys()) if (sec > lastDataSec) lastDataSec = sec
+  const horizon = Math.max(nowSec + BIN_SEC, lastDataSec)
 
-  return { pts, last: pts.length ? (pts[pts.length - 1]?.value ?? 0) : 0 }
+  const pts: NetPoint[] = []
+  let held: number | undefined
+  let last = 0
+  for (let t = opts.openSec; t <= opts.closeSec; t += BIN_SEC) {
+    const v = byBin.get(t)
+    if (v !== undefined) {
+      held = v
+      last = v
+    }
+    if (held !== undefined && (v !== undefined || t <= horizon)) pts.push({ time: t, value: held })
+    else pts.push({ time: t })
+  }
+
+  return { pts, last }
 }
 
 // ── Totals ───────────────────────────────────────────────────────────────────

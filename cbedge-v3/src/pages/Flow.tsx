@@ -44,6 +44,7 @@ import {
   type TypeFilter,
   type View,
 } from '@/data/flowMath'
+import { NET_DRIFT_CALL, NET_DRIFT_PUT } from '@/design/theme'
 import { NetDriftChart } from '@/pages/flow/NetDriftChart'
 // The tape lives in its own module so the board's Flow Tape card renders the
 // SAME table this page does — see the header of pages/flow/FlowTape.tsx.
@@ -231,17 +232,19 @@ export default function Flow() {
     [netBins, isToday, date, chartSpan],
   )
 
-  // Spot overlay for the drift chart. Built from the UNFILTERED active-ticker
-  // tape on purpose: `spot` is the underlying level, identical on every print
-  // in a minute, so narrowing by premium/DTE would only thin the line out for
-  // no gain. Window comes from netSeries so RTH and 24H agree.
+  // Spot overlay for the drift chart, built from the SAME bins as the lines it
+  // sits behind — so the overlay and the drift lines land on one minute grid and
+  // cover one span. It used to be built from the active-ticker tape, which is
+  // capped at the newest 20k rows: on a busy ticker that cap lands mid-morning,
+  // and the overlay began there while the lines began at 9:30. See
+  // buildSpotSeries. Window still comes from netSeries so RTH and 24H agree.
   const spotSeries = useMemo(
     () =>
-      buildSpotSeries(
-        merged.filter((o) => normTicker(o.underlying) === active),
-        { openSec: netSeries.openSec, closeSec: netSeries.closeSec },
-      ),
-    [merged, active, netSeries.openSec, netSeries.closeSec],
+      buildSpotSeries(netBins, {
+        openSec: netSeries.openSec,
+        closeSec: netSeries.closeSec,
+      }),
+    [netBins, netSeries.openSec, netSeries.closeSec],
   )
 
   /**
@@ -316,8 +319,10 @@ export default function Flow() {
     >
       <div className={netSwitching ? 'stale flex min-h-0 flex-1 flex-col' : 'flex min-h-0 flex-1 flex-col'}>
         <div className="flex flex-wrap items-center justify-center gap-6 px-3 py-2 text-xs font-semibold">
-          <span className="text-up">● Calls {fmtPremium(netSeries.lastCall)}</span>
-          <span className="text-down">● Puts {fmtPremium(netSeries.lastPut)}</span>
+          {/* The legend names the lines, so it takes the lines' colours — v2's
+              pair, not v3's directional one. See NET_DRIFT_CALL. */}
+          <span style={{ color: NET_DRIFT_CALL }}>● Calls {fmtPremium(netSeries.lastCall)}</span>
+          <span style={{ color: NET_DRIFT_PUT }}>● Puts {fmtPremium(netSeries.lastPut)}</span>
           <span className="text-muted">Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
           {spotSeries.last > 0 && (
             <span className="text-muted">

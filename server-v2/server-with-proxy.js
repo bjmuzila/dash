@@ -985,7 +985,8 @@ async function queryNetPremBins(pool, f, binMs, sinceMs) {
             sum(CASE WHEN type = 'C' THEN (CASE WHEN side = 'buy' THEN premium ELSE -premium END) ELSE 0 END) AS call_net,
             sum(CASE WHEN type = 'P' THEN (CASE WHEN side = 'buy' THEN premium ELSE -premium END) ELSE 0 END) AS put_net,
             sum(CASE WHEN type = 'C' THEN size ELSE 0 END) AS call_vol,
-            sum(CASE WHEN type = 'P' THEN size ELSE 0 END) AS put_vol
+            sum(CASE WHEN type = 'P' THEN size ELSE 0 END) AS put_vol,
+            avg(spot) FILTER (WHERE spot IS NOT NULL AND spot > 0) AS spot
        FROM flow_prints
       WHERE ${where}
       GROUP BY 1
@@ -998,6 +999,26 @@ async function queryNetPremBins(pool, f, binMs, sinceMs) {
     putNet: Number(r.put_net) || 0,
     callVol: Number(r.call_vol) || 0,
     putVol: Number(r.put_vol) || 0,
+    // ── The underlying's own path, on the SAME grid as the drift lines ───────
+    // The chart's spot overlay used to be derived client-side from the raw
+    // /proxy/flow-history tape, which is capped at the newest 20k rows — so on
+    // a busy ticker the overlay simply began wherever that cap landed (mid
+    // morning) while the drift lines, fed by this uncapped aggregate, began at
+    // 9:30. Two lines on one x-axis, covering different spans.
+    //
+    // `spot` is the underlying level stamped on every print, so it is identical
+    // across a minute's rows and the mean over the bin IS that minute's level
+    // (mean rather than a picked row so one mis-stamped print cannot own the
+    // minute). Emitting it here means the overlay rides exactly the rows, and
+    // exactly the bins, the drift lines are built from — the two cannot
+    // disagree about the x-axis again.
+    //
+    // NOTE: `spot` is not in flow_prints_netprem_covering_idx, so this column
+    // costs a heap fetch per matching row on a full-session (cache-miss) build.
+    // Every poll after the first is the incremental refresh and still only
+    // touches the trailing window. If the cold build ever measures slow, widen
+    // that index's INCLUDE list rather than dropping this column.
+    spot: r.spot != null && Number.isFinite(Number(r.spot)) ? Number(r.spot) : undefined,
   }));
 }
 

@@ -1,5 +1,98 @@
 # Changelog
 
+## 2026-08-31 - phone bubbles now run the desktop's model
+
+Added: `lib/gexBubbleModel.ts`. Edited:
+`components/mobile/pages/MobileEsCandles.tsx`.
+
+The phone drew every strike the server returned, sized `sqrt(|net| / max)`
+between two fixed radii. The desktop draws four strikes a bucket with one forced
+each side of spot, sized against one denominator with a boosted, ringed leader.
+Same data, two different pictures. The phone now runs the desktop's.
+
+**What the rules are** - they were already written down, in `BUBBLES`
+(`es-candles/slotStore.ts`, itself transcribed from cbedge-v3's settings.ts):
+4 strikes a bucket, `minPerSide: 1`, `r = floor + ratio**sizeCurve x (cap -
+floor)`, cap bounded by real bar spacing, leader boosted/ringed/glowed,
+same-bucket neighbours shrunk then jittered, age fading opacity only to
+`ageKeep`. So `levels: 4` and `minPerSide: 1` were not new numbers to invent -
+the phone simply was not reading them.
+
+**`lib/gexBubbleModel.ts`** holds the two pure halves - the strike PICK and the
+SIZE - and imports `BUBBLES` rather than copying it, so the constants stay in
+one file. Drawing stays with each caller: the desktop paints ES through a basis
+and has a replay cursor, the phone paints SPX directly and has neither. The
+desktop's inline copy is untouched: porting a 4,500-line card onto a new module
+to prove a point is not a trade worth making, and what matters is that both now
+read the same numbers AND the same algorithm.
+
+**Forced sides need a pool to pick from.** The request asked for `top=8`, which
+is fine for "the strongest few" and useless for "one each side": gamma is
+routinely lopsided enough that all 8 sit above price and the forced side has
+nothing to choose. Raised to 16 (the desktop asks for 30) - this payload is one
+column per minute over two days, so every extra strike multiplies through all of
+it, and 16 is the compromise.
+
+Two smaller consequences:
+
+- Bucketing keeps the whole winning COLUMN per bar now, not a per-strike merge
+  of the minutes in it. The pick has to rank a real ladder, not a merge of
+  several minutes' leaders.
+- The size-variance slider survives as a multiplier on the caps, and **1.0x is
+  now exactly the desktop**. The floor does not move with it, so it stays a
+  contrast control; the fit pass still shrinks overlapping marks back toward the
+  floor, so a high setting is a request rather than a guarantee.
+
+## 2026-08-31 - Net Premium: the spot overlay rides the drift lines' own bins, and the lines are v2's colours again
+
+Edited: `server-v2/server-with-proxy.js`, `cbedge-v3/src/design/tokens.css`,
+`cbedge-v3/src/design/theme.ts`, `cbedge-v3/src/data/flowMath.ts`,
+`cbedge-v3/src/pages/flow/NetDriftChart.tsx`,
+`cbedge-v3/src/board/netPremium/NetPremiumCard.tsx`,
+`cbedge-v3/src/pages/Flow.tsx`, `cbedge-v3/scripts/mock-server.mjs`.
+
+**The overlay covered a different span than the lines it sits behind.** The
+white underlying line started mid-morning while the call/put lines started at
+9:30. Two sources: the drift lines come from `/proxy/flow-netprem`, a SQL
+aggregate over the whole session; the overlay was built client-side from the raw
+`/proxy/flow-history` tape, which is capped at the newest 20k rows. On a busy
+ticker that cap lands around 11am, so the overlay simply began there.
+
+- **PROXY** — `queryNetPremBins()` in `server-with-proxy.js` now also selects
+  `avg(spot) FILTER (WHERE spot > 0)` per bin, returned as `NetBin.spot`. Same
+  rows, same GROUP BY, no new endpoint; existing callers are unchanged. `spot`
+  is not in `flow_prints_netprem_covering_idx`, so a cache-miss (full-session)
+  build costs a heap fetch per row — every poll after the first is still the
+  incremental trailing-window refresh. Widen that index's INCLUDE list if the
+  cold build ever measures slow.
+- `buildSpotSeries()` now takes the bins instead of the tape, and walks the
+  SAME grid as `buildNetSeries()`: `openSec -> closeSec` in `BIN_SEC` steps, the
+  same fill horizon (later of the clock edge and the last bin with data),
+  whitespace past it. A quiet minute carries the last level forward rather than
+  being dropped, so the line stays on the grid instead of interpolating a
+  diagonal across the gap. Nothing is held backward — before the first level
+  there is whitespace, not an invented opening.
+- The session-level MAD outlier band survived the rewrite. The server's per-bin
+  mean handles one bad print inside a minute; it does nothing about a wholly
+  wrong minute, and the overlay is autoscaled, so one 2x outlier still flattens
+  the day into a straight line with square-wave spikes.
+- `NetDriftChart` passes the overlay's whitespace straight through now, exactly
+  as the drift lines pass theirs.
+
+**The lines are v2's green and red again.** They were on `--color-up` /
+`--color-down` (v3's provisional mint/clay pair). New tokens
+`--color-netdrift-call: #22c55e` and `--color-netdrift-put: #ef4444` carry v2's
+`BUY_GREEN` / `HOME_THEME.red` verbatim, exposed as `NET_DRIFT_CALL` /
+`NET_DRIFT_PUT`. Same reasoning as `--color-candle-up/down`: where matching v2
+value-for-value is the spec, the v2 value gets its own token. The minute-volume
+histogram takes the same pair at 55% (v2's `rgba(34,197,94,.55)` /
+`rgba(239,68,68,.55)`), and the Calls/Puts legend dots on both the card and the
+/flow page take the line colours so a legend entry matches the line it names.
+
+`scripts/mock-server.mjs` emits a per-bin `spot` too, or the overlay does not
+draw at all under the mock preview.
+
+
 ## 2026-08-31 - GEX Candles: the leader is the only white mark; peers go back to red and blue
 
 Edited: `cbedge-v3/src/board/gexCandles/bubbles.ts`, `settings.ts`, `chart.ts`.

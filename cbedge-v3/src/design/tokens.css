@@ -127,6 +127,22 @@
   --color-gexbar-pos: #29b6f6;
   --color-gexbar-neg: #ffb300;
 
+  /* ── Net Drift (Premium) lines ────────────────────────────────────────
+     The call and put lines on the /flow chart and the board's Net Premium
+     card. Carried across from v2 VERBATIM — components/pages/Flow.tsx draws
+     them with BUY_GREEN (#22c55e) and HOME_THEME.red (#ef4444), and "the
+     same colour as the v2 lines" is the spec (Brandon, 2026-08-31).
+
+     Deliberately NOT --color-up/--color-down, for the same reason
+     --color-candle-up/down exist: those are v3's provisional directional
+     pair (a mint and a clay), and this chart is one of the surfaces where
+     matching v2 value-for-value matters more than internal consistency.
+
+     The minute-volume histogram under the lines takes the same two at 55%,
+     which is v2's rgba(34,197,94,.55) / rgba(239,68,68,.55) exactly.        */
+  --color-netdrift-call: #22c55e;
+  --color-netdrift-put: #ef4444;
+
   /* ── DEX overlay ──────────────────────────────────────────────────────
      The net-delta line the GEX Chart draws across its bars, on its own
      normalised scale. A THIRD hue on purpose: the line is not a bar and

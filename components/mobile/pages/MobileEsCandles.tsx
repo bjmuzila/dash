@@ -21,6 +21,18 @@ import type {
 import { useEtfCandles } from "@/hooks/useEtfCandles";
 import { useMobileGex } from "@/hooks/useMobileGex";
 import { useGexBubbleHistory } from "@/hooks/useGexBubbleHistory";
+import {
+  BUBBLES,
+  bubbleAge,
+  bubbleAlpha,
+  bubbleRadius,
+  bubbleSize,
+  bubbleStride,
+  fitBubbleRows,
+  pickBubbleStrikes,
+  toBubbleMarks,
+  type BubbleRow,
+} from "@/lib/gexBubbleModel";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
 import { etDayKey } from "@/components/dashboard/es-candles/chartMath";
 import { netGEXOf } from "@/lib/calculations/calculations";
@@ -58,8 +70,13 @@ import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../
  *     two toggles: each costs 46px of a 390px screen, and the desktop's own
  *     geometry table treats the gutter as a single-choice slot for the same
  *     reason.
- *   - BUBBLES — the per-minute GEX trail, over the last BUBBLE_DAYS sessions.
- *     ON by default, with a size-variance slider (see BUBBLE_SCALE_*).
+ *   - BUBBLES — the GEX trail, over the last BUBBLE_DAYS sessions. ON by
+ *     default, with a size-variance slider (see BUBBLE_SCALE_*).
+ *
+ *     Bucketed to the chart's own bar, then the DESKTOP's model: four strikes a
+ *     bucket with one forced each side of spot, radius from one denominator
+ *     across the window, the bucket's leader boosted and ringed. Shared through
+ *     lib/gexBubbleModel so the two charts cannot drift.
  *   - the γ level lines.
  *
  * The GEX rail is the desktop `EsGexRail` component, imported unchanged: it is
@@ -168,16 +185,17 @@ const GUTTER_W = 46;
 /**
  * Bubble size variance.
  *
- * The trail sizes each bubble by |net GEX| against the session's own maximum,
- * so on a day where one strike dwarfs everything the rest collapse to dots, and
- * on a flat day they all look the same. This scales the TOP of the radius range
- * while the floor stays put — so it is a contrast control, not a zoom: turn it
- * up and the dominant strikes pull away from the crowd, turn it down and the
- * trail flattens into an even ribbon that is easier to follow as a path.
+ * Sizing itself is now the DESKTOP's model, shared through lib/gexBubbleModel:
+ * radius is `floor + ratio**sizeCurve x (cap - floor)` against one denominator
+ * for the whole window, the cap bounded by the real bar spacing, the bucket's
+ * leader boosted and ringed. This slider is a multiplier on those caps and
+ * nothing else.
  *
- * The 1.0 baseline is "half a bar's spacing", the width at which neighbouring
- * buckets touch but never merge. Above ~1.4 they do overlap; that is the point
- * of the control and it is the user's call, so the cap is generous.
+ * **1.0 is exactly the desktop.** It is kept because a 390px chart is not a
+ * 1500px one and sometimes you want the walls to shout; the floor does not move
+ * with it, so it stays a contrast control rather than a zoom. Above ~1.4 the
+ * biggest marks will overlap their neighbours — the fit pass shrinks them back
+ * toward the floor first, so this is a request, not a guarantee.
  */
 /**
  * How many trading days of GEX bubbles the phone asks for.
@@ -198,6 +216,17 @@ const GUTTER_W = 46;
  *     comes back empty. This is the one place that flag earns its cost.
  */
 const BUBBLE_DAYS = 2;
+/**
+ * Strikes the server returns per column, before the pick.
+ *
+ * It is a RANKING POOL, not what gets drawn — four survive (BUBBLES.levels).
+ * It was 8, which is fine for "the strongest few" and not fine for "one each
+ * side of spot": gamma is routinely lopsided enough that all 8 sit above price,
+ * and then the forced side has nothing to choose. The desktop asks for 30; 16 is
+ * the phone's compromise, because this payload is one column per minute over
+ * BUBBLE_DAYS and every extra strike multiplies through all of it.
+ */
+const BUBBLE_LADDER_TOP = 16;
 /** Hard ceiling on the reach, ~4 days. Guards against an absurd bar-day list. */
 const BUBBLE_MINUTES_MAX = 5760;
 /** Reach before the chart has bars to measure from - the hook's own default. */
@@ -437,6 +466,7 @@ export default function MobileEsCandles() {
     expiry: g.expiry,
     minutes: bubbleMinutes,
     days: BUBBLE_DAYS,
+    top: BUBBLE_LADDER_TOP,
     barDayKeys,
   });
 
@@ -806,11 +836,16 @@ export default function MobileEsCandles() {
     cols: bubbleCols,
     rows: chartCandles,
     scale: bubbleScale,
+    // The bucket's own width in minutes — the chart's bar. It picks the size
+    // profile, so it has to ride along rather than be closed over: drawBubbles
+    // is created once and driven from this ref.
+    intervalMinutes: interval === "1" ? 1 : 5,
   });
   bubbleDataRef.current = {
     cols: bubbleCols,
     rows: chartCandles,
     scale: bubbleScale,
+    intervalMinutes: interval === "1" ? 1 : 5,
   };
 
   const drawBubbles = useCallback(() => {
@@ -835,7 +870,7 @@ export default function MobileEsCandles() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
-    const { cols, rows, scale } = bubbleDataRef.current;
+    const { cols, rows, scale, intervalMinutes } = bubbleDataRef.current;
     if (!cols.length || !rows.length) return;
 
     /**
@@ -861,47 +896,64 @@ export default function MobileEsCandles() {
     };
 
     /**
-     * Bucket the trail to the chart's BARS, not its raw minutes.
+     * Bucket the trail to the chart's BARS.
      *
      * The history is 1-minute granular. On a 5-minute chart that is five
      * columns landing on one bar's x, and at these radii they overlap into a
      * solid horizontal band per strike — the trail stops reading as a trail.
-     * The desktop card has the same problem and solves it with a bucket
-     * selector whose default is "Bar"; this does that, without the selector.
+     * The desktop solves it with a bucket selector whose default is the bar;
+     * this does the same thing without the selector.
      *
-     * Last column in a bar wins, so a bucket shows where the strike ENDED that
-     * bar — consistent with a candle close.
+     * LAST column in a bar wins, so a bucket shows where the ladder ENDED that
+     * bar — consistent with a candle close, and it is the whole column that
+     * wins, because the strike PICK below has to rank a real ladder rather than
+     * a merge of several minutes' leaders.
      */
-    const byBar = new Map<string, { bar: number; strike: number; net: number }>();
+    const byBar = new Map<number, { ts: number; cells: { strike: number; net: number }[]; spot: number }>();
     for (const col of cols) {
       const bar = barIndexAt(col.ts);
       if (bar == null) continue;
-      for (const cell of col.cells) {
-        byBar.set(`${bar}|${cell.strike}`, { bar, strike: cell.strike, net: cell.net });
-      }
+      const prev = byBar.get(bar);
+      if (!prev || col.ts >= prev.ts) byBar.set(bar, { ts: col.ts, cells: col.cells, spot: col.spot });
     }
     if (!byBar.size) return;
 
-    // Size by magnitude, on one scale across the whole trail so a bubble's size
-    // means the same thing at 09:31 as at 15:59.
-    let max = 0;
-    for (const b of byBar.values()) max = Math.max(max, Math.abs(b.net));
-    if (!max) return;
+    // Four strikes a bucket, one forced each side of that bucket's own spot —
+    // the desktop's rule, from the same BUBBLES constants (see lib/gexBubbleModel).
+    const picked = new Map<number, ReturnType<typeof pickBubbleStrikes>>();
+    for (const [bar, col] of byBar) {
+      const chosen = pickBubbleStrikes(col.cells, col.spot || null);
+      if (chosen.length) picked.set(bar, chosen);
+    }
+    if (!picked.size) return;
 
-    // Baseline cap is half the bar spacing, so neighbouring buckets can touch
-    // but never merge — the band above is exactly what that prevents.
+    // ONE denominator for every mark on screen, taken over the strikes actually
+    // DRAWN. Per bucket it would renormalise every quiet minute back up to full
+    // size, which is what makes a trail bulge and pinch instead of taper.
+    let windowMax = 0;
+    for (const chosen of picked.values()) {
+      for (const c of chosen) windowMax = Math.max(windowMax, Math.abs(c.net));
+    }
+    if (!windowMax) return;
+
+    // Bar spacing at this zoom, measured off the last two bars.
     let spacing = 12;
     if (rows.length > 1) {
       const x0 = ts.timeToCoordinate(toChartTime(rows[rows.length - 2].timestamp));
       const x1 = ts.timeToCoordinate(toChartTime(rows[rows.length - 1].timestamp));
       if (x0 != null && x1 != null) spacing = Math.abs((x1 as number) - (x0 as number)) || 12;
     }
-    const fitR = Math.max(2.5, Math.min(7, spacing / 2 - 0.5));
-    // The floor does NOT scale: holding it fixed while the ceiling moves is what
-    // makes this a variance control rather than a zoom. Above ~1.4x the biggest
-    // buckets will overlap their neighbours — deliberate, and the user asked.
-    const MIN_R = 1.4;
-    const MAX_R = Math.max(MIN_R + 0.6, fitR * scale);
+
+    // Fewer dots, not smaller ones — and the size profile for the cadence as
+    // DRAWN (bucket x stride), shrunk to the room that exists. `scale` is the
+    // sheet's variance slider; at its default of 1 this is exactly the desktop.
+    const stride = bubbleStride(spacing);
+    const size = bubbleSize(intervalMinutes, spacing, stride, scale);
+
+    const bars = [...picked.keys()].sort((a, b) => a - b);
+    const firstTs = rows[bars[0]!]!.timestamp;
+    const lastTs = rows[bars[bars.length - 1]!]!.timestamp;
+    const span = Math.max(1, lastTs - firstTs);
 
     const xCache = new Map<number, number | null>();
     const xOfBar = (bar: number) => {
@@ -912,33 +964,62 @@ export default function MobileEsCandles() {
       return xCache.get(bar) ?? null;
     };
 
-    for (const b of byBar.values()) {
-      const x = xOfBar(b.bar);
-      if (x == null || x < -MAX_R || x > w + MAX_R) continue;
-      // The strike IS the price now — chart and ladder are both SPX.
-      const y = priceToY(b.strike);
-      if (y == null || y < -MAX_R || y > h + MAX_R) continue;
-      const mag = Math.abs(b.net);
-      if (!mag) continue;
-      const frac = mag / max;
-      // sqrt so AREA tracks magnitude — a linear radius makes the biggest
-      // strike look several times more dominant than it is.
-      const r = MIN_R + (MAX_R - MIN_R) * Math.sqrt(frac);
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      // Fade the weak ones too, so the eye finds the walls without reading sizes.
-      ctx.fillStyle = (b.net >= 0 ? rgba(M_COLOR.pos, 1) : rgba(M_COLOR.neg, 1)).replace(
-        /[\d.]+\)$/,
-        `${(0.22 + 0.5 * frac).toFixed(2)})`,
-      );
-      ctx.fill();
+    const posRgb = M_COLOR.pos;
+    const negRgb = M_COLOR.neg;
+
+    for (let i = 0; i < bars.length; i += stride) {
+      const bar = bars[i]!;
+      const cx0 = xOfBar(bar);
+      if (cx0 == null || cx0 < -40 || cx0 > w + 40) continue;
+      const marks = toBubbleMarks(picked.get(bar)!, windowMax);
+      if (!marks.length) continue;
+      const age = bubbleAge(rows[bar]!.timestamp, firstTs, span);
+
+      const placed: BubbleRow<(typeof marks)[number]>[] = [];
+      for (const m of marks) {
+        // The strike IS the price — chart and ladder are both SPX.
+        const y = priceToY(m.strike);
+        if (y == null || y < -20 || y > h + 20) continue;
+        placed.push({ m, y, r: bubbleRadius(m, size), dx: 0 });
+      }
+      if (!placed.length) continue;
+      fitBubbleRows(placed);
+
+      for (const { m, y, r, dx } of placed) {
+        const positive = m.value >= 0;
+        const base = positive ? posRgb : negRgb;
+        const alpha = bubbleAlpha(m, age);
+        const cx = cx0 + dx;
+        ctx.beginPath();
+        if (m.isTop) {
+          // The bucket's leader: bright core, its own glow, a white ring. The
+          // desktop's three-part treatment — it is what makes the wall of the
+          // moment findable without reading every radius.
+          ctx.fillStyle = rgba(base, Math.min(1, alpha));
+          ctx.shadowColor = rgba(base, 0.95);
+          ctx.shadowBlur = Math.min(size.glowPx, r * BUBBLES.glowFactor);
+          ctx.arc(cx, y, r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.shadowColor = "transparent";
+          ctx.beginPath();
+          ctx.lineWidth = size.ringPx;
+          ctx.strokeStyle = `rgba(255,255,255,${(0.85 * age).toFixed(3)})`;
+          ctx.arc(cx, y, r, 0, Math.PI * 2);
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = rgba(base, alpha);
+          ctx.arc(cx, y, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
   }, [priceToY]);
 
   useEffect(() => {
     bubbleDrawRef.current = drawBubbles;
     drawBubbles();
-  }, [drawBubbles, bubbleCols, chartCandles, bubbleScale]);
+  }, [drawBubbles, bubbleCols, chartCandles, bubbleScale, interval]);
 
   // ── SPX level lines, drawn where they are ──────────────────────────────────
   const levels = useMemo(() => {
@@ -1217,7 +1298,7 @@ export default function MobileEsCandles() {
         {showBubbles && (
           <MSlider
             label="Bubble size variance"
-            hint="Scales the largest bubbles only — the smallest stay put. Higher pulls the dominant strikes out of the crowd; lower flattens the trail into an even path."
+            hint="Scales the largest bubbles only — the smallest stay put. 1.0× is the desktop chart's own sizing."
             value={bubbleScale}
             min={BUBBLE_SCALE_MIN}
             max={BUBBLE_SCALE_MAX}

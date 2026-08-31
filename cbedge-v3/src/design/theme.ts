@@ -86,6 +86,18 @@ export const LIGHT_BLUE = 'var(--color-series-5)'
 export const ES_CANDLE_UP = 'var(--color-candle-up)'
 export const ES_CANDLE_DOWN = 'var(--color-candle-down)'
 
+/**
+ * NET DRIFT (PREMIUM) LINES — the call/put pair the /flow chart and the board's
+ * Net Premium card draw with, and the colour their legend dots take so a legend
+ * entry is the same green as the line it names.
+ *
+ * v2's values, deliberately. Same reasoning as ES_CANDLE_UP/DOWN above: T.green
+ * / T.red are v3's provisional directional pair, and this chart is one of the
+ * surfaces where matching v2 value-for-value is the requirement.
+ */
+export const NET_DRIFT_CALL = 'var(--color-netdrift-call)'
+export const NET_DRIFT_PUT = 'var(--color-netdrift-put)'
+
 /** CB / CW / PW wall colours. cb = Core Bullseye, cw = call wall, pw = put wall. */
 export const LEVEL_COLORS = {
   cb: 'var(--color-level-cb)',

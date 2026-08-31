@@ -19,6 +19,7 @@ import {
   todayYmdET,
   type FlowFilters,
 } from '@/data/flowMath'
+import { NET_DRIFT_CALL, NET_DRIFT_PUT } from '@/design/theme'
 import { NetDriftChart } from '@/pages/flow/NetDriftChart'
 import { fmtContractDate } from '../cardTitle'
 
@@ -116,12 +117,14 @@ export function NetPremiumCard() {
     [bins, date],
   )
 
-  // Spot overlay off the UNFILTERED ticker tape: `spot` is the underlying level
-  // and is identical on every print in a minute, so narrowing it by expiry or
-  // moneyness would only thin the line for no gain.
+  // Spot overlay off the SAME bins the drift lines are built from, so the two
+  // cannot cover different parts of the x-axis. It used to come off the raw
+  // tape, which is capped at the newest 20k rows — on a busy ticker that cap
+  // lands mid-morning and the overlay started there while the lines started at
+  // 9:30. See buildSpotSeries.
   const spotSeries = useMemo(
-    () => buildSpotSeries(own, { openSec: series.openSec, closeSec: series.closeSec }),
-    [own, series.openSec, series.closeSec],
+    () => buildSpotSeries(bins, { openSec: series.openSec, closeSec: series.closeSec }),
+    [bins, series.openSec, series.closeSec],
   )
 
   // The hover list, indexed by minute, biggest premium first — narrowed to the
@@ -192,8 +195,10 @@ export function NetPremiumCard() {
           ].filter(Boolean).join(' ')}
         >
           <div className="flex flex-wrap items-center justify-center gap-4 pb-2 text-xs font-semibold">
-            <span className="text-up">● Calls {fmtPremium(series.lastCall)}</span>
-            <span className="text-down">● Puts {fmtPremium(series.lastPut)}</span>
+            {/* The legend names the lines, so it takes the lines' colours —
+                v2's pair, not v3's directional one. See NET_DRIFT_CALL. */}
+            <span style={{ color: NET_DRIFT_CALL }}>● Calls {fmtPremium(series.lastCall)}</span>
+            <span style={{ color: NET_DRIFT_PUT }}>● Puts {fmtPremium(series.lastPut)}</span>
             <span className="text-muted">Net {fmtPremium(series.lastCall + series.lastPut)}</span>
             {spotSeries.last > 0 && (
               <span className="text-muted">

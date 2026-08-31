@@ -380,7 +380,9 @@ function mockFlowNetPrem(underlying, binSec) {
   const byBin = new Map()
   for (const o of tape) {
     const sec = Math.floor(o.ts / 1000 / bin) * bin
-    const b = byBin.get(sec) ?? { sec, callNet: 0, putNet: 0, callVol: 0, putVol: 0 }
+    const b = byBin.get(sec) ?? {
+      sec, callNet: 0, putNet: 0, callVol: 0, putVol: 0, spotSum: 0, spotN: 0,
+    }
     // Net = bought minus sold, which is what makes the two lines diverge.
     const signed = (o.side === 'buy' ? 1 : -1) * o.premium
     if (o.type === 'C') {
@@ -390,13 +392,22 @@ function mockFlowNetPrem(underlying, binSec) {
       b.putNet += signed
       b.putVol += o.size
     }
+    // The bin's underlying level, exactly as the real aggregate emits it —
+    // avg(spot) over the bin's prints. Without this the chart's spot overlay
+    // does not draw at all under the mock.
+    if (o.spot > 0) {
+      b.spotSum += o.spot
+      b.spotN += 1
+    }
     byBin.set(sec, b)
   }
   return {
     date: expiry,
     binSec: bin,
     partial: false,
-    bins: [...byBin.values()].sort((a, b) => a.sec - b.sec),
+    bins: [...byBin.values()]
+      .sort((a, b) => a.sec - b.sec)
+      .map(({ spotSum, spotN, ...b }) => (spotN > 0 ? { ...b, spot: spotSum / spotN } : b)),
   }
 }
 
