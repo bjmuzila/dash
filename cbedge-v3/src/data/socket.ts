@@ -24,6 +24,18 @@ import { persist, restore } from './cache'
 const WIDEN_MS = 250 // consumers on one route mount in a cascade; land on ONE connection
 const NARROW_MS = 1200 // narrowing is never urgent — never thrash the connection for it
 const SETTLE_MS = 1200 // leave the boot connection unscoped until the first route settles
+/**
+ * How long a connection has to SURVIVE before its predecessors are forgiven.
+ *
+ * The backoff used to reset in `onopen`, which sounds right and is not: a
+ * successful handshake says nothing about whether the connection is usable. A
+ * socket that is accepted and then dies a hundred milliseconds later reset the
+ * counter every single time, so the "exponential" backoff never advanced past
+ * its first step and the app reopened /ws/gex roughly every 700ms — forty-five
+ * connections inside thirty-four seconds, which is what sent us looking. A
+ * connection now has to stay open this long before it counts as good.
+ */
+const STABLE_MS = 5000
 
 let ws: WebSocket | null = null
 let currentTopics: Set<string> | null = null // null = unscoped firehose
@@ -32,6 +44,30 @@ let desired: string[] = []
 let reconnectAttempt = 0
 let started = false
 let disposed = false
+
+/**
+ * Which connection attempt is the CURRENT one.
+ *
+ * Every `connect()` takes the next number, and every handler it installs closes
+ * over that number — so a socket can ask "am I still the one?" instead of
+ * inferring it by comparing against `ws`, which is a moving target between the
+ * moment `connect()` runs and the moment the handshake completes.
+ *
+ * That inference is what multiplied the connections. `connect()` captured
+ * `const old = ws` at CALL time and closed it in `onopen`; if `ws` had moved on
+ * in between — a scope change racing a server-side close — the socket that was
+ * actually live never got closed. It stayed open, still wearing `handleClose`,
+ * and fired a fresh reconnect when it eventually died, while a good connection
+ * was already running. Every orphan bred another orphan.
+ *
+ * With an epoch there is no inference: a superseded socket closes itself and is
+ * ignored, and exactly one connection can ever be adopted.
+ */
+let epoch = 0
+/** Reset the moment the live socket changes — see STABLE_MS. */
+let stableTimer: ReturnType<typeof setTimeout> | null = null
+/** The connection being opened, if any. At most one is ever in flight. */
+let pendingWs: WebSocket | null = null
 
 /** Called once from main.tsx, before the first render. */
 export function startSocket(): void {
@@ -42,7 +78,7 @@ export function startSocket(): void {
 
   // 1. Take over the socket the inline script opened.
   if (b.ws && (b.ws.readyState === WebSocket.OPEN || b.ws.readyState === WebSocket.CONNECTING)) {
-    adopt(b.ws)
+    adopt(b.ws, ++epoch)
     b.status = 'handoff'
     b.sink = ingest
     const buffered = b.frames.splice(0, b.frames.length)
@@ -67,15 +103,40 @@ export function startSocket(): void {
   setTimeout(scheduleScope, SETTLE_MS)
 }
 
-function adopt(sock: WebSocket): void {
+/**
+ * Take ownership of a socket: this one, and only this one, is now THE
+ * connection. `myEpoch` is what the close handler checks — a socket that has
+ * been superseded must not drag the app into a reconnect on its way out.
+ */
+function adopt(sock: WebSocket, myEpoch: number): void {
   ws = sock
+  if (pendingWs === sock) pendingWs = null
   sock.onmessage = (ev) => ingest(ev.data)
-  sock.onclose = handleClose
-  sock.onerror = () => {}
-  sock.onopen = () => {
-    reconnectAttempt = 0
-    flushSend()
+  sock.onclose = () => {
+    if (myEpoch !== epoch) return
+    handleClose()
   }
+  sock.onerror = () => {}
+  sock.onopen = () => flushSend()
+  markStable()
+  // The handshake may already have completed (this is the normal path out of
+  // connect()), in which case the onopen above will never fire. Flush anyway.
+  flushSend()
+}
+
+/**
+ * Start the clock on "this connection is actually working".
+ *
+ * Only a connection that survives STABLE_MS clears the backoff. See the comment
+ * on that constant: resetting on `onopen` is what turned a flapping server into
+ * a connection every 700ms for as long as the tab was open.
+ */
+function markStable(): void {
+  if (stableTimer) clearTimeout(stableTimer)
+  stableTimer = setTimeout(() => {
+    stableTimer = null
+    reconnectAttempt = 0
+  }, STABLE_MS)
 }
 
 function ingest(raw: unknown): void {
@@ -198,44 +259,107 @@ function socketUrl(topics: Set<string> | null): string {
   return `${base}${sep}topics=${encodeURIComponent(Array.from(topics).sort().join(','))}`
 }
 
-function connect(topics: Set<string> | null): void {
-  if (disposed) return
-  const next = new WebSocket(socketUrl(topics))
-  const old = ws
-  next.onopen = () => {
-    reconnectAttempt = 0
-    // Swap only once the replacement is actually open, so there is no window
-    // with no connection at all.
-    if (old && old !== next) {
-      old.onclose = null
-      old.onmessage = null
-      try {
-        old.close()
-      } catch {
-        /* already gone */
-      }
-    }
-    adopt(next)
-    // adopt() reassigns onopen, which has already fired for this socket — so
-    // the queue is replayed here rather than relying on that handler.
-    flushSend()
+/** Detach every handler and close a socket we no longer want to hear from. */
+function discard(sock: WebSocket): void {
+  sock.onopen = null
+  sock.onclose = null
+  sock.onmessage = null
+  sock.onerror = null
+  try {
+    sock.close()
+  } catch {
+    /* already gone */
   }
-  next.onmessage = (ev) => ingest(ev.data)
-  next.onclose = () => {
-    if (ws === next || ws === null) handleClose()
-  }
-  next.onerror = () => {}
 }
 
+function connect(topics: Set<string> | null): void {
+  if (disposed) return
+  const myEpoch = ++epoch
+
+  // Anything still handshaking has just been superseded. Drop it here rather
+  // than letting it open into a world that has moved on — an attempt allowed to
+  // complete late is exactly how a second live socket used to appear.
+  if (pendingWs) {
+    const stale = pendingWs
+    pendingWs = null
+    discard(stale)
+  }
+
+  let next: WebSocket
+  try {
+    next = new WebSocket(socketUrl(topics))
+  } catch {
+    scheduleReconnect() // the constructor can throw on a malformed URL
+    return
+  }
+  pendingWs = next
+
+  next.onmessage = (ev) => ingest(ev.data)
+  next.onerror = () => {}
+
+  next.onopen = () => {
+    // Superseded while we were handshaking: close quietly and let the current
+    // attempt do its job. This is the check the old code tried to make by
+    // comparing against `ws`, which cannot distinguish the two cases.
+    if (myEpoch !== epoch) {
+      if (pendingWs === next) pendingWs = null
+      discard(next)
+      return
+    }
+    // Swap only once the replacement is actually open, so there is never a
+    // window with no connection at all. `ws` is read HERE, not at call time —
+    // whatever is live right now is what gets retired.
+    const old = ws
+    if (old && old !== next) discard(old)
+    adopt(next, myEpoch)
+  }
+
+  next.onclose = () => {
+    // Died before it could be adopted.
+    if (myEpoch !== epoch) return // a newer attempt owns the retry
+    if (pendingWs === next) pendingWs = null
+    // NOTE: `ws` is deliberately left alone. If a previous connection is still
+    // live it stays live and keeps feeding the app — only the attempt failed,
+    // and scheduleReconnect() will try the scope again.
+    scheduleReconnect()
+  }
+}
+
+/** The live connection went away. */
 function handleClose(): void {
   if (disposed) return
   ws = null
+  if (stableTimer) {
+    clearTimeout(stableTimer)
+    stableTimer = null
+  }
+  scheduleReconnect()
+}
+
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Back off, then try again — at most one retry in flight.
+ *
+ * The single-timer guard matters as much as the backoff: a server restart can
+ * close the live socket and a pending attempt in the same tick, and two
+ * independent timers meant two connections a moment later, both of which then
+ * bred their own retries.
+ */
+function scheduleReconnect(): void {
+  if (disposed || reconnectTimer) return
   reconnectAttempt++
   // 500ms, 1s, 2s, 4s, capped at 10s. Jittered so a server restart does not
   // bring every open tab back in the same millisecond.
   const backoff = Math.min(10_000, 500 * 2 ** Math.min(reconnectAttempt - 1, 4))
   const jitter = backoff * 0.25 * Math.random()
-  setTimeout(() => connect(currentTopics), backoff + jitter)
+  reconnectTimer = setTimeout(
+    () => {
+      reconnectTimer = null
+      connect(currentTopics)
+    },
+    backoff + jitter,
+  )
 }
 
 /**
@@ -284,12 +408,16 @@ export function socketState(): { ready: number; topics: string[] | null; attempt
 
 export function stopSocket(): void {
   disposed = true
+  epoch++ // every handler still out there is now stale by definition
   if (pendingScope) clearTimeout(pendingScope)
-  try {
-    ws?.close()
-  } catch {
-    /* already gone */
-  }
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  if (stableTimer) clearTimeout(stableTimer)
+  pendingScope = null
+  reconnectTimer = null
+  stableTimer = null
+  if (pendingWs) discard(pendingWs)
+  if (ws) discard(ws)
+  pendingWs = null
   ws = null
 }
 

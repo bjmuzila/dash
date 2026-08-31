@@ -155,6 +155,15 @@ const MUTED: React.CSSProperties = { color: HOME_THEME.muted, opacity: 0.62 };
 type Bank = "coastal" | "truist" | "secu";
 type Category = { id: number; name: string; amount: number; color?: string | null };
 type SubStatus = "keep" | "cancel" | "watch";
+/**
+ * What a recurring charge IS, which is a different question from what to do
+ * about it. Nearly everything that repeats is tagged "keep", so the verdict
+ * column alone cannot answer "how much of this load is a real bill and how
+ * much is optional" — the number that actually matters when money is tight.
+ *   bill   — power, water, phone, insurance, rent. Cutting it is not on the table.
+ *   luxury — streaming, apps, extras. Not 100% needed.
+ */
+type SubKind = "bill" | "luxury";
 
 type StagedRow = {
   key: string; date: string; description: string; merchant: string;
@@ -170,7 +179,7 @@ type StoredTx = {
 
 type Subscription = {
   id: number; merchant_key: string; merchant: string;
-  status: SubStatus; note: string | null; pushed_recurring_id: number | null;
+  status: SubStatus; kind: SubKind | null; note: string | null; pushed_recurring_id: number | null;
 };
 
 type MonthStat = { month: string; n: number };
@@ -208,6 +217,35 @@ const STATUS_UI: Record<SubStatus, { color: string; label: string }> = {
   cancel: { color: HOME_THEME.red, label: "Cancel" },
   watch: { color: WARN, label: "Watch" },
 };
+const KIND_UI: Record<SubKind, { color: string; label: string; heading: string; blurb: string }> = {
+  bill: {
+    color: ACCENT, label: "Bill", heading: "Real bills",
+    blurb: "Keeping the lights on. This is the floor the month has to clear.",
+  },
+  luxury: {
+    color: WARN, label: "Luxury", heading: "Luxury / not 100% needed",
+    blurb: "Everything above the floor. This is the number that moves when money is tight.",
+  },
+};
+
+/**
+ * A first guess at bill-vs-luxury from the merchant name, used ONLY for rows
+ * that have never been tagged. Without it the whole list lands in one
+ * undifferentiated "unsorted" pile and the split answers nothing until every
+ * row has been clicked. A guessed row is drawn with a dotted chip and is not
+ * written to the database — clicking either chip is what stores a decision.
+ */
+const BILL_HINTS = /\b(rent|mortgage|escrow|insur|geico|progressive|allstate|statefarm|electric|power|energy|duke|gas co|water|sewer|trash|waste|utility|utilities|internet|spectrum|xfinity|comcast|at&?t|verizon|t-?mobile|mint ?mobile|phone|wireless|daycare|childcare|tuition|school|loan|lending|credit|card ?pmt|payment|storage|hoa|pharmacy|medical|dental|vision|health|gym membership|life ins)\b/i;
+const LUXURY_HINTS = /\b(netflix|hulu|disney|max|hbo|paramount|peacock|prime video|spotify|apple music|pandora|tidal|youtube|twitch|patreon|onlyfans|xbox|playstation|nintendo|steam|roblox|discord|audible|kindle|chatgpt|openai|claude|anthropic|midjourney|canva|adobe|dropbox|icloud|google one|notion|substack|nyt|news|doordash|ubereats|grubhub|instacart|starbucks|dunkin|coffee|gaming|vpn|nordvpn)\b/i;
+function guessKind(merchant: string): SubKind {
+  const m = String(merchant || "");
+  if (LUXURY_HINTS.test(m)) return "luxury";
+  if (BILL_HINTS.test(m)) return "bill";
+  // Unknown repeats default to luxury on purpose: the cost of wrongly calling
+  // a bill optional is one click, and the cost of the reverse is a padded
+  // "real bills" floor that quietly excuses the spend.
+  return "luxury";
+}
 
 function fmtMoney(amount: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(amount || 0);
@@ -666,12 +704,18 @@ export default function RealMonth({
         const repeats = m.count >= 2 && tight;
         if (!repeats && !m.flagged) return null;
         const saved = byKey.get(m.key);
+        const storedKind = (saved?.kind ?? null) as SubKind | null;
         return {
           merchant: m.merchant, key: m.key, count: m.count,
           each: repeats ? median : m.total, total: m.total,
           monthly: repeats ? median : m.total,
           categoryId: m.categoryId,
           status: (saved?.status ?? "watch") as SubStatus,
+          kind: storedKind ?? guessKind(m.merchant),
+          // True while the row is sitting in a guessed group. It still counts
+          // toward that group's total — a guess you have not corrected is the
+          // best answer available — but it is drawn so you can see it is one.
+          kindGuessed: storedKind == null,
           pushedId: saved?.pushed_recurring_id ?? null,
         };
       })
@@ -683,12 +727,26 @@ export default function RealMonth({
     const key = mKey(merchant);
     setSubs((prev) => {
       const i = prev.findIndex((s) => s.merchant_key === key);
-      if (i === -1) return [...prev, { id: -Date.now(), merchant_key: key, merchant, status, note: null, pushed_recurring_id: null }];
+      if (i === -1) return [...prev, { id: -Date.now(), merchant_key: key, merchant, status, kind: null, note: null, pushed_recurring_id: null }];
       const next = [...prev];
       next[i] = { ...next[i], status };
       return next;
     });
     await post({ action: "setSubscription", merchant, status });
+  };
+
+  // Independent of the verdict — the server COALESCEs, so writing a kind never
+  // touches keep/watch/cancel and vice versa.
+  const setSubKind = async (merchant: string, kind: SubKind) => {
+    const key = mKey(merchant);
+    setSubs((prev) => {
+      const i = prev.findIndex((s) => s.merchant_key === key);
+      if (i === -1) return [...prev, { id: -Date.now(), merchant_key: key, merchant, status: "watch", kind, note: null, pushed_recurring_id: null }];
+      const next = [...prev];
+      next[i] = { ...next[i], kind };
+      return next;
+    });
+    await post({ action: "setSubscription", merchant, kind });
   };
 
   const pushToPayments = async (merchant: string, amount: number) => {
@@ -734,7 +792,12 @@ export default function RealMonth({
     const uncategorized = txView.filter((r) => r.direction === "out" && r.category_id == null).length;
     const subTotal = subRows.reduce((s, m) => s + m.monthly, 0);
     const cancelSavings = subRows.filter((s) => s.status === "cancel").reduce((s, m) => s + m.monthly, 0);
-    return { outflow, inflow, net: inflow - outflow, uncategorized, subTotal, cancelSavings };
+    // The split the whole tab exists for: what has to be paid vs what is
+    // choice. Guessed rows are counted in their guessed group.
+    const billTotal = subRows.filter((s) => s.kind === "bill").reduce((s, m) => s + m.monthly, 0);
+    const luxuryTotal = subRows.filter((s) => s.kind === "luxury").reduce((s, m) => s + m.monthly, 0);
+    const untagged = subRows.filter((s) => s.kindGuessed).length;
+    return { outflow, inflow, net: inflow - outflow, uncategorized, subTotal, cancelSavings, billTotal, luxuryTotal, untagged };
   }, [txView, subRows]);
 
   const potentialSavings = useMemo(
@@ -821,7 +884,7 @@ export default function RealMonth({
           totals: { inflow: totals.inflow, outflow: totals.outflow, net: totals.net, transactions: tx.length },
           categories: byCategory.map((c) => ({ name: c.name, spent: Number(c.spent.toFixed(2)), budget: c.budget, count: c.count })),
           merchants: allMerchants.slice(0, 40).map((m) => ({ merchant: m.merchant, total: Number(m.total.toFixed(2)), count: m.count })),
-          subscriptions: subRows.map((s) => ({ merchant: s.merchant, monthly: Number(s.monthly.toFixed(2)), count: s.count, status: s.status })),
+          subscriptions: subRows.map((s) => ({ merchant: s.merchant, monthly: Number(s.monthly.toFixed(2)), count: s.count, status: s.status, kind: s.kind })),
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -967,6 +1030,15 @@ export default function RealMonth({
           <Tile label="Money in" value={fmtMoney(totals.inflow, currency)} valueColor={MONEY_IN} />
           <Tile label="Net" value={fmtMoney(totals.net, currency)} valueColor={totals.net >= 0 ? MONEY_IN : MONEY_OUT} />
           <Tile label="Subscriptions" value={fmtMoney(totals.subTotal, currency)} sub={`${subRows.length} recurring · ${fmtMoney(totals.subTotal * 12, currency)}/yr`} valueColor={WARN} />
+          <Tile label="Real bills" value={fmtMoney(totals.billTotal, currency)} sub={`${fmtMoney(totals.billTotal * 12, currency)}/yr · has to be paid`} valueColor={ACCENT} />
+          <Tile
+            label="Luxury"
+            value={fmtMoney(totals.luxuryTotal, currency)}
+            sub={totals.subTotal > 0
+              ? `${Math.round((totals.luxuryTotal / totals.subTotal) * 100)}% of recurring${totals.untagged ? ` · ${totals.untagged} guessed` : ""}`
+              : "nothing recurring"}
+            valueColor={WARN}
+          />
           <Tile label="If you cancel" value={fmtMoney(totals.cancelSavings, currency)} sub={totals.cancelSavings > 0 ? `${fmtMoney(totals.cancelSavings * 12, currency)}/yr back` : "nothing tagged cancel"} valueColor={totals.cancelSavings > 0 ? MONEY_IN : HOME_THEME.muted} />
         </div>
       )}
@@ -1323,64 +1395,141 @@ export default function RealMonth({
       )}
 
       {/* ── SUBSCRIPTIONS ────────────────────────────────────────────────── */}
+      {/* Split by KIND, not listed flat. Nearly every repeat is tagged "keep",
+          so a single ranked list says only "you spend money every month". The
+          question underneath it is which of these you could actually stop —
+          so real bills and luxuries are two tables with two totals, and the
+          keep/watch/cancel verdict stays as an independent second axis. */}
       {hasData && view === "subs" && (
         <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
           <SectionHead
             title="Recurring charges"
-            sub="Tag each one. → Payments adds THAT subscription to the register as a monthly recurring rule — the only thing that ever crosses over."
+            sub="Bill or luxury is what it IS; keep / watch / cancel is what you are doing about it. → Payments adds THAT subscription to the register as a monthly recurring rule — the only thing that ever crosses over."
+            right={
+              subRows.length ? (
+                <div style={{ textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                  <div style={{ fontSize: 18, fontWeight: 900 }}>
+                    <span style={{ color: ACCENT }}>{fmtMoney(totals.billTotal, currency)}</span>
+                    <span style={{ ...MUTED, fontWeight: 700 }}> bills · </span>
+                    <span style={{ color: WARN }}>{fmtMoney(totals.luxuryTotal, currency)}</span>
+                    <span style={{ ...MUTED, fontWeight: 700 }}> luxury</span>
+                  </div>
+                  <div style={{ fontSize: TYPE.label, ...MUTED }}>
+                    per month{totals.untagged > 0 ? ` · ${totals.untagged} still a guess` : " · all tagged"}
+                  </div>
+                </div>
+              ) : null
+            }
           />
           {subRows.length === 0 ? (
             <div style={{ padding: 20, ...MUTED, fontSize: TYPE.body }}>Nothing in {monthLabel(month)} repeats at a steady amount.</div>
           ) : (
-            <div style={isMobile ? scrollX : undefined}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 700 : undefined }}>
-              <thead>
-                <tr>
-                  <th style={th("left")}>Merchant</th>
-                  <th style={{ ...th("center"), width: 55 }}>Hits</th>
-                  <th style={{ ...th("right"), width: 105 }}>Each</th>
-                  <th style={{ ...th("right"), width: 120 }}>Per year</th>
-                  <th style={{ ...th("center"), width: 210 }}>Verdict</th>
-                  <th style={{ ...th("center"), width: 140 }}>Plan</th>
-                </tr>
-              </thead>
-              <tbody>
-                {subRows.map((s) => (
-                  <tr key={s.key} style={{ opacity: s.status === "cancel" ? 0.75 : 1 }}>
-                    <td style={{ ...td("left"), fontWeight: 700, textDecoration: s.status === "cancel" ? "line-through" : undefined }}>
-                      🔁 {s.merchant}
-                      {s.categoryId != null && <span style={{ marginLeft: 8, fontSize: 11, ...MUTED }}>{catById.get(s.categoryId)?.name}</span>}
-                    </td>
-                    <td style={{ ...td("center"), ...MUTED }}>{s.count}</td>
-                    <td style={{ ...td("right"), fontVariantNumeric: "tabular-nums" }}>{fmtMoney(s.each, currency)}</td>
-                    <td style={{ ...td("right"), fontWeight: 800, color: WARN, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(s.monthly * 12, currency)}</td>
-                    <td style={td("center")}>
-                      <div style={{ display: "flex", gap: 5, justifyContent: "center" }}>
-                        {(["keep", "watch", "cancel"] as const).map((st) => (
-                          <button key={st} onClick={() => void setSubStatus(s.merchant, st)} style={chip(s.status === st, STATUS_UI[st].color)}>
-                            {STATUS_UI[st].label}
-                          </button>
+            (["bill", "luxury"] as const).map((kind) => {
+              const rows = subRows.filter((r) => r.kind === kind);
+              if (!rows.length) return null;
+              const ui = KIND_UI[kind];
+              const monthly = rows.reduce((a, r) => a + r.monthly, 0);
+              const guesses = rows.filter((r) => r.kindGuessed).length;
+              return (
+                <div key={kind}>
+                  <div
+                    style={{
+                      display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap",
+                      padding: "12px 16px 10px",
+                      borderTop: `1px solid ${HOME_THEME.border}`,
+                      borderLeft: `3px solid ${ui.color}`,
+                      background: `linear-gradient(90deg, ${rgba(ui.color, 0.13)}, transparent 70%)`,
+                    }}
+                  >
+                    <span style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.16em", textTransform: "uppercase", color: ui.color }}>
+                      {ui.heading}
+                    </span>
+                    <span style={{ fontSize: TYPE.body, fontWeight: 900, fontVariantNumeric: "tabular-nums" }}>
+                      {fmtMoney(monthly, currency)}<span style={{ ...MUTED, fontWeight: 700 }}> /mo</span>
+                    </span>
+                    <span style={{ fontSize: TYPE.label, ...MUTED }}>
+                      {fmtMoney(monthly * 12, currency)}/yr · {rows.length} item{rows.length === 1 ? "" : "s"}
+                      {guesses > 0 ? ` · ${guesses} guessed` : ""}
+                    </span>
+                    <div style={{ flex: 1 }} />
+                    <span style={{ fontSize: TYPE.label, ...MUTED }}>{ui.blurb}</span>
+                  </div>
+                  <div style={isMobile ? scrollX : undefined}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 860 : undefined }}>
+                      <thead>
+                        <tr>
+                          <th style={th("left")}>Merchant</th>
+                          <th style={{ ...th("center"), width: 55 }}>Hits</th>
+                          <th style={{ ...th("right"), width: 105 }}>Each</th>
+                          <th style={{ ...th("right"), width: 120 }}>Per year</th>
+                          <th style={{ ...th("center"), width: 160 }}>Need</th>
+                          <th style={{ ...th("center"), width: 210 }}>Verdict</th>
+                          <th style={{ ...th("center"), width: 140 }}>Plan</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((s) => (
+                          <tr key={s.key} style={{ opacity: s.status === "cancel" ? 0.75 : 1 }}>
+                            <td style={{ ...td("left"), fontWeight: 700, textDecoration: s.status === "cancel" ? "line-through" : undefined }}>
+                              🔁 {s.merchant}
+                              {s.categoryId != null && <span style={{ marginLeft: 8, fontSize: 11, ...MUTED }}>{catById.get(s.categoryId)?.name}</span>}
+                            </td>
+                            <td style={{ ...td("center"), ...MUTED }}>{s.count}</td>
+                            <td style={{ ...td("right"), fontVariantNumeric: "tabular-nums" }}>{fmtMoney(s.each, currency)}</td>
+                            <td style={{ ...td("right"), fontWeight: 800, color: ui.color, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(s.monthly * 12, currency)}</td>
+                            <td style={td("center")}>
+                              <div style={{ display: "flex", gap: 5, justifyContent: "center" }}>
+                                {(["bill", "luxury"] as const).map((k) => {
+                                  const on = s.kind === k;
+                                  return (
+                                    <button
+                                      key={k}
+                                      onClick={() => void setSubKind(s.merchant, k)}
+                                      title={s.kindGuessed ? "Guessed from the merchant name — click to make it stick" : undefined}
+                                      style={{
+                                        ...chip(on, KIND_UI[k].color),
+                                        // A guess looks like a guess. Nothing is
+                                        // stored for this merchant until a click.
+                                        borderStyle: on && s.kindGuessed ? "dashed" : "solid",
+                                        opacity: on ? (s.kindGuessed ? 0.72 : 1) : 0.42,
+                                      }}
+                                    >
+                                      {KIND_UI[k].label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                            <td style={td("center")}>
+                              <div style={{ display: "flex", gap: 5, justifyContent: "center" }}>
+                                {(["keep", "watch", "cancel"] as const).map((st) => (
+                                  <button key={st} onClick={() => void setSubStatus(s.merchant, st)} style={chip(s.status === st, STATUS_UI[st].color)}>
+                                    {STATUS_UI[st].label}
+                                  </button>
+                                ))}
+                              </div>
+                            </td>
+                            <td style={td("center")}>
+                              {s.pushedId ? (
+                                <span style={{ fontSize: TYPE.label, color: MONEY_IN, fontWeight: 800 }}>✓ In Payments</span>
+                              ) : (
+                                <button
+                                  onClick={() => void pushToPayments(s.merchant, s.each)}
+                                  title={`Add ${s.merchant} to Payments as a ${fmtMoney(s.each, currency)}/mo recurring rule`}
+                                  style={{ ...ghost(), padding: "6px 11px", fontSize: TYPE.label, color: ACCENT, borderColor: rgba(ACCENT, 0.4) }}
+                                >
+                                  → Payments
+                                </button>
+                              )}
+                            </td>
+                          </tr>
                         ))}
-                      </div>
-                    </td>
-                    <td style={td("center")}>
-                      {s.pushedId ? (
-                        <span style={{ fontSize: TYPE.label, color: MONEY_IN, fontWeight: 800 }}>✓ In Payments</span>
-                      ) : (
-                        <button
-                          onClick={() => void pushToPayments(s.merchant, s.each)}
-                          title={`Add ${s.merchant} to Payments as a ${fmtMoney(s.each, currency)}/mo recurring rule`}
-                          style={{ ...ghost(), padding: "6px 11px", fontSize: TYPE.label, color: ACCENT, borderColor: rgba(ACCENT, 0.4) }}
-                        >
-                          → Payments
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })
           )}
         </Card>
       )}

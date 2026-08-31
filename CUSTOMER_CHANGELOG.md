@@ -4,6 +4,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Monday 8/31/2026
 
+* **SPX Candles (phone):** now charts SPX itself, so the gamma bubbles and levels stay on screen off-hours. Bubbles show the top 4 strikes — one each side of price — sized like the desktop chart.
+
+* **Live feed (phone):** charts reconnect the moment your phone wakes or the network changes, instead of sitting on "connecting".
+
 * **Home — GEX Chart:** the gamma flip was landing in the wrong place, and on some days did not show at all. Corrected, and it now matches the flip line drawn on the chart.
 
 * **Home & Premarket — Key Levels:** the two pages could show a different put wall or CORE at the same moment, and a put wall occasionally appeared above the current price. Both now read the same levels.

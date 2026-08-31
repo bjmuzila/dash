@@ -7920,6 +7920,12 @@ if (libDb) {
     const currentMonth = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`; };
     const normBank = (v) => (v === 'coastal' || v === 'truist' ? v : 'secu');
     const normStatus = (v) => (v === 'keep' || v === 'cancel' ? v : 'watch');
+    // Two independent axes on a subscription. `status` is the verdict
+    // (keep/watch/cancel); `kind` is what it IS — a real bill or a luxury.
+    // Both are optional on a write: undefined means "leave whatever is stored",
+    // which is what lets the two chip rows in the UI be clicked independently.
+    const normStatusOpt = (v) => (v === 'keep' || v === 'cancel' || v === 'watch' ? v : null);
+    const normKind = (v) => (v === 'bill' || v === 'luxury' ? v : null);
     // Stable identity for a merchant across imports and spelling drift.
     const merchantKey = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 60);
     // Two imports covering the same week must not produce two copies of a row.
@@ -8121,11 +8127,17 @@ if (libDb) {
           if (action === 'setSubscription') {
             const merchant = String(body?.merchant ?? '').trim().slice(0, 80);
             if (!merchant) { send(res, 400, { error: 'merchant required' }); return; }
+            const status = normStatusOpt(body?.status);
+            const kind = normKind(body?.kind);
+            if (status == null && kind == null && body?.note == null) {
+              send(res, 400, { error: 'status, kind or note required' }); return;
+            }
             const row = await D.upsertSubscription({
               profile_id: profile.id,
               merchant_key: merchantKey(merchant),
               merchant,
-              status: normStatus(body?.status),
+              status,
+              kind,
               note: body?.note != null ? String(body.note).slice(0, 300) : null,
             });
             send(res, 200, { ok: true, subscription: row }); return;
@@ -8153,6 +8165,10 @@ if (libDb) {
               merchant_key: merchantKey(merchant),
               merchant,
               status: normStatus(body?.status ?? 'keep'),
+              // Pushing something into Payments as a recurring rule IS the
+              // statement that it is a real bill — but only when it has not
+              // already been classified by hand.
+              kind: normKind(body?.kind) ?? 'bill',
               pushed_recurring_id: rule?.id ?? null,
             });
             send(res, 200, { ok: true, rule, subscription: sub }); return;

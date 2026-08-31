@@ -1,5 +1,158 @@
 # Changelog
 
+## 2026-08-31 - Real Month: bills vs luxury, and the category trend stops oscillating
+
+### Subscriptions split by what they ARE, not just what to do about them
+
+Real Month tagged every recurring charge keep / watch / cancel, and nearly all
+of them are "keep" - so the list ranked by amount and answered nothing. The
+question underneath it is which of these could actually stop.
+
+`budget_subscription` gains a `kind` column (`bill` | `luxury`, NULL =
+unclassified), added with `ADD COLUMN IF NOT EXISTS` so existing rows survive.
+It is a SECOND axis, independent of the verdict: `upsertSubscription` now
+COALESCEs every field, so writing a kind cannot reset keep/cancel and the
+reverse. `setSubscription` accepts either or both and 400s on neither;
+`pushSubscription` implies `bill` (pushing something into Payments as a
+recurring rule IS the claim that it is a real bill) but never overwrites a
+hand-set kind.
+
+The Subscriptions view is now two tables - Real bills and Luxury / not 100%
+needed - each with its own monthly and yearly total, plus a Need column of
+Bill/Luxury chips beside the existing verdict chips. Two new stat tiles carry
+the split up to the strip, with the luxury share as a percentage of recurring.
+
+Rows that have never been tagged are GUESSED from the merchant name
+(`BILL_HINTS` / `LUXURY_HINTS`) so the split is useful on the first load
+instead of after twenty clicks. A guess is drawn with a dashed chip at reduced
+opacity, is counted in its guessed group, and writes nothing - clicking either
+chip is what stores a decision. Unknown merchants guess `luxury` on purpose:
+mislabelling a bill costs one click, mislabelling a luxury pads the "has to be
+paid" floor and quietly excuses the spend. The advice payload carries `kind`
+too.
+
+### Category trend: bars, not a spline
+
+Three complaints, three fixes in `CategoryBudget.tsx`.
+
+**Colour.** Category colours are chosen by hand and Rent's is a deep maroon,
+which on the near-black chart ground rendered as an invisible line and an
+unreadable headline number. New `readable()` keeps the chosen hue and
+saturation and only lifts lightness until it clears a floor (nudging saturation
+slightly so a deep hue does not wash to grey). Applied in both
+`buildCategoryTrend` and `buildBudgetGrid`, so the pill, the line, the headline
+figure and the grid all agree. Nothing in the database changes.
+
+**Thickness.** The 7px halo stroke under a 2.5px line is gone with the line.
+
+**Oscillation.** The Catmull-Rom spline was the actual bug. Monthly spend is
+twelve separate measurements, not a continuous quantity - there is no value
+"between March and April" for a curve to pass through - and the spline invented
+them, swinging below zero between a $281 March and a $0 May and drawing hills
+in months that never happened. It is bars now. A bar can only ever be as tall
+as the month it stands on.
+
+Bars are 62% of the axis slot, clamped into the plot so the first and last do
+not hang over the value labels. A month with no statement imported still reads
+as unmeasured - a hollow dashed slot on the baseline, never a zero-height bar.
+The avg and budget reference lines moved to draw ON TOP of the bars (reading
+which bars cross them is the point), and the hover guide became a soft column
+wash behind them.
+
+## 2026-08-31 - Budget: Sheetz/Gas reads net of Amazon Flex gas
+
+Fuel is entered gross - every Sheetz swipe gets filed to the Sheetz/Gas
+category, including the fill-ups burned driving Amazon Flex. Flex gas is
+already logged per-day on the Amazon tab and already deducted from Amazon net
+pay, so leaving it in the category double-counted it as personal spend.
+
+`categoryStats` in `app/owner/budget/page.tsx` now keeps `gross` (the filed
+total, untouched) and reports `spent` for the fuel category net of the month's
+Amazon gas. The offset is capped at what was filed, so the category can never
+go negative. Every other category is unchanged, and nothing about how rows are
+entered or assigned changes - you still mark all Sheetz transactions to
+Sheetz/Gas and the subtraction happens on read.
+
+August: 510.15 filed - 370.00 Flex = 140.15 real personal fuel.
+
+The category is matched by name (`/sheetz|gas|fuel/i`), so renaming it between
+"Sheetz", "Gas" and "Sheetz/Gas" keeps working.
+
+Surfaced in three places, all showing the arithmetic rather than just the net:
+the Categories tile gets a Filed / - Amazon Flex gas / Real personal fuel
+breakdown, the Overview Category Spend row gets a one-line note under its bar,
+and the per-category popup header shows it beside the spent figure. The
+Overview donut and category totals follow `spent`, so they are net too.
+
+Yearly is untouched - it sums a whole year of register rows and has no Amazon
+gas loaded for those months.
+
+## 2026-08-31 - v3 socket: 45 connections in 34 seconds, and the panels that starved because of it
+
+A network waterfall on /premarket showed ~45 WebSocket connections to
+`/ws/gex`, every one of them carrying the SAME scope
+(`topics=aux,esCandles,gex,spot,status`). Identical scope rules out topic
+thrash - this was the connection layer reconnecting against itself, roughly
+every 700ms, for as long as the tab was open.
+
+That is almost certainly what the "no market data" on half the page was.
+server-v2 dedupes and throttles the `gex` frame (~100KB a go), so a panel that
+missed the connect snapshot waits for a recompute that may not come for
+minutes; every reconnect also drops the replay cache and loses the
+per-connection `SET_EXPIRY`. A socket that reopens twice a second never holds
+still long enough to feed anything.
+
+Two defects in `cbedge-v3/src/data/socket.ts`, both in the connection
+lifecycle. Neither touches `server-v2` or the proxy.
+
+**1. The backoff could not advance.** `reconnectAttempt` was reset in
+`onopen`. A completed handshake says nothing about whether the connection is
+usable, so a socket that was accepted and then died 100ms later reset the
+counter every time and the "exponential" backoff never got past its first
+500ms step. A connection now has to STAY open for `STABLE_MS` (5s) before the
+counter clears - a flapping server backs off to the 10s cap the way it was
+always meant to.
+
+**2. Superseded sockets were never retired, and each orphan bred another.**
+`connect()` captured `const old = ws` at CALL time and closed it in `onopen`.
+If `ws` moved in between - a scope change racing a server-side close - the
+socket that was actually live never got closed. It stayed open still wearing
+`handleClose`, and fired a fresh reconnect when it eventually died, while a
+good connection was already running. Connections multiplied.
+
+Connections are now epoch-numbered. Every `connect()` takes the next number and
+every handler it installs closes over it, so a socket asks "am I still the
+one?" instead of inferring it from `ws`, which is a moving target between the
+call and the handshake. A superseded socket closes itself and is ignored;
+exactly one connection can ever be adopted. Also:
+
+- `ws` is read in `onopen`, not at call time, so whatever is live right now is
+  what gets retired.
+- an attempt still handshaking is discarded the moment a newer one starts.
+- an attempt that dies before adoption no longer nulls `ws` - a previous live
+  connection keeps feeding the app while the scope change is retried.
+- `scheduleReconnect()` allows ONE retry in flight. A server restart that
+  closes the live socket and a pending attempt in the same tick used to arm two
+  independent timers, and both children then bred their own.
+- `discard()` detaches every handler before closing, so nothing we have let go
+  of can call back into the module.
+- `stopSocket()` bumps the epoch and clears all three timers.
+
+Changed: `cbedge-v3/src/data/socket.ts` only.
+
+Not run: `scripts/ws-scope-check.mjs` (it drives a real browser against a mock
+server). Worth running before this ships - the scope-derivation logic is
+untouched, but the reconnect path it exercises is not.
+
+Still open, deliberately not changed:
+
+- `PostMarketTab.tsx` line ~1212 says "No per-minute ladder recorded for today"
+  premarket. The recorder IS writing (the history call returned 62KB);
+  `useIntradayLadder` drops every row outside 09:30-16:00 ET, so before the
+  open it always reads "empty" and the copy implies the recorder is broken.
+- Slow endpoints on the same waterfall: `gex-by-strike-multi` 15.5s, `chains`
+  1.75s, `walls` 1.39s, `premarket-baseline` 1.64s.
+
 ## 2026-08-31 - phone bubbles now run the desktop's model
 
 Added: `lib/gexBubbleModel.ts`. Edited:

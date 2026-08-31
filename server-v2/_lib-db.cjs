@@ -760,18 +760,27 @@ async function ensureAllTables(pool) {
     -- 'cancel' rows roll up into the "if you killed these" savings number.
     -- pushed_recurring_id records that this subscription was pushed into the
     -- Payments register as a recurring rule, so the button can't fire twice.
+    --
+    -- kind is a SECOND, independent axis: is this a real bill (power, phone,
+    -- insurance) or a luxury you could live without (streaming, extra apps)?
+    -- It is not the same question as keep/cancel — most months you keep a
+    -- luxury and you still want to see, in one number, how much of the
+    -- recurring load is optional. NULL means not classified yet.
     CREATE TABLE IF NOT EXISTS budget_subscription (
       id SERIAL PRIMARY KEY,
       profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
       merchant_key TEXT NOT NULL,
       merchant TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'watch',
+      kind TEXT,
       note TEXT,
       pushed_recurring_id INTEGER,
       updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(profile_id, merchant_key)
     );
     CREATE INDEX IF NOT EXISTS idx_budget_subscription_profile ON budget_subscription(profile_id);
+    -- Added after the table shipped; existing rows start unclassified.
+    ALTER TABLE budget_subscription ADD COLUMN IF NOT EXISTS kind TEXT;
 
     -- The last "what to fix" pass for a month, kept so the conclusion survives
     -- a reload and a month switch. One row per month: re-running overwrites it,
@@ -4915,19 +4924,24 @@ async function getBudgetAdvice(profileId, month) {
 async function listSubscriptions(profileId) {
   return queryAll("SELECT * FROM budget_subscription WHERE profile_id = ? ORDER BY merchant ASC", [profileId]);
 }
+// Every field except the merchant is optional and COALESCEd, so a write that
+// only carries `kind` cannot silently reset the keep/cancel verdict (and the
+// reverse). The two axes are tagged from two different chip rows in the UI and
+// have to be independently settable.
 async function upsertSubscription(input) {
   const pool = await getDb();
   const result = await pool.query(
-    `INSERT INTO budget_subscription (profile_id, merchant_key, merchant, status, note, pushed_recurring_id)
-     VALUES ($1,$2,$3,$4,$5,$6)
+    `INSERT INTO budget_subscription (profile_id, merchant_key, merchant, status, kind, note, pushed_recurring_id)
+     VALUES ($1,$2,$3,COALESCE($4,'watch'),$5,$6,$7)
      ON CONFLICT(profile_id, merchant_key) DO UPDATE SET
        merchant = EXCLUDED.merchant,
-       status = EXCLUDED.status,
+       status = COALESCE(EXCLUDED.status, budget_subscription.status),
+       kind = COALESCE(EXCLUDED.kind, budget_subscription.kind),
        note = COALESCE(EXCLUDED.note, budget_subscription.note),
        pushed_recurring_id = COALESCE(EXCLUDED.pushed_recurring_id, budget_subscription.pushed_recurring_id),
        updated_at = CURRENT_TIMESTAMP
      RETURNING *`,
-    [input.profile_id, input.merchant_key, input.merchant, input.status ?? "watch", input.note ?? null, input.pushed_recurring_id ?? null]
+    [input.profile_id, input.merchant_key, input.merchant, input.status ?? null, input.kind ?? null, input.note ?? null, input.pushed_recurring_id ?? null]
   );
   return result.rows[0];
 }

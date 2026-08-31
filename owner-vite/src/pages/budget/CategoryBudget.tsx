@@ -47,6 +47,50 @@ export const UNCATEGORIZED = "Uncategorized";
 
 const MUTED: React.CSSProperties = { color: HOME_THEME.muted, opacity: 0.62 };
 
+/**
+ * Lift a category colour off the near-black page.
+ *
+ * Category colours are picked by hand in the editor, and a dark one — the deep
+ * maroon on Rent, say — renders as a line you cannot see and a headline number
+ * you cannot read, because the chart draws on a near-black ground. This keeps
+ * the hue and saturation the user chose and only raises the lightness until it
+ * clears a floor, so the colour stays recognisably "the Rent colour" while
+ * actually being legible. Anything that is not a plain hex is returned as-is.
+ */
+export function readable(color: string | null | undefined, minL = 0.5): string {
+  const raw = String(color ?? "").trim();
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(raw);
+  if (!m) return raw || HOME_THEME.cyan;
+  const hex = m[1].length === 3 ? m[1].split("").map((c) => c + c).join("") : m[1];
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (l >= minL) return raw;
+
+  const d = max - min;
+  const sat = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let h = 0;
+  if (d !== 0) {
+    h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  // Saturation is nudged up a little too: lightening alone washes a deep hue
+  // toward grey, and a grey "Rent" is no more identifiable than a black one.
+  const S = Math.min(1, sat * 1.05 + 0.12);
+  const c = (1 - Math.abs(2 * minL - 1)) * S;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const mm = minL - c / 2;
+  const [r1, g1, b1] =
+    h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
+      : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  const to = (v: number) => Math.round(Math.min(255, Math.max(0, (v + mm) * 255))).toString(16).padStart(2, "0");
+  return `#${to(r1)}${to(g1)}${to(b1)}`;
+}
+
 function field(): React.CSSProperties {
   return {
     ...homeInputStyle,
@@ -316,30 +360,6 @@ function niceMax(v: number): number {
 }
 
 /**
- * Catmull-Rom through the points, at low tension.
- *
- * Tension is deliberately 0.18 rather than the usual 0.5: a spend series is
- * spiky, and a lively spline overshoots between two far-apart points, drawing
- * a peak in a month that never had one.
- */
-function smoothPath(pts: { x: number; y: number }[]): string {
-  if (!pts.length) return "";
-  if (pts.length === 1) return `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)} l 0.01 0`;
-  const T = 0.18;
-  let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i - 1] ?? pts[i];
-    const p1 = pts[i];
-    const p2 = pts[i + 1];
-    const p3 = pts[i + 2] ?? p2;
-    const c1x = p1.x + (p2.x - p0.x) * T, c1y = p1.y + (p2.y - p0.y) * T;
-    const c2x = p2.x - (p3.x - p1.x) * T, c2y = p2.y - (p3.y - p1.y) * T;
-    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
-  }
-  return d;
-}
-
-/**
  * Category trend — one category's spend, month over month.
  *
  * The table below it is a single month, which cannot answer the question that
@@ -347,10 +367,17 @@ function smoothPath(pts: { x: number; y: number }[]): string {
  * the same category across the imported history, with its own average as the
  * reference line and its budget as a second one.
  *
- * A month with NO statement imported BREAKS the line instead of plotting a
- * zero. An unimported month and a month where you genuinely spent nothing are
+ * Drawn as BARS, not a line. Monthly spend is twelve separate measurements,
+ * not a continuous quantity sampled twelve times — there is no value "between
+ * March and April" for a curve to pass through. A spline through those points
+ * invented one anyway: it swung below zero between a $281 March and a $0 May
+ * and drew hills in months that never had them. A bar can only ever be as tall
+ * as the month it stands on.
+ *
+ * A month with NO statement imported gets a hollow slot rather than a zero-height
+ * bar. An unimported month and a month where you genuinely spent nothing are
  * indistinguishable in the totals, and drawing the first as the second invents
- * a cliff that never happened.
+ * a floor that was never measured.
  */
 function CategoryTrend({
   axis, imported, series, active, onPick, currency,
@@ -374,19 +401,23 @@ function CategoryTrend({
   const px = (i: number) => (n === 1 ? PADL + plotW / 2 : PADL + (i / (n - 1)) * plotW);
   const py = (v: number) => PADT + plotH - (Math.min(v, top) / top) * plotH;
 
-  // Runs of consecutive imported months. Each run is its own path, which is
-  // what puts the gap in the line rather than a straight leap across it.
-  const runs = useMemo(() => {
-    const out: { i: number; x: number; y: number; v: number }[][] = [];
-    let cur: { i: number; x: number; y: number; v: number }[] = [];
-    axis.forEach((m, i) => {
-      if (!imported.has(m)) { if (cur.length) out.push(cur); cur = []; return; }
-      cur.push({ i, x: px(i), y: py(s?.values[i] ?? 0), v: s?.values[i] ?? 0 });
-    });
-    if (cur.length) out.push(cur);
-    return out;
+  // One bar per month. Slot width comes from the axis spacing so twelve months
+  // and three months both fill the plot; the bar itself takes 62% of its slot,
+  // which keeps the gutters readable without the bars going hairline.
+  const slotW = plotW / Math.max(n - 1, 1);
+  const barW = Math.max(6, Math.min(46, slotW * 0.62));
+  const bars = useMemo(
+    () => axis.map((m, i) => {
+      const known = imported.has(m);
+      const v = known ? s?.values[i] ?? 0 : 0;
+      // Clamped into the plot: the first and last bars are centred on the axis
+      // ends, so half of each would otherwise hang over the value labels.
+      const x = Math.min(Math.max(px(i) - barW / 2, PADL), W - PADR - barW);
+      return { i, m, known, v, x, y: py(v), h: Math.max(known && v > 0 ? 2 : 0, PADT + plotH - py(v)) };
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [axis, imported, s, top]);
+    [axis, imported, s, top, barW]
+  );
 
   if (!s) return null;
 
@@ -447,8 +478,8 @@ function CategoryTrend({
         <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="auto" role="img" aria-label={`${s.name} spend by month`}>
           <defs>
             <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={s.color} stopOpacity={0.34} />
-              <stop offset="100%" stopColor={s.color} stopOpacity={0} />
+              <stop offset="0%" stopColor={s.color} stopOpacity={0.85} />
+              <stop offset="100%" stopColor={s.color} stopOpacity={0.3} />
             </linearGradient>
           </defs>
 
@@ -465,6 +496,41 @@ function CategoryTrend({
             );
           })}
 
+          {hover != null && hoverKnown && (
+            <rect
+              x={px(hover) - slotW / 2} y={PADT} width={slotW} height={plotH}
+              fill={rgba(s.color, 0.07)} pointerEvents="none"
+            />
+          )}
+
+          {/* one bar per month */}
+          {bars.map((b) => {
+            if (!b.known) {
+              // No statement for this month. A hollow, dashed slot sitting on
+              // the baseline — visibly "not measured", never mistaken for a
+              // month that cost nothing.
+              return (
+                <rect
+                  key={b.m}
+                  x={b.x} y={PADT + plotH - 9} width={barW} height={9}
+                  fill="none" stroke={rgba("#ffffff", 0.16)} strokeDasharray="3 3" rx={2}
+                />
+              );
+            }
+            const on = hover === b.i;
+            return (
+              <rect
+                key={b.m}
+                x={b.x} y={b.y} width={barW} height={b.h} rx={3}
+                fill={on ? s.color : `url(#${gid})`}
+                stroke={rgba(s.color, on ? 0.95 : 0.7)}
+                strokeWidth={1}
+              />
+            );
+          })}
+          {/* Reference lines sit ON TOP of the bars — the whole point of
+              them is reading which bars cross, and a bar drawn over the line
+              hides exactly the crossing you are looking for. */}
           {/* budget line — the target this category was given */}
           {s.budget > 0 && s.budget <= top && (
             <>
@@ -485,30 +551,6 @@ function CategoryTrend({
             </>
           )}
 
-          {/* one path per unbroken run of imported months */}
-          {runs.map((run, ri) => {
-            const line = smoothPath(run);
-            const area = run.length > 1
-              ? `${line} L ${run[run.length - 1].x.toFixed(1)} ${PADT + plotH} L ${run[0].x.toFixed(1)} ${PADT + plotH} Z`
-              : "";
-            return (
-              <g key={ri}>
-                {area && <path d={area} fill={`url(#${gid})`} />}
-                <path d={line} fill="none" stroke={rgba(s.color, 0.4)} strokeWidth={7} strokeLinejoin="round" strokeLinecap="round" />
-                <path d={line} fill="none" stroke={s.color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
-              </g>
-            );
-          })}
-
-          {/* points + hover targets */}
-          {runs.flat().map((p) => (
-            <circle
-              key={p.i}
-              cx={p.x} cy={p.y} r={hover === p.i ? 5.5 : 3.5}
-              fill={hover === p.i ? s.color : rgba("#000000", 0.85)}
-              stroke={s.color} strokeWidth={2}
-            />
-          ))}
           {axis.map((_, i) => (
             <rect
               key={i}
@@ -519,9 +561,6 @@ function CategoryTrend({
               onMouseLeave={() => setHover((h) => (h === i ? null : h))}
             />
           ))}
-          {hover != null && hoverKnown && (
-            <line x1={px(hover)} x2={px(hover)} y1={PADT} y2={PADT + plotH} stroke={rgba(s.color, 0.35)} strokeDasharray="3 4" />
-          )}
 
           {/* month axis */}
           <g fontSize={10} textAnchor="middle" fill={HOME_THEME.muted}>
@@ -612,7 +651,7 @@ export function buildCategoryTrend(
         avg: total / importedN,
         months: importedN,
         budget: cat?.amount ?? 0,
-        color: cat?.color || (name === UNCATEGORIZED ? DONUT_NEUTRAL : DONUT_RAMP[slotOf.get(name) ?? 0]),
+        color: readable(cat?.color || (name === UNCATEGORIZED ? DONUT_NEUTRAL : DONUT_RAMP[slotOf.get(name) ?? 0])),
       };
     })
     .filter((s) => s.total > 0)
@@ -658,7 +697,7 @@ export function buildBudgetGrid(
     return {
       name,
       id: cat?.id ?? null,
-      color: cat?.color || s?.color || (name === UNCATEGORIZED ? DONUT_NEUTRAL : DONUT_RAMP[slotOf.get(name) ?? 0]),
+      color: readable(cat?.color || s?.color || (name === UNCATEGORIZED ? DONUT_NEUTRAL : DONUT_RAMP[slotOf.get(name) ?? 0])),
       period: cat?.period ?? "monthly",
       values, avg, budget, ratio, status,
       total: values.reduce((a, b) => a + b, 0),

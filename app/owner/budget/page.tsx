@@ -69,6 +69,11 @@ const EDGE_LIGHT = "inset 0 1px 0 rgba(255,255,255,0.12)"; // machined top edge
 const CARD_SHADOW = `${EDGE_LIGHT}, 0 2px 4px rgba(0,0,0,0.6), 0 24px 60px -16px rgba(0,0,0,0.75)`;
 const SHELL_GLOW_DEEP = `radial-gradient(1100px 520px at 12% -10%, rgba(33,158,188,0.13) 0%, transparent 60%), radial-gradient(900px 460px at 88% 6%, rgba(125,211,252,0.09) 0%, transparent 55%), ${HOME_THEME.shellGlow}`;
 
+// The fuel category. Sheetz transactions are all filed here gross; the month's
+// Amazon Flex gas (entered on the Amazon tab) is netted back out of it so the
+// tile reads as real personal fuel spend. Rename-tolerant on purpose.
+const GAS_CATEGORY_RE = /sheetz|gas|fuel/i;
+
 // Swatch palette for category dots.
 const CATEGORY_COLORS = ["#7dd3fc", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", HOME_THEME.red];
 
@@ -435,23 +440,40 @@ export default function BudgetPage() {
 
   // Spend per category (this month's expense rows) + the "unsorted" bucket +
   // the actual rows grouped by category (for the per-category detail popup).
+  //
+  // Fuel is entered gross: EVERY Sheetz swipe gets filed under the Sheetz/Gas
+  // category, including the fill-ups burned driving Amazon Flex. Flex gas is
+  // already logged per-day on the Amazon tab (and already deducted from Amazon
+  // net pay), so leaving it in the category double-counts it as personal spend.
+  // `spent` therefore reports the Sheetz/Gas category NET of the month's Amazon
+  // gas — e.g. 510.15 filed − 370.00 Flex = 140.15 real — while `gross` keeps
+  // the untouched filed total for display. Every other category is untouched.
   const categoryStats = useMemo(() => {
-    const spent: Record<number, number> = {};
+    const gross: Record<number, number> = {};
     const unsorted: RegisterRow[] = [];
     const byCategory: Record<number, RegisterRow[]> = {};
     for (const r of register) {
       if (r.is_beginning || r.amount >= 0) continue;
       if (r.category_id == null) unsorted.push(r);
       else {
-        spent[r.category_id] = (spent[r.category_id] || 0) + Math.abs(r.amount);
+        gross[r.category_id] = (gross[r.category_id] || 0) + Math.abs(r.amount);
         (byCategory[r.category_id] ||= []).push(r);
       }
     }
     unsorted.sort((a, b) => (a.entry_date < b.entry_date ? 1 : -1));
     for (const k of Object.keys(byCategory)) byCategory[Number(k)].sort((a, b) => (a.entry_date < b.entry_date ? 1 : -1));
     const unsortedTotal = unsorted.reduce((s, r) => s + Math.abs(r.amount), 0);
-    return { spent, unsorted, unsortedTotal, byCategory };
-  }, [register]);
+
+    const gasCat = categories.find((c) => GAS_CATEGORY_RE.test(c.name)) || null;
+    const gasCatId = gasCat ? gasCat.id : null;
+    const gasGross = gasCatId != null ? gross[gasCatId] || 0 : 0;
+    // Never drive the category negative — cap the offset at what was filed.
+    const gasOffset = gasCatId != null ? Math.min(amazonComputed.totalGas, gasGross) : 0;
+    const spent: Record<number, number> = { ...gross };
+    if (gasCatId != null) spent[gasCatId] = gasGross - gasOffset;
+
+    return { spent, gross, gasCatId, gasGross, gasOffset, unsorted, unsortedTotal, byCategory };
+  }, [register, categories, amazonComputed.totalGas]);
 
   // Upcoming recurring payments in the next ~10 days not yet logged (materialized).
   const billsDue = useMemo(() => {
@@ -949,6 +971,9 @@ export default function BudgetPage() {
           <CategorySpendCard
             categories={categories}
             spent={categoryStats.spent}
+            gasCatId={categoryStats.gasCatId}
+            gasGross={categoryStats.gasGross}
+            gasOffset={categoryStats.gasOffset}
             unsortedCount={categoryStats.unsorted.length}
             unsortedTotal={categoryStats.unsortedTotal}
             currency={currency}
@@ -974,6 +999,9 @@ export default function BudgetPage() {
           <CategoriesPanel
             categories={categories}
             spent={categoryStats.spent}
+            gasCatId={categoryStats.gasCatId}
+            gasGross={categoryStats.gasGross}
+            gasOffset={categoryStats.gasOffset}
             unsorted={categoryStats.unsorted}
             unsortedTotal={categoryStats.unsortedTotal}
             byCategory={categoryStats.byCategory}
@@ -2229,6 +2257,9 @@ function RecentTransactions({ rows, currency, categories = [] }: { rows: Registe
 function CategorySpendCard({
   categories,
   spent,
+  gasCatId = null,
+  gasGross = 0,
+  gasOffset = 0,
   unsortedCount,
   unsortedTotal,
   currency,
@@ -2236,6 +2267,11 @@ function CategorySpendCard({
 }: {
   categories: Category[];
   spent: Record<number, number>;
+  // Sheetz/Gas is shown net of Amazon Flex gas; these carry the filed total and
+  // the amount netted out so the row can show the arithmetic.
+  gasCatId?: number | null;
+  gasGross?: number;
+  gasOffset?: number;
   unsortedCount: number;
   unsortedTotal: number;
   currency: string;
@@ -2300,6 +2336,11 @@ function CategorySpendCard({
               <div style={{ height: 6, borderRadius: 999, background: bRgba("#ffffff", 0.06), overflow: "hidden" }}>
                 <div style={{ width: `${budget > 0 ? pct : 0}%`, height: "100%", borderRadius: 999, background: over ? SOFT_RED : cc, transition: "width 0.2s ease" }} />
               </div>
+              {c.id === gasCatId && gasOffset > 0 && (
+                <div style={{ marginTop: 4, fontSize: 11, color: HOME_THEME.muted, opacity: 0.7, fontVariantNumeric: "tabular-nums" }}>
+                  {fmtMoney(gasGross, currency)} filed − {fmtMoney(gasOffset, currency)} Amazon Flex gas
+                </div>
+              )}
             </div>
           );
         })}
@@ -2452,6 +2493,9 @@ function OverviewPanel({
 function CategoriesPanel({
   categories,
   spent,
+  gasCatId = null,
+  gasGross = 0,
+  gasOffset = 0,
   unsorted,
   unsortedTotal,
   byCategory,
@@ -2463,6 +2507,11 @@ function CategoriesPanel({
 }: {
   categories: Category[];
   spent: Record<number, number>;
+  // Sheetz/Gas reads net of the month's Amazon Flex gas. `gasGross` is what was
+  // actually filed to the category, `gasOffset` is the Flex gas taken back out.
+  gasCatId?: number | null;
+  gasGross?: number;
+  gasOffset?: number;
   unsorted: RegisterRow[];
   unsortedTotal: number;
   byCategory: Record<number, RegisterRow[]>;
@@ -2528,6 +2577,7 @@ function CategoriesPanel({
           const over = budgetAmt > 0 && s > budgetAmt;
           const dot = c.color || HOME_THEME.cyan;
           const count = (byCategory[c.id] || []).length;
+          const isGas = c.id === gasCatId;
           return (
             <div key={c.id} onClick={() => setOpenCat(c)} title="View transactions in this category" style={{ ...card(), padding: 12, cursor: "pointer" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
@@ -2550,6 +2600,22 @@ function CategoriesPanel({
                 </>
               ) : (
                 <div style={{ fontSize: 14, color: HOME_THEME.muted }}>No budget — just tracking</div>
+              )}
+              {isGas && gasOffset > 0 && (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${HAIRLINE}`, display: "flex", flexDirection: "column", gap: 3, fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", color: HOME_THEME.muted }}>
+                    <span style={{ opacity: 0.75 }}>Filed to {c.name}</span>
+                    <b style={{ color: HOME_THEME.text }}>{fmtMoney(gasGross, currency)}</b>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", color: HOME_THEME.muted }}>
+                    <span style={{ opacity: 0.75 }}>− Amazon Flex gas</span>
+                    <b style={{ color: HOME_THEME.orange }}>−{fmtMoney(gasOffset, currency)}</b>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", color: HOME_THEME.muted }}>
+                    <span style={{ opacity: 0.75 }}>Real personal fuel</span>
+                    <b style={{ color: HOME_THEME.text }}>{fmtMoney(s, currency)}</b>
+                  </div>
+                </div>
               )}
             </div>
           );
@@ -2577,7 +2643,12 @@ function CategoriesPanel({
               <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                 <span style={{ width: 12, height: 12, borderRadius: 3, background: openCat.color || HOME_THEME.cyan, flex: "none" }} />
                 <span style={{ fontSize: 17, fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{openCat.name}</span>
-                <span style={{ fontSize: 14, color: HOME_THEME.muted, flex: "none" }}>{fmtMoney(spent[openCat.id] || 0, currency)} spent</span>
+                <span style={{ fontSize: 14, color: HOME_THEME.muted, flex: "none" }}>
+                  {fmtMoney(spent[openCat.id] || 0, currency)} spent
+                  {openCat.id === gasCatId && gasOffset > 0 && (
+                    <span style={{ opacity: 0.7 }}> · {fmtMoney(gasGross, currency)} filed − {fmtMoney(gasOffset, currency)} Flex gas</span>
+                  )}
+                </span>
               </div>
               <button onClick={() => setOpenCat(null)} style={{ ...ghost(), padding: "6px 12px" }}>Close</button>
             </div>
