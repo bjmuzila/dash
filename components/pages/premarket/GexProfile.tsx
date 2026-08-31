@@ -15,12 +15,30 @@
  * scale, the spot / flip rules, the pan-free scroll and the centring. The page
  * supplies the numbers and what to label.
  *
- * ── THE TWO WINDOWS ─────────────────────────────────────────────────────────
- * `NEAR_HALF` (±12) is the ~25 strikes that decide the open, and the bar scale
- * is normalised over THOSE — a single monster strike 200 points out would
- * otherwise flatten every bar near the money. `VIEW_HALF` (±60) is what
- * actually renders; the panel scrolls, so the extra rows cost nothing until you
- * go looking for a wall, which is exactly when you want them.
+ * ── THE WINDOW, AND WHAT THE BAR SCALE IS NORMALISED OVER ───────────────────
+ * `VIEW_HALF` (±60) is what renders; the panel scrolls, so the extra rows cost
+ * nothing until you go looking for a wall, which is exactly when you want them.
+ *
+ * The bar scale is normalised over THAT SAME WINDOW — every row you can scroll
+ * to — so exactly one positive bar and one negative bar reach the full half
+ * track, and every other bar is a readable fraction of it.
+ *
+ * It used to normalise over a NARROWER ±12 "near" window, on the theory that a
+ * monster strike 200 points out would otherwise flatten every bar near the
+ * money. What it actually produced was the opposite failure, and a much worse
+ * one: on the ex-0DTE board — 55 expirations stacked up, so the standing walls
+ * sit well outside ±12 — most of the ladder came out at a width ABOVE 100%.
+ * Nothing clamped it, `.chart` is a scroll box, so those bars ran off the right
+ * edge and were sliced flat at the panel border. Twenty bars ended at the same
+ * pixel, every one of them a different number, the axis said $473M while bars
+ * nearly three times that were drawn the same length as it, and the panel grew
+ * a horizontal scrollbar. A scale that only describes 25 of the 121 rows it is
+ * drawing is not a scale.
+ *
+ * The width is clamped to the half track as well. With the max taken over the
+ * rendered rows nothing can exceed it, so the clamp is a guard and not a
+ * mechanism — but it is what guarantees the "sliced flat at the border" picture
+ * can never come back.
  *
  * ── CENTRING, AND WHY THE PADDING IS NOT DECORATION ─────────────────────────
  * Centring is `scrollTop = rowTop - (view - row) / 2`, and scrollTop cannot go
@@ -56,9 +74,7 @@ export const PROFILE_VIEW_H = 440;
 /** Half a viewport of room above the first strike and below the last. */
 export const PROFILE_PAD = (PROFILE_VIEW_H - PROFILE_ROW_H) / 2;
 
-/** ±12 strikes: the window the bar scale is normalised over. */
-const NEAR_HALF = 12;
-/** ±60 strikes: the window that renders. */
+/** ±60 strikes: the window that renders, and the window the scale is taken over. */
 const VIEW_HALF = 60;
 
 /** Nearest listed strike to a price, or null when there is nothing to pick. */
@@ -130,12 +146,12 @@ export default function GexProfile({
     return sorted.slice(lo, hi).slice().reverse();   // high strike at the top
   }, [sorted, spotIdx]);
 
-  const nearBars = useMemo(() => windowAt(NEAR_HALF), [windowAt]);
   const bars = useMemo(() => windowAt(VIEW_HALF), [windowAt]);
 
-  // Scaled on the NEAR window, not the scrolled one — see the header.
-  const maxP = Math.max(1, ...nearBars.filter((b) => b.net > 0).map((b) => b.net));
-  const maxN = Math.max(1, ...nearBars.filter((b) => b.net < 0).map((b) => -b.net));
+  // Scaled over every row that renders, so exactly one bar per side is full
+  // width and none can overflow the track — see the header.
+  const maxP = Math.max(1, ...bars.filter((b) => b.net > 0).map((b) => b.net));
+  const maxN = Math.max(1, ...bars.filter((b) => b.net < 0).map((b) => -b.net));
   const bigCut = Math.max(maxP, maxN) * 0.55;
 
   const spotStrike = nearestStrike(bars.map((b) => b.strike), spot);
@@ -311,7 +327,11 @@ export default function GexProfile({
           )}
           {bars.map((b) => {
             const pos = b.net >= 0;
-            const w = (Math.abs(b.net) / (pos ? maxP : maxN)) * 50;
+            // Half the track is 50%. Clamped: with maxP/maxN taken over these
+            // same rows nothing reaches the clamp, but a bar that escapes it
+            // does not shrink the panel's own scroll box — it runs off the
+            // right edge and every over-scale bar is sliced to the same length.
+            const w = Math.min(50, (Math.abs(b.net) / (pos ? maxP : maxN)) * 50);
             const tag = tagFor?.(b.strike) ?? null;
             return (
               <div className={`row${tag ? " key" : ""}`} key={b.strike}>

@@ -315,9 +315,29 @@ export function computeGEXProfile(
   const callContracts = (r: ChainRow) => posOf(r.callOI ?? 0, r.callVolume ?? 0, cm);
   const putContracts = (r: ChainRow) => posOf(r.putOI ?? 0, r.putVolume ?? 0, cm);
 
+  // ONE IV PER STRIKE. Gamma is identical for a call and a put on the same
+  // strike + expiry (put-call parity) — it is a property of the contract, not of
+  // which side you look at. Pricing the call leg off callIV and the put leg off
+  // putIV therefore handed the two legs DIFFERENT gammas, so a strike holding
+  // equal call and put size produced non-zero net GEX purely from the skew
+  // between the two quotes. That is a quoting artifact, not dealer positioning,
+  // and since gamma ∝ φ(d1)/(S·σ·√T) its sign flips with moneyness — damping the
+  // put leg near ATM and inflating it in the wings — which is what walked the
+  // zero crossing off the level the bars actually cross at.
+  //
+  // Average the two quotes when both sides are live, else take whichever side is
+  // quoted. That fallback is also why the row filter below now accepts a
+  // single-sided strike: requiring BOTH IVs silently dropped every strike with
+  // one dead side out of the profile entirely.
+  const ivOf = (r: ChainRow): number => {
+    const c = r.callIV ?? 0, p = r.putIV ?? 0;
+    if (c > 0 && p > 0) return (c + p) / 2;
+    return c > 0 ? c : p;
+  };
+
   // Need at least some rows with IV data + contracts under the active basis
   const rows = chain.filter(r =>
-    (r.callIV ?? 0) > 0 && (r.putIV ?? 0) > 0 &&
+    ivOf(r) > 0 &&
     callContracts(r) + putContracts(r) > 0 &&
     (r.dte ?? 0) >= 0
   );
@@ -336,19 +356,28 @@ export function computeGEXProfile(
   // the model many times.
   const t0DTE = Math.max(rthFractionLeft(), 1 / 78) / 262;
 
+  // `dte` arrives from the feed as CALENDAR days, but the annualization above is
+  // in TRADING days (262/yr). Dividing calendar days by 262 handed every expiry
+  // more time than it has — a Friday→Monday expiry was priced with 3 days of
+  // decay instead of 1 — which flattens gamma and drags the crossing. Convert
+  // calendar → trading days first so both branches share one basis.
+  const TRADING_PER_CALENDAR_DAY = 252 / 365;
+  const yearsTo = (dte: number) =>
+    dte <= 0 ? t0DTE : (dte * TRADING_PER_CALENDAR_DAY) / 262;
+
   // Net GEX ($B) at an arbitrary spot level. Factored out of the level loop so
   // the flip refinement can re-evaluate the SAME model at off-grid prices —
   // the curve and the flip point can never drift apart.
   const netAt = (S: number): number => {
     let net = 0;
     for (const r of rows) {
-      const dte = r.dte ?? 0;
-      const T = dte <= 0 ? t0DTE : dte / 262;
-      const callG = bsGamma(S, r.strike, r.callIV!, T);
-      const putG  = bsGamma(S, r.strike, r.putIV!,  T);
-      // TotalGEX(P) = Σ BS_gamma(P,K,IV,T) × contracts × 100 × P²
-      net += callContracts(r) * 100 * S * S * callG;
-      net -= putContracts(r) * 100 * S * S * putG;
+      const T = yearsTo(r.dte ?? 0);
+      // One gamma per strike (see ivOf): both legs share it, so the ONLY thing
+      // separating the call and put terms is dealer polarity — which is exactly
+      // what the flip is supposed to measure.
+      const g = bsGamma(S, r.strike, ivOf(r), T);
+      // TotalGEX(P) = Σ BS_gamma(P,K,IV,T) × net_contracts × 100 × P²
+      net += (callContracts(r) - putContracts(r)) * 100 * S * S * g;
     }
     return net / 1e9;
   };

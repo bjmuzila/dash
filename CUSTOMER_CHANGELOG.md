@@ -2,6 +2,10 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Monday 8/31/2026
+
+* **Traders Dashboard (v3 preview):** the S&P sector wheel is back — click a sector to zoom, or pop it out full screen. Trending Now sorts high to low, and your ZIP, schedule and tasks save to your account.
+
 ## Sunday 8/30/2026
 
 * **Multi Greek (v3 preview):** the strike detail popup no longer gets covered by the card below it, the settings panel opens fully instead of running off the edge of a narrow card, and the ticker box is now plain text you click to change — freeing up space for the ladder.

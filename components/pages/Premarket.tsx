@@ -609,8 +609,14 @@ const CSS = `
    - .spotline / .flipline are absolutely positioned INSIDE this box, so they
      scroll with their rows, which is what makes them mean anything.
    - overscroll-behavior:contain stops a flick at the end of the ladder from
-     scrolling the whole page behind it. */
-.pmk .chart{position:relative;max-height:440px;overflow-y:auto;overscroll-behavior:contain;
+     scrolling the whole page behind it.
+   - overflow-x:hidden is NOT decoration. Declaring overflow-y:auto alone makes
+     the OTHER axis compute to auto too, so a bar wider than its track turned
+     the ladder into a horizontally scrolling box: the over-wide bars all ran
+     off the right edge and were sliced to the same length, which read as a
+     dozen strikes tied at the maximum. GexProfile now clamps the width, so
+     this is the belt to that braces. */
+.pmk .chart{position:relative;max-height:440px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
   scrollbar-width:thin;scrollbar-color:var(--line2) transparent;padding-right:2px}
 .pmk .chart::-webkit-scrollbar{width:8px}
 .pmk .chart::-webkit-scrollbar-thumb{background:var(--line2);border-radius:4px}

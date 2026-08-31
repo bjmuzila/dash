@@ -1,5 +1,32 @@
 # Changelog
 
+## Monday 8/31/2026 — v3 Traders Dashboard ported from v2, sector wheel and all (`cbedge-v3/src/pages/TradersDashboard.tsx`, `cbedge-v3/src/pages/tradersDashboard/{wheelMath.ts,SectorWheelCard.tsx}`, `cbedge-v3/src/design/{tokens.css,theme.ts}`, `cbedge-v3/scripts/{parity-check.mjs,parity-check.test.mjs,check-casing.mjs}`, `cbedge-v3/docs/parity/traders-dashboard.md`)
+
+**v3 only — nothing in this entry touches the live v2 app at `/app/*`.**
+
+Wrote the 168-row parity inventory first (`docs/parity/traders-dashboard.md`),
+then ported v2's `components/pages/TradersDashboard.tsx` and the whole of
+`components/dashboard/SectorSunburst.tsx` against it — wheel maths transcribed
+1:1 into `wheelMath.ts`, render layer rebuilt on v3 primitives in
+`SectorWheelCard.tsx` behind `lazy()`, with `--color-move-up`/`--color-move-down`
+added to `tokens.css` (blue up, red down, per Brandon) and a numeric colour kit
+in `theme.ts` for the diverging ramp and its ink-contrast test.
+
+Prefs went back to Postgres `td_user_prefs` (one row per `clerk_user_id`, via
+`/api/traders-dashboard`) with the localStorage mirror removed, since a mirror
+resurrected a server-cleared ZIP and leaked one user's routine to the next on a
+shared browser; `flush()` now posts the debounced patch on unmount and
+`pagehide` with `keepalive` so a save in flight is not dropped. Trending Now is
+now one ranking high→low instead of v2's top-5-then-bottom-5. Verification is
+`parity-check.mjs` (43 probes, v2 vs v3 against one backend) plus a fixture
+self-test wired into `npm run check`; `check-casing.mjs` was added after
+`sectorWheel.ts`/`SectorWheel.tsx` resolved to the same module on Windows.
+
+Not run here (shell down): `build`, `budgets`, `perf`, `check:ws`,
+`check:parity`. Two tombstoned files still need `git rm` —
+`cbedge-v3/src/pages/tradersDashboard/sectorWheel.ts` and `SectorWheel.tsx`.
+
+
 ## Sunday 8/30/2026 — v3 popover/cell-card stacking, GEX chart stat row simplified, Multi Greek ticker input (`cbedge-v3/src/board/multiGreek/{CellCard.tsx,MultiGreekCard.tsx}`, `cbedge-v3/src/design/primitives/Controls.tsx`, `cbedge-v3/src/board/gexChart/{GexChartCard.tsx,StatCards.tsx,settings.ts}`)
 
 **v3 only — nothing in this entry touches the live v2 app at `/app/*`.**
