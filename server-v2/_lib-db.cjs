@@ -202,6 +202,7 @@ __export(db_exports, {
   insertWatchSnapshot: () => insertWatchSnapshot,
   linkStripeCustomer: () => linkStripeCustomer,
   listAllUsersForBroadcast: () => listAllUsersForBroadcast,
+  listAmazonGasByMonth: () => listAmazonGasByMonth,
   listAmazonRows: () => listAmazonRows,
   listBudgetCategories: () => listBudgetCategories,
   listBudgetEntries: () => listBudgetEntries,
@@ -5003,6 +5004,25 @@ async function deleteAmazonRow(profileId, id) {
   const pool = await getDb();
   await pool.query(`DELETE FROM budget_amazon WHERE id = $1 AND profile_id = $2`, [id, profileId]);
 }
+// Amazon Flex gas per calendar month, over a YYYY-MM window.
+//
+// Feeds the fuel-category correction on /api/budget/real: every Sheetz swipe
+// is filed to one fuel category, and this is the slice of it that was burned
+// driving Flex. Grouped in SQL rather than by pulling every delivery row,
+// because the trend window is twelve months wide and the client only ever
+// wants the monthly totals.
+async function listAmazonGasByMonth(profileId, sinceMonth, untilMonth) {
+  return queryAll(
+    `SELECT SUBSTR(work_date, 1, 7) AS month, SUM(gas) AS gas
+       FROM budget_amazon
+      WHERE profile_id = ?
+        AND SUBSTR(work_date, 1, 7) >= ?
+        AND SUBSTR(work_date, 1, 7) <= ?
+      GROUP BY SUBSTR(work_date, 1, 7)
+      ORDER BY 1 ASC`,
+    [profileId, sinceMonth, untilMonth || '9999-12']
+  );
+}
 async function listAmazonRows(profileId, fromDate, toDate) {
   return queryAll(
     "SELECT * FROM budget_amazon WHERE profile_id = ? AND work_date >= ? AND work_date <= ? ORDER BY work_date ASC, id ASC",
@@ -5438,6 +5458,7 @@ async function getLatestMultGreekStaticSnapshot() {
   insertWatchSnapshot,
   linkStripeCustomer,
   listAllUsersForBroadcast,
+  listAmazonGasByMonth,
   listAmazonRows,
   listBudgetCategories,
   listBudgetEntries,

@@ -184,6 +184,25 @@ type Subscription = {
 
 type MonthStat = { month: string; n: number };
 
+/**
+ * The fuel correction, as the server applied it.
+ *
+ * Every Sheetz swipe is filed to one fuel category, Flex fill-ups included —
+ * you cannot tell them apart at the till. What is known per month is the Flex
+ * share, off the Amazon tab. The server MOVES that much from the fuel category
+ * into the Flex category on every read of /api/budget/real, so the month totals
+ * still add up and no re-filing by hand is needed.
+ *
+ * `flexGas` is what the Amazon tab holds for a month; `flexMoved` is what was
+ * actually re-filed after capping at what the fuel category held.
+ */
+type FuelSplit = {
+  categoryId: number | null; categoryName: string | null;
+  flexCategoryId: number | null; flexCategoryName: string | null;
+  flexGas: Record<string, number>;
+  flexMoved: Record<string, number>;
+};
+
 type Finding = { title: string; severity: "high" | "medium" | "low"; detail: string; monthlySavings: number; evidence: string };
 type Advice = { headline: string; findings: Finding[]; quickWins: string[]; generatedAt?: string | null };
 
@@ -334,6 +353,7 @@ export default function RealMonth({
       CategoryBudgetSection so it does not have to re-fetch what this already
       loaded. */
   const [trend, setTrend] = useState<TrendPoint[]>([]);
+  const [fuel, setFuel] = useState<FuelSplit | null>(null);
   const [staged, setStaged] = useState<StagedRow[]>([]);
   const [view, setView] = useState<View>("merchants");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -403,6 +423,7 @@ export default function RealMonth({
           count: Number(p.count) || 0,
         }))
       );
+      setFuel(data.fuel ?? null);
       // The stored pass for this month, if one was ever run. It stays until a
       // re-run overwrites it, so reloading costs nothing.
       setAdvice(data.advice ?? null);
@@ -679,6 +700,10 @@ export default function RealMonth({
   }, [visibleMerchants, categories]);
 
   // ── category rollup vs the budgets on the Categories tab ─────────────────
+  // Recomputed from txView rather than read off the server's trend, because it
+  // has to preview UNSAVED category edits. That means the fuel move has to be
+  // applied here too — and re-capped locally, since a pending edit can change
+  // how much is sitting in the fuel category this second.
   const byCategory = useMemo(() => {
     const map = new Map<string, { name: string; spent: number; count: number; budget: number; color: string | null }>();
     for (const r of txView) {
@@ -690,8 +715,45 @@ export default function RealMonth({
       if (hit) { hit.spent += r.amount; hit.count += 1; }
       else map.set(k, { name, spent: r.amount, count: 1, budget: cat?.amount ?? 0, color: cat?.color ?? null });
     }
+
+    const gas = fuel?.flexGas?.[month] ?? 0;
+    const fuelCat = fuel?.categoryId != null ? catById.get(fuel.categoryId) : undefined;
+    if (gas > 0 && fuelCat) {
+      const src = map.get(fuelCat.name.toLowerCase());
+      const move = src ? Math.min(gas, src.spent) : 0;
+      if (src && move > 0) {
+        src.spent -= move;
+        const flexCat = fuel?.flexCategoryId != null ? catById.get(fuel.flexCategoryId) : undefined;
+        if (flexCat) {
+          const dk = flexCat.name.toLowerCase();
+          const dest = map.get(dk);
+          if (dest) dest.spent += move;
+          else map.set(dk, { name: flexCat.name, spent: move, count: 0, budget: flexCat.amount ?? 0, color: flexCat.color ?? null });
+        }
+      }
+    }
     return [...map.values()].sort((a, b) => b.spent - a.spent);
-  }, [txView, catById]);
+  }, [txView, catById, fuel, month]);
+
+  /** What the fuel move did THIS month, for the note under the category table. */
+  const fuelNote = useMemo(() => {
+    const gas = fuel?.flexGas?.[month] ?? 0;
+    if (!(gas > 0) || fuel?.categoryId == null) return null;
+    const fuelCat = catById.get(fuel.categoryId);
+    if (!fuelCat) return null;
+    let filed = 0;
+    for (const r of txView) if (r.direction === "out" && r.category_id === fuel.categoryId) filed += r.amount;
+    // filed is already net of nothing — the move is applied on top of it.
+    const gross = filed;
+    const moved = Math.min(gas, gross);
+    if (!(moved > 0)) return null;
+    return {
+      fuelName: fuelCat.name,
+      flexName: fuel.flexCategoryId != null ? catById.get(fuel.flexCategoryId)?.name ?? null : null,
+      gross, moved, net: gross - moved,
+      uncovered: gas - moved,
+    };
+  }, [fuel, month, txView, catById]);
 
   // ── subscriptions ────────────────────────────────────────────────────────
   const subRows = useMemo(() => {
@@ -1351,6 +1413,38 @@ export default function RealMonth({
       {hasData && view === "categories" && (
         <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
           <SectionHead title="This month by category" sub="Just the loaded month, with a transaction count per category — the two cards above put it in context." />
+          {/* The fuel correction, spelled out. Without this the Sheetz number
+              quietly disagrees with the ledger two clicks away, which reads as
+              a bug rather than as the deduction it is. */}
+          {fuelNote && (
+            <div
+              style={{
+                display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap",
+                margin: "0 16px 12px", padding: "10px 13px", borderRadius: 12,
+                border: `1px solid ${rgba(ACCENT, 0.35)}`,
+                background: rgba(ACCENT, 0.08),
+                fontSize: TYPE.label, fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              <span style={{ fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase", color: ACCENT }}>Flex gas</span>
+              <span style={{ fontSize: TYPE.body }}>
+                <b>{fuelNote.fuelName}</b> {fmtMoney(fuelNote.gross, currency)} filed
+                {" − "}<b style={{ color: WARN }}>{fmtMoney(fuelNote.moved, currency)}</b> Amazon Flex gas
+                {" = "}<b>{fmtMoney(fuelNote.net, currency)}</b> real
+              </span>
+              <span style={MUTED}>
+                {fuelNote.flexName
+                  ? `Moved to ${fuelNote.flexName}, so the month still adds up.`
+                  : "Subtracted only — add a Flex category to keep the month's totals whole."}
+                {" "}From the Amazon tab, applied on every read — not at import.
+              </span>
+              {fuelNote.uncovered > 0.005 && (
+                <span style={{ color: WARN }}>
+                  {fmtMoney(fuelNote.uncovered, currency)} of Flex gas had nothing left in {fuelNote.fuelName} to come out of.
+                </span>
+              )}
+            </div>
+          )}
           <div style={isMobile ? scrollX : undefined}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 620 : undefined }}>
             <thead>

@@ -7952,7 +7952,7 @@ if (libDb) {
               const d = new Date(Date.UTC(y, m - 1 - 11, 1));
               return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
             })();
-            const [tx, subscriptions, categories, months, adviceRow, trend, daily] = await Promise.all([
+            const [tx, subscriptions, categories, months, adviceRow, trend, daily, flexGasRows] = await Promise.all([
               D.listStatementTx(profile.id, month),
               D.listSubscriptions(profile.id),
               D.listBudgetCategories(profile.id),
@@ -7960,7 +7960,56 @@ if (libDb) {
               D.getBudgetAdvice(profile.id, month),
               D.listStatementCategoryTrend(profile.id, trendSince, month),
               D.listStatementDailyTrend(profile.id, trendSince, month),
+              D.listAmazonGasByMonth(profile.id, trendSince, month),
             ]);
+
+            // ── Flex gas comes back out of the fuel category ───────────────
+            // Every Sheetz swipe is filed to ONE fuel category, including the
+            // fill-ups burned driving Amazon Flex — there is no way to tell
+            // them apart at the till, and re-filing individual receipts by
+            // hand is not a thing anyone will keep doing. What IS known,
+            // per month, is the Flex share: it is logged per delivery on the
+            // Amazon tab.
+            //
+            // So the correction is applied HERE, on read, over the whole
+            // trend window. It is not an import step and does not depend on
+            // when a statement was loaded: change an Amazon day for March and
+            // March's fuel number moves the next time this is fetched.
+            //
+            // It MOVES the money rather than deleting it — out of the fuel
+            // category and into the Flex category when one exists — so the
+            // month's total outflow still adds up and the donut still sums to
+            // what actually cleared. Capped at what was filed, so the fuel
+            // category can never go negative.
+            const FUEL_RE = /\b(sheet?z|gas|fuel)\b/i;
+            const FLEX_RE = /flex|amazon/i;
+            const fuelCat = (categories || []).find((c) => FUEL_RE.test(c.name) && !FLEX_RE.test(c.name)) || null;
+            const flexCat = (categories || []).find((c) => FLEX_RE.test(c.name) && FUEL_RE.test(c.name)) || null;
+            const flexGas = {};
+            for (const r of flexGasRows || []) {
+              const m = String(r.month || '').slice(0, 7);
+              if (m) flexGas[m] = (flexGas[m] || 0) + (Number(r.gas) || 0);
+            }
+            const flexMoved = {};
+            if (fuelCat) {
+              const fuelRowFor = new Map();
+              for (const t of trend || []) {
+                if (t.category_id != null && Number(t.category_id) === fuelCat.id) fuelRowFor.set(String(t.month), t);
+              }
+              for (const [m, gas] of Object.entries(flexGas)) {
+                const row = fuelRowFor.get(m);
+                if (!row || !(gas > 0)) continue;
+                const move = Math.min(gas, Number(row.spent) || 0);
+                if (!(move > 0)) continue;
+                row.spent = (Number(row.spent) || 0) - move;
+                flexMoved[m] = move;
+                if (flexCat) {
+                  let dest = (trend || []).find((t) => String(t.month) === m && t.category_id != null && Number(t.category_id) === flexCat.id);
+                  if (!dest) { dest = { month: m, category_id: flexCat.id, spent: 0, n: 0 }; trend.push(dest); }
+                  dest.spent = (Number(dest.spent) || 0) + move;
+                }
+              }
+            }
             // The stored "what to fix" pass for this month, if one was ever run.
             const advice = adviceRow
               ? {
@@ -7985,6 +8034,19 @@ if (libDb) {
                 date: typeof r.tx_date === 'string' ? r.tx_date.slice(0, 10) : new Date(r.tx_date).toISOString().slice(0, 10),
                 spent: Number(r.spent) || 0,
               })),
+              // The fuel correction, spelled out so the client can show its
+              // arithmetic instead of a number that silently disagrees with
+              // the ledger below it. `flexGas` is what the Amazon tab holds
+              // per month; `flexMoved` is what was actually re-filed after
+              // capping at what the fuel category held.
+              fuel: {
+                categoryId: fuelCat ? fuelCat.id : null,
+                categoryName: fuelCat ? fuelCat.name : null,
+                flexCategoryId: flexCat ? flexCat.id : null,
+                flexCategoryName: flexCat ? flexCat.name : null,
+                flexGas,
+                flexMoved,
+              },
             });
             return;
           }

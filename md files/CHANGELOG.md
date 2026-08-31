@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-08-31 - Sheetz minus Flex gas is a READ, not an import step
+
+Answering the question directly: it was not happening on import OR on read,
+because the version of it that shipped earlier today went into
+`app/owner/budget/page.tsx` - the OLD Next.js budget page. owner.cbedge.net
+serves `owner-vite`, so that edit never ran on the live site. The live surfaces
+are `owner-vite/src/pages/budget/RealMonth.tsx` and the shared
+`CategoryBudget.tsx`, fed by `/api/budget/real`.
+
+Rebuilt there, and deliberately as a read-time correction over the WHOLE trend
+window - twelve months, not just the month whose statement was last loaded.
+August is corrected the moment the page is opened; so is March. Change an
+Amazon day for any month and that month's fuel number moves on the next fetch.
+Nothing has to be re-imported and no Sheetz row has to be re-filed by hand,
+which was the point: you cannot tell a Flex fill-up from a personal one at the
+till, so every swipe stays filed to Sheets/Gas and the correction happens above
+it.
+
+It MOVES the money rather than deleting it. `/api/budget/real` now also loads
+Amazon Flex gas per month (new `listAmazonGasByMonth` in `_lib-db.cjs`, grouped
+in SQL over the same window), finds the fuel category by name
+(`/\b(sheet?z|gas|fuel)\b/i`, excluding anything matching `/flex|amazon/i` so
+"Flex Gas & Expenses" is never mistaken for the fuel bucket), and re-files that
+much from the fuel category into the Flex category before sending `trend`. The
+month's total outflow is unchanged and the donut still sums to what cleared -
+$510.15 filed becomes $140.15 Sheets/Gas plus $370.00 Flex Gas & Expenses. The
+move is capped at what the fuel category actually held, so it can never go
+negative.
+
+Because the netting happens on the server's `trend`, every consumer is correct
+with no duplicated arithmetic: the category trend chart, the budget-vs-actual
+grid, the Overview spend cards (which fetch the same endpoint) and the Real
+Month donut. The one place that recomputes from raw transactions is Real
+Month's `byCategory` - it has to preview unsaved category edits - so it applies
+the same move client-side and re-caps locally.
+
+The response carries a `fuel` block (fuel and Flex category ids, `flexGas` per
+month, `flexMoved` after capping) so the UI can show its working rather than a
+number that silently disagrees with the ledger two clicks away. Real Month >
+Categories now leads with that line: filed - Flex gas = real, where it went,
+and a warning if there was more Flex gas in a month than the fuel category had
+to give.
+
 ## 2026-08-31 - Real Month: bills vs luxury, and the category trend stops oscillating
 
 ### Subscriptions split by what they ARE, not just what to do about them
