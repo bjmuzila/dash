@@ -143,11 +143,9 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   const muted = cssVar(container, '--color-muted', '#ffffff')
   const up = cssVar(container, '--color-candle-up', '#30d158')
   const down = cssVar(container, '--color-candle-down', '#ff5b5b')
-  // `pos` / `neg` are the SATURATED sign colours and are the glow only; the
-  // `-hot` pair are the pale tints every mark is filled with. See BubblePalette
-  // in bubbles.ts. Both pairs still come from tokens.css — the marks are white
-  // with a tint because of how they are USED, not because a lighter colour was
-  // hardcoded here.
+  // `pos` / `neg` are the SATURATED sign colours and fill the PEERS; the `-hot`
+  // pair are the pale tints and belong to the bucket's leader alone, taken
+  // further toward white in drawBubbles. See BubblePalette in bubbles.ts.
   const palette: BubblePalette = {
     pos: hexToRgb(cssVar(container, '--color-gex-pos', '#29b6f6'), [41, 182, 246]),
     posHot: hexToRgb(cssVar(container, '--color-gex-pos-hot', '#c8f5ff'), [200, 245, 255]),

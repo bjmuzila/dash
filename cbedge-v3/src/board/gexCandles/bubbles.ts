@@ -9,9 +9,9 @@
 // See BUBBLES in settings.ts for the seven rules this implements and the numbers
 // behind them. The short version: one bubble per bucket, last print wins; four
 // strikes with one forced on each side of spot; radius by sqrt of |gex| over the
-// window max; every mark is white with a tint for its sign; the bucket's biggest
-// gets a boost, a whiter core and a white ring; same-bucket neighbours shrink and
-// then jitter rather than overlap; nothing is ever spliced.
+// window max; peers carry the sign colour and the bucket's biggest gets a boost,
+// a WHITE core and a white ring; same-bucket neighbours shrink and then jitter
+// rather than overlap; nothing is ever spliced.
 //
 // ── WHY IT IS STAMPED AND NOT DRAWN ──────────────────────────────────────────
 //
@@ -186,19 +186,23 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
 // ── Drawing ──────────────────────────────────────────────────────────────────
 
 /**
- * ── THE MARKS ARE WHITE; THE SIGN IS A TINT ──────────────────────────────────
+ * ── ONE WHITE MARK PER BUCKET; EVERYTHING ELSE IS THE SIGN ───────────────────
  *
- * `pos` / `neg` are the SATURATED sign colours and are never used as a fill any
- * more. They are the glow under the leader — the one place the full-strength
- * colour appears, where it reads as a coloured halo around a bright mark rather
- * than as the mark itself.
+ * `pos` / `neg` are the SATURATED sign colours (`--color-gex-pos` `#29b6f6`,
+ * `--color-gex-neg` `#ff4757`) and they are the PEERS' fill. Blue is positive
+ * gamma, red is negative, and that is the first thing the ladder has to say.
+ * They are also the leader's glow.
  *
- * `posHot` / `negHot` are the pale tints (`--color-gex-pos-hot` / `-neg-hot`,
- * near-white with a cool or warm cast) and they are what every mark is actually
- * filled with. A ladder of saturated blue and red dots reads as two categories
- * competing with the candles behind them; a ladder of white dots with a tint
- * reads as one instrument with a sign, which is what it is. Size is the signal,
- * and size is easiest to judge between marks of the same colour.
+ * `posHot` / `negHot` are the pale tints (`--color-gex-pos-hot` / `-neg-hot`)
+ * and they are the LEADER's fill and nothing else's — pushed further toward
+ * white by `BUBBLES.topTint`. One white mark in a column of blue and red is
+ * legible at a glance in a way that a slightly larger dot of the same colour is
+ * not, which is the whole job of marking the biggest wall.
+ *
+ * Briefly, on 2026-08-31, every mark was filled with the pale tint. It made a
+ * quieter chart and it cost the sign: at the small end the tints desaturate
+ * toward the background and a pale pink 2px dot is not distinguishable from a
+ * pale blue one. Do not go back to it.
  */
 export interface BubblePalette {
   pos: [number, number, number]
@@ -601,23 +605,25 @@ export function drawBubbles(
     for (const { mark: m, y, r, dx } of placeBucket(snap, geo, size)) {
       if (y < -20 || y > ph + 20) continue
       const positive = m.value >= 0
-      // The SATURATED sign colour. Glow only — see BubblePalette. Filling a mark
-      // with it is what made the ladder read as two competing categories, and on
-      // the negative side it was also what showed through the leader's core: a
-      // translucent pale fill over a 0.95 red shadow is a red dot with a white
-      // outline, which is not what "the biggest wall" should look like.
+      // The SATURATED sign colour: the PEERS' fill, and the leader's glow.
       const base = positive ? palette.pos : palette.neg
-      // The fill, for EVERY mark: white with a cool or warm cast.
+      // The pale tint. The LEADER only — see the branch below.
       const hot = positive ? palette.posHot : palette.negHot
       const alpha = (m.isTop ? 1 : minOpacity + m.ratio * (1 - minOpacity)) * age
       const cx = x + dx
 
       if (m.isTop) {
-        // Whiter still, and opaque. The leader is the brightest thing in its
-        // bucket and it must not be the reddest — so the tint steps toward white
-        // rather than toward the sign, and the glow underneath is held to
-        // `glowAlpha` so it stays a halo AROUND the mark instead of bleeding
-        // through a core the age fade has made translucent.
+        // ── THE ONE WHITE MARK ────────────────────────────────────────────────
+        // The leader is the brightest thing in its bucket, and brightest means
+        // WHITE: the pale tint pushed further toward white by `topTint`, so it
+        // separates from a ladder of saturated blue and red at a glance rather
+        // than being a slightly bigger dot of the same colour. It keeps enough
+        // cast to still read as positive or negative up close.
+        //
+        // The glow underneath is the saturated sign colour, held to `glowAlpha`
+        // and faded with age so it stays a halo AROUND the mark. At the old 0.95
+        // it bled THROUGH a core the age fade had made translucent, which is how
+        // the negative leader came to look like a red dot with a white outline.
         ctx.beginPath()
         ctx.fillStyle = rgba(toWhite(hot, BUBBLES.topTint), alpha)
         ctx.shadowColor = rgba(base, BUBBLES.glowAlpha * age)
@@ -632,8 +638,10 @@ export function drawBubbles(
         ctx.arc(cx, y, r, 0, Math.PI * 2)
         ctx.stroke()
       } else {
+        // The peers are the SIGN, at full strength. Blue is positive gamma and
+        // red is negative, and that is the first thing the ladder has to say.
         ctx.beginPath()
-        ctx.fillStyle = rgba(hot, alpha)
+        ctx.fillStyle = rgba(base, alpha)
         ctx.arc(cx, y, r, 0, Math.PI * 2)
         ctx.fill()
       }

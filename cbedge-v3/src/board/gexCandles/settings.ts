@@ -154,12 +154,11 @@ export const DEFAULT_SETTINGS: ChartSettings = {
  *   4-10 strikes, 1 a side     rank by |netGex|, force one above spot and one
  *                              below, then fill from the ranking.
  *   grow with net GEX          r = floor + sqrt(|gex| / windowMax) x (cap-floor)
- *   white marks, tinted by sign every mark is filled with the pale hot token,
- *                              not the saturated one; the sign is a cool or warm
- *                              cast and the full-strength colour appears only in
- *                              the leader's glow
- *   the top strike stands out  the bucket's largest gets the size boost, a white
- *                              ring, a whiter core (topTint) and that glow
+ *   peers carry the sign       saturated blue for positive gamma, red for
+ *                              negative — the ladder's first statement
+ *   the top strike stands out  the bucket's largest is the one WHITE mark, plus
+ *                              the size boost, a white ring and a glow in the
+ *                              sign colour
  *   old dots survive           never below minPx, and age only fades opacity a
  *                              little
  *   no overlap if possible     same-bucket neighbours shrink toward the floor,
@@ -377,35 +376,30 @@ export const BUBBLES = {
 
   // ── Colour ───────────────────────────────────────────────────────────────
   //
-  // WHITE MARKS WITH A TINT, not blue and red dots. Every mark is filled with
-  // the pale `--color-gex-*-hot` token; the saturated `--color-gex-pos` /
-  // `-neg` appear only in the leader's glow. See BubblePalette in bubbles.ts for
-  // why, and change the tints there rather than reintroducing a saturated fill.
+  // PEERS CARRY THE SIGN, the LEADER IS WHITE. Peers are filled with the
+  // saturated `--color-gex-pos` / `-neg`; the pale `-hot` tokens belong to the
+  // leader alone, pushed further toward white by `topTint` below. See
+  // BubblePalette in bubbles.ts, including why filling everything with the pale
+  // tint was tried on 2026-08-31 and reverted the same day.
   /**
-   * How much whiter the LEADER's core is than its peers', 0..1 toward white.
+   * How much whiter the LEADER's core is than its own hot tint, 0..1 to white.
    *
-   * The leader has three other ways to stand apart — the size boost, the white
-   * ring and the glow — so this is deliberately small. It exists because the two
-   * hot tints are not equally light (`#c8f5ff` is nearly white already,
-   * `#ffcdd2` is not), and without it the negative leader read as the reddest
-   * mark on the chart at the exact moment it should read as the brightest.
+   * The leader is the one mark that is not the sign colour, so this is what
+   * makes "brightest" read as WHITE rather than as a paler dot of the same hue.
+   * It is not the only signal — the size boost, the white ring and the glow are
+   * all still there — but it is the one that works at a glance, and at a glance
+   * is how the biggest wall gets found.
+   *
+   * 0.45 rather than 1.0 because the two hot tints are not equally light
+   * (`#c8f5ff` is nearly white already, `#ffcdd2` is not) and a mark taken all
+   * the way to white loses its sign entirely up close. This lands both sides
+   * near-white with just enough cast left to tell them apart.
    */
   topTint: 0.45,
   /** The weakest mark fades to 1 - fade. */
-  //
-  // 0.30, not the old 0.45. Opacity was carrying rank alongside size back when
-  // the fill was a saturated colour that stayed legible at half strength. A
-  // near-white mark at 0.55 alpha on this background is grey, and grey loses the
-  // tint that is now the only thing saying which sign it is. Size still ranks.
-  fade: 0.3,
-  /**
-   * The oldest bucket keeps this much of its opacity. Age reads, faintly.
-   *
-   * 0.85, not 0.75, for the same reason `fade` moved: the two multiply, so the
-   * weakest mark in the oldest bucket was drawing at 0.41 of a near-white fill —
-   * which over this background is grey, and a grey mark has no sign.
-   */
-  ageKeep: 0.85,
+  fade: 0.45,
+  /** The oldest bucket keeps this much of its opacity. Age reads, faintly. */
+  ageKeep: 0.75,
   /**
    * The glow under the top mark. Its ring width is per-rung, in `profiles`.
    *
