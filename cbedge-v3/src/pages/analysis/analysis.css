@@ -64,6 +64,71 @@
   -webkit-backdrop-filter: none !important;
 }
 
+/* ── Scrollbars ────────────────────────────────────────────────────────────
+   The platform scrollbar is a light-grey widget on a near-black card, so on a
+   page whose whole point is a dense dark ladder it is the brightest thing on
+   screen — the eye goes to the chrome instead of the bars.
+
+   THE VALUE IS NOT INVENTED. v2 themes exactly one scroller itself — the
+   Premarket card's bullet list — as `rgba(255,255,255,0.12) transparent`, and
+   that is the pair used here. Same reasoning as everything else in this port:
+   where v2 already decided, transcribe the decision.
+
+   BOTH mechanisms are declared on purpose. `scrollbar-color` is the standard
+   and is what Firefox and Chrome 121+ read; the ::-webkit- rules cover older
+   Chromium and Safari, which ignore it entirely. Dropping either leaves a light
+   scrollbar on some share of real browsers.
+
+   Scoped to this page rather than tokens.css: every other v3 route still gets
+   the platform scrollbar, and making that consistent is a separate, deliberate
+   change to a shared file.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.cb-analysis-page,
+.cb-analysis-page * {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-fg) 12%, transparent) transparent;
+}
+
+.cb-analysis-page::-webkit-scrollbar,
+.cb-analysis-page *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+/* Transparent, not a plate: the ladder pane and the card behind it are two
+   different fills, and a track painted one of them reads as a seam down the
+   side of whichever it does not match. */
+.cb-analysis-page::-webkit-scrollbar-track,
+.cb-analysis-page *::-webkit-scrollbar-track,
+.cb-analysis-page::-webkit-scrollbar-corner,
+.cb-analysis-page *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.cb-analysis-page::-webkit-scrollbar-thumb,
+.cb-analysis-page *::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--color-fg) 12%, transparent);
+  border-radius: 8px;
+  /* A transparent border inside a background-clip:padding-box thumb is how a
+     webkit thumb gets inset from its track — there is no margin on this
+     pseudo-element. Without it the thumb is a full-width bar hard against the
+     card edge. */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.cb-analysis-page::-webkit-scrollbar-thumb:hover,
+.cb-analysis-page *::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--color-fg) 24%, transparent);
+}
+
+/* A scroller with nothing to scroll should show nothing at all. */
+.cb-analysis-page::-webkit-scrollbar-thumb:vertical:active,
+.cb-analysis-page *::-webkit-scrollbar-thumb:vertical:active {
+  background-color: color-mix(in srgb, var(--color-fg) 32%, transparent);
+}
+
 /* ── Phones ────────────────────────────────────────────────────────────────
    A single column. v2 steps 4 → 2 (the generic collapse) → 1 (@899); the
    intermediate 2-column step crushes these dense cards, so v3 goes straight to

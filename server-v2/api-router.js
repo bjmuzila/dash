@@ -11288,4 +11288,315 @@ try {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// LSE (London Strategic Edge) vault — /api/lse/*
+//
+// Owner-only market data pulls: catalog, OHLCV candles, option chains, option
+// flow and per-contract candles. This is the Node port of the interactive
+// futures_data_downloader.py — the menu became endpoints, input() became query
+// params, and save_to_csv() became a streamed download.
+//
+// Loaded DEFENSIVELY like every other _lib-*.cjs here: no module, no routes,
+// and the rest of the router is unaffected. The key lives in LSE_API_KEY in
+// .env.local (mounted at runtime, never baked into the image) — it is read
+// inside _lib-lse.cjs at call time and never travels to the browser.
+//
+// ROW CAPS: the vault answers at most 5000 rows per call. /candles and
+// /options-flow therefore page the range and STREAM the CSV out as the pages
+// land, so a decade of 1m bars never has to fit in this process's heap.
+// ---------------------------------------------------------------------------
+{
+  let lse = null;
+  try { lse = require('./_lib-lse.cjs'); }
+  catch (e) { console.warn('[api-router] _lib-lse.cjs not loaded — /api/lse/* stays off:', e.message); }
+
+  if (lse) {
+    const qp = (req) => new URL(req.url || '/', 'http://localhost').searchParams;
+    const wantsCsv = (params) => String(params.get('format') || '').toLowerCase() === 'csv';
+
+    /** LseError carries the upstream status; anything else is ours (500). */
+    const fail = (res, err) => {
+      const status = err instanceof lse.LseError
+        ? (err.status && err.status >= 400 ? err.status : 502)
+        : 500;
+      console.error('[api-router] /api/lse error:', err?.message || err);
+      return send(res, status, { error: err?.message ? String(err.message) : String(err) });
+    };
+
+    /** CSV response head. `send()` always writes application/json, so not that. */
+    const csvHead = (res, filename) => {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Cache-Control', NO_STORE);
+      res.statusCode = 200;
+    };
+
+    const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '_');
+    const slug = (s) => String(s || 'data').replace(/[^A-Za-z0-9._-]+/g, '_');
+
+    /** Small single-call endpoints: same rows either as JSON or as a CSV file. */
+    const respond = (res, params, rows, name, extra = {}) => {
+      if (wantsCsv(params)) {
+        csvHead(res, `${slug(name)}_${stamp()}.csv`);
+        return res.end(lse.toCsv(rows));
+      }
+      return send(res, 200, { rows, count: rows.length, ...extra }, { 'Cache-Control': NO_STORE });
+    };
+
+    // ── status ───────────────────────────────────────────────────────────────
+    // Does this server have a key, and does the vault answer? The page calls
+    // this on mount so a missing LSE_API_KEY reads as "not configured" instead
+    // of five identical 503s from five different panels.
+    register('/api/lse/status', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        if (!lse.hasKey()) {
+          return send(res, 200, { configured: false, reachable: false, error: 'LSE_API_KEY is not set on this server' },
+            { 'Cache-Control': NO_STORE });
+        }
+        try {
+          const m = await lse.meta();
+          return send(res, 200, { configured: true, reachable: true, meta: m }, { 'Cache-Control': NO_STORE });
+        } catch (e) {
+          return send(res, 200, { configured: true, reachable: false, error: String(e?.message ?? e) },
+            { 'Cache-Control': NO_STORE });
+        }
+      },
+    });
+
+    // ── catalog ──────────────────────────────────────────────────────────────
+    // ?dataset=futures&search=NQ[&format=csv][&refresh=1]
+    // ?datasets=1 returns just the dataset list with counts (drives the picker).
+    register('/api/lse/catalog', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        const params = qp(req);
+        try {
+          if (params.get('datasets') === '1') {
+            return send(res, 200, { datasets: await lse.datasets() }, { 'Cache-Control': NO_STORE });
+          }
+          const rows = await lse.catalog({
+            dataset: params.get('dataset') || undefined,
+            search: params.get('search') || undefined,
+            force: params.get('refresh') === '1',
+          });
+          const limit = Number(params.get('limit') || 0);
+          const shown = limit > 0 && !wantsCsv(params) ? rows.slice(0, limit) : rows;
+          return respond(res, params, shown, `lse_catalog_${params.get('dataset') || 'all'}`,
+            { total: rows.length });
+        } catch (e) { return fail(res, e); }
+      },
+    });
+
+    // ── candles ──────────────────────────────────────────────────────────────
+    // ?symbol=NQ&timeframe=1m&start=2026-01-01|MAX&end=&dataset=futures
+    //   &limit=5000            one call, JSON preview (the default)
+    //   &all=1&format=csv      walk the whole range and stream it as CSV
+    //
+    // start=MAX is the Python's "all history" option: look the symbol's
+    // first_tick up in the catalog rather than guessing a lookback.
+    register('/api/lse/candles', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        const params = qp(req);
+        const symbol = String(params.get('symbol') || '').trim().toUpperCase();
+        const timeframe = String(params.get('timeframe') || '1m').toLowerCase();
+        const dataset = params.get('dataset') || undefined;
+        const end = params.get('end') || undefined;
+        let start = params.get('start') || undefined;
+
+        try {
+          if (!symbol) return send(res, 400, { error: 'symbol is required' });
+
+          if (start && start.toUpperCase() === 'MAX') {
+            const first = await lse.firstTickFor(symbol, dataset);
+            if (!first) {
+              // Same fallback the script used when the catalog had no first_tick.
+              const d = new Date(Date.now() - 365 * 10 * 86400_000);
+              start = d.toISOString().slice(0, 10);
+            } else {
+              start = first;
+            }
+          } else if (!start) {
+            // The script's default: a 30-day lookback.
+            start = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+          }
+
+          const all = params.get('all') === '1';
+          if (!all) {
+            const rows = await lse.candles({
+              symbol, timeframe, start, end, dataset,
+              limit: params.get('limit'), order: params.get('order') || 'asc',
+            });
+            return respond(res, params, rows, `${symbol}_${timeframe}`, { symbol, timeframe, start, end: end || null });
+          }
+
+          // Full walk. CSV is streamed page by page; JSON is capped hard,
+          // because a browser tab is not where a million-row array belongs.
+          const maxRows = Math.min(Number(params.get('max_rows') || 2_000_000) || 2_000_000, 5_000_000);
+          if (!wantsCsv(params)) {
+            const out = [];
+            let truncated = false;
+            for await (const page of lse.pageCandles({ symbol, timeframe, start, end, dataset, maxRows: Math.min(maxRows, 50_000) })) {
+              out.push(...page.rows);
+              truncated = truncated || page.truncated;
+            }
+            return send(res, 200, {
+              rows: out, count: out.length, truncated, symbol, timeframe, start, end: end || null,
+              note: truncated ? 'JSON preview is capped at 50,000 rows — use format=csv for the full pull' : undefined,
+            }, { 'Cache-Control': NO_STORE });
+          }
+
+          csvHead(res, `${slug(symbol)}_${slug(timeframe)}_${stamp()}.csv`);
+          let cols = null;
+          let wrote = 0;
+          for await (const page of lse.pageCandles({ symbol, timeframe, start, end, dataset, maxRows })) {
+            if (!page.rows.length) continue;
+            if (!cols) { cols = lse.csvColumns(page.rows); res.write(lse.csvHeader(cols)); }
+            res.write(lse.csvRows(page.rows, cols));
+            wrote += page.rows.length;
+          }
+          if (!wrote) res.write('# no rows for this symbol, timeframe and range\n');
+          return res.end();
+        } catch (e) {
+          // Once bytes are on the wire the status line is already sent; the only
+          // honest thing left is a comment row the CSV reader will show.
+          if (res.headersSent) { try { res.end(`\n# ERROR: ${String(e?.message ?? e)}\n`); } catch {} return; }
+          return fail(res, e);
+        }
+      },
+    });
+
+    // ── options chain ────────────────────────────────────────────────────────
+    // ?underlying=SPY&type=call&expiry=2026-09-18&min_dte=0&max_dte=30[&format=csv]
+    register('/api/lse/options-chain', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        const params = qp(req);
+        const underlying = String(params.get('underlying') || '').trim();
+        if (!underlying) return send(res, 400, { error: 'underlying is required' });
+        try {
+          const rows = await lse.optionsChain({
+            underlying,
+            type: params.get('type') || undefined,
+            expiry: params.get('expiry') || undefined,
+            strike: params.get('strike') || undefined,
+            strikeMin: params.get('strike_min') || undefined,
+            strikeMax: params.get('strike_max') || undefined,
+            minDte: params.get('min_dte') || undefined,
+            maxDte: params.get('max_dte') || undefined,
+            limit: params.get('limit'),
+          });
+          return respond(res, params, rows, `${underlying}_options_chain`, { underlying });
+        } catch (e) { return fail(res, e); }
+      },
+    });
+
+    // ── options flow ─────────────────────────────────────────────────────────
+    // ?underlying=&type=put&min_premium=250000&max_dte=7&start=&end=
+    //   &all=1&format=csv   walk the whole trailing-week tape
+    register('/api/lse/options-flow', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        const params = qp(req);
+        const opts = {
+          underlying: params.get('underlying') || undefined,
+          type: params.get('type') || undefined,
+          minPremium: params.get('min_premium') || undefined,
+          expiry: params.get('expiry') || undefined,
+          maxDte: params.get('max_dte') || undefined,
+          start: params.get('start') || undefined,
+          end: params.get('end') || undefined,
+          order: params.get('order') || 'desc',
+        };
+        try {
+          if (params.get('all') !== '1') {
+            const rows = await lse.optionsFlow({ ...opts, limit: params.get('limit') });
+            return respond(res, params, rows, 'options_flow');
+          }
+          const maxRows = Math.min(Number(params.get('max_rows') || 500_000) || 500_000, 2_000_000);
+          if (!wantsCsv(params)) {
+            const out = [];
+            let truncated = false;
+            for await (const page of lse.pageOptionsFlow({ ...opts, maxRows: Math.min(maxRows, 50_000) })) {
+              out.push(...page.rows);
+              truncated = truncated || page.truncated;
+            }
+            return send(res, 200, { rows: out, count: out.length, truncated }, { 'Cache-Control': NO_STORE });
+          }
+          csvHead(res, `options_flow_${stamp()}.csv`);
+          let cols = null;
+          let wrote = 0;
+          for await (const page of lse.pageOptionsFlow({ ...opts, maxRows })) {
+            if (!page.rows.length) continue;
+            if (!cols) { cols = lse.csvColumns(page.rows); res.write(lse.csvHeader(cols)); }
+            res.write(lse.csvRows(page.rows, cols));
+            wrote += page.rows.length;
+          }
+          if (!wrote) res.write('# no prints matched these filters\n');
+          return res.end();
+        } catch (e) {
+          if (res.headersSent) { try { res.end(`\n# ERROR: ${String(e?.message ?? e)}\n`); } catch {} return; }
+          return fail(res, e);
+        }
+      },
+    });
+
+    // ── option contract candles ──────────────────────────────────────────────
+    // ?ticker=AAPL260612C00205000            (OSI directly)
+    // ?underlying=AAPL&strike=205&expiry=2026-06-12&type=call   (by parts)
+    register('/api/lse/option-candles', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        const params = qp(req);
+        const ticker = params.get('ticker');
+        const underlying = params.get('underlying');
+        if (!ticker && !underlying) {
+          return send(res, 400, { error: 'pass ticker=<OSI>, or underlying + strike + expiry + type' });
+        }
+        try {
+          const rows = ticker
+            ? await lse.optionCandles({ contract: ticker, start: params.get('start') || undefined, end: params.get('end') || undefined, order: params.get('order') || 'asc', limit: params.get('limit') })
+            : await lse.optionCandles({
+                contract: underlying,
+                strike: params.get('strike'),
+                expiry: params.get('expiry'),
+                type: params.get('type'),
+                start: params.get('start') || undefined,
+                end: params.get('end') || undefined,
+                order: params.get('order') || 'asc',
+                limit: params.get('limit'),
+              });
+          const name = ticker || `${underlying}_${params.get('strike')}_${params.get('type')}`;
+          return respond(res, params, rows, `${name}_candles`);
+        } catch (e) { return fail(res, e); }
+      },
+    });
+
+    // ── resolve ──────────────────────────────────────────────────────────────
+    // "apple" → AAPL. The chain/flow panels call this so the UI can show which
+    // ticker a name resolved to BEFORE firing a pull against the wrong company.
+    register('/api/lse/resolve', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        const q = String(qp(req).get('q') || '').trim();
+        if (!q) return send(res, 400, { error: 'q is required' });
+        try {
+          return send(res, 200, { query: q, symbol: await lse.resolveUnderlying(q) }, { 'Cache-Control': NO_STORE });
+        } catch (e) { return fail(res, e); }
+      },
+    });
+
+    // The timeframe list, so the page's picker cannot drift from the client.
+    register('/api/lse/timeframes', {
+      auth: 'owner', methods: ['GET'],
+      async handler(req, res) {
+        return send(res, 200, { timeframes: lse.TIMEFRAMES, maxLimit: lse.MAX_LIMIT },
+          { 'Cache-Control': 'public, max-age=86400' });
+      },
+    });
+  }
+}
+
 module.exports = { handleApiRoute, register, _routes: ROUTES };

@@ -315,11 +315,15 @@ export async function loadEm(rawSym: string): Promise<EmSnapshot> {
   // ── Recent record: the most-recent FINALIZED week plus a trailing-5 rate.
   let recentRec: RecentRecord | null = null
   const evaluated = rows.filter((r) => r.result === 'hit' || r.result === 'miss')
-  if (evaluated.length > 0) {
+  // Bind the newest row rather than indexing twice: under
+  // `noUncheckedIndexedAccess` an index read is `T | undefined` however sure the
+  // length check above made us, and the binding is what narrows it.
+  const newest = evaluated[0]
+  if (newest) {
     const last5 = evaluated.slice(0, 5)
     recentRec = {
-      lastResult: evaluated[0].result ?? null,
-      lastLabel: evaluated[0].week_label ?? null,
+      lastResult: newest.result ?? null,
+      lastLabel: newest.week_label ?? null,
       last5Hits: last5.filter((r) => r.result === 'hit').length,
       last5Total: last5.length,
     }

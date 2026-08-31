@@ -74,6 +74,53 @@ than a grey OS triangle. Every translucent-white text color on the page
 this page was the odd one out. Input placeholders keep the browser's grey,
 deliberately: a placeholder that matches typed text reads as a value.
 
+**Symbol picker + OSI builder (same day).** Two things the CLI made you guess.
+
+- **`SymbolPicker`** - a type-ahead over `/api/lse/catalog` on the Symbol
+  and Underlying fields. Guessing between `ES`, `ESU6`, `ESU26`, `ES=F` and
+  `ESc1` is exactly the 404 the Python printed a four-line hint about, and
+  futures are only 69 rows - so the fix is not a better hint, it is showing
+  the list. Each row is symbol, name and the `first -> last` history span,
+  and picking one writes the exact catalog string. Scoped by dataset:
+  Candles follows the Dataset picker, the option tabs are pinned to
+  `options` so an economics series can't shadow a company. Debounced 220ms
+  (the filter runs server-side over 22k rows).
+- **The OSI ticker is now built, not typed.** Contract Candles leads with
+  Ticker / Expiry / Strike / Type and renders the assembled OSI live
+  underneath with a Copy button - root, `YYMMDD`, `C`/`P`, strike in
+  thousandths padded to eight. `AAPL` + `2026-06-12` + `205` + call ->
+  `AAPL260612C00205000`. The paste box now runs the transform BACKWARDS:
+  drop an OSI in and it splits into the four fields and empties itself, so
+  the parts stay the single source of truth. The request still sends the
+  PARTS, not the rendered OSI - the server is the side that can resolve a
+  company name to its ticker before assembling the contract.
+- A zero-row result now says what to do about it ("the vault matches the
+  symbol literally - use the exact string the Catalog lists") instead of
+  falling back to the generic "set the filters" copy as if nothing had run.
+
+**Themed calendar + an honest status banner (same day).**
+
+- **`DateField`** replaces every date input (Candles start/end, chain
+  expiry, flow start/end, contract expiry). `<input type="date">` was the
+  first cut, but its popup belongs to the browser - `color-scheme: dark` is
+  the entire extent of the control you get over it, so it never matched the
+  surfaces around it. This draws the month from the theme's own tokens:
+  same panel, same border, same cyan, with Today / Max history / Clear in
+  the footer. The text input stays editable because Candles' start accepts
+  the literal `MAX`, which no calendar can express.
+  Dates format via a local-time `ymd()`, never `toISOString()` - the latter
+  shifts to UTC and returns YESTERDAY for anyone west of Greenwich after 7pm.
+  Click-away is a fixed backdrop, not the input's blur: the calendar's own
+  buttons are focusable and blur would close it out from under the click.
+- **The status banner no longer lies.** It reported "LSE_API_KEY is not
+  set" for ANY failure of `/api/lse/status`, including the case where the
+  request never reached the route and the SPA fallback answered with HTML -
+  which sent you to the VPS to fix an env var that was already correct.
+  `StatusState` is now a union and the four cases read differently:
+  missing key, vault unreachable, owner gate refused (401/403), and
+  "the running build does not have these routes yet" (non-JSON body) -
+  the last one saying in as many words that it is a deploy, not a key.
+
 - `owner-vite/src/lib/nav.ts` - "LSE Data" added to the **Market** group.
 - `owner-vite/src/pages/registry.ts` - lazy route registered.
 
