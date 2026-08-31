@@ -5,8 +5,20 @@
  *   The WebSocket carries the paid product (live SPX GEX). Without this gate,
  *   anyone who knows the URL can stream it for free. This module verifies, at
  *   upgrade time, that the connecting user has a valid session cookie and is
- *   either the owner or an active/trialing subscriber — the SAME rule the
- *   pages enforce via lib/subscription.getAccessForUser.
+ *   either the owner, an active/trialing subscriber, or the holder of a live
+ *   comp_access grant — the SAME rule the pages enforce via
+ *   lib/db.ts's getSessionWithUser().
+ *
+ * KEEP THE PAID DEFINITION IN SYNC WITH lib/db.ts (2026-08-31)
+ *   is_paid here MUST match getSessionWithUser()'s is_paid exactly, because the
+ *   two gates sit on opposite sides of the same page load: middleware decides
+ *   whether the document renders, this file decides whether its data loads.
+ *   When they disagree the page draws and then every API call 401s — which is
+ *   what happened when comp_access was added to lib/db.ts and not here: comped
+ *   users (beta testers, friends, support cases) passed middleware, then got a
+ *   permanent 401 on every /api/* call, no /proxy/*, and no WebSocket. If you
+ *   ever add another source of "paid", add it to BOTH queries below and to
+ *   getSessionWithUser().
  *
  * HOW IT AUTHENTICATES (cookie-based — no client changes)
  *   The browser automatically sends our session cookie (`cbe_session`, an
@@ -140,12 +152,23 @@ async function getSessionForToken(rawToken) {
 
   let r;
   try {
+    // is_paid = a live Stripe subscription OR a live comp_access grant. Mirrors
+    // lib/db.ts's getSessionWithUser() clause for clause — see the sync note in
+    // the file header. The comp join is written so an expired or revoked row
+    // simply doesn't match, and comp_access is keyed on the LOWERCASED email
+    // because a comp can be granted before the person has an account.
     r = await pool.query(
       `SELECT s.user_id, u.is_owner,
-              COALESCE(sub.status IN ('active','trialing'), FALSE) AS is_paid
+              (COALESCE(sub.status IN ('active','trialing'), FALSE)
+                OR ca.email IS NOT NULL)                     AS is_paid,
+              (ca.email IS NOT NULL)                         AS is_comped
          FROM sessions s
          JOIN users u ON u.id = s.user_id
          LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
+         LEFT JOIN comp_access ca
+                ON ca.email = LOWER(u.email)
+               AND ca.revoked_at IS NULL
+               AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
         WHERE s.token_hash = $1 AND s.expires_at > NOW()
         LIMIT 1`,
       [tokenHash]
@@ -157,7 +180,13 @@ async function getSessionForToken(rawToken) {
 
   const row = r.rows?.[0];
   const value = row
-    ? { userId: row.user_id, isOwner: !!row.is_owner, isPaid: !!row.is_paid }
+    ? {
+        userId: row.user_id,
+        isOwner: !!row.is_owner,
+        isPaid: !!row.is_paid,
+        // Informational only (logging / admin views). The gate reads isPaid.
+        isComped: !!row.is_comped,
+      }
     : null;
   _cacheSet(tokenHash, value);
   return value;
@@ -167,7 +196,9 @@ async function getSessionForToken(rawToken) {
 function getAccessFor(session) {
   if (OWNER_USER_ID && session.userId === OWNER_USER_ID) return { ok: true, reason: 'owner' };
   if (session.isOwner) return { ok: true, reason: 'owner' };
-  if (session.isPaid) return { ok: true, reason: 'subscribed' };
+  // isPaid already folds in comp_access; `reason` just distinguishes the two in
+  // logs. A comp unlocks exactly what a subscription unlocks and nothing more.
+  if (session.isPaid) return { ok: true, reason: session.isComped ? 'comped' : 'subscribed' };
   return { ok: false, reason: 'inactive' };
 }
 
@@ -222,15 +253,25 @@ async function getAccessForUser(userId) {
   if (OWNER_USER_ID && userId === OWNER_USER_ID) return { ok: true, reason: 'owner' };
   const pool = getAuthPool();
   if (!pool) return { ok: false, reason: 'no-subscription' };
+  // Same comp_access join as getSessionForToken above — see the sync note in
+  // the file header. Without it this function calls a comped user 'inactive'.
   const r = await pool.query(
-    `SELECT u.is_owner, sub.status
+    `SELECT u.is_owner, sub.status, (ca.email IS NOT NULL) AS is_comped
        FROM users u
        LEFT JOIN subscriptions sub ON sub.clerk_user_id = u.id
+       LEFT JOIN comp_access ca
+              ON ca.email = LOWER(u.email)
+             AND ca.revoked_at IS NULL
+             AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
       WHERE u.id = $1 LIMIT 1`,
     [userId]
   );
   const row = r.rows?.[0];
   if (row?.is_owner) return { ok: true, reason: 'owner' };
+  // A live comp is paid access regardless of what the subscriptions row says —
+  // checked BEFORE status so a comped user with an old 'canceled' Stripe row
+  // (churned, then comped) still passes.
+  if (row?.is_comped) return { ok: true, reason: 'comped' };
   const status = row?.status ?? null;
   if (status == null) return { ok: false, reason: 'no-subscription' };
   if (PAID_STATUSES.has(status)) return { ok: true, reason: 'subscribed', status };

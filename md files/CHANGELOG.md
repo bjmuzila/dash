@@ -1,5 +1,53 @@
 # Changelog
 
+## Monday 8/31/2026 - Comped users were 401'd out of every API: ws-auth was missing the comp_access join
+
+The real cause of the ICT `Couldn't load today's plays: Error: HTTP 401` a
+customer kept hitting. Not the pool contention fixed earlier today - a permanent
+gate mismatch for one class of user.
+
+`lib/db.ts`'s `getSessionWithUser()` - what Next middleware uses to decide
+whether the page renders - defines paid as a live Stripe subscription **OR** a
+live `comp_access` grant:
+
+    (COALESCE(sub.status IN ('active','trialing'), FALSE)
+      OR ca.email IS NOT NULL) AS is_paid
+    ...
+    LEFT JOIN comp_access ca ON ca.email = LOWER(u.email)
+           AND ca.revoked_at IS NULL
+           AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+
+`server-v2/ws-auth.js`'s `getSessionForToken()` - what gates every `/api/*`
+route, the whole `/proxy/*` surface, and the WS upgrade - had only the
+subscriptions join. No `comp_access` at all. It drifted when comp_access was
+added to `lib/db.ts`; the file header still claimed it enforced "the SAME rule
+the pages enforce."
+
+So a comped account (beta tester, friend, support case) passed middleware, the
+document rendered normally, and then `getAccessFor()` returned `inactive` and
+every subscriber API answered 401 - permanently, not intermittently. Same for
+`/proxy/*` and the WebSocket, so a comped user also had no live GEX feed at all.
+
+Fix, `server-v2/ws-auth.js` only: both queries now carry the comp join copied
+clause for clause from `lib/db.ts`. `getSessionForToken` ORs `ca.email IS NOT
+NULL` into `is_paid` and returns `isComped`; `getAccessForUser` checks
+`is_comped` BEFORE the subscription status, so someone who churned and was then
+comped isn't denied by their stale `canceled` row. `getAccessFor` reports
+`reason: 'comped'` vs `'subscribed'` for logs - both are simply `ok: true`, a
+comp unlocks exactly what a subscription unlocks and nothing more. Revoked and
+expired comps still don't match; `is_owner` is untouched.
+
+Verified against a stubbed pool: comped-only -> `comped`, comped + canceled
+Stripe row -> `comped`, paying subscriber -> `subscribed`, neither -> `inactive`
+(still denied), owner -> `owner`; `getAccessForUser` with status `canceled`
+returns `comped` when a live grant exists and `inactive` when it doesn't.
+
+Added a header note to `ws-auth.js`: is_paid here MUST match
+`getSessionWithUser()`'s exactly, because the two gates sit on opposite sides of
+the same page load - middleware decides whether the document renders, ws-auth
+decides whether its data loads. When they disagree the page draws and every API
+call 401s. Any future source of "paid" goes in both.
+
 ## 2026-08-31 - GEX Candles: the interval picker moves the bubbles, and the four rows rank by size
 
 Edited: `cbedge-v3/src/board/gexCandles/chart.ts`, `settings.ts`, `bubbles.ts`,

@@ -12,7 +12,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 * **Top toolbar:** added an SPX button beside the ticker picker — one click back to the live feed from any symbol.
 
-* **ICT (and every page):** fixed the random "unauthorized" errors some of you hit on load. Pages now retry a hiccup instead of failing outright.
+* **ICT (and every page):** fixed the "unauthorized" errors on load. Accounts with complimentary access were being locked out of live data entirely, and brief hiccups now retry instead of failing outright.
 
 * **Seasonality (free almanac):** new FOMC, Jackson Hole and Apple event studies — the S&P before, during and after each. The current-year line now updates daily; month-end gained charts.
 
