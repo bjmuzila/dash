@@ -1663,14 +1663,6 @@ export default function Sales() {
               />
             </div>
 
-            {/* Who signed up and did not buy. Sits directly under the KPI row
-                because it is the question a zero-sale day actually raises, and
-                a panel further down would be below the fold on the day it
-                matters most. Self-fetching: it reads a different endpoint on
-                its own range, and folding it into the page load would make the
-                whole dashboard wait on it. */}
-            <SignupsPanel />
-
             {/* Profit per month — real cash collected, less the expense run-rate.
                 Full width; the old "Sale Summary" panel that shared this row is
                 gone (it re-plotted the same signup bars against a flat expense
@@ -1680,6 +1672,13 @@ export default function Sales() {
               subs={[...data.subscriptions, ...(data.cancellations ?? [])]}
               expensesMonthly={expensesMonthly}
             />
+
+            {/* Who signed up and did not buy. Directly under the profit chart:
+                that chart is where a flat or falling month shows up, and this is
+                the list that says who it was. Self-fetching on its own range —
+                folding it into the page load would make the whole dashboard
+                wait on a second endpoint. */}
+            <SignupsPanel />
 
             {/* Trial → paid funnel. Sits directly under the profit chart and
                 ABOVE the subscription tables: those two lists are long and a

@@ -1,67 +1,13 @@
 # Changelog
 
-## 2026-08-31 - WebSocket reconnect storm: the 53GB/day Cloudflare bill
+## 2026-08-31 - Sales: signups panel moves under Profit per Month
 
-Cloudflare egress hit 53GB in 24h. It was not the feed. `/proxy/self-metrics`
-reported `clients: 0` alongside 19.3MB/min of outbound, and the all-time split
-was `snapshot: 382,852,473` bytes against `gex: 139,369` / `flow: 219` - 99.96%
-of every byte /ws/gex has ever sent was the connect-time snapshot. Nobody was
-ever connected. Everybody was looping.
+"Signed up · never bought" was sitting directly under the KPI row. Moved it
+below the Profit per Month chart, which is where it actually belongs: that chart
+is where a flat or falling month shows up, and this is the list that answers
+who it was. Reading them in that order is the whole point.
 
-Probed from a browser against the live socket, 5/5 identical:
-
-    open   @136ms
-    msg    @183ms   type=snapshot   218,529 bytes
-    close  @183ms   code 1006, wasClean=false
-
-The 101 succeeds, the full 218KB snapshot is delivered, the socket is reset in
-the same millisecond. `?topics=spot,status` (1.3KB snapshot) dies the same way at
-+1ms, so it is not payload size, and `ws.extensions` is `""` - permessage-deflate
-is not negotiated, so this is NOT the 2026-08-21 `WS_DEFLATE` bug. Same symptom,
-different cause. Server uptime advances normally across the deaths, so the
-process is not crash-looping; the sockets are. Path is CF edge -> cloudflared ->
-127.0.0.1 with no nginx hop, and nothing in `websocket-server.js` terminates a
-fresh socket, so the reset is upstream of Node.
-
-That is the bug. This entry is about the amplifier, which is what turned it into
-a bill.
-
-`lib/gexSocket.ts` reset `attempts = 0` inside `sock.onopen`, i.e. it treated "the
-handshake succeeded" as "the connection works". Since the handshake succeeds
-every time here, the exponential backoff never left its first rung: a flat 2s
-retry, forever, at 218KB a go. 6.5MB/min per open tab, 9.4GB/day per open tab.
-
-Changed, client-side only, no server or proxy changes:
-
-- Backoff credit is now earned by SURVIVING, not by opening. `onopen` arms a
-  `HEALTHY_CONNECTION_MS` (10s) timer and only zeroes `attempts` if the socket is
-  still the live one and still OPEN when it fires.
-- Broken-transport escalation. Three consecutive connections that open and then
-  die inside 10s having delivered <=1 frame (the snapshot and nothing else) floor
-  the retry at `BROKEN_TRANSPORT_FLOOR_MS` (60s). Any connection that survives 10s
-  clears the streak.
-- +0..30% jitter on every retry delay, so N tabs failing together stop coming
-  back in the same instant.
-- The wake handlers (visibilitychange / pageshow / online / focus) stay the fast
-  path back: a wake still reconnects immediately, so a repaired transport
-  recovers on the next glance instead of waiting out the floor. The streak is
-  deliberately not cleared there - a wake buys one attempt, not a fresh licence
-  to loop.
-- Handshakes that never complete are unaffected: `openedAt === 0` means the
-  socket never opened, which costs nothing and rides the ordinary curve.
-
-Simulated against the observed failure (open -> 1 snapshot -> die @50ms), per
-open tab over 24h: 42,147 reconnects / 9.21GB before, 1,441 / 0.31GB after -
-29x. At the ~5-6 tabs the 53GB implies, that is ~53GB -> ~2GB while the
-transport is still broken.
-
-Under a healthy server this is a no-op: sockets live for hours, the 10s timer
-fires, the curve resets exactly as before.
-
-Still open: who sends the RST. Next step is the loopback probe inside the
-container (the one that isolated the deflate outage, where CF and the tunnel are
-not in the path) plus `docker logs bzila-dashboard 2>&1 | grep '\[WS\]'` for the
-`socket error` line that `ws.on('error')` was added to catch.
+No behaviour change - same self-fetching panel on its own day range.
 
 ## 2026-08-31 - August written up, and linked from Real Month
 
