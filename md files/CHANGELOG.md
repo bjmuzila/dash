@@ -1,13 +1,155 @@
 # Changelog
 
-## 2026-08-31 - Sales: signups panel moves under Profit per Month
+## 2026-08-31 - Root cause: Next steals the 'upgrade' event and kills /ws/gex
 
-"Signed up · never bought" was sitting directly under the KPI row. Moved it
-below the Profit per Month chart, which is where it actually belongs: that chart
-is where a flat or falling month shows up, and this is the list that answers
-who it was. Reading them in that order is the whole point.
+The 53GB/day bleed is closed. It was not the tunnel, not Cloudflare, not deflate,
+and not the feed. **Next.js was destroying every WebSocket on the server.**
 
-No behaviour change - same self-fetching panel on its own day range.
+`node_modules/next/dist/server/next.js:298`:
+
+    setupWebSocketHandler(customServer, _req) {
+      if (!this.didWebSocketSetup) {
+        this.didWebSocketSetup = true;
+        customServer = customServer || _req?.socket?.server;
+        if (customServer) customServer.on('upgrade', ...)
+
+Next 15.5.20 does not need to be handed an `httpServer`. The FIRST request that
+passes through `getRequestHandler()` gives it one off `req.socket.server`, and it
+attaches its own `'upgrade'` listener to our server. A production build owns no
+`/ws/*` route, so its handler destroys the socket. Our broadcaster registered
+first, so the order a client sees is: 101 accepted, full ~220KB connect snapshot
+delivered, then a bare RST (1006) ~2ms later. Nothing is ever logged, because the
+destroy happens on the raw socket and never reaches the `ws` instance that owns
+the connection.
+
+Proven on the live box, four probes, no code deployed:
+
+    real /ws/gex (loopback, no CF/tunnel)   open 8ms -> snapshot 270,401b -> 1006 @14ms
+    minimal ws server, same container        HELD OPEN 20s with a 270KB frame
+    websocket-server.js alone on a new srv   HELD OPEN 20s
+    same + Next, BEFORE any http request     upgradeListeners=1  -> HELD OPEN 20s
+    same + Next, AFTER one http request      upgradeListeners=2  -> 1006 @16ms
+
+The last two lines are the whole bug: one HTTP request is the difference.
+
+Also confirmed along the way: `/ws/nope` (a path nothing owns) hangs up in 7ms on
+prod but stays open on a single-listener server - Node does not reap unhandled
+upgrades, so that 7ms was the second listener all along.
+
+### The guard - server-v2/server-with-proxy.js
+
+Immediately after `createGexWsServer(server, ...)`, `server.on` is wrapped so any
+LATER `'upgrade'` listener never sees `/ws/gex`:
+
+    const _serverOn = server.on.bind(server);
+    server.on = (event, listener) => {
+      if (event !== 'upgrade') return _serverOn(event, listener);
+      return _serverOn('upgrade', (req, socket, head) => {
+        ...if pathname === GEX_WS_PATH: return;   // ours - hands off
+        return listener(req, socket, head);
+      });
+    };
+
+Wrapped, not blocked: a blanket refusal would kill HMR under `dev: true`. Foreign
+handlers keep every path except ours. Installed AFTER `createGexWsServer` so our
+own listener is never wrapped. Verified against a reproduction of the exact prod
+sequence - without the guard `CLOSE 1006 after 14ms, msgs=1`, with it
+`HELD OPEN, msgs=1`.
+
+### The alarm - server-v2/websocket-server.js
+
+This socket has now run up a bill twice in ten days (2026-08-21 deflate,
+2026-08-31 this) and both times the Cloudflare graph the next morning was the
+first anyone knew. A watchdog now checks the existing bandwidth accounting every
+`WS_ALERT_INTERVAL_MS` (60s) and warns, with a 15-minute cooldown so the alarm
+cannot become the second outage. It logs `[WS-ALERT]` and posts to
+`WS_ALERT_WEBHOOK || DISCORD_WEBHOOK_URL`, including a projected GB/day and the
+last-minute split by frame type.
+
+Three independent trips (any set to 0 disables it):
+
+- `WS_ALERT_CONNECTS_PER_MIN` (30) - connects/min at or above this while
+  `clients <= 1`. The sharpest of the three and the one that would have caught
+  BOTH outages on day one: a storm opens dozens of sockets a minute and holds
+  none, so `clients` reads ~0 no matter how bad it is.
+- `WS_ALERT_SNAPSHOT_MB_PER_MIN` (5) - sustained megabytes of connect snapshots.
+  Snapshots are a page-load cost; a steady stream of them means churn.
+- `WS_ALERT_MB_PER_MIN` (30) - total outbound backstop, for a bleed that is
+  nobody's fault in particular.
+
+Supporting change: connections are now counted per 1s bucket alongside bytes
+(`connectsLastMin`, `totalConnects` on `getBandwidth()`, so `/proxy/self-metrics`
+carries them too). Bytes alone cannot tell "a few clients on a fat feed" apart
+from "sixty clients that each took a snapshot and died".
+
+### Still worth doing
+
+`WS_AUTH_REQUIRED` is NOT set in prod - `docker exec ... env | grep WS_` returns
+nothing. The socket that carries the paid product is open to anyone who knows the
+URL, and each anonymous connect costs a ~220KB snapshot. That is the next bill.
+
+## 2026-08-31 - WebSocket reconnect storm: the 53GB/day Cloudflare bill
+
+Cloudflare egress hit 53GB in 24h. It was not the feed. `/proxy/self-metrics`
+reported `clients: 0` alongside 19.3MB/min of outbound, and the all-time split
+was `snapshot: 382,852,473` bytes against `gex: 139,369` / `flow: 219` - 99.96%
+of every byte /ws/gex has ever sent was the connect-time snapshot. Nobody was
+ever connected. Everybody was looping.
+
+Probed from a browser against the live socket, 5/5 identical:
+
+    open   @136ms
+    msg    @183ms   type=snapshot   218,529 bytes
+    close  @183ms   code 1006, wasClean=false
+
+The 101 succeeds, the full 218KB snapshot is delivered, the socket is reset in
+the same millisecond. `?topics=spot,status` (1.3KB snapshot) dies the same way at
++1ms, so it is not payload size, and `ws.extensions` is `""` - permessage-deflate
+is not negotiated, so this is NOT the 2026-08-21 `WS_DEFLATE` bug. Same symptom,
+different cause. Server uptime advances normally across the deaths, so the
+process is not crash-looping; the sockets are. Path is CF edge -> cloudflared ->
+127.0.0.1 with no nginx hop, and nothing in `websocket-server.js` terminates a
+fresh socket, so the reset is upstream of Node.
+
+That is the bug. This entry is about the amplifier, which is what turned it into
+a bill.
+
+`lib/gexSocket.ts` reset `attempts = 0` inside `sock.onopen`, i.e. it treated "the
+handshake succeeded" as "the connection works". Since the handshake succeeds
+every time here, the exponential backoff never left its first rung: a flat 2s
+retry, forever, at 218KB a go. 6.5MB/min per open tab, 9.4GB/day per open tab.
+
+Changed, client-side only, no server or proxy changes:
+
+- Backoff credit is now earned by SURVIVING, not by opening. `onopen` arms a
+  `HEALTHY_CONNECTION_MS` (10s) timer and only zeroes `attempts` if the socket is
+  still the live one and still OPEN when it fires.
+- Broken-transport escalation. Three consecutive connections that open and then
+  die inside 10s having delivered <=1 frame (the snapshot and nothing else) floor
+  the retry at `BROKEN_TRANSPORT_FLOOR_MS` (60s). Any connection that survives 10s
+  clears the streak.
+- +0..30% jitter on every retry delay, so N tabs failing together stop coming
+  back in the same instant.
+- The wake handlers (visibilitychange / pageshow / online / focus) stay the fast
+  path back: a wake still reconnects immediately, so a repaired transport
+  recovers on the next glance instead of waiting out the floor. The streak is
+  deliberately not cleared there - a wake buys one attempt, not a fresh licence
+  to loop.
+- Handshakes that never complete are unaffected: `openedAt === 0` means the
+  socket never opened, which costs nothing and rides the ordinary curve.
+
+Simulated against the observed failure (open -> 1 snapshot -> die @50ms), per
+open tab over 24h: 42,147 reconnects / 9.21GB before, 1,441 / 0.31GB after -
+29x. At the ~5-6 tabs the 53GB implies, that is ~53GB -> ~2GB while the
+transport is still broken.
+
+Under a healthy server this is a no-op: sockets live for hours, the 10s timer
+fires, the curve resets exactly as before.
+
+Still open: who sends the RST. Next step is the loopback probe inside the
+container (the one that isolated the deflate outage, where CF and the tunnel are
+not in the path) plus `docker logs bzila-dashboard 2>&1 | grep '\[WS\]'` for the
+`socket error` line that `ws.on('error')` was added to catch.
 
 ## 2026-08-31 - August written up, and linked from Real Month
 

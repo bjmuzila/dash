@@ -151,6 +151,49 @@ const GEX_BROADCAST_MS_OFFHOURS = Number(process.env.GEX_BROADCAST_MS_OFFHOURS |
 // alone gates it) so live prints stay instant. Env-tunable.
 const FLOW_BROADCAST_MS_OFFHOURS = Number(process.env.FLOW_BROADCAST_MS_OFFHOURS || 30000);
 
+// ── Outbound bandwidth alarm ─────────────────────────────────────────────────
+// /ws/gex egress is uncacheable and counts 100% as Cloudflare "bandwidth served",
+// so this socket is the one place in the app that can quietly run up a bill. It
+// has now done it twice (2026-08-21 deflate, 2026-08-31 Next's stolen 'upgrade'
+// listener), and both times the first anyone knew was the Cloudflare graph the
+// next day. This watchdog is so there is no third time.
+//
+// Three independent trips, because the two outages looked different in bytes but
+// identical in SHAPE — a torrent of connect snapshots to clients that never
+// stayed:
+//   1. connect rate with nothing held  — the reconnect-storm signature, and the
+//      sharpest of the three. Healthy traffic opens a socket and keeps it for
+//      hours; a storm opens dozens a minute and holds none.
+//   2. snapshot bytes/min              — snapshots are a page-load cost. Sustained
+//      megabytes of them means connections are churning, whatever the cause.
+//   3. total bytes/min                 — the backstop, for a bleed that is nobody's
+//      fault in particular (too many clients, a payload that grew).
+// All env-tunable; set any to 0 to disable that trip.
+const WS_ALERT_INTERVAL_MS = Number(process.env.WS_ALERT_INTERVAL_MS || 60_000);
+const WS_ALERT_CONNECTS_PER_MIN = Number(process.env.WS_ALERT_CONNECTS_PER_MIN || 30);
+const WS_ALERT_SNAPSHOT_MB_PER_MIN = Number(process.env.WS_ALERT_SNAPSHOT_MB_PER_MIN || 5);
+const WS_ALERT_MB_PER_MIN = Number(process.env.WS_ALERT_MB_PER_MIN || 30);
+// One alert per this window per condition-set, so a broken transport cannot turn
+// the alarm itself into the second outage (the exact mistake the rate-limited
+// socket-error logger above exists to prevent).
+const WS_ALERT_COOLDOWN_MS = Number(process.env.WS_ALERT_COOLDOWN_MS || 900_000); // 15m
+// Reuses the existing Discord webhook unless given its own. No webhook = log only.
+const WS_ALERT_WEBHOOK = (process.env.WS_ALERT_WEBHOOK || process.env.DISCORD_WEBHOOK_URL || '').trim();
+
+const mb = (bytes) => (bytes / 1e6).toFixed(2);
+
+/** Fire-and-forget Discord post. Never throws, never blocks the event loop path. */
+function postAlertWebhook(content) {
+  if (!WS_ALERT_WEBHOOK) return;
+  try {
+    fetch(WS_ALERT_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: content.slice(0, 1900) }),
+    }).catch(() => { /* the alarm must never be able to break the server */ });
+  } catch { /* ignore */ }
+}
+
 // Lightweight ET regular-trading-hours check (Mon–Fri 9:30–16:00 ET). Used only
 // to coarsen broadcast cadence off-hours; not a market-holiday calendar (the
 // flow skip-if-unchanged already zeroes out quiet periods, so holidays during
@@ -249,24 +292,40 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
   // a measured gex-vs-flow split. Cheap: one byteLength per message per tick,
   // multiplied by the open-client count.
   const bwTotal = Object.create(null);   // type -> cumulative bytes (all time)
-  const bwBuckets = [];                  // [{ sec, byType: {type:bytes} }], newest last
-  function accountBytes(type, bytes) {
-    bwTotal[type] = (bwTotal[type] || 0) + bytes;
+  const bwBuckets = [];                  // [{ sec, conns, byType: {type:bytes} }], newest last
+  let totalConnects = 0;                 // accepted connections since process start
+  function currentBucket() {
     const sec = Math.floor(Date.now() / 1000);
     let b = bwBuckets[bwBuckets.length - 1];
-    if (!b || b.sec !== sec) { b = { sec, byType: Object.create(null) }; bwBuckets.push(b); }
-    b.byType[type] = (b.byType[type] || 0) + bytes;
+    if (!b || b.sec !== sec) { b = { sec, conns: 0, byType: Object.create(null) }; bwBuckets.push(b); }
     // Drop buckets older than 60s.
     const cutoff = sec - 60;
     while (bwBuckets.length && bwBuckets[0].sec < cutoff) bwBuckets.shift();
+    return b;
+  }
+  function accountBytes(type, bytes) {
+    bwTotal[type] = (bwTotal[type] || 0) + bytes;
+    const b = currentBucket();
+    b.byType[type] = (b.byType[type] || 0) + bytes;
+  }
+  // Connections accepted, bucketed the same way. This is the number that actually
+  // NAMES a reconnect storm: bytes alone cannot tell "a few clients on a fat feed"
+  // apart from "sixty clients that each took a snapshot and died", and on
+  // 2026-08-31 it was the second one — 99.96% of all egress was connect
+  // snapshots while `clients` sat at 0.
+  function accountConnect() {
+    totalConnects += 1;
+    currentBucket().conns += 1;
   }
   // Snapshot of the last 60s, in bytes-per-type + total, plus all-time totals.
   function getBandwidth() {
     const cutoff = Math.floor(Date.now() / 1000) - 60;
     const lastMin = Object.create(null);
     let lastMinTotal = 0;
+    let connectsLastMin = 0;
     for (const bk of bwBuckets) {
       if (bk.sec < cutoff) continue;
+      connectsLastMin += bk.conns || 0;
       for (const t in bk.byType) {
         lastMin[t] = (lastMin[t] || 0) + bk.byType[t];
         lastMinTotal += bk.byType[t];
@@ -276,6 +335,8 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       clients: wss.clients.size,
       lastMin,                 // bytes sent per type in the trailing 60s
       lastMinTotal,            // total bytes in the trailing 60s (≈ bytes/min)
+      connectsLastMin,         // connections accepted in the trailing 60s
+      totalConnects,           // connections accepted since process start
       total: { ...bwTotal },   // cumulative bytes per type since process start
       ts: Date.now(),
     };
@@ -342,6 +403,7 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
 
   wss.on('connection', (ws, request) => {
     ws.isAlive = true;
+    accountConnect();
     // Optional ?topics=flow,spot scoping — null means "everything" (default).
     ws.topics = parseTopics(request);
     ws.on('pong', () => {
@@ -491,6 +553,60 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
     }
   });
 
+  // ── Bandwidth alarm (see the WS_ALERT_* constants above) ────────────────────
+  let lastAlertAt = 0;
+  let alerting = false;
+  const bwMonitor = setInterval(() => {
+    let bw;
+    try { bw = getBandwidth(); } catch { return; }
+    const mbMin = bw.lastMinTotal / 1e6;
+    const snapMbMin = (bw.lastMin.snapshot || 0) / 1e6;
+    const reasons = [];
+
+    // Trip 1 — connections churning without anything staying up. `clients` is a
+    // point-in-time count, so a storm of sockets that die in milliseconds reads
+    // as ~0 no matter how many are being opened: high connects + ~no clients IS
+    // the storm, and it is what both outages looked like from in here.
+    if (WS_ALERT_CONNECTS_PER_MIN > 0 && bw.connectsLastMin >= WS_ALERT_CONNECTS_PER_MIN && bw.clients <= 1) {
+      reasons.push(`${bw.connectsLastMin} connects/min but only ${bw.clients} client(s) holding — sockets are not staying up`);
+    }
+    if (WS_ALERT_SNAPSHOT_MB_PER_MIN > 0 && snapMbMin >= WS_ALERT_SNAPSHOT_MB_PER_MIN) {
+      reasons.push(`${mb(bw.lastMin.snapshot || 0)}MB/min of connect snapshots (${Math.round((snapMbMin / (mbMin || 1)) * 100)}% of all egress)`);
+    }
+    if (WS_ALERT_MB_PER_MIN > 0 && mbMin >= WS_ALERT_MB_PER_MIN) {
+      reasons.push(`${mb(bw.lastMinTotal)}MB/min total outbound`);
+    }
+
+    const now = Date.now();
+    if (!reasons.length) {
+      // Recovered — say so once, so a resolved alert doesn't sit unanswered.
+      if (alerting) {
+        alerting = false;
+        const line = `[WS-ALERT] cleared — ${mb(bw.lastMinTotal)}MB/min, ${bw.connectsLastMin} connects/min, ${bw.clients} client(s)`;
+        log.log?.(line);
+        postAlertWebhook(`✅ ${line}`);
+      }
+      return;
+    }
+    if (now - lastAlertAt < WS_ALERT_COOLDOWN_MS) return;
+    lastAlertAt = now;
+    alerting = true;
+
+    // Projected daily cost, which is the number that actually means something
+    // when you are looking at a Cloudflare bill rather than a log line.
+    const gbDay = ((bw.lastMinTotal * 1440) / 1e9).toFixed(1);
+    const split = Object.entries(bw.lastMin)
+      .sort((a, b) => b[1] - a[1])
+      .map(([t, b]) => `${t} ${mb(b)}MB`)
+      .join(', ') || 'none';
+    const line =
+      `[WS-ALERT] /ws/gex egress high: ${reasons.join(' | ')} ` +
+      `— projecting ~${gbDay}GB/day. last-min split: ${split}`;
+    log.error?.(line);
+    postAlertWebhook(`🚨 **CB Edge /ws/gex bandwidth**\n${reasons.map((r) => `• ${r}`).join('\n')}\nProjecting **~${gbDay}GB/day**.\nSplit: ${split}`);
+  }, WS_ALERT_INTERVAL_MS);
+  if (bwMonitor.unref) bwMonitor.unref();
+
   // Keepalive ping / dead-socket reaping.
   const pinger = setInterval(() => {
     for (const ws of wss.clients) {
@@ -511,6 +627,7 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
 
   function close() {
     clearInterval(pinger);
+    clearInterval(bwMonitor);
     unsubscribe();
     for (const ws of wss.clients) ws.terminate();
     wss.close();

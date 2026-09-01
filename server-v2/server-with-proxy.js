@@ -4252,6 +4252,41 @@ async function main() {
   // Attach WS broadcaster (/ws/gex).
   const { wss, broadcastEvent } = createGexWsServer(server, { log: console });
 
+  // ── Next steals this server's 'upgrade' event — block it off /ws/gex ────────
+  // Next 15 (node_modules/next/dist/server/next.js:298 setupWebSocketHandler)
+  // attaches its OWN 'upgrade' listener to THIS server the first time a request
+  // passes through getRequestHandler(). It is not wired up by us and needs no
+  // `httpServer` option — it takes the server straight off `req.socket.server`:
+  //
+  //     customServer = customServer || _req?.socket?.server;
+  //     if (customServer) customServer.on('upgrade', ...)
+  //
+  // A production build owns no /ws/* route, so its handler DESTROYS the socket.
+  // Ours registered first, so the sequence a client sees is: 101 accepted, the
+  // full ~220KB connect snapshot delivered, then a bare RST (1006) about 2ms
+  // later — with nothing logged, because the destroy happens on the raw socket
+  // and never goes through the `ws` instance that owns the connection.
+  //
+  // Proven 2026-08-31 on the live box: `srv.listenerCount('upgrade')` is 1 before
+  // the first HTTP request and 2 after it, and the socket only dies once it is 2.
+  // Cost while it was live: EVERY client reconnect-looped forever, each loop
+  // paying a full snapshot — 99.96% of all /ws/gex egress was connect snapshots,
+  // ~19MB/min with `clients: 0`, 53GB of Cloudflare bandwidth in 24h.
+  //
+  // We wrap rather than refuse: a blanket "no more 'upgrade' listeners" would
+  // kill HMR under `dev: true`. Foreign handlers keep every path except ours.
+  // Installed AFTER createGexWsServer so our own listener is never wrapped.
+  const _serverOn = server.on.bind(server);
+  server.on = (event, listener) => {
+    if (event !== 'upgrade') return _serverOn(event, listener);
+    return _serverOn('upgrade', (req, socket, head) => {
+      let pathname = '';
+      try { pathname = new URL(req.url || '/', 'http://localhost').pathname; } catch { /* ignore */ }
+      if (pathname === (process.env.GEX_WS_PATH || '/ws/gex')) return; // ours — hands off
+      return listener(req, socket, head);
+    });
+  };
+
   // Start the live feed — UNLESS idle was left ON. Idle is now a true bandwidth
   // kill-switch, so a restart while idle must stay paused (no dxLink, no quotes,
   // no broadcasts) until the owner toggles it back on from the dashboard.
