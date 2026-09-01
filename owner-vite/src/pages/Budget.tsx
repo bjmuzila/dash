@@ -182,6 +182,16 @@ export default function Budget() {
   const [register, setRegister] = useState<RegisterRow[]>([]);
   const [recurring, setRecurring] = useState<RecurringRule[]>([]);
   const [amazonRows, setAmazonRows] = useState<AmazonRow[]>([]);
+  /**
+   * Flows the Rent card has been told to ignore, by occurrence key.
+   *
+   * The card projects cash to the 5th from the CURRENT bank balance plus what
+   * is still scheduled. Anything that already landed is in that balance
+   * already, so counting it again invents money — this is how a paycheck that
+   * arrived on the 2nd stops being added twice, and how a bill that is not
+   * actually coming stops being subtracted.
+   */
+  const [settledFlows, setSettledFlows] = useState<Set<string>>(new Set());
   const [propRows, setPropRows] = useState<PropRow[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [dailyBalance, setDailyBalance] = useState<DailyBalance | null>(null);
@@ -254,6 +264,7 @@ export default function Budget() {
     setRegister(data.register || []);
     setRecurring(data.recurring || []);
     setAmazonRows(data.amazonRows || []);
+    setSettledFlows(new Set<string>((data.settledFlows || []).map((k: string) => String(k))));
     setPropRows(data.propRows || []);
     setCategories(data.categories || []);
     setDailyBalance(data.dailyBalance || null);
@@ -308,8 +319,10 @@ export default function Budget() {
 
   useEffect(() => {
     // Bzila needs the year's register rows too — its Contracts stream is read
-    // from the Payments register rather than entered on the tab.
-    if (tab !== "yearly" && tab !== "overview" && tab !== "bzila") return;
+    // from the Payments register rather than entered on the tab. Real Month is
+    // in this list because its Bzila net card reads the same rollup, and a card
+    // that quietly drops the Contracts stream would disagree with the Bzila tab.
+    if (tab !== "yearly" && tab !== "overview" && tab !== "bzila" && tab !== "real") return;
     let cancelled = false;
     (async () => {
       setYearLoading(true);
@@ -443,6 +456,19 @@ export default function Budget() {
     const totalGas = rows.reduce((s, r) => s + r.gas, 0);
     return { rows, totalPay, totalGas, totalNet: totalPay - totalGas };
   }, [amazonRows]);
+
+  /**
+   * Amazon for the SELECTED month, net of the gas it took to earn it. Handed
+   * down to Real Month, which has no delivery log of its own — the statement
+   * only ever sees the day a deposit happened to land. (Bzila's equivalent is
+   * `bzilaMonth`, further down, which already merges all three streams.)
+   */
+  const amazonMonth = useMemo(() => ({
+    days: amazonComputed.rows.length,
+    pay: amazonComputed.totalPay,
+    gas: amazonComputed.totalGas,
+    net: amazonComputed.totalNet,
+  }), [amazonComputed]);
 
   // Bzila — the business ledger. Three streams merged into one set of entries:
   //   prop + cbedge + contracts → budget_prop rows (entered on this tab)
@@ -1065,31 +1091,58 @@ export default function Budget() {
       months.push(ym);
       if (ym === dueYm) break;
     }
-    type Flow = { label: string; amount: number; date: string };
+    // Every flow carries its own occurrence key: a real register row is
+    // 'row:<id>', a projected recurring occurrence reuses the same
+    // '__recur__:<ruleId>:<date>' identity the materialize path already uses.
+    // That is what lets a "already in the bank" mark stick to ONE occurrence
+    // and never drift onto next month's copy of the same bill.
+    type Flow = { key: string; label: string; amount: number; date: string; settled: boolean };
     const flows: Flow[] = [];
     for (const r of register) {
       if (r.is_beginning || !inWindow(r.entry_date)) continue;
-      flows.push({ label: r.label, amount: r.amount, date: r.entry_date });
+      const key = `row:${r.id}`;
+      flows.push({ key, label: r.label, amount: r.amount, date: r.entry_date, settled: settledFlows.has(key) });
     }
     for (const rule of recurring) {
       if (!rule.active) continue;
       for (const ym of months) {
         for (const date of occurrencesInMonth(rule, ym)) {
-          if (!inWindow(date) || materialized.has(`__recur__:${rule.id}:${date}`)) continue;
-          flows.push({ label: rule.label, amount: rule.amount, date });
+          const key = `__recur__:${rule.id}:${date}`;
+          if (!inWindow(date) || materialized.has(key)) continue;
+          flows.push({ key, label: rule.label, amount: rule.amount, date, settled: settledFlows.has(key) });
         }
       }
     }
     flows.sort((a, b) => (a.date < b.date ? -1 : 1));
     const incoming = flows.filter((f) => f.amount > 0);
     const outgoing = flows.filter((f) => f.amount < 0 && !isRent(f.label));
-    const incomingTotal = incoming.reduce((s, f) => s + f.amount, 0);
-    const outgoingTotal = outgoing.reduce((s, f) => s + Math.abs(f.amount), 0);
+    // Settled rows stay VISIBLE — they are struck through in the list so the
+    // schedule still reads whole — but they leave the arithmetic entirely.
+    const incomingTotal = incoming.filter((f) => !f.settled).reduce((s, f) => s + f.amount, 0);
+    const outgoingTotal = outgoing.filter((f) => !f.settled).reduce((s, f) => s + Math.abs(f.amount), 0);
+    const settledCount = flows.filter((f) => f.settled).length;
     const projected = available + incomingTotal - outgoingTotal; // cash on hand when rent hits
     const shortfall = Math.max(0, rentAmount - projected);
     const perDay = daysUntil > 0 ? shortfall / daysUntil : shortfall;
-    return { rentAmount, daysUntil, dueIso, paid, available, incoming, outgoing, incomingTotal, outgoingTotal, projected, shortfall, perDay };
-  }, [recurring, register, allBanks]);
+    return { rentAmount, daysUntil, dueIso, paid, available, incoming, outgoing, incomingTotal, outgoingTotal, settledCount, projected, shortfall, perDay };
+  }, [recurring, register, allBanks, settledFlows]);
+
+  /**
+   * Toggle "already in the bank / not coming" on one Rent-card flow.
+   *
+   * Optimistic: the card re-does its arithmetic on the click, and `post` then
+   * refreshes from the server. A failed write shows up as the mark snapping
+   * back on the next refresh rather than a number that silently lies.
+   */
+  const toggleSettledFlow = async (flow: { key: string; label: string; date: string; settled: boolean }) => {
+    const on = !flow.settled;
+    setSettledFlows((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(flow.key); else next.delete(flow.key);
+      return next;
+    });
+    await post({ action: "settleFlow", key: flow.key, label: flow.label, date: flow.date, on });
+  };
 
   const monthLabel = (() => {
     const [y, m] = month.split("-").map(Number);
@@ -1162,7 +1215,10 @@ export default function Budget() {
   const deleteProp = async (id: number) => post({ action: "propDelete", id });
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: INK, backgroundImage: SHELL_GLOW_DEEP, color: HOME_THEME.text, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
+    // no-card-lift: the dashboard-wide .card-hover rule nudges a card up 2px on
+    // hover. On a page that is a dense grid of money figures, moving the number
+    // you are trying to read is noise — the whole page opts out (see index.css).
+    <div className="no-card-lift" style={{ flex: 1, minHeight: 0, overflowY: "auto", background: INK, backgroundImage: SHELL_GLOW_DEEP, color: HOME_THEME.text, fontFamily: "var(--font-inter), 'Inter', 'Helvetica Neue', Arial, sans-serif" }}>
       <div style={{ minHeight: "100%", display: "flex", flexDirection: "column", padding: "clamp(14px, 2vw, 24px)", gap: 14 }}>
         {/* Title banner */}
         <div style={{ ...cardAccent(4), padding: isMobile ? "12px 13px" : "14px 18px", overflow: "visible", position: "relative", zIndex: monthPickerOpen ? 80 : "auto" }}>
@@ -1273,7 +1329,7 @@ export default function Budget() {
 
         {/* Alerts · banks · upcoming pay */}
         <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1.1fr 1fr 1fr"), gap: 12, alignItems: "stretch" }}>
-          <RentCountdown info={rentInfo} currency={currency} />
+          <RentCountdown info={rentInfo} currency={currency} onToggleFlow={toggleSettledFlow} />
           <BankAccountsCard value={dailyBalance} currency={currency} onSave={saveDailyBalance} fallback={bankNow} />
           <UpcomingPayCard data={upcomingPay} pastDue={billsDue.filter((b) => b.days < 0)} currency={currency} onMarkPaid={markBillPaid} />
         </div>
@@ -1319,6 +1375,8 @@ export default function Budget() {
             categories={categories}
             currency={currency}
             defaultBank="secu"
+            bzila={bzilaMonth}
+            amazon={amazonMonth}
             onOpenCategories={() => setTab("categories")}
             onCategoriesChanged={() => refresh(month)}
           />
@@ -2469,34 +2527,57 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0, height = 240 }:
 /** Rent card — countdown to the 5th plus a to-the-5th cash-flow projection:
  *  what's still coming in (e.g. both pay runs) and going out before rent, and
  *  whether that clears rent when it's due. */
+type RentFlow = { key: string; label: string; amount: number; date: string; settled: boolean };
+
 function RentCountdown({
   info,
   currency,
+  onToggleFlow,
 }: {
   info: {
     rentAmount: number; daysUntil: number; dueIso: string; paid: boolean; available: number;
-    incoming: { label: string; amount: number; date: string }[];
-    outgoing: { label: string; amount: number; date: string }[];
-    incomingTotal: number; outgoingTotal: number; projected: number;
+    incoming: RentFlow[];
+    outgoing: RentFlow[];
+    incomingTotal: number; outgoingTotal: number; settledCount: number; projected: number;
     shortfall: number; perDay: number;
   };
   currency: string;
+  /** Mark a flow already in the bank (or not coming) — it leaves the maths. */
+  onToggleFlow?: (f: RentFlow) => void | Promise<void>;
 }) {
-  const { rentAmount, daysUntil, dueIso, paid, available, incoming, outgoing, incomingTotal, outgoingTotal, projected, shortfall, perDay } = info;
+  const { rentAmount, daysUntil, dueIso, paid, available, incoming, outgoing, incomingTotal, outgoingTotal, settledCount, projected, shortfall, perDay } = info;
   const covered = rentAmount > 0 && shortfall <= 0;
   const pct = rentAmount > 0 ? Math.min(100, Math.max(0, (projected / rentAmount) * 100)) : 0;
   const accent = paid || covered ? HOME_THEME.green : shortfall > 0 ? SOFT_RED : LIGHT_BLUE;
   const surplus = projected - rentAmount;
 
-  const flowLine = (f: { label: string; amount: number; date: string }, key: string, positive: boolean) => (
-    <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, color: HOME_THEME.muted, marginTop: 3 }}>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {f.label} <span style={{ opacity: 0.5 }}>· {shortDate(f.date)}</span>
+  // One scheduled item. Clicking it says "this one is already handled" — the
+  // row stays on screen, struck through, and drops out of the totals above.
+  const flowLine = (f: RentFlow, key: string, positive: boolean) => (
+    <button
+      key={key}
+      onClick={() => void onToggleFlow?.(f)}
+      title={f.settled
+        ? `${f.label} is being ignored — click to count it again`
+        : positive
+          ? `Already landed? Click to take ${f.label} out of the maths — it is in the bank balance already`
+          : `Not coming? Click to take ${f.label} out of the maths`}
+      style={{
+        display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center",
+        width: "100%", marginTop: 3, padding: "2px 4px", borderRadius: 6,
+        background: f.settled ? bRgba("#ffffff", 0.05) : "transparent",
+        border: "none", cursor: onToggleFlow ? "pointer" : "default",
+        fontSize: 12, color: HOME_THEME.muted, textAlign: "left", fontFamily: "inherit",
+        opacity: f.settled ? 0.55 : 1,
+      }}
+    >
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: f.settled ? "line-through" : undefined }}>
+        {f.settled ? "✓ " : ""}{f.label} <span style={{ opacity: 0.5 }}>· {shortDate(f.date)}</span>
       </span>
-      <span style={{ fontWeight: 700, color: positive ? HOME_THEME.green : SOFT_RED, flexShrink: 0 }}>
+      <span style={{ fontWeight: 700, color: f.settled ? HOME_THEME.muted : positive ? HOME_THEME.green : SOFT_RED, flexShrink: 0, textDecoration: f.settled ? "line-through" : undefined }}>
         {positive ? "+" : ""}{fmtMoney(f.amount, currency)}
       </span>
-    </div>
+    </button>
   );
 
   return (
@@ -2531,6 +2612,9 @@ function RentCountdown({
 
           {!paid && (
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${HOME_THEME.border}` }}>
+              <div style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.6, marginBottom: 6, lineHeight: 1.4 }}>
+                Tap a line that already cleared — it is in the balance above, so counting it here would add it twice.
+              </div>
               {/* What else lands before rent — e.g. both pay runs. */}
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.muted }}>
                 <span>Coming in by the 5th</span>
@@ -2557,6 +2641,11 @@ function RentCountdown({
                 </span>
                 <span style={{ fontSize: 17, fontWeight: 900, color: accent }}>{fmtMoney(projected, currency)}</span>
               </div>
+              {settledCount > 0 && (
+                <div style={{ fontSize: 11, color: HOME_THEME.muted, opacity: 0.65, marginTop: 4 }}>
+                  {settledCount} line{settledCount === 1 ? "" : "s"} left out — already cleared or not coming. Tap to put {settledCount === 1 ? "it" : "them"} back.
+                </div>
+              )}
             </div>
           )}
 

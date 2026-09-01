@@ -1,155 +1,139 @@
 # Changelog
 
-## 2026-08-31 - Root cause: Next steals the 'upgrade' event and kills /ws/gex
+## 2026-08-31 - August report restyled into the dashboard theme
 
-The 53GB/day bleed is closed. It was not the tunnel, not Cloudflare, not deflate,
-and not the feed. **Next.js was destroying every WebSocket on the server.**
+The report was its own visual world - ledger-paper palette, Bodoni masthead,
+IBM Plex Mono figures. It links off Real Month, so it read as a document that
+happened to be dark rather than as part of the app. Rebuilt on the owner
+dashboard's own tokens, taken from `owner-vite/src/lib/theme.ts` and the Budget
+page's local surface set:
 
-`node_modules/next/dist/server/next.js:298`:
+- **Ground** `#020308` (INK) with the Budget page's `SHELL_GLOW_DEEP` radials
+  plus the shared shell glow, fixed-attachment.
+- **Cards** `#0B101B` (PANEL) with the 1.5% white top wash, 16px radius, the
+  `rgba(255,255,255,0.16)` hairline and the full CARD_SHADOW including the
+  machined `inset 0 1px 0` top edge.
+- **Type** Inter on the site scale - title 17 / subhead 15 / body 14 / label 12
+  / micro 10 - with the app's uppercase 900-weight eyebrows at .16em, and the
+  system mono stack (`--font-mono`) for every figure.
+- **Colour** lightBlue `#7dd3fc` as the single accent and the magnitude hue,
+  gold `#FFB703` for warnings, and `MONEY_IN #94FC7D` / `MONEY_OUT #EF4444`
+  exactly as RealMonth.tsx defines them - so a red number means the same thing
+  on both surfaces.
+- **Structure** the headline is now a hero Net card matching the one just added
+  to Real Month, followed by a tile row in the same shape as the stat strip.
 
-    setupWebSocketHandler(customServer, _req) {
-      if (!this.didWebSocketSetup) {
-        this.didWebSocketSetup = true;
-        customServer = customServer || _req?.socket?.server;
-        if (customServer) customServer.on('upgrade', ...)
+Validated: the diverging money pair passes CVD separation, chroma and contrast
+against the card surface. It sits above the dark-mode lightness band, which the
+dashboard's palette does by design - matching the app was the point, and every
+delta also carries its sign so nothing is encoded by colour alone.
 
-Next 15.5.20 does not need to be handed an `httpServer`. The FIRST request that
-passes through `getRequestHandler()` gives it one off `req.socket.server`, and it
-attaches its own `'upgrade'` listener to our server. A production build owns no
-`/ws/*` route, so its handler destroys the socket. Our broadcaster registered
-first, so the order a client sees is: 101 accepted, full ~220KB connect snapshot
-delivered, then a bare RST (1006) ~2ms later. Nothing is ever logged, because the
-destroy happens on the raw socket and never reaches the `ws` instance that owns
-the connection.
+Both copies updated: the published artifact and
+`owner-vite/public/reports/2026-08.html`, which also gets a themed back-link to
+`/budget`.
 
-Proven on the live box, four probes, no code deployed:
+## 2026-08-31 - Budget: no hover lift, alphabetical categories, and a way to re-file income
 
-    real /ws/gex (loopback, no CF/tunnel)   open 8ms -> snapshot 270,401b -> 1006 @14ms
-    minimal ws server, same container        HELD OPEN 20s with a 270KB frame
-    websocket-server.js alone on a new srv   HELD OPEN 20s
-    same + Next, BEFORE any http request     upgradeListeners=1  -> HELD OPEN 20s
-    same + Next, AFTER one http request      upgradeListeners=2  -> 1006 @16ms
+**Cards stop moving on hover.** The dashboard-wide `.card-hover` rule nudges a
+card up 2px. On a page that is a dense grid of money figures, moving the number
+you are trying to read is noise. The Budget page root now carries the existing
+`no-card-lift` opt-out, and that rule in `index.css` also drops the transition
+on transform/box-shadow so nothing shifts at all - the border still brightens,
+which keeps the affordance without the movement.
 
-The last two lines are the whole bug: one HTTP request is the difference.
+**Category dropdowns are alphabetical.** `catOptions` was in whatever id order
+the API returned, which is creation order - not an order anyone can search. It
+is scanned by eye dozens of times during a re-file pass, so it sorts by name now
+(case-insensitive). Applies everywhere the picker appears: merchants, per-row,
+staged import, ledger.
 
-Also confirmed along the way: `/ws/nope` (a path nothing owns) hangs up in 7ms on
-prod but stays open on a single-listener server - Node does not reap unhandled
-upgrades, so that 7ms was the second listener all along.
+**Income can be re-filed like spending.** WakeMed paychecks were landing in
+"Transfers" with no obvious way to fix them: `allMerchants` is outflow-only -
+every consumer of it (subscriptions, donut, spend rollups) is about spending -
+so income only appeared in the Ledger, one row at a time. A new **Money in**
+card sits under the merchant list on the same view: every deposit grouped by
+who sent it, one dropdown per source, and it goes through the same
+`setMerchantCategory` path, so "Apply to every month" fixes the history in one
+go. Rows expand to the individual deposits, each with its own picker.
 
-### The guard - server-v2/server-with-proxy.js
+### August report: Verizon corrected
 
-Immediately after `createGexWsServer(server, ...)`, `server.on` is wrapped so any
-LATER `'upgrade'` listener never sees `/ws/gex`:
+The $356.56 Verizon line is not all ours - parents Venmo back $100-150 a month
+for their portion. The household really carries about **$232, roughly $2,780 a
+year**, not the $4,278 the raw statement line implies. The finding, the
+recurring-stack table and the income section were rewritten to say so, and the
+Venmo line is now flagged as carrying a reimbursement rather than income. Both
+copies updated - the published artifact and
+`owner-vite/public/reports/2026-08.html`.
 
-    const _serverOn = server.on.bind(server);
-    server.on = (event, listener) => {
-      if (event !== 'upgrade') return _serverOn(event, listener);
-      return _serverOn('upgrade', (req, socket, head) => {
-        ...if pathname === GEX_WS_PATH: return;   // ours - hands off
-        return listener(req, socket, head);
-      });
-    };
+Still the largest recurring cost after rent, so it stays the top money finding -
+the target is just the net number.
 
-Wrapped, not blocked: a blanket refusal would kill HMR under `dev: true`. Foreign
-handlers keep every path except ours. Installed AFTER `createGexWsServer` so our
-own listener is never wrapped. Verified against a reproduction of the exact prod
-sequence - without the guard `CLOSE 1006 after 14ms, msgs=1`, with it
-`HELD OPEN, msgs=1`.
+## 2026-08-31 - Real Month: Net gets the headline, "What to fix" goes
 
-### The alarm - server-v2/websocket-server.js
+**Removed "What to fix".** The AI pass, its stored `advice` state, `runAdvice`,
+the Finding/Advice types, SEVERITY_UI and `sinceLabel` are all gone. It sat at
+the very top of the page and pushed the actual numbers below the fold to say
+things the numbers already say.
 
-This socket has now run up a bill twice in ten days (2026-08-21 deflate,
-2026-08-31 this) and both times the Cloudflare graph the next morning was the
-first anyone knew. A watchdog now checks the existing bandwidth accounting every
-`WS_ALERT_INTERVAL_MS` (60s) and warns, with a 15-minute cooldown so the alarm
-cannot become the second outage. It logs `[WS-ALERT]` and posts to
-`WS_ALERT_WEBHOOK || DISCORD_WEBHOOK_URL`, including a projected GB/day and the
-last-minute split by frame type.
+**Net is now the headline.** A full-width card at clamp(40px, 8vw, 64px) with
+the in − out arithmetic on the same line, and explainer copy underneath saying
+what it is: bank movement only, every deposit and debit on the imported
+statement. Not profit - transfers between your own accounts count on both
+sides, and business earnings only appear on the day they landed. The copy points
+at the two new cards for the earnings figures, so the distinction is made where
+someone would otherwise misread it.
 
-Three independent trips (any set to 0 disables it):
+**Stat strip, retuned.** "Subscriptions" and "If you cancel" are gone (the
+cancel rollup came out of `totals` with them). "Real bills" and "Luxury" are
+now **Recurring real bills** and **Recurring luxury items**, and the luxury tile
+carries its annual figure alongside its share of recurring.
 
-- `WS_ALERT_CONNECTS_PER_MIN` (30) - connects/min at or above this while
-  `clients <= 1`. The sharpest of the three and the one that would have caught
-  BOTH outages on day one: a storm opens dozens of sockets a minute and holds
-  none, so `clients` reads ~0 no matter how bad it is.
-- `WS_ALERT_SNAPSHOT_MB_PER_MIN` (5) - sustained megabytes of connect snapshots.
-  Snapshots are a page-load cost; a steady stream of them means churn.
-- `WS_ALERT_MB_PER_MIN` (30) - total outbound backstop, for a bleed that is
-  nobody's fault in particular.
+**Two new cards, both net of what it cost to earn them:**
+- **Bzila net** - in minus prop purchases and infrastructure, from the Bzila
+  ledger for the selected month.
+- **Amazon net, after gas** - pay minus gas, with days worked and per-day.
 
-Supporting change: connections are now counted per 1s bucket alongside bytes
-(`connectsLastMin`, `totalConnects` on `getBandwidth()`, so `/proxy/self-metrics`
-carries them too). Bytes alone cannot tell "a few clients on a fat feed" apart
-from "sixty clients that each took a snapshot and died".
+Neither lives in the statement (it only ever sees the day a deposit landed), so
+both are passed down from Budget.tsx rather than re-fetched. Real Month is now
+in the year-rows load list too: the Bzila rollup reads the Contracts stream out
+of the Payments register, and a card that quietly dropped it would disagree with
+the Bzila tab.
 
-### Still worth doing
+## 2026-08-31 - Rent card: take a line out of the maths when it already cleared
 
-`WS_AUTH_REQUIRED` is NOT set in prod - `docker exec ... env | grep WS_` returns
-nothing. The socket that carries the paid product is open to anyone who knows the
-URL, and each anonymous connect costs a ~220KB snapshot. That is the next bill.
+The Rent card projects cash to the 5th as *current bank balance + everything
+still scheduled to come in - everything still scheduled to go out*. That double
+counts anything that already landed: a paycheck that arrived on the 2nd is
+already inside the balance the card starts from, so adding it again invents
+money and the card says rent is covered when it is not. The reverse case is a
+bill that simply is not coming.
 
-## 2026-08-31 - WebSocket reconnect storm: the 53GB/day Cloudflare bill
+Every line under "Coming in by the 5th" and "Going out by the 5th" is now
+clickable. Tapping one marks it already handled: the row stays on screen, struck
+through, and drops out of the totals and the projection. Tapping again puts it
+back. A count under the projected figure says how many lines are being left out,
+so a card with an adjusted number never looks like a card with a wrong number.
 
-Cloudflare egress hit 53GB in 24h. It was not the feed. `/proxy/self-metrics`
-reported `clients: 0` alongside 19.3MB/min of outbound, and the all-time split
-was `snapshot: 382,852,473` bytes against `gex: 139,369` / `flow: 219` - 99.96%
-of every byte /ws/gex has ever sent was the connect-time snapshot. Nobody was
-ever connected. Everybody was looping.
+Each flow carries its own occurrence key - `row:<id>` for a real register row,
+and the existing `__recur__:<ruleId>:<date>` identity for a projected recurring
+occurrence. That is what makes the mark stick to ONE occurrence and never drift
+onto next month's copy of the same bill.
 
-Probed from a browser against the live socket, 5/5 identical:
+Stored in Postgres, not the browser: new `budget_flow_settled` table
+(profile + flow_key unique), returned as `settledFlows` on `GET /api/budget`
+and written by a `settleFlow` action with `on:false` to clear. Marks older than
+the start of last month are pruned on read - they describe one occurrence in a
+~35-day window and could never match a projected flow again.
 
-    open   @136ms
-    msg    @183ms   type=snapshot   218,529 bytes
-    close  @183ms   code 1006, wasClean=false
+## 2026-08-31 - Sales: signups panel moves under Profit per Month
 
-The 101 succeeds, the full 218KB snapshot is delivered, the socket is reset in
-the same millisecond. `?topics=spot,status` (1.3KB snapshot) dies the same way at
-+1ms, so it is not payload size, and `ws.extensions` is `""` - permessage-deflate
-is not negotiated, so this is NOT the 2026-08-21 `WS_DEFLATE` bug. Same symptom,
-different cause. Server uptime advances normally across the deaths, so the
-process is not crash-looping; the sockets are. Path is CF edge -> cloudflared ->
-127.0.0.1 with no nginx hop, and nothing in `websocket-server.js` terminates a
-fresh socket, so the reset is upstream of Node.
+"Signed up · never bought" was sitting directly under the KPI row. Moved it
+below the Profit per Month chart, which is where it actually belongs: that chart
+is where a flat or falling month shows up, and this is the list that answers
+who it was. Reading them in that order is the whole point.
 
-That is the bug. This entry is about the amplifier, which is what turned it into
-a bill.
-
-`lib/gexSocket.ts` reset `attempts = 0` inside `sock.onopen`, i.e. it treated "the
-handshake succeeded" as "the connection works". Since the handshake succeeds
-every time here, the exponential backoff never left its first rung: a flat 2s
-retry, forever, at 218KB a go. 6.5MB/min per open tab, 9.4GB/day per open tab.
-
-Changed, client-side only, no server or proxy changes:
-
-- Backoff credit is now earned by SURVIVING, not by opening. `onopen` arms a
-  `HEALTHY_CONNECTION_MS` (10s) timer and only zeroes `attempts` if the socket is
-  still the live one and still OPEN when it fires.
-- Broken-transport escalation. Three consecutive connections that open and then
-  die inside 10s having delivered <=1 frame (the snapshot and nothing else) floor
-  the retry at `BROKEN_TRANSPORT_FLOOR_MS` (60s). Any connection that survives 10s
-  clears the streak.
-- +0..30% jitter on every retry delay, so N tabs failing together stop coming
-  back in the same instant.
-- The wake handlers (visibilitychange / pageshow / online / focus) stay the fast
-  path back: a wake still reconnects immediately, so a repaired transport
-  recovers on the next glance instead of waiting out the floor. The streak is
-  deliberately not cleared there - a wake buys one attempt, not a fresh licence
-  to loop.
-- Handshakes that never complete are unaffected: `openedAt === 0` means the
-  socket never opened, which costs nothing and rides the ordinary curve.
-
-Simulated against the observed failure (open -> 1 snapshot -> die @50ms), per
-open tab over 24h: 42,147 reconnects / 9.21GB before, 1,441 / 0.31GB after -
-29x. At the ~5-6 tabs the 53GB implies, that is ~53GB -> ~2GB while the
-transport is still broken.
-
-Under a healthy server this is a no-op: sockets live for hours, the 10s timer
-fires, the curve resets exactly as before.
-
-Still open: who sends the RST. Next step is the loopback probe inside the
-container (the one that isolated the deflate outage, where CF and the tunnel are
-not in the path) plus `docker logs bzila-dashboard 2>&1 | grep '\[WS\]'` for the
-`socket error` line that `ws.on('error')` was added to catch.
+No behaviour change - same self-fetching panel on its own day range.
 
 ## 2026-08-31 - August written up, and linked from Real Month
 

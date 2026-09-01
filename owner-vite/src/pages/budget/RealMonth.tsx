@@ -38,8 +38,8 @@ import { useIsMobile, scrollX } from "../../hooks/useIsMobile";
  * the plan automatically. The one bridge is per-subscription: → Payments adds
  * ONE monthly recurring rule. There is no bulk commit, by design.
  *
- * Order on the page is deliberate — "What to fix" is the conclusion and sits at
- * the very top; the raw data that produced it lives underneath.
+ * Order on the page is deliberate — Net is the conclusion and sits at the top
+ * at headline size; the raw data that produced it lives underneath.
  *
  * Views:
  *   Merchants  — one row per vendor, grouped under its category, expandable.
@@ -48,7 +48,8 @@ import { useIsMobile, scrollX } from "../../hooks/useIsMobile";
  *                merchants, with a table view for the close calls.
  *   Ledger     — flat, sortable, every transaction.
  *   Categories — real spend against the budgets on the Categories tab.
- *   Subscriptions — repeat charges, tagged Keep / Cancel / Watch.
+ *   Subscriptions — repeat charges split into real bills and luxuries, each
+ *                with its own verdict of Keep / Watch / Cancel.
  *
  * Theme: every chrome colour resolves from src/lib/theme.ts (HOME_THEME + the
  * rgba() helper), and panels use the shared <Card> primitive. The one page-local
@@ -203,9 +204,6 @@ type FuelSplit = {
   flexMoved: Record<string, number>;
 };
 
-type Finding = { title: string; severity: "high" | "medium" | "low"; detail: string; monthlySavings: number; evidence: string };
-type Advice = { headline: string; findings: Finding[]; quickWins: string[]; generatedAt?: string | null };
-
 type View = "merchants" | "donut" | "ledger" | "categories" | "subs";
 type SortKey = "date" | "merchant" | "amount" | "category";
 
@@ -226,11 +224,6 @@ const BANK_LABEL: Record<Bank, string> = { coastal: "COASTAL", truist: "TRUIST",
 /** Merchants shown per category before the "+n more" link. */
 const PER_CAT_LIMIT = 6;
 
-const SEVERITY_UI: Record<Finding["severity"], { color: string; label: string }> = {
-  high: { color: HOME_THEME.red, label: "HIGH" },
-  medium: { color: WARN, label: "MEDIUM" },
-  low: { color: ACCENT, label: "LOW" },
-};
 const STATUS_UI: Record<SubStatus, { color: string; label: string }> = {
   keep: { color: MONEY_IN, label: "Keep" },
   cancel: { color: HOME_THEME.red, label: "Cancel" },
@@ -278,19 +271,6 @@ function monthLabel(m: string): string {
   if (!y || !mo) return m;
   return `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][mo - 1]} ’${String(y).slice(2)}`;
 }
-/** "3 days ago" — how stale the stored analysis is. */
-function sinceLabel(iso?: string | null): string {
-  if (!iso) return "";
-  const then = new Date(iso).getTime();
-  if (!Number.isFinite(then)) return "";
-  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.round(hrs / 24);
-  return `${days}d ago`;
-}
 /**
  * The merchant grouping key. Must stay identical to `merchantKey` in
  * server-v2/api-router.js and MERCHANT_KEY_SQL in _lib-db.cjs — the whole
@@ -336,6 +316,8 @@ export default function RealMonth({
   categories,
   currency,
   defaultBank = "secu",
+  bzila,
+  amazon,
   onOpenCategories,
   onCategoriesChanged,
 }: {
@@ -346,6 +328,15 @@ export default function RealMonth({
   categories: Category[];
   currency: string;
   defaultBank?: Bank;
+  /**
+   * Earnings for the selected month, handed down rather than re-fetched: the
+   * page above already holds the Bzila ledger and the Amazon delivery log, and
+   * neither lives in the statement. Both are NET — after prop costs and
+   * infrastructure for Bzila, after gas for Amazon — because the gross figure
+   * on its own has repeatedly read as more money than it was.
+   */
+  bzila?: { inAmt: number; outAmt: number; net: number } | null;
+  amazon?: { days: number; pay: number; gas: number; net: number } | null;
   onOpenCategories?: () => void;
   /** Called after a budget edit lands, so the page re-reads its categories. */
   onCategoriesChanged?: () => void | Promise<void>;
@@ -382,11 +373,8 @@ export default function RealMonth({
   const [loading, setLoading] = useState(true);
   const [parsing, setParsing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [advising, setAdvising] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [advice, setAdvice] = useState<Advice | null>(null);
-  const [adviceOpen, setAdviceOpen] = useState(true);
   const [dragging, setDragging] = useState(false);
   /**
    * Whether a category change also re-files that merchant in every OTHER month.
@@ -439,9 +427,6 @@ export default function RealMonth({
         }))
       );
       setFuel(data.fuel ?? null);
-      // The stored pass for this month, if one was ever run. It stays until a
-      // re-run overwrites it, so reloading costs nothing.
-      setAdvice(data.advice ?? null);
     } catch {
       setError("Could not load this month's statement data.");
     } finally {
@@ -451,8 +436,6 @@ export default function RealMonth({
 
   useEffect(() => {
     void load(month);
-    // advice is NOT cleared here — load() replaces it with whatever is stored
-    // for the new month, so switching months never throws a paid result away.
     setStaged([]);
     setExpanded(new Set());
     setShowAllIn(new Set());
@@ -714,6 +697,32 @@ export default function RealMonth({
     return out;
   }, [visibleMerchants, categories]);
 
+  /**
+   * The same vendor rollup, for MONEY IN.
+   *
+   * `allMerchants` is outflow-only — every consumer of it (subscriptions, the
+   * donut, the spend rollups) is about spending. But income needs re-filing
+   * too, and it was only reachable one row at a time in the Ledger: a paycheck
+   * that imported as "Transfers" had no obvious way to become "Pay". This gives
+   * income the same one-dropdown, applies-to-every-month treatment.
+   */
+  const incomeMerchants = useMemo(() => {
+    const map = new Map<string, { key: string; merchant: string; total: number; count: number; categoryId: number | null; mixed: boolean; rows: StoredTx[] }>();
+    for (const r of txView) {
+      if (r.direction !== "in") continue;
+      const k = mKey(r.merchant || r.description);
+      const hit = map.get(k);
+      if (hit) {
+        hit.total += r.amount; hit.count += 1; hit.rows.push(r);
+        if (hit.categoryId !== r.category_id) hit.mixed = true;
+        if (hit.categoryId == null) hit.categoryId = r.category_id;
+      } else {
+        map.set(k, { key: k, merchant: r.merchant || r.description, total: r.amount, count: 1, categoryId: r.category_id, mixed: false, rows: [r] });
+      }
+    }
+    return [...map.values()].sort((a, b) => b.total - a.total);
+  }, [txView]);
+
   // ── category rollup vs the budgets on the Categories tab ─────────────────
   // Recomputed from txView rather than read off the server's trend, because it
   // has to preview UNSAVED category edits. That means the fuel move has to be
@@ -868,19 +877,13 @@ export default function RealMonth({
     const inflow = txView.filter((r) => r.direction === "in").reduce((s, r) => s + r.amount, 0);
     const uncategorized = txView.filter((r) => r.direction === "out" && r.category_id == null).length;
     const subTotal = subRows.reduce((s, m) => s + m.monthly, 0);
-    const cancelSavings = subRows.filter((s) => s.status === "cancel").reduce((s, m) => s + m.monthly, 0);
     // The split the whole tab exists for: what has to be paid vs what is
     // choice. Guessed rows are counted in their guessed group.
     const billTotal = subRows.filter((s) => s.kind === "bill").reduce((s, m) => s + m.monthly, 0);
     const luxuryTotal = subRows.filter((s) => s.kind === "luxury").reduce((s, m) => s + m.monthly, 0);
     const untagged = subRows.filter((s) => s.kindGuessed).length;
-    return { outflow, inflow, net: inflow - outflow, uncategorized, subTotal, cancelSavings, billTotal, luxuryTotal, untagged };
+    return { outflow, inflow, net: inflow - outflow, uncategorized, subTotal, billTotal, luxuryTotal, untagged };
   }, [txView, subRows]);
-
-  const potentialSavings = useMemo(
-    () => (advice?.findings ?? []).reduce((s, f) => s + (f.monthlySavings || 0), 0),
-    [advice]
-  );
 
   // ── donut: category share, each slice expanding to its merchants ─────────
   // Colour is bound to the category's identity (stable id order), not to its
@@ -948,35 +951,16 @@ export default function RealMonth({
     return { slices, total: ranked.reduce((s2, c) => s2 + c.spent, 0), categoryCount: ranked.length };
   }, [byCategory, allMerchants, categories]);
 
-  // ── what to fix ──────────────────────────────────────────────────────────
-  const runAdvice = async () => {
-    if (!tx.length) return;
-    setAdvising(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/budget/advise", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          period: month, month, currency,
-          totals: { inflow: totals.inflow, outflow: totals.outflow, net: totals.net, transactions: tx.length },
-          categories: byCategory.map((c) => ({ name: c.name, spent: Number(c.spent.toFixed(2)), budget: c.budget, count: c.count })),
-          merchants: allMerchants.slice(0, 40).map((m) => ({ merchant: m.merchant, total: Number(m.total.toFixed(2)), count: m.count })),
-          subscriptions: subRows.map((s) => ({ merchant: s.merchant, monthly: Number(s.monthly.toFixed(2)), count: s.count, status: s.status, kind: s.kind })),
-        }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(json?.error || `Advice failed (${res.status}).`); return; }
-      setAdvice({ headline: json.headline || "", findings: json.findings || [], quickWins: json.quickWins || [], generatedAt: json.generatedAt ?? null });
-      setAdviceOpen(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Advice failed.");
-    } finally {
-      setAdvising(false);
-    }
-  };
-
+  // Alphabetical, not the id order the API returns. This list is scanned by eye
+  // dozens of times during a re-file pass, and creation order is not an order
+  // anyone can search.
   const catOptions = useMemo(
-    () => [{ value: "", label: "— none —" }, ...categories.map((c) => ({ value: String(c.id), label: c.name }))],
+    () => [
+      { value: "", label: "— none —" },
+      ...[...categories]
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+        .map((c) => ({ value: String(c.id), label: c.name })),
+    ],
     [categories]
   );
   const stagedIncluded = staged.filter((r) => r.include);
@@ -1007,95 +991,37 @@ export default function RealMonth({
         </Card>
       )}
 
-      {/* ── WHAT TO FIX — first, because the conclusion is the point ──────── */}
+      {/* ── NET, big ─────────────────────────────────────────────────────────
+          The one number the month comes down to, given the room a headline
+          deserves — and, under it, what it does and does not include. Every
+          other figure on this page is an input to this one. */}
       {hasData && (
-        <Card variant="classic" padding={18} style={{ borderColor: rgba(WARN, 0.3) }}>
-          {/* Header doubles as the collapse toggle. The savings total and the
-              age of the stored pass stay visible when collapsed, so the card
-              is still worth reading at one line tall. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span
-              onClick={() => setAdviceOpen((v) => !v)}
-              style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
-            >
-              <span style={{ fontSize: TYPE.label, ...MUTED }}>{adviceOpen ? "▾" : "▸"}</span>
-              <span style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.18em", color: WARN }}>WHAT TO FIX</span>
+        <Card variant="classic" padding="20px 22px" style={{ borderColor: rgba(totals.net >= 0 ? MONEY_IN : MONEY_OUT, 0.35) }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+            <span style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.18em", textTransform: "uppercase", ...MUTED }}>
+              Net · {monthLabel(month)}
             </span>
-            <span style={{ fontSize: TYPE.label, ...MUTED }}>{monthLabel(month)}</span>
-            {advice?.generatedAt && <span style={{ fontSize: TYPE.label, ...MUTED }}>· ran {sinceLabel(advice.generatedAt)}</span>}
-            {potentialSavings > 0 && (
-              <span style={{ fontSize: TYPE.label, fontWeight: 900, color: MONEY_IN, fontVariantNumeric: "tabular-nums" }}>
-                {fmtMoney(potentialSavings, currency)}/mo identified
-              </span>
-            )}
-            {!adviceOpen && advice && (
-              <span style={{ fontSize: TYPE.label, ...MUTED }}>
-                {advice.findings.length} finding{advice.findings.length === 1 ? "" : "s"}
-              </span>
-            )}
             <div style={{ flex: 1 }} />
-            <button
-              onClick={() => void runAdvice()}
-              disabled={advising}
-              style={{ ...ghost(), padding: "6px 12px", fontSize: TYPE.label, opacity: advising ? 0.5 : 1, borderColor: rgba(WARN, 0.5), color: WARN }}
-            >
-              {advising ? "Thinking…" : advice ? "Re-run" : "✦ Analyze this month"}
-            </button>
+            <span style={{ fontSize: TYPE.label, ...MUTED, fontVariantNumeric: "tabular-nums" }}>
+              {fmtMoney(totals.inflow, currency)} in − {fmtMoney(totals.outflow, currency)} out
+            </span>
           </div>
-
-          {adviceOpen && !advice && !advising && (
-            <div style={{ fontSize: TYPE.body, ...MUTED, marginTop: 10, lineHeight: 1.5 }}>
-              Reads the merchant totals, category totals and recurring charges below, then ranks what's actually costing you.
-              Individual transactions are never sent.
-            </div>
-          )}
-          {adviceOpen && advice?.headline && <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.35, marginTop: 12 }}>{advice.headline}</div>}
-
-          {adviceOpen && advice && (
-            <>
-              <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
-                {advice.findings.map((f, i) => {
-                  const ui = SEVERITY_UI[f.severity];
-                  return (
-                    <div
-                      key={i}
-                      style={{
-                        border: `1px solid ${HOME_THEME.border}`,
-                        borderLeft: `3px solid ${ui.color}`,
-                        borderRadius: 12,
-                        padding: "12px 14px",
-                        background: `linear-gradient(90deg, ${rgba(ui.color, 0.07)} 0%, ${rgba("#ffffff", 0.02)} 45%)`,
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: TYPE.micro, fontWeight: 900, letterSpacing: "0.14em", color: ui.color, border: `1px solid ${rgba(ui.color, 0.4)}`, background: rgba(ui.color, 0.1), borderRadius: 999, padding: "2px 8px" }}>{ui.label}</span>
-                        <span style={{ fontSize: TYPE.subhead, fontWeight: 800 }}>{f.title}</span>
-                        <div style={{ flex: 1 }} />
-                        {f.monthlySavings > 0 && (
-                          <span style={{ fontSize: TYPE.body, fontWeight: 900, color: MONEY_IN, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(f.monthlySavings, currency)}/mo</span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: TYPE.body, color: HOME_THEME.text, opacity: 0.82, lineHeight: 1.55, marginTop: 8 }}>{f.detail}</div>
-                      {f.evidence && <div style={{ fontSize: TYPE.label, ...MUTED, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{f.evidence}</div>}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {advice.quickWins.length > 0 && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={labelCap()}>Quick wins</div>
-                  <ul style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 6 }}>
-                    {advice.quickWins.map((qw, i) => <li key={i} style={{ fontSize: TYPE.body, color: HOME_THEME.text, opacity: 0.82, lineHeight: 1.5 }}>{qw}</li>)}
-                  </ul>
-                </div>
-              )}
-              <div style={{ fontSize: 11, ...MUTED, marginTop: 14, opacity: 0.55 }}>
-                Built from the aggregates below — merchant totals, category totals, recurring hits.
-                Saved against {monthLabel(month)}; it stays until you re-run.
-              </div>
-            </>
-          )}
+          <div style={{
+            fontSize: "clamp(40px, 8vw, 64px)", fontWeight: 900, lineHeight: 1.02, marginTop: 6,
+            letterSpacing: "-0.03em", fontVariantNumeric: "tabular-nums",
+            color: totals.net >= 0 ? MONEY_IN : MONEY_OUT,
+          }}>
+            {fmtMoney(totals.net, currency)}
+          </div>
+          <div style={{ fontSize: TYPE.body, ...MUTED, marginTop: 10, lineHeight: 1.55, maxWidth: "72ch" }}>
+            {totals.net >= 0
+              ? "More cleared the account than left it this month."
+              : "More left the account than cleared into it this month."}{" "}
+            This is <b style={{ color: HOME_THEME.text }}>bank movement only</b> — every deposit and every debit
+            on the imported statement, nothing else. It is not profit: money moved between your own accounts
+            counts on both sides, and business earnings only appear here on the day they actually landed.
+            The Bzila and Amazon cards below are the earnings figures; this one is the account.
+          </div>
         </Card>
       )}
 
@@ -1105,18 +1031,38 @@ export default function RealMonth({
           <Tile label="Transactions" value={String(tx.length)} sub={monthLabel(month)} />
           <Tile label="Money out" value={fmtMoney(totals.outflow, currency)} sub={`${allMerchants.length} merchants`} valueColor={MONEY_OUT} />
           <Tile label="Money in" value={fmtMoney(totals.inflow, currency)} valueColor={MONEY_IN} />
-          <Tile label="Net" value={fmtMoney(totals.net, currency)} valueColor={totals.net >= 0 ? MONEY_IN : MONEY_OUT} />
-          <Tile label="Subscriptions" value={fmtMoney(totals.subTotal, currency)} sub={`${subRows.length} recurring · ${fmtMoney(totals.subTotal * 12, currency)}/yr`} valueColor={WARN} />
-          <Tile label="Real bills" value={fmtMoney(totals.billTotal, currency)} sub={`${fmtMoney(totals.billTotal * 12, currency)}/yr · has to be paid`} valueColor={ACCENT} />
           <Tile
-            label="Luxury"
+            label="Recurring real bills"
+            value={fmtMoney(totals.billTotal, currency)}
+            sub={`${fmtMoney(totals.billTotal * 12, currency)}/yr · has to be paid`}
+            valueColor={ACCENT}
+          />
+          <Tile
+            label="Recurring luxury items"
             value={fmtMoney(totals.luxuryTotal, currency)}
             sub={totals.subTotal > 0
-              ? `${Math.round((totals.luxuryTotal / totals.subTotal) * 100)}% of recurring${totals.untagged ? ` · ${totals.untagged} guessed` : ""}`
+              ? `${fmtMoney(totals.luxuryTotal * 12, currency)}/yr · ${Math.round((totals.luxuryTotal / totals.subTotal) * 100)}% of recurring${totals.untagged ? ` · ${totals.untagged} guessed` : ""}`
               : "nothing recurring"}
             valueColor={WARN}
           />
-          <Tile label="If you cancel" value={fmtMoney(totals.cancelSavings, currency)} sub={totals.cancelSavings > 0 ? `${fmtMoney(totals.cancelSavings * 12, currency)}/yr back` : "nothing tagged cancel"} valueColor={totals.cancelSavings > 0 ? MONEY_IN : HOME_THEME.muted} />
+          {/* Earnings, not bank movement — both are net of what it cost to earn
+              them, which is the only version of either number worth reading. */}
+          <Tile
+            label="Bzila net"
+            value={bzila ? fmtMoney(bzila.net, currency) : "—"}
+            sub={bzila
+              ? `${fmtMoney(bzila.inAmt, currency)} in − ${fmtMoney(bzila.outAmt, currency)} costs`
+              : "nothing on the Bzila tab"}
+            valueColor={bzila ? (bzila.net >= 0 ? MONEY_IN : MONEY_OUT) : HOME_THEME.muted}
+          />
+          <Tile
+            label="Amazon net, after gas"
+            value={amazon ? fmtMoney(amazon.net, currency) : "—"}
+            sub={amazon && amazon.days > 0
+              ? `${fmtMoney(amazon.pay, currency)} − ${fmtMoney(amazon.gas, currency)} gas · ${amazon.days} day${amazon.days === 1 ? "" : "s"} · ${fmtMoney(amazon.net / amazon.days, currency)}/day`
+              : "no delivery days logged"}
+            valueColor={amazon ? (amazon.net >= 0 ? MONEY_IN : MONEY_OUT) : HOME_THEME.muted}
+          />
         </div>
       )}
 
@@ -1346,6 +1292,85 @@ export default function RealMonth({
               </div>
             );
           })}
+        </Card>
+      )}
+
+      {/* ── MONEY IN — the same re-file treatment, for deposits ──────────────
+          Sits under the merchant list on the same view: it is the same job
+          (put a vendor in the right category), and a paycheck filed as
+          "Transfers" was previously only fixable one row at a time in the
+          Ledger, which is why it stayed wrong. */}
+      {hasData && view === "merchants" && incomeMerchants.length > 0 && (
+        <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
+          <SectionHead
+            title="Money in"
+            sub="Every deposit, grouped by who sent it. One dropdown re-files the whole source — with “Apply to every month” on, it fixes the history too. Pay belongs in a pay category, not Transfers."
+            right={
+              <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                <div style={{ fontSize: 18, fontWeight: 900, color: MONEY_IN, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(totals.inflow, currency)}</div>
+                <div style={{ fontSize: TYPE.label, ...MUTED }}>{incomeMerchants.length} source{incomeMerchants.length === 1 ? "" : "s"}</div>
+              </div>
+            }
+          />
+          <div style={isMobile ? scrollX : undefined}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 620 : undefined }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th("center"), width: 34 }} />
+                  <th style={th("left")}>Source</th>
+                  <th style={{ ...th("center"), width: 55 }}>Hits</th>
+                  <th style={{ ...th("right"), width: 115 }}>Total</th>
+                  <th style={{ ...th("left"), width: 190 }}>Category</th>
+                </tr>
+              </thead>
+              <tbody>
+                {incomeMerchants.map((m) => {
+                  const open = expanded.has("in:" + m.key);
+                  return (
+                    <Fragment key={m.key}>
+                      <tr>
+                        <td style={{ ...td("center"), cursor: "pointer", ...MUTED }} onClick={() => toggleIn(expanded, setExpanded, "in:" + m.key)}>
+                          {open ? "▾" : "▸"}
+                        </td>
+                        <td style={{ ...td("left"), fontWeight: 700, cursor: "pointer" }} onClick={() => toggleIn(expanded, setExpanded, "in:" + m.key)}>
+                          {m.merchant}
+                          {m.mixed && <span title="Rows from this source have different categories" style={{ marginLeft: 7, fontSize: TYPE.micro, fontWeight: 900, color: WARN, letterSpacing: "0.08em" }}>MIXED</span>}
+                        </td>
+                        <td style={{ ...td("center"), ...MUTED }}>{m.count}</td>
+                        <td style={{ ...td("right"), fontWeight: 800, color: MONEY_IN, fontVariantNumeric: "tabular-nums" }}>+{fmtMoney(m.total, currency)}</td>
+                        <td style={td("left")}>
+                          <ThemedSelect
+                            value={m.categoryId == null || m.mixed ? "" : String(m.categoryId)}
+                            onChange={(v) => setMerchantCategory(m.merchant, v ? Number(v) : null)}
+                            options={catOptions}
+                            placeholder={m.mixed ? "mixed — set all" : "— none —"}
+                          />
+                        </td>
+                      </tr>
+                      {open && m.rows.map((r) => (
+                        <tr key={`in-${r.id}`} style={{ background: rgba("#000000", 0.28) }}>
+                          <td style={td("center")} />
+                          <td style={{ ...td("left"), paddingLeft: 26, ...MUTED, fontSize: TYPE.label }} title={r.description}>
+                            <span style={{ marginRight: 8 }}>{shortDate(r.tx_date)}</span>
+                            {r.description}
+                          </td>
+                          <td style={td("center")} />
+                          <td style={{ ...td("right"), fontVariantNumeric: "tabular-nums", ...MUTED }}>+{fmtMoney(r.amount, currency)}</td>
+                          <td style={td("left")}>
+                            <ThemedSelect
+                              value={r.category_id == null ? "" : String(r.category_id)}
+                              onChange={(v) => setTxCategory(r.id, v ? Number(v) : null)}
+                              options={catOptions}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </Card>
       )}
 

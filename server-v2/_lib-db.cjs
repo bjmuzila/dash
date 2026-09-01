@@ -202,6 +202,8 @@ __export(db_exports, {
   insertWatchSnapshot: () => insertWatchSnapshot,
   linkStripeCustomer: () => linkStripeCustomer,
   listAllUsersForBroadcast: () => listAllUsersForBroadcast,
+  listSettledFlows: () => listSettledFlows,
+  setSettledFlow: () => setSettledFlow,
   listOwnerTodo: () => listOwnerTodo,
   replaceOwnerTodo: () => replaceOwnerTodo,
   listAmazonGasByMonth: () => listAmazonGasByMonth,
@@ -799,6 +801,29 @@ async function ensureAllTables(pool) {
       generated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(profile_id, month)
     );
+
+    -- Flows the Rent card has been told to ignore.
+    --
+    -- The card projects cash to the 5th by adding every scheduled income and
+    -- subtracting every scheduled bill between today and then. That double
+    -- counts anything that ALREADY LANDED: an early paycheck is sitting in the
+    -- bank balance the card starts from, so adding it again invents money. The
+    -- same applies in reverse to a bill that is not actually coming.
+    --
+    -- One row per settled flow. flow_key is the occurrence's own identity -
+    -- 'row:<id>' for a real register row, '__recur__:<ruleId>:<date>' for a
+    -- projected recurring occurrence - so the mark survives a reload and cannot
+    -- drift onto a different month's copy of the same bill.
+    CREATE TABLE IF NOT EXISTS budget_flow_settled (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      flow_key TEXT NOT NULL,
+      label TEXT NOT NULL DEFAULT '',
+      entry_date TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(profile_id, flow_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_flow_settled_profile ON budget_flow_settled(profile_id);
 
     -- Owner To-Do. Was localStorage-only, which meant the list existed on one
     -- browser on one machine and silently reset when that storage was cleared.
@@ -5031,6 +5056,36 @@ async function deleteAmazonRow(profileId, id) {
   const pool = await getDb();
   await pool.query(`DELETE FROM budget_amazon WHERE id = $1 AND profile_id = $2`, [id, profileId]);
 }
+// ── Rent-card settled flows ─────────────────────────────────────────────────
+// Rows older than the given date are dropped on read. These marks describe one
+// occurrence in a ~35-day window; keeping them forever would leave a table that
+// only ever grows and can never match anything again.
+async function listSettledFlows(profileId, sinceDate) {
+  if (sinceDate) {
+    try {
+      const pool = await getDb();
+      await pool.query(`DELETE FROM budget_flow_settled WHERE profile_id = $1 AND entry_date <> '' AND entry_date < $2`, [profileId, sinceDate]);
+    } catch { /* pruning is housekeeping — never block the read on it */ }
+  }
+  return queryAll("SELECT * FROM budget_flow_settled WHERE profile_id = ? ORDER BY entry_date ASC", [profileId]);
+}
+async function setSettledFlow(input) {
+  const pool = await getDb();
+  if (input.on === false) {
+    await pool.query(`DELETE FROM budget_flow_settled WHERE profile_id = $1 AND flow_key = $2`, [input.profile_id, input.flow_key]);
+    return null;
+  }
+  const result = await pool.query(
+    `INSERT INTO budget_flow_settled (profile_id, flow_key, label, entry_date)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT(profile_id, flow_key) DO UPDATE SET
+       label = EXCLUDED.label, entry_date = EXCLUDED.entry_date
+     RETURNING *`,
+    [input.profile_id, input.flow_key, input.label ?? '', input.entry_date ?? '']
+  );
+  return result.rows[0];
+}
+
 // ── Owner To-Do ─────────────────────────────────────────────────────────────
 async function listOwnerTodo() {
   const [items, lists] = await Promise.all([

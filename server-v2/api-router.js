@@ -7762,7 +7762,14 @@ if (libDb) {
             const year = month.slice(0, 4);
             await D.adoptDefaultBudgetProfile(BUDGET_PROFILE_KEY);
             const profile = await D.getOrCreateBudgetProfile(BUDGET_PROFILE_KEY);
-            const [categories, entries, register2, recurring, amazonRows, propRows, dailyBalance] = await Promise.all([
+            // Settled marks older than the start of last month can never match
+            // a flow the Rent card is still projecting — pruned on read.
+            const settledSince = (() => {
+              const d = new Date();
+              d.setMonth(d.getMonth() - 1, 1);
+              return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+            })();
+            const [categories, entries, register2, recurring, amazonRows, propRows, dailyBalance, settledFlows] = await Promise.all([
               D.listBudgetCategories(profile.id),
               D.listBudgetEntries(profile.id, 500),
               D.listRegister(profile.id, from, to),
@@ -7770,9 +7777,16 @@ if (libDb) {
               D.listAmazonRows(profile.id, from, to),
               D.listPropRows(profile.id, `${year}-01-01`, `${year}-12-31`),
               D.getLatestDailyBalance(profile.id),
+              D.listSettledFlows(profile.id, settledSince),
             ]);
             const prevDailyBalance = dailyBalance ? await D.getDailyBalanceBefore(profile.id, dailyBalance.day) : null;
-            send(res, 200, { profile, categories, entries, month, register: register2, recurring, amazonRows, propRows, dailyBalance, prevDailyBalance });
+            send(res, 200, {
+              profile, categories, entries, month, register: register2, recurring, amazonRows, propRows,
+              dailyBalance, prevDailyBalance,
+              // Flows the Rent card has been told are already in the bank (or
+              // are not coming). Keys only — the card matches them by key.
+              settledFlows: (settledFlows || []).map((r) => String(r.flow_key)),
+            });
             return;
           }
           const body = await readJson(req);
@@ -7787,6 +7801,21 @@ if (libDb) {
             send(res, 200, { ok: true, category }); return;
           }
           if (action === 'categoryDelete') { await D.deleteBudgetCategory(profile.id, Number(body?.id ?? 0)); send(res, 200, { ok: true }); return; }
+          // Mark one flow on the Rent card as already settled — an income that
+          // landed early is in the bank balance already, a bill that is not
+          // coming should not be subtracted. `on:false` clears the mark.
+          if (action === 'settleFlow') {
+            const key = String(body?.key ?? '').trim().slice(0, 120);
+            if (!key) { send(res, 400, { error: 'key required' }); return; }
+            const row = await D.setSettledFlow({
+              profile_id: profile.id,
+              flow_key: key,
+              label: String(body?.label ?? '').slice(0, 120),
+              entry_date: /^\d{4}-\d{2}-\d{2}$/.test(String(body?.date ?? '')) ? String(body.date) : '',
+              on: body?.on !== false,
+            });
+            send(res, 200, { ok: true, settled: row }); return;
+          }
           if (action === 'dailyBalance') {
             const row = await D.upsertDailyBalance({
               profile_id: profile.id, day: String(body?.day ?? '').trim() || currentMonth() + '-01',

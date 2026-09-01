@@ -7,188 +7,191 @@
 <title>August on the Statement</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400;0,6..96,600;0,6..96,700;1,6..96,400&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap">
 </head>
 <body>
 <style>
-/* ── Tokens ───────────────────────────────────────────────────────────────────
-   Deliberately single-theme: black ground, greenbar banding lifted just off it,
-   oxblood/ledger-green diverging poles. Every colour is painted explicitly and
-   every value is validated against #000, so the page holds the same on a light
-   or dark host and needs no prefers-color-scheme branch. */
+/* ── Dashboard theme ──────────────────────────────────────────────────────────
+   Every value below is lifted from owner-vite/src/lib/theme.ts and the Budget
+   page's own surface set, so this page reads as part of the app rather than as
+   a document that happens to be dark:
+
+     INK / PANEL / HAIRLINE / CARD_SHADOW / SHELL_GLOW_DEEP  → Budget.tsx
+     lightBlue #7dd3fc · gold #FFB703 · orange #FB8501 · red  → OWNER_THEME
+     MONEY_IN #94FC7D / MONEY_OUT #EF4444                     → RealMonth.tsx
+     TYPE: title 17 · subhead 15 · body 14 · label 12 · micro 10
+
+   Single-theme on purpose: the dashboard is dark-only, and a light variant of
+   this page would not match anything it links back to. */
 :root{
   color-scheme:dark;
-  --paper:#000000;
-  --band:#0B0E08;          /* the greenbar stripe, barely lifted off black */
-  --card:#0A0C07;
-  --ink:#EDF1E6;
-  --ink-2:#A9B39D;
-  --ink-3:#7B8573;
-  --rule:#2B3224;
-  --rule-soft:#1A1F15;
-  --bar:#C08A57;           /* single hue, magnitude only */
-  --bar-soft:#2A2317;
-  --over:#D96A45;          /* diverging: above your own average */
-  --under:#3FAA7E;         /* diverging: below it */
-  --mid:#7B8573;           /* diverging midpoint, neutral by rule */
-  --flag-hi:#D96A45;
-  --flag-mid:#C79A32;
-  --flag-lo:#6FBE93;
-  --shadow:0 1px 0 rgba(255,255,255,.04), 0 18px 34px -26px #000;
+  --ink:#020308;                       /* page ground — near-black */
+  --panel:#0B101B;                     /* card fill, lifted off the ink */
+  --panel-2:#111826;                   /* inset surface inside a card */
+  --hairline:rgba(255,255,255,0.16);
+  --hairline-soft:rgba(255,255,255,0.07);
+  --text:#FFFFFF;
+  --muted:rgba(255,255,255,0.62);
+  --muted-2:rgba(255,255,255,0.42);
+  --accent:#7dd3fc;                    /* the one card accent */
+  --cyan:#219EBC;
+  --gold:#FFB703;
+  --orange:#FB8501;
+  --money-in:#94FC7D;
+  --money-out:#EF4444;
+  --card-shadow:inset 0 1px 0 rgba(255,255,255,0.12), 0 2px 4px rgba(0,0,0,0.6), 0 24px 60px -16px rgba(0,0,0,0.75);
+  --mono:ui-monospace,SFMono-Regular,Menlo,'Cascadia Mono',monospace;
 }
 
 *{box-sizing:border-box}
 body{
-  background:var(--paper);
-  color:var(--ink);
-  font-family:"Source Sans 3","Segoe UI",Helvetica,Arial,sans-serif;
-  font-size:16px;
+  background:var(--ink);
+  background-image:
+    radial-gradient(1100px 520px at 12% -10%, rgba(33,158,188,0.13) 0%, transparent 60%),
+    radial-gradient(900px 460px at 88% 6%, rgba(125,211,252,0.09) 0%, transparent 55%),
+    radial-gradient(circle at 15% 50%, rgba(33,158,188,0.04) 0%, transparent 50%),
+    radial-gradient(circle at 85% 30%, rgba(18,103,131,0.05) 0%, transparent 50%);
+  background-attachment:fixed;
+  color:var(--text);
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  font-size:14px;
   line-height:1.55;
   -webkit-font-smoothing:antialiased;
 }
-.wrap{max-width:900px;margin:0 auto;padding:clamp(20px,4vw,56px) clamp(16px,4vw,36px) 80px}
-.num{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.wrap{max-width:1000px;margin:0 auto;padding:clamp(14px,2vw,28px) clamp(14px,2vw,24px) 72px;
+  display:flex;flex-direction:column;gap:clamp(16px,2vw,26px)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ── Card ─────────────────────────────────────────────────────────────────── */
+.card{
+  background:linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 34%), var(--panel);
+  border:1px solid var(--hairline);
+  border-radius:16px;
+  box-shadow:var(--card-shadow);
+  overflow:hidden;
+}
+.card.pad{padding:clamp(16px,2vw,20px)}
+.head{padding:14px 16px 10px}
+.eyebrow{font-size:12px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
+.headsub{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.45;max-width:78ch}
+
+h1{font-size:clamp(28px,4.4vw,38px);font-weight:900;letter-spacing:-.02em;line-height:1.08;margin:6px 0 8px}
+h2{font-size:17px;font-weight:900;letter-spacing:.01em;margin:0}
+h3{font-size:15px;font-weight:800;margin:0}
+p{margin:0}
+.body{font-size:14px;color:var(--muted);line-height:1.6;max-width:78ch}
+.body b{color:var(--text)}
+.kicker{font-size:10px;font-weight:900;letter-spacing:.22em;text-transform:uppercase;color:var(--muted-2)}
 
 /* ── Masthead ─────────────────────────────────────────────────────────────── */
-.mast{border-bottom:2px solid var(--ink-2);padding-bottom:14px}
-.kicker{
-  font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.22em;
-  text-transform:uppercase;color:var(--ink-3);
-}
-h1{
-  font-family:"Bodoni Moda",Didot,"Times New Roman",serif;
-  font-weight:700;font-size:clamp(38px,7.5vw,62px);line-height:1.02;
-  margin:.16em 0 .1em;letter-spacing:-.015em;text-wrap:balance;
-}
-.dek{font-size:17px;color:var(--ink-2);max-width:62ch;margin:0}
-.mastmeta{
-  display:flex;flex-wrap:wrap;gap:6px 22px;margin-top:14px;
-  font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-3);
-}
-.mastmeta b{color:var(--ink-2);font-weight:500}
+.mastmeta{display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:12px;font-family:var(--mono);
+  font-size:12px;color:var(--muted-2)}
+.mastmeta b{color:var(--muted);font-weight:600}
 
-/* ── Sections ─────────────────────────────────────────────────────────────── */
-section{margin-top:clamp(38px,6vw,60px)}
-h2{
-  font-family:"Bodoni Moda",Didot,serif;font-weight:600;
-  font-size:clamp(24px,3.4vw,31px);line-height:1.15;margin:0 0 6px;
-  letter-spacing:-.01em;text-wrap:balance;
-}
-h3{font-size:15px;font-weight:700;margin:0 0 4px;letter-spacing:.01em}
-.sub{color:var(--ink-2);font-size:15px;margin:0 0 18px;max-width:66ch}
-.eyebrow{
-  font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.2em;
-  text-transform:uppercase;color:var(--ink-3);margin-bottom:6px;
-}
+/* ── Hero figure (matches the Real Month Net card) ────────────────────────── */
+.hero .val{font-size:clamp(38px,7vw,60px);font-weight:900;line-height:1.02;letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;margin-top:4px}
+.hero .top{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.hero .arith{font-family:var(--mono);font-size:12px;color:var(--muted-2);margin-left:auto}
 
-/* ── Headline figures ─────────────────────────────────────────────────────── */
-.heads{display:grid;grid-template-columns:repeat(auto-fit,minmax(184px,1fr));gap:2px;
-  background:var(--rule-soft);border:1px solid var(--rule);border-radius:3px;overflow:hidden}
-.head{background:var(--card);padding:16px 18px 15px}
-.head .lab{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.16em;
-  text-transform:uppercase;color:var(--ink-3)}
-.head .val{font-family:"IBM Plex Mono",monospace;font-size:27px;font-weight:600;
-  font-variant-numeric:tabular-nums;margin-top:5px;letter-spacing:-.02em}
-.head .note{font-size:13px;color:var(--ink-2);margin-top:3px;line-height:1.4}
-.neg{color:var(--over)} .pos{color:var(--under)}
+/* ── Tiles ────────────────────────────────────────────────────────────────── */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.tile{padding:12px 14px}
+.tile .lab{font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.tile .val{font-size:22px;font-weight:900;margin-top:4px;font-variant-numeric:tabular-nums}
+.tile .sub{font-size:12px;color:var(--muted-2);margin-top:2px;line-height:1.4}
 
-/* ── Ranked ledger with inline bars ───────────────────────────────────────── */
-.ledger{border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
-.lrow{
-  display:grid;grid-template-columns:minmax(120px,1.15fr) minmax(90px,2.2fr) 96px 54px;
-  align-items:center;gap:12px;padding:7px 10px;
-}
-.lrow + .lrow{border-top:1px solid var(--rule-soft)}
-.lrow:nth-child(odd){background:var(--band)}      /* greenbar */
-.lrow:hover{background:var(--bar-soft)}
-.lname{font-size:14.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lname small{display:block;font-weight:400;font-size:12px;color:var(--ink-3);white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis}
-.track{height:11px;background:transparent}
-.fill{height:11px;background:var(--bar);border-radius:0 4px 4px 0;box-shadow:0 0 0 2px var(--card)}
-.lamt{text-align:right;font-family:"IBM Plex Mono",monospace;font-size:14px;font-variant-numeric:tabular-nums}
-.lpct{text-align:right;font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-3);
-  font-variant-numeric:tabular-nums}
-.ltot{display:grid;grid-template-columns:minmax(120px,1.15fr) minmax(90px,2.2fr) 96px 54px;gap:12px;
-  padding:9px 10px;font-weight:700;border-top:2px solid var(--ink-2)}
+/* ── Ranked ledger ────────────────────────────────────────────────────────── */
+.lrow{display:grid;grid-template-columns:minmax(120px,1.15fr) minmax(90px,2.2fr) 100px 56px;
+  align-items:center;gap:12px;padding:8px 16px;border-top:1px solid var(--hairline-soft)}
+.lrow:hover{background:rgba(255,255,255,0.03)}
+.lname{font-size:14px;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lname small{display:block;font-weight:400;font-size:12px;color:var(--muted-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track{height:10px}
+.fill{height:10px;background:var(--accent);border-radius:0 4px 4px 0;box-shadow:0 0 12px rgba(125,211,252,.25)}
+.lamt{text-align:right;font-family:var(--mono);font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}
+.lpct{text-align:right;font-family:var(--mono);font-size:12px;color:var(--muted-2);font-variant-numeric:tabular-nums}
+.ltot{display:grid;grid-template-columns:minmax(120px,1.15fr) minmax(90px,2.2fr) 100px 56px;gap:12px;
+  padding:10px 16px;font-weight:900;border-top:1px solid var(--hairline)}
 
-/* ── Inset card ───────────────────────────────────────────────────────────── */
-.inset{
-  background:var(--card);border:1px solid var(--rule);border-left:3px solid var(--bar);
-  border-radius:3px;padding:20px 22px;box-shadow:var(--shadow);
-}
-.calc{display:grid;gap:2px;margin:14px 0 4px;max-width:420px}
-.calc div{display:flex;justify-content:space-between;gap:16px;padding:6px 0;
-  font-family:"IBM Plex Mono",monospace;font-size:14px;font-variant-numeric:tabular-nums}
-.calc div + div{border-top:1px solid var(--rule-soft)}
-.calc .rowtot{border-top:1px solid var(--ink-2);font-weight:600}
-.calc span:first-child{font-family:"Source Sans 3",sans-serif;color:var(--ink-2)}
+/* ── Inset block ──────────────────────────────────────────────────────────── */
+.inset{background:var(--panel-2);border:1px solid var(--hairline-soft);border-left:3px solid var(--accent);
+  border-radius:12px;padding:16px 18px}
+.calc{display:grid;gap:1px;margin:12px 0 2px;max-width:420px}
+.calc div{display:flex;justify-content:space-between;gap:16px;padding:7px 0;font-family:var(--mono);
+  font-size:14px;font-variant-numeric:tabular-nums}
+.calc div + div{border-top:1px solid var(--hairline-soft)}
+.calc .rowtot{border-top:1px solid var(--hairline);font-weight:800}
+.calc span:first-child{font-family:'Inter',sans-serif;color:var(--muted)}
 
-/* ── Delta table (diverging) ──────────────────────────────────────────────── */
-.deltas{border-top:1px solid var(--rule)}
-.drow{display:grid;grid-template-columns:minmax(110px,1fr) 78px 1fr 78px;align-items:center;
-  gap:10px;padding:7px 10px;border-bottom:1px solid var(--rule-soft)}
-.drow:nth-child(even){background:var(--band)}
-.dname{font-size:14.5px;font-weight:600}
-.davg,.ddelta{font-family:"IBM Plex Mono",monospace;font-size:13px;font-variant-numeric:tabular-nums;text-align:right}
+/* ── Delta rows (diverging) ───────────────────────────────────────────────── */
+.drow{display:grid;grid-template-columns:minmax(110px,1fr) 84px 1fr 74px;align-items:center;gap:10px;
+  padding:8px 16px;border-top:1px solid var(--hairline-soft)}
+.drow:hover{background:rgba(255,255,255,0.03)}
+.dname{font-size:14px;font-weight:700}
+.davg,.ddelta{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums;text-align:right}
 .dbar{position:relative;height:14px}
-.dbar::before{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--mid);opacity:.55}
-.dbar i{position:absolute;top:2px;height:10px;border-radius:2px;box-shadow:0 0 0 2px var(--card)}
+.dbar::before{content:"";position:absolute;left:50%;top:-1px;bottom:-1px;width:1px;
+  background:rgba(255,255,255,0.28)}
+.dbar i{position:absolute;top:2px;height:10px;border-radius:3px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;padding:10px 16px 14px;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 
 /* ── Findings ─────────────────────────────────────────────────────────────── */
-.finds{display:grid;gap:12px}
-.find{background:var(--card);border:1px solid var(--rule);border-radius:3px;
-  padding:15px 17px;box-shadow:var(--shadow)}
-.findhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:5px}
-.chip{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.14em;
-  text-transform:uppercase;padding:2px 8px;border-radius:2px;border:1px solid currentColor;flex:none}
-.c-hi{color:var(--flag-hi)} .c-mid{color:var(--flag-mid)} .c-lo{color:var(--flag-lo)}
-.find p{margin:0;color:var(--ink-2);font-size:15px}
+.finds{display:grid;gap:10px;padding:0 16px 16px}
+.find{border:1px solid var(--hairline-soft);border-left:3px solid var(--accent);border-radius:12px;
+  padding:13px 15px;background:linear-gradient(90deg, rgba(125,211,252,0.05) 0%, rgba(255,255,255,0.02) 45%)}
+.find.hi{border-left-color:var(--money-out);background:linear-gradient(90deg, rgba(239,68,68,0.07) 0%, rgba(255,255,255,0.02) 45%)}
+.find.mid{border-left-color:var(--gold);background:linear-gradient(90deg, rgba(255,183,3,0.07) 0%, rgba(255,255,255,0.02) 45%)}
+.findhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.chip{font-size:10px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;padding:2px 8px;
+  border-radius:999px;border:1px solid;flex:none}
+.c-hi{color:var(--money-out);border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.1)}
+.c-mid{color:var(--gold);border-color:rgba(255,183,3,.4);background:rgba(255,183,3,.1)}
+.c-lo{color:var(--accent);border-color:rgba(125,211,252,.4);background:rgba(125,211,252,.1)}
+.find p{color:var(--muted);font-size:14px;line-height:1.55}
 .find p + p{margin-top:7px}
-.find b{color:var(--ink)}
-.do{margin-top:9px;padding-top:9px;border-top:1px dashed var(--rule);font-size:14.5px;color:var(--ink)}
-.do span{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.16em;
-  text-transform:uppercase;color:var(--ink-3);margin-right:8px}
+.find b{color:var(--text)}
+.do{margin-top:10px;padding-top:9px;border-top:1px dashed var(--hairline-soft);font-size:14px;color:var(--text)}
+.do span{font-size:10px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);
+  margin-right:8px}
 
-/* ── Small tables ─────────────────────────────────────────────────────────── */
+/* ── Tables ───────────────────────────────────────────────────────────────── */
 .scroll{overflow-x:auto}
-table{border-collapse:collapse;width:100%;min-width:420px}
-th,td{text-align:left;padding:7px 10px;font-size:14px;border-bottom:1px solid var(--rule-soft)}
-th{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;
-  color:var(--ink-3);border-bottom:1px solid var(--rule);font-weight:500}
-td.n,th.n{text-align:right;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
-tbody tr:nth-child(odd){background:var(--band)}
+table{border-collapse:collapse;width:100%;min-width:440px}
+th,td{text-align:left;padding:9px 16px;font-size:14px;border-top:1px solid var(--hairline-soft)}
+th{font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  border-top:none;border-bottom:1px solid var(--hairline)}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+td small{color:var(--muted-2)}
+tbody tr:hover{background:rgba(255,255,255,0.03)}
 
 /* ── Daily chart ──────────────────────────────────────────────────────────── */
-.chartwrap{position:relative}
+.chartwrap{position:relative;padding:4px 8px 0}
 svg{display:block;width:100%;height:auto;overflow:visible}
-.tip{
-  position:absolute;pointer-events:none;opacity:0;transform:translate(-50%,-100%);
-  background:var(--ink);color:#000;padding:6px 9px;border-radius:3px;
-  font-family:"IBM Plex Mono",monospace;font-size:12px;white-space:nowrap;
-  transition:opacity .1s ease;z-index:5;
-}
-.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:13px;color:var(--ink-2)}
-.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:6px;
-  vertical-align:-1px}
+.tip{position:absolute;pointer-events:none;opacity:0;transform:translate(-50%,-100%);
+  background:var(--panel-2);border:1px solid var(--hairline);color:var(--text);padding:6px 10px;
+  border-radius:8px;font-family:var(--mono);font-size:12px;white-space:nowrap;
+  box-shadow:0 12px 28px rgba(0,0,0,.6);transition:opacity .1s ease;z-index:5}
 
-.foot{margin-top:52px;padding-top:16px;border-top:1px solid var(--rule);
-  font-size:13.5px;color:var(--ink-3);max-width:70ch}
+.foot{font-size:13px;color:var(--muted-2);line-height:1.6;max-width:82ch}
 .foot li{margin-bottom:5px}
-a{color:inherit}
+.foot code{font-family:var(--mono);color:var(--muted)}
+a{color:var(--accent)}
 .backlink{
-  display:inline-block;margin-bottom:22px;text-decoration:none;
-  font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.14em;
-  text-transform:uppercase;color:var(--ink-3);
-  border:1px solid var(--rule);border-radius:3px;padding:6px 12px;
+  align-self:flex-start;text-decoration:none;
+  font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);border:1px solid var(--hairline);border-radius:10px;
+  padding:7px 13px;background:var(--panel);
 }
-.backlink:hover{color:var(--ink);border-color:var(--ink-3)}
-:focus-visible{outline:2px solid var(--bar);outline-offset:2px}
+.backlink:hover{color:var(--text);border-color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
-@media (max-width:620px){
-  .lrow,.ltot{grid-template-columns:minmax(96px,1.3fr) 1fr 84px;}
+@media (max-width:640px){
+  .lrow,.ltot{grid-template-columns:minmax(96px,1.3fr) 1fr 92px}
   .lpct{display:none}
-  .drow{grid-template-columns:minmax(92px,1fr) 70px 70px;}
+  .drow{grid-template-columns:minmax(92px,1fr) 76px 70px}
   .dbar{display:none}
 }
 </style>
@@ -198,10 +201,11 @@ a{color:inherit}
   <a class="backlink" href="/budget">&larr; Back to Real Month</a>
 
 
-  <header class="mast">
+  <!-- ── Masthead ────────────────────────────────────────────────────────── -->
+  <div class="card pad">
     <div class="kicker">Real Month · Statement Review</div>
     <h1>August on the Statement</h1>
-    <p class="dek">Everything that actually cleared the SECU account between 1 and 31 August — not the plan,
+    <p class="body">Everything that actually cleared the SECU account between 1 and 31 August — not the plan,
       not the register. 138 lines, all of them filed.</p>
     <div class="mastmeta">
       <span><b>138</b> transactions</span>
@@ -209,201 +213,220 @@ a{color:inherit}
       <span><b>0</b> uncategorized</span>
       <span>compared against <b>Jan–Jun</b> imported months</span>
     </div>
-  </header>
+  </div>
 
-  <section>
-    <div class="heads">
-      <div class="head">
-        <div class="lab">Money out</div>
-        <div class="val">$5,151.50</div>
-        <div class="note">$93.94/day excluding the rent day</div>
-      </div>
-      <div class="head">
-        <div class="lab">Money in</div>
-        <div class="val">$4,652.53</div>
-        <div class="note">Deposits that landed in SECU</div>
-      </div>
-      <div class="head">
-        <div class="lab">Net</div>
-        <div class="val neg">−$498.97</div>
-        <div class="note">The account ended the month down</div>
-      </div>
-      <div class="head">
-        <div class="lab">Flex earned</div>
-        <div class="val">$1,949.00</div>
-        <div class="note">26 delivery days · only $1,042 of it deposited in August</div>
-      </div>
+  <!-- ── Net, big ────────────────────────────────────────────────────────── -->
+  <div class="card pad hero">
+    <div class="top">
+      <span class="eyebrow" style="color:var(--muted)">Net · Aug ’26</span>
+      <span class="arith">$4,652.53 in − $5,151.50 out</span>
     </div>
-    <p class="sub" style="margin-top:16px">
-      Read those four together before anything else. The month lost $499 on paper, but Flex <em>earned</em>
-      $1,949 while only $1,042 of Flex money reached this account inside the month. The gap is a deposit
-      timing question, not $499 of overspending — and it is the first thing worth chasing down.
+    <div class="val" style="color:var(--money-out)">−$498.97</div>
+    <p class="body" style="margin-top:10px">
+      More left the account than cleared into it. This is <b>bank movement only</b> — every deposit and every
+      debit on the imported statement. It is not a loss: Flex <b>earned $1,949</b> across 26 delivery days while
+      only <b>$1,042</b> of Flex money reached this account inside August. The $907 gap is deposit timing, and
+      it is the first thing worth chasing down.
     </p>
-  </section>
+  </div>
 
-  <section>
-    <div class="eyebrow">Where it went</div>
-    <h2>Fourteen categories, and one of them is nearly half</h2>
-    <p class="sub">Outflow only, after Flex gas is moved out of Sheetz/Gas and into Flex Gas &amp; Expenses.
-      Bars are shares of the $5,151.50 that left the account.</p>
+  <div class="tiles">
+    <div class="card tile"><div class="lab">Money out</div><div class="val" style="color:var(--money-out)">$5,151.50</div><div class="sub">$93.94/day excluding the rent day</div></div>
+    <div class="card tile"><div class="lab">Money in</div><div class="val" style="color:var(--money-in)">$4,652.53</div><div class="sub">Deposits that landed in SECU</div></div>
+    <div class="card tile"><div class="lab">Flex earned</div><div class="val">$1,949.00</div><div class="sub">26 days · $1,579 net of gas · $60.73/day</div></div>
+    <div class="card tile"><div class="lab">Fixed floor</div><div class="val">$3,311.71</div><div class="sub">Rent + Car + Bills · 64% of outflow</div></div>
+  </div>
 
-    <div class="ledger" id="ledger"></div>
+  <!-- ── Where it went ───────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="head">
+      <div class="eyebrow">Where it went</div>
+      <div class="headsub">Outflow only, after Flex gas is moved out of Sheetz/Gas and into Flex Gas &amp; Expenses.
+        Bars are shares of the $5,151.50 that left the account.</div>
+    </div>
+    <div id="ledger"></div>
     <div class="ltot"><span>Total out</span><span></span><span class="lamt num">$5,151.50</span><span class="lpct num">100%</span></div>
-
-    <p class="sub" style="margin-top:16px">
+    <p class="body" style="padding:14px 16px 16px">
       Rent alone is <b>43.3%</b> of every dollar that left. Add Car, Bills and the two fuel lines and you are at
       <b>85%</b> before a single grocery run. The parts of the month you actually decide week to week —
-      Food, Online Shopping, Dining Out, Family Activities — came to <b>$499.77</b>, which is 9.7% of outflow
-      and, to the dollar, roughly the size of the deficit.
+      Food, Online Shopping, Dining Out, Family Activities — came to <b>$499.77</b>: 9.7% of outflow, and to the
+      dollar about the size of the deficit.
     </p>
-  </section>
+  </div>
 
-  <section>
-    <div class="eyebrow">The fuel line</div>
-    <h2>Thirty-eight stops at Sheetz</h2>
-    <div class="inset">
-      <p style="margin:0;color:var(--ink-2)">Every Sheetz swipe is filed to Sheets/Gas, Flex fill-ups included —
-        you cannot tell them apart at the till. The Amazon tab knows the Flex share, so it comes back out:</p>
-      <div class="calc">
-        <div><span>Filed to Sheets/Gas</span><b class="num">$510.15</b></div>
-        <div><span>− Amazon Flex gas (26 days)</span><b class="num" style="color:var(--over)">−$370.00</b></div>
-        <div class="rowtot"><span>Real personal fuel</span><b class="num">$140.15</b></div>
-      </div>
-      <p style="margin:14px 0 0;color:var(--ink-2)">
-        Two numbers worth keeping. <b>$13.42</b> is the average Sheetz swipe across 38 stops — that is not
-        tank fills, that is top-ups plus whatever gets bought inside. And <b>$5.27</b> is what Flex paid for
-        every $1 of gas it burned: $1,949 gross on $370 of fuel, <b>$1,579 net over 26 days — $60.73 a day</b>.
-        The gas number only means something next to that denominator.
-      </p>
+  <!-- ── Fuel ────────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="head">
+      <div class="eyebrow">The fuel line</div>
+      <div class="headsub">Thirty-eight stops at Sheetz, and only a quarter of it was personal.</div>
     </div>
-  </section>
+    <div style="padding:0 16px 16px">
+      <div class="inset">
+        <p class="body">Every Sheetz swipe is filed to Sheets/Gas, Flex fill-ups included — you cannot tell them
+          apart at the till. The Amazon tab knows the Flex share, so it comes back out:</p>
+        <div class="calc">
+          <div><span>Filed to Sheets/Gas</span><b class="num">$510.15</b></div>
+          <div><span>− Amazon Flex gas (26 days)</span><b class="num" style="color:var(--money-out)">−$370.00</b></div>
+          <div class="rowtot"><span>Real personal fuel</span><b class="num" style="color:var(--accent)">$140.15</b></div>
+        </div>
+        <p class="body" style="margin-top:14px">
+          Two numbers worth keeping. <b>$13.42</b> is the average Sheetz swipe across 38 stops — that is not tank
+          fills, that is top-ups plus whatever gets bought inside. And <b>$5.27</b> is what Flex paid for every $1
+          of gas it burned: $1,949 gross on $370 of fuel, <b>$1,579 net over 26 days — $60.73 a day</b>. The gas
+          number only means something next to that denominator.
+        </p>
+      </div>
+    </div>
+  </div>
 
-  <section>
-    <div class="eyebrow">Day by day</div>
-    <h2>One day was 45% of the month</h2>
-    <p class="sub">Daily outflow, 1–31 August. The 6th carries rent; the 4th had no activity at all.</p>
+  <!-- ── Daily ───────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="head">
+      <div class="eyebrow">Day by day</div>
+      <div class="headsub">Daily outflow, 1–31 August. The 6th carries rent; the 4th had no activity at all.</div>
+    </div>
     <div class="chartwrap">
-      <svg id="daily" viewBox="0 0 900 250" role="img" aria-label="Daily outflow for August 2026, highest on the 6th at $2,333.32"></svg>
+      <svg id="daily" viewBox="0 0 900 240" role="img" aria-label="Daily outflow for August 2026, highest on the 6th at $2,333.32"></svg>
       <div class="tip" id="tip"></div>
     </div>
-    <p class="sub" style="margin-top:14px">
+    <p class="body" style="padding:10px 16px 16px">
       Strip out the 6th and the month spent <b>$2,818.18 across 30 days — $93.94 a day</b>. The three days that
       matter after rent are the <b>20th ($592.10)</b>, the <b>17th ($365.64)</b> and the <b>18th ($284.49)</b>:
       insurance, prop-firm accounts and the phone bill all landing in the same week.
     </p>
-  </section>
+  </div>
 
-  <section>
-    <div class="eyebrow">Against your own average</div>
-    <h2>What actually moved</h2>
-    <p class="sub">Each category against its own Jan–Jun average. Bars run left for under, right for over,
-      and every value carries its sign — nothing here is encoded by colour alone.</p>
-    <div class="deltas" id="deltas"></div>
-    <div class="legend">
-      <span><i style="background:var(--under)"></i>Under your average (−)</span>
-      <span><i style="background:var(--over)"></i>Over your average (+)</span>
-      <span><i style="background:var(--mid)"></i>Average line</span>
+  <!-- ── Deltas ──────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="head">
+      <div class="eyebrow">Against your own average</div>
+      <div class="headsub">Each category against its own Jan–Jun average. Bars run left for under, right for
+        over, and every value carries its sign — nothing here is encoded by colour alone.</div>
     </div>
-    <p class="sub" style="margin-top:16px">
+    <div id="deltas"></div>
+    <div class="legend">
+      <span><i style="background:var(--money-in)"></i>Under your average (−)</span>
+      <span><i style="background:var(--money-out)"></i>Over your average (+)</span>
+      <span><i style="background:rgba(255,255,255,0.28)"></i>Average line</span>
+    </div>
+    <p class="body" style="padding:0 16px 16px">
       This is the honest read on the month: <b>discretionary spending was excellent.</b> Dining Out was down
-      76%, Online Shopping down 63%, Bills down 27%, Car down 8%. The deficit did not come from loose
-      spending. It came from <b>Bzila (+195%)</b> — nine TakeProfit accounts and resets — and from the
-      fuel-and-Flex block, which is a business input rather than a household cost.
+      76%, Online Shopping down 63%, Bills down 27%, Car down 8%. The deficit did not come from loose spending.
+      It came from <b>Bzila (+195%)</b> — nine TakeProfit accounts and resets — and from the fuel-and-Flex block,
+      which is a business input rather than a household cost.
     </p>
-  </section>
+  </div>
 
-  <section>
-    <div class="eyebrow">What came in</div>
-    <h2>The income side is filed as shopping</h2>
+  <!-- ── Income ──────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="head">
+      <div class="eyebrow">What came in</div>
+      <div class="headsub">The income side is filed as shopping and transfers.</div>
+    </div>
     <div class="scroll">
       <table>
         <thead><tr><th>Source</th><th class="n">August</th><th class="n">Hits</th><th>Currently filed as</th></tr></thead>
         <tbody>
           <tr><td>WakeMed</td><td class="n">$2,445.34</td><td class="n">2</td><td>Transfers</td></tr>
-          <tr><td>Amazon (Flex deposits)</td><td class="n">$1,042.00</td><td class="n">12</td><td>Online Shopping</td></tr>
-          <tr><td>Brandon Muzila (self)</td><td class="n">$860.00</td><td class="n">5</td><td>Transfers</td></tr>
-          <tr><td>Venmo</td><td class="n">$299.72</td><td class="n">5</td><td>Transfers</td></tr>
-          <tr><td>Sp Carpe · Walmart (refunds)</td><td class="n">$5.47</td><td class="n">2</td><td>Heather extra · Online Shopping</td></tr>
+          <tr><td>Amazon <small>Flex deposits</small></td><td class="n">$1,042.00</td><td class="n">12</td><td>Online Shopping</td></tr>
+          <tr><td>Brandon Muzila <small>self</small></td><td class="n">$860.00</td><td class="n">5</td><td>Transfers</td></tr>
+          <tr><td>Venmo <small>incl. parents' phone share</small></td><td class="n">$299.72</td><td class="n">5</td><td>Transfers</td></tr>
+          <tr><td>Sp Carpe · Walmart <small>refunds</small></td><td class="n">$5.47</td><td class="n">2</td><td>Heather extra · Online Shopping</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="sub" style="margin-top:14px">
+    <p class="body" style="padding:14px 16px 6px">
       Twelve Flex deposits totalling $1,042 are sitting in <b>Online Shopping</b>, and $3,605 of real income is
       in <b>Transfers</b>. Two empty categories already exist for exactly this — <b>Pay</b> and <b>Flex B Pay</b>,
-      both at $0 all year. Until the deposits move, every "net" figure on the page is reading income as a
-      shopping category.
+      both at $0 all year. Until the deposits move, every "net" figure is reading income as a shopping category.
     </p>
-  </section>
+    <p class="body" style="padding:0 16px 16px">
+      The Venmo line is doing double duty: some of it is the <b>$100–150 a month parents send for their share of
+      the phone bill</b>. That is a reimbursement, not income — it is why the Bills line reads about $125/mo
+      higher than the household actually pays.
+    </p>
+  </div>
 
-  <section>
-    <div class="eyebrow">The recurring stack</div>
-    <h2>Bills, split by whether you could stop them</h2>
+  <!-- ── Recurring ───────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="head">
+      <div class="eyebrow">The recurring stack</div>
+      <div class="headsub">Bills, split by whether you could stop them.</div>
+    </div>
     <div class="scroll">
       <table>
         <thead><tr><th>Charge</th><th class="n">Per month</th><th class="n">Per year</th><th>Kind</th></tr></thead>
         <tbody>
-          <tr><td>Verizon</td><td class="n">$356.56</td><td class="n">$4,278.72</td><td>Real bill</td></tr>
+          <tr><td>Verizon <small>less parents' share</small></td><td class="n">~$231.56</td><td class="n">~$2,778.72</td><td>Real bill</td></tr>
           <tr><td>Spectrum</td><td class="n">$85.00</td><td class="n">$1,020.00</td><td>Real bill</td></tr>
           <tr><td>Lemonade Insurance</td><td class="n">$7.50</td><td class="n">$90.00</td><td>Real bill</td></tr>
-          <tr><td>Planet Fitness</td><td class="n">$25.05</td><td class="n">$300.60</td><td>Optional</td></tr>
-          <tr><td>Apple</td><td class="n">$21.98</td><td class="n">$263.76</td><td>Optional</td></tr>
-          <tr><td>Spotify</td><td class="n">$20.37</td><td class="n">$244.44</td><td>Optional</td></tr>
-          <tr><td>Google</td><td class="n">$9.99</td><td class="n">$119.88</td><td>Optional</td></tr>
-          <tr><td>Amazon Prime</td><td class="n">$5.35</td><td class="n">$64.20</td><td>Optional</td></tr>
+          <tr><td>Planet Fitness</td><td class="n">$25.05</td><td class="n">$300.60</td><td>Luxury</td></tr>
+          <tr><td>Apple</td><td class="n">$21.98</td><td class="n">$263.76</td><td>Luxury</td></tr>
+          <tr><td>Spotify</td><td class="n">$20.37</td><td class="n">$244.44</td><td>Luxury</td></tr>
+          <tr><td>Google</td><td class="n">$9.99</td><td class="n">$119.88</td><td>Luxury</td></tr>
+          <tr><td>Amazon Prime</td><td class="n">$5.35</td><td class="n">$64.20</td><td>Luxury</td></tr>
           <tr><td>Discord · X · TradingView</td><td class="n">$25.71</td><td class="n">$308.52</td><td>Business (Bzila)</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="sub" style="margin-top:14px">
-      Personal optional comes to <b>$82.74 a month — $992.88 a year</b>. Worth knowing, but keep it in
-      proportion: <b>Verizon alone is $4,278 a year</b> and is 67% of the whole Bills line. One phone call is
-      worth more than cancelling the entire optional stack.
+    <p class="body" style="padding:14px 16px 16px">
+      Personal luxury comes to <b>$82.74 a month — $992.88 a year</b>. Worth knowing, but keep it in proportion:
+      Verizon is 67% of the whole Bills line. The full bill is <b>$356.56</b>, but parents Venmo back
+      <b>$100–150</b> for their portion every month, so the household actually carries about <b>$232 — roughly
+      $2,780 a year</b>. Still the largest single recurring cost after rent, and still worth more than
+      cancelling the entire luxury stack — just not the $4,278 the raw statement line implies.
     </p>
-  </section>
+  </div>
 
-  <section>
-    <div class="eyebrow">What to improve</div>
-    <h2>Seven things, in the order they pay off</h2>
+  <!-- ── Findings ────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="head">
+      <div class="eyebrow">What to improve</div>
+      <div class="headsub">Seven things, in the order they pay off.</div>
+    </div>
     <div class="finds">
 
-      <div class="find">
+      <div class="find hi">
         <div class="findhead"><span class="chip c-hi">Money</span><h3>Find the missing Flex deposits</h3></div>
         <p>Flex earned <b>$1,949</b> across 26 days. Only <b>$1,042</b> shows up as Amazon deposits in SECU during
-          August. That is a <b>$907</b> gap, and it is the whole reason the month reads as −$499.</p>
+          August — a <b>$907</b> gap, and the whole reason the month reads as −$499.</p>
         <p>Either it landed after the 31st, or it landed somewhere other than this account. Both are fine
           answers — not knowing which is not.</p>
         <div class="do"><span>Do</span>Check the first week of September's deposits before treating August as a losing month.</div>
       </div>
 
-      <div class="find">
-        <div class="findhead"><span class="chip c-hi">Money</span><h3>Verizon at $356.56 is the only big lever left</h3></div>
-        <p>It is 67% of Bills and <b>$4,278 a year</b>. Everything else on the discretionary side is already at or
-          near a record low — Dining Out $33, Online Shopping $183 — so there is nothing left to squeeze there.</p>
-        <p>Getting it to $250 saves <b>$1,278 a year</b>, more than every optional subscription combined.</p>
-        <div class="do"><span>Do</span>One call. Ask what plan the line actually needs and what the loyalty price is.</div>
+      <div class="find hi">
+        <div class="findhead"><span class="chip c-hi">Money</span><h3>Verizon is the biggest lever — but not by as much as it looks</h3></div>
+        <p>The statement shows <b>$356.56</b>, 67% of the whole Bills line. It is not all yours: parents send
+          <b>$100–150</b> back on Venmo each month for their portion, so the household really carries about
+          <b>$232 — roughly $2,780 a year</b>.</p>
+        <p>That still makes it the largest recurring cost after rent, and everything discretionary is already at
+          a record low — Dining Out $33, Online Shopping $183 — so there is nothing left to squeeze there. But
+          the target is the <em>net</em> number, not the $4,278 the raw line implies.</p>
+        <div class="do"><span>Do</span>One call on the plan — and log the Venmo reimbursement against the bill so the Bills line stops reading $125/mo too high.</div>
       </div>
 
-      <div class="find">
+      <div class="find mid">
         <div class="findhead"><span class="chip c-mid">Data</span><h3>File income as income</h3></div>
         <p><b>$3,605</b> of deposits sit in Transfers and <b>$1,042</b> of Flex pay sits in Online Shopping. The
           <b>Pay</b> and <b>Flex B Pay</b> categories exist and have been empty all year.</p>
         <p>Until this is fixed, the Online Shopping trend line is half income and the net figure cannot be read
           straight.</p>
-        <div class="do"><span>Do</span>Re-file WakeMed → Pay and Amazon deposits → Flex B Pay with "apply to every month" on.</div>
+        <div class="do"><span>Do</span>Real Month → Merchants → Money in. One dropdown per source, with “Apply to every month” on.</div>
       </div>
 
-      <div class="find">
+      <div class="find mid">
         <div class="findhead"><span class="chip c-mid">Data</span><h3>Import July</h3></div>
         <p>Statements exist for Dec, Jan–Jun and Aug. <b>July is missing.</b> Every average on the Real Month page
           divides by imported months, so July's absence silently reshapes every trend and every "vs average"
           number in this report.</p>
-        <div class="do"><span>Do</span>Drop the July statement in. It is the single highest-value ten minutes here.</div>
+        <div class="do"><span>Do</span>Drop the July statement in. The single highest-value ten minutes here.</div>
       </div>
 
-      <div class="find">
+      <div class="find mid">
         <div class="findhead"><span class="chip c-mid">Data</span><h3>Set budgets on the four lines that move</h3></div>
-        <p>Only <b>Rent ($2,240)</b> and <b>Family Activities ($3)</b> have budgets. Thirteen categories have none,
-          so "vs budget" is blank almost everywhere and the pace gauge has nothing to measure against.</p>
+        <p>Only <b>Rent ($2,240)</b> and <b>Family Activities ($3)</b> have budgets. Thirteen categories have
+          none, so "vs budget" is blank almost everywhere and the pace gauge has nothing to measure against.</p>
         <p>Based on your own Jan–Jun averages: Food <b>$250</b>, Bills <b>$550</b>, Car <b>$600</b>,
           Sheets/Gas <b>$110</b>.</p>
         <div class="do"><span>Do</span>Four numbers on the Categories tab. Nothing else needs one yet.</div>
@@ -419,31 +442,33 @@ a{color:inherit}
 
       <div class="find">
         <div class="findhead"><span class="chip c-lo">Watch</span><h3>Bzila had its most expensive month ever</h3></div>
-        <p><b>$439.66</b> cleared the bank, against a Jan–Jun average of $149 — up <b>195%</b>. On the business
+        <p><b>$439.66</b> cleared the bank against a Jan–Jun average of $149 — up <b>195%</b>. On the business
           ledger it was nine TakeProfit accounts and resets (<b>$835</b>) plus <b>$130</b> of infrastructure,
           against <b>$1,195</b> of CB Edge earnings. Net <b>+$230</b>.</p>
-        <p>Still positive, so this is a watch item and not a problem. But nine resets in one month is the
-          number to keep an eye on — it is the largest single controllable outflow in the whole month.</p>
+        <p>Still positive, so this is a watch item and not a problem. But nine resets in one month is the number
+          to keep an eye on — it is the largest single controllable outflow in the whole month.</p>
         <div class="do"><span>Do</span>Track resets per month next to CB Edge earnings, the way Flex gas is tracked next to Flex pay.</div>
       </div>
 
     </div>
-  </section>
+  </div>
 
-  <section>
+  <!-- ── children ────────────────────────────────────────────────────────── -->
+  <div class="card pad">
     <div class="eyebrow">One more thing</div>
-    <h2>Nothing was filed to children in August</h2>
-    <p class="sub" style="max-width:66ch">
+    <h2 style="margin-top:6px">Nothing was filed to children in August</h2>
+    <p class="body" style="margin-top:8px">
       That category averaged <b>$165 a month</b> across Jan–Jun and appeared in four of those six months.
-      August is <b>$0</b>. Either it was genuinely a quiet month, or those charges landed under Online
-      Shopping, Family Activities or Food. Worth one pass through the ledger before the month is closed —
-      it is the only category whose zero looks like a filing gap rather than a result.
+      August is <b>$0</b>. Either it was genuinely a quiet month, or those charges landed under Online Shopping,
+      Family Activities or Food. Worth one pass through the ledger before the month is closed — it is the only
+      category whose zero looks like a filing gap rather than a result.
     </p>
-  </section>
+  </div>
 
-  <div class="foot">
-    <div class="eyebrow">How this was measured</div>
-    <ul>
+  <!-- ── Method ──────────────────────────────────────────────────────────── -->
+  <div class="card pad">
+    <div class="eyebrow" style="color:var(--muted)">How this was measured</div>
+    <ul class="foot" style="margin:10px 0 0;padding-left:18px">
       <li>Source: <code>budget_statement_tx</code> for 2026-08 via <code>/api/budget/real</code> — what actually
         cleared, never the register or the plan.</li>
       <li>Fuel: $370 of Amazon Flex gas is moved out of Sheets/Gas into Flex Gas &amp; Expenses on read, so the
@@ -453,8 +478,8 @@ a{color:inherit}
       <li>Two baselines are distorted by a structural gap rather than by behaviour: January has no Rent or Car
         rows, and Flex gas was only logged from May onward. Rent is therefore reported flat rather than as a
         delta.</li>
-      <li>Business figures (TakeProfit, CB Edge, infrastructure) come from the Bzila ledger, which is entered
-        by hand and does not always clear the bank in the same month.</li>
+      <li>Business figures (TakeProfit, CB Edge, infrastructure) come from the Bzila ledger, which is entered by
+        hand and does not always clear the bank in the same month.</li>
     </ul>
   </div>
 </div>
@@ -503,7 +528,7 @@ document.getElementById("ledger").innerHTML = cats.map(([name,detail,amt]) => `
     <div class="lpct">${(amt/OUT_TOTAL*100).toFixed(1)}%</div>
   </div>`).join("");
 
-/* ── Delta rows (diverging, sign always spelled out) ──────────────────────── */
+/* ── Delta rows (diverging; the sign is always spelled out) ───────────────── */
 const maxDelta = Math.max(...deltas.map(([,a,v]) => Math.abs(v-a)));
 document.getElementById("deltas").innerHTML = deltas.map(([name,avg,val]) => {
   const d = val - avg, over = d > 0;
@@ -511,42 +536,43 @@ document.getElementById("deltas").innerHTML = deltas.map(([name,avg,val]) => {
   const pct = avg ? (d/avg*100) : 0;
   return `<div class="drow" title="${name}: ${money(val)} in August against a ${money(avg)} Jan–Jun average">
     <div class="dname">${name}</div>
-    <div class="davg" style="color:var(--ink-3)">${money0(avg)}</div>
-    <div class="dbar"><i style="${over ? `left:50%;width:${w}%;background:var(--over)` :
-      `right:50%;width:${w}%;background:var(--under)`}"></i></div>
-    <div class="ddelta" style="color:${over ? "var(--over)" : "var(--under)"}">${over?"+":"−"}${Math.abs(pct).toFixed(0)}%</div>
+    <div class="davg" style="color:var(--muted-2)">${money0(avg)}</div>
+    <div class="dbar"><i style="${over ? `left:50%;width:${w}%;background:var(--money-out)` :
+      `right:50%;width:${w}%;background:var(--money-in)`}"></i></div>
+    <div class="ddelta" style="color:${over ? "var(--money-out)" : "var(--money-in)"}">${over?"+":"−"}${Math.abs(pct).toFixed(0)}%</div>
   </div>`;
 }).join("");
 
 /* ── Daily columns ────────────────────────────────────────────────────────── */
 (() => {
-  const W = 900, H = 250, L = 46, R = 8, T = 14, B = 26;
+  const W = 900, H = 240, L = 52, R = 8, T = 14, B = 26;
   const pw = W - L - R, ph = H - T - B;
   const top = 2400;
   const slot = pw / daily.length, bw = Math.min(18, slot * 0.62);
   const y = v => T + ph - (v / top) * ph;
   const parts = [];
   [0, 600, 1200, 1800, 2400].forEach(t => {
-    parts.push(`<line x1="${L}" x2="${W-R}" y1="${y(t)}" y2="${y(t)}" stroke="var(--rule)" stroke-dasharray="3 5"/>`);
-    parts.push(`<text x="${L-9}" y="${y(t)+4}" text-anchor="end" font-size="10" fill="var(--ink-3)"
-      font-family="IBM Plex Mono, monospace">${t ? "$"+t.toLocaleString("en-US") : "$0"}</text>`);
+    parts.push(`<line x1="${L}" x2="${W-R}" y1="${y(t)}" y2="${y(t)}" stroke="rgba(255,255,255,0.07)" stroke-dasharray="3 5"/>`);
+    parts.push(`<text x="${L-10}" y="${y(t)+4}" text-anchor="end" font-size="10" fill="rgba(255,255,255,0.42)"
+      font-family="ui-monospace, monospace">${t ? "$"+t.toLocaleString("en-US") : "$0"}</text>`);
   });
   daily.forEach(([day, v], i) => {
     const x = L + i * slot + (slot - bw) / 2;
     const h = Math.max(v > 0 ? 2 : 0, T + ph - y(v));
     if (v > 0) parts.push(`<rect class="bar" data-day="${day}" data-v="${v}" x="${x.toFixed(1)}" y="${y(v).toFixed(1)}"
-      width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="3" fill="var(--bar)" stroke="var(--card)" stroke-width="2"/>`);
+      width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="3" fill="#7dd3fc" fill-opacity="0.85"
+      stroke="#0B101B" stroke-width="2"/>`);
     else parts.push(`<rect class="bar" data-day="${day}" data-v="0" x="${x.toFixed(1)}" y="${(T+ph-7).toFixed(1)}"
-      width="${bw.toFixed(1)}" height="7" rx="2" fill="none" stroke="var(--rule)" stroke-dasharray="2 2"/>`);
+      width="${bw.toFixed(1)}" height="7" rx="2" fill="none" stroke="rgba(255,255,255,0.18)" stroke-dasharray="2 2"/>`);
     if (day % 5 === 0 || day === 1)
       parts.push(`<text x="${(x+bw/2).toFixed(1)}" y="${H-8}" text-anchor="middle" font-size="10"
-        fill="var(--ink-3)" font-family="IBM Plex Mono, monospace">${day}</text>`);
+        fill="rgba(255,255,255,0.42)" font-family="ui-monospace, monospace">${day}</text>`);
   });
   // Direct label on the one point that carries the story, not on every bar.
   const i6 = daily.findIndex(d => d[0] === 6);
   const x6 = L + i6 * slot + slot / 2;
-  parts.push(`<text x="${(x6+11).toFixed(1)}" y="${(y(2333.32)+11).toFixed(1)}" font-size="11" font-weight="600"
-    fill="var(--ink)" font-family="IBM Plex Mono, monospace">$2,333 · rent</text>`);
+  parts.push(`<text x="${(x6+11).toFixed(1)}" y="${(y(2333.32)+11).toFixed(1)}" font-size="11" font-weight="800"
+    fill="#ffffff" font-family="ui-monospace, monospace">$2,333 · rent</text>`);
   const svg = document.getElementById("daily");
   svg.innerHTML = parts.join("");
 
