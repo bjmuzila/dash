@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-08-31 - Budget overview: Rent / Bank / Upcoming Pay move above cash flow
+
+The three "what is happening right now" cards - Rent countdown, bank balances,
+upcoming pay - were sitting BELOW the cash-flow chart and the cashflow calendar.
+Those three are what the page gets opened for; the chart and the calendar are
+the detail behind them, and they are tall, so the answers were pushed off the
+first screen by their own supporting evidence.
+
+Swapped: the Rent / Bank / Upcoming Pay row now sits directly under the
+Safe-to-spend / Pace / Donut / Reconcile strip, with Cash Flow and the Cashflow
+Calendar underneath it. No component or prop changed - the two grid rows traded
+places.
+
 ## 2026-08-31 - August report restyled into the dashboard theme
 
 The report was its own visual world - ledger-paper palette, Bodoni masthead,

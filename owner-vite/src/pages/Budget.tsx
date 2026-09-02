@@ -1301,6 +1301,17 @@ export default function Budget() {
           <BalanceCheckCard data={reconcile} currency={currency} />
         </div>
 
+        {/* Alerts · banks · upcoming pay — the three "what is happening right
+            now" cards. They sit ABOVE the cash-flow pair on purpose: rent, the
+            live bank balance and what is still due are the answers you open
+            this page for, and the chart and calendar are the detail behind
+            them. */}
+        <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1.1fr 1fr 1fr"), gap: 12, alignItems: "stretch" }}>
+          <RentCountdown info={rentInfo} currency={currency} onToggleFlow={toggleSettledFlow} />
+          <BankAccountsCard value={dailyBalance} currency={currency} onSave={saveDailyBalance} fallback={bankNow} />
+          <UpcomingPayCard data={upcomingPay} pastDue={billsDue.filter((b) => b.days < 0)} currency={currency} onMarkPaid={markBillPaid} />
+        </div>
+
         {/* Cash flow (daily) + cashflow calendar */}
         <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1.55fr 1fr"), gap: 12, alignItems: "stretch" }}>
           <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
@@ -1325,13 +1336,6 @@ export default function Budget() {
             </div>
             <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} mode={range} yearNet={yearNet} year={year} />
           </div>
-        </div>
-
-        {/* Alerts · banks · upcoming pay */}
-        <div style={{ display: "grid", gridTemplateColumns: gridCols(isMobile, "1.1fr 1fr 1fr"), gap: 12, alignItems: "stretch" }}>
-          <RentCountdown info={rentInfo} currency={currency} onToggleFlow={toggleSettledFlow} />
-          <BankAccountsCard value={dailyBalance} currency={currency} onSave={saveDailyBalance} fallback={bankNow} />
-          <UpcomingPayCard data={upcomingPay} pastDue={billsDue.filter((b) => b.days < 0)} currency={currency} onMarkPaid={markBillPaid} />
         </div>
 
         {/* Recent transactions · category spend */}
