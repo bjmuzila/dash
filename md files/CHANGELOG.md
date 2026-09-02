@@ -1,5 +1,185 @@
 # Changelog
 
+## 2026-09-02 - CopyShot: overlay caption (option C), the card's header comes off, and stale chunks stop 404ing
+
+**Option C shipped.** No matte, no title band, no strip bolted underneath — the
+image is the card, with the caption and the CB Edge mark laid on its bottom edge
+over a fade that comes up out of the app's own background.
+
+    Net Premium  ·  Sep 2, 17:15 ET  ·  SPX · 9-2-26        [CB EDGE]
+
+One deviation from the mockup, deliberate: the card gets a 32px band of plain
+background under it rather than the caption sitting flat on the card. Every card
+in this app has something living on its bottom edge — Net Premium's "Last print"
+line, GEX Candles' time axis, a ladder's last row — and the mockup put the
+caption straight through it. 32px clears all of them, and with no rule, no plate
+and the fade starting well up inside the card it still reads as the card fading
+into its own footer.
+
+**A card that names itself loses its header.** `data-capture-meta` now does two
+things: it appends the card's own note to the caption, and it takes the Card
+header off the shot. That pairing is the point rather than a side effect — the
+caption already carries the card's NAME and its time, so a card that also hands
+over the one thing the caption cannot work out has said everything its header
+said. Leaving the header in printed "Net Premium" and the expiry twice with the
+chart squeezed underneath. A card that publishes nothing keeps its header,
+because then the header is the only place that information exists.
+
+The capture height comes down by the header's height too. The body is a chart at
+a fixed bitmap size, so removing the header without shortening the picture would
+just have opened a band of empty plate under the chart.
+
+Only `:scope > header` goes — a Multi Greek column or any nested Card keeps its
+own, because there it is content rather than chrome.
+
+**And the 404s.** `[copyshot] Failed to fetch dynamically imported module …
+v3/assets/snapshot-BfbFVooa.js 404`. Not a CopyShot bug: every route and most
+cards in v3 are `lazy()`, Vite names those chunks by content hash, and a deploy
+writes new hashes and DELETES the old files. A tab still running the previous
+`index-*.js` asks for chunks that are no longer on the VPS, gets a 404, and
+whatever was just clicked silently does nothing. The camera is only where it got
+noticed first — it has been true of every lazy thing in the app since the first
+lazy route landed.
+
+`src/main.tsx` now listens for Vite's `vite:preloadError` and reloads the page
+once, guarded by a session flag so a genuinely broken build cannot become a
+reload loop — the second failure in a session is left to throw, which puts it in
+the console where it belongs.
+
+Not touched, and worth naming: the `WebSocket … failed: Page entered
+Back-Forward Cache` lines are the browser freezing a backgrounded tab, and the
+126 `disconnected port object` errors from `proxy.js` / `installHook.js` are a
+browser extension, not this app.
+
+Files: `cbedge-v3/src/shell/snapshot.ts`, `cbedge-v3/src/main.tsx`.
+Preview: `generated/2026-09-02-copyshot-final-overlay.png`.
+
+
+## 2026-09-02 - /scanner step 3: the render layer, and /v3/scanner is a real route again
+
+Step 3 of four. **10,877 lines of render layer** across seven tab components
+plus the page shell, and the four route edits that make `/v3/scanner` exist.
+The rule this step ran on was completeness, not looks: get every value from the
+1,525-row checklist on screen plainly, tick it, and style afterwards. The
+styling pass has not happened — this is deliberately plain.
+
+**The four edits, all of which were REVERSALS.** Scanner was retired from v3 on
+2026-08-30, so none of these was a fresh add:
+
+1. `cbedge-v3/src/pages/Scanner.tsx` — was a tombstone exporting `{}` that
+   invited `git rm`. Now the page frame: tab state, owner gate, seven mounts.
+2. `cbedge-v3/src/App.tsx` — `lazy()` import + `<Route path="/scanner">`, and
+   the "RETIRED" comment block rewritten to name only Test Lab and Journal.
+3. `cbedge-v3/src/shell/Shell.tsx` — the `NAV` entry (🔭), prefetching
+   `/proxy/gex-change-top` on hover so the click lands on data already home.
+4. `app/v3/scanner/route.ts` — answered **404 by design**; now the three-line
+   `serveSpaShell("v3")`.
+
+The fifth edit AGENTS.md warns about turned out to be unnecessary: `/scanner` is
+still in both `ALL_PAGES` and `LIVE_ROUTES` in `pages/TradersDashboard.tsx`. The
+tombstone claimed it had been removed from both. It had not.
+
+**Two things the page shell does that v2 did not:**
+
+- **The tab is in the URL.** `useSearchParams` is the source of truth, so
+  `/v3/scanner?tab=ibstats` is pasteable and back/forward move between tabs.
+  v2 kept it in `useState` and never wrote `?tab=` back. This also deletes the
+  `SCANNER_TAB_EVENT` window listener, which existed only because a
+  query-string-only change does not remount under React Router — and which was
+  the unvalidated way in, casting any truthy `detail` to a tab id with no
+  guard, so a malformed event rendered a page with no card at all.
+- **Every tab is its own `lazy()` chunk.** v2 static-imported all seven, so
+  329KB of tab components plus a 3,100-line page shipped to every visitor
+  whichever tab they opened.
+
+The owner gate is ported as v2's three-way, not two: while auth resolves,
+`visibleTab` is null and NOTHING mounts, so no tab's fetches fire. A flash of
+the wrong tab that then swaps is worse than an empty beat.
+
+**Verification.** `tsc --noEmit` against the real `tsconfig.json` with the
+actual v3 tree, strict plus `noUnusedLocals` / `noUnusedParameters` /
+`noUncheckedIndexedAccess` / `noFallthroughCasesInSwitch` /
+`verbatimModuleSyntax` / `isolatedModules`: **zero errors in every scanner file
+and in `Scanner.tsx`.** Zero colour literals, zero Tailwind shade classes, zero
+`text-[Npx]` or `fontSize:` in CSS, zero banned v2 imports, no `@/data/socket`
+anywhere.
+
+**The non-negotiables v2 broke, now honoured.** Two canvases are created —
+`GexLevelsTab`'s vol-flow chart and `TpoTab`'s letter profile — and **both carry
+`data-cb-layer`** (v2 tagged neither) and **both honour `onVisibility`** (v2
+guarded neither; the TPO profile's draw effect re-ran on every `spot` tick
+whether or not the card was on screen). Watch This' ProbeChart is SVG, so
+`data-cb-layer` does not apply, but it got the guard it lacked — an
+IntersectionObserver publishing `data-visible`, plus a ref its pointer handler
+checks before recomputing a crosshair.
+
+**Bugs reproduced, not fixed** — the point of the step. A break-even pick on GEX
+Change Top genuinely paints **green in the scorecard, red on the card headline,
+and white on the "now" line**, because v2 answers "is this positive" three ways
+(`>= 0`, `> 0`, three-way) in three places; all three call sites carry a comment
+pointing at the marker. A `grade: "B"` row with `max_pct <= 0` shows a B pill
+*and* sits inside the "never green" figure above it. Strike Query's "Negative"
+filter empties the table when sorted by Strike, with the tooltip still promising
+GEX. Pick Study can read **"Armed"** in the bar directly above prose saying
+**"Nothing is being predicted yet"**. IB Stats' gauge saturates at any reading
+≥50%, and its "WICK-only touch" row reads a measured-looking red 0.0% off a
+hardcoded zero.
+
+**One place the render layer corrects v2, and only one:** Pick Study's
+calibration empty row spans `CAL_COLUMN_COUNT` (11) where v2 hardcoded 10
+against 11 columns. The count is already *derived* from the column list, so
+writing anything else would mean typing a literal the header can drift away
+from — which is how v2 got 10.
+
+**Two deviations worth a decision.** IB Stats renders the probability engine's
+stage sections and `TAG` words, which v2 mounts behind
+`ENGINE_FLAGS = {showLive:false, showStages:false}` and therefore never shows —
+BRIEF3 asked for every engine string on screen, and two constants at the top of
+that section restore v2's card exactly. And TPO now loads one 46-day candle
+window instead of re-fetching per day-selector position, which fixes a
+waterfall but means the structure stats no longer move when the day selector
+does; in v2 they do.
+
+`design/primitives/Table` early-returns its `empty` node instead of the table,
+which drops the header row — four tabs independently hand-rolled `<table>`
+markup in the primitive's own class vocabulary to keep a header above a
+colSpan'd empty cell. Worth fixing in the primitive; not done here, because it
+is shared with every other v3 page.
+
+Next: step 4 — the automatic parity script, driving `/app/scanner` and
+`/v3/scanner` against the same backend and failing on anything present in v2 and
+absent in v3.
+
+## 2026-09-02 - v3 Replay: the Multi Greek core now wears the same gold wash as the ladder and the chain
+
+Replay's Multi Greek grid was still painting the Core Bullseye with v2's FLAT
+gold — `linear-gradient(CB_FILL, CB_FILL), heat` at 85% over the whole cell.
+Both of the live surfaces had already moved off that fill because it is a bug,
+not a style: a Core strike below spot is negative, and at 85% the gold buries
+the red, so a short-gamma core and a long-gamma core render identically.
+
+`src/pages/replay/MultiGreekReplay.tsx` now uses the ladder's directional wash,
+copied byte-for-byte from `src/board/multiGreek/MultiGreekCard.tsx`:
+
+    linear-gradient(112deg, gold 0%, gold@85% 55%, gold@0% 82%), heat
+
+- 112deg rather than a true diagonal — the cell is ~7x wider than it is tall.
+- Stops 55/82 (the ladder's), not the chain's 26/66: Replay is scanned across
+  four panels at once, so gold has to hold through the figure and hand over in
+  the last quarter.
+- Fades to gold-at-zero, not `transparent` — a ramp through grey reads dirty.
+- Same colour decision as `levelFillBg()` in
+  `src/pages/optionsChain/heatSkins.ts` (the options chain / home board).
+
+Net effect: the core is still the gold cell at a glance, but the figure now
+sits on the ordinary heat and reads on its own sign again.
+
+Also dropped the ★ marker's `textShadow` halo on later-expiry cores, matching
+the live ladder — the corner it sits in is full gold now, so the glow only
+softened the glyph's edge.
+
+Touched: `cbedge-v3/src/pages/replay/MultiGreekReplay.tsx` (only).
+
 ## 2026-09-02 - ES−SPX basis: the route had never once returned a number
 
 The GEX Candles card on v3 has been showing "ES−SPX basis unavailable (route has

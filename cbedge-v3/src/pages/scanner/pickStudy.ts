@@ -673,6 +673,94 @@ export function calSortValue(r: CalRow, k: CalSortKey): SortValue {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE THREE-STATE SORT ITSELF.
+//
+// ADDED IN STEP 3 (see the report): transcribed from v2's shared
+// `components/shared/useTableSort.tsx`, which is what both of this tab's tables
+// sort through (`SortTh sort={bucketSort} …`). Step 2 ported the two
+// `*SortValue` accessors and stopped there, so the cycle, the null sink and the
+// stability rule — all of which decide what a reader sees — had nowhere to live
+// but the component. They are behaviour, so they live here.
+//
+// Three rules, all v2's:
+//   1. desc → asc → UNSORTED. The third click is not a nicety: server order is
+//      meaningful on both tables (buckets arrive in the feature's own order,
+//      calibration rows arrive grade-ranked) and must be reachable without a
+//      reload.
+//   2. NULLS SINK IN BOTH DIRECTIONS. A missing number is not a small one, and
+//      letting "—" win the top of a descending sort is the fastest way to
+//      misread a table. Empty strings and non-finite numbers count as null.
+//   3. STABLE. Equal values keep the incoming (server) order.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type SortDir = 'asc' | 'desc'
+
+export interface SortState<K extends string> {
+  /** null = unsorted, i.e. the order the server sent. */
+  key: K | null
+  dir: SortDir
+}
+
+/** Neither table sets an initial sort key — first paint is server order. */
+export function initialSortState<K extends string>(): SortState<K> {
+  return { key: null, dir: 'desc' }
+}
+
+/** desc → asc → unsorted. A different column always restarts at desc. */
+export function cycleSort<K extends string>(cur: SortState<K>, k: K): SortState<K> {
+  if (cur.key !== k) return { key: k, dir: 'desc' }
+  if (cur.dir === 'desc') return { key: k, dir: 'asc' }
+  return { key: null, dir: 'desc' }
+}
+
+/** Booleans rank true above false; everything else compares numerically or by locale. */
+export function compareSortValues(a: SortValue, b: SortValue): number {
+  const aNull = a == null || a === '' || (typeof a === 'number' && !Number.isFinite(a))
+  const bNull = b == null || b === '' || (typeof b === 'number' && !Number.isFinite(b))
+  if (aNull && bNull) return 0
+  if (aNull) return 1
+  if (bNull) return -1
+
+  const av = typeof a === 'boolean' ? (a ? 1 : 0) : a
+  const bv = typeof b === 'boolean' ? (b ? 1 : 0) : b
+
+  if (typeof av === 'number' && typeof bv === 'number') return av - bv
+  return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' })
+}
+
+/** A sorted COPY, or `rows` untouched when no column is active. Never mutates. */
+export function applySort<T, K extends string>(
+  rows: readonly T[],
+  state: SortState<K>,
+  get: (row: T, key: K) => SortValue,
+): T[] {
+  const key = state.key
+  if (!key) return rows as T[]
+  const sign = state.dir === 'asc' ? 1 : -1
+  return rows
+    .map((row, i) => ({ row, i }))
+    .sort((x, y) => {
+      const d = compareSortValues(get(x.row, key), get(y.row, key))
+      return d !== 0 ? d * sign : x.i - y.i
+    })
+    .map((w) => w.row)
+}
+
+/** The header caret. The inactive glyph is dimmed rather than hidden. */
+export const SORT_ARROW = { asc: '▲', desc: '▼', inactive: '↕' } as const
+export const SORT_INACTIVE_OPACITY = 0.32
+
+export function sortArrow<K extends string>(state: SortState<K>, k: K): string {
+  if (state.key !== k) return SORT_ARROW.inactive
+  return state.dir === 'asc' ? SORT_ARROW.asc : SORT_ARROW.desc
+}
+
+/** v2 appends its own affordance line to a column's own tooltip. */
+export function sortThTitle(title?: string): string {
+  return title ? `${title}\n\nClick to sort.` : 'Click to sort'
+}
+
 export interface ColumnDef<K extends string> {
   /** null for a non-sortable column. */
   key: K | null

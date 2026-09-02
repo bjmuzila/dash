@@ -36,11 +36,20 @@ const Em = lazy(() => import('@/pages/Em'))
 // /options-chain and /analytics already load.
 const Replay = lazy(() => import('@/pages/Replay'))
 
-// RETIRED 2026-08-30 — Scanner (/scanner), Test Lab (/test) and Journal
-// (/trading) are gone from v3, along with the ICT, ES Candles, Board and Multi
-// Greek rail slots (they never had pages here, only "coming soon" icons). The
-// BOARD CARDS of the same names — Multi Greek, GEX Candles, Key Levels — are
-// deliberately untouched: see src/board/catalog.tsx. Pages out, cards in.
+// /scanner — seven tabs over one route. UN-RETIRED 2026-09-02: the page was
+// removed from v3 on 2026-08-30 and is back as a 1:1 port against the checklist
+// in docs/parity/scanner.md (1,525 rows). The tab lives in the query string, so
+// /v3/scanner?tab=ibstats is a shareable link — which is also why
+// app/v3/scanner/route.ts had to stop answering 404. Each of the seven tabs is
+// its own lazy() chunk INSIDE that route: v2 static-imported all seven, so
+// 329KB of tab components shipped to everyone whichever tab they opened.
+const Scanner = lazy(() => import('@/pages/Scanner'))
+
+// STILL RETIRED 2026-08-30 — Test Lab (/test) and Journal (/trading) are gone
+// from v3, along with the ICT, ES Candles, Board and Multi Greek rail slots
+// (they never had pages here, only "coming soon" icons). The BOARD CARDS of the
+// same names — Multi Greek, GEX Candles, Key Levels — are deliberately
+// untouched: see src/board/catalog.tsx. Pages out, cards in.
 
 export default function App() {
   return (
@@ -64,6 +73,7 @@ export default function App() {
             <Route path="/flow" element={<Flow />} />
             <Route path="/em" element={<Em />} />
             <Route path="/replay" element={<Replay />} />
+            <Route path="/scanner" element={<Scanner />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

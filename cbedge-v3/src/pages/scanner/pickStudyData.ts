@@ -167,6 +167,8 @@ export function ruleFitUrl(days: number, cohort: string, apply: boolean): string
  * window's numbers stay fully rendered and indistinguishable from live ones,
  * with only the subtitle's " · loading…" to say otherwise (D36).
  */
+export class StudyBodyError extends Error {}
+
 export async function loadStudy(
   days: number,
   by: string,
@@ -174,7 +176,13 @@ export async function loadStudy(
   signal?: AbortSignal,
 ): Promise<StudyResp> {
   const j = await query<StudyResp>(studyUrl(days, by, cohort), { ...NO_STORE, signal })
-  if (!j?.ok) throw new Error(j?.error || STUDY_LOAD_FAILED)
+  // ADDED IN STEP 3 (see the report): the throw is typed so the two v2 error
+  // paths stay distinguishable at the render layer. v2's `ok:false` branch calls
+  // `setData(null)` and erases the whole upper half of the tab (D31, D32), while
+  // a THROWN fetch keeps the previous window's numbers on screen (D33, D36).
+  // With one untyped `Error` for both, a step-3 port has to pick one and lose
+  // the other; with this class it can reproduce both, which is what it does.
+  if (!j?.ok) throw new StudyBodyError(j?.error || STUDY_LOAD_FAILED)
   return j
 }
 

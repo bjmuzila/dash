@@ -143,6 +143,28 @@ export function historyDaysFor(nSessions: number): number {
   return nSessions <= 5 ? 14 : nSessions <= 10 ? 22 : 46
 }
 
+/** The widest window the day selector can ask for. */
+export const TPO_MAX_SESSIONS: TpoSessionChoice = 30
+
+/**
+ * ADDED IN STEP 3 — the ONE window the tab loads.
+ *
+ * v2 derives `historyDays` from `nSessions` inside the component, so a 5D→30D
+ * click re-fires the whole candle load AFTER the first one has already landed
+ * (spec "Do not port" 18, v3 non-negotiable 4). The departure note at the top of
+ * this file exports `historyDaysFor` so a caller can fire the widest window it
+ * may need up front and let the day selector be a pure client-side slice; this
+ * is that width, named once so the tab does not pick it.
+ *
+ * THE VISIBLE CONSEQUENCE, stated plainly: `ageSessions` is measured from the
+ * LAST LOADED session, so with one fixed window the structure stats no longer
+ * move when the day selector moves. In v2 they do — 5D loads 14 calendar days
+ * and every age, age bucket and base rate is computed inside that shorter
+ * window. The stats this tab shows are the 46-day window's, always, and the
+ * selector only changes how many profiles are DRAWN.
+ */
+export const TPO_HISTORY_DAYS = historyDaysFor(TPO_MAX_SESSIONS)
+
 // ── ET DATE ──────────────────────────────────────────────────────────────────
 
 /**
@@ -343,6 +365,75 @@ export async function loadTpoCandles(
     historical: histRes.status === 'fulfilled' ? histRes.value : [],
     failed,
   }
+}
+
+// ── THE LIVE LEG ─────────────────────────────────────────────────────────────
+//
+// ADDED IN STEP 3. Step 2 owns only the REST legs and says so; the live half was
+// left open because v2 reaches it through two page-level socket subscriptions
+// (`useEsCandles`'s `subscribeGex` and `useNqCandles`'s OWN raw `WebSocket`),
+// which v3 non-negotiable 2 forbids outright. The replacement is
+// `useFrame` / `watchFrame` from `@/data/hooks` reading the frame types below —
+// no socket import anywhere on the page, and the reconnect, the topic scope and
+// the last-value-wins snapshot all belong to the data layer instead.
+
+/**
+ * The frame type carrying live candle rows, per instrument. These are v2's own
+ * topic names (`subscribeGex({topics: ["esCandles", "es1mCandles"]})` and
+ * `nqCandles`), so the socket layer's scope does not have to learn a new word.
+ *
+ * NOTE only the 5-minute topic is named. v2 subscribes to `es1mCandles` as well
+ * and this tab never reads a 1-minute bar — every profile, every structure and
+ * `spot` itself are built from the 5m aggregation (`interval=5` on both ES REST
+ * legs). Subscribing to a stream the tab discards is the bandwidth v3's topic
+ * derivation exists to stop.
+ */
+export function candleFrameType(instrument: TpoInstrument): string {
+  return instrument === 'NQU' ? 'nqCandles' : 'esCandles'
+}
+
+/**
+ * v2's `COALESCE_MS`. `useEsCandles` publishes on a 250 ms TRAILING timer — a
+ * 4 Hz render ceiling — while writing its refs on every frame, so no bar is
+ * dropped and the profile does not re-render at tick rate. `useNqCandles` never
+ * got it (spec F9, "Do not port" 11); the tab applies it to BOTH instruments.
+ */
+export const CANDLE_COALESCE_MS = 250
+
+/**
+ * Coerce a live candle frame into records.
+ *
+ * Runs the same `normalizeCandle` the two REST decoders run — see header note 1.
+ * The socket's rows have already been through a JSON round trip and a BIGINT
+ * that arrived quoted is exactly as fatal here as it is there: an unparseable
+ * `timestamp` fails every RTH comparison silently and the bar simply never
+ * appears. Rows without a `slotKey` are dropped rather than merged, because
+ * `unionCandles` keys the whole merge on it and `undefined` would collapse every
+ * such row onto one entry.
+ */
+export function liveCandleRows(frame: unknown): EsCandleRecord[] {
+  if (!Array.isArray(frame)) return []
+  return (frame as unknown[])
+    .filter((r): r is EsCandleRecord => {
+      if (typeof r !== 'object' || r === null) return false
+      const slot = (r as { slotKey?: unknown }).slotKey
+      return typeof slot === 'string' && slot.length > 0
+    })
+    .map(normalizeCandle)
+}
+
+/**
+ * ADDED IN STEP 3 — what a failed candle leg says on screen.
+ *
+ * v2 says NOTHING: `snapdb` throws on a non-2xx (F192), the ES path logs per leg
+ * and the NQ path `.catch(() => {})`s it away, and the tab renders "Waiting on
+ * RTH candles." either way — the same sentence it shows at 04:00 on a Sunday
+ * when there genuinely are no bars. `loadTpoCandles` already returns `failed`
+ * for exactly this; returns null when both legs landed.
+ */
+export function candleLoadFailureLine(failed: readonly ('today' | 'historical')[]): string | null {
+  if (!failed.length) return null
+  return `Candle load failed: ${failed.join(' + ')} leg${failed.length === 1 ? '' : 's'}.`
 }
 
 /**

@@ -235,6 +235,13 @@ export const POC_COLOR_VAR_NAME = '--color-warn'
  *     `buildTpoStructures`, and naked POCs branch out of that test before `side`
  *     is read, so the value is inert. It is still what the field says.
  */
+/**
+ * ADDED IN STEP 3 — what `side` says for the one kind that is NOT in the table
+ * below, written out so a surface listing the taxonomy does not have to
+ * paraphrase the rule from the doc comment.
+ */
+export const HOLE_SIDE_RULE = 'per structure — "up" when its low is at or above the POC, else "down"'
+
 export const KIND_SIDE: Record<Exclude<StructureKind, 'hole'>, 'up' | 'down'> = {
   excess_high: 'up',
   excess_low: 'down',
@@ -353,6 +360,22 @@ export const AGE_BUCKETS: readonly AgeBucket[] = ['0-5d', '6-20d', '20d+']
  */
 export function ageBucket(ageSessions: number): AgeBucket {
   return ageSessions <= 5 ? '0-5d' : ageSessions <= 20 ? '6-20d' : '20d+'
+}
+
+/**
+ * ADDED IN STEP 3 — one representative `ageSessions` per bucket.
+ *
+ * `baseRateFor` takes an AGE, not a bucket, so a surface that wants to show the
+ * ladder's answer (the rate, the sample size, and WHICH rung answered) for every
+ * bucket needs an age to ask with. These are the buckets' own boundaries read
+ * back off `ageBucket`: the top of the first two, and one past the second —
+ * which is where `"20d+"` actually starts, per the note above about the label
+ * and the boundary disagreeing by a day.
+ */
+export const AGE_BUCKET_PROBE: Record<AgeBucket, number> = {
+  '0-5d': 5,
+  '6-20d': 20,
+  '20d+': 21,
 }
 
 // ── BASE RATES ───────────────────────────────────────────────────────────────

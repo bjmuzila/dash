@@ -196,15 +196,25 @@ export const RESULTS_LIMIT = 300
  */
 export const RESULTS_QUOTES = 0
 
-/** All four reads send `{cache: "no-store"}`. A zero window is the `query()` equivalent. */
-const NO_STORE_STALE_MS = 0
+/**
+ * All four reads send `{cache: "no-store"}`. A zero window is the `query()`
+ * equivalent.
+ *
+ * Exported because step 3 does not call the loaders below for the three POLLED
+ * or VIEW-KEYED reads — `useQuery` takes a URL, not a promise, and the poll
+ * (`pollMs`) and the "discard the previous URL's answer" guard both live in it.
+ * The render layer therefore passes this window to `useQuery` and reads the
+ * envelope back through the § 11 adapters, which are the same rules these
+ * loaders apply.
+ */
+export const NO_STORE_STALE_MS = 0
 
 /**
  * H204 — re-opening a row ALWAYS refetches in v2; there is no detail cache.
  * Zero here so a repeat open is a repeat request, rather than the port being
  * quietly stale where v2 was live.
  */
-const DETAIL_STALE_MS = 0
+export const DETAIL_STALE_MS = 0
 
 // ─────────────────────────────────────────────────────────────────────────────
 // § 3 — URL BUILDERS
@@ -268,7 +278,7 @@ export function watchThisPreloadUrls(view: OutcomeView = 'all'): string[] {
 // § 4 — WIRE ENVELOPES
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface WatchResponse {
+export interface WatchResponse {
   ok?: boolean
   error?: string
   rows?: WatchRow[]
@@ -282,17 +292,17 @@ interface WatchResponse {
   threshold?: number
 }
 
-interface OutcomesResponse {
+export interface OutcomesResponse {
   ok?: boolean
   error?: string
   rows?: OutcomeRow[]
 }
 
 /** The detail route answers the `OutcomeDetail` shape at the top level, not wrapped. */
-type DetailResponse = OutcomeDetail
+export type DetailResponse = OutcomeDetail
 
 /** v2's `catch` text throughout this tab: `String(e?.message || e)`. */
-function errText(e: unknown): string {
+export function errText(e: unknown): string {
   if (e instanceof Error && e.message) return e.message
   return String(e)
 }
@@ -305,7 +315,7 @@ function errText(e: unknown): string {
  */
 const OK_STATUS = 200
 
-function watchErrText(e: unknown): string {
+export function watchErrText(e: unknown): string {
   return e instanceof SyntaxError ? nonJsonError(OK_STATUS) : errText(e)
 }
 
@@ -345,8 +355,9 @@ export async function loadFarCbWatch(limit: number = WATCH_LIMIT): Promise<Watch
   } catch (e) {
     throw new Error(watchErrText(e))
   }
-  if (!j?.ok) throw new Error(j?.error || LOAD_FAILED_FALLBACK)
-  return { rows: j.rows || [], threshold: j.threshold ?? null }
+  const load = watchRowsFromQuery(j ?? undefined)
+  if (!load) throw new Error(j?.error || LOAD_FAILED_FALLBACK)
+  return load
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -392,8 +403,9 @@ export async function loadFarCbOutcomes(
     const j = await query<OutcomesResponse | null>(farCbOutcomesUrl(status, limit), {
       staleMs: NO_STORE_STALE_MS,
     })
-    if (!j?.ok) return { status: 'rejected', error: j?.error || LOAD_FAILED_FALLBACK }
-    return { status: 'ok', rows: j.rows || [] }
+    const rows = outcomesRowsFromQuery(j ?? undefined)
+    if (!rows) return { status: 'rejected', error: j?.error || LOAD_FAILED_FALLBACK }
+    return { status: 'ok', rows }
   } catch (e) {
     return { status: 'failed', error: errText(e) }
   }
@@ -421,8 +433,9 @@ export async function loadFarCbResults(
   const j = await query<OutcomesResponse | null>(farCbResultsUrl(limit, quotes), {
     staleMs: NO_STORE_STALE_MS,
   })
-  if (!j?.ok) throw new Error(j?.error || LOAD_FAILED_FALLBACK)
-  return j.rows || []
+  const rows = resultsRowsFromQuery(j ?? undefined)
+  if (!rows) throw new Error(j?.error || LOAD_FAILED_FALLBACK)
+  return rows
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -452,8 +465,9 @@ export async function loadFarCbOutcomeDetail(
   const j = await query<DetailResponse | null>(farCbOutcomeDetailUrl(symbol, strike, expiry), {
     staleMs: DETAIL_STALE_MS,
   })
-  if (!j?.ok) throw new Error(j?.error || LOAD_FAILED_FALLBACK)
-  return j
+  const detail = detailFromQuery(j ?? undefined)
+  if (!detail) throw new Error(j?.error || LOAD_FAILED_FALLBACK)
+  return detail
 }
 
 /** The URL for a row, so a step-3 hook can pass it (or `null`) straight to `useQuery`. */
@@ -570,4 +584,103 @@ export async function loadWatchThisEntry(
     loadFarCbOutcomes(view),
   ])
   return { flags, outcomes }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// § 11 — THE SAME FOUR READS, SHAPED FOR `useQuery`
+//
+// ADDED IN STEP 3, AND HERE RATHER THAN IN THE COMPONENT ON PURPOSE. `useQuery`
+// takes a URL and returns `{data, error}`; it does not call the loaders above.
+// Three of the four reads have to go through it rather than through a loader,
+// because the two behaviours the port needs from it cannot be hand-rolled in a
+// component without re-introducing exactly what "Do not port" H214/H215 removed:
+//
+//   • `pollMs` — the 120 s and 60 s polls, both now skipping a hidden tab, with
+//     an immediate catch-up tick on the way back. Hand-rolling them means
+//     `setInterval` again.
+//   • URL-keyed invalidation — passing `null` for a closed detail row, which is
+//     v2's `detailReq` counter (H202) expressed as data.
+//
+// So the ENVELOPE RULES — which body counts as rows, which counts as an error,
+// and what the error sentence is — are written once, here, and both the loaders
+// above and the render layer read them. Every branch below is the same v2 branch
+// its loader applies; nothing new is decided.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * H195 — the flag feed's rows, or `null` when this body must not be applied.
+ *
+ * `null` covers both "nothing back yet" and "a body that did not say `ok`",
+ * because v2 leaves the previous rows on screen in both cases (it throws before
+ * `setRows`). The caller keeps its own last-good value; that is the screen v2
+ * shows, not an empty grid.
+ */
+export function watchRowsFromQuery(j: WatchResponse | undefined): WatchLoad | null {
+  if (!j?.ok) return null
+  return { rows: j.rows || [], threshold: j.threshold ?? null }
+}
+
+/**
+ * H21–H24 — the flag feed's error sentence, or `null`.
+ *
+ * A THROWN request wins over an `ok:false` body, because in v2 the two cannot
+ * coexist: one `load()` produces one or the other. Under `useQuery` they can —
+ * `data` holds the LAST GOOD body while `error` holds the newest failure — and
+ * the newest failure is the one v2 would be showing.
+ *
+ * The message is normalised through `watchErrText` so it still reaches
+ * `isRecorderNotRunError`; see the THIRD departure in the file header.
+ */
+export function watchErrorFromQuery(
+  j: WatchResponse | undefined,
+  e: Error | null,
+): string | null {
+  if (e) return watchErrText(e)
+  if (j && !j.ok) return j.error || LOAD_FAILED_FALLBACK
+  return null
+}
+
+/**
+ * H198 — the flat table's rows, or `null` when this body must not be applied.
+ *
+ * `null` on an `ok:false` body is v2's `if (j.ok)` not firing, and there is no
+ * companion error accessor ON PURPOSE: v2's `catch {}` is empty and its
+ * `ok:false` branch is a no-op, so BOTH failures are invisible and the table
+ * keeps its previous rows saying nothing. H216 asks v3 for a real error branch
+ * there; adding one is a visible change and step 3 is not the place for it.
+ */
+export function outcomesRowsFromQuery(j: OutcomesResponse | undefined): OutcomeRow[] | null {
+  if (!j?.ok) return null
+  return j.rows || []
+}
+
+/** H200 — the Results page's rows. Same acceptance rule; this one has an error too. */
+export function resultsRowsFromQuery(j: OutcomesResponse | undefined): OutcomeRow[] | null {
+  if (!j?.ok) return null
+  return j.rows || []
+}
+
+/** H104 — `resultsErr`. Unlike the flat table, this call site DOES surface both failures. */
+export function resultsErrorFromQuery(
+  j: OutcomesResponse | undefined,
+  e: Error | null,
+): string | null {
+  if (e) return errText(e)
+  if (j && !j.ok) return j.error || LOAD_FAILED_FALLBACK
+  return null
+}
+
+/** H201 — the whole body is the detail, so there is nothing to unwrap. */
+export function detailFromQuery(j: DetailResponse | undefined): OutcomeDetail | null {
+  return j?.ok ? j : null
+}
+
+/** H151 — `detailErr`. */
+export function detailErrorFromQuery(
+  j: DetailResponse | undefined,
+  e: Error | null,
+): string | null {
+  if (e) return errText(e)
+  if (j && !j.ok) return j.error || LOAD_FAILED_FALLBACK
+  return null
 }

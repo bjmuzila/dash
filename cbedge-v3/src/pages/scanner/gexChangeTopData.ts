@@ -120,7 +120,7 @@ export const EP_WATCH = '/api/watch'
  * goes to the network — while still collapsing two simultaneous calls for the
  * same URL into one request.
  */
-const NO_STORE_STALE_MS = 0
+export const NO_STORE_STALE_MS = 0
 
 /**
  * A pick's history is a growing series, appended once a minute. One minute of
@@ -128,7 +128,7 @@ const NO_STORE_STALE_MS = 0
  * what v2's `need.filter(id => !hist[id])` was hand-rolling, and it matches the
  * cadence the open-card refresh polls at.
  */
-const HISTORY_STALE_MS = POLL_MS
+export const HISTORY_STALE_MS = POLL_MS
 
 /** The `date` param is OMITTED, never blanked, when falsy. See note 2 in the header. */
 function withDate(path: string, date?: string): string {
@@ -144,21 +144,21 @@ export function gexChangeTopUrls(date?: string): { top: string; results: string 
 // WIRE ENVELOPES
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface TopResponse {
+export interface TopResponse {
   ok?: boolean
   error?: string
   slots?: SlotBucket[]
   date?: string
 }
 
-interface ResultsResponse {
+export interface ResultsResponse {
   ok?: boolean
   error?: string
   rows?: ResultRow[]
   frozen?: boolean
 }
 
-interface HistoryResponse {
+export interface HistoryResponse {
   ok?: boolean
   error?: string
   points?: PickPoint[]
@@ -269,9 +269,13 @@ export async function loadGexChangeTopEntry(date?: string): Promise<{
  * than a `Load<…>`: the card's back face has exactly one error state and it does
  * not care which way the request failed.
  */
-export async function loadPickHistory(watchId: number, date?: string): Promise<PickHist> {
+export function pickHistoryUrl(watchId: number, date?: string): string {
   const base = `${EP_HISTORY}?id=${encodeURIComponent(String(watchId))}`
-  const url = date ? `${base}&date=${encodeURIComponent(date)}` : base
+  return date ? `${base}&date=${encodeURIComponent(date)}` : base
+}
+
+export async function loadPickHistory(watchId: number, date?: string): Promise<PickHist> {
+  const url = pickHistoryUrl(watchId, date)
   try {
     const j = await query<HistoryResponse>(url, { staleMs: HISTORY_STALE_MS })
     if (!j?.ok) return { points: [], contract: null, error: j?.error || NO_HISTORY }
@@ -281,6 +285,113 @@ export async function loadPickHistory(watchId: number, date?: string): Promise<P
     }
   } catch (e) {
     return { points: [], contract: null, error: errText(e) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOOK-SHAPED VIEWS (added in step 3)
+//
+// The three loaders above are `await`-shaped, and the render layer is not: it
+// polls, and v3's rule is that a poll is `pollMs` on `useQuery`, never a
+// hand-rolled `setInterval`. `useQuery` hands back `{ data, error }` — a parsed
+// body and a thrown request — which is exactly the pair the `Load<…>` variants
+// are built from, so the SAME two-failure-mode decision is made here, once,
+// rather than re-derived inside a component.
+//
+// WHY THIS IS NOT JUST `Load<T>`: `useQuery` keeps the last-good `data` on a
+// thrown request, and v2's `catch` branch keeps the last-good ROWS on screen.
+// A bare `Load` has nowhere to put those rows, so each view carries the rows
+// AND the status, and the status is the thing that says which of v2's two
+// branches produced them. Nothing here decides anything the loaders did not.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Which of v2's branches produced the rows on screen. `pending` = nothing yet. */
+export type FeedStatus = 'pending' | 'ok' | 'rejected' | 'failed'
+
+export interface TopView {
+  status: FeedStatus
+  /** C6 — cleared on `ok: false`, KEPT on a thrown request. */
+  slots: SlotBucket[]
+  /** C6 — the date the feed echoed back, for DISPLAY only. `""` until it lands. */
+  date: string
+  /** C88 — the error line, or null. */
+  error: string | null
+}
+
+/**
+ * C6, C88 — one `useQuery` result as v2's slot-feed state.
+ *
+ * ORDER MATTERS: `ok: false` is checked BEFORE `error`, because that branch
+ * CLEARS the slots and the thrown branch does not. Reversing the two would put
+ * a stale board under an "Error:" line that v2 would have emptied.
+ */
+export function topView(data: TopResponse | undefined, error: Error | null): TopView {
+  if (data && !data.ok) {
+    return { status: 'rejected', slots: [], date: '', error: data.error || LOAD_FAILED }
+  }
+  if (error) {
+    // `data` here is either absent or a previous `ok: true` body — v2's `catch`
+    // left `slots` untouched, so the last-good board stays up under the error.
+    return { status: 'failed', slots: data?.slots || [], date: data?.date || '', error: errText(error) }
+  }
+  if (!data) return { status: 'pending', slots: [], date: '', error: null }
+  return { status: 'ok', slots: data.slots || [], date: data.date || '', error: null }
+}
+
+export interface ResultsView {
+  status: FeedStatus
+  /** C8 — cleared on `ok: false`, KEPT on a thrown request. */
+  rows: ResultRow[]
+  /** C55 — false until a body says otherwise. See note 5 in the file header. */
+  frozen: boolean
+  /** C71 — the scorecard error line, or null. */
+  error: string | null
+}
+
+/**
+ * C8, C71 — one `useQuery` result as v2's scorecard state.
+ *
+ * `frozen` is reported as the body carries it; v2's "a failed load does not
+ * reset `frozen`" is the CALLER's job, because only the caller has the previous
+ * value. See the `frozenRef` note in GexChangeTopTab.tsx.
+ */
+export function resultsView(data: ResultsResponse | undefined, error: Error | null): ResultsView {
+  if (data && !data.ok) {
+    return { status: 'rejected', rows: [], frozen: !!data.frozen, error: data.error || LOAD_FAILED }
+  }
+  if (error) {
+    const rows = Array.isArray(data?.rows) ? data.rows : []
+    return { status: 'failed', rows, frozen: !!data?.frozen, error: errText(error) }
+  }
+  if (!data) return { status: 'pending', rows: [], frozen: false, error: null }
+  return {
+    status: 'ok',
+    rows: Array.isArray(data.rows) ? data.rows : [],
+    frozen: !!data.frozen,
+    error: null,
+  }
+}
+
+/**
+ * C10, C137 — one `useQuery` result as a `PickHist`, or `undefined` before
+ * anything has landed.
+ *
+ * ORDER IS THE OTHER WAY ROUND HERE, deliberately: v2's `loadPick` wrote
+ * `{ points: [], contract: null, error }` on BOTH failure paths, so a thrown
+ * request wipes the chart rather than leaving a stale line under an error
+ * string. That is the one place on this tab where the two branches agree, and
+ * it is why this returns a `PickHist` and not a `Load<…>`.
+ */
+export function pickHistView(
+  data: HistoryResponse | undefined,
+  error: Error | null,
+): PickHist | undefined {
+  if (error) return { points: [], contract: null, error: errText(error) }
+  if (data && !data.ok) return { points: [], contract: null, error: data.error || NO_HISTORY }
+  if (!data) return undefined
+  return {
+    points: (data.points || []).filter((p) => isRth(Number(p.ts))),
+    contract: data.contract ?? null,
   }
 }
 

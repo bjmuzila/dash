@@ -66,27 +66,53 @@ const HIDE_ATTR = 'data-capture-hide'
  *   <div data-capture-meta={`SPX · ${expiry}`}>
  *
  * The caption reads `Net Premium · Sep 2, 17:15 ET · SPX · 9-2-26`, and the
- * card is the only thing that knows the last part. Optional: a card that sets
- * nothing gets name and time.
+ * card is the only thing that knows the last part.
+ *
+ * SETTING IT ALSO DROPS THE CARD'S OWN HEADER from the shot, and that pairing is
+ * the point rather than a side effect. The caption already carries the card's
+ * NAME (the menu row it was taken from) and its time; a card that also hands
+ * over the one thing the caption cannot work out has said everything its header
+ * said, and leaving the header in prints the name and the expiry twice with the
+ * chart squeezed underneath. A card that publishes nothing keeps its header,
+ * because then the header is the only place that information exists.
  */
 const META_ATTR = 'data-capture-meta'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
 /**
- * THE FRAME. The picture is the card, edge to edge, with one caption strip
- * under it — name, time, whatever the card added, and the mark on the right.
+ * THE FRAME. The picture is the card and nothing but the card — no matte, no
+ * title band, no strip bolted underneath. The caption and the mark are laid ON
+ * the bottom of it, over a scrim that fades up out of the app's own background,
+ * so the whole image is the thing being shared and the attribution costs no
+ * height at all.
  *
- * It used to be matted: a title band above, padding all round, a centred
- * watermark below. Three bands of chrome around a card that already has its own
- * header saying the same thing, and the card itself came out smaller than the
- * furniture. One strip says everything the other three did.
+ * The earlier cut was v2's framing: a title band on top, 18px of matte all
+ * round, a centred watermark below. Three pieces of furniture around a card that
+ * already had a header saying the same name, and the card came out smaller than
+ * the chrome around it.
  */
-const FOOT_H = 44
-const FOOT_PAD = 14
-/** Type sizes off `tokens.css`'s scale — 13 is `text-sm`, 11 is `text-xs`. */
+/**
+ * A shallow band of plain background below the card, and the fade that joins
+ * the two.
+ *
+ * The band is 32px rather than 0 because every card in this app has something
+ * living on its bottom edge — Net Premium's "Last print" line, GEX Candles' time
+ * axis, a ladder's last row — and a caption laid straight over that is two
+ * strings on one line. 32px is enough to clear all of them and still read as the
+ * card fading into its own footer rather than as a bar bolted underneath: there
+ * is no rule, no plate, and the fade starts well up inside the card.
+ */
+const CAPTION_BAND = 32
+/** How far up the fade reaches, measured from the bottom of the whole image. */
+const SCRIM_H = 76
+/** Distance from the bottom edge to the caption's centre line. */
+const CAPTION_BASE = 16
+const CAPTION_PAD = 16
+/** Type sizes off `tokens.css`'s scale — 13 is `text-sm`. */
 const CAPTION_PX = 13
-const LOGO_H = 26
+const LOGO_H = 24
+const LOGO_ALPHA = 0.85
 const SEP = '  ·  '
 
 /** Served from the v2 public/ root, which is the same origin. */
@@ -553,8 +579,18 @@ function imgToDataUrl(src: HTMLImageElement): string | null {
  *
  * Everything the SVG document cannot reach back into the page for — styles,
  * canvas bitmaps, image bytes, live form values — is materialised here.
+ *
+ * Returns the clone AND the height it should be rendered at: dropping the card's
+ * own header takes that many pixels off the picture as well as out of it. The
+ * body is a chart at a fixed bitmap size, so leaving the height alone would just
+ * open a band of empty plate under it.
  */
-function buildClone(el: HTMLElement, w: number, h: number): HTMLElement {
+function buildClone(
+  el: HTMLElement,
+  w: number,
+  h: number,
+  dropHeader: boolean,
+): { clone: HTMLElement; height: number } {
   const clone = el.cloneNode(true) as HTMLElement
   const defaults = new TagDefaults()
 
@@ -566,6 +602,13 @@ function buildClone(el: HTMLElement, w: number, h: number): HTMLElement {
     defaults.dispose()
   }
 
+  // The Card primitive's own header — the row carrying the card's name and its
+  // toolbar. See META_ATTR for why publishing a meta is what takes it off.
+  // `:scope >` deliberately: a Multi Greek column or a nested Card has a header
+  // of its own and it is content, not chrome.
+  const header = dropHeader ? el.querySelector<HTMLElement>(':scope > header') : null
+  const height = header ? Math.max(1, h - header.getBoundingClientRect().height) : h
+
   const pairs: Array<[Element, Element]> = []
   pairUp(el, clone, pairs)
 
@@ -573,7 +616,7 @@ function buildClone(el: HTMLElement, w: number, h: number): HTMLElement {
     // A descendant of something already removed. Its own turn is a no-op.
     if (dst !== clone && !clone.contains(dst)) continue
 
-    if (src.hasAttribute(HIDE_ATTR)) {
+    if (src === header || src.hasAttribute(HIDE_ATTR)) {
       dst.remove()
       continue
     }
@@ -607,7 +650,7 @@ function buildClone(el: HTMLElement, w: number, h: number): HTMLElement {
   // picture now, at 0,0.
   clone.style.setProperty('box-sizing', 'border-box')
   clone.style.setProperty('width', `${w}px`)
-  clone.style.setProperty('height', `${h}px`)
+  clone.style.setProperty('height', `${height}px`)
   clone.style.setProperty('margin', '0')
   clone.style.setProperty('position', 'static')
   clone.style.setProperty('inset', 'auto')
@@ -615,22 +658,22 @@ function buildClone(el: HTMLElement, w: number, h: number): HTMLElement {
   clone.style.setProperty('max-width', 'none')
   clone.style.setProperty('max-height', 'none')
 
-  return clone
+  return { clone, height }
 }
 
 // ── Rasterising ──────────────────────────────────────────────────────────────
 
 /** The subtree, rendered by the browser itself, at `shotScale()`. */
-async function rasterise(el: HTMLElement): Promise<HTMLCanvasElement> {
+async function rasterise(el: HTMLElement, dropHeader: boolean): Promise<HTMLCanvasElement> {
   const rect = el.getBoundingClientRect()
   const w = Math.max(1, Math.ceil(rect.width))
-  const h = Math.max(1, Math.ceil(rect.height))
 
   // Text inside the SVG document is measured against the same faces the page is
   // using — but only once they have actually loaded.
   await document.fonts?.ready?.catch(() => undefined)
 
-  const clone = buildClone(el, w, h)
+  const { clone, height } = buildClone(el, w, Math.max(1, Math.ceil(rect.height)), dropHeader)
+  const h = Math.ceil(height)
   const body = new XMLSerializer().serializeToString(clone)
   const svg =
     `<svg xmlns="${SVG_NS}" width="${w}" height="${h}">` +
@@ -687,12 +730,12 @@ function loadLogo(): Promise<HTMLImageElement | null> {
 }
 
 /**
- * The card, edge to edge, over one caption strip.
+ * The card, with the caption and the mark laid over its bottom edge.
  *
  * `Net Premium · Sep 2, 17:15 ET · SPX · 9-2-26` on the left, the CB Edge mark
- * on the right, a hairline between the two. Everything the old title band said
- * is in that line, and the card gets the whole width instead of sitting inside
- * 18px of matte with a second header above it repeating its own name.
+ * on the right, both sitting on a scrim that fades up out of the app's own
+ * background. Nothing is added below the card, so the image is exactly the card
+ * and the attribution rides for free.
  */
 function frame(
   shot: HTMLCanvasElement,
@@ -703,7 +746,7 @@ function frame(
   const scale = shotScale()
   const w = shot.width / scale
   const cardH = shot.height / scale
-  const h = cardH + FOOT_H
+  const h = cardH + CAPTION_BAND
 
   const out = document.createElement('canvas')
   out.width = Math.round(w * scale)
@@ -718,29 +761,33 @@ function frame(
   ctx.fillRect(0, 0, w, h)
   ctx.drawImage(shot, 0, 0, w, cardH)
 
-  ctx.strokeStyle = tokenHex('--color-line')
-  ctx.lineWidth = 1
-  ctx.beginPath()
-  ctx.moveTo(0, cardH + 0.5)
-  ctx.lineTo(w, cardH + 0.5)
-  ctx.stroke()
+  // The scrim. Transparent at the top so it reads as the card dimming into its
+  // own footer rather than as a bar someone stuck on.
+  const scrimTop = Math.max(0, h - SCRIM_H)
+  const g = ctx.createLinearGradient(0, scrimTop, 0, h)
+  g.addColorStop(0, tokenHexAlpha('--color-bg', 0))
+  g.addColorStop(1, tokenHexAlpha('--color-bg', 0.92))
+  ctx.fillStyle = g
+  ctx.fillRect(0, scrimTop, w, h - scrimTop)
 
-  const mid = cardH + FOOT_H / 2
+  const mid = h - CAPTION_BASE
   ctx.textBaseline = 'middle'
 
   // The mark goes down first so the caption knows how much room is left.
   let logoW = 0
   if (logo?.naturalWidth && logo.naturalHeight) {
     logoW = (logo.naturalWidth / logo.naturalHeight) * LOGO_H
-    ctx.drawImage(logo, w - FOOT_PAD - logoW, mid - LOGO_H / 2, logoW, LOGO_H)
+    ctx.globalAlpha = LOGO_ALPHA
+    ctx.drawImage(logo, w - CAPTION_PAD - logoW, mid - LOGO_H / 2, logoW, LOGO_H)
+    ctx.globalAlpha = 1
   }
 
-  const room = Math.max(40, w - FOOT_PAD * 2 - logoW - 16)
+  const room = Math.max(40, w - CAPTION_PAD * 2 - logoW - 16)
   ctx.textAlign = 'left'
   ctx.font = `600 ${CAPTION_PX}px ${face}`
   ctx.fillStyle = tokenHex('--color-fg')
   const titleW = Math.min(ctx.measureText(title).width, room)
-  ctx.fillText(title, FOOT_PAD, mid, room)
+  ctx.fillText(title, CAPTION_PAD, mid, room)
 
   // Time and the card's own note in the quieter weight, so the name still reads
   // first at a glance in a Discord thumbnail. `--color-muted` is white today
@@ -749,8 +796,8 @@ function frame(
   // has no class, so it takes the alpha from the token itself.
   const tail = meta ? `${SEP}${stampNow()}${SEP}${meta}` : `${SEP}${stampNow()}`
   ctx.font = `400 ${CAPTION_PX}px ${face}`
-  ctx.fillStyle = tokenHexAlpha('--color-muted', 0.62)
-  ctx.fillText(tail, FOOT_PAD + titleW, mid, Math.max(20, room - titleW))
+  ctx.fillStyle = tokenHexAlpha('--color-muted', 0.7)
+  ctx.fillText(tail, CAPTION_PAD + titleW, mid, Math.max(20, room - titleW))
 
   return out
 }
@@ -805,8 +852,10 @@ function metaOf(el: HTMLElement): string | null {
 
 /** Photograph `el`, frame it, and put it on the clipboard. */
 export async function captureAndCopy(el: HTMLElement, opts: ShotOptions = {}): Promise<ShotResult> {
+  // A card that named itself has said everything its header said, so the header
+  // comes off — see META_ATTR.
   const meta = metaOf(el)
-  const [shot, logo] = await Promise.all([rasterise(el), loadLogo()])
+  const [shot, logo] = await Promise.all([rasterise(el, meta != null), loadLogo()])
   const blob = await toBlob(frame(shot, opts.title ?? 'CB Edge', meta, logo))
   return copyOrDownload(blob, opts.filename ?? 'snapshot.png')
 }

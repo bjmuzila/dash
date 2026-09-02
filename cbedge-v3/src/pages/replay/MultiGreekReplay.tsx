@@ -74,8 +74,29 @@ const BASIS_KEY = 'cb-v3-replay-mg-basis'
 /** Strike rail width, matching the live card so the two boards read alike. */
 const RAIL_PX = 76
 
-/** The Core Bullseye fill — v2's VIVID skin, gold at 85% OVER the heat wash. */
+/**
+ * ── THE CORE BULLSEYE FILL ───────────────────────────────────────────────────
+ * Byte-for-byte the live Multi Greek ladder's wash (board/multiGreek/
+ * MultiGreekCard.tsx), and the same colour decision as the chain matrix's
+ * `levelFillBg()` (pages/optionsChain/heatSkins.ts).
+ *
+ * Replay used to paint v2's FLAT gold at 85% over the whole cell, and that was
+ * the bug both of those surfaces already fixed: a Core below spot is negative,
+ * and at 85% the gold buried the red — two cells that meant opposite things
+ * looked identical. The wash keeps gold where the eye looks for the marker (the
+ * ★ / badge end of the cell) and is gone before the figure, which sits on the
+ * ordinary heat and reads red or blue again.
+ *
+ * Stops are the ladder's 55/82, not the chain's 26/66: the ladder is scanned
+ * across four panels at once, so gold holds through the figure and hands over
+ * in the last quarter.
+ */
+const CB_WASH_ANGLE = '112deg'
+const CB_GOLD = 'var(--color-level-cb)'
 const CB_FILL = 'color-mix(in srgb, var(--color-level-cb) 85%, transparent)'
+/** Fades to gold-at-zero, not `transparent`: a ramp through grey reads dirty. */
+const CB_FADE = 'color-mix(in srgb, var(--color-level-cb) 0%, transparent)'
+const CB_WASH = `linear-gradient(${CB_WASH_ANGLE},${CB_GOLD} 0%,${CB_FILL} 55%,${CB_FADE} 82%)`
 
 function readStored(key: string, fallback: string): string {
   try {
@@ -466,7 +487,16 @@ function ReplayPanel({
                       style={
                         isCb
                           ? {
-                              background: `linear-gradient(${CB_FILL}, ${CB_FILL}), ${heat}`,
+                              // THE CORE. Gold washes in from the left edge and
+                              // clears before the figure; past that the cell is
+                              // the ordinary heat, so the number reads on its
+                              // own sign rather than on gold. See CB_WASH.
+                              //
+                              // A gradient layered over a background in one
+                              // property is the only way to composite a
+                              // translucent layer over another without knowing
+                              // what the layer underneath resolved to.
+                              background: `${CB_WASH}, ${heat}`,
                               textShadow: '0 1px 2px color-mix(in srgb, var(--color-app) 85%, transparent)',
                             }
                           : {
@@ -485,10 +515,12 @@ function ReplayPanel({
                         <span
                           title="Core Bullseye"
                           className="pointer-events-none absolute left-0.5 top-px text-2xs leading-none"
-                          style={{
-                            color: 'var(--color-app)',
-                            textShadow: '0 0 2px color-mix(in srgb, var(--color-fg) 55%, transparent)',
-                          }}
+                          // Drawn in the app ground, not gold: the corner it
+                          // sits in is where CB_WASH holds FULL gold, and a gold
+                          // star on gold is an invisible star. No halo either —
+                          // solid gold is already its ground, and the glow only
+                          // softened the glyph's edge. Matches the live ladder.
+                          style={{ color: 'var(--color-app)' }}
                         >
                           ★
                         </span>

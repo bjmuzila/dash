@@ -762,6 +762,18 @@ export function countLiveSignals(
   return signals.filter((s) => isSignalLive(s, spot, livePad)).length
 }
 
+/**
+ * The "this is live" ink — the `● LIVE` badge, and the live row's border and
+ * wash. v2 paints all three `HT.green #8ECAE6`, which is a light blue that also
+ * paints every card subtitle; the collapse sends the DIRECTIONAL uses to the
+ * move pair, and "spot has arrived at this level" is one of them. Same value
+ * `railAccent` returns while anything is live, by construction.
+ */
+export const LIVE_COLOR = MOVE_UP
+
+/** F116's badge, glyph U+25CF. Omitted entirely when the row is not live. */
+export const LIVE_BADGE = '● LIVE'
+
 export interface AmtSignalRowView {
   live: boolean
   level: SignalLevel
@@ -816,7 +828,36 @@ export const AMT_TILE_LABELS = {
   ibWidth: 'IB width',
   state: 'State',
   opening: 'Opening',
+  /**
+   * ADDED IN STEP 3. v2 has FOUR tiles and `rangeExt` is not one of them: the
+   * range-extension ladder is computed on every read, feeds the day type, and
+   * then only ever reaches the screen paraphrased inside a day-type note
+   * ("one-sided extension up"). On a wide IB with two-sided extension the note
+   * says "extension both ways" and on a narrow IB with two-sided extension the
+   * note says "no extension yet" (that is the day-type BUG below) — so there is
+   * no reading of the four tiles from which the actual ladder result can be
+   * recovered. It gets its own tile.
+   */
+  rangeExt: 'Range extension',
 } as const
+
+/**
+ * ADDED IN STEP 3 — the `rangeExt` tile's four values, written out.
+ *
+ * `classifyRangeExtension` returns a bare enum; these say what each outcome
+ * MEANS in the same "<value> — <note>" shape `STATE_LABEL` uses, because the
+ * word "none" alone does not tell a reader that the test is "a full bin clear
+ * of the IB", which is the only part of this ladder that ever surprises anyone.
+ */
+export const RANGE_EXT_LABEL: Record<RangeExt, string> = {
+  none: 'none — still inside the IB',
+  up: 'up — cleared the IB high',
+  down: 'down — cleared the IB low',
+  both: 'both — cleared the IB on both sides',
+}
+
+/** The `rangeExt` tile's fixed note. `pad` is the bin size — 1 pt ESU, 5 NQU. */
+export const RANGE_EXT_TILE_NOTE = 'must clear the IB by a full bin'
 
 /** The IB tile's fixed note. The value above it is `narrow · 0.62×` (U+00D7). */
 export const IB_TILE_NOTE = 'vs recent-median IB'

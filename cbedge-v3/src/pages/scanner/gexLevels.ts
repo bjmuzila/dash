@@ -378,6 +378,17 @@ export function fmtDate(ymd: string): string {
   return `${MONTHS[m - 1] ?? ''} ${day}, ${y}`
 }
 
+/**
+ * `fmtDate` with the year stripped — "Aug 14".
+ *
+ * v2 wrote this as `glFmtDate(r.date).replace(/, \d+$/, "")` at the OI-by-date
+ * axis (B104), the tab's only call site. It is a LABEL RULE, so it lives beside
+ * the formatter it wraps rather than in the render layer.
+ */
+export function fmtDateNoYear(ymd: string): string {
+  return fmtDate(ymd).replace(/, \d+$/, '')
+}
+
 /** "2026-08-14" → "8/14". No zero padding, no year. Raw string on a miss. */
 export function fmtExpiryLabel(ymd: string): string {
   const [, m, d] = ymd.split('-').map(Number)
@@ -728,6 +739,23 @@ export function visibleWindow<Item>(
 export function domainWithZero(vals: number[]): { min: number; max: number } {
   let min = Math.min(0, ...vals)
   let max = Math.max(0, ...vals)
+  if (min === max) {
+    min -= 1
+    max += 1
+  }
+  return { min, max }
+}
+
+/**
+ * B235 — the call/put chart's domain, which is NOT `domainWithZero` over one
+ * array: the two legs get SEPARATE extremes. Raw `putGEX` is negative and raw
+ * `callGEX` positive by construction, so the puts define the floor and the
+ * calls the ceiling and the two are never netted. Flat data gets ±1, the same
+ * escape `domainWithZero` uses.
+ */
+export function callPutDomain(callVals: number[], putVals: number[]): { min: number; max: number } {
+  let min = Math.min(0, ...putVals)
+  let max = Math.max(0, ...callVals)
   if (min === max) {
     min -= 1
     max += 1
@@ -2329,12 +2357,18 @@ export const GEX_LEVELS_CARDS: readonly GexLevelsCardDef[] = [
   {
     key: 'volFlow',
     title: () => 'Net vol GEX flow (today)',
-    // CODE-VS-COMMENT CONFLICT, resolved in favour of the code (spec B264):
-    // v2's string says "5m buckets" while the panel sends bin=30 and prints
-    // "30s buckets · today ET" in its own header. The bucket width is
-    // interpolated from BIN_SEC here so the two can never disagree again.
+    // BUG (v2): "5m buckets" is STALE. The panel sends `bin=BIN_SEC` = 30 and
+    // prints "30s buckets · today ET" in its own header a few pixels below this
+    // line, so the card contradicts itself on screen. The code wins; the string
+    // never caught up.
+    //
+    // Shipped as v2 wrote it, deliberately: reproducing a visibly wrong string
+    // is step 3's job, not fixing it. Spec B264 and "Do not port" 24 both want
+    // it fixed, and this is the whole edit when Brandon says so — swap the
+    // literal for the interpolation the rest of card 12 already uses:
+    //   `Intraday path of the volume leg, ${BIN_LABEL} buckets from …`
     subtitle: () =>
-      `Intraday path of the volume leg, ${BIN_LABEL} buckets from option_strike_gex_history · pick an expiration or track the front · above zero = flow adding long gamma (dampening), below = short gamma (amplifying)`,
+      'Intraday path of the volume leg, 5m buckets from option_strike_gex_history · pick an expiration or track the front · above zero = flow adding long gamma (dampening), below = short gamma (amplifying)',
     endpoints: ['proxy/gex-vol-flow'],
     defaultColumn: 'right',
   },

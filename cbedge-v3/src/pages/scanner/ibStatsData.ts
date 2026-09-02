@@ -67,7 +67,16 @@
 
 import { query } from '@/data/api'
 import type { IbResultRow } from '@/pages/scanner/ibDailyResults'
-import { winLabel, type IbDataset, type IbSymbol, type IbWindow, type TapeDay } from '@/pages/scanner/ibStats'
+import {
+  LIVE_FEED_HISTORY_DAYS,
+  winLabel,
+  type IbCandle,
+  type IbDataset,
+  type IbSymbol,
+  type IbWindow,
+  type TapeDay,
+} from '@/pages/scanner/ibStats'
+import { loadTpoCandles } from '@/pages/scanner/tpoData'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE STATIC DATASET.
@@ -185,6 +194,63 @@ export function tapeFrom(rows: readonly IbResultRow[], n: number = TAPE_LENGTH):
       bothBroke: !!r.both_broke,
       singleBreak: !!r.single_break,
     }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE LIVE TAPE.
+//
+// ADDED IN STEP 3, because step 2 left this side open: `computeLiveSession`
+// takes `IbCandle[]` and nothing in this module produced any. v2 got them from
+// `useEsCandles` / `useNqCandles`, i.e. two page-level socket subscriptions,
+// which v3 non-negotiable 3 forbids outright — and there is no candle FRAME type
+// in `@/data/store` to read with `useFrame` either, so the REST legs are the only
+// route that exists today.
+//
+// They already exist: Part F's `tpoData.ts` owns `/api/snapshots/candles` for
+// exactly these two instruments, `allSettled` per leg, decoded out of the `lite`
+// columnar envelope. Calling it is one shared cache entry per URL rather than a
+// second copy of the same four URLs in this file; `EsCandleRecord` carries the
+// six fields `IbCandle` declares and nothing here reads more.
+//
+// WHAT CHANGES vs v2, stated plainly (spec rows G44–G47):
+//   • no socket, so no 4 Hz republish. The poll below is the cadence instead.
+//   • `withAverages` is moot — the REST legs never compute avg5/avg14, which is
+//     the waste G47 flags.
+//   • `connected` (G53's subtitle switch) has no socket to report on; the tab
+//     derives it from "the last candle read resolved", which is the closest true
+//     statement this transport can make.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The live tape's refresh cadence. v2 had none — it held a socket — so this is a
+ * transport substitution, not a behaviour v2 shipped. 15 s matches the other
+ * scanner tabs' fast poll (`GEX_POLL_MS`, `VOL_FLOW_POLL_MS`) and, unlike v2's
+ * subscription, `query()`'s poll pauses on a hidden tab.
+ */
+export const IB_CANDLE_POLL_MS = 15_000
+
+export interface IbCandleLoad {
+  /** Today's RTH bars — the session `computeLiveSession` reads. */
+  today: IbCandle[]
+  /** The prior sessions, used ONLY as the pdh/pdl fallback (rule 11). */
+  historical: IbCandle[]
+  /** Both legs resolved. Stands in for v2's socket `connected` flag (G53). */
+  connected: boolean
+}
+
+/**
+ * The two candle legs for one symbol, in parallel.
+ *
+ * `today` is passed to `computeLiveSession` as `candles` and `historical` as
+ * `historical`: today's read carries no prior-dated bars, so the prior session
+ * resolves through the documented fallback path rather than by chance.
+ */
+export async function loadIbCandles(sym: IbSymbol): Promise<IbCandleLoad> {
+  const { today, historical, failed } = await loadTpoCandles(
+    sym === 'NQ' ? 'NQU' : 'ESU',
+    LIVE_FEED_HISTORY_DAYS,
+  )
+  return { today, historical, connected: failed.length === 0 }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
