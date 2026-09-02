@@ -14,11 +14,14 @@ export default function PricingActions({
   hasBilling,
   monthlyLabel = "Subscribe monthly",
   yearlyLabel = "Subscribe yearly",
+  promo,
 }: {
   hasAccess: boolean;
   hasBilling: boolean;
   monthlyLabel?: string;
   yearlyLabel?: string;
+  /** Promo code from a /bday-style link — forwarded so checkout pre-applies it. */
+  promo?: string | null;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState<"monthly" | "yearly" | "portal" | null>(null);
@@ -31,7 +34,7 @@ export default function PricingActions({
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan }),
+        body: JSON.stringify(promo ? { plan, promo } : { plan }),
       });
       const data = await res.json();
       if (!res.ok || !data?.url) {

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getUserFromMiddleware } from "@/lib/supabase/middleware";
 import { BARE_SOURCE_LIST } from "@/lib/shortLinks";
+import { PROMO_SLUG_LIST } from "@/lib/promoLinks";
 
 /**
  * The one-segment short links (`/x`, `/youtube`, …), built from the SAME list
@@ -13,6 +14,14 @@ import { BARE_SOURCE_LIST } from "@/lib/shortLinks";
  * the site (`/es-candles`, `/scanner`, `/owner`).
  */
 const BARE_SHORT_LINK_RE = new RegExp(`^\\/(${BARE_SOURCE_LIST.join("|")})$`);
+
+/**
+ * Promo short links (`/bday`, …) — same shape, same rule: derived from the
+ * PROMO_LINKS table in lib/promoLinks.ts so the route that answers and the
+ * gate that lets it through can never drift apart. Adding a promo there makes
+ * its link public here automatically.
+ */
+const PROMO_LINK_RE = new RegExp(`^\\/(${PROMO_SLUG_LIST.join("|")})$`);
 
 // Public routes: landing, auth pages, the waitlist API, the maintenance page,
 // and static/proxy assets. Everything else (the paid dashboard) requires a
@@ -67,6 +76,9 @@ const PUBLIC_PATTERNS: RegExp[] = [
   // app/[source]/route.ts. No verb to disambiguate it, so this is an explicit
   // allowlist of known sources — see BARE_SHORT_LINK_RE above.
   BARE_SHORT_LINK_RE,
+  // Promo deal links (`/bday`) — 302 redirectors into /pricing, put on
+  // graphics and posts, so they must resolve signed OUT. See PROMO_LINK_RE.
+  PROMO_LINK_RE,
   /^\/api\/stripe\/webhook$/,
   // Page-load beacon. Public because it fires on EVERY load including guests
   // and unpaid users — gating it silently drops visit logging for exactly the

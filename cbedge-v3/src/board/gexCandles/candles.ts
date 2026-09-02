@@ -1,10 +1,22 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Candles for the GEX Candles card: fetch, roll up, filter by session.
 //
-// ONE ENDPOINT, since ES and NQ were dropped:
+// ONE ENDPOINT for every symbol on the board:
 //
 //   /api/snapshots/etf-candles?symbol=&days=&interval=
 //     → { symbol, interval, days, source, rows: [{ timestamp, open, … }] }
+//
+// …plus ES FUTURES, back since 2026-09-02 as the card's SPX/ES switch:
+//
+//   /api/snapshots/candles?daysBack=&limit=&interval=&lite=1
+//     → { lite: 1, cols: [...], rows: [[timestamp, date, slotKey, …]] }
+//
+// The futures route is SELECT * out of Postgres, so its BIGINT and REAL
+// columns arrive as QUOTED STRINGS unless `lite=1` asks for the columnar
+// tuple form, where the handler emits real numbers. This card only ever asks
+// lite. `interval` picks the 1m or the 5m table — they share a slotKey space
+// and an unfiltered read returns them interleaved. `daysBack` is inclusive of
+// today (date >= cutoff), so ONE request covers the window.
 //
 // Every value on that route is a real JSON number (the handler coerces each
 // field). The futures route it replaced was SELECT * out of Postgres, so its
@@ -115,6 +127,53 @@ export function parseCandles(json: unknown): Bar[] {
   }
   // Sorting an already-sorted array is cheap and removes a whole class of "the
   // chart drew backwards" bug if the route's ordering ever changes.
+  out.sort((a, b) => a.t - b.t)
+  return out
+}
+
+/** The ES futures history, lite-encoded. Same Bar shape out as the ETF route. */
+export function esCandlesUrl(interval: Interval, days = HISTORY_DAYS): string {
+  // 1m × ~23h × days, with room: the route caps `limit` at 50000.
+  return `/api/snapshots/candles?daysBack=${days}&limit=20000&interval=${nativeInterval(interval)}&lite=1`
+}
+
+interface LiteCandlesResponse {
+  lite?: number
+  cols?: unknown
+  rows?: unknown
+}
+
+/**
+ * Parse the futures route. Handles the lite tuple form this card asks for AND
+ * the verbose row form, so a client deployed ahead of a backend that ignores
+ * `lite` still draws. Same "undefined is not an error" contract as
+ * parseCandles.
+ */
+export function parseEsCandles(json: unknown): Bar[] {
+  if (!json || typeof json !== 'object') return []
+  const j = json as LiteCandlesResponse
+  const rows = j.rows
+  if (!Array.isArray(rows) || !rows.length) return []
+  const out: Bar[] = []
+  if (j.lite === 1 && Array.isArray(j.cols)) {
+    const cols = j.cols as string[]
+    const ix = (k: string) => cols.indexOf(k)
+    const iT = ix('timestamp'), iO = ix('open'), iH = ix('high'), iL = ix('low'), iC = ix('close'), iV = ix('volume')
+    if (iT < 0 || iC < 0) return []
+    for (const tuple of rows as unknown[][]) {
+      const t = num(tuple[iT])
+      const c = num(tuple[iC])
+      if (!t || !(c > 0)) continue
+      out.push({ t, o: num(tuple[iO]), h: num(tuple[iH]), l: num(tuple[iL]), c, v: num(tuple[iV]) })
+    }
+  } else {
+    for (const r of rows as Array<Record<string, unknown>>) {
+      const t = num(r.timestamp)
+      const c = num(r.close)
+      if (!t || !(c > 0)) continue
+      out.push({ t, o: num(r.open), h: num(r.high), l: num(r.low), c, v: num(r.volume) })
+    }
+  }
   out.sort((a, b) => a.t - b.t)
   return out
 }

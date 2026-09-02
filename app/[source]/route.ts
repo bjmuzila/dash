@@ -6,6 +6,7 @@ import {
   shortLinkLocation,
   shortLinkSlug,
 } from "@/lib/shortLinks";
+import { PROMO_LINKS, PROMO_COOKIE, PROMO_COOKIE_MAX_AGE } from "@/lib/promoLinks";
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
@@ -40,6 +41,33 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, ctx: { params: Promise<{ source: string }> }) {
   const { source: rawSource } = await ctx.params;
   const sourceSlug = shortLinkSlug(rawSource);
+
+  // ── Promo short links — cbedge.net/bday ──────────────────────────────────
+  // A slug in PROMO_LINKS (lib/promoLinks.ts) is a DEAL link, not a
+  // where-did-they-come-from link: it 302s to /pricing with the code in the
+  // query (so the page can show the offer), tags the visit for the
+  // Acquisition panel, and drops a 30-day cookie so the code survives the
+  // sign-up detour before /api/stripe/checkout reads it. Checked before the
+  // BARE_SOURCES allowlist; both are explicit tables, so `/pricng` still 404s.
+  const promo = sourceSlug ? PROMO_LINKS[sourceSlug] : undefined;
+  if (promo) {
+    const qs = new URLSearchParams({
+      promo: promo.code,
+      utm_source: sourceSlug,
+      utm_medium: "promo",
+      utm_campaign: promo.campaign,
+    });
+    // Same relative-Location + no-store reasoning as the redirect below.
+    const headers = new Headers({
+      Location: `/pricing?${qs.toString()}`,
+      "Cache-Control": "no-store, max-age=0",
+    });
+    headers.append(
+      "Set-Cookie",
+      `${PROMO_COOKIE}=${promo.code}; Path=/; Max-Age=${PROMO_COOKIE_MAX_AGE}; HttpOnly; SameSite=Lax`
+    );
+    return new NextResponse(null, { status: 302, headers });
+  }
 
   // Allowlist, not a catch-all. See the block comment above.
   if (!sourceSlug || !BARE_SOURCES.has(sourceSlug)) {

@@ -1,5 +1,126 @@
 # Changelog
 
+## 2026-09-02 - v3 toolbar: Notes button + owner-gated Quick Probe
+
+The NOTES button and the drawer behind it are now in v3's toolbar, matching v2
+one for one. Pencil glyph with a count badge, sitting between the ET clock and
+the account avatar; it toggles a 320px right-side dock that is a flex SIBLING of
+the page column, so it pushes content rather than floating over it.
+
+### Files
+
+- `cbedge-v3/src/shell/notes.tsx` (new) — `useNotes` store + `NotesBody`, ported
+  from v2's `components/shared/notes.tsx`. Same storage key prefix
+  (`sidebar-notes-v1:<userId>`), same `cb-notes-changed` cross-instance sync
+  event, same quota-shedding write path (drop the oldest image, then the oldest
+  note, rather than letting `setItem` throw and desync state). Both builds are
+  on one origin, so notes written on `/app/*` are the notes read on `/v3/*`.
+- `cbedge-v3/src/shell/NotesPanelContext.tsx` (new) — open/closed state,
+  persisted under v2's key `notes-dock-open-v1`.
+- `cbedge-v3/src/shell/QuickProbe.tsx` (new) — owner-only Quick Probe, ported
+  from v2. Ticker / expiration / strike / call-put, `POST /api/watch`
+  `{action:"add"}` with no `addedPrice` so the route captures the live mark as
+  the entry basis; expirations fill from `/api/expirations`. `useIsOwner`
+  decides whether it is DRAWN, `/api/watch` (registered `auth: 'owner'`
+  server-side) decides whether the write is allowed. Renders nothing and fetches
+  nothing for a non-owner.
+- `cbedge-v3/src/shell/NotesDock.tsx` (new) — the drawer. Quick Probe on top,
+  capped at 62% height with its own scroll so an open probe cannot push the note
+  list out of the panel; notes list below. Signed-in desktop only (`useIsPhone`),
+  as in v2.
+- `cbedge-v3/src/shell/Shell.tsx` — `NotesPanelProvider` added inside
+  `AuthProvider`, `NotesButton` in the toolbar after `EtClock`, `NotesDock`
+  mounted as a sibling of the page column.
+
+### Notes
+
+- No v2 imports: every piece is rewritten in v3's idiom against v3's own
+  `data/auth.tsx`, per the clean-slate rule in `cbedge-v3/AGENTS.md`.
+- Zero theme violations — all five files are pure token utilities (no hex, no
+  `rgb()`, no Tailwind palette shades, no arbitrary type sizes), so nothing goes
+  into `theme-baseline.json`.
+
+
+## 2026-09-02 - v3 GEX Candles: ES futures candles are back, as an SPX/ES switch
+
+v2's original pairing — SPX gamma drawn over ES futures candles — returns to the
+v3 GEX Candles card. Not as a symbol: v3 has one board-wide ticker and none of
+the other cards know what a futures contract is. It is a per-card SPX/ES
+segmented control in the toolbar (bottom sheet on a phone), shown only while
+the page symbol is SPX, persisted as `esCandles` in the card's settings blob
+(v7).
+
+### What ES does
+
+- Candles come off `/api/snapshots/candles?daysBack=5&interval=1|5&lite=1` on
+  the same 30s poll the cash index uses. The lite tuple form is parsed by the
+  new `parseEsCandles`; the verbose form still parses as a fallback.
+- The forming bar ticks from the socket's `esCandles` (5m) / `es1mCandles` (1m)
+  frame via `watchFrame` -> `setLivePrice`, imperatively — never `spot`, which
+  is the cash index one basis below. Reading the frame is what puts it into the
+  socket's derived topic scope while on ES, and takes it out when not.
+- Every GEX strike (bubbles AND rail) is shifted into ES price space by the
+  ES−SPX basis from `/proxy/es-spx-basis` — per HISTORY COLUMN by that ET
+  session's basis (`days`), the newest session's `basis` for anything else.
+  New `board/gexCandles/basis.ts`. The four-tier fallback ladder v2 carried
+  (live esCandle−spot, eod anchor, server basis) was NOT ported: the basis
+  decays ~1pt/day and only the proxy tier was ever right.
+- No usable basis => the layer draws UNSHIFTED and the status line says
+  "ES−SPX basis unavailable — GEX levels are drawn at SPX cash strikes."
+- The view key includes the tape, so SPX<->ES reframes the price window.
+
+### Deliberately not `useEsCandles`
+
+`src/data/esCandles.ts` re-renders its consumer on every candle frame — right
+for the relative-volume panels, wrong for a chart that would re-ingest ~7,000
+1m bars per socket message. The card polls like SPX and ticks imperatively.
+
+### Files
+
+- `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx` — switch, ES query,
+  basis query, column shift, ES live tick, status line
+- `cbedge-v3/src/board/gexCandles/basis.ts` — NEW
+- `cbedge-v3/src/board/gexCandles/candles.ts` — `esCandlesUrl`, `parseEsCandles`
+- `cbedge-v3/src/board/gexCandles/settings.ts` — `esCandles`, blob v7
+- `cbedge-v3/src/board/gexCandles/symbols.ts` — header note; ES/NQ still
+  normalise to SPX/NDX as page symbols
+
+## 2026-09-02 - /bday promo links + BDAY birthday promo graphic
+
+September birthday-month promo: $1,000/yr -> $400/yr with code **BDAY**,
+promoted as `cbedge.net/bday`.
+
+Added: `lib/promoLinks.ts`, `generated/2026-09-02-bday-annual-x-post.{html,png}`.
+Edited: `app/[source]/route.ts`, `middleware.ts`, `app/pricing/page.tsx`,
+`components/pricing/PricingActions.tsx`, `app/api/stripe/checkout/route.ts`.
+
+- **Promo short links are a table** (`lib/promoLinks.ts`): one row per deal
+  (`bday` -> code BDAY + banner copy). The bare-segment route answers for the
+  slug and middleware derives its public pattern from the same list, so a
+  future `/(whatever-word)` promo is one row here plus a Stripe coupon -
+  nothing else changes.
+- **`/bday`** 302s to `/pricing?promo=BDAY` with utm tags (`utm_source=bday`,
+  `utm_medium=promo`, `utm_campaign=bday`) and drops a 30-day `cbe_promo`
+  cookie so the code survives the sign-up detour (pricing -> sign-up -> back
+  -> checkout) where the query string is lost.
+- **Pricing page** shows the birthday banner and a "code BDAY is applied
+  automatically" box when the promo is live (query param or cookie), and
+  forwards the code to checkout via PricingActions.
+- **Checkout** (`/api/stripe/checkout`) pre-applies the code as a Stripe
+  discount on the YEARLY plan only (a $600-off coupon on a $45 monthly
+  invoice would be nonsense - monthly keeps the type-it-yourself box).
+  Stripe forbids `discounts` + `allow_promotion_codes` together, so the
+  session flips between them; if BDAY isn't an active promotion code in
+  Stripe yet, it falls back to manual entry instead of blocking the purchase.
+  Only codes in the PROMO_LINKS table are honored - this is a pre-fill for
+  advertised deals, not an "apply any string" input.
+- **Graphic** - recreation of the EDGE3 annual X graphic with the birthday
+  framing: $400/yr, code BDAY, link cbedge.net/bday
+  (`generated/2026-09-02-bday-annual-x-post.png`, editable HTML alongside).
+
+**BDAY must exist in Stripe as an ACTIVE promotion code** (on a $600-off-once
+coupon, yearly price) before the link goes out - same requirement EDGE3 had.
+
 ## 2026-09-01 - The flow tape was 99% of socket egress; the alarm caught it day one
 
 First trading day after the /ws/gex fix. Cloudflare fell 53GB -> 19.92GB (-77.5%),

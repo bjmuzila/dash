@@ -124,6 +124,15 @@ export interface ChartSettings {
    * about the layer is the frozen BUBBLES block above.
    */
   bubbleScale: number
+  /**
+   * ES FUTURES CANDLES under SPX gamma — v2's original pairing, back as a
+   * per-card switch (2026-09-02). Only meaningful while the page symbol is
+   * SPX: the gamma stays `$SPX`, the candles come off `es_candles` + the
+   * socket's `esCandles` / `es1mCandles` frames, and every strike is pushed
+   * through the ES−SPX basis (/proxy/es-spx-basis) before it is drawn. On any
+   * other symbol the flag is ignored — there is no futures tape for AMZN.
+   */
+  esCandles: boolean
 }
 
 export const DEFAULT_SETTINGS: ChartSettings = {
@@ -139,6 +148,7 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   expiry: '',
   bubbleBucket: BUBBLE_BUCKET_DEFAULT,
   bubbleScale: 1,
+  esCandles: false,
 }
 
 /**
@@ -456,6 +466,10 @@ const KEY_PREFIX = 'cb-v3-gex-candles:'
 /**
  * Blob version, written alongside the settings and checked on load.
  *
+ * v7 (2026-09-02): `esCandles` added — the SPX/ES candle switch. An older blob
+ * has no such key and coerce falls back to false, which is the cash-index
+ * chart those blobs already drew.
+ *
  * v6 (2026-08-31): `bubbleScale` added. An older blob has no such key,
  * clampScale falls back to 1, and 1 is the size those blobs already drew.
  *
@@ -473,7 +487,7 @@ const KEY_PREFIX = 'cb-v3-gex-candles:'
  * simply never read. Kept because the next default that needs pushing will need
  * this, and re-deriving the mechanism is worse than leaving it inert.
  */
-const SETTINGS_V = 6
+const SETTINGS_V = 7
 const STALE_ON_UPGRADE: string[] = ['prevDay', 'bubbleDay']
 
 /** Coerce an unknown parsed blob into a complete, in-range settings object. */
@@ -499,6 +513,7 @@ function coerce(raw: unknown): ChartSettings {
     expiry: typeof p.expiry === 'string' ? p.expiry : '',
     bubbleBucket: isBubbleBucket(p.bubbleBucket) ? p.bubbleBucket : DEFAULT_SETTINGS.bubbleBucket,
     bubbleScale: clampScale(p.bubbleScale),
+    esCandles: p.esCandles === true,
   }
 }
 

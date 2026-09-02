@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // The chart's symbol universe.
 //
-// ES AND NQ ARE DELIBERATELY ABSENT (2026-08-27). Dropping the futures is what
-// lets this whole module tree be simple:
+// ES AND NQ ARE NOT SYMBOLS HERE (2026-08-27). Dropping the futures from the
+// symbol list is what lets this module tree be simple:
 //
 //   · One candle endpoint. /api/snapshots/etf-candles serves every symbol here.
 //     The futures route, /api/snapshots/candles, only ever looked at the symbol
@@ -18,6 +18,14 @@
 // SPX cash candles are recorded by server-v2/etf-candle-recorder.js (its hot
 // lane, added 2026-08-27) and /api/snapshots/etf-candles is the only route that
 // serves them, with a dxlink-live fallback while the table fills.
+//
+// ES IS BACK AS A CANDLE SOURCE, NOT A SYMBOL (2026-09-02). Like v2's original
+// pairing — SPX gamma on ES futures candles — but expressed as the card's
+// SPX/ES switch (`settings.esCandles`), shown only while the page symbol is
+// SPX. The gamma key stays `$SPX`; the tape comes off `useEsCandles` and the
+// strikes go through the basis in ./basis.ts. Typing "ES" into the toolbar
+// still lands on SPX (RETIRED below), where the switch is one click away, and
+// none of the other cards on the board has to learn what a futures contract is.
 //
 // Three tiers of symbol, as in v2:
 //   1. the curated list below, always present, always first
@@ -57,7 +65,10 @@ const BY_KEY = new Map(SYMBOLS.map((s) => [s.key, s]))
 
 export const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/
 
-/** Symbols v3 no longer charts, and what a saved setting for one becomes. */
+/**
+ * Symbols v3 does not chart AS SYMBOLS, and what a saved setting for one
+ * becomes. ES is charted through the GEX Candles card's SPX/ES switch instead.
+ */
 const RETIRED: Record<string, string> = { ES: 'SPX', '/ES': 'SPX', NQ: 'NDX', '/NQ': 'NDX' }
 
 export function normalizeSymbol(s: string): string {

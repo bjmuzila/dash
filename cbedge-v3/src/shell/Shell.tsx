@@ -2,10 +2,14 @@ import type { DragEvent as ReactDragEvent, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { preload } from '@/data/api'
-import { AuthProvider } from '@/data/auth'
+import { AuthProvider, useAuth } from '@/data/auth'
 import { PAGE_TICKER_RE, PageSymbolProvider, SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import { Chip } from '@/design/primitives/Controls'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
+import { useIsPhone } from '@/design/useIsPhone'
+import NotesDock from '@/shell/NotesDock'
+import { NotesPanelProvider, useNotesPanel } from '@/shell/NotesPanelContext'
+import { PencilIcon, useNotes } from '@/shell/notes'
 import { UserMenu } from '@/shell/UserMenu'
 
 // The persistent frame: mounts once and never unmounts, so the socket, the
@@ -220,6 +224,43 @@ function EtClock() {
   )
 }
 
+// ── NOTES button ─────────────────────────────────────────────────────────────
+// v2's toolbar carries this immediately left of the account menu, and so does
+// this one: pencil glyph, count badge, toggles the right-side dock. Signed-in
+// desktop only — the dock itself refuses to mount on a phone (NotesDock), so a
+// button that toggles nothing would be a lie.
+function NotesButton() {
+  const { isSignedIn, userId } = useAuth()
+  const { open, togglePanel } = useNotesPanel()
+  const { notes } = useNotes(userId)
+  const isPhone = useIsPhone()
+
+  if (!isSignedIn || isPhone) return null
+
+  return (
+    <div className="relative flex shrink-0">
+      <button
+        type="button"
+        onClick={togglePanel}
+        title="Notes"
+        aria-label="Notes"
+        aria-expanded={open}
+        className={[
+          'flex h-7 w-7 items-center justify-center rounded-full border bg-raised transition-colors',
+          open ? 'border-accent text-accent' : 'border-line text-muted hover:text-fg',
+        ].join(' ')}
+      >
+        <PencilIcon size={15} />
+      </button>
+      {notes.length > 0 && (
+        <span className="tabular pointer-events-none absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-bg bg-accent px-1 text-3xs font-extrabold text-bg">
+          {notes.length > 99 ? '99+' : notes.length}
+        </span>
+      )}
+    </div>
+  )
+}
+
 function Toolbar() {
   // THE ticker control for the whole board. Every card that can follow a symbol
   // follows this one, which is why no card carries its own dropdown — see
@@ -274,6 +315,10 @@ function Toolbar() {
         title="The board's symbol — every card that can follow a ticker is showing this one. Click to search the list or star a ticker to keep it on top."
       />
       <EtClock />
+      {/* Notes — toggles the right-side dock (and, for the owner, the Quick
+          Probe card inside it). Same slot as v2: after the clock, before the
+          avatar. */}
+      <NotesButton />
       {/* The account dropdown — same rows as v2's UserMenu, on v3 tokens. The
           Owner entry inside is owner-gated (chrome only; middleware.ts is the
           real gate). See shell/UserMenu.tsx. */}
@@ -288,17 +333,25 @@ export function Shell({ children }: { children: ReactNode }) {
   //     and they have to be looking at one value.
   //   AuthProvider — one /api/auth/me read for the whole session. The account
   //     menu needs it, and so does anything that draws owner-only chrome.
+  //   NotesPanelProvider — the toolbar button and the dock are on opposite
+  //     sides of the page column and have to share one open/closed value.
+  //
+  // NotesDock is a SIBLING of the page column, not a child of it: that is what
+  // makes it push the page rather than float over it (v2 does the same).
   return (
     <AuthProvider>
-      <PageSymbolProvider>
-        <div className="cb-viewport flex overflow-hidden bg-bg text-fg">
-          <Rail />
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            <Toolbar />
-            {children}
+      <NotesPanelProvider>
+        <PageSymbolProvider>
+          <div className="cb-viewport flex overflow-hidden bg-bg text-fg">
+            <Rail />
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+              <Toolbar />
+              {children}
+            </div>
+            <NotesDock />
           </div>
-        </div>
-      </PageSymbolProvider>
+        </PageSymbolProvider>
+      </NotesPanelProvider>
     </AuthProvider>
   )
 }
