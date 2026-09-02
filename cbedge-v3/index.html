@@ -5,18 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
     <title>CB Edge</title>
-    <!-- Inline, not a file: without SOME icon the browser requests /favicon.ico
-         on every load and logs a 404 in the console of a page that has no other
-         errors, which trains you to ignore the console. A data: URI costs one
-         line and no request.
+    <!-- The badge, from public/favicon.svg — vector, so one file serves the
+         browser tab and a retina bookmark tile. It is a FILE rather than the
+         data: URI this used to be because the lettering is traced outlines and
+         that is ~14KB of path data; inlined, it would have eaten three times
+         index.html's entire brotli budget (see scripts/check-budgets.mjs).
 
-         This is THE mark — the same ladder glyph src/shell/Brand.tsx draws in
-         the rail, with v3's candle colours baked in because a data: URI cannot
-         read a CSS variable. If the mark changes, both change together. -->
-    <link
-      rel="icon"
-      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%2307080b'/><rect x='2.2' y='2.2' width='27.6' height='27.6' rx='8.4' fill='none' stroke='%23ffffff' stroke-width='2.3'/><path d='M14.6 9.0 A5.6 5.6 0 0 0 6.4 13.2 v5.6 A5.6 5.6 0 0 0 14.6 23.0' fill='none' stroke='%23ff5b5b' stroke-width='3' stroke-linecap='round'/><path d='M18.2 7.2 V24.8 M18.2 7.2 h3.4 a4.4 4.4 0 0 1 0 8.8 h-3.4 M18.2 16.0 h4.4 a4.4 4.4 0 0 1 0 8.8 h-4.4' fill='none' stroke='%2330d158' stroke-width='3' stroke-linejoin='round' stroke-linecap='round'/></svg>"
-    />
+         The path is absolute and carries the base, because a relative href
+         resolves against the CURRENT URL, not the document — and this SPA has
+         routes at /v3/<page>, where "./favicon.svg" would 404. -->
+    <link rel="icon" type="image/svg+xml" href="/v3/favicon.svg" />
 
     <!-- ───────────────────────────────────────────────────────────────────
          PAINT TOKENS — inlined so the background and text color are correct

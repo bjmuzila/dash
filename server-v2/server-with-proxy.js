@@ -108,7 +108,7 @@ catch (e) { console.warn('[atm-prem] recorder not loaded:', e.message); }
 let multGreekGexRecorder = null;
 try { multGreekGexRecorder = require('./mult-greek-gex-recorder'); }
 catch (e) { console.warn('[mult-greek-gex] recorder not loaded:', e.message); }
-const { getEsSpxBasis } = require('./es-spx-basis');
+const { getEsSpxBasis, getEsSpxBasisReason } = require('./es-spx-basis');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
@@ -453,11 +453,13 @@ async function handleProxyRest(req, res) {
   // The ONE trustworthy ES−SPX basis: our es_candles 16:00 ET close (the charted
   // contract → roll-correct) minus Yahoo ^GSPC's close (independent of the broker
   // feed, whose "SPX" spot actually tracks ES and poisons every other basis path).
-  // { basis, esClose, spxClose, date } — or { basis: null } when unavailable, which
-  // callers must NOT coerce to 0.
+  // { basis, esClose, spxClose, date } — or { basis: null, reason } when unavailable,
+  // which callers must NOT coerce to 0. `reason` names the leg that broke (db /
+  // yahoo / no-match); a bare null hid an SSL misconfiguration in this route's own
+  // pg pool for months. Clients ignore the extra field.
   if (pathname === '/proxy/es-spx-basis') {
     getEsSpxBasis()
-      .then((b) => sendJson(res, 200, b ?? { basis: null }))
+      .then((b) => sendJson(res, 200, b ?? { basis: null, reason: getEsSpxBasisReason() }))
       .catch((e) => sendJson(res, 500, { error: 'es-spx-basis failed', detail: String(e?.message || e) }));
     return true;
   }

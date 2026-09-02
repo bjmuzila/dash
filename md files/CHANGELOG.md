@@ -1,29 +1,85 @@
 # Changelog
 
-## 2026-09-02 - v3 mark: the bars become a C and a B
+## 2026-09-02 - ES−SPX basis: the route had never once returned a number
 
-Follow-up to the logo drop earlier today. The mark was the source art's bar
-ladder — five red bars beside five green bars — redrawn on v3's candle tokens.
-It reads at 512px and turns to mush at 16px: five 2.6-unit bars on a 32-unit
-grid land on roughly one device pixel each in a favicon, and the two columns
-merge into two coloured smudges.
+The GEX Candles card on v3 has been showing "ES−SPX basis unavailable (route has
+no usable basis, no live pair yet) — GEX levels are drawn at SPX cash strikes"
+on the ES tape. That banner was telling the truth: `/proxy/es-spx-basis` was
+answering `{"basis":null}`, and had been answering it since the day the route
+was written.
 
-`CbMark` is now the letters **C** and **B**, keeping exactly what the ladder was
-carrying — RED on the left (`--color-candle-down`), GREEN on the right
-(`--color-candle-up`), the down/up pair the whole app is painted in — at a size
-a mark actually gets used at. Both letters are drawn as STROKES, not filled
-glyphs, so their weight is identical at every scale; the C's round caps are the
-one piece of the old mark's drawing worth keeping.
+Neither leg was actually broken. `es_candles` has its `16:00` ET rows (verified
+for 08-31, 09-01 and 09-02 against live prod), and Yahoo `^GSPC` is reachable
+from the box — `/api/insights/vix` pulls it every call.
 
-The full ladder art is untouched and still the wordmark's mark
-(`public/cbedge3.0.png`, `cbedge-v3/src/assets/cbedge-wordmark.png`) — it has
-the room there. This is the square-slot form only: rail head, favicon, app icon.
+**The fault was the module's own database pool.** `server-v2/es-spx-basis.js`
+opened a private `pg.Pool` with nothing but a `connectionString`. `DATABASE_URL`
+points at Render's EXTERNAL Postgres host and carries no `?sslmode=require`, so
+that pool negotiated no TLS, Render refused the connection, the `es_candles`
+query threw, the `catch` swallowed it into a `console.warn`, and the route
+returned null. Forever. Every other db-backed route works because every other
+one goes through `_lib-db.cjs`, whose pool has always set
+`ssl: { rejectUnauthorized: false }` for any non-localhost URL.
 
-Regenerated with it: `cbedge-v3/index.html`'s data-URI favicon,
-`public/cbedge-mark.svg`, `public/cbedge-mark-icon.svg`,
-`public/cbedge-mark-512.png`.
+So the private pool is gone. The query now runs through `_lib-db.cjs`'s
+`queryAll`, which brings the correct SSL config, the transient-reconnect retry,
+and one fewer connection against a connection-limited Render instance.
 
-Files: `cbedge-v3/src/shell/Brand.tsx`, `cbedge-v3/index.html`,
+Three smaller things went in with it:
+
+- **Yahoo gets the working headers.** The bare `User-Agent` this module sent is
+  the one Yahoo 401s; every other `^GSPC` caller in `api-router.js` sends
+  `Origin` / `Referer` / `Accept-Language` too, and now so does this one.
+- **`LIMIT 15` → `LIMIT 30`.** `es_candles` holds both a 1m and a 5m `16:00` row
+  per session, so fifteen rows was only ~7 sessions of `days` — and the card
+  shifts each history column by ITS OWN session's basis. Same-date duplicates
+  are skipped rather than recomputed.
+- **The null response now says why.** `{ basis: null, reason: 'db: …' }` —
+  `db` / `yahoo` / `no-match`. A bare null read identically for four different
+  faults, which is exactly how an SSL misconfiguration hid in plain sight for
+  months. Clients ignore the extra field.
+
+No client file changed. The banner in `GexCandlesCard.tsx` is left as it is: it
+is the correct thing to show when there is genuinely no basis, and it now
+disappears on its own because the route returns one.
+
+Files: `server-v2/es-spx-basis.js`, `server-v2/server-with-proxy.js`.
+
+## 2026-09-02 - v3 mark: the badge, vectorised, with the ladder gradient
+
+Third and final pass at the square mark today. The two earlier attempts both
+started from the premise that the mark should be DRAWN from theme tokens so it
+could inherit the surface it sat on — first as smooth CB letterforms, then as
+dashes arranged into a C and a B. That premise was wrong. It is the right
+instinct for chrome and the wrong one for a logo: the badge is a fixed piece of
+artwork with its own colours, and each time it was redrawn "on theme" it stopped
+being the logo.
+
+`CbMark` is now the artwork itself: CB EDGE over the red/green ladder in its
+rounded frame — the badge as drawn, not an interpretation of it.
+
+**It is fully vector.** The frame, the ten bars and the divider are shapes; the
+CB EDGE lettering is the real face traced to outlines, since the custom type has
+no font file. One file therefore serves both a 20px rail head and a 1024px app
+icon, which no crop of the source PNG could.
+
+**The ladder carries a gradient now**, running OUTWARD FROM THE DIVIDER: deep at
+the centre, bright at the edges, on both sides. One ramp per column, declared in
+user space across the full 512 box, so the two columns read as mirror halves of
+a single sweep rather than ten independently tinted bars.
+
+**The favicon is a file again, not a data: URI.** Traced outlines are ~14KB of
+path data — inlined, that is three times index.html's whole brotli budget. It
+lives at `cbedge-v3/public/favicon.svg` and is referenced by ABSOLUTE path
+(`/v3/favicon.svg`): a relative href resolves against the current URL, not the
+document, and this SPA has routes at `/v3/<page>` where `./favicon.svg` 404s.
+
+The wordmark is unchanged — the horizontal lockup still carries the ladder
+beside the lettering, which is what a wide slot wants.
+
+Files: `cbedge-v3/src/shell/Brand.tsx`,
+`cbedge-v3/src/assets/cbedge-mark.svg` (new),
+`cbedge-v3/public/favicon.svg` (new), `cbedge-v3/index.html`,
 `public/cbedge-mark.svg`, `public/cbedge-mark-icon.svg`,
 `public/cbedge-mark-512.png`.
 
