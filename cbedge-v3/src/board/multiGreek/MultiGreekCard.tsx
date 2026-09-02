@@ -94,9 +94,11 @@ const RAIL_PX = 76
  * the marker — the ★ / badge end of the cell — and is gone before the figure,
  * which sits on the ordinary heat and reads red or blue again.
  *
- * The stops are TIGHTER than the chain's (12/40 vs 26/66) for one reason: these
- * figures are CENTRED and the chain's are right-aligned, so the gold has to
- * clear the middle of the cell instead of just its right third.
+ * The stops are LONGER than the chain's (55/82 vs 26/66). The ladder is scanned
+ * across four panels at once and the core has to be findable in peripheral
+ * vision, so gold holds through the figure and hands over in the last quarter —
+ * enough tail, between the fade and the CB badge, to say which way the gamma
+ * points without the cell stopping being the gold one.
  *
  * Twin of `levelFillBg()` in pages/optionsChain/heatSkins.ts. Kept as its own
  * constant rather than imported for the same reason CB_FILL was: that module
@@ -108,7 +110,7 @@ const CB_GOLD = 'var(--color-level-cb)'
 const CB_FILL = 'color-mix(in srgb, var(--color-level-cb) 85%, transparent)'
 /** Fades to gold-at-zero, not `transparent`: a ramp through grey reads dirty. */
 const CB_FADE = 'color-mix(in srgb, var(--color-level-cb) 0%, transparent)'
-const CB_WASH = `linear-gradient(${CB_WASH_ANGLE},${CB_GOLD} 0%,${CB_FILL} 12%,${CB_FADE} 40%)`
+const CB_WASH = `linear-gradient(${CB_WASH_ANGLE},${CB_GOLD} 0%,${CB_FILL} 55%,${CB_FADE} 82%)`
 
 function readStored(key: string, fallback: string): string {
   try {

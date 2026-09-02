@@ -29,6 +29,7 @@ import { alpha, LIGHT_BLUE, MOVE_UP, SHADOW, T } from '@/design/theme'
 import { query } from '@/data/api'
 import { fmtClockHm, fmtExpiryShort, fmtGex, fmtReplayClock, fmtStampDate } from './format'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
+import { ReplayDock } from '@/design/primitives/ReplayDock'
 
 interface Strike {
   strike: number
@@ -366,10 +367,26 @@ export function LadderModal({
   // The body is the whole feature: pickers, transport, ladder, stamp. The modal
   // is a frame around it, and /replay's "Chain ladder" tab is the same body with
   // the hub's Card as the frame instead.
-  const body = (
-    <>
+
+  // ── THE TRANSPORT ──────────────────────────────────────────────────────────
+  // Split out of the body so the EMBEDDED shape can send it to the page's
+  // replay dock while the ladder stays in the card. In the modal it stays where
+  // it is: a modal owns its own bottom edge, and pushing a bar onto the page
+  // behind it would dock the controls somewhere the overlay is covering.
+  const transport = (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: embedded ? 'row' : 'column',
+        flexWrap: 'wrap',
+        alignItems: embedded ? 'center' : 'stretch',
+        gap: embedded ? 10 : 0,
+        width: '100%',
+        minWidth: 0,
+      }}
+    >
       {/* Controls */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 14 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: embedded ? 0 : 14 }}>
         <span
           style={{
             fontSize: 13,
@@ -463,7 +480,7 @@ export function LadderModal({
       </div>
 
       {/* Scrubber */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: embedded ? 0 : 6, flex: embedded ? '1 1 320px' : undefined, minWidth: 0 }}>
         <input
           type="range"
           min={0}
@@ -494,10 +511,15 @@ export function LadderModal({
           )}
         </div>
       </div>
-      <div style={{ fontSize: 12, color: SUB, marginBottom: 14 }}>
+      <div style={{ fontSize: 'var(--text-xs)', color: SUB, marginBottom: embedded ? 0 : 14, whiteSpace: 'nowrap' }}>
         {frames.length ? `Frame ${idx + 1} / ${frames.length}` : ''}
       </div>
+    </div>
+  )
 
+  const body = (
+    <>
+      {embedded ? <ReplayDock>{transport}</ReplayDock> : transport}
       {loading && <div style={{ padding: 40, textAlign: 'center', color: SUB }}>Loading…</div>}
       {!loading && err && <div style={{ padding: 24, textAlign: 'center', color: NEG }}>{err}</div>}
       {!loading && !err && !frames.length && (

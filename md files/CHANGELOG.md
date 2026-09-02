@@ -1,5 +1,131 @@
 # Changelog
 
+## 2026-09-02 - Options chain: 50% strikes by default, and the settings menu registers its clicks
+
+Two unrelated fixes on the same control.
+
+### The % strikes picker silently ignored a pick
+
+Clicking an option in the chain's GRID > STRIKES menu did nothing, on and off.
+Two causes, both fixed:
+
+- `cbedge-v3/src/design/primitives/Controls.tsx` — `Popover`'s click-outside
+  closed on ANY `pointerdown` whose target was not inside its own panel. The
+  dropdown's list is `createPortal`'d to `<body>`, so pressing a row counted as
+  "outside": the ⚙ panel closed, the list unmounted with it, and the `click`
+  that would have fired on mouseup landed on nothing. Outside now ignores
+  anything under a `[data-popover-safe]` node — new exported `POPOVER_SAFE_ATTR`,
+  which any portalled menu opened from a Popover must carry.
+- `cbedge-v3/src/pages/optionsChain/pickers.tsx` — rows act on `onPointerDown`
+  rather than `onClick`, and carry the attribute above. `useAnchor` repositions
+  the menu on any scroll in the capture phase, so a list that shifted a few
+  pixels between press and release put the two events on different rows, and
+  `click` only fires when they match.
+
+### Strikes default
+
+- `cbedge-v3/src/pages/optionsChain/useChainData.ts` — the per-ticker auto
+  window is now SPX 10% / everything else 50%, up from 30%. SPX stays at 10: it
+  lists thousands of strikes across the expiries drawn side by side and a wider
+  window costs real frames. A single-name chain is a fraction of that, and 30%
+  cut off before the strikes worth reading.
+
+## 2026-09-02 - Options chain + Multi Greek: the CB (Core) cell keeps its sign
+
+A Core Bullseye below spot is negative, but the VIVID skin painted the cell flat
+gold at .85 and the red underneath was gone — a short-gamma Core looked
+identical to a long-gamma one. The gold is now a diagonal WASH instead of a flat
+layer: solid at the ★ corner, holding the skin's alpha, then out, so the figure
+lands on the ordinary sign heat. The cell still reads "Core" at a glance and the
+number reads red or blue again.
+
+### Files
+
+- `cbedge-v3/src/pages/optionsChain/heatSkins.ts` — `levelFillBg()` branches on
+  `kind === 'cb'` and returns
+  `linear-gradient(112deg, cb 0%, cb@.85 26%, cb@0 66%), <heat>`.
+  112deg rather than 135 because the cell is ~7x wider than tall — a true
+  diagonal clears the gold inside two characters. New `CB_WASH_ANGLE` /
+  `CB_WASH_HOLD` / `CB_WASH_END` constants carry the tuning.
+  CW and PW are untouched (flat two-stop): their colour already IS the sign, so
+  they have nothing to hide. CB is the only level whose colour is directionless.
+  Fades to `alpha(cb, 0)` rather than `transparent` so the ramp stays in the
+  gold hue instead of dipping through grey.
+- `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx` — dropped the ★'s white
+  halo on the levelFill skins. The corner it sits in is now solid gold, so the
+  glyph has its own ground and the glow only softened its edge.
+- `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx` — same treatment on the
+  Multi Greek ladder, which had the identical bug from its own copy of the value
+  (`CB_FILL`, flat gold at 85% over the heat). Now `CB_WASH`, with LONGER stops
+  than the chain's — 55% / 82% against 26% / 66%. The ladder is scanned across
+  four panels at once and the core has to be findable in peripheral vision, so
+  gold holds through the figure and hands over in the last quarter; the tail
+  between the fade and the CB badge is what carries the sign. ★ halo dropped for
+  the same reason as the chain's.
+
+No token, skin-config or math change: the ramp, rank floors, `levelFill.alpha`
+and CLASSIC are all byte-for-byte what they were.
+
+## 2026-09-02 - v3 GEX Candles: ES futures candles are back, as an SPX/ES switch
+
+v2's original pairing — SPX gamma drawn over ES futures candles — returns to the
+v3 GEX Candles card. Not as a symbol: v3 has one board-wide ticker and none of
+the other cards know what a futures contract is. It is a per-card SPX/ES
+segmented control in the toolbar (bottom sheet on a phone), shown only while
+the page symbol is SPX, persisted as `esCandles` in the card's settings blob
+(v7).
+
+### What ES does
+
+- Candles come off `/api/snapshots/candles?daysBack=5&interval=1|5&lite=1` on
+  the same 30s poll the cash index uses. The lite tuple form is parsed by the
+  new `parseEsCandles`; the verbose form still parses as a fallback.
+- The forming bar ticks from the socket's `esCandles` (5m) / `es1mCandles` (1m)
+  frame via `watchFrame` -> `setLivePrice`, imperatively — never `spot`, which
+  is the cash index one basis below. Reading the frame is what puts it into the
+  socket's derived topic scope while on ES, and takes it out when not.
+- Every GEX strike (bubbles AND rail) is shifted into ES price space by the
+  ES−SPX basis from `/proxy/es-spx-basis` — per HISTORY COLUMN by that ET
+  session's basis (`days`), the newest session's `basis` for anything else.
+  New `board/gexCandles/basis.ts`. The four-tier fallback ladder v2 carried
+  (live esCandle−spot, eod anchor, server basis) was NOT ported: the basis
+  decays ~1pt/day and only the proxy tier was ever right.
+- Fallback when the route answers `{ basis: null }` (fresh es_candles table
+  with no 16:00 bar, Yahoo refusing, no DATABASE_URL): v2's first tier — the
+  newest ES bar close minus the live `spot`, sampled once a minute during
+  cash hours only (spot freezes at 16:00), rounded to 0.25, plausibility-
+  gated (0 < b < 250) so a collapsed broker spot is rejected, not applied.
+- Neither usable => the layer draws UNSHIFTED and the status line says
+  "ES−SPX basis unavailable (<why>) — GEX levels are drawn at SPX cash
+  strikes."
+- The view key includes the tape, so SPX<->ES reframes the price window.
+
+### Owner: the bubbles keep forming in a background tab
+
+`useQuery` pauses polls while the tab is hidden (right for customers — egress
+nobody is looking at). New `background: true` option keeps a poll running
+hidden; the GEX Candles card passes `background: isOwner` on both the candle
+poll (30s) and the GEX history poll (60s), so the owner's chart never has a
+hole from another tab being up. Browsers throttle hidden timers to ~1/min,
+which is the recorder's own cadence. Files: `cbedge-v3/src/data/api.ts`,
+`GexCandlesCard.tsx`.
+
+### Deliberately not `useEsCandles`
+
+`src/data/esCandles.ts` re-renders its consumer on every candle frame — right
+for the relative-volume panels, wrong for a chart that would re-ingest ~7,000
+1m bars per socket message. The card polls like SPX and ticks imperatively.
+
+### Files
+
+- `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx` — switch, ES query,
+  basis query, column shift, ES live tick, status line
+- `cbedge-v3/src/board/gexCandles/basis.ts` — NEW
+- `cbedge-v3/src/board/gexCandles/candles.ts` — `esCandlesUrl`, `parseEsCandles`
+- `cbedge-v3/src/board/gexCandles/settings.ts` — `esCandles`, blob v7
+- `cbedge-v3/src/board/gexCandles/symbols.ts` — header note; ES/NQ still
+  normalise to SPX/NDX as page symbols
+
 ## 2026-09-02 - v3 home board saves to the account, not just the browser
 
 The terminal board (`/v3` home) already autosaved every drag, resize, add and

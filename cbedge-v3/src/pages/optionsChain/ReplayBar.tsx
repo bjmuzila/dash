@@ -6,6 +6,12 @@
 // feature can be misunderstood. The clock, the session date and the recorded
 // spot travel with the image.
 //
+// Since 2026-09-02 it renders into the REPLAY DOCK — the bottom-of-page bar
+// every v3 replay surface shares, transcribed from v2's ES Candles transport.
+// The dock is in FLOW, so it shrinks the grid rather than covering the strikes
+// nearest the money, and it carries the orange plate this bar used to draw for
+// itself. See design/primitives/ReplayDock.tsx.
+//
 // The bar also states its own COVERAGE out loud, twice over. `strike_growth`
 // records only the top N strikes a side per sweep, so the grid looks like the
 // live chain while being a record of the WALLS — without the "recorded walls
@@ -15,7 +21,7 @@
 // Spec: docs/parity/options-chain.md — Part E.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { alpha, T } from '@/design/theme'
+import { T } from '@/design/theme'
 import { fmtReplayClock } from './format'
 import { ChainDropdown } from './pickers'
 import { REPLAY_SCOPES, REPLAY_SCOPE_LABEL, REPLAY_SPEEDS, type ReplayScope } from './useChainData'
@@ -57,15 +63,16 @@ export function ReplayBar(p: ReplayBarProps) {
   return (
     <div
       style={{
+        // No plate. This bar lives in the REPLAY DOCK at the bottom of the page
+        // now (design/primitives/ReplayDock.tsx), and the dock is the orange
+        // one — a second plate inside it would be a bar drawn inside a bar.
         display: 'flex',
         alignItems: 'center',
         gap: 10,
         flexWrap: 'wrap',
-        padding: '5px 8px',
-        borderRadius: 8,
-        border: `1px solid ${alpha(T.orange, 0.35)}`,
-        background: `linear-gradient(180deg,${alpha(T.orange, 0.12)},${alpha(T.orange, 0.03)})`,
-        fontSize: 11,
+        flex: 1,
+        minWidth: 0,
+        fontSize: 'var(--text-xs)',
         whiteSpace: 'nowrap',
       }}
     >

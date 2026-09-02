@@ -49,6 +49,17 @@ export interface QueryOpts {
    * refetching a chain every 15s is pure egress nobody is looking at.
    */
   pollMs?: number
+  /**
+   * Keep polling while the tab is HIDDEN. Off by default — a background tab
+   * refetching a chain every 15s is egress nobody is looking at — and on for
+   * the few consumers whose data must be COMPLETE when the tab comes back, not
+   * merely current: the GEX Candles history poll for the owner, where a
+   * minute's bubble missed while another tab was up is a hole in the session's
+   * record, not a stale number that the next poll repairs. Browsers still
+   * throttle hidden-tab timers to about once a minute, which is exactly the
+   * cadence that consumer needs.
+   */
+  background?: boolean
   signal?: AbortSignal
 }
 
@@ -109,7 +120,7 @@ export interface QueryResult<T> {
  * it is available, so a remount does not flash a loading state.
  */
 export function useQuery<T>(url: string | null, opts: QueryOpts = {}): QueryResult<T> {
-  const { staleMs, pollMs } = opts
+  const { staleMs, pollMs, background = false } = opts
   const [, forceRender] = useState(0)
   const stateRef = useRef<{ data: T | undefined; error: Error | null; loading: boolean }>({
     data: url ? peek<T>(url) : undefined,
@@ -138,7 +149,7 @@ export function useQuery<T>(url: string | null, opts: QueryOpts = {}): QueryResu
   useEffect(() => {
     if (!url || !pollMs) return
     const tick = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      if (!background && typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       // staleMs 0 deliberately bypasses the cache window — the whole point of a
       // poll is to go and ask again. Dedupe still applies, so two cards polling
       // the same URL still make one request.
@@ -164,7 +175,7 @@ export function useQuery<T>(url: string | null, opts: QueryOpts = {}): QueryResu
       clearInterval(id)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [url, pollMs])
+  }, [url, pollMs, background])
 
   return { ...stateRef.current, refetch: run }
 }

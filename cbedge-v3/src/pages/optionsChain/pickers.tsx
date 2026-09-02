@@ -17,10 +17,18 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { POPOVER_SAFE_ATTR } from '@/design/primitives/Controls'
 import { alpha, SHADOW, T } from '@/design/theme'
 
 /** Above every other layer this page can raise. */
 const MENU_Z = 100010
+
+/**
+ * Spread onto a portalled menu's root so the Popover it was opened from does
+ * not read the pointerdown that picks a row as a click outside itself. See
+ * POPOVER_SAFE_ATTR.
+ */
+const POPOVER_SAFE: Record<string, string> = { [POPOVER_SAFE_ATTR]: '' }
 
 /** Keeps a portal'd menu under its trigger through scrolls and resizes. */
 function useAnchor(open: boolean, btnRef: React.RefObject<HTMLButtonElement | null>) {
@@ -139,6 +147,11 @@ export function ChainDropdown<TValue extends string | number>({
         createPortal(
           <div
             ref={menuRef}
+            // This menu portals to <body>, so a Popover it was opened from
+            // (the chain's ⚙ settings panel) would otherwise treat the
+            // pointerdown on a row as a click OUTSIDE itself, close, and take
+            // this menu down with it before the row's click could fire.
+            {...POPOVER_SAFE}
             style={menuPanelStyle({
               left: rect.left,
               top: rect.top,
@@ -153,7 +166,14 @@ export function ChainDropdown<TValue extends string | number>({
               return (
                 <div
                   key={String(opt)}
-                  onClick={() => {
+                  // POINTERDOWN, not click. `useAnchor` re-positions this menu
+                  // on any scroll in the capture phase, so a list that moved a
+                  // few pixels between press and release left the two events on
+                  // different rows — and `click` only fires when they match, so
+                  // the pick silently did nothing. Acting on the press means the
+                  // row under the finger is the row that answers.
+                  onPointerDown={(e) => {
+                    e.preventDefault()
                     onChange(opt)
                     setOpen(false)
                   }}

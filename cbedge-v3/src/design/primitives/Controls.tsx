@@ -165,6 +165,23 @@ interface PopPos {
 }
 
 /**
+ * Marks a node that is VISUALLY inside an open Popover but DOM-wise is not —
+ * a menu of its own that portals to <body>, such as the options chain's %
+ * strikes dropdown.
+ *
+ * Without this the popover's click-outside closed on the pointerdown that was
+ * meant to pick a row: the row lives in a different portal, so `contains()` said
+ * "outside", the panel unmounted, and the `click` that would have fired on
+ * mouseup never landed on anything. From the outside that reads as "I clicked
+ * the option and nothing happened", intermittently — it depended on whether the
+ * unmount beat the mouseup.
+ *
+ * Any portalled menu that can be opened from inside a Popover must carry this
+ * attribute on its outermost node.
+ */
+export const POPOVER_SAFE_ATTR = 'data-popover-safe'
+
+/**
  * A click-outside-to-close popover anchored under its trigger.
  *
  * Portalled to <body> and positioned in viewport coordinates. It used to be an
@@ -210,7 +227,12 @@ export function Popover({
   useEffect(() => {
     if (!open) return
     const onDown = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+      const t = e.target as Node | null
+      if (!ref.current || ref.current.contains(t)) return
+      // A menu this panel opened, portalled somewhere else in the DOM. It is
+      // "inside" as far as the user is concerned. See POPOVER_SAFE_ATTR.
+      if (t instanceof Element && t.closest(`[${POPOVER_SAFE_ATTR}]`)) return
+      onClose()
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()

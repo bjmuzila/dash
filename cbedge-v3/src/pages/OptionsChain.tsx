@@ -47,6 +47,7 @@ import { ChainMatrix } from './optionsChain/ChainMatrix'
 import { LadderModal } from './optionsChain/LadderModal'
 import { ChainDropdown } from './optionsChain/pickers'
 import { ReplayBar } from './optionsChain/ReplayBar'
+import { ReplayDock } from '@/design/primitives/ReplayDock'
 import { StrikeHoverCard } from './optionsChain/StrikeHoverCard'
 import { HEAT_SKINS, type HeatSkin } from './optionsChain/heatSkins'
 import { INTENSITY_MIN } from './optionsChain/chainMath'
@@ -486,7 +487,12 @@ export default function OptionsChain({
           </div>
         </div>
 
+        {/* The transport docks to the BOTTOM of the page, not under the
+            toolbar — v2's ES Candles shape, and the one Brandon asked every
+            replay surface to take. In flow, so it shrinks the grid instead of
+            covering the strikes nearest the money. */}
         {c.replay.on && (
+          <ReplayDock>
           <ReplayBar
             dates={c.replay.dates}
             date={c.replay.date}
@@ -510,6 +516,7 @@ export default function OptionsChain({
             onOpenLadder={() => setLadderOpen(true)}
             segStyle={segStyle}
           />
+          </ReplayDock>
         )}
       </div>
 

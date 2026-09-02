@@ -52,6 +52,7 @@ import {
   useLiveData,
   useRefreshButton,
 } from '../kit'
+import { ReplayDock } from '@/design/primitives/ReplayDock'
 import { TickerPicker, cleanSymbol } from '../TickerPicker'
 import { accumulateChainGreeks } from '../greeks'
 import { TlLadder } from './Ladder'
@@ -837,25 +838,29 @@ export function TickerLookupCard({
         ))}
       </div>
 
-      {/* The replay transport sits UNDER the ticker choices, not above them:
-          picking a symbol reloads the session, so the control that changes WHAT
-          is being replayed belongs before the one that scrubs through it.
-          Reading order now matches cause and effect.
+      {/* The replay transport DOCKS to the bottom of the page — v2's ES Candles
+          shape, applied to every replay surface in v3. It renders here in the
+          React tree (this card owns the state it drives) and lands there in the
+          DOM; a portal moves one and not the other.
 
-          The ladders below look exactly like the live ones, so "recorded walls
-          only" has to be stated here or an em-dashed rung reads as a broken
-          card. */}
+          The dock is in FLOW, so it shrinks the page rather than covering the
+          bottom of these ladders. That matters here specifically: the ladders
+          look exactly like the live ones, so "recorded walls only" has to be
+          readable or an em-dashed rung reads as a broken card. */}
       {replayOn && (
+        <ReplayDock>
         <div
           style={{
+            // No plate of its own. The transport lives in the page's REPLAY
+            // DOCK now (design/primitives/ReplayDock.tsx) — bottom of the page,
+            // in flow, orange, the shape v2's ES Candles transport takes — and
+            // the dock is what draws the orange.
             display: 'flex',
             alignItems: 'center',
             gap: 8,
             flexWrap: 'wrap',
-            padding: '6px 10px',
-            borderRadius: 10,
-            background: V2W.replayBg,
-            border: `1px solid ${V2W.replayEdge}`,
+            flex: 1,
+            minWidth: 0,
             fontSize: FS.small,
             color: V2.text,
           }}
@@ -984,6 +989,7 @@ export function TickerLookupCard({
             </span>
           )}
         </div>
+        </ReplayDock>
       )}
 
       {gateLoading || gateError || !hasAny ? (

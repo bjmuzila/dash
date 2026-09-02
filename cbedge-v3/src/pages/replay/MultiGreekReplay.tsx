@@ -33,6 +33,7 @@ import { PAGE_TICKER_RE } from '@/data/symbol'
 import { alpha, T } from '@/design/theme'
 import { Chip, PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
 import { Slider } from '@/board/gexCandles/controls'
+import { ReplayDock } from '@/design/primitives/ReplayDock'
 import {
   BASIS_LABEL,
   EX0_KEY,
@@ -684,29 +685,18 @@ export function MultiGreekReplay() {
   })
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
+    <div className="flex min-h-0 flex-1 flex-col p-2">
       {/* ── The transport ──────────────────────────────────────────────────────
-          Orange, and saying what it is, because a screen-grab of a rewound board
-          that does not carry its clock reads as a live one. The coverage caveats
-          on the right are not decoration for the same reason: the recorder
-          stores the WALLS, not every strike, and a grid that looks like a live
-          chain while being a record of the walls is the single worst way this
-          feature can be misread. */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          flexWrap: 'wrap',
-          flexShrink: 0,
-          padding: '5px 10px',
-          borderRadius: 10,
-          background: alpha(T.orange, 0.07),
-          border: `1px solid ${alpha(T.orange, 0.333)}`,
-          fontSize: 'var(--text-xs)',
-          color: T.text,
-        }}
-      >
+          Docked to the bottom of the page, like v2's ES Candles transport — in
+          FLOW, so it shrinks the panels rather than covering the strikes nearest
+          the money. It carries no plate of its own: the dock is orange, and a
+          rewound board announcing itself along the whole bottom edge of the
+          screen is a stronger signal than a chip inside a panel. Which matters
+          here more than anywhere — the recorder stores the WALLS, not every
+          strike, so a grid that looks like a live chain while being a record of
+          the walls is the single worst way this can be misread, and the caveat
+          line on the right is the sentence that stops it. */}
+      <ReplayDock>
         <span
           style={{
             fontWeight: 900,
@@ -890,7 +880,7 @@ export function MultiGreekReplay() {
             </div>
           </Popover>
         </div>
-      </div>
+      </ReplayDock>
 
       <div className="flex min-h-0 flex-1 gap-2 overflow-x-auto">
         {tickers.map((t, i) => (

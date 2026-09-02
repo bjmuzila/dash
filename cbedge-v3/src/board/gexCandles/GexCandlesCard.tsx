@@ -4,6 +4,7 @@ import { CardToolbar } from '@/design/primitives/Card'
 import { useIsPhone } from '@/design/useIsPhone'
 import { useQuery } from '@/data/api'
 import { usePageSymbol } from '@/data/symbol'
+import { useAuth } from '@/data/auth'
 import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
 import { SegGroup, Chip, Popover, PanelSection, Dropdown, Slider } from './controls'
@@ -26,11 +27,14 @@ import {
 import {
   candlesUrl,
   esCandlesUrl,
+  etMinutesOfDay,
   filterSession,
   fmtCountdown,
   parseCandles,
   parseEsCandles,
   rollup,
+  RTH_CLOSE_MIN,
+  RTH_OPEN_MIN,
   type Bar,
 } from './candles'
 import { etDay, gexHistoryUrl, latestSession, parseGexHistory } from './gexHistory'
@@ -283,6 +287,17 @@ export function GexCandlesCard() {
   const { symbol } = usePageSymbol()
   const def = useMemo(() => symbolDef(symbol), [symbol])
 
+  // ── THE OWNER'S CHART KEEPS RUNNING IN A BACKGROUND TAB ────────────────────
+  // useQuery stops polling while the tab is hidden, which is right for every
+  // customer: a chart nobody is looking at is egress for nothing. It is wrong
+  // for the owner, whose chart is the SESSION'S RECORD — a bubble that did not
+  // form because another tab was up for ten minutes is a ten-minute hole in
+  // it, and the catch-up poll on return does not fill a hole, it only draws
+  // the newest column. So for the owner both polls run hidden. The browser
+  // throttles hidden timers to about once a minute, which is the recorder's
+  // own cadence, so nothing is lost to the throttle either.
+  const { isOwner } = useAuth()
+
   // ── SPX or ES candles ──────────────────────────────────────────────────────
   // The switch only exists on SPX: the gamma is `$SPX` either way, and only
   // SPX has a futures tape to swap in. On any other symbol the stored flag is
@@ -307,19 +322,68 @@ export function GexCandlesCard() {
   // price"), and the closed bars arrive on the poll, as they do for SPX.
   const candlesQ = useQuery<unknown>(
     useEs ? esCandlesUrl(settings.interval) : candlesUrl(def, settings.interval),
-    { staleMs: 25_000, pollMs: 30_000 },
+    { staleMs: 25_000, pollMs: 30_000, background: isOwner },
   )
   // The basis, ES only. useQuery(null) neither fetches nor polls, so the
   // request exists only while there is a futures chart to shift.
   const basisQ = useQuery<unknown>(useEs ? BASIS_URL : null, { staleMs: 300_000, pollMs: 1_800_000 })
-  const basis = useMemo(() => (useEs ? parseBasis(basisQ.data) : NO_BASIS), [useEs, basisQ.data])
+  const routeBasis = useMemo(() => (useEs ? parseBasis(basisQ.data) : NO_BASIS), [useEs, basisQ.data])
+  const routeUsable = isPlausibleBasis(routeBasis.basis) || routeBasis.days.size > 0
+
+  // ── The LIVE basis, as the fallback ────────────────────────────────────────
+  // v2's first tier: the newest ES bar's close minus the live SPX spot, both
+  // off the socket, sampled together. The proxy route is still preferred — it
+  // is roll-correct by construction and immune to the broker-spot problem
+  // frames.ts describes — but when it answers `{ basis: null }` (no 16:00 ES
+  // bar yet on a fresh table, Yahoo refusing, no DATABASE_URL on a dev box)
+  // this is what keeps the layer on the right price. The plausibility gate is
+  // the safety: a collapsed or negative live difference is REJECTED, and the
+  // card stays unshifted and says so, rather than bending every level by a
+  // number that is wrong.
+  //
+  // Refs plus a once-a-minute sample, not state per tick: the shift re-buckets
+  // the whole history, and the basis moves about a point a DAY.
+  const esCloseRef = useRef(0)
+  const spotRef = useRef(0)
+  const [liveBasis, setLiveBasis] = useState(0)
+  useEffect(() => {
+    if (!useEs || routeUsable) return
+    const unsub = watchFrame<SpotFrame>('spot', (f) => {
+      const px = f?.data.spot
+      if (typeof px === 'number' && px > 0) spotRef.current = px
+    })
+    const sample = () => {
+      // CASH OPEN ONLY. `spot` freezes at 16:00 while ES keeps trading, so
+      // overnight the difference is not a basis — it is the overnight move.
+      // Hold whatever the last open-hours sample was instead.
+      const m = etMinutesOfDay(Date.now())
+      const wd = new Date().getUTCDay()
+      if (m < RTH_OPEN_MIN || m >= RTH_CLOSE_MIN || wd === 0 || wd === 6) return
+      const b = esCloseRef.current - spotRef.current
+      const next = esCloseRef.current > 0 && spotRef.current > 0 && isPlausibleBasis(b) ? Math.round(b * 4) / 4 : 0
+      setLiveBasis((prev) => (Math.abs(prev - next) >= 0.5 ? next : prev))
+    }
+    // First sample once the frames have had a moment to land, then a minute.
+    const t0 = setTimeout(sample, 1500)
+    const id = setInterval(sample, 60_000)
+    return () => {
+      unsub()
+      clearTimeout(t0)
+      clearInterval(id)
+    }
+  }, [useEs, routeUsable])
+
+  const basis = useMemo(
+    () => (routeUsable ? routeBasis : liveBasis > 0 ? { basis: liveBasis, days: new Map<string, number>() } : NO_BASIS),
+    [routeUsable, routeBasis, liveBasis],
+  )
   // Only once the route has ANSWERED (or failed): the moment before the first
   // response would otherwise flash the warning on every switch to ES.
   const basisMissing =
     useEs &&
     (basisQ.error != null || basisQ.data !== undefined) &&
-    !isPlausibleBasis(basis.basis) &&
-    basis.days.size === 0
+    !routeUsable &&
+    !(liveBasis > 0)
   const expiryQ = useQuery<ExpirationsResponse>(
     `/api/expirations?ticker=${encodeURIComponent(chainTicker(def))}`,
     { staleMs: 300_000 },
@@ -397,7 +461,7 @@ export function GexCandlesCard() {
     // The recorder writes a column a minute, so asking more often than that
     // returns the same ladder twice — and it is the heaviest request the card
     // makes.
-    { staleMs: 30_000, pollMs: 60_000 },
+    { staleMs: 30_000, pollMs: 60_000, background: isOwner },
   )
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -537,7 +601,10 @@ export function GexCandlesCard() {
     const type = settings.interval === 1 ? 'es1mCandles' : 'esCandles'
     return watchFrame<{ data?: unknown }>(type, (f) => {
       const px = newestClose(f?.data)
-      if (px > 0) apply((h) => h.setLivePrice(px))
+      if (px > 0) {
+        esCloseRef.current = px
+        apply((h) => h.setLivePrice(px))
+      }
     })
   }, [useEs, settings.interval, apply])
 
@@ -771,7 +838,7 @@ export function GexCandlesCard() {
           notice every wall is 50 points under where price is reacting. Say it. */}
       {basisMissing && settings.bubblesOn && (
         <span className="shrink-0 text-xs text-warn opacity-80">
-          ES−SPX basis unavailable — GEX levels are drawn at SPX cash strikes.
+          ES−SPX basis unavailable ({basisQ.error ? basisQ.error.message : 'route has no usable basis, no live pair yet'}) — GEX levels are drawn at SPX cash strikes.
         </span>
       )}
 

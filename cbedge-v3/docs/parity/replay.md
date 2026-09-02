@@ -132,6 +132,32 @@ choice of mount shape.
 | A17 | Mount shape — FULL | `TABS[n].full === true` (tabs 3, 4) | root `<div className="replay-root" style={{...homeShellStyle, display flex, flexDirection column, minHeight 0, height "100%"}}>`; tab bar in a `padding "12px clamp(14px, 2vw, 24px) 0" · flexShrink 0` strip; pane `flex 1 · minHeight 0 · display flex · flexDirection column` | The embedded page renders its OWN shell. `minHeight: 0` on BOTH the column and the pane is what lets its internal scroller size itself instead of pushing the tab bar off the top. Wrapping a FULL tab in `PageShell` double-pads and nests a scroller in a scroller | — |
 | A18 | Suspense fallback | `fallback` const | `"LOADING REPLAY…"` · `padding 40 · textAlign center · color rgba(255,255,255,0.55) · fontSize 13 · letterSpacing .08em` | — | shown while a lazy tab's chunk loads |
 
+### A.19 — THE REPLAY DOCK (v3 only, added 2026-09-02)
+
+Brandon, looking at the built page: *"all replay settings should be hardcoded to
+the bottom of the page like in v2 es candles."* So every replay transport in v3
+now renders into one bar at the bottom of the page column —
+`src/design/primitives/ReplayDock.tsx`, transcribed from v2's ES Candles
+transport (`components/pages/EsCandles.tsx` 766–795 +
+`components/dashboard/es-candles/EsChartCard.tsx` 5618–5775).
+
+**This is a v3 shape with no v2 counterpart on `/app/replay`.** v2's replay page
+draws each tab's bar inline, where that surface happens to put it. The checker
+reads text, not position, so every probe still passes; the difference is
+recorded here rather than left to be rediscovered.
+
+| # | Concern | Detail |
+|---|---|---|
+| A19 | Not `position: fixed` | The load-bearing decision, and v2's own. The dock is the LAST FLEX CHILD of the app's page column — `flexShrink: 0` beside a `flex-1` page — so mounting it SHRINKS the page by its height. A fixed bar covers the last inch of whatever it is docked over: on a ladder that is the strikes nearest the money; on the chain grid it is the rows around spot. v2 records the same reasoning and the same trade: the content reflows twice per replay, once in and once out |
+| A20 | Where it is mounted | `ReplayDockHost` wraps `{children}` in `src/shell/Shell.tsx`, so EVERY v3 page gets the dock, not just `/v3/replay`. `/v3/options-chain` and `/v3/analytics` dock their transports too |
+| A21 | How a bar gets there | `<ReplayDock>{bar}</ReplayDock>`, rendered wherever the surface likes in its OWN tree — the transports own the state they drive, and hoisting that state to the page to move a bar would be the wrong repair. A portal moves the DOM, not the React tree |
+| A22 | It only exists when claimed | `ReplayDock` claims on mount and releases on unmount; the host renders nothing at zero claims. An empty bar with a hairline and a shadow is a page that looks broken along its bottom edge |
+| A23 | No host, no problem | Rendered outside a host (a preview, a test, `LadderModal` in MODAL mode) `ReplayDock` renders its children inline. A modal owns its own bottom edge; pushing its controls onto the page behind it would dock them under the overlay |
+| A24 | Chrome | `borderTop 1px alpha(T.orange,.35)` · `background linear-gradient(180deg, alpha(orange,.10), alpha(orange,.03)), alpha(T.panel,.92)` · `backdropFilter blur(14px)` · `boxShadow 0 -10px 30px alpha(SHADOW,.35)` (upward — the thing it separates from is above it) · `padding 8px 16px` · `zIndex 40` · `position: relative`, in flow |
+| A25 | The dock is orange, the bars are not | Only ONE thing ever docks here, so the "you are looking at a recording" announcement is the whole bottom edge of the screen rather than a chip inside a panel — a stronger signal than the per-bar orange plates it replaces. Every bar therefore DROPPED its own plate: `ReplayBar` (chain), the Ticker Lookup transport, and the Multi Greek transport all lost their border, background and radius. The `Replay` label and the orange accents inside them stay |
+| A26 | Layout inside | One wrapping row, `gap 10`. Groups inside a bar are their own nowrap flex boxes so they fold as intact units and the dock simply gets taller — which, being in flow, shrinks the page further. Same as v2: wrap, never scroll, and nothing is hidden at any width |
+| A27 | Ladder tab | `LadderModal`'s controls + scrubber + frame counter go to the dock when `embedded`; the ladder itself stays in the Card. In modal mode all three stay inline and stack, as before |
+
 **Code splitting.** Everything except `ChainReplay` is `lazy()`. Mounting
 `/replay` must not pull Multi Greek's and Options Chain's chunks down before a
 tab is picked. In v3 this maps onto per-tab `lazy()` inside the page, not a
@@ -590,7 +616,11 @@ transport), with every wall, rank, ramp and column rule imported unchanged from
 | `cbedge-v3/src/pages/Replay.tsx` | NEW — the hub: tab bar, `#tab=` router, FRAMED/FULL mount shapes, four `lazy()` tabs |
 | `cbedge-v3/src/pages/replay/mgReplay.ts` | NEW — recorder parse, minute-bucket timeline, step-hold pick, session axis, replay columns |
 | `cbedge-v3/src/pages/replay/MultiGreekReplay.tsx` | NEW — four panels off one clock, transport, cog |
-| `cbedge-v3/src/pages/optionsChain/LadderModal.tsx` | `embedded` prop; body split out of the portal; Escape bound only when there is something to close |
+| `cbedge-v3/src/design/primitives/ReplayDock.tsx` | NEW — the bottom-of-page dock every replay transport renders into (A19–A27) |
+| `cbedge-v3/src/shell/Shell.tsx` | `ReplayDockHost` around the page, so every route has a dock |
+| `cbedge-v3/src/pages/optionsChain/ReplayBar.tsx` | plate dropped — the dock draws it now |
+| `cbedge-v3/src/pages/analysis/lookup/TickerLookup.tsx` | transport docked, plate dropped |
+| `cbedge-v3/src/pages/optionsChain/LadderModal.tsx` | `embedded` prop; body split out of the portal; transport split out of the body and docked when embedded; Escape bound only when there is something to close |
 | `cbedge-v3/src/pages/OptionsChain.tsx` | `initialReplay` / `initialReplayScope` props, forwarded to `useChainData` (which already accepted them) |
 | `cbedge-v3/src/pages/analysis/lookup/Ladder.tsx` | Δ double-sign fix (decision 1) |
 | `cbedge-v3/src/App.tsx` | `lazy()` route |

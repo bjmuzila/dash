@@ -147,11 +147,18 @@ export function useChainData(opts: UseChainDataOpts) {
   const [heatSkin, setHeatSkin] = useState<HeatSkin>(CHAIN_DEFAULT_SKIN)
   const [intensity, setIntensity] = useState(HEAT_SKINS[CHAIN_DEFAULT_SKIN].intensity.def)
 
-  // Auto strike window per ticker: SPX renders 10% (huge chain), everything else
-  // 30%. Re-applies on every ticker change; the % control still overrides it for
-  // the ticker on screen.
+  // Auto strike window per ticker: SPX renders 10%, everything else 50%.
+  //
+  // The two numbers are not a taste difference. SPX lists thousands of strikes
+  // across the expiries this grid draws side by side, so 10% is already a deep
+  // ladder there and a wider window costs real frames. A single-name chain is a
+  // fraction of that, and 30% cut the window off before the strikes that
+  // matter — 50% is the one that opens on something worth reading.
+  //
+  // Re-applies on every ticker change; the % control still overrides it for the
+  // ticker on screen.
   useEffect(() => {
-    setDisplayPercent(activeTicker.toUpperCase() === 'SPX' ? 10 : 30)
+    setDisplayPercent(activeTicker.toUpperCase() === 'SPX' ? 10 : 50)
   }, [activeTicker])
 
   // The first render always uses the page default and any saved skin is applied
