@@ -55,6 +55,33 @@ function allUsersList(lists: {
   return Array.from(seen);
 }
 
+// Case-insensitive de-dupe that KEEPS the first spelling seen and the order it
+// was seen in. Every audience resolution funnels through this, so a person who
+// sits on two selected lists (a subscriber who is also on "old emails 2", say)
+// is emailed exactly once — under whichever list came first in priority order.
+// `new Set(array)` alone was not enough: the users table stores mixed case and
+// the legacy CSVs are lowercase, so "Foo@x.com" and "foo@x.com" survived as two
+// recipients and that person got the broadcast twice.
+function dedupeEmails(emails: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of emails) {
+    const email = String(raw ?? "").trim();
+    const key = email.toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(email);
+  }
+  return out;
+}
+
+// The order audiences are concatenated in before de-duping. Live accounts
+// first, waitlist next, the stale legacy CSVs LAST — same priority the
+// "all" list has always used, so a multi-select send behaves identically to
+// "all" for anyone who appears in more than one of the chosen lists, and an
+// interrupted run drops legacy addresses rather than live users.
+const AUDIENCE_PRIORITY = ["subscribers", "not_paying", "waitlist", "old_emails", "old_emails2"] as const;
+
 // GET — owner only.
 //   ?history=1 → returns the broadcast send history (summary rows).
 //   (default)  → returns recipient lists/counts for the compose UI preview.
@@ -138,7 +165,10 @@ async function sendViaResend(
 }
 
 // POST — owner only. Sends an email broadcast via Resend.
-// Body: { subject, html?, text?, audience?: "all"|"subscribers"|"custom", to?: string[] }
+// Body: { subject, html?, text?, audiences?: string[], audience?: string, to?: string[] }
+// `audiences` may hold any mix of "subscribers" | "not_paying" | "waitlist" |
+// "old_emails" | "old_emails2"; "all" and "custom" are whole answers on their
+// own. The union is deduped, so overlapping lists never double-send.
 export async function POST(req: NextRequest) {
   try {
     const gate = await ownerGate();
@@ -155,7 +185,16 @@ export async function POST(req: NextRequest) {
     const subject = String(body?.subject ?? "").trim();
     const html = body?.html != null ? String(body.html) : "";
     const text = body?.text != null ? String(body.text) : "";
-    const audience = String(body?.audience ?? "custom");
+    // Audiences are a LIST now — the compose page lets you tick several at once
+    // (e.g. Subscribers + Waitlist) and the union is deduped so nobody on two of
+    // them gets two copies. `audiences` is the current field; the old scalar
+    // `audience` is still honored so an older client / a curl keeps working.
+    const rawAudiences: string[] = Array.isArray(body?.audiences)
+      ? body.audiences.map((x: unknown) => String(x).trim()).filter(Boolean)
+      : [String(body?.audience ?? "custom")];
+    const picked = new Set(rawAudiences);
+    // What gets written to the send history: "subscribers+waitlist".
+    const audience = rawAudiences.join("+") || "custom";
 
     if (!subject) return NextResponse.json({ error: "Subject is required" }, { status: 400 });
     if (!html && !text) return NextResponse.json({ error: "Message body is required" }, { status: 400 });
@@ -179,9 +218,14 @@ export async function POST(req: NextRequest) {
     const taggedHtml = html ? tagEmailLinksHtml(html, utm) : "";
     const taggedText = text ? tagEmailLinksText(text, utm) : "";
 
-    // Resolve recipients.
+    // Resolve recipients — the UNION of every selected audience, in priority
+    // order, deduped case-insensitively. "custom" and "all" are each their own
+    // whole answer (custom = the typed box, all = every address on file), so
+    // whichever of those is present wins and the rest are redundant.
     let to: string[] = [];
-    if (audience === "all") {
+    if (picked.has("custom")) {
+      to = Array.isArray(body?.to) ? body.to.map((x: unknown) => String(x).trim()) : [];
+    } else if (picked.has("all")) {
       // Every address we have — signed-up accounts, waitlist, and the legacy
       // lists — deduped, legacy addresses sent last. See allUsersList().
       const recipients = await listAllUsersForBroadcast();
@@ -189,21 +233,31 @@ export async function POST(req: NextRequest) {
       const waitlist = await listWaitlistEmails().catch(() => []);
       const { oldEmails, oldEmails2 } = loadLegacyEmails();
       to = allUsersList({ signedUp, waitlist, oldEmails, oldEmails2 });
-    } else if (audience === "subscribers" || audience === "not_paying") {
-      const recipients = await listAllUsersForBroadcast();
-      const picked = audience === "subscribers" ? recipients.filter((r) => r.paid) : recipients.filter((r) => !r.paid);
-      to = picked.map((r) => r.email);
-    } else if (audience === "waitlist") {
-      to = await listWaitlistEmails();
-    } else if (audience === "old_emails" || audience === "old_emails2") {
-      const { oldEmails, oldEmails2 } = loadLegacyEmails();
-      to = audience === "old_emails2" ? oldEmails2 : oldEmails;
     } else {
-      to = Array.isArray(body?.to) ? body.to.map((x: unknown) => String(x).trim()) : [];
+      // Load each source AT MOST ONCE, however many audiences reference it.
+      const needsAccounts = picked.has("subscribers") || picked.has("not_paying");
+      const needsLegacy = picked.has("old_emails") || picked.has("old_emails2");
+      const accounts = needsAccounts ? await listAllUsersForBroadcast() : [];
+      const waitlist = picked.has("waitlist") ? await listWaitlistEmails().catch(() => []) : [];
+      const legacy = needsLegacy ? loadLegacyEmails() : { oldEmails: [], oldEmails2: [] };
+
+      const merged: string[] = [];
+      for (const name of AUDIENCE_PRIORITY) {
+        if (!picked.has(name)) continue;
+        if (name === "subscribers") merged.push(...accounts.filter((r) => r.paid).map((r) => r.email));
+        else if (name === "not_paying") merged.push(...accounts.filter((r) => !r.paid).map((r) => r.email));
+        else if (name === "waitlist") merged.push(...waitlist);
+        else if (name === "old_emails") merged.push(...legacy.oldEmails);
+        else if (name === "old_emails2") merged.push(...legacy.oldEmails2);
+      }
+      to = merged;
     }
 
-    // De-dupe + validate.
-    to = Array.from(new Set(to.filter((e) => EMAIL_RE.test(e))));
+    // Validate, then de-dupe case-insensitively. This is the guarantee that one
+    // person on three of the selected lists still receives exactly one email.
+    const requested = to.filter((e) => EMAIL_RE.test(e)).length;
+    to = dedupeEmails(to.filter((e) => EMAIL_RE.test(e)));
+    const duplicateCount = requested - to.length;
 
     // Honor the global suppression list for EVERY audience — never email anyone
     // who unsubscribed (or was manually suppressed by the owner).
@@ -294,6 +348,10 @@ export async function POST(req: NextRequest) {
       sentCount: sent.length,
       failedCount: to.length - sent.length,
       suppressedCount,
+      // How many addresses were dropped because they sat on more than one of
+      // the selected lists. Surfaced so a multi-select send can say so.
+      duplicateCount,
+      audience,
       failed: failed.length ? failed : undefined,
       // Echoed so the compose page can confirm what the clicks will report as,
       // rather than the owner having to guess at what the subject slugged to.

@@ -39,18 +39,40 @@ function rowSpot(r: GexRow, spot: number): number {
   return own > 0 ? own : spot
 }
 
-/** Contracts behind one side under the active basis. `flow` prices off OI+VOL. */
+/**
+ * Contracts behind one side. Only the two BOOK bases get here — on flow the
+ * leg accessors return the wire's own flow leg and never reach this.
+ */
 function contractsOf(oi: number, vol: number, basis: GexBasis): number {
   return basis === 'vol-only' ? vol : oi + vol
 }
 
-export function callGexOf(r: GexRow, spot: number, basis: GexBasis): number {
+/**
+ * The CALL leg.
+ *
+ * `flowActive` is the same resolved flag `netGexOf` takes, and it is here for
+ * the same reason. Without it these two read `basis` as "vol-only, or not", so
+ * FLOW fell into the OI+VOL branch: the net bar drew flow while the CALL/PUT
+ * split drew open interest, under a "CALL/PUT · FLOW" label. Same class of bug
+ * the comment at the top of this file exists to prevent, one accessor down.
+ *
+ * ⚠ On flow the result is SIGNED both ways — dealer long positive, dealer short
+ * negative. Off flow it is positive by construction. A caller drawing the two
+ * legs back to back must branch on that; see `flowSplitSupported`.
+ */
+export function callGexOf(r: GexRow, spot: number, basis: GexBasis, flowActive = false): number {
+  if (flowActive) return n(r.flowCallGEX)
   const s = rowSpot(r, spot)
   return Math.abs(n(r.callGamma)) * contractsOf(n(r.callOI), n(r.callVolume), basis) * s * s
 }
 
-/** Negative by construction: a put's dealer gamma is short. */
-export function putGexOf(r: GexRow, spot: number, basis: GexBasis): number {
+/**
+ * The PUT leg. Negative by construction off flow: a put's dealer gamma is
+ * short. On flow it carries the dealer's OWN sign, exactly like the call leg —
+ * see `callGexOf`.
+ */
+export function putGexOf(r: GexRow, spot: number, basis: GexBasis, flowActive = false): number {
+  if (flowActive) return n(r.flowPutGEX)
   const s = rowSpot(r, spot)
   return -(Math.abs(n(r.putGamma)) * contractsOf(n(r.putOI), n(r.putVolume), basis) * s * s)
 }
@@ -91,6 +113,21 @@ export function dexOf(r: GexRow, basis: GexBasis): number {
  */
 export function flowSupported(rows: GexRow[]): boolean {
   for (const r of rows) if (r.flowGEX != null) return true
+  return false
+}
+
+/**
+ * True when the flow legs rode along too, not just their sum.
+ *
+ * Tested SEPARATELY from `flowSupported` because the two arrived at different
+ * times: `flowGEX` has always been on the wire, `flowCallGEX`/`flowPutGEX` were
+ * added 2026-09. A server that has not been redeployed sends the first and not
+ * the other two, and the honest answer there is "flow has no split to show" —
+ * NOT a silent fall back to the OI+VOL legs, which is the bug this whole change
+ * is fixing.
+ */
+export function flowSplitSupported(rows: GexRow[]): boolean {
+  for (const r of rows) if (r.flowCallGEX != null || r.flowPutGEX != null) return true
   return false
 }
 

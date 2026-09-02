@@ -7,6 +7,7 @@ import { PAGE_TICKER_RE, PageSymbolProvider, SOCKET_SYMBOL, isSocketSymbol, useP
 import { Chip } from '@/design/primitives/Controls'
 import { ReplayDockHost } from '@/design/primitives/ReplayDock'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
+import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
 import { UserMenu } from '@/shell/UserMenu'
 
 // The persistent frame: mounts once and never unmounts, so the socket, the
@@ -277,6 +278,11 @@ function Toolbar() {
         title="The board's symbol — every card that can follow a ticker is showing this one. Click to search the list or star a ticker to keep it on top."
       />
       <EtClock />
+      {/* ── 📸 ─────────────────────────────────────────────────────────────────
+          The one camera in the app. Draws nothing for anyone but the owner, and
+          nothing at all until some surface on the current page has published
+          itself as worth photographing — see shell/CopyShot.tsx. */}
+      <CopyShotMenu />
       {/* The account dropdown — same rows as v2's UserMenu, on v3 tokens. The
           Owner entry inside is owner-gated (chrome only; middleware.ts is the
           real gate). See shell/UserMenu.tsx. */}
@@ -286,28 +292,32 @@ function Toolbar() {
 }
 
 export function Shell({ children }: { children: ReactNode }) {
-  // Two providers, both above the toolbar AND the page:
+  // Three providers, all above the toolbar AND the page:
   //   PageSymbolProvider — the search sets the symbol and the cards read it,
   //     and they have to be looking at one value.
   //   AuthProvider — one /api/auth/me read for the whole session. The account
   //     menu needs it, and so does anything that draws owner-only chrome.
+  //   CopyShotProvider — the camera lives in the toolbar and its targets are
+  //     published by the page, so the registry has to sit above both.
   return (
     <AuthProvider>
       <PageSymbolProvider>
-        <div className="cb-viewport flex overflow-hidden bg-bg text-fg">
-          <Rail />
-          {/* THE PAGE COLUMN. Toolbar, page, and — whenever a surface is
-              rewound — the replay dock as the last child. The dock is in FLOW,
-              so it shrinks the page instead of covering the bottom of it; see
-              design/primitives/ReplayDock.tsx. Every replay transport in the app
-              lands there, which is why the announcement that you are looking at
-              a recording is the whole bottom edge of the screen rather than a
-              chip somewhere inside a panel. */}
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            <Toolbar />
-            <ReplayDockHost>{children}</ReplayDockHost>
+        <CopyShotProvider>
+          <div className="cb-viewport flex overflow-hidden bg-bg text-fg">
+            <Rail />
+            {/* THE PAGE COLUMN. Toolbar, page, and — whenever a surface is
+                rewound — the replay dock as the last child. The dock is in FLOW,
+                so it shrinks the page instead of covering the bottom of it; see
+                design/primitives/ReplayDock.tsx. Every replay transport in the
+                app lands there, which is why the announcement that you are
+                looking at a recording is the whole bottom edge of the screen
+                rather than a chip somewhere inside a panel. */}
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+              <Toolbar />
+              <ReplayDockHost>{children}</ReplayDockHost>
+            </div>
           </div>
-        </div>
+        </CopyShotProvider>
       </PageSymbolProvider>
     </AuthProvider>
   )

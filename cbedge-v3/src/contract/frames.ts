@@ -71,9 +71,9 @@ export interface GexRow {
   putGamma: number
   dte: number
   /**
-   * ── The three OPTIONAL exposure legs ──────────────────────────────────────
+   * ── The OPTIONAL exposure legs ────────────────────────────────────────────
    *
-   * All three come off computeGexRows() unconditionally, so on the socket path
+   * All of them come off computeGexRows() unconditionally, so on the socket path
    * they are always there. They are optional HERE because the other producer of
    * this shape — board/chainGex.ts, which derives a ladder from /api/chains for
    * every non-socket ticker — cannot always fill them:
@@ -86,6 +86,16 @@ export interface GexRow {
    *                       but the socket symbol, so the chain path never fills
    *                       it — which is why the chart's FLOW basis falls back
    *                       to net instead of drawing an empty pane.
+   *   flowCallGEX /       the two LEGS behind flowGEX, which sums them. Added
+   *   flowPutGEX          2026-09 so the GEX Chart's CALL/PUT split has flow
+   *                       legs to draw; before that it silently drew the OI+VOL
+   *                       legs under a "CALL/PUT · FLOW" label. ⚠ SIGNED on
+   *                       BOTH sides — dealer long = positive, dealer short =
+   *                       negative, whichever leg it is. They are NOT the
+   *                       "call always +, put always −" pair callGEX/putGEX
+   *                       are, so never abs() them into that shape.
+   *                       Absent on a server older than that change, which is
+   *                       why the split tests for them separately from flowGEX.
    *
    * Read them through gexChart/gexChartRender.ts's accessors rather than
    * inline, so "which fields make up which basis" is answered in one place.
@@ -93,6 +103,8 @@ export interface GexRow {
   netDEX?: number
   volNetDEX?: number
   flowGEX?: number
+  flowCallGEX?: number
+  flowPutGEX?: number
   [k: string]: unknown
 }
 export interface GexData {

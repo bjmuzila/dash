@@ -115,12 +115,22 @@ function computeGexRows(rows, spot, flowInventory = null) {
     // (inv.putNet < 0) is a short-gamma position and must contribute
     // NEGATIVE flow GEX, same polarity as being short calls — no separate
     // sign flip between the two legs like the OI-based formula uses.
+    //
+    // The two LEGS are emitted alongside the sum (flowCallGEX / flowPutGEX).
+    // They used to be locals here, and the GEX Chart's CALL/PUT split had no
+    // flow legs to draw — so on the FLOW basis it silently drew the OI+VOL
+    // legs under a "CALL/PUT · FLOW" label. Both are SIGNED (dealer long =
+    // positive on either side, per the polarity note above); they are not the
+    // "call is always +, put is always −" pair callGEX/putGEX are, and a
+    // consumer must not abs() them.
     let flowGEX = 0;
+    let flowCallGEX = 0;
+    let flowPutGEX = 0;
     if (flowInventory && flowInventory.has(strike)) {
       const inv = flowInventory.get(strike);
-      const callFlowGEX = callGamma * inv.callNet * spot * spot;
-      const putFlowGEX = putGamma * inv.putNet * spot * spot;
-      flowGEX = callFlowGEX + putFlowGEX;
+      flowCallGEX = callGamma * inv.callNet * spot * spot;
+      flowPutGEX = putGamma * inv.putNet * spot * spot;
+      flowGEX = flowCallGEX + flowPutGEX;
     }
 
     // Vanna / charm exposure computed by sibling module.
@@ -144,6 +154,8 @@ function computeGexRows(rows, spot, flowInventory = null) {
       netVolGEX,
       netVolGexDir,
       flowGEX,
+      flowCallGEX,
+      flowPutGEX,
       netDEX,
       volNetDEX,
       netVanna,
@@ -359,7 +371,7 @@ function totalNetGex(gexRows) {
  * single unnamed expiry.
  *
  * ADDITIVE fields are summed: OI, volume, callGEX/putGEX/netGEX, netVolGEX,
- * netVolGexDir, flowGEX, netDEX, volNetDEX, vanna/chex.
+ * netVolGexDir, flowGEX, flowCallGEX, flowPutGEX, netDEX, volNetDEX, vanna/chex.
  * PER-CONTRACT fields (callGamma, putGamma, callDelta, putDelta, IVs, marks,
  * dte) cannot be summed and are taken from the NEAREST expiry at that strike —
  * representative only. Do not read a merged row's gamma as "the" gamma; the
@@ -381,7 +393,8 @@ function computeGexRowsMultiExpiry(rows, spot) {
 
   const SUM_FIELDS = [
     'callOI', 'putOI', 'callVolume', 'putVolume',
-    'callGEX', 'putGEX', 'netGEX', 'netVolGEX', 'netVolGexDir', 'flowGEX',
+    'callGEX', 'putGEX', 'netGEX', 'netVolGEX', 'netVolGexDir',
+    'flowGEX', 'flowCallGEX', 'flowPutGEX',
     'netDEX', 'volNetDEX', 'netVanna', 'netVolVanna', 'chex', 'volChex',
   ];
   // Carried from the nearest-dated expiry present at that strike, not summed.

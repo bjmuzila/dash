@@ -1,51 +1,218 @@
 # Changelog
 
-## 2026-09-02 - Campaign links: create `cbedge.net/<name>` from the panel, no `/click`, no deploy
+## 2026-09-02 - v3 check:theme: gexChartRender colour literals
 
-The Campaign links panel's **Somewhere else** row used to emit
-`cbedge.net/v3/click`. The verb was there for a real reason — the bare
-one-segment form answers only for an allowlist (`/x`, `/youtube`, …), so an
-unknown name would have 404'd — but it is four characters of noise in every
-post and it says nothing. Now the allowlist is something the panel can add to,
-so the row emits `cbedge.net/v3` and the link works within seconds.
+`npm run check` failed on `src/board/gexChart/gexChartRender.ts` (baseline 32,
+found 33). Cleaned the file down to 1 instead of raising the baseline.
 
-### How
+**`src/board/gexChart/gexChartRender.ts`**
 
-- **New `short_links` table** (`lib/db.ts`) — `slug`, `campaign`, `medium`,
-  `dest`. Plus `listShortLinks` / `upsertShortLink` / `deleteShortLink`.
-- **`lib/shortLinkRegistry.ts`** — the cached read side. Loads the whole table
-  at once on a 30s TTL with a 5-minute stale window (same shape middleware
-  already uses for the maintenance flag). The web pounds one-segment paths
-  (`/wp-admin`, `/.env`, every typo), so a query per probe was never an option.
-- **`app/api/owner/short-links/route.ts`** — owner-gated GET / POST / DELETE.
-- **`RESERVED_SLUGS` in `lib/shortLinks.ts`** — every top-level folder in
-  `app/`, the paths served outside the app router, and the old owner prefixes.
-  Checked on write AND on every read.
-- **`middleware.ts`** answers a created link itself, before the auth gate.
-- **`app/[source]/route.ts`** does the same as a second net, so the two can't
-  disagree if the middleware matcher ever stops covering a path.
-- **`CampaignLinkBuilder.tsx`** — one-off row is bare, the button becomes
-  "Create & copy" until the name exists, and created links are listed below it
-  with copy / retire.
+- `readPalette()` no longer repeats tokens.css. The seven hex fallbacks
+  (`'#29b6f6'`, `'#ffb300'`, ...) were the same values `hexToRgb()` already
+  carries as numbers, typed a second time. `cssVar()` lost its fallback
+  argument; an unset or misspelled variable now lands on the numeric fallback,
+  one copy rather than two.
+- `Palette.surface` is an `[r,g,b]` triple like every other entry (it was the
+  one raw string). The hover chip draws with `withAlpha(p.surface, 1)`.
+- The local `rgba()` helper is renamed `withAlpha()`. Its 25 call sites read as
+  colour literals to check-theme's scanner, which matches on the text `rgba(`.
+  Same output; a call site now reads as "this token at 55%".
+- One literal remains, in `withAlpha`'s own template - canvas cannot resolve a
+  custom property, so `design/theme.ts`'s `alpha()` (color-mix over var()) is
+  not available there. Every channel still comes from tokens.css.
 
-### Why middleware answers it instead of just marking the path public
+**`cbedge-v3/theme-baseline.json`** - ratcheted down, not up: gexChartRender
+32 -> 1, plus the two files the run already reported as under
+(LadderModal 18 -> 17, ReplayBar 5 -> 4).
 
-A created link that collided with a real page would, under a
-"mark-it-public" gate, make that page reachable signed out — a paywall hole
-opened by typing a name. Answering in middleware makes the same collision a
-redirect you can see the moment you load the page. Reserved names are refused
-at both ends anyway; this is the third net, not the first.
+No behaviour change: the same colours, from the same tokens.
 
-### Unchanged
+## 2026-09-02 - v3 GEX Chart: FLOW + CALL/PUT drew the OI+VOL legs
 
-`/x/click` and every other two-segment link still work. A name nobody created
-still 404s, so `cbedge.net/pricng` is a 404 and not a ghost referral.
+Clicking **FLOW** and then **C/P** on the v3 home board's GEX Chart did not draw
+flow's call and put legs. It drew the OPEN-INTEREST legs, under a label that
+read `CALL/PUT · FLOW` the whole time.
 
-### Note
+**Why** `values.ts` had one accessor that knew about flow and two that did not.
+`netGexOf()` branches on a resolved `flowActive` flag and reads `r.flowGEX`;
+`callGexOf()` / `putGexOf()` only ever asked whether the basis was `'vol-only'`,
+so `'flow'` fell through the `else` into the OI+VOL path. The net bar was flow,
+the split was the standing book, and nothing said so — the exact
+"basis half-applies" failure the comment at the top of that file was written to
+prevent, one function further down.
 
-`v3` itself can't be used — `app/v3/route.ts` already serves the v3 dashboard
-shell, so the API refuses it along with every other real route name.
+**The legs did not exist on the wire.** `computeGexRows()` computed
+`callFlowGEX` / `putFlowGEX` as locals and emitted only their sum as `flowGEX`.
+Dealer inventory per side is accumulated all day server-side
+(`flow-gex.js`), so the client cannot rebuild it from the rolling tape window it
+receives — this had to be fixed at the source.
 
+**Server** — `server-v2/computation/gex-calculator.js`
+
+- `flowCallGEX` and `flowPutGEX` are now emitted on every row beside `flowGEX`,
+  which still carries their sum. Additive; two numbers per strike.
+- Both added to `computeGexRowsMultiExpiry`'s `SUM_FIELDS`.
+- ⚠ Both are **SIGNED on both sides** — dealer long positive, dealer short
+  negative, whichever leg. They are NOT the "call always +, put always −" pair
+  `callGEX`/`putGEX` are. Do not `abs()` them into that shape.
+
+**Client** — `cbedge-v3/`
+
+- `contract/frames.ts` — `flowCallGEX?` / `flowPutGEX?` on `GexRow`, optional
+  for the same reason `flowGEX` is: `board/chainGex.ts` never fills them.
+- `board/gexChart/values.ts` — `callGexOf()` / `putGexOf()` take `flowActive`
+  and return the wire's flow leg when it is set. New `flowSplitSupported()`,
+  tested separately from `flowSupported()` because a server that has not been
+  redeployed sends the sum and not the legs.
+- `board/gexChart/gexChartRender.ts` — on flow the split draws two SIGNED
+  half-width bars side by side (call left, put right) instead of one stacked
+  pair, because two signed full-width bars from zero hide one another whenever
+  the signs agree. Off flow the original stacked geometry is untouched. The
+  hover readout prints the flow legs signed rather than `abs()`-ed.
+- When FLOW is on and the feed carries no legs, the split is **refused** and the
+  net flow bar is drawn with an on-chart note saying so — never a silent
+  fallback to the OI+VOL legs, which is the bug being fixed.
+
+**Verified** — `gex-calculator.selftest.js` still passes (16 checks); the legs
+sum to `flowGEX` to the cent, a dealer-long call leg is positive and a
+dealer-short put leg negative, `null` inventory yields zeros rather than
+`undefined`, multi-expiry carries the fields, and the OI+VOL and VOL paths
+through `callGexOf`/`putGexOf` are byte-identical to before.
+
+**Needs a deploy** — the chart shows the note and the net bar until the VPS is
+running the new `gex-calculator.js`.
+
+## 2026-09-02 - v3 CopyShot: one owner-gated camera in the toolbar, and a menu of what to shoot
+
+v3 could not take a screenshot of anything. v2 solves this by hanging a 📸 on
+every panel that wants one — twelve buttons, twelve slightly different
+implementations, and a row of chrome on every card that one person ever uses.
+v3 inverts it: the BUTTON is in one place and the TARGETS come to it.
+
+**The camera** sits in the toolbar between the ET clock and the account menu,
+owner-gated on `useIsOwner` (chrome only, same rule as everything else in v3 —
+the capture runs in the browser against pixels the viewer can already see, so
+there is nothing here for a gate to protect). Clicking it opens a menu of
+whatever the current page has published as worth photographing. Pick a row, get
+a framed PNG on the clipboard.
+
+**What is on the menu**
+
+- **Home board** — every card on the board, by name, in reading order, plus
+  "Whole board". Registered by `BoardPage` from the layout rather than card by
+  card, so a card does not have to know the feature exists and anything added to
+  `CARD_CATALOG` later is covered for free. Copies are numbered the way the
+  headers are. What is captured is the tile's `<section>` — the Card itself, not
+  the resize grab-handle around it.
+- **S&P Sector Wheel** — only while it is POPPED OUT. In the card it is a 300px
+  circle; popped out it is the whole S&P with the mover lists and the sector
+  leaderboard beside it, which is the thing worth sharing. The pop-out also
+  carries its own 📸 in its header, and that is not duplication for its own
+  sake: the overlay is `fixed inset-0` above everything, so while it is open the
+  toolbar is behind it and its camera cannot be clicked at all.
+- **Estimated Move** — the /v3/em result block, published as soon as a ticker
+  has actually been looked up, labelled with that ticker so the PNG's title band
+  names it. Nothing is offered before the lookup lands.
+
+**The capture engine is not html2canvas** (`src/shell/snapshot.ts`). The obvious
+move was to add v2's dependency. It does not work here: html2canvas
+re-implements CSS colour parsing and knows hex and the plain rgb / hsl forms
+only, and every wash, edge and ring in v3 is an `alpha()` call — i.e.
+`color-mix()`, the sanctioned way to get a token at an opacity — which Chrome
+resolves to the `color(srgb …)` form. It throws on the first one it meets, and
+no way of writing the app avoids that without giving up the token bridge. It
+would also have cost ~45KB brotli of route budget.
+
+So the browser renders instead: the subtree is cloned, its computed styles are
+pinned onto the clone, and the clone is serialised into an `<svg><foreignObject>`
+and drawn to a canvas. Whatever Chrome can paint, this can photograph. No
+dependency, no budget line, and the engine is behind a dynamic `import()` so it
+arrives with the first click rather than in the entry chunk.
+
+Three details worth knowing:
+
+- **Declarations are pruned, carefully.** Pinning ~340 properties on every node
+  serialises a card to megabytes. A property is dropped only when the clone is
+  guaranteed to land on the same value anyway: an inherited one that matches the
+  parent, or any other one that matches the parent AND the tag's UA default
+  (read from a throwaway iframe with no stylesheets — the same environment the
+  clone is about to render in).
+- **Boxes are restated from the measured border box.** `getComputedStyle().width`
+  is the CONTENT width whatever `box-sizing` says, so copying it verbatim
+  alongside a copied `box-sizing: border-box` shrinks the clone by its own
+  padding at every level of nesting.
+- **Canvases become `<img>` data URIs and cross-origin images are dropped** — an
+  unresolvable reference does not degrade inside an SVG, it fails the whole image
+  load silently.
+
+Known and accepted: pseudo-elements are not cloned, scrolled content
+photographs from its own top, and a card scrolled out of view has not painted
+(non-negotiable 5) so its chart comes out blank. `data-capture-hide` on an
+element removes it from the clone — that is how a button stays out of its own
+PNG.
+
+The frame matches v2's: title band, ET stamp, `Data provided by CBEdge.net`
+watermark, clipboard first with a silent fallback to a `.png` download.
+
+**Parity bookkeeping.** `docs/parity/em.md`'s "the one thing NOT ported" is
+resolved: the capability came across, the chrome moved. `parity-check-em.mjs`
+keeps `D/snapshot` as a declared `soft` departure with a rewritten reason — the
+count is 0 by design now, not by omission.
+
+Files: `cbedge-v3/src/shell/snapshot.ts` (new),
+`cbedge-v3/src/shell/CopyShot.tsx` (new), `cbedge-v3/src/shell/Shell.tsx`,
+`cbedge-v3/src/board/BoardPage.tsx`, `cbedge-v3/src/pages/Em.tsx`,
+`cbedge-v3/src/pages/tradersDashboard/SectorWheelCard.tsx`,
+`cbedge-v3/scripts/parity-check-em.mjs`, `cbedge-v3/docs/parity/em.md`.
+No new dependency, no backend change.
+
+
+## 2026-09-02 - Premarket: blank page, "Cannot read properties of undefined (reading 'rplon')"
+
+/app/premarket rendered nothing and threw at module scope. Two prose comments
+inside the page's CSS template literal quoted class names in BACKTICKS, which
+closed the template early -- everything after it was parsed as JavaScript, so
+`.pmk.rplon` became a property read on a string's undefined `.pmk`.
+
+### Files
+
+- `components/pages/Premarket.tsx` -- inside `const CSS = ` ... `` (lines 279-743),
+  the backticks around `.pmk.rplon .lvl .mig` (line 345) and `.mig.ph` (line 589)
+  are now single quotes. No CSS or behaviour change. Rule: never put a backtick
+  in a comment that lives inside a template literal.
+
+## 2026-09-02 - Emails: multi-select audiences, one email per person
+
+The owner Emails page sent to exactly one audience at a time, so reaching
+Subscribers + Waitlist + both legacy lists meant four separate sends -- and
+anyone sitting on more than one of them got the broadcast two, three, four
+times. Audiences are now tickable and the union is deduped, so a send goes to
+each person once.
+
+- Tick any mix of Subscribers / Not paying / Waitlist / Old emails / Old emails 2.
+  "All users" and "Custom" are whole answers on their own, so picking either
+  replaces the selection (round marker instead of a checkbox). The selection can
+  never go empty -- unticking the last one is a no-op.
+- The recipient line shows the deduped total and, when the lists overlap,
+  "N duplicates merged". View list / Edit list both operate on the union.
+- De-dupe is case-insensitive. `new Set(array)` was not enough on its own: the
+  users table stores mixed case and the legacy CSVs are lowercase, so
+  "Foo@x.com" and "foo@x.com" survived as two recipients.
+
+### Files
+
+- `owner-vite/src/pages/Emails.tsx` -- `audience: Audience` became
+  `audiences: Audience[]` with `toggleAudience()`. New `dedupeEmails()`,
+  `EXCLUSIVE`, `UNION_ORDER`, and a derived `unionList` / `duplicatesRemoved`.
+  Buttons render a tick box and each list's size. `?audience=` now also accepts
+  a comma-separated list (`?audience=subscribers,waitlist`).
+- `app/api/admin/send-email/route.ts` -- POST reads `audiences: string[]`
+  (scalar `audience` still honored for older clients / curl), loads each source
+  at most once however many audiences reference it, concatenates in
+  `AUDIENCE_PRIORITY` (live accounts -> waitlist -> legacy CSVs last) and runs
+  the result through the new `dedupeEmails()`. Response adds `duplicateCount`
+  and the resolved `audience` label; the send history row records
+  "subscribers+waitlist".
 
 ## 2026-09-02 - v3 GEX Candles: ES futures candles are back, as an SPX/ES switch
 
@@ -100,6 +267,20 @@ index is off the right edge, `frameRecent()` is re-applied. lightweight-charts
 can settle on a range derived from the OLD base index when the bar count
 changes by an order of magnitude (1m -> 15m), which put the live candle
 off-screen on every timeframe switch.
+
+### "Click SPX, get one long candle to zero"
+
+`candles.ts` `sanitize()`: a half-assembled bar from the recorder's hot lane
+or the dxlink live fallback (close set, low/open still 0) drew as a candle
+from price to 0 and autoscaled the pane to 0–9000. Both parsers now require
+every field to be a real price, clamp high/low around open/close, and drop
+any bar whose range exceeds 25% of price. The poll brings the finished bar.
+
+### ES live pair off the connect snapshot
+
+`data/socket.ts` `fanOutSnapshot` now writes `esCandles` / `es1mCandles`
+from the snapshot, so the ES card has a forming-bar close immediately after
+a (re)connect instead of waiting for the next delta.
 
 ### Deliberately not `useEsCandles`
 

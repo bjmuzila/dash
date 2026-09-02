@@ -217,6 +217,13 @@ function fanOutSnapshot(frame: { symbol?: string; ts?: number; data?: unknown })
     put('status', { ...(d.status as Record<string, unknown>), expirations: d.expirations, expiry: d.expiry })
   }
   if (d.flow && typeof d.flow === 'object') put('flow', d.flow)
+  // The futures tapes (2026-09-02). Between deltas — a quiet minute, or the
+  // reconnect a scope change causes — the snapshot is the only copy of the
+  // forming ES bar, and the GEX Candles card on ES reads its close as the live
+  // print. Without this the card had no ES price until the next tick moved a
+  // bar, which is what "no live pair yet" was on a slow tape.
+  if (Array.isArray(d.esCandles) && d.esCandles.length) put('esCandles', d.esCandles)
+  if (Array.isArray(d.es1mCandles) && d.es1mCandles.length) put('es1mCandles', d.es1mCandles)
 }
 
 // ── Scope management ─────────────────────────────────────────────────────────

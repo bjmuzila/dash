@@ -12,6 +12,7 @@ import { createPortal } from 'react-dom'
 import { Card } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
 import { T, alpha } from '@/design/theme'
+import { CopyShotButton, NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 import {
   AMP,
   CAPS,
@@ -464,6 +465,8 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
   // the only pass the effect ever ran and the gate silently never engaged.
   const boxRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
+  /** The pop-out's PANEL — the plate inside the backdrop. See shotTargets. */
+  const panelRef = useRef<HTMLDivElement>(null)
   const inView = useInView(boxRef)
   // The pop-out is a fixed overlay over the viewport — it is on screen by
   // definition, whatever the card behind it is doing.
@@ -545,6 +548,34 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
     }
   }, [expanded, close])
 
+  // ── 📸 The wheel, but only once it is popped out ───────────────────────────
+  //
+  // In the card it is a 300px circle nobody wants a PNG of; popped out it is
+  // the whole S&P on one plate, with the mover lists and the sector
+  // leaderboard beside it, which is the thing that gets shared.
+  //
+  // Published to the toolbar's menu AND carrying its own camera below, and the
+  // duplication is not an oversight: the pop-out is `fixed inset-0` above
+  // everything, so while it is open the toolbar is behind it and its camera
+  // cannot be clicked. The registration is what keeps the menu honest; the
+  // button is what the hand can actually reach.
+  const shotTargets = useMemo<CopyShotTarget[]>(
+    () =>
+      expanded
+        ? [
+            {
+              id: 'sector-wheel',
+              label: 'S&P Sector Wheel',
+              group: 'This page',
+              file: 'sector-wheel',
+              resolve: () => panelRef.current,
+            },
+          ]
+        : NO_TARGETS,
+    [expanded],
+  )
+  useCopyShotTargets(shotTargets)
+
   const capOptions = useMemo(
     () =>
       CAPS.map((c) => ({
@@ -565,6 +596,14 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
       />
       {expanded ? (
         <>
+          {/* Owner-only, and it draws nothing for anyone else. It wears
+              data-capture-hide, so it is not in its own picture. */}
+          {shotTargets[0] && (
+            <CopyShotButton
+              target={shotTargets[0]}
+              className="rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold opacity-75 hover:opacity-100"
+            />
+          )}
           <button
             type="button"
             onClick={toggleFullscreen}
@@ -747,6 +786,7 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
         }}
       >
         <div
+          ref={panelRef}
           className={[
             'max-h-full w-full overflow-auto',
             isFs ? '' : 'rounded-lg border border-line bg-surface shadow-2xl',

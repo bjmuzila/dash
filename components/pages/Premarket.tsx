@@ -342,7 +342,7 @@ const CSS = `
      tile (9). Every rounded surface picks one; nothing types its own. */
   --r:12px; --r2:9px;
   /* Height a Key Levels migration line is held open to while replay is on —
-     two wrapped lines of 10.5px/1.3 type. See `.pmk.rplon .lvl .mig`. */
+     two wrapped lines of 10.5px/1.3 type. See '.pmk.rplon .lvl .mig'. */
   --migH:28px;
   background:var(--bg);color:var(--txt);
   font:13px/1.45 var(--font-inter),'Inter',ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -586,7 +586,7 @@ const CSS = `
    and down each time the scrubber moves. That is unreadable, and it is the
    single biggest source of the "the page moves around too much" in replay.
 
-   So while replay is on, every tile reserves the slot: `.mig.ph` is an empty,
+   So while replay is on, every tile reserves the slot: '.mig.ph' is an empty,
    invisible mig line of the same height, and a real one is floored to it. Two
    lines' worth, because the wall tiles wrap (tag + was→now + "wall moved …").
    Off-replay nothing changes — the placeholder is display:none and the tile

@@ -179,7 +179,7 @@ disclaimer, and NOT the search card or the page header.
 | Week label | `/api/levels → row.exp_label` | `` `Week of {exp_label}` `` — `12px / 700; uppercase; letterSpacing .1em` | `HT.text` | Span omitted entirely when `exp_label` is falsy |
 | Updated stamp | `/api/levels → row.updated_at` | `` `Updated {fmtUpdated(updated_at)}` `` — `12px`, `marginLeft:auto` | `HT.text` | Span omitted entirely when `updated_at` is falsy |
 | `fmtUpdated` format | `hooks/useEmLookup.ts` | `new Date(ts).toLocaleString("en-US", {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"})` → `"Aug 28, 04:19 PM"` — **browser-local timezone, not ET** | none | Unparseable date → `""`, so the span renders the bare word `"Updated "` |
-| **SNAPSHOT — NOT PORTED** | — | v2's `BoxSnapBtn` is html2canvas, a v2 dependency. v3 has no snapshot stack, and adding one is a budget decision rather than a side effect of this port. `parity-check-em.mjs` carries it as a declared `soft` departure (`D/snapshot`), so **every run prints it** instead of passing over it. The five rows below record what would have to be rebuilt | — | — |
+| **SNAPSHOT — MOVED (2026-09-02)** | — | The capture EXISTS in v3 now: `src/shell/snapshot.ts`, no dependency — the subtree is cloned, its computed styles are pinned onto the clone, and Chrome renders it through an `<svg><foreignObject>`. What did not come across is the BUTTON. v3 has one camera, owner-gated, in the toolbar (`src/shell/CopyShot.tsx`); `Em.tsx` publishes its result block to that menu as soon as a ticker has been looked up, labelled with the ticker so the PNG's title band names it. `parity-check-em.mjs` keeps `D/snapshot` as a declared `soft` departure so **every run prints it** — the count is 0 by design, not by omission. The rows below describe v2's button, kept for reference | — | — |
 | Snapshot slot | `<span>` wrapper | `marginLeft: data.updated_at ? 8 : "auto"` — the button takes over the right-push when there is no stamp | Carries `data-html2canvas-ignore="true"` so it is not in its own PNG | Always renders inside the result block |
 | Snapshot button component | `BoxSnapBtn` (`components/shared/DataBox.tsx`) | `targetRef={snapRef}`, `title={`${data.label \|\| data.ticker} • EM & Zones`}` — the title is baked into the PNG's frame band | — | — |
 | Snap button — idle | `s === "idle"` | Glyph `📸`, `padding 2px 5px; fontSize 14; radius 2; 1px border` | colour `#a78bfa`, border `#a78bfa40` | — |
@@ -424,14 +424,24 @@ cannot be mistaken for one that did.
 4. **Deep link** → write `?ticker=` into the URL. Part A.
 5. **Enrichment waterfall** → fire in parallel. Part J.
 
-### The one thing NOT ported
+### The one thing NOT ported — resolved 2026-09-02
 
-The **snapshot (📸) button**. v2's `BoxSnapBtn` is html2canvas; v3 has no
-snapshot stack and pulling one in is a dependency and a budget decision, not a
-side effect of a port. It is declared in the parity script as a `soft`
-departure, so it is printed on every run rather than forgotten. If it should
-come across, that is its own change — and the shared `lib/snapshot.ts` capture
-engine is what would need a v3 equivalent, not just the button.
+The **snapshot (📸) button**. It was left out because v2's `BoxSnapBtn` is
+html2canvas and v3 had no capture engine; pulling the library in was a
+dependency and a budget decision rather than a side effect of a port.
+
+v3 has an engine now — `src/shell/snapshot.ts`, and it is not html2canvas.
+html2canvas parses CSS colours itself and knows only hex / `rgb()` / `hsl()`,
+which every `alpha()` call in this app (i.e. `color-mix()`) walks straight into.
+So the browser renders instead: clone the subtree, pin the computed styles onto
+the clone, serialise it into an `<svg><foreignObject>` and draw that. No
+dependency, no budget line.
+
+The BUTTON still is not on this page, and that is now a choice rather than a
+gap. v3 has one camera — owner-gated, in the toolbar — and surfaces publish
+themselves to it (`src/shell/CopyShot.tsx`). This page publishes its result
+block the moment a ticker resolves. `D/snapshot` stays a declared `soft`
+departure so the difference keeps being printed.
 
 ### Not addressed by this port
 

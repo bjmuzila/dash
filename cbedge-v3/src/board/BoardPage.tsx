@@ -3,6 +3,7 @@ import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
 import { Board, compactBoard, type BoardItem } from '@/design/primitives/Board'
 import { useAuth } from '@/data/auth'
+import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 import { CARD_CATALOG, CARD_BY_ID, cardTypeOf, placeNewCard } from './catalog'
 import {
   fetchServerLayout,
@@ -75,6 +76,8 @@ export default function BoardPage() {
   const [remoteErr, setRemoteErr] = useState<string | null>(null)
   const savedOnceRef = useRef(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  /** The board's scroll port. Its only child is the grid — see shotTargets. */
+  const boardRef = useRef<HTMLDivElement | null>(null)
 
   // Autosave — every layout change (drag, resize, add, remove) persists
   // immediately. There's nothing to debounce against: it's a local write, not
@@ -182,6 +185,53 @@ export default function BoardPage() {
     return out
   }, [layout])
 
+  // ── 📸 Every card on the board, offered to the toolbar's camera ────────────
+  //
+  // Registered from HERE rather than card by card, and that is the whole point:
+  // a card does not have to know the feature exists to be photographable. The
+  // board already knows every card's name, its copy number and where its tile
+  // is in the DOM — `data-card-id`, which Board.tsx puts on each tile for the
+  // perf check — so one publisher covers the catalog, including cards added
+  // after this was written.
+  //
+  // The element handed over is the tile's `<section>`, i.e. the Card itself:
+  // the tile wrapper also carries the resize grab-handle, which is chrome and
+  // does not belong in a shot. Resolved at click time because a drag rebuilds
+  // the tile. Reading order, not layout order, so the menu matches the eye.
+  const shotTargets = useMemo<CopyShotTarget[]>(() => {
+    const inReadingOrder = [...layout].sort((a, b) => a.y - b.y || a.x - b.x)
+    const cards = inReadingOrder.map<CopyShotTarget>((it) => {
+      const type = cardTypeOf(it.id)
+      const def = CARD_BY_ID.get(type)
+      const nth = (countByType.get(type) ?? 0) > 1 ? ordinalById.get(it.id) : undefined
+      return {
+        id: `board:${it.id}`,
+        label: `${def?.label ?? type}${nth != null ? ` ${nth}` : ''}`,
+        group: 'Home board',
+        file: it.id,
+        resolve: () =>
+          boardRef.current?.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(it.id)}"] section`) ?? null,
+      }
+    })
+    return [
+      {
+        id: 'board:all',
+        label: 'Whole board',
+        group: 'Home board',
+        file: 'board',
+        // The grid itself, not the scroll port around it — the board is taller
+        // than the window as often as not, and a shot of the scroll port is a
+        // shot of the part that happened to be showing. Cards below the fold
+        // have not painted (non-negotiable 5), so their charts come out blank;
+        // that is the visibility gate doing its job, not the capture failing.
+        resolve: () => (boardRef.current?.firstElementChild as HTMLElement | undefined) ?? null,
+      },
+      ...cards,
+    ]
+  }, [layout, countByType, ordinalById])
+
+  useCopyShotTargets(shotTargets)
+
   const addCard = (id: string) => {
     setLayoutState((prev) => compactBoard([...prev, placeNewCard(id, prev)]))
     setMenuOpen(false)
@@ -279,7 +329,7 @@ export default function BoardPage() {
         </div>
       }
     >
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={boardRef} className="min-h-0 flex-1 overflow-y-auto">
         <Board
           layout={layout}
           onLayoutChange={setLayoutState}

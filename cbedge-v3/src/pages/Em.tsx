@@ -22,24 +22,32 @@
 // Zone's border and its text are now one colour, and the sub-50% threshold is
 // the same colour in the hit-rate meter as it is in the track record.
 //
-// NOT PORTED — the snapshot (📸) button. v2's BoxSnapBtn is html2canvas, which
-// is a v2 dependency; v3 has no snapshot stack and adding one is a budget
-// decision, not a side effect of this port. parity-check-em.mjs declares it as
-// a KNOWN DEPARTURE (`soft`), so every run prints it rather than passing over
-// it. See docs/parity/em.md Part D.
+// SNAPSHOT — v2 put a 📸 inside the result header (BoxSnapBtn, html2canvas).
+// v3 HAS the capture now (shell/snapshot.ts — no dependency; the browser does
+// the rendering) but not the button: there is one camera in this app and it
+// lives in the toolbar. This page publishes its RESULT BLOCK to that camera's
+// menu the moment a ticker has actually been looked up, which is the only
+// moment there is anything worth photographing — and it publishes the looked-up
+// ticker in the label, so the PNG's title band says which one it is.
+//
+// The frame (title band, watermark, clipboard-then-download) matches v2's, so
+// the two pages produce the same picture. parity-check-em.mjs still carries
+// `D/snapshot` as a KNOWN DEPARTURE (`soft`): the capability came across, the
+// chrome moved. See docs/parity/em.md Part D.
 //
 // This page opens no socket and mounts no canvas: it is REST-only, so
 // non-negotiables 4, 5 and 6 have nothing to bite on here.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { CSSProperties, ReactNode } from 'react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Card } from '@/design/primitives/Card'
 import { Page } from '@/design/primitives/Page'
 import { CAL, MOVE_DOWN, MOVE_UP, T, alpha } from '@/design/theme'
 import type { EmSnapshot } from '@/pages/em/emData'
 import { POPULAR, emNumber, fmtUpdated, loadEm, val } from '@/pages/em/emData'
+import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 
 // ── Threshold tables ─────────────────────────────────────────────────────────
 // Both are v2's, to the number. They were two DIFFERENT colour sets in v2 for
@@ -102,6 +110,31 @@ export default function Em() {
 
   const data = snap?.data
   const busy = loading || !input.trim()
+
+  // ── 📸 The result block, offered to the toolbar's camera ───────────────────
+  //
+  // v2 captured "from the result header down" — ticker, week, stamp, then every
+  // card. Same span here, and the same rule about WHEN: nothing is published
+  // until a lookup has landed, so the menu never offers a shot of the empty
+  // state.
+  const shotRef = useRef<HTMLDivElement | null>(null)
+  const sym = data?.ticker || ticker
+  const shotTargets = useMemo<CopyShotTarget[]>(
+    () =>
+      snap && data && !loading
+        ? [
+            {
+              id: 'em:result',
+              label: `Estimated Move — ${data.label || sym}`,
+              group: 'This page',
+              file: `em-${sym}`,
+              resolve: () => shotRef.current,
+            },
+          ]
+        : NO_TARGETS,
+    [snap, data, loading, sym],
+  )
+  useCopyShotTargets(shotTargets)
 
   return (
     <Page>
@@ -188,7 +221,7 @@ export default function Em() {
 
         {/* ── Result ───────────────────────────────────────────────────── */}
         {snap && data && !loading && (
-          <div className="flex flex-col gap-4">
+          <div ref={shotRef} className="flex flex-col gap-4">
             <div className="flex flex-wrap items-baseline gap-3">
               <span className="text-2xl font-extrabold tracking-tight text-fg">
                 {data.label || data.ticker || ticker}

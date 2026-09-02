@@ -98,6 +98,30 @@ const num = (v: unknown): number => {
 }
 
 /**
+ * ── A BAR WITH A ZERO IN IT IS NOT A BAR ────────────────────────────────────
+ *
+ * The recorder's hot lane and the dxlink live fallback can both hand over a
+ * bar that is still being assembled — close set, low (or open) still 0. Drawn
+ * as-is that is one candle from price to ZERO, which autoscales the whole pane
+ * to 0–9000 and flattens the session to a line. "Click SPX, get one long
+ * candle" was exactly this. So every field must be a real price, and the
+ * high/low are clamped around open/close so a stale extreme cannot survive
+ * either. Returns null for anything that does not qualify — the caller skips
+ * it, and the poll brings the finished bar 30s later.
+ */
+function sanitize(t: number, o: number, h: number, l: number, c: number, v: number): Bar | null {
+  if (!t || !(c > 0)) return null
+  const open = o > 0 ? o : c
+  let high = h > 0 ? h : Math.max(open, c)
+  let low = l > 0 ? l : Math.min(open, c)
+  high = Math.max(high, open, c)
+  low = Math.min(low, open, c)
+  // A wick wider than a quarter of the price is a data fault, not a print.
+  if (high - low > c * 0.25) return null
+  return { t, o: open, h: high, l: low, c, v: Math.max(0, v) }
+}
+
+/**
  * The interval to ASK FOR. The route only buckets to 1 or 5; 15/30/60 are
  * rolled up here. Everything above 5 pulls 5m bars — a 1h chart built from 1m
  * rows is twelve times the payload for an identical picture.
@@ -121,9 +145,8 @@ export function parseCandles(json: unknown): Bar[] {
   if (!json || typeof json !== 'object') return []
   const out: Bar[] = []
   for (const r of (json as CandlesResponse).rows ?? []) {
-    const t = num(r.timestamp)
-    if (!t) continue
-    out.push({ t, o: num(r.open), h: num(r.high), l: num(r.low), c: num(r.close), v: num(r.volume) })
+    const bar = sanitize(num(r.timestamp), num(r.open), num(r.high), num(r.low), num(r.close), num(r.volume))
+    if (bar) out.push(bar)
   }
   // Sorting an already-sorted array is cheap and removes a whole class of "the
   // chart drew backwards" bug if the route's ordering ever changes.
@@ -161,17 +184,13 @@ export function parseEsCandles(json: unknown): Bar[] {
     const iT = ix('timestamp'), iO = ix('open'), iH = ix('high'), iL = ix('low'), iC = ix('close'), iV = ix('volume')
     if (iT < 0 || iC < 0) return []
     for (const tuple of rows as unknown[][]) {
-      const t = num(tuple[iT])
-      const c = num(tuple[iC])
-      if (!t || !(c > 0)) continue
-      out.push({ t, o: num(tuple[iO]), h: num(tuple[iH]), l: num(tuple[iL]), c, v: num(tuple[iV]) })
+      const bar = sanitize(num(tuple[iT]), num(tuple[iO]), num(tuple[iH]), num(tuple[iL]), num(tuple[iC]), num(tuple[iV]))
+      if (bar) out.push(bar)
     }
   } else {
     for (const r of rows as Array<Record<string, unknown>>) {
-      const t = num(r.timestamp)
-      const c = num(r.close)
-      if (!t || !(c > 0)) continue
-      out.push({ t, o: num(r.open), h: num(r.high), l: num(r.low), c, v: num(r.volume) })
+      const bar = sanitize(num(r.timestamp), num(r.open), num(r.high), num(r.low), num(r.close), num(r.volume))
+      if (bar) out.push(bar)
     }
   }
   out.sort((a, b) => a.t - b.t)

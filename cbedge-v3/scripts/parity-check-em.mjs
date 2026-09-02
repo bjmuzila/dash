@@ -142,7 +142,7 @@ export const PROBES = [
     id: 'D/snapshot',
     label: 'Snapshot (📸) button',
     count: true,
-    soft: 'NOT PORTED — v2 uses html2canvas (a v2 dependency); v3 has no snapshot stack. Adding one is a budget decision, not a side effect of this port. docs/parity/em.md Part D.',
+    soft: 'MOVED, not missing — v3 DOES capture this block (src/shell/snapshot.ts; no dependency, the browser renders it), but the camera is the single owner-gated one in the toolbar and the page publishes itself to that menu once a ticker is looked up. No button inside the result block, so this count is 0 by design. docs/parity/em.md Part D.',
     get: (h) => h.snapButtons,
   },
 

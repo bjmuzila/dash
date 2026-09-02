@@ -6,6 +6,7 @@ import {
   coreStrike,
   dexOf,
   dexSupported,
+  flowSplitSupported,
   flowSupported,
   fmtGexShort,
   netGexOf,
@@ -216,9 +217,8 @@ export function atmStart(rows: GexRow[], spot: number, count: number): number {
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 
-function cssVar(el: HTMLElement, name: string, fallback: string): string {
-  const v = getComputedStyle(el).getPropertyValue(name).trim()
-  return v || fallback
+function cssVar(el: HTMLElement, name: string): string {
+  return getComputedStyle(el).getPropertyValue(name).trim()
 }
 
 /** '#rrggbb' → [r,g,b]. Canvas needs per-stop alpha, which a token cannot carry. */
@@ -236,22 +236,33 @@ interface Palette {
   line: [number, number, number]
   dex: [number, number, number]
   core: [number, number, number]
-  surface: string
+  surface: [number, number, number]
 }
 
 function readPalette(el: HTMLElement): Palette {
   return {
-    pos: hexToRgb(cssVar(el, '--color-gexbar-pos', '#29b6f6'), [41, 182, 246]),
-    neg: hexToRgb(cssVar(el, '--color-gexbar-neg', '#ffb300'), [255, 179, 0]),
-    fg: hexToRgb(cssVar(el, '--color-fg', '#ffffff'), [255, 255, 255]),
-    line: hexToRgb(cssVar(el, '--color-line', '#23272e'), [35, 39, 46]),
-    dex: hexToRgb(cssVar(el, '--color-dex', '#1f8dad'), [31, 141, 173]),
-    core: hexToRgb(cssVar(el, '--color-level-cb', '#ffd600'), [255, 214, 0]),
-    surface: cssVar(el, '--color-surface', '#0f1117'),
+    pos: hexToRgb(cssVar(el, '--color-gexbar-pos'), [41, 182, 246]),
+    neg: hexToRgb(cssVar(el, '--color-gexbar-neg'), [255, 179, 0]),
+    fg: hexToRgb(cssVar(el, '--color-fg'), [255, 255, 255]),
+    line: hexToRgb(cssVar(el, '--color-line'), [35, 39, 46]),
+    dex: hexToRgb(cssVar(el, '--color-dex'), [31, 141, 173]),
+    core: hexToRgb(cssVar(el, '--color-level-cb'), [255, 214, 0]),
+    surface: hexToRgb(cssVar(el, '--color-surface'), [15, 17, 23]),
   }
 }
 
-const rgba = (c: [number, number, number], a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`
+/**
+ * A palette triple at an alpha, as a canvas colour string.
+ *
+ * The one colour literal in this file, and it is a SYNTAX rather than a colour:
+ * every channel comes from readPalette, which reads tokens.css. Canvas cannot
+ * resolve a custom property, so design/theme.ts's alpha() — color-mix() over a
+ * var() — is not available here; this is the canvas equivalent.
+ *
+ * Named withAlpha, not rgba, so a call site reads as "this token at 55%" and
+ * not as a hand-typed colour.
+ */
+const withAlpha = (c: [number, number, number], a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`
 
 export interface GexChartHandle {
   setModel: (m: GexChartModel) => void
@@ -352,11 +363,29 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     const flowActive = model.basis === 'flow' && flowSupported(model.rows)
     const flowMissing = model.basis === 'flow' && !flowActive
     const dexActive = model.showDex && dexSupported(model.rows, model.basis)
-    const splitting = model.split === 'call-put'
+
+    // ── The CALL/PUT split, on flow ────────────────────────────────────────
+    // The legs are their OWN wire fields (flowCallGEX / flowPutGEX), not
+    // something derivable from the rest of the row: the dealer's signed
+    // inventory per side only exists on the server. So the split has a second
+    // support test, and when it fails the split is REFUSED rather than quietly
+    // drawing the OI+VOL legs — which is what this chart did until 2026-09,
+    // labelled "CALL/PUT · FLOW" the whole time.
+    const splitAsked = model.split === 'call-put'
+    const flowSplitOff = flowActive && splitAsked && !flowSplitSupported(model.rows)
+    const splitting = splitAsked && !flowSplitOff
+
+    // On flow BOTH legs are signed — dealer long positive, dealer short
+    // negative — so neither one has a fixed side of the zero line to sit on.
+    // Two full-width bars drawn from zero would then hide one behind the other
+    // whenever the signs agree, so the flow split draws them half-width, side
+    // by side. Off flow the signs are opposite by construction (call +, put −)
+    // and the original stacked geometry is kept exactly as it was.
+    const signedSplit = splitting && flowActive
 
     const getNet = (r: GexRow) => netGexOf(r, model.basis, flowActive)
-    const getCall = (r: GexRow) => callGexOf(r, model.spot, model.basis)
-    const getPut = (r: GexRow) => putGexOf(r, model.spot, model.basis)
+    const getCall = (r: GexRow) => callGexOf(r, model.spot, model.basis, flowActive)
+    const getPut = (r: GexRow) => putGexOf(r, model.spot, model.basis, flowActive)
 
     // ── Viewport ──
     const dynCount = Math.max(MIN_COUNT, Math.round(TARGET_RANGE / detectedStep) + 1)
@@ -398,7 +427,7 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     const yFor = (v: number) => yZero - (v / maxG) * (cH / 2)
 
     // ── Zero line ──
-    ctx.strokeStyle = rgba(p.line, 0.9)
+    ctx.strokeStyle = withAlpha(p.line, 0.9)
     ctx.lineWidth = 0.8
     ctx.beginPath()
     ctx.moveTo(PAD_L, yZero)
@@ -411,13 +440,13 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     for (let g = gStep; g <= maxG * 1.01; g += gStep) {
       for (const y of [yFor(g), yFor(-g)]) {
         if (y < PAD_T - 1 || y > PAD_T + cH + 1) continue
-        ctx.strokeStyle = rgba(p.line, 0.55)
+        ctx.strokeStyle = withAlpha(p.line, 0.55)
         ctx.beginPath()
         ctx.moveTo(PAD_L, y)
         ctx.lineTo(PAD_L + cW, y)
         ctx.stroke()
       }
-      ctx.fillStyle = rgba(p.fg, 0.92)
+      ctx.fillStyle = withAlpha(p.fg, 0.92)
       ctx.font = 'bold 11px ui-monospace, monospace'
       ctx.textAlign = 'right'
       // The LINE may run to the frame edge; its LABEL may not. The bottom strip
@@ -443,7 +472,7 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // In the split the SIGN still picks the colour, and the two legs already
     // carry opposite signs by construction — so a call bar is blue above the
     // line and a put bar amber below it, with no second rule to remember.
-    const drawBar = (x: number, v: number, highlighted: boolean) => {
+    const drawBar = (x: number, v: number, highlighted: boolean, w = barW) => {
       if (!v) return
       const yTop = v >= 0 ? clamp(yFor(v), PAD_T, yZero) : yZero
       const yBot = v >= 0 ? yZero : clamp(yFor(v), yZero, PAD_T + cH)
@@ -452,9 +481,9 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
       const grad = ctx.createLinearGradient(0, yTop, 0, yTop + h)
       const base = v >= 0 ? p.pos : p.neg
       if (highlighted) {
-        grad.addColorStop(0, rgba(p.fg, 0.98))
-        grad.addColorStop(1, rgba(base, 0.72))
-        ctx.shadowColor = rgba(base, 0.7)
+        grad.addColorStop(0, withAlpha(p.fg, 0.98))
+        grad.addColorStop(1, withAlpha(base, 0.72))
+        ctx.shadowColor = withAlpha(base, 0.7)
         ctx.shadowBlur = 12
       } else {
         const t = Math.min(Math.abs(v) / netMax, 1)
@@ -462,15 +491,15 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
         const mix = (c: number) => Math.round(c + (255 - c) * lift)
         const lit: [number, number, number] = [mix(base[0]), mix(base[1]), mix(base[2])]
         if (v >= 0) {
-          grad.addColorStop(0, rgba(lit, 0.9))
-          grad.addColorStop(1, rgba(base, 0.2))
+          grad.addColorStop(0, withAlpha(lit, 0.9))
+          grad.addColorStop(1, withAlpha(base, 0.2))
         } else {
-          grad.addColorStop(0, rgba(base, 0.2))
-          grad.addColorStop(1, rgba(lit, 0.9))
+          grad.addColorStop(0, withAlpha(base, 0.2))
+          grad.addColorStop(1, withAlpha(lit, 0.9))
         }
       }
       ctx.fillStyle = grad
-      ctx.fillRect(x - barW / 2, yTop, barW, h)
+      ctx.fillRect(x - w / 2, yTop, w, h)
       if (highlighted) ctx.shadowBlur = 0
     }
 
@@ -478,7 +507,13 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     data.forEach((r, i) => {
       const x = xAt(i)
       const highlighted = r.strike === hoverStrike
-      if (splitting) {
+      if (signedSplit) {
+        // Flow: two signed half-width bars, call on the left of the column and
+        // put on the right, each free to point either way.
+        const hw = Math.max(1, barW / 2)
+        drawBar(x - hw / 2, getCall(r), highlighted, hw)
+        drawBar(x + hw / 2, getPut(r), highlighted, hw)
+      } else if (splitting) {
         drawBar(x, Math.abs(getCall(r)), highlighted)
         drawBar(x, -Math.abs(getPut(r)), highlighted)
       } else {
@@ -497,9 +532,9 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
       let maxDex = 1
       for (const v of dexVals) maxDex = Math.max(maxDex, Math.abs(v))
       const yDex = (v: number) => yZero - (v / maxDex) * (cH / 2) * 0.6
-      ctx.strokeStyle = rgba(p.dex, 0.95)
+      ctx.strokeStyle = withAlpha(p.dex, 0.95)
       ctx.lineWidth = 2
-      ctx.shadowColor = rgba(p.dex, 0.35)
+      ctx.shadowColor = withAlpha(p.dex, 0.35)
       ctx.shadowBlur = 10
       const pts = dexVals.map((v, i) => ({ x: xAt(i), y: yDex(v) }))
       if (pts.length > 1) {
@@ -516,7 +551,7 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
         ctx.stroke()
       }
       ctx.shadowBlur = 0
-      ctx.fillStyle = rgba(p.dex, 0.85)
+      ctx.fillStyle = withAlpha(p.dex, 0.85)
       ctx.font = 'bold 8px ui-monospace, monospace'
       ctx.textAlign = 'left'
       ctx.fillText('+NET DEX', PAD_L + 3, yDex(0) - 3)
@@ -539,14 +574,14 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
 
       if (sx !== null) {
         ctx.setLineDash([5, 5])
-        ctx.strokeStyle = rgba(p.fg, 0.55)
+        ctx.strokeStyle = withAlpha(p.fg, 0.55)
         ctx.lineWidth = 1
         ctx.beginPath()
         ctx.moveTo(sx, PAD_T)
         ctx.lineTo(sx, PAD_T + cH)
         ctx.stroke()
         ctx.setLineDash([])
-        ctx.fillStyle = rgba(p.fg, 0.85)
+        ctx.fillStyle = withAlpha(p.fg, 0.85)
         ctx.font = 'bold 9px ui-monospace, monospace'
         ctx.textAlign = 'center'
         ctx.fillText(
@@ -581,12 +616,12 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
       const bh = 15
       const bx = clamp(xAt(coreIdx) - bw / 2, 2, Math.max(2, W - bw - 2))
       const by = Math.max(2, cy - 20)
-      ctx.fillStyle = rgba(p.core, 0.12)
+      ctx.fillStyle = withAlpha(p.core, 0.12)
       ctx.fillRect(bx, by, bw, bh)
-      ctx.strokeStyle = rgba(col, 0.95)
+      ctx.strokeStyle = withAlpha(col, 0.95)
       ctx.lineWidth = 1
       ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1)
-      ctx.fillStyle = rgba(col, 0.98)
+      ctx.fillStyle = withAlpha(col, 0.98)
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillText(lbl, bx + bw / 2, by + bh / 2 + 0.5)
@@ -602,7 +637,7 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     const lastData = data[data.length - 1]
     if (firstRow && lastData) {
       const labelStep = niceStep(lastData.strike - firstRow.strike, 7)
-      ctx.fillStyle = rgba(p.fg, 0.92)
+      ctx.fillStyle = withAlpha(p.fg, 0.92)
       ctx.font = 'bold 11px ui-monospace, monospace'
       ctx.textAlign = 'center'
       data.forEach((r, i) => {
@@ -617,7 +652,7 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // v2's chart takes a `seriesLabel` prop rather than deriving one.
     const seriesBits = [splitting ? 'CALL/PUT' : 'NET GEX', BASIS_LABEL[flowActive ? 'flow' : model.basis]]
     if (model.expiry) seriesBits.push(model.expiry)
-    ctx.fillStyle = rgba(p.fg, 0.55)
+    ctx.fillStyle = withAlpha(p.fg, 0.55)
     ctx.font = 'bold 9px ui-monospace, monospace'
     ctx.textAlign = 'left'
     ctx.fillText(seriesBits.join(' · '), PAD_L + 2, PAD_T - 8)
@@ -626,14 +661,25 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // as a silent fallback: the bars in front of you are OI+VOL, and a user who
     // is not told that will read them as a flow book.
     if (flowMissing) {
-      ctx.fillStyle = rgba(p.fg, 0.45)
+      ctx.fillStyle = withAlpha(p.fg, 0.45)
       ctx.font = 'bold 9px ui-monospace, monospace'
       ctx.textAlign = 'center'
       ctx.fillText('No classified flow for this symbol — showing OI+VOL', W / 2, PAD_T + 24)
     }
 
+    // Asked for the split ON flow, and this feed carries only the summed
+    // flowGEX — no per-side legs. Same rule as above: say it, and draw the net
+    // bar. Falling back to the OI+VOL legs under a FLOW label is exactly the
+    // bug this note replaced.
+    if (flowSplitOff) {
+      ctx.fillStyle = withAlpha(p.fg, 0.45)
+      ctx.font = 'bold 9px ui-monospace, monospace'
+      ctx.textAlign = 'center'
+      ctx.fillText('Flow carries no call/put split on this feed — showing net flow', W / 2, PAD_T + 24)
+    }
+
     // ── The hint, very dim, bottom-right ──
-    ctx.fillStyle = rgba(p.fg, 0.22)
+    ctx.fillStyle = withAlpha(p.fg, 0.22)
     ctx.font = 'bold 8px ui-monospace, monospace'
     ctx.textAlign = 'right'
     // Says which of the two modes you are in, because "why did it stop
@@ -650,23 +696,28 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // ── Hover readout ──
     if (hover) {
       const v = getNet(hover.row)
-      const label = splitting
-        ? `${hover.row.strike.toLocaleString('en-US')}   C ${fmtGexShort(Math.abs(getCall(hover.row)))}   P ${fmtGexShort(-Math.abs(getPut(hover.row)))}`
-        : `${hover.row.strike.toLocaleString('en-US')}   ${fmtGexShort(v)}`
+      // On flow the legs are signed, so the readout prints them as they are —
+      // abs()-ing them here would put a "+" in front of a dealer SHORT leg.
+      const k = hover.row.strike.toLocaleString('en-US')
+      const label = signedSplit
+        ? `${k}   C ${fmtGexShort(getCall(hover.row))}   P ${fmtGexShort(getPut(hover.row))}`
+        : splitting
+          ? `${k}   C ${fmtGexShort(Math.abs(getCall(hover.row)))}   P ${fmtGexShort(-Math.abs(getPut(hover.row)))}`
+          : `${k}   ${fmtGexShort(v)}`
       ctx.font = 'bold 10px ui-monospace, monospace'
       const tw = ctx.measureText(label).width
       const bw = tw + 14
       const bh = 20
       const bx = clamp(hover.x - bw / 2, PAD_L, Math.max(PAD_L, W - PAD_R - bw))
       const by = clamp(hover.y - bh - 10, PAD_T, PAD_T + cH - bh)
-      ctx.fillStyle = p.surface
+      ctx.fillStyle = withAlpha(p.surface, 1)
       ctx.globalAlpha = 0.95
       ctx.fillRect(bx, by, bw, bh)
       ctx.globalAlpha = 1
-      ctx.strokeStyle = rgba(v >= 0 ? p.pos : p.neg, 0.6)
+      ctx.strokeStyle = withAlpha(v >= 0 ? p.pos : p.neg, 0.6)
       ctx.lineWidth = 1
       ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1)
-      ctx.fillStyle = rgba(p.fg, 0.95)
+      ctx.fillStyle = withAlpha(p.fg, 0.95)
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
       ctx.fillText(label, bx + 7, by + bh / 2)

@@ -21,6 +21,37 @@ const AUDIENCE_OPTIONS: SegOption[] = [
   { value: "custom", label: "✏️ Custom" },
 ];
 
+// Audiences are MULTI-SELECT: tick Subscribers + Waitlist + Old emails and the
+// send goes to the union. "All users" and "Custom" are each a whole answer on
+// their own — All is already the superset, Custom is a hand-typed list — so
+// picking either clears the rest, and picking anything else clears them.
+const EXCLUSIVE: Audience[] = ["all", "custom"];
+
+// The order the union is built in, mirroring AUDIENCE_PRIORITY in
+// app/api/admin/send-email/route.ts. Live accounts first, legacy CSVs last:
+// someone on two lists is kept under the more current one. The two must stay
+// identical or the count shown here won't match what the server sends.
+const UNION_ORDER: Audience[] = ["subscribers", "not_paying", "waitlist", "old_emails", "old_emails2"];
+
+/** Drop repeats from a selection while keeping UNION_ORDER-independent order. */
+function dedupeAudiences(list: Audience[]): Audience[] {
+  return Array.from(new Set(list));
+}
+
+/** Case-insensitive de-dupe keeping first spelling + first-seen order. */
+function dedupeEmails(emails: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of emails) {
+    const email = (raw ?? "").trim();
+    const key = email.toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(email);
+  }
+  return out;
+}
+
 /**
  * Preview-only mirror of campaignSlug() in lib/emails/utm.ts. The SERVER slug is
  * the one that ships — this exists so the composer can show what the link will
@@ -47,7 +78,7 @@ interface SendRecord {
 }
 
 export default function Emails() {
-  const [audience, setAudience] = useState<Audience>("subscribers");
+  const [audiences, setAudiences] = useState<Audience[]>(["subscribers"]);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -104,10 +135,16 @@ export default function Emails() {
 
   // Preselect the audience from ?audience= (e.g. the admin page's "Email these →"
   // deep-links to ?audience=not_paying).
+  // Accepts a comma-separated list (?audience=subscribers,waitlist) as well as
+  // a single value, so a deep-link can preselect a multi-audience send.
   useEffect(() => {
     const a = new URLSearchParams(window.location.search).get("audience");
-    const VALID: Audience[] = ["all", "subscribers", "not_paying", "waitlist", "old_emails", "old_emails2", "custom"];
-    if (a && (VALID as string[]).includes(a)) setAudience(a as Audience);
+    if (!a) return;
+    const VALID: string[] = ["all", "subscribers", "not_paying", "waitlist", "old_emails", "old_emails2", "custom"];
+    const wanted = a.split(",").map((s) => s.trim()).filter((s) => VALID.includes(s)) as Audience[];
+    if (!wanted.length) return;
+    const exclusive = wanted.find((w) => EXCLUSIVE.includes(w));
+    setAudiences(exclusive ? [exclusive] : dedupeAudiences(wanted));
   }, []);
 
   // Load recipient counts + Resend config status on mount.
@@ -136,16 +173,22 @@ export default function Emails() {
     return () => { alive = false; };
   }, []);
 
-  const recipientCount =
-    audience === "all" ? counts?.all ?? 0
-    : audience === "subscribers" ? counts?.subscribers ?? 0
-    : audience === "not_paying" ? counts?.notPaying ?? 0
-    : audience === "waitlist" ? counts?.waitlist ?? 0
-    : audience === "old_emails" ? counts?.oldEmails ?? 0
-    : audience === "old_emails2" ? counts?.oldEmails2 ?? 0
-    : customTo.split(/[\s,;]+/).filter(Boolean).length;
+  const isCustom = audiences.includes("custom");
 
-  // Resolve the email array for the current (non-custom) audience.
+  // Tick / untick an audience. The two exclusive ones replace the selection;
+  // everything else toggles within the multi-select group. The selection can
+  // never go empty — unticking the last one is a no-op rather than a send to
+  // nobody.
+  function toggleAudience(v: Audience) {
+    setAudiences((prev) => {
+      if (EXCLUSIVE.includes(v)) return [v];
+      const base = prev.filter((a) => !EXCLUSIVE.includes(a));
+      if (base.includes(v)) return base.length > 1 ? base.filter((a) => a !== v) : base;
+      return [...base, v];
+    });
+  }
+
+  // Resolve the email array for ONE audience.
   function listFor(a: Audience): string[] {
     if (!lists) return [];
     return a === "all" ? lists.all
@@ -156,13 +199,34 @@ export default function Emails() {
       : lists.subscribers;
   }
 
-  // Copy the selected list into the editable Custom box so specific recipients
+  // The actual send list: every selected audience concatenated in UNION_ORDER,
+  // then deduped — so an address on Subscribers AND Old emails 2 appears once.
+  const unionList: string[] = (() => {
+    if (!lists || isCustom) return [];
+    if (audiences.includes("all")) return lists.all;
+    const merged: string[] = [];
+    for (const a of UNION_ORDER) if (audiences.includes(a)) merged.push(...listFor(a));
+    return dedupeEmails(merged);
+  })();
+
+  // Sum of the selected lists BEFORE de-duping — the gap between this and
+  // unionList.length is how many double-sends the merge just prevented.
+  const rawCount = isCustom || audiences.includes("all")
+    ? 0
+    : UNION_ORDER.reduce((n, a) => (audiences.includes(a) ? n + listFor(a).length : n), 0);
+
+  const recipientCount = isCustom
+    ? dedupeEmails(customTo.split(/[\s,;]+/).filter(Boolean)).length
+    : unionList.length;
+
+  const duplicatesRemoved = Math.max(0, rawCount - unionList.length);
+
+  // Copy the resolved union into the editable Custom box so specific recipients
   // can be removed before sending. The send then goes only to what's left.
   function editList() {
-    const emails = listFor(audience);
-    if (emails.length === 0) return;
-    setCustomTo(emails.join(", "));
-    setAudience("custom");
+    if (unionList.length === 0) return;
+    setCustomTo(unionList.join(", "));
+    setAudiences(["custom"]);
     setShowList(false);
   }
 
@@ -171,7 +235,7 @@ export default function Emails() {
     const html = body.trim();
     if (!subj) { setError("Subject is required."); return; }
     if (!html) { setError("Message body is required."); return; }
-    if (audience === "custom" && recipientCount === 0) {
+    if (isCustom && recipientCount === 0) {
       setError("Add at least one recipient email."); return;
     }
 
@@ -180,13 +244,17 @@ export default function Emails() {
     setResult(null);
     try {
       const payload: Record<string, unknown> = {
-        subject: subj, html, audience,
+        subject: subj, html,
+        // `audiences` is the field the server reads; `audience` is sent too so
+        // nothing downstream that still expects a scalar breaks.
+        audiences,
+        audience: audiences.join("+"),
         utmSource,
         // Blank is meaningful: the server falls back to a slug of the subject.
         utmCampaign: campaign.trim(),
       };
-      if (audience === "custom") {
-        payload.to = customTo.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+      if (isCustom) {
+        payload.to = dedupeEmails(customTo.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean));
       }
       const res = await fetch("/api/admin/send-email", {
         method: "POST",
@@ -200,7 +268,8 @@ export default function Emails() {
         ? " — " + j.failed.slice(0, 3).map((f: { error?: string }) => f.error || "unknown error").join("; ")
         : "";
       const camp = j.campaign ? ` · tagged ${j.campaign}` : "";
-      setResult(`Sent to ${j.sentCount} recipient${j.sentCount === 1 ? "" : "s"}${failNote}${camp}.${failDetail}`);
+      const dupeNote = j.duplicateCount ? ` · ${j.duplicateCount} duplicate${j.duplicateCount === 1 ? "" : "s"} merged` : "";
+      setResult(`Sent to ${j.sentCount} recipient${j.sentCount === 1 ? "" : "s"}${failNote}${dupeNote}${camp}.${failDetail}`);
       setSubject("");
       setBody("");
       loadHistory();
@@ -286,6 +355,10 @@ export default function Emails() {
 
           <div>
             {label("Audience")}
+            <div style={{ fontSize: 14, color: HOME_THEME.muted, opacity: 0.7, marginTop: -4, marginBottom: 8 }}>
+              Tick as many as you like — anyone on two lists is sent one email, not two.
+              “All users” and “Custom” each replace the selection.
+            </div>
             <div
               style={{
                 display: "flex",
@@ -302,12 +375,23 @@ export default function Emails() {
               }}
             >
               {AUDIENCE_OPTIONS.map((o) => {
-                const on = audience === o.value;
+                const value = o.value as Audience;
+                const on = audiences.includes(value);
+                const size = value === "all" ? counts?.all
+                  : value === "subscribers" ? counts?.subscribers
+                  : value === "not_paying" ? counts?.notPaying
+                  : value === "waitlist" ? counts?.waitlist
+                  : value === "old_emails" ? counts?.oldEmails
+                  : value === "old_emails2" ? counts?.oldEmails2
+                  : undefined;
                 return (
                   <button
                     key={o.value}
-                    onClick={() => setAudience(o.value as Audience)}
+                    onClick={() => toggleAudience(value)}
                     style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
                       textAlign: "left",
                       padding: "8px 12px",
                       borderRadius: 9,
@@ -320,17 +404,43 @@ export default function Emails() {
                       border: `1px solid ${on ? HOME_THEME.cyan : "rgba(255,255,255,0.08)"}`,
                     }}
                   >
-                    {o.label}
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 16,
+                        height: 16,
+                        flex: "0 0 16px",
+                        borderRadius: EXCLUSIVE.includes(value) ? 999 : 5,
+                        border: `1px solid ${on ? "#FFFFFF" : "rgba(255,255,255,0.28)"}`,
+                        background: on ? "#FFFFFF" : "transparent",
+                        color: HOME_THEME.cyan,
+                        fontSize: 11,
+                        fontWeight: 900,
+                        lineHeight: "14px",
+                        textAlign: "center",
+                      }}
+                    >
+                      {on ? "✓" : ""}
+                    </span>
+                    <span style={{ flex: 1 }}>{o.label}</span>
+                    {size != null && (
+                      <span style={{ fontSize: 12, fontWeight: 600, opacity: on ? 0.85 : 0.55 }}>{size}</span>
+                    )}
                   </button>
                 );
               })}
             </div>
-            <div style={{ fontSize: 14, color: HOME_THEME.muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ fontSize: 14, color: HOME_THEME.muted, marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span>
                 {recipientCount} recipient{recipientCount === 1 ? "" : "s"}
+                {duplicatesRemoved > 0 && (
+                  <span style={{ color: HOME_THEME.green }}>
+                    {" "}· {duplicatesRemoved} duplicate{duplicatesRemoved === 1 ? "" : "s"} merged
+                  </span>
+                )}
                 {from ? ` · from ${from}` : ""}
               </span>
-              {audience !== "custom" && lists && recipientCount > 0 && (
+              {!isCustom && lists && recipientCount > 0 && (
                 <>
                   <button
                     onClick={() => setShowList((s) => !s)}
@@ -348,9 +458,9 @@ export default function Emails() {
               )}
             </div>
 
-            {showList && audience !== "custom" && lists && (
+            {showList && !isCustom && lists && (
               <div style={{ marginTop: 8, maxHeight: 200, overflowY: "auto", padding: "10px 12px", borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.25)" }}>
-                {listFor(audience).map((email) => (
+                {unionList.map((email) => (
                   <div key={email} style={{ fontSize: 14, color: HOME_THEME.green, lineHeight: 1.7, fontFamily: "var(--font-mono)" }}>
                     {email}
                   </div>
@@ -359,7 +469,7 @@ export default function Emails() {
             )}
           </div>
 
-          {audience === "custom" && (
+          {isCustom && (
             <div>
               {label("Recipients")}
               <div style={{ fontSize: 14, color: HOME_THEME.muted, opacity: 0.75, marginBottom: 6 }}>
