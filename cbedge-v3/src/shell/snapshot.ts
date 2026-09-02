@@ -186,9 +186,68 @@ const INHERITED = new Set([
 ])
 
 /**
+ * Properties that are NEVER pruned, however redundant they look.
+ *
+ * The prune test above rests on one assumption: a property left out lands on
+ * the tag default, and the tag default is what the sandbox measured. Border
+ * width breaks that assumption, and it cost a whole afternoon of white
+ * rectangles round every card.
+ *
+ * Tailwind's preflight sets `border: 0 solid currentColor` on every element, so
+ * a plain div computes to `border-style: solid`, `border-width: 0px`,
+ * `border-color: <the text colour>` — white, in this app. Against a bare div in
+ * the sandbox (`none` / `0px` / black) that reads as: style DIFFERS, keep it;
+ * colour DIFFERS, keep it; width MATCHES at 0px, drop it. Both zeros are real,
+ * and they mean completely different things — the sandbox's is zero because the
+ * style is `none`, and an omitted width under a written `border-style: solid`
+ * falls back to the initial value, which is `medium`. Three white pixels around
+ * every element in the picture.
+ *
+ * The shape of the bug is a computed value that another property FIXES UP, and
+ * that is a short, closed list in CSS: the width of a border, an outline or a
+ * column rule is reported as 0 whenever its style is none. Writing those
+ * families whole costs ~19 declarations a node and takes the whole class of
+ * mistake off the table.
+ */
+const ALWAYS = new Set([
+  'border-top-width',
+  'border-right-width',
+  'border-bottom-width',
+  'border-left-width',
+  'border-top-style',
+  'border-right-style',
+  'border-bottom-style',
+  'border-left-style',
+  'border-top-color',
+  'border-right-color',
+  'border-bottom-color',
+  'border-left-color',
+  'outline-width',
+  'outline-style',
+  'outline-color',
+  'outline-offset',
+  'column-rule-width',
+  'column-rule-style',
+  'column-rule-color',
+  // The two that decide where everything else lands. They are effectively never
+  // prunable in practice, and a layout that silently collapses because one of
+  // them was is not a failure worth risking to save two declarations.
+  'width',
+  'height',
+])
+
+/**
  * The UA's computed style for a bare element of each tag, read from a sandbox
  * document with no stylesheets — which is exactly the environment the clone is
  * about to be rendered in.
+ *
+ * `baseline()` is the same reading for a tag the UA stylesheet says NOTHING
+ * about (a plain `div`, or a plain `g` inside SVG). Comparing a tag's defaults
+ * against the baseline is how the prune tells "this value is just inherited" —
+ * safe to leave out — from "the UA declares this for this tag", which is not:
+ * a UA rule beats inheritance, so an `<h2>` whose font-size was dropped because
+ * it matched its parent comes back at the UA's 1.5em and bold. Same disease as
+ * the border-width note above, on the inherited side.
  *
  * Lives for one capture and is torn down in a `finally`.
  */
@@ -212,8 +271,19 @@ class TagDefaults {
 
   /** Empty map when the sandbox is unavailable — the caller then keeps everything. */
   for(el: Element): Map<string, string> {
+    return this.read(el.namespaceURI === SVG_NS, el.tagName.toLowerCase())
+  }
+
+  /**
+   * The defaults of a tag the UA stylesheet has no opinion about, in the same
+   * namespace. Anything a tag's own defaults differ from here is UA-declared.
+   */
+  baseline(el: Element): Map<string, string> {
     const svg = el.namespaceURI === SVG_NS
-    const tag = el.tagName.toLowerCase()
+    return this.read(svg, svg ? 'g' : 'div')
+  }
+
+  private read(svg: boolean, tag: string): Map<string, string> {
     const key = svg ? `svg:${tag}` : tag
     const hit = this.cache.get(key)
     if (hit) return hit
@@ -276,16 +346,21 @@ function applyStyle(
   // The root has no parent inside the capture, so nothing about it can be left
   // to inheritance and every declaration is written.
   const defs = parentCs ? defaults.for(src) : null
+  const base = parentCs ? defaults.baseline(src) : null
 
   for (let i = 0; i < cs.length; i++) {
     const prop = cs.item(i)
     if (!prop) continue
     const v = cs.getPropertyValue(prop)
 
-    if (parentCs) {
+    if (parentCs && !ALWAYS.has(prop)) {
       const inherited = prop.startsWith('--') || INHERITED.has(prop)
       const sameAsParent = parentCs.getPropertyValue(prop) === v
-      if (inherited ? sameAsParent : sameAsParent && defs?.get(prop) === v) continue
+      // Inherited: the clone gets it from its parent — UNLESS the UA stylesheet
+      // declares this property for this tag, which beats inheritance. Custom
+      // properties are in neither map, so they compare equal and stay prunable.
+      const uaSilent = defs?.get(prop) === base?.get(prop)
+      if (inherited ? sameAsParent && uaSilent : sameAsParent && defs?.get(prop) === v) continue
     }
 
     style.setProperty(prop, v, cs.getPropertyPriority(prop))
@@ -299,24 +374,21 @@ function applyStyle(
     style.setProperty('background-image', 'none')
   }
 
-  // ── Box pinning ────────────────────────────────────────────────────────────
-  // `getComputedStyle().width` is the CONTENT width, whatever `box-sizing`
-  // says. Copying that value verbatim alongside a copied `box-sizing:
-  // border-box` shrinks the clone by its own padding and border — every card
-  // came back narrower per nesting level, compounding down the tree. So the box
-  // is restated from the measured border box, which is the one number that
-  // cannot disagree with what is on screen.
+  // NOTE ON THE BOX, because the obvious "fix" here is a bug:
   //
-  // Skipped for inline boxes (width does not apply, and text must re-flow),
-  // for transformed ones (`getBoundingClientRect` already has the transform
-  // baked in and the copied `transform` would apply it a second time), and for
-  // SVG, whose geometry travels in attributes the clone already carries.
-  if (dst instanceof HTMLElement && cs.display !== 'inline' && cs.transform === 'none') {
-    const r = src.getBoundingClientRect()
-    style.setProperty('box-sizing', 'border-box')
-    style.setProperty('width', `${r.width}px`)
-    style.setProperty('height', `${r.height}px`)
-  }
+  // An earlier cut restated every element's box from `getBoundingClientRect`,
+  // on the belief that `getComputedStyle().width` is the CONTENT width whatever
+  // `box-sizing` says — which would shrink the clone by its own padding at
+  // every level of nesting. It is not: Chrome's resolved `width` HONOURS
+  // `box-sizing`, so a border-box element reports its border box and a
+  // content-box element its content box. Copying `width` and `box-sizing`
+  // together, which the loop above already does, reproduces the geometry
+  // exactly.
+  //
+  // Measuring instead was strictly worse: the rect is fractional and a text box
+  // pinned to its own exact width re-wraps on the tiniest metric difference in
+  // the SVG document, and a transformed element's rect already has the
+  // transform in it, which the copied `transform` would then apply twice.
 }
 
 /**

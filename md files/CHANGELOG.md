@@ -1,86 +1,63 @@
 # Changelog
 
-## 2026-09-02 - v3 check:theme: gexChartRender colour literals
+## 2026-09-02 - CopyShot: the white rectangle round everything, and the `<h2>` that came back 1.5em
 
-`npm run check` failed on `src/board/gexChart/gexChartRender.ts` (baseline 32,
-found 33). Cleaned the file down to 1 instead of raising the baseline.
+The first CopyShot PNGs had a white box drawn round the card, round the
+toolbar, round every button and round the chart. Two bugs, one shape.
 
-**`src/board/gexChart/gexChartRender.ts`**
+**The engine prunes declarations, and the prune was unsound.** The clone is
+rendered inside an `<svg><foreignObject>` — its own document, with no access to
+the page's stylesheets — so every computed style has to be pinned on inline.
+Naively that is ~340 declarations per node and a card serialises to megabytes,
+so `snapshot.ts` drops a declaration when the clone is guaranteed to land on the
+same value anyway: an inherited one that matches the parent, or any other that
+matches the parent AND the tag's UA default (measured from a throwaway iframe
+with no stylesheets — the same environment the clone renders in).
 
-- `readPalette()` no longer repeats tokens.css. The seven hex fallbacks
-  (`'#29b6f6'`, `'#ffb300'`, ...) were the same values `hexToRgb()` already
-  carries as numbers, typed a second time. `cssVar()` lost its fallback
-  argument; an unset or misspelled variable now lands on the numeric fallback,
-  one copy rather than two.
-- `Palette.surface` is an `[r,g,b]` triple like every other entry (it was the
-  one raw string). The hover chip draws with `withAlpha(p.surface, 1)`.
-- The local `rgba()` helper is renamed `withAlpha()`. Its 25 call sites read as
-  colour literals to check-theme's scanner, which matches on the text `rgba(`.
-  Same output; a call site now reads as "this token at 55%".
-- One literal remains, in `withAlpha`'s own template - canvas cannot resolve a
-  custom property, so `design/theme.ts`'s `alpha()` (color-mix over var()) is
-  not available there. Every channel still comes from tokens.css.
+Both halves of that were wrong in the same way: **a value can be equal for a
+different reason.**
 
-**`cbedge-v3/theme-baseline.json`** - ratcheted down, not up: gexChartRender
-32 -> 1, plus the two files the run already reported as under
-(LadderModal 18 -> 17, ReplayBar 5 -> 4).
+- **The white boxes.** Tailwind's preflight sets `border: 0 solid currentColor`
+  on every element, so a plain div computes to style `solid`, width `0px`,
+  colour white (currentColor, and `--color-fg` is white). Against a bare div in
+  the sandbox — `none` / `0px` / black — that reads as: style differs, keep;
+  colour differs, keep; **width matches at 0px, drop**. Both zeros are real and
+  they mean different things: the sandbox's is zero *because the style is none*.
+  An omitted width under a written `border-style: solid` falls back to the
+  initial value, which is `medium` — three white pixels around every element.
+- **The oversized headings.** Card titles are `<h2 class="text-sm">`, i.e. 13px,
+  inside a 13px header — so `font-size` matched the parent and was dropped as
+  "it will inherit". It does not: the UA stylesheet declares `h2 { font-size:
+  1.5em; font-weight: bold }`, and a UA rule beats inheritance. Same for
+  `<button>` and `<input>` font, `<a>` colour, `<code>` family — the UA has an
+  opinion about most of the tags this app actually uses.
 
-No behaviour change: the same colours, from the same tokens.
+Fixes, both narrow:
 
-## 2026-09-02 - v3 GEX Chart: FLOW + CALL/PUT drew the OI+VOL legs
+- An `ALWAYS` set of properties that are never pruned: the border, outline and
+  column-rule width/style/colour longhands (the closed list of computed values
+  another property *fixes up*), plus `width` and `height`.
+- `TagDefaults.baseline()` — the same sandbox reading for a tag the UA says
+  nothing about (`div`, or `g` inside SVG). An inherited property is now dropped
+  only when it matches the parent AND the tag's default matches that baseline,
+  i.e. only when the UA is actually silent about it. Custom properties are in
+  neither map, so they compare equal and stay prunable.
 
-Clicking **FLOW** and then **C/P** on the v3 home board's GEX Chart did not draw
-flow's call and put legs. It drew the OPEN-INTEREST legs, under a label that
-read `CALL/PUT · FLOW` the whole time.
+**Also removed: the box pinning.** `applyStyle` had been restating every box
+from `getBoundingClientRect`, on the belief that `getComputedStyle().width` is
+the content width whatever `box-sizing` says. It is not — Chrome's resolved
+`width` honours `box-sizing`, so copying `width` and `box-sizing` together
+(which the loop already did) reproduces the geometry exactly. Measuring instead
+was strictly worse: the rect is fractional, and a text box pinned to its own
+exact width re-wraps on the smallest metric difference in the SVG document —
+which is what made card titles break onto a second line.
 
-**Why** `values.ts` had one accessor that knew about flow and two that did not.
-`netGexOf()` branches on a resolved `flowActive` flag and reads `r.flowGEX`;
-`callGexOf()` / `putGexOf()` only ever asked whether the basis was `'vol-only'`,
-so `'flow'` fell through the `else` into the OI+VOL path. The net bar was flow,
-the split was the standing book, and nothing said so — the exact
-"basis half-applies" failure the comment at the top of that file was written to
-prevent, one function further down.
+Verified against a headless Chromium harness: the same card rendered live and
+captured now agree to the pixel on geometry (520×252 both, input 184×25, header
+518×30), with the only differences being text antialiasing — grayscale in an SVG
+raster versus subpixel on screen, which is inherent and not fixable.
 
-**The legs did not exist on the wire.** `computeGexRows()` computed
-`callFlowGEX` / `putFlowGEX` as locals and emitted only their sum as `flowGEX`.
-Dealer inventory per side is accumulated all day server-side
-(`flow-gex.js`), so the client cannot rebuild it from the rolling tape window it
-receives — this had to be fixed at the source.
-
-**Server** — `server-v2/computation/gex-calculator.js`
-
-- `flowCallGEX` and `flowPutGEX` are now emitted on every row beside `flowGEX`,
-  which still carries their sum. Additive; two numbers per strike.
-- Both added to `computeGexRowsMultiExpiry`'s `SUM_FIELDS`.
-- ⚠ Both are **SIGNED on both sides** — dealer long positive, dealer short
-  negative, whichever leg. They are NOT the "call always +, put always −" pair
-  `callGEX`/`putGEX` are. Do not `abs()` them into that shape.
-
-**Client** — `cbedge-v3/`
-
-- `contract/frames.ts` — `flowCallGEX?` / `flowPutGEX?` on `GexRow`, optional
-  for the same reason `flowGEX` is: `board/chainGex.ts` never fills them.
-- `board/gexChart/values.ts` — `callGexOf()` / `putGexOf()` take `flowActive`
-  and return the wire's flow leg when it is set. New `flowSplitSupported()`,
-  tested separately from `flowSupported()` because a server that has not been
-  redeployed sends the sum and not the legs.
-- `board/gexChart/gexChartRender.ts` — on flow the split draws two SIGNED
-  half-width bars side by side (call left, put right) instead of one stacked
-  pair, because two signed full-width bars from zero hide one another whenever
-  the signs agree. Off flow the original stacked geometry is untouched. The
-  hover readout prints the flow legs signed rather than `abs()`-ed.
-- When FLOW is on and the feed carries no legs, the split is **refused** and the
-  net flow bar is drawn with an on-chart note saying so — never a silent
-  fallback to the OI+VOL legs, which is the bug being fixed.
-
-**Verified** — `gex-calculator.selftest.js` still passes (16 checks); the legs
-sum to `flowGEX` to the cent, a dealer-long call leg is positive and a
-dealer-short put leg negative, `null` inventory yields zeros rather than
-`undefined`, multi-expiry carries the fields, and the OI+VOL and VOL paths
-through `callGexOf`/`putGexOf` are byte-identical to before.
-
-**Needs a deploy** — the chart shows the note and the net bar until the VPS is
-running the new `gex-calculator.js`.
+Files: `cbedge-v3/src/shell/snapshot.ts`.
 
 ## 2026-09-02 - v3 CopyShot: one owner-gated camera in the toolbar, and a menu of what to shoot
 
@@ -129,18 +106,12 @@ and drawn to a canvas. Whatever Chrome can paint, this can photograph. No
 dependency, no budget line, and the engine is behind a dynamic `import()` so it
 arrives with the first click rather than in the entry chunk.
 
-Three details worth knowing:
+Two details worth knowing:
 
 - **Declarations are pruned, carefully.** Pinning ~340 properties on every node
   serialises a card to megabytes. A property is dropped only when the clone is
-  guaranteed to land on the same value anyway: an inherited one that matches the
-  parent, or any other one that matches the parent AND the tag's UA default
-  (read from a throwaway iframe with no stylesheets — the same environment the
-  clone is about to render in).
-- **Boxes are restated from the measured border box.** `getComputedStyle().width`
-  is the CONTENT width whatever `box-sizing` says, so copying it verbatim
-  alongside a copied `box-sizing: border-box` shrinks the clone by its own
-  padding at every level of nesting.
+  guaranteed to land on the same value anyway. Getting that test right took a
+  second pass — see the entry above.
 - **Canvases become `<img>` data URIs and cross-origin images are dropped** — an
   unresolvable reference does not degrade inside an SVG, it fails the whole image
   load silently.
@@ -167,192 +138,99 @@ Files: `cbedge-v3/src/shell/snapshot.ts` (new),
 No new dependency, no backend change.
 
 
-## 2026-09-02 - Premarket: blank page, "Cannot read properties of undefined (reading 'rplon')"
+## 2026-09-02 - /scanner parity inventory for v3 (step 1 of 4 — spec only, no code)
 
-/app/premarket rendered nothing and threw at module scope. Two prose comments
-inside the page's CSS template literal quoted class names in BACKTICKS, which
-closed the template early -- everything after it was parsed as JavaScript, so
-`.pmk.rplon` became a property read on a string's undefined `.pmk`.
+Starting the v2 → v3 port of `/scanner`. Step 1 of the four-step order is the
+inventory, and this is it: `cbedge-v3/docs/parity/scanner.md`, **1,525
+checklist rows** across the page frame and all seven tabs, in the same shape as
+`docs/parity/em.md`. Nothing under `cbedge-v3/src/` has been written or changed.
 
-### Files
+The point of doing this first: the recurring failure is that the v3 page comes
+out missing chunks of what v2 showed, because the page gets re-decided while it
+is being rebuilt. Both jobs were already done in v2. This finishes the first one
+so the second is only construction.
 
-- `components/pages/Premarket.tsx` -- inside `const CSS = ` ... `` (lines 279-743),
-  the backticks around `.pmk.rplon .lvl .mig` (line 345) and `.mig.ph` (line 589)
-  are now single quotes. No CSS or behaviour change. Rule: never put a backtick
-  in a comment that lives inside a template literal.
+Parts: A frame/routing/owner gate (58) · B GEX Levels (335) · C GEX Change Top
+(158) · D Pick Study (127) · E Strike Query (118) · F TPO Structures (201) ·
+G IB Stats (308) · H Watch This (220).
 
-## 2026-09-02 - Emails: multi-select audiences, one email per person
+What the transcription turned up, beyond the spec itself:
 
-The owner Emails page sent to exactly one audience at a time, so reaching
-Subscribers + Waitlist + both legacy lists meant four separate sends -- and
-anyone sitting on more than one of them got the broadcast two, three, four
-times. Audiences are now tickable and the union is deduped, so a send goes to
-each person once.
+- **`HOME_THEME.green` is `#8ECAE6`, a light blue, doing three jobs** — card
+  subtitles and table headers (chrome), the IB Stats accent, and the
+  positive/up semantic against `#EF4444`. Six of seven tabs hit it. The port
+  collapses it onto `T.muted` / `T.series5` / `MOVE_UP` by construction, same
+  as em.md's two-reds case. "Positive" is currently painted four different
+  ways across the page (`#8ECAE6`, `#1FD98A`, `#22c55e`, `#30d158`).
+- **Two sources of truth for the default tab.** `ScannerPage` opens on
+  `gexchangetop`; `sectionNav.ts` says `gexlevels`. On a bare `/scanner` the
+  strip highlights one tab while the other is rendered.
+- **Nine code-vs-comment conflicts**, each recorded with "the code wins" — the
+  loudest being Strike Query's direction filter, whose tooltip promises GEX
+  while `dirPass` actually tests the sign of the active sort column (so sorting
+  by Strike makes "Negative" return zero rows, silently).
+- **`/proxy/vol-pin-scanner` does not exist in `server-v2`** — zero matches
+  across `server-with-proxy.js`, `api-router.js` and `proxy-tastytrade.js`.
+  `VolPinScanner` in `Scanner.tsx` is dead twice over: no tab renders it and
+  the route it calls would 404. Every other endpoint in the doc was verified to
+  resolve. `GreeksScanner` is likewise unreachable from any tab; the live one
+  is on the owner page.
+- **Seven more dead blocks** enumerated so the port does not resurrect them:
+  `ModalPortal`, `StructureRow`, `TpoForwardMap`, `RuleBoard`,
+  `PlaybookLegacy`, `IbLevelCanvas`, `useCardLayout().reset`.
+- **v3 non-negotiables the page breaks as written**: all seven tabs are static
+  imports (329 KB of tab components ship whichever tab you open, and every tab
+  switch is a full unmount → remount → refetch); two canvases with no
+  `data-cb-layer` and no visibility guard, the TPO letter profile repainting on
+  every new bar off-screen; a confirmed `/proxy/gex` → `/api/chains` waterfall
+  with `/api/eod-gex` fired twice per mount.
 
-- Tick any mix of Subscribers / Not paying / Waitlist / Old emails / Old emails 2.
-  "All users" and "Custom" are whole answers on their own, so picking either
-  replaces the selection (round marker instead of a checkbox). The selection can
-  never go empty -- unticking the last one is a no-op.
-- The recipient line shows the deduped total and, when the lists overlap,
-  "N duplicates merged". View list / Edit list both operate on the union.
-- De-dupe is case-insensitive. `new Set(array)` was not enough on its own: the
-  users table stores mixed case and the legacy CSVs are lowercase, so
-  "Foo@x.com" and "foo@x.com" survived as two recipients.
+Also worth flagging for the build: Scanner was **retired** from v3 on
+2026-08-30, so all four "adding a page" steps have to be *reversed*, not merely
+performed — `src/pages/Scanner.tsx` is a tombstone, there is no route, no NAV
+slot, and `app/v3/scanner/route.ts` answers 404 by design. Plus a fifth edit:
+`/scanner` back into `ALL_PAGES`/`LIVE_ROUTES` in `pages/TradersDashboard.tsx`.
 
-### Files
+Next: review the inventory, then step 2 — transcribe the logic 1:1 into new
+files under `cbedge-v3/src/`.
 
-- `owner-vite/src/pages/Emails.tsx` -- `audience: Audience` became
-  `audiences: Audience[]` with `toggleAudience()`. New `dedupeEmails()`,
-  `EXCLUSIVE`, `UNION_ORDER`, and a derived `unionList` / `duplicatesRemoved`.
-  Buttons render a tick box and each list's size. `?audience=` now also accepts
-  a comma-separated list (`?audience=subscribers,waitlist`).
-- `app/api/admin/send-email/route.ts` -- POST reads `audiences: string[]`
-  (scalar `audience` still honored for older clients / curl), loads each source
-  at most once however many audiences reference it, concatenates in
-  `AUDIENCE_PRIORITY` (live accounts -> waitlist -> legacy CSVs last) and runs
-  the result through the new `dedupeEmails()`. Response adds `duplicateCount`
-  and the resolved `audience` label; the send history row records
-  "subscribers+waitlist".
+## 2026-09-02 - Black screen on Todo: a stale chunk with nothing to catch it
 
-## 2026-09-02 - v3 GEX Candles: ES futures candles are back, as an SPX/ES switch
+/todo renders fine on a cold load and on every client-side path into it — TODAY
+→ TODO, LISTS → TODO, MONEY → TODO all clean, no console errors. So the bug is
+not in Todo.tsx. It is the same stale-index.html problem as the phone's rent
+card, in its more destructive form.
 
-v2's original pairing — SPX gamma drawn over ES futures candles — returns to the
-v3 GEX Candles card. Not as a symbol: v3 has one board-wide ticker and none of
-the other cards know what a futures contract is. It is a per-card SPX/ES
-segmented control in the toolbar (bottom sheet on a phone), shown only while
-the page symbol is SPX, persisted as `esCandles` in the card's settings blob
-(v7).
+Every route in `budget-vite/src/App.tsx` is `lazy()`, so each is its own
+fingerprinted chunk. A browser holding a cached index.html from before a deploy
+is holding a document that names chunk hashes the server no longer has. The
+entry script is cached and boots, the tabs whose chunks are still cached still
+work, and the ONE route whose hash moved fails its dynamic import — which is
+exactly why it was Todo and only Todo.
 
-### What ES does
+With `<Suspense fallback={null}>` and **no error boundary anywhere in the app**,
+that rejection unmounts the entire tree. No message, no fallback: the page
+background and nothing else.
 
-- Candles come off `/api/snapshots/candles?daysBack=5&interval=1|5&lite=1` on
-  the same 30s poll the cash index uses. The lite tuple form is parsed by the
-  new `parseEsCandles`; the verbose form still parses as a fallback.
-- The forming bar ticks from the socket's `esCandles` (5m) / `es1mCandles` (1m)
-  frame via `watchFrame` -> `setLivePrice`, imperatively — never `spot`, which
-  is the cash index one basis below. Reading the frame is what puts it into the
-  socket's derived topic scope while on ES, and takes it out when not.
-- Every GEX strike (bubbles AND rail) is shifted into ES price space by the
-  ES−SPX basis from `/proxy/es-spx-basis` — per HISTORY COLUMN by that ET
-  session's basis (`days`), the newest session's `basis` for anything else.
-  New `board/gexCandles/basis.ts`. The four-tier fallback ladder v2 carried
-  (live esCandle−spot, eod anchor, server basis) was NOT ported: the basis
-  decays ~1pt/day and only the proxy tier was ever right.
-- Fallback when the route answers `{ basis: null }` (fresh es_candles table
-  with no 16:00 bar, Yahoo refusing, no DATABASE_URL): v2's first tier — the
-  newest ES bar close minus the live `spot`, sampled once a minute during
-  cash hours only (spot freezes at 16:00), rounded to 0.25, plausibility-
-  gated (0 < b < 250) so a collapsed broker spot is rejected, not applied.
-- Neither usable => the layer draws UNSHIFTED and the status line says
-  "ES−SPX basis unavailable (<why>) — GEX levels are drawn at SPX cash
-  strikes."
-- The view key includes the tape, so SPX<->ES reframes the price window.
+Three changes, prevention and recovery:
 
-### Owner: the bubbles keep forming in a background tab
+- **`RouteBoundary`** around every lazy route. A failed dynamic import reloads
+  the page ONCE — fetching a fresh index.html and the current hashes — so a
+  device already stuck in this state gets itself out. A `sessionStorage` guard
+  stops it looping, and it is cleared on a clean `load` so the next deploy can
+  use it too. A crash that is not a stale chunk shows "This screen didn't load"
+  with a Reload button instead of a black screen.
+- **`vite:preloadError`** listener at module scope, so a stale preload is caught
+  even when the failure never reaches a render.
+- **A visible Suspense fallback** instead of `null`. On LTE a route chunk takes
+  a beat, and an empty screen during it is indistinguishable from the crash.
 
-`useQuery` pauses polls while the tab is hidden (right for customers — egress
-nobody is looking at). New `background: true` option keeps a poll running
-hidden; the GEX Candles card passes `background: isOwner` on both the candle
-poll (30s) and the GEX history poll (60s), so the owner's chart never has a
-hole from another tab being up. Browsers throttle hidden timers to ~1/min,
-which is the recorder's own cadence. Files: `cbedge-v3/src/data/api.ts`,
-`GexCandlesCard.tsx`.
+The `no-store` on index.html shipped yesterday stops the state being reachable
+at all; this stops it being fatal when it happens anyway.
 
-### Timeframe change keeps the newest candle in frame
-
-`chart.ts` `ensureLatestVisible()`: after a reframe (symbol / interval /
-session / SPX<->ES), the visible logical range is re-checked on the next
-animation frame and again after a 150ms layout pass; if the newest bar's
-index is off the right edge, `frameRecent()` is re-applied. lightweight-charts
-can settle on a range derived from the OLD base index when the bar count
-changes by an order of magnitude (1m -> 15m), which put the live candle
-off-screen on every timeframe switch.
-
-### "Click SPX, get one long candle to zero"
-
-`candles.ts` `sanitize()`: a half-assembled bar from the recorder's hot lane
-or the dxlink live fallback (close set, low/open still 0) drew as a candle
-from price to 0 and autoscaled the pane to 0–9000. Both parsers now require
-every field to be a real price, clamp high/low around open/close, and drop
-any bar whose range exceeds 25% of price. The poll brings the finished bar.
-
-### ES live pair off the connect snapshot
-
-`data/socket.ts` `fanOutSnapshot` now writes `esCandles` / `es1mCandles`
-from the snapshot, so the ES card has a forming-bar close immediately after
-a (re)connect instead of waiting for the next delta.
-
-### Deliberately not `useEsCandles`
-
-`src/data/esCandles.ts` re-renders its consumer on every candle frame — right
-for the relative-volume panels, wrong for a chart that would re-ingest ~7,000
-1m bars per socket message. The card polls like SPX and ticks imperatively.
-
-### Files
-
-- `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx` — switch, ES query,
-  basis query, column shift, ES live tick, status line
-- `cbedge-v3/src/board/gexCandles/basis.ts` — NEW
-- `cbedge-v3/src/board/gexCandles/candles.ts` — `esCandlesUrl`, `parseEsCandles`
-- `cbedge-v3/src/board/gexCandles/settings.ts` — `esCandles`, blob v7
-- `cbedge-v3/src/board/gexCandles/symbols.ts` — header note; ES/NQ still
-  normalise to SPX/NDX as page symbols
-
-## 2026-09-02 - v3 home board saves to the account, not just the browser
-
-The terminal board (`/v3` home) already autosaved every drag, resize, add and
-remove — to `localStorage`, key `cb-v3-board-layout`. Per browser. Clear site
-data, or open v3 on the other machine, and the board came back as the three
-default cards.
-
-Postgres was already there and already wired: `dashboard_layouts` in
-`server-v2/_lib-db.cjs` (keyed clerk_user_id / page / name, one row flagged
-`is_default`, layout stored opaquely) behind `/api/dashboard-layout` in
-`api-router.js`. v3 was simply not calling it. New
-`cbedge-v3/src/board/layoutStore.ts` does, under page key `v3-home`, template
-name `Default`.
-
-### Two tiers, and the third key that arbitrates them
-
-- **Autosave stays local**, on every gesture. A drag emits a layout per animation
-  frame; posting those would be a request storm, and it would make every
-  accidental nudge permanent on every device the user owns.
-- **"Save layout"** — new button, shown in edit mode next to Done — POSTs the
-  same array to the account. Saving to the account is an act, not a side effect.
-- **`cb-v3-board-synced`** holds the layout as the server last saw it. On load it
-  answers the only question that matters: does this browser hold edits the
-  account has never been told about? Local === synced, or no local key at all,
-  and the server copy is adopted (it may be newer, from another machine). They
-  differ, and the local arrangement stays on screen with "Unsaved layout" in the
-  header. Without that key, opening the board on a laptop would silently throw
-  away whatever was rearranged there but not saved.
-
-One status line in the header, in priority order — Saving… / Save failed
-(with the reason) / Loading layout… / Unsaved layout / the existing local
-"Saved" flash. Never two at once. The button disables itself when the board already
-matches what the account holds, and when signed out (with a title that says so).
-
-The blob reconciliation — id migration before the catalog check, dedupe on the
-INSTANCE id, drop what this build cannot render — moved out of `BoardPage` into
-`layoutStore.sanitizeLayout()` and now runs over the server payload too, so a
-template saved before a card was renamed still loads. Card SETTINGS are still
-per card type and still local; only the arrangement goes to the account.
-
-Files: `cbedge-v3/src/board/layoutStore.ts` (new),
-`cbedge-v3/src/board/BoardPage.tsx`. No backend change.
-
-## 2026-09-02 - v3 toolbar: Notes wiring re-applied to Shell.tsx
-
-The Notes button, `NotesPanelProvider` and the `NotesDock` mount were lost from
-`cbedge-v3/src/shell/Shell.tsx` — the file was rewritten by a later edit (the one
-that turned the Replay rail slot from `comingSoon` into a real route with a
-`/proxy/strike-growth/replay-meta` prefetch) and my four hunks went with it. The
-four NEW files (`notes.tsx`, `NotesPanelContext.tsx`, `QuickProbe.tsx`,
-`NotesDock.tsx`) were untouched — nothing imported them, so the button simply
-never rendered.
-
-Re-applied on top of the current Shell.tsx, keeping the Replay prefetch change.
-
+Note: owner-vite lazy-loads its routes the same way and has no boundary either.
+It has not produced a black screen — its stale bundle showed old UI rather than
+crashing — so it is left alone for now, but it is the same shape.
 
 ## 2026-08-31 - The 8am email was the last surface still double-counting
 

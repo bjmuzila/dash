@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react'
+import { Component, lazy, Suspense, useState, type ReactNode } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth } from './auth'
@@ -25,7 +25,89 @@ const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } },
 })
 
-const S = (el: React.ReactNode) => <Suspense fallback={null}>{el}</Suspense>
+/**
+ * Recover from a STALE CHUNK.
+ *
+ * Every route below is `lazy()`, so each is its own fingerprinted file. If a
+ * browser is holding a cached index.html from before a deploy, that document
+ * names chunk hashes the server no longer has: the entry script is cached and
+ * boots fine, the tabs whose chunks are still cached still work, and the ONE
+ * route whose hash moved fails its dynamic import. With no boundary that
+ * rejection unmounts the whole tree — a black screen on one tab and only that
+ * tab, which is exactly how this presented.
+ *
+ * nginx now sends `no-store` on index.html so the state stops being reachable,
+ * but a device already stuck in it has to get itself out: a failed import
+ * reloads the page ONCE, which fetches a fresh index.html and the current
+ * hashes. `sessionStorage` guards the reload so a genuine, repeatable crash
+ * shows a message instead of looping.
+ */
+const RELOAD_GUARD = 'hh:chunk-reload'
+const isStaleChunk = (e: unknown) =>
+  /failed to fetch dynamically imported module|importing a module script failed|error loading dynamically imported module/i
+    .test(String((e as Error)?.message ?? e))
+
+function recoverFromStaleChunk(): boolean {
+  try {
+    if (sessionStorage.getItem(RELOAD_GUARD)) return false
+    sessionStorage.setItem(RELOAD_GUARD, '1')
+  } catch { /* private mode — one reload is still better than a black screen */ }
+  location.reload()
+  return true
+}
+
+// Vite fires this before the import rejection surfaces, so a stale preload is
+// caught even when the failure never reaches a render.
+if (typeof window !== 'undefined') {
+  window.addEventListener('vite:preloadError', () => { recoverFromStaleChunk() })
+  // A clean load means we are not mid-recovery; clear the guard so the NEXT
+  // deploy can use it too.
+  window.addEventListener('load', () => {
+    try { sessionStorage.removeItem(RELOAD_GUARD) } catch { /* nothing to clear */ }
+  })
+}
+
+class RouteBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() { return { failed: true } }
+  componentDidCatch(err: unknown) {
+    if (isStaleChunk(err) && recoverFromStaleChunk()) return
+    console.error('[route]', err)
+  }
+  render() {
+    if (!this.state.failed) return this.props.children
+    return (
+      <div style={{ padding: '32px 18px', textAlign: 'center', color: T.ink, fontFamily: SANS }}>
+        <div style={{ fontSize: 15, fontWeight: 700 }}>This screen didn't load.</div>
+        <div style={{ fontSize: 13, color: T.faint, marginTop: 6, lineHeight: 1.5 }}>
+          Usually an update landing mid-tap. Reloading picks up the new version.
+        </div>
+        <button
+          onClick={() => { try { sessionStorage.removeItem(RELOAD_GUARD) } catch { /* ignore */ } location.reload() }}
+          style={{
+            marginTop: 16, padding: '10px 18px', borderRadius: 10, cursor: 'pointer',
+            background: 'transparent', color: T.accent, fontFamily: SANS, fontSize: 14, fontWeight: 700,
+            border: `1px solid ${T.accentSoft}`,
+          }}
+        >
+          Reload
+        </button>
+      </div>
+    )
+  }
+}
+
+/**
+ * `fallback` is a faint dot, not null. On LTE a route chunk can take a beat,
+ * and an empty screen during it is indistinguishable from the crash above.
+ */
+const S = (el: React.ReactNode) => (
+  <RouteBoundary>
+    <Suspense fallback={<div style={{ padding: 28, textAlign: 'center', color: T.faint, fontFamily: SANS, fontSize: 14 }}>…</div>}>
+      {el}
+    </Suspense>
+  </RouteBoundary>
+)
 
 /**
  * Module scope, so it survives Gate re-rendering on every route change but
