@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-09-02 - Options chain: the CB (Core) cell keeps its sign
+
+A Core Bullseye below spot is negative, but VIVID painted the cell flat gold at
+.85 and the red underneath was gone — a short-gamma Core looked identical to a
+long-gamma one. The gold is now a diagonal WASH instead of a flat layer: solid
+at the ★ in the top-left corner, holding the skin's .85 through 26%, out by 66%.
+The figure is right-aligned, so it lands on the ordinary sign heat. The cell
+still reads "Core" at a glance and the number reads red or blue again.
+
+### Files
+
+- `cbedge-v3/src/pages/optionsChain/heatSkins.ts` — `levelFillBg()` branches on
+  `kind === 'cb'` and returns
+  `linear-gradient(112deg, cb 0%, cb@.85 26%, cb@0 66%), <heat>`.
+  112deg rather than 135 because the cell is ~7x wider than tall — a true
+  diagonal clears the gold inside two characters. New `CB_WASH_ANGLE` /
+  `CB_WASH_HOLD` / `CB_WASH_END` constants carry the tuning.
+  CW and PW are untouched (flat two-stop): their colour already IS the sign, so
+  they have nothing to hide. CB is the only level whose colour is directionless.
+  Fades to `alpha(cb, 0)` rather than `transparent` so the ramp stays in the
+  gold hue instead of dipping through grey.
+- `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx` — dropped the ★'s white
+  halo on the levelFill skins. The corner it sits in is now solid gold, so the
+  glyph has its own ground and the glow only softened its edge.
+
+No token, skin-config or math change: the ramp, rank floors, `levelFill.alpha`
+and CLASSIC are all byte-for-byte what they were.
+
 ## 2026-09-02 - v3 toolbar: Notes button + owner-gated Quick Probe
 
 The NOTES button and the drawer behind it are now in v3's toolbar, matching v2

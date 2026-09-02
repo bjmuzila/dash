@@ -128,20 +128,53 @@ export function skinMetricBg(
 }
 
 /**
+ * The diagonal the CB wash runs along, and where the gold hands over to the heat.
+ *
+ * CB used to be a FLAT gold layer over the whole cell, and that was the bug: a
+ * Core strike below spot is negative, but at .85 the gold buried the red and a
+ * short-gamma Core looked exactly like a long-gamma one. The wash keeps gold
+ * where the eye looks for the marker — the ★ in the top-left corner — and lets
+ * it fall to nothing before the figure, which is right-aligned. So the cell
+ * still reads "Core" at a glance and the number still sits on its own sign.
+ *
+ * 112deg (not 135) because the cell is ~7x wider than it is tall: a true
+ * diagonal would clear the gold within the first two characters.
+ */
+const CB_WASH_ANGLE = '112deg'
+/** Gold holds to here, then fades out by CB_WASH_END. Both % of the diagonal. */
+const CB_WASH_HOLD = 26
+const CB_WASH_END = 66
+
+/**
  * Fill for a CB / CW / PW cell, when the skin asks for the level's colour rather
  * than the sign's. Returns null when the skin does not (CLASSIC), and the caller
  * falls through to the ordinary heat.
  *
- * "blend" is a two-stop linear-gradient rather than a colour: it is the only way
- * to composite one translucent layer over another in a single `background`
- * without knowing what the layer underneath resolved to.
+ * "blend" is a linear-gradient rather than a colour: it is the only way to
+ * composite one translucent layer over another in a single `background` without
+ * knowing what the layer underneath resolved to.
+ *
+ * CW and PW stay the flat two-stop wash — their colour IS the sign (blue call
+ * wall, red put wall), so there is nothing underneath for them to hide. Only CB
+ * gets the directional gradient, because gold is the one level colour that
+ * carries no direction of its own.
  */
 export function levelFillBg(kind: WallKind, skin: SkinDef, beneath: string): string | null {
   const lf = skin.levelFill
   if (!lf) return null
   const over = alpha(LEVEL_FILL_COLOR[kind], lf.alpha[kind])
   if (lf.mode === 'level') return over
-  return `linear-gradient(${over},${over}), ${beneath === 'transparent' ? 'transparent' : beneath}`
+  const under = beneath === 'transparent' ? 'transparent' : beneath
+  if (kind === 'cb') {
+    // Solid at the ★ corner so the marker always has a ground, the skin's own
+    // alpha across the hold, then out — the heat owns the rest of the tile.
+    const solid = LEVEL_FILL_COLOR.cb
+    const fade = alpha(LEVEL_FILL_COLOR.cb, 0)
+    return (
+      `linear-gradient(${CB_WASH_ANGLE},${solid} 0%,${over} ${CB_WASH_HOLD}%,${fade} ${CB_WASH_END}%), ${under}`
+    )
+  }
+  return `linear-gradient(${over},${over}), ${under}`
 }
 
 // ── Cell geometry, as THIS grid wears each skin ──────────────────────────────

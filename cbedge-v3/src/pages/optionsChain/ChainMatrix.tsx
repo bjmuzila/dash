@@ -620,10 +620,14 @@ export const ChainMatrix = memo(function ChainMatrix({
                 >
                   {isMvc &&
                     (SK.levelFill ? (
-                      // Pinned to the cell's top-left corner and — because the
-                      // cell underneath is now gold — drawn in the ink that
-                      // colour was chosen to carry. A gold star on a gold tile is
-                      // an invisible star.
+                      // Pinned to the cell's top-left corner — which is exactly
+                      // where levelFillBg holds the CB wash at FULL gold — and
+                      // drawn in the ink that colour was chosen to carry. A gold
+                      // star on a gold tile is an invisible star.
+                      //
+                      // No halo: the corner is solid gold under the glyph (the
+                      // wash only fades further along the diagonal), so the ★
+                      // already has its own ground and a glow just softens it.
                       <span
                         title="CB - Core Bullseye — highest |net GEX|"
                         style={{
@@ -633,7 +637,6 @@ export const ChainMatrix = memo(function ChainMatrix({
                           fontSize: 10,
                           lineHeight: 1,
                           color: LEVEL_ON_SOLID,
-                          textShadow: `0 0 2px ${alpha(T.text, 0.55)}`,
                           pointerEvents: 'none',
                         }}
                       >
