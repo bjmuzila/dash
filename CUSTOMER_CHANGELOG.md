@@ -2,6 +2,20 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Wednesday 9/2/2026
+
+* **Options Chain (v3 preview):** a Core (CB) strike below price now clearly reads red instead of gold, the strike window opens at 50% by default, and the settings menu no longer ignores your click.
+
+* **Multi Greek (v3 preview):** the Core strike keeps its gold marker while still showing whether gamma is positive or negative, and turning CB / CW / PW off now hides just the labels, not the gold.
+
+* **GEX Candles (v3 preview):** an SPX / ES switch — chart the futures overnight with the same SPX gamma bubbles, levels shifted to ES prices. Switching timeframe now keeps the live candle on screen, and the stray candle-to-zero glitch is gone.
+
+* **Replay (v3 preview):** a new page gathering all four replays in one place — chain ladder, GEX levels, Multi Greek and the full options chain — each opening already rewound to the last recorded snapshot.
+
+* **Replay controls (v3 preview):** the transport now sits along the bottom of every page, the way ES Candles does, so it never covers the strikes nearest price.
+
+* **Analysis — Ticker Lookup (v3 preview):** the Δ 1D column was printing two signs on every value. Fixed.
+
 ## Monday 8/31/2026
 
 * **SPX Candles (phone):** now charts SPX itself, so the gamma bubbles and levels stay on screen off-hours. Bubbles show the top 4 strikes — one each side of price — sized like the desktop chart.

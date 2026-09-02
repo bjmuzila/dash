@@ -7,6 +7,7 @@ import { PAGE_TICKER_RE, PageSymbolProvider, SOCKET_SYMBOL, isSocketSymbol, useP
 import { Chip } from '@/design/primitives/Controls'
 import { ReplayDockHost } from '@/design/primitives/ReplayDock'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
+import { CbMark, CbWordmark } from '@/shell/Brand'
 import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
 import { UserMenu } from '@/shell/UserMenu'
 
@@ -65,12 +66,12 @@ export const NAV: NavItem[] = [
   { to: '/flow', label: 'Flow', icon: '🌊' },
 ]
 
+// The rail head. Was a blue "CB" square standing in for a logo that did not
+// exist in a form this could use; it is now the real mark — see shell/Brand.tsx
+// for why the glyph is drawn rather than imported, and for the rule about which
+// of the two brand forms is allowed in a square slot.
 function Logo() {
-  return (
-    <div className="mb-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent text-xs font-bold text-bg">
-      CB
-    </div>
-  )
+  return <CbMark title="CB Edge" className="mb-2 h-8 w-8 shrink-0 text-fg" />
 }
 
 // Drag-to-reorder for the rail — mirrors v2's GexGroupNav, rewritten fresh for
@@ -250,7 +251,10 @@ function Toolbar() {
   const { symbol, setSymbol } = usePageSymbol()
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
-      <span className="text-sm font-semibold tracking-tight">CB Edge</span>
+      {/* The logo, not the word. h-7 in an h-11 band leaves the same optical
+          margin the rest of the toolbar's controls sit in, and the asset is
+          ~3.4x that tall, so it stays sharp on a retina panel. */}
+      <CbWordmark className="h-7 w-auto shrink-0" />
       <div className="flex-1" />
       {/* ── Back to SPX in one click ───────────────────────────────────────────
           SPX is not just the most-used ticker, it is the only one the socket

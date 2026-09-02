@@ -172,7 +172,14 @@ export function NetPremiumCard() {
   const stale = binAgeSec != null && binAgeSec >= STALE_AFTER_SEC
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      // The caption strip under a CopyShot reads `Net Premium · <time> · <this>`.
+      // The ticker and the contract date are what make a shared PNG of this card
+      // still mean something a week later, and this card is the only thing that
+      // knows them. See shell/snapshot.ts (META_ATTR).
+      data-capture-meta={`${active}${expiry ? ` · ${fmtContractDate(expiry)}` : ''}`}
+    >
       <CardToolbar>
         <span className="text-2xs font-bold uppercase tracking-[0.08em] text-muted">
           OTM · closest expiry

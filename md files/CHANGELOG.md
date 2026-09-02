@@ -1,5 +1,83 @@
 # Changelog
 
+## 2026-09-02 - v3 mark: the bars become a C and a B
+
+Follow-up to the logo drop earlier today. The mark was the source art's bar
+ladder — five red bars beside five green bars — redrawn on v3's candle tokens.
+It reads at 512px and turns to mush at 16px: five 2.6-unit bars on a 32-unit
+grid land on roughly one device pixel each in a favicon, and the two columns
+merge into two coloured smudges.
+
+`CbMark` is now the letters **C** and **B**, keeping exactly what the ladder was
+carrying — RED on the left (`--color-candle-down`), GREEN on the right
+(`--color-candle-up`), the down/up pair the whole app is painted in — at a size
+a mark actually gets used at. Both letters are drawn as STROKES, not filled
+glyphs, so their weight is identical at every scale; the C's round caps are the
+one piece of the old mark's drawing worth keeping.
+
+The full ladder art is untouched and still the wordmark's mark
+(`public/cbedge3.0.png`, `cbedge-v3/src/assets/cbedge-wordmark.png`) — it has
+the room there. This is the square-slot form only: rail head, favicon, app icon.
+
+Regenerated with it: `cbedge-v3/index.html`'s data-URI favicon,
+`public/cbedge-mark.svg`, `public/cbedge-mark-icon.svg`,
+`public/cbedge-mark-512.png`.
+
+Files: `cbedge-v3/src/shell/Brand.tsx`, `cbedge-v3/index.html`,
+`public/cbedge-mark.svg`, `public/cbedge-mark-icon.svg`,
+`public/cbedge-mark-512.png`.
+
+## 2026-09-02 - v3 gets the real logo: wordmark in the toolbar, mark on the rail
+
+The v3 shell was still wearing placeholders in both brand slots: a blue rounded
+square with the letters `CB` at the head of the rail, and the plain text
+`CB Edge` at the left of the toolbar. Both are now the actual logo.
+
+**New: `cbedge-v3/src/shell/Brand.tsx`** — the only file in v3 that draws the
+logo, exporting the two forms and the rule about which goes where:
+
+- `<CbMark />` — the glyph alone (the bar ladder in its rounded square). Square,
+  legible down to 16px, and the only form allowed in a square slot: the rail
+  head, the favicon, an app icon.
+- `<CbWordmark />` — the horizontal lockup, mark + `CB EDGE`. Wide, needs ~100px
+  of run to stay readable. Toolbar, headers, share cards.
+
+**The mark is drawn as SVG, not imported.** Its frame and divider are
+`currentColor` and its bars are `--color-candle-down` / `--color-candle-up`, so
+it inherits the surface it sits on and its red/green are the same two values
+every candle in the app is painted with. The source art's pure `#f00`/`#0f0`
+would have been the only two colours in v3 that belong to nothing else; redrawn
+on the tokens, the logo now says what the charts say. No colour literal enters
+`src/` — `check-theme.mjs` stays clean.
+
+**The wordmark stays a bitmap** (`src/assets/cbedge-wordmark.png`, 374x96,
+18KB) because the lettering is a custom face we do not have as outlines. It is
+composed from `public/cbedge3.0.png`: the mark and the `CB EDGE` line lifted out
+separately, alpha-denoised, and set as a horizontal lockup. **The tagline is
+deliberately dropped** — `Your edge. Their loss.` is 113px tall in art that is
+609px tall, so at the 28px the toolbar renders it reads as a grey smudge. It
+stays in the full-size art for anywhere with room for it.
+
+Rendered at `h-7` in the `h-11` toolbar band, which puts it on the same optical
+margin as the rest of the toolbar's controls, at ~3.4x density for retina.
+`width`/`height` are stated on the `<img>` so the toolbar does not reflow
+between first paint and the image landing.
+
+**Favicon.** `cbedge-v3/index.html` carried a data-URI `CB` in accent blue. It
+is now the same ladder mark, with the token values baked in — a data: URI cannot
+read a CSS variable, so the file says so and says that the two move together.
+
+**Going forward, this is the icon.** The standalone art is checked in for reuse
+outside v3: `public/cbedge-mark.svg` (transparent, white frame — for anything
+with its own background), `public/cbedge-mark-icon.svg` (on the `--color-bg`
+tile, for a favicon or an app icon) and `public/cbedge-mark-512.png`.
+
+Files: `cbedge-v3/src/shell/Brand.tsx` (new),
+`cbedge-v3/src/assets/cbedge-wordmark.png` (new),
+`cbedge-v3/src/shell/Shell.tsx`, `cbedge-v3/index.html`,
+`public/cbedge-mark.svg`, `public/cbedge-mark-icon.svg`,
+`public/cbedge-mark-512.png`.
+
 ## 2026-09-02 - CopyShot: the white rectangle round everything, and the `<h2>` that came back 1.5em
 
 The first CopyShot PNGs had a white box drawn round the card, round the

@@ -26,27 +26,31 @@
 //   · PSEUDO-ELEMENTS (`::before` / `::after`) are not cloned. Nothing on the
 //     board draws content with them today; a decorative rule or dot would go
 //     missing rather than break the shot.
-//   · SCROLLED CONTENT photographs from its own top. A capture is of the box,
-//     not of the scroll position inside it.
 //   · CROSS-ORIGIN images are dropped. An `<svg>` image whose subresources are
 //     unreachable fails to load AT ALL — silently — so a picture that cannot be
 //     inlined has to go rather than take the whole capture down with it.
 //   · A card scrolled out of view has not painted (non-negotiable 5), so its
 //     canvases photograph blank. That is the visibility gate working, not the
 //     capture failing.
+//   · A GRID that is scrolled shifts by transforming its children, which loses
+//     any transform they had of their own. Nothing on the board does this; the
+//     scrollers that matter are the flex and block ones. See carryScroll.
 //
 // ── The contract with the page ───────────────────────────────────────────────
-// An element carrying `data-capture-hide` is removed from the clone. Use it on
-// the control that STARTS a capture, so a button is never in its own PNG.
+// Two attributes, both optional:
+//   · `data-capture-hide` — the element is removed from the clone. Use it on the
+//     control that STARTS a capture, so a button is never in its own PNG.
+//   · `data-capture-meta` — the card's own words for the caption strip, after
+//     the name and the time. The contract date, the ticker, the basis.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { tokenHex } from '@/design/theme'
+import { tokenHex, tokenHexAlpha } from '@/design/theme'
 
 /** What actually happened to the PNG. The clipboard is not always available. */
 export type ShotResult = 'copied' | 'saved'
 
 export interface ShotOptions {
-  /** Printed in the frame's title band. Usually the card's own name. */
+  /** Leads the caption strip. Usually the card's own name. */
   title?: string
   /** Download name, used only when the clipboard write is refused. */
   filename?: string
@@ -55,23 +59,38 @@ export interface ShotOptions {
 /** Elements the page wants out of the picture — see the header. */
 const HIDE_ATTR = 'data-capture-hide'
 
+/**
+ * A card's own contribution to the caption — the contract date, the basis, the
+ * ticker. Put it on the card root or on anything inside it:
+ *
+ *   <div data-capture-meta={`SPX · ${expiry}`}>
+ *
+ * The caption reads `Net Premium · Sep 2, 17:15 ET · SPX · 9-2-26`, and the
+ * card is the only thing that knows the last part. Optional: a card that sets
+ * nothing gets name and time.
+ */
+const META_ATTR = 'data-capture-meta'
+
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
-/** Frame geometry, in CSS pixels before the device-ratio multiply. */
-const PAD = 18
-const BAND_H = 40
-const FOOT_H = 22
-
 /**
- * Type sizes off `tokens.css`'s scale — 15 (`text-base`), 11 (`text-xs`),
- * 10 (`text-2xs`). A canvas cannot wear a class, so it reads the same numbers
- * the utilities are built from rather than inventing new ones.
+ * THE FRAME. The picture is the card, edge to edge, with one caption strip
+ * under it — name, time, whatever the card added, and the mark on the right.
+ *
+ * It used to be matted: a title band above, padding all round, a centred
+ * watermark below. Three bands of chrome around a card that already has its own
+ * header saying the same thing, and the card itself came out smaller than the
+ * furniture. One strip says everything the other three did.
  */
-const TITLE_PX = 15
-const META_PX = 11
-const MARK_PX = 10
+const FOOT_H = 44
+const FOOT_PAD = 14
+/** Type sizes off `tokens.css`'s scale — 13 is `text-sm`, 11 is `text-xs`. */
+const CAPTION_PX = 13
+const LOGO_H = 26
+const SEP = '  ·  '
 
-const WATERMARK = 'Data provided by CBEdge.net'
+/** Served from the v2 public/ root, which is the same origin. */
+const LOGO_SRC = '/cbedge3.0.png'
 
 /**
  * Cap the multiply at 2. A full board at devicePixelRatio 3 is a bitmap Chrome
@@ -374,6 +393,16 @@ function applyStyle(
     style.setProperty('background-image', 'none')
   }
 
+  // No scrollbars in a photograph. A scroller's offset travels as a margin (see
+  // carryScroll), so the clone has nothing left to scroll — but `overflow: auto`
+  // over overflowing content still draws the bar, and the SVG document draws the
+  // CLASSIC one, eating 15px of the numbers it was pointing at. The app hides
+  // these on screen anyway; this makes the picture agree.
+  for (const axis of ['overflow-x', 'overflow-y'] as const) {
+    const o = cs.getPropertyValue(axis)
+    if (o === 'auto' || o === 'scroll') style.setProperty(axis, 'hidden')
+  }
+
   // NOTE ON THE BOX, because the obvious "fix" here is a bug:
   //
   // An earlier cut restated every element's box from `getBoundingClientRect`,
@@ -414,6 +443,9 @@ function styleTree(
     const dc = b[i]
     if (sc && dc) styleTree(sc, dc, cs, defaults)
   }
+  // After the children, never before: it rewrites the first child's margin and
+  // the style pass would otherwise put the live value straight back.
+  carryScroll(src, dst, cs)
 }
 
 /**
@@ -435,6 +467,49 @@ function pairUp(src: Element, dst: Element, out: Array<[Element, Element]>): voi
     const dc = b[i]
     if (sc && dc) pairUp(sc, dc, out)
   }
+}
+
+/**
+ * Carry a scroll offset across to the clone.
+ *
+ * A scroll position is not a style, so `cloneNode` starts every scroller at the
+ * top — which is how the Multi Greek ladder photographed at strike 950 for a
+ * $324 stock. That ladder auto-scrolls so ATM sits in the middle of the box, and
+ * the middle is the entire point of the card; a shot of the top of it is a shot
+ * of a column of dashes.
+ *
+ * The offset travels as a NEGATIVE MARGIN on the first element child rather
+ * than as a scroll: the container keeps its own `overflow`, so everything above
+ * the offset is clipped exactly as it is on screen, and normal flow carries the
+ * shift down through every sibling. A transform on the container would move its
+ * background and border too; a wrapper element around the children would break
+ * the flex and grid containers this app is built out of.
+ *
+ * Grid is the one layout this cannot shift — margin on one item does not move
+ * the rest of the track — so those children are translated individually
+ * instead.
+ */
+function carryScroll(src: Element, dst: Element, cs: CSSStyleDeclaration): void {
+  const top = src.scrollTop
+  const left = src.scrollLeft
+  if (!top && !left) return
+
+  if (cs.display.includes('grid')) {
+    for (const child of Array.from(dst.children)) {
+      const s = (child as HTMLElement).style
+      if (s) s.setProperty('transform', `translate(${-left}px, ${-top}px)`)
+    }
+    return
+  }
+
+  const first = dst.firstElementChild as HTMLElement | null
+  if (!first?.style) return
+  // Added to whatever margin the child already carries, which the style pass
+  // has already written out in full.
+  const mt = parseFloat(getComputedStyle(src.firstElementChild ?? src).marginTop) || 0
+  const ml = parseFloat(getComputedStyle(src.firstElementChild ?? src).marginLeft) || 0
+  if (top) first.style.setProperty('margin-top', `${mt - top}px`)
+  if (left) first.style.setProperty('margin-left', `${ml - left}px`)
 }
 
 /** A canvas's bitmap as an `<img>`, or null when the canvas cannot be read. */
@@ -580,17 +655,55 @@ async function rasterise(el: HTMLElement): Promise<HTMLCanvasElement> {
   return out
 }
 
+/** ET, the only clock this app tells time in. */
+function stampNow(): string {
+  return `${new Date().toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })} ET`
+}
+
 /**
- * The shot, matted on the app's own background with a title band and the
- * watermark — the framing v2's `captureToCanvas({framed:true})` produces, so a
- * v2 snapshot and a v3 one look like they came from the same product.
+ * The mark, loaded once per tab and kept.
+ *
+ * Resolves to null on any failure — a missing logo prints a caption without one
+ * rather than losing the shot.
  */
-function frame(shot: HTMLCanvasElement, title: string): HTMLCanvasElement {
+let logoPromise: Promise<HTMLImageElement | null> | null = null
+function loadLogo(): Promise<HTMLImageElement | null> {
+  if (!logoPromise) {
+    logoPromise = new Promise<HTMLImageElement | null>((resolve) => {
+      const img = new Image()
+      img.onload = () => resolve(img)
+      img.onerror = () => resolve(null)
+      img.src = LOGO_SRC
+    })
+  }
+  return logoPromise
+}
+
+/**
+ * The card, edge to edge, over one caption strip.
+ *
+ * `Net Premium · Sep 2, 17:15 ET · SPX · 9-2-26` on the left, the CB Edge mark
+ * on the right, a hairline between the two. Everything the old title band said
+ * is in that line, and the card gets the whole width instead of sitting inside
+ * 18px of matte with a second header above it repeating its own name.
+ */
+function frame(
+  shot: HTMLCanvasElement,
+  title: string,
+  meta: string | null,
+  logo: HTMLImageElement | null,
+): HTMLCanvasElement {
   const scale = shotScale()
-  const innerW = shot.width / scale
-  const innerH = shot.height / scale
-  const w = innerW + PAD * 2
-  const h = innerH + BAND_H + FOOT_H + PAD * 2
+  const w = shot.width / scale
+  const cardH = shot.height / scale
+  const h = cardH + FOOT_H
 
   const out = document.createElement('canvas')
   out.width = Math.round(w * scale)
@@ -603,45 +716,41 @@ function frame(shot: HTMLCanvasElement, title: string): HTMLCanvasElement {
 
   ctx.fillStyle = tokenHex('--color-bg')
   ctx.fillRect(0, 0, w, h)
-
-  ctx.textBaseline = 'middle'
-  const bandMid = PAD + BAND_H / 2 - 2
-
-  // The stamp is drawn and measured first so the title can be given the space
-  // that is actually left — a long card name is squeezed to fit rather than
-  // drawn straight through the time.
-  const stamp = `${new Date().toLocaleString('en-US', {
-    timeZone: 'America/New_York',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })} ET`
-  ctx.font = `500 ${META_PX}px ${face}`
-  ctx.fillStyle = tokenHex('--color-muted')
-  ctx.textAlign = 'right'
-  ctx.fillText(stamp, w - PAD, bandMid)
-  const stampW = ctx.measureText(stamp).width
-
-  ctx.textAlign = 'left'
-  ctx.fillStyle = tokenHex('--color-fg')
-  ctx.font = `600 ${TITLE_PX}px ${face}`
-  ctx.fillText(title, PAD, bandMid, Math.max(40, w - PAD * 2 - stampW - 12))
+  ctx.drawImage(shot, 0, 0, w, cardH)
 
   ctx.strokeStyle = tokenHex('--color-line')
   ctx.lineWidth = 1
   ctx.beginPath()
-  ctx.moveTo(PAD, PAD + BAND_H - 0.5)
-  ctx.lineTo(w - PAD, PAD + BAND_H - 0.5)
+  ctx.moveTo(0, cardH + 0.5)
+  ctx.lineTo(w, cardH + 0.5)
   ctx.stroke()
 
-  ctx.drawImage(shot, PAD, PAD + BAND_H, innerW, innerH)
+  const mid = cardH + FOOT_H / 2
+  ctx.textBaseline = 'middle'
 
-  ctx.font = `500 ${MARK_PX}px ${face}`
-  ctx.fillStyle = tokenHex('--color-faint')
-  ctx.textAlign = 'center'
-  ctx.fillText(WATERMARK, w / 2, PAD + BAND_H + innerH + FOOT_H / 2 + 2)
+  // The mark goes down first so the caption knows how much room is left.
+  let logoW = 0
+  if (logo?.naturalWidth && logo.naturalHeight) {
+    logoW = (logo.naturalWidth / logo.naturalHeight) * LOGO_H
+    ctx.drawImage(logo, w - FOOT_PAD - logoW, mid - LOGO_H / 2, logoW, LOGO_H)
+  }
+
+  const room = Math.max(40, w - FOOT_PAD * 2 - logoW - 16)
+  ctx.textAlign = 'left'
+  ctx.font = `600 ${CAPTION_PX}px ${face}`
+  ctx.fillStyle = tokenHex('--color-fg')
+  const titleW = Math.min(ctx.measureText(title).width, room)
+  ctx.fillText(title, FOOT_PAD, mid, room)
+
+  // Time and the card's own note in the quieter weight, so the name still reads
+  // first at a glance in a Discord thumbnail. `--color-muted` is white today
+  // (every text token is — see tokens.css), and the whole difference between fg
+  // and muted in this app is the opacity utility a class would carry; a canvas
+  // has no class, so it takes the alpha from the token itself.
+  const tail = meta ? `${SEP}${stampNow()}${SEP}${meta}` : `${SEP}${stampNow()}`
+  ctx.font = `400 ${CAPTION_PX}px ${face}`
+  ctx.fillStyle = tokenHexAlpha('--color-muted', 0.62)
+  ctx.fillText(tail, FOOT_PAD + titleW, mid, Math.max(20, room - titleW))
 
   return out
 }
@@ -687,9 +796,17 @@ export async function copyOrDownload(blob: Blob, filename: string): Promise<Shot
   return 'saved'
 }
 
+/** The card's own contribution to the caption. See META_ATTR. */
+function metaOf(el: HTMLElement): string | null {
+  const own = el.getAttribute(META_ATTR)
+  if (own) return own
+  return el.querySelector(`[${META_ATTR}]`)?.getAttribute(META_ATTR) || null
+}
+
 /** Photograph `el`, frame it, and put it on the clipboard. */
 export async function captureAndCopy(el: HTMLElement, opts: ShotOptions = {}): Promise<ShotResult> {
-  const shot = await rasterise(el)
-  const blob = await toBlob(frame(shot, opts.title ?? 'CB Edge'))
+  const meta = metaOf(el)
+  const [shot, logo] = await Promise.all([rasterise(el), loadLogo()])
+  const blob = await toBlob(frame(shot, opts.title ?? 'CB Edge', meta, logo))
   return copyOrDownload(blob, opts.filename ?? 'snapshot.png')
 }
