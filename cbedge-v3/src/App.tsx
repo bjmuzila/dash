@@ -30,6 +30,11 @@ const Flow = lazy(() => import('@/pages/Flow'))
 // /em — Estimated Moves. A 1:1 port of v2's /app/em against the checklist in
 // docs/parity/em.md; REST-only, opens no socket, mounts no canvas.
 const Em = lazy(() => import('@/pages/Em'))
+// /replay — the replay hub. Four tabs, each mounting a surface that already
+// exists elsewhere, opened ALREADY REWOUND. Spec: docs/parity/replay.md. Its own
+// chunk is small on purpose: three of the four tabs lazy() into the SAME chunks
+// /options-chain and /analytics already load.
+const Replay = lazy(() => import('@/pages/Replay'))
 
 // RETIRED 2026-08-30 — Scanner (/scanner), Test Lab (/test) and Journal
 // (/trading) are gone from v3, along with the ICT, ES Candles, Board and Multi
@@ -58,6 +63,7 @@ export default function App() {
             <Route path="/analytics" element={<Analysis />} />
             <Route path="/flow" element={<Flow />} />
             <Route path="/em" element={<Em />} />
+            <Route path="/replay" element={<Replay />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

@@ -72,9 +72,22 @@ const inputStyle: React.CSSProperties = {
 export function LadderModal({
   symbol: initialSymbol,
   onClose,
+  embedded = false,
 }: {
   symbol: string
-  onClose: () => void
+  /** Omit for the embedded shape — there is nothing to close. */
+  onClose?: () => void
+  /**
+   * Render the bare body instead of the portal'd overlay.
+   *
+   * This is the "Chain ladder" tab of /replay: the hub already supplies the
+   * Card, its title and its subtitle, so the overlay, the modal plate, the
+   * heading pair and the ✕ would be a second frame drawn inside the first. The
+   * Escape handler goes with them — Escape in a page that is not a modal has
+   * nothing to dismiss, and stealing the key from whatever else wants it is
+   * worse than not binding it.
+   */
+  embedded?: boolean
 }) {
   const [symbols, setSymbols] = useState<string[]>([])
   const [symbol, setSymbol] = useState<string>((initialSymbol || '').toUpperCase())
@@ -160,6 +173,7 @@ export function LadderModal({
   }, [playing, idx, frames.length])
 
   useEffect(() => {
+    if (!onClose) return
     const h = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
@@ -349,6 +363,258 @@ export function LadderModal({
     [allStrikes, netByStrike, denom],
   )
 
+  // The body is the whole feature: pickers, transport, ladder, stamp. The modal
+  // is a frame around it, and /replay's "Chain ladder" tab is the same body with
+  // the hub's Card as the frame instead.
+  const body = (
+    <>
+      {/* Controls */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 14 }}>
+        <span
+          style={{
+            fontSize: 13,
+            fontWeight: 800,
+            color: T.cyan,
+            letterSpacing: '0.06em',
+            fontFamily: 'var(--font-mono)',
+            minWidth: 46,
+          }}
+        >
+          {symbol || '—'}
+        </span>
+        {/* The RECORDER's symbol list, not the board's — a session can only
+            be replayed for a root the recorder actually swept. */}
+        <TickerPicker
+          activeTicker={symbol}
+          universe={symbols.length ? symbols : undefined}
+          onSelect={setSymbol}
+          triggerLabel="Tickers"
+        />
+        <select value={date} style={{ ...inputStyle, padding: '6px 10px', cursor: 'pointer' }} onChange={(e) => setDate(e.target.value)}>
+          {dates.map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </select>
+        <button
+          style={{
+            ...inputStyle,
+            padding: '6px 16px',
+            cursor: 'pointer',
+            minWidth: 74,
+            background: playing ? alpha(NEG, 0.15) : alpha(LIGHT_BLUE, 0.15),
+            borderColor: playing ? NEG : LIGHT_BLUE,
+            color: T.text,
+            fontWeight: 600,
+          }}
+          disabled={!frames.length}
+          onClick={() => {
+            if (idx >= frames.length - 1) setIdx(0)
+            setPlaying((p) => !p)
+          }}
+        >
+          {playing ? '❚❚ Pause' : '▶ Play'}
+        </button>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: SUB }}>Speed</span>
+          {SPEEDS.map((sp) => (
+            <button
+              key={sp}
+              onClick={() => setSpeed(sp)}
+              style={{
+                ...inputStyle,
+                padding: '4px 8px',
+                cursor: 'pointer',
+                fontSize: 12,
+                borderColor: speed === sp ? LIGHT_BLUE : T.border,
+                color: speed === sp ? LIGHT_BLUE : SUB,
+              }}
+            >
+              {sp}×
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: SUB }}>Scale</span>
+          {(['frame', 'day'] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setScaleMode(m)}
+              title={
+                m === 'frame'
+                  ? 'Rescale each snapshot to its own peak — bars always readable'
+                  : 'Fixed session-wide scale — magnitudes comparable across time'
+              }
+              style={{
+                ...inputStyle,
+                padding: '4px 8px',
+                cursor: 'pointer',
+                fontSize: 12,
+                textTransform: 'capitalize',
+                borderColor: scaleMode === m ? LIGHT_BLUE : T.border,
+                color: scaleMode === m ? LIGHT_BLUE : SUB,
+              }}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Scrubber */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
+        <input
+          type="range"
+          min={0}
+          max={Math.max(0, frames.length - 1)}
+          value={idx}
+          disabled={!frames.length}
+          onChange={(e) => {
+            setPlaying(false)
+            setIdx(Number(e.target.value))
+          }}
+          style={{ flex: 1, accentColor: LIGHT_BLUE }}
+        />
+        <div
+          style={{
+            fontVariantNumeric: 'tabular-nums',
+            minWidth: 150,
+            textAlign: 'right',
+            fontSize: 14,
+            color: T.text,
+          }}
+        >
+          {frame ? (
+            <>
+              <strong>{fmtClockHm(frame.ts)}</strong> ET<span style={{ color: SUB }}> · spot {spot.toFixed(2)}</span>
+            </>
+          ) : (
+            '—'
+          )}
+        </div>
+      </div>
+      <div style={{ fontSize: 12, color: SUB, marginBottom: 14 }}>
+        {frames.length ? `Frame ${idx + 1} / ${frames.length}` : ''}
+      </div>
+
+      {loading && <div style={{ padding: 40, textAlign: 'center', color: SUB }}>Loading…</div>}
+      {!loading && err && <div style={{ padding: 24, textAlign: 'center', color: NEG }}>{err}</div>}
+      {!loading && !err && !frames.length && (
+        <div style={{ padding: 40, textAlign: 'center', color: SUB }}>
+          No recorded frames for {symbol} on {date || 'this date'}.
+        </div>
+      )}
+
+      {!loading && !err && frame && (
+        <div ref={rowsContainerRef} style={{ position: 'relative' }}>
+          {/* Provenance stamp — ticker, expiry and the frame's own wall clock,
+              burned into the ladder itself so a screen-grab carries what it is
+              and when, with no surrounding chrome needed. */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 64,
+              top: 0,
+              zIndex: 3,
+              pointerEvents: 'none',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 3,
+              padding: '6px 10px',
+              borderRadius: 8,
+              background: alpha(T.bg, 0.62),
+              border: `1px solid ${T.border}`,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span
+                style={{
+                  fontSize: 15,
+                  fontWeight: 800,
+                  letterSpacing: '0.08em',
+                  color: T.cyan,
+                  fontFamily: 'var(--font-mono)',
+                  lineHeight: 1,
+                }}
+              >
+                {symbol || '—'}
+              </span>
+              {frameExpiry && (
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: '0.06em',
+                    lineHeight: 1,
+                    padding: '3px 6px',
+                    borderRadius: 4,
+                    color: isZeroDte ? T.orange : LIGHT_BLUE,
+                    border: `1px solid ${alpha(isZeroDte ? T.orange : LIGHT_BLUE, 0.45)}`,
+                    background: alpha(isZeroDte ? T.orange : LIGHT_BLUE, 0.1),
+                  }}
+                >
+                  {isZeroDte ? '0DTE' : `EXP ${fmtExpiryShort(frameExpiry)}`}
+                </span>
+              )}
+              {extraExpiries > 0 && (
+                <span
+                  title={`Net summed across ${extraExpiries + 1} expiries`}
+                  style={{ fontSize: 10, fontWeight: 700, color: SUB, lineHeight: 1 }}
+                >
+                  +{extraExpiries}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: SUB, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>
+              {date ? fmtStampDate(date) : ''}
+              {frame ? `${date ? ' · ' : ''}${fmtReplayClock(frame.ts)} ET` : ''}
+            </div>
+          </div>
+
+          {spotTop !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                left: 64,
+                right: 0,
+                top: spotTop,
+                height: 0,
+                borderTop: `1px dashed ${T.text}`,
+                pointerEvents: 'none',
+                zIndex: 1,
+                // No CSS transition here. The JS tween above already eases
+                // `spot`; a transition on top of it re-starts every animation
+                // frame, so the line permanently trails its own label.
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: -8,
+                  fontSize: 10,
+                  color: T.text,
+                  background: T.panel,
+                  padding: '0 4px',
+                }}
+              >
+                spot {spot.toFixed(2)}
+              </span>
+            </div>
+          )}
+          <div ref={rowsColRef} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {ladder}
+          </div>
+        </div>
+      )}
+    </>
+  )
+
+  // Embedded: no overlay, no plate, no heading pair, no ✕ — the hub's Card is
+  // already all four.
+  if (embedded || !onClose) return <div>{body}</div>
+
   if (typeof document === 'undefined') return null
 
   return createPortal(
@@ -406,246 +672,7 @@ export function LadderModal({
           </button>
         </div>
 
-        {/* Controls */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 14 }}>
-          <span
-            style={{
-              fontSize: 13,
-              fontWeight: 800,
-              color: T.cyan,
-              letterSpacing: '0.06em',
-              fontFamily: 'var(--font-mono)',
-              minWidth: 46,
-            }}
-          >
-            {symbol || '—'}
-          </span>
-          {/* The RECORDER's symbol list, not the board's — a session can only
-              be replayed for a root the recorder actually swept. */}
-          <TickerPicker
-            activeTicker={symbol}
-            universe={symbols.length ? symbols : undefined}
-            onSelect={setSymbol}
-            triggerLabel="Tickers"
-          />
-          <select value={date} style={{ ...inputStyle, padding: '6px 10px', cursor: 'pointer' }} onChange={(e) => setDate(e.target.value)}>
-            {dates.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-          <button
-            style={{
-              ...inputStyle,
-              padding: '6px 16px',
-              cursor: 'pointer',
-              minWidth: 74,
-              background: playing ? alpha(NEG, 0.15) : alpha(LIGHT_BLUE, 0.15),
-              borderColor: playing ? NEG : LIGHT_BLUE,
-              color: T.text,
-              fontWeight: 600,
-            }}
-            disabled={!frames.length}
-            onClick={() => {
-              if (idx >= frames.length - 1) setIdx(0)
-              setPlaying((p) => !p)
-            }}
-          >
-            {playing ? '❚❚ Pause' : '▶ Play'}
-          </button>
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-            <span style={{ fontSize: 12, color: SUB }}>Speed</span>
-            {SPEEDS.map((sp) => (
-              <button
-                key={sp}
-                onClick={() => setSpeed(sp)}
-                style={{
-                  ...inputStyle,
-                  padding: '4px 8px',
-                  cursor: 'pointer',
-                  fontSize: 12,
-                  borderColor: speed === sp ? LIGHT_BLUE : T.border,
-                  color: speed === sp ? LIGHT_BLUE : SUB,
-                }}
-              >
-                {sp}×
-              </button>
-            ))}
-          </div>
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-            <span style={{ fontSize: 12, color: SUB }}>Scale</span>
-            {(['frame', 'day'] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setScaleMode(m)}
-                title={
-                  m === 'frame'
-                    ? 'Rescale each snapshot to its own peak — bars always readable'
-                    : 'Fixed session-wide scale — magnitudes comparable across time'
-                }
-                style={{
-                  ...inputStyle,
-                  padding: '4px 8px',
-                  cursor: 'pointer',
-                  fontSize: 12,
-                  textTransform: 'capitalize',
-                  borderColor: scaleMode === m ? LIGHT_BLUE : T.border,
-                  color: scaleMode === m ? LIGHT_BLUE : SUB,
-                }}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Scrubber */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(0, frames.length - 1)}
-            value={idx}
-            disabled={!frames.length}
-            onChange={(e) => {
-              setPlaying(false)
-              setIdx(Number(e.target.value))
-            }}
-            style={{ flex: 1, accentColor: LIGHT_BLUE }}
-          />
-          <div
-            style={{
-              fontVariantNumeric: 'tabular-nums',
-              minWidth: 150,
-              textAlign: 'right',
-              fontSize: 14,
-              color: T.text,
-            }}
-          >
-            {frame ? (
-              <>
-                <strong>{fmtClockHm(frame.ts)}</strong> ET<span style={{ color: SUB }}> · spot {spot.toFixed(2)}</span>
-              </>
-            ) : (
-              '—'
-            )}
-          </div>
-        </div>
-        <div style={{ fontSize: 12, color: SUB, marginBottom: 14 }}>
-          {frames.length ? `Frame ${idx + 1} / ${frames.length}` : ''}
-        </div>
-
-        {loading && <div style={{ padding: 40, textAlign: 'center', color: SUB }}>Loading…</div>}
-        {!loading && err && <div style={{ padding: 24, textAlign: 'center', color: NEG }}>{err}</div>}
-        {!loading && !err && !frames.length && (
-          <div style={{ padding: 40, textAlign: 'center', color: SUB }}>
-            No recorded frames for {symbol} on {date || 'this date'}.
-          </div>
-        )}
-
-        {!loading && !err && frame && (
-          <div ref={rowsContainerRef} style={{ position: 'relative' }}>
-            {/* Provenance stamp — ticker, expiry and the frame's own wall clock,
-                burned into the ladder itself so a screen-grab carries what it is
-                and when, with no surrounding chrome needed. */}
-            <div
-              style={{
-                position: 'absolute',
-                left: 64,
-                top: 0,
-                zIndex: 3,
-                pointerEvents: 'none',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 3,
-                padding: '6px 10px',
-                borderRadius: 8,
-                background: alpha(T.bg, 0.62),
-                border: `1px solid ${T.border}`,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 800,
-                    letterSpacing: '0.08em',
-                    color: T.cyan,
-                    fontFamily: 'var(--font-mono)',
-                    lineHeight: 1,
-                  }}
-                >
-                  {symbol || '—'}
-                </span>
-                {frameExpiry && (
-                  <span
-                    style={{
-                      fontSize: 10,
-                      fontWeight: 700,
-                      letterSpacing: '0.06em',
-                      lineHeight: 1,
-                      padding: '3px 6px',
-                      borderRadius: 4,
-                      color: isZeroDte ? T.orange : LIGHT_BLUE,
-                      border: `1px solid ${alpha(isZeroDte ? T.orange : LIGHT_BLUE, 0.45)}`,
-                      background: alpha(isZeroDte ? T.orange : LIGHT_BLUE, 0.1),
-                    }}
-                  >
-                    {isZeroDte ? '0DTE' : `EXP ${fmtExpiryShort(frameExpiry)}`}
-                  </span>
-                )}
-                {extraExpiries > 0 && (
-                  <span
-                    title={`Net summed across ${extraExpiries + 1} expiries`}
-                    style={{ fontSize: 10, fontWeight: 700, color: SUB, lineHeight: 1 }}
-                  >
-                    +{extraExpiries}
-                  </span>
-                )}
-              </div>
-              <div style={{ fontSize: 11, color: SUB, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>
-                {date ? fmtStampDate(date) : ''}
-                {frame ? `${date ? ' · ' : ''}${fmtReplayClock(frame.ts)} ET` : ''}
-              </div>
-            </div>
-
-            {spotTop !== null && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: 64,
-                  right: 0,
-                  top: spotTop,
-                  height: 0,
-                  borderTop: `1px dashed ${T.text}`,
-                  pointerEvents: 'none',
-                  zIndex: 1,
-                  // No CSS transition here. The JS tween above already eases
-                  // `spot`; a transition on top of it re-starts every animation
-                  // frame, so the line permanently trails its own label.
-                }}
-              >
-                <span
-                  style={{
-                    position: 'absolute',
-                    right: 0,
-                    top: -8,
-                    fontSize: 10,
-                    color: T.text,
-                    background: T.panel,
-                    padding: '0 4px',
-                  }}
-                >
-                  spot {spot.toFixed(2)}
-                </span>
-              </div>
-            )}
-            <div ref={rowsColRef} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              {ladder}
-            </div>
-          </div>
-        )}
+        {body}
       </div>
     </div>,
     document.body,

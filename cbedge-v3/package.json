@@ -30,7 +30,9 @@
     "check:parity:analysis:self": "node scripts/parity-check-analysis.test.mjs",
     "check:parity:em": "node scripts/parity-check-em.mjs",
     "check:parity:em:self": "node scripts/parity-check-em.test.mjs",
-    "check": "npm run check:casing && npm run typecheck && npm run check:theme && npm run build:fast && npm run budgets && npm run check:ws && npm run perf && npm run check:parity:self && npm run check:parity:chain:self && npm run check:parity:flow:self && npm run check:parity:analysis:self && npm run check:parity:em:self",
+    "check:parity:replay": "node scripts/parity-check-replay.mjs",
+    "check:parity:replay:self": "node scripts/parity-check-replay.test.mjs",
+    "check": "npm run check:casing && npm run typecheck && npm run check:theme && npm run build:fast && npm run budgets && npm run check:ws && npm run perf && npm run check:parity:self && npm run check:parity:chain:self && npm run check:parity:flow:self && npm run check:parity:analysis:self && npm run check:parity:em:self && npm run check:parity:replay:self",
     "preview": "vite preview --port 4173"
   },
   "dependencies": {

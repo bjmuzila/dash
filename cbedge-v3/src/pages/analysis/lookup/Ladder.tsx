@@ -382,10 +382,13 @@ function ChangeCell({ chg }: { chg: number | undefined }) {
   const has = chg != null && Number.isFinite(chg) && chg !== 0
   return (
     <span
+      // fmtBig ALREADY signs its output. v2 prepended a second sign here and in
+      // the cell below, so a +1.2B change read "++1.2B" and a −840M one read
+      // "−+840M". Fixed rather than transcribed (docs/parity/replay.md, open
+      // decision 1) — and fixed the same way in both places, so the Δ column
+      // signs exactly like the Value column beside it.
       title={
-        chg == null
-          ? 'no end-of-day snapshot for this strike'
-          : `${chg > 0 ? '+' : ''}${fmtBig(chg)} vs prior session close`
+        chg == null ? 'no end-of-day snapshot for this strike' : `${fmtBig(chg)} vs prior session close`
       }
       style={{
         textAlign: 'right',
@@ -401,7 +404,7 @@ function ChangeCell({ chg }: { chg: number | undefined }) {
         textOverflow: 'ellipsis',
       }}
     >
-      {chg == null ? '—' : `${chg > 0 ? '+' : chg < 0 ? '−' : ''}${fmtBig(Math.abs(chg))}`}
+      {chg == null ? '—' : fmtBig(chg)}
     </span>
   )
 }

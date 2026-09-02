@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type {
   BudgetOverview as Overview, BudgetBriefing, BudgetCategory, FlowBucket,
+  BudgetRent, RentFlow,
 } from '../api'
 import { T, label, body, card, tile, MONO } from '../theme'
 import Collapsible from './Collapsible'
@@ -115,16 +116,25 @@ function KV({ k, v, tone }: { k: string; v: string; tone?: string }) {
 
 // ── The page ─────────────────────────────────────────────────────────────────
 
-export default function BudgetOverview({ o, briefing, categories, unsortedSpend, currency, month }: {
+export default function BudgetOverview({ o, briefing, rent, categories, unsortedSpend, currency, month, onSettleFlow }: {
   o: Overview
   briefing: BudgetBriefing
+  /** Optional: an older server predates the rent card. */
+  rent?: BudgetRent
   categories: BudgetCategory[]
   unsortedSpend: number
   currency: string
   month: string
+  /** Tap a scheduled line off (or back on). Omitted = read-only card. */
+  onSettleFlow?: (f: RentFlow) => void | Promise<void>
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Rent sits ABOVE the briefing. The briefing answers "can I spend
+          anything today"; rent answers "does the biggest bill of the month
+          clear", and on the 2nd of the month that is the more urgent of the
+          two. */}
+      {rent && rent.rentAmount > 0 && <Rent r={rent} currency={currency} onToggle={onSettleFlow} />}
       <Briefing b={briefing} />
       <Tiles o={o} currency={currency} />
 
@@ -140,6 +150,153 @@ export default function BudgetOverview({ o, briefing, categories, unsortedSpend,
       <CashFlow o={o} currency={currency} month={month} />
       <UpcomingPay o={o} currency={currency} />
       <CategoryBudgets categories={categories} unsortedSpend={unsortedSpend} currency={currency} />
+    </div>
+  )
+}
+
+// ── Rent ─────────────────────────────────────────────────────────────────────
+
+/**
+ * The rent countdown, same arithmetic as the desktop card.
+ *
+ * `projected` is the bank balance plus what is still scheduled to land before
+ * the 5th. Anything already in the account must NOT be added again, which is
+ * what tapping a line does — it stays listed, struck through, and leaves the
+ * totals. Nothing is computed here; the server sends both the flows and the
+ * totals already net of the settled ones.
+ */
+function Rent({ r, currency, onToggle }: {
+  r: BudgetRent; currency: string; onToggle?: (f: RentFlow) => void | Promise<void>
+}) {
+  const covered = r.shortfall <= 0
+  const tone = r.paid || covered ? TONE.good : TONE.bad
+  const pct = r.rentAmount > 0 ? Math.min(100, Math.max(0, (r.projected / r.rentAmount) * 100)) : 0
+
+  const line = (f: RentFlow, positive: boolean) => (
+    <button
+      key={f.key}
+      onClick={() => void onToggle?.(f)}
+      disabled={!onToggle}
+      title={f.settled ? 'Counting it again' : 'Already cleared? Tap to take it out of the maths'}
+      style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+        width: '100%', marginTop: 3, padding: '4px 5px', borderRadius: 7,
+        background: f.settled ? 'rgba(255,255,255,0.05)' : 'transparent',
+        border: 'none', font: 'inherit', textAlign: 'left',
+        color: T.ink, cursor: onToggle ? 'pointer' : 'default',
+        opacity: f.settled ? 0.55 : 1,
+      }}
+    >
+      <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                     textDecoration: f.settled ? 'line-through' : undefined }}>
+        {f.settled ? '✓ ' : ''}{f.label} <span style={{ opacity: 0.55 }}>· {shortDate(f.date)}</span>
+      </span>
+      <b style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums', flexShrink: 0, fontWeight: 700,
+                  color: f.settled ? T.ink : positive ? GOOD : SOFT_RED,
+                  textDecoration: f.settled ? 'line-through' : undefined }}>
+        {positive ? '+' : ''}{fmt(f.amount, currency)}
+      </b>
+    </button>
+  )
+
+  return (
+    <div style={card({ padding: 14 })}>
+      <Head title="Rent" right={`Due ${shortDate(r.dueIso)} · the 5th`} />
+
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 9 }}>
+        <span style={{ fontSize: 40, fontWeight: 800, lineHeight: 1, letterSpacing: '-0.02em',
+                       color: tone.fg }}>
+          {r.paid ? 'Paid' : r.daysUntil === 0 ? 'Today' : r.daysUntil}
+        </span>
+        {!r.paid && r.daysUntil > 0 && (
+          <span style={{ ...body(12.5), fontWeight: 700 }}>day{r.daysUntil === 1 ? '' : 's'} to rent</span>
+        )}
+        {r.paid && <span style={{ ...body(12.5), fontWeight: 700, color: tone.fg }}>✓ this month</span>}
+      </div>
+
+      <div style={{ marginTop: 10 }}>
+        <Line k="Rent" v={fmt(r.rentAmount, currency)} hi />
+        <Line k="On hand now" v={fmt(r.available, currency)}
+              tone={r.available < 0 ? SOFT_RED : undefined} />
+      </div>
+
+      {!r.paid && (
+        <div style={{ marginTop: 11, paddingTop: 11, borderTop: `1px solid ${T.rule}` }}>
+          {onToggle && (
+            <div style={{ ...body(11), opacity: 0.62, marginBottom: 6, lineHeight: 1.4 }}>
+              Tap a line that already cleared — it is in the balance above, so counting it here would add it twice.
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: MONO, fontSize: 10,
+                        fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            <span style={{ color: T.ink, opacity: 0.7 }}>Coming in by the 5th</span>
+            <span style={{ color: r.incomingTotal > 0 ? GOOD : T.ink }}>+{fmt(r.incomingTotal, currency)}</span>
+          </div>
+          {r.incoming.length
+            ? r.incoming.map((f) => line(f, true))
+            : <div style={{ ...body(11), opacity: 0.5, marginTop: 3 }}>Nothing scheduled</div>}
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: MONO, fontSize: 10,
+                        fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginTop: 10 }}>
+            <span style={{ color: T.ink, opacity: 0.7 }}>Going out by the 5th</span>
+            <span style={{ color: r.outgoingTotal > 0 ? SOFT_RED : T.ink }}>
+              {r.outgoingTotal > 0 ? '−' : ''}{fmt(r.outgoingTotal, currency)}
+            </span>
+          </div>
+          {r.outgoing.length
+            ? r.outgoing.map((f) => line(f, false))
+            : <div style={{ ...body(11), opacity: 0.5, marginTop: 3 }}>Nothing scheduled</div>}
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 11 }}>
+            <span style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ ...body(12), fontWeight: 700 }}>Projected on the 5th, for rent</span>
+              <span style={{ ...body(10.5), opacity: 0.65 }}>before rent is paid</span>
+            </span>
+            <b style={{ fontSize: 17, fontWeight: 800, color: tone.fg, fontVariantNumeric: 'tabular-nums' }}>
+              {fmt(r.projected, currency)}
+            </b>
+          </div>
+          {r.settledCount > 0 && (
+            <div style={{ ...body(10.5), opacity: 0.65, marginTop: 4 }}>
+              {r.settledCount} line{r.settledCount === 1 ? '' : 's'} left out — already cleared or not coming.
+              {onToggle ? ' Tap to put them back.' : ''}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ height: 7, borderRadius: 99, background: 'rgba(255,255,255,0.07)',
+                    margin: '11px 0 6px', overflow: 'hidden' }}>
+        <div style={{ height: 7, borderRadius: 99, background: tone.fg, width: `${pct}%` }} />
+      </div>
+
+      {r.paid ? (
+        <div style={{ ...body(12.5), fontWeight: 700, color: tone.fg }}>Rent is paid for this month.</div>
+      ) : (
+        <div style={{ background: tone.bg, border: `1px solid ${tone.bd}`, borderLeft: `3px solid ${tone.fg}`,
+                      borderRadius: 10, padding: '10px 12px', marginTop: 2 }}>
+          {covered ? (
+            <>
+              <div style={{ ...body(13), fontWeight: 700, color: tone.fg }}>Enough coming in — rent's covered.</div>
+              <div style={{ ...body(11.5), opacity: 0.8, marginTop: 2 }}>
+                {fmt(r.projected - r.rentAmount, currency)} to spare after rent
+                {r.daysUntil > 0 ? ' on the 5th' : ''}.
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ ...body(12) }}>
+                Still short by <b style={{ color: tone.fg }}>{fmt(r.shortfall, currency)}</b> after what's due
+                {r.daysUntil > 0 ? ` in ${r.daysUntil} day${r.daysUntil === 1 ? '' : 's'}` : ' today'}
+              </div>
+              <div style={{ ...body(15), fontWeight: 800, color: tone.fg, marginTop: 4 }}>
+                {fmt(r.perDay, currency)} <span style={{ ...body(12), fontWeight: 700 }}>/day extra</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useBudget, useAddBudgetRow, useMarkBillPaid, useDeleteBudgetRow } from '../hooks'
-import { ApiError, type Bank, type BudgetBill, type BudgetRow } from '../api'
+import { ApiError, budget, type Bank, type BudgetBill, type BudgetRow } from '../api'
 import { T, label, body, section, row, input, button, segment } from '../theme'
 import BudgetOverview from '../components/BudgetOverview'
 import Collapsible from '../components/Collapsible'
@@ -85,10 +85,18 @@ export default function Budget() {
       <BudgetOverview
         o={data.overview}
         briefing={data.briefing}
+        rent={data.rent}
         categories={data.categories}
         unsortedSpend={data.unsortedSpend}
         currency={cur}
         month={data.month}
+        onSettleFlow={async (f) => {
+          // The one exception to "everything above the register is read only":
+          // saying a paycheque already landed is a one-handed correction, and
+          // it is the difference between the card being right and being wrong.
+          await budget.settleFlow({ key: f.key, label: f.label, date: f.date, on: !f.settled })
+          await refetch()
+        }}
       />
 
       {overdue.length > 0 && <Bills title="Past due" bills={overdue} currency={cur} accent />}

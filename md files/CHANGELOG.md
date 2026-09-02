@@ -1,306 +1,75 @@
 # Changelog
 
-## 2026-09-02 - Email: "Version 3 of cbedge.net is coming soon...."
+## 2026-08-31 - The 8am email was the last surface still double-counting
 
-New broadcast template for the v3 teaser, registered as a one-click preset on the
-owner Emails page (owner.cbedge.net -> Emails -> Templates, newest on top). Same
-dark shell as the rest of `lib/emails`: #05060A ground, #0D1119 panel, 3px cyan
-accent bar, centered logo, table layout, all styles inline. Carries a hero
-screenshot (ES candles with live gamma levels) and five feature rows -- faster
-charts, customize layouts, state of the art alerts, easy navigation, replays.
+It was the most wrong of the three, and by a knowable amount: **+$1,100 too
+optimistic** this morning.
 
-### Files
+`budget-email.js` fetches `/api/budget`, which returns `settledFlows`, and then
+ignored it in all three places it matters. With H PAY (+$1,200, 9-2) and H CAR
+(−$100, 9-4) both marked as already cleared:
 
-- `lib/emails/v3-coming-soon.ts` -- NEW. `v3ComingSoonEmail()`, `v3ComingSoonText()`,
-  `V3_COMING_SOON_SUBJECT`. Features live in one `FEATURES` array so the HTML and
-  text bodies cannot drift. Keeps `{{UNSUBSCRIBE_URL}}`. CTA defaults to
-  `/whats-new`; `opts.ctaUrl` / `opts.imageUrl` override.
-- `app/api/admin/email-templates/route.ts` -- imported and appended to
-  `buildTemplates()` as id `v3-coming-soon`. Appended (not prepended) because the
-  list is maintained oldest-first and `newestFirst()` reverses it for the picker.
-- `public/v3-preview-es-candles.png` -- NEW. The hero screenshot, served from the
-  site so mail clients can fetch it (Gmail strips data: URIs).
-- `generated/2026-09-02-v3-coming-soon-email.html` -- rendered preview for the
-  browser. Git-ignored.
+- `computeRent()` added H PAY back into `incomingTotal` and subtracted H CAR
+  again from `outgoingTotal` → rent `projected` overstated by $1,100.
+- `bills` / `owed` still listed H CAR as due → `owed` $100 high.
+- `incoming` / `coming` still listed H PAY as coming → `available` $1,200 high.
 
-## 2026-09-02 - Premarket replay: /es-candles' transport, an RTH switch, and a page that holds still
+All three start from `allBanks`, the CURRENT bank balance — which already
+contains anything that cleared. Adding the scheduled occurrence on top counts
+the same money twice. Every one of them now skips `settledFlows`, keyed the same
+way the card writes them (`row:<id>` for a real register row,
+`__recur__:<ruleId>:<date>` for a projected occurrence).
 
-Four fixes to the /premarket replay, all of them the same complaint from
-different angles — the page moved around too much to actually watch a session
-rebuild.
+`buildBriefing()` in `_lib-household-budget.cjs` had the identical bug, and it
+matters more now: that briefing renders directly beneath the new rent card on
+budget.cbedge.net, so an unfixed briefing would have sat there contradicting the
+card above it about the same paycheque. It takes `settled` too, and `paid` and
+`settled` are skipped for the same stated reason.
 
-**The page stopped jumping.** The Key Levels migration line ("was 12.4M → 18.1M
-· +46%") renders nothing when a tile has no move to report. Live that happens
-once, when the baseline lands. Stepped through a recording it happens on almost
-every frame, and because the six tiles are one grid row that is as tall as its
-tallest tile, the entire five-screen page below Key Levels shoved up and down
-each time the scrubber moved. While replay is on, every tile now reserves the
-slot: an empty, invisible mig line of the same height, floored at two wrapped
-lines. Off-replay nothing changes.
+Four copies of this arithmetic now exist — the owner page, the household lib,
+the email, and the briefing. They agree today; the comments in each say why the
+exclusion is load-bearing rather than cosmetic, because that is what stopped
+being obvious the last three times.
 
-**RTH / ETH.** The recorder runs 04:00→16:25 ET, so an ETH session is ~150
-frames and more than half of them are premarket. The transport now carries the
-same two-button strip /es-candles has, in the same place (with the day picker —
-it answers WHICH bars, not HOW you move through them), with the same labels.
-ETH stays the default. Flipping it keeps your place: the cursor lands on the
-nearest frame of the new slice rather than jumping to the close.
+## 2026-08-31 - Rent card on budget.cbedge.net, and the stale-phone fix
 
-**The bar is /es-candles' size.** It was a size and a half bigger than the one
-it was modelled on — 9/20/10 padding, 14px clock, 34px keys. Now 6/16/7, 12px,
-30px, 26px ✕, 10px row gap. On a strip that is permanently on screen for the
-length of a replay that is real viewport back.
+### Why the phone disagreed with the laptop
 
-**Section 3 is ±20 strikes → 41 rows.** "How the book was built" rendered ±60
-(121 rows, four screens of ladder) while the replay frames are recorded at ±20,
-so past that a replayed session was drawing empty rows — and on a live one the
-outer eighty strikes never carry 2% of the biggest bar. The recorder's trim was
-also half a strike off centre: it anchored on the first strike at-or-above spot
-and sliced [i-20, i+20), which is 40 rows with 20 below spot and only 19 above.
-It now anchors on the strike NEAREST spot and keeps 20 each side — 41.
+Nothing was wrong with the marks. `GET /api/budget` returns
+`settledFlows: ["__recur__:23:2026-09-01","__recur__:22:2026-09-02","__recur__:2:2026-09-04"]`
+and the desktop card reads $1,948 with "2 lines left out" on a cold load - H PAY
+and H CAR are both stored and both applied. The phone was running an OLD BUNDLE:
+its screenshot has no "Tap a line that already cleared" hint at all, so it
+predates the toggle entirely and could not have shown a mark.
 
-### Files
+`index.html` is the only unhashed file in a Vite build and it names the hashed
+bundle. Neither SPA sent cache headers for it, so a browser or Cloudflare
+holding an old copy keeps that device on the old app indefinitely while every
+other device gets the new one. Both `owner-vite/nginx.conf` and
+`budget-vite/nginx.conf` now send `no-store, must-revalidate` on `/index.html`;
+the fingerprinted assets keep their `immutable, 1y`.
 
-- `components/pages/Premarket.tsx` — `replaySession` state + RTH filter memo,
-  `sessionSnapMinRef` so an RTH/ETH flip keeps its place, the RTH/ETH `SegGroup`
-  in the transport's day-picker group, a session-aware "no frames" message,
-  `.rplon` on the page root, `--migH` + the `.mig.ph` reservation rules, and the
-  `.rplbar` / `.rplrow` / `.rplt` / `.rplclock` / `.rplx` size pass.
-- `components/pages/premarket/PostMarketTab.tsx` — `evBars` is `evWindow(20)`.
-- `server-v2/premarket-replay-recorder.js` — `trimRows()` centres on the nearest
-  strike to spot and keeps `2×side+1` rows. Affects newly recorded frames only.
+### Rent card, above the briefing on budget.cbedge.net
 
-## 2026-09-02 - Options chain: the CB (Core) cell keeps its sign
+`buildRent()` in `_lib-household-budget.cjs`, the same arithmetic as the desktop
+card - due on the 5th, projected from the bank balance plus what is still
+scheduled to land, minus what is still scheduled to leave. It reads
+`budget_flow_settled` through the existing `optional()` guard, so an older
+`_lib-db.cjs` degrades to an unmarked card rather than 500ing the month. Flows
+carry the same occurrence keys (`row:<id>`, `__recur__:<ruleId>:<date>`), which
+is what makes a line tapped off on the laptop show as tapped off on the phone.
 
-A Core Bullseye below spot is negative, but VIVID painted the cell flat gold at
-.85 and the red underneath was gone — a short-gamma Core looked identical to a
-long-gamma one. The gold is now a diagonal WASH instead of a flat layer: solid
-at the ★ in the top-left corner, holding the skin's .85 through 26%, out by 66%.
-The figure is right-aligned, so it lands on the ordinary sign heat. The cell
-still reads "Core" at a glance and the number reads red or blue again.
+Shipped as `rent` on the `/api/hh/budget` payload, typed `BudgetRent` /
+`RentFlow`, rendered by a new `<Rent>` in `BudgetOverview.tsx` ABOVE
+`<Briefing>`: the briefing answers "can I spend anything today", rent answers
+"does the biggest bill of the month clear", and early in the month that is the
+more urgent question.
 
-### Files
-
-- `cbedge-v3/src/pages/optionsChain/heatSkins.ts` — `levelFillBg()` branches on
-  `kind === 'cb'` and returns
-  `linear-gradient(112deg, cb 0%, cb@.85 26%, cb@0 66%), <heat>`.
-  112deg rather than 135 because the cell is ~7x wider than tall — a true
-  diagonal clears the gold inside two characters. New `CB_WASH_ANGLE` /
-  `CB_WASH_HOLD` / `CB_WASH_END` constants carry the tuning.
-  CW and PW are untouched (flat two-stop): their colour already IS the sign, so
-  they have nothing to hide. CB is the only level whose colour is directionless.
-  Fades to `alpha(cb, 0)` rather than `transparent` so the ramp stays in the
-  gold hue instead of dipping through grey.
-- `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx` — dropped the ★'s white
-  halo on the levelFill skins. The corner it sits in is now solid gold, so the
-  glyph has its own ground and the glow only softened its edge.
-- `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx` — same treatment on the
-  Multi Greek ladder, which had the identical bug from its own copy of the
-  value (`CB_FILL`, flat gold at 85% over the heat). Now `CB_WASH`, with
-  TIGHTER stops than the chain's — 12% / 40% against 26% / 66% — because these
-  figures are CENTRED and the chain's are right-aligned, so the gold has to
-  clear the middle of the cell rather than just its right third. ★ halo
-  dropped for the same reason as the chain's.
-
-No token, skin-config or math change: the ramp, rank floors, `levelFill.alpha`
-and CLASSIC are all byte-for-byte what they were.
-
-## 2026-09-02 - v3 toolbar: Notes button + owner-gated Quick Probe
-
-The NOTES button and the drawer behind it are now in v3's toolbar, matching v2
-one for one. Pencil glyph with a count badge, sitting between the ET clock and
-the account avatar; it toggles a 320px right-side dock that is a flex SIBLING of
-the page column, so it pushes content rather than floating over it.
-
-### Files
-
-- `cbedge-v3/src/shell/notes.tsx` (new) — `useNotes` store + `NotesBody`, ported
-  from v2's `components/shared/notes.tsx`. Same storage key prefix
-  (`sidebar-notes-v1:<userId>`), same `cb-notes-changed` cross-instance sync
-  event, same quota-shedding write path (drop the oldest image, then the oldest
-  note, rather than letting `setItem` throw and desync state). Both builds are
-  on one origin, so notes written on `/app/*` are the notes read on `/v3/*`.
-- `cbedge-v3/src/shell/NotesPanelContext.tsx` (new) — open/closed state,
-  persisted under v2's key `notes-dock-open-v1`.
-- `cbedge-v3/src/shell/QuickProbe.tsx` (new) — owner-only Quick Probe, ported
-  from v2. Ticker / expiration / strike / call-put, `POST /api/watch`
-  `{action:"add"}` with no `addedPrice` so the route captures the live mark as
-  the entry basis; expirations fill from `/api/expirations`. `useIsOwner`
-  decides whether it is DRAWN, `/api/watch` (registered `auth: 'owner'`
-  server-side) decides whether the write is allowed. Renders nothing and fetches
-  nothing for a non-owner.
-- `cbedge-v3/src/shell/NotesDock.tsx` (new) — the drawer. Quick Probe on top,
-  capped at 62% height with its own scroll so an open probe cannot push the note
-  list out of the panel; notes list below. Signed-in desktop only (`useIsPhone`),
-  as in v2.
-- `cbedge-v3/src/shell/Shell.tsx` — `NotesPanelProvider` added inside
-  `AuthProvider`, `NotesButton` in the toolbar after `EtClock`, `NotesDock`
-  mounted as a sibling of the page column.
-
-### Notes
-
-- No v2 imports: every piece is rewritten in v3's idiom against v3's own
-  `data/auth.tsx`, per the clean-slate rule in `cbedge-v3/AGENTS.md`.
-- Zero theme violations — all five files are pure token utilities (no hex, no
-  `rgb()`, no Tailwind palette shades, no arbitrary type sizes), so nothing goes
-  into `theme-baseline.json`.
-
-
-## 2026-09-02 - v3 GEX Candles: ES futures candles are back, as an SPX/ES switch
-
-v2's original pairing — SPX gamma drawn over ES futures candles — returns to the
-v3 GEX Candles card. Not as a symbol: v3 has one board-wide ticker and none of
-the other cards know what a futures contract is. It is a per-card SPX/ES
-segmented control in the toolbar (bottom sheet on a phone), shown only while
-the page symbol is SPX, persisted as `esCandles` in the card's settings blob
-(v7).
-
-### What ES does
-
-- Candles come off `/api/snapshots/candles?daysBack=5&interval=1|5&lite=1` on
-  the same 30s poll the cash index uses. The lite tuple form is parsed by the
-  new `parseEsCandles`; the verbose form still parses as a fallback.
-- The forming bar ticks from the socket's `esCandles` (5m) / `es1mCandles` (1m)
-  frame via `watchFrame` -> `setLivePrice`, imperatively — never `spot`, which
-  is the cash index one basis below. Reading the frame is what puts it into the
-  socket's derived topic scope while on ES, and takes it out when not.
-- Every GEX strike (bubbles AND rail) is shifted into ES price space by the
-  ES−SPX basis from `/proxy/es-spx-basis` — per HISTORY COLUMN by that ET
-  session's basis (`days`), the newest session's `basis` for anything else.
-  New `board/gexCandles/basis.ts`. The four-tier fallback ladder v2 carried
-  (live esCandle−spot, eod anchor, server basis) was NOT ported: the basis
-  decays ~1pt/day and only the proxy tier was ever right.
-- No usable basis => the layer draws UNSHIFTED and the status line says
-  "ES−SPX basis unavailable — GEX levels are drawn at SPX cash strikes."
-- The view key includes the tape, so SPX<->ES reframes the price window.
-
-### Deliberately not `useEsCandles`
-
-`src/data/esCandles.ts` re-renders its consumer on every candle frame — right
-for the relative-volume panels, wrong for a chart that would re-ingest ~7,000
-1m bars per socket message. The card polls like SPX and ticks imperatively.
-
-### Files
-
-- `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx` — switch, ES query,
-  basis query, column shift, ES live tick, status line
-- `cbedge-v3/src/board/gexCandles/basis.ts` — NEW
-- `cbedge-v3/src/board/gexCandles/candles.ts` — `esCandlesUrl`, `parseEsCandles`
-- `cbedge-v3/src/board/gexCandles/settings.ts` — `esCandles`, blob v7
-- `cbedge-v3/src/board/gexCandles/symbols.ts` — header note; ES/NQ still
-  normalise to SPX/NDX as page symbols
-
-## 2026-09-02 - /bday promo links + BDAY birthday promo graphic
-
-September birthday-month promo: $1,000/yr -> $400/yr with code **BDAY**,
-promoted as `cbedge.net/bday`.
-
-Added: `lib/promoLinks.ts`, `generated/2026-09-02-bday-annual-x-post.{html,png}`.
-Edited: `app/[source]/route.ts`, `middleware.ts`, `app/pricing/page.tsx`,
-`components/pricing/PricingActions.tsx`, `app/api/stripe/checkout/route.ts`.
-
-- **Promo short links are a table** (`lib/promoLinks.ts`): one row per deal
-  (`bday` -> code BDAY + banner copy). The bare-segment route answers for the
-  slug and middleware derives its public pattern from the same list, so a
-  future `/(whatever-word)` promo is one row here plus a Stripe coupon -
-  nothing else changes.
-- **`/bday`** 302s to `/pricing?promo=BDAY` with utm tags (`utm_source=bday`,
-  `utm_medium=promo`, `utm_campaign=bday`) and drops a 30-day `cbe_promo`
-  cookie so the code survives the sign-up detour (pricing -> sign-up -> back
-  -> checkout) where the query string is lost.
-- **Pricing page** shows the birthday banner and a "code BDAY is applied
-  automatically" box when the promo is live (query param or cookie), and
-  forwards the code to checkout via PricingActions.
-- **Checkout** (`/api/stripe/checkout`) pre-applies the code as a Stripe
-  discount on the YEARLY plan only (a $600-off coupon on a $45 monthly
-  invoice would be nonsense - monthly keeps the type-it-yourself box).
-  Stripe forbids `discounts` + `allow_promotion_codes` together, so the
-  session flips between them; if BDAY isn't an active promotion code in
-  Stripe yet, it falls back to manual entry instead of blocking the purchase.
-  Only codes in the PROMO_LINKS table are honored - this is a pre-fill for
-  advertised deals, not an "apply any string" input.
-- **Graphic** - recreation of the EDGE3 annual X graphic with the birthday
-  framing: $400/yr, code BDAY, link cbedge.net/bday
-  (`generated/2026-09-02-bday-annual-x-post.png`, editable HTML alongside).
-
-**BDAY must exist in Stripe as an ACTIVE promotion code** (on a $600-off-once
-coupon, yearly price) before the link goes out - same requirement EDGE3 had.
-
-## 2026-09-01 - The flow tape was 99% of socket egress; the alarm caught it day one
-
-First trading day after the /ws/gex fix. Cloudflare fell 53GB -> 19.92GB (-77.5%),
-but with a 4.87GB spike in one bucket at 10:29 ET. The WS_ALERT watchdog shipped
-the night before named the culprit without any investigation:
-
-    [WS-ALERT] /ws/gex egress high: 653.06MB/min total outbound
-      - projecting ~940.4GB/day. last-min split:
-      flow 646.20MB, status 4.31MB, gex 2.28MB, aux 0.17MB, spot 0.09MB
-
-flow was 99% of everything the socket sent.
-
-### Why
-
-`FlowProcessor.bucket()` (server-v2/computation/flow-processor.js) returns nine
-small scalars plus `tape` - the ENTIRE per-order session FIFO, capped at
-FLOW_TAPE_CAP (default 8000) and filtered by FLOW_TAPE_FLOOR. Production runs
-that floor at $500 rather than the $5000 default so equity-option blocks survive
-long enough for the client's per-ticker filter, which means ~10x more orders
-clear it. The broadcast then shipped that whole array to every client twice a
-second, growing all session:
-
-    3,413 orders x ~500B  ~= 1.7MB per frame
-           x 2 frames/sec  ~= 3.4MB/s per client
-           x 3 clients      ~= 615MB/min        (measured: 646MB/min)
-
-The August dedupe fix only ever helped when the market was QUIET. Once prints are
-landing the content genuinely changes on every 500ms publish, the skip-if-
-unchanged check passes every time, and the full tape goes out regardless. That is
-why it looked fine in every off-hours probe - a pre-market probe measured
-`flow 5646b` and read as harmless. The shape only exists once the tape fills.
-
-### Fix - server-v2/websocket-server.js
-
-The fix was already in the file, applied to the wrong half. `trimSnapshotFlow()`
-trims the tape to SNAPSHOT_TAPE_MAX (150) for the connect snapshot, and its
-comment gives the reason: "the client backfills full history from SQL separately,
-and the FlowTape only renders a scrolling window." That same comment then said
-"Live broadcasts are unaffected" - which was the bug, not a feature.
-
-Live frames now trim too, via `trimBroadcastFlow()` / FLOW_BROADCAST_TAPE_MAX
-(default 300, 2x the snapshot window so a client cannot miss prints between
-frames; 0 restores the full tape). Every client already receives a 150-order tape
-on connect and renders it fine, so a trimmed live frame is a shape the client is
-guaranteed to handle.
-
-Applied ONLY on the wire. The processor's own tape is untouched at 8000, so
-`writeFlowTape()` persistence and `flowGexAccumulator.ingestTape()` (dealer
-inventory) still see every order. /flow's SQL backfill is unaffected.
-
-Two supporting changes:
-
-- **Dedupe now keys on the TRIMMED payload.** Coalescing can mutate an order that
-  has already scrolled out of the broadcast window ("a sweep that starts small can
-  still grow into a real block"), which would otherwise defeat the dedupe and
-  resend a byte-identical frame. Keying on what is actually sent fixes that.
-- **FLOW_BROADCAST_MS_RTH** (default 0) as a second lever. The RTH floor stays 0
-  because a flow tape's whole value is immediacy and the trim is what actually
-  bounds the volume; set it to 1000 to halve the frame rate at the cost of up to
-  1s of tape latency.
-
-Measured against a model of the real payload: **11.3x** at cap=300 (22.6x at 150).
-646MB/min -> roughly 57MB/min, and the 4.87GB spike bucket -> ~0.43GB.
-
-Note: 57MB/min peak is still above WS_ALERT_MB_PER_MIN (30), so a heavy session
-may still trip the total-bytes alarm. That is the alarm working as a peak
-indicator, not a regression - if it becomes noise, drop FLOW_BROADCAST_TAPE_MAX to
-150 or set FLOW_BROADCAST_MS_RTH=1000 before raising the threshold.
-
-### Also live as of today
-
-`WS_DEFLATE=default` and `WS_AUTH_REQUIRED=1` are both on and browser-confirmed.
-Anonymous connections now get a 401 at the upgrade with ZERO bytes sent (no
-snapshot to unauthorized clients). 10/10 users across trialing / active / comped
-verified against the gate before enabling. Both flags live only in .env.local on
-the VPS, which is not in git.
+The card is tappable on the phone too - a new `settleFlow` action on
+`/api/hh/budget` writes the same `budget_flow_settled` row the owner page
+writes. That is a deliberate exception to "everything above the register is read
+only": saying a paycheque already landed is a one-handed correction, and it is
+the difference between the card being right and being wrong.
 
 ## 2026-08-31 - Budget overview: Rent / Bank / Upcoming Pay move above cash flow
 

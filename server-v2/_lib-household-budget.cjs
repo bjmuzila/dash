@@ -156,6 +156,11 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
   // above and for the same reason — an older _lib-db.cjs without these exports
   // must degrade to a zeroed tile, not a 500 on the whole month.
   const amazonRows = await optional(libDb, 'listAmazonRows', profile.id, from, to);
+  // Rent-card marks: occurrences told "already cleared / not coming". Same
+  // typeof-guard as the rest — an older _lib-db.cjs without the table must
+  // degrade to an unmarked card, never a 500 on the whole month.
+  const settledRows = await optional(libDb, 'listSettledFlows', profile.id, null);
+  const settledKeys = new Set(settledRows.map((r) => String(r.flow_key)));
   const propRows = await optional(libDb, 'listPropRows', profile.id, from, to);
   // Only for the cash-flow chart's Monthly mode. Real rows across the year — no
   // recurrence expansion, matching the desktop's `yearMonths`.
@@ -323,7 +328,11 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
     recurringCount: recurring.filter((r) => r.active).length,
     amazon,
     bzila,
-    briefing: buildBriefing({ month: m, today, register, recurring, allBanks: inBank, bankAsOf }),
+    briefing: buildBriefing({ month: m, today, register, recurring, allBanks: inBank, bankAsOf, settled: settledKeys }),
+    // The rent countdown, above the briefing on the phone: it is the one bill
+    // big enough that the answer changes what you do today.
+    rent: buildRent({ month: m, today, register, recurring, allBanks: inBank, settled: settledKeys }),
+    settledFlows: [...settledKeys],
     overview: buildOverview({
       month: m, today, rows, register, recurring, categories, bankNow,
       dailyBalance, prevDailyBalance, categorySpend: spentByCategory, unsorted,
@@ -397,9 +406,96 @@ function buildBzila(propRows, register, categories) {
  * what is in the bank. Without it any month with rent outstanding reads as a
  * disaster on the 1st and recovers on payday, which is noise, not information.
  */
+/**
+ * The rent countdown, identical in arithmetic to the desktop card.
+ *
+ * Rent is due on the 5th. The question the card answers is not "what does rent
+ * cost" but "will there be enough in the account on the day it hits", so it
+ * projects from the CURRENT bank balance and adds every scheduled income and
+ * subtracts every scheduled bill landing between today and the 5th.
+ *
+ * That projection double counts anything that already landed: an early paycheck
+ * is already inside the balance it starts from. `budget_flow_settled` records
+ * the occurrences that have been marked "already cleared / not coming"; they
+ * stay in the returned list so the schedule still reads whole, flagged
+ * `settled: true`, and are excluded from the totals.
+ *
+ * Every flow carries the same occurrence key the desktop uses — 'row:<id>' for
+ * a real register row, '__recur__:<ruleId>:<date>' for a projected one — so a
+ * mark made on the laptop shows on the phone and vice versa.
+ */
+const RENT_DAY = 5;
+function buildRent({ month, today, register, recurring, allBanks, settled = new Set() }) {
+  const rentRule = recurring.find((r) => r.active && Number(r.amount) < 0 && /rent/i.test(r.label || ''));
+  const rentAmount = rentRule ? Math.abs(Number(rentRule.amount)) : 0;
+
+  const [ty, tm, td] = today.split('-').map(Number);
+  let dueY = ty, dueM = tm;
+  if (td > RENT_DAY) { dueM += 1; if (dueM > 12) { dueM = 1; dueY += 1; } }
+  const dueYm = `${dueY}-${pad(dueM)}`;
+  const dueIso = `${dueYm}-${pad(RENT_DAY)}`;
+  const daysUntil = Math.max(0, daysBetween(today, dueIso));
+
+  // Already paid this cycle: a real, non-beginning rent row inside the due month.
+  const paid = register.some((r) => !r.is_beginning && Number(r.amount) < 0 &&
+    /rent/i.test(r.label || '') && String(r.entry_date).slice(0, 7) === dueYm);
+
+  const inWindow = (d) => d >= today && d <= dueIso;
+  const isRent = (label) => /rent/i.test(label || '');
+  const materialised = new Set(
+    register
+      .filter((r) => !r.is_beginning && typeof r.recurring_tag === 'string' &&
+                     r.recurring_tag.startsWith('__recur__:'))
+      .map((r) => r.recurring_tag),
+  );
+
+  // Calendar months the window touches — this month, plus next when it wraps.
+  const months = [];
+  for (let y = ty, mo = tm, guard = 0; guard < 4; guard++) {
+    const ym = `${y}-${pad(mo)}`;
+    months.push(ym);
+    if (ym === dueYm) break;
+    mo += 1; if (mo > 12) { mo = 1; y += 1; }
+  }
+
+  const flows = [];
+  for (const r of register) {
+    if (r.is_beginning || !inWindow(String(r.entry_date))) continue;
+    const key = `row:${r.id}`;
+    flows.push({ key, label: r.label, amount: Number(r.amount), date: String(r.entry_date), settled: settled.has(key) });
+  }
+  for (const rule of recurring) {
+    if (!rule.active) continue;
+    for (const ym of months) {
+      for (const date of occurrencesInMonth(rule, ym)) {
+        const key = recurTag(rule.id, date);
+        if (!inWindow(date) || materialised.has(key)) continue;
+        flows.push({ key, label: rule.label, amount: Number(rule.amount), date, settled: settled.has(key) });
+      }
+    }
+  }
+  flows.sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  const incoming = flows.filter((f) => f.amount > 0);
+  const outgoing = flows.filter((f) => f.amount < 0 && !isRent(f.label));
+  const incomingTotal = incoming.filter((f) => !f.settled).reduce((s, f) => s + f.amount, 0);
+  const outgoingTotal = outgoing.filter((f) => !f.settled).reduce((s, f) => s + Math.abs(f.amount), 0);
+  const settledCount = flows.filter((f) => f.settled).length;
+  const projected = allBanks + incomingTotal - outgoingTotal;
+  const shortfall = Math.max(0, rentAmount - projected);
+
+  return {
+    rentAmount, daysUntil, dueIso, paid,
+    available: allBanks,
+    incoming, outgoing, incomingTotal, outgoingTotal, settledCount,
+    projected, shortfall,
+    perDay: daysUntil > 0 ? shortfall / daysUntil : shortfall,
+  };
+}
+
 const SAFE_BUFFER = Number(process.env.BUDGET_SAFE_BUFFER || 200);
 
-function buildBriefing({ month, today, register, recurring, allBanks, bankAsOf = null }) {
+function buildBriefing({ month, today, register, recurring, allBanks, bankAsOf = null, settled = new Set() }) {
   const paid = new Set(
     register.filter((r) => !r.is_beginning && typeof r.recurring_tag === 'string'
                         && r.recurring_tag.startsWith('__recur__:'))
@@ -411,7 +507,15 @@ function buildBriefing({ month, today, register, recurring, allBanks, bankAsOf =
     const amt = Number(rule.amount) || 0;
     if (amt === 0) continue;
     for (const date of occurrencesInMonth(rule, month)) {
-      if (paid.has(recurTag(rule.id, date))) continue;
+      // `paid` = a real row already carries this occurrence's tag.
+      // `settled` = the Rent card was told it already cleared (or is not
+      // coming). Both mean the same thing here: `allBanks` is the CURRENT bank
+      // balance, so counting the occurrence again on top of it double-counts
+      // the money — and this card sits directly under the rent card, which
+      // already excludes them. Two cards disagreeing about the same paycheque
+      // is worse than either being wrong alone.
+      const tag = recurTag(rule.id, date);
+      if (paid.has(tag) || settled.has(tag)) continue;
       if (amt < 0) bills.push({ label: rule.label, amount: Math.abs(amt), date, pastDue: date < today });
       else incoming.push({ label: rule.label, amount: amt, date, late: date < today });
     }
@@ -792,6 +896,25 @@ async function setDailyBalance(profileKey, { day, coastal, truist, secu }) {
   });
 }
 
+/**
+ * Mark one rent-card flow already cleared (or not coming), or clear the mark.
+ * Writes the same `budget_flow_settled` row the desktop card writes, so the two
+ * surfaces can never disagree about which lines are being counted.
+ */
+async function setSettledFlow(profileKey, { key, label, date, on }) {
+  if (!libDb || typeof libDb.setSettledFlow !== 'function') throw new Error('Not available on this server yet.');
+  const flowKey = String(key || '').trim().slice(0, 120);
+  if (!flowKey) throw new Error('Which line?');
+  const profile = await profileFor(profileKey);
+  return libDb.setSettledFlow({
+    profile_id: profile.id,
+    flow_key: flowKey,
+    label: String(label || '').slice(0, 120),
+    entry_date: isDate(date) ? String(date) : '',
+    on: on !== false,
+  });
+}
+
 async function setRowCategory(profileKey, id, categoryId) {
   const profile = await profileFor(profileKey);
   if (!Number.isInteger(id) || id <= 0) throw new Error('That row is a scheduled bill.');
@@ -835,7 +958,8 @@ async function summary(profileKey, tz = 'America/New_York') {
 module.exports = {
   available, BANKS, buildOverview, daysBetween, isoDay,
   getMonth, summary,
-  addRow, markBillPaid, updateRow, deleteRow, setDailyBalance, setRowCategory,
+  addRow, markBillPaid, updateRow, deleteRow, setDailyBalance, setRowCategory, setSettledFlow,
+  buildRent,
   // exported for the parity tests
   occurrencesInMonth, recurTag, addDays, monthRange, currentMonth, todayIn,
 };

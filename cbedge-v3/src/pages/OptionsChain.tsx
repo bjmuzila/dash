@@ -50,7 +50,14 @@ import { ReplayBar } from './optionsChain/ReplayBar'
 import { StrikeHoverCard } from './optionsChain/StrikeHoverCard'
 import { HEAT_SKINS, type HeatSkin } from './optionsChain/heatSkins'
 import { INTENSITY_MIN } from './optionsChain/chainMath'
-import { DATA_MODE_LABEL, DISPLAY_PERCENTS, GREEK_MODES, useChainData, type GreekMode } from './optionsChain/useChainData'
+import {
+  DATA_MODE_LABEL,
+  DISPLAY_PERCENTS,
+  GREEK_MODES,
+  useChainData,
+  type GreekMode,
+  type ReplayScope,
+} from './optionsChain/useChainData'
 import type { DataMode } from './optionsChain/chainMath'
 
 /** The ↻ button's four states and its 1800ms revert, transcribed from v2's
@@ -79,9 +86,28 @@ function useRefreshButton(fn: () => Promise<void>) {
   return { trigger, label, state }
 }
 
-export default function OptionsChain() {
+export interface OptionsChainProps {
+  /**
+   * Open ALREADY REWOUND. /replay mounts the page this way: making the user
+   * press the page's own Replay toggle first is asking them to confirm the
+   * thing they just navigated to. It is INITIAL STATE only — the cog's toggle
+   * still works, so exiting replay from inside the tab behaves normally.
+   */
+  initialReplay?: boolean
+  /**
+   * Which expiries a rewound grid opens on. /replay passes "0dte": that tab is
+   * for watching the FRONT contract move, and "all expiries" is one click away
+   * on the bar's own scope control.
+   */
+  initialReplayScope?: ReplayScope
+}
+
+export default function OptionsChain({
+  initialReplay = false,
+  initialReplayScope = 'all',
+}: OptionsChainProps = {}) {
   const { symbol } = usePageSymbol()
-  const c = useChainData({ symbol })
+  const c = useChainData({ symbol, initialReplay, initialReplayScope })
 
   const [cogOpen, setCogOpen] = useState(false)
   const [ladderOpen, setLadderOpen] = useState(false)

@@ -77,8 +77,15 @@ function occurrencesInMonth(rule, month) {
 
 // Port of the /owner/budget Rent card's rentInfo: project cash flow to the 5th
 // (every other income + expense landing before rent) so we can answer whether
-// rent is covered when it's due. Keep in sync with app/owner/budget/page.tsx.
-function computeRent(register, recurring, allBanks, today) {
+// rent is covered when it's due. Keep in sync with owner-vite/src/pages/Budget.tsx.
+//
+// `settled` carries the occurrences marked "already cleared / not coming" on
+// the card (budget_flow_settled, returned by /api/budget as settledFlows).
+// Skipping them is not cosmetic: `allBanks` is the CURRENT bank balance, so a
+// paycheque that already landed is inside it, and adding the scheduled
+// occurrence on top counts the same money twice. That is what made this email
+// the most optimistic of the three surfaces.
+function computeRent(register, recurring, allBanks, today, settled = new Set()) {
   const RENT_DAY = 5;
   const rentRule = recurring.find((r) => r.active && r.amount < 0 && /rent/i.test(r.label));
   if (!rentRule) return null;
@@ -103,13 +110,15 @@ function computeRent(register, recurring, allBanks, today) {
   const flows = [];
   for (const r of register) {
     if (r.is_beginning || !inWindow(r.entry_date)) continue;
+    if (settled.has(`row:${r.id}`)) continue;
     flows.push({ label: r.label, amount: r.amount, date: r.entry_date });
   }
   for (const rule of recurring) {
     if (!rule.active) continue;
     for (const ym of months) {
       for (const date of occurrencesInMonth(rule, ym)) {
-        if (!inWindow(date) || materialized.has(`__recur__:${rule.id}:${date}`)) continue;
+        const tag = `__recur__:${rule.id}:${date}`;
+        if (!inWindow(date) || materialized.has(tag) || settled.has(tag)) continue;
         flows.push({ label: rule.label, amount: rule.amount, date });
       }
     }
@@ -196,6 +205,13 @@ async function buildWriteup(base, cookie, month) {
 
   const allBanks = db ? (db.coastal || 0) + (db.truist || 0) + (db.secu || 0) : 0;
 
+  // Occurrences marked "already cleared / not coming" on the Rent card. They
+  // are excluded EVERYWHERE below for the same reason: `allBanks` is the bank
+  // balance as it stands, so anything already inside it must not be added or
+  // subtracted a second time. Without this the email is the only surface still
+  // double-counting an early paycheque.
+  const settled = new Set(Array.isArray(d.settledFlows) ? d.settledFlows.map(String) : []);
+
   // Every recurring outflow this month that hasn't been logged as paid yet.
   // A rule occurrence is "paid" once a real register row carries its tag.
   const paid = new Set(
@@ -207,7 +223,7 @@ async function buildWriteup(base, cookie, month) {
     if (!rule.active || rule.amount >= 0) continue;
     for (const date of occurrencesInMonth(rule, month)) {
       const tag = `__recur__:${rule.id}:${date}`;
-      if (paid.has(tag)) continue;
+      if (paid.has(tag) || settled.has(tag)) continue;
       bills.push({ label: rule.label, amount: Math.abs(rule.amount), date, pastDue: date < today });
     }
   }
@@ -224,7 +240,7 @@ async function buildWriteup(base, cookie, month) {
     if (!rule.active || rule.amount <= 0) continue;
     for (const date of occurrencesInMonth(rule, month)) {
       const tag = `__recur__:${rule.id}:${date}`;
-      if (paid.has(tag)) continue;
+      if (paid.has(tag) || settled.has(tag)) continue;
       incoming.push({ label: rule.label, amount: rule.amount, date, late: date < today });
     }
   }
@@ -237,7 +253,7 @@ async function buildWriteup(base, cookie, month) {
   const after = available - owed;
 
   // Rent projection (mirrors the /owner/budget Rent card) — shown under STILL DUE.
-  const rentHtml = rentSection(computeRent(register, recurring, allBanks, today));
+  const rentHtml = rentSection(computeRent(register, recurring, allBanks, today, settled));
 
   // The headline: can we cover what's still due this month, and is it safe to spend?
   let tone, verdict, sub;

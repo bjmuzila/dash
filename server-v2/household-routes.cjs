@@ -1432,6 +1432,16 @@ function registerHouseholdRoutes({ register, send, readJson }) {
             await hbudget.setRowCategory(key, Number(body?.id), body?.categoryId);
             send(res, 200, { ok: true }, nostore); return;
           }
+          // Rent card: mark a scheduled line already cleared (or not coming) so
+          // it stops being counted twice. Writes the SAME budget_flow_settled
+          // row /owner/budget writes — tap it off on the phone and the laptop
+          // agrees on the next load.
+          if (action === 'settleFlow') {
+            await hbudget.setSettledFlow(key, {
+              key: body?.key, label: body?.label, date: body?.date, on: body?.on,
+            });
+            send(res, 200, { ok: true }, nostore); return;
+          }
 
           send(res, 400, { error: `Unknown action: ${action}` }, nostore);
         } catch (err) {

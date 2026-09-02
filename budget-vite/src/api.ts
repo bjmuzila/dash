@@ -349,6 +349,42 @@ export type BudgetBriefing = {
   stillDue: { label: string; amount: number; date: string; pastDue: boolean }[]
 }
 
+/** One scheduled line on the rent countdown, with its own occurrence key. */
+export type RentFlow = {
+  /** 'row:<id>' for a real register row, '__recur__:<ruleId>:<date>' for a
+   *  projected one — the SAME key /owner/budget writes, so a line tapped off on
+   *  the laptop is tapped off here. */
+  key: string
+  label: string
+  amount: number
+  date: string
+  /** Already cleared (or not coming): still listed, but out of the totals. */
+  settled: boolean
+}
+
+/**
+ * Rent, and whether the account clears it on the 5th.
+ *
+ * `projected` starts from the bank balance and applies only the UNSETTLED
+ * flows — anything marked settled is already inside that balance, so counting
+ * it again would invent money.
+ */
+export type BudgetRent = {
+  rentAmount: number
+  daysUntil: number
+  dueIso: string
+  paid: boolean
+  available: number
+  incoming: RentFlow[]
+  outgoing: RentFlow[]
+  incomingTotal: number
+  outgoingTotal: number
+  settledCount: number
+  projected: number
+  shortfall: number
+  perDay: number
+}
+
 export type BudgetMonth = {
   month: string
   today: string
@@ -374,6 +410,8 @@ export type BudgetMonth = {
   bzila: { inAmt: number; outAmt: number; net: number
            streams: { prop: number; cbedge: number; contracts: number } }
   briefing: BudgetBriefing
+  /** Optional: an older server predates the rent card. */
+  rent?: BudgetRent
   overview: BudgetOverview
 }
 
@@ -681,6 +719,9 @@ export const budget = {
   deleteRow: (id: number) => api.post<{ ok: true }>('/api/hh/budget', { action: 'deleteRow', id }),
   setDailyBalance: (b: { day: string; coastal: number; truist: number; secu: number }) =>
     api.post<{ ok: true }>('/api/hh/budget', { action: 'setDailyBalance', ...b }),
+  /** Mark a rent-card line already cleared / not coming (or put it back). */
+  settleFlow: (f: { key: string; label: string; date: string; on: boolean }) =>
+    api.post<{ ok: true }>('/api/hh/budget', { action: 'settleFlow', ...f }),
 }
 
 export const weather = {

@@ -34,15 +34,15 @@ components it mounts:
 
 **Total: 187 checklist rows.**
 
-| Part | Covers | Rows | Already in v3? |
+| Part | Covers | Rows | What it took |
 |---|---|---|---|
-| A | Page frame, tab bar, hash routing, the two mount shapes | 18 | no — build |
-| B | Tab 1 "Chain ladder" — `ChainReplay embedded` | 27 | **yes**, as `optionsChain/LadderModal.tsx` (modal only) |
-| C | Tab 2 "GEX levels" — `TickerLookupCard embedded initialReplay` | 54 | **yes**, as `analysis/lookup/TickerLookup.tsx` (props already exist) |
-| D | Tab 3 "Multi Greek" — `MultGreekClient initialReplay` | 58 | **no** — card exists, page and replay path do not |
-| E | Tab 4 "Options chain" — `initialReplay` + `initialReplayScope="0dte"` | 12 | **yes**, minus the two props |
-| F | Shared data layer — the recorder endpoints | 8 | partly |
-| G | Cross-tab behaviour, persistence, keyboard | 10 | no |
+| A | Page frame, tab bar, hash routing, the two mount shapes | 18 | NEW — `src/pages/Replay.tsx` |
+| B | Tab 1 "Chain ladder" — `ChainReplay embedded` | 27 | `optionsChain/LadderModal.tsx` + an `embedded` shape |
+| C | Tab 2 "GEX levels" — `TickerLookupCard embedded initialReplay` | 54 | `analysis/lookup/TickerLookup.tsx` — already had both props; a two-line mount, plus the Δ sign fix |
+| D | Tab 3 "Multi Greek" — `MultGreekClient initialReplay` | 58 | NEW — `src/pages/replay/mgReplay.ts` + `MultiGreekReplay.tsx` |
+| E | Tab 4 "Options chain" — `initialReplay` + `initialReplayScope="0dte"` | 12 | two props threaded into `useChainData` |
+| F | Shared data layer — the recorder endpoints | 8 | `query()` in the two new files |
+| G | Cross-tab behaviour, persistence, keyboard | 10 | `App.tsx`, `Shell.tsx`, `app/v3/replay/route.ts` |
 
 Parts B, C and E are deliberately SHORT: their full row-by-row inventories
 already exist and are not duplicated here. They live in
@@ -70,33 +70,39 @@ must report every one as a `~ soft` line rather than passing over it.
 
 ---
 
-## Open decisions — answer these before Part 2
+## Decisions — settled 2026-09-02
 
-Five things where transcribing v2 verbatim would carry a defect across. Each
-needs a yes/no, not a judgement call during the build.
+Five places where transcribing v2 verbatim would have carried a defect across.
+Brandon's answers, and what each one means in the code.
 
-1. **The Δ double-sign bug (Part C, `Δ 1D` column).** v2 renders `++1.2B` and
-   `−+840M`: the cell prepends its own sign and then calls `fmtBig`, which
-   prepends one too. The column is suppressed in replay, so it is invisible on
-   `/replay` — but the same `TickerLookupCard` renders it live on `/analytics`.
-   Fix in the shared component, or transcribe?
-2. **"No recorded sweeps for {ticker} this session" is unreachable** (Part D).
-   A panel whose ticker has no session, or whose clock is before its first
-   sweep, falls through to the LIVE empty string `"Select an expiry and click
-   GO"` — which is nonsense in a replay page with no GO button. Fix, or
-   transcribe?
-3. **CW/PW have no spot filter in v2** (Part D). `computeWalls` picks the top
-   `+GEX` and most `−GEX` strikes with no requirement that CW sit above spot or
-   PW below. v3's `board/multiGreek/mgMath.ts` has already added
-   `strike > spot` / `strike < spot` guards. **These two are not the same page
-   today.** Which one is correct?
-4. **`MAX_EXP_COLS` is 4 in v2, 3 in v3's `mgMath.ts`.** Same question.
-5. **The chain-ladder tab has no symbol coupling** (Part B). `ChainReplay`
-   carries its own picker and defaults to MSFT-if-recorded; the other three tabs
-   follow their own symbol too. v3 has a board-wide `usePageSymbol` in the
-   Shell. Does `/v3/replay` bind its tabs to the board symbol, or keep four
-   independent symbols the way v2 does? (v2's answer is four independent; the
-   Shell's ticker control will look broken either way unless this is decided.)
+| # | Question | Answer | Where it landed |
+|---|---|---|---|
+| 1 | The Δ double-sign bug — v2 renders `++1.2B` / `−+840M` because the cell prepends a sign and `fmtBig` prepends another | **FIX** | `src/pages/analysis/lookup/Ladder.tsx` — `ChangeCell` prints `fmtBig(chg)` and nothing else, in the value AND the tooltip. One sign, ASCII, exactly like the Value column beside it. The column is suppressed in replay, so this is visible on `/analytics` rather than here — fixed in the shared component, once |
+| 2 | `"No recorded sweeps for {ticker} this session"` is unreachable in v2; a panel with no session falls through to the LIVE string `"Select an expiry and click GO"` | **FIX** | `MultiGreekReplay.tsx` → `emptyState()`. Three states told apart: loading → `Loading recorded session…`; no session → `No recorded sweeps for {ticker} this session`; session but the clock precedes its first sweep → `{ticker} had not swept yet at {HH:MM} ET`. No GO-button advice on a page with no GO button |
+| 3 | CW/PW have no spot filter in v2; v3's `mgMath.columnStats` requires CW above spot and PW below | **v3 logic** | `board/multiGreek/mgMath.ts` unchanged, imported by the replay panel. One definition of a wall in v3, not two |
+| 4 | `MAX_EXP_COLS` is 4 in v2, 3 in v3 | **v3 logic** | Same import. v2's `4` was silently identical to `3` — the chain route returns the nearest expiration plus at most two more |
+| 5 | Four independent symbols (v2) or bound to the v3 Shell's board ticker | **like v2** | Four independent slots in `MultiGreekReplay.tsx`, defaults `SPX / SPY / QQQ / NDX`, persisted at `cb-v3-replay-mg-tickers`, duplicates refused, an empty box restores that slot's default. The other three tabs keep their own symbol too. Same reasoning as the Multi Greek note in `src/data/symbol.tsx`: a page that compares four symbols WITH each other cannot take one board symbol |
+
+Two consequences of 3 and 4 worth stating out loud, because they are the only
+places `/v3/replay` will deliberately disagree with `/app/replay` on a NUMBER
+rather than on a pixel:
+
+- a v2 Call Wall that sits **below** spot has no v3 counterpart — v3 picks the
+  next-best `+GEX` strike above spot instead, or `null`;
+- v2's Columns control offers `4`; v3's offers `1 | 2 | 3`.
+
+`scripts/parity-check-replay.mjs` will report both as differences rather than
+losses. That is correct and it should stay noisy.
+
+Also settled while building, and recorded here rather than discovered later:
+
+- **`fmtGex` differs and stays differing.** v2's `fmtCell` prints `1.2B` with no
+  `$` and no `+`; v3's `mgMath.fmtGex` prints `+$1.23B`. The v3 form is what the
+  live Multi Greek card already shows, and two Multi Greek surfaces in one app
+  formatting the same number two ways is worse than either form.
+- **`cellAlpha`'s ramp** (`{base .04, span .55, max .62, ease 1.6}`) matches
+  neither of v2's skins. Same reasoning: it is what the live card paints, and
+  the replay board sits beside it.
 
 ---
 
@@ -396,7 +402,7 @@ Rendered when `replayOn && !isStatic`. Container `flexShrink 0 · flex · alignI
 | D55 | ATM ring | `r.isATM` | `boxShadow: inset 0 2px 0 #fff, inset 0 -2px 0 #fff, inset 2px 0 0 #fff, inset -2px 0 0 #fff` on the whole row | **universal, not skin-gated** | — |
 | D56 | GEX cell — value | `r.gex[e]` | `val == null` **or** `val === 0` → `"--"`; else `fmtCell` → `≥1e9` `1dp B` · `≥1e6` `1dp M` · `≥1e3` `0dp K` · else `0dp`. `sign = n < 0 ? "-" : ""` — **positives get NO sign, no `$`** (money skin: `$ (a/1e6).toFixed(2) M`) | ink `SK.cell.text` — sign and value are ONE run, never two colours. Weight `SK.cell.weight[topRank===1?0:topRank?1:2]` | a strike absent from this sweep stays `undefined` → `--`, deliberately NOT `0` ("no gamma here" is a different claim from "not recorded at this moment") |
 | D57 | GEX cell — heat | `skinMetricBg(val, maxAbs[e], topRank, intensity, SK)` | `n===0 \|\| max===0` → transparent; rank 1–3 → `skinRankBg`; else `alpha = min(ramp.max, ramp.base + ((ratio × max(intensity,1)) ** ramp.ease) × ramp.span)`, colour `rgba(SK.pos \| SK.neg, alpha)` | `SK.pos = "41,182,246"`, `SK.neg = "255,71,87"`. CLASSIC ramp `{base .02, span .16, max .18, ease 1.4}`, rank `[.90,.45,.25]`, intensity `{def 1.75, max 3}`, `levelFill false`. VIVID ramp `{base .05, span .25, max 1, ease .4}`, rank `[.95,.62,.40]`, intensity `{def 3, max 4}`, `levelFill true` | `val == null` → transparent |
-| D58 | v3 divergence — flag | `board/multiGreek/mgMath.ts` | `MAX_EXP_COLS` 3 vs v2's 4 · `columnStats` adds `strike > spot` / `strike < spot` guards to CW/PW that v2 does not have · `fmtGex` prints `+` on positives and `$…M/B/K` where v2's `fmtCell` prints no `$` and no `+` · `cellAlpha` RAMP `{base .04, span .55, max .62, ease 1.6}` matches neither skin | **Four silent behaviour changes.** Open decisions 3 and 4 | — |
+| D58 | v3 divergence — SETTLED | `board/multiGreek/mgMath.ts`, imported unchanged | `MAX_EXP_COLS` 3 · `columnStats` guards CW above spot and PW below · `fmtGex` prints `+$1.23B` · `cellAlpha` RAMP `{base .04, span .55, max .62, ease 1.6}` | All four are v3's, by decision (see *Decisions — settled*). The replay board and the live board therefore agree with each other, and disagree with v2 in the four ways listed there | — |
 | D59 | Rank-1 ring | `!levelsOnly && topRank===1 && val != null` | `outline 1px solid rgba(SK.pos\|SK.neg, .9)`, `outlineOffset -1px`, `zIndex 1` | by sign | — |
 | D60 | `★` peak star | `!levelsOnly && !isFront && topRank===1` | `position absolute · top 1 · left 2 · 10px · lineHeight 1 · pointerEvents none` | normal: `#ffd600` with `textShadow 0 0 2px rgba(0,0,0,.8)`. On a level-filled CB tile: `#04121a` with `textShadow 0 0 2px rgba(255,255,255,.55)` | — |
 | D61 | CB glow | `isCB` → `className="mvc-peak-cell"` | `animation mvcGlow 2.4s ease-in-out infinite`; `0%,100%` → `box-shadow 0 0 3px rgba(255,255,255,.35)`, `50%` → `0 0 10px rgba(255,255,255,.85)` | injected as an inline `<style>` inside each Card | — |
@@ -404,8 +410,8 @@ Rendered when `replayOn && !isStatic`. Container `flexShrink 0 · flex · alignI
 | D63 | Cursor | — | `"default"` while rewound; the click handler is `undefined` | cells are not clickable in replay | — |
 | D64 | Row sort | `allStrikes.sort((a,b) => b - a)` | **descending**, in both live and replay | replay's ladder is the **session's** strike union (fixed for the whole day), so it never shakes while scrubbing | — |
 | D65 | Column order | `displayCols` | the session's expiries ascending, sliced to `colCount`, with the `ALL` column **appended** (`replaceLast = false`) | replay never swaps ALL in for the last expiry | — |
-| D66 | Panel empty (frame, no cols) | — | `` `No recorded sweeps for ${ticker} this session` `` · `height 80 · centred · 12px` | ink `#475569` | **see open decision 2 — this string is unreachable in v2** |
-| D67 | Panel empty (no frame) | — | `"Select an expiry and click GO"` | ink `#475569` | what actually renders for a ticker with no session, or a clock before its first sweep. `spot` is 0, so the header shows `--` |
+| D66 | Panel empty — no session | — | `` `No recorded sweeps for ${ticker} this session` `` | **Unreachable in v2; wired up in v3.** This is now what a ticker the recorder never swept actually says |
+| D67 | Panel empty — clock precedes the first sweep | — | `` `${ticker} had not swept yet at ${HH:MM} ET` `` | v2 prints the LIVE string `"Select an expiry and click GO"` here — advice with no GO button anywhere on the page. Replaced, not transcribed (decision 2). `spot` is 0 in this state, so the header shows `--` |
 | D68 | Panel empty (no rows) | — | `"No strikes in range"` | ink `#475569` | — |
 
 ### D.6 — Derived math (transcribe verbatim)
@@ -505,7 +511,7 @@ tab 3 fire in parallel at entry, not per panel.
 
 | # | Concern | v2 | Note for v3 |
 |---|---|---|---|
-| G1 | Symbol | four independent symbols — tab 1 has its own picker, tabs 2/4 have their own, tab 3 has four | **open decision 5** — the v3 Shell owns a board symbol |
+| G1 | Symbol | four independent symbols — tab 1 has its own picker, tabs 2/4 have their own, tab 3 has four | **SETTLED: like v2.** Four independent slots on tab 3 (`cb-v3-replay-mg-tickers`), and the other tabs keep their own. The Shell's board ticker does not reach this page |
 | G2 | Date | independent per tab. Switching tabs does not carry the session date across | a shared `replayDate` would be new behaviour; flag it, do not smuggle it |
 | G3 | Clock | independent per tab | same |
 | G4 | Unmount | switching tabs unmounts the previous tab entirely (no `keepMounted`) — its fetches, intervals and playback all stop | keep. It is also what makes non-negotiable 5 trivially satisfied here |
@@ -518,9 +524,13 @@ tab 3 fire in parallel at entry, not per panel.
 
 ---
 
-# Verification — `scripts/parity-check-replay.mjs`
+# Verification — `scripts/parity-check-replay.mjs` (built)
 
-Same shape as `parity-check-chain.mjs`: drive `/app/replay` and `/v3/replay` in
+`npm run check:parity:replay` drives it; `npm run check:parity:replay:self`
+exercises `compare()` against fixtures and is wired into `npm run check`.
+
+**119 probes across five surfaces** (the hub plus four tabs). Same shape as
+`parity-check-chain.mjs`: drive `/app/replay` and `/v3/replay` in
 ONE browser against ONE backend in the same minute, harvest the LABELLED VALUES
 out of each, and FAIL on anything present in v2 and absent in v3. Text, not
 selectors — the port replaces every class name on purpose.
@@ -565,9 +575,32 @@ loop; `TL_LADDER_SIDE = 20`; `TL_ANCHOR_SLACK = 5`; `maxAbs` floor of 1;
 `MAX_EXP_COLS`; the CB-collision rule; the first-negative-to-positive flip; and
 every wording in the *Empty or loading* column.
 
-**The honest ledger.** Of 187 rows: Part C (54) is a mount of a component v3
-already ships with the right props. Part E (12) is two props on a page v3
-already ships. Part B (27) is an `embedded` flag on a component v3 already
-ships. Part A (18) and Part G (10) are the hub itself — small, new. **Part D
-(58) is the build**, and it carries four silent divergences that already exist
-in `mgMath.ts`. Estimate accordingly, and answer the five open decisions first.
+**The honest ledger, after the build.** Of 187 rows: Part C (54) was a mount of
+a component v3 already shipped with the right props. Part E (12) was two props.
+Part B (27) was an `embedded` flag. Part A (18) and Part G (10) are the hub
+itself. **Part D (58) was the build** — `mgReplay.ts` (the recorder side: parse,
+timeline, step-hold, session axis) and `MultiGreekReplay.tsx` (four panels, one
+transport), with every wall, rank, ramp and column rule imported unchanged from
+`board/multiGreek/mgMath.ts` so v3 has ONE definition of a wall.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `cbedge-v3/src/pages/Replay.tsx` | NEW — the hub: tab bar, `#tab=` router, FRAMED/FULL mount shapes, four `lazy()` tabs |
+| `cbedge-v3/src/pages/replay/mgReplay.ts` | NEW — recorder parse, minute-bucket timeline, step-hold pick, session axis, replay columns |
+| `cbedge-v3/src/pages/replay/MultiGreekReplay.tsx` | NEW — four panels off one clock, transport, cog |
+| `cbedge-v3/src/pages/optionsChain/LadderModal.tsx` | `embedded` prop; body split out of the portal; Escape bound only when there is something to close |
+| `cbedge-v3/src/pages/OptionsChain.tsx` | `initialReplay` / `initialReplayScope` props, forwarded to `useChainData` (which already accepted them) |
+| `cbedge-v3/src/pages/analysis/lookup/Ladder.tsx` | Δ double-sign fix (decision 1) |
+| `cbedge-v3/src/App.tsx` | `lazy()` route |
+| `cbedge-v3/src/shell/Shell.tsx` | `comingSoon` off, `prefetch: ['/proxy/strike-growth/replay-meta']` on |
+| `app/v3/replay/route.ts` | step 4 of four — `serveSpaShell("v3")` |
+| `cbedge-v3/scripts/parity-check-replay.mjs` + `.test.mjs` | the checker and its self-test |
+| `cbedge-v3/package.json` | `check:parity:replay`, `check:parity:replay:self`, and the latter into `check` |
+
+**Still to run on the laptop, against a live backend:** `npm run check`
+(typecheck, theme, build, budgets, ws scope, perf, every parity self-test) and
+then `npm run check:parity:replay` with `PARITY_COOKIE` set. `check-theme` and
+`check-casing` and the replay self-test were run during the build and are clean;
+the typecheck, the bundle and the budgets need the repo's `node_modules`.
