@@ -177,22 +177,31 @@ function internalHeaders(extra = {}) {
 }
 
 /**
- * Keep the `side` nearest listed strikes each side of `spot`.
+ * Keep the strike NEAREST spot plus the `side` nearest listed strikes each side
+ * of it — 2×side+1 rows, genuinely centred on the money.
  *
- * Strikes at or above spot count as the upper side, so the result is up to
- * 2×side rows centred on the money. Nothing is summed, averaged or rounded —
- * rows are passed through exactly as the snapshot carried them, for the same
- * reason the freeze recorder does no arithmetic: a replayed frame that
- * disagrees with what was on screen that minute makes the whole feature
- * untrustworthy.
+ * It used to anchor on the first strike at-or-above spot and slice
+ * [i-side, i+side), which is 2×side rows and half a strike off centre: the
+ * at-the-money strike counted as part of the UPPER side, so a frame carried
+ * `side` strikes below spot and only `side-1` above it. At side=20 that is 40
+ * rows, and the panel that renders them — section 3 of the Post-Market tab,
+ * which draws ±20 — expects 41.
+ *
+ * Nothing is summed, averaged or rounded: rows are passed through exactly as
+ * the snapshot carried them, for the same reason the freeze recorder does no
+ * arithmetic — a replayed frame that disagrees with what was on screen that
+ * minute makes the whole feature untrustworthy.
  */
 function trimRows(rows, spot, side) {
   if (!Array.isArray(rows) || !rows.length) return rows;
-  if (!(spot > 0) || !(side > 0) || rows.length <= side * 2) return rows;
+  if (!(spot > 0) || !(side > 0) || rows.length <= side * 2 + 1) return rows;
   const sorted = rows.slice().sort((a, b) => Number(a.strike) - Number(b.strike));
-  let i = sorted.findIndex((r) => Number(r.strike) >= spot);
-  if (i < 0) i = sorted.length;
-  return sorted.slice(Math.max(0, i - side), Math.min(sorted.length, i + side));
+  // The centre row: nearest listed strike to spot, kept in every frame.
+  let i = 0;
+  for (let k = 1; k < sorted.length; k++) {
+    if (Math.abs(Number(sorted[k].strike) - spot) < Math.abs(Number(sorted[i].strike) - spot)) i = k;
+  }
+  return sorted.slice(Math.max(0, i - side), Math.min(sorted.length, i + side + 1));
 }
 
 /**

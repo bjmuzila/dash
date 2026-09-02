@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-09-02 - Email: "Version 3 of cbedge.net is coming soon...."
+
+New broadcast template for the v3 teaser, registered as a one-click preset on the
+owner Emails page (owner.cbedge.net -> Emails -> Templates, newest on top). Same
+dark shell as the rest of `lib/emails`: #05060A ground, #0D1119 panel, 3px cyan
+accent bar, centered logo, table layout, all styles inline. Carries a hero
+screenshot (ES candles with live gamma levels) and five feature rows -- faster
+charts, customize layouts, state of the art alerts, easy navigation, replays.
+
+### Files
+
+- `lib/emails/v3-coming-soon.ts` -- NEW. `v3ComingSoonEmail()`, `v3ComingSoonText()`,
+  `V3_COMING_SOON_SUBJECT`. Features live in one `FEATURES` array so the HTML and
+  text bodies cannot drift. Keeps `{{UNSUBSCRIBE_URL}}`. CTA defaults to
+  `/whats-new`; `opts.ctaUrl` / `opts.imageUrl` override.
+- `app/api/admin/email-templates/route.ts` -- imported and appended to
+  `buildTemplates()` as id `v3-coming-soon`. Appended (not prepended) because the
+  list is maintained oldest-first and `newestFirst()` reverses it for the picker.
+- `public/v3-preview-es-candles.png` -- NEW. The hero screenshot, served from the
+  site so mail clients can fetch it (Gmail strips data: URIs).
+- `generated/2026-09-02-v3-coming-soon-email.html` -- rendered preview for the
+  browser. Git-ignored.
+
+## 2026-09-02 - Premarket replay: /es-candles' transport, an RTH switch, and a page that holds still
+
+Four fixes to the /premarket replay, all of them the same complaint from
+different angles — the page moved around too much to actually watch a session
+rebuild.
+
+**The page stopped jumping.** The Key Levels migration line ("was 12.4M → 18.1M
+· +46%") renders nothing when a tile has no move to report. Live that happens
+once, when the baseline lands. Stepped through a recording it happens on almost
+every frame, and because the six tiles are one grid row that is as tall as its
+tallest tile, the entire five-screen page below Key Levels shoved up and down
+each time the scrubber moved. While replay is on, every tile now reserves the
+slot: an empty, invisible mig line of the same height, floored at two wrapped
+lines. Off-replay nothing changes.
+
+**RTH / ETH.** The recorder runs 04:00→16:25 ET, so an ETH session is ~150
+frames and more than half of them are premarket. The transport now carries the
+same two-button strip /es-candles has, in the same place (with the day picker —
+it answers WHICH bars, not HOW you move through them), with the same labels.
+ETH stays the default. Flipping it keeps your place: the cursor lands on the
+nearest frame of the new slice rather than jumping to the close.
+
+**The bar is /es-candles' size.** It was a size and a half bigger than the one
+it was modelled on — 9/20/10 padding, 14px clock, 34px keys. Now 6/16/7, 12px,
+30px, 26px ✕, 10px row gap. On a strip that is permanently on screen for the
+length of a replay that is real viewport back.
+
+**Section 3 is ±20 strikes → 41 rows.** "How the book was built" rendered ±60
+(121 rows, four screens of ladder) while the replay frames are recorded at ±20,
+so past that a replayed session was drawing empty rows — and on a live one the
+outer eighty strikes never carry 2% of the biggest bar. The recorder's trim was
+also half a strike off centre: it anchored on the first strike at-or-above spot
+and sliced [i-20, i+20), which is 40 rows with 20 below spot and only 19 above.
+It now anchors on the strike NEAREST spot and keeps 20 each side — 41.
+
+### Files
+
+- `components/pages/Premarket.tsx` — `replaySession` state + RTH filter memo,
+  `sessionSnapMinRef` so an RTH/ETH flip keeps its place, the RTH/ETH `SegGroup`
+  in the transport's day-picker group, a session-aware "no frames" message,
+  `.rplon` on the page root, `--migH` + the `.mig.ph` reservation rules, and the
+  `.rplbar` / `.rplrow` / `.rplt` / `.rplclock` / `.rplx` size pass.
+- `components/pages/premarket/PostMarketTab.tsx` — `evBars` is `evWindow(20)`.
+- `server-v2/premarket-replay-recorder.js` — `trimRows()` centres on the nearest
+  strike to spot and keeps `2×side+1` rows. Affects newly recorded frames only.
+
 ## 2026-09-02 - Options chain: the CB (Core) cell keeps its sign
 
 A Core Bullseye below spot is negative, but VIVID painted the cell flat gold at

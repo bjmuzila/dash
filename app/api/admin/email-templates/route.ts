@@ -23,6 +23,7 @@ import { mobileFeedbackEmail, mobileFeedbackText, MOBILE_FEEDBACK_SUBJECT } from
 import { midnight300Email, midnight300Text, MIDNIGHT_300_SUBJECT } from "@/lib/emails/midnight-300";
 import { edge3AnnualEmail, edge3AnnualText, EDGE3_ANNUAL_SUBJECT } from "@/lib/emails/edge3-annual";
 import { seasonalityFreeEmail, seasonalityFreeText, SEASONALITY_FREE_SUBJECT } from "@/lib/emails/seasonality-free";
+import { v3ComingSoonEmail, v3ComingSoonText, V3_COMING_SOON_SUBJECT } from "@/lib/emails/v3-coming-soon";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -203,6 +204,13 @@ function buildTemplates(): Template[] {
       subject: SEASONALITY_FREE_SUBJECT,
       html: seasonalityFreeEmail,
       text: seasonalityFreeText,
+    },
+    {
+      id: "v3-coming-soon",
+      label: "🚀 Version 3 coming soon — faster charts, layouts, alerts, replays",
+      subject: V3_COMING_SOON_SUBJECT,
+      html: v3ComingSoonEmail,
+      text: v3ComingSoonText,
     },
   ];
 }

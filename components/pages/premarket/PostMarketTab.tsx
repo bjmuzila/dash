@@ -320,7 +320,7 @@ export const POSTMARKET_CSS = `
 /* ...but only while there IS a column to fill. Below 1180px .body collapses to
    one column (see the Premarket stylesheet), the column's height becomes its
    own content, and a flex child with an indefinite parent height ignores
-   flex-grow — so max-height:none would render all 121 rows and turn section 3
+   flex-grow — so max-height:none would render all 41 rows and turn section 3
    into a page. The cap comes back. */
 @media (max-width:1180px){
   .pmk .col.evcol .evchart{flex:0 1 auto;max-height:440px}
@@ -669,8 +669,16 @@ export default function PostMarketTab(p: PostMarketProps) {
 
   /**
    * Same two-window rule as the premarket profile: ±12 sets the bar SCALE (so a
-   * monster strike far from the money cannot flatten everything near it), ±60
+   * monster strike far from the money cannot flatten everything near it), ±20
    * renders and the panel scrolls.
+   *
+   * ±20 — 41 rows, the strike nearest spot in the middle — rather than the ±60
+   * this used to draw. Two reasons pointing the same way: 121 rows is four
+   * screens of ladder whose outer eighty strikes never carry 2% of the biggest
+   * bar on a 0DTE session, and the REPLAY frames are recorded at ±20 strikes
+   * (server-v2/premarket-replay-recorder.js), so past that a replayed session
+   * was drawing empty rows. One window now, and the live panel shows exactly
+   * the strikes a replay of the same session will.
    */
   const evWindow = useCallback((half: number) => {
     if (!perStrike.length || !(spot > 0)) return [];
@@ -679,7 +687,8 @@ export default function PostMarketTab(p: PostMarketProps) {
     return perStrike.slice(Math.max(0, idx - half), Math.min(perStrike.length, idx + half + 1)).slice().reverse();
   }, [perStrike, spot]);
   const evNear = useMemo(() => evWindow(12), [evWindow]);
-  const evBars = useMemo(() => evWindow(60), [evWindow]);
+  /** ±20 listed strikes each side of spot → 41 rows. See evWindow's header. */
+  const evBars = useMemo(() => evWindow(20), [evWindow]);
 
   /**
    * One row of the evolution profile: where the strike ended, and how it got
@@ -1306,7 +1315,7 @@ export default function PostMarketTab(p: PostMarketProps) {
    * and over each row's CLOSE only, not its peak.
    *
    * FIRST FIX (kept). The scale used to be `max |net|` across evNear (±12
-   * strikes) while the panel renders evBars (±60). Every strike outside the near
+   * strikes) while the panel renders evBars (±20). Every strike outside the near
    * window whose gamma beat the near-window max drew past 100% of the track, and
    * its peak ghost was explicitly `Math.min(46, …)` — so the hatch clamped to
    * exactly the same length on every one of them. That is the "all the bars are

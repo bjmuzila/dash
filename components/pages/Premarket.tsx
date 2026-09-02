@@ -341,6 +341,9 @@ const CSS = `
   /* Two radii for the whole page — the week board's card (12) and its inner
      tile (9). Every rounded surface picks one; nothing types its own. */
   --r:12px; --r2:9px;
+  /* Height a Key Levels migration line is held open to while replay is on —
+     two wrapped lines of 10.5px/1.3 type. See `.pmk.rplon .lvl .mig`. */
+  --migH:28px;
   background:var(--bg);color:var(--txt);
   font:13px/1.45 var(--font-inter),'Inter',ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
   -webkit-font-smoothing:antialiased;height:100%;overflow:auto;
@@ -417,16 +420,20 @@ const CSS = `
 .pmk .rplbtn.on{border-color:var(--cyanEdge);background:var(--cyanWash);color:var(--cyan);font-weight:600}
 .pmk .rplbtn:disabled{opacity:.4;cursor:not-allowed}
 
+/* SIZED TO /es-candles' TRANSPORT, not to this page's cards. That bar is
+   8px of padding, 12px type and a 28px ✕, and it is the one people learn
+   first; this one was a size and a half bigger, which on a strip that is
+   permanently on screen during a replay is real viewport spent on nothing. */
 .pmk .rplbar{position:sticky;bottom:0;z-index:30;
-  padding:9px 20px 10px;border-top:1px solid var(--cyanEdge);
+  padding:6px 16px 7px;border-top:1px solid var(--cyanEdge);
   /* Cyan wash OVER the app's opaque plate: the wash alone is translucent and
      the page scrolls beneath this bar. */
   background:linear-gradient(var(--cyanWash),var(--cyanWash)), var(--plate);
   box-shadow:0 -14px 34px rgba(0,0,0,.34)}
 /* Same centred column as .wrap, so the transport lines up with the page. */
 .pmk .rplwrap{max-width:1560px;margin:0 auto}
-.pmk .rplrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.pmk .rplrow+.rplrow{margin-top:9px}
+.pmk .rplrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pmk .rplrow+.rplrow{margin-top:8px}
 .pmk .rpltag{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
   color:var(--cyan);white-space:nowrap}
 /* One cluster of keys — /es-candles groups its transport the same way, so the
@@ -438,26 +445,26 @@ const CSS = `
 /* Close, pinned right. Same shape and reason as /es-candles' ✕: the
    no-frames branch renders one sentence and no transport, so without this the
    bar could be opened and not closed. */
-.pmk .rplx{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+.pmk .rplx{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;
   background:${ink(0.04)};border:1px solid ${HT.border};color:var(--dim2);cursor:pointer;
-  font:inherit;font-size:15px;line-height:1;font-weight:700;flex-shrink:0}
+  font:inherit;font-size:14px;line-height:1;font-weight:700;flex-shrink:0}
 .pmk .rplx:hover{background:var(--active);color:var(--txt)}
 /* Transport buttons. Square-ish and monospaced so ▶ / ❚❚ do not change the
    button's width when the state flips — a play control that resizes as you use
    it is the one place a 2px shift is genuinely annoying. */
 .pmk .rplt{background:var(--sunken);border:1px solid var(--line2);color:var(--txt);
-  font:inherit;font-size:12px;min-width:34px;padding:4px 9px;border-radius:var(--r2);
+  font:inherit;font-size:11.5px;min-width:30px;padding:3px 8px;border-radius:var(--r2);
   cursor:pointer;font-variant-numeric:tabular-nums}
 .pmk .rplt:hover:not(:disabled){background:var(--active)}
 .pmk .rplt:disabled{opacity:.35;cursor:not-allowed}
 .pmk .rplt.play{min-width:74px;border-color:var(--cyanEdge);color:var(--cyan);font-weight:600}
-.pmk .rplclock{font-size:14px;font-weight:650;color:var(--txt);font-variant-numeric:tabular-nums;
+.pmk .rplclock{font-size:12px;font-weight:600;color:var(--txt);font-variant-numeric:tabular-nums;
   white-space:nowrap}
-.pmk .rplclock small{font-size:10.5px;font-weight:500;color:var(--dim2);letter-spacing:.06em}
+.pmk .rplclock small{font-size:10px;font-weight:500;color:var(--dim2);letter-spacing:.06em}
 /* The scrub is a DockSlider now (width:"auto" → it flexes), so the old bare
    <input type=range> rule is gone rather than left to rot. */
 /* Coverage toggle. Square, so ⓘ never changes the row's height. */
-.pmk .rplt.info{min-width:30px;padding:4px 8px}
+.pmk .rplt.info{min-width:26px;padding:3px 7px}
 .pmk .rplt.info.on{border-color:var(--cyanEdge);color:var(--cyan)}
 /* Takes the scrubber's place when a session has no frames — a dead track
    spanning the bar reads as "loading forever" rather than "nothing recorded". */
@@ -569,6 +576,24 @@ const CSS = `
   display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:10.5px;color:var(--dim2)}
 .pmk .lvl .mig .arw{color:var(--line3)}
 .pmk .lvl .mig .now{color:var(--dim)}
+/* ── HOLDING THE PAGE STILL DURING A REPLAY ────────────────────────────────
+   The mig line is the one part of a Key Levels tile that comes and goes with
+   the DATA rather than with the layout: a strike with no migration to report
+   renders nothing, so the tile is ~34px shorter. Live that happens once, when
+   the baseline lands. Stepped through a recorded session it happens on almost
+   every frame — the six tiles are one grid row, the row is as tall as its
+   tallest tile, and so the entire five-screen page below Key Levels jumps up
+   and down each time the scrubber moves. That is unreadable, and it is the
+   single biggest source of the "the page moves around too much" in replay.
+
+   So while replay is on, every tile reserves the slot: `.mig.ph` is an empty,
+   invisible mig line of the same height, and a real one is floored to it. Two
+   lines' worth, because the wall tiles wrap (tag + was→now + "wall moved …").
+   Off-replay nothing changes — the placeholder is display:none and the tile
+   ends exactly where it always did. */
+.pmk .lvl .mig.ph{display:none}
+.pmk.rplon .lvl .mig{min-height:var(--migH);align-items:flex-start}
+.pmk.rplon .lvl .mig.ph{display:block;border-top-color:transparent}
 /* Tag = the STATE of the move, one word. Neutral by default; only a move that
    actually means something takes a colour, so a screen of grey tags reads
    correctly as "nothing migrated overnight". */
@@ -944,7 +969,13 @@ function MigLine({ tag, tagClass, was, now, pct, note }: {
   pct?: string | null;
   note?: string | null;
 }) {
-  if (!tag && !was && !note) return null;
+  // A tile with nothing to report still holds the ROW'S HEIGHT open — see the
+  // `.mig.ph` rule. Off-replay the placeholder is display:none and this is
+  // exactly the old `return null`; during a replay it is a reserved, invisible
+  // slot, because a mig line that appears on frame 12 and vanishes on frame 13
+  // grows and shrinks the whole Key Levels row and shoves every section below
+  // it up and down the page as the scrubber moves.
+  if (!tag && !was && !note) return <div className="mig ph" aria-hidden />;
   return (
     <div className="mig">
       {tag && <span className={`mtag ${tagClass ?? ""}`}>{tag}</span>}
@@ -1220,8 +1251,35 @@ export default function Premarket() {
   /** Flags only — which dates have frames — so the button can say when it is
    *  pointless to press. One small request, cached for a minute. */
   const { byDate: replayByDate } = useReplayDates(SESSION_COUNT);
-  const { frames: replayFrames, state: replayState } =
+  const { frames: replayFramesAll, state: replayState } =
     usePremarketReplay(sessionDate, replayOn, "SPX");
+  /**
+   * WHICH SLICE OF THE DAY THE CURSOR MAY TRAVEL OVER.
+   *
+   * The recorder runs 04:00→16:25 ET, so an ETH session is ~150 frames and more
+   * than half of them are premarket. Replaying "what the session did" almost
+   * always means the cash session, and scrubbing to it by hand every time is
+   * the sort of chore /es-candles already solved with the same two-button
+   * strip — so this is that control, same labels, same meaning: it answers
+   * WHICH bars, never HOW you move through them.
+   *
+   * ETH stays the default: it is what the bar has always shown, and a control
+   * that silently hides two thirds of a recording on first open is worse than
+   * one press.
+   */
+  const [replaySession, setReplaySession] = useState<"rth" | "eth">("eth");
+  const replayFrames = useMemo(
+    () => (replaySession === "rth"
+      ? replayFramesAll.filter((f) => f.minute >= RTH_OPEN_MIN && f.minute <= RTH_CLOSE_MIN)
+      : replayFramesAll),
+    [replayFramesAll, replaySession],
+  );
+  /**
+   * The minute the cursor was parked on when RTH/ETH was flipped, so the effect
+   * below can land it on the nearest frame of the NEW slice instead of jumping
+   * to the close. Null except across that one re-render.
+   */
+  const sessionSnapMinRef = useRef<number | null>(null);
   const [replayIdx, setReplayIdx] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState<number>(1);
@@ -1268,7 +1326,25 @@ export default function Premarket() {
   // and the scrubber is then dragged backwards to find the moment you want.
   // (ChainReplay lands on frame 0 because it is a standalone player you press
   // Play on; this one is the page, and the page's default is "now".)
+  //
+  // FLIPPING RTH/ETH IS NOT A NEW SESSION. It changes `replayFrames`' identity
+  // and would otherwise fall through the same "land on the last frame" branch,
+  // throwing away the moment you were reading. `sessionSnapMinRef` carries that
+  // minute across the re-render and the cursor lands on the nearest frame of
+  // the new slice instead.
   useEffect(() => {
+    const snap = sessionSnapMinRef.current;
+    sessionSnapMinRef.current = null;
+    if (snap != null && replayFrames.length) {
+      let best = 0, bestD = Infinity;
+      replayFrames.forEach((f, i) => {
+        const d = Math.abs(f.minute - snap);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      setReplayIdx(best);
+      setReplayPlaying(false);
+      return;
+    }
     setReplayIdx(Math.max(0, replayFrames.length - 1));
     setReplayPlaying(false);
   }, [replayFrames]);
@@ -2199,7 +2275,9 @@ export default function Premarket() {
 
 
   return (
-    <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
+    // `rplon` while the transport is open: the page reserves the slots that
+    // would otherwise grow and shrink with each frame (see `--migH`).
+    <div className={`pmk${replayOn ? " rplon" : ""}`} style={{ flex: 1, minHeight: 0 }}>
       <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS + HISTORICAL_CSS + GAMMA_BELL_CSS + CB_CONTRACTS_CSS }} />
       <div className="wrap">
 
@@ -3234,13 +3312,33 @@ export default function Premarket() {
                   onClick={() => stepReplayDate(1)}
                   title="Next recorded session"
                 ><span>▶</span></DockButton>
+                {/* RTH / ETH — WHICH bars, not HOW you move through them, which
+                    is why it sits with the day picker and not with play/scrub/
+                    speed. Identical control, identical position, identical
+                    labels to /es-candles' transport. */}
+                <SegGroup
+                  options={[{ label: "RTH", value: "rth" }, { label: "ETH", value: "eth" }]}
+                  active={replaySession}
+                  onChange={(v) => {
+                    const next = v === "rth" ? "rth" : "eth";
+                    if (next === replaySession) return;
+                    // Remember WHERE the cursor was before the frame list
+                    // changes; the landing effect re-finds that minute.
+                    sessionSnapMinRef.current =
+                      replayFrames[Math.min(replayIdx, replayFrames.length - 1)]?.minute ?? null;
+                    setReplayPlaying(false);
+                    setReplaySession(next);
+                  }}
+                />
               </div>
 
               {!replayFrames.length ? (
                 <span className="rplmsg">
                   {replayState === "loading" ? "Loading this session’s frames…"
                     : replayState === "error" ? "Could not load this session’s frames."
-                      : "No frames recorded for this session — step ◀ / ▶ to another."}
+                      : replaySession === "rth" && replayFramesAll.length
+                        ? "No 09:30–16:00 frames for this session — switch to ETH, or step ◀ / ▶ to another."
+                        : "No frames recorded for this session — step ◀ / ▶ to another."}
                 </span>
               ) : (
                 <>
