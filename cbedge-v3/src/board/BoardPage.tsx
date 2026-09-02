@@ -1,18 +1,35 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
 import { Board, compactBoard, type BoardItem } from '@/design/primitives/Board'
-import { CARD_CATALOG, CARD_BY_ID, cardTypeOf, migrateCardId, placeNewCard } from './catalog'
+import { useAuth } from '@/data/auth'
+import { CARD_CATALOG, CARD_BY_ID, cardTypeOf, placeNewCard } from './catalog'
+import {
+  fetchServerLayout,
+  readLocalLayout,
+  readSyncedLayout,
+  sameLayout,
+  saveServerLayout,
+  writeLocalLayout,
+  writeSyncedLayout,
+} from './layoutStore'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The terminal home: a customizable card board. Add cards from the catalog,
 // drag/resize them, remove the ones you don't want — the arrangement autosaves
 // as you go and reloads next visit.
 //
-// Persistence is localStorage for now (per-browser). The shape is the same
-// BoardItem[] a server-backed template would round-trip, so swapping this for
-// a REST-backed save (through src/data/api.ts, once that endpoint exists) is a
-// change to loadLayout/persist only — nothing above this file needs to know.
+// ── Two tiers of persistence, and why ────────────────────────────────────────
+// AUTOSAVE is localStorage, on every gesture: free, synchronous, per browser.
+// "SAVE LAYOUT" (edit mode) writes the same array to Postgres through v2's
+// /api/dashboard-layout, per account, so the board follows the user to another
+// machine. See src/board/layoutStore.ts for the wire and for cb-v3-board-synced,
+// the third key that decides which copy wins on load.
+//
+// The autosave is deliberately NOT the thing that hits the network. A drag emits
+// a layout per animation frame; posting those would be a request storm, and it
+// would make every accidental nudge permanent across every device the user owns.
+// Saving to the account is an act, not a side effect.
 //
 // ── The same card, more than once ────────────────────────────────────────────
 // Every catalog entry can be added as many times as the user wants: two GEX
@@ -25,10 +42,11 @@ import { CARD_CATALOG, CARD_BY_ID, cardTypeOf, migrateCardId, placeNewCard } fro
 // (`cb-v3-mg-basis`, and friends), not per instance. Two copies can be set
 // differently for the session, but on reload both come back on whichever was
 // written last. Fixing that means threading the instance id into every card's
-// storage key, which is a change to every card and not to this file.
+// storage key, which is a change to every card and not to this file. It is also
+// why "Save layout" saves the ARRANGEMENT and not the settings: the server would
+// be storing a per-type key it cannot attribute to a card.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const LAYOUT_KEY = 'cb-v3-board-layout'
 const DEFAULT_IDS = ['gex-candles', 'key-levels', 'quick-links']
 
 function defaultLayout(): BoardItem[] {
@@ -37,42 +55,24 @@ function defaultLayout(): BoardItem[] {
   return compactBoard(items)
 }
 
-function loadLayout(): BoardItem[] {
-  try {
-    const raw = localStorage.getItem(LAYOUT_KEY)
-    const parsed = raw ? JSON.parse(raw) : null
-    if (!Array.isArray(parsed) || parsed.length === 0) return defaultLayout()
-    const kept: BoardItem[] = []
-    const seen = new Set<string>()
-    for (const i of parsed) {
-      if (!i || typeof i.id !== 'string') continue
-      if (![i.x, i.y, i.w, i.h].every((n: unknown) => typeof n === 'number')) continue
-      // Rename BEFORE the catalog check. A renamed card is still the user's
-      // card — dropping it because its id changed would silently empty their
-      // board on an upgrade. A card that was genuinely deleted still falls out
-      // here, which is what should happen.
-      //
-      // The dedupe is on the INSTANCE id, not the card type: two GEX Charts is
-      // a board the user built on purpose, while the same instance id twice is
-      // a corrupt blob that would collide in the grid.
-      const id = migrateCardId(i.id)
-      if (!CARD_BY_ID.has(cardTypeOf(id)) || seen.has(id)) continue
-      seen.add(id)
-      kept.push({ id, x: i.x, y: i.y, w: i.w, h: i.h })
-    }
-    return kept.length ? compactBoard(kept) : defaultLayout()
-  } catch {
-    return defaultLayout()
-  }
-}
-
-type SaveState = 'idle' | 'saved'
+type Remote = 'idle' | 'loading' | 'saving' | 'error'
 
 export default function BoardPage() {
-  const [layout, setLayoutState] = useState<BoardItem[]>(() => loadLayout())
+  const { isSignedIn, isLoaded } = useAuth()
+
+  // Read both keys ONCE, before anything can rewrite them. `boot.local` vs
+  // `boot.synced` is the whole basis for deciding whether the server copy may
+  // replace what is on screen, and the autosave effect below overwrites the
+  // local key on the first change — so it has to be captured at mount.
+  const [boot] = useState(() => ({ local: readLocalLayout(), synced: readSyncedLayout() }))
+
+  const [layout, setLayoutState] = useState<BoardItem[]>(() => boot.local ?? defaultLayout())
+  const [synced, setSynced] = useState<BoardItem[] | null>(() => boot.synced)
   const [locked, setLocked] = useState(true)
   const [menuOpen, setMenuOpen] = useState(false)
-  const [saveState, setSaveState] = useState<SaveState>('idle')
+  const [flash, setFlash] = useState(false)
+  const [remote, setRemote] = useState<Remote>('idle')
+  const [remoteErr, setRemoteErr] = useState<string | null>(null)
   const savedOnceRef = useRef(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
@@ -84,13 +84,61 @@ export default function BoardPage() {
       savedOnceRef.current = true
       return
     }
+    writeLocalLayout(layout)
+    setFlash(true)
+    const t = setTimeout(() => setFlash(false), 1200)
+    return () => clearTimeout(t)
+  }, [layout])
+
+  // Load the account's saved board once auth answers.
+  //
+  // It replaces what is on screen ONLY when this browser holds nothing the
+  // server hasn't seen — local === synced, or a first visit with no local key
+  // at all. Otherwise the local arrangement stays and the header says it is
+  // unsaved, because silently discarding it is the one outcome that loses work.
+  useEffect(() => {
+    if (!isSignedIn) return
+    const ac = new AbortController()
+    let alive = true
+    setRemote('loading')
+    setRemoteErr(null)
+    fetchServerLayout(ac.signal)
+      .then((tpl) => {
+        if (!alive) return
+        setRemote('idle')
+        if (!tpl) return
+        setSynced(tpl.layout)
+        writeSyncedLayout(tpl.layout)
+        const localUnsaved = boot.local != null && !sameLayout(boot.local, boot.synced)
+        if (!localUnsaved) setLayoutState(compactBoard(tpl.layout))
+      })
+      .catch((err: Error) => {
+        if (!alive || err.name === 'AbortError') return
+        setRemote('error')
+        setRemoteErr(err.message)
+      })
+    return () => {
+      alive = false
+      ac.abort()
+    }
+  }, [isSignedIn, boot])
+
+  const dirty = !sameLayout(layout, synced)
+
+  const saveLayout = useCallback(async () => {
+    const snapshot = layout
+    setRemote('saving')
+    setRemoteErr(null)
     try {
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout))
-      setSaveState('saved')
-      const t = setTimeout(() => setSaveState('idle'), 1200)
-      return () => clearTimeout(t)
-    } catch {
-      /* best-effort — the in-memory layout still works for this session */
+      await saveServerLayout(snapshot)
+      setSynced(snapshot)
+      writeSyncedLayout(snapshot)
+      setRemote('idle')
+      setFlash(true)
+      setTimeout(() => setFlash(false), 1200)
+    } catch (err) {
+      setRemote('error')
+      setRemoteErr((err as Error).message)
     }
   }, [layout])
 
@@ -142,13 +190,53 @@ export default function BoardPage() {
     setLayoutState((prev) => compactBoard(prev.filter((i) => i.id !== id)))
   }
 
+  // One status line, in priority order: what the network is doing, then what is
+  // outstanding, then the local-autosave flash. Never two at once — a header
+  // that says "Saved" and "Unsaved layout" side by side is worse than silent.
+  const status: { text: string; tone: 'faint' | 'muted' | 'down' } | null =
+    remote === 'saving'
+      ? { text: 'Saving…', tone: 'muted' }
+      : remote === 'error'
+        ? { text: remoteErr ? `Save failed — ${remoteErr}` : 'Save failed', tone: 'down' }
+        : remote === 'loading'
+          ? { text: 'Loading layout…', tone: 'faint' }
+          : !locked && isSignedIn && dirty
+            ? { text: 'Unsaved layout', tone: 'muted' }
+            : flash
+              ? { text: 'Saved', tone: 'faint' }
+              : null
+
+  const toneClass =
+    status?.tone === 'down' ? 'text-down' : status?.tone === 'muted' ? 'text-muted' : 'text-faint'
+
   return (
     <Page
       title="Terminal"
       fill
       actions={
         <div className="flex items-center gap-2">
-          {saveState === 'saved' && <span className="text-xs text-faint">Saved</span>}
+          {status && <span className={`text-xs ${toneClass}`}>{status.text}</span>}
+          {/* Save layout belongs to edit mode: it is the counterpart of the
+              gestures that made the board dirty, and out of edit mode there is
+              nothing the user could have changed. */}
+          {!locked && (
+            <button
+              onClick={() => void saveLayout()}
+              disabled={!isSignedIn || remote === 'saving' || !dirty}
+              title={
+                !isLoaded
+                  ? 'Checking your account…'
+                  : !isSignedIn
+                    ? 'Sign in to save this layout to your account'
+                    : !dirty
+                      ? 'This layout is already saved to your account'
+                      : 'Save this layout to your account, for every browser you sign in on'
+              }
+              className="rounded-sm border border-line bg-surface px-2.5 py-1 text-xs font-medium text-fg transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40 disabled:hover:bg-surface"
+            >
+              Save layout
+            </button>
+          )}
           <button
             onClick={() => setLocked((v) => !v)}
             className={[

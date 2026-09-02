@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en" class="cb">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>CB Edge</title>
+    <!-- Inline, not a file: without SOME icon the browser requests /favicon.ico
+         on every load and logs a 404 in the console of a page that has no other
+         errors, which trains you to ignore the console. A data: URI costs one
+         line and no request. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2307080b'/%3E%3Ctext x='16' y='22' font-family='system-ui,sans-serif' font-size='15' font-weight='700' fill='%235b8cff' text-anchor='middle'%3ECB%3C/text%3E%3C/svg%3E"
+    />
+
+    <!-- ───────────────────────────────────────────────────────────────────
+         PAINT TOKENS — inlined so the background and text color are correct
+         on the very first frame, before any CSS file is fetched. Everything
+         else lives in src/design/tokens.css.
+
+         These two values MUST match tokens.css. scripts/check-budgets.mjs
+         fails the build if they drift.
+         ─────────────────────────────────────────────────────────────── -->
+    <style>
+      :root { --cb-bg: #07080b; --cb-fg: #ffffff; }
+      html, body { margin: 0; height: 100%; background: var(--cb-bg); color: var(--cb-fg); }
+      body { font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+      #root { min-height: 100%; display: flex; flex-direction: column; }
+      /* 100dvh where supported. Plain 100vh on iOS Safari measures the viewport
+         WITHOUT the collapsible URL bar — a v2 bug worth not repeating. */
+      .cb-viewport { height: 100vh; height: 100dvh; }
+    </style>
+
+    <!-- ───────────────────────────────────────────────────────────────────
+         EARLY BOOT — this is the single biggest win in the whole app.
+
+         The WebSocket opens HERE, in the document head, before the React
+         bundle has even been fetched. Frames that arrive during bundle
+         download + parse + mount are buffered instead of missed. In v2 the
+         socket did not open until a component mounted and subscribed, which
+         cost 300-800ms of dead time on every cold load.
+
+         Keep this script tiny and dependency-free. It must never throw —
+         a failure here has to degrade to "the app opens its own socket
+         later", not "the page is blank".
+         ─────────────────────────────────────────────────────────────── -->
+    <script>
+      (function () {
+        var boot = {
+          t0: performance.now(),
+          navStart: 0,
+          frames: [],        // buffered raw messages, drained by src/data/socket.ts
+          sink: null,        // set by the data layer once it takes over
+          ws: null,
+          status: 'connecting',
+          firstFrameAt: null,
+          firstPaintAt: null,
+          cache: null,       // Promise<Record<string, unknown>> of last-known state
+          error: null,
+        };
+        window.__CB_BOOT__ = boot;
+
+        try {
+          var nav = performance.getEntriesByType('navigation')[0];
+          boot.navStart = nav ? nav.startTime : 0;
+        } catch (e) { /* not fatal */ }
+
+        // ── 1. Open the socket immediately ────────────────────────────────
+        // Always same-origin. In dev the Vite proxy forwards /ws to the VPS;
+        // in prod server-v2 serves both the app and the socket. Keeping this
+        // origin-agnostic means the early socket and the app's own reconnects
+        // can never disagree about where the data lives.
+        try {
+          var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/gex';
+          var ws = new WebSocket(url);
+          boot.ws = ws;
+          ws.onopen = function () { boot.status = 'open'; };
+          ws.onerror = function () { boot.status = 'error'; };
+          ws.onclose = function () { if (boot.status !== 'handoff') boot.status = 'closed'; };
+          ws.onmessage = function (ev) {
+            if (boot.firstFrameAt === null) boot.firstFrameAt = performance.now();
+            if (boot.sink) boot.sink(ev.data);
+            // Cap the buffer. If the bundle is somehow so slow that thousands of
+            // frames pile up, dropping the oldest is correct — these are
+            // last-value-wins snapshots, not an event log.
+            else if (boot.frames.push(ev.data) > 500) boot.frames.splice(0, 250);
+          };
+        } catch (e) {
+          boot.status = 'error';
+          boot.error = String(e);
+        }
+
+        // ── 2. Start reading last-known state from IndexedDB in parallel ──
+        // The read is kicked off here rather than on mount so the data is
+        // usually already resolved by the time React asks for it. Result: the
+        // first paint shows real (stale) numbers instead of empty panels.
+        boot.cache = new Promise(function (resolve) {
+          var out = {};
+          try {
+            var req = indexedDB.open('cbedge-v3', 1);
+            req.onupgradeneeded = function () {
+              var db = req.result;
+              if (!db.objectStoreNames.contains('frames')) db.createObjectStore('frames');
+            };
+            req.onerror = function () { resolve(out); };
+            req.onsuccess = function () {
+              var db = req.result;
+              try {
+                var tx = db.transaction('frames', 'readonly');
+                var cur = tx.objectStore('frames').openCursor();
+                cur.onsuccess = function () {
+                  var c = cur.result;
+                  if (!c) { resolve(out); return; }
+                  out[String(c.key)] = c.value;
+                  c.continue();
+                };
+                cur.onerror = function () { resolve(out); };
+              } catch (e) { resolve(out); }
+            };
+          } catch (e) { resolve(out); }
+        });
+
+        // ── 3. Stamp the first paint ─────────────────────────────────────
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            if (boot.firstPaintAt === null) boot.firstPaintAt = performance.now();
+          });
+        });
+      })();
+    </script>
+    <script type="module" crossorigin src="/v3/assets/index-BCryxehe.js"></script>
+    <link rel="modulepreload" crossorigin href="/v3/assets/react-BuQOX7bh.js">
+    <link rel="stylesheet" crossorigin href="/v3/assets/index-DrxaVLaO.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

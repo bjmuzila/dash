@@ -1,5 +1,61 @@
 # Changelog
 
+## 2026-09-02 - v3 home board saves to the account, not just the browser
+
+The terminal board (`/v3` home) already autosaved every drag, resize, add and
+remove — to `localStorage`, key `cb-v3-board-layout`. Per browser. Clear site
+data, or open v3 on the other machine, and the board came back as the three
+default cards.
+
+Postgres was already there and already wired: `dashboard_layouts` in
+`server-v2/_lib-db.cjs` (keyed clerk_user_id / page / name, one row flagged
+`is_default`, layout stored opaquely) behind `/api/dashboard-layout` in
+`api-router.js`. v3 was simply not calling it. New
+`cbedge-v3/src/board/layoutStore.ts` does, under page key `v3-home`, template
+name `Default`.
+
+### Two tiers, and the third key that arbitrates them
+
+- **Autosave stays local**, on every gesture. A drag emits a layout per animation
+  frame; posting those would be a request storm, and it would make every
+  accidental nudge permanent on every device the user owns.
+- **"Save layout"** — new button, shown in edit mode next to Done — POSTs the
+  same array to the account. Saving to the account is an act, not a side effect.
+- **`cb-v3-board-synced`** holds the layout as the server last saw it. On load it
+  answers the only question that matters: does this browser hold edits the
+  account has never been told about? Local === synced, or no local key at all,
+  and the server copy is adopted (it may be newer, from another machine). They
+  differ, and the local arrangement stays on screen with "Unsaved layout" in the
+  header. Without that key, opening the board on a laptop would silently throw
+  away whatever was rearranged there but not saved.
+
+One status line in the header, in priority order — Saving… / Save failed
+(with the reason) / Loading layout… / Unsaved layout / the existing local
+"Saved" flash. Never two at once. The button disables itself when the board already
+matches what the account holds, and when signed out (with a title that says so).
+
+The blob reconciliation — id migration before the catalog check, dedupe on the
+INSTANCE id, drop what this build cannot render — moved out of `BoardPage` into
+`layoutStore.sanitizeLayout()` and now runs over the server payload too, so a
+template saved before a card was renamed still loads. Card SETTINGS are still
+per card type and still local; only the arrangement goes to the account.
+
+Files: `cbedge-v3/src/board/layoutStore.ts` (new),
+`cbedge-v3/src/board/BoardPage.tsx`. No backend change.
+
+## 2026-09-02 - v3 toolbar: Notes wiring re-applied to Shell.tsx
+
+The Notes button, `NotesPanelProvider` and the `NotesDock` mount were lost from
+`cbedge-v3/src/shell/Shell.tsx` — the file was rewritten by a later edit (the one
+that turned the Replay rail slot from `comingSoon` into a real route with a
+`/proxy/strike-growth/replay-meta` prefetch) and my four hunks went with it. The
+four NEW files (`notes.tsx`, `NotesPanelContext.tsx`, `QuickProbe.tsx`,
+`NotesDock.tsx`) were untouched — nothing imported them, so the button simply
+never rendered.
+
+Re-applied on top of the current Shell.tsx, keeping the Replay prefetch change.
+
+
 ## 2026-08-31 - The 8am email was the last surface still double-counting
 
 It was the most wrong of the three, and by a knowable amount: **+$1,100 too

@@ -129,7 +129,7 @@ function writeStore(key: string, wanted: Note[]): Note[] {
       // Oldest note carrying an image (list is newest-first).
       let victim = -1
       for (let i = list.length - 1; i >= 0; i--) {
-        if (list[i].img) {
+        if (list[i]?.img) {
           victim = i
           break
         }

@@ -93,7 +93,9 @@ function write(key: string, value: string): void {
 
 /** Saved slots over the defaults, per slot, with duplicates reset to default. */
 function loadTickers(): string[] {
-  const base = [...DEFAULT_TICKERS]
+  // string[], not the literal tuple's union: the whole point of the slots is
+  // that a saved (or typed) symbol replaces a default.
+  const base: string[] = [...DEFAULT_TICKERS]
   let saved: unknown = null
   try {
     saved = JSON.parse(localStorage.getItem(TICKERS_KEY) ?? 'null')
@@ -113,7 +115,7 @@ function loadTickers(): string[] {
       seen.add(t)
       return t
     }
-    const fallback = base[i] as string
+    const fallback = base[i] ?? t
     if (seen.has(fallback)) return t
     seen.add(fallback)
     return fallback
