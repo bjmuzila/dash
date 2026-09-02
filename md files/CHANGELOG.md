@@ -24,6 +24,13 @@ still reads "Core" at a glance and the number reads red or blue again.
 - `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx` — dropped the ★'s white
   halo on the levelFill skins. The corner it sits in is now solid gold, so the
   glyph has its own ground and the glow only softened its edge.
+- `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx` — same treatment on the
+  Multi Greek ladder, which had the identical bug from its own copy of the
+  value (`CB_FILL`, flat gold at 85% over the heat). Now `CB_WASH`, with
+  TIGHTER stops than the chain's — 12% / 40% against 26% / 66% — because these
+  figures are CENTRED and the chain's are right-aligned, so the gold has to
+  clear the middle of the cell rather than just its right third. ★ halo
+  dropped for the same reason as the chain's.
 
 No token, skin-config or math change: the ramp, rank floors, `levelFill.alpha`
 and CLASSIC are all byte-for-byte what they were.

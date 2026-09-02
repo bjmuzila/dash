@@ -53,9 +53,12 @@ import {
 //
 // ── Marks on the ladder ──────────────────────────────────────────────────────
 //   ATM        a white ring around the row
-//   CB         the cell goes GOLD and its number keeps the GEX hue, so the core
-//              is findable across four ladders at a glance while the sign is
-//              still readable. Front expiry adds the named badge and a pulse;
+//   CB         GOLD washes in from the cell's left edge and clears before the
+//              figure, so the core is findable across four ladders at a glance
+//              and the number still sits on its own sign colour. Flat gold used
+//              to cover the whole cell and a short-gamma core looked exactly
+//              like a long-gamma one. Front expiry adds the named badge and a
+//              pulse;
 //              later expiries get a ★ in the corner — the same strike, marked
 //              more quietly because the front expiry is the one being traded.
 //   CW / PW    ringed badges in their own colours, front expiry only
@@ -81,10 +84,31 @@ const BASIS_STORE_KEY = 'cb-v3-mg-basis'
 const RAIL_PX = 76
 
 /**
- * The Core Bullseye fill — v2's VIVID skin, value for value: gold at 85%,
- * laid OVER the cell's heat wash rather than replacing it.
+ * ── THE CORE BULLSEYE FILL ───────────────────────────────────────────────────
+ * Gold at 85% — v2's VIVID number — but a WASH from the left edge rather than a
+ * flat layer over the whole cell.
+ *
+ * Flat was the bug, and it is the same one the chain matrix had: a Core below
+ * spot is negative, and at 85% the gold buried the red. Two cells that meant
+ * opposite things looked identical. The wash keeps gold where the eye looks for
+ * the marker — the ★ / badge end of the cell — and is gone before the figure,
+ * which sits on the ordinary heat and reads red or blue again.
+ *
+ * The stops are TIGHTER than the chain's (12/40 vs 26/66) for one reason: these
+ * figures are CENTRED and the chain's are right-aligned, so the gold has to
+ * clear the middle of the cell instead of just its right third.
+ *
+ * Twin of `levelFillBg()` in pages/optionsChain/heatSkins.ts. Kept as its own
+ * constant rather than imported for the same reason CB_FILL was: that module
+ * owns a SKIN (ramp, rank floors, cell geometry) and this ladder wears none of
+ * it — only the one colour decision is shared, so only the one value is copied.
  */
+const CB_WASH_ANGLE = '112deg'
+const CB_GOLD = 'var(--color-level-cb)'
 const CB_FILL = 'color-mix(in srgb, var(--color-level-cb) 85%, transparent)'
+/** Fades to gold-at-zero, not `transparent`: a ramp through grey reads dirty. */
+const CB_FADE = 'color-mix(in srgb, var(--color-level-cb) 0%, transparent)'
+const CB_WASH = `linear-gradient(${CB_WASH_ANGLE},${CB_GOLD} 0%,${CB_FILL} 12%,${CB_FADE} 40%)`
 
 function readStored(key: string, fallback: string): string {
   try {
@@ -625,25 +649,17 @@ function TickerPanel({
                     style={
                       isCb
                         ? {
-                            // THE CORE, EXACTLY AS v2'S VIVID SKIN DRAWS IT.
+                            // THE CORE. Gold washes in from the left edge and is
+                            // gone by 40% of the diagonal; past that the cell is
+                            // the ordinary heat, so the centred figure reads on
+                            // its own sign rather than on gold. See CB_WASH.
                             //
-                            // Gold at 85%, BLENDED OVER the heat rather than
-                            // replacing it — that 0.85 is v2's own number, and
-                            // the reason for it is that gold at full strength
-                            // swamps the row AND takes the sign with it. Laid
-                            // over the wash, the cyan or red underneath still
-                            // shows through, so the cell says "core" and "which
-                            // way the gamma points" at the same time.
-                            //
-                            // The figure is WHITE with v2's drop shadow, not the
-                            // GEX hue: a mid-tone hue on gold is the weakest
-                            // pair on the board, and the fill beneath is already
-                            // carrying the sign.
-                            //
-                            // Two identical gradient stops is how a flat colour
-                            // gets layered over a background in one property —
-                            // the same trick v2's levelFillBg() uses.
-                            background: `linear-gradient(${CB_FILL}, ${CB_FILL}), ${heat}`,
+                            // A gradient layered over a background in one
+                            // property is the only way to composite a
+                            // translucent layer over another without knowing
+                            // what the layer underneath resolved to — the same
+                            // trick v2's levelFillBg() uses.
+                            background: `${CB_WASH}, ${heat}`,
                             textShadow: '0 1px 2px color-mix(in srgb, var(--color-app) 85%, transparent)',
                           }
                         : {
@@ -663,16 +679,15 @@ function TickerPanel({
                     {/* Later expiries mark their own CB with a star. Same
                         strike, quieter mark — the front expiry is the one being
                         traded, so it gets the named badge. Drawn in the app
-                        ground, not gold: the cell underneath it IS gold now, and
-                        a gold star on gold is an invisible star. */}
+                        ground, not gold: the corner it sits in is where CB_WASH
+                        holds FULL gold, and a gold star on gold is an invisible
+                        star. No halo either — solid gold is already its ground,
+                        and the glow only softened the glyph's edge. */}
                     {isCb && !isFront && (
                       <span
                         title="Core Bullseye"
                         className="pointer-events-none absolute left-0.5 top-px text-2xs leading-none"
-                        style={{
-                          color: 'var(--color-app)',
-                          textShadow: '0 0 2px color-mix(in srgb, var(--color-fg) 55%, transparent)',
-                        }}
+                        style={{ color: 'var(--color-app)' }}
                       >
                         ★
                       </span>
