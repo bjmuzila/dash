@@ -1,5 +1,82 @@
 # Changelog
 
+## 2026-09-01 - The flow tape was 99% of socket egress; the alarm caught it day one
+
+First trading day after the /ws/gex fix. Cloudflare fell 53GB -> 19.92GB (-77.5%),
+but with a 4.87GB spike in one bucket at 10:29 ET. The WS_ALERT watchdog shipped
+the night before named the culprit without any investigation:
+
+    [WS-ALERT] /ws/gex egress high: 653.06MB/min total outbound
+      - projecting ~940.4GB/day. last-min split:
+      flow 646.20MB, status 4.31MB, gex 2.28MB, aux 0.17MB, spot 0.09MB
+
+flow was 99% of everything the socket sent.
+
+### Why
+
+`FlowProcessor.bucket()` (server-v2/computation/flow-processor.js) returns nine
+small scalars plus `tape` - the ENTIRE per-order session FIFO, capped at
+FLOW_TAPE_CAP (default 8000) and filtered by FLOW_TAPE_FLOOR. Production runs
+that floor at $500 rather than the $5000 default so equity-option blocks survive
+long enough for the client's per-ticker filter, which means ~10x more orders
+clear it. The broadcast then shipped that whole array to every client twice a
+second, growing all session:
+
+    3,413 orders x ~500B  ~= 1.7MB per frame
+           x 2 frames/sec  ~= 3.4MB/s per client
+           x 3 clients      ~= 615MB/min        (measured: 646MB/min)
+
+The August dedupe fix only ever helped when the market was QUIET. Once prints are
+landing the content genuinely changes on every 500ms publish, the skip-if-
+unchanged check passes every time, and the full tape goes out regardless. That is
+why it looked fine in every off-hours probe - a pre-market probe measured
+`flow 5646b` and read as harmless. The shape only exists once the tape fills.
+
+### Fix - server-v2/websocket-server.js
+
+The fix was already in the file, applied to the wrong half. `trimSnapshotFlow()`
+trims the tape to SNAPSHOT_TAPE_MAX (150) for the connect snapshot, and its
+comment gives the reason: "the client backfills full history from SQL separately,
+and the FlowTape only renders a scrolling window." That same comment then said
+"Live broadcasts are unaffected" - which was the bug, not a feature.
+
+Live frames now trim too, via `trimBroadcastFlow()` / FLOW_BROADCAST_TAPE_MAX
+(default 300, 2x the snapshot window so a client cannot miss prints between
+frames; 0 restores the full tape). Every client already receives a 150-order tape
+on connect and renders it fine, so a trimmed live frame is a shape the client is
+guaranteed to handle.
+
+Applied ONLY on the wire. The processor's own tape is untouched at 8000, so
+`writeFlowTape()` persistence and `flowGexAccumulator.ingestTape()` (dealer
+inventory) still see every order. /flow's SQL backfill is unaffected.
+
+Two supporting changes:
+
+- **Dedupe now keys on the TRIMMED payload.** Coalescing can mutate an order that
+  has already scrolled out of the broadcast window ("a sweep that starts small can
+  still grow into a real block"), which would otherwise defeat the dedupe and
+  resend a byte-identical frame. Keying on what is actually sent fixes that.
+- **FLOW_BROADCAST_MS_RTH** (default 0) as a second lever. The RTH floor stays 0
+  because a flow tape's whole value is immediacy and the trim is what actually
+  bounds the volume; set it to 1000 to halve the frame rate at the cost of up to
+  1s of tape latency.
+
+Measured against a model of the real payload: **11.3x** at cap=300 (22.6x at 150).
+646MB/min -> roughly 57MB/min, and the 4.87GB spike bucket -> ~0.43GB.
+
+Note: 57MB/min peak is still above WS_ALERT_MB_PER_MIN (30), so a heavy session
+may still trip the total-bytes alarm. That is the alarm working as a peak
+indicator, not a regression - if it becomes noise, drop FLOW_BROADCAST_TAPE_MAX to
+150 or set FLOW_BROADCAST_MS_RTH=1000 before raising the threshold.
+
+### Also live as of today
+
+`WS_DEFLATE=default` and `WS_AUTH_REQUIRED=1` are both on and browser-confirmed.
+Anonymous connections now get a 401 at the upgrade with ZERO bytes sent (no
+snapshot to unauthorized clients). 10/10 users across trialing / active / comped
+verified against the gate before enabling. Both flags live only in .env.local on
+the VPS, which is not in git.
+
 ## 2026-08-31 - Budget overview: Rent / Bank / Upcoming Pay move above cash flow
 
 The three "what is happening right now" cards - Rent countdown, bank balances,

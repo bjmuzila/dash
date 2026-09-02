@@ -225,6 +225,112 @@ Note: `app/home/HomeClient.tsx`, `WhaleOrdersPanel`, `hooks/useNqCandles` and th
 separate `owner-vite` / `home3-vite` apps still open their OWN sockets and none
 of this applies to them.
 
+## `/ws/gex` — the bandwidth rules (read before touching the socket)
+
+This socket is uncacheable and counts 100% as Cloudflare "bandwidth served". It
+has run up a bill three times now (2026-08-21, 2026-08-31, 2026-09-01). Every
+rule below exists because of a specific one of those.
+
+### Next.js steals the `'upgrade'` event — do NOT remove the guard
+
+`server-v2/server-with-proxy.js` wraps `server.on` immediately after
+`createGexWsServer(...)`. It looks like defensive noise. It is not. Removing it
+re-breaks every WebSocket on the site and costs ~53GB/day.
+
+Next 15 (`node_modules/next/dist/server/next.js:298 setupWebSocketHandler`)
+attaches its OWN `'upgrade'` listener to our HTTP server the first time a request
+passes through `getRequestHandler()`. It needs no `httpServer` option — it takes
+the server straight off `req.socket.server`. A production build owns no `/ws/*`
+route, so its handler destroys the socket. Ours registered first, so a client
+gets: 101 accepted, full ~220KB connect snapshot delivered, then a bare RST
+(1006) ~2ms later. NOTHING is logged, because the destroy happens on the raw
+socket and never reaches the `ws` instance that owns it.
+
+Symptoms if it returns: pages sit on "waiting for the feed",
+`/proxy/self-metrics` shows `clients: 0` with megabytes/min of `snapshot`, and
+`srv.listenerCount('upgrade')` is 2 instead of 1.
+
+The guard WRAPS rather than blocks — a blanket refusal would kill HMR under
+`dev: true`. Install it AFTER `createGexWsServer` so our own listener is never
+wrapped.
+
+### Never broadcast a whole growing array
+
+The `flow` frame carried `FlowProcessor.bucket().tape` — the entire per-order
+session FIFO (FLOW_TAPE_CAP, 8000) — to every client twice a second, all session.
+On 2026-09-01 that was 646MB/min, **99% of all socket egress**, ~940GB/day.
+
+Live frames now trim to `FLOW_BROADCAST_TAPE_MAX` (300) via `trimBroadcastFlow()`,
+the same slice the connect snapshot has always used at `SNAPSHOT_TAPE_MAX` (150).
+Trimming is applied ONLY on the wire — the processor tape stays at 8000 so
+`writeFlowTape()` persistence and `flowGexAccumulator.ingestTape()` still see
+every order.
+
+Three things to carry forward:
+
+1. **Dedupe on what you actually SEND, not on source state.** Coalescing mutates
+   orders that have already scrolled out of the window, which defeats a dedupe
+   keyed on the full tape and resends byte-identical frames.
+2. **Off-hours testing proves nothing about a tape.** A pre-market probe measured
+   `flow 5646b` and read as harmless; the same frame was 1.7MB by 10:29 ET. Any
+   frame whose size depends on session accumulation must be measured DURING RTH.
+3. `FLOW_TAPE_FLOOR` is $500 in prod vs a $5000 default — ~10x more orders clear
+   the noise floor and ride in every frame. Lowering it multiplies frame size.
+
+### The bandwidth alarm
+
+`websocket-server.js` checks its own egress every 60s, logs `[WS-ALERT]` and posts
+to `WS_ALERT_WEBHOOK || DISCORD_WEBHOOK_URL` with a projected GB/day and the split
+by frame type. 15-minute cooldown so the alarm cannot become the second outage.
+It found the flow bleed on its first trading day, from the log line alone.
+
+- `WS_ALERT_CONNECTS_PER_MIN` (30) — connects/min this high while `clients <= 1`.
+  The sharpest trip, and the only one that would have caught BOTH the 08-21 and
+  08-31 outages on day one: a reconnect storm holds no sockets, so `clients` reads
+  ~0 no matter how bad it is. Bytes alone cannot tell "a few clients on a fat
+  feed" apart from "sixty clients that each took a snapshot and died".
+- `WS_ALERT_SNAPSHOT_MB_PER_MIN` (5) — sustained MB of connect snapshots = churn.
+- `WS_ALERT_MB_PER_MIN` (30) — total backstop. A heavy session can still trip this
+  legitimately; drop `FLOW_BROADCAST_TAPE_MAX` to 150 or set
+  `FLOW_BROADCAST_MS_RTH=1000` before raising the threshold.
+
+Healthy `/proxy/self-metrics` looks like: `clients` > 0, `connectsLastMin` near 0,
+`snapshot` a small slice of `total`. The inverse of that is a storm.
+
+### Client-side backoff (`lib/gexSocket.ts`)
+
+Backoff credit is earned by SURVIVING, not by opening — `attempts = 0` fires on a
+`HEALTHY_CONNECTION_MS` (10s) timer, not in `onopen`. Do not move it back. When
+the handshake succeeds and the socket dies immediately (exactly what Next was
+doing), resetting on open makes the "exponential" backoff a flat 2s loop forever
+at full snapshot cost. Three consecutive open-then-die connections floor the retry
+at `BROKEN_TRANSPORT_FLOOR_MS` (60s); the wake handlers stay the fast path back.
+
+### Env flags — NOT in git, easy to lose
+
+These live ONLY in `.env.local` on the VPS, which is untracked. A fresh box, a
+restored backup or a hand-rebuilt env silently reverts every one to a worse
+default.
+
+| flag | live value | if missing | what you lose |
+|------|-----------|------------|---------------|
+| `WS_DEFLATE` | `default` | `off` | 80-90% of socket egress |
+| `WS_AUTH_REQUIRED` | `1` | off | the paid feed is open to anyone with the URL |
+| `FLOW_BROADCAST_TAPE_MAX` | unset (300) | 300 | nothing; the default is the intended one |
+| `AUTH_POOL_MAX` | unset (16) | 16 | raise to 32 if `[WS] upgrade rejected (verify-error)` appears in bulk |
+
+`WS_DEFLATE=default` is ws's own settings. `WS_DEFLATE=on` is a TUNED config
+blamed for the 2026-08-21 browser outage — that diagnosis was WRONG (the real
+cause was the Next upgrade bug above), but `on` has still never been verified.
+Use `default`.
+
+`WS_AUTH_REQUIRED=1` fails CLOSED: if the Postgres session lookup errors, every
+connection is rejected and every dashboard goes dark. Before enabling it on a new
+box, verify the gate against the DB for a real subscriber, a comped user and the
+owner — the script is in the 2026-08-31 CHANGELOG entry. `is_paid` here MUST stay
+in sync with `lib/db.ts`'s `getSessionWithUser()`; when it drifted, comped users
+passed middleware and then 401'd on everything.
+
 ## Theme
 
 UI must source colors/spacing from `components/shared/homeTheme.ts` (+

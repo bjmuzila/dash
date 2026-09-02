@@ -27,10 +27,45 @@ const PROCESS_START_MS = Date.now();
 // (network handoffs, screen on/off), and each reconnect replays this snapshot.
 // The full flow tape + candle history is the single biggest payload the server
 // sends, so trim them on connect — the client backfills full history from SQL
-// separately, and the FlowTape only renders a scrolling window. Live broadcasts
-// are unaffected. Env-tunable.
+// separately, and the FlowTape only renders a scrolling window. Env-tunable.
 const SNAPSHOT_TAPE_MAX = Number(process.env.SNAPSHOT_TAPE_MAX || 150);
 const SNAPSHOT_CANDLES_MAX = Number(process.env.SNAPSHOT_CANDLES_MAX || 120);
+
+// ── Cap for the LIVE flow tape (2026-09-01) ─────────────────────────────────
+// The line above used to end "Live broadcasts are unaffected." That was the bug.
+//
+// FlowProcessor.bucket() returns nine small scalars plus `tape` — the WHOLE
+// per-order session FIFO, capped at FLOW_TAPE_CAP (default 8000) and filtered by
+// FLOW_TAPE_FLOOR. Production runs that floor at $500 rather than the $5000
+// default so equity blocks survive, which means ~10x more orders clear it. The
+// broadcast below then shipped that entire array to every client TWICE A SECOND,
+// growing all session:
+//
+//     3,413 orders x ~500B  ~= 1.7MB per frame
+//            x 2 frames/sec  ~= 3.4MB/s per client
+//            x 3 clients      ~= 615MB/min      (measured: 646MB/min, 99% of ALL
+//                                                socket egress, ~940GB/day)
+//
+// Caught by the WS_ALERT watchdog on its first trading day, 2026-09-01.
+//
+// The reasoning that justified trimming the snapshot applies verbatim here — the
+// client backfills full history from SQL and FlowTape renders a scrolling window
+// — and every client already receives a 150-order tape on connect and renders it
+// fine, so a trimmed live frame is a shape it is guaranteed to handle. Default is
+// 2x the snapshot window so a client cannot miss prints between frames.
+//
+// Deliberately applied ONLY on the wire: the processor's own tape is untouched,
+// so writeFlowTape() persistence and flowGexAccumulator.ingestTape() (dealer
+// inventory) still see every order. Set to 0 to send the full tape again.
+const FLOW_BROADCAST_TAPE_MAX = Number(process.env.FLOW_BROADCAST_TAPE_MAX || 300);
+
+function trimBroadcastFlow(flow) {
+  if (!FLOW_BROADCAST_TAPE_MAX) return flow;
+  if (!flow || !Array.isArray(flow.tape)) return flow;
+  if (flow.tape.length <= FLOW_BROADCAST_TAPE_MAX) return flow;
+  // Newest N (tape is oldest-first) — same slice the snapshot trim uses.
+  return { ...flow, tape: flow.tape.slice(-FLOW_BROADCAST_TAPE_MAX) };
+}
 
 // Module-level handle to the active broadcaster's bandwidth getter, set when
 // createGexWsServer runs. Exported via getWsBandwidth() so /proxy/self-metrics
@@ -150,6 +185,11 @@ const GEX_BROADCAST_MS_OFFHOURS = Number(process.env.GEX_BROADCAST_MS_OFFHOURS |
 // coarsen to this cadence outside RTH. During RTH the floor is 0 (content dedupe
 // alone gates it) so live prints stay instant. Env-tunable.
 const FLOW_BROADCAST_MS_OFFHOURS = Number(process.env.FLOW_BROADCAST_MS_OFFHOURS || 30000);
+// RTH floor between flow sends. 0 = every changed publish (~2/s), which is the
+// historical behavior and the right default: the tape's value is immediacy, and
+// FLOW_BROADCAST_TAPE_MAX is what actually bounds the volume. Raise to 1000 to
+// halve the frame rate if a heavy session still runs hot.
+const FLOW_BROADCAST_MS_RTH = Number(process.env.FLOW_BROADCAST_MS_RTH || 0);
 
 // ── Outbound bandwidth alarm ─────────────────────────────────────────────────
 // /ws/gex egress is uncacheable and counts 100% as Cloudflare "bandwidth served",
@@ -478,14 +518,30 @@ function createGexWsServer(server, { path = WS_PATH, log = console } = {}) {
       //      the GEX frame uses to exclude updatedAt). Payload still carries them.
       //   2) Off-hours floor: outside RTH the chain/tape barely moves, so coarsen
       //      to FLOW_BROADCAST_MS_OFFHOURS even if content nudged (window slide).
-      const { asOf, prints, ...flowContent } = state.flow || {}; // eslint-disable-line no-unused-vars
+      //
+      // Both of those only ever helped when the market was QUIET. Once prints are
+      // landing the content genuinely changes on every 500ms publish, so the
+      // dedupe passes every time and the full tape went out anyway — 646MB/min on
+      // 2026-09-01. See FLOW_BROADCAST_TAPE_MAX above: the payload is now trimmed
+      // to the newest N orders before it goes anywhere.
+      //
+      // Trim FIRST, then dedupe on the TRIMMED content. Coalescing can mutate an
+      // order that has already scrolled out of the broadcast window (a sweep that
+      // grows past the floor), which would otherwise defeat the dedupe and resend
+      // a byte-identical frame. Keying on what we actually send fixes that.
+      const trimmedFlow = trimBroadcastFlow(state.flow);
+      const { asOf, prints, ...flowContent } = trimmedFlow || {}; // eslint-disable-line no-unused-vars
       const flowKey = JSON.stringify(flowContent);
       const now = Date.now();
-      const flowFloor = isRthNow() ? 0 : FLOW_BROADCAST_MS_OFFHOURS;
+      // RTH floor stays 0 by default: a flow tape's whole value is immediacy, and
+      // the trim above is what actually fixed the volume. FLOW_BROADCAST_MS_RTH
+      // is here as a second lever if a very busy session still runs hot — set it
+      // to 1000 to halve the frame rate at the cost of up to 1s of tape latency.
+      const flowFloor = isRthNow() ? FLOW_BROADCAST_MS_RTH : FLOW_BROADCAST_MS_OFFHOURS;
       if (flowKey !== lastFlowPayload && now - lastFlowSentAt >= flowFloor) {
         lastFlowPayload = flowKey;
         lastFlowSentAt = now;
-        out.push(msg('flow', state.flow, state.symbol));
+        out.push(msg('flow', trimmedFlow, state.symbol));
       }
     }
     // Full esCandles array goes out only in the connect-time snapshot (written via
