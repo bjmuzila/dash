@@ -58,10 +58,13 @@ import {
 //              and the number still sits on its own sign colour. Flat gold used
 //              to cover the whole cell and a short-gamma core looked exactly
 //              like a long-gamma one. Front expiry adds the named badge and a
-//              pulse;
-//              later expiries get a ★ in the corner — the same strike, marked
-//              more quietly because the front expiry is the one being traded.
+//              pulse; later expiries get a ★ in the corner — the same strike,
+//              marked more quietly because the front expiry is the one traded.
 //   CW / PW    ringed badges in their own colours, front expiry only
+//
+// The CB / CW / PW switch turns off the LABELS only — the badges and the ★. The
+// core's gold is colour, not a label: it is the thing that makes the core
+// findable at a glance, and clearing the text is not a reason to lose it.
 //
 // ── Not carried over ─────────────────────────────────────────────────────────
 // Replay, the Δ 5/15/30m stamps, the cell click-through book, the full-page
@@ -615,7 +618,12 @@ function TickerPanel({
                 const hue = v >= 0 ? 'var(--color-gex-pos)' : 'var(--color-gex-neg)'
                 const heat =
                   alpha > 0 ? `color-mix(in srgb, ${hue} ${(alpha * 100).toFixed(1)}%, transparent)` : 'transparent'
-                const level = showLevels ? levelOf(c.key, strike) : null
+                // NOT gated on showLevels. That switch turns off the LABELS —
+                // the CB / CW / PW badges and the ★ — and nothing else. The
+                // gold on the core is colour, not a label: it is how the core
+                // is found across four ladders at a glance, and a board with
+                // the badges cleared still has to answer "where is it".
+                const level = levelOf(c.key, strike)
                 const isFront = front != null && c.key === front.key
                 const isCb = level === 'cb'
                 const f = fmtGex(v)
@@ -685,7 +693,7 @@ function TickerPanel({
                         holds FULL gold, and a gold star on gold is an invisible
                         star. No halo either — solid gold is already its ground,
                         and the glow only softened the glyph's edge. */}
-                    {isCb && !isFront && (
+                    {showLevels && isCb && !isFront && (
                       <span
                         title="Core Bullseye"
                         className="pointer-events-none absolute left-0.5 top-px text-2xs leading-none"
@@ -696,7 +704,7 @@ function TickerPanel({
                     )}
 
                     {/* Front expiry names the level, ringed in its own colour. */}
-                    {level && isFront && (
+                    {showLevels && level && isFront && (
                       <span
                         title={{ cb: 'Core Bullseye', cw: 'Call Wall', pw: 'Put Wall' }[level]}
                         className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 rounded-[3px] bg-app px-[3px] text-3xs font-black leading-[1.3] tracking-[0.04em] text-fg"
@@ -960,7 +968,7 @@ export function MultiGreekCard() {
                   label="CB / CW / PW"
                   on={showLevels}
                   onClick={() => setShowLevels((v) => !v)}
-                  title="Mark the Core Bullseye, Call Wall and Put Wall. The front expiry names them; later expiries star their own CB."
+                  title="Name the Core Bullseye, Call Wall and Put Wall — the front expiry's badges and the ★ on later expiries. The core's gold stays either way."
                 />
               </div>
             </PanelSection>

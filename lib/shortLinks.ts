@@ -28,6 +28,22 @@
  * The two-segment form has no such restriction: its verb suffix (`/click`,
  * `/profile`, …) is what makes it unambiguous, so an unknown source there is
  * accepted and reported as a referral.
+ *
+ * ─── THE SECOND HALF OF THE ALLOWLIST ───────────────────────────────────────
+ *
+ * PLACEMENTS below covers the platforms that never change. Everything else —
+ * a podcast, a newsletter swap, a one-off push — is a ROW IN THE short_links
+ * TABLE, created from the Campaign links panel on the owner Overview and read
+ * through lib/shortLinkRegistry.ts. That is what makes `cbedge.net/<name>`
+ * work with no deploy while keeping the guard intact: a name resolves only
+ * once the owner has actually created it, so `/pricng` still 404s and a bot
+ * probing `/wp-admin` still gets nothing.
+ *
+ * RESERVED_SLUGS is the safety rail on that. A created link can never be a
+ * name the site already routes — checked when the row is written AND again on
+ * every lookup, so a row that predates a new page can't shadow it or, worse,
+ * make a gated page reachable signed-out. Keep it in sync with the top-level
+ * folders in app/.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -105,6 +121,61 @@ export const BARE_SOURCE_LIST: string[] = [
 ].sort();
 
 export const BARE_SOURCES = new Set(BARE_SOURCE_LIST);
+
+/**
+ * Names a created short link may NEVER take, because the site already routes
+ * them. Two reasons, and the second is the serious one:
+ *
+ *   1. A collision is invisible. Next resolves static segments before dynamic
+ *      ones, so `/pricing` would keep serving the pricing page and the link
+ *      would silently never fire.
+ *   2. middleware.ts answers a registered short link BEFORE the auth gate. A
+ *      row named after a gated page (`scanner`, `owner`, `es-candles`) would
+ *      therefore short-circuit that page's gate. Reserving them is what keeps
+ *      "the owner typed a name" from ever being able to open a paid page.
+ *
+ * Every top-level folder in app/ belongs here, plus the paths served outside
+ * the app router (`proxy`, `ws`, `_next`, the Vite bundles) and the old owner
+ * prefixes middleware still 308s (`dev`, `admin`, `budget`, …). When you add a
+ * page at app/<name>/, add <name> here in the same commit.
+ */
+export const RESERVED_SLUG_LIST: string[] = [
+  "_next", "_template", "about-me", "admin", "api", "app", "apple-icon", "auth",
+  "budget", "chat", "checkout", "coming-soon", "components", "dashboard", "dev",
+  "disclaimer", "docs", "em", "es-candles", "explore", "favicon", "feedback",
+  "flow", "footprint", "gex", "gex2", "guide", "home", "home3", "icon", "ict",
+  "insights", "levels", "logic-order", "logs", "m", "maintenance",
+  "market-matrix", "market-scanner", "mobile", "mult-greek", "obook",
+  "opengraph-image", "options", "options-chain", "overview", "owner",
+  "personal", "premarket", "pricing", "privacy", "proxy", "public", "quotes",
+  "risk-disclosure", "robots", "scanner", "sign-in", "sign-up", "sitemap",
+  "social-media", "squeeze", "terms", "test", "testui", "toolbar-preview",
+  "top10", "traders-dashboard", "twitter-image", "unsubscribe", "v3", "vanilla",
+  "whats-new", "ws",
+];
+
+const RESERVED_SLUGS = new Set(RESERVED_SLUG_LIST);
+
+/**
+ * True when a slug is spoken for — by a real route, by a built-in platform
+ * link (`/x`), or by a promo link. Promo slugs are passed in rather than
+ * imported so this module stays free of a circular dependency with
+ * lib/promoLinks.ts.
+ */
+export function isReservedSlug(slug: string, promoSlugs?: Iterable<string>): boolean {
+  if (!slug) return true;
+  if (RESERVED_SLUGS.has(slug)) return true;
+  if (BARE_SOURCES.has(slug)) return true;
+  if (promoSlugs) for (const p of promoSlugs) if (p === slug) return true;
+  return false;
+}
+
+/**
+ * The shape a created short link must have: one segment, lowercase, 2–40
+ * characters. Two is the floor because a single letter is too easy to collide
+ * with a future route and too easy to typo into.
+ */
+export const CUSTOM_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,39}$/;
 
 /** Same rules as campaignSlug() in lib/emails/utm.ts — keep the two identical. */
 export function shortLinkSlug(input: string): string {

@@ -1,70 +1,51 @@
 # Changelog
 
-## 2026-09-02 - Options chain: 50% strikes by default, and the settings menu registers its clicks
+## 2026-09-02 - Campaign links: create `cbedge.net/<name>` from the panel, no `/click`, no deploy
 
-Two unrelated fixes on the same control.
+The Campaign links panel's **Somewhere else** row used to emit
+`cbedge.net/v3/click`. The verb was there for a real reason — the bare
+one-segment form answers only for an allowlist (`/x`, `/youtube`, …), so an
+unknown name would have 404'd — but it is four characters of noise in every
+post and it says nothing. Now the allowlist is something the panel can add to,
+so the row emits `cbedge.net/v3` and the link works within seconds.
 
-### The % strikes picker silently ignored a pick
+### How
 
-Clicking an option in the chain's GRID > STRIKES menu did nothing, on and off.
-Two causes, both fixed:
+- **New `short_links` table** (`lib/db.ts`) — `slug`, `campaign`, `medium`,
+  `dest`. Plus `listShortLinks` / `upsertShortLink` / `deleteShortLink`.
+- **`lib/shortLinkRegistry.ts`** — the cached read side. Loads the whole table
+  at once on a 30s TTL with a 5-minute stale window (same shape middleware
+  already uses for the maintenance flag). The web pounds one-segment paths
+  (`/wp-admin`, `/.env`, every typo), so a query per probe was never an option.
+- **`app/api/owner/short-links/route.ts`** — owner-gated GET / POST / DELETE.
+- **`RESERVED_SLUGS` in `lib/shortLinks.ts`** — every top-level folder in
+  `app/`, the paths served outside the app router, and the old owner prefixes.
+  Checked on write AND on every read.
+- **`middleware.ts`** answers a created link itself, before the auth gate.
+- **`app/[source]/route.ts`** does the same as a second net, so the two can't
+  disagree if the middleware matcher ever stops covering a path.
+- **`CampaignLinkBuilder.tsx`** — one-off row is bare, the button becomes
+  "Create & copy" until the name exists, and created links are listed below it
+  with copy / retire.
 
-- `cbedge-v3/src/design/primitives/Controls.tsx` — `Popover`'s click-outside
-  closed on ANY `pointerdown` whose target was not inside its own panel. The
-  dropdown's list is `createPortal`'d to `<body>`, so pressing a row counted as
-  "outside": the ⚙ panel closed, the list unmounted with it, and the `click`
-  that would have fired on mouseup landed on nothing. Outside now ignores
-  anything under a `[data-popover-safe]` node — new exported `POPOVER_SAFE_ATTR`,
-  which any portalled menu opened from a Popover must carry.
-- `cbedge-v3/src/pages/optionsChain/pickers.tsx` — rows act on `onPointerDown`
-  rather than `onClick`, and carry the attribute above. `useAnchor` repositions
-  the menu on any scroll in the capture phase, so a list that shifted a few
-  pixels between press and release put the two events on different rows, and
-  `click` only fires when they match.
+### Why middleware answers it instead of just marking the path public
 
-### Strikes default
+A created link that collided with a real page would, under a
+"mark-it-public" gate, make that page reachable signed out — a paywall hole
+opened by typing a name. Answering in middleware makes the same collision a
+redirect you can see the moment you load the page. Reserved names are refused
+at both ends anyway; this is the third net, not the first.
 
-- `cbedge-v3/src/pages/optionsChain/useChainData.ts` — the per-ticker auto
-  window is now SPX 10% / everything else 50%, up from 30%. SPX stays at 10: it
-  lists thousands of strikes across the expiries drawn side by side and a wider
-  window costs real frames. A single-name chain is a fraction of that, and 30%
-  cut off before the strikes worth reading.
+### Unchanged
 
-## 2026-09-02 - Options chain + Multi Greek: the CB (Core) cell keeps its sign
+`/x/click` and every other two-segment link still work. A name nobody created
+still 404s, so `cbedge.net/pricng` is a 404 and not a ghost referral.
 
-A Core Bullseye below spot is negative, but the VIVID skin painted the cell flat
-gold at .85 and the red underneath was gone — a short-gamma Core looked
-identical to a long-gamma one. The gold is now a diagonal WASH instead of a flat
-layer: solid at the ★ corner, holding the skin's alpha, then out, so the figure
-lands on the ordinary sign heat. The cell still reads "Core" at a glance and the
-number reads red or blue again.
+### Note
 
-### Files
+`v3` itself can't be used — `app/v3/route.ts` already serves the v3 dashboard
+shell, so the API refuses it along with every other real route name.
 
-- `cbedge-v3/src/pages/optionsChain/heatSkins.ts` — `levelFillBg()` branches on
-  `kind === 'cb'` and returns
-  `linear-gradient(112deg, cb 0%, cb@.85 26%, cb@0 66%), <heat>`.
-  112deg rather than 135 because the cell is ~7x wider than tall — a true
-  diagonal clears the gold inside two characters. New `CB_WASH_ANGLE` /
-  `CB_WASH_HOLD` / `CB_WASH_END` constants carry the tuning.
-  CW and PW are untouched (flat two-stop): their colour already IS the sign, so
-  they have nothing to hide. CB is the only level whose colour is directionless.
-  Fades to `alpha(cb, 0)` rather than `transparent` so the ramp stays in the
-  gold hue instead of dipping through grey.
-- `cbedge-v3/src/pages/optionsChain/ChainMatrix.tsx` — dropped the ★'s white
-  halo on the levelFill skins. The corner it sits in is now solid gold, so the
-  glyph has its own ground and the glow only softened its edge.
-- `cbedge-v3/src/board/multiGreek/MultiGreekCard.tsx` — same treatment on the
-  Multi Greek ladder, which had the identical bug from its own copy of the value
-  (`CB_FILL`, flat gold at 85% over the heat). Now `CB_WASH`, with LONGER stops
-  than the chain's — 55% / 82% against 26% / 66%. The ladder is scanned across
-  four panels at once and the core has to be findable in peripheral vision, so
-  gold holds through the figure and hands over in the last quarter; the tail
-  between the fade and the CB badge is what carries the sign. ★ halo dropped for
-  the same reason as the chain's.
-
-No token, skin-config or math change: the ramp, rank floors, `levelFill.alpha`
-and CLASSIC are all byte-for-byte what they were.
 
 ## 2026-09-02 - v3 GEX Candles: ES futures candles are back, as an SPX/ES switch
 
@@ -109,6 +90,16 @@ poll (30s) and the GEX history poll (60s), so the owner's chart never has a
 hole from another tab being up. Browsers throttle hidden timers to ~1/min,
 which is the recorder's own cadence. Files: `cbedge-v3/src/data/api.ts`,
 `GexCandlesCard.tsx`.
+
+### Timeframe change keeps the newest candle in frame
+
+`chart.ts` `ensureLatestVisible()`: after a reframe (symbol / interval /
+session / SPX<->ES), the visible logical range is re-checked on the next
+animation frame and again after a 150ms layout pass; if the newest bar's
+index is off the right edge, `frameRecent()` is re-applied. lightweight-charts
+can settle on a range derived from the OLD base index when the bar count
+changes by an order of magnitude (1m -> 15m), which put the live candle
+off-screen on every timeframe switch.
 
 ### Deliberately not `useEsCandles`
 

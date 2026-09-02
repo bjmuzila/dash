@@ -6,6 +6,7 @@ import {
   shortLinkLocation,
   shortLinkSlug,
 } from "@/lib/shortLinks";
+import { lookupShortLink } from "@/lib/shortLinkRegistry";
 import { PROMO_LINKS, PROMO_COOKIE, PROMO_COOKIE_MAX_AGE } from "@/lib/promoLinks";
 
 /**
@@ -67,6 +68,33 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ source: str
       `${PROMO_COOKIE}=${promo.code}; Path=/; Max-Age=${PROMO_COOKIE_MAX_AGE}; HttpOnly; SameSite=Lax`
     );
     return new NextResponse(null, { status: 302, headers });
+  }
+
+  // ── Owner-created short links — cbedge.net/podcast ───────────────────────
+  // Rows in short_links, added from the Campaign links panel on the owner
+  // Overview, so a new name needs no deploy. Still an allowlist: a name that
+  // was never created 404s below exactly as before.
+  //
+  // In production middleware.ts answers these before routing (see the block
+  // there) and this branch never runs. It exists so the two can't disagree —
+  // if the matcher ever stops covering a path, the link still works.
+  if (sourceSlug) {
+    const link = await lookupShortLink(sourceSlug);
+    if (link) {
+      const sp = req.nextUrl.searchParams;
+      const placement = {
+        ...resolvePlacement(sourceSlug, BARE_ACTION),
+        medium: link.medium || "referral",
+        campaign: link.campaign || "link",
+      };
+      return new NextResponse(null, {
+        status: 302,
+        headers: {
+          Location: shortLinkLocation(placement, sp.get("c"), sp.get("to") ?? link.dest),
+          "Cache-Control": "no-store, max-age=0",
+        },
+      });
+    }
   }
 
   // Allowlist, not a catch-all. See the block comment above.

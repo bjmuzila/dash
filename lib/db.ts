@@ -541,6 +541,29 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_far_cb_custom_created ON far_cb_custom_tickers(created_at DESC);
 
+    -- Owner-created one-segment campaign links — cbedge.net/<slug>.
+    --
+    -- The built-in platforms (/x, /youtube, …) are a code table in
+    -- lib/shortLinks.ts because they never change. This is the same thing for
+    -- the ones that DO: a podcast, a newsletter swap, a one-off push. A row
+    -- here is what makes cbedge.net/<slug> resolve AT ALL — the bare
+    -- one-segment form is an allowlist on purpose (see lib/shortLinks.ts), and
+    -- this table is the half of that allowlist the owner can add to without a
+    -- deploy.
+    --
+    -- slug arrives already normalized (shortLinkSlug) and never reserved (see
+    -- RESERVED_SLUGS). dest is a same-site path the redirect forwards to;
+    -- campaign is the utm_campaign the Acquisition panel buckets it under.
+    CREATE TABLE IF NOT EXISTS short_links (
+      slug        TEXT PRIMARY KEY,
+      campaign    TEXT NOT NULL DEFAULT 'link',
+      medium      TEXT NOT NULL DEFAULT 'referral',
+      dest        TEXT NOT NULL DEFAULT '/',
+      created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_short_links_created ON short_links(created_at DESC);
+
     -- Email broadcast history. One row per send from /admin/emails. Summary only
     -- (no per-recipient rows). recipients is a JSON array of the addresses sent.
     CREATE TABLE IF NOT EXISTS email_sends (
@@ -3911,6 +3934,50 @@ export async function listFarCbTickers(limit = 200): Promise<FarCbCustomTicker[]
     "SELECT * FROM far_cb_custom_tickers WHERE active = TRUE ORDER BY created_at DESC LIMIT ?",
     [limit]
   );
+}
+
+// ── Owner-created short links (cbedge.net/<slug>) ────────────────────────────
+// The rows behind lib/shortLinkRegistry.ts. Validation (slug shape, reserved
+// names, same-site destination) happens in app/api/owner/short-links/route.ts
+// BEFORE anything reaches here — these are the raw reads and writes.
+
+export interface ShortLinkRow {
+  slug: string;
+  campaign: string;
+  medium: string;
+  dest: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export async function listShortLinks(): Promise<ShortLinkRow[]> {
+  await getDb();
+  return queryAll<ShortLinkRow>("SELECT * FROM short_links ORDER BY created_at DESC");
+}
+
+export async function upsertShortLink(input: {
+  slug: string;
+  campaign?: string | null;
+  medium?: string | null;
+  dest?: string | null;
+}): Promise<ShortLinkRow | undefined> {
+  await getDb();
+  return queryOne<ShortLinkRow>(
+    `INSERT INTO short_links (slug, campaign, medium, dest)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (slug) DO UPDATE SET
+       campaign = EXCLUDED.campaign,
+       medium = EXCLUDED.medium,
+       dest = EXCLUDED.dest,
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [input.slug, input.campaign || "link", input.medium || "referral", input.dest || "/"]
+  );
+}
+
+export async function deleteShortLink(slug: string): Promise<void> {
+  await getDb();
+  await queryAll("DELETE FROM short_links WHERE slug = ?", [slug]);
 }
 
 /** No-op: pg writes are immediate, no file persistence needed */

@@ -1,6 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getUserFromMiddleware } from "@/lib/supabase/middleware";
-import { BARE_SOURCE_LIST } from "@/lib/shortLinks";
+import {
+  BARE_SOURCE_LIST,
+  CUSTOM_SLUG_RE,
+  resolvePlacement,
+  shortLinkLocation,
+} from "@/lib/shortLinks";
+import { lookupShortLink } from "@/lib/shortLinkRegistry";
 import { PROMO_SLUG_LIST } from "@/lib/promoLinks";
 
 /**
@@ -229,6 +235,42 @@ export async function middleware(req: NextRequest) {
   }
 
   if (isPublicRoute(path)) return res;
+
+  // ── Owner-created short links — cbedge.net/<name> ──────────────────────────
+  //
+  // The static ones (`/x`, `/bday`) are PUBLIC_PATTERNS above, because their
+  // names are known at build time. These aren't: they're rows in short_links
+  // that the owner adds from the Overview panel, so the gate can't be a regex
+  // baked into this file — it's a cached table lookup (lib/shortLinkRegistry).
+  //
+  // It ANSWERS here rather than just marking the path public and letting
+  // app/[source]/route.ts do it. That is the whole safety argument: middleware
+  // runs before routing, so if a row ever names a real page the visible result
+  // is that page redirecting — loud, and obvious the moment you load it —
+  // instead of a gated page quietly becoming reachable signed-out. (Reserved
+  // names are rejected at both write and read, so this is the third net, not
+  // the first.) The registry answers from memory, so the bot traffic that
+  // pounds one-segment paths never reaches Postgres.
+  //
+  // Same 302 + no-store as app/[source]/route.ts, for the same reason: a 301
+  // would be cached by every proxy in between and re-pointing the link later
+  // would never reach anyone who had clicked it once.
+  if (CUSTOM_SLUG_RE.test(path.slice(1))) {
+    const slug = path.slice(1);
+    const link = await lookupShortLink(slug);
+    if (link) {
+      const sp = req.nextUrl.searchParams;
+      const placement = {
+        ...resolvePlacement(slug, "click"),
+        medium: link.medium || "referral",
+        campaign: link.campaign || "link",
+      };
+      const location = shortLinkLocation(placement, sp.get("c"), sp.get("to") ?? link.dest);
+      const out = NextResponse.redirect(new URL(location, req.nextUrl.origin), 302);
+      out.headers.set("Cache-Control", "no-store, max-age=0");
+      return out;
+    }
+  }
 
   // Old owner URLs (bookmarks, pinned quick-pages) → permanent new /owner/* home.
   const moved = ownerMovedTarget(path);

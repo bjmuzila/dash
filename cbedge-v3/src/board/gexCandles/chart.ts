@@ -388,6 +388,39 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     }
   }
 
+  /**
+   * ── THE NEWEST BAR MUST SURVIVE A TIMEFRAME CHANGE ──────────────────────────
+   *
+   * `frameRecent` sets the logical range synchronously, right after `setData`.
+   * That is usually enough — but not always. lightweight-charts re-lays the
+   * time scale on its own next frame, and when the bar COUNT has just changed
+   * by an order of magnitude (1m → 15m is ~1,950 bars → ~130) the range it
+   * settles on can be the one it derived from the OLD base index, which lands
+   * the pane on candles from earlier in the week with the newest one off the
+   * right edge. Switch timeframe, lose the live candle — that was the report.
+   *
+   * So the frame is CHECKED after the chart has had its frame, and once more
+   * after a layout pass, and re-applied if the newest bar is not on screen.
+   * Idempotent: a view that is already right is left exactly as it is.
+   */
+  let ensureTimer: ReturnType<typeof setTimeout> | null = null
+  function ensureLatestVisible() {
+    const check = () => {
+      if (barCount <= 0) return
+      let r: { from: number; to: number } | null = null
+      try {
+        r = ts.getVisibleLogicalRange()
+      } catch {
+        return
+      }
+      // `barCount - 1` is the newest bar's index; `to` is the right edge.
+      if (!r || r.to < barCount - 1 || r.from > barCount - 1) frameRecent()
+    }
+    requestAnimationFrame(check)
+    if (ensureTimer) clearTimeout(ensureTimer)
+    ensureTimer = setTimeout(check, 150)
+  }
+
   /** Newest bar back at the right edge, keeping the user's bar spacing. */
   function anchorToNow() {
     try {
@@ -747,6 +780,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
           /* the scale is gone; frameRecent below still frames the time axis */
         }
         frameRecent()
+        ensureLatestVisible()
       } else {
         reanchorIfStranded(prevCount)
       }
@@ -858,6 +892,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       }
     },
     destroy() {
+      if (ensureTimer) clearTimeout(ensureTimer)
       railSink = null
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
       ro.disconnect()
