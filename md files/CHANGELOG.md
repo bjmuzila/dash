@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-09-03 - Fix: stray backticks broke the owner-vite Docker build
+
+The VPS deploy died in the `owners` target with
+`studioHtml.ts:1487: Expected ";" but found "alerts"`, pointing at what looks
+like an ordinary block comment.
+
+It is not a comment. The whole file is ONE String.raw template literal opened on
+line 12 and closed on line 2021 - so the two backticks around `alerts` in the
+Auto-buy template's header note CLOSED the template early, and everything after
+them parsed as loose JavaScript. That is why the error names an identifier
+sitting inside a /* */ block.
+
+Fixed by quoting the word instead. The file now holds exactly two backticks, the
+pair that opens and closes the template, and esbuild parses it clean.
+
+Worth remembering: inside `studioHtml.ts` a backtick is never punctuation. Use
+single quotes in comments and prose there.
+
+Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
+
 ## 2026-09-03 - v3 board: Gauge Rail card (v2's home strip, minus IB Direction)
 
 v2's home-page segmented-LED strip, added to the v3 board as a card. Five tiles

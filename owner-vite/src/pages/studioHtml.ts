@@ -1484,7 +1484,7 @@ var TPL={
   ]},
 
   /* AUTO BUY · CORE LEVEL — the daily "the core got tagged and the bot took it"
-     post. Same shape as `alerts`, different story: this one is about the LEVEL
+     post. Same shape as 'alerts', different story: this one is about the LEVEL
      doing the work, so the headline is the core tag and the numbers underneath
      are what the fill turned into.
 
