@@ -1,5 +1,91 @@
 # Changelog
 
+## 2026-09-03 - v3 Traders Dashboard: sector wheel "up" is now the chart blue
+
+The S&P Sector Wheel painted every up move mint green (`--color-move-up:
+#35c28e`), which was the only green on an otherwise blue dashboard and read as a
+different system.
+
+`--color-move-up` is now **#29b6f6** — the same blue the GEX bubbles and bars use
+on the candles (`--color-gex-pos`). `--color-move-down` keeps the clay red
+(#e0645f), so up/down still differ in hue AND lightness for a colourblind check.
+
+- `cbedge-v3/src/design/tokens.css` — one token value, plus the comment
+  explaining why `--color-move-*` has now split from `--color-up/--color-down`
+  (those keep the provisional mint/clay semantic pair).
+
+Because the wheel reads the token through `wheelPalette()` in
+`cbedge-v3/src/pages/tradersDashboard/wheelMath.ts`, every ramp derived from it
+(ticker bar fills, sector/industry ring washes, callout text, the hub net number,
+tooltip and footer figures) follows automatically — no component change. The same
+token also drives the rest of the traders dashboard's directional numbers.
+
+## 2026-09-03 - Free trial: one per email, and only for a first-time email
+
+The 2-day trial was attached to every monthly checkout unconditionally. It was
+keyed on a freshly created `users.id`, so a new email bought a brand-new trial,
+forever — and a customer who trialed in March and came back in June got a second
+free two days on the house.
+
+**The trial is now decided BEFORE the Checkout session is created.**
+`lib/trialEligibility.ts` answers one question — has this email already had its
+trial — and `subscription_data.trial_period_days` is simply not sent when the
+answer is yes. Three checks, cheapest first, any one of them enough:
+
+1. `trial_history` — the email has already claimed a trial.
+2. Our own `subscriptions` row carries a `stripe_subscription_id`, i.e. this
+   account has been through checkout before, whatever the status is now.
+3. Stripe itself — `subscriptions.list({ status: "all", limit: 1 })` on the
+   customer. The authority, and the only check that sees a subscription created
+   outside our flow (dashboard, API, a resumed session).
+
+**Why not just let the existing guard handle it.** `lib/trialGuard.ts` already
+blocked repeat trials, but it can only run in the webhook: the card fingerprint
+does not exist until Stripe's hosted page has taken the card, so it grants the
+trial and revokes it seconds later. That is the correct shape for card farming
+and the wrong shape for an ordinary returning customer, who would be shown "2
+days free", enter a card, and be billed on the spot. A decision made before the
+session exists means Stripe's own checkout page shows them the truth.
+
+**Two axes now, doing different jobs.** Email is free, so the email gate alone
+is not a defence — nothing stops the same person signing up as someone else
+tomorrow. The card fingerprint gate stays exactly as it was, behind it. What is
+new in the guard is the same email rule enforced on the way back in, for the
+paths checkout does not own, plus the claim: whenever a trial is allowed to
+stand, the email is stamped as spent (including the wallet/bank case that has no
+fingerprint to judge — the trial is consumed either way).
+
+**New table `trial_history`**, one row per email that has ever been granted a
+trial. Keyed on the canonical form (`trialEmailKey`: lowercased, `+tag` dropped,
+Gmail dots stripped) so `brand+2@gmail.com` cannot farm `b.rand@gmail.com`'s
+entitlement. First claim owns the email permanently — `ON CONFLICT DO NOTHING`,
+never `DO UPDATE`, or a redelivered webhook would hand the entitlement back out.
+
+**Backfilled, and this is the part that matters on deploy.** Every account with
+a Stripe subscription id, plus every account behind a row in `trial_cards`, is
+seeded as already-trialed. Without it the gate would read an empty table on
+first boot and hand a fresh free trial to the entire existing customer base the
+next time any of them re-subscribed. The backfill keys on plain `lower(email)`
+rather than reproducing the Gmail rules in SQL — two implementations that can
+drift is worse than one extra lookup — so `findTrialHistory()` matches on both
+keys.
+
+**Fails open, deliberately.** A DB blip or a Stripe timeout grants the trial. One
+free trial costs less than one refused legitimate signup, and the card guard is
+still behind it. Kill switch: `TRIAL_NEW_EMAIL_ONLY=0` restores the old
+grant-to-everyone behaviour (`TRIAL_GUARD_ENABLED=0` still governs the card
+axis). Every checkout stamps `trial_decision` into the subscription metadata, so
+why a given subscription did or did not start on a trial is readable in the
+Stripe dashboard months later.
+
+Not touched: the pricing page still advertises the trial to everyone. Stripe's
+checkout page shows the real first charge, so nobody is billed by surprise, but
+the CTA copy could read eligibility off a status endpoint later.
+
+Files: `lib/trialEligibility.ts` (new), `lib/db.ts`, `lib/trialGuard.ts`,
+`app/api/stripe/checkout/route.ts`.
+
+
 ## 2026-09-03 - Theme check: LadderModal and MultiGreekReplay off the type scale
 
 `npm run check-theme` (pre-commit gate) failed on 19 bare `fontSize: <number>`

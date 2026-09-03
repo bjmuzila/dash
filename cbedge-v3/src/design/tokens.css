@@ -76,8 +76,13 @@
   /* The directional pair the traders dashboard and the sector wheel read.
      Separate names from --color-up/--color-down on purpose: those are the UI's
      provisional semantic pair, these are the MOVE colours (a % change, a wheel
-     wedge). Same values today; split them the day one of the two moves.      */
-  --color-move-up: #35c28e;
+     wedge). This is where the two pairs split (Brandon, 2026-09-03): the
+     dashboard's "up" is the CHART BLUE — the same #29b6f6 the GEX bubbles and
+     bars use on the candles (--color-gex-pos below) — so the sector wheel reads
+     as part of the dashboard instead of dropping a lone mint green into it.
+     Down keeps the clay red; the up/down contrast is hue AND lightness, so the
+     pair still survives a colourblind check.                                 */
+  --color-move-up: #29b6f6;
   --color-move-down: #e0645f;
   --color-flat: #7a828d;
   --color-accent: #5b8cff;

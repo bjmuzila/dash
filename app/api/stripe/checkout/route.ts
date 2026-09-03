@@ -3,6 +3,7 @@ import { getServerUser } from "@/lib/supabase/server";
 import { getStripe, getPriceIdForPlan, type Plan } from "@/lib/stripe";
 import { getSubscription, linkStripeCustomer } from "@/lib/db";
 import { PROMO_COOKIE, promoByCode } from "@/lib/promoLinks";
+import { decideTrialEligibility } from "@/lib/trialEligibility";
 
 export const dynamic = "force-dynamic";
 
@@ -89,6 +90,26 @@ export async function POST(req: NextRequest) {
 
     const affCode = affiliateCode(req);
 
+    // ── One free trial per email, and only for an email that has never had one
+    // ─────────────────────────────────────────────────────────────────────────
+    // Decided here, not after the fact: a returning customer must never be shown
+    // "2 days free", hand over a card, and be billed on the spot. See
+    // lib/trialEligibility.ts for the three checks and why this fails open.
+    // The webhook's card guard (lib/trialGuard.ts) still sits behind it.
+    const trial = await decideTrialEligibility({
+      stripe,
+      plan,
+      userId,
+      email: user?.email ?? null,
+      customerId,
+    });
+    if (!trial.eligible && trial.reason !== "not-monthly") {
+      console.log(
+        `[stripe/checkout] no trial for user ${userId} (${trial.reason}` +
+        `${trial.firstTrialAt ? `, first trial ${trial.firstTrialAt}` : ""})`
+      );
+    }
+
     // ── Pre-apply the advertised promo (YEARLY only) ─────────────────────────
     // The /bday deal is $600 off the ANNUAL plan; pre-applying an amount-off
     // coupon to a $45 monthly invoice would be nonsense, so monthly keeps the
@@ -118,16 +139,27 @@ export async function POST(req: NextRequest) {
       // clerk_user_id on the session is the webhook's fallback mapping if the
       // customer lookup ever misses.
       metadata: { clerk_user_id: userId, ...(affCode ? { affiliate_code: affCode } : {}) },
-      // 2-day free trial, MONTHLY ONLY — the landing CTA promises "2-day free
-      // trial · no charge up front". It has to be set HERE: Checkout ignores
-      // the product-level Trial Offer objects configured in the Stripe
-      // dashboard (those are Subscriptions-API only), and the legacy
-      // price-level trial field is unset on both prices.
+      // 2-day free trial — MONTHLY ONLY, and FIRST TIME ONLY (see the trial
+      // decision above; `trial.eligible` is already false for yearly). The
+      // landing CTA promises "2-day free trial · no charge up front", which is a
+      // promise to new customers; a repeat checkout is a straight purchase.
+      //
+      // It has to be set HERE: Checkout ignores the product-level Trial Offer
+      // objects configured in the Stripe dashboard (those are Subscriptions-API
+      // only), and the legacy price-level trial field is unset on both prices.
       // payment_method_collection stays "always" so the card is still captured
       // up front and the sub converts automatically when the trial ends.
+      //
+      // trial_decision rides along in the subscription metadata so the webhook —
+      // and anyone reading a subscription in the Stripe dashboard six months
+      // from now — can see WHY this one did or did not start on a trial.
       subscription_data: {
-        metadata: { clerk_user_id: userId, ...(affCode ? { affiliate_code: affCode } : {}) },
-        ...(plan === "monthly" ? { trial_period_days: 2 } : {}),
+        metadata: {
+          clerk_user_id: userId,
+          trial_decision: trial.reason,
+          ...(affCode ? { affiliate_code: affCode } : {}),
+        },
+        ...(trial.eligible ? { trial_period_days: 2 } : {}),
       },
       payment_method_collection: "always",
       // Mutually exclusive on Stripe's side — see the promo block above.

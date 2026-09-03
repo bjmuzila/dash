@@ -1099,6 +1099,48 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_trial_cards_name  ON trial_cards(name_key);
     CREATE INDEX IF NOT EXISTS idx_trial_cards_reuse ON trial_cards(reuse_count DESC);
 
+    -- One row per EMAIL that has ever been GRANTED a free trial.
+    --
+    -- trial_cards (above) gates the CARD, and only after the fact: the
+    -- fingerprint does not exist until Stripe's hosted page has taken the card,
+    -- so the trial is granted first and revoked seconds later. That is the right
+    -- shape for card abuse, and the wrong shape for the ordinary case — a
+    -- customer who trialed, cancelled, and comes back next month should simply
+    -- not be OFFERED a second trial. This table is the axis that can be checked
+    -- BEFORE the Checkout session is created, so the trial is never dangled and
+    -- then yanked.
+    --
+    -- KEYED ON EMAIL, NOT users.id, deliberately: deleting the account and
+    -- signing up again with the same address must not mint a fresh trial, and a
+    -- users row can go away. email_key is the canonical form written by
+    -- trialEmailKey() below — lowercased, +tag dropped, Gmail dots removed.
+    --
+    -- WHY BOTH email_key AND email: email_key is what we match on; email is the
+    -- address as it was actually typed, kept so a human reading the abuse report
+    -- can recognise the account.
+    --
+    -- source records which side of the flow claimed it ('checkout' | 'webhook' |
+    -- 'backfill'). blocked_attempts / last_attempt_* are the audit trail of
+    -- repeat tries against an email that has already spent its trial.
+    CREATE TABLE IF NOT EXISTS trial_history (
+      email_key              TEXT PRIMARY KEY,
+      email                  TEXT,
+      clerk_user_id          TEXT,
+      stripe_customer_id     TEXT,
+      stripe_subscription_id TEXT,
+      source                 TEXT,
+      blocked_attempts       INTEGER NOT NULL DEFAULT 0,
+      last_attempt_user_id   TEXT,
+      last_attempt_at        TIMESTAMPTZ,
+      first_trial_at         TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_trial_history_user  ON trial_history(clerk_user_id);
+    CREATE INDEX IF NOT EXISTS idx_trial_history_email ON trial_history(email);
+    -- The one-time backfill that seeds this table runs at the BOTTOM of this
+    -- block: it joins `users`, which is created further down.
+
+
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
     -- tasks are JSON arrays the page owns; zip drives the weather card.
     CREATE TABLE IF NOT EXISTS td_user_prefs (
@@ -1444,6 +1486,39 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       used_at    TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
+
+    -- BACKFILL — every account that has already been through Stripe Checkout has
+    -- had its one trial. Without this, the new gate would read an empty table on
+    -- first deploy and hand a brand-new free trial to every existing customer the
+    -- next time they re-subscribed.
+    --
+    -- Keyed on plain lower(email), NOT the canonical key: reproducing the Gmail
+    -- dot rules in SQL means a second implementation of trialEmailKey() that can
+    -- drift from the first. findTrialHistory() matches on BOTH keys instead, so
+    -- these rows are still found.
+    --
+    -- ON CONFLICT DO NOTHING makes it safe to re-run on every boot, which it
+    -- does — this block is the schema, not a migration script.
+    INSERT INTO trial_history
+      (email_key, email, clerk_user_id, stripe_customer_id, stripe_subscription_id, source, first_trial_at)
+    SELECT lower(btrim(u.email)), u.email, s.clerk_user_id, s.stripe_customer_id,
+           s.stripe_subscription_id, 'backfill', COALESCE(s.created_at, CURRENT_TIMESTAMP)
+      FROM subscriptions s
+      JOIN users u ON u.id = s.clerk_user_id
+     WHERE s.stripe_subscription_id IS NOT NULL
+       AND btrim(COALESCE(u.email, '')) <> ''
+    ON CONFLICT (email_key) DO NOTHING;
+
+    -- Second source: a card that has demonstrably started a trial, for accounts
+    -- whose subscriptions row was never written or has since been cleaned out.
+    INSERT INTO trial_history
+      (email_key, email, clerk_user_id, stripe_customer_id, stripe_subscription_id, source, first_trial_at)
+    SELECT lower(btrim(u.email)), u.email, tc.clerk_user_id, tc.stripe_customer_id,
+           tc.stripe_subscription_id, 'backfill', COALESCE(tc.first_seen_at, CURRENT_TIMESTAMP)
+      FROM trial_cards tc
+      JOIN users u ON u.id = tc.clerk_user_id
+     WHERE btrim(COALESCE(u.email, '')) <> ''
+    ON CONFLICT (email_key) DO NOTHING;
   `);
 }
 
@@ -2650,6 +2725,143 @@ export async function getTrialCardReuses(limit = 200): Promise<TrialCardRecord[]
     `SELECT * FROM trial_cards
       WHERE reuse_count > 0 OR blocked = TRUE OR flagged_name_match IS NOT NULL
       ORDER BY COALESCE(last_reuse_at, first_seen_at) DESC
+      LIMIT ?`,
+    [limit]
+  );
+}
+
+// ── Trial gate, second axis: one free trial per EMAIL / customer ───────────
+// See the trial_history DDL above. trial_cards judges the CARD after Stripe has
+// taken it; this judges the ACCOUNT before Checkout is even created.
+
+/**
+ * Canonical comparison key for an email address.
+ *
+ * Lowercases and trims, drops a `+tag` suffix from the local part, and — for
+ * Gmail only — strips dots from the local part. So `b.rand+trial@gmail.com`,
+ * `brand@googlemail.com` and `Brand@Gmail.com` all collide on one key, while
+ * `a.b@fastmail.com` is left intact: most providers treat dots as significant
+ * and folding them would merge two genuinely different people.
+ *
+ * This is ONLY the "has this human had a trial" key. It is never an identity —
+ * users.email (UNIQUE) remains the account, and nothing authenticates on this.
+ */
+export function trialEmailKey(email: string | null | undefined): string {
+  const raw = (email || "").trim().toLowerCase();
+  const at = raw.lastIndexOf("@");
+  if (at <= 0 || at === raw.length - 1) return raw;
+  let local = raw.slice(0, at);
+  let domain = raw.slice(at + 1);
+  const plus = local.indexOf("+");
+  if (plus > 0) local = local.slice(0, plus);
+  if (domain === "googlemail.com") domain = "gmail.com";
+  if (domain === "gmail.com") local = local.replace(/\./g, "");
+  return local ? `${local}@${domain}` : raw;
+}
+
+export interface TrialHistoryRecord {
+  email_key: string;
+  email: string | null;
+  clerk_user_id: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  source: string | null;
+  blocked_attempts: number;
+  last_attempt_user_id: string | null;
+  last_attempt_at: string | null;
+  first_trial_at: string | null;
+  updated_at: string | null;
+}
+
+/**
+ * Has this email already spent its free trial?
+ *
+ * Matches BOTH keys on purpose. Rows written by the app use the canonical key
+ * (trialEmailKey), but the one-time backfill in the DDL had to key on plain
+ * lower(email) — see the note there. Checking both means an existing customer
+ * whose address contains a dot or a +tag is still recognised, and the OR costs
+ * nothing against a primary key.
+ *
+ * Returns the OLDEST row: the first trial is the one that was legitimately
+ * earned, so that is the row a later attempt is reported against.
+ */
+export async function findTrialHistory(
+  email: string | null | undefined
+): Promise<TrialHistoryRecord | undefined> {
+  const canonical = trialEmailKey(email);
+  if (!canonical) return undefined;
+  const loose = (email || "").trim().toLowerCase();
+  const res = await pgQuery(
+    `SELECT * FROM trial_history
+      WHERE email_key = $1::text OR email_key = $2::text
+      ORDER BY first_trial_at ASC
+      LIMIT 1`,
+    [canonical, loose]
+  );
+  return res.rows[0] as TrialHistoryRecord | undefined;
+}
+
+/**
+ * Claim the one trial for an email.
+ *
+ * ON CONFLICT DO NOTHING, like recordTrialCard: the first claim OWNS the email
+ * permanently. A redelivered webhook or a concurrent event must never rewrite
+ * the row to point at a later subscription — that would hand the entitlement
+ * back out, which is the whole thing this table prevents.
+ */
+export async function recordTrialHistory(r: {
+  email: string;
+  clerk_user_id?: string | null;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  source?: string | null;
+}): Promise<void> {
+  const key = trialEmailKey(r.email);
+  if (!key) return;
+  await pgQuery(
+    `INSERT INTO trial_history
+       (email_key, email, clerk_user_id, stripe_customer_id, stripe_subscription_id, source)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (email_key) DO NOTHING`,
+    [
+      key,
+      r.email,
+      r.clerk_user_id ?? null,
+      r.stripe_customer_id ?? null,
+      r.stripe_subscription_id ?? null,
+      r.source ?? null,
+    ]
+  );
+}
+
+/**
+ * Stamp a refused repeat attempt on an email that has already trialed. Bumps the
+ * counter and records who tried; the original claim is never touched.
+ */
+export async function markTrialHistoryAttempt(
+  email: string,
+  attemptedByUserId: string | null
+): Promise<void> {
+  const canonical = trialEmailKey(email);
+  if (!canonical) return;
+  const loose = (email || "").trim().toLowerCase();
+  await pgQuery(
+    `UPDATE trial_history
+        SET blocked_attempts     = blocked_attempts + 1,
+            last_attempt_user_id = $3,
+            last_attempt_at      = CURRENT_TIMESTAMP,
+            updated_at           = CURRENT_TIMESTAMP
+      WHERE email_key = $1::text OR email_key = $2::text`,
+    [canonical, loose, attemptedByUserId ?? null]
+  );
+}
+
+/** Emails that came back for a second trial — the abuse report. */
+export async function getTrialHistoryReuses(limit = 200): Promise<TrialHistoryRecord[]> {
+  return queryAll<TrialHistoryRecord>(
+    `SELECT * FROM trial_history
+      WHERE blocked_attempts > 0
+      ORDER BY last_attempt_at DESC NULLS LAST
       LIMIT ?`,
     [limit]
   );

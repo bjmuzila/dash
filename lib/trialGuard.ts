@@ -1,9 +1,25 @@
 // Repeat-free-trial guard.
 //
+// TWO AXES, and they do different jobs.
+//
+// AXIS 1 — ONE TRIAL PER EMAIL / CUSTOMER. Decided BEFORE the Checkout session
+// exists, in lib/trialEligibility.ts: an email that has already had a trial is
+// simply not offered another one, so `trial_period_days` is never sent. That is
+// the ordinary case — a customer who trialed, cancelled, and came back — and it
+// deserves a clean "no trial on this checkout", not a trial that gets revoked
+// ten seconds later. Enforced AGAIN here, on the way back in, because a
+// trialing subscription can also appear from somewhere our checkout route never
+// ran: the Stripe dashboard, the API, a resumed old session. Backed by the
+// trial_history table (lib/db.ts).
+//
+// AXIS 2 — ONE TRIAL PER CARD, which is what the rest of this file does. Axis 1
+// keys on an email, and email is free: nothing stops the same person signing up
+// as someone else tomorrow. So the card is checked too.
+//
 // THE PROBLEM: the 2-day trial is attached at checkout
 // (app/api/stripe/checkout/route.ts → subscription_data.trial_period_days) and
-// is keyed on nothing but a freshly created users.id. A new email therefore
-// buys a brand-new trial, forever. Email is free; a card is not.
+// was keyed on nothing but a freshly created users.id. A new email therefore
+// bought a brand-new trial, forever. Email is free; a card is not.
 //
 // THE KEY: Stripe stamps every card with a `fingerprint` that is STABLE across
 // different customers, different emails and different accounts. Two Checkout
@@ -36,6 +52,10 @@ import {
   findTrialCardByNameKey,
   recordTrialCard,
   markTrialCardReuse,
+  findTrialHistory,
+  recordTrialHistory,
+  markTrialHistoryAttempt,
+  getUserById,
 } from "@/lib/db";
 
 const truthy = (v: string | undefined) => /^(1|true|yes|on)$/i.test((v || "").trim());
@@ -156,6 +176,22 @@ async function resolveCard(
   };
 }
 
+/**
+ * The account's email, or null.
+ *
+ * Best-effort like everything else in this file: a lookup failure must degrade
+ * to "cannot check the email axis", never to a 500 that makes Stripe redeliver a
+ * subscription change we already applied.
+ */
+async function userEmail(clerkUserId: string): Promise<string | null> {
+  try {
+    return (await getUserById(clerkUserId))?.email ?? null;
+  } catch (err) {
+    console.warn("[trialGuard] user lookup failed:", String(err));
+    return null;
+  }
+}
+
 /** Best-effort Discord ping. Never throws, never blocks the webhook. */
 async function alertOwner(text: string): Promise<void> {
   const url = (process.env.TRIAL_GUARD_ALERT_WEBHOOK || "").trim();
@@ -171,14 +207,17 @@ async function alertOwner(text: string): Promise<void> {
   }
 }
 
+export type TrialGuardVia = "fingerprint" | "name" | "email";
+
 export type TrialGuardResult =
   | { action: "skipped"; reason: string }
-  | { action: "allowed"; fingerprint: string }
-  | { action: "blocked"; fingerprint: string; via: "fingerprint" | "name"; firstUserId: string | null }
+  | { action: "allowed"; fingerprint: string | null }
+  | { action: "blocked"; fingerprint: string | null; via: TrialGuardVia; firstUserId: string | null }
   | { action: "flagged"; fingerprint: string; via: "name"; firstUserId: string | null };
 
 /**
- * Enforce one-trial-per-card. Call for every subscription the webhook syncs.
+ * Enforce one-trial-per-email and one-trial-per-card. Call for every
+ * subscription the webhook syncs.
  *
  * Contract: NEVER throws. A guard failure must not 500 the webhook — Stripe
  * would retry a subscription state change that already succeeded, and a
@@ -202,8 +241,56 @@ export async function enforceTrialGuard(
     if (sub.metadata?.trial_guard) return { action: "skipped", reason: "already-judged" };
     if (!clerkUserId) return { action: "skipped", reason: "no-user" };
 
+    // ── 0. Email / customer: one trial per address ───────────────────────────
+    // Checkout already withholds trial_period_days from an email that has
+    // trialed, so in the normal flow this finds nothing and costs one indexed
+    // lookup. It earns its place on the paths checkout does not own — a
+    // subscription created in the Stripe dashboard or over the API, a Checkout
+    // session minted before this gate shipped and completed after it.
+    //
+    // A row pointing at THIS subscription is our own claim coming back on a
+    // redelivered event, not a second trial: latch and leave.
+    const email = await userEmail(clerkUserId);
+    if (email) {
+      const prior = await findTrialHistory(email);
+      if (prior) {
+        if (prior.stripe_subscription_id === sub.id) {
+          return { action: "skipped", reason: "email-already-claimed-by-this-sub" };
+        }
+        await markTrialHistoryAttempt(email, clerkUserId);
+        await revoke(stripe, sub, "email", prior.clerk_user_id);
+        await alertOwner(
+          `⛔ Repeat trial blocked (email already trialed)\n` +
+          `email: ${email}\n` +
+          `first trial ${prior.first_trial_at ?? "?"} on subscription ` +
+          `${prior.stripe_subscription_id ?? "?"} (user ${prior.clerk_user_id ?? "?"})\n` +
+          `subscription ${sub.id} — trial ended, action=${guardAction()}`
+        );
+        return { action: "blocked", fingerprint: null, via: "email", firstUserId: prior.clerk_user_id };
+      }
+    }
+
+    // Both "trial stands" outcomes below spend the email's one trial, so both
+    // claim it. Declared once here rather than inlined twice.
+    const claimEmail = async () => {
+      if (!email) return;
+      await recordTrialHistory({
+        email,
+        clerk_user_id: clerkUserId,
+        stripe_customer_id: customerId,
+        stripe_subscription_id: sub.id,
+        source: "webhook",
+      });
+    };
+
     const card = await resolveCard(stripe, sub, customerId);
-    if (!card) return { action: "skipped", reason: "no-card-fingerprint" };
+    if (!card) {
+      // No fingerprint (wallet/bank rail, or the PM could not be resolved) means
+      // axis 2 cannot judge this one — but the trial IS being consumed, so the
+      // email still has to be claimed or the next signup on it gets another.
+      await claimEmail();
+      return { action: "skipped", reason: "no-card-fingerprint" };
+    }
 
     // ── 1. Fingerprint: the hard signal ──────────────────────────────────────
     const byFp = await findTrialCardByFingerprint(card.fingerprint);
@@ -271,6 +358,7 @@ export async function enforceTrialGuard(
           exp_year: card.expYear,
           flagged_name_match: byName.clerk_user_id,
         });
+        await claimEmail();
         await alertOwner(
           `⚠️ Trial allowed but NAME MATCHES an earlier trial\n` +
           `name: ${card.name ?? "?"} — different card ${card.brand ?? "?"} ••••${card.last4 ?? "????"}\n` +
@@ -294,6 +382,7 @@ export async function enforceTrialGuard(
       exp_month: card.expMonth,
       exp_year: card.expYear,
     });
+    await claimEmail();
     return { action: "allowed", fingerprint: card.fingerprint };
   } catch (err) {
     // Fail OPEN: a broken guard must never cost a legitimate signup.
@@ -309,7 +398,7 @@ export async function enforceTrialGuard(
 async function revoke(
   stripe: Stripe,
   sub: Stripe.Subscription,
-  via: "fingerprint" | "name",
+  via: TrialGuardVia,
   firstUserId: string | null,
 ): Promise<void> {
   const metadata = {
