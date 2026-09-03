@@ -72,7 +72,7 @@
 // Spec: docs/parity/scanner.md Part G, rows G279–G304.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { LIGHT_BLUE, MOVE_DOWN, MOVE_UP, T, alpha } from '@/design/theme'
+import { T, V2, alpha } from '@/design/theme'
 import { EM_DASH } from '@/pages/scanner/format'
 import { etMin, type IbCandle, type IbDataset } from '@/pages/scanner/ibStats'
 
@@ -202,17 +202,17 @@ export function splitLevels(levels: readonly Lvl[]): { up: Lvl[]; dn: Lvl[] } {
  * `:223`, `:295–296`) — the only place on this tab where an extension multiple
  * has a colour at all.
  *
- *   mult >= 1.5 → MOVE_DOWN (v2: HOME_THEME.red)
- *   mult >= 1   → T.orange
- *   otherwise   → LIGHT_BLUE
+ *   mult >= 1.5 → V2.red    (v2: HOME_THEME.red #EF4444)
+ *   mult >= 1   → V2.orange (v2: HOME_THEME.orange #FB8501)
+ *   otherwise   → V2.accent (v2: LIGHT_BLUE #7dd3fc, the 0.5× ladder colour)
  *
  * It is a DISTANCE ladder, not a directional one: the same colours are used on
  * the down side, where a "red" level is a target below price.
  */
 export function levelColor(mult: number): string {
-  if (mult >= 1.5) return MOVE_DOWN
-  if (mult >= 1) return T.orange
-  return LIGHT_BLUE
+  if (mult >= 1.5) return V2.red
+  if (mult >= 1) return V2.orange
+  return V2.accent
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -420,6 +420,7 @@ export function buildLadderDrawing(ib: LevelIb, levels: readonly Lvl[]): LadderD
   }
 
   // ── the IB box. Fill is the tab accent at 5% (v2: `${LIGHT_BLUE}0D`, 0x0D/255).
+  // The accent is v2's own LIGHT_BLUE #7dd3fc → `V2.accent`; the alpha is v2's.
   // `Math.max(2, …)` floors a degenerate box at two units so it never vanishes.
   rects.push({
     x: LADDER.BOX_L,
@@ -427,7 +428,7 @@ export function buildLadderDrawing(ib: LevelIb, levels: readonly Lvl[]): LadderD
     width: LADDER.BOX_R - LADDER.BOX_L,
     height: Math.max(2, y(ib.low) - y(ib.high)),
     rx: 2,
-    fill: alpha(LIGHT_BLUE, 0.05),
+    fill: alpha(V2.accent, 0.05),
     stroke: alpha(T.text, 0.1), // v2: HOME_THEME.border
     strokeWidth: 1,
   })
@@ -441,7 +442,7 @@ export function buildLadderDrawing(ib: LevelIb, levels: readonly Lvl[]): LadderD
     y1: fibY,
     x2: LADDER.BOX_R,
     y2: fibY,
-    stroke: MOVE_UP, // v2: HOME_THEME.green
+    stroke: V2.up, // v2: HOME_THEME.green #8ECAE6 → the positive leg #1FD98A
     strokeWidth: 1,
     dash: '2 3',
     opacity: 0.55,
@@ -450,7 +451,7 @@ export function buildLadderDrawing(ib: LevelIb, levels: readonly Lvl[]): LadderD
     x: LADDER.BOX_L + 4,
     y: fibY - 4,
     text: FIB_LABEL,
-    fill: MOVE_UP,
+    fill: V2.up,
     opacity: 0.85,
     weight: 700,
   })
@@ -482,14 +483,14 @@ export function buildLadderDrawing(ib: LevelIb, levels: readonly Lvl[]): LadderD
     y1: y(ib.high),
     x2: LADDER.LINE_R,
     y2: y(ib.high),
-    stroke: LIGHT_BLUE,
+    stroke: V2.accent,
     strokeWidth: 2.5,
   })
   labels.push({
     x: LADDER.LINE_R + LADDER.LABEL_DX,
     y: y(ib.high) + LADDER.LABEL_DY,
     text: 'IB HIGH',
-    fill: LIGHT_BLUE,
+    fill: V2.accent,
     weight: 800,
   })
   lines.push({
@@ -497,14 +498,14 @@ export function buildLadderDrawing(ib: LevelIb, levels: readonly Lvl[]): LadderD
     y1: y(ib.low),
     x2: LADDER.LINE_R,
     y2: y(ib.low),
-    stroke: T.orange,
+    stroke: V2.orange,
     strokeWidth: 2.5,
   })
   labels.push({
     x: LADDER.LINE_R + LADDER.LABEL_DX,
     y: y(ib.low) + LADDER.LABEL_DY,
     text: 'IB LOW',
-    fill: T.orange,
+    fill: V2.orange,
     weight: 800,
   })
 
@@ -512,7 +513,7 @@ export function buildLadderDrawing(ib: LevelIb, levels: readonly Lvl[]): LadderD
   // against the previous close. The x values are written in v2 as offsets from
   // BOX_R: −40 (dot), −118 (leader start), −124 (chip), −72 (chip text centre).
   // Nothing collision-avoids: the chip can overlap the IB HIGH line.
-  const pxColor = ib.last >= ib.mid ? MOVE_UP : MOVE_DOWN
+  const pxColor = ib.last >= ib.mid ? V2.up : V2.red
   const py = y(ib.last)
   circles.push({ cx: LADDER.BOX_R - 40, cy: py, r: 4, fill: pxColor })
   circles.push({
@@ -540,7 +541,7 @@ export function buildLadderDrawing(ib: LevelIb, levels: readonly Lvl[]): LadderD
     width: 104,
     height: 22,
     rx: 7,
-    fill: alpha(T.panel, 0.72), // v2: HOME_THEME.panelBgStrong
+    fill: alpha(V2.panel, 0.72), // v2: HOME_THEME.panelBgStrong rgba(13,17,25,.72)
     stroke: alpha(pxColor, 0.35), // v2: `${pxColor}59`
     strokeWidth: 1,
   })
@@ -595,7 +596,7 @@ export interface PillSpec {
 export function statusPills(ib: LevelIb, brk: LevelBreakState): PillSpec[] {
   const out: PillSpec[] = []
   if (brk.broke) {
-    const c = brk.broke === 'up' ? MOVE_UP : MOVE_DOWN
+    const c = brk.broke === 'up' ? V2.up : V2.red
     out.push({
       text: `IB ${brk.broke === 'up' ? 'HIGH' : 'LOW'} BROKEN${brk.backInside ? ' · BACK INSIDE' : ''}`,
       glyph: brk.broke === 'up' ? '▲' : '▼',
@@ -607,33 +608,33 @@ export function statusPills(ib: LevelIb, brk: LevelBreakState): PillSpec[] {
   } else {
     out.push({
       text: 'IB UNBROKEN',
-      color: LIGHT_BLUE,
-      background: alpha(LIGHT_BLUE, 0.09), // v2: `${LIGHT_BLUE}17`
-      border: alpha(LIGHT_BLUE, 0.27), // v2: `${LIGHT_BLUE}44`
+      color: V2.accent,
+      background: alpha(V2.accent, 0.09), // v2: `${LIGHT_BLUE}17`
+      border: alpha(V2.accent, 0.27), // v2: `${LIGHT_BLUE}44`
     })
   }
   out.push(
     ib.complete
       ? {
           text: 'IB DONE',
-          color: MOVE_UP,
-          background: alpha(MOVE_UP, 0.08), // v2: `${green}14`
-          border: alpha(MOVE_UP, 0.27), // v2: `${green}44`
+          color: V2.up,
+          background: alpha(V2.up, 0.08), // v2: `${green}14`
+          border: alpha(V2.up, 0.27), // v2: `${green}44`
         }
       : {
           text: 'IB FORMING',
-          color: T.orange,
-          background: alpha(T.orange, 0.09), // v2: `${orange}17`
-          border: alpha(T.orange, 0.33), // v2: `${orange}55`
+          color: V2.orange,
+          background: alpha(V2.orange, 0.09), // v2: `${orange}17`
+          border: alpha(V2.orange, 0.33), // v2: `${orange}55`
         },
   )
   if (ib.complete) {
     out.push({
       text: 'LOCKED',
       glyph: '🔒',
-      color: LIGHT_BLUE,
-      background: alpha(LIGHT_BLUE, 0.07), // v2: `${LIGHT_BLUE}12`
-      border: alpha(LIGHT_BLUE, 0.23), // v2: `${LIGHT_BLUE}3B`
+      color: V2.accent,
+      background: alpha(V2.accent, 0.07), // v2: `${LIGHT_BLUE}12`
+      border: alpha(V2.accent, 0.23), // v2: `${LIGHT_BLUE}3B`
     })
   }
   return out
@@ -678,7 +679,9 @@ export function railRows(levels: readonly Lvl[], broke: 'up' | 'down' | null): R
       label: `${l.mult}× extension`,
       price: l.price.toFixed(2),
       dist: `${l.dist >= 0 ? '+' : ''}${l.dist.toFixed(2)}`,
-      distColor: l.dist >= 0 ? LIGHT_BLUE : T.orange,
+      // v2: positive distances light blue, negative distances ORANGE — not a
+      // red, and not a sign ladder. Do not "fix" it.
+      distColor: l.dist >= 0 ? V2.accent : V2.orange,
       prob: l.prob != null ? `${(100 * l.prob).toFixed(1)}%` : EM_DASH,
       probColor: col,
       probBackground: alpha(col, 0.13), // v2: `${col}22`
@@ -695,7 +698,7 @@ export function railHeader(broke: 'up' | 'down' | null, connected: boolean): {
   return {
     title: `Targets — ${broke === 'up' ? 'upside live' : broke === 'down' ? 'downside live' : 'unbroken'}`,
     status: connected ? 'LIVE' : 'STALE',
-    statusColor: connected ? MOVE_UP : MOVE_DOWN,
+    statusColor: connected ? V2.up : V2.red,
   }
 }
 
@@ -724,10 +727,10 @@ export function failPanel(rates: LevelRates): {
         : '',
     midLabel: 'Reach the mid',
     midValue: rates.fadeMid != null ? `${(100 * rates.fadeMid).toFixed(1)}%` : EM_DASH,
-    midColor: MOVE_UP,
+    midColor: V2.up,
     oppLabel: 'Full rotation',
     oppValue: rates.fadeOpp != null ? `${(100 * rates.fadeOpp).toFixed(1)}%` : EM_DASH,
-    oppColor: MOVE_DOWN,
+    oppColor: V2.red,
   }
 }
 

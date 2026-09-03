@@ -80,22 +80,35 @@
 // rather than reaching for a snapshot, and there is exactly one `EOD_GEX_DAYS`
 // / one parse for both EOD cards to read.
 //
-// The COLOUR COLLAPSE (v3 non-negotiable 1) is applied at the ladder call
-// sites, each one commented:
-//   • v2 painted "positive" THREE ways on one screen — `#22C55E` on the gamma
-//     surfaces, `#7dd3fc` on the delta/OI/EOD surfaces, `#8ECAE6` on card 12's
-//     flow series — and each one carries a code comment defending it against
-//     the other two. Wherever the value is a SIGN it is MOVE_UP here, once.
-//   • Wherever `#7dd3fc` is an ACCENT or a LEG IDENTITY rather than a sign
-//     (the Resistance tile, the call leg, the OI bars — OI is never negative,
-//     the CPG gauge's balanced middle band, the spot line) it stays LIGHT_BLUE.
-//   • Every v2 negative (`#EF4444`) is MOVE_DOWN.
-//   • THE SPOT LINE had three treatments (LIGHT_BLUE @.6, LIGHT_BLUE @.75,
-//     white @.6). One here: `SPOT_LINE`.
-//   • THE FLIP LINE had three (white "2 3" @.55, green "4 3" @.55, white "2 2"
-//     @.45). One here: `FLIP_LINE`, on v2's majority treatment. `VIOLET` — v3's
-//     "this is a gamma flip" token — was the other candidate and is NOT taken,
-//     because it would introduce a hue this tab never painted.
+// ── THE COLOUR COLLAPSE IS REVERSED (Brandon, 2026-09-03) ────────────────────
+// Step 2 collapsed this tab's three positives onto MOVE_UP and its three spot /
+// flip treatments onto one each. That is undone: /v3/scanner renders v2's
+// PALETTE, not v3's semantics, and v2's per-surface splits are kept because
+// Brandon did not choose to collapse them. The ONE collision that is dropped is
+// `HOME_THEME.green` #8ECAE6 doing three unrelated jobs, and it does not appear
+// on this tab's ladders at all — only card 12's flow series (`pctInk`, the tiles
+// and `TOKEN.up`) painted it, and those are SIGNS, so they take `V2.up` #1FD98A.
+//
+// So this tab now paints TWO positives on adjacent cards, on purpose:
+//   • `V2.pos` #22C55E — v2's `GEX_POS_GREEN`, declared in v2 *precisely
+//     because* `.green` is a blue. The GAMMA surfaces only: the cumulative
+//     curve and its fill, the per-strike gamma bars, their legend swatches, and
+//     the gamma-bars flip line.
+//   • `V2.accent` #7dd3fc — v2's `LIGHT_BLUE`. The DELTA / OI / EOD surfaces,
+//     both gauge positive bands, the Resistance tile, the call leg, and the two
+//     gamma charts' spot lines. Also every place #7dd3fc was already an accent
+//     or a leg identity rather than a sign.
+//   • Every v2 negative (`#EF4444`) is `V2.red` — signs, error lines and both
+//     ends of the CPG ladder alike.
+//
+// And the per-chart marker treatments are v2's again, not one each:
+//   • SPOT: `SPOT_LINE_CURVE` (accent @.6, B199) · `SPOT_LINE_BARS` (accent
+//     @.75, B228) · `SPOT_LINE_WHITE` (white @.6, B239/B249).
+//   • FLIP: `FLIP_LINE_CURVE` (white "2 3" @.55, drawn whenever finite — B198
+//     has NO in-view guard) · `FLIP_LINE_BARS` (`V2.pos` "4 3" @.55, in-view
+//     only — B227) · `FLIP_LINE_SPARK` (white "2 2" @.45, in-view only — B168).
+//     `VIOLET`, v3's dedicated flip token, is still NOT taken: it would put a
+//     hue on this tab that v2 never painted here.
 //
 // ── REMOVED IN v2, DO NOT RE-ADD ─────────────────────────────────────────────
 // • `EOD_GEX_FIELD_META.totalGex` — the "legacy, mixed basis" third EOD basis
@@ -127,7 +140,7 @@
 // Spec: docs/parity/scanner.md Part B, rows B1–B335.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { LIGHT_BLUE, MOVE_DOWN, MOVE_UP, T, alpha, tokenHex, tokenHexAlpha } from '@/design/theme'
+import { T, V2, alpha, tokenHex, tokenHexAlpha } from '@/design/theme'
 import { EM_DASH, fmtInt } from '@/pages/scanner/format'
 import type { ScannerTabId } from '@/pages/scanner/scannerNav'
 
@@ -903,11 +916,15 @@ export const TICK_CAP_EOD = 10
 
 /**
  * The sign colour for the cumulative curve and its area fill.
- * v2: `GEX_POS_GREEN` #22C55E / `HOME_THEME.red` #EF4444.
- * COLLAPSE: both are the sign semantic → MOVE_UP / MOVE_DOWN.
+ *
+ * 2026-09-03: the step-2 collapse onto MOVE_UP/MOVE_DOWN is REVERSED — these are
+ * v2's own `GEX_POS_GREEN` #22C55E (`V2.pos`) and `HOME_THEME.red` #EF4444.
+ * `V2.pos` is declared in v2 precisely because `.green` is a light blue, and it
+ * is this tab's GAMMA positive: the delta and EOD bars two cards over are a
+ * different positive (`V2.accent`) and stay that way.
  */
 export function signColor(sign: 1 | -1): string {
-  return sign > 0 ? MOVE_UP : MOVE_DOWN
+  return sign > 0 ? V2.pos : V2.red
 }
 
 /** The 20%-alpha area fill under a curve segment. v2 appended a `33` hex byte. */
@@ -917,74 +934,131 @@ export function signAreaFill(sign: 1 | -1): string {
 
 /**
  * Per-strike gamma bars (cards 7 & 8). Boundary `>= 0`, so exactly zero is up.
- * v2: #22C55E / #EF4444 → the same collapse as `signColor`.
+ * v2: #22C55E / #EF4444 — the same GAMMA surface as `signColor`, so the same
+ * pair. Not `V2.accent`; see `deltaBarColor` for the other positive.
  */
 export function gammaBarColor(v: number): string {
-  return v >= 0 ? MOVE_UP : MOVE_DOWN
+  return v >= 0 ? V2.pos : V2.red
 }
 
 /**
  * Net-delta bars (cards 10 & 11).
- * v2 painted POSITIVE here `LIGHT_BLUE` #7dd3fc and negative #EF4444 — the same
- * two-way SIGN ladder as the gamma bars, in different colours, on adjacent
- * cards. COLLAPSE: one positive semantic, one token → MOVE_UP / MOVE_DOWN.
+ *
+ * v2 paints POSITIVE here `LIGHT_BLUE` #7dd3fc and negative #EF4444 — the same
+ * two-way SIGN ladder as the gamma bars, in a different positive, on adjacent
+ * cards. 2026-09-03: that is KEPT rather than collapsed. Two positives one card
+ * apart is v2's "three-positives case" and Brandon's instruction is that the
+ * scanner ships v2's palette per surface. `V2.accent`, NOT `V2.pos`.
  */
 export function deltaBarColor(v: number): string {
-  return v >= 0 ? MOVE_UP : MOVE_DOWN
+  return v >= 0 ? V2.accent : V2.red
 }
 
 /**
  * EOD session bars (cards 2 & 3). Boundary `>= 0` — exactly zero paints up.
- * v2: `LIGHT_BLUE` / #EF4444. Same collapse as `deltaBarColor`.
+ * v2: `LIGHT_BLUE` / #EF4444. Same `V2.accent` family as `deltaBarColor`.
  */
 export function eodBarColor(v: number): string {
-  return v >= 0 ? MOVE_UP : MOVE_DOWN
+  return v >= 0 ? V2.accent : V2.red
 }
 
 /**
  * The call and put LEGS (card 9's paired bars, card 5's two mini charts).
  * These are not signs — raw callGEX is positive and raw putGEX negative by
- * construction — so the accent stays LIGHT_BLUE and only the put side collapses
- * onto MOVE_DOWN with every other v2 #EF4444.
+ * construction — so the call side is v2's accent and the put side v2's red,
+ * exactly as v2 paints them.
  */
-export const CALL_LEG_COLOR = LIGHT_BLUE
-export const PUT_LEG_COLOR = MOVE_DOWN
+export const CALL_LEG_COLOR = V2.accent
+export const PUT_LEG_COLOR = V2.red
 
 /**
  * Open-interest bars (card 1). OI is never negative, so this is a SERIES colour
  * and not a ladder: it stays the accent.
  */
-export const OI_BAR_COLOR = LIGHT_BLUE
-
-/** Every error line on the tab. v2's HOME_THEME.red on all five. */
-export const ERROR_INK = MOVE_DOWN
+export const OI_BAR_COLOR = V2.accent
 
 /**
- * THE SPOT MARKER — one treatment. v2 had three for the same mark: LIGHT_BLUE
- * at 0.6 on the cumulative chart, LIGHT_BLUE at 0.75 on the gamma bars, white
- * at 0.6 on the delta and call/put charts.
+ * Every error line on the tab. v2's HOME_THEME.red on all five — an error is not
+ * a direction, but v2 paints both with the same value and so does this port.
  */
-export const SPOT_LINE = { color: LIGHT_BLUE, dash: '2 3', opacity: 0.6 } as const
+export const ERROR_INK = V2.red
+
+/** One vertical dashed marker's full treatment: colour, dash pattern, opacity. */
+export interface MarkerLine {
+  color: string
+  dash: string
+  opacity: number
+}
+
+// ── THE SPOT MARKER — THREE TREATMENTS, as v2 paints them ────────────────────
+// Step 2 collapsed these onto one. Reversed 2026-09-03: the collapse existed
+// because v3's semantic palette had no room for three, and v2's palette does.
+// Each constant names the spec row it transcribes; do not merge them again
+// without a decision that says so.
+
+/** B199 — the cumulative 0DTE gamma chart (card 6). v2's `LIGHT_BLUE` at 0.6. */
+export const SPOT_LINE_CURVE: MarkerLine = { color: V2.accent, dash: '2 3', opacity: 0.6 }
 
 /**
- * THE GAMMA FLIP MARKER — one treatment. v2 had three: white "2 3" at 0.55 on
- * the cumulative chart, green "4 3" at 0.55 on the gamma bars, white "2 2" at
- * 0.45 in the table sparkline. This is v2's majority treatment. `VIOLET`, v3's
- * dedicated flip token, was the other candidate and is deliberately not taken —
- * it would put a hue on this tab that v2 never painted here.
+ * B228 — the multi-expiry gamma bars (cards 7 & 8). The SAME colour as the
+ * curve's, at a different opacity. v2 gives no reason; it is transcribed.
  */
-export const FLIP_LINE = { color: T.text, dash: '2 3', opacity: 0.55 } as const
+export const SPOT_LINE_BARS: MarkerLine = { color: V2.accent, dash: '2 3', opacity: 0.75 }
 
 /**
- * IN-VIEW RULE FOR THE FLIP LINE. v2 disagreed with itself: the gamma bars and
- * the table sparkline draw it only when it falls inside the visible domain,
- * while the cumulative chart draws it whenever it is finite — clamping or
- * extrapolating an off-window flip onto the edge of the plot. This exports the
- * in-view test so step 3 applies ONE rule; the cumulative chart's unguarded
- * version is the odd one out, not the intent.
+ * B239, B249 — the call/put gamma chart (card 9) and the net-delta charts
+ * (cards 10 & 11). WHITE, not the accent: `HOME_THEME.text`, which is `T.text`
+ * #ffffff exactly. Card 11's legend Spot swatch is white to match (B258).
+ */
+export const SPOT_LINE_WHITE: MarkerLine = { color: T.text, dash: '2 3', opacity: 0.6 }
+
+// ── THE GAMMA FLIP MARKER — THREE TREATMENTS, likewise restored ──────────────
+// Colour, dash pattern AND in-view guard all differ per chart in v2. `VIOLET`,
+// v3's dedicated flip token, is deliberately not taken anywhere here: it would
+// put a hue on this tab that v2 never painted.
+
+/**
+ * B198 — the cumulative chart (card 6). White, dash "2 3", 0.55, and drawn
+ * whenever `neutral` is finite: this chart has NO in-view guard, so an
+ * off-window flip is still drawn at a clamped/extrapolated x. Guard with
+ * `flipFinite`, not `flipInView`.
+ */
+export const FLIP_LINE_CURVE: MarkerLine = { color: T.text, dash: '2 3', opacity: 0.55 }
+
+/**
+ * B227 — the gamma bars (cards 7 & 8). `GEX_POS_GREEN` #22C55E, dash "4 3",
+ * 0.55, in-view only. A different colour AND a different dash from the
+ * cumulative chart's, for the same semantic. It is the same swatch as the
+ * chart's own "Positive gamma$" bars, which is why B231's legend cannot
+ * distinguish the two entries — v2's quirk, kept.
+ */
+export const FLIP_LINE_BARS: MarkerLine = { color: V2.pos, dash: '4 3', opacity: 0.55 }
+
+/**
+ * B168 — the daily key-level log's curve sparkline (card 4). White, dash "2 2",
+ * 0.45, in-view only. The third dash pattern for the third rendering of one mark.
+ */
+export const FLIP_LINE_SPARK: MarkerLine = { color: T.text, dash: '2 2', opacity: 0.45 }
+
+/**
+ * IN-VIEW RULE FOR THE FLIP LINE — the gamma bars (B227) and the table
+ * sparkline (B168). Both draw the marker only when the flip falls inside the
+ * visible domain.
+ *
+ * The cumulative chart (B198) does NOT use this: it draws whenever the value is
+ * finite. Step 2 applied this guard to all three; 2026-09-03 restores v2's
+ * split, so use `flipFinite` there.
  */
 export function flipInView(neutral: number | null | undefined, lo: number, hi: number): boolean {
   return neutral != null && Number.isFinite(neutral) && neutral >= lo && neutral <= hi
+}
+
+/**
+ * THE CUMULATIVE CHART'S RULE (B198) — finite is enough, no domain test. An
+ * off-window flip is drawn at the clamped/extrapolated x rather than omitted.
+ */
+export function flipFinite(neutral: number | null | undefined): boolean {
+  return neutral != null && Number.isFinite(neutral)
 }
 
 /** A gauge band, in raw value units. */
@@ -1007,12 +1081,16 @@ export function gammaGaugeSpan(dollarGamma: number | null | undefined): number {
 
 /**
  * Two bands, boundary at exactly 0.
- * v2: negative HOME_THEME.red, positive LIGHT_BLUE. Positive is a SIGN → MOVE_UP.
+ *
+ * v2: negative HOME_THEME.red, positive LIGHT_BLUE. Step 2 read the positive
+ * band as a sign and moved it to MOVE_UP; 2026-09-03 puts it back on v2's own
+ * `V2.accent` — spec Part B is explicit that the `$Gamma` gauge's positive band
+ * is `LIGHT_BLUE`, not `GEX_POS_GREEN`, even though the gamma BARS beside it are.
  */
 export function gammaGaugeBands(span: number): GaugeBand[] {
   return [
-    { from: -span, to: 0, color: MOVE_DOWN },
-    { from: 0, to: span, color: MOVE_UP },
+    { from: -span, to: 0, color: V2.red },
+    { from: 0, to: span, color: V2.accent },
   ]
 }
 
@@ -1023,16 +1101,16 @@ export const CPG_GAUGE_MAX = 2
 /**
  * Three bands, in order: [0,0.7) alarming · [0.7,1.3) balanced · [1.3,2] alarming.
  *
- * The middle band is BALANCED, not positive — so it keeps the accent rather
- * than collapsing onto MOVE_UP. Both extremes were HOME_THEME.red in v2, which
- * means the colour alone cannot tell call-heavy from put-heavy; that is v2's
- * design and it is preserved.
+ * The middle band is BALANCED, not positive — it is v2's accent, never a green.
+ * Both extremes are HOME_THEME.red in v2, which means the colour alone cannot
+ * tell call-heavy from put-heavy: this ladder is centre-good, not signed. That
+ * is v2's design and it is preserved.
  */
 export function cpgGaugeBands(): GaugeBand[] {
   return [
-    { from: 0, to: 0.7, color: MOVE_DOWN },
-    { from: 0.7, to: 1.3, color: LIGHT_BLUE },
-    { from: 1.3, to: CPG_GAUGE_MAX, color: MOVE_DOWN },
+    { from: 0, to: 0.7, color: V2.red },
+    { from: 0.7, to: 1.3, color: V2.accent },
+    { from: 1.3, to: CPG_GAUGE_MAX, color: V2.red },
   ]
 }
 
@@ -1050,9 +1128,9 @@ export function gaugeAngle(value: number, min: number, max: number): number {
 export const TILE_ACCENT = {
   stockPrice: T.text,
   /** v2 LIGHT_BLUE — a wall level, an accent, not a sign. Stays the accent. */
-  resistance: LIGHT_BLUE,
+  resistance: V2.accent,
   /** v2 HOME_THEME.red. */
-  support: MOVE_DOWN,
+  support: V2.red,
   neutral: T.text,
 } as const
 
@@ -1085,10 +1163,14 @@ export const REFRESH_LOCK_MS = 1800
 
 /** `success` on any resolve, `error` on any throw. Both revert after the lock. */
 export function refreshInk(state: RefreshState): string {
-  if (state === 'success') return MOVE_UP // v2 REFRESH_GREEN #1FD98A → the up token
-  if (state === 'error') return MOVE_DOWN // v2 HOME_THEME.red
-  if (state === 'refreshing') return T.flat // v2 "#888"
-  return T.cyan
+  // v2's REFRESH_GREEN #1FD98A. `V2.up` points at that exact token, so this is
+  // now exact parity rather than the step-2 approximation.
+  if (state === 'success') return V2.up
+  if (state === 'error') return V2.red // v2 HOME_THEME.red
+  // v2 typed a bare "#888" here — not a named v2 constant, so there is nothing
+  // to point at. `T.flat` #7a828d is the closest token; deliberately left.
+  if (state === 'refreshing') return T.flat
+  return V2.cyan
 }
 
 /** The four panel-level buttons (EOD ×2, OI-by-expiration, multi-expiry) and card 12's. */
@@ -1224,24 +1306,25 @@ export interface LegendItem {
 
 /** Card 6 — cumulative 0DTE gamma. */
 export const LEGEND_NET_GAMMA: readonly LegendItem[] = [
-  { label: LEGEND_COPY.positiveGamma, color: MOVE_UP },
-  { label: LEGEND_COPY.negativeGamma, color: MOVE_DOWN },
-  { label: LEGEND_COPY.spot, color: SPOT_LINE.color },
+  { label: LEGEND_COPY.positiveGamma, color: V2.pos },
+  { label: LEGEND_COPY.negativeGamma, color: V2.red },
+  { label: LEGEND_COPY.spot, color: SPOT_LINE_CURVE.color },
 ]
 
 /**
- * Cards 7 & 8 — multi-expiry gamma bars. Four items.
+ * Cards 7 & 8 — multi-expiry gamma bars. Four items (B231).
  *
- * In v2 "Positive gamma$" and "Flip" carried the SAME swatch (#22C55E), so the
- * legend could not distinguish them. Under the collapse the flip line takes
- * `FLIP_LINE.color` and the two swatches now differ, which is the point of
- * having a legend at all.
+ * "Positive gamma$" and "Flip" carry the SAME swatch, because on this chart the
+ * flip line IS `GEX_POS_GREEN` — so the legend cannot tell them apart. That is
+ * v2's own quirk. Step 2 broke it by collapsing the flip line onto white;
+ * 2026-09-03 restores v2's per-chart treatment, and a legend swatch has to be
+ * the colour of the mark it names, so the collision comes back with it.
  */
 export const LEGEND_NET_GAMMA_MULTI: readonly LegendItem[] = [
-  { label: LEGEND_COPY.positiveGamma, color: MOVE_UP },
-  { label: LEGEND_COPY.negativeGamma, color: MOVE_DOWN },
-  { label: LEGEND_COPY.spot, color: SPOT_LINE.color },
-  { label: LEGEND_COPY.flip, color: FLIP_LINE.color },
+  { label: LEGEND_COPY.positiveGamma, color: V2.pos },
+  { label: LEGEND_COPY.negativeGamma, color: V2.red },
+  { label: LEGEND_COPY.spot, color: SPOT_LINE_BARS.color },
+  { label: LEGEND_COPY.flip, color: FLIP_LINE_BARS.color },
 ]
 
 /** Card 9 — call/put gamma. */
@@ -1252,26 +1335,27 @@ export const LEGEND_CALL_PUT: readonly LegendItem[] = [
 
 /** Card 10 — 0DTE net delta. */
 export const LEGEND_NET_DELTA: readonly LegendItem[] = [
-  { label: LEGEND_COPY.positive, color: MOVE_UP },
-  { label: LEGEND_COPY.negative, color: MOVE_DOWN },
+  { label: LEGEND_COPY.positive, color: V2.accent },
+  { label: LEGEND_COPY.negative, color: V2.red },
 ]
 
 /**
- * Card 11 — ex-0DTE net delta. Its Spot swatch was the only white one on the
- * tab, matching that chart's white spot line; both collapse onto `SPOT_LINE`.
+ * Card 11 — ex-0DTE net delta. Its Spot swatch is the only white one on the tab
+ * (B258), matching that chart's white spot line — `SPOT_LINE_WHITE`, restored
+ * 2026-09-03 along with the rest of v2's per-chart spot treatments.
  */
 export const LEGEND_NET_DELTA_MULTI: readonly LegendItem[] = [
-  { label: LEGEND_COPY.positiveDelta, color: MOVE_UP },
-  { label: LEGEND_COPY.negativeDelta, color: MOVE_DOWN },
-  { label: LEGEND_COPY.spot, color: SPOT_LINE.color },
+  { label: LEGEND_COPY.positiveDelta, color: V2.accent },
+  { label: LEGEND_COPY.negativeDelta, color: V2.red },
+  { label: LEGEND_COPY.spot, color: SPOT_LINE_WHITE.color },
 ]
 
 /** Cards 2 & 3 — EOD GEX. Both entries name the basis. */
 export function eodLegend(field: EodGexField): LegendItem[] {
   const label = EOD_GEX_FIELD_META[field].label
   return [
-    { label: `Positive · ${label}`, color: MOVE_UP },
-    { label: `Negative · ${label}`, color: MOVE_DOWN },
+    { label: `Positive · ${label}`, color: V2.accent },
+    { label: `Negative · ${label}`, color: V2.red },
   ]
 }
 
@@ -1908,9 +1992,16 @@ export function computeVolFlowPctStats(pctPoints: VolFlowPoint[]): VolFlowPctSta
   }
 }
 
-/** `>= 50` is the long-gamma side. v2's POS/NEG were #8ECAE6 / #EF4444. */
+/**
+ * `>= 50` is the long-gamma side. v2's POS/NEG here were #8ECAE6 / #EF4444.
+ *
+ * This is the one place on the tab where v2 painted a SIGN with `HOME_THEME.green`
+ * #8ECAE6 — the light blue doing three jobs — so it takes the POSITIVE leg of
+ * that split, `V2.up` #1FD98A, not the chrome leg `V2.green`. The gamma and
+ * delta positives on the cards above are untouched by this and keep their own.
+ */
 export function pctInk(v: number): string {
-  return v >= VOL_FLOW_PCT_BASELINE ? MOVE_UP : MOVE_DOWN
+  return v >= VOL_FLOW_PCT_BASELINE ? V2.up : V2.red
 }
 
 export interface VolFlowTile {
@@ -1943,7 +2034,7 @@ export function volFlowDollarTiles(stats: VolFlowStats): VolFlowTile[] {
       label: 'Net Vol GEX',
       value: fmtGex(last.volGex),
       sub: etTimeFromSec(Math.floor(last.ts / 1000)),
-      color: last.volGex >= 0 ? MOVE_UP : MOVE_DOWN,
+      color: last.volGex >= 0 ? V2.up : V2.red,
     },
     {
       label: 'Δ Last Bucket',
@@ -1952,32 +2043,32 @@ export function volFlowDollarTiles(stats: VolFlowStats): VolFlowTile[] {
       // which is consistent — unlike the % view's version below.
       value: last.dVol == null ? EM_DASH : `${last.dVol > 0 ? '+' : ''}${fmtGex(last.dVol)}`,
       sub: BIN_LABEL,
-      color: (last.dVol ?? 0) >= 0 ? MOVE_UP : MOVE_DOWN,
+      color: (last.dVol ?? 0) >= 0 ? V2.up : V2.red,
     },
     {
       label: 'Session High',
       value: fmtGex(stats.high.v),
       sub: etTimeFromSec(Math.floor(stats.high.at / 1000)),
-      color: MOVE_UP,
+      color: V2.up,
     },
     {
       label: 'Session Low',
       value: fmtGex(stats.low.v),
       sub: etTimeFromSec(Math.floor(stats.low.at / 1000)),
-      color: stats.low.v < 0 ? MOVE_DOWN : T.text,
+      color: stats.low.v < 0 ? V2.red : T.text,
     },
     {
       label: 'Sign Flips',
       value: String(stats.flips),
       sub: stats.flips === 0 ? 'one regime' : 'regime changes',
-      color: stats.flips > 0 ? T.orange : T.cyan,
+      color: stats.flips > 0 ? V2.orange : V2.cyan,
     },
     {
       label: 'Spot',
       // A FALSY test, so a genuine spot of 0 prints an em dash.
       value: last.spot ? last.spot.toFixed(2) : EM_DASH,
       sub: `${last.strikes} strikes`,
-      color: T.cyan,
+      color: V2.cyan,
     },
   ]
 }
@@ -2002,25 +2093,25 @@ export function volFlowPctTiles(s: VolFlowPctStats): VolFlowTile[] {
       // v2 writes it; step 3 decides. (VolGexFlowPanel.tsx:441.)
       value: s.d == null ? EM_DASH : `${s.d > 0 ? '+' : '−'}${Math.abs(s.d).toFixed(1)}pt`,
       sub: BIN_LABEL,
-      color: (s.d ?? 0) >= 0 ? MOVE_UP : MOVE_DOWN,
+      color: (s.d ?? 0) >= 0 ? V2.up : V2.red,
     },
     {
       label: 'Session High',
       value: `${s.high.v.toFixed(0)}%`,
       sub: etTimeFromSec(Math.floor(s.high.at / 1000)),
-      color: MOVE_UP,
+      color: V2.up,
     },
     {
       label: 'Session Low',
       value: `${s.low.v.toFixed(0)}%`,
       sub: etTimeFromSec(Math.floor(s.low.at / 1000)),
-      color: MOVE_DOWN,
+      color: V2.red,
     },
     {
       label: 'Time > 50%',
       value: `${s.abovePct.toFixed(0)}%`,
       sub: s.flips === 0 ? 'one regime' : `${s.flips} regime changes`,
-      color: s.abovePct >= VOL_FLOW_PCT_BASELINE ? MOVE_UP : MOVE_DOWN,
+      color: s.abovePct >= VOL_FLOW_PCT_BASELINE ? V2.up : V2.red,
     },
     {
       label: 'Regime',
@@ -2053,9 +2144,9 @@ export function volFlowScrimVisible(loading: boolean, err: string | null, pointC
   return loading || !!err || (pointCount === 0 && !loading)
 }
 
-/** The scrim's ink: red on an error, the accent otherwise. */
+/** The scrim's ink: v2's red on an error, v2's cyan otherwise. */
 export function volFlowScrimInk(err: string | null): string {
-  return err ? MOVE_DOWN : T.cyan
+  return err ? V2.red : V2.cyan
 }
 
 // ── Card 12's chart, as configuration ────────────────────────────────────────
@@ -2067,11 +2158,22 @@ export function volFlowScrimInk(err: string | null): string {
 // into a chart file is exactly what the token bridge exists to prevent. Call
 // them at MOUNT, not per frame.
 
+// THESE ARE CUSTOM-PROPERTY NAMES, NOT `var()` STRINGS. `tokenHex()` looks each
+// one up on the computed style at mount and returns 'transparent' for a name it
+// cannot find — it does NOT throw. So a rename or a deletion of either token
+// below paints card 12's chart blank with no error anywhere. Both are declared
+// in src/design/tokens.css; keep them named there.
+//
+// 2026-09-03: these were '--color-move-up' / '--color-move-down'. The scanner
+// runs on v2's palette, and these two MUST resolve to the same values `V2.up`
+// and `V2.red` hand to the six stat tiles beside the chart — otherwise the
+// series and its own tiles disagree about the sign of the same number.
 const TOKEN = {
-  up: '--color-move-up',
-  down: '--color-move-down',
+  /** `V2.up` #1FD98A — v2's REFRESH_GREEN. Same token `V2.up` points at. */
+  up: '--color-v2-refresh',
+  /** `V2.red` #EF4444 — v2's HOME_THEME.red. Same token `V2.red` points at. */
+  down: '--color-v2-red',
   fg: '--color-fg',
-  line: '--color-line',
 } as const
 
 /** v2's grid wash was white at 5%; its borders were white at 10%. */
@@ -2112,7 +2214,9 @@ export function volFlowChartOptions(): {
  * so the sign is read from colour and side without a legend lookup.
  *
  * v2's fills were hand-typed rgba expansions of #8ECAE6 and #EF4444; here they
- * are the up/down tokens at the same four alphas.
+ * are `TOKEN.up` / `TOKEN.down` at the same four alphas. #8ECAE6 is a SIGN on
+ * this series, so it takes the positive leg of the three-way split (#1FD98A),
+ * exactly like `pctInk` and the tiles above.
  */
 export function volFlowSeriesColors(): {
   topLineColor: string

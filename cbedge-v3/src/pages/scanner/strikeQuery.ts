@@ -46,19 +46,25 @@
 //
 // ── THE ONE DELIBERATE DEPARTURE FROM v2 ─────────────────────────────────────
 // None in the maths. The departures are in `strikeQueryData.ts` (the transport)
-// and in the colour collapse below; the filters, comparators, boundaries, caps
+// and in the colour split below; the filters, comparators, boundaries, caps
 // and strings are byte-for-byte v2.
 //
-// ── COLOUR COLLAPSE ──────────────────────────────────────────────────────────
+// ── COLOUR SPLIT (Brandon, 2026-09-03) ───────────────────────────────────────
+// REVERSED: the step-2 collapse onto `MOVE_UP` / `MOVE_DOWN` / `T.*` is gone.
+// This tab renders v2's palette, not v3's semantics; only the ONE collision v2
+// did not intend is broken apart.
+//
 // v2's `HOME_THEME.green` is #8ECAE6 — a LIGHT BLUE — and it did two unrelated
 // jobs: page chrome (toolbar labels, the header row, the card subtitle, the
 // Top-10 header) AND "this number rose", paired against #EF4444. One value
 // meaning both is the two-reds case from em.md. Split here:
-//   chrome            → `T.muted`
-//   positive / rising → `MOVE_UP`
-//   negative /falling → `MOVE_DOWN`
-// #EF4444 likewise split: directional → `MOVE_DOWN`, the error banner →
-// `T.red`. The 5%-OTM orange → `T.orange`, boundary unchanged.
+//   chrome            → `V2.green` #8ECAE6  (keeps the value v2 painted it)
+//   positive / rising → `V2.up`    #1FD98A  (v2's own REFRESH_GREEN role colour)
+//   negative /falling → `V2.red`   #EF4444
+// #EF4444 splits by MEANING, not by value: directional → `V2.red`, the error
+// banner → `SQ_ERROR_COLOR`, which is also `V2.red` because v2 paints both
+// #EF4444 — two constants so they can move apart later. The 5%-OTM orange →
+// `V2.orange` #FB8501, boundary unchanged.
 //
 // ── A v3 RULE CARRIED OVER FROM DELETED CODE (E116–E118) ─────────────────────
 // v2 had a `ModalPortal` helper directly after this tab. It is dead — a whole
@@ -88,7 +94,7 @@
 // Spec: docs/parity/scanner.md Part E, rows E1–E118.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { MOVE_DOWN, MOVE_UP, T, alpha } from '@/design/theme'
+import { T, V2, alpha } from '@/design/theme'
 import { EM_DASH, fmtB } from '@/pages/scanner/format'
 import { OWNER_ONLY_TABS, scannerTab } from '@/pages/scanner/scannerNav'
 import type { ScannerTabId } from '@/pages/scanner/scannerNav'
@@ -752,11 +758,12 @@ export function sqOtmText(r: SqRow): string {
  * A row with no usable spot has `sqOtmDist` 0, so its em dash is painted the
  * dim colour, never orange.
  *
- * COLLAPSE: v2's `HOME_THEME.orange` #FB8501 → `T.orange`; the sub-threshold
- * `rgba(255,255,255,0.7)` → `alpha(T.text, 0.7)`.
+ * TOKENS: v2's `HOME_THEME.orange` #FB8501 → `V2.orange`; the sub-threshold
+ * `rgba(255,255,255,0.7)` → `alpha(T.text, 0.7)`, which is already exact
+ * (`T.text` is #ffffff, v2's `HT.text`).
  */
 export function sqOtmColor(r: SqRow): string {
-  return sqOtmDist(r) * 100 >= SQ_OTM_ORANGE_PCT ? T.orange : alpha(T.text, 0.7)
+  return sqOtmDist(r) * 100 >= SQ_OTM_ORANGE_PCT ? V2.orange : alpha(T.text, 0.7)
 }
 
 /**
@@ -775,21 +782,22 @@ export function sqDeltaCellText(v: number | null): string {
  *
  * Three-way ladder, evaluated in this order:
  *   null   → `T.text`   ("not measured" — the em dash above)
- *   v >= 0 → `MOVE_UP`
- *   v <  0 → `MOVE_DOWN`
+ *   v >= 0 → `V2.up`     #1FD98A
+ *   v <  0 → `V2.red`    #EF4444
  *
  * The boundary is `>=`, so a measured exact zero is painted UP and prints
  * `"+0"`. That is `fmtB`'s whole reason for always carrying a sign: `"+0"`
  * means "measured, and flat", the em dash means "no reading".
  *
- * COLLAPSE: v2 painted the up branch `HOME_THEME.green` #8ECAE6 — a light blue
+ * THE SPLIT: v2 painted the up branch `HOME_THEME.green` #8ECAE6 — a light blue
  * that is also the colour of every label and header on this tab — and the down
- * branch #EF4444, the same red as the error banner. Split into the directional
- * pair; chrome takes `T.muted` and the error banner takes `T.red`.
+ * branch #EF4444, the same red as the error banner. A SIGNED figure takes the
+ * positive leg `V2.up` #1FD98A; chrome keeps #8ECAE6 as `V2.green`. The error
+ * banner keeps #EF4444 alongside the directional red, under its own name.
  */
 export function sqDeltaCellColor(v: number | null): string {
   if (v == null) return T.text
-  return v >= 0 ? MOVE_UP : MOVE_DOWN
+  return v >= 0 ? V2.up : V2.red
 }
 
 /**
@@ -818,7 +826,7 @@ export function sqCardMetricText(r: SqRow, col: SqCol): string {
 export function sqCardMetricColor(r: SqRow, col: SqCol): string {
   const def = SQ_COLUMNS.find((c) => c.key === col)
   if (!def?.signColoured) return T.text
-  return sqVal(r, col) >= 0 ? MOVE_UP : MOVE_DOWN
+  return sqVal(r, col) >= 0 ? V2.up : V2.red
 }
 
 /** `"$6050"` — a raw `$` on the raw number, no separator, no fixed decimals (E82). */
@@ -840,7 +848,7 @@ export function sqCardRankText(index: number): string {
  * wrong on its own; shipping both is.
  */
 export const SQ_NULL_CHG_RENDER = {
-  card: { text: fmtB(0), color: MOVE_UP, meaning: 'measured, and flat' },
+  card: { text: fmtB(0), color: V2.up, meaning: 'measured, and flat' },
   table: { text: EM_DASH, color: T.text, meaning: 'no reading' },
 } as const
 
@@ -848,18 +856,19 @@ export const SQ_NULL_CHG_RENDER = {
  * The active sort header is the only cyan thing in the header row; every other
  * header — and the header row itself — is chrome. Spec: rows E95, E86–E88.
  *
- * COLLAPSE: inactive was `HOME_THEME.green` #8ECAE6 in its CHROME role, so it
- * takes `T.muted` here and NOT `MOVE_UP`.
+ * THE SPLIT: inactive was `HOME_THEME.green` #8ECAE6 in its CHROME role, so it
+ * KEEPS that value as `V2.green` and is NOT `V2.up`. Active is v2's cyan.
  */
 export function sqHeaderColor(col: SqCol, sort: SqSort): string {
-  return sort.col === col ? T.cyan : T.muted
+  return sort.col === col ? V2.cyan : V2.green
 }
 
 /**
  * The error banner's colour. Spec: row E112.
  *
- * COLLAPSE: v2 used #EF4444 for this AND for a falling delta. A failed fetch is
- * not a direction, so the banner takes `T.red` and only the deltas take
- * `MOVE_DOWN`.
+ * v2 uses #EF4444 for this AND for a falling delta, and so does this port: the
+ * two are split by MEANING, not by value. A failed fetch is not a direction, so
+ * it gets its own constant — resolving to the same `V2.red` the deltas take,
+ * free to move apart later without a hunt through the file.
  */
-export const SQ_ERROR_COLOR = T.red
+export const SQ_ERROR_COLOR = V2.red

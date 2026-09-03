@@ -43,22 +43,26 @@
 // …and uses them where the card above uses `HOME_THEME.green` #8ECAE6 and
 // `HOME_THEME.red` #EF4444 for the same two ideas, one card apart on one screen.
 //
-// THE CALL: COLLAPSE. Both pairs carry ONE semantic — positive/up and
-// negative/down — so both become MOVE_UP / MOVE_DOWN here.
+// THE CALL, REVERSED (Brandon, 2026-09-03): DO NOT COLLAPSE. Step 2 folded
+// both pairs onto MOVE_UP / MOVE_DOWN, arguing that v2's own comment complains
+// about the HUE ("real green", "true red (not pink)") rather than claiming a
+// different MEANING. The palette reversal takes that back: /v3/scanner renders
+// v2's palette per surface, not v3's semantics, so this card keeps the pair v2
+// declared for it. `POS` #1FD98A is `V2.up` and `NEG` #FF3B3B is `V2.neg`.
 //
-// THE EVIDENCE, from v2's own source:
-//   • the comment names the semantic ("Positive/negative semantic colors") and
-//     then argues about the HUE, not the meaning: "real green", "true red (not
-//     pink)". That is a complaint that #8ECAE6 is a light blue and #EF4444 is
-//     pinkish — i.e. that the shared token looked wrong, not that this card
-//     means something different by it;
-//   • `C.bull` carries the comment "any positive breakout chance → green" and
-//     `C.bear` just "true red" — the same two roles the Live Read gauge paints
-//     with HOME_THEME.green/red;
-//   • nothing in the file distinguishes the two greens by MEANING anywhere: no
-//     surface uses both, and no legend explains a difference to a reader.
-// One semantic painted two ways is drift, and a re-key is the moment to drop it.
-// `EDGE_COLORS` below is the one pair.
+// #1FD98A is not an import from elsewhere — it is this page's own answer to
+// "what colour is a good number", written down twice: here, and in homeTheme's
+// `REFRESH_GREEN` ("the up / success green … a role color"). So it is also the
+// value every OTHER positive on the scanner that v2 painted #8ECAE6 now takes.
+//
+// The reds do NOT converge the same way. The IB Read card ONE ROW UP paints its
+// positives and negatives #8ECAE6 / #EF4444; this card, directly below it on the
+// same screen, paints #1FD98A / #FF3B3B. That side-by-side difference is v2's,
+// and it is now DELIBERATE: the four positives and three negatives v2 uses on
+// this page stay on the surfaces v2 painted them, and only the one collision v2
+// did not intend (#8ECAE6 doing chrome, accent and positive at once) is broken
+// apart. `V2.neg` exists solely for this card's `bear` ring — do not "fix" it
+// to `V2.red`.
 //
 // ── REMOVED IN v2, DO NOT RE-ADD ─────────────────────────────────────────────
 // • `edgeGradient()` (`:58–60`) — `linear-gradient(90deg, ${color}59, ${color})`,
@@ -71,7 +75,7 @@
 // Spec: docs/parity/scanner.md Part G, rows G142–G161, G249.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { MOVE_DOWN, MOVE_UP, T } from '@/design/theme'
+import { T, V2, alpha } from '@/design/theme'
 import type { LiveSession, ScoredRule } from '@/pages/scanner/ibStats'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -313,15 +317,18 @@ export const TAG: Record<EngineStatus, string> = {
 
 /**
  * `EDGECOL` (`:62`) — the ring colours, and the tag/dot colours on the stage
- * board. v2's `POS` #1FD98A and `NEG` #FF3B3B are collapsed onto MOVE_UP /
- * MOVE_DOWN here; see the decision note in the file header. `off` was #6B7686,
- * which is what `T.flat` already means.
+ * board. v2's own `POS` #1FD98A and `NEG` #FF3B3B are KEPT as this card's pair
+ * (`V2.up` / `V2.neg`), not folded onto the IB Read card's #8ECAE6 / #EF4444 one
+ * row above; see the two-greens/two-reds note in the file header. `off` was
+ * #6B7686 — a grey that paints nothing on this tab (spec G161) — and collapses
+ * onto `V2.neutral` #6B7280, v2's scanner-wide NEUTRAL, rather than minting a
+ * sixth grey for a dead value (COLOR-REMAP decision 4).
  */
 export const EDGE_COLORS: Record<EngineStatus, string> = {
-  bull: MOVE_UP,
-  bear: MOVE_DOWN,
-  rot: T.orange,
-  off: T.flat,
+  bull: V2.up,
+  bear: V2.neg,
+  rot: V2.orange,
+  off: V2.neutral,
 }
 
 /**
@@ -357,9 +364,16 @@ export function ringDashOffset(pct: number): number {
   return RING.circumference * (1 - pct / 100)
 }
 
-/** The centre number greys out at zero (`:117`). */
+/**
+ * The centre number greys out at zero (`:117`).
+ *
+ * v2 dims it with `C.muted` rgba(255,255,255,0.55). `T.muted` is OPAQUE white
+ * in v3, which would make a zero-value gauge read at full strength — this is
+ * the one place on this tab where v2 does dim a value, so the opacity is
+ * carried explicitly.
+ */
 export function ringNumberColor(pct: number, color: string): string {
-  return pct > 0 ? color : T.muted
+  return pct > 0 ? color : alpha(T.text, 0.55)
 }
 
 /** Every fixed string on the card. */

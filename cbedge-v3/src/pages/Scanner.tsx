@@ -131,12 +131,21 @@ export default function Scanner() {
 
   return (
     <Page>
-      <TabStrip active={visibleTab} isOwner={isOwner} onSelect={selectTab} />
+      {/* `scanner-v2` is the ONE global-token override this page takes. It
+          redefines --color-line for this subtree only, because v2 draws a card
+          edge as a white hairline and v3's line is an opaque slate — and 37 of
+          the sites that draw it live inside the Card primitive and the
+          `border-line` utility, neither of which this page owns. The rule and
+          the full reasoning are in tokens.css. Removing this class puts the
+          scanner back on the v3 edge and changes nothing else. */}
+      <div className="scanner-v2 flex min-h-0 flex-1 flex-col gap-3">
+        <TabStrip active={visibleTab} isOwner={isOwner} onSelect={selectTab} />
       {/* `key` on the boundary so switching tabs gets a fresh Suspense rather
           than holding the previous tab's tree while the next chunk loads. */}
-      <Suspense key={visibleTab ?? 'pending'} fallback={null}>
-        {Tab ? <Tab /> : null}
-      </Suspense>
+        <Suspense key={visibleTab ?? 'pending'} fallback={null}>
+          {Tab ? <Tab /> : null}
+        </Suspense>
+      </div>
     </Page>
   )
 }

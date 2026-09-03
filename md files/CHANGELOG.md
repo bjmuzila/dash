@@ -1,5 +1,161 @@
 # Changelog
 
+## 2026-09-03 - /level-log parity inventory (step 1 of 4 — spec only, no code)
+
+`/level-log` was never ported to v3. It is v2's only `SCANNER_ROUTES` entry —
+a sibling route rather than a scanner tab, which is why the Scanner port
+deliberately left it out. Brandon wants it, on the same four-step order.
+
+This is step 1: **`cbedge-v3/docs/parity/level-log.md`, 283 checklist rows**
+across Parts A–Q, in the same five-column shape as `scanner.md` and `em.md`.
+Nothing under `cbedge-v3/src/` has been written.
+
+Source is one file — `components/pages/LevelLog.tsx`, 2,608 lines, lazy-routed
+at `app-vite/src/App.tsx:93`. There is no `app/level-log/` directory; the
+component IS the route.
+
+Parts: A frame/controls (11) · B the three switches (15) · C tickers/date/
+refresh (12) · D error (3) · E ticker rail (17) · F log header + buttons (24) ·
+G capture rail + chips (24) · H migration chart (49) · I popout (15) · J churn
+history (14) · K variant-empty (4) · L timeline (28) · M reaction taxonomy (3) ·
+N formatters (14) · O ET machinery (10) · P data layer (24) · Q buildLogText (16).
+
+**The port is easier than Scanner's in one important way: nothing on this page
+paints to canvas.** Every mark is DOM or SVG — the migration chart is one
+`<svg viewBox="0 0 100 H" preserveAspectRatio="none">`, and the rail, chips,
+timeline, delta chips and churn bars are absolutely-positioned DOM. So
+non-negotiable 6 (`data-cb-layer`) does not apply anywhere here, and there is no
+timer-driven paint to guard.
+
+**Three corrections the inventory turned up against what we thought:**
+
+1. **The page hits THREE endpoints, not two.** `useGexChurnHistory`, imported
+   from `GexHeatBar.tsx`, GETs `/api/gex-gross-feed?symbol=&days=45` — the
+   client's 45 against a server default of 60, clamped 1–400.
+2. **`/proxy/walls?series=1` is fetched, parsed and then discarded.**
+   `series.samples` is read by nothing; only `.expiry` / `.expiries` survive.
+   Its own header comment says it exists so the chart has gamma between rolls —
+   but the chart builds `coreG` from `log`'s `level_gex` instead. The code wins:
+   the flip that comment describes is still invisible on screen.
+3. **`/proxy/candles-intraday` has no `toMs` param** — the client computes `to`
+   and filters client-side — and a `fromMs` older than 7 days is SILENTLY
+   replaced server-side, after which the client filters every bar out and gets
+   `[]`. That is the documented "outside dxFeed's 1m window" path, confirmed at
+   `server-with-proxy.js:578–582`.
+
+**Three code-vs-comment conflicts, code wins in all three:** `MIG_H` is 250
+while three separate comments say 190; the popout is 2.2×, not "twice"; and
+`DaySeg.roles`'s doc still describes the heavier-wall model that was DELETED on
+2026-08-27 to fix the "MSFT reads 505 here and 500 everywhere else" bug —
+porting from that doc reintroduces the bug.
+
+**Three two-sources-of-truth:** the ordering rule is written three times; the
+event-meta list twice with different contents, so `excursion_pts` — the most
+quantitative field on a hit — never reaches the clipboard; and the scope word
+three ways, so the PNG title band can print a different word than the card it
+photographs.
+
+**Colour.** Brandon's 2026-09-03 standing decision applies: v2's palette, as
+tokens, with the one collision v2 never intended dropped. `GREEN` `#8ECAE6`
+splits into `V2.green` (chrome — both scope chips) and `V2.up` `#1FD98A`
+(positive — `reject`, `rolled_over`, `BREAK & REJECT`, `WallDelta` up,
+`↑ from below`, both button success states). **Four NEW collisions found here**,
+the worst being that `MUTED === C.label === #FFFFFF`, so twelve "muted" elements
+render at full body-weight white — and v3's `--color-muted` is also `#ffffff`,
+so a naïve re-key reproduces it silently. Also: `AMBER === HOME_THEME.orange`,
+so the timeline's dot ternary believes it has three branches and has two.
+
+**Unverifiable, and it matters:** `REACTION_RULE`'s nine threshold tooltips
+describe `classify()`, which lives in `walls-recorder.js` — not in the staged
+tree. If those thresholds moved, the tooltips are lying to the customer. Open
+question 1.
+
+Next: Brandon reviews, then step 2 — transcribe the logic 1:1 into
+`cbedge-v3/src/pages/levelLog/`.
+
+## 2026-09-03 - /v3/scanner runs on v2's palette (step 2's colour collapse, reversed)
+
+Brandon: keep v2's colouring. So the six scanner tabs are back on **v2's actual
+values**, as tokens. **Scanner only** — Em, Flow, Options Chain, Premarket,
+Analysis, Replay, Traders Dash and the board cards are untouched, and the
+2026-08-31 "re-key /em onto v3 tokens" decision still stands for that page.
+
+**What step 2 got wrong, and what it got right.** Step 2 collapsed v2's palette
+onto v3's semantics — every positive to `MOVE_UP`, every negative to
+`MOVE_DOWN`, chrome to `T.muted`. That threw away the look. But it collapsed for
+a real reason: v2's `HOME_THEME.green` `#8ECAE6` — **a light blue** — does THREE
+jobs at once: card subtitles and table headers (chrome), the tab accent, and the
+positive/up semantic. So in v2 a "good" number is the same colour as the column
+heading above it.
+
+The reversal keeps the palette and drops only that one collision:
+
+| job | token | v2 value | evidence |
+|---|---|---|---|
+| chrome | `V2.green` | `#8ECAE6` | `PageCard.tsx:138` paints every card subtitle with it; the shared `th` does the same in six tabs |
+| accent | `V2.accent` | `#7dd3fc` | `homeTheme.ts:88` declares `LIGHT_BLUE` as "the one card accent" |
+| positive | `V2.up` | `#1FD98A` | `homeTheme.ts:293` declares `REFRESH_GREEN` as "the up / success green… a role color"; `IbProbabilityEngine.tsx:37` already uses it as a positive |
+
+**Everything v2 paints per-surface stays per-surface.** The scanner really does
+use four greens and three reds — `#22c55e` on GEX Levels' gamma, `#7dd3fc` on its
+delta/OI/EOD, `#30d158` on Watch This' probe chart; `#EF4444` as the default
+negative, `#FF3B3B` on the Bearish Edge gauge only, `#ff5b5b` on the probe chart.
+Those are v2's, not porting slips, and they were deliberately NOT unified.
+
+**Four new tokens, not forty.** `--color-v2-accent` `#7dd3fc` (v2's real
+`LIGHT_BLUE` — note `--color-v2-lightblue` is `#7ed3fc`, a genuinely different
+value with its own comment explaining why), `--color-v2-neg` `#ff3b3b`,
+`--color-v2-chip` `#8dcdff`, `--color-v2-neutral` `#6b7280`. Everything else the
+scanner needs already existed under some name. Plus five `V2` members and four
+`V2W` washes, which complete v2's panel-alpha ladder to .20/.35/.45/.72/.97.
+
+**The card edge, and the one override.** v2 draws a card edge as a white
+hairline `rgba(255,255,255,0.10)`; v3's `--color-line` is an opaque slate
+`#23272e`. Six sites reach it inline and were remapped; **37 more go through the
+`border-line` utility and the `Card` primitive**, which the scanner does not own.
+Recolouring `--color-line` globally would move every v3 page, and forking the
+primitives is the same problem wearing a hat. So the page root carries
+`.scanner-v2` and the token is redefined **for that subtree only** — which is
+what custom properties are for. It is the ONE global-token override the scanner
+gets; deleting the rule puts it back on the v3 edge and changes nothing else.
+
+Note for whoever edits `tokens.css` next: that rule canNOT live in the `@theme
+static` block with the tokens — `@theme` takes declarations, not rules. It sits
+just after the block closes, with a comment saying so, because putting it inside
+is the obvious mistake and it fails quietly.
+
+**One primitive changed, invisibly.** `SegGroup` gained an optional
+`activeColor` on each option, because v2 paints Strike Query's Positive/Negative
+buttons in the up and down colours and they are opposites, not peers. Additive by
+construction: every existing caller omits it and renders byte-identically, so no
+other page moved.
+
+**Also restored:** step 2 had collapsed three spot-line treatments and three
+gamma-flip treatments on GEX Levels into one each, because v3's semantics had no
+room for three. v2's palette does, so all six are back — colour, dash pattern and
+in-view guard per chart. v2's gamma-bars flip line is `#22C55E`, not white.
+
+**Verification.** `tsc --noEmit` against the real `tsconfig.json`: zero errors
+across all 31 scanner files, the page shell, `theme.ts` and `Controls.tsx`.
+**`check-theme.mjs` — v3's own gate — passes**, and it was proved live rather
+than assumed: injecting `#ff00ff` into `format.ts` makes it fail with a colour-
+literal violation on that exact line, and reverting makes it pass again. No
+`theme-baseline.json` entry was needed; every edit swapped one token-backed
+symbol for another. Zero hex outside comments; zero `MOVE_UP`/`MOVE_DOWN`/
+`LIGHT_BLUE` imports left in the scanner; every `var(--…)` resolves.
+
+The mapping lives at **`cbedge-v3/docs/parity/scanner-color-remap.md`** — 304
+rows across 19 files, 94 of them NO CHANGE (mostly `T.text`, which is `#ffffff`
+in both palettes, so "converting" it is motion without change). It records the
+three-way split with its evidence, a DO-NOT-TOUCH list, and the seven questions
+that came up plus how each was settled.
+
+**One divergence left, deliberately.** The scorecard's twelve `<th>` labels are
+painted by the `Table` primitive's own `text-muted`, not by anything the scanner
+owns, so they stay v3's muted rather than v2's `#8ECAE6`. Fixing it means either
+a prop on the primitive or another scoped override; neither is worth it for one
+table until someone says the difference reads wrong.
+
 ## 2026-09-03 - Fix: card full-screen was silently gone (Shell lost the stage)
 
 A later `Shell.tsx` rewrite dropped the `ExpandStageHost` wrapper added earlier

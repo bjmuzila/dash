@@ -66,6 +66,20 @@ export function SegGroup<T extends string>({
      * and the other options are still one click away, so nobody is stranded.
      */
     disabled?: boolean
+    /**
+     * Ink for this option WHEN SELECTED. Optional, and omitting it is the
+     * default everywhere — a group whose options are peers (RTH/ETH, 5m/15m)
+     * should not colour them differently, and every existing caller omits it.
+     *
+     * It exists for the one case where the options are not peers but opposites
+     * and v2 painted them so: the scanner's Positive / Negative direction
+     * filter, where the selected state carrying the up or down colour is the
+     * fastest read on the control. Pass a TOKEN, never a hex.
+     *
+     * Added 2026-09-03 for /v3/scanner. Additive by construction: with the prop
+     * omitted this renders byte-identically to before, so no other page moved.
+     */
+    activeColor?: string
   }>
   value: T
   onChange: (v: T) => void
@@ -92,6 +106,11 @@ export function SegGroup<T extends string>({
             if (!o.disabled) onChange(o.value)
           }}
           title={o.title}
+          // Only the SELECTED option wears its `activeColor`; an unselected one
+          // keeps the muted ink, so the group still reads as one control rather
+          // than a row of competing colours. Undefined leaves the class-driven
+          // colour alone entirely — see the prop's note above.
+          style={o.activeColor && o.value === value ? { color: o.activeColor } : undefined}
           className={[
             SEG_SIZE[size],
             'font-semibold tracking-wide transition-colors first:rounded-l-sm last:rounded-r-sm',

@@ -241,6 +241,39 @@
                                     rgba(126,211,252,.10) = #7ed3fc. The CSS is
                                     what reaches the screen, so it wins. */
 
+  /* ── The scanner's leg of v2's palette ───────────────────────────────────
+     Added 2026-09-03. The /v3/scanner page runs on v2's palette rather than
+     v3's semantics (Brandon). The three below are the values v2 paints on that
+     page that no token here already carries.
+
+     The one collision v2 did NOT intend is dropped on the way across:
+     HOME_THEME.green #8ECAE6 does THREE jobs in v2 — card subtitles and table
+     headers (chrome), the tab accent, and the positive/up semantic. Those are
+     --color-v2-green, --color-v2-accent and --color-v2-refresh here, so a
+     "good" number is no longer the same colour as the column heading above it.
+     Everything else v2 paints per-surface is kept per-surface: the page really
+     does use four different greens, and that is v2's, not a porting slip.    */
+  --color-v2-accent: #7dd3fc; /* v2's homeTheme LIGHT_BLUE, declared there as
+                                 "the one card accent". NOT --color-v2-lightblue
+                                 #7ed3fc above — that one is what the embed CSS
+                                 actually paints, and the two differ by a digit
+                                 on purpose. The tab accent for IB Stats and
+                                 Watch This. */
+  --color-v2-neg: #ff3b3b; /* the probability engine's own NEG, commented in v2
+                              as "true red (not pink)" — the Bearish Edge gauge
+                              only. The page's default negative stays
+                              --color-v2-red #EF4444, one card above it. */
+  --color-v2-chip: #8dcdff; /* SCANNER-SPECIFIC. The GEX Levels scope chip's
+                               plate and edge. v2 names it nowhere else. */
+  --color-v2-neutral: #6b7280; /* v2's NEUTRAL from scannerStyles.ts, imported
+                                  by six tabs. Duplicates --color-impact-holiday
+                                  deliberately, on the same reasoning the block
+                                  above gives for v2-cyan == cal-accent: a
+                                  scanner neutral is not a calendar holiday.
+                                  They agree today and must be free to move
+                                  apart tomorrow. */
+
+
   /* ── Type scale ───────────────────────────────────────────────────────
      Numbers use the tabular font so columns do not jitter as prices tick.  */
   --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -263,6 +296,29 @@
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   THE SCANNER'S CARD EDGE.
+
+   /v3/scanner runs on v2's palette (Brandon, 2026-09-03). v2 draws a card edge
+   as a WHITE HAIRLINE, rgba(255,255,255,0.10); v3's --color-line is an opaque
+   slate #23272e. Six sites reach the edge through an inline style and are
+   remapped one by one, but 37 more go through the `border-line` utility and the
+   Card primitive — neither of which the scanner owns.
+
+   Rather than recolour every v3 page or fork the primitives, the scanner's root
+   carries `.scanner-v2` and the token is redefined FOR THAT SUBTREE ONLY. That
+   is what custom properties are for, and it is the ONE global-token override the
+   scanner gets — everything else that diverges is remapped per call site.
+
+   This CANNOT live in the @theme block above: `@theme static` takes custom
+   property declarations, not rules.
+
+   Delete this to put the scanner back on the v3 edge. Nothing else changes.
+   ───────────────────────────────────────────────────────────────────────────*/
+.scanner-v2 {
+  --color-line: rgba(255, 255, 255, 0.1);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────

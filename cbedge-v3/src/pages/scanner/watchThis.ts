@@ -49,21 +49,31 @@
 //      both and does not reconcile them; neither does this port. (Part H, open
 //      question 6.)
 //
-// ── COLOUR: THE COLLAPSE, AND WHY THIS TAB NEEDED IT MOST ────────────────────
+// ── COLOUR: THE SPLIT, AND WHY THIS TAB SHOWS IT MOST ────────────────────────
+// REVERSED (Brandon, 2026-09-03). Step 2 collapsed this tab's colours onto
+// MOVE_UP / MOVE_DOWN / LIGHT_BLUE / T.muted. That decision is gone: the v3
+// scanner renders v2's PALETTE, per surface, not v3's semantics — so the pairs
+// v2 painted on two different surfaces stay two pairs.
+//
 // v2 painted "positive" on this tab with THREE values at once — `HOME_THEME.green`
 // #8ECAE6 (a light blue) on the flat table's OPEN, `#30d158` on the detail
 // panel's OPEN chip one row below it, and #8ECAE6 again on every table HEADER,
 // where it means nothing directional at all. "Negative" was #EF4444 in the
-// tables and #ff5b5b in the chart. And `LIGHT_BLUE` was three different values
-// across the two trees (#7dd3fc in v2, #7ed3fc in tokens.css, #4fb8d4 as the
-// `LIGHT_BLUE` export) on thirteen elements of this one tab.
+// tables and #ff5b5b in the chart.
 //
-// Collapsed here, per the decision recorded in docs/parity/scanner.md:
-//   every positive/up  → MOVE_UP
-//   every negative/down→ MOVE_DOWN
-//   every light blue   → LIGHT_BLUE (the v3 token)
-//   chrome (headers, labels that are not a state) → T.muted
-// Each collapse is commented at its call site below.
+// Only the #8ECAE6 collision is broken apart — it is the one v2 did not intend.
+// Everything else keeps the surface v2 painted it on:
+//   TABLE side, signed / state figures  → V2.up  #1FD98A / V2.red #EF4444
+//   PROBE CHART side (and its chips)    → ES_CANDLE_UP #30d158 / ES_CANDLE_DOWN
+//                                         #ff5b5b — v2's PROBE_GRN / PROBE_RED
+//   the light-blue accent (13 elements) → V2.accent #7dd3fc, v2's own LIGHT_BLUE
+//                                         (NOT the v3 `LIGHT_BLUE` export, which
+//                                         is --color-series-5 #4fb8d4)
+//   chrome (headers, labels that are not a state) → V2.green #8ECAE6, the value
+//                                         v2 painted them
+//   CATEGORY chips (the C badge = PROBE_ICE #8ECAE6) → V2.green, because a
+//                                         call-vs-put badge is not a sign
+// Each site is commented below.
 //
 // ── THE DELIBERATE DEPARTURES FROM v2 ────────────────────────────────────────
 // Colour is the only one in THIS file; the data layer's are in watchThisData.ts
@@ -103,7 +113,7 @@
 // Spec: docs/parity/scanner.md Part H, rows H1–H220.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { LIGHT_BLUE, MOVE_DOWN, MOVE_UP, T } from '@/design/theme'
+import { ES_CANDLE_DOWN, ES_CANDLE_UP, T, V2, alpha } from '@/design/theme'
 import { EM_DASH, fmtB } from '@/pages/scanner/format'
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -463,13 +473,14 @@ export function groupOutcomesByDay(rows: OutcomeRow[]): DayBucket[] {
  * `fmtProbePct`), so an exact `0` renders "▲ 0.0%" in plain text — an up arrow
  * with no up colour. (H138.)
  *
- * COLOUR COLLAPSE: v2's PROBE_GRN #30d158 / PROBE_RED #ff5b5b were a SECOND
- * up/down pair, live on screen at the same time as the tables' #8ECAE6/#EF4444
- * — open a row and the table's OPEN is one green while the panel's OPEN chip
- * is the other. Both pairs collapse onto MOVE_UP / MOVE_DOWN.
+ * COLOUR: v2's PROBE_GRN #30d158 / PROBE_RED #ff5b5b are a SECOND up/down pair,
+ * live on screen at the same time as the tables' #8ECAE6/#EF4444 — open a row
+ * and the table's OPEN is one green while the panel's OPEN chip is the other.
+ * BOTH PAIRS SHIP. This is the probe chart's own pair (`ES_CANDLE_UP` /
+ * `ES_CANDLE_DOWN`); the table side takes `V2.up` / `V2.red`. Do not unify them.
  */
 export const probeTone = (v: number | null): string =>
-  v == null ? T.text : v > 0 ? MOVE_UP : v < 0 ? MOVE_DOWN : T.text
+  v == null ? T.text : v > 0 ? ES_CANDLE_UP : v < 0 ? ES_CANDLE_DOWN : T.text
 
 /** Bare two-decimal number, or an em dash. No `$` — the `$` is in the PNG only. (H140.) */
 export const probePx = (v: number | null): string => (v == null ? EM_DASH : v.toFixed(2))
@@ -725,12 +736,13 @@ export const watchRowKey = (r: WatchRow): string => `${r.symbol}-${r.expiry}-${r
 export const isCallSide = (r: WatchRow): boolean => r.gex_value >= 0
 
 /**
- * COLOUR COLLAPSE: v2 painted this `HOME_THEME.green` #8ECAE6 / `HOME_THEME.red`
- * #EF4444. #8ECAE6 is a LIGHT BLUE doing duty as "positive"; here the
- * directional job goes to MOVE_UP/MOVE_DOWN and the chrome job (table headers)
- * goes to T.muted, so the two stop sharing a value.
+ * COLOUR: v2 painted this `HOME_THEME.green` #8ECAE6 / `HOME_THEME.red` #EF4444.
+ * #8ECAE6 is a LIGHT BLUE doing duty as "positive"; the DIRECTIONAL job takes
+ * the split's positive leg `V2.up` #1FD98A while the CHROME job (table headers)
+ * keeps #8ECAE6 as `V2.green`, so the two stop sharing a value. Table side, not
+ * chart side — the probe chart has its own pair (`probeTone`).
  */
-export const directionColor = (up: boolean): string => (up ? MOVE_UP : MOVE_DOWN)
+export const directionColor = (up: boolean): string => (up ? V2.up : V2.red)
 
 /** Raw number, no toFixed: 5900 prints "$5900", 5902.5 prints "$5902.5". (H33, H78.) */
 export const fmtStrike = (strike: number): string => `$${strike}`
@@ -834,7 +846,7 @@ export const OUTCOME_COLSPAN = OUTCOME_COLUMNS.length // 12
 /**
  * `side === "above"` → up, anything else → down.
  *
- * COLOUR COLLAPSE: v2's HOME_THEME.green #8ECAE6 / .red #EF4444. (H78, H122.)
+ * COLOUR: v2's HOME_THEME.green #8ECAE6 / .red #EF4444 → V2.up / V2.red. (H78, H122.)
  */
 export const sideColor = (side: OutcomeSide): string => directionColor(side === 'above')
 
@@ -853,8 +865,8 @@ export const entryTitle = (o: OutcomeRow): string | undefined =>
 export const fmtHigh = (o: OutcomeRow): string =>
   o.opt_high != null ? `$${o.opt_high.toFixed(2)}` : EM_DASH
 
-/** COLOUR COLLAPSE: v2's LIGHT_BLUE #7dd3fc → the v3 LIGHT_BLUE token. (H83.) */
-export const highColor = (o: OutcomeRow): string => (o.opt_high != null ? LIGHT_BLUE : T.text)
+/** COLOUR: v2's LIGHT_BLUE #7dd3fc → `V2.accent`, v2's own value. (H83.) */
+export const highColor = (o: OutcomeRow): string => (o.opt_high != null ? V2.accent : T.text)
 
 /**
  * Glyph, space, ABSOLUTE value at one decimal, `%`. The glyph boundary is
@@ -864,11 +876,11 @@ export const fmtMaxPct = (v: number | null | undefined): string =>
   v == null ? EM_DASH : `${v >= 0 ? '▲' : '▼'} ${Math.abs(v).toFixed(1)}%`
 
 /**
- * COLOUR COLLAPSE: #8ECAE6/#EF4444 → MOVE_UP/MOVE_DOWN; the null case stays
- * body text. Boundary is `>= 0`, so an exact 0 is painted up. (H84.)
+ * COLOUR: #8ECAE6/#EF4444 → V2.up/V2.red; the null case stays body text.
+ * Boundary is `>= 0`, so an exact 0 is painted up. (H84.)
  */
 export const maxPctColor = (v: number | null | undefined): string =>
-  v == null ? T.text : v >= 0 ? MOVE_UP : MOVE_DOWN
+  v == null ? T.text : v >= 0 ? V2.up : V2.red
 
 /** Two decimals. (H85, H125.) */
 export const fmtFlaggedSpot = (o: OutcomeRow): string => `$${o.spot_at_flag.toFixed(2)}`
@@ -883,12 +895,12 @@ export const fmtClosest = (o: OutcomeRow): string =>
 /**
  * Boundary is STRICTLY `< 1`, so exactly 1.0% is not highlighted.
  *
- * COLOUR COLLAPSE: v2's LIGHT_BLUE #7dd3fc → the v3 LIGHT_BLUE token. This is
- * not a direction — "closest" is small-is-notable in both signs — so it stays
- * on the accent, not on MOVE_UP. (H87, H127.)
+ * COLOUR: v2's LIGHT_BLUE #7dd3fc → `V2.accent`. This is not a direction —
+ * "closest" is small-is-notable in both signs — so it stays on the accent, not
+ * on `V2.up`. (H87, H127.)
  */
 export const closestColor = (o: OutcomeRow): string =>
-  o.closest_pct != null && o.closest_pct < 1 ? LIGHT_BLUE : T.text
+  o.closest_pct != null && o.closest_pct < 1 ? V2.accent : T.text
 
 /** THIS cell applies `ymd()`; the flat table's Expiry and Flagged cells do not. (H79, H80, H88.) */
 export const fmtTouchedCell = (o: OutcomeRow): string => ymd(o.touched_date) ?? EM_DASH
@@ -898,9 +910,9 @@ export const fmtTouchedCell = (o: OutcomeRow): string => ymd(o.touched_date) ?? 
  * NORMALISED one, so a truthy-but-malformed date paints light blue while
  * displaying an em dash (H88). Copied as written.
  *
- * COLOUR COLLAPSE: LIGHT_BLUE #7dd3fc → the v3 LIGHT_BLUE token.
+ * COLOUR: LIGHT_BLUE #7dd3fc → `V2.accent`, v2's own value.
  */
-export const touchedColor = (o: OutcomeRow): string => (o.touched_date ? LIGHT_BLUE : T.text)
+export const touchedColor = (o: OutcomeRow): string => (o.touched_date ? V2.accent : T.text)
 
 /** "OPEN" / "TOUCHED" / "EXPIRED". (H89.) */
 export const fmtStatusWord = (status: OutcomeStatus): string => status.toUpperCase()
@@ -909,15 +921,17 @@ export const fmtStatusWord = (status: OutcomeStatus): string => status.toUpperCa
  * The status ladder, tested in this order: touched → accent, expired → body
  * text, anything else (i.e. open) → up.
  *
- * COLOUR COLLAPSE, AND THIS IS THE WORST CASE ON THE PAGE: v2 painted the flat
- * table's OPEN `HOME_THEME.green` #8ECAE6 while the detail panel's OPEN chip —
- * one row below it, on screen at the same time — was `PROBE_GRN` #30d158. Same
- * word, same state, two greens. Both are MOVE_UP here, and `statusChipColor`
- * below is deliberately the same function so they can never drift again.
- * (H89, H128, H134.)
+ * COLOUR — TWO GREENS, KEPT: v2 paints the flat table's OPEN
+ * `HOME_THEME.green` #8ECAE6 while the detail panel's OPEN chip — one row
+ * below it, on screen at the same time — is `PROBE_GRN` #30d158. Same word,
+ * same state, two greens. Step 2 collapsed both onto MOVE_UP; that is reversed
+ * (Brandon, 2026-09-03): the WORD here takes the split's positive leg `V2.up`
+ * #1FD98A, and the CHIP keeps #30d158 — see `statusChipColor`, which is
+ * therefore no longer the same function. Spec H records the pair as v2's own
+ * inconsistency and it ships as v2 paints it. (H89, H128, H134.)
  */
 export const statusColor = (status: OutcomeStatus): string =>
-  status === 'touched' ? LIGHT_BLUE : status === 'expired' ? T.text : MOVE_UP
+  status === 'touched' ? V2.accent : status === 'expired' ? T.text : V2.up
 
 /** Guarded on `outcomes.length`, NOT on a loading flag — so a slow fetch shows this. (H94, H106.) */
 export const EMPTY_TRACKED = 'No tracked flags yet.'
@@ -955,8 +969,8 @@ export const DAY_COLUMNS: readonly PlainColumn[] = [
 
 export const DAY_COLSPAN = DAY_COLUMNS.length // 5
 
-/** COLOUR COLLAPSE: LIGHT_BLUE #7dd3fc → the v3 token. (H107.) */
-export const dayDateColor = (isOpen: boolean): string => (isOpen ? LIGHT_BLUE : T.text)
+/** COLOUR: LIGHT_BLUE #7dd3fc → `V2.accent`, v2's own value. (H107.) */
+export const dayDateColor = (isOpen: boolean): string => (isOpen ? V2.accent : T.text)
 
 export type ResultSectionKey = 'opened' | 'touched' | 'expired'
 
@@ -971,9 +985,9 @@ export interface ResultSection {
 /**
  * Rendered in array order.
  *
- * COLOUR COLLAPSE: Opened was HOME_THEME.green #8ECAE6 → MOVE_UP (it counts
- * flags that OPENED, which is this tab's positive); Touched was LIGHT_BLUE
- * #7dd3fc → the v3 LIGHT_BLUE token; Expired stays on the warning ink.
+ * COLOUR: Opened was HOME_THEME.green #8ECAE6 → `V2.up` (it counts flags that
+ * OPENED, which is this tab's positive); Touched was LIGHT_BLUE #7dd3fc →
+ * `V2.accent`, v2's own value; Expired stays on the warning ink `V2.orange`.
  *
  * Note the Expired NOTE says "without ever being touched" — which is exactly
  * what `groupOutcomesByDay`'s status gate produces. The wording and the
@@ -983,19 +997,19 @@ export const RESULT_SECTIONS: readonly ResultSection[] = [
   {
     key: 'opened',
     label: 'Opened',
-    color: MOVE_UP,
+    color: V2.up,
     note: 'flagged for the first time on this date',
   },
   {
     key: 'touched',
     label: 'Touched',
-    color: LIGHT_BLUE,
+    color: V2.accent,
     note: 'spot reached the flagged strike on this date',
   },
   {
     key: 'expired',
     label: 'Expired',
-    color: T.orange,
+    color: V2.orange,
     note: 'expired on this date without ever being touched',
   },
 ] as const
@@ -1004,8 +1018,13 @@ export const RESULT_SECTIONS: readonly ResultSection[] = [
 export const sectionHeading = (sec: ResultSection, n: number): string =>
   `${sec.label.toUpperCase()} · ${n}`
 
-/** A zero count is dimmed rather than hidden — it renders the literal 0, never an em dash. (H108–H110.) */
-export const countColor = (n: number, color: string): string => (n ? color : T.muted)
+/**
+ * A zero count is dimmed rather than hidden — it renders the literal 0, never an
+ * em dash. v2 DIMS it with rgba(255,255,255,0.35); `T.muted` is opaque white in
+ * v3 and would not dim it at all, so the opacity is carried explicitly.
+ * (H108–H110.)
+ */
+export const countColor = (n: number, color: string): string => (n ? color : alpha(T.text, 0.35))
 
 /**
  * The per-section sub-table's eight columns. NONE of these headers is
@@ -1056,21 +1075,26 @@ export const detailStatusLabel = (d: OutcomeDetail): string =>
   d.status === 'touched' ? `Touched ${d.touchedDate ?? ''}` : d.status.toUpperCase()
 
 /**
- * The chip inks. Deliberately the SAME function as `statusColor` — see the
- * collapse note there: v2 had the flat table's OPEN and this chip's OPEN in two
- * different greens on screen at once. (H134.)
+ * The chip inks. NO LONGER the same function as `statusColor`: v2 paints this
+ * chip's OPEN `PROBE_GRN` #30d158 while the flat table's OPEN one row above is
+ * #8ECAE6, and the palette reversal (Brandon, 2026-09-03) keeps that pair
+ * apart — the probe panel has its own up/down colours and this chip belongs to
+ * it. Only the OPEN branch differs; touched and expired follow `statusColor`.
+ * (H134.)
  */
-export const statusChipColor = statusColor
+export const statusChipColor = (status: OutcomeStatus): string =>
+  status === 'open' ? ES_CANDLE_UP : statusColor(status)
 
 /**
  * The C/P badge ink.
  *
- * COLOUR COLLAPSE: v2's C chip was PROBE_ICE #8ECAE6 (a light blue) and its P
- * chip was HOME_THEME.orange #FB8501. The C chip joins the light-blue family on
- * LIGHT_BLUE; the P chip keeps the warning ink, which was already a distinct
- * hue doing a distinct job. (H133.)
+ * COLOUR: v2's C chip is PROBE_ICE #8ECAE6 (a light blue) and its P chip is
+ * HOME_THEME.orange #FB8501. The C chip is a CATEGORY — call vs put, never
+ * chosen by the sign of a number — so it takes the CHROME value `V2.green`
+ * #8ECAE6 that v2 painted it, exactly like `sideColor` on GEX Change Top. It is
+ * NOT `V2.accent` and NOT `V2.up`. The P chip keeps the warning ink. (H133.)
  */
-export const badgeColor = (type: 'C' | 'P'): string => (type === 'C' ? LIGHT_BLUE : T.orange)
+export const badgeColor = (type: 'C' | 'P'): string => (type === 'C' ? V2.green : V2.orange)
 
 /** Renders "IN"/"HIGH"/"NOW" — the labels are lower-case in source, upper-cased by style. (H140–H144.) */
 export const DETAIL_LABEL_IN = 'in'
@@ -1142,30 +1166,31 @@ export const fmtContractPctChg = (v: number | null): string =>
 /**
  * The Δ columns' ink. Boundary `>= 0`, null → body text.
  *
- * COLOUR COLLAPSE: #8ECAE6/#EF4444 → MOVE_UP/MOVE_DOWN, the same pair the chart
- * and the chips now use. (H156, H158, H159.)
+ * COLOUR: #8ECAE6/#EF4444 → `V2.up`/`V2.red` — the TABLE side's pair. The probe
+ * chart and its chips keep their own #30d158/#ff5b5b. (H156, H158, H159.)
  */
 export const deltaColor = (v: number | null): string =>
-  v == null ? T.text : v >= 0 ? MOVE_UP : MOVE_DOWN
+  v == null ? T.text : v >= 0 ? V2.up : V2.red
 
 // ═════════════════════════════════════════════════════════════════════════════
 // CHROME INKS — the third job #8ECAE6 was doing (H.9 header rows)
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * Every table header row on this tab (flat, day, section, detail-day) was
- * painted `HOME_THEME.green` #8ECAE6 in v2 — the SAME value as "positive". A
- * header is not a direction, so in v3 it takes the muted chrome ink and the two
- * jobs stop sharing a token. This is the "chrome → T.muted" half of the
- * collapse. (H.9, H.10d, H.11a; Part H "Green that is blue".)
+ * Every table header row on this tab (flat, day, section, detail-day) is painted
+ * `HOME_THEME.green` #8ECAE6 in v2 — the SAME value as "positive". A header is
+ * not a direction, so the two jobs stop sharing a TOKEN: chrome KEEPS the value
+ * as `V2.green` (it is where the value lives by site count) and the positive
+ * moves to `V2.up` #1FD98A. This is the chrome leg of the three-way split.
+ * (H.9, H.10d, H.11a; Part H "Green that is blue".)
  */
-export const TABLE_HEADER_INK = T.muted
+export const TABLE_HEADER_INK = V2.green
 
 /**
  * The active sort header, and its arrow.
  *
- * COLOUR COLLAPSE: LIGHT_BLUE #7dd3fc → the v3 token. An INACTIVE header sets
- * no colour at all in v2 and inherits the header row's ink, so it follows
+ * COLOUR: LIGHT_BLUE #7dd3fc → `V2.accent`, v2's own value. An INACTIVE header
+ * sets no colour at all in v2 and inherits the header row's ink, so it follows
  * TABLE_HEADER_INK here. (H72, H73.)
  */
-export const sortHeaderInk = (active: boolean): string => (active ? LIGHT_BLUE : TABLE_HEADER_INK)
+export const sortHeaderInk = (active: boolean): string => (active ? V2.accent : TABLE_HEADER_INK)

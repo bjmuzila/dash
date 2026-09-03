@@ -170,6 +170,44 @@ export const V2 = {
   refresh: 'var(--color-v2-refresh)',
   badgeInk: 'var(--color-v2-badge-ink)',
   lightBlue: 'var(--color-v2-lightblue)',
+
+  // ── The scanner's leg of v2's palette (2026-09-03) ────────────────────────
+  // /v3/scanner runs on v2's palette rather than v3's semantics. The five below
+  // exist so that ONE collision v2 never intended can be dropped on the way
+  // across: `HOME_THEME.green` #8ECAE6 does three jobs in v2 — chrome, the tab
+  // accent, and positive/up. Here those are `green`, `accent` and `up`, so a
+  // "good" number is no longer the colour of the heading above it.
+  //
+  // Everything v2 paints per-surface stays per-surface. The scanner really does
+  // use four greens and three reds; that is v2's, not a porting slip.
+
+  /**
+   * v2's `homeTheme.LIGHT_BLUE`, declared there as "the one card accent" — the
+   * tab accent for IB Stats and Watch This.
+   *
+   * NOT `lightBlue` above. That one is #7ed3fc, what the `.analytics-embed` CSS
+   * actually paints; this is #7dd3fc, what `homeTheme` declares. They differ by
+   * a digit and both are real.
+   */
+  accent: 'var(--color-v2-accent)',
+  /**
+   * The scanner's positive/up. v2's `REFRESH_GREEN`, declared as "the up /
+   * success green… a role color, not a refresh-button detail" — and already
+   * used as a positive by v2's own probability engine. Same value as `refresh`;
+   * separate name because the role is separate.
+   */
+  up: 'var(--color-v2-refresh)',
+  /**
+   * The probability engine's own `NEG`, commented in v2 as "true red (not
+   * pink)". The Bearish Edge gauge ONLY — the page's default negative is `red`
+   * #EF4444, one card above it. That side-by-side difference is v2's and is
+   * deliberate.
+   */
+  neg: 'var(--color-v2-neg)',
+  /** v2's `NEUTRAL` from `scannerStyles.ts`, imported by six scanner tabs. */
+  neutral: 'var(--color-v2-neutral)',
+  /** SCANNER-SPECIFIC. The GEX Levels scope chip's plate and edge. */
+  chip: 'var(--color-v2-chip)',
   /** Already identical in both palettes. Aliased so a ported file reads V2.* throughout. */
   text: T.text,
   muted: T.muted,
@@ -219,6 +257,22 @@ export const V2W = {
   glowB: alpha(V2.purple, 0.05),
   /** The embed-mode card radial. */
   embedGlow: alpha(V2.lightBlue, 0.1),
+
+  // ── The scanner's washes (2026-09-03) ────────────────────────────────────
+  // These complete v2's panel-alpha ladder, which runs .20 / .35 / .45 / .72 /
+  // .97 across the page. `panelBg` (.45), `panelBgStrong` (.72) and
+  // `panelSolid` (.97) were already here; the scanner uses the other two.
+
+  /** A stat tile's plate on the scanner — v2's lightest panel step. */
+  tilePlate: alpha(V2.panel, 0.35),
+  /** A Watch This flag card's plate. The lightest step v2 uses anywhere. */
+  flagPlate: alpha(V2.panel, 0.2),
+  /** The GEX Levels scope chip's fill. */
+  chipBg: alpha(V2.chip, 0.1),
+  /** The GEX Levels scope chip's edge — a different alpha from its fill, as v2
+   *  draws it. Step 2 had collapsed the chip's text, fill and edge onto one
+   *  value; the palette reversal splits them back apart. */
+  chipEdge: alpha(V2.chip, 0.28),
 } as const
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -57,7 +57,7 @@ import type { ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '@/design/primitives/Card'
 import { Chip, SegGroup } from '@/design/primitives/Controls'
-import { MOVE_UP, T, alpha } from '@/design/theme'
+import { T, V2, alpha } from '@/design/theme'
 import { EM_DASH } from '@/pages/scanner/format'
 import {
   ALERT_COLOR,
@@ -207,7 +207,7 @@ function richText(text: string, bold: readonly string[], code?: string): ReactNo
   return text.split(re).map((seg, i) => {
     if (code && seg === code) {
       return (
-        <code key={i} style={{ color: T.cyan }}>
+        <code key={i} style={{ color: V2.cyan }}>
           {seg}
         </code>
       )
@@ -249,13 +249,13 @@ function SortHeaderRow<K extends string>({
             title={sortThTitle(c.title)}
             aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
             className={`${TH_CLASS} ${align} cursor-pointer select-none whitespace-nowrap`}
-            style={{ color: active ? T.cyan : TABLE_HEADER_COLOR }}
+            style={{ color: active ? V2.cyan : TABLE_HEADER_COLOR }}
           >
             {c.label}
             <span
               aria-hidden
               className="ml-1 text-3xs"
-              style={{ opacity: active ? 1 : SORT_INACTIVE_OPACITY, color: active ? T.cyan : 'inherit' }}
+              style={{ opacity: active ? 1 : SORT_INACTIVE_OPACITY, color: active ? V2.cyan : 'inherit' }}
             >
               {sortArrow(sort, k)}
             </span>
@@ -268,9 +268,9 @@ function SortHeaderRow<K extends string>({
 
 // ── RateBar (D62, D63) ───────────────────────────────────────────────────────
 //
-// The fill stays T.cyan while the Lift value beside it takes the MOVE pair: the
-// bar encodes MAGNITUDE and is deliberately not a threshold mark. Unifying the
-// two would make an 8% hit rate and a -8pt lift the same colour.
+// The fill stays V2.cyan while the Lift value beside it takes the V2.up / V2.red
+// pair: the bar encodes MAGNITUDE and is deliberately not a threshold mark.
+// Unifying the two would make an 8% hit rate and a -8pt lift the same colour.
 
 function RateBar({ v }: { v: number | null }) {
   if (v == null) return <span style={{ color: T.text }}>{EM_DASH}</span>
@@ -357,21 +357,24 @@ function RuleBar({
         >
           {fitButtonLabel(fitting, s.armed)}
         </button>
-        {/* D81 — runs the fit AND stores it. Armed is a GOOD state, so the ink is
-            the directional up token rather than v2's shared chrome light blue. */}
+        {/* D81 — runs the fit AND stores it. Arming is a SUCCESS state, so the ink
+            is V2.up #1FD98A — the positive/success leg of v2's #8ECAE6 collision
+            (Brandon, 2026-09-03) — rather than the chrome light blue v2 shared
+            with the table headers. */}
         <button
           type="button"
           onClick={onArm}
           disabled={s.busy}
           title={ARM_BTN_TITLE}
           className={BTN_CLASS}
-          style={{ opacity: s.busy ? 0.5 : 1, color: MOVE_UP, borderColor: alpha(MOVE_UP, 0.45) }}
+          style={{ opacity: s.busy ? 0.5 : 1, color: V2.up, borderColor: alpha(V2.up, 0.45) }}
         >
           {armButtonLabel(fitting, s.armed)}
         </button>
         {/* D82 — only for a rule that was FITTED. A pinned rule shows no Disarm:
             you cannot clear from the UI something the UI did not write. The ink is
-            T.red because a destructive control is an ALERT, not a direction. */}
+            ALERT_COLOR (V2.red) because a destructive control is an ALERT, not a
+            direction — v2 paints both #EF4444. */}
         {showDisarm(rule) && (
           <button
             type="button"

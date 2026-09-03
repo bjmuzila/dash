@@ -28,11 +28,12 @@
 // "no data" states from an explicit "—" into a "+0", which is the one thing
 // rule 1 above exists to prevent.
 //
-// ── THE ONE DELIBERATE DEPARTURE FROM v2 ─────────────────────────────────────
-// v2's `NEUTRAL` was the literal "#6B7280". It is `T.flat` here — v3's
-// `--color-flat` #7a828d, the token that already means "neither up nor down".
-// The two are within a hair of each other and having a seventh grey on the
-// page to preserve the difference would be the wrong trade.
+// ── NO DEPARTURE FROM v2 (2026-09-03) ────────────────────────────────────────
+// This file used to swap v2's `NEUTRAL` #6B7280 onto `T.flat` #7a828d and call
+// it "the one deliberate departure from v2". That departure is reversed: the
+// scanner renders v2's palette, not v3's semantics, so `NEUTRAL` is `V2.neutral`
+// — v2's own #6B7280 from `components/scanner/scannerStyles.ts` — and the same
+// reversal puts the z-score ladder back on v2's own red and orange.
 //
 // ── REMOVED IN v2, DO NOT RE-ADD ─────────────────────────────────────────────
 // `th`, `td` and `seg()` — the three CSSProperties objects. They are styling,
@@ -43,10 +44,10 @@
 // Spec: docs/parity/scanner.md Part A, rows A30–A37.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { MOVE_DOWN, T, alpha } from '@/design/theme'
+import { T, V2, alpha } from '@/design/theme'
 
-/** "Neither up nor down." v2's NEUTRAL #6B7280 → v3's --color-flat. */
-export const NEUTRAL = T.flat
+/** "Neither up nor down." v2's NEUTRAL #6B7280, which six tabs import. */
+export const NEUTRAL = V2.neutral
 
 /**
  * Signed compact magnitude: "+1.40B", "-45.6M", "+789". ASCII hyphen, not
@@ -98,22 +99,26 @@ export const EM_DASH = '—'
  * The z-score colour ladder, evaluated in this order:
  *
  *   null      → 40% white   ("not measured")
- *   |z| >= 3  → MOVE_DOWN   ("extreme")
- *   |z| >= 2  → T.orange    ("unusual")
+ *   |z| >= 3  → V2.red      ("extreme")
+ *   |z| >= 2  → V2.orange   ("unusual")
  *   otherwise → T.text
  *
  * Both boundaries are `>=`, and both are on the ABSOLUTE value — a -3.1σ is
  * painted exactly like a +3.1σ. See rule 4 in the file header.
  *
- * v2 painted the extreme band `HOME_THEME.red` #EF4444; that collapses onto
- * MOVE_DOWN with every other "negative/alarming" red on the page, per the
- * decision recorded in docs/parity/scanner.md.
+ * 2026-09-03: the extreme band was collapsed onto MOVE_UP/MOVE_DOWN with every
+ * other "negative/alarming" red on the page. That collapse is REVERSED — the
+ * scanner runs on v2's palette and the semantics stay split — so the band is
+ * back on v2's own `HOME_THEME.red` #EF4444 and the 2σ band on v2's
+ * `HOME_THEME.orange` #FB8501 (v3's `T.orange` is a different #e0a44a).
+ * The null branch stays `alpha(T.text, 0.4)`: `--color-fg` is #ffffff, which is
+ * exactly v2's `HT.text`, and the alpha is v2's own.
  */
 export function zColor(z: number | null | undefined): string {
   if (z == null) return alpha(T.text, 0.4)
   const a = Math.abs(z)
-  if (a >= 3) return MOVE_DOWN
-  if (a >= 2) return T.orange
+  if (a >= 3) return V2.red
+  if (a >= 2) return V2.orange
   return T.text
 }
 

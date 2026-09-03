@@ -42,7 +42,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Card } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
-import { T, alpha } from '@/design/theme'
+import { T, V2, V2W, alpha } from '@/design/theme'
 import { fmtB } from '@/pages/scanner/format'
 import {
   SQ_CARD_SCOPE_OPTIONS,
@@ -134,7 +134,7 @@ function sqRowBackground(i: number): string {
 
 /** Cards alternate the OTHER way: even indices tinted, odd washed (E78). */
 function sqCardBackground(i: number): string {
-  return i % 2 ? alpha(T.text, 0.02) : alpha(T.cyan, 0.06)
+  return i % 2 ? alpha(T.text, 0.02) : alpha(V2.cyan, 0.06)
 }
 
 /** E79 / E99 — index-suffixed, so nothing is reused across a re-sort. */
@@ -251,10 +251,13 @@ export default function StrikeQueryTab() {
         {sqSubtitle({ symbol, dir, minOtm, loading })}
       </div>
 
-      {/* ── Toolbar (E50–E65) ──────────────────────────────────────────────── */}
+      {/* ── Toolbar (E50–E65) ──────────────────────────────────────────────────
+          The three labels below are v2's `lbl` chrome, painted HOME_THEME.green
+          #8ECAE6 — the CHROME leg of that value's three-way split, so they keep
+          it as `V2.green` (Brandon, 2026-09-03). ─────────────────────────────*/}
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1">
-          <span className={LABEL_CLASS} style={{ color: T.muted }}>
+          <span className={LABEL_CLASS} style={{ color: V2.green }}>
             {SQ_TEXT.labelTicker}
           </span>
           {/* E51 — THE ONLY CONTROL THAT REFETCHES. */}
@@ -273,7 +276,7 @@ export default function StrikeQueryTab() {
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className={LABEL_CLASS} style={{ color: T.muted }}>
+          <span className={LABEL_CLASS} style={{ color: V2.green }}>
             {SQ_TEXT.labelExpiry}
           </span>
           {/* E53 — expiry strings render RAW; only the ALL option's label differs
@@ -293,7 +296,7 @@ export default function StrikeQueryTab() {
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className={LABEL_CLASS} style={{ color: T.muted }}>
+          <span className={LABEL_CLASS} style={{ color: V2.green }}>
             {SQ_TEXT.labelLimit}
           </span>
           {/* E55 — a client-side slice applied AFTER the sort, so it is a true
@@ -312,8 +315,10 @@ export default function StrikeQueryTab() {
           </select>
         </label>
 
-        {/* E56 — a literal pipe glyph, not a rule element. */}
-        <span className="self-center text-xs" style={{ color: T.border }}>
+        {/* E56 — a literal pipe glyph, not a rule element. v2's divider is
+            `HOME_THEME.border` rgba(255,255,255,.10), NOT `--color-line`, which
+            is an opaque slate #23272e. */}
+        <span className="self-center text-xs" style={{ color: V2W.border }}>
           {SQ_TEXT.divider}
         </span>
 
@@ -321,8 +326,20 @@ export default function StrikeQueryTab() {
             tests the active sort column instead, so on Strike or Delta Abs
             "Negative" is structurally empty and the empty-state row (E113/E114)
             gives no hint why. See the BUG note on `sqDirPass`. */}
+        {/* The active Positive / Negative buttons carry a PER-OPTION colour in
+            v2 — #8ECAE6 and #EF4444 — which the primitive's shared cyan active
+            state cannot express. `activeColor` is the optional prop added for
+            exactly this (COLOR-REMAP decision 6, 2026-09-03); every other caller
+            omits it and renders unchanged. `All` omits it too and keeps the
+            primitive's default. Positive takes `V2.up` #1FD98A rather than the
+            chrome #8ECAE6: it is one half of an up/down pair, so it belongs to
+            the positive leg of the split, exactly like the Δ cells it filters. */}
         <SegGroup<SqDirFilter>
-          options={SQ_DIR_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+          options={SQ_DIR_OPTIONS.map((o) => ({
+            value: o.value,
+            label: o.label,
+            activeColor: o.value === 'pos' ? V2.up : o.value === 'neg' ? V2.red : undefined,
+          }))}
           value={dir}
           onChange={setDir}
           title={SQ_TEXT.dirTooltip}
@@ -330,7 +347,7 @@ export default function StrikeQueryTab() {
 
         {/* E61–E63. Lowercase `min`, uppercase `OTM`, and NOT uppercased by CSS
             unlike the three dropdown labels above. */}
-        <label className="flex items-center gap-1.5 text-xs" style={{ color: T.orange }} title={SQ_TEXT.minOtmTooltip}>
+        <label className="flex items-center gap-1.5 text-xs" style={{ color: V2.orange }} title={SQ_TEXT.minOtmTooltip}>
           {SQ_TEXT.labelMinOtm}
           <select
             aria-label={SQ_TEXT.labelMinOtm}
@@ -385,7 +402,7 @@ export default function StrikeQueryTab() {
         <div className="mb-4">
           <div className="mb-2 flex flex-wrap items-center gap-3">
             {/* E74 — the middle segment is the ACTIVE sort column's label. */}
-            <span className="text-sm uppercase tracking-wide" style={{ color: T.muted }}>
+            <span className="text-sm uppercase tracking-wide" style={{ color: V2.green }}>
               {sqTopCardsHeader(sort.col)}
             </span>
             {/* E75/E76 — `All − Indices` uses U+2212, and excludes SQ_INDICES's
@@ -414,7 +431,7 @@ export default function StrikeQueryTab() {
                   </span>
                 </div>
                 {/* E82/E83 — a raw `$` on the raw number, then the raw expiry. */}
-                <div className="my-0.5 text-xs font-bold" style={{ color: T.cyan }}>
+                <div className="my-0.5 text-xs font-bold" style={{ color: V2.cyan }}>
                   {sqCardStrikeText(r)}{' '}
                   <span className="font-normal" style={{ color: alpha(T.text, 0.4) }}>
                     {r.expiry}
@@ -444,18 +461,18 @@ export default function StrikeQueryTab() {
               {/* E86/E87 — omitted entirely when a single ticker / expiry is
                   selected, which is what makes the empty row's colSpan vary. */}
               {showSymbol && (
-                <th className={`${TH_STATIC_CLASS} text-left`} style={{ color: T.muted }}>
+                <th className={`${TH_STATIC_CLASS} text-left`} style={{ color: V2.green }}>
                   {SQ_FIXED_HEADERS.symbol}
                 </th>
               )}
               {showExpiry && (
-                <th className={`${TH_STATIC_CLASS} text-left`} style={{ color: T.muted }}>
+                <th className={`${TH_STATIC_CLASS} text-left`} style={{ color: V2.green }}>
                   {SQ_FIXED_HEADERS.expiry}
                 </th>
               )}
               {/* E88 — NOT sortable: no click target, no arrow, no cursor change,
                   and the sort hint above does not say so. */}
-              <th className={`${TH_STATIC_CLASS} text-right`} style={{ color: T.muted }}>
+              <th className={`${TH_STATIC_CLASS} text-right`} style={{ color: V2.green }}>
                 {SQ_FIXED_HEADERS.otm}
               </th>
               {/* E89–E97 — the six sortable columns, in SQ_COLUMNS order. */}

@@ -51,7 +51,7 @@
 // Spec: docs/parity/scanner.md Part G, rows G219–G235.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { LIGHT_BLUE, MOVE_DOWN, MOVE_UP, T } from '@/design/theme'
+import { T, V2 } from '@/design/theme'
 import { EM_DASH } from '@/pages/scanner/format'
 import { clockExact, f1, rateColor } from '@/pages/scanner/ibStats'
 
@@ -210,7 +210,7 @@ export const bucketCell = (r: IbResultRow): string => r.width_bucket ?? EM_DASH
 export function biasCell(r: IbResultRow): { text: string; color: string } {
   return {
     text: r.bias ?? EM_DASH,
-    color: r.bias === 'H' ? MOVE_UP : r.bias === 'L' ? MOVE_DOWN : T.text,
+    color: r.bias === 'H' ? V2.up : r.bias === 'L' ? V2.red : T.text,
   }
 }
 
@@ -237,7 +237,7 @@ export function breakCell(r: IbResultRow): { text: string; color: string; title?
   return {
     text: `${dayType}${r.failed ? '†' : ''}`,
     color:
-      dayType === 'H' ? MOVE_UP : dayType === 'L' ? MOVE_DOWN : dayType === 'BOTH' ? T.purple : T.text,
+      dayType === 'H' ? V2.up : dayType === 'L' ? V2.red : dayType === 'BOTH' ? V2.purple : T.text,
     title: r.failed ? BREAK_FAILED_TITLE : undefined,
   }
 }
@@ -256,7 +256,7 @@ export const timeCell = (r: IbResultRow): string => clockExact(r.break_min)
 export function extCell(r: IbResultRow): { text: string; color: string } {
   return {
     text: r.break_side ? (r.ext_10 ? '✓' : '✗') : EM_DASH,
-    color: r.ext_10 ? MOVE_UP : T.text,
+    color: r.ext_10 ? V2.up : T.text,
   }
 }
 
@@ -307,7 +307,7 @@ export function ruleCell(r: IbRuleResult | undefined): RuleCellRead {
   return {
     state: r.hit ? 'hit' : 'miss',
     text: r.hit ? '✓' : '✗',
-    color: r.hit ? MOVE_UP : MOVE_DOWN,
+    color: r.hit ? V2.up : V2.red,
     dim: false,
     title: `${RULE_NAMES[r.id] ?? r.name} — ${r.note}${side}`,
   }
@@ -349,7 +349,7 @@ export function shouldntBeCell(r: IbResultRow): ShouldntBeRead {
   return {
     failed,
     text: failed ? `¬${failed}` : EM_DASH,
-    color: failed ? MOVE_DOWN : T.text,
+    color: failed ? V2.red : T.text,
     dim: !failed,
     title: failed
       ? `Bias called ${failed === 'H' ? 'HIGH' : 'LOW'} first — price didn't go there; broke ${brokeSide} instead.`
@@ -421,8 +421,11 @@ export const BIAS_SUMMARY_TEXT = {
 
 export const HIT_RATE_COLSPAN = 8
 export const HIT_RATE_LABEL = (n: number): string => `HIT RATE (in-play days only, last ${n})`
-/** The label paints the tab accent, like every other section header here. */
-export const HIT_RATE_LABEL_COLOR = LIGHT_BLUE
+/**
+ * The label paints the tab accent, like every other section header here — v2's
+ * `LIGHT_BLUE` #7dd3fc, the ACCENT leg of #8ECAE6's three-way split.
+ */
+export const HIT_RATE_LABEL_COLOR = V2.accent
 
 export interface HitRateCell {
   /** 0 dp, or an em dash when the column has no in-play days. */
@@ -471,9 +474,9 @@ export const DAILY_RESULTS_TEXT = {
   footnote:
     'Break column: H/L = close-confirmed break side, BOTH = rotation, NONE = contained, † = break failed back inside within 30m. 1× = the break ran ≥ 1× IB width. Hit rates are conditional on the rule being in play, so columns have different sample sizes.',
   legendHeading: 'THE RULES',
-  legendHeadingColor: LIGHT_BLUE,
+  legendHeadingColor: V2.accent,
   /** The `R#` key in the legend takes the UI accent, not the tab accent. */
-  legendKeyColor: T.cyan,
+  legendKeyColor: V2.cyan,
   legendSeparator: ' — ',
 } as const
 
@@ -500,8 +503,12 @@ export function dailyResultsView(
   return data.length === 0 ? 'empty' : 'table'
 }
 
-/** The error banner colour (`:156`). */
-export const ERROR_COLOR = MOVE_DOWN
+/**
+ * The error banner colour (`:156`). An error is not a direction, but v2 paints
+ * both this and a down cell `HOME_THEME.red` #EF4444, so both take `V2.red`;
+ * the separate constant is what lets them move apart later.
+ */
+export const ERROR_COLOR = V2.red
 
 /**
  * THERE IS NO SORT ON THIS TABLE.

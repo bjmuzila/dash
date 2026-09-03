@@ -73,7 +73,7 @@ import { ChartFrame } from '@/design/primitives/ChartFrame'
 import { Chip, SegGroup } from '@/design/primitives/Controls'
 import type { Column } from '@/design/primitives/Table'
 import { Table } from '@/design/primitives/Table'
-import { MOVE_UP, T, V2, V2W, alpha } from '@/design/theme'
+import { T, V2, V2W, alpha } from '@/design/theme'
 import { EM_DASH } from '@/pages/scanner/format'
 import type {
   GradeInfo,
@@ -445,8 +445,14 @@ export default function GexChangeTopTab() {
     >
       {/* C45 — the subtitle, and the ONLY loading affordance once data is on
           screen. Note it writes the ★ rule with `&` where the footer legend
-          (C155) writes the same rule with `AND`; both are on screen at once. */}
-      <p className="mb-3 text-xs" style={{ color: T.muted }}>
+          (C155) writes the same rule with `AND`; both are on screen at once.
+
+          INK: `V2.green` #8ECAE6, v2's own subtitle colour. Step 2 moved it to
+          `T.muted` as part of collapsing #8ECAE6's three jobs; 2026-09-03
+          reverses that — the scanner renders v2's palette and #8ECAE6 splits by
+          JOB, so the CHROME leg keeps v2's value while the positive leg goes to
+          `V2.up`. See §SIGN COLOURS in gexChangeTop.ts. */}
+      <p className="mb-3 text-xs" style={{ color: V2.green }}>
         {cardSubtitle(top.loading)}
       </p>
 
@@ -728,7 +734,10 @@ function Scorecard({
  *
  * The headers take the primitive's own `text-muted` chrome. v2 painted all
  * twelve `HOME_THEME.green` — the same value as a positive Peak % underneath
- * them — and that collapse is recorded in §SIGN COLOURS.
+ * them. Since 2026-09-03 that value is the CHROME leg of the #8ECAE6 split
+ * (`V2.green`) and the positive takes `V2.up`, so the two no longer collide;
+ * these headers stay on the primitive because the scanner does not own `Table`.
+ * Recorded in §SIGN COLOURS in gexChangeTop.ts.
  */
 function scorecardColumns(frozen: boolean): Column<ResultRow>[] {
   const cell: Record<string, (r: ResultRow) => ReactNode> = {
@@ -1533,6 +1542,10 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
   // C149 — NEAREST charted sample to the scorecard's peak, and nothing at all
   // when the nearest is more than five minutes away: that is a different event,
   // and pointing at the wrong bar is worse than pointing at none.
+  // INK: `V2.green` #8ECAE6, v2's own peak-marker colour. Step 2 read it as the
+  // positive semantic and put it on MOVE_UP; 2026-09-03 reverses that — the
+  // marker is drawn UNCONDITIONALLY, so it is not a sign, and it takes the
+  // CHROME leg of the #8ECAE6 split rather than `V2.up`. See §SIGN COLOURS.
   const peakIdx = nearestIndexToTs(series, s.peakTs)
   const peakPt = peakIdx == null ? undefined : series[peakIdx]
   if (peakIdx != null && peakPt) {
@@ -1547,12 +1560,12 @@ function drawChart(root: SVGSVGElement, s: ChartState, gradId: string): void {
           'stroke-width': 1,
           'stroke-dasharray': '2 3',
         }),
-        { stroke: alpha(MOVE_UP, 0.35) },
+        { stroke: alpha(V2.green, 0.35) },
       ),
     )
     root.appendChild(
       paint(mk('circle', { cx: px, cy: sy(peakPt.v), r: 3.2, 'stroke-width': 1 }), {
-        fill: MOVE_UP,
+        fill: V2.green,
         stroke: V2.bg,
       }),
     )

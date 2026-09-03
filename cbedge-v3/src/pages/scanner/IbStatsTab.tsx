@@ -65,7 +65,7 @@ import { useIsOwner } from '@/data/auth'
 import { Card } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
 import { Stat } from '@/design/primitives/Stat'
-import { LIGHT_BLUE, MOVE_DOWN, MOVE_UP, T, alpha } from '@/design/theme'
+import { T, V2, V2W, alpha } from '@/design/theme'
 import { EM_DASH } from '@/pages/scanner/format'
 import {
   BIAS_SUMMARY_TEXT,
@@ -318,7 +318,7 @@ function SectionTr({ text }: { text: string }) {
       <td
         colSpan={5}
         className={`${TD} pt-3 text-left font-semibold`}
-        style={{ color: LIGHT_BLUE }}
+        style={{ color: V2.accent }}
       >
         {text}
       </td>
@@ -400,7 +400,7 @@ function Gauge({ pHigh }: { pHigh: number }) {
         <path
           d={LIVE_GAUGE.upPath}
           fill="none"
-          stroke={MOVE_UP}
+          stroke={V2.up}
           strokeWidth={LIVE_GAUGE.strokeWidth}
           strokeLinecap="round"
           strokeDasharray={LIVE_GAUGE.arc}
@@ -409,7 +409,7 @@ function Gauge({ pHigh }: { pHigh: number }) {
         <path
           d={LIVE_GAUGE.downPath}
           fill="none"
-          stroke={MOVE_DOWN}
+          stroke={V2.red}
           strokeWidth={LIVE_GAUGE.strokeWidth}
           strokeLinecap="round"
           strokeDasharray={LIVE_GAUGE.arc}
@@ -517,11 +517,11 @@ function LiveRead({
           <div className="mt-2 flex justify-between text-xs text-fg">
             <span>
               {LIVE_READ_TEXT.highFirst}
-              <b className="font-semibold" style={{ color: MOVE_UP }}>{`${pHigh.toFixed(1)}%`}</b>
+              <b className="font-semibold" style={{ color: V2.up }}>{`${pHigh.toFixed(1)}%`}</b>
             </span>
             <span>
               {LIVE_READ_TEXT.lowFirst}
-              <b className="font-semibold" style={{ color: MOVE_DOWN }}>
+              <b className="font-semibold" style={{ color: V2.red }}>
                 {`${(100 - pHigh).toFixed(1)}%`}
               </b>
             </span>
@@ -655,14 +655,18 @@ function IbRead({
               key={fam.key}
               className="relative rounded-md border p-3"
               style={{
-                borderColor: fam.hero ? T.orange : T.border,
-                background: fam.hero ? alpha(T.orange, 0.08) : T.panelBg,
+                // v2's family plate: an ORANGE hero edge, and otherwise its
+                // own border rgba(255,255,255,.10) — not `--color-line`, which
+                // is opaque #23272e. The plate is translucent rgba(13,17,25,.45),
+                // not v3's opaque #14171d.
+                borderColor: fam.hero ? V2.orange : V2W.border,
+                background: fam.hero ? alpha(V2.orange, 0.08) : V2W.panelBg,
               }}
             >
               {badge && (
                 <span
                   className="absolute right-2 top-2 rounded-sm border px-1 py-0.5 text-3xs uppercase tracking-wide"
-                  style={{ color: T.orange, borderColor: T.orange }}
+                  style={{ color: V2.orange, borderColor: V2.orange }}
                 >
                   {badge}
                 </span>
@@ -687,7 +691,7 @@ function IbRead({
                   <div
                     key={r.id}
                     className="flex items-center justify-between gap-2 rounded-sm border border-line px-2 py-1.5"
-                    style={{ background: T.panelBg }}
+                    style={{ background: V2W.panelBg }}
                   >
                     <span className="min-w-0">
                       <span className="block truncate text-2xs text-fg">{`${r.id} · ${r.name}`}</span>
@@ -815,7 +819,7 @@ function ProbabilityEngine({
   const pClose = closeSnap ? engineProbabilities(closeSnap.rules, closeSnap.env) : null
 
   return (
-    <Card title={`${ENGINE_TEXT.icon} ${ENGINE_TEXT.title}`} actions={<EngineChip text={sym} color={T.cyan} />}>
+    <Card title={`${ENGINE_TEXT.icon} ${ENGINE_TEXT.title}`} actions={<EngineChip text={sym} color={V2.cyan} />}>
       <p className={SUBTITLE}>{ENGINE_TEXT.strapline(sym)}</p>
 
       {/* G149 — rendered only once the freeze exists. HARDCODED "10:30": on
@@ -823,7 +827,7 @@ function ProbabilityEngine({
       {pClose && (
         <>
           <div className="mb-2 flex items-center gap-2">
-            <EngineChip text={ENGINE_TEXT.closeChip} color={T.orange} />
+            <EngineChip text={ENGINE_TEXT.closeChip} color={V2.orange} />
             <span className="text-xs text-muted">{ENGINE_TEXT.closeChipNote}</span>
           </div>
           <RingTrio p={pClose} />
@@ -836,7 +840,8 @@ function ProbabilityEngine({
           change before the swap. SHOW_LIVE makes both reachable — a departure. */}
       {(SHOW_LIVE || !pClose) && pClose && (
         <div className="mt-4 flex items-center gap-2">
-          <EngineChip text={ENGINE_TEXT.liveChip} color={MOVE_UP} />
+          {/* v2's TAG chip is `POS` #1FD98A — exact parity with `V2.up`. */}
+          <EngineChip text={ENGINE_TEXT.liveChip} color={V2.up} />
           <span className="text-xs text-muted">{ENGINE_TEXT.liveChipNote}</span>
         </div>
       )}
@@ -860,7 +865,7 @@ function ProbabilityEngine({
             .map(toRow)
           return (
             <div key={stage.title} className="mt-4">
-              <div className={`${SECTION_LABEL} uppercase`} style={{ color: T.cyan }}>
+              <div className={`${SECTION_LABEL} uppercase`} style={{ color: V2.cyan }}>
                 {`${stage.icon} ${stage.title}`}
               </div>
               <div className="mt-2 flex flex-col gap-1.5">
@@ -923,22 +928,22 @@ function DailyResultsTable({ data }: { data: readonly IbResultRow[] }) {
       {/* G223 — bias split of the recorded 10:30 calls. HARDCODED 10:30. */}
       <p className="mt-1.5 text-xs">
         <span className="text-muted">{BIAS_SUMMARY_TEXT.line1Label(summary.biasedCount)}</span>
-        <span className="font-semibold" style={{ color: MOVE_UP }}>
+        <span className="font-semibold" style={{ color: V2.up }}>
           {BIAS_SUMMARY_TEXT.bullish(summary.bullPct)}
         </span>
         <span className="text-faint">{BIAS_SUMMARY_TEXT.separator}</span>
-        <span className="font-semibold" style={{ color: MOVE_DOWN }}>
+        <span className="font-semibold" style={{ color: V2.red }}>
           {BIAS_SUMMARY_TEXT.bearish(summary.bearPct)}
         </span>
       </p>
       {/* G224 — what actually broke first, and how often the bias called it. */}
       <p className="mb-3 text-xs">
         <span className="text-muted">{BIAS_SUMMARY_TEXT.line2Label(summary.resolvedCount)}</span>
-        <span className="font-semibold" style={{ color: MOVE_UP }}>
+        <span className="font-semibold" style={{ color: V2.up }}>
           {BIAS_SUMMARY_TEXT.bullish(summary.actualBullPct)}
         </span>
         <span className="text-faint">{BIAS_SUMMARY_TEXT.separator}</span>
-        <span className="font-semibold" style={{ color: MOVE_DOWN }}>
+        <span className="font-semibold" style={{ color: V2.red }}>
           {BIAS_SUMMARY_TEXT.bearish(summary.actualBearPct)}
         </span>
         <span className="text-muted">{BIAS_SUMMARY_TEXT.biasCorrect}</span>

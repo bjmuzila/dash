@@ -57,33 +57,40 @@
 // three reads should be gated server-side too. OPEN QUESTION, carried forward
 // from docs/parity/scanner.md Part D open question 3 — do not assume either way.
 //
-// ── THE COLOUR COLLAPSE ──────────────────────────────────────────────────────
-// v2's `HOME_THEME.green` #8ECAE6 — a LIGHT BLUE, not a green — does FOUR
-// unrelated jobs on this one tab:
+// ── THE COLOUR SPLIT (Brandon, 2026-09-03) ───────────────────────────────────
+// REVERSED: this tab no longer renders v3's collapsed semantics. It renders
+// v2's palette. The step-2 collapse onto MOVE_UP / MOVE_DOWN / T.* recorded
+// here previously is gone — see docs/parity/scanner.md and COLOR-REMAP.md.
 //
-//   (a) chrome ............ both table header rows            → T.muted
-//   (b) semantic positive . ✓ holds, lift >= 8, +ve term chip → MOVE_UP
-//   (c) a state ........... the "Armed" word and the Arm btn  → MOVE_UP
-//   (d) a confirmation .... the transient "✓ copied"          → V2.refresh
+// v2's `HOME_THEME.green` #8ECAE6 — a LIGHT BLUE, not a green — does FOUR
+// unrelated jobs on this one tab, and that collision is the ONE thing this port
+// breaks apart. Each leg takes a different value v2 already ships:
+//
+//   (a) chrome ............ both table header rows            → V2.green  #8ECAE6
+//   (b) semantic positive . ✓ holds, lift >= 8, +ve term chip → V2.up     #1FD98A
+//   (c) a state ........... the "Armed" word and the Arm btn  → V2.up     #1FD98A
+//   (d) a confirmation .... the transient "✓ copied"          → V2.up     #1FD98A
 //
 // The result in v2 is that a `>= 8` lift — the strongest signal in the table —
-// is painted the exact same colour as the column headings above it. (c) is
-// MOVE_UP because "Armed" is a GOOD state: the rule has cleared the evidence
-// bar, which is the thing the whole bar is counting toward. (d) is V2.refresh
-// because a copy confirmation is not a positive VALUE, it is an acknowledgement
-// that a control fired, and the refresh token is v3's colour for exactly that.
+// is painted the exact same colour as the column headings above it. (a) keeps
+// the value v2 painted it, because chrome is where the value lives by site
+// count. (b) takes v2's own REFRESH_GREEN #1FD98A, which homeTheme.ts:288–293
+// declares as "the up / success green … a role color". (c) and (d) join it:
+// "Armed" is a GOOD state — the rule cleared the evidence bar — and a copy
+// confirmation is a success acknowledgement, and V2.up is the role colour for
+// exactly that (COLOR-REMAP decision 2).
 //
-// Reds split the same way: a signed NEGATIVE number (lift <= -8, ✗ holds, a -ve
-// term chip, the red verdict, an above-average never-green rate) takes
-// MOVE_DOWN, per the collapse; an ALERT (the two error lines, the Disarm
-// button's ink) takes T.red. v2 used one #EF4444 for both, and they are not the
-// same idea — one is a direction, the other is a warning.
+// Reds split by MEANING, not by value: a signed NEGATIVE number (lift <= -8,
+// ✗ holds, a -ve term chip, the red verdict, an above-average never-green rate)
+// and an ALERT (the two error lines, the Disarm button's ink) are two different
+// ideas, but v2 paints both `HOME_THEME.red` #EF4444 — so both take V2.red and
+// stay separate CONSTANTS so they can move apart later without a hunt.
 //
-// One thing deliberately NOT collapsed: `RateBar`'s fill stays T.cyan while the
-// Lift value beside it takes the MOVE pair. The bar encodes MAGNITUDE and is
-// deliberately not a threshold mark; unifying them would make an 8% hit rate and
-// a -8pt lift the same colour. The next reader will try to merge them — this
-// paragraph is why they should not.
+// One thing deliberately NOT collapsed: `RateBar`'s fill stays V2.cyan while the
+// Lift value beside it takes the V2.up / V2.red pair. The bar encodes MAGNITUDE
+// and is deliberately not a threshold mark; unifying them would make an 8% hit
+// rate and a -8pt lift the same colour. The next reader will try to merge them —
+// this paragraph is why they should not.
 //
 // ── THE ONE DELIBERATE DEPARTURE FROM v2 ─────────────────────────────────────
 // There is none in the LOGIC, and that is deliberate. Six v2 defects are ported
@@ -132,7 +139,7 @@
 // Spec: docs/parity/scanner.md Part D, rows D1–D127.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { MOVE_DOWN, MOVE_UP, T, V2 } from '@/design/theme'
+import { T, V2 } from '@/design/theme'
 import { EM_DASH } from '@/pages/scanner/format'
 import { DEFAULT_TAB, OWNER_ONLY_TABS } from '@/pages/scanner/scannerNav'
 import type { ScannerTabId } from '@/pages/scanner/scannerNav'
@@ -497,27 +504,28 @@ export function signed(v: number | null | undefined, dp = 0): string {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COLOUR LADDERS. Boundaries are business logic; the values are tokens.
-// See the colour-collapse note in the file header for why each token was picked.
+// See the colour-split note in the file header for why each token was picked.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * "Up above the line, down below — the only thing a lift column has to say."
  *
  * Three branches, in this order, both boundaries inclusive:
- *   null       → T.text
- *   >= +8      → MOVE_UP     (v2: HOME_THEME.green #8ECAE6, job (b))
- *   <= -8      → MOVE_DOWN   (v2: HOME_THEME.red   #EF4444)
+ *   null       → T.text   (v2: HT.text #FFFFFF — already exact, unchanged)
+ *   >= +8      → V2.up    (v2: HOME_THEME.green #8ECAE6, job (b) → #1FD98A)
+ *   <= -8      → V2.red   (v2: HOME_THEME.red   #EF4444)
  *   otherwise  → T.text
  *
  * A 0 lift and a MISSING lift are painted identically. That is v2's, and it is
  * the one place on this tab where "measured, and flat" and "not measured" are
- * indistinguishable. If step 3 wants them apart, the dead band is T.flat and
- * null is T.faint — but that is a change, not parity.
+ * indistinguishable. The spec flags it as a defect; it is not a palette
+ * question, so it stays. If step 3 wants them apart, the dead band is T.flat
+ * and null is T.faint — but that is a change, not parity.
  */
 export function liftColor(v: number | null): string {
   if (v == null) return T.text
-  if (v >= LIFT_UP_PT) return MOVE_UP
-  if (v <= LIFT_DOWN_PT) return MOVE_DOWN
+  if (v >= LIFT_UP_PT) return V2.up
+  if (v <= LIFT_DOWN_PT) return V2.red
   return T.text
 }
 
@@ -530,7 +538,8 @@ export function holdsGlyph(holds: boolean | null): string {
 }
 
 export function holdsColor(holds: boolean | null): string {
-  return holds == null ? T.text : holds ? MOVE_UP : MOVE_DOWN
+  // A hit/miss test — the positive leg of the #8ECAE6 split. V2.up / V2.red.
+  return holds == null ? T.text : holds ? V2.up : V2.red
 }
 
 /**
@@ -550,7 +559,7 @@ export function bucketNeverGreenColor(
   bucketPctNeverGreen: number | null,
   overallPctNeverGreen: number | null | undefined,
 ): string {
-  return (bucketPctNeverGreen ?? 0) > (overallPctNeverGreen ?? 0) ? MOVE_DOWN : T.text
+  return (bucketPctNeverGreen ?? 0) > (overallPctNeverGreen ?? 0) ? V2.red : T.text
 }
 
 /**
@@ -560,7 +569,7 @@ export function bucketNeverGreenColor(
  * note on `bucketNeverGreenColor`: same header, different rule, same screen.
  */
 export function calNeverGreenColor(): string {
-  return MOVE_DOWN
+  return V2.red
 }
 
 /**
@@ -568,28 +577,43 @@ export function calNeverGreenColor(): string {
  * "+0" — a term that does nothing, painted as if it did something. v2's, kept.
  */
 export function termChipColor(pts: number): string {
-  return pts >= 0 ? MOVE_UP : MOVE_DOWN
+  return pts >= 0 ? V2.up : V2.red
 }
 
-/** Both table header rows. v2 painted these HOME_THEME.green — job (a). */
-export const TABLE_HEADER_COLOR = T.muted
+/**
+ * Both table header rows. The CHROME leg of the #8ECAE6 split — v2 painted
+ * these `HOME_THEME.green` and they keep that exact value (job (a)).
+ */
+export const TABLE_HEADER_COLOR = V2.green
 
 /** The headline's A/B rate. UNCONDITIONAL: a 12% rate is the same ink as 80%. */
-export const HEADLINE_GOOD_COLOR = MOVE_UP
+export const HEADLINE_GOOD_COLOR = V2.up
 /** The headline's never-green rate. Unconditional too. */
-export const HEADLINE_BAD_COLOR = MOVE_DOWN
-/** The headline's graded-pick count, and the RateBar fill. A magnitude, not a sign. */
-export const COUNT_COLOR = T.cyan
-export const RATE_BAR_FILL = T.cyan
+export const HEADLINE_BAD_COLOR = V2.red
+/**
+ * The headline's graded-pick count, and the RateBar fill. A MAGNITUDE, not a
+ * sign — V2.cyan on purpose, and deliberately NOT V2.up. Unifying them would
+ * make an 8% hit rate and a -8pt lift the same colour; see the file header.
+ */
+export const COUNT_COLOR = V2.cyan
+export const RATE_BAR_FILL = V2.cyan
 
-/** The two error lines and the Disarm button: an ALERT, not a direction. */
-export const ALERT_COLOR = T.red
+/**
+ * The two error lines and the Disarm button: an ALERT, not a direction. v2
+ * paints alerts and negatives with the same `HOME_THEME.red` #EF4444, so this
+ * resolves to the same value as the directional red — kept a separate constant
+ * because they are separate ideas and may move apart.
+ */
+export const ALERT_COLOR = V2.red
 
-/** "✓ copied" — an acknowledgement that a control fired. Job (d). */
-export const COPIED_COLOR = V2.refresh
+/**
+ * "✓ copied" — a SUCCESS acknowledgement that a control fired, so it takes the
+ * positive/success role colour (COLOR-REMAP decision 2). Job (d).
+ */
+export const COPIED_COLOR = V2.up
 
 /** Section titles, the thin badge, the pinned warning, `fit.note`. */
-export const WARN_COLOR = T.orange
+export const WARN_COLOR = V2.orange
 
 /** Bar width for a hit rate. Clamped 0–100, so an out-of-range value pins. */
 export function rateBarWidthPct(v: number): number {
@@ -928,7 +952,7 @@ export function buildVerdict(data: StudyResp | null | undefined): Verdict | null
 
   if (Math.abs(d) < VERDICT_NOISE_PT) {
     return {
-      tone: T.orange,
+      tone: V2.orange,
       text: `Taken picks hit ${pct(c.selected.pctGood)} vs ${pct(c.shadow.pctGood)} for the ones passed on — a ${signed(d)}pt gap. That is inside the noise: on this sample the top-5 cut is not doing measurable work.`,
     }
   }
@@ -936,13 +960,13 @@ export function buildVerdict(data: StudyResp | null | undefined): Verdict | null
   if (d > 0) {
     // Note this branch drops "for the ones" — the only one of the four that does.
     return {
-      tone: MOVE_UP,
+      tone: V2.up,
       text: `Taken picks hit ${pct(c.selected.pctGood)} vs ${pct(c.shadow.pctGood)} passed on — ${signed(d)}pts. The ranking is selecting something real.`,
     }
   }
 
   return {
-    tone: MOVE_DOWN,
+    tone: V2.red,
     text: `Taken picks hit ${pct(c.selected.pctGood)} vs ${pct(c.shadow.pctGood)} for the ones passed on — ${signed(d)}pts. The picks you skipped did BETTER. Check the ranking before tuning anything else.`,
   }
 }
@@ -1063,9 +1087,11 @@ export function ruleBarState(
     need,
     have,
     ready,
-    // Armed is a GOOD state — the evidence cleared the bar — so it takes MOVE_UP
-    // rather than the header chrome colour v2 shared with it. See the header.
-    tone: armed ? MOVE_UP : ready ? T.cyan : T.orange,
+    // Armed is a SUCCESS state — the evidence cleared the bar — so it takes
+    // V2.up #1FD98A rather than the header chrome colour V2.green #8ECAE6 that
+    // v2 shared with it (COLOR-REMAP decision 2, 2026-09-03). "Ready to arm" is
+    // cyan; "collecting evidence" is orange.
+    tone: armed ? V2.up : ready ? V2.cyan : V2.orange,
     busy: fitting !== '',
   }
 }
@@ -1229,7 +1255,8 @@ export function fitHeadline(fit: FitResp): string {
 }
 
 export function fitPreviewTone(fit: FitResp): string {
-  return fit.armed ? MOVE_UP : T.orange
+  // Armed is a success state — V2.up, not the chrome green. See `ruleBarState`.
+  return fit.armed ? V2.up : V2.orange
 }
 
 /** The <details> summary. Collapsed by default; the "(s)" is literal. */
@@ -1366,7 +1393,7 @@ export const NOT_ARMED_PROSE: readonly string[] = [
 /** Bold runs inside NOT_ARMED_PROSE, so step 3 emphasises the same three phrases. */
 export const NOT_ARMED_PROSE_BOLD: readonly string[] = ['not thin', 'hold', 'Fit now']
 
-/** The one <code> run in NOT_ARMED_PROSE — paragraph 3, in T.cyan. */
+/** The one <code> run in NOT_ARMED_PROSE — paragraph 3, in V2.cyan. */
 export const NOT_ARMED_PROSE_CODE = 'server-v2/config/pick-proj-rule.json'
 
 // ─────────────────────────────────────────────────────────────────────────────

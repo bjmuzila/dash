@@ -117,7 +117,7 @@
 // Spec: docs/parity/scanner.md Part C, rows C1–C158.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { MOVE_DOWN, MOVE_UP, T, V2 } from '@/design/theme'
+import { T, V2 } from '@/design/theme'
 import { EM_DASH } from '@/pages/scanner/format'
 import { DEFAULT_TAB, scannerTab } from '@/pages/scanner/scannerNav'
 import type { ScannerTabId } from '@/pages/scanner/scannerNav'
@@ -558,19 +558,21 @@ export const GRADE_ORDER: readonly Grade[] = ['A+', 'A', 'B', 'C', 'D', 'F']
  * only thing that does. That is v2's ramp and it is transcribed rather than
  * expanded — inventing two more steps here would change what the strip means.
  *
- * COLLAPSE (docs/parity/scanner.md, "the one colour decision"): v2 painted A+/A
- * with `HOME_THEME.green` #8ECAE6 and F with `HOME_THEME.red` #EF4444. In the
- * grade ramp those two are the POSITIVE and NEGATIVE semantics, so they take
- * MOVE_UP and MOVE_DOWN like every other signed value on this tab. B keeps the
- * v2 teal and C/D the v2 orange, which are neither.
+ * INK (2026-09-03 — reversing the step-2 collapse): the scanner renders v2's
+ * palette, not v3's semantics, and the semantics stay SPLIT. Step 2 read A+/A as
+ * "the positive semantic" and moved them onto MOVE_UP; they are back on v2's own
+ * `HOME_THEME.green` #8ECAE6 (`V2.green`) because A GRADE LETTER IS A CATEGORY,
+ * NOT A SIGN — it takes the chrome leg of the #8ECAE6 split, exactly like
+ * `sideColor`'s call badge. Only sign-driven figures on this tab take `V2.up`.
+ * F is v2's `HOME_THEME.red` #EF4444; B keeps the v2 teal and C/D the v2 orange.
  */
 export const GRADE_COLOR: Record<Grade, string> = {
-  'A+': MOVE_UP,
-  A: MOVE_UP,
+  'A+': V2.green,
+  A: V2.green,
   B: V2.cyan,
   C: V2.orange,
   D: V2.orange,
-  F: MOVE_DOWN,
+  F: V2.red,
 }
 
 /**
@@ -770,23 +772,33 @@ export function projPillTitle(grade: string, pts: number | null | undefined): st
 // // because collapsing them here would change what is on screen without anyone
 // // choosing to. Step 3 picks ONE rule and deletes the others.
 //
-// COLLAPSE: v2 painted every one of these with `HOME_THEME.green` #8ECAE6 (a
-// light blue) and `HOME_THEME.red` #EF4444. Both are directional here, so both
-// take the direction tokens — MOVE_UP and MOVE_DOWN — per the decision recorded
-// in docs/parity/scanner.md. The neutral case takes T.text, which is v2's
-// `HOME_THEME.text`; there is no muted colour on this tab (v2's `HT.muted` is
-// the same #FFFFFF as `HT.text`), so hierarchy is size and opacity, never hue.
+// INK — 2026-09-03, REVERSING THE STEP-2 COLLAPSE. The scanner renders v2's
+// palette, not v3's semantics: MOVE_UP / MOVE_DOWN are gone from this file and
+// every function below is on a v2 value. v2 painted all of these with
+// `HOME_THEME.green` #8ECAE6 (a light blue) and `HOME_THEME.red` #EF4444, and
+// both are directional here, so the negative is v2's own red `V2.red` and the
+// positive is `V2.up` #1FD98A — v2's `REFRESH_GREEN`, whose own docblock calls
+// it "the up / success green … a role color". The neutral case takes T.text,
+// which is v2's `HOME_THEME.text`; there is no muted colour on this tab (v2's
+// `HT.muted` is the same #FFFFFF as `HT.text`), so hierarchy is size and
+// opacity, never hue.
 //
-// AND THE OTHER HALF OF THAT COLLAPSE — CHROME. `HOME_THEME.green` was doing
-// FOUR unrelated jobs in v2: positive/up (the functions below), the call SIDE
-// (`sideColor`, which keeps the v2 light-blue token because side is not sign),
-// and two pieces of pure chrome — the scorecard's twelve column headers (v2's
-// `th` colour, C74) and the Card subtitle (C45). A `<th>` reading "Peak %" was
-// painted the same value as a +140% peak underneath it. THE CHROME HALF
-// COLLAPSES TO `T.muted`: headers and subtitle are labels, and a label must not
-// borrow the ink that means "this number went up". Recorded at both call sites
-// below (SCORECARD_COLUMNS and CARD_SUBTITLE) so step 3 cannot paint them green
-// again by copying v2's `th`.
+// WHY THE POSITIVE MOVES AT ALL, WHEN NOTHING ELSE DOES. `HOME_THEME.green` is
+// one value doing FOUR unrelated jobs in v2: positive/up (the functions below),
+// the call SIDE (`sideColor`), the A+/A grade letter (`GRADE_COLOR`), and pure
+// chrome — the scorecard's twelve column headers (v2's `th` colour, C74) and
+// the Card subtitle (C45). A `<th>` reading "Peak %" was painted the same value
+// as a +140% peak underneath it. That collision is the ONE thing this port
+// breaks, and it breaks three ways, each onto a colour v2 already ships:
+//
+//   chrome    #8ECAE6  V2.green   headers, subtitle, the call badge, the A+/A pill
+//   accent    #7dd3fc  V2.accent  the tab pills (pages/scanner/scannerNav.ts)
+//   positive  #1FD98A  V2.up      the sign-driven functions below
+//
+// So the chrome half does NOT go to `T.muted` any more — it keeps v2's value.
+// Recorded at both call sites below (SCORECARD_COLUMNS and CARD_SUBTITLE).
+// Nothing else on this tab moves: the four positives v2 uses across the scanner
+// are NOT unified.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -797,7 +809,7 @@ export function projPillTitle(grade: string, pts: number | null | undefined): st
  * three inks, all three on screen at once.
  */
 export function peakPctTableColor(v: number | null): string {
-  return v == null ? T.text : v >= 0 ? MOVE_UP : MOVE_DOWN
+  return v == null ? T.text : v >= 0 ? V2.up : V2.red
 }
 
 /**
@@ -807,7 +819,7 @@ export function peakPctTableColor(v: number | null): string {
  * colour and the count disagree about the same row.
  */
 export function closePctTableColor(v: number | null): string {
-  return v == null ? T.text : v >= 0 ? MOVE_UP : MOVE_DOWN
+  return v == null ? T.text : v >= 0 ? V2.up : V2.red
 }
 
 /**
@@ -816,7 +828,7 @@ export function closePctTableColor(v: number | null): string {
  * `pnlColor`'s three-way (zero NEUTRAL) on the card back.
  */
 export function peakPctCardColor(v: number | null): string {
-  return v == null ? T.text : v > 0 ? MOVE_UP : MOVE_DOWN
+  return v == null ? T.text : v > 0 ? V2.up : V2.red
 }
 
 /**
@@ -826,7 +838,7 @@ export function peakPctCardColor(v: number | null): string {
  * front and white here, at the same moment.
  */
 export function pnlColor(v: number | null): string {
-  return v == null ? T.text : v > 0 ? MOVE_UP : v < 0 ? MOVE_DOWN : T.text
+  return v == null ? T.text : v > 0 ? V2.up : v < 0 ? V2.red : T.text
 }
 
 /**
@@ -842,22 +854,22 @@ export function deltaIsUp(latestChg: number | null): boolean {
 
 /** C113 — the Δ headline's ink, from `deltaIsUp`. */
 export function deltaColor(latestChg: number | null): string {
-  return deltaIsUp(latestChg) ? MOVE_UP : MOVE_DOWN
+  return deltaIsUp(latestChg) ? V2.up : V2.red
 }
 
 /** C118 — "% vs open" on the card front. `null` neutral, `>= 0` up. */
 export function pctOpenColor(v: number | null): string {
-  return v == null ? T.text : v >= 0 ? MOVE_UP : MOVE_DOWN
+  return v == null ? T.text : v >= 0 ? V2.up : V2.red
 }
 
 /** C58 — "avg peak" in the summary line. NULL IS PAINTED DOWN, and prints an em dash. */
 export function avgPeakColor(v: number | null): string {
-  return v != null && v >= 0 ? MOVE_UP : MOVE_DOWN
+  return v != null && v >= 0 ? V2.up : V2.red
 }
 
 /** C70 — the "never green" count. Any non-zero is DOWN; exactly zero is UP. */
 export function neverGreenColor(n: number): string {
-  return n ? MOVE_DOWN : MOVE_UP
+  return n ? V2.red : V2.up
 }
 
 /**
@@ -1494,9 +1506,11 @@ export const CARD_TITLE = 'GEX Change · Hourly Top 5'
  * Note this writes the ★ rule with `&` where the footer legend (C155) writes the
  * same rule with `AND`. Both are on screen at once. Copied as-is.
  *
- * INK: v2 painted this `HOME_THEME.green` #8ECAE6, the positive/up value. It is
- * chrome — a subtitle — so it takes `T.muted` in v3. See the CHROME paragraph in
- * §SIGN COLOURS.
+ * INK: v2 painted this `HOME_THEME.green` #8ECAE6. Step 2 read that as the
+ * positive/up value and moved the subtitle to `T.muted`; 2026-09-03 reverses it
+ * — the scanner runs on v2's palette and #8ECAE6 splits by JOB, not by value.
+ * A subtitle is chrome, so it keeps v2's own colour as `V2.green`. See the INK
+ * paragraph in §SIGN COLOURS. Applied at GexChangeTopTab.tsx C45.
  */
 export const CARD_SUBTITLE =
   '★ Very strong picks (|Δ| ≥ $200k & |% vs open| ≥ 30%), ranked by score · captured every 30 min during RTH'
@@ -1651,10 +1665,15 @@ export function scorecardEmptyCopy(totalResults: number): string {
  * There is NO sort on any of them: no key, no default column, no direction, no
  * comparator, no tie-break and no click handler. See point 7 in the file header.
  *
- * INK, and it is a change: v2 painted every one of these headers
- * `HOME_THEME.green` #8ECAE6 — the same value as a positive Peak %. They are
- * chrome, so they take `T.muted` in v3. See the CHROME paragraph in §SIGN
- * COLOURS. The `key` field is an identity for the render, NOT a sort key; adding
+ * INK: v2 painted every one of these headers `HOME_THEME.green` #8ECAE6 — the
+ * same value as a positive Peak % underneath them. Under the 2026-09-03 palette
+ * reversal that value is the CHROME leg of the #8ECAE6 split (`V2.green`) and
+ * the positive Peak % takes `V2.up` #1FD98A, so the two are no longer the same
+ * colour. These twelve headers are drawn by the `Table` primitive's own
+ * `text-muted` rather than by an inline style, and the scanner does not own the
+ * primitive — so they render v3 chrome, not `V2.green`, and that is the one
+ * unresolved divergence on this tab. See the INK paragraph in §SIGN COLOURS.
+ * The `key` field is an identity for the render, NOT a sort key; adding
  * a comparator keyed off it would invent an order the server never promised.
  */
 export const SCORECARD_COLUMNS: readonly { key: string; label: string; align: 'left' | 'right' }[] = [

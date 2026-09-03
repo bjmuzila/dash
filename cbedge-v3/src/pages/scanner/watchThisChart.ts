@@ -67,19 +67,27 @@
 // v2 hardcoded eight `PROBE_*` literals here, and its comment says why: the PNG
 // capture serialised this SVG standalone, where a `var()` reference resolves to
 // nothing off-DOM. The capture is not ported, so the reason is gone and the
-// literals go with it. The collapse (see watchThis.ts's header) puts:
-//   PROBE_ICE #8ECAE6 (line, wash, hover dot) → LIGHT_BLUE — it always was one
-//   PROBE_GRN #30d158 / PROBE_RED #ff5b5b     → MOVE_UP / MOVE_DOWN
-//   the #7dd3fc TOUCHED marker                → LIGHT_BLUE
-// which merges the line and the touched marker onto one token. In v2 those were
-// #8ECAE6 and #7dd3fc — two light blues a hair apart that already read as the
-// same colour; the dash pattern is what separated them on screen, and it still
-// is.
+// literals go with it — but the VALUES stay v2's. The palette reversal
+// (Brandon, 2026-09-03) undoes step 2's collapse onto MOVE_UP / MOVE_DOWN /
+// LIGHT_BLUE; this chart keeps the pair v2 declared for it (see watchThis.ts's
+// header for the whole split):
+//   PROBE_ICE #8ECAE6 (line, wash, hover dot) → V2.green — v2's own value
+//   PROBE_GRN #30d158 / PROBE_RED #ff5b5b     → ES_CANDLE_UP / ES_CANDLE_DOWN
+//   the TOUCHED marker                        → V2.green
+// which merges the line and the touched marker onto one token, as step 2 did,
+// but on #8ECAE6 rather than #7dd3fc: in v2 those were two light blues a hair
+// apart that already read as the same colour, and the `touched` status chip is
+// PROBE_ICE anyway. The dash pattern is what separated them on screen, and it
+// still is.
+//
+// The #30d158 / #ff5b5b pair is WATCH-THIS-ONLY and does NOT unify with the
+// table side's V2.up / V2.red one panel above it. That side-by-side difference
+// is v2's and it ships.
 //
 // Spec: docs/parity/scanner.md Part H, rows H160–H180.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { LIGHT_BLUE, MOVE_DOWN, MOVE_UP, T, V2, alpha } from '@/design/theme'
+import { ES_CANDLE_DOWN, ES_CANDLE_UP, T, V2, alpha } from '@/design/theme'
 import { ymd } from '@/pages/scanner/watchThis'
 import type { OutcomeDetailDay } from '@/pages/scanner/watchThis'
 
@@ -163,19 +171,23 @@ export const PROBE_WASH_STOPS = [
  * the header for what each one used to be.
  */
 export const PROBE_CHART_INK = {
-  /** The price line, its wash, and the hover dot's ring. Was PROBE_ICE #8ECAE6. */
-  line: LIGHT_BLUE,
-  /** The dashed TOUCHED vertical and its label. Was LIGHT_BLUE #7dd3fc. */
-  touched: LIGHT_BLUE,
-  /** The session high's ring and label. Was PROBE_GRN #30d158. */
-  high: MOVE_UP,
-  /** The session low's ring and label. Was PROBE_RED #ff5b5b. */
-  low: MOVE_DOWN,
-  /** Rail prices, FLAGGED label, axis dates, tooltip text. Was PROBE_TXT #ffffff. */
+  /** The price line, its wash, and the hover dot's ring. v2's PROBE_ICE #8ECAE6. */
+  line: V2.green,
+  /**
+   * The dashed TOUCHED vertical and its label. v2 drew the marker #7dd3fc and
+   * the `touched` status chip PROBE_ICE #8ECAE6; both land on `V2.green` here —
+   * two light blues a hair apart, separated on screen by the dash pattern.
+   */
+  touched: V2.green,
+  /** The session high's ring and label. v2's PROBE_GRN #30d158. */
+  high: ES_CANDLE_UP,
+  /** The session low's ring and label. v2's PROBE_RED #ff5b5b. */
+  low: ES_CANDLE_DOWN,
+  /** Rail prices, FLAGGED label, axis dates, tooltip text. v2's PROBE_TXT #ffffff. */
   text: T.text,
-  /** Ink INSIDE the solid last-mark pill — must stay dark on a filled chip. Was #06090d. */
+  /** Ink INSIDE the solid last-mark pill — must stay dark on a filled chip. v2: #06090d. */
   pillInk: V2.ink,
-  /** The hover dot's fill. Was PROBE_BG #05060a. */
+  /** The hover dot's fill. v2's PROBE_BG #05060a — `V2.bg` is already exact. */
   hoverDotFill: V2.bg,
   gridline: alpha(T.text, 0.07),
   /** The break-even dashed line. */
@@ -189,7 +201,7 @@ export const PROBE_CHART_INK = {
    * follow the P/L tone is Part H open question 7, and a decision, not a bug to
    * quietly fix here.
    */
-  tooltipBorder: alpha(MOVE_UP, 0.45),
+  tooltipBorder: alpha(ES_CANDLE_UP, 0.45),
 } as const
 
 // ═════════════════════════════════════════════════════════════════════════════

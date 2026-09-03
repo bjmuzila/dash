@@ -92,7 +92,7 @@
 // G117–G141, G162–G218, G236–G250, G251–G278.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { LIGHT_BLUE, MOVE_DOWN, MOVE_UP, T } from '@/design/theme'
+import { T, V2 } from '@/design/theme'
 import { EM_DASH } from '@/pages/scanner/format'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -317,9 +317,9 @@ export function rateNum(n: number, d: number): number | null {
  * THE hit-rate colour ladder (G32 / G243).
  *
  *   null      → T.text     ("not measured" — v2 painted it the body white)
- *   p >= 60   → MOVE_UP
- *   p <= 40   → MOVE_DOWN
- *   otherwise → T.orange
+ *   p >= 60   → V2.up      #1FD98A
+ *   p <= 40   → V2.red     #EF4444
+ *   otherwise → V2.orange  #FB8501
  *
  * Both boundaries are inclusive, so exactly 60 is up and exactly 40 is down;
  * 40 < p < 60 is the warn colour.
@@ -328,15 +328,19 @@ export function rateNum(n: number, d: number): number | null {
  * `IbDailyResults.tsx:134` (the bias-correct figure) and `IbDailyResults.tsx:231`
  * (the hit-rate footer). This is the one copy; both files import it.
  *
- * COLOUR COLLAPSE: v2's `HOME_THEME.green` #8ECAE6 is a LIGHT BLUE doing three
- * jobs. As a POSITIVE it is MOVE_UP here; as the tab ACCENT it is LIGHT_BLUE.
- * `HOME_THEME.red` #EF4444 → MOVE_DOWN.
+ * THE THREE-WAY SPLIT (Brandon, 2026-09-03 — this reverses step 2's collapse
+ * onto MOVE_UP/MOVE_DOWN; the tab now runs on v2's palette, not v3 semantics).
+ * v2's `HOME_THEME.green` #8ECAE6 is a LIGHT BLUE doing three jobs. As a
+ * POSITIVE it is `V2.up` #1FD98A here (v2's own REFRESH_GREEN, the declared
+ * up/success role colour); as the tab ACCENT it is `V2.accent` #7dd3fc, see
+ * `IB_READ_ACCENT`; as CHROME it keeps #8ECAE6 as `V2.green`.
+ * `HOME_THEME.red` #EF4444 → `V2.red`.
  */
 export function rateColor(p: number | null | undefined): string {
   if (p == null) return T.text
-  if (p >= 60) return MOVE_UP
-  if (p <= 40) return MOVE_DOWN
-  return T.orange
+  if (p >= 60) return V2.up
+  if (p <= 40) return V2.red
+  return V2.orange
 }
 
 /** Mean, or null on an empty array. No NaN filtering — one NaN poisons it. */
@@ -1369,9 +1373,9 @@ export const EXPANSION_LABELS = {
 
 /** The three bar colours (`:613–615`). Cyan / purple / warn — not a rate ladder. */
 export const EXPANSION_COLORS = {
-  single: T.cyan,
-  both: T.purple,
-  none: T.orange,
+  single: V2.cyan,
+  both: V2.purple,
+  none: V2.orange,
 } as const
 
 export type TacticalVerdict = 'tradeable' | 'fade' | 'noise'
@@ -1484,7 +1488,7 @@ export const TACTICAL_VERDICT_TEXT: Record<TacticalVerdict, string> = {
 
 /** A NULL rule paints the warn colour, same as "noise". */
 export function tacticalVerdictColor(v: TacticalVerdict | null | undefined): string {
-  return v === 'tradeable' ? MOVE_UP : v === 'fade' ? MOVE_DOWN : T.orange
+  return v === 'tradeable' ? V2.up : v === 'fade' ? V2.red : V2.orange
 }
 
 /**
@@ -1531,8 +1535,8 @@ export function overallVerdictText(score: number): string {
 }
 
 export function overallVerdictColor(score: number): string {
-  if (convictionOf(score) === 'NEUTRAL') return T.orange
-  return score >= 0 ? MOVE_UP : MOVE_DOWN
+  if (convictionOf(score) === 'NEUTRAL') return V2.orange
+  return score >= 0 ? V2.up : V2.red
 }
 
 /** Signed integer, e.g. "+37" / "-8". The minus is the ASCII one `toFixed` emits. */
@@ -1594,7 +1598,7 @@ export function gaugeVerdict(pHigh: number): { text: string; color: string } {
       : hiSide
         ? 'HIGH BREAK BIAS'
         : 'LOW BREAK BIAS'
-  return { text, color: hiSide ? MOVE_UP : MOVE_DOWN }
+  return { text, color: hiSide ? V2.up : V2.red }
 }
 
 /** Every fixed string on the Live Read card. */
@@ -2212,8 +2216,8 @@ export function familyStat(scored: readonly ScoredRule[], ids: readonly string[]
 
 /** The family verdict word and its colour (`:1055–1056`). Arrows are U+2191/U+2193. */
 export function familyVerdict(netSide: 'H' | 'L' | null): { text: string; color: string } {
-  if (netSide == null) return { text: 'CONTEXT', color: T.orange }
-  return netSide === 'H' ? { text: 'HIGH ↑', color: MOVE_UP } : { text: 'LOW ↓', color: MOVE_DOWN }
+  if (netSide == null) return { text: 'CONTEXT', color: V2.orange }
+  return netSide === 'H' ? { text: 'HIGH ↑', color: V2.up } : { text: 'LOW ↓', color: V2.red }
 }
 
 /** One session on the "LAST 5 SESSIONS" tape. */
@@ -2243,7 +2247,7 @@ export function fallbackTape(days: readonly SlimDay[]): TapeDay[] {
 export function tapeChip(d: TapeDay): { color: string; date: string; dir: string; dayType: string } {
   const up = d.firstTouchSide === 'H'
   return {
-    color: d.firstTouchSide == null ? T.orange : up ? MOVE_UP : MOVE_DOWN,
+    color: d.firstTouchSide == null ? V2.orange : up ? V2.up : V2.red,
     // "MM-DD". Assumes an ISO date; anything shorter silently truncates.
     date: d.date.slice(5),
     dir: d.firstTouchSide == null ? EM_DASH : up ? 'HIGH ↑' : 'LOW ↓',
@@ -2259,8 +2263,8 @@ export function tapeChip(d: TapeDay): { color: string; date: string; dir: string
 
 /** Hit / miss dot colours (`:958–970`). The miss dot also drops to 55% opacity. */
 export const DOT = {
-  hit: MOVE_UP,
-  miss: MOVE_DOWN,
+  hit: V2.up,
+  miss: V2.red,
   hitTitle: 'hit',
   missTitle: 'miss',
   empty: 'no history',
@@ -2286,8 +2290,13 @@ export const IB_READ_TEXT = {
   footnoteBold: ['Green dots = the rule was right on that past session, red = wrong', 'Conflict Watch'],
 } as const
 
-/** The tape label and the section headers paint the tab accent. */
-export const IB_READ_ACCENT = LIGHT_BLUE
+/**
+ * The tape label and the section headers paint the tab accent — the ACCENT leg
+ * of v2's #8ECAE6 collision, which is v2's own `LIGHT_BLUE` #7dd3fc ("the one
+ * card accent", homeTheme.ts:88). This tab's body already accented in #7dd3fc
+ * in v2; the tab pill now agrees with it (see `scannerNav.ts`).
+ */
+export const IB_READ_ACCENT = V2.accent
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE OWNER-ONLY HISTORICAL CARDS.
@@ -2931,9 +2940,9 @@ export const OWNER_CARDS = {
 
 /** The three bucket-label colours in card 4's width-range table (`:1725`). */
 export const WIDTH_BUCKET_COLORS: Record<'NARROW' | 'NORMAL' | 'WIDE', string> = {
-  NARROW: MOVE_UP,
-  NORMAL: T.orange,
-  WIDE: MOVE_DOWN,
+  NARROW: V2.up,
+  NORMAL: V2.orange,
+  WIDE: V2.red,
 }
 
 /**
@@ -3949,8 +3958,8 @@ export function playbookSetups(live: LiveSession, dowName: string): LegacySetup[
 
 /** @notWiredInV2 — the fourth rate ladder, `PlaybookLegacy`'s card border (`:1329`). */
 export function playbookBorderColor(p: number | null): string {
-  if (p != null && p >= 60) return MOVE_UP
-  if (p != null && p <= 40) return MOVE_DOWN
+  if (p != null && p >= 60) return V2.up
+  if (p != null && p <= 40) return V2.red
   // v2's neutral here is `rgba(255,255,255,0.08)`, not the warn colour the other
   // three ladders use. Step 3 supplies the wash; the boundary logic is the point.
   return T.border

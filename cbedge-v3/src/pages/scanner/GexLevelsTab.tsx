@@ -92,7 +92,7 @@ import { ChartFrame } from '@/design/primitives/ChartFrame'
 import { SegGroup } from '@/design/primitives/Controls'
 import type { Column } from '@/design/primitives/Table'
 import { Table } from '@/design/primitives/Table'
-import { T, alpha } from '@/design/theme'
+import { T, V2, V2W, alpha } from '@/design/theme'
 import { EM_DASH } from '@/pages/scanner/format'
 import type {
   CardKey,
@@ -113,6 +113,7 @@ import type {
   GexMultiPayload,
   HistoryEntry,
   LegendItem,
+  MarkerLine,
   OiByExpiryRow,
   RefreshState,
   VolFlowPoint,
@@ -134,7 +135,9 @@ import {
   EOD_GEX_FIELD_META,
   ERROR_COPY,
   ERROR_INK,
-  FLIP_LINE,
+  FLIP_LINE_BARS,
+  FLIP_LINE_CURVE,
+  FLIP_LINE_SPARK,
   GAUGE_COPY,
   GAUGE_GEOM,
   GEX_LEVELS_CARDS,
@@ -153,7 +156,9 @@ import {
   PUT_LEG_COLOR,
   REFRESH_LABEL,
   REFRESH_LOCK_MS,
-  SPOT_LINE,
+  SPOT_LINE_BARS,
+  SPOT_LINE_CURVE,
+  SPOT_LINE_WHITE,
   STATUS_COPY,
   TICK_CAP_EOD,
   TICK_CAP_OI_EXPIRY,
@@ -203,6 +208,7 @@ import {
   etHourMinute,
   etTimeFromSec,
   expiryFilterOptions,
+  flipFinite,
   flipInView,
   fmt0,
   fmt2,
@@ -494,7 +500,10 @@ function ChartTooltip({ x, y, children }: { x: number; y: number; children: Reac
   return (
     <div
       className="pointer-events-none absolute z-50 whitespace-nowrap rounded-md border border-line px-3 py-2 text-xs leading-relaxed text-fg shadow-lg"
-      style={{ left: x, top: y, transform: 'translate(-50%, -100%) translateY(-10px)', background: T.panel }}
+      // B203 — v2 makes this tooltip OPAQUE on purpose: `V2.panel` #0D1119, the
+      // solid plate, not the translucent one every card uses. `T.panel` is a
+      // different plate (#0f1117).
+      style={{ left: x, top: y, transform: 'translate(-50%, -100%) translateY(-10px)', background: V2.panel }}
     >
       {children}
     </div>
@@ -558,10 +567,15 @@ function StatTile({
     <div className="min-w-24 rounded-md border border-line px-3 py-2" title={title}>
       <div className="flex items-baseline gap-1.5">
         <span className="text-2xs font-bold uppercase tracking-wider text-muted">{label}</span>
+        {/* B42 — the scope chip. TWO light blues in six lines of v2: the TEXT is
+            LIGHT_BLUE #7dd3fc and the PLATE and its edge are #8DCDFF at 10% and
+            28%. Step 2 collapsed the plate onto the text colour; restored
+            2026-09-03 — the only collision this port drops is #8ECAE6's, and a
+            plate-vs-ink pair is not that. */}
         {scope && (
           <span
             className="rounded-full px-1.5 text-3xs font-bold tracking-wide"
-            style={{ color: CALL_LEG_COLOR, background: alpha(CALL_LEG_COLOR, 0.1), border: `1px solid ${alpha(CALL_LEG_COLOR, 0.28)}` }}
+            style={{ color: V2.accent, background: V2W.chipBg, border: `1px solid ${V2W.chipEdge}` }}
           >
             {scope}
           </span>
@@ -667,13 +681,22 @@ function AxisTextSmall({
   )
 }
 
-/** The zero rule every chart draws across its plot. */
+/**
+ * The zero rule every chart draws across its plot. v2's baseline is
+ * `HOME_THEME.border` — a WHITE hairline at 10%, which is `V2W.border`. Not
+ * `T.border`: `--color-line` is an opaque slate #23272e.
+ */
 function ZeroLine({ g, y }: { g: ChartGeom; y: number }) {
-  return <line x1={g.padL} x2={g.w - g.padR} y1={y} y2={y} strokeWidth={1} style={{ stroke: T.border }} />
+  return <line x1={g.padL} x2={g.w - g.padR} y1={y} y2={y} strokeWidth={1} style={{ stroke: V2W.border }} />
 }
 
-/** The spot marker — ONE treatment, where v2 had three (see SPOT_LINE). */
-function SpotLine({ g, x }: { g: ChartGeom; x: number }) {
+/**
+ * The spot marker. THREE treatments, one per chart family, restored 2026-09-03
+ * from the step-2 collapse — so the caller names the one its chart uses
+ * (`SPOT_LINE_CURVE` / `SPOT_LINE_BARS` / `SPOT_LINE_WHITE`, B199 / B228 /
+ * B239+B249) rather than getting a page-wide default.
+ */
+function SpotLine({ g, x, line }: { g: ChartGeom; x: number; line: MarkerLine }) {
   return (
     <line
       x1={x}
@@ -681,15 +704,20 @@ function SpotLine({ g, x }: { g: ChartGeom; x: number }) {
       y1={g.padT}
       y2={g.h - g.padB}
       strokeWidth={1}
-      strokeDasharray={SPOT_LINE.dash}
-      opacity={SPOT_LINE.opacity}
-      style={{ stroke: SPOT_LINE.color }}
+      strokeDasharray={line.dash}
+      opacity={line.opacity}
+      style={{ stroke: line.color }}
     />
   )
 }
 
-/** The gamma-flip marker — likewise one treatment, where v2 had three. */
-function FlipLine({ g, x }: { g: ChartGeom; x: number }) {
+/**
+ * The gamma-flip marker — likewise three treatments (`FLIP_LINE_CURVE` /
+ * `FLIP_LINE_BARS` / `FLIP_LINE_SPARK`), differing in colour AND dash pattern.
+ * The IN-VIEW GUARD differs too and belongs to the caller: the bars and the
+ * sparkline use `flipInView`, the cumulative chart uses `flipFinite`.
+ */
+function FlipLine({ g, x, line }: { g: ChartGeom; x: number; line: MarkerLine }) {
   return (
     <line
       x1={x}
@@ -697,9 +725,9 @@ function FlipLine({ g, x }: { g: ChartGeom; x: number }) {
       y1={g.padT}
       y2={g.h - g.padB}
       strokeWidth={1}
-      strokeDasharray={FLIP_LINE.dash}
-      opacity={FLIP_LINE.opacity}
-      style={{ stroke: FLIP_LINE.color }}
+      strokeDasharray={line.dash}
+      opacity={line.opacity}
+      style={{ stroke: line.color }}
     />
   )
 }
@@ -906,7 +934,8 @@ function CurveSpark({ pts, neutral }: { pts: CurvePt[]; neutral: number | null }
 
   return (
     <svg viewBox={`0 0 ${g.w} ${g.h}`} width={g.w} height={g.h} aria-hidden className="block">
-      <line x1={0} x2={g.w} y1={y0} y2={y0} strokeWidth={1} style={{ stroke: T.border }} />
+      {/* v2's `HOME_THEME.border`, a white hairline — not `--color-line`. */}
+      <line x1={0} x2={g.w} y1={y0} y2={y0} strokeWidth={1} style={{ stroke: V2W.border }} />
       {signSegments(pts).map((seg, i) => {
         const first = seg.pts[0]
         const last = seg.pts[seg.pts.length - 1]
@@ -922,8 +951,9 @@ function CurveSpark({ pts, neutral }: { pts: CurvePt[]; neutral: number | null }
           </g>
         )
       })}
-      {/* The in-view test is `flipInView` everywhere on this tab now — see the
-          note on it: v2's cumulative chart was the one place without it. */}
+      {/* B168 — the sparkline's own flip treatment: white, dash "2 2", 0.45,
+          and IN-VIEW ONLY. Restored 2026-09-03 with the other two; step 2 had
+          all three charts sharing one line and one guard. */}
       {flipInView(neutral, dom.xlo, dom.xhi) && (
         <line
           x1={x(neutral as number)}
@@ -931,9 +961,9 @@ function CurveSpark({ pts, neutral }: { pts: CurvePt[]; neutral: number | null }
           y1={0}
           y2={g.h}
           strokeWidth={1}
-          strokeDasharray={FLIP_LINE.dash}
-          opacity={FLIP_LINE.opacity}
-          style={{ stroke: FLIP_LINE.color }}
+          strokeDasharray={FLIP_LINE_SPARK.dash}
+          opacity={FLIP_LINE_SPARK.opacity}
+          style={{ stroke: FLIP_LINE_SPARK.color }}
         />
       )}
     </svg>
@@ -1176,8 +1206,12 @@ function NetGammaCurveChart({
             </g>
           )
         })}
-        {flipInView(neutral, xlo, xhi) && <FlipLine g={g} x={x(neutral as number)} />}
-        <SpotLine g={g} x={x(spot)} />
+        {/* B198 — white, dash "2 3", 0.55, and NO in-view test: this chart alone
+            draws the flip whenever the value is finite, clamping an off-window
+            flip onto the edge of the plot. B199 — the spot line is the accent
+            at 0.6 here and at 0.75 on the bars chart. Both restored 2026-09-03. */}
+        {flipFinite(neutral) && <FlipLine g={g} x={x(neutral as number)} line={FLIP_LINE_CURVE} />}
+        <SpotLine g={g} x={x(spot)} line={SPOT_LINE_CURVE} />
         {/* B200 — invisible hit targets. The HOVERED dot is drawn SMALLER (4)
             than the untouched ones (7); that is v2's, not a transposition. */}
         {shown.map((p, i) => (
@@ -1289,8 +1323,12 @@ function NetGammaBarsChart({
             />
           )
         })}
-        {flipInView(neutral, xlo, xhi) && <FlipLine g={g} x={x(neutral as number)} />}
-        <SpotLine g={g} x={x(spot)} />
+        {/* B227 — `GEX_POS_GREEN` #22C55E, dash "4 3", 0.55, IN-VIEW ONLY: a
+            different colour AND dash from the cumulative chart's flip line, for
+            the same semantic. B228 — the same accent spot line as card 6 at a
+            different opacity. v2's, restored 2026-09-03. */}
+        {flipInView(neutral, xlo, xhi) && <FlipLine g={g} x={x(neutral as number)} line={FLIP_LINE_BARS} />}
+        <SpotLine g={g} x={x(spot)} line={SPOT_LINE_BARS} />
         {[dom.min, 0, dom.max].map((v) => (
           <AxisText key={`y${v}`} x={g.padL - 8} y={y(v) + 4} anchor="end">
             {fmtBn(v)}
@@ -1429,7 +1467,8 @@ function CallPutGammaChart({ rows, spot }: { rows: GexLevelsRow[]; spot: number 
           )
         })}
         {/* B240 — this chart takes no `neutral` at all. There is no flip line. */}
-        <SpotLine g={g} x={x(spot)} />
+        {/* B239 / B249 — WHITE here, not the accent: v2's third spot treatment. */}
+        <SpotLine g={g} x={x(spot)} line={SPOT_LINE_WHITE} />
         {[dom.min, 0, dom.max].map((v) => (
           <AxisText key={`y${v}`} x={g.padL - 8} y={y(v) + 4} anchor="end">
             {fmtBn(v)}
@@ -1525,7 +1564,8 @@ function NetDeltaChart({
             />
           )
         })}
-        <SpotLine g={g} x={x(spot)} />
+        {/* B239 / B249 — WHITE here, not the accent: v2's third spot treatment. */}
+        <SpotLine g={g} x={x(spot)} line={SPOT_LINE_WHITE} />
         {/* B250 — `fmt0`, not `fmtBn`: the only Y axis on the tab that spells a
             magnitude out in full. v2's, kept. */}
         {[dom.min, 0, dom.max].map((v) => (
@@ -1923,7 +1963,9 @@ function VolGexFlowPanel() {
         {volFlowScrimVisible(loading, error, points.length) && (
           <div
             className="absolute inset-0 flex items-center justify-center rounded-md p-4 text-center text-xs font-semibold tracking-wide"
-            style={{ background: alpha(T.bg, 0.72), color: volFlowScrimInk(error) }}
+            // v2's scrim is `HOME_THEME.bg` #05060a at 72% — `V2.bg`, not
+            // `T.bg` #07080b.
+            style={{ background: alpha(V2.bg, 0.72), color: volFlowScrimInk(error) }}
           >
             {volFlowScrimText(error, loading, pctView, session)}
           </div>

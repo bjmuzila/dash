@@ -85,7 +85,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useQuery } from '@/data/api'
 import { Card } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
-import { LIGHT_BLUE, SHADOW, T, alpha } from '@/design/theme'
+import { SHADOW, T, V2, V2W, alpha } from '@/design/theme'
 import {
   ADD_BUSY_LABEL,
   ADD_LABEL,
@@ -268,14 +268,18 @@ const TD_CLASS = 'border-b border-line/50 px-2 py-1'
 
 /** H90, H112, H129 — odd rows washed, even rows bare. */
 const ROW_WASH = alpha(T.text, 0.02)
-/** H90, H112, H129 — the open row overrides the stripe in all three tables. */
-const ROW_OPEN = alpha(T.cyan, 0.1)
+/**
+ * H90, H112, H129 — the open row overrides the stripe in all three tables.
+ * v2's rgba(33,158,188,0.10); `V2W.pickRow` is that exact wash, already named.
+ */
+const ROW_OPEN = V2W.pickRow
 /**
  * H93, H113, H130 — the expanded row's cell.
  *
- * COLOUR COLLAPSE: v2 used `rgba(0,0,0,0.20)` in the flat table and
- * `rgba(0,0,0,0.25)` in the Results sub-table for no stated reason; the spec's
- * "Two blacks" note asks for one value. This is it.
+ * v2 uses `rgba(0,0,0,0.20)` in the flat table and `rgba(0,0,0,0.25)` in the
+ * Results sub-table for no stated reason; the spec's "Two blacks" note asks for
+ * one value. This is it — a TREATMENT collapse, not a palette one, so it stands
+ * unchanged through the palette reversal. `SHADOW` is #000000, exactly v2's.
  */
 const ROW_EXPANDED = alpha(SHADOW, 0.2)
 
@@ -352,14 +356,15 @@ function FlagCard({ row }: { row: WatchRow }) {
             {fmtSpot(row.spot)}
           </span>
         </span>
-        {/* H32 — a label, not a state: always this colour, on every card. */}
-        <span className="text-sm font-bold tracking-wide" style={{ color: LIGHT_BLUE }}>
+        {/* H32 — a label, not a state: always this colour, on every card. v2's
+            LIGHT_BLUE #7dd3fc → `V2.accent`. */}
+        <span className="text-sm font-bold tracking-wide" style={{ color: V2.accent }}>
           {WATCH_THIS_BADGE}
         </span>
       </div>
 
       {/* H33 — raw number, no toFixed. H34 — the server's expiry string verbatim. */}
-      <div className="mb-1 text-sm font-bold" style={{ color: LIGHT_BLUE }}>
+      <div className="mb-1 text-sm font-bold" style={{ color: V2.accent }}>
         {fmtStrike(row.strike)}
         <span className="font-normal text-fg">{fmtExpiryDte(row.expiry, row.dte_days)}</span>
       </div>
@@ -385,7 +390,7 @@ function FlagCard({ row }: { row: WatchRow }) {
         <a
           href={chainHref(row)}
           className="text-sm font-bold no-underline"
-          style={{ color: LIGHT_BLUE }}
+          style={{ color: V2.accent }}
         >
           {VIEW_CHAIN_LABEL}
         </a>
@@ -829,9 +834,11 @@ function OutcomeDetailPanel({
   const hasDays = !!detail && detail.days.length > 0
 
   return (
+    // The plate is v2's PROBE_BG #05060a — this detail panel's own colour, not
+    // the page canvas, which stays v3's. The edge is v2's cyan at 50%.
     <div
       className="my-1.5 max-w-[940px] rounded-md border p-3.5"
-      style={{ background: T.bg, borderColor: alpha(T.cyan, 0.5) }}
+      style={{ background: V2.bg, borderColor: alpha(V2.cyan, 0.5) }}
     >
       {/* H132–H135 — ticker, badge, status chip, close. */}
       <div className="flex items-center justify-between gap-3">
@@ -844,10 +851,12 @@ function OutcomeDetailPanel({
             // H134 — "Touched <date>" keeps MIXED case here, unlike the flat
             // table's cell which upper-cases everything.
             //
-            // COLOUR COLLAPSE, THE WORST CASE ON THE PAGE: in v2 this chip's
-            // OPEN was #30d158 while the flat table's OPEN one row above was
-            // #8ECAE6 — same word, same state, two greens on screen at once.
-            // `statusChipColor` IS `statusColor`, so they can never drift again.
+            // TWO GREENS, KEPT: in v2 this chip's OPEN is #30d158 while the
+            // flat table's OPEN one row above is #8ECAE6 — same word, same
+            // state, two greens on screen at once. Step 2 collapsed them; the
+            // palette reversal (Brandon, 2026-09-03) puts them back, so
+            // `statusChipColor` is no longer `statusColor`: this chip keeps the
+            // probe chart's ES_CANDLE_UP #30d158 and the table word takes V2.up.
             <DetailChip ink={statusChipColor(detail.status)}>
               {detailStatusLabel(detail)}
             </DetailChip>
@@ -915,7 +924,7 @@ function OutcomeDetailPanel({
           </div>
         )}
         {err && (
-          <div className="py-10 text-center font-mono text-xs" style={{ color: T.orange }}>
+          <div className="py-10 text-center font-mono text-xs" style={{ color: V2.orange }}>
             {err}
           </div>
         )}
@@ -1012,7 +1021,7 @@ function ResultsByDay({
   // a refresh that already has days shows the stale table silently.
   if (err) {
     return (
-      <div className="p-5 text-center text-sm" style={{ color: T.orange }}>
+      <div className="p-5 text-center text-sm" style={{ color: V2.orange }}>
         {err}
       </div>
     )
@@ -1540,7 +1549,7 @@ export default function WatchThisTab() {
         {addStatus && (
           <span
             className="text-sm"
-            style={{ color: addStatus.kind === 'ok' ? LIGHT_BLUE : T.red }}
+            style={{ color: addStatus.kind === 'ok' ? V2.accent : V2.red }}
           >
             {addStatus.msg}
           </span>
@@ -1549,7 +1558,7 @@ export default function WatchThisTab() {
 
       {/* H21/H22 — bare text, no plate, and no `!loading` guard. */}
       {flagErr && (
-        <div className="mb-3 text-sm" style={{ color: T.orange }}>
+        <div className="mb-3 text-sm" style={{ color: V2.orange }}>
           {flagErrorText(flagErr)}
         </div>
       )}

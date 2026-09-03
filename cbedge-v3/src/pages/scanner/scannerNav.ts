@@ -66,7 +66,7 @@
 // Spec: docs/parity/scanner.md Part A, rows A12–A29.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { LIGHT_BLUE, T } from '@/design/theme'
+import { V2 } from '@/design/theme'
 
 /** Tabs that render inline on /scanner. */
 export type ScannerTabId =
@@ -98,20 +98,38 @@ export interface ScannerTabDef {
 /**
  * Bar order + per-tab accent.
  *
- * v2 accent → v3 token. The two greens and two light blues collapse here, per
- * the decision in docs/parity/scanner.md: v2's `HOME_THEME.green` #8ECAE6 is a
- * LIGHT BLUE doing three jobs (chrome, this accent, and the positive/up
- * semantic). As an ACCENT it becomes LIGHT_BLUE, the same token IB Stats and
- * Watch use; as a positive it becomes MOVE_UP wherever a number is painted.
- * The accent and the "good number" colour were never meant to be the same value.
+ * v2 accent → v2 token. 2026-09-03: the step-2 collapse onto v3's semantic
+ * palette is REVERSED — the scanner renders v2's palette, so every accent below
+ * is v2's own value (`V2.cyan` #219EBC, `V2.orange` #FB8501, `V2.purple`
+ * #126783), not v3's near-miss equivalents.
+ *
+ * THIS FILE CARRIES THE ACCENT LEG OF THE THREE-WAY SPLIT. v2's
+ * `HOME_THEME.green` #8ECAE6 is a LIGHT BLUE doing three unrelated jobs at once
+ * — chrome, this accent, and the positive/up semantic — and that one collision
+ * is the only thing the port breaks. The three legs each take a DIFFERENT value
+ * v2 already ships:
+ *
+ *   chrome    #8ECAE6  V2.green   card subtitles, table headers, category badges
+ *   accent    #7dd3fc  V2.accent  the IB Stats and Watch This tab pills — HERE
+ *   positive  #1FD98A  V2.up      every sign-driven / hit-miss figure
+ *
+ * The accent leg has v2's own answer behind it: `homeTheme.ts:88` declares
+ * `LIGHT_BLUE = "#7dd3fc"` under the comment "the one card accent". Watch This'
+ * pill was already that value, and IB Stats' body already accents in it
+ * throughout, so this is the pill agreeing with the tab it opens. Note this is
+ * NOT v3's `LIGHT_BLUE`, which is `--color-series-5` #4fb8d4.
+ *
+ * The other three positives on this page (#22c55e, #30d158, #1FD98A) are NOT
+ * unified — see the token docblocks in src/design/theme.ts before reaching for
+ * a green anywhere on the scanner.
  *
  * 2026-08-16 (v2): "gex", "gexpct", "marketquality" and "statprompter" moved to
  * Test Lab and "gexlevels" came the other way. Those four are not in this list
  * and are not part of this port.
  */
 export const SCANNER_TABS: readonly ScannerTabDef[] = [
-  { id: 'gexlevels', label: 'GEX Levels', short: 'Levels', accent: T.cyan, icon: '📏' },
-  { id: 'gexchangetop', label: 'GEX Change Top', short: 'GEX Δ Top', accent: T.orange, icon: '📊' },
+  { id: 'gexlevels', label: 'GEX Levels', short: 'Levels', accent: V2.cyan, icon: '📏' },
+  { id: 'gexchangetop', label: 'GEX Change Top', short: 'GEX Δ Top', accent: V2.orange, icon: '📊' },
   // Sits next to GEX Change Top because it is that tab's feedback loop: the
   // cards flag picks, the scorecard grades them, this reads the graded history
   // back and asks what the A/B picks had in common at capture.
@@ -123,13 +141,13 @@ export const SCANNER_TABS: readonly ScannerTabDef[] = [
     id: 'pickstudy',
     label: 'Pick Study',
     short: 'Study',
-    accent: T.purple,
+    accent: V2.purple,
     icon: '🔬',
     ownerOnly: true,
   },
-  { id: 'strike', label: 'Strike Query', short: 'Strike', accent: T.cyan, icon: '🎯' },
-  { id: 'ibstats', label: 'IB Stats', short: 'IB Stats', accent: LIGHT_BLUE, icon: '📐' },
-  { id: 'watch', label: 'Watch This', short: 'Watch', accent: LIGHT_BLUE, icon: '👁️' },
+  { id: 'strike', label: 'Strike Query', short: 'Strike', accent: V2.cyan, icon: '🎯' },
+  { id: 'ibstats', label: 'IB Stats', short: 'IB Stats', accent: V2.accent, icon: '📐' },
+  { id: 'watch', label: 'Watch This', short: 'Watch', accent: V2.accent, icon: '👁️' },
 ]
 
 /**
