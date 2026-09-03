@@ -75,6 +75,11 @@ export const NAV: NavItem[] = [
   // and DEFAULT_TAB in pages/scanner/scannerNav.ts is now the only one), so the
   // click lands on data that is already home.
   { to: '/scanner', label: 'Scanner', icon: '🔭', prefetch: ['/proxy/gex-change-top'] },
+  // Landed 2026-09-03 with the wall-migration chart — the first surface of v2's
+  // /app/level-log to come across. No prefetch: the page's fetch is keyed on a
+  // ticker AND a date, and warming SPX-on-today would be wrong for anyone whose
+  // last link named something else.
+  { to: '/level-log', label: 'Level Log', icon: '🧱' },
 ]
 
 function Logo() {

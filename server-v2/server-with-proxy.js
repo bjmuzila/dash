@@ -188,6 +188,39 @@ function buildStreamerSymbol(ticker, expiry, strike, type) {
 function etSessionOpenMs(ymd) { return etEpochMs(ymd, 9, 30); }
 function etSessionCloseMs(ymd) { return etEpochMs(ymd, 16, 0); }
 
+// ── strike-growth replay metadata cache ─────────────────────────────────────
+// /proxy/strike-growth/replay-meta answers two questions — which symbols were
+// recorded in the last 7 days, and which dates exist for one of them. Neither
+// moves more than once a day, but the endpoint is hit on every mount of the
+// replay picker (including from pages that never open it), and each miss is a
+// DISTINCT over the whole retention window.
+//
+// 5 minutes is well inside "a new session date appears" and far outside the
+// mount storm. Single-flighted for the same reason the vol-flow cache is: a
+// cold key with several mounts behind it should cost one query, not several.
+const _SG_META_TTL_MS = 5 * 60 * 1000;
+const _sgMetaCache = new Map();    // key -> { at, value }
+const _sgMetaInFlight = new Map(); // key -> Promise
+async function _sgReplayMeta(key, run) {
+  const hit = _sgMetaCache.get(key);
+  if (hit && Date.now() - hit.at < _SG_META_TTL_MS) return hit.value;
+  const flight = _sgMetaInFlight.get(key);
+  if (flight) return flight;
+  const p = Promise.resolve()
+    .then(run)
+    .then((value) => {
+      _sgMetaCache.set(key, { at: Date.now(), value });
+      if (_sgMetaCache.size > 64) {
+        const cutoff = Date.now() - _SG_META_TTL_MS;
+        for (const [k, v] of _sgMetaCache) if (v.at < cutoff) _sgMetaCache.delete(k);
+      }
+      return value;
+    })
+    .finally(() => { _sgMetaInFlight.delete(key); });
+  _sgMetaInFlight.set(key, p);
+  return p;
+}
+
 // ---------------------------------------------------------------------------
 // REST snapshot router (/proxy/*)
 // ---------------------------------------------------------------------------
@@ -1151,7 +1184,33 @@ async function handleFlowPremSplit(req, res) {
 // own front-expiry string, so assuming "front == today's date" breaks on any
 // day the recorder rolls late. scope=all sums every expiry in the window.
 const _volFlowCache = new Map(); // key -> { at, payload }
-const VOLFLOW_TTL_MS = 20_000;   // recorder writes ~1/min; 20s keeps polls cheap
+// Recorder writes ~1/min, so anything under a minute re-runs the scan for a
+// series that cannot have moved. 45s keeps a poll in step with the writer
+// without ever serving a bucket the chart already has.
+const VOLFLOW_TTL_MS = 45_000;
+// Single-flight. The scan is expensive enough that a cold key with three panels
+// (or three tabs) on it used to start three identical queries, each of which
+// then wrote the same payload. They now share one promise, so a miss costs the
+// DB exactly one scan no matter how many callers arrive during it.
+const _volFlowInFlight = new Map(); // key -> Promise<payload>
+
+/**
+ * Build (or serve from cache) one gex-vol-flow payload. Split out of the HTTP
+ * handler so the prewarm tick below can drive the same cache the requests read.
+ */
+async function volFlowPayload({ binSec, binMs, scope, expiryParam, session, symbol }) {
+  const key = `${binMs}|${scope}|${expiryParam}|${session}|${symbol}`;
+  const hit = _volFlowCache.get(key);
+  if (hit && Date.now() - hit.at < VOLFLOW_TTL_MS) return hit.payload;
+
+  const flight = _volFlowInFlight.get(key);
+  if (flight) return flight;
+
+  const p = computeVolFlow({ key, binSec, binMs, scope, expiryParam, session, symbol })
+    .finally(() => { _volFlowInFlight.delete(key); });
+  _volFlowInFlight.set(key, p);
+  return p;
+}
 
 async function handleGexVolFlow(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
@@ -1178,27 +1237,42 @@ async function handleGexVolFlow(req, res) {
   // which inflates the dollar series and badly skews the positive share.
   const symbol = (searchParams.get('symbol') || '$SPX').trim().toUpperCase();
 
-  const key = `${binMs}|${scope}|${expiryParam}|${session}|${symbol}`;
-  const hit = _volFlowCache.get(key);
-  if (hit && Date.now() - hit.at < VOLFLOW_TTL_MS) return sendJson(res, 200, hit.payload, req);
+  const payload = await volFlowPayload({ binSec, binMs, scope, expiryParam, session, symbol });
+  sendJson(res, 200, payload, req);
+}
 
+async function computeVolFlow({ key, binSec, binMs, scope, expiryParam, session, symbol }) {
   const pool = getHistPool();
-  if (!pool) return sendJson(res, 200, { ok: false, reason: 'no-db', expiry: null, binSec, points: [] }, req);
+  if (!pool) return { ok: false, reason: 'no-db', expiry: null, binSec, points: [] };
 
-  // ET midnight → epoch ms, computed in SQL so the app server's TZ can't drift
-  // it. date_trunc runs on the ET wall clock, then converts back to timestamptz.
-  const DAY_START = `(extract(epoch from date_trunc('day', now() AT TIME ZONE 'America/New_York')
-                      AT TIME ZONE 'America/New_York') * 1000)::bigint`;
+  // Session window as plain epoch-ms bounds, computed HERE rather than per row
+  // in SQL.
+  //
+  // This used to derive ET midnight with date_trunc and then clamp RTH with
+  //   (to_timestamp(timestamp/1000.0) AT TIME ZONE 'America/New_York')::time
+  // on every candidate row. That is a timezone conversion per row across the
+  // whole day's partition (~300k rows for one SPX session), and worse, it hides
+  // the real bound from the planner: `timestamp >= midnight` was the only thing
+  // the index could use, so the scan always started at 00:00 ET and threw away
+  // the overnight rows one at a time.
+  //
+  // etEpochMs does the same ET wall-clock math in JS (it reads the zone's real
+  // UTC offset, so the app server's own TZ still can't drift it), and the two
+  // bigint bounds turn both queries below into a straight range scan on
+  // idx_osgh_symbol_ts (symbol, timestamp).
+  //
+  // Half-days are still not special-cased: an early close just means the
+  // 13:00–16:00 stretch has no rows, which plots as a shorter session rather
+  // than a wrong one.
+  const etToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+  const winFrom = session === 'rth' ? etSessionOpenMs(etToday) : etEpochMs(etToday, 0, 0);
+  const winTo = session === 'rth' ? etSessionCloseMs(etToday) : Number.MAX_SAFE_INTEGER;
 
-  // RTH clamp on the ET wall clock. Half-days are not special-cased: an early
-  // close just means the 13:00–16:00 stretch has no rows, which plots as a
-  // shorter session rather than a wrong one.
-  const RTH_ONLY = session === 'rth'
-    ? `AND (to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York')::time
-             >= TIME '09:30'
-       AND (to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York')::time
-             <  TIME '16:00'`
-    : '';
+  // `symbol IS NULL OR symbol = $1` used to sit on both queries. The column is
+  // NOT NULL DEFAULT '$SPX' (see the ALTER in gex-history-writer.js), so the
+  // IS NULL leg can never match — but an OR on the LEADING column of
+  // idx_osgh_symbol_ts stopped the planner treating this as one index range and
+  // pushed it to a bitmap/seq scan of every symbol in the table. Dropped.
 
   // Every expiry with rows in the selected window, for the panel's expiry
   // chooser. Sent on every response so the picker's options can't drift from
@@ -1209,12 +1283,12 @@ async function handleGexVolFlow(req, res) {
   const { rows: expRows } = await pool.query(
     `SELECT expiry, COUNT(*)::int AS row_count, MAX(timestamp) AS last_ts
        FROM option_strike_gex_history
-      WHERE timestamp >= ${DAY_START}
-        ${RTH_ONLY}
-        AND (symbol IS NULL OR symbol = $1)
+      WHERE symbol = $1
+        AND timestamp >= $2
+        AND timestamp <  $3
       GROUP BY expiry
       ORDER BY expiry ASC`,
-    [symbol]
+    [symbol, winFrom, winTo]
   );
   const expiries = expRows.map((r) => ({
     expiry: r.expiry,
@@ -1248,15 +1322,34 @@ async function handleGexVolFlow(req, res) {
     expiry = best?.expiry || '';
   }
 
+  // `($2 = '' OR expiry = $2)` was the same planner trap as the symbol OR above:
+  // a constant-vs-column disjunction that the index cannot be probed with, so
+  // the expiry filter only ever ran as a post-scan recheck. The predicate is now
+  // built in JS and simply absent when there is nothing to filter on.
+  const expiryClause = expiry ? 'AND expiry = $4' : '';
+  const volFlowParams = expiry
+    ? [binMs, symbol, winFrom, expiry, winTo]
+    : [binMs, symbol, winFrom, winTo];
+  const winToParam = expiry ? '$5' : '$4';
+
   const { rows } = await pool.query(
     `WITH src AS (
        SELECT (timestamp / $1::bigint) * $1::bigint AS bucket_ms,
-              timestamp, expiry, strike, spot, net_gex, net_vol_gex
+              timestamp, spot, net_gex, net_vol_gex,
+              -- The slot's newest write, carried on every row of the bucket by a
+              -- window rather than recovered by a second pass.
+              --
+              -- This replaced a materialised "src" CTE + a "slot" GROUP BY over
+              -- it + a hash join back to "src". Because "src" was referenced
+              -- twice Postgres could not inline it, so a full RTH session was
+              -- spooled to a tuplestore and then read twice — three passes over
+              -- ~300k rows to answer a question that one ordered pass answers.
+              MAX(timestamp) OVER (PARTITION BY (timestamp / $1::bigint), expiry) AS slot_ts
          FROM option_strike_gex_history
-        WHERE timestamp >= ${DAY_START}
-          ${RTH_ONLY}
-          AND ($2 = '' OR expiry = $2)
-          AND (symbol IS NULL OR symbol = $3)
+        WHERE symbol = $2
+          AND timestamp >= $3
+          AND timestamp <  ${winToParam}
+          ${expiryClause}
      ),
      -- ONE snapshot per (bucket, expiry): the newest write that landed in it.
      -- The writer stamps every strike of a batch with the same instant, so
@@ -1272,18 +1365,10 @@ async function handleGexVolFlow(req, res) {
      -- distinct strikes in a single 30s bucket where the feed only ever
      -- subscribes ±8% of spot (~250 strikes) — which inflated the dollar series
      -- and pushed the positive share to 87% against the Levels strip's 50%.
-     slot AS (
-       SELECT bucket_ms, expiry, MAX(timestamp) AS ts
-         FROM src
-        GROUP BY bucket_ms, expiry
-     ),
      latest AS (
-       SELECT s.bucket_ms, s.spot, s.net_gex, s.net_vol_gex
-         FROM src s
-         JOIN slot k
-           ON k.bucket_ms = s.bucket_ms
-          AND k.expiry = s.expiry
-          AND k.ts = s.timestamp
+       SELECT bucket_ms, spot, net_gex, net_vol_gex
+         FROM src
+        WHERE timestamp = slot_ts
      )
      SELECT bucket_ms,
             MAX(spot)                                AS spot,
@@ -1307,7 +1392,7 @@ async function handleGexVolFlow(req, res) {
        FROM latest
       GROUP BY bucket_ms
       ORDER BY bucket_ms ASC`,
-    [binMs, expiry || '', symbol]
+    volFlowParams
   );
 
   let prev = null;
@@ -1344,7 +1429,38 @@ async function handleGexVolFlow(req, res) {
     const cutoff = Date.now() - 10 * 60 * 1000;
     for (const [k, v] of _volFlowCache) if (v.at < cutoff) _volFlowCache.delete(k);
   }
-  sendJson(res, 200, payload, req);
+  return payload;
+}
+
+// ── Vol-flow prewarm ────────────────────────────────────────────────────────
+// Same idea as the netprem prewarm below: keep the key the Scanner actually
+// asks for hot, so nobody eats a cold scan. The panel requests bin=30 (floored
+// to 60), session=rth, scope=front, so that is the one key worth holding.
+//
+// Without this, the 45s TTL guarantees a cold miss to whoever loads the page
+// more than 45s after the last viewer — which on a quiet morning is every
+// single visitor. Disable with VOLFLOW_PREWARM=0.
+const VOLFLOW_PREWARM_SYMBOLS = (process.env.VOLFLOW_PREWARM_SYMBOLS || '$SPX')
+  .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+if (process.env.VOLFLOW_PREWARM !== '0' && VOLFLOW_PREWARM_SYMBOLS.length) {
+  const volFlowPrewarmTick = async () => {
+    // RTH gate (rough): Mon–Fri 9:25–16:05 ET so the open is already warm.
+    const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const day = et.getDay();
+    const mins = et.getHours() * 60 + et.getMinutes();
+    if (day === 0 || day === 6 || mins < 9 * 60 + 25 || mins > 16 * 60 + 5) return;
+    for (const sym of VOLFLOW_PREWARM_SYMBOLS) {
+      try {
+        await volFlowPayload({
+          binSec: 60, binMs: 60_000, scope: 'front', expiryParam: '', session: 'rth', symbol: sym,
+        });
+      } catch { /* pool down / query failed — try again next tick */ }
+    }
+  };
+  // Just inside the TTL, so the cached payload is replaced a beat before it
+  // goes stale and a request never lands on an expired key.
+  const volFlowPrewarmId = setInterval(volFlowPrewarmTick, 30_000);
+  volFlowPrewarmId.unref?.();
 }
 
 // ── Netprem prewarm ─────────────────────────────────────────────────────────
@@ -2512,19 +2628,31 @@ async function main() {
             const p = getPool();
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
-            const symsQ = await p.query(
+            // `date` is already a DATE column (see ensureSchema in
+            // strike-growth-recorder.js). The old predicate was
+            //   date::date >= CURRENT_DATE - INTERVAL '7 days'
+            // — a no-op cast that still wrapped the column in an expression, so
+            // idx_strike_growth_latest (date, symbol, expiry, ts) could not be
+            // used and BOTH queries seq-scanned the whole retention window.
+            // `date >= CURRENT_DATE - 7` is date arithmetic on both sides, which
+            // the index can be probed with directly.
+            //
+            // Cached because neither answer can change more than once a day: the
+            // symbol roster is fixed by the recorder's watchlist and a new date
+            // appears at the first write of a session.
+            const symsQ = await _sgReplayMeta('symbols', () => p.query(
               `SELECT DISTINCT symbol FROM strike_growth
-               WHERE date::date >= CURRENT_DATE - INTERVAL '7 days'
+               WHERE date >= CURRENT_DATE - 7
                ORDER BY symbol ASC`
-            );
+            ));
             let dates = [];
             if (symbol) {
-              const dQ = await p.query(
+              const dQ = await _sgReplayMeta(`dates:${symbol}`, () => p.query(
                 `SELECT DISTINCT date FROM strike_growth
-                 WHERE symbol = $1 AND date::date >= CURRENT_DATE - INTERVAL '7 days'
+                 WHERE symbol = $1 AND date >= CURRENT_DATE - 7
                  ORDER BY date DESC`,
                 [symbol]
-              );
+              ));
               dates = dQ.rows.map((r) => r.date);
             }
             sendJson(res, 200, { ok: true, symbols: symsQ.rows.map((r) => r.symbol), dates });

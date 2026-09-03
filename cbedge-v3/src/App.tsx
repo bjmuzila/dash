@@ -55,6 +55,15 @@ const Scanner = lazy(() => import('@/pages/Scanner'))
 // /v3/economic-calendar?tab=earnings is a shareable link.
 const EconomicCalendar = lazy(() => import('@/pages/EconomicCalendar'))
 
+// /level-log — v2's /app/level-log, being ported a surface at a time against
+// the 283-row checklist in docs/parity/level-log.md. What is here is the WALL
+// MIGRATION chart (Part H) and the range switch that made v2's popout worth
+// opening (Part I); the ticker rail, the log card, the capture rail, the churn
+// strip and the timeline are still v2-only. The ticker and the date live in the
+// query string, so /v3/level-log?ticker=SPX&date=2026-09-02 is a shareable link
+// — which is why app/v3/level-log/route.ts had to be added with it.
+const LevelLog = lazy(() => import('@/pages/LevelLog'))
+
 // ── THE PHONE BUILD — /v3/m/* ────────────────────────────────────────────────
 // Six screens, registered in src/mobile/mobileNav.ts, each one a HOME-BOARD CARD
 // or a v3 page rendered full-bleed inside MobileShell. There is no phone-only
@@ -110,6 +119,7 @@ export default function App() {
             <Route path="/replay" element={<Replay />} />
             <Route path="/scanner" element={<Scanner />} />
             <Route path="/economic-calendar" element={<EconomicCalendar />} />
+            <Route path="/level-log" element={<LevelLog />} />
 
             {/* ── The phone build ────────────────────────────────────────────
                 Adding a tab is TWO edits: MOBILE_TABS in

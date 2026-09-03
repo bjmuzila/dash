@@ -156,6 +156,7 @@ const ALL_PAGES: { label: string; href: string }[] = [
   { label: 'Flow', href: '/flow' },
   { label: 'ES Candles', href: '/es-candles' },
   { label: 'Scanner', href: '/scanner' },
+  { label: 'Level Log', href: '/level-log' },
   { label: 'ICT', href: '/ict' },
   { label: 'Test Lab', href: '/test' },
   { label: 'Journal', href: '/trading' },
@@ -176,6 +177,7 @@ const LIVE_ROUTES = new Set([
   '/flow',
   '/em',
   '/scanner',
+  '/level-log',
   '/trading',
   '/test',
 ])

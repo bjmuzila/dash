@@ -3051,9 +3051,19 @@ const OWNER_ONLY_TABS = new Set<MainTab>(
 );
 
 export default function ScannerPage() {
-  // /scanner opens on GEX Change Top (2026-08-21). Any ?tab= in the URL still
-  // wins — the deep-link effect below overrides this on mount.
-  const [tab, setTab] = useState<MainTab>("gexchangetop");
+  // /scanner opens on GEX Change Top (2026-08-21). Any ?tab= in the URL wins,
+  // and it is read in the INITIALISER, not an effect.
+  //
+  // It used to be an effect, so /scanner?tab=gexlevels rendered GexChangeTop
+  // first, fired its /proxy/gex-change-top + -results fetches, and only then
+  // swapped — every deep link paid for a tab nobody asked for and threw the
+  // result away. The old comment cited prerendering and hydration mismatch;
+  // that was the Next-rendered era. These pages are served by the Vite SPA
+  // (app-vite), which has no server render to mismatch against, and
+  // readTabFromUrl already returns null when there is no window.
+  const [tab, setTab] = useState<MainTab>(
+    () => (readTabFromUrl() as MainTab | null) ?? "gexchangetop",
+  );
   // The sub-strip already hides owner-only pills; this is the other half, so a
   // pasted /scanner?tab=pickstudy URL doesn't open one. `loaded` matters: auth
   // resolves a tick after mount, and bouncing before it does would kick the
@@ -3065,13 +3075,8 @@ export default function ScannerPage() {
   // an empty beat, and it would also fire that tab's fetches.
   const visibleTab: MainTab | null = ownerGated ? (authLoaded ? "gexchangetop" : null) : tab;
 
-  // Deep link support: /scanner?tab=ibstats opens straight on that tab. Read in
-  // an effect (not useSearchParams) so the page stays prerenderable and there's
-  // no hydration mismatch — the default tab renders first, then swaps on mount.
-  useEffect(() => {
-    const fromUrl = readTabFromUrl();
-    if (fromUrl) setTab(fromUrl as MainTab);
-  }, []);
+  // Deep-link handling now lives in the useState initialiser above, so the first
+  // render is already the right tab and no wrong-tab fetches go out.
 
   // The GlobalToolbar's Scanner sub-strip links to /scanner?tab=… . While we are
   // already on /scanner that is a query-string-only navigation, which React

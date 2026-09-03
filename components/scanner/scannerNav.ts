@@ -128,7 +128,11 @@ export function isScannerTabId(v: string | null | undefined): v is ScannerTabId 
 /**
  * Reads ?tab= off the current URL without next/navigation's useSearchParams,
  * which would force the whole page under a Suspense boundary at build time.
- * Call from an effect (window is undefined during SSR/prerender).
+ *
+ * Safe to call from a useState initialiser — it returns null when there is no
+ * window, so it degrades to the caller's default instead of throwing. Prefer
+ * that to an effect: an effect renders the DEFAULT tab first and fires that
+ * tab's fetches before the real one takes over.
  */
 export function readTabFromUrl(): ScannerTabId | null {
   if (typeof window === "undefined") return null;

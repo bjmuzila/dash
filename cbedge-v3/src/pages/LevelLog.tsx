@@ -1,0 +1,190 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// LEVEL LOG — /v3/level-log
+//
+// FIRST SLICE OF THE PORT: the WALL MIGRATION chart and nothing else.
+//
+// v2's /app/level-log is 2,608 lines and thirteen surfaces; the spec for all of
+// it is docs/parity/level-log.md (283 checklist rows, Parts A–Q). What has come
+// across here is Part H (`WallMigrationChart`), Part I's RANGE behaviour, and
+// the slice of Part P those two need. Still to come, in the parity doc's order:
+// the ticker rail (E), the log card head (F), the capture rail and chips (G),
+// the churn strip (J), the timeline (L), the reaction legend (M) and
+// `buildLogText` (Q). Nothing below is a placeholder for them — they are simply
+// not built yet, and this page says what it shows.
+//
+// WHAT IS DELIBERATELY NOT v2's:
+//   · Part I's popout. v2 drew the week view in a portalled modal with its own
+//     scrim, Escape handler and close button, which Part S lists as v2-only
+//     chrome. v3 already has ONE way to make a card full size — the expand
+//     control every Card carries (design/primitives/Expand.tsx) — and the range
+//     switch that made the popout worth opening lives in the toolbar, where it
+//     works at either size. So TODAY / 5 SESSIONS is a control, not a mode.
+//   · v2 defaulted the popout to 5 sessions because opening it was an explicit
+//     act. Here the range is always on screen, so it opens on TODAY: up to
+//     thirteen requests must not be the cost of landing on the page.
+//
+// REST-only. No socket, no canvas, no polling — the log is change-only and the
+// page fetches on entry and on an explicit refresh, so an open tab never
+// hammers the recorder. Non-negotiables 2, 4, 5 and 6 have nothing to bite on.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { Card, CardToolbar } from '@/design/primitives/Card'
+import { SegGroup } from '@/design/primitives/Controls'
+import { Page } from '@/design/primitives/Page'
+import { TickerPicker } from '@/design/primitives/TickerPicker'
+import { PAGE_TICKER_RE } from '@/data/symbol'
+import { MIG_H, WallMigrationChart } from '@/pages/levelLog/WallMigrationChart'
+import {
+  type ExpScope,
+  type GexBasis,
+  type LogView,
+  VIEW_SCOPE,
+  todayETStr,
+  useWallDays,
+  variantTag,
+} from '@/pages/levelLog/wallData'
+
+/** How many sessions the week view asks for. v2's number. */
+const WEEK_SESSIONS = 5
+
+/**
+ * Card height: the plot at its designed 250 plus the header, the toolbar row,
+ * the variant line, the legend and the axis stamps. Explicit rather than
+ * content-sized because the chart FILLS its body — a body that sized to the
+ * chart and a chart that sized to the body have no fixed point between them.
+ */
+const CARD_H = MIG_H + 132
+
+const VIEW_OPTIONS: Array<{ label: string; value: LogView; title: string }> = [
+  { label: 'Walls', value: 'walls', title: 'Call wall + put wall only' },
+  { label: 'Core', value: 'core', title: 'CORE level only' },
+  { label: 'All', value: 'all', title: 'Walls + CORE on one timeline' },
+]
+
+const SCOPE_OPTIONS: Array<{ label: string; value: ExpScope; title: string }> = [
+  { label: '0DTE', value: '0dte', title: 'Nearest listed contract only — chain.expirations[0]' },
+  { label: 'Non-0DTE', value: 'agg', title: 'Every OTHER listed expiration, summed per strike' },
+]
+
+const BASIS_OPTIONS: Array<{ label: string; value: GexBasis; title: string }> = [
+  {
+    label: 'OI + Vol',
+    value: 'oivol',
+    title: 'netGEX + netVolGEX — open interest and today’s volume',
+  },
+  { label: 'Vol only', value: 'vol', title: 'netVolGEX alone — today’s volume, no open interest' },
+]
+
+const RANGE_OPTIONS: Array<{ label: string; value: '1' | '5'; title: string }> = [
+  { label: 'Today', value: '1', title: 'Just the selected date' },
+  {
+    label: '5 sessions',
+    value: '5',
+    title: 'The last 5 recorded sessions ending on the selected date',
+  },
+]
+
+export default function LevelLog() {
+  // The ticker and the date live in the query string, so /v3/level-log?ticker=
+  // SPX&date=2026-09-02 is a shareable link — which is also why
+  // app/v3/level-log/route.ts has to answer the hard refresh.
+  const [params, setParams] = useSearchParams()
+  const symbol = (params.get('ticker') || 'SPX').trim().toUpperCase()
+  const date = (params.get('date') || '').trim() || todayETStr()
+
+  const [view, setView] = useState<LogView>('all')
+  const [scope, setScope] = useState<ExpScope>('0dte')
+  const [basis, setBasis] = useState<GexBasis>('oivol')
+  const [range, setRange] = useState<'1' | '5'>('1')
+  // Bumped by Refresh. It is a dep of the fetch effect and nothing else — the
+  // requests are `no-store`, so a bump is a genuine re-read of the recorder.
+  const [nonce, setNonce] = useState(0)
+
+  const { days, loading } = useWallDays(
+    symbol,
+    date,
+    range === '5' ? WEEK_SESSIONS : 1,
+    nonce,
+    scope,
+    basis,
+  )
+
+  const setParam = (key: string, value: string) => {
+    const next = new URLSearchParams(params)
+    next.set(key, value)
+    setParams(next, { replace: true })
+  }
+
+  return (
+    <Page>
+      <Card
+        title="Level Log"
+        expandId="level-log-wall-migration"
+        style={{ height: CARD_H }}
+        actions={
+          <button
+            type="button"
+            onClick={() => setNonce((n) => n + 1)}
+            title="Re-read the recorder for this date"
+            className="rounded-sm px-1 text-xs text-faint transition-colors hover:bg-raised hover:text-fg"
+          >
+            <span aria-hidden>↻</span>
+          </button>
+        }
+      >
+        <CardToolbar>
+          <TickerPicker
+            activeTicker={symbol}
+            onSelect={(t) => setParam('ticker', t)}
+            allowCustom={PAGE_TICKER_RE}
+            title="Which root's recorded levels to draw"
+          />
+          <input
+            type="date"
+            value={date}
+            max={todayETStr()}
+            onChange={(e) => setParam('date', e.target.value || todayETStr())}
+            title="Session date, ET"
+            className="tabular rounded-sm border border-line bg-surface2 px-1.5 py-0.5 font-mono text-2xs text-fg"
+          />
+          <SegGroup options={VIEW_OPTIONS} value={view} onChange={setView} title="Which levels" />
+          <SegGroup
+            options={SCOPE_OPTIONS}
+            value={scope}
+            onChange={setScope}
+            title="Which contracts"
+          />
+          <SegGroup options={BASIS_OPTIONS} value={basis} onChange={setBasis} title="Which GEX" />
+          <SegGroup
+            options={RANGE_OPTIONS}
+            value={range}
+            onChange={setRange}
+            title="One session, or the last five recorded ones"
+          />
+        </CardToolbar>
+
+        <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
+          <span className="tabular font-mono text-2xs text-muted">
+            {variantTag(scope, basis)} · {VIEW_SCOPE[view]} view · 09:29 open + every 15m to 16:00
+            ET, change-only
+          </span>
+          {loading ? <span className="text-2xs text-faint">loading…</span> : null}
+        </div>
+
+        {days.length ? (
+          <WallMigrationChart days={days} view={view} fill />
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm text-muted">
+            {loading
+              ? 'Loading sessions…'
+              : range === '5'
+                ? `No recorded sessions for ${symbol} in the ${WEEK_SESSIONS} weekdays ending ${date} on ${variantTag(scope, basis)}.`
+                : `No recorded levels for ${symbol} on ${date} — ${variantTag(scope, basis)}.`}
+          </div>
+        )}
+      </Card>
+    </Page>
+  )
+}

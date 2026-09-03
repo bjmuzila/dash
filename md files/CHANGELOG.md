@@ -1,5 +1,121 @@
 # Changelog
 
+## 2026-09-03 - v3: Level Log lands with the wall-migration chart (`cbedge-v3/src/pages/LevelLog.tsx`, `pages/levelLog/*`, `app/v3/level-log/route.ts`)
+
+v2's `/app/level-log` had no counterpart in v3 at all — only the 283-row spec in
+`cbedge-v3/docs/parity/level-log.md`. The first surface of it is across:
+`WallMigrationChart` (parity Part H) and the range switch that made v2's popout
+worth opening (Part I), on a new `/v3/level-log` route with the ticker and date
+in the query string. `app/v3/level-log/route.ts` ships with it (step 4 of the
+four in `cbedge-v3/AGENTS.md`), plus the `App.tsx` route, the `Shell.tsx` NAV
+entry and the `TradersDashboard` ALL_PAGES / LIVE_ROUTES rows those three move
+with.
+
+The MODEL is transcribed, not reinvented: the change-only forward fill, the
+tape-not-the-log x extent, the CORE-sign rule as TWO ROLES (CORE = the heavier
+wall, OTHER = the lighter one drawn in that wall's colour, so a dominance flip
+swaps the lines instead of blinking one out), the one y range across every
+session drawn, the per-day `dense` decision at 20 one-minute bars, and the
+legend rule where a wall that is the CORE all session takes no chip because that
+chip would toggle nothing.
+
+Four things did NOT come across, each on purpose:
+
+- **Part I's portalled popout.** Part S lists that scrim/Escape/close chrome as
+  v2-only. v3 already has one way to make a card full size — the expand control
+  every `Card` carries — and TODAY / 5 SESSIONS is now a toolbar control that
+  works at either size rather than a mode you have to open a modal to reach.
+  It also opens on TODAY, not 5: v2 could default to the week because opening
+  the popout was an explicit act, and up to thirteen requests must not be the
+  cost of landing on the page.
+- **`data-cap-center` / `data-cap-swatch` and the absolutely-positioned legend
+  swatch.** Those exist to work around html2canvas drawing every text run at its
+  own probed baseline. v3's `shell/snapshot.ts` has no html2canvas, so the
+  workaround came out with the library it was for and the chip is a plain
+  inline-flex.
+- **The watermark.** v2 stamped `/cb-edge-logo.png` over the popout's plot so it
+  rode into the PNG; v3's snapshot bakes its own titled band.
+- **`stepRun`'s `reverse` param** — v2 carried it and never passed it true.
+
+Still v2-only, in the parity doc's order: the ticker rail (E), the log card head
+(F), the capture rail and chips (G), the churn strip (J), the timeline (L), the
+reaction legend (M) and `buildLogText` (Q). Nothing on the new page stands in for
+them.
+
+REST-only — `/proxy/walls` and `/proxy/candles-intraday`, no socket, no canvas,
+no polling. The single-session read fires the log and the tape TOGETHER (the date
+is known at entry, so non-negotiable 3 has nothing to hoist); the week view keeps
+v2's two waves, because the candidate logs are what decide which days exist and a
+bank holiday must not cost a candle fetch. Every array read is bound and guarded
+rather than indexed twice — v3 compiles under `noUncheckedIndexedAccess`.
+Verified: `tsc --noEmit` clean and `check-theme` reports no violations on the
+three new files. `npm run check` has NOT been run — the laptop's workspace was
+down for this session.
+
+## 2026-09-03 - Scanner page load: 19.9s vol-flow + 6.7s replay-meta
+
+Network waterfall on `/app/scanner?tab=gexlevels` showed `gex-vol-flow` at
+**19.88s** and `strike-growth/replay-meta` at **6.68s**, plus a `gex-change-top`
+call for a tab that was never displayed. All three were self-inflicted.
+
+### `/proxy/gex-vol-flow` — 19.9s
+
+Three compounding problems in `handleGexVolFlow`:
+
+1. **`(symbol IS NULL OR symbol = $1)`** on both queries. `symbol` is
+   `NOT NULL DEFAULT '$SPX'` (see the ALTER in `gex-history-writer.js`), so the
+   `IS NULL` leg can never match — but an OR on the LEADING column of
+   `idx_osgh_symbol_ts (symbol, timestamp)` stopped the planner treating it as
+   one index range and pushed it to a scan of every symbol in the table. Same
+   trap again on `($2 = '' OR expiry = $2)`. Both dropped; the expiry predicate
+   is now built in JS and simply absent when there is nothing to filter on.
+2. **The RTH clamp ran per row.**
+   `(to_timestamp(timestamp/1000.0) AT TIME ZONE 'America/New_York')::time` is a
+   timezone conversion for every candidate row (~300k for one SPX session), and
+   it hid the real bound from the planner — `timestamp >= ET midnight` was all
+   the index could use, so the scan always started at 00:00 ET and discarded the
+   overnight rows one at a time. Now computed as two epoch-ms bounds in JS via
+   the existing `etSessionOpenMs` / `etSessionCloseMs`, so both queries are a
+   straight range scan on the session.
+3. **`src` was scanned three times.** The CTE was referenced twice (once to
+   build `slot`'s GROUP BY, once to join back), so Postgres could not inline it
+   and spooled the whole session to a tuplestore. Replaced with a single
+   `MAX(timestamp) OVER (PARTITION BY bucket, expiry)` window and a
+   `WHERE timestamp = slot_ts` filter — one ordered pass, identical semantics
+   (still exactly one snapshot per bucket+expiry, still not `DISTINCT ON` per
+   strike).
+
+Also: TTL 20s -> 45s (recorder writes ~1/min, so a sub-minute miss re-ran the
+scan for a series that could not have moved), added single-flight so concurrent
+mounts on a cold key cost one query instead of N, and added an RTH prewarm tick
+(30s, mirroring the netprem prewarm) for the exact key the panel requests —
+`bin=60, session=rth, scope=front, $SPX`. Disable with `VOLFLOW_PREWARM=0`.
+
+### `/proxy/strike-growth/replay-meta` — 6.7s
+
+`WHERE date::date >= CURRENT_DATE - INTERVAL '7 days'` on a column that is
+**already** `DATE`. The no-op cast still wrapped the column in an expression, so
+`idx_strike_growth_latest (date, symbol, expiry, ts)` could not be used and both
+`SELECT DISTINCT` queries seq-scanned the retention window. Now
+`date >= CURRENT_DATE - 7` (date arithmetic on both sides), plus a 5-minute
+single-flighted cache — neither the symbol roster nor the date list can change
+more than once a day, and the endpoint is hit on every mount of the replay
+picker.
+
+### Scanner: deep link rendered the wrong tab first
+
+`ScannerPage` initialised `tab = "gexchangetop"` and only read `?tab=` in a mount
+effect, so `?tab=gexlevels` mounted `GexChangeTop`, fired its
+`/proxy/gex-change-top` + `-results` fetches, then threw the result away. Moved
+into the `useState` initialiser. The old comment cited prerender/hydration
+safety — that was the Next-rendered era; these pages are served by the Vite SPA
+now, and `readTabFromUrl()` already returns null with no window.
+
+No response shapes or numbers changed on any of the three.
+
+Files: `server-v2/server-with-proxy.js`, `components/pages/Scanner.tsx`,
+`components/scanner/scannerNav.ts`
+
 ## 2026-09-03 - budgets:ratchet was RAISING a budget, not lowering it
 
 `npm run budgets:ratchet` reported this, and it is backwards:
