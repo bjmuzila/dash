@@ -698,7 +698,7 @@ function mkLayer(o){
     styleList(d);
   }
   if(o.t==='image'){
-    d.innerHTML='<div class="ph">'+(o.label||'Click to load image')+'</div>';
+    d.innerHTML='<div class="ph">'+(o.label||'Paste a screenshot, or double-click')+'</div>';
     d.addEventListener('dblclick',function(){pick(d)});
   }
   if(o.t==='logo'){
@@ -885,7 +885,7 @@ function inspector(){
     h+='<div class="row"><button id="l_add">+ Bullet</button><button id="l_rm">− Bullet</button></div>';
   }
   if(t==='image'||t==='logo'){
-    h+='<div class="row"><button id="i_load" class="pri" style="flex:1">Load image…</button></div>';
+    h+='<div class="row"><button id="i_load" class="pri" style="flex:1">Load image…</button></div>'+'<p class="empty" style="margin:2px 0 0">Or just <b>Ctrl+V</b> — a copied screenshot drops into the selected slot.</p>';
     if(t==='image'){
       var im0=sel.querySelector('img');
       var z0=im0?parseFloat(im0.dataset.z||'1'):1;
@@ -1069,6 +1069,62 @@ document.addEventListener('keydown',function(e){
     if(x.dataset.lock==='1') return;
     x.style.left=px(x.offsetLeft+k[0]*s); x.style.top=px(x.offsetTop+k[1]*s);
   });
+});
+
+// ── Ctrl+V a screenshot straight into a slot ────────────────────────────────
+// Snipping a card and then hunting for a file in a picker is the slow half of
+// making one of these. The clipboard already has the picture; this takes it.
+//
+// Where it lands, in order:
+//   1. the SELECTED image/logo layer — you clicked the slot you meant
+//   2. the first EMPTY image slot — the common case on a fresh template
+//   3. a NEW image layer, sized to the pasted bitmap and centred
+//
+// Text paste is left alone: if the clipboard carries text and the caret is in
+// an editable line, the browser's own paste is what you want. An image-only
+// clipboard is taken wherever the focus is, because there is nothing else it
+// could have meant.
+function emptySlots(){
+  return [].filter.call(stage.querySelectorAll('.ly[data-t=image]'),function(d){
+    return !d.querySelector('img');
+  });
+}
+function pasteTarget(){
+  if(sel && (sel.dataset.t==='image'||sel.dataset.t==='logo')) return sel;
+  var e=emptySlots();
+  return e.length?e[0]:null;
+}
+function newImageLayer(url,nw,nh){
+  // Fit the bitmap inside 760x620 so a 3000px screenshot does not land as a
+  // layer bigger than the canvas, and keep its aspect so nothing is squashed.
+  var sc=Math.min(760/(nw||760),620/(nh||620),1);
+  var w=Math.max(120,Math.round((nw||600)*sc)), h=Math.max(90,Math.round((nh||340)*sc));
+  var d=mkLayer({t:'image',x:Math.round((W-w)/2),y:Math.round((H-h)/2),w:w,h:h,
+                 label:'Pasted screenshot'});
+  setImg(d,url);
+  return d;
+}
+document.addEventListener('paste',function(e){
+  var cd=e.clipboardData; if(!cd) return;
+  var file=null;
+  for(var i=0;i<cd.items.length;i++){
+    var it=cd.items[i];
+    if(it.kind==='file' && it.type.indexOf('image/')===0){ file=it.getAsFile(); break; }
+  }
+  if(!file) return;                                   // plain text — not ours
+  var hasText=[].indexOf.call(cd.types||[],'text/plain')>=0;
+  if(hasText && document.activeElement && document.activeElement.isContentEditable) return;
+  e.preventDefault();
+  var r=new FileReader();
+  r.onload=function(){
+    var url=r.result, d=pasteTarget();
+    if(d){ setImg(d,url); select(d); return; }
+    var probe=new Image();
+    probe.onload=function(){ select(newImageLayer(url,probe.naturalWidth,probe.naturalHeight)); };
+    probe.onerror=function(){ select(newImageLayer(url,600,340)); };
+    probe.src=url;
+  };
+  r.readAsDataURL(file);
 });
 
 document.querySelectorAll('[data-add]').forEach(function(b){
@@ -1381,7 +1437,7 @@ function v3card(icon,name,hook,bullets){
     {t:'text',x:80,y:382,w:700,html:hook,fs:30,fw:700,col:C.body},
     {t:'box',x:80,y:466,w:340,h:2,bgc:C.line,bd:C.line},
     {t:'list',x:80,y:512,w:720,fs:27,items:bullets},
-    {t:'image',x:880,y:110,w:640,h:680,label:name+' screenshot'},
+    {t:'image',x:880,y:110,w:640,h:680,label:'Paste the '+name+' screenshot'},
     {t:'text',x:80,y:826,w:600,html:'cbedge.net',fs:22,fw:700,col:C.dim}
   ];
 }
@@ -1434,7 +1490,7 @@ document.getElementById('tsave').onclick=function(){
   var clone=stage.cloneNode(true);
   clone.querySelectorAll('.hnd').forEach(function(h){h.remove()});
   clone.querySelectorAll('.ly[data-t=image]').forEach(function(d){
-    var lbl=(d.querySelector('.ph')||{}).textContent||'Click to load image';
+    var lbl=(d.querySelector('.ph')||{}).textContent||'Paste a screenshot, or double-click';
     d.innerHTML='<div class="ph">'+lbl+'</div>';
   });
   clone.querySelectorAll('.ly[data-t=logo] img').forEach(function(im){ im.src=LOGO_SRC; delete im.dataset.url; });

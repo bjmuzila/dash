@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-09-03 - Post Studio: Ctrl+V a screenshot straight into a slot
+
+**Snipping a card and then hunting for the file in a picker was the slow half of
+making one of these.** The clipboard already has the picture. Now a paste takes
+it.
+
+Where a pasted image lands, in order:
+
+1. The SELECTED image or logo layer - you clicked the slot you meant.
+2. The first EMPTY image slot - the common case on a freshly loaded template.
+3. A NEW image layer, sized to the pasted bitmap (fitted inside 760x620 so a
+   3000px screenshot does not arrive bigger than the canvas) and centred.
+
+Text paste is untouched: if the clipboard carries text and the caret is in an
+editable line, the browser's own paste is what you want. An image-only clipboard
+is taken wherever the focus is, because there is nothing else it could have
+meant.
+
+Undo/redo needed no wiring - the MutationObserver on `#stage` already sees the
+`<img>` land.
+
+Empty slots now read "Paste a screenshot, or double-click" instead of "Click to
+load image", the eight V3 card templates label theirs "Paste the <card>
+screenshot", and the image inspector says the same under Load image.
+
+Verified in a headless run: pasting into a loaded template fills the empty slot,
+a second paste with nothing selected creates a new centred layer, and no console
+or page errors.
+
+Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
+
 ## 2026-09-03 - Build fix: a backtick inside the schema template literal
 
 The VPS Docker build died in `next build` with `Expected ',', got 'users'` at
