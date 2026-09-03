@@ -1258,23 +1258,23 @@ document.querySelectorAll('[data-add]').forEach(function(b){
 
 var TPL={
   feature:function(){return [
-    {t:'logo',x:1080,y:70,w:440,h:150},
+    {t:'logo',x:80,y:70,w:352,h:120},
     {t:'text',x:90,y:250,w:800,html:'The data desks pay for.<br><span style="color:'+accent()+'">Built for retail.</span>',fs:62,fw:800},
     {t:'list',x:90,y:430,w:800,fs:28,items:['IB stats — 8 years historical','3 years historical estimated move','Live GEX charts &amp; full greeks','400+ stock options flow','Heatmaps, stats &amp; more']},
-    {t:'image',x:900,y:260,w:640,h:257,label:'GEX chart'},
-    {t:'image',x:840,y:464,w:520,h:219,label:'Options flow'},
-    {t:'image',x:1000,y:631,w:540,h:219,label:'Heatmap'}
+    {t:'image',x:900,y:70,w:640,h:340,label:'GEX chart'},
+    {t:'image',x:840,y:340,w:520,h:290,label:'Options flow'},
+    {t:'image',x:1000,y:560,w:540,h:290,label:'Heatmap'}
   ]},
   hero:function(){return [
     {t:'image',x:0,y:0,w:W,h:H,label:'Full dashboard screenshot'},
     {t:'box',x:0,y:0,w:Math.round(W*0.62),h:H,bgc:C.bg,bd:C.bg},
-    {t:'logo',x:1080,y:80,w:440,h:150},
+    {t:'logo',x:80,y:80,w:352,h:120},
     {t:'text',x:90,y:270,w:820,html:'The data desks pay for.<br><span style="color:'+accent()+'">Built for retail.</span>',fs:62,fw:800},
     {t:'list',x:90,y:450,w:800,fs:28,items:['Live GEX charts &amp; full greeks','400+ stock options flow','8 years of IB stats','Heatmaps, stats &amp; more']}
   ]},
   grid:function(){return [
-    {t:'logo',x:1180,y:60,w:340,h:110},
-    {t:'text',x:470,y:80,w:686,html:'Everything you need to trade the tape.',fs:36,fw:800},
+    {t:'logo',x:80,y:60,w:272,h:88},
+    {t:'text',x:470,y:80,w:1040,html:'Everything you need to trade the tape.',fs:36,fw:800},
     {t:'box',x:90,y:230,w:460,h:250},
     {t:'image',x:100,y:240,w:440,h:170,label:'Shot 1'},
     {t:'text',x:110,y:420,w:420,html:'Live GEX &amp; greeks',fs:23,fw:700},
@@ -1292,13 +1292,13 @@ var TPL={
     {t:'text',x:1098,y:625,w:380,html:'historical estimated move',fs:24,fw:700,col:C.body}
   ]},
   stat:function(){return [
-    {t:'logo',x:1140,y:70,w:380,h:130},
+    {t:'logo',x:80,y:70,w:304,h:104},
     {t:'text',x:90,y:300,w:1400,html:'400+',fs:190,fw:800,col:accent(),lh:1},
     {t:'text',x:90,y:530,w:1100,html:'tickers of live options flow — every sweep, block and split, as it prints.',fs:44,fw:700},
     {t:'text',x:90,y:790,w:900,html:'cbedge.net',fs:26,fw:700,col:C.mut}
   ]},
   promo:function(){return [
-    {t:'logo',x:1120,y:70,w:400,h:140},
+    {t:'logo',x:80,y:70,w:320,h:112},
     {t:'text',x:90,y:260,w:900,html:'Lock in founder pricing.',fs:64,fw:800},
     {t:'box',x:90,y:390,w:420,h:200},
     {t:'text',x:130,y:420,w:340,html:'Monthly',fs:24,fw:700,col:C.mut},
@@ -1309,16 +1309,16 @@ var TPL={
     {t:'text',x:580,y:465,w:364,html:'<s style="color:'+C.dim+'">$1000</s> <span style="color:'+accent()+'">$500</span>/yr',fs:38,fw:800},
     {t:'text',x:580,y:540,w:340,html:'code YEAR',fs:20,fw:700,col:C.gold},
     {t:'list',x:90,y:640,w:880,fs:24,items:['Live GEX, greeks &amp; key levels','400+ ticker options flow','8 years of IB stats · cancel anytime']},
-    {t:'image',x:1010,y:250,w:520,h:530,label:'Dashboard screenshot'}
+    {t:'image',x:1010,y:120,w:520,h:660,label:'Dashboard screenshot'}
   ]},
   quote:function(){return [
-    {t:'logo',x:1140,y:70,w:380,h:130},
+    {t:'logo',x:80,y:70,w:304,h:104},
     {t:'text',x:90,y:290,w:1420,html:'Most retail traders are flying blind.<br><span style="color:'+accent()+'">CB Edge isn\'t.</span>',fs:78,fw:800},
     {t:'text',x:90,y:600,w:1200,html:'Real-time gamma, orderflow and key levels — the same read the desks are working with.',fs:34,fw:700,col:C.body},
     {t:'text',x:90,y:790,w:900,html:'cbedge.net',fs:26,fw:700,col:C.mut}
   ]},
   win:function(){return [
-    {t:'logo',x:1190,y:56,w:330,h:110},
+    {t:'logo',x:80,y:56,w:264,h:88},
     {t:'text',x:80,y:186,w:900,html:'THE SCANNER FLAGGED IT.',fs:26,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:232,w:920,html:'PLTR 140C <span style="color:'+accent()+'">+129.6%</span>',fs:72,fw:800},
     {t:'box',x:80,y:350,w:900,h:150},
@@ -1329,8 +1329,8 @@ var TPL={
     {t:'text',x:672,y:378,w:280,html:'PER CONTRACT',fs:18,fw:700,col:C.mut,ls:2},
     {t:'text',x:672,y:410,w:280,html:'+$175',fs:44,fw:800,col:accent()},
     {t:'list',x:80,y:540,w:900,fs:25,items:['$3.2M sweep · 8.2% OTM · +101% vs open','Scanner score 60 — flagged “Very strong”','Jul 24 expiry · spot 129.37 at the print']},
-    {t:'image',x:1010,y:206,w:520,h:320,label:'Scanner card screenshot'},
-    {t:'image',x:1010,y:546,w:520,h:264,label:'Option price chart screenshot'},
+    {t:'image',x:1010,y:56,w:520,h:400,label:'Scanner card screenshot'},
+    {t:'image',x:1010,y:480,w:520,h:330,label:'Option price chart screenshot'},
     {t:'text',x:80,y:812,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim}
   ]},
 
@@ -1339,7 +1339,7 @@ var TPL={
 
   /* Daily "here are the walls" post — the pinned-tweet format as a card. */
   levels:function(){return [
-    {t:'logo',x:1180,y:56,w:340,h:112},
+    {t:'logo',x:80,y:56,w:272,h:90},
     {t:'text',x:80,y:186,w:900,html:'$SPX · KEY LEVELS · 0DTE',fs:22,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:228,w:920,html:'Where the dealers are <span style="color:'+accent()+'">pinned.</span>',fs:56,fw:800},
     {t:'box',x:80,y:340,w:900,h:112},
@@ -1356,44 +1356,44 @@ var TPL={
     {t:'text',x:800,y:628,w:160,html:'support',fs:20,fw:700,col:C.dim},
     {t:'text',x:80,y:736,w:900,html:'Updated live all day — not a morning screenshot.',fs:26,fw:700,col:C.body},
     {t:'text',x:80,y:790,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim},
-    {t:'image',x:1020,y:208,w:500,h:652,label:'GEX ladder / levels screenshot'}
+    {t:'image',x:1020,y:56,w:500,h:788,label:'GEX ladder / levels screenshot'}
   ]},
 
   /* "Shipped this week" — changelog / newest updates post. */
   updates:function(){return [
-    {t:'logo',x:1180,y:56,w:340,h:112},
+    {t:'logo',x:80,y:56,w:272,h:90},
     {t:'text',x:80,y:186,w:900,html:'WHAT&#39;S NEW',fs:22,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:228,w:920,html:'Shipped <span style="color:'+accent()+'">this week.</span>',fs:58,fw:800},
     {t:'box',x:80,y:348,w:900,h:404},
     {t:'list',x:124,y:392,w:820,fs:27,items:['New — ES/SPX ladder with live gamma walls','New — estimated-move stat cards for earnings','Faster — GEX refresh cut to under a second','Fixed — RTH/ETH toggle now holds across pages','Discord alerts fire the moment DEX crosses zero']},
     {t:'text',x:80,y:790,w:900,html:'Full changelog at cbedge.net/whats-new',fs:22,fw:700,col:C.dim},
-    {t:'image',x:1020,y:208,w:500,h:562,label:'Screenshot of the new feature'},
-    {t:'box',x:1020,y:799,w:500,h:45,bgc:C.panelUp},
-    {t:'text',x:1052,y:810,w:440,html:'Free 2-day trial · cbedge.net',fs:22,fw:700,col:C.pale}
+    {t:'image',x:1020,y:56,w:500,h:696,label:'Screenshot of the new feature'},
+    {t:'box',x:1020,y:788,w:500,h:56,bgc:C.panelUp},
+    {t:'text',x:1052,y:802,w:440,html:'Free 2-day trial · cbedge.net',fs:22,fw:700,col:C.pale}
   ]},
 
   /* Big screenshot + numbered callouts — the "here's how to read it" post. */
   explain:function(){return [
-    {t:'logo',x:1220,y:52,w:300,h:100},
+    {t:'logo',x:80,y:52,w:240,h:80},
     {t:'text',x:420,y:60,w:600,html:'HOW TO READ IT',fs:20,fw:700,col:C.mut,ls:3},
     {t:'text',x:420,y:92,w:620,html:'The GEX ladder, line by line.',fs:38,fw:800},
     {t:'image',x:80,y:186,w:940,h:620,label:'Screenshot to annotate'},
-    {t:'box',x:1060,y:192,w:460,h:190},
-    {t:'text',x:1092,y:216,w:400,html:'1',fs:32,fw:800,col:accent()},
-    {t:'text',x:1092,y:264,w:400,html:'Say what this part of the chart is showing you.',fs:23,fw:700,col:C.body},
-    {t:'box',x:1060,y:407,w:460,h:190},
-    {t:'text',x:1092,y:431,w:400,html:'2',fs:32,fw:800,col:accent()},
-    {t:'text',x:1092,y:479,w:400,html:'Then what it means for where price can go.',fs:23,fw:700,col:C.body},
-    {t:'box',x:1060,y:622,w:460,h:190},
-    {t:'text',x:1092,y:646,w:400,html:'3',fs:32,fw:800,col:accent()},
-    {t:'text',x:1092,y:694,w:400,html:'Then the trade it sets up. Keep it to one idea.',fs:23,fw:700,col:C.body},
+    {t:'box',x:1060,y:186,w:460,h:190},
+    {t:'text',x:1092,y:210,w:400,html:'1',fs:32,fw:800,col:accent()},
+    {t:'text',x:1092,y:258,w:400,html:'Say what this part of the chart is showing you.',fs:23,fw:700,col:C.body},
+    {t:'box',x:1060,y:401,w:460,h:190},
+    {t:'text',x:1092,y:425,w:400,html:'2',fs:32,fw:800,col:accent()},
+    {t:'text',x:1092,y:473,w:400,html:'Then what it means for where price can go.',fs:23,fw:700,col:C.body},
+    {t:'box',x:1060,y:616,w:460,h:190},
+    {t:'text',x:1092,y:640,w:400,html:'3',fs:32,fw:800,col:accent()},
+    {t:'text',x:1092,y:688,w:400,html:'Then the trade it sets up. Keep it to one idea.',fs:23,fw:700,col:C.body},
     {t:'text',x:80,y:836,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim}
   ]},
 
   /* Earnings estimated-move stat card — the $AMD-style post. */
   earnings:function(){return [
-    {t:'logo',x:1200,y:52,w:320,h:106},
-    {t:'text',x:1140,y:198,w:380,html:'cbedge.net',fs:22,fw:700,col:C.dim,al:'right'},
+    {t:'logo',x:80,y:52,w:256,h:85},
+    {t:'text',x:1140,y:74,w:380,html:'cbedge.net',fs:22,fw:700,col:C.dim,al:'right'},
     {t:'text',x:80,y:178,w:900,html:'EARNINGS · ESTIMATED MOVE',fs:22,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:216,w:900,html:'$AMD',fs:84,fw:800},
     {t:'text',x:80,y:326,w:900,html:'Reports Tuesday after the close.',fs:30,fw:700,col:C.pale},
@@ -1405,20 +1405,20 @@ var TPL={
     {t:'text',x:486,y:432,w:290,html:'UPPER',fs:17,fw:700,col:C.mut,ls:2},
     {t:'text',x:486,y:466,w:290,html:'$172.30',fs:50,fw:800,col:C.pale},
     {t:'text',x:486,y:534,w:290,html:'1σ to the upside',fs:19,fw:700,col:C.dim},
-    {t:'box',x:828,y:528,w:350,h:184},
+    {t:'box',x:828,y:404,w:350,h:184},
     {t:'text',x:860,y:432,w:290,html:'LOWER',fs:17,fw:700,col:C.mut,ls:2},
     {t:'text',x:860,y:466,w:290,html:'$153.46',fs:50,fw:800,col:C.red},
     {t:'text',x:860,y:534,w:290,html:'1σ to the downside',fs:19,fw:700,col:C.dim},
-    {t:'box',x:1202,y:528,w:350,h:184},
-    {t:'text',x:1234,y:556,w:290,html:'IV CRUSH',fs:17,fw:700,col:C.mut,ls:2},
-    {t:'text',x:1234,y:590,w:290,html:'−38%',fs:50,fw:800,col:C.gold},
-    {t:'text',x:1234,y:658,w:290,html:'front-month, post-print',fs:19,fw:700,col:C.dim},
-    {t:'image',x:80,y:748,w:1472,h:112,label:'Estimated-move stat card screenshot'}
+    {t:'box',x:1202,y:404,w:350,h:184},
+    {t:'text',x:1234,y:432,w:290,html:'IV CRUSH',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:1234,y:466,w:290,html:'−38%',fs:50,fw:800,col:C.gold},
+    {t:'text',x:1234,y:534,w:290,html:'front-month, post-print',fs:19,fw:700,col:C.dim},
+    {t:'image',x:80,y:624,w:1472,h:224,label:'Estimated-move stat card screenshot'}
   ]},
 
   /* "Called it" recap — the level on the left, what price did on the right. */
   recap:function(){return [
-    {t:'logo',x:1200,y:52,w:320,h:106},
+    {t:'logo',x:80,y:52,w:256,h:85},
     {t:'text',x:80,y:176,w:1000,html:'CALLED IT.',fs:24,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:216,w:1300,html:'7450 retest — <span style="color:'+accent()+'">clean rejection.</span>',fs:62,fw:800},
     {t:'box',x:80,y:344,w:720,h:412},
@@ -1433,7 +1433,7 @@ var TPL={
 
   /* Live alert card — "DEX crossed 0", Discord signal posts. */
   signal:function(){return [
-    {t:'logo',x:1180,y:56,w:340,h:112},
+    {t:'logo',x:80,y:56,w:272,h:90},
     {t:'box',x:80,y:190,w:250,h:44,bgc:C.panelUp},
     {t:'text',x:104,y:200,w:210,html:'CB EDGE SIGNALS',fs:18,fw:800,col:accent(),ls:2},
     {t:'text',x:80,y:262,w:1000,html:'DEX crossed <span style="color:'+accent()+'">zero.</span>',fs:66,fw:800},
@@ -1444,7 +1444,7 @@ var TPL={
     {t:'text',x:560,y:442,w:380,html:'7,412.55',fs:38,fw:800,col:accent()},
     {t:'list',x:80,y:552,w:900,fs:26,items:['Gamma flipped positive — dealers buying dips','Call wall 7450 · put wall 7350','Pushed to Discord the second it fires']},
     {t:'text',x:80,y:822,w:900,html:'cbedge.net · alerts in real time · not financial advice',fs:20,fw:700,col:C.dim},
-    {t:'image',x:1020,y:208,w:500,h:652,label:'Signal / alert card screenshot'}
+    {t:'image',x:1020,y:56,w:500,h:788,label:'Signal / alert card screenshot'}
   ]},
 
   /* Two-screenshot alert result — the daily "here's what the alerts did" post.
@@ -1459,7 +1459,7 @@ var TPL={
      Resize a slot from its corner with shift held to keep that ratio. */
   alerts:function(){return [
     // ── left column: the rendered story ──────────────────────────────────
-    {t:'logo',x:1200,y:52,w:320,h:106},
+    {t:'logo',x:80,y:52,w:256,h:85},
     {t:'text',x:80,y:184,w:720,html:'0DTE ALERT · RESULT',fs:22,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:222,w:760,html:'SPXW 7750C',fs:62,fw:800,k:'contract'},
     {t:'text',x:80,y:300,w:760,html:'<span class="fv" style="color:'+accent()+'">+440.9%</span> to the peak',fs:44,fw:800,k:'pct'},
@@ -1474,13 +1474,51 @@ var TPL={
     {t:'text',x:80,y:834,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim},
 
     // ── right column: the two screenshot slots + CTA ─────────────────────
-    {t:'text',x:860,y:198,w:316,html:'THE ALERTS THAT FIRED',fs:18,fw:700,col:C.mut,ls:2},
-    {t:'image',x:860,y:232,w:660,h:128,label:'Alerts table screenshot · wide strip',k:'shot-table'},
-    {t:'text',x:860,y:396,w:660,html:'THE 7750C, ALL SESSION',fs:18,fw:700,col:C.mut,ls:2},
-    {t:'image',x:860,y:430,w:660,h:320,label:'Option price chart screenshot',k:'shot-chart'},
-    {t:'box',x:860,y:774,w:660,h:70,bgc:C.panelUp},
-    {t:'text',x:892,y:788,w:600,html:'Every alert tracked to the tick.',fs:26,fw:800,col:C.pale},
-    {t:'text',x:892,y:820,w:600,html:'cbedge.net · free 2-day trial',fs:22,fw:700,col:C.dim}
+    {t:'text',x:860,y:56,w:660,html:'THE ALERTS THAT FIRED',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:90,w:660,h:128,label:'Alerts table screenshot · wide strip',k:'shot-table'},
+    {t:'text',x:860,y:258,w:660,html:'THE 7750C, ALL SESSION',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:292,w:660,h:406,label:'Option price chart screenshot',k:'shot-chart'},
+    {t:'box',x:860,y:732,w:660,h:112,bgc:C.panelUp},
+    {t:'text',x:892,y:756,w:600,html:'Every alert tracked to the tick.',fs:26,fw:800,col:C.pale},
+    {t:'text',x:892,y:794,w:600,html:'cbedge.net · free 2-day trial',fs:22,fw:700,col:C.dim}
+  ]},
+
+  /* AUTO BUY · CORE LEVEL — the daily "the core got tagged and the bot took it"
+     post. Same shape as `alerts`, different story: this one is about the LEVEL
+     doing the work, so the headline is the core tag and the numbers underneath
+     are what the fill turned into.
+
+     Two slots, sized to the aspect the two exports actually come out at, so a
+     paste lands flush and nothing has to be zoomed or panned:
+       · auto-buy table strip  1122x148  (7.58:1)  -> 660x87
+       · contract price card    900x544  (1.65:1)  -> 660x399
+     Resize a slot from its corner with shift held to keep that ratio, or
+     alt+drag a side to trim it. */
+  autocore:function(){return [
+    // ── left column: the rendered story ──────────────────────────────────
+    {t:'logo',x:80,y:56,w:272,h:90},
+    {t:'text',x:80,y:184,w:720,html:'AUTO BUY &middot; CORE LEVEL',fs:22,fw:700,col:C.mut,ls:3},
+    {t:'text',x:80,y:222,w:760,html:'SPXW 7720C',fs:62,fw:800,k:'contract'},
+    {t:'text',x:80,y:300,w:760,html:'<span class="fv" style="color:'+accent()+'">+1068.9%</span> to the peak',fs:44,fw:800,k:'pct'},
+    {t:'box',x:80,y:392,w:720,h:158},
+    {t:'text',x:112,y:420,w:200,html:'ENTRY',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:112,y:452,w:200,html:'$3.05',fs:44,fw:800,k:'entry'},
+    {t:'text',x:352,y:420,w:200,html:'PEAK',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:352,y:452,w:200,html:'$35.65',fs:44,fw:800,col:accent(),k:'peak'},
+    {t:'text',x:592,y:420,w:200,html:'PER CONTRACT',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:592,y:452,w:200,html:'+$2,465',fs:40,fw:800,col:accent(),k:'perContract'},
+    {t:'list',x:80,y:586,w:720,fs:25,items:['Core level tagged 10:30 AM &middot; peak 2:02 PM','Bought automatically &mdash; no discretion, no hesitation','Sold $27.70 &mdash; +808.2% booked'],k:'bullets'},
+    {t:'text',x:80,y:834,w:900,html:'cbedge.net &middot; not financial advice',fs:20,fw:700,col:C.dim},
+
+    // ── right column: the two screenshot slots + CTA ─────────────────────
+    {t:'text',x:860,y:56,w:660,html:'THE BUYS THAT FIRED',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:90,w:660,h:87,label:'Auto-buy table screenshot &middot; wide strip',k:'shot-table'},
+    {t:'text',x:860,y:213,w:660,html:'THE CONTRACT, ALL SESSION',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:247,w:660,h:399,label:'Contract price card screenshot',k:'shot-chart'},
+    {t:'box',x:860,y:700,w:660,h:144,bgc:C.panelUp},
+    {t:'text',x:892,y:722,w:600,html:'The level does the work.',fs:26,fw:800,col:C.pale},
+    {t:'text',x:892,y:762,w:600,html:'Posted before the open. Bought the second it tags.',fs:20,fw:700,col:C.body},
+    {t:'text',x:892,y:798,w:600,html:'cbedge.net &middot; free 2-day trial',fs:20,fw:700,col:C.dim}
   ]},
 
   /* Weekend estimated-moves scoreboard — the Saturday "here is how the week
@@ -1493,7 +1531,7 @@ var TPL={
        · core-board strip   ~425x212  (2.01:1) → 660x329 */
   emweek:function(){return [
     // ── left column: the rendered scoreboard + the ask ───────────────────
-    {t:'logo',x:1200,y:52,w:320,h:106},
+    {t:'logo',x:80,y:52,w:256,h:85},
     {t:'text',x:80,y:184,w:760,html:'ESTIMATED MOVES · WEEKLY RESULTS',fs:20,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:218,w:800,html:'Week of 8/28',fs:56,fw:800,k:'weekLabel'},
     {t:'text',x:80,y:296,w:800,html:'Every move we scored this week — wins and misses.',fs:28,fw:700,col:C.body},
@@ -1517,13 +1555,13 @@ var TPL={
     {t:'text',x:80,y:836,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim},
 
     // ── right column: the two weekly-stats strips ────────────────────────
-    {t:'text',x:860,y:198,w:316,html:'ALL SCORED TICKERS',fs:18,fw:700,col:C.mut,ls:2},
-    {t:'image',x:860,y:232,w:660,h:170,label:'Weekly stats — all tickers',k:'shot-all'},
-    {t:'text',x:860,y:436,w:660,html:'THE CORE BOARD',fs:18,fw:700,col:C.mut,ls:2},
-    {t:'image',x:860,y:470,w:660,h:284,label:'Weekly stats — core board',k:'shot-core'},
-    {t:'box',x:860,y:774,w:660,h:70,bgc:C.panelUp},
-    {t:'text',x:892,y:788,w:600,html:'Scored = graded against the actual close.',fs:24,fw:800,col:C.pale},
-    {t:'text',x:892,y:822,w:600,html:'Every ticker, every week — nothing dropped after the fact.',fs:20,fw:700,col:C.dim}
+    {t:'text',x:860,y:56,w:660,html:'ALL SCORED TICKERS',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:90,w:660,h:191,label:'Weekly stats — all tickers',k:'shot-all'},
+    {t:'text',x:860,y:321,w:660,html:'THE CORE BOARD',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:355,w:660,h:329,label:'Weekly stats — core board',k:'shot-core'},
+    {t:'box',x:860,y:712,w:660,h:132,bgc:C.panelUp},
+    {t:'text',x:892,y:740,w:600,html:'Scored = graded against the actual close.',fs:24,fw:800,col:C.pale},
+    {t:'text',x:892,y:784,w:600,html:'Every ticker, every week — nothing dropped after the fact.',fs:20,fw:700,col:C.dim}
   ]},
 
 
@@ -1549,7 +1587,7 @@ var TPL={
 
 function v3card(icon,name,hook,bullets){
   return [
-    {t:'logo',x:1180,y:56,w:340,h:112},
+    {t:'logo',x:80,y:56,w:272,h:90},
     {t:'text',x:80,y:288,w:700,html:icon+' '+name,fs:60,fw:800},
     {t:'text',x:80,y:382,w:700,html:hook,fs:30,fw:700,col:C.body},
     {t:'box',x:80,y:466,w:340,h:2,bgc:C.line,bd:C.line},
@@ -1565,6 +1603,7 @@ function customTpls(){ try{return JSON.parse(localStorage.getItem('cbe_tpls')||'
 function refreshT(){
   var sel0=document.getElementById('tpl'), cur=sel0.value;
   var built=[['alerts','Alert result — 2 screenshots'],
+             ['autocore','Auto buy — core level'],
              ['emweek','EM weekend results + sign-up'],
              ['levels','Key levels — walls &amp; flip'],['earnings','Earnings — estimated move'],
              ['explain','Screenshot + callouts'],['recap','Called it — level vs price'],

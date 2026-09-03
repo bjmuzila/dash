@@ -1,5 +1,90 @@
 # Changelog
 
+## 2026-09-03 - v3 board: Gauge Rail card (v2's home strip, minus IB Direction)
+
+v2's home-page segmented-LED strip, added to the v3 board as a card. Five tiles
+across one row: Gamma (Net GEX), Delta (DEX), Gamma % 0DTE (Vol), Net GEX Rate /
+min and 0DTE GEX D 15m, each a tick meter with the value under it and a
+15-minute change line under that.
+
+The sixth tile - IB Direction - is deliberately not here. It was also the only
+one on the rail that had nothing to do with the option book (it came off the ES
+candle feed through its own hook), so dropping it makes this a single-source
+card: every number comes from ONE gex frame plus that frame's own history.
+
+Where the numbers come from is the one real difference from v2. v2 reads the
+socket's `totals` blob (totalGEXOiVol / totalDeltaOiVol); v3's wire contract
+does not describe that blob, so the card sums the ROWS through the same
+accessors the GEX Chart card uses - netGexOf/dexOf on the OI+VOL basis. That is
+the identical definition server-v2's greeks-ts-writer.js records with, so the
+rail cannot disagree with the GEX Chart's Net GEX tile sitting next to it, and
+the recorded series is a valid seed for it.
+
+Seeded from `/api/snapshots/greeks` (today, $B, one request, no poll). Without
+it the rate tile and the 15-minute tile would read "--" for the first fifteen
+minutes after the card is added, which is most of the time anyone spends looking
+at a board. The per-tile 15-minute change LINE is still a one-minute ring buffer
+and still draws nothing until it reaches back a full fifteen minutes - never
+value minus prevValue.
+
+The snapshot selector deliberately ignores the frame's `updatedAt` when deciding
+whether anything changed, so the card re-renders on movement rather than on
+every socket push.
+
+Default footprint w 12 / h 5 - the strip shape, full board width.
+
+Touched: `cbedge-v3/src/board/gaugeRail/GaugeRailCard.tsx` (new),
+`cbedge-v3/src/board/catalog.tsx`. No proxy, server or v2 dashboard code.
+
+## 2026-09-03 - Post Studio: "Auto buy - core level" template
+
+The daily "the core got tagged and the bot took it" post, as a template. Same
+two-column shape as the alert-result card, different story: this one is about
+the LEVEL doing the work, so the headline is the tag and the numbers underneath
+are what the fill turned into.
+
+Left side is all rendered type - contract, percent to the peak, an entry / peak /
+per-contract row, three bullets, the disclaimer - and every number carries a `k:`
+key, so Auto-fill can read them off the screenshots and Save-as-template keeps
+the layout.
+
+Right side is the two slots, cut to the aspect the exports actually come out at
+so a paste lands flush with nothing to zoom or pan:
+
+- auto-buy table strip - 1122x148 (7.58:1) -> 660x87
+- contract price card - 900x544 (1.65:1) -> 660x399
+
+Listed in the Template dropdown as "Auto buy - core level", right under the alert
+result card.
+
+Verified in a headless run: the template loads with no console or page errors and
+both real screenshots seat flush in their slots at 1:1.
+
+Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
+
+## 2026-09-03 - Post Studio: logo back on the left, 20% smaller
+
+Reverting the top-right move from earlier today. The logo sits at the 80px left
+margin again on all sixteen built-in templates and the eight V3 cards, at 80% of
+its old size (e.g. 340x112 -> 272x90) - it was carrying more weight than a logo
+needs to.
+
+Because the logo is out of the top-right again, every right-column layout that
+had been compressed to make room for it is restored to its original geometry:
+feature's three staggered shots, promo's dashboard slot, win's two screenshots,
+updates' feature shot and trial strip, levels' and signal's full-height ladders,
+explain's three callout boxes, earnings' stat row and bottom strip, and the
+alerts / emweek two-slot columns. grid's headline is back to its full 1040 width.
+
+Kept from that pass: promo's yearly price ("$1000 $500/yr") stays at 38px in a
+slightly wider box. At 46px it wrapped and overlapped "code YEAR" - that was a
+pre-existing bug, not something the logo move caused.
+
+Verified in a headless run: all 24 templates render with no console or page
+errors and nothing runs off the canvas.
+
+Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
+
 ## 2026-09-03 - Post Studio: alt+drag a side to crop, and the logo moves right
 
 **Cropping.** A pasted screenshot almost never matches the slot it lands in, and

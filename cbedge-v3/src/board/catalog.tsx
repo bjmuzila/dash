@@ -8,10 +8,10 @@ import type { BoardItem } from '@/design/primitives/Board'
 // BoardPage and Board never need to change.
 //
 // THE BIG ONES ARE lazy(). GEX Candles, Multi Greek, Key Levels, the Economic
-// Calendar, the GEX Chart, Net Premium and the Flow Tape are each a real
-// feature with its own module tree — GEX Candles and Net Premium each pull
-// lightweight-charts, the Flow Tape pulls the whole print table and its
-// contract drawer. Static imports would put all of them in the board's route
+// Calendar, the GEX Chart, Net Premium, the Flow Tape and the Gauge Rail are
+// each a real feature with its own module tree — GEX Candles and Net Premium
+// each pull lightweight-charts, the Flow Tape pulls the whole print table and
+// its contract drawer. Static imports would put all of them in the board's route
 // chunk and every user would pay for the cards they do not have on their board.
 // lazy() means a card's code arrives when the card does. The Suspense fallback
 // is a blank fill, not a spinner: the card frame is already drawn around it,
@@ -31,6 +31,7 @@ const EconCalendarCard = lazy(() =>
 const GexChartCard = lazy(() => import('./gexChart/GexChartCard').then((m) => ({ default: m.GexChartCard })))
 const NetPremiumCard = lazy(() => import('./netPremium/NetPremiumCard').then((m) => ({ default: m.NetPremiumCard })))
 const FlowTapeCard = lazy(() => import('./flowTape/FlowTapeCard').then((m) => ({ default: m.FlowTapeCard })))
+const GaugeRailCard = lazy(() => import('./gaugeRail/GaugeRailCard').then((m) => ({ default: m.GaugeRailCard })))
 
 function Deferred({ children }: { children: ReactNode }) {
   return <Suspense fallback={<div className="min-h-0 flex-1" />}>{children}</Suspense>
@@ -186,6 +187,21 @@ export const CARD_CATALOG: CardDef[] = [
     render: () => (
       <Deferred>
         <GexChartCard />
+      </Deferred>
+    ),
+  },
+  {
+    // v2's home-page gauge strip, minus its IB Direction tile. A one-row card:
+    // w 12 / h 5 is the strip shape it is drawn for — five tiles sharing the
+    // full board width, tall enough for a label, a meter, a value and its
+    // 15-minute change line and no taller.
+    id: 'gauge-rail',
+    icon: '🎚️',
+    label: 'Gauge Rail',
+    defaultSize: { w: 12, h: 5 },
+    render: () => (
+      <Deferred>
+        <GaugeRailCard />
       </Deferred>
     ),
   },

@@ -4,6 +4,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Thursday 9/3/2026
 
+* **GEX Candles (v3 preview):** the GEX bubbles now line up with the candles they belong to, the 1-minute view shows the top four strikes at four clearly different sizes, the biggest wall in each column is gold, and the chart opens on the full 9:30-4:00 session instead of a squeezed sliver.
+
 * **Economic Calendar (v3 preview):** the calendar and the earnings week board now have their own full page — impact filters, a market-cap filter, search, and a link that opens straight to the earnings tab.
 
 * **Phone (v3 preview):** the dashboard now has a real phone version — GEX, Heat, SPX Candles, Estimated Moves and Calendar, with the usual top bar and a bottom tab bar. Opening cbedge.net on a phone goes straight there. The options chain is desktop-only for now.
