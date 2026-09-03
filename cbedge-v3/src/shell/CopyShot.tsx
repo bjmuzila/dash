@@ -45,6 +45,13 @@ export interface CopyShotTarget {
   id: string
   /** One emoji, matching the card's own (see CardDef.icon in board/catalog). */
   icon?: string
+  /**
+   * The row's tooltip, for a target the default wording would misdescribe. The
+   * default says "Copy a PNG of …", which is true of every row but the Stats
+   * one — that copies characters, and a row that claims to be a picture is a row
+   * nobody clicks when they wanted text.
+   */
+  hint?: string
   /** The menu row, and the name that leads the PNG's caption. */
   label: string
   /**
@@ -368,7 +375,7 @@ export function CopyShotMenu() {
                   key={t.id}
                   type="button"
                   onClick={() => pick(t)}
-                  title={`Copy a PNG of ${t.label} — drag to reorder`}
+                  title={`${t.hint ?? `Copy a PNG of ${t.label}`} — drag to reorder`}
                   draggable
                   onDragStart={(e) => {
                     dragId.current = t.id

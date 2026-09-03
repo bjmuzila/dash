@@ -140,6 +140,56 @@ const CARD_ID = 'gex-candles'
 const REPLAY_BASE_MS = 700
 const REPLAY_SPEEDS = [0.5, 1, 2, 4, 8] as const
 
+/**
+ * How far back the bubble history reaches WHILE REWOUND, minutes.
+ *
+ * 5760 = 4 days, and it is the route's own clamp on `minutes` (see
+ * /api/snapshots/option-strike-gex-history in server-v2/api-router.js) — asking
+ * for more is silently the same request, so this is "everything there is".
+ *
+ * Everything there is, is not much. `option_strike_gex_history` is pruned to
+ * GEX_HISTORY_KEEP_SESSIONS — THREE trading sessions, env-overridable — by
+ * `pruneOptionStrikeGexHistory` in server-v2/_lib-db.cjs. So the session picker
+ * below will offer at most three days no matter what this number says, and on a
+ * Monday two of them may be Thursday and Friday. That is a retention decision,
+ * not a client one: raising GEX_HISTORY_KEEP_SESSIONS is what buys more days.
+ *
+ * The picker therefore never guesses. It lists the ET days the payload actually
+ * came back holding, and says how many that was.
+ */
+const REPLAY_HISTORY_MINUTES = 5760
+
+/**
+ * Calendar days of CANDLES to pull while rewound (live: candles.ts's
+ * HISTORY_DAYS).
+ *
+ * 7 is dxFeed's practical 1m ceiling, which the etf-candles route clamps to
+ * regardless of what is asked — so it is simultaneously "enough to cover the
+ * oldest retained gamma session across a weekend" and "the most that can be
+ * answered".
+ */
+const REPLAY_CANDLE_DAYS = 7
+
+/** `Fri 09-05` — how a session reads in the replay day picker. */
+const ET_DAY_LABEL = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  weekday: 'short',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+/**
+ * A `YYYY-MM-DD` ET day, labelled for the picker.
+ *
+ * Parsed at NOON UTC, not midnight: `new Date('2026-09-05')` is midnight UTC,
+ * which is the 4th in New York, and the dropdown would name every session as
+ * the day before itself.
+ */
+function dayLabel(day: string): string {
+  const ts = Date.parse(`${day}T12:00:00Z`)
+  return Number.isFinite(ts) ? ET_DAY_LABEL.format(new Date(ts)) : day
+}
+
 /** `HH:MM` in New York — what the transport's clock reads. */
 const ET_CLOCK = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York',
@@ -400,6 +450,16 @@ export function GexCandlesCard({
   const [replayMs, setReplayMs] = useState(0)
   const [replayPlaying, setReplayPlaying] = useState(false)
   const [replaySpeed, setReplaySpeed] = useState(1)
+  /**
+   * Which SESSION is rewound, as a `YYYY-MM-DD` ET day. '' = the newest one the
+   * history came back holding, which is what the card draws live.
+   *
+   * Only the replay path reads it. Live, the card still pins itself to
+   * `latestSession` exactly as it always has — a board card that could sit on
+   * Tuesday's gamma without the whole page saying so is the bug this picker
+   * exists to avoid creating.
+   */
+  const [replayDay, setReplayDay] = useState('')
 
   const patch = useCallback((p: Partial<ChartSettings>) => {
     setSettings((prev) => {
@@ -456,8 +516,18 @@ export function GexCandlesCard({
   // message would be the exact React-in-the-tick-path AGENTS.md rule 4 bans.
   // Here the forming bar reaches the chart imperatively (see "The live
   // price"), and the closed bars arrive on the poll, as they do for SPX.
+  // REPLAY PULLS A WIDER TAPE. The session picker can only offer a day the
+  // GAMMA has, but a day with gamma and no candles is an empty chart with a
+  // populated dropdown over it — worse than not offering the day. Retention is
+  // three sessions and three sessions can straddle a weekend plus a holiday, so
+  // the default 5 calendar days is not always enough to cover the oldest of
+  // them. 7 is the ETF route's own dxFeed ceiling, so it is the most that can be
+  // asked for and still answered.
+  const candleDays = replayOn ? REPLAY_CANDLE_DAYS : undefined
   const candlesQ = useQuery<unknown>(
-    useEs ? esCandlesUrl(settings.interval) : candlesUrl(def, settings.interval),
+    useEs
+      ? esCandlesUrl(settings.interval, candleDays)
+      : candlesUrl(def, settings.interval, candleDays),
     { staleMs: 25_000, pollMs: 30_000, background: isOwner },
   )
   // The basis, ES only. useQuery(null) neither fetches nor polls, so the
@@ -580,12 +650,20 @@ export function GexCandlesCard({
   // the distance to that Friday's pre-open plus an hour instead of a constant
   // that cannot know what day it is. The route clamps at 5760, comfortably
   // above a Sunday.
+  //
+  // IN REPLAY THE REACH IS THE WHOLE RETENTION. The session picker can only
+  // offer days that are IN the payload, so replay asks for the route's maximum
+  // — see REPLAY_HISTORY_MINUTES. That is the expensive request this constant
+  // was written to avoid, and it is paid ONLY on the replay tab: a rewound
+  // chart is a deliberate act with a session dropdown on it, not the board's
+  // idle poll.
   const historyMinutes = useMemo(() => {
+    if (replayOn) return REPLAY_HISTORY_MINUTES
     if (!weekendExpiry) return GEX_HISTORY_MINUTES
     const preOpen = Date.parse(`${weekendExpiry}T08:00:00Z`) // 04:00 ET, before any session column
     const back = Math.ceil((Date.now() - preOpen) / 60_000) + 60
     return Math.min(5760, Math.max(GEX_HISTORY_MINUTES, back))
-  }, [weekendExpiry])
+  }, [replayOn, weekendExpiry])
   // Held in a variable rather than inlined, because the NULL case has to be
   // readable downstream — see `allColumns`.
   const gexUrl =
@@ -608,11 +686,35 @@ export function GexCandlesCard({
     return filterSession(rollup(raw, settings.interval), session)
   }, [useEs, candlesQ.data, settings.interval, session])
 
+  /** The ET days the TAPE covers, newest first. `HISTORY_DAYS` calendar days. */
+  const barDays = useMemo(
+    () => [...new Set(allBars.map((b) => etDay(b.t)))].sort().reverse(),
+    [allBars],
+  )
+
+  /**
+   * The session being drawn while rewound — the picked day, or the newest the
+   * tape has, which is the one the live card draws. '' live, and that empty
+   * string is load-bearing: everything below reads it as "do not scope", so the
+   * board's behaviour is reached by the same code path rather than a branch.
+   */
+  const activeDay = replayOn ? (replayDay || barDays[0] || '') : ''
+
+  /** The tape, scoped to the rewound session. Live, the whole thing. */
+  const dayBars = useMemo(
+    () => (activeDay ? allBars.filter((b) => etDay(b.t) === activeDay) : allBars),
+    [allBars, activeDay],
+  )
+
   // ── The replay cursor ──────────────────────────────────────────────────────
   // The timeline is the BARS, not the GEX columns: the candles are always there
   // and the ladder may be switched off, and a transport whose scrubber empties
   // when you turn off a layer is a broken transport.
-  const replayTimeline = useMemo(() => allBars.map((b) => b.t), [allBars])
+  //
+  // ONE SESSION's bars, not five. The tape is pulled HISTORY_DAYS deep, and a
+  // scrubber spanning all of it would put four sessions the picker has already
+  // excluded under one handle — 09:30 would be four different mornings.
+  const replayTimeline = useMemo(() => dayBars.map((b) => b.t), [dayBars])
   const replayLast = replayTimeline.length - 1
 
   // Index is DERIVED from the timestamp, never stored. See the header: an index
@@ -654,9 +756,11 @@ export function GexCandlesCard({
     return () => clearInterval(id)
   }, [replayPlaying, replaySpeed, replayTimeline])
 
+  // `dayBars`, so a rewound chart shows THAT session and nothing after it. Live,
+  // `dayBars` IS `allBars` and `cursor` is 0, so this is a no-op passthrough.
   const bars = useMemo(
-    () => (cursor ? allBars.filter((b) => b.t <= cursor) : allBars),
-    [allBars, cursor],
+    () => (cursor ? dayBars.filter((b) => b.t <= cursor) : dayBars),
+    [dayBars, cursor],
   )
 
   barsRef.current = bars
@@ -698,12 +802,45 @@ export function GexCandlesCard({
   // reason: the bubbles and the rail read one array, so a rewound chart cannot
   // show 10:04 gamma under a 10:04 tape beside a 16:00 rail.
   const columns = useMemo(() => {
-    const picked = weekendExpiry
-      ? allColumns.filter((c) => etDay(c.slotTs) === weekendExpiry)
-      : latestSession(allColumns)
+    // `activeDay` FIRST: rewound, the picked session outranks both the weekend
+    // pin and "newest", which are the two rules for choosing a session when
+    // nobody has chosen one. Live it is '' and neither rule moves.
+    const picked = activeDay
+      ? allColumns.filter((c) => etDay(c.slotTs) === activeDay)
+      : weekendExpiry
+        ? allColumns.filter((c) => etDay(c.slotTs) === weekendExpiry)
+        : latestSession(allColumns)
     const shifted = useEs ? shiftColumns(picked, basis) : picked
     return cursor ? shifted.filter((c) => c.slotTs <= cursor) : shifted
-  }, [allColumns, weekendExpiry, useEs, basis, cursor])
+  }, [allColumns, activeDay, weekendExpiry, useEs, basis, cursor])
+
+  /**
+   * THE SESSIONS THE PICKER MAY OFFER, newest first.
+   *
+   * The ET days the GAMMA payload actually came back holding — never a computed
+   * range. `option_strike_gex_history` is pruned to three sessions server-side
+   * (see REPLAY_HISTORY_MINUTES), holidays and half-days move which three, and a
+   * dropdown that offers a day with no ladder behind it is a dropdown that
+   * renders an empty chart and blames the user for picking wrong.
+   *
+   * With both gamma layers off there is no payload to read, so it falls back to
+   * the tape's days — the picker stays usable for scrubbing candles alone.
+   */
+  const sessionDays = useMemo(() => {
+    const days = [...new Set(allColumns.map((c) => etDay(c.slotTs)))].sort().reverse()
+    return days.length ? days : barDays
+  }, [allColumns, barDays])
+
+  // A PICKED DAY CAN AGE OUT. Retention drops the oldest session every morning,
+  // so a tab left open overnight can hold a `replayDay` the server no longer
+  // has — and a select whose value is not one of its own options renders empty,
+  // over a chart with no ladder on it. Fall back to the newest instead.
+  useEffect(() => {
+    if (!replayOn || !replayDay || !sessionDays.length) return
+    if (sessionDays.includes(replayDay)) return
+    setReplayDay('')
+    setReplayMs(0)
+  }, [replayOn, replayDay, sessionDays])
 
   // No bars in these deps: a candle POLL is not a reason to re-bucket the GEX
   // history. `bucketMs` is how the interval gets in — the chart maps interval ->
@@ -923,7 +1060,9 @@ export function GexCandlesCard({
         `${settings.interval}m`,
         session.toUpperCase(),
         // A shot of a rewound chart that does not say so is a shot of a lie.
-        replayOn && cursor ? `REPLAY ${ET_CLOCK.format(new Date(cursor))} ET` : '',
+        replayOn && cursor
+          ? `REPLAY ${activeDay} ${ET_CLOCK.format(new Date(cursor))} ET`
+          : '',
       ]
         .filter(Boolean)
         .join(' · ')}
@@ -942,9 +1081,11 @@ export function GexCandlesCard({
             on={replayOn}
             onClick={() => {
               setReplayPlaying(false)
+              setReplayDay('')
+              setReplayMs(0)
               setReplayOn((v) => !v)
             }}
-            title="Scrub the session on screen — the candles, the GEX bubbles and the rail all clip to one cursor. Off = live."
+            title="Scrub a recorded session — the candles, the GEX bubbles and the rail all clip to one cursor, and the bar picks which day. Off = live."
           />
         )}
         {/* THE TAPE SWITCH STAYS IN THE HEADER ON A PHONE TOO (2026-09-03).
@@ -1088,6 +1229,44 @@ export function GexCandlesCard({
               Replay
             </span>
 
+            {/* ── The session picker ──
+                Which DAY is rewound. Same place and same shape as the date
+                dropdown on the Ticker Lookup and chain-ladder transports, so
+                the four tabs read alike.
+
+                Its options are the days the payload came back holding, never a
+                computed range — see `sessionDays`. Switching one clears the
+                cursor so the seed effect parks it at that session's open;
+                carrying a timestamp across a day boundary would land it at
+                whichever end of the new tape it happened to fall past. */}
+            <select
+              value={activeDay}
+              onChange={(e) => {
+                setReplayPlaying(false)
+                setReplayMs(0)
+                setReplayDay(e.target.value)
+              }}
+              disabled={sessionDays.length === 0}
+              title="Which recorded session to scrub"
+              className="tabular shrink-0 cursor-pointer rounded-sm border border-line bg-raised px-1.5 py-0.5 font-mono text-2xs font-extrabold text-fg outline-none"
+            >
+              {sessionDays.length === 0 && <option value="">—</option>}
+              {sessionDays.map((d) => (
+                <option key={d} value={d}>
+                  {dayLabel(d)}
+                </option>
+              ))}
+            </select>
+            {/* HOW MANY, said out loud. Three sessions is the server's retention
+                (see REPLAY_HISTORY_MINUTES), and a dropdown with three entries
+                and no explanation reads as a bug rather than a limit. */}
+            <span
+              className="shrink-0 text-2xs text-muted opacity-70"
+              title="Sessions currently held in option_strike_gex_history. Server-side retention (GEX_HISTORY_KEEP_SESSIONS) decides this, not the chart."
+            >
+              {sessionDays.length === 1 ? '1 session' : `${sessionDays.length} sessions`} recorded
+            </span>
+
             {/* The clock is the whole point of the bar: it is the one place the
                 cursor is stated as a TIME rather than as a slider position. */}
             <span className="tabular shrink-0 font-mono font-extrabold text-fg">
@@ -1174,7 +1353,11 @@ export function GexCandlesCard({
             <button
               type="button"
               onClick={() => {
+                // Drop the picked session too, or coming back into replay
+                // reopens on a day that may no longer be the one on screen.
                 setReplayPlaying(false)
+                setReplayDay('')
+                setReplayMs(0)
                 setReplayOn(false)
               }}
               title="Leave replay and return to the live chart"

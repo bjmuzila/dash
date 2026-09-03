@@ -908,6 +908,18 @@ export function TickerLookupCard({
             ))}
           </select>
 
+          {/* HOW MANY SESSIONS ARE ACTUALLY THERE. The recorder's retention —
+              not this card — decides the length of that list, and a dropdown
+              with three entries and no explanation reads as a broken fetch
+              rather than as the limit it is. Said out loud, in the same place,
+              on every replay transport in v3. */}
+          <span
+            style={{ fontSize: FS.micro, fontWeight: 700, opacity: 0.6, flexShrink: 0 }}
+            title={`Recorded sessions the strike-growth recorder is holding for ${sym}. Server-side retention decides this, not the chart.`}
+          >
+            {replayDates.length === 1 ? '1 session' : `${replayDates.length} sessions`}
+          </span>
+
           <button
             onClick={() => {
               setReplayPlaying(false)

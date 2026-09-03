@@ -1,5 +1,184 @@
 # Changelog
 
+## 2026-09-03 - Theme check: LadderModal and MultiGreekReplay off the type scale
+
+`npm run check-theme` (pre-commit gate) failed on 19 bare `fontSize: <number>`
+style values — 18 in `src/pages/optionsChain/LadderModal.tsx` (baseline allowed
+17) and 1 new one in `src/pages/replay/MultiGreekReplay.tsx` (no baseline, must
+be zero).
+
+Every hit is a React style object, so all of them now read the scale variable
+instead of a literal: 10 -> `var(--text-2xs)`, 11 -> `var(--text-xs)`,
+13 -> `var(--text-sm)`, 15 -> `var(--text-base)`, 18 -> `var(--text-lg)`. Three
+sizes were off the scale entirely and were snapped to the nearest step: the
+input/control size 14 -> `--text-sm` (13), the dense 12s (strike labels, speed
+and scale rows, modal subtitle) -> `--text-xs` (11), and the modal title
+16 -> `--text-base` (15).
+
+`LadderModal.tsx` is now at zero, so its entry was REMOVED from
+`theme-baseline.json` rather than raised — the file can never regress again.
+
+Files: `cbedge-v3/src/pages/optionsChain/LadderModal.tsx`,
+`cbedge-v3/src/pages/replay/MultiGreekReplay.tsx`,
+`cbedge-v3/theme-baseline.json`
+
+## 2026-09-03 - GEX Candles: the bubbles sit on their candles again
+
+Four bubble columns over four candles were landing visibly between them — about
+half a bar to the left, every mark, at every zoom and every interval.
+
+**The cause was the search, not the data.** `drawBubbles` did not ask the chart
+where a bucket goes; it worked it out by binary-searching `timeAtX()` — which is
+lightweight-charts' `coordinateToTime()` — for the x whose time matched the
+bucket. But `coordinateToTime()` reports the NEAREST bar's time, so it is a STEP
+function: constant across a whole bar, jumping at the boundary. A binary search
+on `t < ms` cannot converge inside a step; it converges on the step itself, and
+the step between two bars sits at the midpoint between their centres. Every
+bubble was therefore stamped on the seam between its candle and the previous
+one. The offset was exactly half a bar because half a bar is where the seam is.
+
+**The chart answers directly now.** `chart.ts` keeps `barTimes` — the same bar
+opens it hands the series, plus the forming bar — and `geo.xOfTime(ms)` binary-
+searches THAT for the bar containing the instant, takes the bar's centre from
+`timeToCoordinate()`, and adds the sub-bar fraction x `barSpacing`. A bucket
+whose timestamp is a bar's open lands dead on the candle; a 1m bucket inside a
+15m bar lands proportionally across it. `timeAtX` survives only as the anchor
+for the pxPerDot measurement, which is all a step function can honestly give.
+
+It has to be the real bar array and not arithmetic off `intervalMs`: 15m and
+coarser anchor to 09:30 ET rather than the epoch, the RTH close forces a short
+bar at 15:30, and any gap in the feed leaves a hole.
+
+**Bubbles no longer float past the newest candle.** The same lookup returns null
+off the ends of the series — before the first bar, and more than two bars past
+the last — instead of clamping. The old code pinned anything outside the probed
+window to the window's edge, which is how a column of bubbles ended up stamped
+in the whitespace to the right of the last candle and in the price-scale gutter.
+Two bars of slack, not zero, because a GEX minute can legitimately arrive before
+the candle feed has printed the bar it belongs to.
+
+Removed: `timeWindow()` and `xAtTime()` in `bubbles.ts`. Nothing in that file
+searches for a position any more.
+
+Files: `cbedge-v3/src/board/gexCandles/chart.ts`,
+`cbedge-v3/src/board/gexCandles/bubbles.ts`.
+
+
+## 2026-09-03 - CopyShot: 📋 Stats — the one row that copies characters, not pixels
+
+A new row in the camera's menu, published by the Key Levels card. It puts six
+lines on the clipboard as TEXT:
+
+    Ticker: SPX
+    Core: 6700
+    Call Wall: 6750
+    Put Wall: 6600
+    Net Gex: +$1.24B
+    Net Dex: -$842.50M
+
+**Text rather than a PNG, because of what happens next.** This gets pasted into
+a Discord message and typed around: it can be quoted, corrected, searched and
+copied on again, and a phone reads it aloud. A screenshot of six numbers does
+none of that — and this is the one place on the board where the numbers ARE the
+content, with no chart to look at.
+
+**Where the values come from.** The ticker, the CORE and both walls are the same
+derived levels the card is already drawing — `deriveLevels()` in
+`data/levels.ts`, one source for the axis and this line both, so the text can
+never disagree with the picture beside it. The two totals are the WHOLE ladder
+summed on the OI+VOL basis through `netGexOf` / `dexOf`, which is what the rest
+of the board means by "net". Strikes carry the ladder's own decimal places, so
+SPX reads `6700` and AAPL reads `327.50`.
+
+Two formatting decisions worth naming:
+
+- **ASCII signs, not `fmtGexShort`'s.** That formatter uses U+2212 for the minus,
+  which exists to stop a signed column jittering in a table. Outside a table it
+  is a character that pastes oddly and does not match a search for "-".
+- **The plus is explicit.** Positive and negative gamma are two different regimes
+  and which one is the first thing anyone reads off the line; leaving it to be
+  inferred from the absence of a minus is exactly the ambiguity to avoid in a
+  message someone skims.
+
+**New in the shared plumbing:**
+
+- `copyText()` in `shell/snapshot.ts` — `writeText` first, then an off-screen
+  `<textarea>` + `execCommand`, which is not superstition: it is the path that
+  still works on an insecure origin or after a declined permission, and for text
+  there is no sensible download to fall back to instead. Throws when both fail,
+  so the button shows ✕ rather than reporting a copy that did not happen.
+- `CopyShotTarget.hint` — the row's tooltip, for a target the default wording
+  would misdescribe. Every other row is honestly "Copy a PNG of …"; a row that
+  claims to be a picture is a row nobody clicks when they wanted text.
+
+The row only appears when there are rows and a spot to derive against, so it
+never offers to copy six dashes.
+
+Files: `cbedge-v3/src/board/keyLevels/KeyLevelsCard.tsx`,
+`cbedge-v3/src/shell/snapshot.ts`, `cbedge-v3/src/shell/CopyShot.tsx`.
+
+
+## 2026-09-03 - Replay: a session picker on GEX candles, and every transport says how many days it has
+
+### GEX candles replay can go back a day
+
+`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`. The tab could only ever
+scrub the CURRENT session — the card pins itself to `latestSession(allColumns)`
+and asks for 720 minutes of ladder. Rewound, it now carries a session dropdown,
+and the candles, the bubbles and the rail all scope to the day it names.
+
+No server change, and no new route. The pieces were already there:
+
+- `/api/snapshots/option-strike-gex-history?mode=heatmap` takes `minutes` and
+  clamps it at 5760 (4 days). Replay asks for the clamp — `REPLAY_HISTORY_
+  MINUTES` — so the payload holds every session the server still has, and the
+  picker lists the ET days that came back rather than a computed range. Live,
+  the reach is the old 720: this is the expensive request the constant was
+  written to avoid, and it is paid only on the replay tab.
+- Candles go from 5 calendar days to 7 while rewound (`REPLAY_CANDLE_DAYS`; 7 is
+  the etf-candles route's own dxFeed ceiling). A day with gamma and no candles
+  is an empty chart under a populated dropdown.
+- `activeDay` scopes three things at once: `dayBars` (so the scrubber spans ONE
+  session, not five mornings), the `columns` memo (ahead of the weekend pin and
+  "newest"), and the CopyShot caption.
+- Switching day clears the cursor so the seed effect parks it at that session's
+  open; a timestamp carried across a day boundary lands at whichever end of the
+  new tape it falls past.
+- A picked day that ages out of retention overnight falls back to the newest —
+  a `<select>` whose value is not one of its options renders empty.
+
+### HOW MANY DAYS ARE ACTUALLY RECORDED
+
+**Three trading sessions.** `option_strike_gex_history` is pruned by
+`pruneOptionStrikeGexHistory` in `server-v2/_lib-db.cjs` to
+`GEX_HISTORY_KEEP_SESSIONS`, which defaults to 3 and is env-overridable. The
+prune counts DISTINCT weekday `date` values, not wall-clock hours (a 48h window
+used to destroy every Friday over the weekend). So the new picker will offer at
+most three days, and on a Monday two of them may be Thursday and Friday.
+
+That is a retention decision, not a client one — raising
+`GEX_HISTORY_KEEP_SESSIONS` on the VPS is what buys more days. Nothing in this
+change touches the recorder, the prune, or any route.
+
+### Every replay transport now states its count
+
+Same wording, same place, on all four:
+
+- GEX candles - `N sessions recorded`, from the ET days in the gamma payload
+  (falling back to the tape's days when both gamma layers are off).
+- GEX levels (`TickerLookup.tsx`), chain ladder (`LadderModal.tsx`), Multi Greek
+  (`MultiGreekReplay.tsx`) - `N sessions` beside the existing date dropdown,
+  counted off the list `/proxy/strike-growth/replay-meta` returned.
+
+A three-entry dropdown with no explanation reads as a failed fetch rather than
+as the limit it is. Each count carries a tooltip naming server-side retention as
+the thing that decides it.
+
+Touched: `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
+`cbedge-v3/src/pages/analysis/lookup/TickerLookup.tsx`,
+`cbedge-v3/src/pages/optionsChain/LadderModal.tsx`,
+`cbedge-v3/src/pages/replay/MultiGreekReplay.tsx`.
+
 ## 2026-09-03 - /level-log parity inventory (step 1 of 4 — spec only, no code)
 
 `/level-log` was never ported to v3. It is v2's only `SCANNER_ROUTES` entry —

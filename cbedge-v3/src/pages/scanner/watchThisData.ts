@@ -197,8 +197,25 @@ export const RESULTS_LIMIT = 300
 export const RESULTS_QUOTES = 0
 
 /**
- * All four reads send `{cache: "no-store"}`. A zero window is the `query()`
- * equivalent.
+ * THE REMOUNT-DEDUPE WINDOW. 10s.
+ *
+ * This was `0` until 2026-09-03, on the reasoning that all four reads send
+ * `{cache: "no-store"}` and a zero window is the `query()` equivalent. That
+ * reasoning was WRONG, and a network trace of /v3/scanner proved it: every feed
+ * on the page fired TWICE on one load.
+ *
+ * `no-store` is an HTTP-cache directive on a fetch v2 made ONCE PER MOUNT and
+ * then held in component state — v2 never asked twice because it never re-ran
+ * the fetch. `staleMs: 0` disables `query()`'s in-memory reuse, so a remount
+ * costs a second full round trip. In-flight dedupe collapses two SIMULTANEOUS
+ * calls; it cannot collapse two a few hundred ms apart, which is the shape a
+ * remount makes.
+ *
+ * 10s is chosen against the poll cadence: the flag feed polls at 120s and the
+ * outcomes feed at 60s, so a window one sixth of the faster of the two cannot
+ * show a number the next tick would not have shown anyway. The poll bypasses
+ * this (`useQuery`'s tick passes `staleMs: 0` on purpose), so freshness is
+ * unchanged and only the duplicate is gone.
  *
  * Exported because step 3 does not call the loaders below for the three POLLED
  * or VIEW-KEYED reads — `useQuery` takes a URL, not a promise, and the poll
@@ -207,7 +224,7 @@ export const RESULTS_QUOTES = 0
  * envelope back through the § 11 adapters, which are the same rules these
  * loaders apply.
  */
-export const NO_STORE_STALE_MS = 0
+export const NO_STORE_STALE_MS = 10_000
 
 /**
  * H204 — re-opening a row ALWAYS refetches in v2; there is no detail cache.

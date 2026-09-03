@@ -218,9 +218,32 @@ function toWhite(c: [number, number, number], t: number): [number, number, numbe
 }
 
 export interface BubbleGeometry {
-  /** Pixel x of an instant, or null when it is off the scale. */
+  /**
+   * Pixel x of an instant — ANCHORED ON THE BAR THAT CONTAINS IT.
+   *
+   * ── This is the alignment contract, and it is the whole reason the layer ──
+   * A bucket's x must be the x of its CANDLE: four bubbles over four candles
+   * have to sit on those four candles, not between them. The chart supplies
+   * this by binary-searching its real bar array for the bar containing `ms`,
+   * asking lightweight-charts for that bar's coordinate (which is the bar's
+   * CENTRE), and then adding the sub-bar fraction × barSpacing. So a bucket
+   * whose timestamp IS a bar's open lands exactly on that candle, and a finer
+   * bucket inside a coarser bar lands proportionally across it.
+   *
+   * Null off the ends of the series — before the first bar, or more than two
+   * bars past the last. NOT null merely for being scrolled off screen: the
+   * coordinate is real and negative (or past the width) and the draw culls it,
+   * which is what keeps a panned-away bucket from being pinned to an edge.
+   */
   xOfTime: (ms: number) => number | null
-  /** The instant at a pixel x — the inverse of xOfTime. null off the scale. */
+  /**
+   * The instant at a pixel x. Quantised to a bar — lightweight-charts'
+   * coordinateToTime() answers with the NEAREST bar's time, not a continuous
+   * inverse — so it is used only to pick an anchor near the middle of the plot,
+   * never to place a mark. Placing with it is what put every bubble half a bar
+   * off its candle: binary-searching a step function converges on the STEP, and
+   * the step between two bars is the midpoint between their centres.
+   */
   timeAtX: (x: number) => number | null
   /** Pixel y of a price, or null. */
   yOfPrice: (price: number) => number | null
@@ -246,90 +269,25 @@ function rgba(c: [number, number, number], a: number): string {
   return `rgba(${c[0]},${c[1]},${c[2]},${a})`
 }
 
-/** The pixel window of the pane that the time scale can actually answer for. */
-interface TimeWindow {
-  xLo: number
-  xHi: number
-  tLo: number
-  tHi: number
-}
-
-/**
- * Find the sub-range of [0, width] where timeAtX() returns a time.
- *
- * It is NOT the whole canvas: the overlay spans the card, the chart's PLOT does
- * not — the price scale owns the right ~60px — and coordinateToTime() answers
- * null outside the plot and outside the data. Probing the canvas edges gets null
- * at both ends, which is how the first version of this helper managed to fail on
- * every single frame.
- */
-function timeWindow(geo: BubbleGeometry): TimeWindow | null {
-  // The PLOT's width, never the canvas's. See BubbleGeometry.plotWidth.
-  const w = Math.max(1, Math.min(geo.plotWidth, geo.width))
-  const STEPS = 24
-  let firstValid = -1
-  let lastValid = -1
-  for (let i = 0; i <= STEPS; i++) {
-    const x = (w * i) / STEPS
-    if (geo.timeAtX(x) != null) {
-      if (firstValid < 0) firstValid = x
-      lastValid = x
-    }
-  }
-  if (firstValid < 0 || lastValid < 0) return null
-  const step = w / STEPS
-  const refine = (valid: number, invalid: number) => {
-    let v = valid
-    let n = invalid
-    for (let i = 0; i < 8; i++) {
-      const mid = (v + n) / 2
-      if (geo.timeAtX(mid) != null) v = mid
-      else n = mid
-    }
-    return v
-  }
-  const xLo = firstValid > 0 ? refine(firstValid, Math.max(0, firstValid - step)) : 0
-  const xHi = lastValid < w ? refine(lastValid, Math.min(w, lastValid + step)) : w
-  const tLo = geo.timeAtX(xLo)
-  const tHi = geo.timeAtX(xHi)
-  if (tLo == null || tHi == null || !(tHi > tLo)) return null
-  return { xLo, xHi, tLo, tHi }
-}
-
-/**
- * Where an instant sits on the pane, in pixels.
- *
- * NOT xOfTime(). lightweight-charts' timeToCoordinate() answers only for
- * timestamps that are IN the series — it does not interpolate — while the GEX
- * history is per minute and the candles are 5m or coarser, so a bucket almost
- * never lands on a bar and the whole layer vanished intermittently on nothing
- * more than whether it did. timeAtX() IS defined across the plot and monotonic
- * in x, so the inverse is a binary search over the window found above.
- *
- * ── null OUTSIDE THE WINDOW, NOT CLAMPED TO ITS EDGES ────────────────────────
- * This used to answer `win.xLo` for anything older than the window and `win.xHi`
- * for anything newer. That is not a position, it is a pin: every bucket recorded
- * before the visible range — the whole morning, when you are looking at the last
- * two hours — was stamped on the left edge, on top of each other, and stayed
- * glued there through pans and zooms while the candles underneath moved. Same
- * story on the right, where the pinned column landed in the price-scale gutter.
- * A bucket that is not in the window is not on the chart; it is skipped.
- */
-function xAtTime(win: TimeWindow, geo: BubbleGeometry, ms: number): number | null {
-  if (ms < win.tLo || ms > win.tHi) return null
-  if (ms === win.tLo) return win.xLo
-  if (ms === win.tHi) return win.xHi
-  let lo = win.xLo
-  let hi = win.xHi
-  for (let i = 0; i < 20; i++) {
-    const mid = (lo + hi) / 2
-    const t = geo.timeAtX(mid)
-    if (t == null) break
-    if (t < ms) lo = mid
-    else hi = mid
-  }
-  return (lo + hi) / 2
-}
+// ── WHERE A BUCKET GOES, AND WHY IT IS NO LONGER SEARCHED FOR ────────────────
+//
+// There used to be a `timeWindow()` + `xAtTime()` pair here: probe the plot for
+// the x-range where `timeAtX()` answers, then binary-search that range for the
+// x whose time is the bucket's. It was wrong, and it was wrong by HALF A BAR,
+// every mark, always.
+//
+// `timeAtX()` is `coordinateToTime()`, and that is a STEP function: it reports
+// the nearest bar's time, so it holds one value across a whole bar and jumps at
+// the boundary. A binary search on `t < ms` cannot land in the middle of a step
+// — it converges on the step itself, which sits at the MIDPOINT BETWEEN TWO BAR
+// CENTRES. So every bucket was stamped on the seam between its candle and the
+// one before it. Four bubbles over four candles came out visibly offset, which
+// is exactly what it looked like.
+//
+// The chart knows its own bars, so it answers directly instead:
+// `geo.xOfTime()` finds the containing bar, takes that bar's centre from
+// `timeToCoordinate()`, and interpolates inside it. See BubbleGeometry.xOfTime.
+// Nothing in here searches for a position any more.
 
 interface SizeProfile {
   capPx: number
@@ -514,8 +472,6 @@ export function drawBubbles(
   // ~60px and the time axis the bottom ~26px, and a mark belongs in neither.
   const pw = Math.max(1, Math.min(geo.plotWidth, w))
   const ph = Math.max(1, Math.min(geo.plotHeight, h))
-  const win = timeWindow(geo)
-  if (!win) return false
 
   const first = snaps[0]!
   const last = snaps[snaps.length - 1]!
@@ -533,18 +489,33 @@ export function drawBubbles(
   const bucketMs = diffs.length ? diffs[diffs.length >> 1]! : 60_000
   // Pixels a bucket owns AT THE CURRENT ZOOM, measured locally rather than from
   // the data's whole span. The span version was wrong in a way that only showed
-  // up zoomed in: xAtTime CLAMPS to the visible window, so a whole day of
-  // snapshots reports the plot's own width no matter how far in you are, the
-  // bucket looks a fraction of a pixel wide, and the stride throws away almost
-  // everything. Two times one bucket apart, in the middle of the plot, is the
-  // question actually being asked.
-  const tMid = geo.timeAtX((win.xLo + win.xHi) / 2) ?? first.ts
-  // One bucket either side of the midpoint, whichever of the two is still inside
-  // the window — xAtTime answers null outside it now, and a clamped answer here
-  // would report a fraction of the real spacing and stride away most of the trail.
-  const xMid = xAtTime(win, geo, tMid)
-  const xStep = xAtTime(win, geo, tMid + bucketMs) ?? xAtTime(win, geo, tMid - bucketMs)
-  const pxPerDot = xMid != null && xStep != null ? Math.abs(xStep - xMid) : 0
+  // up zoomed in: it reported the plot's own width for a whole day of snapshots
+  // no matter how far in you were, the bucket looked a fraction of a pixel wide,
+  // and the stride threw away almost everything. Two instants one bucket apart,
+  // near the middle of the plot, is the question actually being asked.
+  //
+  // `timeAtX` is only the ANCHOR here — a bar's time near the middle of the
+  // pane, which is all a step function can honestly give — and both ends of the
+  // measurement then go through `xOfTime`, the bar-anchored one the marks are
+  // placed with. Measuring with anything else would size the trail against a
+  // spacing it is not drawn at.
+  //
+  // Anchors are tried in order and the first that yields a real gap wins: the
+  // pane's midpoint normally, then snapshots, so a pane whose middle is sitting
+  // in whitespace still gets a spacing instead of falling back to stride 1.
+  const anchors: number[] = []
+  const tMid = geo.timeAtX(pw / 2)
+  if (tMid != null) anchors.push(tMid)
+  anchors.push(snaps[snaps.length >> 1]!.ts, last.ts, first.ts)
+  let pxPerDot = 0
+  for (const t of anchors) {
+    const a = geo.xOfTime(t)
+    if (a == null) continue
+    const b = geo.xOfTime(t + bucketMs) ?? geo.xOfTime(t - bucketMs)
+    if (b == null) continue
+    const d = Math.abs(b - a)
+    if (d > 0) { pxPerDot = d; break }
+  }
 
   // ── THE DOTS ARE STRIDED WHEN THERE IS NOT ROOM FOR ALL OF THEM ───────────
   //
@@ -593,9 +564,15 @@ export function drawBubbles(
   let drew = 0
   for (let i = 0; i < snaps.length; i += stride) {
     const snap = snaps[i]!
-    const x = xAtTime(win, geo, snap.ts)
-    // Outside the visible window entirely: not on this chart. See xAtTime.
+    // ON ITS CANDLE. xOfTime anchors the bucket to the bar that contains it —
+    // see BubbleGeometry.xOfTime for why nothing here searches for the x.
+    const x = geo.xOfTime(snap.ts)
+    // Off the ends of the series: before the first bar, or past the last with
+    // no candle to belong to. Not a position, so not drawn — this is what stops
+    // a stale morning of GEX being stacked onto the closing bar, or a column of
+    // bubbles floating in the whitespace to the right of the newest candle.
     if (x == null) continue
+    // Scrolled out of the pane. A real coordinate, just not one on screen.
     if (x < -40 || x > pw + 40) continue
     // Age fades opacity only a LITTLE — the oldest bucket keeps `ageKeep` of it.
     // A trail that fades to nothing is a trail you cannot read the morning off,

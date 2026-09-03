@@ -806,6 +806,17 @@ export function MultiGreekReplay() {
           )}
         </select>
 
+        {/* HOW MANY SESSIONS ARE ACTUALLY THERE. This list is the UNION across
+            the four slots (see the dates wave), and its length is the
+            recorder's retention rather than anything this page controls — so it
+            is stated, in the same place, on every replay transport in v3. */}
+        <span
+          style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, opacity: 0.6, flexShrink: 0 }}
+          title="Recorded sessions across the four slots. Server-side retention decides this, not the board."
+        >
+          {dates.length === 1 ? '1 session' : `${dates.length} sessions`}
+        </span>
+
         <button
           title="Previous minute"
           disabled={idx <= 0}

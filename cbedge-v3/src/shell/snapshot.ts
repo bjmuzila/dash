@@ -852,6 +852,51 @@ function download(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+/**
+ * PLAIN TEXT to the clipboard.
+ *
+ * The other half of this file photographs pixels; some things are better as
+ * characters. A levels line pasted into Discord as text can be quoted, searched
+ * and read by a phone's screen reader, and it survives being copied on again —
+ * a PNG of six numbers is none of those. See board/keyLevels/KeyLevelsCard.tsx.
+ *
+ * `writeText` is the modern path. The `execCommand` fallback is not superstition:
+ * it is the one that still works when the async clipboard is unavailable (an
+ * insecure origin, a permission the user declined), and for text there is no
+ * sensible download to fall back to instead — a .txt in ~/Downloads is not what
+ * anybody meant by copy. Throws when both fail, so the caller shows the error
+ * rather than reporting a copy that did not happen.
+ */
+export async function copyText(text: string): Promise<ShotResult> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return 'copied'
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+
+  // Off-screen rather than hidden: `display:none` cannot hold a selection, and
+  // a selection is what execCommand copies.
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.setAttribute('readonly', '')
+  ta.setAttribute('aria-hidden', 'true')
+  ta.style.cssText = 'position:fixed;left:-99999px;top:0;opacity:0'
+  document.body.appendChild(ta)
+  try {
+    ta.select()
+    ta.setSelectionRange(0, text.length)
+    if (document.execCommand('copy')) return 'copied'
+  } catch {
+    /* reported below */
+  } finally {
+    ta.remove()
+  }
+  throw new Error('the browser refused the clipboard')
+}
+
 /** One attempt at the clipboard. False means "not this blob", not "never". */
 async function copyBlob(blob: Blob): Promise<boolean> {
   try {

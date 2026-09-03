@@ -61,7 +61,7 @@ async function get<TResult>(url: string): Promise<TResult | null> {
 }
 
 const inputStyle: React.CSSProperties = {
-  fontSize: 14,
+  fontSize: 'var(--text-sm)',
   padding: '8px 12px',
   border: `1px solid ${T.border}`,
   borderRadius: 6,
@@ -345,7 +345,7 @@ export function LadderModal({
         return (
           <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div
-              style={{ width: 56, textAlign: 'right', fontSize: 12, color: T.text, fontVariantNumeric: 'tabular-nums' }}
+              style={{ width: 56, textAlign: 'right', fontSize: 'var(--text-xs)', color: T.text, fontVariantNumeric: 'tabular-nums' }}
             >
               {k}
             </div>
@@ -366,7 +366,7 @@ export function LadderModal({
               style={{
                 width: 68,
                 textAlign: 'left',
-                fontSize: 11,
+                fontSize: 'var(--text-xs)',
                 color: positive ? POS : NEG,
                 fontVariantNumeric: 'tabular-nums',
               }}
@@ -404,7 +404,7 @@ export function LadderModal({
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: embedded ? 0 : 14 }}>
         <span
           style={{
-            fontSize: 13,
+            fontSize: 'var(--text-sm)',
             fontWeight: 800,
             color: T.cyan,
             letterSpacing: '0.06em',
@@ -423,12 +423,23 @@ export function LadderModal({
           triggerLabel="Tickers"
         />
         <select value={date} style={{ ...inputStyle, padding: '6px 10px', cursor: 'pointer' }} onChange={(e) => setDate(e.target.value)}>
+          {dates.length === 0 && <option value="">—</option>}
           {dates.map((d) => (
             <option key={d} value={d}>
               {d}
             </option>
           ))}
         </select>
+        {/* HOW MANY SESSIONS ARE ACTUALLY THERE — the recorder's retention, not
+            this modal, decides that list's length. Every replay transport in v3
+            says it in the same place, for the same reason: a three-entry
+            dropdown with no explanation reads as a failed fetch. */}
+        <span
+          style={{ fontSize: 'var(--text-xs)', fontWeight: 700, opacity: 0.6, flexShrink: 0 }}
+          title={`Recorded sessions held for ${symbol || 'this root'}. Server-side retention decides this, not the chart.`}
+        >
+          {dates.length === 1 ? '1 session' : `${dates.length} sessions`}
+        </span>
         <button
           style={{
             ...inputStyle,
@@ -449,7 +460,7 @@ export function LadderModal({
           {playing ? '❚❚ Pause' : '▶ Play'}
         </button>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: SUB }}>Speed</span>
+          <span style={{ fontSize: 'var(--text-xs)', color: SUB }}>Speed</span>
           {SPEEDS.map((sp) => (
             <button
               key={sp}
@@ -458,7 +469,7 @@ export function LadderModal({
                 ...inputStyle,
                 padding: '4px 8px',
                 cursor: 'pointer',
-                fontSize: 12,
+                fontSize: 'var(--text-xs)',
                 borderColor: speed === sp ? LIGHT_BLUE : T.border,
                 color: speed === sp ? LIGHT_BLUE : SUB,
               }}
@@ -468,7 +479,7 @@ export function LadderModal({
           ))}
         </div>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: SUB }}>Scale</span>
+          <span style={{ fontSize: 'var(--text-xs)', color: SUB }}>Scale</span>
           {(['frame', 'day'] as const).map((m) => (
             <button
               key={m}
@@ -482,7 +493,7 @@ export function LadderModal({
                 ...inputStyle,
                 padding: '4px 8px',
                 cursor: 'pointer',
-                fontSize: 12,
+                fontSize: 'var(--text-xs)',
                 textTransform: 'capitalize',
                 borderColor: scaleMode === m ? LIGHT_BLUE : T.border,
                 color: scaleMode === m ? LIGHT_BLUE : SUB,
@@ -513,7 +524,7 @@ export function LadderModal({
             fontVariantNumeric: 'tabular-nums',
             minWidth: 150,
             textAlign: 'right',
-            fontSize: 14,
+            fontSize: 'var(--text-sm)',
             color: T.text,
           }}
         >
@@ -567,7 +578,7 @@ export function LadderModal({
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span
                 style={{
-                  fontSize: 15,
+                  fontSize: 'var(--text-base)',
                   fontWeight: 800,
                   letterSpacing: '0.08em',
                   color: T.cyan,
@@ -580,7 +591,7 @@ export function LadderModal({
               {frameExpiry && (
                 <span
                   style={{
-                    fontSize: 10,
+                    fontSize: 'var(--text-2xs)',
                     fontWeight: 700,
                     letterSpacing: '0.06em',
                     lineHeight: 1,
@@ -597,13 +608,13 @@ export function LadderModal({
               {extraExpiries > 0 && (
                 <span
                   title={`Net summed across ${extraExpiries + 1} expiries`}
-                  style={{ fontSize: 10, fontWeight: 700, color: SUB, lineHeight: 1 }}
+                  style={{ fontSize: 'var(--text-2xs)', fontWeight: 700, color: SUB, lineHeight: 1 }}
                 >
                   +{extraExpiries}
                 </span>
               )}
             </div>
-            <div style={{ fontSize: 11, color: SUB, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: SUB, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>
               {date ? fmtStampDate(date) : ''}
               {frame ? `${date ? ' · ' : ''}${fmtReplayClock(frame.ts)} ET` : ''}
             </div>
@@ -630,7 +641,7 @@ export function LadderModal({
                   position: 'absolute',
                   right: 0,
                   top: -8,
-                  fontSize: 10,
+                  fontSize: 'var(--text-2xs)',
                   color: T.text,
                   background: T.panel,
                   padding: '0 4px',
@@ -682,10 +693,10 @@ export function LadderModal({
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: T.text, letterSpacing: '0.02em' }}>
+            <div style={{ fontSize: 'var(--text-base)', fontWeight: 800, color: T.text, letterSpacing: '0.02em' }}>
               Option Chain Replay
             </div>
-            <div style={{ fontSize: 12, color: SUB }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: SUB }}>
               Play back the recorded per-strike net-GEX profile through the session.
             </div>
           </div>
@@ -698,7 +709,7 @@ export function LadderModal({
               height: 34,
               padding: 0,
               cursor: 'pointer',
-              fontSize: 18,
+              fontSize: 'var(--text-lg)',
               lineHeight: 1,
               display: 'flex',
               alignItems: 'center',

@@ -11,6 +11,8 @@ import { chainGexUrl, chainToGex } from '../chainGex'
 import { parseChain } from '../multiGreek/mgMath'
 import { CardHeading } from '../cardTitle'
 import { computeMaxPain, fmtPts, fmtPx, priceDp, strikeDp } from './levelsMath'
+import { dexOf, netGexOf } from '../gexChart/values'
+import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Key Levels — every level on ONE horizontal price axis.
@@ -330,6 +332,69 @@ function LevelsBody({
 
     return out
   }, [putWall, distPut, flipShown, distFlip, maxPain, spot, core, callWall, distCall, kDp, pDp, weeklyEm])
+
+  // ── 📋 Stats, as TEXT ──────────────────────────────────────────────────────
+  //
+  // The one row in the camera's menu that is not a picture. Six lines — the
+  // ticker, the CORE, both walls, and the two whole-board totals — straight onto
+  // the clipboard as characters.
+  //
+  // Text rather than a PNG because of what happens next: this gets pasted into a
+  // Discord message and typed around. It can be quoted, searched, corrected and
+  // copied on again, and a phone reads it aloud. A screenshot of six numbers can
+  // do none of that, and it is the one thing on this board where the numbers
+  // ARE the content — there is no chart to look at.
+  //
+  // Both totals are the WHOLE ladder on the OI+VOL basis, which is what the rest
+  // of the board means by "net" (see gexChart/values.ts). ASCII signs, not the
+  // U+2212 `fmtGexShort` uses — that minus exists to stop a signed column
+  // jittering in a table, and outside a table it is a character that pastes
+  // oddly and does not match a search for "-".
+  const statsTargets = useMemo<CopyShotTarget[]>(() => {
+    if (!rows.length || !(spot > 0)) return NO_TARGETS
+    let gex = 0
+    let dex = 0
+    for (const r of rows) {
+      gex += netGexOf(r, 'oi-vol', false)
+      dex += dexOf(r, 'oi-vol')
+    }
+    // The sign is EXPLICIT on both totals. Positive and negative gamma are two
+    // different regimes and "which one" is the first thing anyone reads off
+    // this line — leaving the plus to be inferred from the absence of a minus
+    // is exactly the ambiguity to avoid in a message someone skims.
+    const money = (v: number) => {
+      const a = Math.abs(v)
+      const sign = v < 0 ? '-' : '+'
+      if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(2)}B`
+      if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`
+      if (a >= 1e3) return `${sign}$${(a / 1e3).toFixed(2)}K`
+      return `${sign}$${a.toFixed(0)}`
+    }
+    const level = (v: number | null | undefined) =>
+      v == null ? '—' : v.toFixed(kDp)
+    const text = [
+      `Ticker: ${symbol}`,
+      `Core: ${level(core?.strike)}`,
+      `Call Wall: ${level(callWall)}`,
+      `Put Wall: ${level(putWall)}`,
+      `Net Gex: ${money(gex)}`,
+      `Net Dex: ${money(dex)}`,
+    ].join('\n')
+    return [
+      {
+        id: 'key-levels-stats',
+        icon: '📋',
+        label: 'Stats',
+        hint: 'Copy the levels as TEXT — ticker, core, both walls, net GEX and net DEX',
+        group: 'Home board',
+        capture: async () => {
+          const { copyText } = await import('@/shell/snapshot')
+          return copyText(text)
+        },
+      },
+    ]
+  }, [rows, spot, symbol, core, callWall, putWall, kDp])
+  useCopyShotTargets(statsTargets)
 
   return (
     <div

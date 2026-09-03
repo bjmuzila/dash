@@ -115,12 +115,31 @@ export const EP_STUDY = '/proxy/gex-change-top-study'
 export const EP_WATCH = '/api/watch'
 
 /**
- * v2 read all three feeds with `{ cache: "no-store" }`. `staleMs: 0` is the
- * `query()` equivalent: no cached value is old enough to serve, so every call
- * goes to the network — while still collapsing two simultaneous calls for the
- * same URL into one request.
+ * THE REMOUNT-DEDUPE WINDOW. 10s.
+ *
+ * This was `0` until 2026-09-03, on the reasoning that v2 sent
+ * `{ cache: "no-store" }` and `staleMs: 0` is the `query()` equivalent. That
+ * reasoning was WRONG, and a network trace of /v3/scanner proved it: every
+ * feed on the page fired TWICE on one load.
+ *
+ * The two are not equivalent. `no-store` is an HTTP-cache directive on a fetch
+ * v2 made ONCE PER MOUNT and then held in component state — v2 never asked
+ * twice because it never re-ran the fetch. `staleMs: 0` disables `query()`'s
+ * in-memory reuse, so every remount, every StrictMode double-invoke and every
+ * rail `preload()` that lands before the component mounts costs a SECOND full
+ * round trip. In-flight dedupe still collapses two simultaneous calls; what it
+ * cannot do is collapse two calls a few hundred ms apart, which is exactly the
+ * shape a remount makes.
+ *
+ * 10s is chosen against the poll cadence, not plucked: these feeds poll at 60s
+ * (`POLL_MS`), so a value one sixth of that cannot put a number on screen that
+ * the next tick would not have shown anyway — while being far longer than the
+ * few hundred ms a remount burst spans. The poll itself still bypasses this
+ * (`useQuery`'s tick passes `staleMs: 0` deliberately: the point of a poll is
+ * to go and ask again), and so does the ↻ button. Freshness is unchanged; the
+ * duplicate is gone.
  */
-export const NO_STORE_STALE_MS = 0
+export const NO_STORE_STALE_MS = 10_000
 
 /**
  * A pick's history is a growing series, appended once a minute. One minute of

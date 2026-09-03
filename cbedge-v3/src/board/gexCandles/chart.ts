@@ -273,6 +273,58 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   let synth: FormingBar | null = null
   let intervalMs = 5 * 60_000
 
+  /**
+   * Every bar's open, in ms, ascending — the SAME list the series was given,
+   * plus the forming bar.
+   *
+   * This exists so the bubble layer can be told where a bucket goes instead of
+   * having to look for it. See barAt/xOfTime below, and BubbleGeometry.xOfTime
+   * in bubbles.ts for what went wrong when it looked.
+   *
+   * It has to be the real array and cannot be arithmetic off `intervalMs`: 15m
+   * and coarser anchor to 09:30 ET rather than to the epoch, the RTH close
+   * forces a short bar at 15:30, and any gap in the feed leaves a hole. A
+   * computed timestamp under any of those is not a bar, and timeToCoordinate()
+   * answers null for it — which is how a whole overlay disappears with no error
+   * anywhere.
+   */
+  let barTimes: number[] = []
+
+  /**
+   * The open of the bar CONTAINING an instant, or null when there is no such
+   * bar.
+   *
+   * ── Past the end is not "the last bar" ─────────────────────────────────────
+   * The search returns the newest bar at or before `ms`, which for anything
+   * after the final candle CLAMPS, silently: every later bucket stacks onto the
+   * closing bar and draws as if it were a real print. Two bars of slack, not
+   * zero — a GEX minute can legitimately arrive before the candle feed has
+   * printed the bar it belongs to, and culling the newest column every time the
+   * candles lag is a worse bug than the one this prevents. Further out has no
+   * bar and gets no pixel.
+   */
+  function barAt(ms: number): number | null {
+    const n = barTimes.length
+    if (!n || ms < barTimes[0]!) return null
+    if (ms >= barTimes[n - 1]! + 2 * intervalMs) return null
+    let lo = 0
+    let hi = n - 1
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (barTimes[mid]! <= ms) lo = mid
+      else hi = mid - 1
+    }
+    return barTimes[lo]!
+  }
+
+  /** Keep `barTimes` covering the forming bar `live` is currently drawing. */
+  function syncLiveBarTime() {
+    if (!live) return
+    const n = barTimes.length
+    if (n && barTimes[n - 1]! >= live.openMs) return
+    barTimes.push(live.openMs)
+  }
+
   const ts = chart.timeScale()
 
   function checkOffscreen() {
@@ -683,14 +735,42 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       return
     }
 
+    // Bar width in pixels at this zoom. Read once per frame — it is cached model
+    // state, not a layout read, but it is asked for on every mark otherwise.
+    let barSpacing = 6
+    try {
+      barSpacing = ts.options().barSpacing ?? 6
+    } catch {
+      /* mid-teardown; the frame is about to be cancelled anyway */
+    }
+
     const geo = {
+      // ── A BUCKET SITS ON ITS CANDLE ────────────────────────────────────────
+      // Anchor on the bar that CONTAINS the instant, then offset by the sub-bar
+      // fraction. timeToCoordinate() returns that bar's CENTRE, so a bucket
+      // whose timestamp is a bar's open lands dead on the candle, and a 1m
+      // bucket inside a 15m bar lands proportionally across it.
+      //
+      // ── Do not "simplify" this back to timeToCoordinate(ms) ────────────────
+      // It answers only for timestamps that are literally IN the series — it
+      // does not interpolate — and the GEX history is per minute while the
+      // candles are 5m or coarser, so a bucket almost never lands on a bar and
+      // the layer vanished intermittently on nothing more than whether it did.
+      // That is what the caller used to work around by binary-searching
+      // coordinateToTime(), and that search is what put every mark half a bar
+      // off its candle. Both problems are this function's job now.
       xOfTime: (ms: number) => {
-        const x = ts.timeToCoordinate(Math.floor(ms / 1000) as UTCTimestamp)
-        return x == null ? null : (x as number)
+        const start = barAt(ms)
+        if (start == null) return null
+        const c0 = ts.timeToCoordinate(Math.floor(start / 1000) as UTCTimestamp)
+        if (c0 == null) return null // off the scale, or a bar the series dropped
+        const frac = Math.max(0, Math.min(1, (ms - start) / intervalMs))
+        return (c0 as number) + frac * barSpacing
       },
-      // The inverse. timeToCoordinate() answers only for times that are IN the
-      // series and the buckets are per-minute, so a bucket almost never lands on
-      // a bar; coordinateToTime() is defined across the whole plot.
+      // NOT the inverse — coordinateToTime() reports the NEAREST bar's time, so
+      // it is a step function, constant across a bar. Good enough to pick an
+      // anchor near the middle of the pane, which is all the bubble layer asks
+      // it for; placing a mark with it is the bug described above.
       timeAtX: (x: number) => {
         const t = ts.coordinateToTime(x as Coordinate)
         return typeof t === 'number' ? t * 1000 : null
@@ -739,6 +819,10 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
 
       const prevCount = barCount
       barCount = bars.length
+      // The bubble layer positions every bucket against this. It must be the
+      // SAME list the series gets, and it must be replaced here rather than
+      // merged, so a bar the poll dropped stops being a place a bucket can land.
+      barTimes = bars.map((b) => b.t)
       version++
       series.setData(
         bars.map((b) => ({
@@ -772,6 +856,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       } else if (synth) {
         synth = null
       }
+      // The re-added forming bar is a bar the bubble layer can place against.
+      syncLiveBarTime()
       pickProbes()
       if (reframe && bars.length) {
         try {
@@ -837,6 +923,7 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         }
         synth = live
         barCount++
+        syncLiveBarTime()
         // A bump HERE only — once an interval, not once a tick. A new bar moves
         // the time axis, and the bubble band is positioned against it.
         version++

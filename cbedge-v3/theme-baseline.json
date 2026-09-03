@@ -9,7 +9,6 @@
     "src/pages/OptionsChain.tsx": 15,
     "src/pages/Premarket.tsx": 39,
     "src/pages/optionsChain/ChainMatrix.tsx": 15,
-    "src/pages/optionsChain/LadderModal.tsx": 17,
     "src/pages/optionsChain/ReplayBar.tsx": 4,
     "src/pages/optionsChain/StrikeHoverCard.tsx": 9,
     "src/pages/optionsChain/heatSkins.ts": 2,
