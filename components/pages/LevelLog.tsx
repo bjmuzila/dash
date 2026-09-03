@@ -483,6 +483,45 @@ function buildLogText(
 // ── buttons ──────────────────────────────────────────────────────────────────
 
 /**
+ * CORE MIGRATION pop-out. Opens public/core-migration.html — the standalone
+ * long-range chart (the selected ticker's CORE across the last 63 recorded
+ * sessions, core only by default, walls on a toggle) — in its own tab, primed
+ * with WHATEVER THE PAGE IS ON: the selected ticker, the date as the range's
+ * end, and both variant switches. The page itself reads the data (one call to
+ * /api/walls-range, falling back to /proxy/walls a session at a time), so
+ * nothing is copied across and a tab left open can simply be reloaded.
+ *
+ * A plain static file on purpose: it is the same HTML that lives in
+ * generated/ for hand-editing, and a static file needs no route, no lazy()
+ * import and no check-routes entry. `noopener` so the tab cannot reach back.
+ */
+function CoreMigrationButton({ symbol, endDate, scope, basis }: {
+  symbol: string | null; endDate: string; scope: ExpScope; basis: GexBasis;
+}) {
+  const open = () => {
+    if (!symbol) return;
+    const q = new URLSearchParams({ symbol, end: endDate, scope, basis });
+    window.open(`/core-migration.html?${q.toString()}`, "_blank", "noopener");
+  };
+  return (
+    <button
+      onClick={open}
+      disabled={!symbol}
+      title={symbol ? `Open ${symbol}'s CORE migration — the last 63 recorded sessions — in a new tab` : "Pick a ticker first"}
+      style={{
+        padding: "6px 12px", borderRadius: 8, cursor: symbol ? "pointer" : "default", fontFamily: "inherit",
+        border: `1px solid ${symbol ? CORE_GOLD : C.border}`,
+        background: symbol ? rgba(CORE_GOLD, 0.12) : "rgba(255,255,255,0.03)",
+        color: symbol ? CORE_GOLD : C.label, fontSize: 13, fontWeight: 800,
+        letterSpacing: "0.08em", textTransform: "uppercase", opacity: symbol ? 1 : 0.5,
+      }}
+    >
+      ⤢ CORE migration
+    </button>
+  );
+}
+
+/**
  * Screenshot the LIVE card.
  *
  * The owner version deliberately rendered `buildLogText()` into a throwaway
@@ -953,6 +992,7 @@ export default function LevelLog() {
             </span>
             {/* data-capture-hide: live-page chrome, dropped from the screenshot. */}
             <div data-capture-hide style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+              <CoreMigrationButton symbol={sel} endDate={date} scope={scope} basis={basis} />
               <CopyLogButton disabled={empty} text={logText} />
               <SnapLogButton disabled={empty} targetRef={logCardRef} filename={snapFile} title={snapTitle} />
             </div>
@@ -1019,11 +1059,6 @@ export default function LevelLog() {
           </div>
         </div>
       </div>
-
-      {/* SPX, three months of CORE. Its own card under the day's log: the same
-          chart, fed by one range read instead of one session, opening on CORE
-          alone. See CoreMigrationCard. */}
-      <CoreMigrationCard endDate={date} nonce={nonce} scope={scope} basis={basis} />
 
       {/* Full-size chart. Mounted only while open, so the 5-session fetch never
           runs for a reader who did not ask for it. */}
@@ -1543,11 +1578,9 @@ type DaySeg = {
 /** What the legend can switch off — the three levels plus the price line. */
 type MigKey = WallLevel | "spot";
 
-function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark, title = "Wall migration" }: {
+function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark }: {
   days: DaySlice[];
   view: LogView;
-  /** Section head. The long-range SPX card names itself "CORE migration". */
-  title?: string;
   /** Plot height in px. The popout draws the same model twice as tall. */
   height?: number;
   /** Given only by the inline chart — the popout has nothing to expand into. */
@@ -2032,22 +2065,11 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark, t
 
   const lastSpot = last.spotDrawn.length ? last.spotDrawn[last.spotDrawn.length - 1].v : null;
 
-  /**
-   * LONG RANGE — more sessions than the week rail can name. A weekday and a
-   * date under every slice was fine for five; at sixty-three it is a wall of
-   * 10px type nobody can read. So past ten sessions the rail stamps only the
-   * FIRST session and every session that opens a new month, the per-day
-   * dividers fade to a hairline and the month edges take their weight — the
-   * eye reads weeks by the dividers and months by the labels.
-   */
-  const longRange = N > 10;
-  const monthEdge: boolean[] = segs.map((seg, i) => i === 0 || seg.date.slice(0, 7) !== segs[i - 1].date.slice(0, 7));
-
   return (
     <div style={{ padding: "13px 18px 12px", borderBottom: `1px solid ${C.border}` }}>
       <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap", marginBottom: 6 }}>
         <span style={{ fontSize: FS_LABEL, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase" }}>
-          {title}
+          Wall migration
         </span>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, color: MUTED }}>
           {N > 1 ? `${N} sessions · ` : ""}recorded levels · {anyDense
@@ -2091,8 +2113,7 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark, t
             clock, the other is a gap in the rows. */}
         {segs.slice(1).map((seg, k) => (
           <line key={`div-${seg.date}`} x1={(k + 1) * segW} x2={(k + 1) * segW} y1={0} y2={height}
-            stroke={rgba(HOME_THEME.text, longRange ? (monthEdge[k + 1] ? 0.28 : 0.06) : 0.22)}
-            strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            stroke={rgba(HOME_THEME.text, 0.22)} strokeWidth={1} vectorEffect="non-scaling-stroke" />
         ))}
         {/* Where the log stopped writing. Everything right of it is the forward
             fill — the levels held, which is why there are no rows — and the
@@ -2138,24 +2159,6 @@ function WallMigrationChart({ days, view, height = MIG_H, onExpand, watermark, t
           <span>{slotClock(Math.round(last.lastSlot / 2))}</span>
           <span>{slotClock(last.lastSlot)}</span>
         </div>
-      ) : longRange ? (
-        <div style={{ position: "relative", height: 28, marginTop: 5, color: MUTED }} aria-hidden>
-          {segs.map((seg, i) => (monthEdge[i] ? (
-            <span key={seg.date} style={{ position: "absolute", left: `${i * segW}%`, top: 0, paddingLeft: 4, whiteSpace: "nowrap" }}>
-              <span style={{
-                display: "block", fontSize: 10, fontWeight: 800, letterSpacing: "0.1em",
-                textTransform: "uppercase", color: C.label,
-              }}>{monName(seg.date)}</span>
-              <span style={{ display: "block", fontFamily: "var(--font-mono)", fontSize: 10 }}>{mdShort(seg.date)}</span>
-            </span>
-          ) : null))}
-          <span style={{ position: "absolute", right: 0, top: 0, textAlign: "right" }}>
-            <span style={{ display: "block", fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.label }}>
-              {N} sessions
-            </span>
-            <span style={{ display: "block", fontFamily: "var(--font-mono)", fontSize: 10 }}>{mdShort(segs[0].date)} → {mdShort(last.date)}</span>
-          </span>
-        </div>
       ) : (
         <div style={{ display: "flex", marginTop: 5, color: MUTED }} aria-hidden>
           {segs.map((seg) => (
@@ -2199,13 +2202,6 @@ function dowName(date: string): string {
 function mdShort(date: string): string {
   const [, mm, dd] = date.split("-");
   return mm && dd ? `${Number(mm)}/${Number(dd)}` : date;
-}
-
-/** "SEP" from "2026-09-01" — the long-range rail's month stamp. */
-function monName(date: string): string {
-  const t = Date.parse(`${date}T12:00:00Z`);
-  if (!Number.isFinite(t)) return "";
-  return new Date(t).toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }).toUpperCase();
 }
 
 /**
@@ -2303,149 +2299,6 @@ function useWallDays(
     return () => { alive = false; };
   }, [symbol, endDate, count, nonce, scope, basis]);
   return state;
-}
-
-/**
- * LONG-RANGE FETCH for the SPX CORE migration card. One request:
- * /api/walls-range returns the change-only walls_log rows for the last `count`
- * recorded sessions of one symbol, grouped by date and already in slot order —
- * the same rows /proxy/walls?symbol= gives a day at a time. No events and no
- * tape: over three months the read is where the CORE sat and where it went,
- * and the spot stamped on every level row is enough of a price line for that.
- */
-function useWallRange(
-  symbol: string | null, endDate: string, count: number, nonce: number,
-  scope: ExpScope, basis: GexBasis,
-): { days: DaySlice[]; loading: boolean; error: string | null } {
-  const [state, setState] = useState<{ days: DaySlice[]; loading: boolean; error: string | null }>(
-    { days: [], loading: false, error: null },
-  );
-  useEffect(() => {
-    if (!symbol || count < 1) { setState({ days: [], loading: false, error: null }); return; }
-    let alive = true;
-    setState((prev) => ({ days: prev.days, loading: true, error: null }));
-    (async () => {
-      try {
-        const r = await fetch(
-          `/api/walls-range?symbol=${encodeURIComponent(symbol)}&days=${count}&end=${encodeURIComponent(endDate)}${variantQuery(scope, basis)}`,
-          { cache: "no-store" },
-        );
-        const j = await r.json();
-        if (!j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-        const raw: { date: string; log: WallLogRow[] }[] = Array.isArray(j.days) ? j.days : [];
-        const days: DaySlice[] = raw
-          .filter((d) => d && typeof d.date === "string" && Array.isArray(d.log) && d.log.length)
-          .map((d) => ({ date: d.date, log: d.log, events: [], price: [] }));
-        if (alive) setState({ days, loading: false, error: null });
-      } catch (e) {
-        if (alive) setState({ days: [], loading: false, error: String((e as Error)?.message || e) });
-      }
-    })();
-    return () => { alive = false; };
-  }, [symbol, endDate, count, nonce, scope, basis]);
-  return state;
-}
-
-/** The long-range card's symbol. SPX is the one with three months of CORE in the DB. */
-const CORE_RANGE_SYMBOL = "SPX";
-/** Sessions per range pill — a trading month is ~21, a quarter ~63. */
-const CORE_RANGES: { id: 21 | 63; label: string; blurb: string }[] = [
-  { id: 21, label: "1M", blurb: "The last 21 recorded sessions" },
-  { id: 63, label: "3M", blurb: "The last 63 recorded sessions — about a quarter" },
-];
-
-/**
- * SPX — CORE MIGRATION over months. Deliberately the SAME WallMigrationChart
- * the day card and the popout draw with (one chart, one set of rules), handed
- * sixty-three sessions instead of one and opened on the CORE view: one gold
- * line, the CORE's strike, stepping across the quarter, with the spot captures
- * threaded through it. The WALLS pill switches the chart to the ALL view, which
- * brings the role model with it — CORE stays gold and the OTHER wall arrives in
- * the colour of the side it currently is — and the legend chips underneath
- * still drop any single series. Core-only is the default because that is the
- * question this card exists for: where has the heaviest gamma node on the
- * board been sitting, and how does that relate to where price went.
- *
- * Follows the page's date (as the range's END), variant switches and refresh,
- * but NOT its ticker or WALLS/CORE/ALL pills — it is an SPX card, and its own
- * pill owns whether walls draw.
- */
-function CoreMigrationCard({ endDate, nonce, scope, basis }: {
-  endDate: string; nonce: number; scope: ExpScope; basis: GexBasis;
-}) {
-  const [range, setRange] = useState<21 | 63>(63);
-  const [wallsOn, setWallsOn] = useState(false);
-  const { days, loading, error } = useWallRange(CORE_RANGE_SYMBOL, endDate, range, nonce, scope, basis);
-  const cardRef = useRef<HTMLDivElement | null>(null);
-  const vTag = variantTag(scope, basis);
-  const view: LogView = wallsOn ? "all" : "core";
-  const snapFile = `${CORE_RANGE_SYMBOL.toLowerCase()}-core-migration-${wallsOn ? "walls" : "core"}-${scope}-${basis}-${endDate}-${range}s.png`;
-  const snapTitle = `${CORE_RANGE_SYMBOL} — CORE migration · ${range} sessions to ${endDate} · ${vTag}`;
-
-  const chip = (on: boolean, color: string = C.cyan): CSSProperties => ({
-    padding: "5px 11px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
-    border: `1px solid ${on ? color : C.border}`,
-    background: on ? rgba(color, 0.16) : "rgba(255,255,255,0.03)",
-    color: on ? color : C.label, fontSize: FS_LABEL, fontWeight: 800,
-    letterSpacing: "0.08em", textTransform: "uppercase",
-  });
-
-  return (
-    <div ref={cardRef} style={{ ...CARD, overflow: "hidden", marginTop: 16 }}>
-      <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontSize: FS_LABEL, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase" }}>
-          {CORE_RANGE_SYMBOL} — CORE migration
-        </span>
-        <span style={{ fontSize: FS_META, fontFamily: "var(--font-mono)", color: MUTED }}>
-          {days.length ? `${days.length} sessions to ${endDate}` : `to ${endDate}`} · {vTag}
-        </span>
-        <div data-capture-hide style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 8 }}>
-          {CORE_RANGES.map((r) => (
-            <button key={r.id} onClick={() => setRange(r.id)} style={chip(range === r.id)} title={r.blurb}>{r.label}</button>
-          ))}
-          <span style={{ width: 1, height: 18, background: C.border, margin: "0 2px" }} />
-          <button
-            onClick={() => setWallsOn(false)}
-            style={chip(!wallsOn, CORE_GOLD)}
-            title="CORE only — the single heaviest gamma node, session by session"
-          >
-            Core only
-          </button>
-          <button
-            onClick={() => setWallsOn(true)}
-            style={chip(wallsOn, AMBER)}
-            title="Draw the call wall and put wall alongside the CORE (legend chips can still drop any one)"
-          >
-            + Walls
-          </button>
-        </div>
-        {loading ? <span style={{ fontSize: FS_META, color: MUTED }}>loading…</span> : null}
-        <div data-capture-hide style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-          <SnapLogButton disabled={!days.length} targetRef={cardRef} filename={snapFile} title={snapTitle} />
-        </div>
-      </div>
-
-      {days.length ? (
-        <WallMigrationChart days={days} view={view} height={MIG_H * 1.6} title="CORE migration" />
-      ) : (
-        <div style={{ padding: "18px 18px 20px", fontSize: FS_BODY, color: MUTED }}>
-          {loading
-            ? "Loading sessions…"
-            : error
-              ? `Could not load /api/walls-range — ${error}`
-              : `No recorded sessions for ${CORE_RANGE_SYMBOL} in the ${range} sessions ending ${endDate} on ${vTag}.`}
-        </div>
-      )}
-
-      {/* What the line is, once. The day card can lean on the page head for
-          this; a quarter of one gold line under a different title cannot. */}
-      <div style={{ padding: "10px 18px 14px", fontSize: FS_META, color: MUTED, lineHeight: 1.5 }}>
-        Recorded levels only — 09:29 open + every 15m to 16:00 ET, written when the level moved, carried
-        forward when it did not. Spot is the price stamped on each capture, not the tape.
-        {wallsOn ? " Walls on: CORE stays gold; the other wall draws in the colour of the side it currently is." : ""}
-      </div>
-    </div>
-  );
 }
 
 /**

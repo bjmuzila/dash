@@ -1,313 +1,50 @@
 # Changelog
 
-## 2026-09-03 - v3 Economic Calendar + Earnings page (`/v3/economic-calendar`)
-
-v2's `/app/economic-calendar` ported to v3 as a PAGE, not a card. Two tabs over
-one feed: timed econ events with earnings woven into the day, and a five-column
-earnings week board.
-
-### Inventory first, then build
-
-The recurring failure on these ports is the v3 version coming out missing chunks
-of what v2 showed, because the page gets rebuilt from scratch — re-deciding what
-it contains at the same time as building it. Both jobs were already done in v2.
-So this one was written down before a line of v3 code existed:
-
-**`cbedge-v3/docs/parity/economic-calendar.md`** — 176 rows, one per rendered
-value, each with the endpoint AND field it comes from, its format and units, its
-threshold or colour rule, its sort order, and its empty/loading state. Every
-panel, badge, tooltip, toggle and column, not just the headline numbers. Parts
-A–Q. It is the spec; the page is finished when every row is ticked.
-
-### The three decisions the inventory surfaced
-
-1. **Type scale collapses DOWN.** v2 uses 12px and 14px; neither is on v3's
-   scale (9/10/11/13/15/18). 12 -> 11, 14 -> 13, applied uniformly, so the size
-   ORDER survives everywhere. Rounding 14 up to 15 would have made an event
-   title larger than the board header's own title.
-2. **All ten filters ship.** v2's page declared its own 8-key `FILTER_OPTS`,
-   dropping `all-usd` and `earnings` from the shared list. v3 takes the shared
-   ten — `earnings` is the only control that can isolate the woven earnings
-   blocks, and this page had no other one. Default stays `{all}`.
-3. **Long day label** — "MONDAY SEPTEMBER 1", the page's wording, shipped as
-   `fullDayLabelLong()` BESIDE the existing short form rather than replacing it.
-   The board card still wants the abbreviation in its narrow strip.
-
-### Four v2 defects fixed rather than transcribed
-
-Each was its own recommendation in Part Q, and none of them removes a value.
-
-- The **date chip** was gated on `lastRefresh` and then rendered `today`, so it
-  was invisible until the first load completed and never once showed the thing
-  it was gated on. Unconditional now, with the refresh time beside the date.
-- **`source` was fetched and thrown away.** `/api/calendar` answers HTTP 200 with
-  an empty events array when the upstream is down, so `res.ok` tells you
-  nothing; `source: "unavailable"` is the real signal and it now raises the
-  owner banner even when `warning` is empty. This is how the feed broke
-  unnoticed for six weeks.
-- **One `search` string was shared across both tabs**, so typing "fed" on the
-  calendar tab silently filtered the earnings board. One query per tab.
-- **The tab was not in the URL**, so every shared link opened on Calendar.
-  `?tab=earnings` now, the shape `/v3/scanner` already uses.
-
-### Logic transcribed, not re-derived
-
-`cbedge-v3/src/data/econCalendar.ts` was already a verbatim port of v2's
-`lib/econCalendar.ts`, so the maths came across untouched and nothing in it was
-rewritten: `pickAnticipated`'s two OR'd rules and its per-day top-up,
-`groupEarningsByDate`'s three buckets, `etMonFri`'s weekend roll-forward, the
-30-minute staleness cutoff, `fmtMcap`'s three branches. The page imports every
-one of them and re-declares nothing.
-
-The part a description would have lost is the **insertion order of the woven
-earnings blocks**, and it is transcribed exactly: PRE immediately after the day
-separator; AFTER immediately before the first event later than 16:00 ET, or at
-the end of the day if there is no such event; TBD always last, because an
-unconfirmed time has no position in the day's sequence and anchoring it anywhere
-earlier would imply one.
-
-### Palette
-
-Every one of v2's twenty hardcoded literals plus the nine-entry `BOARD` wash
-object already had a v3 token — `--color-impact-*` and `--color-cal-*` were
-added for the board card — so nothing new was minted. The board's three
-luminance rungs stay ALPHAS over the plate rather than picked colours, which is
-what keeps them tracking the token: `card` (a day column, the lightest thing on
-the page), `head` one rung up so the date has a plate, `tile` one rung down so
-the chips read as objects sitting on the column rather than holes cut into it.
-
-`npm run check:theme`'s four rules pass on every new and edited file. Nothing was
-added to `theme-baseline.json`.
-
-### Verified automatically, not by eye
-
-**`cbedge-v3/scripts/parity-check-econ.mjs`** drives BOTH pages through three
-scenarios against ONE backend — calendar tab; earnings/this week/Anticipated;
-earnings/next week/All — and fails on anything v2 renders and v3 does not. 25
-probes on the calendar tab, 31 on the earnings tab. It CLICKS to the tab rather
-than deep-linking, because v2 has no `?tab=` and clicking is the one path both
-sides share.
-
-Two set probes carry the weight, and both exist because a plain text probe would
-sail past the real losses:
-
-- every ticker each side LINKS to (`finance.yahoo.com/quote/<SYM>`), so a board
-  that renders its columns and its counts but drops a session bucket fails;
-- every market-cap string each side puts in a chip TOOLTIP, because cap and EPS
-  are on screen nowhere else — the tile is logo and ticker and nothing more.
-
-A vacuous run is called out rather than banked: a board with no names, or a
-calendar day with no A/F/P figures, passes its probes for the wrong reason and
-the run says so. Same for a weekend run, where `etMonFri` rolls forward to a
-week the recorder may not have swept.
-
-**`cbedge-v3/scripts/parity-check-econ.test.mjs`** — 20 assertions over fixtures,
-each an injected regression this port could plausibly have shipped: the TBD
-bucket dropped (the largest silent loss available here — Nasdaq marks most of
-its calendar time-not-supplied, and v2's own code used to throw that bucket
-away), the after-hours block dropped, chip tooltips dropped, `fmtMcap` losing its
-sub-billion branch so every small cap prints "$0B", the A/F/P row dropped, a
-whole day column dropped. All 20 pass; every injected regression fails the
-harness as intended. Wired into `npm run check`.
-
-### Files
-
-New:
-
-- `cbedge-v3/docs/parity/economic-calendar.md` — the 176-row spec
-- `cbedge-v3/src/pages/EconomicCalendar.tsx`
-- `cbedge-v3/src/pages/economicCalendar/ChipLogo.tsx` — the three-stage logo
-  ladder (mirrored `/logos/<SYM>.png?v=3` -> `/proxy/ticker-logo?raw=1` ->
-  ticker-text chip). `raw=1` is load-bearing: a 302 to a third-party host taints
-  a capture canvas and takes the whole PNG with it. **Bump `LOGO_REV` in step
-  with v2's `components/shared/ChipLogo.tsx`** — two apps read one mirror.
-- `cbedge-v3/src/pages/economicCalendar/board.ts` — the `BOARD` washes, the chip
-  geometry, `dayFull`/`dayDate`
-- `cbedge-v3/scripts/parity-check-econ.mjs` + `.test.mjs`
-- `app/v3/economic-calendar/route.ts` — step 4 of four; without it the page
-  works in-app and 404s on a hard refresh, and with the tab in the query string
-  a shared link IS a hard refresh
-
-Edited:
-
-- `cbedge-v3/src/App.tsx` — `lazy()` import + route
-- `cbedge-v3/src/shell/Shell.tsx` — NAV entry, prefetching `/api/calendar` and
-  `/proxy/earnings-week?week=both` on hover
-- `cbedge-v3/src/data/econCalendar.ts` — `fullDayLabelLong()` added, nothing else
-- `cbedge-v3/package.json` — `check:parity:econ`, `check:parity:econ:self`, and
-  the self-test inside `npm run check`
-
-### Also: `econTemplate.ts` unblocked the pre-commit theme check
-
-Six `font-size` literals in `src/board/econCalendar/econTemplate.ts` (the 1280x672
-Discord poster) were failing `check-theme` rule 4 and aborting the commit:
-24px on `.badge`, 17px on the date pills, 30px on `.quote`, and 14px on
-`.panel-title`, `.panel-count` and `.empty-panel`.
-
-They are now five named constants at the top of the file, next to the lane
-widths. **The rendered stylesheet is byte-identical** — the poster does not
-change by one pixel.
-
-That is the right fix rather than a dodge, because it makes these six consistent
-with the TWELVE sizes in the same file that already pass the check: every other
-size there is arithmetic (`px(16, econScale)`, `Math.round(ern.sym * 0.95)`)
-because the three lanes re-scale with how many rows land in them, and the JS
-truncation divides by those very numbers. These five are simply the sizes that do
-not re-scale, and they never got brought into that system.
-
-The alternative was mapping them onto v3's type scale: 24 is already on it, but
-17 -> 18 and 30 -> 32 would change a brand asset that has been going into one
-Discord channel for months, and the quote lives in a `max-width:1120px` centred
-block on a canvas that is height-locked and "shrinks, never grows" — 30 -> 32 can
-push a long quote to a second line. Rem sizing is wrong here for the same reason:
-`--text-*` is a rem ladder, so a viewer with a non-16px root would rescale the
-badge alone on a canvas where every other number is absolute. This is the carve-out
-AGENTS.md already makes for a canvas or a chart config: the number stays a number.
-
-Say the word if you would rather have the scale mapping and a re-tuned poster.
-
-### Still to run on the laptop
-
-`npm run typecheck`, `npm run build` and a live `check:parity:econ` (it needs a
-browser, a signed-in cookie and the backend up). Run `npm run check` before
-pushing. Run the parity check ONCE AS OWNER and ONCE AS A PLAIN SUBSCRIBER — the
-feed-health and error banners are owner-only on both pages, so only an owner run
-exercises them and only a subscriber run proves they stayed hidden.
-
-## 2026-09-03 - Replay hub: a GEX candles tab
-
-Fifth tab on `/v3/replay`, between GEX levels and Multi Greek. It is the board's
-own GEX Candles card, mounted with a new `replay` prop, so the candles, the GEX
-bubbles and the GEX rail all rewind together off one cursor.
-
-### It costs nothing to fetch
-
-The card already holds a whole session of candles AND a whole session of
-per-minute GEX ladders in memory — the ladders are what the bubbles ARE. So the
-replay is not a second data path or a second recorder: it is ONE cursor
-timestamp, and both series are clipped to it.
-
-    bars.filter(b => b.t <= cursor)            // the tape
-    columns.filter(c => c.slotTs <= cursor)    // the ladders
-
-The column clip lands upstream of BOTH consumers — the bubble model and the rail
-read one array — so a rewound chart can never show 10:04 gamma under a 10:04
-tape beside a 16:00 rail.
-
-### The cursor is a timestamp, not a bar index
-
-Switching 1m -> 5m rebuilds the timeline with a fifth of the entries. An index
-would land somewhere unrelated; a time stays the same time, and the scrubber
-handle moves to wherever that instant now sits. The index is derived from the
-timestamp on every render and never stored.
-
-### Rewound, the live feeds are off
-
-`spot` / `esCandles` / `es1mCandles` paint the forming bar, and pushing a live
-print onto a rewound chart would put 15:59's price on the 10:04 candle. Gated at
-the subscription, not inside the callback, so those frame types also drop back
-OUT of the socket's derived topic scope while rewound. The forming-bar countdown
-goes with them — there is no bar forming in a session that already closed — and
-the CopyShot caption gains `REPLAY HH:MM ET`, because a shot of a rewound chart
-that does not say so is a shot of a lie.
-
-### The board is untouched
-
-`replay` is opt-in and `BoardPage`/`catalog.tsx` do not pass it. `<GexCandles
-Card />` on the board is the live card it has always been: no transport, no
-toolbar button, no extra request, every replay hook inert behind one `replayOn`
-flag that nothing can turn true without a control that is not rendered.
-
-### Transport + framing
-
-- Same shape and the same numbers as every other v3 transport: ◀ · ▶/❚❚ · ▶,
-  one scrubber, `Speed` 0.5×/1×/2×/4×/8×, 700ms per bar at 1×, docked to the
-  page's bottom edge through `ReplayDock` (in flow, so it shrinks the chart
-  instead of covering the last inch of it). Plus a `Live` key to drop out.
-- Opens rewound to the session's OPEN, not the last bar. Landing on the last bar
-  is a rewound chart that looks exactly like the live one.
-- `TabDef.chart` added to the hub: the framed body is normally a block scroller
-  (right for a ladder), and a `flex-1` chart inside a block parent has nothing to
-  stretch against and collapses. The candles tab swaps that wrapper for a flex
-  column.
-- The tab follows the toolbar ticker for free — the card already reads
-  `usePageSymbol`.
-
-Note: `scripts/parity-check-replay.mjs` is a v2<->v3 harness and still knows four
-tabs. Its `A/tablist` probe is `count`-based (fails only when v3 has ZERO), so a
-v3-only fifth tab reports as a difference, not a failure. Left as-is on purpose:
-that script's job is proving nothing of v2's went missing.
-
-Touched: `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
-`cbedge-v3/src/pages/Replay.tsx`.
-
-## 2026-09-03 - v3: every card can go full screen, inside the app frame
-
-**Every `Card` in v3 now has an expand control** (the small arrows at the right
-of its header). Expanded, the card fills the whole page area and nothing else
-changes: THE LEFT RAIL AND THE TOP TOOLBAR STAY PUT, so the ticker picker, the
-clock, the camera, the account menu and every nav icon are still there and still
-work. Escape, or the same button (now a collapse glyph), puts it back.
-
-Deliberately NOT the browser's Fullscreen API and NOT `position: fixed` over the
-viewport - both take the rail and the toolbar with them, and those two are how
-you leave the card you just expanded.
-
-How it works: `src/design/primitives/Expand.tsx` is a new host, `ExpandStageHost`,
-mounted in `Shell.tsx` INSIDE the page column (right of the rail, below the
-toolbar) and inside `ReplayDockHost`, so an expanded card covers exactly that box
-and the replay dock still owns the bottom edge. An expanded card is PORTALED onto
-that stage - the same trick `CardToolbar` and `ReplayDock` already use here - so
-the React tree never moves: the chart instance, the fetched chain, the scroll
-position and the replay cursor all survive expanding and collapsing. The board
-tile it came from keeps its place in the grid and is simply empty for the
-duration, so collapsing puts the card back exactly where it was.
-
-Notes:
-- On by default (`expandable` on `CardProps`, defaults true) - "every card"
-  means every card, including the ones on Analysis, Scanner, Premarket, Flow.
-- Outside the shell there is no stage and no button, so the phone build
-  (`/v3/m/*`), previews and tests are untouched.
-- One card expanded at a time.
-- `BoardPage` passes `expandId={id}` (the board instance id), so the expansion
-  survives a re-render mid-gesture, and the toolbar camera can still find a card
-  while it is expanded and living outside its tile - a shot taken then is the
-  card at the size you are looking at it.
-
-No colour literals, no Tailwind palette, no off-scale type - `check:theme` clean.
-
-Touched: `cbedge-v3/src/design/primitives/Expand.tsx` (new),
-`cbedge-v3/src/design/primitives/Card.tsx`, `cbedge-v3/src/shell/Shell.tsx`,
-`cbedge-v3/src/board/BoardPage.tsx`. No proxy, server or v2 code.
-
-## 2026-09-03 - Post Studio: v3 wordmark, and a template per v3 board card
-
-**The logo was the old one.** `LOGO_SRC` in `owner-vite/src/pages/studioHtml.ts`
-was still the resampled `cbedge3.0.png` master. It is now the V3 WORDMARK -
-`cbedge-v3/src/assets/cbedge-wordmark.png`, the same lockup `Brand.tsx` renders
-in the v3 toolbar - inlined as a data URI the same way, for the same reason
-(this document renders inside owner.cbedge.net and cannot reach the Next app's
-public/). 374x96 at source, ~18KB, down from ~35KB. `object-fit:contain` absorbs
-the 3.90:1 ratio in the 3:1 logo slots, so no template geometry moved.
-
-**Eight new templates, one per card on the v3 board** - GEX Candles, GEX Chart,
-Multi Greek, Net Premium, Flow Tape, Quick Links, Key Levels, Economic Calendar
-& Earnings. Each is wordmark, card name, one-line description, four bullets, and
-a single tall screenshot slot. They are for X, so there is nothing in them about
-endpoints, sockets or grid units - the card has to sell what it does, not
-document how it is wired.
-
-All eight are built by one `v3card()` helper rather than eight copies of the same
-layout, so the geometry is edited in one place. They appear in the Template
-dropdown as "V3 card - <name>", between the Scanner-win template and Blank.
-
-Verified: the studio document loads with no console or page errors, all 24
-templates enumerate, and loading a v3 template renders the wordmark and the slot.
-
-Also in `generated/` (git-ignored): eight standalone 1600x900 PNG versions of the
-same cards for immediate posting, plus the HTML they were rendered from.
-
-Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
+## 2026-09-03 - "New version available" toast, so a phone tab stops running last week's build
+
+Nothing here was a caching bug, and clearing cookies never fixed it. The SPA
+shell is served `cache-control: no-store` and every asset under `/v3/assets/` is
+content-hashed, so a RELOAD has always landed on the current build. The problem
+was narrower: **a tab that never reloads.** On a phone the browser is not
+closed, it is backgrounded — Tuesday's tab is still there on Friday, still
+running Tuesday's JavaScript, and nothing in the browser was ever going to ask
+the server whether that was still the newest one.
+
+So it asks. New `cbedge-v3/src/data/appVersion.ts`:
+
+- **The build id is the entry chunk's own filename.** Vite content-hashes it
+  (`/v3/assets/index-qlRQ5y_H.js`), so it changes when — and only when — the
+  bundle changes. The running build is read off this document's own
+  `<script type="module">`; the latest by fetching `/v3` with
+  `cache: 'no-store'` and reading the same tag out of it. Two strings.
+  No version file, no build-time constant, no endpoint, no server change: a
+  stamp written at build time is a second thing that can go stale against the
+  bundle it describes, and a filename the bundler owns cannot.
+- **Checks on: 30s after mount, every 10 min while visible, and on
+  `visibilitychange`.** The last one is the one that matters — a backgrounded
+  tab's timers are throttled or stopped outright, so coming back to the
+  foreground is the only reliable moment to ask.
+- **A non-HTML or non-200 answer is ignored.** A redirect to `/` or `/home`
+  means the session lapsed or the gate moved, not that there is a new build, and
+  offering "Update" to someone whose reload lands on a sign-in page is worse
+  than saying nothing.
+
+`cbedge-v3/src/shell/UpdateToast.tsx` is the popup: bottom centre where a thumb
+is, above the tab bar and its safe-area inset on `/m/*`. Dismiss is per BUILD
+(sessionStorage), so clearing one never hides the next one.
+
+**Not auto-reload.** A reload mid-session throws away scroll position, an open
+ladder, a half-typed ticker — and on a chart page it is indistinguishable from a
+crash. `applyUpdate()` is `location.reload()` and nothing else: no cache API to
+empty, no cookies, no service worker to unregister (v3 registers none).
+
+This is the proactive half of a pair. The `vite:preloadError` handler in
+`main.tsx` catches the other: a stale tab asking for a lazy chunk the deploy has
+already deleted. That one fires only when you tap something; this one tells you
+before you tap. Both stay.
+
+**Changed:** `src/shell/Shell.tsx` mounts the toast once for both the desktop and
+phone branches.
 
 ## 2026-09-03 - v3 phone build: six tabs at /v3/m/*, and /v3 is no longer owner-only
 

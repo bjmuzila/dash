@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CORE migration</title>
+<style>
+  /* Palette mirrors components/shared/homeTheme.ts (standalone file, so the
+     values are inlined here — the one place in the repo allowed to). */
+  :root {
+    --bg: #05060A; --panel: rgba(13,17,25,0.72); --border: rgba(255,255,255,0.10);
+    --text: #FFFFFF; --muted: rgba(255,255,255,0.62); --cyan: #219EBC; --orange: #FB8501;
+    --core: #ffd600; --call: #30d158; --put: #ff4757; --red: #EF4444;
+    --mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.45 Inter, "Helvetica Neue", Arial, sans-serif; }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 18px 16px 40px; }
+  .card { background: radial-gradient(circle at 50% 0%, rgba(33,158,188,0.07) 0%, transparent 55%), var(--panel);
+    border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+  .head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  .title { font-size: 15px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--cyan); }
+  .meta { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .chip { padding: 5px 11px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 12px; font-weight: 800;
+    letter-spacing: .08em; text-transform: uppercase; border: 1px solid var(--border);
+    background: rgba(255,255,255,0.03); color: var(--text); }
+  .chip.on { border-color: var(--c, var(--cyan)); color: var(--c, var(--cyan)); background: color-mix(in srgb, var(--c, var(--cyan)) 16%, transparent); }
+  .sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
+  .ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+  .ctl input, .ctl select { font: inherit; font-size: 12px; color: var(--text); background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; }
+  .ctl input[type=text] { width: 260px; }
+  .legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 12px 18px 0; }
+  .lg { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; color: var(--muted);
+    font: inherit; font-size: 11px; cursor: pointer; padding: 0; }
+  .lg .sw { width: 11px; height: 11px; border-radius: 2px; border: 1px solid var(--sc); background: var(--sc); }
+  .lg.off { opacity: .4; } .lg.off .sw { background: transparent; }
+  .lg .v { font-family: var(--mono); color: var(--text); }
+  .plot { position: relative; padding: 8px 18px 0; }
+  svg { width: 100%; display: block; }
+  .rail { position: relative; height: 30px; margin: 4px 18px 0; color: var(--muted); }
+  .rail span { position: absolute; top: 0; white-space: nowrap; padding-left: 4px; }
+  .rail b { display: block; font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--text); }
+  .rail i { display: block; font-style: normal; font-family: var(--mono); font-size: 10px; }
+  .note { padding: 10px 18px 16px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .empty { padding: 26px 18px; color: var(--muted); }
+  .err { color: var(--red); }
+  .tip { position: absolute; pointer-events: none; display: none; background: rgba(13,17,25,0.96); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 9px; font-family: var(--mono); font-size: 11px; white-space: nowrap; z-index: 2; }
+  .tip b { color: var(--core); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="head">
+      <span class="title" id="title">CORE migration</span>
+      <span class="meta" id="meta">—</span>
+      <span class="sep"></span>
+      <button class="chip" data-range="21">1M</button>
+      <button class="chip on" data-range="63">3M</button>
+      <span class="sep"></span>
+      <button class="chip on" id="coreOnly" style="--c: var(--core)">Core only</button>
+      <button class="chip" id="wallsOn" style="--c: var(--orange)">+ Walls</button>
+      <span style="margin-left:auto; display:flex; gap:8px">
+        <button class="chip" id="png">⤓ PNG</button>
+        <button class="chip" id="reload">↻ Reload</button>
+      </span>
+    </div>
+    <div class="ctl">
+      <label>Ticker <input type="text" id="symbol" value="SPX" style="width:80px;text-transform:uppercase;font-family:var(--mono)"></label>
+      <label>End <input type="date" id="end"></label>
+      <label>Scope <select id="scope"><option value="0dte">0DTE</option><option value="agg">Non-0DTE</option></select></label>
+      <label>Basis <select id="basis"><option value="oivol">OI+Vol</option><option value="vol">Vol</option></select></label>
+      <label>Server <input type="text" id="base" placeholder="same origin (leave blank) or https://cbedge.net"></label>
+      <label>or JSON <input type="file" id="file" accept="application/json"></label>
+      <span id="status"></span>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="plot" id="plot"><div class="tip" id="tip"></div></div>
+    <div class="rail" id="rail"></div>
+    <div class="note">
+      Recorded levels only — 09:29 open + every 15m to 16:00 ET, written to <code>walls_log</code> when the level moved
+      and carried forward when it did not. Spot is the price stamped on each capture, not the tape.
+      CORE is the single largest |net GEX| strike on the chain; with walls on it stays gold and the other wall is
+      drawn in the colour of the side it currently is (call green / put red) — the same role model the Level Log uses.
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ── constants (mirror components/pages/LevelLog.tsx) ─────────────────────
+  // Primed from the URL by the Level Log's "CORE migration" button:
+  //   /core-migration.html?symbol=SPX&end=YYYY-MM-DD&scope=0dte&basis=oivol
+  const Q = new URLSearchParams(location.search);
+  const SYMBOL = () => ($('symbol').value || 'SPX').trim().toUpperCase();
+  const SLOTS = 27;                      // slot 0 = 09:29, then 09:45…16:00 every 15m
+  const LEVELS = ['put_wall', 'call_wall', 'cb'];
+  const COLOR = { cb: 'var(--core)', call_wall: 'var(--call)', put_wall: 'var(--put)', spot: 'var(--text)' };
+  const HEX   = { cb: '#ffd600', call_wall: '#30d158', put_wall: '#ff4757', spot: '#ffffff' };
+  const LABEL = { cb: 'CORE', call_wall: 'Call Wall', put_wall: 'Put Wall', spot: 'spot' };
+  const H = 420, PAD = 10;
+
+  const $ = (id) => document.getElementById(id);
+  const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+  const etToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+  const slotClock = (s) => { if (s <= 0) return '09:29'; const m = 9 * 60 + 45 + (s - 1) * 15;
+    return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
+  const fmt = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const monName = (d) => new Date(Date.parse(d + 'T12:00:00Z')).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }).toUpperCase();
+  const md = (d) => { const [, m, dd] = d.split('-'); return `${+m}/${+dd}`; };
+
+  // ── state ────────────────────────────────────────────────────────────────
+  const st = { range: 63, walls: false, off: new Set(), days: [], loading: false, error: null };
+  $('symbol').value = (Q.get('symbol') || 'SPX').toUpperCase();
+  $('end').value = isDate(Q.get('end')) ? Q.get('end') : etToday();
+  if (['0dte', 'agg'].includes(Q.get('scope'))) $('scope').value = Q.get('scope');
+  if (['oivol', 'vol'].includes(Q.get('basis'))) $('basis').value = Q.get('basis');
+  try { $('base').value = localStorage.getItem('spxcore.base') || ''; } catch {}
+
+  // ── data ─────────────────────────────────────────────────────────────────
+  const base = () => ($('base').value || '').trim().replace(/\/$/, '');
+  const variant = () => `&scope=${$('scope').value}&basis=${$('basis').value}`;
+
+  async function fetchRange() {
+    // One read when the server has /api/walls-range; otherwise the same rows a
+    // session at a time through /proxy/walls?symbol= (which has always existed).
+    const end = $('end').value || etToday();
+    try {
+      const r = await fetch(`${base()}/api/walls-range?symbol=${SYMBOL()}&days=${st.range}&end=${end}${variant()}`, { cache: 'no-store', credentials: 'include' });
+      const j = await r.json();
+      if (j && j.ok && Array.isArray(j.days)) return j.days;
+    } catch {}
+    const dates = lastWeekdays(end, Math.round(st.range * 1.5) + 6);
+    const out = [];
+    const CONC = 8;
+    for (let i = 0; i < dates.length; i += CONC) {
+      setStatus(`loading ${Math.min(i + CONC, dates.length)}/${dates.length} sessions…`);
+      const part = await Promise.all(dates.slice(i, i + CONC).map(async (d) => {
+        try {
+          const r = await fetch(`${base()}/proxy/walls?date=${d}&symbol=${SYMBOL()}${variant()}`, { cache: 'no-store', credentials: 'include' });
+          const j = await r.json();
+          return j && j.ok && Array.isArray(j.log) && j.log.length ? { date: d, log: j.log } : null;
+        } catch { return null; }
+      }));
+      out.push(...part.filter(Boolean));
+    }
+    if (!out.length) throw new Error('nothing came back — open this file from the site origin, set the Server field, or load a JSON export');
+    return out.slice(-st.range);
+  }
+  function lastWeekdays(end, n) {
+    const out = []; const t = Date.parse(end + 'T12:00:00Z');
+    for (let k = 0; out.length < n && k < n * 3 + 10; k++) {
+      const d = new Date(t - k * 86400000); const dow = d.getUTCDay();
+      if (dow === 0 || dow === 6) continue; out.push(d.toISOString().slice(0, 10));
+    }
+    return out.reverse();
+  }
+  function normalize(days) {
+    return days
+      .filter((d) => d && typeof d.date === 'string' && Array.isArray(d.log) && d.log.length)
+      .map((d) => ({ date: d.date.slice(0, 10), log: d.log.map((r) => ({
+        slot: +r.slot, level_type: r.level_type, strike: +r.strike, spot: r.spot == null ? null : +r.spot,
+        level_gex: r.level_gex == null ? null : +r.level_gex })) }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+  async function load() {
+    st.loading = true; st.error = null; setStatus('loading…');
+    $('title').textContent = `${SYMBOL()} — CORE migration`; document.title = `${SYMBOL()} — CORE migration`;
+    render();
+    try { st.days = normalize(await fetchRange()).slice(-st.range); try { localStorage.setItem('spxcore.base', base()); } catch {} }
+    catch (e) { st.days = []; st.error = String(e && e.message || e); }
+    st.loading = false; setStatus(''); render();
+  }
+  const setStatus = (s) => { $('status').textContent = s; };
+
+  // ── model (forward fill + the CORE-sign role model) ──────────────────────
+  function model(days, walls) {
+    const want = walls ? LEVELS : ['cb'];
+    const segs = [];
+    for (const day of days) {
+      const log = day.log.filter((r) => want.includes(r.level_type) && r.slot >= 0 && r.slot < SLOTS);
+      const L = SLOTS - 1; // every session draws to 16:00 — a level with no later row HELD
+      const series = {};
+      for (const lt of want) {
+        const rows = log.filter((r) => r.level_type === lt && Number.isFinite(r.strike)).sort((a, b) => a.slot - b.slot);
+        if (!rows.length) continue;
+        const arr = new Array(SLOTS).fill(null); let cur = null, i = 0;
+        for (let s = 0; s <= L; s++) { while (i < rows.length && rows[i].slot <= s) cur = rows[i++].strike; arr[s] = cur; }
+        series[lt] = arr;
+      }
+      const coreG = new Array(SLOTS).fill(null);
+      { const g = log.filter((r) => r.level_type === 'cb' && r.level_gex != null).sort((a, b) => a.slot - b.slot);
+        let cur = null, i = 0; for (let s = 0; s <= L; s++) { while (i < g.length && g[i].slot <= s) cur = g[i++].level_gex; coreG[s] = cur; } }
+      const cb = series.cb, cw = series.call_wall, pw = series.put_wall;
+      let roles = null;
+      if (cb && (cw || pw)) {
+        const core = new Array(SLOTS).fill(null), other = new Array(SLOTS).fill(null), side = new Array(SLOTS).fill(null);
+        for (let s = 0; s <= L; s++) {
+          const c = cb[s]; if (c == null) continue;
+          const a = cw ? cw[s] : null, b = pw ? pw[s] : null;
+          let cs;
+          if (a != null && c === a) cs = 'call'; else if (b != null && c === b) cs = 'put';
+          else { const g = coreG[s]; if (g != null && g !== 0) cs = g > 0 ? 'call' : 'put';
+            else if (a != null && b != null) cs = Math.abs(c - a) <= Math.abs(c - b) ? 'call' : 'put'; else cs = a != null ? 'call' : 'put'; }
+          core[s] = c; const o = cs === 'call' ? b : a; if (o != null) { other[s] = o; side[s] = cs === 'call' ? 'put' : 'call'; }
+        }
+        roles = { core, other, side };
+      }
+      const spot = new Array(SLOTS).fill(null);
+      for (const r of day.log) if (r.slot >= 0 && r.slot < SLOTS && r.spot > 0) spot[r.slot] = r.spot;
+      const spotPts = spot.map((v, s) => ({ s, v })).filter((p) => p.v != null);
+      // last capture of the day (for the tooltip / last-value legend)
+      let lastWrite = 0; for (const r of day.log) if (r.slot > lastWrite) lastWrite = r.slot;
+      segs.push({ date: day.date, series, roles, spotPts, L, lastWrite, log: day.log });
+    }
+    if (!segs.length) return null;
+    const vals = [];
+    for (const seg of segs) { for (const arr of Object.values(seg.series)) for (const v of arr) if (v != null) vals.push(v); for (const p of seg.spotPts) vals.push(p.v); }
+    if (vals.length < 2) return null;
+    let lo = Math.min(...vals), hi = Math.max(...vals); if (!(hi > lo)) { lo *= 0.999; hi *= 1.001; }
+    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    return { segs, lo, hi };
+  }
+
+  // ── render ───────────────────────────────────────────────────────────────
+  function render() {
+    $('coreOnly').classList.toggle('on', !st.walls); $('wallsOn').classList.toggle('on', st.walls);
+    document.querySelectorAll('[data-range]').forEach((b) => b.classList.toggle('on', +b.dataset.range === st.range));
+    const plot = $('plot'); const tip = $('tip'); const legend = $('legend'); const rail = $('rail');
+    plot.querySelectorAll('svg, .empty, .gl').forEach((n) => n.remove()); legend.innerHTML = ''; rail.innerHTML = '';
+    const m = st.days.length ? model(st.days, st.walls) : null;
+    $('meta').textContent = m ? `${m.segs.length} sessions · ${m.segs[0].date} → ${m.segs[m.segs.length - 1].date} · ${$('scope').value === 'agg' ? 'Non-0DTE' : '0DTE'} · ${$('basis').value === 'vol' ? 'Vol' : 'OI+Vol'}` : '—';
+    if (!m) {
+      const d = document.createElement('div'); d.className = 'empty' + (st.error ? ' err' : '');
+      d.textContent = st.loading ? 'Loading sessions…' : st.error ? `Could not load — ${st.error}` : `No recorded sessions for ${SYMBOL()}.`;
+      plot.appendChild(d); return;
+    }
+    const { segs, lo, hi } = m; const N = segs.length; const segW = 100 / N;
+    const x = (i, s) => i * segW + (s / segs[i].L) * segW;
+    const y = (v) => PAD + (1 - (v - lo) / (hi - lo)) * (H - PAD * 2);
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', `0 0 100 ${H}`); svg.setAttribute('height', H); svg.setAttribute('preserveAspectRatio', 'none');
+    const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+    const line = (x1, x2, y1, y2, stroke, extra = {}) => svg.appendChild(el('line', { x1, x2, y1, y2, stroke, 'stroke-width': 1, 'vector-effect': 'non-scaling-stroke', ...extra }));
+
+    // y grid — a handful of round strikes, labelled in HTML over the plot
+    const stepY = niceStep((hi - lo) / 5);
+    const gridLabels = [];
+    for (let k = Math.ceil(lo / stepY); k * stepY < hi; k++) { const v = Math.round(k * stepY * 100) / 100; line(0, 100, y(v), y(v), 'rgba(255,255,255,0.06)'); gridLabels.push({ v, y: y(v) }); }
+    // session / month dividers
+    const monthEdge = segs.map((s, i) => i === 0 || s.date.slice(0, 7) !== segs[i - 1].date.slice(0, 7));
+    for (let i = 1; i < N; i++) line(i * segW, i * segW, 0, H, `rgba(255,255,255,${N > 10 ? (monthEdge[i] ? 0.28 : 0.06) : 0.22})`);
+
+    const stepRun = (i, arr, a, b) => { const out = []; let prev = null;
+      for (let s = a; s <= b; s++) { const v = arr[s]; if (v == null) continue; if (prev != null && v !== prev) out.push(`${x(i, s)},${y(prev)}`); out.push(`${x(i, s)},${y(v)}`); prev = v; }
+      return out; };
+    const stepRuns = (i, arr) => { const out = []; if (!arr) return out; const L = segs[i].L; let s = 0;
+      while (s <= L) { if (arr[s] == null) { s++; continue; } const a = s; while (s <= L && arr[s] != null) s++; const p = stepRun(i, arr, a, s - 1); if (p.length) out.push(p.join(' ')); }
+      return out; };
+    const poly = (pts, color, w) => svg.appendChild(el('polyline', { points: pts, fill: 'none', stroke: color, 'stroke-width': w, 'vector-effect': 'non-scaling-stroke', 'stroke-linejoin': 'miter' }));
+    const off = st.off;
+    const roled = st.walls && segs.some((s) => s.roles);
+    if (roled && !off.has('cb')) {
+      for (let i = 0; i < N; i++) { const r = segs[i].roles; if (!r) continue; const L = segs[i].L; let s = 0;
+        while (s <= L) { if (r.other[s] == null || r.side[s] == null) { s++; continue; } const a = s, sd = r.side[s];
+          while (s <= L && r.other[s] != null && r.side[s] === sd) s++; const b = s - 1; const lt = sd === 'call' ? 'call_wall' : 'put_wall';
+          if (!off.has(lt)) { const pts = stepRun(i, r.other, a, b); const nx = r.other[b + 1];
+            if (pts.length && nx != null && b + 1 <= L) pts.push(`${x(i, b + 1)},${y(r.other[b])}`, `${x(i, b + 1)},${y(nx)}`);
+            if (pts.length) poly(pts.join(' '), HEX[lt], 1.8); } }
+        stepRuns(i, r.core).forEach((d) => poly(d, HEX.cb, 2.2)); }
+    } else {
+      for (const lt of LEVELS) { if (off.has(lt)) continue; for (let i = 0; i < N; i++) stepRuns(i, segs[i].series[lt]).forEach((d) => poly(d, HEX[lt], lt === 'cb' ? 2.2 : 1.8)); }
+    }
+    if (!off.has('spot')) for (let i = 0; i < N; i++) { const d = segs[i].spotPts.map((p) => `${x(i, p.s)},${y(p.v)}`).join(' '); if (d) poly(d, HEX.spot, 1.2); }
+    plot.appendChild(svg);
+    // grid labels
+    for (const g of gridLabels) { const s = document.createElement('span'); s.className = 'gl'; s.textContent = fmt(g.v);
+      s.style.cssText = `position:absolute;left:22px;top:${g.y + 8 - 7}px;font:10px var(--mono);color:rgba(255,255,255,0.45);pointer-events:none`; plot.appendChild(s); }
+
+    // legend chips (toggles)
+    const lastOf = (lt) => { for (let i = N - 1; i >= 0; i--) { const a = segs[i].series[lt]; if (!a) continue; for (let s = segs[i].L; s >= 0; s--) if (a[s] != null) return a[s]; } return null; };
+    const drawn = (st.walls ? LEVELS : ['cb']).filter((lt) => segs.some((s) => s.series[lt]));
+    const lastSpot = (() => { for (let i = N - 1; i >= 0; i--) { const p = segs[i].spotPts; if (p.length) return p[p.length - 1].v; } return null; })();
+    for (const k of [...drawn, 'spot']) {
+      const b = document.createElement('button'); b.className = 'lg' + (off.has(k) ? ' off' : ''); b.style.setProperty('--sc', HEX[k]);
+      b.innerHTML = `<span class="sw"></span><span>${LABEL[k]}</span><span class="v">${fmt(k === 'spot' ? lastSpot : lastOf(k))}</span>`;
+      b.title = off.has(k) ? `Show ${LABEL[k]}` : `Hide ${LABEL[k]}`;
+      b.onclick = () => { off.has(k) ? off.delete(k) : off.add(k); render(); }; legend.appendChild(b);
+    }
+    // date rail
+    if (N > 10) {
+      segs.forEach((seg, i) => { if (!monthEdge[i]) return; const s = document.createElement('span'); s.style.left = `${i * segW}%`;
+        s.innerHTML = `<b>${monName(seg.date)}</b><i>${md(seg.date)}</i>`; rail.appendChild(s); });
+    } else {
+      segs.forEach((seg, i) => { const s = document.createElement('span'); s.style.left = `${i * segW}%`; s.style.width = `${segW}%`; s.style.textAlign = 'center';
+        s.innerHTML = `<b>${new Date(Date.parse(seg.date + 'T12:00:00Z')).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}</b><i>${md(seg.date)}</i>`; rail.appendChild(s); });
+    }
+    // hover
+    svg.onmousemove = (ev) => {
+      const rect = svg.getBoundingClientRect(); const fx = (ev.clientX - rect.left) / rect.width * 100;
+      const i = Math.min(N - 1, Math.max(0, Math.floor(fx / segW))); const seg = segs[i];
+      const s = Math.min(seg.L, Math.max(0, Math.round((fx - i * segW) / segW * seg.L)));
+      const cb = seg.series.cb ? seg.series.cb[s] : null;
+      const cw = seg.series.call_wall ? seg.series.call_wall[s] : null, pw = seg.series.put_wall ? seg.series.put_wall[s] : null;
+      let sp = null; for (const p of seg.spotPts) if (p.s <= s) sp = p.v;
+      tip.innerHTML = `${seg.date} ${slotClock(s)}${s > seg.lastWrite ? ' (held)' : ''}<br><b>CORE ${fmt(cb)}</b>` +
+        (st.walls ? `<br><span style="color:${HEX.call_wall}">Call ${fmt(cw)}</span> · <span style="color:${HEX.put_wall}">Put ${fmt(pw)}</span>` : '') +
+        `<br>spot ${fmt(sp)}`;
+      tip.style.display = 'block'; tip.style.left = `${ev.clientX - rect.left + 14}px`; tip.style.top = `${ev.clientY - rect.top + 8}px`;
+    };
+    svg.onmouseleave = () => { tip.style.display = 'none'; };
+  }
+  function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw))); const f = raw / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p; }
+
+  // ── PNG (whole card) ─────────────────────────────────────────────────────
+  $('png').onclick = () => {
+    const svg = $('plot').querySelector('svg'); if (!svg) return;
+    const rect = svg.getBoundingClientRect(); const W = Math.round(rect.width * 2), Hh = Math.round(rect.height * 2);
+    const clone = svg.cloneNode(true); clone.setAttribute('width', W); clone.setAttribute('height', Hh);
+    const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob); const img = new Image();
+    img.onload = () => { const c = document.createElement('canvas'); c.width = W; c.height = Hh + 60; const g = c.getContext('2d');
+      g.fillStyle = '#05060A'; g.fillRect(0, 0, c.width, c.height); g.fillStyle = '#219EBC'; g.font = 'bold 26px Inter, Arial';
+      g.fillText(`${SYMBOL()} — CORE migration · ${$('meta').textContent}`, 20, 40); g.drawImage(img, 0, 60, W, Hh);
+      const a = document.createElement('a'); a.download = `${SYMBOL().toLowerCase()}-core-migration-${$('end').value}-${st.range}s.png`; a.href = c.toDataURL('image/png'); a.click(); URL.revokeObjectURL(url); };
+    img.src = url;
+  };
+
+  // ── wiring ───────────────────────────────────────────────────────────────
+  document.querySelectorAll('[data-range]').forEach((b) => b.onclick = () => { st.range = +b.dataset.range; load(); });
+  $('coreOnly').onclick = () => { st.walls = false; render(); };
+  $('wallsOn').onclick = () => { st.walls = true; render(); };
+  $('reload').onclick = load;
+  ['symbol', 'end', 'scope', 'basis'].forEach((id) => $(id).onchange = load);
+  $('base').onchange = load;
+  $('file').onchange = async (e) => { const f = e.target.files[0]; if (!f) return;
+    try { const j = JSON.parse(await f.text()); const days = Array.isArray(j) ? j : j.days; st.days = normalize(days).slice(-st.range); st.error = null; }
+    catch (err) { st.days = []; st.error = 'bad JSON: ' + err.message; } render(); };
+  load();
+})();
+</script>
+</body>
+</html>

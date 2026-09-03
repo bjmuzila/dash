@@ -6,11 +6,11 @@ import { isMobilePath } from '@/mobile/mobileNav'
 import { AuthProvider } from '@/data/auth'
 import { PAGE_TICKER_RE, PageSymbolProvider, SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import { Chip } from '@/design/primitives/Controls'
-import { ExpandStageHost } from '@/design/primitives/Expand'
 import { ReplayDockHost } from '@/design/primitives/ReplayDock'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
 import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
 import { UserMenu } from '@/shell/UserMenu'
+import { UpdateToast } from '@/shell/UpdateToast'
 
 // The persistent frame: mounts once and never unmounts, so the socket, the
 // store and any dock state survive navigation. Routes render inside it.
@@ -74,15 +74,6 @@ export const NAV: NavItem[] = [
   // and DEFAULT_TAB in pages/scanner/scannerNav.ts is now the only one), so the
   // click lands on data that is already home.
   { to: '/scanner', label: 'Scanner', icon: '🔭', prefetch: ['/proxy/gex-change-top'] },
-  // Prefetches BOTH feeds the page opens on — the econ events it renders first
-  // and the earnings rows it weaves between them. They are two requests either
-  // way; starting them on hover means the click lands on data already home.
-  {
-    to: '/economic-calendar',
-    label: 'Econ Calendar',
-    icon: '📅',
-    prefetch: ['/api/calendar', '/proxy/earnings-week?week=both'],
-  },
 ]
 
 function Logo() {
@@ -334,6 +325,10 @@ export function Shell({ children }: { children: ReactNode }) {
     <AuthProvider>
       <PageSymbolProvider>
         <CopyShotProvider>
+          {/* "New version — Update". Fixed-position, so it is a sibling of the
+              layout rather than part of it, and mounted once for both branches.
+              See data/appVersion.ts for why an open phone tab needs telling. */}
+          <UpdateToast />
           {mobile ? (
             <div className="cb-viewport flex flex-col overflow-hidden bg-bg text-fg">
               <ReplayDockHost>{children}</ReplayDockHost>
@@ -350,17 +345,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 rather than a chip somewhere inside a panel. */}
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
               <Toolbar />
-              {/* ExpandStageHost sits INSIDE the page column and outside the
-                  page: that is what makes a card's "full screen" fill exactly
-                  this box — everything to the right of the rail and below the
-                  toolbar — instead of covering the viewport. Both stay live
-                  while a card is expanded, so you can navigate straight out of
-                  it. Inside ReplayDockHost, so the dock still holds the bottom
-                  edge under an expanded card rather than being covered by it.
-                  See design/primitives/Expand.tsx. */}
-              <ReplayDockHost>
-                <ExpandStageHost>{children}</ExpandStageHost>
-              </ReplayDockHost>
+              <ReplayDockHost>{children}</ReplayDockHost>
             </div>
           </div>
           )}

@@ -2,6 +2,20 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Thursday 9/3/2026
+
+* **Economic Calendar (v3 preview):** the calendar and the earnings week board now have their own full page — impact filters, a market-cap filter, search, and a link that opens straight to the earnings tab.
+
+* **Phone (v3 preview):** the dashboard now has a real phone version — GEX, Heat, SPX Candles, Chain, Estimated Moves and Calendar, with a bottom tab bar.
+
+* **SPX Candles (phone, v3 preview):** the SPX / ES switch now sits in the header instead of buried in the settings sheet.
+
+* **Heat (phone, v3 preview):** the Multi Greek ladder, showing today's expiration only, with room for up to four tickers side by side.
+
+* **v3 preview:** now open to every subscriber, not just the owner account.
+
+* **Updates:** a "New version available" prompt now appears when an update ships. One tap to take it — no refreshing or clearing anything.
+
 ## Wednesday 9/2/2026
 
 * **Options Chain (v3 preview):** a Core (CB) strike below price now clearly reads red instead of gold, the strike window opens at 50% by default, and the settings menu no longer ignores your click.
