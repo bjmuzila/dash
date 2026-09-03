@@ -10,6 +10,12 @@ import { MobileShell } from '../MobileShell'
 // basis. The switch sits in the header on a phone as well as on the desktop, so
 // it is one tap from here rather than a tap into a sheet.
 //
+// `spxOnly` (2026-09-03) does two things, and they are the same thing: the card
+// stops following the board's ticker and charts SPX — which makes that SPX/ES
+// switch the only symbol control on the screen — and SESSION STOPS BEING A
+// SETTING, because ES is ETH and SPX cash is RTH and there was never a fourth
+// combination worth a button. See the prop.
+//
 // The tab is called SPX rather than ES because the cash index is what it opens
 // on; the future is the switch.
 
@@ -19,9 +25,9 @@ const GexCandlesCard = lazy(() =>
 
 export default function MSpx() {
   return (
-    <MobileShell title="Candles" fill symbol>
+    <MobileShell title="Candles" fill>
       <Suspense fallback={<div className="min-h-0 flex-1" />}>
-        <GexCandlesCard />
+        <GexCandlesCard spxOnly />
       </Suspense>
     </MobileShell>
   )

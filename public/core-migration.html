@@ -28,9 +28,31 @@
   .chip.on { border-color: var(--c, var(--cyan)); color: var(--c, var(--cyan)); background: color-mix(in srgb, var(--c, var(--cyan)) 16%, transparent); }
   .sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
   .ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
-  .ctl input, .ctl select { font: inherit; font-size: 12px; color: var(--text); background: rgba(255,255,255,0.04);
+  .ctl input { font: inherit; font-size: 12px; color: var(--text); background: rgba(255,255,255,0.04);
     border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; }
   .ctl input[type=text] { width: 260px; }
+  /* ── Dark dropdowns / date pickers — the same block app/globals.css applies to
+     every dashboard page ("Dark dropdowns everywhere"). Inlined because this file
+     is standalone and never loads globals.css; keep the two in step. ── */
+  select {
+    color-scheme: dark; -webkit-appearance: none; -moz-appearance: none; appearance: none;
+    font: inherit; font-size: 12px; background-color: #0d1119; color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; padding: 5px 30px 5px 8px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23219EBC' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-repeat: no-repeat; background-position: right 8px center; background-size: 14px; cursor: pointer;
+  }
+  select:focus { outline: none; border-color: rgba(0,240,255,0.45); }
+  select option, select optgroup { background-color: #0d1119; color: var(--text); }
+  select option:checked, select option:hover { background-color: rgba(0,240,255,0.18); color: var(--text); }
+  input[type=date] { color-scheme: dark; }
+  input[type=date]::-webkit-calendar-picker-indicator {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2322d3ee' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4' width='18' height='18' rx='2'/><line x1='16' y1='2' x2='16' y2='6'/><line x1='8' y1='2' x2='8' y2='6'/><line x1='3' y1='10' x2='21' y2='10'/></svg>");
+    background-size: contain; background-repeat: no-repeat; background-position: center; width: 14px; height: 14px; opacity: .9; cursor: pointer;
+  }
+  input[type=file] { color: var(--muted); }
+  input[type=file]::file-selector-button { font: inherit; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--cyan); background: linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04)); border: 1px solid rgba(33,158,188,.25);
+    border-radius: 6px; padding: 3px 8px; margin-right: 8px; cursor: pointer; }
   .legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 12px 18px 0; }
   .lg { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; color: var(--muted);
     font: inherit; font-size: 11px; cursor: pointer; padding: 0; }
@@ -81,8 +103,7 @@
     <div class="plot" id="plot"><div class="tip" id="tip"></div></div>
     <div class="rail" id="rail"></div>
     <div class="note">
-      Recorded levels only — 09:29 open + every 15m to 16:00 ET, written to <code>walls_log</code> when the level moved
-      and carried forward when it did not. Spot is the price stamped on each capture, not the tape.
+      Each gold bar is one stay of the CORE at a strike — from the 15-minute slot it arrived to the slot it left — and its weight is how long it held (a hairline is a one-slot blink, a heavy bar held for hours). Nothing joins the bars, so a flip is a gap, not a spike. Recorded levels only: 09:29 open + every 15m to 16:00 ET, written to <code>walls_log</code> when the level moved. Spot is the 5-minute scanner price for each session (the sweep the walls were sampled from); a session without it falls back to the price stamped on each capture.
       CORE is the single largest |net GEX| strike on the chain; with walls on it stays gold and the other wall is
       drawn in the colour of the side it currently is (call green / put red) — the same role model the Level Log uses.
     </div>
@@ -101,7 +122,7 @@
   const COLOR = { cb: 'var(--core)', call_wall: 'var(--call)', put_wall: 'var(--put)', spot: 'var(--text)' };
   const HEX   = { cb: '#ffd600', call_wall: '#30d158', put_wall: '#ff4757', spot: '#ffffff' };
   const LABEL = { cb: 'CORE', call_wall: 'Call Wall', put_wall: 'Put Wall', spot: 'spot' };
-  const H = 420, PAD = 10;
+  const H = 500, PAD = 12;
 
   const $ = (id) => document.getElementById(id);
   const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
@@ -111,6 +132,13 @@
   const fmt = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
   const monName = (d) => new Date(Date.parse(d + 'T12:00:00Z')).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }).toUpperCase();
   const md = (d) => { const [, m, dd] = d.split('-'); return `${+m}/${+dd}`; };
+  /** ET minutes-since-midnight of a timestamp, or null. */
+  const HM = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit' });
+  const etMins = (ts) => { const t = new Date(ts); if (!Number.isFinite(t.getTime())) return null;
+    const P = HM.formatToParts(t); const h = +P.find((x) => x.type === 'hour').value % 24, m = +P.find((x) => x.type === 'minute').value; return h * 60 + m; };
+  /** ET minutes → fractional slot (mirror of LevelLog's slotAtMins): slot 0 is
+      09:29, slot 1 is 09:45, then one slot per 15 minutes to 16:00 (slot 26). */
+  const slotAtMins = (m) => m <= 569 ? 0 : m <= 585 ? (m - 569) / 16 : 1 + (m - 585) / 15;
 
   // ── state ────────────────────────────────────────────────────────────────
   const st = { range: 63, walls: false, off: new Set(), days: [], loading: false, error: null };
@@ -142,7 +170,16 @@
         try {
           const r = await fetch(`${base()}/proxy/walls?date=${d}&symbol=${SYMBOL()}${variant()}`, { cache: 'no-store', credentials: 'include' });
           const j = await r.json();
-          return j && j.ok && Array.isArray(j.log) && j.log.length ? { date: d, log: j.log } : null;
+          if (!(j && j.ok && Array.isArray(j.log) && j.log.length)) return null;
+          // The 5-minute scanner series for the price line (same rows
+          // /api/walls-range folds in as `spot`). Best-effort.
+          let spot = [];
+          try {
+            const rs = await fetch(`${base()}/proxy/walls?date=${d}&symbol=${SYMBOL()}&series=1${variant()}`, { cache: 'no-store', credentials: 'include' });
+            const js = await rs.json();
+            if (js && js.ok && Array.isArray(js.series)) spot = js.series.map((row) => [etMins(row.ts), +row.spot]).filter((p) => p[0] != null && p[1] > 0);
+          } catch {}
+          return { date: d, log: j.log, spot };
         } catch { return null; }
       }));
       out.push(...part.filter(Boolean));
@@ -163,7 +200,9 @@
       .filter((d) => d && typeof d.date === 'string' && Array.isArray(d.log) && d.log.length)
       .map((d) => ({ date: d.date.slice(0, 10), log: d.log.map((r) => ({
         slot: +r.slot, level_type: r.level_type, strike: +r.strike, spot: r.spot == null ? null : +r.spot,
-        level_gex: r.level_gex == null ? null : +r.level_gex })) }))
+        level_gex: r.level_gex == null ? null : +r.level_gex })),
+        // 5-minute tape as [etMins, px]; slot-x is derived at draw time.
+        spot: (Array.isArray(d.spot) ? d.spot : []).map((p) => [+p[0], +p[1]]).filter((p) => Number.isFinite(p[0]) && p[1] > 0) }))
       .sort((a, b) => a.date.localeCompare(b.date));
   }
   async function load() {
@@ -211,10 +250,16 @@
       }
       const spot = new Array(SLOTS).fill(null);
       for (const r of day.log) if (r.slot >= 0 && r.slot < SLOTS && r.spot > 0) spot[r.slot] = r.spot;
-      const spotPts = spot.map((v, s) => ({ s, v })).filter((p) => p.v != null);
+      const caps = spot.map((v, s) => ({ s, v })).filter((p) => p.v != null);
+      // WHICH PRICE GETS DRAWN — the 5-minute tape when the day has one, the
+      // log's own captures when it does not; never the two spliced. Same rule
+      // as the Level Log chart, decided per day.
+      const tape = day.spot.map((p) => ({ s: slotAtMins(p[0]), v: p[1] })).filter((p) => p.s >= 0 && p.s <= SLOTS - 1).sort((a, b) => a.s - b.s);
+      const dense = tape.length >= 20;
+      const spotPts = dense ? tape : caps;
       // last capture of the day (for the tooltip / last-value legend)
       let lastWrite = 0; for (const r of day.log) if (r.slot > lastWrite) lastWrite = r.slot;
-      segs.push({ date: day.date, series, roles, spotPts, L, lastWrite, log: day.log });
+      segs.push({ date: day.date, series, roles, spotPts, dense, L, lastWrite, log: day.log });
     }
     if (!segs.length) return null;
     const vals = [];
@@ -232,7 +277,8 @@
     const plot = $('plot'); const tip = $('tip'); const legend = $('legend'); const rail = $('rail');
     plot.querySelectorAll('svg, .empty, .gl').forEach((n) => n.remove()); legend.innerHTML = ''; rail.innerHTML = '';
     const m = st.days.length ? model(st.days, st.walls) : null;
-    $('meta').textContent = m ? `${m.segs.length} sessions · ${m.segs[0].date} → ${m.segs[m.segs.length - 1].date} · ${$('scope').value === 'agg' ? 'Non-0DTE' : '0DTE'} · ${$('basis').value === 'vol' ? 'Vol' : 'OI+Vol'}` : '—';
+    const nTape = m ? m.segs.reduce((n, s) => n + (s.dense ? s.spotPts.length : 0), 0) : 0;
+    $('meta').textContent = m ? `${m.segs.length} sessions · ${m.segs[0].date} → ${m.segs[m.segs.length - 1].date} · ${$('scope').value === 'agg' ? 'Non-0DTE' : '0DTE'} · ${$('basis').value === 'vol' ? 'Vol' : 'OI+Vol'}${nTape ? ` · ${nTape.toLocaleString()} × 5m spot` : ''}` : '—';
     if (!m) {
       const d = document.createElement('div'); d.className = 'empty' + (st.error ? ' err' : '');
       d.textContent = st.loading ? 'Loading sessions…' : st.error ? `Could not load — ${st.error}` : `No recorded sessions for ${SYMBOL()}.`;
@@ -255,27 +301,42 @@
     const monthEdge = segs.map((s, i) => i === 0 || s.date.slice(0, 7) !== segs[i - 1].date.slice(0, 7));
     for (let i = 1; i < N; i++) line(i * segW, i * segW, 0, H, `rgba(255,255,255,${N > 10 ? (monthEdge[i] ? 0.28 : 0.06) : 0.22})`);
 
-    const stepRun = (i, arr, a, b) => { const out = []; let prev = null;
-      for (let s = a; s <= b; s++) { const v = arr[s]; if (v == null) continue; if (prev != null && v !== prev) out.push(`${x(i, s)},${y(prev)}`); out.push(`${x(i, s)},${y(v)}`); prev = v; }
-      return out; };
-    const stepRuns = (i, arr) => { const out = []; if (!arr) return out; const L = segs[i].L; let s = 0;
-      while (s <= L) { if (arr[s] == null) { s++; continue; } const a = s; while (s <= L && arr[s] != null) s++; const p = stepRun(i, arr, a, s - 1); if (p.length) out.push(p.join(' ')); }
-      return out; };
-    const poly = (pts, color, w) => svg.appendChild(el('polyline', { points: pts, fill: 'none', stroke: color, 'stroke-width': w, 'vector-effect': 'non-scaling-stroke', 'stroke-linejoin': 'miter' }));
+    const poly = (pts, color, w, extra = {}) => svg.appendChild(el('polyline', { points: pts, fill: 'none', stroke: color, 'stroke-width': w, 'vector-effect': 'non-scaling-stroke', 'stroke-linejoin': 'round', ...extra }));
     const off = st.off;
+
+    /**
+     * DWELL BANDS, not steps. A level is drawn as one horizontal bar per
+     * contiguous run at a strike, from the slot it arrived to the slot it left,
+     * and NOTHING joins the runs: a one-slot flip is a faint hairline, a level
+     * that held all afternoon is a heavy bar. Thickness and opacity both scale
+     * with how many slots the run lasted, so the eye reads where the level
+     * LIVED and skips where it merely blinked. Runs are per day (the log does
+     * not carry overnight), but same-strike bars on consecutive days line up
+     * into one shelf on their own.
+     */
+    const runsOf = (arr, L) => { const out = []; if (!arr) return out; let s = 0;
+      while (s <= L) { if (arr[s] == null) { s++; continue; } const a = s, v = arr[s]; while (s <= L && arr[s] === v) s++; out.push({ a, b: s - 1, v, n: s - a }); }
+      return out; };
+    const band = (i, run, color, heavy) => {
+      const L = segs[i].L; const f = Math.min(1, run.n / 14);            // 14 slots ≈ 3.5h = full weight
+      const w = (heavy ? 1.6 : 1.2) + f * (heavy ? 5.4 : 3.8);
+      const x1 = x(i, run.a), x2 = run.b + 1 <= L ? x(i, run.b + 1) : x(i, L) + (segW / L) * 0.6;
+      svg.appendChild(el('line', { x1, x2, y1: y(run.v), y2: y(run.v), stroke: color, 'stroke-width': w.toFixed(2),
+        'stroke-opacity': (0.28 + 0.72 * f).toFixed(2), 'stroke-linecap': 'butt', 'vector-effect': 'non-scaling-stroke' }));
+    };
     const roled = st.walls && segs.some((s) => s.roles);
     if (roled && !off.has('cb')) {
-      for (let i = 0; i < N; i++) { const r = segs[i].roles; if (!r) continue; const L = segs[i].L; let s = 0;
-        while (s <= L) { if (r.other[s] == null || r.side[s] == null) { s++; continue; } const a = s, sd = r.side[s];
-          while (s <= L && r.other[s] != null && r.side[s] === sd) s++; const b = s - 1; const lt = sd === 'call' ? 'call_wall' : 'put_wall';
-          if (!off.has(lt)) { const pts = stepRun(i, r.other, a, b); const nx = r.other[b + 1];
-            if (pts.length && nx != null && b + 1 <= L) pts.push(`${x(i, b + 1)},${y(r.other[b])}`, `${x(i, b + 1)},${y(nx)}`);
-            if (pts.length) poly(pts.join(' '), HEX[lt], 1.8); } }
-        stepRuns(i, r.core).forEach((d) => poly(d, HEX.cb, 2.2)); }
+      for (let i = 0; i < N; i++) { const r = segs[i].roles; if (!r) continue; const L = segs[i].L;
+        // OTHER: runs split on strike AND side, so each bar carries the colour of the wall it is.
+        let s = 0;
+        while (s <= L) { if (r.other[s] == null || r.side[s] == null) { s++; continue; } const a = s, v = r.other[s], sd = r.side[s];
+          while (s <= L && r.other[s] === v && r.side[s] === sd) s++; const lt = sd === 'call' ? 'call_wall' : 'put_wall';
+          if (!off.has(lt)) band(i, { a, b: s - 1, v, n: s - a }, HEX[lt], false); }
+        runsOf(r.core, L).forEach((run) => band(i, run, HEX.cb, true)); }
     } else {
-      for (const lt of LEVELS) { if (off.has(lt)) continue; for (let i = 0; i < N; i++) stepRuns(i, segs[i].series[lt]).forEach((d) => poly(d, HEX[lt], lt === 'cb' ? 2.2 : 1.8)); }
+      for (const lt of LEVELS) { if (off.has(lt)) continue; for (let i = 0; i < N; i++) runsOf(segs[i].series[lt], segs[i].L).forEach((run) => band(i, run, HEX[lt], lt === 'cb')); }
     }
-    if (!off.has('spot')) for (let i = 0; i < N; i++) { const d = segs[i].spotPts.map((p) => `${x(i, p.s)},${y(p.v)}`).join(' '); if (d) poly(d, HEX.spot, 1.2); }
+    if (!off.has('spot')) for (let i = 0; i < N; i++) { const d = segs[i].spotPts.map((p) => `${x(i, p.s)},${y(p.v)}`).join(' '); if (d) poly(d, HEX.spot, segs[i].dense ? 1 : 1.3, { 'stroke-opacity': 0.72 }); }
     plot.appendChild(svg);
     // grid labels
     for (const g of gridLabels) { const s = document.createElement('span'); s.className = 'gl'; s.textContent = fmt(g.v);
@@ -306,7 +367,7 @@
       const s = Math.min(seg.L, Math.max(0, Math.round((fx - i * segW) / segW * seg.L)));
       const cb = seg.series.cb ? seg.series.cb[s] : null;
       const cw = seg.series.call_wall ? seg.series.call_wall[s] : null, pw = seg.series.put_wall ? seg.series.put_wall[s] : null;
-      let sp = null; for (const p of seg.spotPts) if (p.s <= s) sp = p.v;
+      let sp = null, best = Infinity; for (const p of seg.spotPts) { const d = Math.abs(p.s - s); if (d < best) { best = d; sp = p.v; } }
       tip.innerHTML = `${seg.date} ${slotClock(s)}${s > seg.lastWrite ? ' (held)' : ''}<br><b>CORE ${fmt(cb)}</b>` +
         (st.walls ? `<br><span style="color:${HEX.call_wall}">Call ${fmt(cw)}</span> · <span style="color:${HEX.put_wall}">Put ${fmt(pw)}</span>` : '') +
         `<br>spot ${fmt(sp)}`;

@@ -6,6 +6,7 @@ import { isMobilePath } from '@/mobile/mobileNav'
 import { AuthProvider } from '@/data/auth'
 import { PAGE_TICKER_RE, PageSymbolProvider, SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import { Chip } from '@/design/primitives/Controls'
+import { ExpandStageHost } from '@/design/primitives/Expand'
 import { ReplayDockHost } from '@/design/primitives/ReplayDock'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
 import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
@@ -235,7 +236,7 @@ function EtClock() {
   )
 }
 
-function Toolbar() {
+function Toolbar({ mobile = false }: { mobile?: boolean }) {
   // THE ticker control for the whole board. Every card that can follow a symbol
   // follows this one, which is why no card carries its own dropdown — see
   // src/data/symbol.tsx for which cards can and which cannot.
@@ -276,18 +277,33 @@ function Toolbar() {
           every time. It lights up when SPX is already the board's symbol, so it
           doubles as "am I on the live feed or the poll?" — which is the other
           question people were opening the dropdown to answer. */}
-      <Chip
-        label={SOCKET_SYMBOL}
-        on={isSocketSymbol(symbol)}
-        onClick={() => setSymbol(SOCKET_SYMBOL)}
-        title="Put the whole board back on SPX — the one symbol the live socket streams, where every GEX card is on the feed rather than a chain poll"
-      />
-      <TickerPicker
-        activeTicker={symbol}
-        onSelect={setSymbol}
-        allowCustom={PAGE_TICKER_RE}
-        title="The board's symbol — every card that can follow a ticker is showing this one. Click to search the list or star a ticker to keep it on top."
-      />
+      {/* ── NOT ON THE PHONE BUILD (2026-09-03) ────────────────────────────
+          These two set the BOARD's symbol, and on /m/* nothing reads it: the
+          GEX chart, the Multi Greek ladder and the candles are each pinned to
+          SPX for now (see the `simple` / `pinnedFirst` / `spxOnly` props on
+          those cards). A picker that moves a value no visible card follows is
+          a control that lies, which is the one thing this toolbar was rebuilt
+          to stop being. Everything else here — the mark, the clock, the camera,
+          the account menu — is the same bar the desktop draws, which is the
+          point: the phone is v3, not a second app.
+
+          When a phone screen follows a ticker again, delete the guard. */}
+      {!mobile && (
+        <>
+          <Chip
+            label={SOCKET_SYMBOL}
+            on={isSocketSymbol(symbol)}
+            onClick={() => setSymbol(SOCKET_SYMBOL)}
+            title="Put the whole board back on SPX — the one symbol the live socket streams, where every GEX card is on the feed rather than a chain poll"
+          />
+          <TickerPicker
+            activeTicker={symbol}
+            onSelect={setSymbol}
+            allowCustom={PAGE_TICKER_RE}
+            title="The board's symbol — every card that can follow a ticker is showing this one. Click to search the list or star a ticker to keep it on top."
+          />
+        </>
+      )}
       <EtClock />
       {/* ── 📸 ─────────────────────────────────────────────────────────────────
           The one camera in the app. Draws nothing for anyone but the owner, and
@@ -303,15 +319,19 @@ function Toolbar() {
 }
 
 export function Shell({ children }: { children: ReactNode }) {
-  // ── /m/* renders WITHOUT the desktop chrome ─────────────────────────────────
-  // The phone build brings its own frame (src/mobile/MobileShell.tsx): one
-  // header and a bottom tab bar. The rail is 64px of a 390px screen and the
-  // toolbar is a second header, so both come off — but ONLY the chrome. The
-  // three providers below stay exactly where they are, which is the whole
-  // reason this is a branch inside Shell rather than a second shell component:
-  // the socket, the store, the page symbol and the auth read are one instance
-  // for the session, and a phone that mounted its own would open a second
-  // WebSocket the moment someone long-pressed back to the desktop.
+  // ── /m/* keeps the TOOLBAR and drops the RAIL ───────────────────────────────
+  // The rail is 64px of a 390px screen — a quarter of it, spent on a nav the
+  // bottom tab bar already is. The toolbar stays, and it is the SAME component
+  // the desktop draws: brand, ET clock, camera, account menu, one instance, one
+  // set of behaviours. A phone-only copy of that bar would be a second thing to
+  // change every time (`mobile` there hides only the board's ticker controls —
+  // see the note beside them).
+  //
+  // The three providers below stay exactly where they are either way, which is
+  // the whole reason this is a branch inside Shell rather than a second shell
+  // component: the socket, the store, the page symbol and the auth read are one
+  // instance for the session, and a phone that mounted its own would open a
+  // second WebSocket the moment someone long-pressed back to the desktop.
   const mobile = isMobilePath(useLocation().pathname)
 
   // Three providers, all above the toolbar AND the page:
@@ -331,6 +351,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <UpdateToast />
           {mobile ? (
             <div className="cb-viewport flex flex-col overflow-hidden bg-bg text-fg">
+              <Toolbar mobile />
               <ReplayDockHost>{children}</ReplayDockHost>
             </div>
           ) : (
@@ -345,7 +366,24 @@ export function Shell({ children }: { children: ReactNode }) {
                 rather than a chip somewhere inside a panel. */}
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
               <Toolbar />
-              <ReplayDockHost>{children}</ReplayDockHost>
+              {/* ── ExpandStageHost — DO NOT DROP THIS WRAPPER ────────────────
+                  It is what makes every Card's expand control exist: outside a
+                  stage the context is null and Card draws no button at all, so
+                  removing this line does not break loudly, it silently deletes
+                  the feature from the whole app. (It has been lost to a Shell
+                  rewrite once already — 2026-09-03.)
+
+                  It sits INSIDE the page column and OUTSIDE the page, which is
+                  what makes a card's "full screen" fill exactly this box —
+                  everything right of the rail and below the toolbar — instead
+                  of covering the viewport. Both stay live and clickable while a
+                  card is expanded, which is how you leave it. Inside
+                  ReplayDockHost, so the dock still holds the bottom edge under
+                  an expanded card rather than being covered by it.
+                  See design/primitives/Expand.tsx. ── */}
+              <ReplayDockHost>
+                <ExpandStageHost>{children}</ExpandStageHost>
+              </ReplayDockHost>
             </div>
           </div>
           )}

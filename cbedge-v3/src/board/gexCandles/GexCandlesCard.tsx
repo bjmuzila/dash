@@ -11,6 +11,9 @@ import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
 import { SegGroup, Chip, Popover, PanelSection, Dropdown, Slider } from './controls'
 import { chainTicker, symbolDef } from './symbols'
+
+/** What `spxOnly` pins the card to. The one root with both a cash tape and a future. */
+const SPX_ONLY_SYMBOL = 'SPX'
 import {
   BUBBLE_LADDER_REQUEST,
   BUBBLE_SCALE_MAX,
@@ -322,7 +325,28 @@ export function GexCandlesCard({
    * Replay hub's "GEX candles" tab does.
    */
   replay = false,
-}: { replay?: boolean } = {}) {
+  /**
+   * SPX AND ES ONLY, and the session follows the tape.
+   *
+   * For the phone build (/v3/m/spx). Two things, and they are the same thing:
+   *
+   *   · The card stops following the board's ticker and charts SPX. The SPX/ES
+   *     switch is `esCapable`, which is true only on SPX, so pinning the symbol
+   *     is what makes that switch the ONLY symbol control on the screen — which
+   *     is what was asked for, and it is also the only pair the phone has a
+   *     live feed for.
+   *   · SESSION STOPS BEING A SETTING. ES trades nearly around the clock, so it
+   *     is ETH; SPX cash does not exist outside 09:30–16:00 ET, so RTH on it is
+   *     not a filter, it is the whole tape — an SPX chart on "ETH" and the same
+   *     chart on "RTH" are the same picture, and a button that changes nothing
+   *     is a button that teaches you it does nothing. Tying it to the tape
+   *     removes the one setting on this card that could only ever be wrong.
+   *
+   * The stored `session` is left alone, like `railOn`: the same browser profile
+   * opens this card on a desktop and must find it as it left it.
+   */
+  spxOnly = false,
+}: { replay?: boolean; spxOnly?: boolean } = {}) {
   // ── Phone layout ───────────────────────────────────────────────────────────
   // One card, three differences, all of them about the hand rather than the
   // screen size:
@@ -389,7 +413,8 @@ export function GexCandlesCard({
   // live in this toolbar is gone: the board has one ticker and the toolbar
   // search is where it is set. `settings.symbol` stays in the stored blob so an
   // older saved setting is not destroyed, but nothing reads it any more.
-  const { symbol } = usePageSymbol()
+  const { symbol: boardSymbol } = usePageSymbol()
+  const symbol = spxOnly ? SPX_ONLY_SYMBOL : boardSymbol
   const def = useMemo(() => symbolDef(symbol), [symbol])
 
   // ── THE OWNER'S CHART KEEPS RUNNING IN A BACKGROUND TAB ────────────────────
@@ -410,6 +435,12 @@ export function GexCandlesCard({
   // own candles, and comes back to ES when it returns to SPX.
   const esCapable = def.gexSymbol === '$SPX'
   const useEs = esCapable && settings.esCandles
+  /**
+   * The session the chart actually filters on. Normally the stored setting;
+   * derived from the tape when `spxOnly` — ES has an overnight, SPX cash does
+   * not. See the prop.
+   */
+  const session = spxOnly ? (useEs ? 'eth' : 'rth') : settings.session
 
   // ── Fetches ────────────────────────────────────────────────────────────────
   // `pollMs`, not just `staleMs`. staleMs is a cache TTL and never causes a
@@ -574,8 +605,8 @@ export function GexCandlesCard({
   // cursor; live, the two are the same array.
   const allBars = useMemo(() => {
     const raw = useEs ? parseEsCandles(candlesQ.data) : parseCandles(candlesQ.data)
-    return filterSession(rollup(raw, settings.interval), settings.session)
-  }, [useEs, candlesQ.data, settings.interval, settings.session])
+    return filterSession(rollup(raw, settings.interval), session)
+  }, [useEs, candlesQ.data, settings.interval, session])
 
   // ── The replay cursor ──────────────────────────────────────────────────────
   // The timeline is the BARS, not the GEX columns: the candles are always there
@@ -716,7 +747,7 @@ export function GexCandlesCard({
   // `replayOn` is in the key so entering or leaving replay reframes ONCE. It is
   // the only replay state that belongs here: the cursor moving is not a scale
   // change, and reframing on every scrub tick would fight the pan and the zoom.
-  const viewKey = `${symbol}|${useEs ? 'ES' : 'IDX'}|${settings.interval}|${settings.session}|${replayOn ? 'R' : 'L'}`
+  const viewKey = `${symbol}|${useEs ? 'ES' : 'IDX'}|${settings.interval}|${session}|${replayOn ? 'R' : 'L'}`
   const framedRef = useRef('')
 
   // BEFORE the setBars effect below, deliberately. The interval is what the
@@ -875,7 +906,7 @@ export function GexCandlesCard({
         { label: 'RTH', value: 'rth' },
         { label: 'ETH', value: 'eth' },
       ]}
-      value={settings.session}
+      value={session}
       onChange={(v) => patch({ session: v })}
     />
   )
@@ -890,7 +921,7 @@ export function GexCandlesCard({
         useEs ? 'ES' : symbol,
         expiry,
         `${settings.interval}m`,
-        settings.session.toUpperCase(),
+        session.toUpperCase(),
         // A shot of a rewound chart that does not say so is a shot of a lie.
         replayOn && cursor ? `REPLAY ${ET_CLOCK.format(new Date(cursor))} ET` : '',
       ]
@@ -926,7 +957,7 @@ export function GexCandlesCard({
         {tapePicker}
         {!phone && expiryPicker}
         {!phone && intervalPicker}
-        {!phone && sessionPicker}
+        {!phone && !spxOnly && sessionPicker}
         <div className="relative shrink-0">
           <button
             type="button"
@@ -941,7 +972,7 @@ export function GexCandlesCard({
                 chart is currently set to — otherwise the two settings you
                 change most are invisible until you open the sheet. */}
             {phone
-              ? `${INTERVAL_LABEL[settings.interval]} · ${settings.session.toUpperCase()} ⚙`
+              ? `${INTERVAL_LABEL[settings.interval]} · ${session.toUpperCase()} ⚙`
               : '⚙ Layers'}
           </button>
           <Popover open={settingsOpen} onClose={() => setSettingsOpen(false)} sheet={phone}>
@@ -952,7 +983,8 @@ export function GexCandlesCard({
                   the header on every width. See the note on CardToolbar. */}
               {phone && <PanelSection title="Expiry">{expiryPicker}</PanelSection>}
               {phone && <PanelSection title="Interval">{intervalPicker}</PanelSection>}
-              {phone && <PanelSection title="Session">{sessionPicker}</PanelSection>}
+              {/* No Session section when the tape decides it — see spxOnly. */}
+              {phone && !spxOnly && <PanelSection title="Session">{sessionPicker}</PanelSection>}
 
               <PanelSection title="Layer">
                 <div className="flex flex-wrap gap-1">

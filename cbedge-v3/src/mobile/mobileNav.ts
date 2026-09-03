@@ -49,7 +49,12 @@ export const MOBILE_TABS: MobileTab[] = [
   // SPX cash candles with the SPX/ES tape switch in the header — the switch is
   // the card's own `settings.esCandles`, so the phone and the board agree.
   { id: 'spx', path: '/m/spx', label: 'SPX', title: 'SPX Candles', icon: '🕯️' },
-  { id: 'chain', path: '/m/chain', label: 'Chain', title: 'Options Chain', icon: '⛓️' },
+  // NO CHAIN TAB (2026-09-03, removed the day after it landed). The v3 options
+  // chain is a strike ladder with up to a dozen numeric columns read ACROSS;
+  // at 390px it is a horizontal scroll over a table you cannot see two columns
+  // of at once, which is not the page, it is a picture of the page. It stays a
+  // desktop screen until there is a phone DESIGN for it rather than the desktop
+  // one made narrow. /v3/options-chain is untouched.
   { id: 'em', path: '/m/em', label: 'Moves', title: 'Estimated Moves', icon: '↔️' },
   { id: 'econ', path: '/m/econ', label: 'Cal', title: 'Economic Calendar', icon: '📅' },
 ]
@@ -66,7 +71,6 @@ export const MOBILE_DEFAULT_PATH = '/m/gex'
 export const DESKTOP_TO_MOBILE: Record<string, string> = {
   '/': '/m/gex',
   '/traders-dashboard': '/m/gex',
-  '/options-chain': '/m/chain',
   '/em': '/m/em',
 }
 
@@ -75,7 +79,6 @@ export const MOBILE_TO_DESKTOP: Record<string, string> = {
   '/m/gex': '/',
   '/m/heat': '/',
   '/m/spx': '/',
-  '/m/chain': '/options-chain',
   '/m/em': '/em',
   '/m/econ': '/',
 }

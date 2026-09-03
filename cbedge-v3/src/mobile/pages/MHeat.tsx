@@ -14,6 +14,13 @@ import { MobileShell } from '../MobileShell'
 // ＋ button is untouched, so 1–4 tickers still works exactly as it does on the
 // board — the panel row scrolls sideways once there are more than two.
 //
+// `pinnedFirst="SPX"` (2026-09-03): panel one is SPX and is not typeable. On the
+// board that panel IS the page symbol and typing in it moves everything, which
+// is honest there; here nothing else reads that value — the toolbar's picker is
+// hidden on /m/* — so a typeable panel one would be the last way to move a
+// number with no visible consequence. ＋ is the way symbols come in, and it
+// ADDS rather than replaces.
+//
 // `fill` — the ladder scrolls inside itself, both ways. A page that also
 // scrolled would fight it.
 
@@ -23,9 +30,9 @@ const MultiGreekCard = lazy(() =>
 
 export default function MHeat() {
   return (
-    <MobileShell title="Multi Greek" fill symbol>
+    <MobileShell title="Multi Greek" fill>
       <Suspense fallback={<div className="min-h-0 flex-1" />}>
-        <MultiGreekCard singleColumn />
+        <MultiGreekCard singleColumn pinnedFirst="SPX" />
       </Suspense>
     </MobileShell>
   )

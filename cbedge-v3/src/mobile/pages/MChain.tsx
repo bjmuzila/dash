@@ -1,26 +1,17 @@
-import { Suspense, lazy } from 'react'
-import { MobileShell } from '../MobileShell'
-
-// /m/chain — the options chain.
+// ─────────────────────────────────────────────────────────────────────────────
+// REMOVED 2026-09-03 — the phone Options Chain tab.
 //
-// This one is a v3 PAGE rather than a board card, and it already draws its own
-// toolbar (ticker, expiry, strike window, the cog) in a row that scrolls
-// sideways. So the shell is `bare`: no Card, no second header. The one thing the
-// page cannot supply for itself on a phone is the BOARD's ticker control — it
-// reads usePageSymbol() and the desktop toolbar that sets it is not mounted
-// here — so the shell contributes that strip and nothing else.
+// The v3 options chain is a strike ladder with up to a dozen numeric columns
+// read ACROSS. At 390px that is a horizontal scroll over a table you cannot see
+// two columns of at once, which is not the page — it is a picture of the page.
+// It goes back in when there is a phone DESIGN for it rather than the desktop
+// one made narrow. `/v3/options-chain` is untouched.
 //
-// `fill` — the matrix owns a scroll container of its own and centres the ATM row
-// inside it on load. An outer scroll would break that centring.
+// THIS FILE IS DEAD AND SHOULD BE DELETED. It is empty rather than gone because
+// the session that removed the tab could not delete files on this machine; it
+// is kept compiling so `npm run check` does not fail on a file nobody imports.
+//
+//   git rm cbedge-v3/src/mobile/pages/MChain.tsx
+// ─────────────────────────────────────────────────────────────────────────────
 
-const OptionsChain = lazy(() => import('@/pages/OptionsChain'))
-
-export default function MChain() {
-  return (
-    <MobileShell chrome="bare" title="Chain" fill symbol>
-      <Suspense fallback={<div className="min-h-0 flex-1" />}>
-        <OptionsChain />
-      </Suspense>
-    </MobileShell>
-  )
-}
+export {}

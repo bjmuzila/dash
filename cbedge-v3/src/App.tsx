@@ -73,7 +73,6 @@ const EconomicCalendar = lazy(() => import('@/pages/EconomicCalendar'))
 const MGex = lazy(() => import('@/mobile/pages/MGex'))
 const MHeat = lazy(() => import('@/mobile/pages/MHeat'))
 const MSpx = lazy(() => import('@/mobile/pages/MSpx'))
-const MChain = lazy(() => import('@/mobile/pages/MChain'))
 const MEm = lazy(() => import('@/mobile/pages/MEm'))
 const MEcon = lazy(() => import('@/mobile/pages/MEcon'))
 
@@ -120,7 +119,6 @@ export default function App() {
             <Route path="/m/gex" element={<MGex />} />
             <Route path="/m/heat" element={<MHeat />} />
             <Route path="/m/spx" element={<MSpx />} />
-            <Route path="/m/chain" element={<MChain />} />
             <Route path="/m/em" element={<MEm />} />
             <Route path="/m/econ" element={<MEcon />} />
 

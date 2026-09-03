@@ -8575,7 +8575,8 @@ if (libDb) {
   // the last N recorded sessions, in one round trip. Subscriber.
   //
   //   GET /api/walls-range?symbol=SPX&days=63[&end=YYYY-MM-DD][&scope=&basis=]
-  //   → { ok, symbol, scope, basis, end, days: [{ date, log: [...] }] }
+  //   → { ok, symbol, scope, basis, end,
+  //       days: [{ date, log: [...walls_log rows], spot: [[etMins, px], ...] }] }
   //
   // Feeds the Level Log page's SPX CORE MIGRATION card (three months of CORE
   // levels on one chart). /proxy/walls?symbol= is one request per session;
@@ -8584,9 +8585,9 @@ if (libDb) {
   // every session at once. `days` is the number of sessions the symbol HAS rows
   // on, ending at `end`, not calendar days: holidays and pre-universe dates
   // simply do not count, exactly as useWallDays drops empty days on the client.
-  // Events and the 1-minute tape are deliberately NOT included — the chart's
-  // long-range read is where the level sat, and the spot captured on each
-  // level row is enough of a price line for that.
+  // Events are deliberately NOT included — the chart's long-range read is where
+  // the level sat. The price line is the 5-minute scanner spot (see below),
+  // not the dxFeed 1-minute tape, which only reaches back 7 days.
   register('/api/walls-range', {
     auth: 'subscriber', methods: ['GET'],
     async handler(req, res) {
@@ -8627,9 +8628,48 @@ if (libDb) {
         const byDate = new Map();
         for (const r of rows) {
           const { date, ...rest } = r;
-          if (!byDate.has(date)) byDate.set(date, { date, log: [] });
+          if (!byDate.has(date)) byDate.set(date, { date, log: [], spot: [] });
           byDate.get(date).log.push({ ...rest, at: walls.slotLabel(rest.slot) });
         }
+
+        // THE PRICE LINE — the 5-minute spot from scanner_snapshots, the same
+        // sweep the walls were sampled from (walls-recorder reads its slots off
+        // this table), for every session in the range. Roughly 78 points a day
+        // against the handful of spot stamps the change-only log carries, and
+        // it needs no dxFeed window (1m candles stop at 7 days) and no Theta
+        // call. `spot` is [etMinutes, px] pairs inside 09:29–16:00 so the page
+        // can put each sample on the same fractional-slot x the levels use.
+        // scanner_snapshots.date is TEXT (walls_log.date is DATE) — hence the
+        // text[] here and the to_char above.
+        const dates = [...byDate.keys()];
+        if (dates.length) {
+          try {
+            const { rows: px } = await pool.query(
+              `SELECT date, ts, spot FROM scanner_snapshots
+                WHERE symbol = $1 AND date = ANY($2::text[]) AND spot > 0
+                ORDER BY ts ASC`,
+              [symbol, dates],
+            );
+            const hm = new Intl.DateTimeFormat('en-US', {
+              timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit',
+            });
+            for (const r of px) {
+              const day = byDate.get(r.date);
+              if (!day) continue;
+              const parts = hm.formatToParts(new Date(r.ts));
+              const h = Number(parts.find((x) => x.type === 'hour')?.value);
+              const m = Number(parts.find((x) => x.type === 'minute')?.value);
+              if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
+              const mins = (h % 24) * 60 + m;
+              if (mins < 9 * 60 + 29 || mins > 16 * 60) continue;
+              day.spot.push([mins, Number(r.spot)]);
+            }
+          } catch (e) {
+            // The levels still draw off their own stamps; the tape is a bonus.
+            console.warn('[walls-range] spot series unavailable:', e?.message || e);
+          }
+        }
+
         send(res, 200, {
           ok: true, symbol, scope: variant.scope, basis: variant.basis, end,
           days: [...byDate.values()],

@@ -193,6 +193,8 @@ interface PanelProps {
   showLevels: boolean
   /** Returns false when the symbol was refused (a duplicate), so the box snaps back. */
   onCommitTicker: (next: string) => boolean
+  /** false = the ticker is read-only text. See MultiGreekCardProps.pinnedFirst. */
+  editable?: boolean
   /**
    * Present only on ADDED panels. The first panel is the board's ticker and has
    * nothing to remove — closing it would leave the card showing a symbol the
@@ -228,6 +230,7 @@ function TickerPanel({
   onCommitTicker,
   onRemove,
   isPageSymbol,
+  editable = true,
   onOpenCell,
 }: PanelProps) {
   // 15s, matching v2's auto-refresh. staleMs alone would never refetch — it is
@@ -436,7 +439,17 @@ function TickerPanel({
           thing in a narrow panel, spending both on three characters that change
           once a session. */}
       <div className="flex shrink-0 select-none items-center justify-between gap-1 border-b border-line px-1.5 py-px">
-        {editing ? (
+        {!editable ? (
+          // Read-only. A <span>, not a disabled button: a control that cannot
+          // be used should not look like one, and this panel's symbol is a fact
+          // about the card rather than a setting on it.
+          <span
+            title={`${ticker} — this panel is fixed. Add another with ＋.`}
+            className="min-w-0 shrink truncate text-left text-sm font-extrabold uppercase leading-none tracking-[0.06em] text-accent"
+          >
+            {ticker}
+          </span>
+        ) : editing ? (
           <input
             autoFocus
             value={draft}
@@ -747,12 +760,28 @@ export interface MultiGreekCardProps {
    * one-column board on the desktop next time.
    */
   singleColumn?: boolean
+  /**
+   * Panel one is THIS symbol, always, and its ticker is not typeable.
+   *
+   * On the board, panel one IS the page symbol and typing in it moves the whole
+   * board — that is the honest thing for a card sitting next to five others
+   * reading the same value. On the phone build nothing else is reading it, and
+   * the header's picker is hidden there for that reason, so a typeable panel
+   * one would be the last surviving way to move a value with no other visible
+   * consequence. Pinned to SPX instead; the ＋ button is the only way symbols
+   * come in, which is the one that adds rather than replaces.
+   */
+  pinnedFirst?: string
 }
 
-export function MultiGreekCard({ singleColumn = false }: MultiGreekCardProps = {}) {
+export function MultiGreekCard({ singleColumn = false, pinnedFirst }: MultiGreekCardProps = {}) {
   // Panel one. Read from the page rather than stored here, so the card opens on
   // whatever the board is already showing.
-  const { symbol: pageSymbol, setSymbol: setPageSymbol } = usePageSymbol()
+  const { symbol: boardSymbol, setSymbol: setPageSymbol } = usePageSymbol()
+  // Slot zero. The board's symbol normally; a fixed one when `pinnedFirst` says
+  // so. Everything below that used to read the page symbol reads THIS, so the
+  // dedupe, the ＋ refusal and the panel list all agree about what panel one is.
+  const pageSymbol = pinnedFirst ? pinnedFirst.toUpperCase() : boardSymbol
   const [extras, setExtras] = useState<string[]>(() => loadExtras(pageSymbol))
   const [addOpen, setAddOpen] = useState(false)
   const [addDraft, setAddDraft] = useState('')
@@ -834,6 +863,9 @@ export function MultiGreekCard({ singleColumn = false }: MultiGreekCardProps = {
     (slot: number, next: string): boolean => {
       if (!PAGE_TICKER_RE.test(next)) return false
       if (slot === 0) {
+        // Pinned: nothing to commit, and the panel does not offer the control
+        // that would call this anyway.
+        if (pinnedFirst) return false
         if (extras.includes(next)) return false
         setPageSymbol(next)
         return true
@@ -846,7 +878,7 @@ export function MultiGreekCard({ singleColumn = false }: MultiGreekCardProps = {
       writeExtras(out)
       return true
     },
-    [extras, pageSymbol, setPageSymbol, writeExtras],
+    [extras, pageSymbol, pinnedFirst, setPageSymbol, writeExtras],
   )
 
   const addTicker = useCallback(() => {
@@ -1021,6 +1053,7 @@ export function MultiGreekCard({ singleColumn = false }: MultiGreekCardProps = {
             key={i === 0 ? '__page__' : t}
             ticker={t}
             isPageSymbol={i === 0}
+            editable={!(i === 0 && pinnedFirst)}
             onRemove={i === 0 ? undefined : () => removeTicker(i - 1)}
             anchor={anchor}
             colCount={colCount}

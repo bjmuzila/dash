@@ -4,12 +4,12 @@ import { CardToolbar } from '@/design/primitives/Card'
 import { Chip, SegGroup } from '@/design/primitives/Controls'
 import { useQuery } from '@/data/api'
 import { watchFrame } from '@/data/hooks'
-import { isSocketSymbol, usePageSymbol } from '@/data/symbol'
+import { SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import type { GexData, GexFrame, GexRow, SpotFrame } from '@/contract/frames'
 import { chainGexUrl, chainToGex, EMPTY_CHAIN_GEX } from '../chainGex'
 import { EMPTY_MODEL, mountGexChart, type GexChartHandle, type GexChartModel } from './gexChartRender'
 import { BASIS_LABEL, flowSupported, fmtGexShort, totalNet } from './values'
-import { loadSettings, saveSettings, type GexChartSettings } from './settings'
+import { loadSettings, saveSettings, type GexBasis, type GexChartSettings } from './settings'
 import { StatCards } from './StatCards'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,14 +64,52 @@ const CARD_ID = 'gex-chart'
  */
 const EMPTY_ROWS: GexRow[] = []
 
-export function GexChartCard() {
-  const { symbol } = usePageSymbol()
+export interface GexChartCardProps {
+  /**
+   * The stripped-down card: SPX only, OI+VOL / VOL only, one net bar, no DEX
+   * line and no stat row. For the phone build (/v3/m/gex).
+   *
+   * WHY EACH ONE GOES.
+   *   FLOW    is a third basis whose answer is a different question, and the
+   *           two that are left are the two anyone switches between.
+   *   C/P     doubles the bar count in a plot ~380px wide. The split is a
+   *           desktop read.
+   *   DEX     is a second series on a second scale over that same plot.
+   *   CARDS   is ten tiles sharing the width of a phone — three characters
+   *           each, and the chart loses the height they take.
+   *
+   * The stored settings are NOT rewritten. The same browser profile opens this
+   * card on a desktop and must find its basis, split, DEX and cards exactly as
+   * it left them; this only changes what is DRAWN, the way `railOn` already
+   * does on the candles card.
+   */
+  simple?: boolean
+}
+
+export function GexChartCard({ simple = false }: GexChartCardProps = {}) {
+  const { symbol: pageSymbol } = usePageSymbol()
+  // Pinned, not defaulted: SPX is the only symbol the socket streams, and the
+  // phone screen is meant to be the live one rather than a 15s chain poll.
+  const symbol = simple ? SOCKET_SYMBOL : pageSymbol
   const onSocket = isSocketSymbol(symbol)
 
-  const [settings, setSettings] = useState<GexChartSettings>(() => loadSettings(CARD_ID))
+  const [stored, setSettings] = useState<GexChartSettings>(() => loadSettings(CARD_ID))
+  // What this render actually uses. `patch` still writes `stored`.
+  const settings: GexChartSettings = simple
+    ? {
+        ...stored,
+        // A stored FLOW does not survive here — there is no third button to
+        // show it on, and a selected value with no control is the thing the
+        // card's own comment calls a control that lies.
+        basis: stored.basis === 'flow' ? 'oi-vol' : stored.basis,
+        split: 'net',
+        showDex: false,
+        cardsOn: false,
+      }
+    : stored
 
   const patch = useCallback((p: Partial<GexChartSettings>) => {
-    setSettings((prev) => {
+    setSettings((prev: GexChartSettings) => {
       const next = { ...prev, ...p }
       saveSettings(CARD_ID, next)
       return next
@@ -253,6 +291,40 @@ export function GexChartCard() {
     [view.rows, settings.basis, flowActive],
   )
 
+  /**
+   * The basis buttons. Built here rather than inline because the FLOW entry is
+   * CONDITIONAL — the simple card has no third basis — and a conditional spread
+   * inside a JSX array widens the option type to `string`, which loses
+   * `GexBasis` on the way into onChange.
+   */
+  const basisOptions: Array<{ label: string; value: GexBasis; title?: string; disabled?: boolean }> = [
+    {
+      label: 'OI+VOL',
+      value: 'oi-vol',
+      title: 'Open interest plus today’s volume — what the rest of the board means by GEX',
+    },
+    { label: 'VOL', value: 'vol-only', title: 'Today’s volume alone, without the standing book behind it' },
+  ]
+  if (!simple) {
+    basisOptions.push({
+      label: 'FLOW',
+      value: 'flow',
+      // Not selectable when this ladder carries no `flowGEX` leg — there is no
+      // tape for anything but the socket symbol, so on a chain-derived ticker
+      // the button would only ever have picked a basis that immediately falls
+      // back to OI+VOL.
+      //
+      // A stored FLOW choice is NOT rewritten when that happens: it stays
+      // selected (dimmed, and the pane says why it is drawing OI+VOL) so it
+      // comes back intact on the next symbol that has a tape. The other two
+      // options are still one click away.
+      disabled: flowOff,
+      title: flowOff
+        ? `No classified options tape for ${symbol} — flow GEX only exists for the symbol the socket streams`
+        : 'Gamma against the dealer’s own signed inventory, built from the classified tape',
+    })
+  }
+
   return (
     <div
       className="flex min-h-0 flex-1 flex-col gap-1.5"
@@ -282,54 +354,40 @@ export function GexChartCard() {
 
         <SegGroup
           title="Which contracts the bars are priced on"
-          options={[
-            { label: 'OI+VOL', value: 'oi-vol', title: 'Open interest plus today’s volume — what the rest of the board means by GEX' },
-            { label: 'VOL', value: 'vol-only', title: 'Today’s volume alone, without the standing book behind it' },
-            {
-              label: 'FLOW',
-              value: 'flow',
-              // Not selectable when this ladder carries no `flowGEX` leg —
-              // there is no tape for anything but the socket symbol, so on a
-              // chain-derived ticker the button would only ever have picked a
-              // basis that immediately falls back to OI+VOL.
-              //
-              // A stored FLOW choice is NOT rewritten when that happens: it
-              // stays selected (dimmed, and the pane says why it is drawing
-              // OI+VOL) so it comes back intact on the next symbol that has a
-              // tape. The other two options are still one click away.
-              disabled: flowOff,
-              title: flowOff
-                ? `No classified options tape for ${symbol} — flow GEX only exists for the symbol the socket streams`
-                : 'Gamma against the dealer’s own signed inventory, built from the classified tape',
-            },
-          ]}
+          options={basisOptions}
           value={settings.basis}
           onChange={(v) => patch({ basis: v })}
         />
 
-        <SegGroup
-          title="One net bar per strike, or the call leg up and the put leg down"
-          options={[
-            { label: 'NET', value: 'net' },
-            { label: 'C/P', value: 'call-put' },
-          ]}
-          value={settings.split}
-          onChange={(v) => patch({ split: v })}
-        />
+        {!simple && (
+          <SegGroup
+            title="One net bar per strike, or the call leg up and the put leg down"
+            options={[
+              { label: 'NET', value: 'net' },
+              { label: 'C/P', value: 'call-put' },
+            ]}
+            value={settings.split}
+            onChange={(v) => patch({ split: v })}
+          />
+        )}
 
-        <Chip
-          label="DEX"
-          on={settings.showDex}
-          onClick={() => patch({ showDex: !settings.showDex })}
-          title="Net dealer DELTA exposure as a line across the bars, on its own normalised scale — it answers which way delta leans and where it turns, not how many dollars"
-        />
+        {!simple && (
+          <Chip
+            label="DEX"
+            on={settings.showDex}
+            onClick={() => patch({ showDex: !settings.showDex })}
+            title="Net dealer DELTA exposure as a line across the bars, on its own normalised scale — it answers which way delta leans and where it turns, not how many dollars"
+          />
+        )}
 
-        <Chip
-          label="CARDS"
-          on={settings.cardsOn}
-          onClick={() => patch({ cardsOn: !settings.cardsOn })}
-          title="The stat row above the chart — all ten tiles, or none"
-        />
+        {!simple && (
+          <Chip
+            label="CARDS"
+            on={settings.cardsOn}
+            onClick={() => patch({ cardsOn: !settings.cardsOn })}
+            title="The stat row above the chart — all ten tiles, or none"
+          />
+        )}
 
         {/* WHERE the rows came from — shown only when it is not the obvious
             answer. The basis is already on the segmented control beside this,

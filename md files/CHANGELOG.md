@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-09-03 - Fix: card full-screen was silently gone (Shell lost the stage)
+
+A later `Shell.tsx` rewrite dropped the `ExpandStageHost` wrapper added earlier
+today, so no card had an expand button anywhere in v3. Restored, with a
+DO-NOT-DROP comment on the line.
+
+Why it failed silently: `Card` asks for the stage through context and draws no
+control when there isn't one - deliberately, so the phone build, previews and
+tests need no opt-out. The cost is that deleting the host does not throw, it
+just removes the feature from the entire app. `Card.tsx`, `Expand.tsx` and
+`BoardPage.tsx` were all still intact; only the one wrapper line was missing.
+
+Touched: `cbedge-v3/src/shell/Shell.tsx`. No proxy, server or v2 code.
+
+## 2026-09-03 - Level Log: CORE migration pop-out (ticker's CORE across 63 sessions)
+
+New `⤢ CORE migration` button in the log card's header on `/app/level-log`,
+beside Copy / Snapshot. It opens `public/core-migration.html` in a new tab,
+primed with whatever the page is on — the selected ticker, the page date as the
+range's end, and both variant switches (`?symbol=&end=&scope=&basis=`).
+
+### The pop-out
+
+A standalone HTML page (the same file is kept in `generated/` for hand edits):
+the ticker's CORE level stepping across the last 63 recorded sessions (1M pill
+= 21), **core only by default**, `+ Walls` draws the call/put walls alongside
+using the Level Log's CORE-sign role model (CORE stays gold, the other wall in
+the colour of the side it currently is), legend chips drop any single series,
+hover readout per slot, month-stamped rail, PNG export. Ticker / end / scope /
+basis are editable on the page itself, so it also works on its own. Its
+dropdowns and date input carry the app's "Dark dropdowns everywhere" CSS
+inline — a standalone file never loads `globals.css`, and without it they
+render as white native controls.
+
+### Data
+
+One call to `GET /api/walls-range?symbol=&days=63[&end=][&scope=&basis=]`
+(api-router, subscriber): the change-only `walls_log` rows for the last N
+sessions the symbol has rows on, grouped by date, in slot order — the rows
+`/proxy/walls?symbol=` serves a day at a time, same variant fallback. If that
+route is not there yet the page falls back to `/proxy/walls` per session.
+`date` is rendered to text in SQL so pg never returns a JS Date that slips a
+day. Nothing in `server-with-proxy.js` or the recorder changed.
+
+### Dwell bands, not steps
+
+The first cut drew the CORE as a step line, and on a quarter of sessions every
+one-slot flip was a vertical spike — the chart read as noise. Now each
+contiguous stay at a strike is one horizontal bar from the slot it arrived to
+the slot it left, thickness and opacity scaled by how many slots it held (14
+slots ≈ 3.5h = full weight), and nothing joins the bars. A blink is a faint
+hairline, an afternoon is a heavy shelf, and same-strike bars on consecutive
+days line up into one shelf by themselves. Walls-on uses the same bars in the
+role model's colours. Spot line dimmed to 72% so the bars lead.
+
+### Price line = the 5-minute scanner spot
+
+`/api/walls-range` folds in `spot: [[etMins, px], …]` per session from
+`scanner_snapshots` — the very sweep walls-recorder samples its slots from, so
+the tape and the levels come from one clock. ~78 points a session instead of
+the handful of stamps the change-only log carries, and no dxFeed window
+(1-minute candles stop at 7 days) or Theta call. The page draws the tape when a
+session has ≥20 samples and falls back to the captures when it does not, never
+splicing the two; the per-session fallback path pulls the same series through
+`/proxy/walls?series=1`.
+
+Files: `public/core-migration.html`, `generated/2026-09-03-spx-core-migration.html`,
+`components/pages/LevelLog.tsx`, `server-v2/api-router.js`.
+
 ## 2026-09-03 - cbedge.net lands a phone on the v3 phone build
 
 `app/page.tsx` only ever did one thing for a signed-in visitor — `redirect("/traders-dashboard")` — and on a phone that is the v2 desktop dashboard, which is now the long way round to a build that exists.
