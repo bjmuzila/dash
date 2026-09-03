@@ -47,11 +47,13 @@
 // gone with it — v3 has one owner-gated camera in the toolbar; see the REMOVED
 // block at the top of gexChangeTop.ts.
 //
-// C16 (`prefers-reduced-motion`) has nothing left to guard. Its ONLY effect in
-// v2 was to swap the flipper's `transform 0.32s ease-out` for `none`, and the
-// 3D flip is not what this step ships: the back face is a block that appears
-// under the front (C108's note below). No transition, no media query. It comes
-// back with the flip animation, in the styling pass, or not at all.
+// C16 (`prefers-reduced-motion`) guards the flip, and is live again. An earlier
+// port rendered the back as a block that appeared UNDER the front, so there was
+// no transition for the query to switch off and the guard was dropped with it.
+// The tile is a true two-face 3D flip again (C107, C108, C125), so C16 is back
+// where v2 had it: ONE `matchMedia` listener at the tab level, threaded down to
+// the flipper, swapping `transform 0.32s ease-out` for `none`. Reduced motion is
+// an instant face swap — the rotation still happens, it just takes no time.
 //
 // ── NON-NEGOTIABLES ──────────────────────────────────────────────────────────
 // · No colour literals — every colour is a token via @/design/theme or comes
@@ -65,7 +67,7 @@
 //   place; v2's chart is SVG and the tokens interpolate straight into it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Card } from '@/design/primitives/Card'
 import type { ChartHandle } from '@/design/primitives/ChartFrame'
@@ -216,6 +218,84 @@ import { useQuery } from '@/data/api'
  *  does not re-trigger the chart's redraw effect on every render. */
 const EMPTY_POINTS: readonly PickPoint[] = []
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE FLIP (C107, C108, C125) — GEOMETRY AND MOTION
+//
+// Everything here is transform geometry and a duration. None of it is a colour
+// and none of it is a type size, so it is px and it lives with the DOM it
+// describes rather than in gexChangeTop.ts (same rule as the chart's `GEO`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** C107 — v2's `perspective: 1200` on the TILE, not on the flipper. The
+ *  perspective has to come from an ancestor of the rotating box or the rotation
+ *  is orthographic and the card reads as a squash rather than a turn. */
+const FLIP_PERSPECTIVE = 1200
+
+/** C107 — sized for the TALLER face. The back is header + sub + headline + the
+ *  demoted "now" line + toolbar + a fixed 96px chart + hint, and both faces are
+ *  `inset: 0`, so this one number is the tile's height whichever way up it is.
+ *  That is what stops a flip resizing the card or reflowing the grid. */
+const FLIP_MIN_HEIGHT = 260
+
+/** C108 — v2's transition, verbatim. Only `transform` animates, which is
+ *  compositor-only: no layout, no paint, no main-thread work per frame. */
+const FLIP_TRANSITION = 'transform 0.32s ease-out'
+
+/** C108 — the reduced-motion value. Not `transform 0s`: `none` also removes the
+ *  `transitionend` and the compositor layer promotion, so the face swap is a
+ *  single style recalc. */
+const FLIP_TRANSITION_NONE = 'none'
+
+/**
+ * C125 — the surface BOTH faces share, so the tile is the same box either way
+ * up. v2 spread `classicCardAccentStyle` here: a flat frosted panel with a
+ * hairline edge, no radial highlight and no tint wash. Do not reintroduce a glow.
+ *
+ * `backfaceVisibility: hidden` is the load-bearing declaration. It is what makes
+ * a face turned away from the viewer drop out of BOTH the paint and the hit
+ * test — without it the flipper shows the front and the mirrored back stacked on
+ * top of each other, and the turned-away face still swallows clicks.
+ */
+const FACE_STYLE: CSSProperties = {
+  borderColor: V2W.border,
+  background: V2W.panelBg,
+  backfaceVisibility: 'hidden',
+  WebkitBackfaceVisibility: 'hidden',
+}
+
+/** The back face is the same surface, turned around. v2: `{ ...faceStyle,
+ *  transform: 'rotateY(180deg)' }` — and the padding tightens from the front's
+ *  12/14 to 10/12 (that half is a class, below). */
+const BACK_FACE_STYLE: CSSProperties = { ...FACE_STYLE, transform: 'rotateY(180deg)' }
+
+/** Both faces are absolutely positioned against the flipper and clip their own
+ *  overflow. The padding differs (C125) and is applied per face. */
+const FACE_CLASS = 'absolute inset-0 overflow-hidden rounded-md border'
+
+/**
+ * C16 — the OS "reduce motion" setting, live.
+ *
+ * Called ONCE, at the tab, and threaded down. v2 did the same, and the reason is
+ * the card count: a hook per tile would put ~65 `matchMedia` listeners on one
+ * media query for a boolean that is identical in all of them.
+ *
+ * `matchMedia` itself is optional-chained: an old browser without it returns
+ * undefined, the effect leaves early, and `reduceMotion` stays false — i.e. the
+ * animation plays, which is v2's fallback.
+ */
+function useReducedMotion(): boolean {
+  const [reduce, setReduce] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)')
+    if (!mq) return
+    const sync = () => setReduce(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
+  return reduce
+}
+
 /** A plain toolbar button. Structural only — every colour arrives as a token. */
 function ToolButton({
   label,
@@ -344,6 +424,8 @@ export default function GexChangeTopTab() {
   const [metric, setMetric] = useState<Metric>(DEFAULT_METRIC)
   const [flipped, setFlipped] = useState<ReadonlySet<string>>(() => new Set())
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set())
+  // C16 — one listener for the whole board; every tile's flipper reads it.
+  const reduceMotion = useReducedMotion()
 
   const dateArg = pickedDate || undefined
   const urls = gexChangeTopUrls(dateArg)
@@ -496,6 +578,7 @@ export default function GexChangeTopTab() {
           flipped={flipped}
           opened={opened}
           onToggle={toggleFlip}
+          reduceMotion={reduceMotion}
           historyPollMs={historyPollMs}
           dateArg={dateArg}
         />
@@ -814,6 +897,7 @@ function SlotSection({
   flipped,
   opened,
   onToggle,
+  reduceMotion,
   historyPollMs,
   dateArg,
 }: {
@@ -826,6 +910,7 @@ function SlotSection({
   flipped: ReadonlySet<string>
   opened: ReadonlySet<string>
   onToggle: (cid: string) => void
+  reduceMotion: boolean
   historyPollMs: number | undefined
   dateArg: string | undefined
 }) {
@@ -877,6 +962,7 @@ function SlotSection({
             flipped={flipped}
             opened={opened}
             onToggle={onToggle}
+            reduceMotion={reduceMotion}
             historyPollMs={historyPollMs}
             dateArg={dateArg}
           />
@@ -887,7 +973,27 @@ function SlotSection({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// C96–C124 — THE PICK CARD, FRONT FACE
+// C96–C124 — THE PICK TILE: THE FLIPPER, AND THE FRONT FACE
+//
+// THREE BOXES, AND EACH ONE HAS TO BE THE BOX IT IS:
+//
+//   tile     position: relative · minHeight 260 · perspective 1200
+//     └ flipper   position: absolute · inset 0 · preserve-3d · rotateY(0|180)
+//         ├ front   position: absolute · inset 0 · backface-visibility hidden
+//         └ back    the same, plus its own rotateY(180deg)
+//
+// The flipper MUST be `absolute + inset: 0`. Both faces are absolutely
+// positioned against it, so left in normal flow it has no in-flow children,
+// computes to zero height, and the whole tile collapses. (v2's own comment, and
+// it is the first thing that breaks if someone "simplifies" this.)
+//
+// `perspective` MUST be on the tile, not the flipper: it has to come from an
+// ancestor of the rotating box. On the flipper itself the rotation is
+// orthographic and the card reads as a horizontal squash, not a turn.
+//
+// The two faces occupy the SAME footprint — one `minHeight` on the tile, `inset:
+// 0` on both faces — so the back REPLACES the front rather than appearing under
+// it, and flipping cannot resize the card or reflow the grid around it.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PickCard({
@@ -901,6 +1007,7 @@ function PickCard({
   flipped,
   opened,
   onToggle,
+  reduceMotion,
   historyPollMs,
   dateArg,
 }: {
@@ -914,6 +1021,7 @@ function PickCard({
   flipped: ReadonlySet<string>
   opened: ReadonlySet<string>
   onToggle: (cid: string) => void
+  reduceMotion: boolean
   historyPollMs: number | undefined
   dateArg: string | undefined
 }) {
@@ -932,107 +1040,166 @@ function PickCard({
       // C107 — a row with no `watch_id` has no tooltip, because it is also not
       // flippable: it was never auto-probed, so there is no price line to show.
       title={cardTitle(row, v.side, v.wid, isFlipped)}
-      className="rounded-md border p-3"
+      className="relative"
       style={{
-        borderColor: V2W.border,
-        background: V2W.panelBg,
+        minHeight: FLIP_MIN_HEIGHT,
+        perspective: FLIP_PERSPECTIVE,
         // C106, C107 — present but discounted. The card stays because removing
         // it would leave the hour a pick short (rank 6 was never recorded).
         opacity: v.underFloor ? 0.62 : 1,
       }}
     >
-      {/* C111, C112 — the rank sits inside the symbol span, same ink, one gap
-          apart, so it reads as part of the ticker. */}
-      <div className="mb-1 flex items-baseline justify-between gap-2">
-        <span className="text-lg font-extrabold" style={{ color: T.text }}>
-          <span className="mr-1.5" style={{ color: T.text }}>
-            {row.rank}
-          </span>
-          {row.symbol}
-        </span>
-        <span className="text-sm" style={{ color: T.text }}>
-          {fmtStrike(row.strike)}
-        </span>
-      </div>
+      <div
+        /*
+          C108 — THE FLIPPER.
 
-      {/* C113 — the Δ headline, and the FOURTH zero convention on this tab: a
-          null `latest_chg` coalesces to 0 before the `>= 0` test, so the em dash
-          — the "no data" glyph — is painted in the UP colour. `deltaColor` keeps
-          that as written. C114 — the grade pill at the larger size, off the SAME
-          scorecard row the entry basis came from. */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-lg font-extrabold leading-tight" style={{ color: deltaColor(row.latest_chg) }}>
-          {fmtBig(row.latest_chg)}
-        </div>
-        <GradePill info={v.grade} provisional={!frozen} size="lg" />
-      </div>
-
-      {/* C115 */}
-      <div className="mt-1 text-sm" style={{ color: T.text }}>
-        {row.expiry} · {SPOT_LABEL} {fmtSpot(row.spot)}
-      </div>
-      {/* C116 — every card carries its own capture stamp. In v2 that was because
-          the slot header above was stripped from screenshots; here it survives
-          because a single tile still has to say WHEN it was taken. */}
-      <div className="mt-0.5 text-xs" style={{ color: T.text }}>
-        {CAPTURED_LABEL_PREFIX} {v.captured}
-      </div>
-
-      <div className="mt-1.5 flex flex-wrap items-center gap-2.5 text-sm">
-        {/* C117 — the span is omitted ENTIRELY when spot is null or ≤ 0, and the
-            row closes up. Unsigned: a strike either side of spot reads "OTM". */}
-        {v.otmPct != null && <span style={{ color: V2.orange }}>{fmtOtm(v.otmPct)}</span>}
-        {/* C118 — the span renders even when null, unlike C117. */}
-        <span style={{ color: pctOpenColor(row.pct_open) }}>{fmtPctOpen(row.pct_open)}</span>
-        {/* C119 — server-computed. The formula is the footer legend (C154). */}
-        <span style={{ color: V2.cyan }}>{fmtScore(row.score)}</span>
-        {/* C120 — renders nothing when `proj_grade` is null, the shipping default. */}
-        <ProjPill grade={row.proj_grade} pts={row.proj_pts} />
-      </div>
-
-      {/* C121 — every card on this tab carries it; there is no second tier. */}
-      <div className="mt-1.5 text-sm font-extrabold" style={{ color: V2.orange }}>
-        {VERY_STRONG_LABEL}
-        {/* C122 — legacy slots only. The `?? 0` inside `underFloorTitle` is v2's
-            and is unreachable: `underFloor` implies the id is in `cheapIds`,
-            which implies an entry exists. */}
-        {v.underFloor && (
-          <span
-            title={underFloorTitle(v.wid != null ? index.entryById.get(v.wid) : undefined)}
-            className="ml-1.5 rounded-sm border px-1 py-px text-xs font-bold"
-            style={{
-              color: T.text,
-              background: alpha(T.text, 0.1),
-              borderColor: alpha(T.text, 0.25),
-            }}
-          >
-            {UNDER_FLOOR_BADGE}
-          </span>
-        )}
-      </div>
-
-      {/* C123 — the flip affordance, and in v3 the flip CONTROL. v2 made the
-          whole tile clickable and this a hint; a real button is the same
-          affordance without a div that swallows pointer events. Absent for a
-          pre-auto-probe row, which has no price line to show. */}
-      {v.wid != null && (
-        <button
-          type="button"
-          onClick={() => onToggle(v.cid)}
-          aria-expanded={isFlipped}
-          title={isFlipped ? CARD_BACK_TO_PICK : undefined}
-          className="mt-2 text-xs"
-          style={{ color: alpha(V2.cyan, 0.75) }}
+          `data-flip3d` is kept as v2 wrote it, and it is the ONLY survivor of
+          v2's capture attribute protocol: `data-noshot`, `data-card` and
+          `data-face` are gone with html2canvas (see the REMOVED block at the top
+          of gexChangeTop.ts). CAPTURE ITSELF IS NOT PORTED — v3 has one
+          owner-gated camera in the page toolbar and nothing here reads this
+          attribute. It stays because it documents, in the DOM, which face is
+          actually facing the viewer: that is not otherwise legible from a
+          transform, it is what a devtools inspection and any future flattening
+          capture would key on, and it costs one string.
+        */
+        data-flip3d={isFlipped ? 'back' : 'front'}
+        // MUST be absolute + inset 0 — see the box diagram above.
+        className="absolute inset-0"
+        style={{
+          transformStyle: 'preserve-3d',
+          // C16 — reduced motion is an instant face swap: the same rotation,
+          // with no transition to interpolate it.
+          transition: reduceMotion ? FLIP_TRANSITION_NONE : FLIP_TRANSITION,
+          transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
+          // C108 — promoted ONLY on tiles that have actually been opened.
+          // Unconditionally it would hand the compositor ~65 layers, on a board
+          // where most tiles are never turned over.
+          willChange: hasBack ? 'transform' : undefined,
+        }}
+      >
+        <div
+          /* C125 — the front face. Same box as the back (`inset: 0`), v2's
+             12px/14px padding, and `backfaceVisibility: hidden` so it stops
+             painting the moment the flipper passes 90°. */
+          className={`${FACE_CLASS} p-3`}
+          style={FACE_STYLE}
+          // The turned-away face is already out of the hit test (backface
+          // visibility) but NOT out of the tab order; `inert` is what keeps a
+          // keyboard off the face nobody can see. v2 had no equivalent, and the
+          // block-under-front port got it for free from `hidden`.
+          inert={isFlipped}
         >
-          {PRICE_LINE_HINT}
-        </button>
-      )}
+          {/* C111, C112 — the rank sits inside the symbol span, same ink, one gap
+              apart, so it reads as part of the ticker. */}
+          <div className="mb-1 flex items-baseline justify-between gap-2">
+            <span className="text-lg font-extrabold" style={{ color: T.text }}>
+              <span className="mr-1.5" style={{ color: T.text }}>
+                {row.rank}
+              </span>
+              {row.symbol}
+            </span>
+            <span className="text-sm" style={{ color: T.text }}>
+              {fmtStrike(row.strike)}
+            </span>
+          </div>
 
-      {/* C108, C125 — v2 turned the tile over in 3D. Here the back is a second
-          block under the front, mounted on first open and kept mounted after a
-          flip-back (C15's `opened`) so a re-open costs no request. */}
-      {hasBack && (
-        <div hidden={!isFlipped}>
+          {/* C113 — the Δ headline, and the FOURTH zero convention on this tab: a
+              null `latest_chg` coalesces to 0 before the `>= 0` test, so the em dash
+              — the "no data" glyph — is painted in the UP colour. `deltaColor` keeps
+              that as written. C114 — the grade pill at the larger size, off the SAME
+              scorecard row the entry basis came from. */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-lg font-extrabold leading-tight" style={{ color: deltaColor(row.latest_chg) }}>
+              {fmtBig(row.latest_chg)}
+            </div>
+            <GradePill info={v.grade} provisional={!frozen} size="lg" />
+          </div>
+
+          {/* C115 */}
+          <div className="mt-1 text-sm" style={{ color: T.text }}>
+            {row.expiry} · {SPOT_LABEL} {fmtSpot(row.spot)}
+          </div>
+          {/* C116 — every card carries its own capture stamp. In v2 that was because
+              the slot header above was stripped from screenshots; here it survives
+              because a single tile still has to say WHEN it was taken. */}
+          <div className="mt-0.5 text-xs" style={{ color: T.text }}>
+            {CAPTURED_LABEL_PREFIX} {v.captured}
+          </div>
+
+          <div className="mt-1.5 flex flex-wrap items-center gap-2.5 text-sm">
+            {/* C117 — the span is omitted ENTIRELY when spot is null or ≤ 0, and the
+                row closes up. Unsigned: a strike either side of spot reads "OTM". */}
+            {v.otmPct != null && <span style={{ color: V2.orange }}>{fmtOtm(v.otmPct)}</span>}
+            {/* C118 — the span renders even when null, unlike C117. */}
+            <span style={{ color: pctOpenColor(row.pct_open) }}>{fmtPctOpen(row.pct_open)}</span>
+            {/* C119 — server-computed. The formula is the footer legend (C154). */}
+            <span style={{ color: V2.cyan }}>{fmtScore(row.score)}</span>
+            {/* C120 — renders nothing when `proj_grade` is null, the shipping default. */}
+            <ProjPill grade={row.proj_grade} pts={row.proj_pts} />
+          </div>
+
+          {/* C121 — every card on this tab carries it; there is no second tier. */}
+          <div className="mt-1.5 text-sm font-extrabold" style={{ color: V2.orange }}>
+            {VERY_STRONG_LABEL}
+            {/* C122 — legacy slots only. The `?? 0` inside `underFloorTitle` is v2's
+                and is unreachable: `underFloor` implies the id is in `cheapIds`,
+                which implies an entry exists. */}
+            {v.underFloor && (
+              <span
+                title={underFloorTitle(v.wid != null ? index.entryById.get(v.wid) : undefined)}
+                className="ml-1.5 rounded-sm border px-1 py-px text-xs font-bold"
+                style={{
+                  color: T.text,
+                  background: alpha(T.text, 0.1),
+                  borderColor: alpha(T.text, 0.25),
+                }}
+              >
+                {UNDER_FLOOR_BADGE}
+              </span>
+            )}
+          </div>
+
+          {/* C123 — the flip affordance, and in v3 the flip CONTROL. v2 made the
+              whole tile clickable and this a hint; a real button is the same
+              affordance without a div that swallows pointer events. Absent for a
+              pre-auto-probe row, which has no price line to show.
+
+              Pinned to the bottom-left as v2 pinned it (left 14, bottom 8): the
+              front face is now a fixed-height box, so in flow it would float in the
+              middle of whatever space the content left. */}
+          {v.wid != null && (
+            <button
+              type="button"
+              onClick={() => onToggle(v.cid)}
+              aria-expanded={isFlipped}
+              title={isFlipped ? CARD_BACK_TO_PICK : undefined}
+              className="absolute bottom-2 left-3.5 text-xs"
+              style={{ color: alpha(V2.cyan, 0.75) }}
+            >
+              {PRICE_LINE_HINT}
+            </button>
+          )}
+        </div>
+
+        {/*
+          C125 — THE BACK FACE. It REPLACES the front in the same footprint: same
+          `inset: 0`, its own `rotateY(180deg)` so it starts turned away, and
+          `backfaceVisibility: hidden` so exactly one of the two is ever painted.
+
+          MOUNTED LAZILY, AND THIS IS NOT AN OPTIMISATION TO TIDY AWAY. The back
+          is where the `/proxy/gex-change-top-history` fetch lives (see PickBack),
+          so mounting all ~65 backs at page load would fire ~65 history requests
+          for charts nobody has asked for — C14 and C15 exist to prevent exactly
+          that. A click mounts the back and THEN the flipper rotates, which is
+          also what v2 did: it fetched on open too.
+
+          `hasBack` is `isFlipped || opened.has(cid)`, and `opened` is never
+          cleared by a flip-back — so once a card has been turned over its back
+          stays mounted, the flip-back animates with real content behind it
+          instead of an empty face, and a second flip costs no request.
+        */}
+        {hasBack && (
           <PickBack
             row={row}
             slot={slot}
@@ -1042,11 +1209,12 @@ function PickCard({
             metric={metric}
             onMetric={onMetric}
             onClose={() => onToggle(v.cid)}
+            facingAway={!isFlipped}
             pollMs={historyPollMs}
             dateArg={dateArg}
           />
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
@@ -1056,7 +1224,13 @@ function PickCard({
 //
 // The history fetch lives HERE, not in the tab, for one reason: it must not
 // happen until a card is opened. ~65 tiles fetching a session's snapshots at
-// mount is the request storm C14 and C15 exist to prevent.
+// mount is the request storm C14 and C15 exist to prevent. That is also why this
+// component IS the face rather than something rendered inside one: mounting it
+// and mounting the fetch are the same event.
+//
+// v2's order, top to bottom, and the order below:
+//   ticker + strike badge → capture line → PEAK headline + grade pill →
+//   IN → HIGH line → NOW line → the 1D | Price | Net GEX toolbar → chart → hint
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PickBack({
@@ -1068,6 +1242,7 @@ function PickBack({
   metric,
   onMetric,
   onClose,
+  facingAway,
   pollMs,
   dateArg,
 }: {
@@ -1079,6 +1254,7 @@ function PickBack({
   metric: Metric
   onMetric: (m: Metric) => void
   onClose: () => void
+  facingAway: boolean
   pollMs: number | undefined
   dateArg: string | undefined
 }) {
@@ -1097,7 +1273,17 @@ function PickBack({
   const v = derivePickCard({ row, slot, date, index, hist })
 
   return (
-    <div className="mt-3 border-t pt-2" style={{ borderColor: V2W.border }}>
+    <div
+      /* C125 — the same surface as the front, turned around, at v2's tighter
+         10px/12px padding (the front is 12/14). `inset: 0` makes this the SAME
+         footprint as the front rather than a block beneath it. */
+      className={`${FACE_CLASS} px-3 py-2.5`}
+      style={BACK_FACE_STYLE}
+      // Out of the tab order while it is turned away — the mirror of the front
+      // face's guard. Purely an interaction gate: it does not affect the paint,
+      // so the first half of a flip-back still shows this face rotating away.
+      inert={facingAway}
+    >
       {/* C126 — the badge takes the CARD's derived side (strike vs spot), which
           can disagree with the scorecard's server `side` for the same contract
           (C77). Both are transcribed; neither is authoritative in v2.
@@ -1207,6 +1393,7 @@ function PickBack({
         </div>
       </div>
 
+      {/* v2's `.op-toolbar`: RANGE LEFT, METRIC RIGHT, one row, `justify-between`. */}
       <div className="mb-1 flex items-center justify-between gap-1.5">
         {/* C135 — NOT a control. The recorder's snapshots are one session, so
             there is exactly one range. */}
@@ -1264,12 +1451,32 @@ function PickBack({
 // C139–C153 — THE CHART
 //
 // Mounted through ChartFrame, drawn imperatively into an SVG the frame owns —
-// non-negotiable 5. VISIBILITY: this is an on-demand renderer (it paints when
-// the data, the metric or the crosshair changes, not on a frame loop), so it
-// honours `onVisibility` — it skips the paint while the frame is off-screen or
-// the tab is hidden, and repaints what it skipped on the way back in. There is
-// no canvas here, so there is no `data-cb-layer` to place: v2's chart is SVG,
-// and SVG keeps the tokens as `var()` strings instead of forcing a resolve.
+// non-negotiable 5. There is no canvas here, so there is no `data-cb-layer` to
+// place: v2's chart is SVG, and SVG keeps the tokens as `var()` strings instead
+// of forcing a resolve.
+//
+// ── VISIBILITY: TWO GATES, AND THEY COVER DIFFERENT THINGS ──────────────────
+//
+// 1. SCROLLED OUT / BACKGROUND TAB → ChartFrame's signal. This is an on-demand
+//    renderer (it paints when the data, the metric or the crosshair changes, not
+//    on a frame loop), so `draw()` returns early on `!handle.visible()` and the
+//    `onVisibility(true)` edge repaints whatever was skipped. That signal is an
+//    IntersectionObserver plus `document.hidden`.
+//
+// 2. ROTATED AWAY BY THE FLIP → `backface-visibility: hidden` on the face, and
+//    ONLY that. Be precise about it: an IntersectionObserver does NOT see a
+//    turned-away face. `rotateY(180deg)` maps the border box to a rectangle of
+//    the same area in the root's coordinate space, so the observer reports the
+//    face as intersecting and `handle.visible()` stays true — the frame's gate
+//    is about the viewport, not about which way a box is pointing.
+//
+//    `backface-visibility: hidden` is what makes the claim true, and it does it
+//    at two levels: the compositor drops the face from the paint entirely, and
+//    the face drops out of hit-testing, so a turned-away chart receives no
+//    `mousemove` and therefore does no crosshair redraws. What remains is a data
+//    or metric change while face-down, which rebuilds one 96px SVG per opened
+//    card — exactly v2's behaviour, and the reason `hasBack` keeps the number of
+//    mounted backs down to the cards someone has actually opened.
 //
 // THE GEOMETRY BELOW IS v2's, to the pixel. It is here rather than in
 // gexChangeTop.ts because it is px and DOM identity, which the logic module

@@ -289,12 +289,31 @@ function rgba(c: [number, number, number], a: number): string {
 // `timeToCoordinate()`, and interpolates inside it. See BubbleGeometry.xOfTime.
 // Nothing in here searches for a position any more.
 
+/**
+ * TWO budgets, because only ONE axis is crowded.
+ *
+ * `capPx` / `floorPx` / `topCapPx` are the HORIZONTAL half-width, and they are
+ * what the bucket spacing bounds — the gap to the next bucket is the only thing
+ * a mark can fuse across. `capYPx` / `floorYPx` / `topCapYPx` are the VERTICAL
+ * half-height and the spacing has nothing to say about them: two strikes in a
+ * bucket are tens of pixels apart on the price axis, and placeBucket's fit pass
+ * already guarantees the ones that are not clear each other.
+ *
+ * Splitting them is what brought the size channel back at 1m. One budget for
+ * both axes meant a ~3px horizontal bound at a session zoom was also the
+ * vertical bound, all four rows landed on `minPx`, and the ladder drew as four
+ * identical specks. See BUBBLES.maxAspect for the ceiling on how far apart the
+ * two are allowed to get.
+ */
 interface SizeProfile {
   capPx: number
   floorPx: number
+  capYPx: number
+  floorYPx: number
   topBoost: number
   /** Hard ceiling on the boosted leader — its own share of the spacing. */
   topCapPx: number
+  topCapYPx: number
   /** Blur allowed under the leader, bounded by the room left beside it. */
   glowPx: number
   ringPx: number
@@ -365,11 +384,33 @@ function sizeFor(bucketMs: number, pxPerDot: number, scale = 1): SizeProfile {
   // across the gap. Blur is not free real estate — it has to come out of the
   // same spacing everything else is measured against.
   const spare = pxPerDot > 0 ? pxPerDot / 2 - topCapPx : BUBBLES.glowMaxPx
+
+  // ── 4. THE VERTICAL BUDGET, WHICH THE SPACING DOES NOT BOUND ──────────────
+  // Everything above is the horizontal half-width and every one of its bounds
+  // is the gap to the NEXT BUCKET. None of that applies going up and down: the
+  // neighbour in y is another strike, tens of pixels away, and placeBucket's
+  // fit pass owns the case where it is not.
+  //
+  // So the vertical budget is the rung's own profile, unshrunk — capped only
+  // against the horizontal one by `maxAspect` so a mark stays an oval and does
+  // not become a bar. `Math.max(capPx, …)` because the vertical can never be
+  // the TIGHTER of the two: at the coarse rungs the profile binds first, the
+  // two are equal, and the mark is round exactly as it was before.
+  const capYPx = Math.max(capPx, Math.min(p.capPx * scale, capPx * BUBBLES.maxAspect))
+  const topCapYPx = Math.max(topCapPx, Math.min(p.capPx * p.topBoost * scale, topCapPx * BUBBLES.maxAspect))
+
   return {
     capPx,
     floorPx: Math.max(BUBBLES.minPx, Math.min(p.floorPx * scale, capPx * BUBBLES.floorOfCap)),
+    capYPx,
+    // The floor is a fraction of the budget it belongs to, so the vertical one
+    // gets the vertical cap. Using the horizontal floor here would leave the
+    // tall marks starting from a squashed bottom and reintroduce the flat-dot
+    // look at the small end.
+    floorYPx: Math.max(BUBBLES.minPx, Math.min(p.floorPx * scale, capYPx * BUBBLES.floorOfCap)),
     topBoost: p.topBoost,
     topCapPx,
+    topCapYPx,
     glowPx: Math.max(0, Math.min(BUBBLES.glowMaxPx, spare)),
     ringPx: p.ringPx * scale,
   }
@@ -378,7 +419,10 @@ function sizeFor(bucketMs: number, pxPerDot: number, scale = 1): SizeProfile {
 interface Placed {
   mark: BubbleMark
   y: number
-  r: number
+  /** Half-width. Bounded by the bucket spacing — this is the axis that fuses. */
+  rx: number
+  /** Half-height. Bounded by the profile and by the fit pass, not by spacing. */
+  ry: number
   dx: number
 }
 
@@ -386,7 +430,9 @@ interface Placed {
  * One bucket's marks, sized and then fitted so they do not overlap.
  *
  * ── The size law ──────────────────────────────────────────────────────────
- *   r = floorPx + (|gex| / windowMax) ** sizeCurve x (capPx - floorPx),  x boost
+ *   t  = (1 - rankMix) x (|gex| / windowMax) ** sizeCurve  +  rankMix x rank
+ *   rx = floorPx  + t x (capPx  - floorPx),   x boost, capped at topCapPx
+ *   ry = floorYPx + t x (capYPx - floorYPx),  x boost, capped at topCapYPx
  *
  * Compressive rather than linear because the top strike is routinely five to ten
  * times its neighbours: a linear law hands it the whole budget and leaves
@@ -394,6 +440,16 @@ interface Placed {
  * holding a quarter of the max still draws at about a third of the range, so
  * the ladder stays rankable — and the top still stands apart, by the boost and the ring rather
  * than by flattening everything under it.
+ *
+ * `rankMix` is the guarantee underneath that: it reserves a slice of the budget
+ * for the row's PLACE in its bucket, so rows 1-4 differ in size even when their
+ * gamma does not — four near-equal strikes, or a quiet bucket where the whole
+ * ladder sits near the floor. Both of those drew as four identical specks.
+ *
+ * `rx` and `ry` come off the SAME `t` and differ only in their budgets — see
+ * SizeProfile for why the vertical one is bigger and what it fixed at 1m. One
+ * `t` for both keeps a mark's shape constant as it grows, so the small marks
+ * are the same family as the big ones rather than a different one.
  *
  * ── Then the fit ──────────────────────────────────────────────────────────
  * Two marks in the same bucket merging is a lie: it draws two levels as one. So
@@ -406,37 +462,77 @@ interface Placed {
  */
 function placeBucket(snap: BubbleSnapshot, geo: BubbleGeometry, size: SizeProfile): Placed[] {
   const rows: Placed[] = []
-  for (const mark of snap.marks) {
+  // `marks` arrives biggest-first, so the index IS the rank.
+  const n = Math.max(1, snap.marks.length)
+  for (let i = 0; i < snap.marks.length; i++) {
+    const mark = snap.marks[i]!
     const y = geo.yOfPrice(mark.strike)
     if (y == null) continue
-    const base = size.floorPx + Math.pow(mark.ratio, BUBBLES.sizeCurve) * (size.capPx - size.floorPx)
-    const r = mark.isTop ? Math.min(base * size.topBoost, size.topCapPx) : base
-    rows.push({ mark, y, r, dx: 0 })
+
+    // ── ONE POSITION ALONG THE BUDGET, SPENT ON BOTH AXES ───────────────────
+    // `t` is 0..1 and it is the whole size decision; rx and ry then just read
+    // it off their own budgets. Deriving both from one number is what keeps a
+    // mark's shape constant as it grows — the alternative, sizing each axis
+    // from its own curve, makes the small marks a different SHAPE from the big
+    // ones and the ladder stops reading as one family of marks.
+    //
+    // Two terms:
+    //   byGex   the row's share of the window max, compressed by `sizeCurve`.
+    //           The honest read, and most of the answer.
+    //   byRank  its position in its own bucket, 1st..nth → 1 .. 1/n. This is
+    //           what makes rows 1-4 different sizes when the gamma alone would
+    //           not: four strikes within a few percent of each other, or a
+    //           quiet bucket where every row lands near the floor, both used to
+    //           draw as four identical specks. See BUBBLES.rankMix.
+    // The blend is monotone in the rank and the marks are already sorted by
+    // |netGex|, so nothing about the ORDER changes.
+    const byGex = Math.pow(mark.ratio, BUBBLES.sizeCurve)
+    const byRank = 1 - i / n
+    const t = clamp((1 - BUBBLES.rankMix) * byGex + BUBBLES.rankMix * byRank, 0, 1)
+
+    const bx = size.floorPx + t * (size.capPx - size.floorPx)
+    const by = size.floorYPx + t * (size.capYPx - size.floorYPx)
+    rows.push({
+      mark,
+      y,
+      rx: mark.isTop ? Math.min(bx * size.topBoost, size.topCapPx) : bx,
+      ry: mark.isTop ? Math.min(by * size.topBoost, size.topCapYPx) : by,
+      dx: 0,
+    })
   }
   rows.sort((a, b) => a.y - b.y)
 
+  // The fit is VERTICAL and so it spends `ry`. Shrinking `rx` here would give
+  // back width that was never the problem — the neighbour in y is a different
+  // strike, not a different bucket — and would cost the size read twice over.
   for (let pass = 0; pass < BUBBLES.fitPasses; pass++) {
     let tightened = false
     for (let i = 1; i < rows.length; i++) {
       const a = rows[i - 1]!
       const b = rows[i]!
       const room = b.y - a.y - BUBBLES.gapPx
-      const sum = a.r + b.r
+      const sum = a.ry + b.ry
       if (sum <= room) continue
       const f = room > 0 ? room / sum : 0
-      a.r = Math.max(BUBBLES.minPx, a.r * f)
-      b.r = Math.max(BUBBLES.minPx, b.r * f)
+      a.ry = Math.max(BUBBLES.minPx, a.ry * f)
+      b.ry = Math.max(BUBBLES.minPx, b.ry * f)
       tightened = true
     }
     if (!tightened) break
   }
+
+  // A mark is never WIDER than it is tall. The budgets start out with the
+  // vertical at least equal to the horizontal, but a hard vertical squeeze can
+  // push `ry` under `rx`, and a wide flat dot is the shape this whole change is
+  // getting away from.
+  for (const row of rows) row.rx = Math.min(row.rx, row.ry)
 
   // Still colliding at the floor — the price scale is squeezed, or two strikes
   // are a fraction apart. Step them sideways in alternating directions.
   for (let i = 1; i < rows.length; i++) {
     const a = rows[i - 1]!
     const b = rows[i]!
-    if (b.y - a.y - BUBBLES.gapPx >= a.r + b.r) continue
+    if (b.y - a.y - BUBBLES.gapPx >= a.ry + b.ry) continue
     b.dx = a.dx >= 0 ? -BUBBLES.jitterPx : BUBBLES.jitterPx
   }
   return rows
@@ -579,7 +675,7 @@ export function drawBubbles(
     // and the morning is half of why it is drawn.
     const age = BUBBLES.ageKeep + (1 - BUBBLES.ageKeep) * ((snap.ts - first.ts) / span)
 
-    for (const { mark: m, y, r, dx } of placeBucket(snap, geo, size)) {
+    for (const { mark: m, y, rx, ry, dx } of placeBucket(snap, geo, size)) {
       if (y < -20 || y > ph + 20) continue
       const positive = m.value >= 0
       // The SATURATED sign colour: the PEERS' fill, and the leader's glow.
@@ -604,22 +700,26 @@ export function drawBubbles(
         ctx.beginPath()
         ctx.fillStyle = rgba(toWhite(hot, BUBBLES.topTint), alpha)
         ctx.shadowColor = rgba(base, BUBBLES.glowAlpha * age)
-        ctx.shadowBlur = Math.min(size.glowPx, r * BUBBLES.glowFactor)
-        ctx.arc(cx, y, r, 0, Math.PI * 2)
+        // The blur is measured off the WIDTH. The room it has to spread into is
+        // the gap to the next bucket, which is the same bound `rx` already
+        // carries; sizing it off the taller axis would put the halo back across
+        // that gap, which is what fused the leader's row into a sausage.
+        ctx.shadowBlur = Math.min(size.glowPx, rx * BUBBLES.glowFactor)
+        ctx.ellipse(cx, y, rx, ry, 0, 0, Math.PI * 2)
         ctx.fill()
         ctx.shadowBlur = 0
         ctx.shadowColor = 'transparent'
         ctx.beginPath()
         ctx.lineWidth = size.ringPx
         ctx.strokeStyle = `rgba(255,255,255,${0.85 * age})`
-        ctx.arc(cx, y, r, 0, Math.PI * 2)
+        ctx.ellipse(cx, y, rx, ry, 0, 0, Math.PI * 2)
         ctx.stroke()
       } else {
         // The peers are the SIGN, at full strength. Blue is positive gamma and
         // red is negative, and that is the first thing the ladder has to say.
         ctx.beginPath()
         ctx.fillStyle = rgba(base, alpha)
-        ctx.arc(cx, y, r, 0, Math.PI * 2)
+        ctx.ellipse(cx, y, rx, ry, 0, 0, Math.PI * 2)
         ctx.fill()
       }
       drew++

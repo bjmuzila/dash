@@ -16,8 +16,8 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--bg); color: var(--text);
     font: 13px/1.45 Inter, "Helvetica Neue", Arial, sans-serif; }
-  .wrap { max-width: 1400px; margin: 0 auto; padding: 18px 16px 40px; }
-  .card { background: radial-gradient(circle at 50% 0%, rgba(33,158,188,0.07) 0%, transparent 55%), var(--panel);
+  .wrap { height: 100vh; padding: 10px 12px; }
+  .card { height: 100%; display: flex; flex-direction: column; background: radial-gradient(circle at 50% 0%, rgba(33,158,188,0.07) 0%, transparent 55%), var(--panel);
     border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
   .head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 14px 18px; border-bottom: 1px solid var(--border); }
   .title { font-size: 15px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--cyan); }
@@ -59,13 +59,12 @@
   .lg .sw { width: 11px; height: 11px; border-radius: 2px; border: 1px solid var(--sc); background: var(--sc); }
   .lg.off { opacity: .4; } .lg.off .sw { background: transparent; }
   .lg .v { font-family: var(--mono); color: var(--text); }
-  .plot { position: relative; padding: 8px 18px 0; }
-  svg { width: 100%; display: block; }
-  .rail { position: relative; height: 30px; margin: 4px 18px 0; color: var(--muted); }
+  .plot { position: relative; padding: 8px 18px 0; flex: 1 1 auto; min-height: 200px; }
+  svg { width: 100%; height: 100%; display: block; }
+  .rail { position: relative; height: 30px; margin: 4px 18px 10px; color: var(--muted); flex: 0 0 auto; }
   .rail span { position: absolute; top: 0; white-space: nowrap; padding-left: 4px; }
   .rail b { display: block; font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--text); }
   .rail i { display: block; font-style: normal; font-family: var(--mono); font-size: 10px; }
-  .note { padding: 10px 18px 16px; font-size: 12px; color: var(--muted); line-height: 1.5; }
   .empty { padding: 26px 18px; color: var(--muted); }
   .err { color: var(--red); }
   .tip { position: absolute; pointer-events: none; display: none; background: rgba(13,17,25,0.96); border: 1px solid var(--border);
@@ -86,7 +85,7 @@
       <button class="chip on" id="coreOnly" style="--c: var(--core)">Core only</button>
       <button class="chip" id="wallsOn" style="--c: var(--orange)">+ Walls</button>
       <span style="margin-left:auto; display:flex; gap:8px">
-        <button class="chip" id="png">⤓ PNG</button>
+        <button class="chip" id="png" title="Copy a screenshot of the chart to the clipboard (and download it)">📷 Screenshot</button>
         <button class="chip" id="reload">↻ Reload</button>
       </span>
     </div>
@@ -102,11 +101,6 @@
     <div class="legend" id="legend"></div>
     <div class="plot" id="plot"><div class="tip" id="tip"></div></div>
     <div class="rail" id="rail"></div>
-    <div class="note">
-      Each gold bar is one stay of the CORE at a strike — from the 15-minute slot it arrived to the slot it left — and its weight is how long it held (a hairline is a one-slot blink, a heavy bar held for hours). Nothing joins the bars, so a flip is a gap, not a spike. Recorded levels only: 09:29 open + every 15m to 16:00 ET, written to <code>walls_log</code> when the level moved. Spot is the 5-minute scanner price for each session (the sweep the walls were sampled from); a session without it falls back to the price stamped on each capture.
-      CORE is the single largest |net GEX| strike on the chain; with walls on it stays gold and the other wall is
-      drawn in the colour of the side it currently is (call green / put red) — the same role model the Level Log uses.
-    </div>
   </div>
 </div>
 
@@ -122,7 +116,9 @@
   const COLOR = { cb: 'var(--core)', call_wall: 'var(--call)', put_wall: 'var(--put)', spot: 'var(--text)' };
   const HEX   = { cb: '#ffd600', call_wall: '#30d158', put_wall: '#ff4757', spot: '#ffffff' };
   const LABEL = { cb: 'CORE', call_wall: 'Call Wall', put_wall: 'Put Wall', spot: 'spot' };
-  const H = 500, PAD = 12;
+  const PAD = 12;
+  /** Plot height = whatever the page gives the plot box — the chart fills the window. */
+  const plotH = () => Math.max(200, Math.round($('plot').getBoundingClientRect().height - 8));
 
   const $ = (id) => document.getElementById(id);
   const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
@@ -262,11 +258,18 @@
       segs.push({ date: day.date, series, roles, spotPts, dense, L, lastWrite, log: day.log });
     }
     if (!segs.length) return null;
+    // Y RANGE — from the tape and from level stays of at least two slots. A
+    // one-slot blink at a strike 40 points away (a bad sweep, a thin chain) is
+    // still drawn, but it does not get to flatten the whole quarter into a
+    // ribbon; if it lands off-plot the eye loses nothing that mattered.
     const vals = [];
-    for (const seg of segs) { for (const arr of Object.values(seg.series)) for (const v of arr) if (v != null) vals.push(v); for (const p of seg.spotPts) vals.push(p.v); }
+    for (const seg of segs) {
+      for (const arr of Object.values(seg.series)) { let s0 = 0; while (s0 <= seg.L) { if (arr[s0] == null) { s0++; continue; } const v = arr[s0], a = s0; while (s0 <= seg.L && arr[s0] === v) s0++; if (s0 - a >= 2) vals.push(v); } }
+      for (const p of seg.spotPts) vals.push(p.v);
+    }
     if (vals.length < 2) return null;
     let lo = Math.min(...vals), hi = Math.max(...vals); if (!(hi > lo)) { lo *= 0.999; hi *= 1.001; }
-    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
     return { segs, lo, hi };
   }
 
@@ -284,7 +287,7 @@
       d.textContent = st.loading ? 'Loading sessions…' : st.error ? `Could not load — ${st.error}` : `No recorded sessions for ${SYMBOL()}.`;
       plot.appendChild(d); return;
     }
-    const { segs, lo, hi } = m; const N = segs.length; const segW = 100 / N;
+    const { segs, lo, hi } = m; const N = segs.length; const segW = 100 / N; const H = plotH();
     const x = (i, s) => i * segW + (s / segs[i].L) * segW;
     const y = (v) => PAD + (1 - (v - lo) / (hi - lo)) * (H - PAD * 2);
     const NS = 'http://www.w3.org/2000/svg';
@@ -317,26 +320,39 @@
     const runsOf = (arr, L) => { const out = []; if (!arr) return out; let s = 0;
       while (s <= L) { if (arr[s] == null) { s++; continue; } const a = s, v = arr[s]; while (s <= L && arr[s] === v) s++; out.push({ a, b: s - 1, v, n: s - a }); }
       return out; };
-    const band = (i, run, color, heavy) => {
-      const L = segs[i].L; const f = Math.min(1, run.n / 14);            // 14 slots ≈ 3.5h = full weight
-      const w = (heavy ? 1.6 : 1.2) + f * (heavy ? 5.4 : 3.8);
+    /**
+     * One bar per stay, all the same weight, plus a FAINT vertical where one
+     * stay hands off to the next — so the path of the level is still readable
+     * (Brandon: "I prefer the lines up and down") without the joins shouting
+     * over the shelves. `prev` carries the previous run of the same series on
+     * the same day so the join is drawn once, at the slot the level moved.
+     */
+    const BAR_W = { heavy: 3.2, light: 2.4 };
+    const band = (i, run, color, heavy, prev) => {
+      const L = segs[i].L;
       const x1 = x(i, run.a), x2 = run.b + 1 <= L ? x(i, run.b + 1) : x(i, L) + (segW / L) * 0.6;
-      svg.appendChild(el('line', { x1, x2, y1: y(run.v), y2: y(run.v), stroke: color, 'stroke-width': w.toFixed(2),
-        'stroke-opacity': (0.28 + 0.72 * f).toFixed(2), 'stroke-linecap': 'butt', 'vector-effect': 'non-scaling-stroke' }));
+      if (prev && prev.v !== run.v) {
+        svg.appendChild(el('line', { x1, x2: x1, y1: y(prev.v), y2: y(run.v), stroke: color, 'stroke-width': 1,
+          'stroke-opacity': 0.28, 'vector-effect': 'non-scaling-stroke' }));
+      }
+      svg.appendChild(el('line', { x1, x2, y1: y(run.v), y2: y(run.v), stroke: color, 'stroke-width': heavy ? BAR_W.heavy : BAR_W.light,
+        'stroke-opacity': heavy ? 0.95 : 0.85, 'stroke-linecap': 'butt', 'vector-effect': 'non-scaling-stroke' }));
     };
     const roled = st.walls && segs.some((s) => s.roles);
     if (roled && !off.has('cb')) {
       for (let i = 0; i < N; i++) { const r = segs[i].roles; if (!r) continue; const L = segs[i].L;
         // OTHER: runs split on strike AND side, so each bar carries the colour of the wall it is.
-        let s = 0;
-        while (s <= L) { if (r.other[s] == null || r.side[s] == null) { s++; continue; } const a = s, v = r.other[s], sd = r.side[s];
+        let s = 0, prev = null;
+        while (s <= L) { if (r.other[s] == null || r.side[s] == null) { s++; prev = null; continue; } const a = s, v = r.other[s], sd = r.side[s];
           while (s <= L && r.other[s] === v && r.side[s] === sd) s++; const lt = sd === 'call' ? 'call_wall' : 'put_wall';
-          if (!off.has(lt)) band(i, { a, b: s - 1, v, n: s - a }, HEX[lt], false); }
-        runsOf(r.core, L).forEach((run) => band(i, run, HEX.cb, true)); }
+          const run = { a, b: s - 1, v, n: s - a };
+          if (!off.has(lt)) band(i, run, HEX[lt], false, prev);
+          prev = run; }
+        runsOf(r.core, L).forEach((run, k, arr) => band(i, run, HEX.cb, true, k ? arr[k - 1] : null)); }
     } else {
-      for (const lt of LEVELS) { if (off.has(lt)) continue; for (let i = 0; i < N; i++) runsOf(segs[i].series[lt], segs[i].L).forEach((run) => band(i, run, HEX[lt], lt === 'cb')); }
+      for (const lt of LEVELS) { if (off.has(lt)) continue; for (let i = 0; i < N; i++) runsOf(segs[i].series[lt], segs[i].L).forEach((run, k, arr) => band(i, run, HEX[lt], lt === 'cb', k ? arr[k - 1] : null)); }
     }
-    if (!off.has('spot')) for (let i = 0; i < N; i++) { const d = segs[i].spotPts.map((p) => `${x(i, p.s)},${y(p.v)}`).join(' '); if (d) poly(d, HEX.spot, segs[i].dense ? 1 : 1.3, { 'stroke-opacity': 0.72 }); }
+    if (!off.has('spot')) for (let i = 0; i < N; i++) { const d = segs[i].spotPts.map((p) => `${x(i, p.s)},${y(p.v)}`).join(' '); if (d) poly(d, HEX.spot, segs[i].dense ? 1 : 1.3, { 'stroke-opacity': 0.8 }); }
     plot.appendChild(svg);
     // grid labels
     for (const g of gridLabels) { const s = document.createElement('span'); s.className = 'gl'; s.textContent = fmt(g.v);
@@ -377,18 +393,54 @@
   }
   function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw))); const f = raw / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p; }
 
-  // ── PNG (whole card) ─────────────────────────────────────────────────────
-  $('png').onclick = () => {
+  // ── Screenshot — the chart with its head, legend and date rail, composed on
+  //    a canvas (no html2canvas: the site CSP allows no third-party scripts).
+  //    Copied to the clipboard AND downloaded, so it can go straight into a
+  //    Discord/X post or be kept. ────────────────────────────────────────────
+  $('png').onclick = async () => {
     const svg = $('plot').querySelector('svg'); if (!svg) return;
-    const rect = svg.getBoundingClientRect(); const W = Math.round(rect.width * 2), Hh = Math.round(rect.height * 2);
+    const btn = $('png'); const was = btn.textContent; btn.textContent = '… capturing';
+    const S = 2, rect = svg.getBoundingClientRect(); const W = Math.round(rect.width * S), Hh = Math.round(rect.height * S);
     const clone = svg.cloneNode(true); clone.setAttribute('width', W); clone.setAttribute('height', Hh);
-    const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' });
-    const url = URL.createObjectURL(blob); const img = new Image();
-    img.onload = () => { const c = document.createElement('canvas'); c.width = W; c.height = Hh + 60; const g = c.getContext('2d');
-      g.fillStyle = '#05060A'; g.fillRect(0, 0, c.width, c.height); g.fillStyle = '#219EBC'; g.font = 'bold 26px Inter, Arial';
-      g.fillText(`${SYMBOL()} — CORE migration · ${$('meta').textContent}`, 20, 40); g.drawImage(img, 0, 60, W, Hh);
-      const a = document.createElement('a'); a.download = `${SYMBOL().toLowerCase()}-core-migration-${$('end').value}-${st.range}s.png`; a.href = c.toDataURL('image/png'); a.click(); URL.revokeObjectURL(url); };
-    img.src = url;
+    const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }));
+    const img = new Image();
+    await new Promise((ok, bad) => { img.onload = ok; img.onerror = bad; img.src = url; });
+    const HEAD = 64 * S, LEG = 26 * S, RAIL = 34 * S, PADX = 18 * S;
+    const c = document.createElement('canvas'); c.width = W + PADX * 2; c.height = HEAD + LEG + Hh + RAIL; const g = c.getContext('2d');
+    g.fillStyle = '#05060A'; g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = '#219EBC'; g.font = `800 ${15 * S}px Inter, Arial`; g.fillText(`${SYMBOL()} — CORE MIGRATION`, PADX, 26 * S);
+    g.fillStyle = 'rgba(255,255,255,0.62)'; g.font = `${11 * S}px ${'ui-monospace, Menlo, Consolas, monospace'}`; g.fillText($('meta').textContent, PADX, 46 * S);
+    // legend
+    let lx = PADX; const legY = HEAD + 10 * S;
+    for (const b of $('legend').querySelectorAll('.lg')) {
+      const sw = b.querySelector('.sw'); const col = getComputedStyle(sw).borderColor; const on = !b.classList.contains('off');
+      g.globalAlpha = on ? 1 : 0.4; g.fillStyle = col; g.strokeStyle = col; g.lineWidth = S;
+      if (on) g.fillRect(lx, legY - 9 * S, 11 * S, 11 * S); else g.strokeRect(lx, legY - 9 * S, 11 * S, 11 * S);
+      const [lab, val] = [b.children[1].textContent, b.children[2].textContent];
+      g.font = `${11 * S}px Inter, Arial`; g.fillStyle = 'rgba(255,255,255,0.62)'; g.fillText(lab, lx + 16 * S, legY);
+      const w1 = g.measureText(lab).width; g.font = `${11 * S}px ui-monospace, Menlo, Consolas, monospace`; g.fillStyle = '#fff'; g.fillText(val, lx + 16 * S + w1 + 5 * S, legY);
+      lx += 16 * S + w1 + 5 * S + g.measureText(val).width + 18 * S; g.globalAlpha = 1;
+    }
+    // plot + its y labels
+    g.drawImage(img, PADX, HEAD + LEG, W, Hh);
+    for (const gl of $('plot').querySelectorAll('.gl')) { const top = parseFloat(gl.style.top); g.fillStyle = 'rgba(255,255,255,0.45)'; g.font = `${10 * S}px ui-monospace, Menlo, Consolas, monospace`; g.fillText(gl.textContent, PADX + 4 * S, HEAD + LEG + (top - 8 + 7) * S); }
+    // rail
+    const railTop = HEAD + LEG + Hh + 12 * S;
+    for (const sp of $('rail').querySelectorAll('span')) {
+      const left = parseFloat(sp.style.left) / 100 * W + PADX; const wdt = sp.style.width ? parseFloat(sp.style.width) / 100 * W : 0;
+      const b = sp.querySelector('b').textContent, i2 = sp.querySelector('i').textContent;
+      g.textAlign = wdt ? 'center' : 'left'; const tx = wdt ? left + wdt / 2 : left + 4 * S;
+      g.fillStyle = '#fff'; g.font = `800 ${10 * S}px Inter, Arial`; g.fillText(b, tx, railTop);
+      g.fillStyle = 'rgba(255,255,255,0.62)'; g.font = `${10 * S}px ui-monospace, Menlo, Consolas, monospace`; g.fillText(i2, tx, railTop + 12 * S);
+    }
+    g.textAlign = 'left';
+    URL.revokeObjectURL(url);
+    const name = `${SYMBOL().toLowerCase()}-core-migration-${$('end').value}-${st.range}s.png`;
+    const blob = await new Promise((ok) => c.toBlob(ok, 'image/png'));
+    let copied = false;
+    try { if (navigator.clipboard && window.ClipboardItem) { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); copied = true; } } catch {}
+    const a = document.createElement('a'); a.download = name; a.href = URL.createObjectURL(blob); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    btn.textContent = copied ? '✓ copied + saved' : '✓ saved'; setTimeout(() => { btn.textContent = was; }, 1800);
   };
 
   // ── wiring ───────────────────────────────────────────────────────────────
@@ -401,6 +453,7 @@
   $('file').onchange = async (e) => { const f = e.target.files[0]; if (!f) return;
     try { const j = JSON.parse(await f.text()); const days = Array.isArray(j) ? j : j.days; st.days = normalize(days).slice(-st.range); st.error = null; }
     catch (err) { st.days = []; st.error = 'bad JSON: ' + err.message; } render(); };
+  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(render, 120); });
   load();
 })();
 </script>

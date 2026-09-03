@@ -373,6 +373,54 @@ export const BUBBLES = {
    * rather than spending room that is not there.
    */
   topOfSpacing: 0.44,
+  /**
+   * ── THE MARKS GO OBLONG, BECAUSE ONLY ONE AXIS IS CROWDED ────────────────
+   *
+   * Everything above bounds a mark by the HORIZONTAL spacing — the gap to the
+   * next bucket — and then draws a circle, which spends that same bound on the
+   * vertical axis as well. At 1m across a session that bound is ~3px, so all
+   * four rows arrived at the floor and the ladder had one size. Shrinking the
+   * numbers cannot fix it and neither can growing them: the room genuinely is
+   * not there sideways.
+   *
+   * Sideways. Vertically there is a whole pane. Two strikes in a bucket are
+   * tens of pixels apart on the price axis and the fit pass below already
+   * guarantees they clear each other, so the vertical budget can come from the
+   * rung's own profile with no spacing bound on it at all — and the size
+   * channel comes back at exactly the zoom where it had died.
+   *
+   * This is the ratio ceiling on that: how many times taller than wide a mark
+   * may draw. 2.4 is a firm oval and still obviously a mark rather than a dash,
+   * and at 1m on a session view it buys the peers a 3.3-8.8px half-height where
+   * they all used to sit on `minPx`. Past ~3 the trail starts reading as a set
+   * of vertical BARS, which is the "the level was one thing for this whole
+   * stretch" claim this layer exists not to make. At the coarse rungs the
+   * profile cap binds first and the marks are round again, so this is inert
+   * everywhere it is not needed.
+   */
+  maxAspect: 2.4,
+  /**
+   * ── AND ROWS 1-4 RANK BY EYE EVEN WHEN THE GAMMA DOES NOT ────────────────
+   *
+   * `sizeCurve` spreads the four rows over the budget by their share of the
+   * WINDOW's max, which is the honest read and is the right default — but it
+   * says nothing at all when a bucket's four strikes are within a few percent
+   * of each other, or when the whole bucket is quiet and every row lands near
+   * the floor. Both are common, and both draw as four identical specks.
+   *
+   * So the size is a blend: this much of it is the row's RANK inside its own
+   * bucket (1st, 2nd, 3rd, 4th → 1, .75, .5, .25), and the rest is the gamma.
+   * A guaranteed step of `rankMix / rows` between neighbours, on top of
+   * whatever the gamma already said.
+   *
+   * 0.4 and not more: past about half the budget the mark stops reporting
+   * magnitude and starts reporting only its position in a list, at which point
+   * a 4th row holding 90% of the leader's gamma draws small and lies. Nothing
+   * about the ORDER changes — the marks are sorted by |netGex| before this and
+   * the blend is monotone in the rank, so the ladder still ranks the way the
+   * numbers do.
+   */
+  rankMix: 0.4,
   /** Absolute floor. Old dots never shrink past this, whatever the fit does. */
   minPx: 1.2,
 

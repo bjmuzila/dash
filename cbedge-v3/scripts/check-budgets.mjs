@@ -189,6 +189,14 @@ function slack() {
 /**
  * Rewrite budgets.json with every number pulled down to current reality.
  *
+ * A RATCHET ONLY TURNS ONE WAY. `tightened()` adds `ratchet.slack` on top of
+ * what the bundle weighs today, so for a kind whose budget is ALREADY tighter
+ * than that — react sat 6% above its chunk — the "tightened" number is BIGGER
+ * than the budget in the file, and writing it raised the ceiling. That is the
+ * exact move this file's own $comment calls a deliberate decision, done
+ * silently by the tool meant to prevent drift. Hence the Math.min: a kind only
+ * ever moves down, and one that is already tight is left alone.
+ *
  * Written key by key rather than with a spread, so the file keeps its shape and
  * its comments and the diff is only the numbers — the diff being readable is
  * the entire reason these live in a file instead of in this script.
@@ -201,8 +209,9 @@ function writeRatchet() {
     const want = tightened(kind)
     // A kind with nothing in dist/ keeps its number: a build that happened not
     // to emit a route chunk must not silently ratchet the route budget to zero.
-    next[kind] = want ?? now
-    if (want && want !== now) changes.push(`  ${kind.padEnd(14)} ${kb(now)} → ${kb(want)}`)
+    // And a kind already below `want` keeps its number too — see above.
+    next[kind] = want == null ? now : Math.min(now, want)
+    if (next[kind] !== now) changes.push(`  ${kind.padEnd(14)} ${kb(now)} → ${kb(next[kind])}`)
   }
   if (budgets.ratchet) next.ratchet = budgets.ratchet
   if (budgets.perf) next.perf = budgets.perf

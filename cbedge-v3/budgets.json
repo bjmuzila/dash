@@ -1,11 +1,11 @@
 {
   "$comment": "Hard limits, in BROTLI-compressed bytes, enforced by scripts/check-budgets.mjs on every build. These are set close to current reality on purpose — a budget with 4x headroom enforces nothing. Raising a number is a deliberate decision that shows up in a diff, which is the whole point: 'no exceptions' only survives if a machine enforces it. LOWERING one matters just as much and is far easier to forget, which is what `ratchet` is for: `npm run budgets:ratchet` pulls every number back down to what the bundle actually weighs today.",
-  "entry": 46000,
+  "entry": 37100,
   "react": 55000,
-  "route": 80000,
-  "css": 20000,
-  "html": 4096,
-  "totalInitial": 112000,
+  "route": 59100,
+  "css": 8500,
+  "html": 2600,
+  "totalInitial": 108400,
   "ratchet": {
     "$comment": "slack = how much headroom a budget may carry before it stops enforcing anything. When the largest asset of a kind is more than this fraction under its budget, the check reports SLACK. enforce=true turns those reports into build failures; leave it false so a bundle getting SMALLER never blocks a commit — re-tighten deliberately with `npm run budgets:ratchet`.",
     "slack": 0.15,

@@ -55,8 +55,17 @@
 // • THE WHOLE html2canvas CAPTURE SURFACE — `⧉ Copy image` (C51), `📷 Screenshot`
 //   (C52), the capture filename `gex-change-top-{date|today}.png` (C53), the two
 //   per-card `📷` buttons and their busy/"✓ Copied"/"✓ Saved" lifecycle with its
-//   1800 ms reset (C109, C110, C127), and the `data-noshot="1"` / `data-flip3d` /
-//   `data-face` / `data-card` attribute protocol they depend on.
+//   1800 ms reset (C109, C110, C127), and the `data-noshot="1"` / `data-face` /
+//   `data-card` attribute protocol they depend on.
+//
+//   ONE ATTRIBUTE OF THAT PROTOCOL SURVIVES, AND IT IS NOT A CAPTURE HOOK.
+//   `data-flip3d="front"|"back"` is still written on the flipper in
+//   GexChangeTopTab. Capture is NOT ported and nothing reads it. It stays
+//   because the tile is a real two-face 3D flip (C107, C108, C125) and the
+//   attribute is the only place the DOM says which face is actually facing the
+//   viewer — a `transform` matrix does not tell you that at a glance. It
+//   documents the intent, it is what a devtools inspection reads, and it is what
+//   any future flattening capture would key on, as v2's did.
 //
 //   WHAT v2's lib/snapshot.ts DID, recorded so nothing here reads as an
 //   unexplained deletion. Four exported helpers:
