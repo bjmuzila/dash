@@ -316,6 +316,59 @@ function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 function blueA(a: number) { return `rgba(59,130,246,${a})`; }
 function orangeA(a: number) { return `rgba(251,133,1,${a})`; } // #FB8501 — "new alert"
 
+// ── V3 ───────────────────────────────────────────────────────────────────────
+// The one door into cbedge-v3 from inside v2. v3 is a separate frontend served
+// at /v3/* (cbedge-v3/, its own Vite SPA behind app/v3/**/route.ts →
+// serveSpaShell("v3")); both apps run at the same time and there is no cutover
+// day, so people need a way across that is always in the same place. The
+// universal toolbar is that place.
+//
+// IT IS A PLAIN <a>, AND IT MUST STAY ONE. Inside the customer dashboard
+// `next/link` is shimmed to react-router (app-vite/src/shims/next-link.tsx), so
+// a <Link href="/v3"> here would be a client-side route change INSIDE the v2
+// SPA — which has no /v3 route and would fall through its catch-all to
+// /traders-dashboard. Crossing to another SPA needs a real document
+// navigation. No trailing slash: app/v3/route.ts is the shell route and Next
+// runs with trailingSlash off, so /v3/ would just cost a 308 on every click.
+function V3Pill({ compact = false }: { compact?: boolean }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <a
+      href="/v3"
+      title="CB Edge v3 — the new dashboard"
+      aria-label="Open CB Edge v3"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        position: "relative",
+        zIndex: 1,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: compact ? 0 : 5,
+        height: compact ? 30 : 32,
+        padding: compact ? "0 8px" : "0 11px",
+        flexShrink: 0,
+        borderRadius: 999,
+        border: `1px solid ${hover ? cyanA(0.7) : cyanA(0.4)}`,
+        background: `linear-gradient(110deg, ${cyanA(hover ? 0.26 : 0.14)}, ${blueA(hover ? 0.2 : 0.1)})`,
+        color: hover ? "#bfeaf5" : CYAN,
+        fontSize: 12,
+        fontWeight: 800,
+        letterSpacing: "0.08em",
+        lineHeight: 1,
+        textDecoration: "none",
+        whiteSpace: "nowrap",
+        boxShadow: hover ? `0 4px 12px -2px ${cyanA(0.5)}` : "none",
+        transform: hover ? "translateY(-1px)" : "none",
+        transition: "background 0.14s, border-color 0.14s, color 0.14s, box-shadow 0.14s, transform 0.14s",
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 12, letterSpacing: 0 }}>✨</span>
+      {!compact && <span>V3</span>}
+    </a>
+  );
+}
+
 // Left-side nav strip contents. `href` doubles as the stable id used for the
 // saved drag order. `ownerOnly` items only render for the owner.
 type NavItem = { href: string; label: string; emoji: string; ownerOnly?: boolean; comingSoon?: boolean; extHref?: string };
@@ -754,6 +807,15 @@ export default function GlobalToolbar() {
           {/* flexible gap — opens the center and pushes the quotes + clock
               cluster to the right ── */}
           <div style={{ flex: 1, minWidth: isMobile ? 0 : 8 }} />
+
+          {/* ── V3 — the crossing to the new dashboard (/v3) ──
+              First thing in the right-hand cluster, so it is in the same place
+              on every route in the app rather than at the end of a nav strip
+              the user is free to re-order. Hidden on the phone build (/m/*),
+              where the pill is already down to the ticker, the clock and the
+              avatar — v3's own phone build is reached from /v3 once you are
+              across. Icon-only when the viewport is narrow. ── */}
+          {!isMobileRoute && <V3Pill compact={isMobile} />}
 
           {/* ── Live ticker (ESU / NQU + dropdown) — now sits just left of the
               clock; shrinks/clips on narrow screens ── */}

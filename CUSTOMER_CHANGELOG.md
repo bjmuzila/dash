@@ -6,7 +6,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 * **Economic Calendar (v3 preview):** the calendar and the earnings week board now have their own full page — impact filters, a market-cap filter, search, and a link that opens straight to the earnings tab.
 
-* **Phone (v3 preview):** the dashboard now has a real phone version — GEX, Heat, SPX Candles, Chain, Estimated Moves and Calendar, with a bottom tab bar.
+* **Phone (v3 preview):** the dashboard now has a real phone version — GEX, Heat, SPX Candles, Chain, Estimated Moves and Calendar, with a bottom tab bar. Opening cbedge.net on a phone goes straight there.
 
 * **SPX Candles (phone, v3 preview):** the SPX / ES switch now sits in the header instead of buried in the settings sheet.
 

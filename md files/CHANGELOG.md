@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-09-03 - cbedge.net lands a phone on the v3 phone build
+
+`app/page.tsx` only ever did one thing for a signed-in visitor — `redirect("/traders-dashboard")` — and on a phone that is the v2 desktop dashboard, which is now the long way round to a build that exists.
+
+```
+signed out                 -> LandingClient (unchanged; it is the sales page)
+signed in, phone UA        -> /v3/m/gex
+signed in, anything else   -> /traders-dashboard (unchanged)
+```
+
+**Why a user-agent test.** The decision is made on the server, in a server component, before one byte of JavaScript has run — a viewport width is not knowable there. The alternative is to serve the landing page and bounce from the client, which is a visible flash of the wrong page on exactly the connections least able to afford it. `Android.*Mobile` is Google's own documented phone test (an Android TABLET's UA omits `Mobile`) and iPadOS reports itself as Macintosh, so neither tablets nor laptops match.
+
+The app's own phone test, `cbedge-v3/src/design/useIsPhone.ts`, stays width + pointer. The two are answering different questions — "what should I serve" vs "what am I being rendered in" — and are allowed to disagree at the margin. Nothing is GATED on this either way: it picks a landing spot, and every route it can send you to is still reachable by typing it.
+
+**Why `/v3/m/gex` and not `/v3`.** The SPA's `MobileRedirect` would get there on its own, but only after the desktop board had mounted — a frame of the wrong layout plus a board's worth of chunks nobody asked for.
+
+An unpaid signed-in account is bounced to `/home` by `middleware.ts` from `/v3/m/gex` exactly as it was from `/traders-dashboard`. No change there.
+
+## 2026-09-03 - v2: a V3 pill in the universal toolbar
+
+**There is now a way into v3 from inside v2**, in the same place on every route:
+a small cyan "✨ V3" pill in `GlobalToolbar`, first item of the right-hand
+cluster (just left of the live ticker). Both apps run side by side with no
+cutover day, so the crossing had to be somewhere fixed rather than at the end of
+a nav strip every user is free to re-order.
+
+**It is a plain `<a href="/v3">`, and it has to stay one.** Inside the customer
+dashboard `next/link` is shimmed to react-router (`app-vite/src/shims/
+next-link.tsx`), so a `<Link href="/v3">` would be a client-side route change
+INSIDE the v2 SPA — which has no /v3 route and would fall through its catch-all
+to /traders-dashboard. Crossing to another SPA needs a real document navigation.
+No trailing slash either: `app/v3/route.ts` is the shell route and Next runs
+with trailingSlash off, so `/v3/` would just cost a 308 on every click.
+
+Hidden on the phone build (`/m/*`), where the pill is already down to the
+ticker, the clock and the avatar; icon-only on a narrow viewport. Not gated -
+`/v3` is a normal paid route since 2026-09-03 and carries its own gate.
+
+Touched: `components/shared/GlobalToolbar.tsx`. No proxy, server or v3 code.
+
 ## 2026-09-03 - "New version available" toast, so a phone tab stops running last week's build
 
 Nothing here was a caching bug, and clearing cookies never fixed it. The SPA
