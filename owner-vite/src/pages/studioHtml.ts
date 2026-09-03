@@ -119,6 +119,17 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
   .ly .hnd{display:none;position:absolute;right:-6px;bottom:-6px;width:16px;height:16px;background:var(--acc);border-radius:3px;cursor:nwse-resize;z-index:9}
   .ly.sel .hnd{display:block}
   .ly[data-lock="1"].sel .hnd{display:none}
+  /* One grab bar per side. Plain drag moves that side; alt+drag CROPS an image
+     layer — the border comes in and the picture underneath stays put. */
+  .ly .eh{display:none;position:absolute;background:transparent;z-index:8}
+  .ly.sel .eh{display:block}
+  .ly[data-lock="1"].sel .eh{display:none}
+  .ly .eh::after{content:'';position:absolute;inset:0;background:var(--acc);opacity:0;transition:opacity .1s}
+  .ly .eh:hover::after{opacity:.7}
+  .ly .eh[data-edge=n]{left:10px;right:10px;top:-5px;height:10px;cursor:ns-resize}
+  .ly .eh[data-edge=s]{left:10px;right:10px;bottom:-5px;height:10px;cursor:ns-resize}
+  .ly .eh[data-edge=w]{top:10px;bottom:10px;left:-5px;width:10px;cursor:ew-resize}
+  .ly .eh[data-edge=e]{top:10px;bottom:10px;right:-5px;width:10px;cursor:ew-resize}
   .ly[data-t=text]{padding:0}
   .ly[data-t=text] .ed{outline:none;white-space:pre-wrap;word-break:break-word}
   .ly .ed[contenteditable="true"]{cursor:text;box-shadow:0 0 0 1px var(--acc) inset}
@@ -744,10 +755,14 @@ function styleList(d){
 }
 function setImg(d,url){
   var im=d.querySelector('img');
+  // Dropping the first image into an empty slot replaces the placeholder — and
+  // every handle that was sitting next to it. Put them back, or the layer keeps
+  // its corner grip and silently loses the four side grips that do the cropping.
   if(!im){ d.innerHTML='<img>'; im=d.querySelector('img'); }
   im.src=url; im.dataset.url=url;
   if(d.dataset.t==='logo'){ im.style.objectFit='contain'; }
-  var h=d.querySelector('.hnd'); if(!h) addHandle(d);
+  if(!d.querySelector('.hnd')) addHandle(d);
+  if(!d.querySelector('.eh')) addEdges(d);
 }
 function pick(d){
   var i=document.createElement('input'); i.type='file'; i.accept='image/*';
@@ -756,6 +771,97 @@ function pick(d){
     var r=new FileReader(); r.onload=function(){setImg(d,r.result)}; r.readAsDataURL(f);
   };
   i.click();
+}
+// ── Cropping an image slot ──────────────────────────────────────────────────
+// A pasted screenshot almost never matches the slot it lands in, and the fix is
+// always the same: pull one border in until the dead space is gone. Alt+drag a
+// side does exactly that — the border moves and the picture under it does NOT.
+//
+// The mechanism: once a layer is cropped its <img> stops being 100%/100% of the
+// box and gets a FROZEN pixel size (cw x ch) plus a negative margin (ml, mt).
+// The layer still clips (overflow:hidden), so trimming the right edge is just a
+// narrower box, and trimming the left edge is a narrower box plus an equal
+// negative margin. Nothing rescales, which is the whole point.
+//
+// The numbers live on the <img> as data-cw/ch/ml/mt, so they round-trip through
+// stage.innerHTML with presets, undo and Save-as-template for free.
+function cropState(im){
+  return {cw:+im.dataset.cw||0, ch:+im.dataset.ch||0, ml:+im.dataset.ml||0, mt:+im.dataset.mt||0};
+}
+function freezeCrop(d){
+  var im=d.querySelector('img'); if(!im) return null;
+  if(!im.dataset.cw){
+    // offsetWidth already carries whatever the scroll-wheel zoom did.
+    im.dataset.cw=im.offsetWidth; im.dataset.ch=im.offsetHeight;
+    im.dataset.ml=0; im.dataset.mt=0;
+  }
+  return im;
+}
+function applyCrop(im){
+  var c=cropState(im);
+  if(!c.cw) return;
+  im.style.width=c.cw+'px'; im.style.height=c.ch+'px';
+  im.style.marginLeft=c.ml+'px'; im.style.marginTop=c.mt+'px';
+}
+/* A plain corner resize on a cropped layer scales the picture with the box, so
+   the crop survives being made bigger or smaller. */
+function scaleCrop(im,fx,fy){
+  var c=cropState(im); if(!c.cw) return;
+  im.dataset.cw=Math.round(c.cw*fx); im.dataset.ch=Math.round(c.ch*fy);
+  im.dataset.ml=Math.round(c.ml*fx); im.dataset.mt=Math.round(c.mt*fy);
+  applyCrop(im);
+}
+function resetCrop(d){
+  var im=d.querySelector('img'); if(!im) return;
+  delete im.dataset.cw; delete im.dataset.ch; delete im.dataset.ml; delete im.dataset.mt;
+  im.style.width=''; im.style.height=''; im.style.marginLeft=''; im.style.marginTop='';
+  im.dataset.z=1;
+}
+function addEdges(d){
+  ['n','s','w','e'].forEach(function(edge){
+    var h=document.createElement('div');
+    h.className='eh'; h.dataset.edge=edge; d.appendChild(h);
+    h.addEventListener('mousedown',function(e){
+      e.preventDefault(); e.stopPropagation();
+      if(d.dataset.lock==='1') return;
+      var x0=e.clientX, y0=e.clientY;
+      var L=d.offsetLeft, T=d.offsetTop, Wb=d.offsetWidth, Hb=d.offsetHeight;
+      var im=d.querySelector('img');
+      var crop=e.altKey && !!im;
+      var c0=crop?(freezeCrop(d),cropState(d.querySelector('img'))):null;
+      var tgt=snapTargets([d]), tol=snapTol();
+      function mv(ev){
+        var dx=(ev.clientX-x0)/Z, dy=(ev.clientY-y0)/Z, gx=[], gy=[];
+        var nl=L, nt=T, nw=Wb, nh=Hb;
+        if(edge==='e') nw=Wb+dx;
+        if(edge==='s') nh=Hb+dy;
+        if(edge==='w'){ nl=L+dx; nw=Wb-dx; }
+        if(edge==='n'){ nt=T+dy; nh=Hb-dy; }
+        nw=Math.max(40,nw); nh=Math.max(30,nh);
+        // Snapping is for laying out, not for trimming — a crop follows the
+        // pointer exactly or it is not a crop.
+        if(!crop){
+          if(edge==='e'){ var se=bestSnap(tgt.xs,[nl+nw],tol); if(se){ nw=Math.max(40,se.at[0]-nl); gx=se.at; } }
+          if(edge==='w'){ var sw=bestSnap(tgt.xs,[nl],tol); if(sw){ nw=Math.max(40,nw-sw.d); nl+=sw.d; gx=sw.at; } }
+          if(edge==='s'){ var ss=bestSnap(tgt.ys,[nt+nh],tol); if(ss){ nh=Math.max(30,ss.at[0]-nt); gy=ss.at; } }
+          if(edge==='n'){ var sn=bestSnap(tgt.ys,[nt],tol); if(sn){ nh=Math.max(30,nh-sn.d); nt+=sn.d; gy=sn.at; } }
+          showGuides(gx,gy);
+        }
+        d.style.left=px(Math.round(nl)); d.style.top=px(Math.round(nt));
+        d.style.width=px(Math.round(nw)); d.style.height=px(Math.round(nh));
+        if(crop){
+          var im2=d.querySelector('img');
+          im2.dataset.cw=c0.cw; im2.dataset.ch=c0.ch;
+          // Only the two edges that move the box origin move the picture back.
+          im2.dataset.ml=Math.round(c0.ml-(nl-L));
+          im2.dataset.mt=Math.round(c0.mt-(nt-T));
+          applyCrop(im2);
+        }
+      }
+      function up(){clearGuides();document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up)}
+      document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+    });
+  });
 }
 function addHandle(d){
   var h=document.createElement('div'); h.className='hnd'; d.appendChild(h);
@@ -778,6 +884,9 @@ function addHandle(d){
       }
       // Shift while dragging the handle = keep the box's aspect ratio.
       if(ev.shiftKey) h=Math.max(30,w*ar);
+      // A cropped picture scales with the box rather than un-cropping itself.
+      var cim=d.querySelector('img');
+      if(cim&&cim.dataset.cw&&w0&&h0) scaleCrop(cim,w/w0,h/h0);
       showGuides(gx,gy);
       d.style.width=px(Math.round(w)); d.style.height=px(Math.round(h));
     }
@@ -787,6 +896,7 @@ function addHandle(d){
 }
 function wire(d){
   addHandle(d);
+  addEdges(d);
   // Text/bullets: double-click turns editing on, blur turns it back off, so the
   // layer is draggable the rest of the time.
   if(d.dataset.t==='text'||d.dataset.t==='list'){
@@ -799,7 +909,7 @@ function wire(d){
     });
   }
   d.addEventListener('mousedown',function(e){
-    if(e.target.classList.contains('hnd'))return;
+    if(e.target.classList.contains('hnd')||e.target.classList.contains('eh'))return;
     if(e.target.isContentEditable) return;
     select(d, e.ctrlKey||e.metaKey);
     // ctrl+click can toggle d back OFF — don't then drag it.
@@ -864,7 +974,7 @@ stage.addEventListener('mousedown',function(e){ if(e.target===stage||e.target.cl
 
 function inspector(){
   var p=document.getElementById('insp');
-  if(!sel){ p.innerHTML='<p class="empty">Click a layer on the canvas to edit it.<br><br>Drag = move · corner = resize · double-click text = edit it · ctrl+click = add to selection (then Group) · scroll on an image = zoom · shift+drag an image = pan crop · arrows = nudge · Delete = remove</p>'; return; }
+  if(!sel){ p.innerHTML='<p class="empty">Click a layer on the canvas to edit it.<br><br>Drag = move · corner = resize · <b>drag a side = move that border</b> · <b>alt+drag a side of an image = crop it</b> · double-click text = edit it · ctrl+click = add to selection (then Group) · scroll on an image = zoom · shift+drag an image = pan crop · arrows = nudge · Delete = remove</p>'; return; }
   // With more than one layer selected only the group/lock controls make sense —
   // per-layer styling would be ambiguous.
   var multi=selSet.length>1;
@@ -885,7 +995,7 @@ function inspector(){
     h+='<div class="row"><button id="l_add">+ Bullet</button><button id="l_rm">− Bullet</button></div>';
   }
   if(t==='image'||t==='logo'){
-    h+='<div class="row"><button id="i_load" class="pri" style="flex:1">Load image…</button></div>'+'<p class="empty" style="margin:2px 0 0">Or just <b>Ctrl+V</b> — a copied screenshot drops into the selected slot.</p>';
+    h+='<div class="row"><button id="i_load" class="pri" style="flex:1">Load image…</button></div>'+'<p class="empty" style="margin:2px 0 0">Or just <b>Ctrl+V</b> — a copied screenshot drops into the selected slot.</p>'+(t==='image'?'<div class="row"><button id="i_uncrop" style="flex:1">Reset crop</button></div><p class="empty" style="margin:2px 0 0"><b>Alt+drag a side</b> to crop: the border comes in, the picture stays put.</p>':'');
     if(t==='image'){
       var im0=sel.querySelector('img');
       var z0=im0?parseFloat(im0.dataset.z||'1'):1;
@@ -946,6 +1056,10 @@ function inspector(){
   if(t==='image'||t==='logo'){
     g('i_load').onclick=function(){pick(sel)};
     if(t==='image'){
+      // Back to an uncropped, unzoomed slot. The zoom slider reads data-z, so
+      // resetting that too keeps the panel honest about what it is showing.
+      var unc=g('i_uncrop');
+      if(unc) unc.onclick=function(){ resetCrop(sel); inspector(); };
       var im=function(){return sel.querySelector('img')};
       var opGet=function(){ var m=im(); return (m&&m.style.objectPosition||'50% 50%').split(' '); };
       var opSet=function(x,y){ var m=im(); if(m) m.style.objectPosition=x+'% '+y+'%'; };
@@ -960,6 +1074,9 @@ function inspector(){
       });
       g('i_z').oninput=function(){
         var m=im(); if(!m) return;
+        // Zoom is a percentage of the box, which a frozen crop has stepped out
+        // of. Drop the crop rather than half-applying both.
+        if(m.dataset.cw) resetCrop(sel);
         m.dataset.z=this.value;
         m.style.width=(this.value*100)+'%'; m.style.height=(this.value*100)+'%';
       };
@@ -1141,23 +1258,23 @@ document.querySelectorAll('[data-add]').forEach(function(b){
 
 var TPL={
   feature:function(){return [
-    {t:'logo',x:90,y:70,w:440,h:150},
+    {t:'logo',x:1080,y:70,w:440,h:150},
     {t:'text',x:90,y:250,w:800,html:'The data desks pay for.<br><span style="color:'+accent()+'">Built for retail.</span>',fs:62,fw:800},
     {t:'list',x:90,y:430,w:800,fs:28,items:['IB stats — 8 years historical','3 years historical estimated move','Live GEX charts &amp; full greeks','400+ stock options flow','Heatmaps, stats &amp; more']},
-    {t:'image',x:900,y:70,w:640,h:340,label:'GEX chart'},
-    {t:'image',x:840,y:340,w:520,h:290,label:'Options flow'},
-    {t:'image',x:1000,y:560,w:540,h:290,label:'Heatmap'}
+    {t:'image',x:900,y:260,w:640,h:257,label:'GEX chart'},
+    {t:'image',x:840,y:464,w:520,h:219,label:'Options flow'},
+    {t:'image',x:1000,y:631,w:540,h:219,label:'Heatmap'}
   ]},
   hero:function(){return [
     {t:'image',x:0,y:0,w:W,h:H,label:'Full dashboard screenshot'},
     {t:'box',x:0,y:0,w:Math.round(W*0.62),h:H,bgc:C.bg,bd:C.bg},
-    {t:'logo',x:90,y:80,w:440,h:150},
+    {t:'logo',x:1080,y:80,w:440,h:150},
     {t:'text',x:90,y:270,w:820,html:'The data desks pay for.<br><span style="color:'+accent()+'">Built for retail.</span>',fs:62,fw:800},
     {t:'list',x:90,y:450,w:800,fs:28,items:['Live GEX charts &amp; full greeks','400+ stock options flow','8 years of IB stats','Heatmaps, stats &amp; more']}
   ]},
   grid:function(){return [
-    {t:'logo',x:90,y:60,w:340,h:110},
-    {t:'text',x:470,y:80,w:1040,html:'Everything you need to trade the tape.',fs:36,fw:800},
+    {t:'logo',x:1180,y:60,w:340,h:110},
+    {t:'text',x:470,y:80,w:686,html:'Everything you need to trade the tape.',fs:36,fw:800},
     {t:'box',x:90,y:230,w:460,h:250},
     {t:'image',x:100,y:240,w:440,h:170,label:'Shot 1'},
     {t:'text',x:110,y:420,w:420,html:'Live GEX &amp; greeks',fs:23,fw:700},
@@ -1175,13 +1292,13 @@ var TPL={
     {t:'text',x:1098,y:625,w:380,html:'historical estimated move',fs:24,fw:700,col:C.body}
   ]},
   stat:function(){return [
-    {t:'logo',x:90,y:70,w:380,h:130},
+    {t:'logo',x:1140,y:70,w:380,h:130},
     {t:'text',x:90,y:300,w:1400,html:'400+',fs:190,fw:800,col:accent(),lh:1},
     {t:'text',x:90,y:530,w:1100,html:'tickers of live options flow — every sweep, block and split, as it prints.',fs:44,fw:700},
     {t:'text',x:90,y:790,w:900,html:'cbedge.net',fs:26,fw:700,col:C.mut}
   ]},
   promo:function(){return [
-    {t:'logo',x:90,y:70,w:400,h:140},
+    {t:'logo',x:1120,y:70,w:400,h:140},
     {t:'text',x:90,y:260,w:900,html:'Lock in founder pricing.',fs:64,fw:800},
     {t:'box',x:90,y:390,w:420,h:200},
     {t:'text',x:130,y:420,w:340,html:'Monthly',fs:24,fw:700,col:C.mut},
@@ -1189,19 +1306,19 @@ var TPL={
     {t:'text',x:130,y:540,w:340,html:'code MONTH',fs:20,fw:700,col:C.gold},
     {t:'box',x:540,y:390,w:420,h:200},
     {t:'text',x:580,y:420,w:340,html:'Yearly',fs:24,fw:700,col:C.mut},
-    {t:'text',x:580,y:465,w:340,html:'<s style="color:'+C.dim+'">$1000</s> <span style="color:'+accent()+'">$500</span>/yr',fs:46,fw:800},
+    {t:'text',x:580,y:465,w:364,html:'<s style="color:'+C.dim+'">$1000</s> <span style="color:'+accent()+'">$500</span>/yr',fs:38,fw:800},
     {t:'text',x:580,y:540,w:340,html:'code YEAR',fs:20,fw:700,col:C.gold},
     {t:'list',x:90,y:640,w:880,fs:24,items:['Live GEX, greeks &amp; key levels','400+ ticker options flow','8 years of IB stats · cancel anytime']},
-    {t:'image',x:1010,y:120,w:520,h:660,label:'Dashboard screenshot'}
+    {t:'image',x:1010,y:250,w:520,h:530,label:'Dashboard screenshot'}
   ]},
   quote:function(){return [
-    {t:'logo',x:90,y:70,w:380,h:130},
+    {t:'logo',x:1140,y:70,w:380,h:130},
     {t:'text',x:90,y:290,w:1420,html:'Most retail traders are flying blind.<br><span style="color:'+accent()+'">CB Edge isn\'t.</span>',fs:78,fw:800},
     {t:'text',x:90,y:600,w:1200,html:'Real-time gamma, orderflow and key levels — the same read the desks are working with.',fs:34,fw:700,col:C.body},
     {t:'text',x:90,y:790,w:900,html:'cbedge.net',fs:26,fw:700,col:C.mut}
   ]},
   win:function(){return [
-    {t:'logo',x:80,y:56,w:330,h:110},
+    {t:'logo',x:1190,y:56,w:330,h:110},
     {t:'text',x:80,y:186,w:900,html:'THE SCANNER FLAGGED IT.',fs:26,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:232,w:920,html:'PLTR 140C <span style="color:'+accent()+'">+129.6%</span>',fs:72,fw:800},
     {t:'box',x:80,y:350,w:900,h:150},
@@ -1212,8 +1329,8 @@ var TPL={
     {t:'text',x:672,y:378,w:280,html:'PER CONTRACT',fs:18,fw:700,col:C.mut,ls:2},
     {t:'text',x:672,y:410,w:280,html:'+$175',fs:44,fw:800,col:accent()},
     {t:'list',x:80,y:540,w:900,fs:25,items:['$3.2M sweep · 8.2% OTM · +101% vs open','Scanner score 60 — flagged “Very strong”','Jul 24 expiry · spot 129.37 at the print']},
-    {t:'image',x:1010,y:56,w:520,h:400,label:'Scanner card screenshot'},
-    {t:'image',x:1010,y:480,w:520,h:330,label:'Option price chart screenshot'},
+    {t:'image',x:1010,y:206,w:520,h:320,label:'Scanner card screenshot'},
+    {t:'image',x:1010,y:546,w:520,h:264,label:'Option price chart screenshot'},
     {t:'text',x:80,y:812,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim}
   ]},
 
@@ -1222,7 +1339,7 @@ var TPL={
 
   /* Daily "here are the walls" post — the pinned-tweet format as a card. */
   levels:function(){return [
-    {t:'logo',x:80,y:56,w:340,h:112},
+    {t:'logo',x:1180,y:56,w:340,h:112},
     {t:'text',x:80,y:186,w:900,html:'$SPX · KEY LEVELS · 0DTE',fs:22,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:228,w:920,html:'Where the dealers are <span style="color:'+accent()+'">pinned.</span>',fs:56,fw:800},
     {t:'box',x:80,y:340,w:900,h:112},
@@ -1239,44 +1356,44 @@ var TPL={
     {t:'text',x:800,y:628,w:160,html:'support',fs:20,fw:700,col:C.dim},
     {t:'text',x:80,y:736,w:900,html:'Updated live all day — not a morning screenshot.',fs:26,fw:700,col:C.body},
     {t:'text',x:80,y:790,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim},
-    {t:'image',x:1020,y:56,w:500,h:788,label:'GEX ladder / levels screenshot'}
+    {t:'image',x:1020,y:208,w:500,h:652,label:'GEX ladder / levels screenshot'}
   ]},
 
   /* "Shipped this week" — changelog / newest updates post. */
   updates:function(){return [
-    {t:'logo',x:80,y:56,w:340,h:112},
+    {t:'logo',x:1180,y:56,w:340,h:112},
     {t:'text',x:80,y:186,w:900,html:'WHAT&#39;S NEW',fs:22,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:228,w:920,html:'Shipped <span style="color:'+accent()+'">this week.</span>',fs:58,fw:800},
     {t:'box',x:80,y:348,w:900,h:404},
     {t:'list',x:124,y:392,w:820,fs:27,items:['New — ES/SPX ladder with live gamma walls','New — estimated-move stat cards for earnings','Faster — GEX refresh cut to under a second','Fixed — RTH/ETH toggle now holds across pages','Discord alerts fire the moment DEX crosses zero']},
     {t:'text',x:80,y:790,w:900,html:'Full changelog at cbedge.net/whats-new',fs:22,fw:700,col:C.dim},
-    {t:'image',x:1020,y:56,w:500,h:696,label:'Screenshot of the new feature'},
-    {t:'box',x:1020,y:788,w:500,h:56,bgc:C.panelUp},
-    {t:'text',x:1052,y:802,w:440,html:'Free 2-day trial · cbedge.net',fs:22,fw:700,col:C.pale}
+    {t:'image',x:1020,y:208,w:500,h:562,label:'Screenshot of the new feature'},
+    {t:'box',x:1020,y:799,w:500,h:45,bgc:C.panelUp},
+    {t:'text',x:1052,y:810,w:440,html:'Free 2-day trial · cbedge.net',fs:22,fw:700,col:C.pale}
   ]},
 
   /* Big screenshot + numbered callouts — the "here's how to read it" post. */
   explain:function(){return [
-    {t:'logo',x:80,y:52,w:300,h:100},
+    {t:'logo',x:1220,y:52,w:300,h:100},
     {t:'text',x:420,y:60,w:600,html:'HOW TO READ IT',fs:20,fw:700,col:C.mut,ls:3},
     {t:'text',x:420,y:92,w:620,html:'The GEX ladder, line by line.',fs:38,fw:800},
     {t:'image',x:80,y:186,w:940,h:620,label:'Screenshot to annotate'},
-    {t:'box',x:1060,y:186,w:460,h:190},
-    {t:'text',x:1092,y:210,w:400,html:'1',fs:32,fw:800,col:accent()},
-    {t:'text',x:1092,y:258,w:400,html:'Say what this part of the chart is showing you.',fs:23,fw:700,col:C.body},
-    {t:'box',x:1060,y:401,w:460,h:190},
-    {t:'text',x:1092,y:425,w:400,html:'2',fs:32,fw:800,col:accent()},
-    {t:'text',x:1092,y:473,w:400,html:'Then what it means for where price can go.',fs:23,fw:700,col:C.body},
-    {t:'box',x:1060,y:616,w:460,h:190},
-    {t:'text',x:1092,y:640,w:400,html:'3',fs:32,fw:800,col:accent()},
-    {t:'text',x:1092,y:688,w:400,html:'Then the trade it sets up. Keep it to one idea.',fs:23,fw:700,col:C.body},
+    {t:'box',x:1060,y:192,w:460,h:190},
+    {t:'text',x:1092,y:216,w:400,html:'1',fs:32,fw:800,col:accent()},
+    {t:'text',x:1092,y:264,w:400,html:'Say what this part of the chart is showing you.',fs:23,fw:700,col:C.body},
+    {t:'box',x:1060,y:407,w:460,h:190},
+    {t:'text',x:1092,y:431,w:400,html:'2',fs:32,fw:800,col:accent()},
+    {t:'text',x:1092,y:479,w:400,html:'Then what it means for where price can go.',fs:23,fw:700,col:C.body},
+    {t:'box',x:1060,y:622,w:460,h:190},
+    {t:'text',x:1092,y:646,w:400,html:'3',fs:32,fw:800,col:accent()},
+    {t:'text',x:1092,y:694,w:400,html:'Then the trade it sets up. Keep it to one idea.',fs:23,fw:700,col:C.body},
     {t:'text',x:80,y:836,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim}
   ]},
 
   /* Earnings estimated-move stat card — the $AMD-style post. */
   earnings:function(){return [
-    {t:'logo',x:80,y:52,w:320,h:106},
-    {t:'text',x:1140,y:74,w:380,html:'cbedge.net',fs:22,fw:700,col:C.dim,al:'right'},
+    {t:'logo',x:1200,y:52,w:320,h:106},
+    {t:'text',x:1140,y:198,w:380,html:'cbedge.net',fs:22,fw:700,col:C.dim,al:'right'},
     {t:'text',x:80,y:178,w:900,html:'EARNINGS · ESTIMATED MOVE',fs:22,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:216,w:900,html:'$AMD',fs:84,fw:800},
     {t:'text',x:80,y:326,w:900,html:'Reports Tuesday after the close.',fs:30,fw:700,col:C.pale},
@@ -1288,20 +1405,20 @@ var TPL={
     {t:'text',x:486,y:432,w:290,html:'UPPER',fs:17,fw:700,col:C.mut,ls:2},
     {t:'text',x:486,y:466,w:290,html:'$172.30',fs:50,fw:800,col:C.pale},
     {t:'text',x:486,y:534,w:290,html:'1σ to the upside',fs:19,fw:700,col:C.dim},
-    {t:'box',x:828,y:404,w:350,h:184},
+    {t:'box',x:828,y:528,w:350,h:184},
     {t:'text',x:860,y:432,w:290,html:'LOWER',fs:17,fw:700,col:C.mut,ls:2},
     {t:'text',x:860,y:466,w:290,html:'$153.46',fs:50,fw:800,col:C.red},
     {t:'text',x:860,y:534,w:290,html:'1σ to the downside',fs:19,fw:700,col:C.dim},
-    {t:'box',x:1202,y:404,w:350,h:184},
-    {t:'text',x:1234,y:432,w:290,html:'IV CRUSH',fs:17,fw:700,col:C.mut,ls:2},
-    {t:'text',x:1234,y:466,w:290,html:'−38%',fs:50,fw:800,col:C.gold},
-    {t:'text',x:1234,y:534,w:290,html:'front-month, post-print',fs:19,fw:700,col:C.dim},
-    {t:'image',x:80,y:624,w:1472,h:224,label:'Estimated-move stat card screenshot'}
+    {t:'box',x:1202,y:528,w:350,h:184},
+    {t:'text',x:1234,y:556,w:290,html:'IV CRUSH',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:1234,y:590,w:290,html:'−38%',fs:50,fw:800,col:C.gold},
+    {t:'text',x:1234,y:658,w:290,html:'front-month, post-print',fs:19,fw:700,col:C.dim},
+    {t:'image',x:80,y:748,w:1472,h:112,label:'Estimated-move stat card screenshot'}
   ]},
 
   /* "Called it" recap — the level on the left, what price did on the right. */
   recap:function(){return [
-    {t:'logo',x:80,y:52,w:320,h:106},
+    {t:'logo',x:1200,y:52,w:320,h:106},
     {t:'text',x:80,y:176,w:1000,html:'CALLED IT.',fs:24,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:216,w:1300,html:'7450 retest — <span style="color:'+accent()+'">clean rejection.</span>',fs:62,fw:800},
     {t:'box',x:80,y:344,w:720,h:412},
@@ -1316,7 +1433,7 @@ var TPL={
 
   /* Live alert card — "DEX crossed 0", Discord signal posts. */
   signal:function(){return [
-    {t:'logo',x:80,y:56,w:340,h:112},
+    {t:'logo',x:1180,y:56,w:340,h:112},
     {t:'box',x:80,y:190,w:250,h:44,bgc:C.panelUp},
     {t:'text',x:104,y:200,w:210,html:'CB EDGE SIGNALS',fs:18,fw:800,col:accent(),ls:2},
     {t:'text',x:80,y:262,w:1000,html:'DEX crossed <span style="color:'+accent()+'">zero.</span>',fs:66,fw:800},
@@ -1327,7 +1444,7 @@ var TPL={
     {t:'text',x:560,y:442,w:380,html:'7,412.55',fs:38,fw:800,col:accent()},
     {t:'list',x:80,y:552,w:900,fs:26,items:['Gamma flipped positive — dealers buying dips','Call wall 7450 · put wall 7350','Pushed to Discord the second it fires']},
     {t:'text',x:80,y:822,w:900,html:'cbedge.net · alerts in real time · not financial advice',fs:20,fw:700,col:C.dim},
-    {t:'image',x:1020,y:56,w:500,h:788,label:'Signal / alert card screenshot'}
+    {t:'image',x:1020,y:208,w:500,h:652,label:'Signal / alert card screenshot'}
   ]},
 
   /* Two-screenshot alert result — the daily "here's what the alerts did" post.
@@ -1342,7 +1459,7 @@ var TPL={
      Resize a slot from its corner with shift held to keep that ratio. */
   alerts:function(){return [
     // ── left column: the rendered story ──────────────────────────────────
-    {t:'logo',x:80,y:52,w:320,h:106},
+    {t:'logo',x:1200,y:52,w:320,h:106},
     {t:'text',x:80,y:184,w:720,html:'0DTE ALERT · RESULT',fs:22,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:222,w:760,html:'SPXW 7750C',fs:62,fw:800,k:'contract'},
     {t:'text',x:80,y:300,w:760,html:'<span class="fv" style="color:'+accent()+'">+440.9%</span> to the peak',fs:44,fw:800,k:'pct'},
@@ -1357,13 +1474,13 @@ var TPL={
     {t:'text',x:80,y:834,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim},
 
     // ── right column: the two screenshot slots + CTA ─────────────────────
-    {t:'text',x:860,y:56,w:660,html:'THE ALERTS THAT FIRED',fs:18,fw:700,col:C.mut,ls:2},
-    {t:'image',x:860,y:90,w:660,h:128,label:'Alerts table screenshot · wide strip',k:'shot-table'},
-    {t:'text',x:860,y:258,w:660,html:'THE 7750C, ALL SESSION',fs:18,fw:700,col:C.mut,ls:2},
-    {t:'image',x:860,y:292,w:660,h:406,label:'Option price chart screenshot',k:'shot-chart'},
-    {t:'box',x:860,y:732,w:660,h:112,bgc:C.panelUp},
-    {t:'text',x:892,y:756,w:600,html:'Every alert tracked to the tick.',fs:26,fw:800,col:C.pale},
-    {t:'text',x:892,y:794,w:600,html:'cbedge.net · free 2-day trial',fs:22,fw:700,col:C.dim}
+    {t:'text',x:860,y:198,w:316,html:'THE ALERTS THAT FIRED',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:232,w:660,h:128,label:'Alerts table screenshot · wide strip',k:'shot-table'},
+    {t:'text',x:860,y:396,w:660,html:'THE 7750C, ALL SESSION',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:430,w:660,h:320,label:'Option price chart screenshot',k:'shot-chart'},
+    {t:'box',x:860,y:774,w:660,h:70,bgc:C.panelUp},
+    {t:'text',x:892,y:788,w:600,html:'Every alert tracked to the tick.',fs:26,fw:800,col:C.pale},
+    {t:'text',x:892,y:820,w:600,html:'cbedge.net · free 2-day trial',fs:22,fw:700,col:C.dim}
   ]},
 
   /* Weekend estimated-moves scoreboard — the Saturday "here is how the week
@@ -1376,7 +1493,7 @@ var TPL={
        · core-board strip   ~425x212  (2.01:1) → 660x329 */
   emweek:function(){return [
     // ── left column: the rendered scoreboard + the ask ───────────────────
-    {t:'logo',x:80,y:52,w:320,h:106},
+    {t:'logo',x:1200,y:52,w:320,h:106},
     {t:'text',x:80,y:184,w:760,html:'ESTIMATED MOVES · WEEKLY RESULTS',fs:20,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:218,w:800,html:'Week of 8/28',fs:56,fw:800,k:'weekLabel'},
     {t:'text',x:80,y:296,w:800,html:'Every move we scored this week — wins and misses.',fs:28,fw:700,col:C.body},
@@ -1400,13 +1517,13 @@ var TPL={
     {t:'text',x:80,y:836,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim},
 
     // ── right column: the two weekly-stats strips ────────────────────────
-    {t:'text',x:860,y:56,w:660,html:'ALL SCORED TICKERS',fs:18,fw:700,col:C.mut,ls:2},
-    {t:'image',x:860,y:90,w:660,h:191,label:'Weekly stats — all tickers',k:'shot-all'},
-    {t:'text',x:860,y:321,w:660,html:'THE CORE BOARD',fs:18,fw:700,col:C.mut,ls:2},
-    {t:'image',x:860,y:355,w:660,h:329,label:'Weekly stats — core board',k:'shot-core'},
-    {t:'box',x:860,y:712,w:660,h:132,bgc:C.panelUp},
-    {t:'text',x:892,y:740,w:600,html:'Scored = graded against the actual close.',fs:24,fw:800,col:C.pale},
-    {t:'text',x:892,y:784,w:600,html:'Every ticker, every week — nothing dropped after the fact.',fs:20,fw:700,col:C.dim}
+    {t:'text',x:860,y:198,w:316,html:'ALL SCORED TICKERS',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:232,w:660,h:170,label:'Weekly stats — all tickers',k:'shot-all'},
+    {t:'text',x:860,y:436,w:660,html:'THE CORE BOARD',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:860,y:470,w:660,h:284,label:'Weekly stats — core board',k:'shot-core'},
+    {t:'box',x:860,y:774,w:660,h:70,bgc:C.panelUp},
+    {t:'text',x:892,y:788,w:600,html:'Scored = graded against the actual close.',fs:24,fw:800,col:C.pale},
+    {t:'text',x:892,y:822,w:600,html:'Every ticker, every week — nothing dropped after the fact.',fs:20,fw:700,col:C.dim}
   ]},
 
 
@@ -1432,12 +1549,12 @@ var TPL={
 
 function v3card(icon,name,hook,bullets){
   return [
-    {t:'logo',x:80,y:52,w:340,h:112},
-    {t:'text',x:80,y:288,w:760,html:icon+' '+name,fs:60,fw:800},
+    {t:'logo',x:1180,y:56,w:340,h:112},
+    {t:'text',x:80,y:288,w:700,html:icon+' '+name,fs:60,fw:800},
     {t:'text',x:80,y:382,w:700,html:hook,fs:30,fw:700,col:C.body},
     {t:'box',x:80,y:466,w:340,h:2,bgc:C.line,bd:C.line},
-    {t:'list',x:80,y:512,w:720,fs:27,items:bullets},
-    {t:'image',x:880,y:110,w:640,h:680,label:'Paste the '+name+' screenshot'},
+    {t:'list',x:80,y:512,w:700,fs:27,items:bullets},
+    {t:'image',x:820,y:210,w:700,h:580,label:'Paste the '+name+' screenshot'},
     {t:'text',x:80,y:826,w:600,html:'cbedge.net',fs:22,fw:700,col:C.dim}
   ];
 }
@@ -1488,7 +1605,7 @@ document.getElementById('tsave').onclick=function(){
   var n=prompt('Template name'); if(!n) return;
   select(null);
   var clone=stage.cloneNode(true);
-  clone.querySelectorAll('.hnd').forEach(function(h){h.remove()});
+  clone.querySelectorAll('.hnd,.eh').forEach(function(h){h.remove()});
   clone.querySelectorAll('.ly[data-t=image]').forEach(function(d){
     var lbl=(d.querySelector('.ph')||{}).textContent||'Paste a screenshot, or double-click';
     d.innerHTML='<div class="ph">'+lbl+'</div>';
@@ -1560,11 +1677,22 @@ function exportImagesAsBackgrounds(on){
     var z=parseFloat(im.dataset.z||'1')||1;
     // The same number the browser uses: cover takes the larger scale, contain
     // the smaller, and the zoom multiplies whichever it was.
-    var sc=(fit==='contain'?Math.min(bw/iw,bh/ih):Math.max(bw/iw,bh/ih))*z;
+    var cw=+im.dataset.cw||0, ch=+im.dataset.ch||0;
+    // A cropped layer's <img> is cw x ch at (ml, mt); the box only clips it. So
+    // the fit is resolved against the FROZEN size and the result is nudged by
+    // the margins, otherwise the export would re-fit to the trimmed box and
+    // undo the crop.
+    var fw=cw||bw, fh=ch||bh;
+    var sc=(fit==='contain'?Math.min(fw/iw,fh/ih):Math.max(fw/iw,fh/ih))*(cw?1:z);
+    var op=(cs.objectPosition||'50% 50%').split(' ');
+    var opx=parseFloat(op[0]); if(isNaN(opx)) opx=50;
+    var opy=parseFloat(op[1]); if(isNaN(opy)) opy=50;
+    var bxp=(fw-iw*sc)*(opx/100)+(+im.dataset.ml||0);
+    var byp=(fh-ih*sc)*(opy/100)+(+im.dataset.mt||0);
     d.dataset.exBg=d.style.backgroundImage||'';
     d.style.backgroundImage='url("'+(im.dataset.url||im.getAttribute('src'))+'")';
     d.style.backgroundSize=(iw*sc)+'px '+(ih*sc)+'px';
-    d.style.backgroundPosition=cs.objectPosition||'50% 50%';
+    d.style.backgroundPosition=Math.round(bxp)+'px '+Math.round(byp)+'px';
     d.style.backgroundRepeat='no-repeat';
     im.style.visibility='hidden';
   });
@@ -1704,8 +1832,9 @@ function restore(s){
   chrome();   // stage.innerHTML just replaced the fx plate, frame and guide overlay
   setFx(s.fx&&s.fx.on||[], s.fx?s.fx.amt:null);   // presets saved before FX have none
   stage.querySelectorAll('.ly').forEach(function(d){
-    var h=d.querySelector('.hnd'); if(h)h.remove();
+    d.querySelectorAll('.hnd,.eh').forEach(function(h){h.remove()});
     d.classList.remove('sel');
+    var rim=d.querySelector('img'); if(rim&&rim.dataset.cw) applyCrop(rim);
     // Presets saved before the dblclick-to-edit change stored contenteditable=true,
     // which would make those layers undraggable again.
     d.querySelectorAll('.ed').forEach(function(n){n.contentEditable='false'});

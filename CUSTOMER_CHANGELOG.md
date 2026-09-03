@@ -6,11 +6,13 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 * **Economic Calendar (v3 preview):** the calendar and the earnings week board now have their own full page — impact filters, a market-cap filter, search, and a link that opens straight to the earnings tab.
 
-* **Phone (v3 preview):** the dashboard now has a real phone version — GEX, Heat, SPX Candles, Chain, Estimated Moves and Calendar, with a bottom tab bar. Opening cbedge.net on a phone goes straight there.
+* **Phone (v3 preview):** the dashboard now has a real phone version — GEX, Heat, SPX Candles, Estimated Moves and Calendar, with the usual top bar and a bottom tab bar. Opening cbedge.net on a phone goes straight there. The options chain is desktop-only for now.
 
-* **SPX Candles (phone, v3 preview):** the SPX / ES switch now sits in the header instead of buried in the settings sheet.
+* **SPX Candles (phone, v3 preview):** the SPX / ES switch now sits in the header instead of buried in the settings sheet, and the session follows it — ES shows the overnight, SPX shows the cash day.
 
-* **Heat (phone, v3 preview):** the Multi Greek ladder, showing today's expiration only, with room for up to four tickers side by side.
+* **Heat (phone, v3 preview):** the Multi Greek ladder, showing today's expiration only. The first panel is always SPX; add up to three more tickers beside it.
+
+* **GEX (phone, v3 preview):** trimmed to what reads on a phone — SPX, with an OI+Vol / Vol switch. No flow basis, call/put split, DEX line or stat tiles.
 
 * **v3 preview:** now open to every subscriber, not just the owner account.
 

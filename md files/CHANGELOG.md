@@ -1,5 +1,79 @@
 # Changelog
 
+## 2026-09-03 - Post Studio: alt+drag a side to crop, and the logo moves right
+
+**Cropping.** A pasted screenshot almost never matches the slot it lands in, and
+the fix was always the same: pull one border in until the dead space is gone.
+Every layer now has a grab bar on each side. Plain drag moves that border and
+resizes the box, with the usual snapping. **Alt+drag a side of an image crops
+it** - the border comes in and the picture underneath does not move.
+
+The mechanism: once a layer is cropped its `<img>` stops being 100%/100% of the
+box and takes a FROZEN pixel size (`data-cw`/`data-ch`) plus a negative margin
+(`data-ml`/`data-mt`). The layer already clips, so trimming the right edge is
+just a narrower box, and trimming the left edge is a narrower box plus an equal
+negative margin. Nothing rescales, which is the whole point. Those four numbers
+live on the element, so they round-trip through undo, presets and Save-as-
+template for free. A corner resize scales the crop with the box; the zoom slider
+drops it rather than half-applying both; "Reset crop" in the image inspector puts
+the slot back.
+
+The PNG export had to learn it too. `exportImagesAsBackgrounds()` re-fits each
+image to its box because html2canvas ignores `object-fit`; against a cropped
+layer that would have re-fitted to the TRIMMED box and undone the crop. It now
+resolves the fit against the frozen size and places the background in pixels,
+offset by the margins.
+
+**Fixed while in there:** dropping the first image into an empty slot ran
+`d.innerHTML='<img>'`, which wiped the placeholder AND every handle next to it.
+The corner grip was rebuilt, the four new side grips were not - so a freshly
+pasted screenshot was the one thing you could not crop. `setImg()` now restores
+both.
+
+**The logo is top-right on every template.** Right-aligned at the same 80px
+margin the rest of the layout uses, on all sixteen built-ins and the eight V3
+cards. Where that put it on top of a right-hand screenshot slot, the right column
+was compressed to start below it rather than shifted until its tail fell off the
+canvas - feature, promo, win, updates, alerts and emweek each got their column
+re-fitted by hand. On the V3 cards the text block now runs the full left side.
+
+Also fixed a pre-existing wrap: promo's yearly price ("$1000 $500/yr") was too
+wide for its box at 46px and overlapped "code YEAR". 38px, slightly wider box.
+
+Verified in a headless run: all 24 templates render with no console or page
+errors, a wide screenshot in a tall slot trims correctly from the top and bottom
+edges with the picture pinned, and undo/redo leaves exactly five handles on the
+layer rather than duplicating them.
+
+Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
+
+## 2026-09-03 - Phone build, second pass: the v3 toolbar, one tab out, three cards narrowed
+
+Six changes, and the thread through all of them is the same: a phone screen should be the v3 card with the desktop-only controls taken OFF, not a different thing that happens to show the same numbers.
+
+**1. `/m/*` keeps the toolbar and drops the rail.** `Shell.tsx` used to remove both. The rail is 64px of a 390px screen spent on a nav the bottom tab bar already is; the toolbar is the brand, the ET clock, the camera and the account menu, and there is no reason a phone should not have them. It is the SAME component, not a phone copy — a copy is a second thing to change every time.
+
+**2. The toolbar's ticker controls are hidden on `/m/*`** (`Toolbar({ mobile })`). After the changes below, no phone screen reads the board symbol: the GEX chart, the Multi Greek ladder and the candles are each pinned to SPX. A picker that moves a value nothing visible follows is exactly the control-that-lies this toolbar was rebuilt to stop being. `MobileShell` dropped its own duplicate SPX chip + picker for the same reason — one place decides, not two. Delete the guard the day a phone screen follows a ticker again.
+
+**3. GEX chart — `GexChartCard({ simple })`.** SPX only, and OI+VOL / VOL only. What goes and why:
+
+- **FLOW** is a third basis answering a different question; the two left are the two anyone switches between.
+- **C/P** doubles the bar count in a plot ~380px wide. The split is a desktop read.
+- **DEX** is a second series on a second scale over that same plot.
+- **CARDS** is ten tiles sharing the width of a phone — three characters each, and the chart loses the height they take.
+
+The basis options list is now built ABOVE the JSX as a typed array rather than inline: a conditional spread inside a JSX array widens the option type to `string`, which loses `GexBasis` on the way into `onChange`.
+
+**4. Heat — `MultiGreekCard({ pinnedFirst: 'SPX' })`.** Panel one is SPX and its ticker is a `<span>`, not a click-to-type button. On the board, panel one IS the page symbol and typing in it moves everything, which is honest when five other cards read that value; here nothing does, so a typeable panel one would have been the last surviving way to move a number with no visible consequence. `TickerPanel` gained `editable` for it. ＋ is unchanged — still 1-4 panels, still the thing that ADDS rather than replaces.
+
+**5. Candles — `GexCandlesCard({ spxOnly })`.** Two things that are the same thing. The card stops following the board's ticker and charts SPX, which is what makes the SPX/ES switch the only symbol control on the screen (the switch is `esCapable`, true only on SPX). And SESSION STOPS BEING A SETTING: ES trades nearly around the clock so it is ETH, SPX cash does not exist outside 09:30-16:00 ET so RTH on it is not a filter but the whole tape. An SPX chart on "ETH" and the same chart on "RTH" are the same picture, and a button that changes nothing teaches you it does nothing. `session` is derived and the picker is hidden rather than shown-but-inert.
+
+All three props leave the STORED settings alone. The same browser profile opens these cards on a desktop and must find its basis, split, DEX, cards and session exactly as it left them — the rule `railOn` already followed.
+
+**6. The Options Chain tab is gone.** Out of `MOBILE_TABS`, out of `App.tsx`, out of `DESKTOP_TO_MOBILE` and `MOBILE_TO_DESKTOP`. The v3 chain is a strike ladder with up to a dozen numeric columns read ACROSS; at 390px that is a horizontal scroll over a table you cannot see two columns of at once, which is not the page, it is a picture of the page. `/v3/options-chain` is untouched and it goes back when there is a phone DESIGN for it. `MChain.tsx` could not be deleted (the device's Linux workspace would not start, so no `rm`) and is a comment-plus-`export {}` tombstone that compiles, pending `git rm`.
+
+**Not built.** Three large cards were edited without a typecheck available. `npm run check` in `cbedge-v3/` before pushing.
+
 ## 2026-09-03 - Bubble colours go through the theme check (pre-commit unblock)
 
 `push.ps1` was blocked by `check-theme.mjs`: `src/board/gexCandles/bubbles.ts`
