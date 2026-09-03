@@ -1,5 +1,75 @@
 # Changelog
 
+## 2026-09-03 - v3 home: no "Terminal" header, board controls in the toolbar, real brand art
+
+Four changes to the v3 shell and home board (`cbedge-v3/`).
+
+### The word "Terminal" is gone
+`BoardPage` passed `title="Terminal"` to `Page`, which drew a header row across
+the top of the board. The home page does not need to announce itself to the
+person who navigated to it, and the row cost a band of vertical space on the one
+page that is meant to be full-bleed. `Page` draws no header when it gets neither
+`title` nor `actions`, so dropping both removes the row outright.
+
+### Edit layout / Save layout / + Add card moved into the toolbar
+New `src/shell/ToolbarSlot.tsx` - a DOM portal, not lifted state:
+
+- `ToolbarSlotProvider` sits in `Shell` beside `CopyShotProvider`, above both
+  the toolbar and the page, for the same reason that one does.
+- `ToolbarSlotHost` is rendered once by the toolbar, right of the flex spacer.
+- `ToolbarSlot` is rendered by a page; its children appear in the toolbar.
+
+The board's edit mode, dirty flag, status line and add-card menu all stay inside
+`BoardPage` where the layout lives - the toolbar never learns what a card is.
+**"Only on the home page" needs no condition anywhere:** the slot draws whatever
+the mounted route puts in it, and every other route puts nothing.
+
+### The rail head is the real badge
+`Shell`'s `Logo()` was a drawn accent square with the letters `CB` in it - a
+placeholder from before the artwork existed. It renders `<CbMark />` now, the one
+square form of the brand (`shell/Brand.tsx`), sized on one axis since the asset
+is square by construction.
+
+### The toolbar shows the wordmark
+`<span>CB Edge</span>` set in the UI font became `<CbWordmark className="h-6 w-auto" />` -
+the horizontal lockup, which is the form drawn for a wide slot.
+
+**Files:** `cbedge-v3/src/shell/ToolbarSlot.tsx` (new),
+`cbedge-v3/src/shell/Shell.tsx`, `cbedge-v3/src/board/BoardPage.tsx`.
+
+## 2026-09-03 - GEX Candles: the oblong/rank change is 1m ONLY
+
+Follow-up to the entry below. 5m and coarser were right before it and are back
+to exactly what they were.
+
+`maxAspect` and `rankMix` were globals, so the vertical budget and the rank
+blend reached every rung. They are now fields on the RUNG PROFILE
+(`BUBBLES.profiles`), and only 1m carries live values:
+
+    1:  { …, aspect: 2.4, rankMix: 0.4 }
+    5:  { …, aspect: 1,   rankMix: 0   }
+    15: { …, aspect: 1,   rankMix: 0   }
+    30: { …, aspect: 1,   rankMix: 0   }
+    60: { …, aspect: 1,   rankMix: 0   }
+
+`aspect: 1` collapses `capYPx` onto `capPx`, `floorYPx` onto `floorPx` and
+`topCapYPx` onto `topCapPx` — same character-for-character expression — so
+`rx === ry` and `ctx.ellipse` draws the circle `ctx.arc` used to. `rankMix: 0`
+drops the rank term and `t` is the plain `ratio ** sizeCurve` it always was.
+
+Checked at a 3px/min zoom: 5m draws 13.0 / 6.0 / 4.8 / 4.2 px, round, which is
+the pre-change picture; 1m draws 10.6x25.3 / 5.2x11.4 / 4.3x8.5 / 3.6x6.2, which
+is the ladder it was missing.
+
+1m is the only rung where the horizontal spacing genuinely runs out — at a
+session view it leaves ~3.4px, a circle spends that on both axes, and all four
+rows land on `minPx`. Everywhere else the profile cap binds first, which is why
+this belongs in the profile and not in a global.
+
+Files: `cbedge-v3/src/board/gexCandles/settings.ts`,
+`cbedge-v3/src/board/gexCandles/bubbles.ts`.
+
+
 ## 2026-09-03 - v3: Level Log lands with the wall-migration chart (`cbedge-v3/src/pages/LevelLog.tsx`, `pages/levelLog/*`, `app/v3/level-log/route.ts`)
 
 v2's `/app/level-log` had no counterpart in v3 at all — only the 283-row spec in

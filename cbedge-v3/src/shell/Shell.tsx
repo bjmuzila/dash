@@ -9,7 +9,9 @@ import { Chip } from '@/design/primitives/Controls'
 import { ExpandStageHost } from '@/design/primitives/Expand'
 import { ReplayDockHost } from '@/design/primitives/ReplayDock'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
+import { CbMark, CbWordmark } from '@/shell/Brand'
 import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
+import { ToolbarSlotHost, ToolbarSlotProvider } from '@/shell/ToolbarSlot'
 import { UserMenu } from '@/shell/UserMenu'
 import { UpdateToast } from '@/shell/UpdateToast'
 
@@ -82,12 +84,12 @@ export const NAV: NavItem[] = [
   { to: '/level-log', label: 'Level Log', icon: '🧱' },
 ]
 
+// The rail head. It was a drawn accent square with the letters "CB" in it —
+// a placeholder from before the artwork existed. It is the real badge now:
+// CbMark, the one square form of the brand (see shell/Brand.tsx). Sized on one
+// axis because the asset is square by construction.
 function Logo() {
-  return (
-    <div className="mb-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent text-xs font-bold text-bg">
-      CB
-    </div>
-  )
+  return <CbMark className="mb-2 h-8 w-8 shrink-0" title="CB Edge" />
 }
 
 // Drag-to-reorder for the rail — mirrors v2's GexGroupNav, rewritten fresh for
@@ -267,8 +269,16 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
   const { symbol, setSymbol } = usePageSymbol()
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line bg-bg px-3">
-      <span className="text-sm font-semibold tracking-tight">CB Edge</span>
+      {/* The wordmark, not the words. "CB Edge" set in the UI font was a
+          stand-in; the horizontal lockup is the brand in a wide slot, and the
+          toolbar is the wide slot it was drawn for. See shell/Brand.tsx. */}
+      <CbWordmark className="h-6 w-auto shrink-0" />
       <div className="flex-1" />
+      {/* ── THE PAGE'S OWN CONTROLS ────────────────────────────────────────────
+          Empty on every route that puts nothing in it. The home board fills it
+          with Edit layout / Save layout / + Add card, which is why that page no
+          longer draws a header row of its own. See shell/ToolbarSlot.tsx. */}
+      <ToolbarSlotHost />
       {/* ── Back to SPX in one click ───────────────────────────────────────────
           SPX is not just the most-used ticker, it is the only one the socket
           streams: on it the GEX cards are live and free, and off it they fall
@@ -346,10 +356,13 @@ export function Shell({ children }: { children: ReactNode }) {
   //     menu needs it, and so does anything that draws owner-only chrome.
   //   CopyShotProvider — the camera lives in the toolbar and its targets are
   //     published by the page, so the registry has to sit above both.
+  //   ToolbarSlotProvider — same shape, same reason: the slot is IN the toolbar
+  //     and its contents come FROM the page, so it has to be above both.
   return (
     <AuthProvider>
       <PageSymbolProvider>
         <CopyShotProvider>
+          <ToolbarSlotProvider>
           {/* "New version — Update". Fixed-position, so it is a sibling of the
               layout rather than part of it, and mounted once for both branches.
               See data/appVersion.ts for why an open phone tab needs telling. */}
@@ -392,6 +405,7 @@ export function Shell({ children }: { children: ReactNode }) {
             </div>
           </div>
           )}
+          </ToolbarSlotProvider>
         </CopyShotProvider>
       </PageSymbolProvider>
     </AuthProvider>

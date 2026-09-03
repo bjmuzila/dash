@@ -4,6 +4,7 @@ import { Card } from '@/design/primitives/Card'
 import { Board, compactBoard, type BoardItem } from '@/design/primitives/Board'
 import { useAuth } from '@/data/auth'
 import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
+import { ToolbarSlot } from '@/shell/ToolbarSlot'
 import { CARD_CATALOG, CARD_BY_ID, cardTypeOf, placeNewCard } from './catalog'
 import {
   fetchServerLayout,
@@ -270,11 +271,17 @@ export default function BoardPage() {
   const toneClass =
     status?.tone === 'down' ? 'text-down' : status?.tone === 'muted' ? 'text-muted' : 'text-faint'
 
+  // ── NO PAGE HEADER ──────────────────────────────────────────────────────────
+  // This page used to open with a header row: the word "Terminal" on the left
+  // and the board's controls on the right, a whole band of chrome under a
+  // toolbar that was mostly empty. The word is gone — the home page does not
+  // need to announce itself to the person who navigated to it — and the
+  // controls moved UP into the toolbar through ToolbarSlot, which is a portal,
+  // so they are still owned by this component and still hold the board's state.
+  // They appear only while this page is mounted; see shell/ToolbarSlot.tsx.
   return (
-    <Page
-      title="Terminal"
-      fill
-      actions={
+    <Page fill>
+      <ToolbarSlot>
         <div className="flex items-center gap-2">
           {status && <span className={`text-xs ${toneClass}`}>{status.text}</span>}
           {/* Save layout belongs to edit mode: it is the counterpart of the
@@ -341,8 +348,7 @@ export default function BoardPage() {
             )}
           </div>
         </div>
-      }
-    >
+      </ToolbarSlot>
       <div ref={boardRef} className="min-h-0 flex-1 overflow-y-auto">
         <Board
           layout={layout}

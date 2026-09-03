@@ -295,15 +295,19 @@ function rgba(c: [number, number, number], a: number): string {
  * `capPx` / `floorPx` / `topCapPx` are the HORIZONTAL half-width, and they are
  * what the bucket spacing bounds — the gap to the next bucket is the only thing
  * a mark can fuse across. `capYPx` / `floorYPx` / `topCapYPx` are the VERTICAL
- * half-height and the spacing has nothing to say about them: two strikes in a
+ * half-height, which the spacing has nothing to say about: two strikes in a
  * bucket are tens of pixels apart on the price axis, and placeBucket's fit pass
  * already guarantees the ones that are not clear each other.
  *
- * Splitting them is what brought the size channel back at 1m. One budget for
- * both axes meant a ~3px horizontal bound at a session zoom was also the
- * vertical bound, all four rows landed on `minPx`, and the ladder drew as four
- * identical specks. See BUBBLES.maxAspect for the ceiling on how far apart the
- * two are allowed to get.
+ * ── AND THE TWO ARE ONLY DIFFERENT AT 1m ──────────────────────────────────
+ * The split exists for one rung. At 1m a session view leaves ~3.4px of spacing,
+ * a circle spends that on BOTH axes, all four rows land on `minPx` and the size
+ * channel is dead. At 5m and coarser the profile cap binds first, the rows
+ * already rank by eye, and the marks are round — that picture is correct and is
+ * not to be changed. So the ratio lives in the rung's own profile
+ * (`BUBBLES.profiles[n].aspect`) and every rung but 1m carries `aspect: 1`,
+ * which makes `capYPx === capPx`, `floorYPx === floorPx`,
+ * `topCapYPx === topCapPx`, and the ellipse a circle again.
  */
 interface SizeProfile {
   capPx: number
@@ -314,6 +318,11 @@ interface SizeProfile {
   /** Hard ceiling on the boosted leader — its own share of the spacing. */
   topCapPx: number
   topCapYPx: number
+  /**
+   * The rung's rank-vs-gamma blend, 0 at every rung but 1m. See
+   * BUBBLES.profiles and the size law above placeBucket.
+   */
+  rankMix: number
   /** Blur allowed under the leader, bounded by the room left beside it. */
   glowPx: number
   ringPx: number
@@ -392,12 +401,17 @@ function sizeFor(bucketMs: number, pxPerDot: number, scale = 1): SizeProfile {
   // fit pass owns the case where it is not.
   //
   // So the vertical budget is the rung's own profile, unshrunk — capped only
-  // against the horizontal one by `maxAspect` so a mark stays an oval and does
-  // not become a bar. `Math.max(capPx, …)` because the vertical can never be
-  // the TIGHTER of the two: at the coarse rungs the profile binds first, the
-  // two are equal, and the mark is round exactly as it was before.
-  const capYPx = Math.max(capPx, Math.min(p.capPx * scale, capPx * BUBBLES.maxAspect))
-  const topCapYPx = Math.max(topCapPx, Math.min(p.capPx * p.topBoost * scale, topCapPx * BUBBLES.maxAspect))
+  // against the horizontal one by that rung's `aspect`, so a mark stays an oval
+  // and does not become a bar.
+  //
+  // `aspect` is 1 everywhere except 1m, and at 1 the `Math.max(capPx, …)`
+  // collapses each of these onto its horizontal twin: same cap, same floor,
+  // same leader ceiling, `rx === ry`, and a circle of exactly the radius the 5m
+  // and coarser rungs have always drawn. That is deliberate — 1m is the only
+  // rung where the spacing runs out, and it is the only one this touches.
+  const aspect = Math.max(1, p.aspect)
+  const capYPx = Math.max(capPx, Math.min(p.capPx * scale, capPx * aspect))
+  const topCapYPx = Math.max(topCapPx, Math.min(p.capPx * p.topBoost * scale, topCapPx * aspect))
 
   return {
     capPx,
@@ -406,11 +420,13 @@ function sizeFor(bucketMs: number, pxPerDot: number, scale = 1): SizeProfile {
     // The floor is a fraction of the budget it belongs to, so the vertical one
     // gets the vertical cap. Using the horizontal floor here would leave the
     // tall marks starting from a squashed bottom and reintroduce the flat-dot
-    // look at the small end.
+    // look at the small end. At `aspect: 1` this is the same expression as
+    // `floorPx` above, to the character.
     floorYPx: Math.max(BUBBLES.minPx, Math.min(p.floorPx * scale, capYPx * BUBBLES.floorOfCap)),
     topBoost: p.topBoost,
     topCapPx,
     topCapYPx,
+    rankMix: p.rankMix,
     glowPx: Math.max(0, Math.min(BUBBLES.glowMaxPx, spare)),
     ringPx: p.ringPx * scale,
   }
@@ -451,6 +467,13 @@ interface Placed {
  * `t` for both keeps a mark's shape constant as it grows, so the small marks
  * are the same family as the big ones rather than a different one.
  *
+ * ── BOTH OF THOSE ARE 1m-ONLY ─────────────────────────────────────────────
+ * `rankMix` and the vertical budget's `aspect` are per-rung, and every rung
+ * above 1m carries the identity values (0 and 1). At 5m and coarser this law
+ * reduces, term for term, to the one that was there before them: a circle of
+ * radius `floorPx + ratio ** sizeCurve x (capPx - floorPx)`. That picture was
+ * right; nothing here changes it.
+ *
  * ── Then the fit ──────────────────────────────────────────────────────────
  * Two marks in the same bucket merging is a lie: it draws two levels as one. So
  * neighbours in y shrink TOWARD the floor, proportionally, keeping their
@@ -483,12 +506,19 @@ function placeBucket(snap: BubbleSnapshot, geo: BubbleGeometry, size: SizeProfil
     //           what makes rows 1-4 different sizes when the gamma alone would
     //           not: four strikes within a few percent of each other, or a
     //           quiet bucket where every row lands near the floor, both used to
-    //           draw as four identical specks. See BUBBLES.rankMix.
+    //           draw as four identical specks.
     // The blend is monotone in the rank and the marks are already sorted by
     // |netGex|, so nothing about the ORDER changes.
+    //
+    // `rankMix` IS PER RUNG AND IS ZERO ABOVE 1m. 5m and coarser rank by eye on
+    // the gamma alone — that picture was right and is untouched — so there the
+    // second term drops out and `t` is the plain `ratio ** sizeCurve` it has
+    // always been. See BUBBLES.profiles.
     const byGex = Math.pow(mark.ratio, BUBBLES.sizeCurve)
     const byRank = 1 - i / n
-    const t = clamp((1 - BUBBLES.rankMix) * byGex + BUBBLES.rankMix * byRank, 0, 1)
+    const t = size.rankMix > 0
+      ? clamp((1 - size.rankMix) * byGex + size.rankMix * byRank, 0, 1)
+      : byGex
 
     const bx = size.floorPx + t * (size.capPx - size.floorPx)
     const by = size.floorYPx + t * (size.capYPx - size.floorYPx)
