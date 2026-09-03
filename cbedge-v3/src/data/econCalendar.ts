@@ -146,6 +146,24 @@ export function fullDayLabel(dateStr: string, today: string): string {
   return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase();
 }
 
+/**
+ * The same label with the month spelled out — "MONDAY SEPTEMBER 1".
+ *
+ * v2 had BOTH forms and they disagreed: the shared helper above (transcribed
+ * from the home panel) abbreviates the month, while the standalone
+ * /economic-calendar page declared its own with `month: "long"`. That is a
+ * genuine difference rather than drift to be flattened — the panel is a narrow
+ * sidebar strip and the page is full width — so both ship, named apart.
+ *
+ * DECIDED 2026-09-03 (Brandon): the PAGE uses the long form.
+ * Spec: docs/parity/economic-calendar.md Part H.
+ */
+export function fullDayLabelLong(dateStr: string, today: string): string {
+  if (dateStr === today) return "TODAY";
+  const d = new Date(dateStr + "T12:00:00");
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }).toUpperCase();
+}
+
 export type FilterKey =
   | "all-usd"
   | "high-usd"

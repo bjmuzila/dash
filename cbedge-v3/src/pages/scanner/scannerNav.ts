@@ -21,8 +21,8 @@
 //      is harmless (the renderer skips an unknown id); a stale entry in
 //      `SCANNER_TABS` still draws a pill. Remove from both.
 //   4. The accent per tab is a real product decision (GEX Levels and Strike
-//      Query share one; TPO and Watch share another), so it is kept — but as
-//      tokens, never as the v2 hex.
+//      Query share one; IB Stats and Watch share another), so it is kept — but
+//      as tokens, never as the v2 hex.
 //
 // ── THE ONE DELIBERATE DEPARTURE FROM v2 ─────────────────────────────────────
 // v2 had TWO answers for the default tab: `ScannerPage`'s `useState` said
@@ -47,6 +47,22 @@
 //   keep the Next page prerenderable, which cost a one-frame flash of the wrong
 //   tab. v3 is a Vite SPA — the router has the param synchronously.
 //
+// ── DROPPED FROM v3, DO NOT RE-ADD ───────────────────────────────────────────
+// • 2026-09-03: 'tpo' — TPO Structures. Brandon dropped the tab. It left THREE
+//   places in this file, not one, and note 3 above is why all three had to go:
+//   a stale key in `SCANNER_GROUPS` is harmless, but a stale entry in
+//   `SCANNER_TABS` STILL DRAWS A PILL — one that selects a tab id with no
+//   component behind it. Removing it from `SCANNER_TABS` is what stops the pill;
+//   removing it from `ScannerTabId` is what makes the compiler find every other
+//   site, because `TAB_COMPONENT` in pages/Scanner.tsx is a
+//   `Record<ScannerTabId, …>` and a leftover 'tpo' key is only an error once the
+//   union no longer contains it. The union is the enforcement, so it leaves too.
+//   `isScannerTabId('tpo')` is now false and a pasted `?tab=tpo` falls back to
+//   DEFAULT_TAB, which is the same treatment any other unknown id gets.
+//   The tab's modules are tombstoned under pages/scanner/ (TpoTab.tsx,
+//   tpoData.ts, tpoStructures.ts, tpoTaxonomy.ts, tpoProfile.ts, amt.ts); the
+//   candle loaders they shared with IB Stats live on in pages/scanner/candles.ts.
+//
 // Spec: docs/parity/scanner.md Part A, rows A12–A29.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -58,7 +74,6 @@ export type ScannerTabId =
   | 'gexchangetop'
   | 'pickstudy'
   | 'strike'
-  | 'tpo'
   | 'ibstats'
   | 'watch'
 
@@ -86,8 +101,8 @@ export interface ScannerTabDef {
  * v2 accent → v3 token. The two greens and two light blues collapse here, per
  * the decision in docs/parity/scanner.md: v2's `HOME_THEME.green` #8ECAE6 is a
  * LIGHT BLUE doing three jobs (chrome, this accent, and the positive/up
- * semantic). As an ACCENT it becomes LIGHT_BLUE, the same token TPO and Watch
- * already use; as a positive it becomes MOVE_UP wherever a number is painted.
+ * semantic). As an ACCENT it becomes LIGHT_BLUE, the same token IB Stats and
+ * Watch use; as a positive it becomes MOVE_UP wherever a number is painted.
  * The accent and the "good number" colour were never meant to be the same value.
  *
  * 2026-08-16 (v2): "gex", "gexpct", "marketquality" and "statprompter" moved to
@@ -113,7 +128,6 @@ export const SCANNER_TABS: readonly ScannerTabDef[] = [
     ownerOnly: true,
   },
   { id: 'strike', label: 'Strike Query', short: 'Strike', accent: T.cyan, icon: '🎯' },
-  { id: 'tpo', label: 'TPO Structures', short: 'TPO', accent: LIGHT_BLUE, icon: '🏛️' },
   { id: 'ibstats', label: 'IB Stats', short: 'IB Stats', accent: LIGHT_BLUE, icon: '📐' },
   { id: 'watch', label: 'Watch This', short: 'Watch', accent: LIGHT_BLUE, icon: '👁️' },
 ]
@@ -134,7 +148,10 @@ export const DEFAULT_TAB: ScannerTabId = 'gexchangetop'
  */
 export const SCANNER_GROUPS: readonly { key: string; tabs: readonly ScannerTabId[] }[] = [
   { key: 'gamma', tabs: ['gexlevels', 'gexchangetop', 'pickstudy', 'strike'] },
-  { key: 'structure', tabs: ['tpo', 'ibstats'] },
+  // One tab since 2026-09-03 — TPO left. Kept as its own cluster rather than
+  // folded into 'gamma': IB Stats is a structure read, not a gamma read, and the
+  // divider is what says so.
+  { key: 'structure', tabs: ['ibstats'] },
   { key: 'more', tabs: ['watch'] },
 ]
 

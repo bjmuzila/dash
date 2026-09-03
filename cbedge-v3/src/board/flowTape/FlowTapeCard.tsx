@@ -214,7 +214,13 @@ export function FlowTapeCard() {
   const stopLabel = draftPremium === 0 ? 'Any' : fmtPremium(draftPremium)
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    <div
+      className="flex min-h-0 flex-1 flex-col gap-2"
+      // For the caption under a CopyShot. Every expiry and every DTE goes into
+      // this tape by design (see the header note), so the ticker is the whole of
+      // what the shot needs told. See shell/snapshot.ts.
+      data-capture-meta={`${active} · all expiries`}
+    >
       <CardToolbar>
         {/* Order matters: the toolbar is right-aligned, so the LAST item's right
             edge is the one that does not move. The slider goes last, and the two

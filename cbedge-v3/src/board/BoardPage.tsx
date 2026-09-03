@@ -206,16 +206,27 @@ export default function BoardPage() {
       const nth = (countByType.get(type) ?? 0) > 1 ? ordinalById.get(it.id) : undefined
       return {
         id: `board:${it.id}`,
+        icon: def?.icon,
         label: `${def?.label ?? type}${nth != null ? ` ${nth}` : ''}`,
         group: 'Home board',
         file: it.id,
+        // An EXPANDED card is not in its tile — it is portaled onto the page
+        // column's stage (design/primitives/Expand.tsx) and its tile is empty.
+        // So the tile is looked up first and the stage is the fallback, which
+        // also means the shot you get is the card at the size you are looking
+        // at it, which is the one you wanted a picture of.
         resolve: () =>
-          boardRef.current?.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(it.id)}"] section`) ?? null,
+          boardRef.current?.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(it.id)}"] section`) ??
+          document.querySelector<HTMLElement>(
+            `[data-cb-stage] section[data-card-instance="${CSS.escape(it.id)}"]`,
+          ) ??
+          null,
       }
     })
     return [
       {
         id: 'board:all',
+        icon: '🗂️',
         label: 'Whole board',
         group: 'Home board',
         file: 'board',
@@ -318,6 +329,9 @@ export default function BoardPage() {
                       title={n > 0 ? `Add another ${c.label} — ${n} on the board` : `Add ${c.label}`}
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-fg hover:bg-raised"
                     >
+                      <span aria-hidden className="w-4 shrink-0 text-center leading-none">
+                        {c.icon}
+                      </span>
                       <span className="min-w-0 flex-1 truncate">{c.label}</span>
                       {n > 0 && <span className="shrink-0 text-xs text-faint">×{n}</span>}
                     </button>
@@ -349,6 +363,10 @@ export default function BoardPage() {
             const Title = def.Title
             return (
               <Card
+                // The INSTANCE id, so the expand state survives a re-render mid
+                // gesture and so a shot target can find the card while it is
+                // expanded and living outside its tile. See Card's expandId.
+                expandId={id}
                 title={
                   <span data-board-handle className={locked ? 'block' : 'block cursor-grab select-none'}>
                     {Title ? <Title /> : def.label}

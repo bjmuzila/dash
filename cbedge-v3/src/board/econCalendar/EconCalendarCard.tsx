@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@/data/api'
 import { CardToolbar } from '@/design/primitives/Card'
 import { Popover } from '../gexCandles/controls'
+import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
+import { etToday, type CalEvent as PosterEvent, type EarnRow as PosterEarnRow } from '@/data/econCalendar'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Economic Calendar & Earnings — v2's home-page panel, as a board card.
@@ -414,6 +416,55 @@ export function EconCalendarCard() {
 
   const loading = cal.loading && !cal.data
   const nothing = !loading && ahead.length === 0 && past.length === 0 && earnByDate.size === 0
+
+  // ── 📸 The poster ──────────────────────────────────────────────────────────
+  //
+  // A SECOND camera row for this card, beside the plain shot of the card that
+  // BoardPage publishes. This one does not photograph anything on screen: it
+  // composes v2's 1280×720 Discord card — three lanes, the quote of the day,
+  // the CB Edge mark — from the same two feeds this card is already holding,
+  // and photographs that. See ./econTemplate.ts.
+  //
+  // The module is behind a dynamic import for the same reason the capture
+  // engine is: it is a poster nobody but the owner will ever build, and it has
+  // no business in the chunk that draws the card.
+  const posterTargets = useMemo<CopyShotTarget[]>(() => {
+    if (loading) return NO_TARGETS
+    return [
+      {
+        id: 'econ-poster',
+        icon: '🖼️',
+        label: 'Economic Calendar — poster',
+        group: 'Home board',
+        file: 'econ-calendar',
+        capture: async () => {
+          const mod = await import('./econTemplate')
+          // Best-effort: the poster renders fine without a quote of the day.
+          const quote = await mod.fetchQuote()
+          const today = etToday()
+          // v2's shaping, kept: the week's feed narrowed to today, biggest name
+          // first, because the lane holds twelve per session and the twelve that
+          // matter are the twelve people have heard of.
+          const earnings = (earn.data?.rows ?? [])
+            .filter((r) => r.date === today)
+            .sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0))
+            .map<PosterEarnRow>((r) => ({
+              ...r,
+              // The card's own row type widens `session` to string because the
+              // feed has been known to invent one. The poster's three groups are
+              // closed, so anything else lands in Time TBD.
+              session: r.session === 'pre' || r.session === 'after' ? r.session : 'unknown',
+            }))
+          return mod.captureEconPoster({
+            events: (cal.data?.events ?? []) as PosterEvent[],
+            earnings,
+            quote,
+          })
+        },
+      },
+    ]
+  }, [loading, cal.data, earn.data])
+  useCopyShotTargets(posterTargets)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

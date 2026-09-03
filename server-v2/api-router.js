@@ -8571,6 +8571,75 @@ if (libDb) {
     },
   });
 
+  // /api/walls-range — ONE symbol's change-only level log (walls_log) across
+  // the last N recorded sessions, in one round trip. Subscriber.
+  //
+  //   GET /api/walls-range?symbol=SPX&days=63[&end=YYYY-MM-DD][&scope=&basis=]
+  //   → { ok, symbol, scope, basis, end, days: [{ date, log: [...] }] }
+  //
+  // Feeds the Level Log page's SPX CORE MIGRATION card (three months of CORE
+  // levels on one chart). /proxy/walls?symbol= is one request per session;
+  // sixty-three of those for one picture is the wrong shape, so this returns
+  // the same rows — same columns, same variant fallback, same slot order — for
+  // every session at once. `days` is the number of sessions the symbol HAS rows
+  // on, ending at `end`, not calendar days: holidays and pre-universe dates
+  // simply do not count, exactly as useWallDays drops empty days on the client.
+  // Events and the 1-minute tape are deliberately NOT included — the chart's
+  // long-range read is where the level sat, and the spot captured on each
+  // level row is enough of a price line for that.
+  register('/api/walls-range', {
+    auth: 'subscriber', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const walls = require('./walls-recorder');
+        const variants = require('./scanner-variants');
+        const u = new URL(req.url || '/', 'http://localhost');
+        const symbol = String(u.searchParams.get('symbol') || 'SPX').trim().toUpperCase();
+        const days = Math.max(1, Math.min(260, Number(u.searchParams.get('days')) || 63));
+        const endRaw = String(u.searchParams.get('end') || '');
+        const end = /^\d{4}-\d{2}-\d{2}$/.test(endRaw) ? endRaw : etDateStr();
+        const variant = variants.normalize(u.searchParams.get('scope'), u.searchParams.get('basis'));
+
+        const pool = walls.getPool();
+        if (!pool || !(await walls.ensureSchema())) {
+          send(res, 503, { ok: false, error: 'no DB' }, { 'Cache-Control': NO_STORE });
+          return;
+        }
+        // The newest `days` session dates this symbol wrote under this variant,
+        // then every level row on those dates. `date` is a DATE column, so it
+        // is rendered to text in SQL rather than letting pg hand back a JS Date
+        // that would shift a day west of Greenwich.
+        const { rows } = await pool.query(
+          `WITH d AS (
+             SELECT DISTINCT date FROM walls_log
+              WHERE symbol = $1 AND date <= $2::date
+                AND expiry_scope = $3 AND basis = $4
+              ORDER BY date DESC LIMIT $5)
+           SELECT to_char(w.date, 'YYYY-MM-DD') AS date,
+                  w.slot, w.ts, w.level_type, w.strike, w.prev_strike, w.delta,
+                  w.spot, w.reason, w.level_gex
+             FROM walls_log w
+             JOIN d ON d.date = w.date
+            WHERE w.symbol = $1 AND w.expiry_scope = $3 AND w.basis = $4
+            ORDER BY w.date ASC, w.slot ASC, w.level_type ASC`,
+          [symbol, end, variant.scope, variant.basis, days],
+        );
+        const byDate = new Map();
+        for (const r of rows) {
+          const { date, ...rest } = r;
+          if (!byDate.has(date)) byDate.set(date, { date, log: [] });
+          byDate.get(date).log.push({ ...rest, at: walls.slotLabel(rest.slot) });
+        }
+        send(res, 200, {
+          ok: true, symbol, scope: variant.scope, basis: variant.basis, end,
+          days: [...byDate.values()],
+        }, { 'Cache-Control': NO_STORE });
+      } catch (e) {
+        send(res, 500, { ok: false, error: String(e?.message || e) }, { 'Cache-Control': NO_STORE });
+      }
+    },
+  });
+
   // ── Owner admin routes (all fail-closed owner-gated in the originals via
   // getServerUserId+OWNER_USER_ID → enforceAuth 'owner'). All libDb-backed. ──
 

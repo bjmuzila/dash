@@ -1,7 +1,8 @@
 import type { CSSProperties, ReactNode } from 'react'
-import { createContext, useContext, useMemo, useState } from 'react'
+import { createContext, useContext, useEffect, useId, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { alpha, SHADOW, V2W } from '@/design/theme'
+import { useExpandStage } from '@/design/primitives/Expand'
 
 // The only container in the app. If something needs a border and a background,
 // it is a Card — there is no second way to draw a panel.
@@ -70,6 +71,24 @@ export interface CardProps {
   fill?: boolean
   /** Surface treatment. See CardPlate. Defaults to v3's dark-slate plate. */
   plate?: CardPlate
+  /**
+   * Draw the expand control. ON BY DEFAULT — every card in the app can be blown
+   * up to fill the page area (see design/primitives/Expand.tsx). Pass false only
+   * for a card that is already the whole page, where expanding is a no-op that
+   * still costs a button.
+   *
+   * The control draws nothing outside an ExpandStageHost, so the phone build,
+   * previews and tests need no opt-out.
+   */
+  expandable?: boolean
+  /**
+   * Stable key for the expand state, and the card's identity in the DOM
+   * (`data-card-instance`). Defaults to a generated id, which is fine for a card
+   * that never remounts; the board passes its instance id so a re-render mid-drag
+   * cannot drop the expansion, and so a shot target can still find the card while
+   * it is expanded and living outside its tile.
+   */
+  expandId?: string
   /** Outer overrides — height, grid span. Not a licence to restyle the plate. */
   style?: CSSProperties
   className?: string
@@ -93,6 +112,8 @@ export function Card({
   flush = false,
   fill = false,
   plate = 'v3',
+  expandable = true,
+  expandId,
   style,
   className = '',
   children,
@@ -100,20 +121,45 @@ export function Card({
   const [host, setHost] = useState<HTMLDivElement | null>(null)
   const slot = useMemo<ToolbarSlot>(() => ({ host }), [host])
 
+  const expandCtx = useExpandStage()
+  const autoId = useId()
+  const expandKey = expandId ?? autoId
   // The header is where a body's <CardToolbar> lands, so a Card that renders no
   // header has no slot and CardToolbar falls back to drawing inline. Every card
-  // on the board carries a title, so in practice the slot is always there.
+  // on the board carries a title, so in practice the slot is always there. It is
+  // also the only place the expand control can go — one toolbar per card.
   const header = title || actions
+  const canExpand = expandable && !!header && expandCtx != null
+  const expanded = canExpand && expandCtx!.expandedId === expandKey
 
-  return (
+  // A card that unmounts while expanded — removed from the board, or navigated
+  // away from — must not leave the stage holding a key nothing will ever render.
+  const collapse = expandCtx?.collapse
+  useEffect(() => {
+    if (!expanded || !collapse) return
+    return () => collapse(expandKey)
+  }, [expanded, collapse, expandKey])
+
+  const section = (
     <section
-      style={plate === 'v2' ? { ...V2_PLATE, ...style } : style}
+      data-card-instance={expandId}
+      data-card-expanded={expanded ? '' : undefined}
+      style={
+        expanded
+          ? { ...(plate === 'v2' ? V2_PLATE : null), height: '100%', width: '100%' }
+          : plate === 'v2'
+            ? { ...V2_PLATE, ...style }
+            : style
+      }
       className={[
         'flex flex-col overflow-hidden',
         // The v2 plate carries its own radius, edge and fill as inline style —
         // these utilities would fight it.
         plate === 'v2' ? '' : 'rounded-md border border-line bg-surface',
-        fill ? 'min-h-0 flex-1' : '',
+        // Expanded, the card owns the stage: it fills it, and the caller's grid
+        // span / pixel height (which described a tile that is no longer where
+        // this card lives) is dropped above.
+        expanded ? 'min-h-0 flex-1' : fill ? 'min-h-0 flex-1' : '',
         className,
       ]
         .filter(Boolean)
@@ -126,6 +172,22 @@ export function Card({
               case it is just the spacer that keeps `actions` on the right. */}
           <div ref={setHost} className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5" />
           {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
+          {canExpand && (
+            <button
+              type="button"
+              onClick={() => (expanded ? expandCtx!.collapse(expandKey) : expandCtx!.expand(expandKey))}
+              title={
+                expanded
+                  ? 'Back to the board (Esc)'
+                  : 'Fill the page with this card — the rail and toolbar stay put'
+              }
+              aria-label={expanded ? 'Collapse card' : 'Expand card'}
+              aria-pressed={expanded}
+              className="shrink-0 rounded-sm px-1 text-xs leading-none text-faint transition-colors hover:bg-raised hover:text-fg"
+            >
+              <span aria-hidden>{expanded ? '⤡' : '⤢'}</span>
+            </button>
+          )}
         </header>
       )}
       <ToolbarSlotContext.Provider value={header ? slot : null}>
@@ -143,4 +205,9 @@ export function Card({
       </ToolbarSlotContext.Provider>
     </section>
   )
+
+  // Expanded: the same React element, rendered into the page column's stage.
+  // The tile it came from keeps its place in the grid and is simply empty for
+  // the duration, so collapsing puts the card back exactly where it was.
+  return expanded && expandCtx?.stage ? createPortal(section, expandCtx.stage) : section
 }

@@ -54,6 +54,12 @@ export interface CardDef {
   id: string
   label: string
   /**
+   * One emoji, in the rail's language (see NAV in shell/Shell.tsx). It is what
+   * the "+ Add card" menu and the camera's menu are scanned by — at a glance
+   * you are looking for the shape, not reading eight labels.
+   */
+  icon: string
+  /**
    * A live header for cards whose subject is not fixed — the page ticker, the
    * contract date the numbers came from. Rendered by BoardPage IN PLACE OF
    * `label`, inside the drag handle, so it must stay one line of text.
@@ -163,6 +169,7 @@ function QuickLinksCard() {
 export const CARD_CATALOG: CardDef[] = [
   {
     id: 'gex-candles',
+    icon: '🕯️',
     label: 'GEX Candles',
     defaultSize: { w: 8, h: 12 },
     render: () => (
@@ -173,6 +180,7 @@ export const CARD_CATALOG: CardDef[] = [
   },
   {
     id: 'gex-chart',
+    icon: '📊',
     label: 'GEX Chart',
     defaultSize: { w: 6, h: 12 },
     render: () => (
@@ -183,6 +191,7 @@ export const CARD_CATALOG: CardDef[] = [
   },
   {
     id: 'multi-greek',
+    icon: '🧮',
     label: 'Multi Greek',
     defaultSize: { w: 12, h: 14 },
     render: () => (
@@ -193,6 +202,7 @@ export const CARD_CATALOG: CardDef[] = [
   },
   {
     id: 'net-premium',
+    icon: '💵',
     label: 'Net Premium',
     defaultSize: { w: 8, h: 12 },
     render: () => (
@@ -203,6 +213,7 @@ export const CARD_CATALOG: CardDef[] = [
   },
   {
     id: 'flow-tape',
+    icon: '🌊',
     label: 'Flow Tape',
     defaultSize: { w: 12, h: 12 },
     render: () => (
@@ -211,9 +222,10 @@ export const CARD_CATALOG: CardDef[] = [
       </Deferred>
     ),
   },
-  { id: 'quick-links', label: 'Quick Links', defaultSize: { w: 3, h: 6 }, render: () => <QuickLinksCard /> },
+  { id: 'quick-links', icon: '🔗', label: 'Quick Links', defaultSize: { w: 3, h: 6 }, render: () => <QuickLinksCard /> },
   {
     id: 'key-levels',
+    icon: '📏',
     label: 'Key Levels',
     Title: KeyLevelsHeading,
     defaultSize: { w: 12, h: 6 },
@@ -225,6 +237,7 @@ export const CARD_CATALOG: CardDef[] = [
   },
   {
     id: 'econ-calendar',
+    icon: '🗓️',
     label: 'Economic Calendar & Earnings',
     defaultSize: { w: 6, h: 12 },
     render: () => (

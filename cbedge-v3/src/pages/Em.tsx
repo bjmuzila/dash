@@ -27,13 +27,11 @@
 // the rendering) but not the button: there is one camera in this app and it
 // lives in the toolbar. This page publishes its RESULT BLOCK to that camera's
 // menu the moment a ticker has actually been looked up, which is the only
-// moment there is anything worth photographing — and it publishes the looked-up
-// ticker in the label, so the PNG's title band says which one it is.
+// moment there is anything worth photographing, and it publishes the ticker and
+// the week as the caption's tail so the PNG names them under the picture.
 //
-// The frame (title band, watermark, clipboard-then-download) matches v2's, so
-// the two pages produce the same picture. parity-check-em.mjs still carries
-// `D/snapshot` as a KNOWN DEPARTURE (`soft`): the capability came across, the
-// chrome moved. See docs/parity/em.md Part D.
+// parity-check-em.mjs still carries `D/snapshot` as a KNOWN DEPARTURE (`soft`):
+// the capability came across, the chrome moved. See docs/parity/em.md Part D.
 //
 // This page opens no socket and mounts no canvas: it is REST-only, so
 // non-negotiables 4, 5 and 6 have nothing to bite on here.
@@ -125,8 +123,11 @@ export default function Em() {
         ? [
             {
               id: 'em:result',
-              label: `Estimated Move — ${data.label || sym}`,
+              icon: '↔️',
+              label: 'Estimated Move',
               group: 'This page',
+              // Same caption shape every card uses: name · time · ticker · week.
+              meta: `${data.label || sym}${data.exp_label ? ` · Week of ${data.exp_label}` : ''}`,
               file: `em-${sym}`,
               resolve: () => shotRef.current,
             },

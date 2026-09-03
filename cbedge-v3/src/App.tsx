@@ -1,6 +1,8 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Shell } from '@/shell/Shell'
+import { MobileRedirect } from '@/mobile/MobileRedirect'
+import { MOBILE_DEFAULT_PATH } from '@/mobile/mobileNav'
 import Home from '@/pages/Home'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,6 +47,36 @@ const Replay = lazy(() => import('@/pages/Replay'))
 // 329KB of tab components shipped to everyone whichever tab they opened.
 const Scanner = lazy(() => import('@/pages/Scanner'))
 
+// /economic-calendar — two tabs over one feed: timed econ events with earnings
+// woven into the day, and a five-column earnings week board. A 1:1 port of
+// v2's /app/economic-calendar against the 176-row checklist in
+// docs/parity/economic-calendar.md. REST-only: three feeds fired in parallel at
+// entry, no socket, no canvas. The tab lives in the query string, so
+// /v3/economic-calendar?tab=earnings is a shareable link.
+const EconomicCalendar = lazy(() => import('@/pages/EconomicCalendar'))
+
+// ── THE PHONE BUILD — /v3/m/* ────────────────────────────────────────────────
+// Six screens, registered in src/mobile/mobileNav.ts, each one a HOME-BOARD CARD
+// or a v3 page rendered full-bleed inside MobileShell. There is no phone-only
+// implementation of any number on them: the Heat tab IS MultiGreekCard, the GEX
+// tab IS GexChartCard, so a fix to a card is a fix to the phone. v2 shipped six
+// bespoke phone pages under components/mobile/ and they drifted from the desktop
+// inside a week — this is the same product decision made the other way.
+//
+// lazy() like every other route, and each one is a thin wrapper whose real
+// weight is the chunk the card already has, so a phone downloads the card it is
+// looking at and nothing else.
+//
+// A hard refresh on any of these is answered by app/v3/m/[tab]/route.ts in the
+// v2 repo — ONE dynamic segment, deliberately not a catch-all under /v3, which
+// would swallow /v3/assets/*.js and hand back HTML.
+const MGex = lazy(() => import('@/mobile/pages/MGex'))
+const MHeat = lazy(() => import('@/mobile/pages/MHeat'))
+const MSpx = lazy(() => import('@/mobile/pages/MSpx'))
+const MChain = lazy(() => import('@/mobile/pages/MChain'))
+const MEm = lazy(() => import('@/mobile/pages/MEm'))
+const MEcon = lazy(() => import('@/mobile/pages/MEcon'))
+
 // STILL RETIRED 2026-08-30 — Test Lab (/test) and Journal (/trading) are gone
 // from v3, along with the ICT, ES Candles, Board and Multi Greek rail slots
 // (they never had pages here, only "coming soon" icons). The BOARD CARDS of the
@@ -54,6 +86,10 @@ const Scanner = lazy(() => import('@/pages/Scanner'))
 export default function App() {
   return (
     <BrowserRouter basename="/v3">
+      {/* Phones on a route that HAS a phone counterpart are replaced to it.
+          Above the Shell because it needs the router and nothing else, and
+          `replace` so Back does not land on the route it just left. */}
+      <MobileRedirect />
       <Shell>
         <Suspense fallback={null}>
           <Routes>
@@ -74,6 +110,20 @@ export default function App() {
             <Route path="/em" element={<Em />} />
             <Route path="/replay" element={<Replay />} />
             <Route path="/scanner" element={<Scanner />} />
+            <Route path="/economic-calendar" element={<EconomicCalendar />} />
+
+            {/* ── The phone build ────────────────────────────────────────────
+                Adding a tab is TWO edits: MOBILE_TABS in
+                src/mobile/mobileNav.ts and a line here. The Next handler is
+                already generic (app/v3/m/[tab]/route.ts). */}
+            <Route path="/m" element={<Navigate to={MOBILE_DEFAULT_PATH} replace />} />
+            <Route path="/m/gex" element={<MGex />} />
+            <Route path="/m/heat" element={<MHeat />} />
+            <Route path="/m/spx" element={<MSpx />} />
+            <Route path="/m/chain" element={<MChain />} />
+            <Route path="/m/em" element={<MEm />} />
+            <Route path="/m/econ" element={<MEcon />} />
+
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

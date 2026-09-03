@@ -52,29 +52,42 @@ export type ShotResult = 'copied' | 'saved'
 export interface ShotOptions {
   /** Leads the caption strip. Usually the card's own name. */
   title?: string
+  /**
+   * Caption tail when the element publishes no `data-capture-meta` of its own —
+   * for a surface the registration knows more about than the DOM does. The
+   * attribute wins where both exist, because the card is closer to the truth.
+   */
+  meta?: string
   /** Download name, used only when the clipboard write is refused. */
   filename?: string
+  /**
+   * Deliver the pixels with no caption band and no mark.
+   *
+   * For a surface that IS the poster rather than a card photographed out of the
+   * page — the Economic Calendar template (board/econCalendar/econTemplate.ts)
+   * carries its own title bar, its own date and its own CB Edge mark, and the
+   * caption would say every one of them a second time.
+   */
+  bare?: boolean
 }
 
 /** Elements the page wants out of the picture — see the header. */
 const HIDE_ATTR = 'data-capture-hide'
 
 /**
- * A card's own contribution to the caption — the contract date, the basis, the
- * ticker. Put it on the card root or on anything inside it:
+ * A card's own contribution to the caption — its ticker, its contract date, the
+ * basis it is drawing. Put it on the card root or on anything inside it:
  *
- *   <div data-capture-meta={`SPX · ${expiry}`}>
+ *   <div data-capture-meta={`${symbol} · ${expiry}`}>
  *
- * The caption reads `Net Premium · Sep 2, 17:15 ET · SPX · 9-2-26`, and the
- * card is the only thing that knows the last part.
+ * The caption reads `Net Premium · Sep 2, 17:15 ET · SPX · 9-2-26`.
  *
- * SETTING IT ALSO DROPS THE CARD'S OWN HEADER from the shot, and that pairing is
- * the point rather than a side effect. The caption already carries the card's
- * NAME (the menu row it was taken from) and its time; a card that also hands
- * over the one thing the caption cannot work out has said everything its header
- * said, and leaving the header in prints the name and the expiry twice with the
- * chart squeezed underneath. A card that publishes nothing keeps its header,
- * because then the header is the only place that information exists.
+ * EVERY SHOT DROPS THE CARD'S OWN HEADER — that is not conditional on this
+ * attribute, and every card is expected to publish here whatever its header was
+ * carrying. One shape for every screenshot: the card, then one line under it.
+ * A card with nothing to add (Quick Links, the Economic Calendar) publishes
+ * nothing and its caption is just the name and the time, which is all its header
+ * said anyway.
  */
 const META_ATTR = 'data-capture-meta'
 
@@ -119,12 +132,30 @@ const SEP = '  ·  '
 const LOGO_SRC = '/cbedge3.0.png'
 
 /**
- * Cap the multiply at 2. A full board at devicePixelRatio 3 is a bitmap Chrome
- * refuses to put on the clipboard, and nobody can tell 2× from 3× in a Discord
- * embed.
+ * THE PIXEL BUDGET, and why it exists.
+ *
+ * The whole board is not a card — it is every card, at full height, and on a
+ * 27" monitor that is something like 2400×3000 CSS pixels. At devicePixelRatio
+ * 2 that is a 29-megapixel bitmap, and Chrome will not put one of those on the
+ * clipboard: `navigator.clipboard.write` rejects, and the capture used to fall
+ * out of the bottom into a download. "Copy" quietly becoming "saved to
+ * ~/Downloads" on exactly the shot you most want to paste is the worst possible
+ * place for that fallback to fire.
+ *
+ * So the multiply is derived from the OUTPUT SIZE rather than from the display:
+ * 2× while the picture is small enough to stay under the budget, sliding down
+ * toward 1× as it grows. A card is unaffected — the budget is four times the
+ * biggest card anyone has on a board — and the board comes back at whatever
+ * fidelity fits in one clipboard write.
  */
-function shotScale(): number {
-  return Math.min(2, Math.max(1, window.devicePixelRatio || 1))
+const MAX_SHOT_PIXELS = 12_000_000
+/** Never below this, however large the surface: a mush is not a screenshot. */
+const MIN_SHOT_SCALE = 0.75
+
+function shotScale(w: number, h: number): number {
+  const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
+  const area = Math.max(1, w * h)
+  return Math.max(MIN_SHOT_SCALE, Math.min(dpr, Math.sqrt(MAX_SHOT_PIXELS / area)))
 }
 
 // ── Which declarations actually have to travel ───────────────────────────────
@@ -585,12 +616,7 @@ function imgToDataUrl(src: HTMLImageElement): string | null {
  * body is a chart at a fixed bitmap size, so leaving the height alone would just
  * open a band of empty plate under it.
  */
-function buildClone(
-  el: HTMLElement,
-  w: number,
-  h: number,
-  dropHeader: boolean,
-): { clone: HTMLElement; height: number } {
+function buildClone(el: HTMLElement, w: number, h: number): { clone: HTMLElement; height: number } {
   const clone = el.cloneNode(true) as HTMLElement
   const defaults = new TagDefaults()
 
@@ -603,10 +629,13 @@ function buildClone(
   }
 
   // The Card primitive's own header — the row carrying the card's name and its
-  // toolbar. See META_ATTR for why publishing a meta is what takes it off.
-  // `:scope >` deliberately: a Multi Greek column or a nested Card has a header
-  // of its own and it is content, not chrome.
-  const header = dropHeader ? el.querySelector<HTMLElement>(':scope > header') : null
+  // toolbar. It always comes off: the caption under the picture says the name,
+  // the time and whatever the card published (see META_ATTR), so leaving the
+  // header in prints all of it twice with the chart squeezed underneath.
+  //
+  // `:scope >` deliberately: a Multi Greek column or any nested Card has a
+  // header of its own and that one is content, not chrome.
+  const header = el.querySelector<HTMLElement>(':scope > header')
   const height = header ? Math.max(1, h - header.getBoundingClientRect().height) : h
 
   const pairs: Array<[Element, Element]> = []
@@ -663,8 +692,8 @@ function buildClone(
 
 // ── Rasterising ──────────────────────────────────────────────────────────────
 
-/** The subtree, rendered by the browser itself, at `shotScale()`. */
-async function rasterise(el: HTMLElement, dropHeader: boolean): Promise<HTMLCanvasElement> {
+/** The subtree, rendered by the browser itself. See shotScale for the multiply. */
+async function rasterise(el: HTMLElement): Promise<{ canvas: HTMLCanvasElement; scale: number }> {
   const rect = el.getBoundingClientRect()
   const w = Math.max(1, Math.ceil(rect.width))
 
@@ -672,7 +701,7 @@ async function rasterise(el: HTMLElement, dropHeader: boolean): Promise<HTMLCanv
   // using — but only once they have actually loaded.
   await document.fonts?.ready?.catch(() => undefined)
 
-  const { clone, height } = buildClone(el, w, Math.max(1, Math.ceil(rect.height)), dropHeader)
+  const { clone, height } = buildClone(el, w, Math.max(1, Math.ceil(rect.height)))
   const h = Math.ceil(height)
   const body = new XMLSerializer().serializeToString(clone)
   const svg =
@@ -688,14 +717,16 @@ async function rasterise(el: HTMLElement, dropHeader: boolean): Promise<HTMLCanv
     img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
   })
 
-  const scale = shotScale()
+  // The caption band rides under the card, so the budget has to cover both or
+  // the frame is the thing that tips the write over the limit.
+  const scale = shotScale(w, h + CAPTION_BAND)
   const out = document.createElement('canvas')
   out.width = Math.round(w * scale)
   out.height = Math.round(h * scale)
   const ctx = out.getContext('2d')
   if (!ctx) throw new Error('no 2d context')
   ctx.drawImage(img, 0, 0, out.width, out.height)
-  return out
+  return { canvas: out, scale }
 }
 
 /** ET, the only clock this app tells time in. */
@@ -739,11 +770,11 @@ function loadLogo(): Promise<HTMLImageElement | null> {
  */
 function frame(
   shot: HTMLCanvasElement,
+  scale: number,
   title: string,
   meta: string | null,
   logo: HTMLImageElement | null,
 ): HTMLCanvasElement {
-  const scale = shotScale()
   const w = shot.width / scale
   const cardH = shot.height / scale
   const h = cardH + CAPTION_BAND
@@ -821,24 +852,63 @@ function download(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/**
- * Clipboard first, a download second.
- *
- * The clipboard is the point — the shot is going into Discord or a DM, and a
- * file in ~/Downloads is two more steps. But `navigator.clipboard.write` is
- * refused on an insecure origin, in a background tab, and whenever the browser
- * decides the user gesture has gone stale, and none of those are worth losing
- * the capture over.
- */
-export async function copyOrDownload(blob: Blob, filename: string): Promise<ShotResult> {
+/** One attempt at the clipboard. False means "not this blob", not "never". */
+async function copyBlob(blob: Blob): Promise<boolean> {
   try {
-    if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-      return 'copied'
-    }
+    if (!navigator.clipboard || typeof ClipboardItem === 'undefined') return false
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    return true
   } catch {
-    /* fall through to the download */
+    return false
   }
+}
+
+/** Half-size copy of a canvas, for the retry ladder below. */
+function shrink(src: HTMLCanvasElement, factor: number): HTMLCanvasElement {
+  const out = document.createElement('canvas')
+  out.width = Math.max(1, Math.round(src.width * factor))
+  out.height = Math.max(1, Math.round(src.height * factor))
+  const ctx = out.getContext('2d')
+  if (!ctx) return src
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(src, 0, 0, out.width, out.height)
+  return out
+}
+
+/**
+ * The clipboard, and only then a download.
+ *
+ * The clipboard is the whole point — the shot is going into Discord or a DM,
+ * and a file in ~/Downloads is two more steps. Chrome refuses a write for two
+ * different reasons and they want different answers: it refuses because the
+ * bitmap is too big, which SHRINKING fixes, and it refuses on an insecure
+ * origin or a stale gesture, which nothing here fixes.
+ *
+ * There is no way to tell the two apart from the rejection, so this tries
+ * smaller twice before giving up. `shotScale` already sizes the capture to stay
+ * under the limit; this is the belt to that pair of braces, and it is what
+ * stopped "Whole board" quietly arriving in ~/Downloads instead of on the
+ * clipboard. The download is still there for the cases that are genuinely not
+ * about size — losing the capture entirely would be worse than either.
+ */
+const RETRY_FACTORS = [0.62, 0.45]
+
+export async function copyOrDownload(blob: Blob, filename: string): Promise<ShotResult> {
+  if (await copyBlob(blob)) return 'copied'
+  download(blob, filename)
+  return 'saved'
+}
+
+async function deliver(canvas: HTMLCanvasElement, filename: string): Promise<ShotResult> {
+  let blob = await toBlob(canvas)
+  if (await copyBlob(blob)) return 'copied'
+
+  for (const f of RETRY_FACTORS) {
+    blob = await toBlob(shrink(canvas, f))
+    if (await copyBlob(blob)) return 'copied'
+  }
+
   download(blob, filename)
   return 'saved'
 }
@@ -852,10 +922,13 @@ function metaOf(el: HTMLElement): string | null {
 
 /** Photograph `el`, frame it, and put it on the clipboard. */
 export async function captureAndCopy(el: HTMLElement, opts: ShotOptions = {}): Promise<ShotResult> {
-  // A card that named itself has said everything its header said, so the header
-  // comes off — see META_ATTR.
-  const meta = metaOf(el)
-  const [shot, logo] = await Promise.all([rasterise(el, meta != null), loadLogo()])
-  const blob = await toBlob(frame(shot, opts.title ?? 'CB Edge', meta, logo))
-  return copyOrDownload(blob, opts.filename ?? 'snapshot.png')
+  // The DOM wins where both exist: the card is closer to the truth than the
+  // menu entry that pointed at it.
+  const meta = metaOf(el) ?? opts.meta ?? null
+  const [{ canvas, scale }, logo] = await Promise.all([
+    rasterise(el),
+    opts.bare ? Promise.resolve(null) : loadLogo(),
+  ])
+  const out = opts.bare ? canvas : frame(canvas, scale, opts.title ?? 'CB Edge', meta, logo)
+  return deliver(out, opts.filename ?? 'snapshot.png')
 }

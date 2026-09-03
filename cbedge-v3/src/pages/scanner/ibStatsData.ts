@@ -76,7 +76,7 @@ import {
   type IbWindow,
   type TapeDay,
 } from '@/pages/scanner/ibStats'
-import { loadTpoCandles } from '@/pages/scanner/tpoData'
+import { loadCandles } from '@/pages/scanner/candles'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE STATIC DATASET.
@@ -206,11 +206,16 @@ export function tapeFrom(rows: readonly IbResultRow[], n: number = TAPE_LENGTH):
 // in `@/data/store` to read with `useFrame` either, so the REST legs are the only
 // route that exists today.
 //
-// They already exist: Part F's `tpoData.ts` owns `/api/snapshots/candles` for
-// exactly these two instruments, `allSettled` per leg, decoded out of the `lite`
+// They already exist: `candles.ts` owns `/api/snapshots/candles` for exactly
+// these two instruments, `allSettled` per leg, decoded out of the `lite`
 // columnar envelope. Calling it is one shared cache entry per URL rather than a
 // second copy of the same four URLs in this file; `EsCandleRecord` carries the
 // six fields `IbCandle` declares and nothing here reads more.
+//
+// `candles.ts` was extracted from `tpoData.ts` on 2026-09-03 when the TPO
+// Structures tab was dropped, and `loadTpoCandles` was renamed `loadCandles`
+// with it. This tab is now that module's ONLY consumer — the borrow became
+// ownership, and the endpoint has one client in v3.
 //
 // WHAT CHANGES vs v2, stated plainly (spec rows G44–G47):
 //   • no socket, so no 4 Hz republish. The poll below is the cadence instead.
@@ -246,7 +251,7 @@ export interface IbCandleLoad {
  * resolves through the documented fallback path rather than by chance.
  */
 export async function loadIbCandles(sym: IbSymbol): Promise<IbCandleLoad> {
-  const { today, historical, failed } = await loadTpoCandles(
+  const { today, historical, failed } = await loadCandles(
     sym === 'NQ' ? 'NQU' : 'ESU',
     LIVE_FEED_HISTORY_DAYS,
   )

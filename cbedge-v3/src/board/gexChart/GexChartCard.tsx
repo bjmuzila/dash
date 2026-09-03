@@ -254,7 +254,15 @@ export function GexChartCard() {
   )
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-1.5">
+    <div
+      className="flex min-h-0 flex-1 flex-col gap-1.5"
+      // The expiry and the basis, for the caption under a CopyShot — the shot
+      // drops this card's header, and those two are the whole difference between
+      // one ladder and another that looks identical. See shell/snapshot.ts.
+      data-capture-meta={[symbol, view.expiry, BASIS_LABEL[settings.basis]]
+        .filter(Boolean)
+        .join(' · ')}
+    >
       <CardToolbar>
         {/* WHICH EXPIRY THESE BARS ARE. The rows look identical whichever one
             they came from, so without this the chart is a ladder with no date

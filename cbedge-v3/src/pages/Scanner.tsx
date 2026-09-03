@@ -1,9 +1,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// /scanner — the scanner page. Seven tabs over one route.
+// /scanner — the scanner page. Six tabs over one route.
+//
+// (Seven until 2026-09-03, when TPO Structures was dropped. See the dated note
+// in `pages/scanner/scannerNav.ts` — the registry is where a tab exists or
+// stops existing; this file only mounts what the registry's union allows, which
+// is why `TAB_COMPONENT` is a `Record<ScannerTabId, …>` and not a partial map.)
 //
 // Ported from v2's `components/pages/Scanner.tsx` against the checklist in
 // docs/parity/scanner.md Part A. This file is the FRAME only: tab state, the
-// owner gate, and the seven mount points. Every value on screen belongs to a
+// owner gate, and the six mount points. Every value on screen belongs to a
 // tab component, and every threshold behind those values belongs to a module
 // under `@/pages/scanner/`.
 //
@@ -15,11 +20,11 @@
 //      source of truth. `/v3/scanner?tab=ibstats` is pasteable, which matters
 //      for the same reason `app/v3/em/route.ts` gives for its own existence: a
 //      shared link IS a hard refresh.
-//   2. EVERY TAB IS `lazy()`. v2 static-imported all seven, so 329KB of tab
-//      components plus a 3,100-line page shipped to every visitor whichever tab
-//      they opened. Seven chunks means an over-budget tab is legible in
-//      check-budgets.mjs by name, which is the whole reason the budgets file
-//      names chunks at all.
+//   2. EVERY TAB IS `lazy()`. v2 static-imported all seven of its tabs, so 329KB
+//      of tab components plus a 3,100-line page shipped to every visitor
+//      whichever tab they opened. One chunk per tab means an over-budget tab is
+//      legible in check-budgets.mjs by name, which is the whole reason the
+//      budgets file names chunks at all.
 //   3. THE OWNER GATE IS THREE-WAY, NOT TWO. While auth resolves,
 //      `visibleTab` is null and NOTHING mounts — not the gated tab, not the
 //      fallback. A flash of the wrong tab that then swaps is worse than an
@@ -67,14 +72,13 @@ import {
   type ScannerTabId,
 } from '@/pages/scanner/scannerNav'
 
-// Seven chunks, one per tab. See note 2 above — this is the fix for v2 shipping
+// Six chunks, one per tab. See note 2 above — this is the fix for v2 shipping
 // all of them to everyone. The chunk names fall out of the file names, which is
 // what makes an over-budget tab legible in check-budgets.mjs output.
 const GexLevelsTab = lazy(() => import('@/pages/scanner/GexLevelsTab'))
 const GexChangeTopTab = lazy(() => import('@/pages/scanner/GexChangeTopTab'))
 const PickStudyTab = lazy(() => import('@/pages/scanner/PickStudyTab'))
 const StrikeQueryTab = lazy(() => import('@/pages/scanner/StrikeQueryTab'))
-const TpoTab = lazy(() => import('@/pages/scanner/TpoTab'))
 const IbStatsTab = lazy(() => import('@/pages/scanner/IbStatsTab'))
 const WatchThisTab = lazy(() => import('@/pages/scanner/WatchThisTab'))
 
@@ -83,7 +87,6 @@ const TAB_COMPONENT: Record<ScannerTabId, React.LazyExoticComponent<() => React.
   gexchangetop: GexChangeTopTab,
   pickstudy: PickStudyTab,
   strike: StrikeQueryTab,
-  tpo: TpoTab,
   ibstats: IbStatsTab,
   watch: WatchThisTab,
 }
@@ -109,7 +112,7 @@ export default function Scanner() {
 
   const selectTab = useCallback(
     (id: ScannerTabId) => {
-      // `replace` so the seven tabs do not stack seven entries in the history
+      // `replace` so the six tabs do not stack six entries in the history
       // for one visit — back should leave the page, not walk the tabs you
       // browsed. The URL still updates, which is the point of the departure.
       setParams(
@@ -180,7 +183,7 @@ function TabStrip({
                   ].join(' ')}
                   // The accent is per-tab and comes from the registry as a
                   // token. Only the active pill wears it, so the row does not
-                  // become seven competing colours.
+                  // become six competing colours.
                   style={on ? { borderColor: t.accent } : undefined}
                 >
                   <span aria-hidden>{t.icon}</span>

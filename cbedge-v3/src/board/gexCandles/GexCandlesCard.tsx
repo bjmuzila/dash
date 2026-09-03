@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
+import { ReplayDock } from '@/design/primitives/ReplayDock'
+import { T } from '@/design/theme'
 import { useIsPhone } from '@/design/useIsPhone'
 import { useQuery } from '@/data/api'
 import { usePageSymbol } from '@/data/symbol'
@@ -56,11 +58,35 @@ import { mountEsChart, type EsChartHandle } from './chart'
 // change the same thing and a way to end up reading two symbols side by side
 // without noticing.
 //
-// What deliberately did NOT: the gamma HEATMAP, replay, EMAs, Bollinger, RSI,
-// volume, the profile/TPO overlays, the multi-chart dock and the screenshot
-// pipeline. v2's EsChartCard is ~376KB of source; this card's whole route chunk
-// has an 80kb brotli ceiling in budgets.json. "Only GEX bubbles" is what makes
-// the two facts compatible.
+// What deliberately did NOT: the gamma HEATMAP, EMAs, Bollinger, RSI, volume,
+// the profile/TPO overlays, the multi-chart dock and the screenshot pipeline.
+// v2's EsChartCard is ~376KB of source; this card's whole route chunk has an
+// 80kb brotli ceiling in budgets.json. "Only GEX bubbles" is what makes the two
+// facts compatible.
+//
+// ── REPLAY (2026-09-03) ──────────────────────────────────────────────────────
+// OPT-IN, via the `replay` prop, and the board does not pass it. `<GexCandles
+// Card />` on the board is byte-for-byte the live card it has always been: no
+// transport, no toolbar change, no extra request, and every replay hook sits
+// inert behind one `replayOn` flag. `<GexCandlesCard replay />` — the Replay
+// hub's "GEX candles" tab — mounts already rewound to the session's open.
+//
+// It costs NOTHING to fetch, which is the reason it could be added at all. This
+// card already holds a whole session of candles AND a whole session of per-
+// minute GEX ladders in memory — that is what the bubbles ARE. So the replay is
+// not a second data path: it is ONE cursor timestamp, and both series are
+// clipped to it. `bars.filter(t <= cursor)` and `columns.filter(slotTs <=
+// cursor)`, upstream of the bubble model and the rail, so the candles, the
+// bubbles and the rail can never disagree about what time it is.
+//
+// THE CURSOR IS A TIMESTAMP, NOT A BAR INDEX. Switching 1m -> 5m rebuilds the
+// timeline with a fifth of the entries; an index would land somewhere unrelated
+// while a time stays the same time.
+//
+// Rewound, the live feeds are OFF — the socket's spot / esCandles frames paint
+// the forming bar, and pushing a live print onto a rewound chart would put a
+// 15:59 candle on a 10:04 tape. The forming-bar countdown goes with them: there
+// is no bar forming in a session that already closed.
 //
 // ── The data path ────────────────────────────────────────────────────────────
 //   candles   /api/snapshots/etf-candles — every symbol on the board
@@ -100,6 +126,24 @@ import { mountEsChart, type EsChartHandle } from './chart'
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CARD_ID = 'gex-candles'
+
+// ── Replay transport ─────────────────────────────────────────────────────────
+// The same numbers and the same key layout as every other v3 transport —
+// mgReplay.ts's MG_REPLAY_BASE_MS / MG_REPLAY_SPEEDS and the Ticker Lookup bar.
+// Not imported from either: those constants belong to modules this card has no
+// other reason to pull in, and the two values are the whole of the shared
+// decision. Same reasoning as CB_WASH's twin in the Multi Greek ladder.
+/** ms per BAR at 1×. */
+const REPLAY_BASE_MS = 700
+const REPLAY_SPEEDS = [0.5, 1, 2, 4, 8] as const
+
+/** `HH:MM` in New York — what the transport's clock reads. */
+const ET_CLOCK = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
 
 const ET_DATE = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/New_York',
@@ -154,6 +198,48 @@ function etWeekendSessionDay(now = new Date()): string {
  * emitters; a delta frame carries only the bars that changed, so "newest" is
  * by timestamp, not by position.
  */
+/**
+ * One transport key. Local rather than a `Chip`: the dock draws the orange
+ * plate, so these have to sit ON it — a Chip's own surface reads as a second
+ * plate inside the bar, which is the thing the dock's header note asks bars not
+ * to do.
+ */
+function TransportButton({
+  label,
+  title,
+  on = false,
+  disabled = false,
+  onClick,
+}: {
+  label: string
+  title: string
+  on?: boolean
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-pressed={on}
+      disabled={disabled}
+      className={[
+        'tabular shrink-0 rounded-sm border px-2 py-0.5 font-mono text-2xs font-extrabold leading-none',
+        on ? 'border-transparent text-bg' : 'border-line text-fg hover:bg-raised',
+        // Dimmed rather than hidden, the way the other transports do it: a key
+        // that disappears at the end of the tape moves every key beside it.
+        disabled ? 'cursor-default opacity-40' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      style={on ? { background: T.orange } : undefined}
+    >
+      {label}
+    </button>
+  )
+}
+
 function newestClose(data: unknown): number {
   const list = Array.isArray(data)
     ? data
@@ -228,7 +314,15 @@ interface ExpirationsResponse {
   data?: { items?: Array<{ 'expiration-date'?: string }> }
 }
 
-export function GexCandlesCard() {
+export function GexCandlesCard({
+  /**
+   * Offer the replay transport, and open already rewound to the session's open.
+   *
+   * The board never passes it — see the REPLAY note in the header. Only the
+   * Replay hub's "GEX candles" tab does.
+   */
+  replay = false,
+}: { replay?: boolean } = {}) {
   // ── Phone layout ───────────────────────────────────────────────────────────
   // One card, three differences, all of them about the hand rather than the
   // screen size:
@@ -271,6 +365,17 @@ export function GexCandlesCard() {
   )
   const countdownRef = useRef<HTMLSpanElement | null>(null)
   const barsRef = useRef<Bar[]>([])
+
+  // ── Replay state ───────────────────────────────────────────────────────────
+  // All four are inert unless `replay` was passed: `replayOn` seeds false, and
+  // nothing below it can turn true without the toggle, which is not rendered.
+  // Declared unconditionally because hooks are — the cost of an unused piece of
+  // state is nothing, and the alternative is a second component.
+  const [replayOn, setReplayOn] = useState(replay)
+  /** The cursor, as a TIMESTAMP. 0 = not seeded yet. See the header. */
+  const [replayMs, setReplayMs] = useState(0)
+  const [replayPlaying, setReplayPlaying] = useState(false)
+  const [replaySpeed, setReplaySpeed] = useState(1)
 
   const patch = useCallback((p: Partial<ChartSettings>) => {
     setSettings((prev) => {
@@ -465,10 +570,63 @@ export function GexCandlesCard() {
   )
 
   // ── Derived ────────────────────────────────────────────────────────────────
-  const bars = useMemo(() => {
+  // The WHOLE tape the card holds. `bars` below is this, clipped to the replay
+  // cursor; live, the two are the same array.
+  const allBars = useMemo(() => {
     const raw = useEs ? parseEsCandles(candlesQ.data) : parseCandles(candlesQ.data)
     return filterSession(rollup(raw, settings.interval), settings.session)
   }, [useEs, candlesQ.data, settings.interval, settings.session])
+
+  // ── The replay cursor ──────────────────────────────────────────────────────
+  // The timeline is the BARS, not the GEX columns: the candles are always there
+  // and the ladder may be switched off, and a transport whose scrubber empties
+  // when you turn off a layer is a broken transport.
+  const replayTimeline = useMemo(() => allBars.map((b) => b.t), [allBars])
+  const replayLast = replayTimeline.length - 1
+
+  // Index is DERIVED from the timestamp, never stored. See the header: an index
+  // does not survive a 1m -> 5m switch and a time does.
+  const replayIdx = useMemo(() => {
+    if (!replayTimeline.length) return 0
+    if (!replayMs) return 0
+    const after = replayTimeline.findIndex((t) => t > replayMs)
+    return after === -1 ? replayTimeline.length - 1 : Math.max(0, after - 1)
+  }, [replayTimeline, replayMs])
+
+  const cursor = replayOn ? (replayTimeline[replayIdx] ?? 0) : 0
+
+  // Seed at the session's OPEN, once bars exist. Landing on the last bar would
+  // be a rewound chart that looks exactly like the live one, which is the worst
+  // possible opening state for a replay tab.
+  useEffect(() => {
+    if (!replayOn || replayMs) return
+    const first = replayTimeline[0]
+    if (first) setReplayMs(first)
+  }, [replayOn, replayMs, replayTimeline])
+
+  // Stop at the right edge rather than looping. A poll that adds a bar while
+  // paused at the end leaves the cursor where it was — it does not chase the
+  // live edge, because "I stopped here" is a position, not a follow.
+  useEffect(() => {
+    if (!replayPlaying || replayTimeline.length === 0) return
+    const id = setInterval(() => {
+      setReplayMs((ms) => {
+        const i = ms ? replayTimeline.findIndex((t) => t > ms) : 0
+        const next = i === -1 ? null : replayTimeline[i]
+        if (next == null) {
+          setReplayPlaying(false)
+          return ms
+        }
+        return next
+      })
+    }, REPLAY_BASE_MS / replaySpeed)
+    return () => clearInterval(id)
+  }, [replayPlaying, replaySpeed, replayTimeline])
+
+  const bars = useMemo(
+    () => (cursor ? allBars.filter((b) => b.t <= cursor) : allBars),
+    [allBars, cursor],
+  )
 
   barsRef.current = bars
 
@@ -504,12 +662,17 @@ export function GexCandlesCard() {
   // read the same shifted columns, so they cannot disagree about where a strike
   // sits. Per-column, by that session's basis (see basis.ts), not one number
   // over the whole window.
+  //
+  // The replay clip lands HERE, upstream of both consumers, for the same
+  // reason: the bubbles and the rail read one array, so a rewound chart cannot
+  // show 10:04 gamma under a 10:04 tape beside a 16:00 rail.
   const columns = useMemo(() => {
     const picked = weekendExpiry
       ? allColumns.filter((c) => etDay(c.slotTs) === weekendExpiry)
       : latestSession(allColumns)
-    return useEs ? shiftColumns(picked, basis) : picked
-  }, [allColumns, weekendExpiry, useEs, basis])
+    const shifted = useEs ? shiftColumns(picked, basis) : picked
+    return cursor ? shifted.filter((c) => c.slotTs <= cursor) : shifted
+  }, [allColumns, weekendExpiry, useEs, basis, cursor])
 
   // No bars in these deps: a candle POLL is not a reason to re-bucket the GEX
   // history. `bucketMs` is how the interval gets in — the chart maps interval ->
@@ -550,7 +713,10 @@ export function GexCandlesCard() {
   // ES is in the key: the futures sit a basis above cash, and while that is
   // inside SPX's window a switch still deserves the reframe — the tape's
   // overnight range is not the index's.
-  const viewKey = `${symbol}|${useEs ? 'ES' : 'IDX'}|${settings.interval}|${settings.session}`
+  // `replayOn` is in the key so entering or leaving replay reframes ONCE. It is
+  // the only replay state that belongs here: the cursor moving is not a scale
+  // change, and reframing on every scrub tick would fight the pan and the zoom.
+  const viewKey = `${symbol}|${useEs ? 'ES' : 'IDX'}|${settings.interval}|${settings.session}|${replayOn ? 'R' : 'L'}`
   const framedRef = useRef('')
 
   // BEFORE the setBars effect below, deliberately. The interval is what the
@@ -588,7 +754,11 @@ export function GexCandlesCard() {
   // close is the live print. Reading it here is also what puts that type into
   // the socket's derived topic scope while the card is on ES, and takes it out
   // again when it is not.
-  const livePrice = esCapable && !useEs
+  // `&& !replayOn`: a live print pushed onto a rewound chart would paint 15:59's
+  // price onto the 10:04 candle the cursor is sitting on. Gating it here rather
+  // than inside the callback also drops the subscription, which takes `spot` /
+  // `esCandles` back OUT of the socket's derived topic scope while rewound.
+  const livePrice = esCapable && !useEs && !replayOn
   useEffect(() => {
     if (!livePrice) return
     return watchFrame<SpotFrame>('spot', (f) => {
@@ -597,7 +767,7 @@ export function GexCandlesCard() {
     })
   }, [livePrice, apply])
   useEffect(() => {
-    if (!useEs) return
+    if (!useEs || replayOn) return
     const type = settings.interval === 1 ? 'es1mCandles' : 'esCandles'
     return watchFrame<{ data?: unknown }>(type, (f) => {
       const px = newestClose(f?.data)
@@ -606,7 +776,7 @@ export function GexCandlesCard() {
         apply((h) => h.setLivePrice(px))
       }
     })
-  }, [useEs, settings.interval, apply])
+  }, [useEs, replayOn, settings.interval, apply])
 
   useEffect(
     () =>
@@ -627,7 +797,10 @@ export function GexCandlesCard() {
   useEffect(() => {
     const el = countdownRef.current
     if (!el) return
-    if (!settings.countdown) {
+    // Off while rewound: there is no bar forming in a session that has already
+    // closed, and `Date.now() - last` against a rewound cursor counts the wrong
+    // thing anyway.
+    if (!settings.countdown || replayOn) {
       el.textContent = ''
       return
     }
@@ -647,10 +820,14 @@ export function GexCandlesCard() {
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [settings.countdown, settings.interval])
+  }, [settings.countdown, replayOn, settings.interval])
 
   const error = candlesQ.error
-  const empty = !error && bars.length === 0
+  // `allBars`, not `bars`: rewound to the open, `bars` is legitimately one
+  // candle long and on the very first frame it can be zero. That is a cursor at
+  // the start of the session, not a card with no candles, and saying "No
+  // candles recorded" over a chart that is about to play is a lie.
+  const empty = !error && allBars.length === 0
   const tapeLabel = useEs ? 'ES' : def.label
 
   const ctlSize = phone ? ('touch' as const) : ('sm' as const)
@@ -704,13 +881,49 @@ export function GexCandlesCard() {
   )
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col gap-1">
+    <div
+      className="relative flex min-h-0 flex-1 flex-col gap-1"
+      // Everything the toolbar above carries, for the caption under a CopyShot —
+      // the shot drops this card's header, so what is not published here is not
+      // in the picture. See shell/snapshot.ts (META_ATTR).
+      data-capture-meta={[
+        useEs ? 'ES' : symbol,
+        expiry,
+        `${settings.interval}m`,
+        settings.session.toUpperCase(),
+        // A shot of a rewound chart that does not say so is a shot of a lie.
+        replayOn && cursor ? `REPLAY ${ET_CLOCK.format(new Date(cursor))} ET` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')}
+    >
       {/* ── Toolbar ──
           Portalled into the Card's header. This card used to draw its own row
           right under that header, so the board showed two bars stacked and the
           chart lost the height of both. */}
       <CardToolbar>
-        {!phone && tapePicker}
+        {/* Only where replay was offered — the board never passes the prop, so
+            this button does not exist there and the toolbar is unchanged. */}
+        {replay && (
+          <Chip
+            size={ctlSize}
+            label="⏱ Replay"
+            on={replayOn}
+            onClick={() => {
+              setReplayPlaying(false)
+              setReplayOn((v) => !v)
+            }}
+            title="Scrub the session on screen — the candles, the GEX bubbles and the rail all clip to one cursor. Off = live."
+          />
+        )}
+        {/* THE TAPE SWITCH STAYS IN THE HEADER ON A PHONE TOO (2026-09-03).
+            Everything else folds into the sheet below, but SPX-vs-ES is the one
+            control you reach for mid-session — it is the difference between a
+            chart that stops at 16:00 ET and one that has the overnight — and
+            burying it behind ⚙ made the phone build's candle screen answer a
+            different question from the board's. Two segments, and it is the
+            width of the word "ES". */}
+        {tapePicker}
         {!phone && expiryPicker}
         {!phone && intervalPicker}
         {!phone && sessionPicker}
@@ -728,14 +941,15 @@ export function GexCandlesCard() {
                 chart is currently set to — otherwise the two settings you
                 change most are invisible until you open the sheet. */}
             {phone
-              ? `${useEs ? 'ES · ' : ''}${INTERVAL_LABEL[settings.interval]} · ${settings.session.toUpperCase()} ⚙`
+              ? `${INTERVAL_LABEL[settings.interval]} · ${settings.session.toUpperCase()} ⚙`
               : '⚙ Layers'}
           </button>
           <Popover open={settingsOpen} onClose={() => setSettingsOpen(false)} sheet={phone}>
             <div className={phone ? 'flex w-full flex-col gap-3' : 'flex w-64 flex-col gap-2'}>
               {/* The controls the desktop keeps in the header. Same elements,
                   same handlers — only the placement differs. */}
-              {phone && tapePicker && <PanelSection title="Candles">{tapePicker}</PanelSection>}
+              {/* No "Candles" section here any more — the tape switch lives in
+                  the header on every width. See the note on CardToolbar. */}
               {phone && <PanelSection title="Expiry">{expiryPicker}</PanelSection>}
               {phone && <PanelSection title="Interval">{intervalPicker}</PanelSection>}
               {phone && <PanelSection title="Session">{sessionPicker}</PanelSection>}
@@ -826,6 +1040,119 @@ export function GexCandlesCard() {
           </Popover>
         </div>
       </CardToolbar>
+
+      {/* ── The replay transport ──
+          Rendered here, in this card's own tree, because this card owns the
+          state it drives; ReplayDock portals the DOM to the bottom of the page
+          column, in flow, so it shrinks the chart rather than covering the last
+          inch of it. See design/primitives/ReplayDock.tsx. */}
+      {replayOn && (
+        <ReplayDock>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-xs">
+            <span
+              className="shrink-0 font-black uppercase tracking-[0.1em]"
+              style={{ color: T.orange }}
+            >
+              Replay
+            </span>
+
+            {/* The clock is the whole point of the bar: it is the one place the
+                cursor is stated as a TIME rather than as a slider position. */}
+            <span className="tabular shrink-0 font-mono font-extrabold text-fg">
+              {cursor ? `${ET_CLOCK.format(new Date(cursor))} ET` : '--:--'}
+            </span>
+            <span className="shrink-0 text-2xs text-muted opacity-70">
+              {replayTimeline.length ? `bar ${replayIdx + 1}/${replayTimeline.length}` : 'no bars'}
+            </span>
+
+            {/* ◀ · play/pause · ▶ — the same three keys, in the same order, as
+                the Ticker Lookup and Multi Greek bars. */}
+            <span className="flex shrink-0 items-center gap-1">
+              <TransportButton
+                label="◀"
+                title="Previous bar"
+                disabled={replayIdx <= 0}
+                onClick={() => {
+                  setReplayPlaying(false)
+                  const prev = replayTimeline[replayIdx - 1]
+                  if (prev) setReplayMs(prev)
+                }}
+              />
+              <TransportButton
+                label={replayPlaying ? '❚❚' : '▶'}
+                title="Play / pause"
+                on={replayPlaying}
+                disabled={replayTimeline.length < 2}
+                onClick={() => {
+                  // Playing from the end shows one step and stops, which reads
+                  // as broken — rewind to the open first.
+                  if (replayIdx >= replayLast) {
+                    const first = replayTimeline[0]
+                    if (first) setReplayMs(first)
+                  }
+                  setReplayPlaying((p) => !p)
+                }}
+              />
+              <TransportButton
+                label="▶"
+                title="Next bar"
+                disabled={replayIdx >= replayLast}
+                onClick={() => {
+                  setReplayPlaying(false)
+                  const next = replayTimeline[replayIdx + 1]
+                  if (next) setReplayMs(next)
+                }}
+              />
+            </span>
+
+            {/* One scrubber over the bar index. `value` is the DERIVED index, so
+                a 1m -> 5m switch moves the handle to wherever that same instant
+                now sits instead of leaving it pointing at a different time. */}
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, replayLast)}
+              step={1}
+              value={replayIdx}
+              disabled={replayTimeline.length === 0}
+              onChange={(e) => {
+                setReplayPlaying(false)
+                const next = replayTimeline[Number(e.target.value)]
+                if (next) setReplayMs(next)
+              }}
+              // The dock's own orange (T.orange = --color-warn), not v2's, so
+              // the handle matches the plate it sits on.
+              className="h-1 min-w-[140px] flex-1 cursor-pointer accent-[var(--color-warn)]"
+              aria-label="Replay position"
+            />
+
+            <span className="flex shrink-0 items-center gap-1">
+              <span className="text-2xs font-bold text-muted opacity-60">Speed</span>
+              {REPLAY_SPEEDS.map((s) => (
+                <TransportButton
+                  key={s}
+                  label={`${s}×`}
+                  title={`Play at ${s}×`}
+                  on={replaySpeed === s}
+                  onClick={() => setReplaySpeed(s)}
+                />
+              ))}
+            </span>
+
+            <button
+              type="button"
+              onClick={() => {
+                setReplayPlaying(false)
+                setReplayOn(false)
+              }}
+              title="Leave replay and return to the live chart"
+              className="shrink-0 rounded-sm border border-line px-2 py-0.5 text-2xs font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg"
+            >
+              Live
+            </button>
+          </div>
+        </ReplayDock>
+      )}
 
       {/* ── Status line ── */}
       {error && <span className="shrink-0 text-xs text-down">{error.message}</span>}

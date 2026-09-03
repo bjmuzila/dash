@@ -68,9 +68,12 @@ import {
 //     are not rendered at all while it reads "0". The wrapper keeps its height
 //     so nothing jumps.
 //
-//  3. THERE IS NO SNAPSHOT BUTTON. v2's ⤢/Snap cluster carried a
-//     CopySnapButton; that needs a DOM-to-canvas renderer v3 does not ship and
-//     will not add for one button. Expand and Full screen did come across.
+//  3. THE SNAPSHOT BUTTON IS ONLY IN THE POP-OUT, and only for the owner. v3
+//     has one camera and it is in the toolbar (shell/CopyShot.tsx) — but this
+//     pop-out is a `fixed inset-0` overlay above everything, so while it is open
+//     that toolbar is behind it and unclickable. The wheel publishes itself to
+//     the menu anyway and carries a second button here for the case where it is
+//     the thing covering the screen.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** How far outside the viewport still counts as visible. ChartFrame's value. */
@@ -565,14 +568,18 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
         ? [
             {
               id: 'sector-wheel',
+              icon: '🥧',
               label: 'S&P Sector Wheel',
               group: 'This page',
               file: 'sector-wheel',
+              // What the dropped header was carrying: the universe, the zoom,
+              // and the scale the bars are drawn against.
+              meta: `S&P 500${focus ? ` · ${focus}` : ''} · ±${cap}% full scale`,
               resolve: () => panelRef.current,
             },
           ]
         : NO_TARGETS,
-    [expanded],
+    [expanded, focus, cap],
   )
   useCopyShotTargets(shotTargets)
 
@@ -793,10 +800,15 @@ export default function SectorWheel({ payload, failed }: SectorWheelProps) {
           ].join(' ')}
           style={{ maxWidth: isFs ? 'none' : 1320, padding: 'clamp(16px, 2vw, 28px)' }}
         >
-          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+          {/* A real <header>, not a div, and that is load-bearing: a CopyShot
+              drops the captured surface's own `:scope > header` and shortens the
+              picture to match, so the name and the controls live in the caption
+              under the shot instead of being printed twice. See
+              shell/snapshot.ts. */}
+          <header className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
             <div className="text-lg font-medium text-fg">S&amp;P Sector Wheel</div>
             <div className="flex shrink-0 items-center gap-1.5">{controls}</div>
-          </div>
+          </header>
           {body}
         </div>
       </div>,

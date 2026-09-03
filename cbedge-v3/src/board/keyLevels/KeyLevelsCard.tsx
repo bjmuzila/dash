@@ -332,7 +332,13 @@ function LevelsBody({
   }, [putWall, distPut, flipShown, distFlip, maxPain, spot, core, callWall, distCall, kDp, pDp, weeklyEm])
 
   return (
-    <div className={['flex min-h-0 flex-1 flex-col', emptyFeed ? 'stale' : ''].join(' ')}>
+    <div
+      className={['flex min-h-0 flex-1 flex-col', emptyFeed ? 'stale' : ''].join(' ')}
+      // For the caption under a CopyShot: the shot drops the Card header, and on
+      // this card that header is the live KeyLevelsTitle — the only place the
+      // symbol appears. See shell/snapshot.ts (META_ATTR).
+      data-capture-meta={symbol}
+    >
       <LevelsAxis marks={marks} spotPrice={spot || null} />
     </div>
   )

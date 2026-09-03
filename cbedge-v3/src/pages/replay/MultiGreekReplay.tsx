@@ -29,7 +29,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { query } from '@/data/api'
-import { PAGE_TICKER_RE } from '@/data/symbol'
+import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
 import { alpha, T } from '@/design/theme'
 import { Chip, PanelSection, Popover, SegGroup } from '@/design/primitives/Controls'
 import { Slider } from '@/board/gexCandles/controls'
@@ -59,11 +59,13 @@ import {
   type MgSession,
 } from './mgReplay'
 
-/** Four panels, four independent symbols — v2's shape, kept deliberately.
- *  The board-wide ticker in the Shell drives cards that COMPARE against one
- *  another; this page compares four symbols with each other, so one page symbol
- *  applied to all four would leave it comparing a symbol with itself. Same
- *  reasoning as the note beside Multi Greek in src/data/symbol.tsx. */
+/** Four panels. SLOT 1 follows the toolbar's board symbol (see the sync effect
+ *  in MultiGreekReplay); slots 2-4 are independently typeable and stay put.
+ *  That split is the live Multi Greek board's shape — panel 1 is the board
+ *  ticker, the rest are added by hand — and it is the only way this tab can
+ *  answer the toolbar without comparing a symbol with itself, which is what
+ *  pinning all four to one symbol would do. The values below are the seeds for
+ *  a board that has never been set; slot 1's is replaced on first render. */
 const DEFAULT_TICKERS = ['SPX', 'SPY', 'QQQ', 'NDX'] as const
 
 const TICKERS_KEY = 'cb-v3-replay-mg-tickers'
@@ -551,6 +553,7 @@ function ReplayPanel({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function MultiGreekReplay() {
+  const { symbol: pageSymbol, setSymbol: setPageSymbol } = usePageSymbol()
   const [tickers, setTickers] = useState<string[]>(() => loadTickers())
   const [dates, setDates] = useState<string[]>([])
   const [date, setDate] = useState('')
@@ -570,6 +573,27 @@ export function MultiGreekReplay() {
   const [intensity, setIntensity] = useState(1.75)
   const [showLevels, setShowLevels] = useState(true)
   const [cogOpen, setCogOpen] = useState(false)
+
+  // ── SLOT 1 FOLLOWS THE TOOLBAR ─────────────────────────────────────────────
+  // The Replay hub's other three tabs follow the board symbol outright; this one
+  // cannot, because four slots pinned to one symbol would leave the tab
+  // comparing a symbol with itself, which is the entire reason the card has four
+  // slots. So it takes the live Multi Greek board's shape instead: panel 1 IS
+  // the board ticker, panels 2-4 are added by hand and stay where they were put.
+  //
+  // A symbol that already sits in another slot is not left doubled — a repeated
+  // symbol is one panel fewer, silently, the same rule loadTickers() enforces on
+  // a saved board. The displaced slot takes the symbol slot 1 just gave up, so
+  // the tab still shows four distinct readings across a toolbar change.
+  useEffect(() => {
+    if (tickers[0] === pageSymbol) return
+    const displaced = tickers[0]
+    const out = tickers.map((t, i) => (i === 0 ? pageSymbol : t))
+    const dup = out.findIndex((t, i) => i !== 0 && t === pageSymbol)
+    if (dup > 0 && displaced) out[dup] = displaced
+    setTickers(out)
+    write(TICKERS_KEY, JSON.stringify(out))
+  }, [pageSymbol, tickers])
 
   const key = tickers.join(',')
 
@@ -678,12 +702,21 @@ export function MultiGreekReplay() {
     (slot: number, next: string): boolean => {
       if (!PAGE_TICKER_RE.test(next)) return false
       if (tickers.some((t, j) => j !== slot && t === next)) return false
+      // Slot 1 IS the board symbol, so typing here moves the TOOLBAR and the
+      // sync effect above brings the slot with it. Writing it locally instead
+      // would put the panel and the toolbar on two different symbols — and the
+      // effect would immediately snap the panel back, so the box would look
+      // broken.
+      if (slot === 0) {
+        setPageSymbol(next)
+        return true
+      }
       const out = tickers.map((t, j) => (j === slot ? next : t))
       setTickers(out)
       write(TICKERS_KEY, JSON.stringify(out))
       return true
     },
-    [tickers],
+    [tickers, setPageSymbol],
   )
 
   const commitCols = (n: number) => {

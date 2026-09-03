@@ -118,6 +118,21 @@ export function LadderModal({
     })()
   }, [])
 
+  // FOLLOW THE CALLER'S SYMBOL when it moves. Embedded in the Replay hub that
+  // is the board ticker, so changing it in the toolbar re-seeds this tab; as a
+  // modal it is the chain's active ticker, which does not move while the modal
+  // is open. Guarded on non-empty so a caller passing '' still falls through to
+  // the recorded-list default above rather than blanking the picker.
+  //
+  // It SEEDS, it does not lock: the picker below still switches to any root the
+  // recorder swept, and that choice stands until the toolbar moves again. The
+  // recorder's list is not the board's, so locking the two together would make
+  // half the recorded sessions unreachable from here.
+  useEffect(() => {
+    const s = (initialSymbol || '').toUpperCase()
+    if (s) setSymbol(s)
+  }, [initialSymbol])
+
   useEffect(() => {
     if (!symbol) return
     void (async () => {

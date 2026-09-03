@@ -1,5 +1,711 @@
 # Changelog
 
+## 2026-09-03 - v3 Economic Calendar + Earnings page (`/v3/economic-calendar`)
+
+v2's `/app/economic-calendar` ported to v3 as a PAGE, not a card. Two tabs over
+one feed: timed econ events with earnings woven into the day, and a five-column
+earnings week board.
+
+### Inventory first, then build
+
+The recurring failure on these ports is the v3 version coming out missing chunks
+of what v2 showed, because the page gets rebuilt from scratch — re-deciding what
+it contains at the same time as building it. Both jobs were already done in v2.
+So this one was written down before a line of v3 code existed:
+
+**`cbedge-v3/docs/parity/economic-calendar.md`** — 176 rows, one per rendered
+value, each with the endpoint AND field it comes from, its format and units, its
+threshold or colour rule, its sort order, and its empty/loading state. Every
+panel, badge, tooltip, toggle and column, not just the headline numbers. Parts
+A–Q. It is the spec; the page is finished when every row is ticked.
+
+### The three decisions the inventory surfaced
+
+1. **Type scale collapses DOWN.** v2 uses 12px and 14px; neither is on v3's
+   scale (9/10/11/13/15/18). 12 -> 11, 14 -> 13, applied uniformly, so the size
+   ORDER survives everywhere. Rounding 14 up to 15 would have made an event
+   title larger than the board header's own title.
+2. **All ten filters ship.** v2's page declared its own 8-key `FILTER_OPTS`,
+   dropping `all-usd` and `earnings` from the shared list. v3 takes the shared
+   ten — `earnings` is the only control that can isolate the woven earnings
+   blocks, and this page had no other one. Default stays `{all}`.
+3. **Long day label** — "MONDAY SEPTEMBER 1", the page's wording, shipped as
+   `fullDayLabelLong()` BESIDE the existing short form rather than replacing it.
+   The board card still wants the abbreviation in its narrow strip.
+
+### Four v2 defects fixed rather than transcribed
+
+Each was its own recommendation in Part Q, and none of them removes a value.
+
+- The **date chip** was gated on `lastRefresh` and then rendered `today`, so it
+  was invisible until the first load completed and never once showed the thing
+  it was gated on. Unconditional now, with the refresh time beside the date.
+- **`source` was fetched and thrown away.** `/api/calendar` answers HTTP 200 with
+  an empty events array when the upstream is down, so `res.ok` tells you
+  nothing; `source: "unavailable"` is the real signal and it now raises the
+  owner banner even when `warning` is empty. This is how the feed broke
+  unnoticed for six weeks.
+- **One `search` string was shared across both tabs**, so typing "fed" on the
+  calendar tab silently filtered the earnings board. One query per tab.
+- **The tab was not in the URL**, so every shared link opened on Calendar.
+  `?tab=earnings` now, the shape `/v3/scanner` already uses.
+
+### Logic transcribed, not re-derived
+
+`cbedge-v3/src/data/econCalendar.ts` was already a verbatim port of v2's
+`lib/econCalendar.ts`, so the maths came across untouched and nothing in it was
+rewritten: `pickAnticipated`'s two OR'd rules and its per-day top-up,
+`groupEarningsByDate`'s three buckets, `etMonFri`'s weekend roll-forward, the
+30-minute staleness cutoff, `fmtMcap`'s three branches. The page imports every
+one of them and re-declares nothing.
+
+The part a description would have lost is the **insertion order of the woven
+earnings blocks**, and it is transcribed exactly: PRE immediately after the day
+separator; AFTER immediately before the first event later than 16:00 ET, or at
+the end of the day if there is no such event; TBD always last, because an
+unconfirmed time has no position in the day's sequence and anchoring it anywhere
+earlier would imply one.
+
+### Palette
+
+Every one of v2's twenty hardcoded literals plus the nine-entry `BOARD` wash
+object already had a v3 token — `--color-impact-*` and `--color-cal-*` were
+added for the board card — so nothing new was minted. The board's three
+luminance rungs stay ALPHAS over the plate rather than picked colours, which is
+what keeps them tracking the token: `card` (a day column, the lightest thing on
+the page), `head` one rung up so the date has a plate, `tile` one rung down so
+the chips read as objects sitting on the column rather than holes cut into it.
+
+`npm run check:theme`'s four rules pass on every new and edited file. Nothing was
+added to `theme-baseline.json`.
+
+### Verified automatically, not by eye
+
+**`cbedge-v3/scripts/parity-check-econ.mjs`** drives BOTH pages through three
+scenarios against ONE backend — calendar tab; earnings/this week/Anticipated;
+earnings/next week/All — and fails on anything v2 renders and v3 does not. 25
+probes on the calendar tab, 31 on the earnings tab. It CLICKS to the tab rather
+than deep-linking, because v2 has no `?tab=` and clicking is the one path both
+sides share.
+
+Two set probes carry the weight, and both exist because a plain text probe would
+sail past the real losses:
+
+- every ticker each side LINKS to (`finance.yahoo.com/quote/<SYM>`), so a board
+  that renders its columns and its counts but drops a session bucket fails;
+- every market-cap string each side puts in a chip TOOLTIP, because cap and EPS
+  are on screen nowhere else — the tile is logo and ticker and nothing more.
+
+A vacuous run is called out rather than banked: a board with no names, or a
+calendar day with no A/F/P figures, passes its probes for the wrong reason and
+the run says so. Same for a weekend run, where `etMonFri` rolls forward to a
+week the recorder may not have swept.
+
+**`cbedge-v3/scripts/parity-check-econ.test.mjs`** — 20 assertions over fixtures,
+each an injected regression this port could plausibly have shipped: the TBD
+bucket dropped (the largest silent loss available here — Nasdaq marks most of
+its calendar time-not-supplied, and v2's own code used to throw that bucket
+away), the after-hours block dropped, chip tooltips dropped, `fmtMcap` losing its
+sub-billion branch so every small cap prints "$0B", the A/F/P row dropped, a
+whole day column dropped. All 20 pass; every injected regression fails the
+harness as intended. Wired into `npm run check`.
+
+### Files
+
+New:
+
+- `cbedge-v3/docs/parity/economic-calendar.md` — the 176-row spec
+- `cbedge-v3/src/pages/EconomicCalendar.tsx`
+- `cbedge-v3/src/pages/economicCalendar/ChipLogo.tsx` — the three-stage logo
+  ladder (mirrored `/logos/<SYM>.png?v=3` -> `/proxy/ticker-logo?raw=1` ->
+  ticker-text chip). `raw=1` is load-bearing: a 302 to a third-party host taints
+  a capture canvas and takes the whole PNG with it. **Bump `LOGO_REV` in step
+  with v2's `components/shared/ChipLogo.tsx`** — two apps read one mirror.
+- `cbedge-v3/src/pages/economicCalendar/board.ts` — the `BOARD` washes, the chip
+  geometry, `dayFull`/`dayDate`
+- `cbedge-v3/scripts/parity-check-econ.mjs` + `.test.mjs`
+- `app/v3/economic-calendar/route.ts` — step 4 of four; without it the page
+  works in-app and 404s on a hard refresh, and with the tab in the query string
+  a shared link IS a hard refresh
+
+Edited:
+
+- `cbedge-v3/src/App.tsx` — `lazy()` import + route
+- `cbedge-v3/src/shell/Shell.tsx` — NAV entry, prefetching `/api/calendar` and
+  `/proxy/earnings-week?week=both` on hover
+- `cbedge-v3/src/data/econCalendar.ts` — `fullDayLabelLong()` added, nothing else
+- `cbedge-v3/package.json` — `check:parity:econ`, `check:parity:econ:self`, and
+  the self-test inside `npm run check`
+
+### Also: `econTemplate.ts` unblocked the pre-commit theme check
+
+Six `font-size` literals in `src/board/econCalendar/econTemplate.ts` (the 1280x672
+Discord poster) were failing `check-theme` rule 4 and aborting the commit:
+24px on `.badge`, 17px on the date pills, 30px on `.quote`, and 14px on
+`.panel-title`, `.panel-count` and `.empty-panel`.
+
+They are now five named constants at the top of the file, next to the lane
+widths. **The rendered stylesheet is byte-identical** — the poster does not
+change by one pixel.
+
+That is the right fix rather than a dodge, because it makes these six consistent
+with the TWELVE sizes in the same file that already pass the check: every other
+size there is arithmetic (`px(16, econScale)`, `Math.round(ern.sym * 0.95)`)
+because the three lanes re-scale with how many rows land in them, and the JS
+truncation divides by those very numbers. These five are simply the sizes that do
+not re-scale, and they never got brought into that system.
+
+The alternative was mapping them onto v3's type scale: 24 is already on it, but
+17 -> 18 and 30 -> 32 would change a brand asset that has been going into one
+Discord channel for months, and the quote lives in a `max-width:1120px` centred
+block on a canvas that is height-locked and "shrinks, never grows" — 30 -> 32 can
+push a long quote to a second line. Rem sizing is wrong here for the same reason:
+`--text-*` is a rem ladder, so a viewer with a non-16px root would rescale the
+badge alone on a canvas where every other number is absolute. This is the carve-out
+AGENTS.md already makes for a canvas or a chart config: the number stays a number.
+
+Say the word if you would rather have the scale mapping and a re-tuned poster.
+
+### Still to run on the laptop
+
+`npm run typecheck`, `npm run build` and a live `check:parity:econ` (it needs a
+browser, a signed-in cookie and the backend up). Run `npm run check` before
+pushing. Run the parity check ONCE AS OWNER and ONCE AS A PLAIN SUBSCRIBER — the
+feed-health and error banners are owner-only on both pages, so only an owner run
+exercises them and only a subscriber run proves they stayed hidden.
+
+## 2026-09-03 - Replay hub: a GEX candles tab
+
+Fifth tab on `/v3/replay`, between GEX levels and Multi Greek. It is the board's
+own GEX Candles card, mounted with a new `replay` prop, so the candles, the GEX
+bubbles and the GEX rail all rewind together off one cursor.
+
+### It costs nothing to fetch
+
+The card already holds a whole session of candles AND a whole session of
+per-minute GEX ladders in memory — the ladders are what the bubbles ARE. So the
+replay is not a second data path or a second recorder: it is ONE cursor
+timestamp, and both series are clipped to it.
+
+    bars.filter(b => b.t <= cursor)            // the tape
+    columns.filter(c => c.slotTs <= cursor)    // the ladders
+
+The column clip lands upstream of BOTH consumers — the bubble model and the rail
+read one array — so a rewound chart can never show 10:04 gamma under a 10:04
+tape beside a 16:00 rail.
+
+### The cursor is a timestamp, not a bar index
+
+Switching 1m -> 5m rebuilds the timeline with a fifth of the entries. An index
+would land somewhere unrelated; a time stays the same time, and the scrubber
+handle moves to wherever that instant now sits. The index is derived from the
+timestamp on every render and never stored.
+
+### Rewound, the live feeds are off
+
+`spot` / `esCandles` / `es1mCandles` paint the forming bar, and pushing a live
+print onto a rewound chart would put 15:59's price on the 10:04 candle. Gated at
+the subscription, not inside the callback, so those frame types also drop back
+OUT of the socket's derived topic scope while rewound. The forming-bar countdown
+goes with them — there is no bar forming in a session that already closed — and
+the CopyShot caption gains `REPLAY HH:MM ET`, because a shot of a rewound chart
+that does not say so is a shot of a lie.
+
+### The board is untouched
+
+`replay` is opt-in and `BoardPage`/`catalog.tsx` do not pass it. `<GexCandles
+Card />` on the board is the live card it has always been: no transport, no
+toolbar button, no extra request, every replay hook inert behind one `replayOn`
+flag that nothing can turn true without a control that is not rendered.
+
+### Transport + framing
+
+- Same shape and the same numbers as every other v3 transport: ◀ · ▶/❚❚ · ▶,
+  one scrubber, `Speed` 0.5×/1×/2×/4×/8×, 700ms per bar at 1×, docked to the
+  page's bottom edge through `ReplayDock` (in flow, so it shrinks the chart
+  instead of covering the last inch of it). Plus a `Live` key to drop out.
+- Opens rewound to the session's OPEN, not the last bar. Landing on the last bar
+  is a rewound chart that looks exactly like the live one.
+- `TabDef.chart` added to the hub: the framed body is normally a block scroller
+  (right for a ladder), and a `flex-1` chart inside a block parent has nothing to
+  stretch against and collapses. The candles tab swaps that wrapper for a flex
+  column.
+- The tab follows the toolbar ticker for free — the card already reads
+  `usePageSymbol`.
+
+Note: `scripts/parity-check-replay.mjs` is a v2<->v3 harness and still knows four
+tabs. Its `A/tablist` probe is `count`-based (fails only when v3 has ZERO), so a
+v3-only fifth tab reports as a difference, not a failure. Left as-is on purpose:
+that script's job is proving nothing of v2's went missing.
+
+Touched: `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`,
+`cbedge-v3/src/pages/Replay.tsx`.
+
+## 2026-09-03 - v3: every card can go full screen, inside the app frame
+
+**Every `Card` in v3 now has an expand control** (the small arrows at the right
+of its header). Expanded, the card fills the whole page area and nothing else
+changes: THE LEFT RAIL AND THE TOP TOOLBAR STAY PUT, so the ticker picker, the
+clock, the camera, the account menu and every nav icon are still there and still
+work. Escape, or the same button (now a collapse glyph), puts it back.
+
+Deliberately NOT the browser's Fullscreen API and NOT `position: fixed` over the
+viewport - both take the rail and the toolbar with them, and those two are how
+you leave the card you just expanded.
+
+How it works: `src/design/primitives/Expand.tsx` is a new host, `ExpandStageHost`,
+mounted in `Shell.tsx` INSIDE the page column (right of the rail, below the
+toolbar) and inside `ReplayDockHost`, so an expanded card covers exactly that box
+and the replay dock still owns the bottom edge. An expanded card is PORTALED onto
+that stage - the same trick `CardToolbar` and `ReplayDock` already use here - so
+the React tree never moves: the chart instance, the fetched chain, the scroll
+position and the replay cursor all survive expanding and collapsing. The board
+tile it came from keeps its place in the grid and is simply empty for the
+duration, so collapsing puts the card back exactly where it was.
+
+Notes:
+- On by default (`expandable` on `CardProps`, defaults true) - "every card"
+  means every card, including the ones on Analysis, Scanner, Premarket, Flow.
+- Outside the shell there is no stage and no button, so the phone build
+  (`/v3/m/*`), previews and tests are untouched.
+- One card expanded at a time.
+- `BoardPage` passes `expandId={id}` (the board instance id), so the expansion
+  survives a re-render mid-gesture, and the toolbar camera can still find a card
+  while it is expanded and living outside its tile - a shot taken then is the
+  card at the size you are looking at it.
+
+No colour literals, no Tailwind palette, no off-scale type - `check:theme` clean.
+
+Touched: `cbedge-v3/src/design/primitives/Expand.tsx` (new),
+`cbedge-v3/src/design/primitives/Card.tsx`, `cbedge-v3/src/shell/Shell.tsx`,
+`cbedge-v3/src/board/BoardPage.tsx`. No proxy, server or v2 code.
+
+## 2026-09-03 - Post Studio: v3 wordmark, and a template per v3 board card
+
+**The logo was the old one.** `LOGO_SRC` in `owner-vite/src/pages/studioHtml.ts`
+was still the resampled `cbedge3.0.png` master. It is now the V3 WORDMARK -
+`cbedge-v3/src/assets/cbedge-wordmark.png`, the same lockup `Brand.tsx` renders
+in the v3 toolbar - inlined as a data URI the same way, for the same reason
+(this document renders inside owner.cbedge.net and cannot reach the Next app's
+public/). 374x96 at source, ~18KB, down from ~35KB. `object-fit:contain` absorbs
+the 3.90:1 ratio in the 3:1 logo slots, so no template geometry moved.
+
+**Eight new templates, one per card on the v3 board** - GEX Candles, GEX Chart,
+Multi Greek, Net Premium, Flow Tape, Quick Links, Key Levels, Economic Calendar
+& Earnings. Each is wordmark, card name, one-line description, four bullets, and
+a single tall screenshot slot. They are for X, so there is nothing in them about
+endpoints, sockets or grid units - the card has to sell what it does, not
+document how it is wired.
+
+All eight are built by one `v3card()` helper rather than eight copies of the same
+layout, so the geometry is edited in one place. They appear in the Template
+dropdown as "V3 card - <name>", between the Scanner-win template and Blank.
+
+Verified: the studio document loads with no console or page errors, all 24
+templates enumerate, and loading a v3 template renders the wordmark and the slot.
+
+Also in `generated/` (git-ignored): eight standalone 1600x900 PNG versions of the
+same cards for immediate posting, plus the HTML they were rendered from.
+
+Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
+
+## 2026-09-03 - v3 phone build: six tabs at /v3/m/*, and /v3 is no longer owner-only
+
+v3 has a phone build. Six screens under `/v3/m/*` with a bottom tab bar, and
+**not one of them is a phone-only implementation of anything** — each tab is a
+HOME-BOARD CARD or a v3 page rendered full-bleed inside a phone frame:
+
+| Tab | What it actually is |
+|---|---|
+| `/m/gex` — GEX | `board/gexChart/GexChartCard` |
+| `/m/heat` — Heat | `board/multiGreek/MultiGreekCard`, one column |
+| `/m/spx` — SPX | `board/gexCandles/GexCandlesCard` |
+| `/m/chain` — Chain | `pages/OptionsChain` |
+| `/m/em` — Moves | `pages/Em` |
+| `/m/econ` — Cal | `board/econCalendar/EconCalendarCard` |
+
+That is the whole design, and it is the one thing v2's phone build got wrong.
+`components/mobile/` is six bespoke pages that re-derive numbers the desktop
+already computes, and they started drifting from it the week they landed. Here a
+fix to a card is a fix to the phone, because they are the same component.
+
+**Heat is Multi Greek with one column.** New `singleColumn` prop: one expiry
+column — the front one, 0DTE on SPX — no ex-0DTE total, and the Columns section
+of the cog hidden with it, because a control that cannot move the thing it names
+is worse than no control. The ＋ button is untouched, so 1–4 ticker panels works
+exactly as it does on the board and the panel row scrolls sideways past two. The
+card's reason to exist is the ACROSS read (the same strike on several symbols at
+the same DTE); at 390px three expiry columns per panel is three unreadable
+columns and no across read at all, so the columns are what gets spent.
+
+It is a PROP, not `useIsPhone()` inside the card: the board gets looked at in a
+narrow desktop window, and a card that silently dropped two columns on a resize
+is a bug nobody can describe. It also writes nothing to storage — a phone visit
+must not come back as a one-column board on the desktop.
+
+**The SPX/ES tape switch is in the header on a phone now.** `GexCandlesCard` was
+already phone-aware and folded its whole toolbar into a bottom sheet, the switch
+with it. That switch is the difference between a chart that stops at 16:00 ET
+and one that has the overnight, and it is the control you reach for mid-session,
+so it stays in the header at every width; the ⚙ button's phone label drops the
+`ES ·` prefix it used to carry to compensate. Everything else still folds.
+
+**/v3 is no longer owner-gated.** `middleware.ts` lost `/^\/v3(\/.*)?$/` from
+`OWNER_PATTERNS`. v3 is a normal paid route now — signed-out visitors still go
+to `/`, unpaid ones still go to `/home`. No v3-shaped hole was added to the
+gate; there is one fewer owner-only pattern.
+
+**New files**
+
+- `cbedge-v3/src/mobile/mobileNav.ts` — the tab registry, the desktop→mobile
+  redirect map, the session opt-out. Dependency-free on purpose.
+- `cbedge-v3/src/mobile/MobileShell.tsx` — ONE header and the tab bar. On a card
+  screen the header IS the `Card` header, so the card's own `<CardToolbar>`
+  portals into it and the phone never shows two stacked bars — a real problem,
+  since a second bar costs ~60px of the ~600 a phone has. `chrome="bare"` is for
+  a page that already draws a toolbar (Chain, Moves). `fill` = no scroll, for
+  anything that owns a drag gesture.
+- `cbedge-v3/src/mobile/MobileTabBar.tsx` — six tabs, safe-area aware.
+  Long-press any tab for the desktop site, for the session.
+- `cbedge-v3/src/mobile/MobileRedirect.tsx` — phones on a route that HAS a phone
+  counterpart get replaced to it. Only the four routes in `DESKTOP_TO_MOBILE`;
+  Analysis, Flow, Replay, Scanner and Premarket keep their desktop layout,
+  because a cramped real page beats a redirect to an unrelated one. Desktop
+  browsers are never pushed off `/m/*`, so it can be tested on a laptop.
+- `cbedge-v3/src/mobile/pages/M{Gex,Heat,Spx,Chain,Em,Econ}.tsx` — six thin
+  wrappers. Their real weight is the chunk the card already has.
+- `app/v3/m/[tab]/route.ts`, `app/v3/m/route.ts` — the SPA shell for a hard
+  refresh or a shared link. ONE dynamic segment, deliberately not a catch-all:
+  a catch-all under `/v3` would swallow `/v3/assets/*.js` and hand back HTML.
+  Because the segment is bounded, adding a tab needs no new route file.
+
+**Changed:** `src/App.tsx` (six lazy routes + `MobileRedirect`), `src/shell/Shell.tsx`
+(drops the rail and toolbar on `/m/*` and keeps all three providers — one
+socket, one store, one auth read across a long-press to the desktop and back),
+`src/board/multiGreek/MultiGreekCard.tsx`, `src/board/gexCandles/GexCandlesCard.tsx`,
+`cbedge-v3/AGENTS.md`, `middleware.ts`.
+
+**Before pushing:** run `npm run check` in `cbedge-v3/`. These changes were
+written without a local build — typecheck, theme, budgets, ws-scope and perf all
+still need a green run on the laptop.
+
+## 2026-09-03 - CopyShot: the Economic Calendar poster, ported from v2
+
+v2's Discord card is back. Not a screenshot of the board card — a POSTER: a
+locked 1280×672 layout built for one job, which is to be pasted into Discord and
+read at a glance on a phone. Title bar, quote of the day, three lanes
+(Presidential Schedule / Economic Calendar / Earnings), CB Edge mark in the
+corner. It is the second camera row on the Economic Calendar card, under
+🖼️ **Economic Calendar — poster**, beside the plain shot of the card itself.
+
+New file: `cbedge-v3/src/board/econCalendar/econTemplate.ts`, transcribed from
+v2's `lib/discord/econSnapshot.ts` and meant to come out looking the same — the
+asset has been going into the same channel for months and people know its shape.
+Palette is v3's: the impact ramp is `--color-impact-*`, which carries v2's exact
+reds and ambers, and the accent is `--color-cal-accent`, v2's teal, deliberately
+rather than v3's blue. A poster is a brand asset, not a page.
+
+**What did not come across.** A third of v2's file is html2canvas workarounds,
+and v3 does not render through html2canvas:
+
+- **PILL_NUDGE_EM is gone.** html2canvas puts a text baseline at (top + ascent)
+  and ignores line-height's half-leading, so nothing centres vertically; v2
+  compensates with asymmetric padding tuned off a real render — 0.42em of it.
+  `<foreignObject>` IS a browser and centres correctly, so carrying that over
+  would have pushed every pill's text visibly low. Replaced with
+  `align-items:center`.
+- **The JS truncation stayed.** v3 would not need it — the browser does
+  `text-overflow` — but the measurements are tuned, the result is deterministic,
+  and matching v2's line breaks is the point.
+
+**Two things fixed on the way through.**
+
+- **The canvas is 1280×672, not 1280×720.** v2's `<body>` was 720 tall with 24px
+  of padding around a 1280-wide child, so the poster overflowed it — which never
+  mattered there, because the capture targeted `#root` and the body was only the
+  thing it sat in. Here the poster IS the captured element, and keeping the
+  wrapper silently took 48px out of the lane arithmetic: the earnings strip lost
+  a chip per row and the third group fell off the bottom of the panel.
+- **`Non-Farm Employment Change` now ranks first.** v2's headline table matches
+  `nonfarm payrolls`, and ForexFactory titles the print "Non-Farm Employment
+  Change" — so on jobs Friday THE number was unranked and sorted below Crude Oil
+  Inventories. Faithful to v2 everywhere else; this one is a bug, not a decision.
+
+**Two small pieces of plumbing** hold it up, both general:
+
+- `CopyShotTarget.capture` — a target may take the whole shot itself. The poster
+  is composed on demand (fetch, build, mount off-screen, photograph, tear down),
+  so there is nothing for `resolve` to return until the row is clicked. Icon,
+  ordering and button feedback are unchanged; only the middle is different.
+- `ShotOptions.bare` — deliver the pixels with no caption band and no mark. The
+  poster carries its own title, date and mark, and the caption would say all
+  three a second time.
+
+The poster is mounted off-screen in the LIVE document rather than an iframe: the
+engine inlines computed style off a laid-out element, and `getComputedStyle` on
+another document's nodes is not something to rely on. Every rule is scoped under
+`.cbx-econ-poster`, which also puts it at specificity (0,1,0) — above Tailwind's
+preflight, so `border:0 solid currentColor` cannot fight the poster's own reset.
+Same hazard the ALWAYS set in `shell/snapshot.ts` guards from the other end.
+
+Files: `cbedge-v3/src/board/econCalendar/econTemplate.ts` (new),
+`cbedge-v3/src/board/econCalendar/EconCalendarCard.tsx`,
+`cbedge-v3/src/shell/snapshot.ts`, `cbedge-v3/src/shell/CopyShot.tsx`.
+Preview: `generated/2026-09-03-econ-calendar-poster.png`.
+
+
+## 2026-09-03 — Post Studio card templates (v3 board cards)
+
+Rendered eight 1600x900 info-card templates for owner.cbedge.net -> Post Studio,
+one per entry in `cbedge-v3/src/board/catalog.tsx` (GEX Candles, GEX Chart,
+Multi Greek, Net Premium, Flow Tape, Quick Links, Key Levels, Economic Calendar
+& Earnings).
+
+Each template carries: the card's hook line, a "what it shows" list, the live
+REST endpoints and `/ws/gex` topics it actually reads, an API-pull block
+(endpoint + card id + grid size + live topics), a board-footprint diagram, a
+ready post-copy line, and an empty 4:3 screenshot slot for the real card shot.
+
+Colours/type are the v3 tokens (`cbedge-v3/src/design/tokens.css`) — nothing
+hardcoded off-theme.
+
+Output (git-ignored): `generated/2026-09-03-post-studio-*.png` plus
+`generated/2026-09-03-post-studio-card-templates.html` — the editable source.
+To drop a real shot in, put `<img src="...">` inside that card's `.slot` div and
+re-export at 1600x900.
+
+No application code changed.
+
+## 2026-09-03 - CopyShot: "Whole board" copies instead of downloading, and the menu has icons you can drag
+
+**The board was too big to copy.** Not a bug in the fallback — the fallback was
+working exactly as written. The whole board is every card at full height, which
+on a 27" monitor is something like 2400×3000 CSS pixels; at devicePixelRatio 2
+that is a 29-megapixel bitmap and Chrome rejects the clipboard write outright.
+The capture then fell out of the bottom into a download, which is the worst
+possible place for that to happen: "copy" quietly becoming "saved to
+~/Downloads" on exactly the shot you most wanted to paste.
+
+Two changes, belt and braces:
+
+- **The multiply is now derived from the OUTPUT SIZE, not the display.** 2×
+  while the picture stays under a 12-megapixel budget, sliding toward 1× as it
+  grows. A card is unaffected — the budget is several times the biggest card
+  anyone has on a board — and a 2400×3000 board comes back at 1.29× instead of
+  2×, which is one clipboard write rather than none. Floored at 0.75×; a mush is
+  not a screenshot.
+- **A retry ladder before the download.** Chrome refuses a write for two
+  different reasons that want different answers — too big, which shrinking
+  fixes, and an insecure origin or stale gesture, which nothing here fixes — and
+  the rejection does not say which. So it now tries again at 0.62× and 0.45×
+  before falling back. The download is still there for the failures that are
+  genuinely not about size, because losing the capture entirely would be worse.
+
+**The camera's menu has icons, and the rows are draggable.** Same language as
+the rail — one emoji per row — and `CardDef` carries it, so the "+ Add card"
+menu picked it up for free and the two menus name the same card the same way.
+🗂️ Whole board · 🕯️ GEX Candles · 📊 GEX Chart · 💵 Net Premium · 🧮 Multi Greek
+· 📏 Key Levels · 🌊 Flow Tape · 🗓️ Economic Calendar · 🔗 Quick Links · 🥧 Sector
+Wheel · ↔️ Estimated Move.
+
+Order is saved per browser under `cb-v3-copyshot-order`, the same shape the rail
+uses. Stored as a flat list of target ids: a row whose id is not in the list
+sorts after the ones that are and keeps its published order, so a card added
+tomorrow lands at the bottom of its group rather than somewhere arbitrary, and
+nothing needs migrating when the catalog grows. Dragging is confined to a group
+— "Whole board" belongs above the cards, and dropping a page's surface into the
+middle of the board's list would only ever be a mis-drop. Rewriting one group's
+order carries every other group's saved ids through untouched, so arranging the
+board cannot disturb an arrangement made on a page that is not even mounted.
+
+Files: `cbedge-v3/src/shell/snapshot.ts`, `cbedge-v3/src/shell/CopyShot.tsx`,
+`cbedge-v3/src/board/catalog.tsx`, `cbedge-v3/src/board/BoardPage.tsx`,
+`cbedge-v3/src/pages/Em.tsx`,
+`cbedge-v3/src/pages/tradersDashboard/SectorWheelCard.tsx`.
+Preview: `generated/2026-09-03-copyshot-menu.png`.
+
+
+## 2026-09-03 - /scanner: TPO Structures dropped from v3
+
+Brandon's call. The v3 scanner is **six tabs**, not seven. v2's
+`/app/scanner?tab=tpo` is untouched and still live — this is a v3 decision only.
+
+**One thing made it non-trivial.** `ibStatsData.ts` imported `loadTpoCandles`
+from `tpoData.ts`, and that import was never about TPO: `tpoData.ts` happened to
+own `/api/snapshots/candles` for ES and NQ, and IB Stats' live tape reuses it
+rather than keeping a second copy of the same four URLs. (IB Stats needs REST
+candles at all because v2 got them from two page-level socket hooks, which v3
+non-negotiable 2 forbids.)
+
+So the candle half was extracted first, into **`pages/scanner/candles.ts`** (468
+lines) — the record types, `etDateStr`, the four URL builders, the stale
+constants, the loaders, the live-frame helpers, `unionCandles`, `barCountKey`,
+`spotFromCandles`. Renamed off the TPO flavour: `TpoInstrument` →
+`CandleInstrument`, `loadTpoCandles` → `loadCandles`, `TpoCandleLoad` →
+`CandleLoad`. Nothing needed inlining — no moved function referenced any of the
+TPO session constants. Leaving a file called `tpoData.ts` behind for IB Stats'
+benefit would have been exactly the dead-name confusion AGENTS.md complains
+about.
+
+**Removed from the registry, in all three places it lived.** `'tpo'` is out of
+`ScannerTabId`, `SCANNER_TABS` and `SCANNER_GROUPS` (the `structure` cluster is
+now just IB Stats). All three matter and the file now says why: a stale key in
+`SCANNER_GROUPS` is harmless because the renderer skips an unknown id, but **a
+stale entry in `SCANNER_TABS` still draws a pill** — one selecting a tab with no
+component behind it. Dropping it from the union is what makes the compiler find
+every other site, because `TAB_COMPONENT` in `pages/Scanner.tsx` is a
+`Record<ScannerTabId, …>` and a leftover key is only an error once the union
+stops containing it. `isScannerTabId('tpo')` is now false, so a pasted
+`?tab=tpo` falls back to `DEFAULT_TAB` like any other unknown id.
+
+**Six files tombstoned** under `cbedge-v3/src/pages/scanner/` — `TpoTab.tsx`,
+`tpoData.ts`, `tpoStructures.ts`, `tpoTaxonomy.ts`, `tpoProfile.ts`, `amt.ts`.
+Each carries the repo's usual DELETED header and invites `git rm`; they are on
+disk only because the tooling that made the change cannot delete files.
+`tpoData.ts`'s tombstone additionally carries the full forwarding table — three
+renames plus the 21 names that moved unchanged — so a reader hunting
+`loadTpoCandles` lands on `candles.ts` instead of a dead end.
+
+**Verification.** `tsc --noEmit` against the real `tsconfig.json` with the actual
+v3 tree: **zero errors under `pages/scanner/` or `pages/Scanner.tsx`** (the 15
+remaining are `TS2307` on v3 modules that were never staged into the harness —
+`@/pages/Home`, `@/shell/CopyShot` and friends). Greps confirm no surviving
+import of any removed module and no `'tpo'` tab id anywhere in code; the only
+hits are the tombstones' own forwarding prose. `noUnusedLocals` passing is what
+proves `LIGHT_BLUE` still earns its import in `scannerNav.ts` after the accent
+that shared it left.
+
+**`docs/parity/scanner.md` Part F is marked, not deleted.** It carries a banner
+saying it is no longer a build target, and the doc total now reads *1,525 rows
+(1,324 live)*. It stays for two reasons: rows F4–F13 and F191–F200 still spec
+the candle layer, and are the spec for `candles.ts` now; and the rest is the
+record of what v2's tab did, which is what makes dropping it a decision rather
+than an omission.
+
+**Left alone deliberately:** `/api/tpo-forecast` in `server-v2` now has zero v3
+clients — killing a server route is a separate decision from dropping a tab, and
+v2's tab still calls it. `budgets.json` needs nothing: it budgets by asset kind,
+not per-chunk name, so the vanished `TpoTab` chunk leaves no stale key, just
+more headroom in `route`.
+
+## 2026-09-03 - Replay: every tab follows the toolbar, and the GEX-levels core bar wears the gold
+
+Three things, all on the /v3/replay hub and the Ticker Lookup card behind its
+GEX-levels tab.
+
+### 1. The CB bar carries the house gold wash
+
+`cbedge-v3/src/pages/analysis/lookup/Ladder.tsx` — the GEX-levels ladder, shown
+BOTH on the Replay hub's "GEX levels" tab and on the Analysis page's Ticker
+Lookup card (one component, two surfaces, so this lands on both at once).
+
+The Core Bullseye was said only by the `CB` tag beside the strike; the bar
+itself was untouched. It now carries the same gradient the Multi Greek ladder,
+its replay and the option chain use:
+
+    linear-gradient(90deg,  gold 0%, gold@85% 55%, gold@0% 82%), <sign colour>   +GEX
+    linear-gradient(270deg, gold 0%, gold@85% 55%, gold@0% 82%), <sign colour>   -GEX
+
+Gold is held at the bar's ROOT — the centre rail every bar grows from — and is
+gone before the tip, so magnitude and sign still read exactly as before. Two
+angles because the two sides grow away from a shared rail: the positive bar's
+root is its left edge, the negative bar's is its right. A flat gold fill was
+never an option, for the reason it was pulled from the chain and both Multi
+Greek ladders: it buries the sign, and a red core and a blue core render as the
+same stripe.
+
+CW and PW stay tag-only. Their colour IS a direction (blue ceiling, red floor)
+and would fight the bar's own sign; gold carries no direction, so it can ride
+the bar without saying anything the bar does not already say.
+
+### 2. Every replay tab follows the toolbar ticker
+
+`cbedge-v3/src/pages/Replay.tsx` and friends. Four tabs each remembering their
+own symbol meant switching tabs could change the subject without saying so, and
+the toolbar — the one control that looks like it drives the page — drove only
+the Options Chain tab.
+
+| Tab | Now |
+|-----|-----|
+| Chain ladder | Opens on the board symbol and re-seeds when the toolbar moves (`LadderModal.tsx`). Keeps its own picker: only roots the RECORDER swept can be replayed, and that list is not the board's — locking them together would make half the recorded sessions unreachable. |
+| GEX levels | Follows outright. Dropdown removed — see 3. |
+| Multi Greek | SLOT 1 follows; slots 2-4 stay independently typeable. Four slots pinned to one symbol would leave the tab comparing a symbol with itself, which is the point of the card. Same shape as the live Multi Greek board (panel 1 = board ticker, rest added by hand). Typing in slot 1 now sets the TOOLBAR, and a symbol that already sits in another slot displaces rather than doubling. |
+| Options chain | Already followed — reads `usePageSymbol` directly. No change. |
+
+### 3. GEX levels: the ticker dropdown is gone
+
+`cbedge-v3/src/pages/analysis/lookup/TickerLookup.tsx`. The card's `TickerPicker`
+was the one place the symbol on screen could disagree with the symbol in the
+toolbar. Removed; `usePageSymbol` is now the single source, which is what
+`data/symbol.tsx` has always said ("no card carries its own ticker box any
+more").
+
+- The quick row stays, but its buttons now set the BOARD symbol — a shortcut to
+  the toolbar, not a second control competing with it.
+- Expiry reset moved out of `lookup` into an effect on the symbol: the symbol can
+  now move from the toolbar, which `lookup` never sees.
+- `forget` and the scanner-universe fetch (`useScannerTickers`) went with the
+  picker — they existed only to fill and prune its option list. Recents survive
+  as the quick row's tail, append-only. `TickerPicker` / `useScannerTickers` are
+  still used by `cards/TickerLevels.tsx`, so neither module is dead.
+- `initialSymbol` prop dropped; neither caller passed one.
+
+Touched: `cbedge-v3/src/pages/analysis/lookup/Ladder.tsx`,
+`cbedge-v3/src/pages/analysis/lookup/TickerLookup.tsx`,
+`cbedge-v3/src/pages/Replay.tsx`,
+`cbedge-v3/src/pages/optionsChain/LadderModal.tsx`,
+`cbedge-v3/src/pages/replay/MultiGreekReplay.tsx`.
+
+## 2026-09-03 - CopyShot: one shape for every card — no header, one caption line, mark bottom-right
+
+Every screenshot now comes out the way the Net Premium one does:
+
+    ┌──────────────────────────────────────────────────┐
+    │                                                  │
+    │                   THE CARD                       │
+    │                                                  │
+    │  GEX Candles · Sep 3, 09:41 ET · SPX · 0DTE …    [CB EDGE]
+    └──────────────────────────────────────────────────┘
+
+**The card's own header always comes off now.** It used to be conditional on the
+card publishing a `data-capture-meta`, which meant Net Premium got the clean
+treatment and everything else still printed its name twice — once in its header,
+once in the caption — with the chart squeezed into what was left. Dropping it is
+unconditional, and the picture is shortened by the header's height so the chart
+does not leave a band of empty plate under it. Only `:scope > header`: a Multi
+Greek column or any nested Card keeps its own, because there it is content.
+
+**So every card now publishes what its header was carrying.** That is the whole
+contract — what is not in `data-capture-meta` is not in the picture:
+
+| Card | Caption tail |
+|---|---|
+| GEX Candles | `SPX · <expiry> · 1m · RTH` — the tape, the expiry, the interval, the session |
+| GEX Chart | `SPX · <expiry> · OI+VOL` — the two things that tell one ladder from another that looks identical |
+| Multi Greek | every panel on the board, e.g. `SPX · AAPL · SPY` (the per-column expiries stay in the column headers, which are content) |
+| Net Premium | `SPX · 9-2-26 · OTM` |
+| Key Levels | `SPX` — its header was the live `KeyLevelsTitle`, the only place the symbol appeared |
+| Flow Tape | `SPX · all expiries` |
+| Economic Calendar, Quick Links | nothing, which is all their headers said |
+
+**Off the board too.** The sector wheel pop-out's title row is now a real
+`<header>` rather than a div, so the same rule takes it off and shortens the
+shot; what it was carrying — the universe, the zoom, the ±% scale — moves to the
+caption. `/v3/em` drops the ticker out of its menu label and into the caption as
+`<ticker> · Week of <date>`, so it reads like every card instead of like a
+special case.
+
+**`CopyShotTarget.meta`** is the new fallback for a surface the registration
+knows more about than the DOM does — the two page targets above use it. The
+attribute wins where both exist, because the card is closer to the truth.
+
+Files: `cbedge-v3/src/shell/snapshot.ts`, `cbedge-v3/src/shell/CopyShot.tsx`,
+`cbedge-v3/src/board/{gexCandles/GexCandlesCard,gexChart/GexChartCard,multiGreek/MultiGreekCard,keyLevels/KeyLevelsCard,flowTape/FlowTapeCard,netPremium/NetPremiumCard}.tsx`,
+`cbedge-v3/src/pages/Em.tsx`,
+`cbedge-v3/src/pages/tradersDashboard/SectorWheelCard.tsx`.
+Preview: `generated/2026-09-03-copyshot-uniform-caption.png`.
+
+
 ## 2026-09-02 - CopyShot: overlay caption (option C), the card's header comes off, and stale chunks stop 404ing
 
 **Option C shipped.** No matte, no title band, no strip bolted underneath — the

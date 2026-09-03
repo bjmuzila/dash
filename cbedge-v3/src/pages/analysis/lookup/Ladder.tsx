@@ -6,13 +6,47 @@
 // levels at once could only ever wear one of the wash colours, which made the
 // wash a worse copy of the tags beside it.
 //
-// Spot is the ONE exception and keeps its chrome: "where price is" must never be
-// ambiguous.
+// THE CORE IS THE ONE LEVEL THAT ALSO MARKS ITS BAR — see CB_WASH below. CW and
+// PW keep the tag-only rule: their colour IS a direction (blue ceiling, red
+// floor) and it would fight the bar's own sign. Gold carries no direction, so it
+// can ride the bar without saying anything the bar does not already say.
+//
+// Spot is the other exception and keeps its chrome: "where price is" must never
+// be ambiguous.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { FS, Label, fmtBig } from '../kit'
 import type { TlLevels, TlRow } from './levels'
 import { LEVEL_COLORS, V2, V2W } from '@/design/theme'
+
+/**
+ * ── THE CORE BULLSEYE WASH ───────────────────────────────────────────────────
+ * The same gold gradient the Multi Greek ladder (board/multiGreek/
+ * MultiGreekCard.tsx), its replay (pages/replay/MultiGreekReplay.tsx) and the
+ * option chain (`levelFillBg()` in pages/optionsChain/heatSkins.ts) wear, in
+ * the one form a BAR can take.
+ *
+ * A flat gold fill was never an option here for the reason it was pulled from
+ * all three of those: it buries the sign. A red core bar and a blue core bar
+ * would render as the same gold stripe, and the sign is half of what the bar
+ * says. So the gold is held at the bar's ROOT — the centre rail, where the eye
+ * lands and where every bar starts — at full strength, then at 85%, then out
+ * before the tip. The tip is bare sign colour, so length and direction are read
+ * exactly as they were.
+ *
+ * Same stops as the ladder's cell wash (0 / 55 / 82). The direction differs per
+ * side because the two bars grow AWAY from a shared rail: the positive bar's
+ * root is its left edge, the negative bar's root is its right.
+ */
+const CB_GOLD = 'var(--color-level-cb)'
+const CB_FILL = 'color-mix(in srgb, var(--color-level-cb) 85%, transparent)'
+/** Fades to gold-at-zero, not `transparent`: a ramp through grey reads dirty. */
+const CB_FADE = 'color-mix(in srgb, var(--color-level-cb) 0%, transparent)'
+const CB_STOPS = `${CB_GOLD} 0%,${CB_FILL} 55%,${CB_FADE} 82%`
+/** +GEX grows right from the rail — gold starts at the left edge. */
+const CB_WASH_POS = `linear-gradient(90deg,${CB_STOPS})`
+/** −GEX grows left from the rail — gold starts at the right edge. */
+const CB_WASH_NEG = `linear-gradient(270deg,${CB_STOPS})`
 
 export function TlLadder({
   rows,
@@ -243,7 +277,8 @@ export function TlLadder({
           // A strike can BE more than one level — core and call wall coincide
           // often — so every match gets its own tag.
           const marks: { key: string; label: string; color: string; title: string }[] = []
-          if (levels.core === r.strike)
+          const isCore = levels.core === r.strike
+          if (isCore)
             marks.push({ key: 'cb', label: 'CB', color: LEVEL_COLORS.cb, title: 'Core — biggest magnet' })
           if (levels.callWall === r.strike)
             marks.push({ key: 'cw', label: 'CW', color: LEVEL_COLORS.cw, title: 'Call wall — ceiling' })
@@ -312,9 +347,12 @@ export function TlLadder({
                 ))}
               </span>
 
-              {/* The bars are deliberately UNTOUCHED by the level marking — no
-                  outline, no glow. A bar's job is magnitude and sign; the level
-                  is said by the tag beside the strike and nowhere else. */}
+              {/* No outline, no glow, no row tint — a bar's job is magnitude and
+                  sign, and CW / PW are said by the tag beside the strike and
+                  nowhere else. The CORE is the exception: its bar carries the
+                  house gold wash from the rail out, which marks the biggest
+                  magnet without touching either thing the bar says. See
+                  CB_WASH_POS / CB_WASH_NEG. */}
               <span style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
                 <span style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
                   {!unrecorded && !pos && (
@@ -323,7 +361,7 @@ export function TlLadder({
                         width: `${pct}%`,
                         height: 14,
                         borderRadius: '4px 0 0 4px',
-                        background: V2.red,
+                        background: isCore ? `${CB_WASH_NEG}, ${V2.red}` : V2.red,
                       }}
                     />
                   )}
@@ -336,7 +374,7 @@ export function TlLadder({
                         width: `${pct}%`,
                         height: 14,
                         borderRadius: '0 4px 4px 0',
-                        background: V2.pos,
+                        background: isCore ? `${CB_WASH_POS}, ${V2.pos}` : V2.pos,
                       }}
                     />
                   )}

@@ -32,16 +32,29 @@
 // /options-chain and /analytics routes already load, so a user who has been to
 // either arrives here with the tab already cached.
 //
-// FOUR INDEPENDENT SYMBOLS, deliberately. The Shell's ticker drives the cards
-// that compare against one another; these four tabs are four different readings
-// and the Multi Greek tab compares symbols WITH each other. Binding them to the
-// board symbol would leave that tab comparing a symbol with itself — the same
-// reasoning as the Multi Greek note in src/data/symbol.tsx.
+// EVERY TAB FOLLOWS THE TOOLBAR TICKER. Four tabs that each remembered their own
+// symbol meant switching tabs could change the subject without saying so, and
+// the toolbar — the one control that looks like it drives the page — drove only
+// the Options Chain tab. The board symbol (data/symbol.tsx) now seeds all four:
+//
+//   chain-ladder   the recorded ladder opens on the board symbol; its own
+//                  picker stays, because only roots the RECORDER swept can be
+//                  replayed and that list is not the board's.
+//   gex-levels     follows outright — its dropdown is gone (TickerLookup.tsx).
+//   gex-candles    the board's GEX Candles card, mounted with `replay`. It
+//                  already reads usePageSymbol, so it follows on its own.
+//   mult-greek     SLOT 1 follows; slots 2-4 stay independently typeable. Four
+//                  slots pinned to one symbol would leave the tab comparing a
+//                  symbol with itself, which is the point of that card — the
+//                  live Multi Greek board is shaped the same way (panel 1 = the
+//                  board ticker, the rest added by hand).
+//   options-chain  already followed; it reads usePageSymbol directly.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { Card } from '@/design/primitives/Card'
 import { Page } from '@/design/primitives/Page'
+import { usePageSymbol } from '@/data/symbol'
 
 const LadderReplay = lazy(() =>
   import('./optionsChain/LadderModal').then((m) => ({ default: m.LadderModal })),
@@ -53,8 +66,13 @@ const MultiGreekReplay = lazy(() =>
   import('./replay/MultiGreekReplay').then((m) => ({ default: m.MultiGreekReplay })),
 )
 const OptionsChain = lazy(() => import('./OptionsChain'))
+// The board's GEX Candles card, mounted with `replay` — see the REPLAY note in
+// GexCandlesCard.tsx. Same chunk the board already loads.
+const GexCandles = lazy(() =>
+  import('@/board/gexCandles/GexCandlesCard').then((m) => ({ default: m.GexCandlesCard })),
+)
 
-type TabId = 'chain-ladder' | 'gex-levels' | 'mult-greek' | 'options-chain'
+type TabId = 'chain-ladder' | 'gex-levels' | 'gex-candles' | 'mult-greek' | 'options-chain'
 
 interface TabDef {
   id: TabId
@@ -65,6 +83,16 @@ interface TabDef {
   blurb: string
   /** true = the tab renders its own frame and takes the whole viewport. */
   full: boolean
+  /**
+   * The framed body is a CHART, not a scrolling list.
+   *
+   * The default framed body is a block scroller (`overflow-y-auto`), which is
+   * right for a ladder and wrong for a chart: a `flex-1` chart inside a block
+   * parent has nothing to stretch against and collapses to nothing. This swaps
+   * the wrapper for a flex column so the chart gets the Card's remaining
+   * height, which is what every board card is written to expect.
+   */
+  chart?: boolean
 }
 
 const TABS: TabDef[] = [
@@ -82,6 +110,15 @@ const TABS: TabDef[] = [
     blurb:
       "The Ticker Lookup's two ladders — one expiry beside the whole board ex-0DTE — with the walls and gamma flip they imply.",
     full: false,
+  },
+  {
+    id: 'gex-candles',
+    label: 'GEX candles',
+    title: 'GEX candles replay',
+    blurb:
+      'The candles with the GEX bubbles and the rail over them, scrubbed through the session on one cursor — the ladder as it stood at each bar, not as it stands now.',
+    full: false,
+    chart: true,
   },
   {
     id: 'mult-greek',
@@ -123,6 +160,7 @@ const fallback = (
 
 export default function ReplayPage() {
   const [tab, setTab] = useState<TabId>(DEFAULT_TAB)
+  const { symbol } = usePageSymbol()
 
   // Read the hash AFTER mount rather than in the initializer. The route mounts
   // inside a Suspense boundary and a shared link can arrive before the chunk
@@ -193,14 +231,24 @@ export default function ReplayPage() {
         <div className="flex min-h-0 flex-1 flex-col p-3">
           <Card title={active.title} fill>
             <p className="mb-3 shrink-0 text-xs text-muted">{active.blurb}</p>
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            {/* See TabDef.chart: a chart needs a flex column to stretch in, a
+                ladder needs a scroller. */}
+            <div
+              className={
+                active.chart ? 'flex min-h-0 flex-1 flex-col' : 'min-h-0 flex-1 overflow-y-auto'
+              }
+            >
               <Suspense fallback={fallback}>
                 {active.id === 'chain-ladder' ? (
-                  // No symbol: the ladder picks MSFT if the recorder swept it and
-                  // the first recorded symbol otherwise, and carries its own
-                  // picker. A default chosen here would just be a second place to
-                  // be wrong.
-                  <LadderReplay symbol="" embedded />
+                  // The board symbol, and it re-seeds when the toolbar moves.
+                  // The ladder keeps its own picker: only a root the RECORDER
+                  // swept can be replayed, so a board symbol with no recorded
+                  // session says so and the picker offers what there is.
+                  <LadderReplay symbol={symbol} embedded />
+                ) : active.id === 'gex-candles' ? (
+                  // Follows the toolbar on its own — the card reads
+                  // usePageSymbol directly, like the Options Chain tab.
+                  <GexCandles replay />
                 ) : (
                   <TickerLookupCard embedded initialReplay />
                 )}

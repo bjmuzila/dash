@@ -2,6 +2,9 @@ import type { ReactNode } from 'react'
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useIsOwner } from '@/data/auth'
 import { Popover } from '@/design/primitives/Controls'
+// Type-only: erased at build, so the engine stays out of the entry chunk. The
+// value side arrives through the dynamic import in `useShot` below.
+import type { ShotResult } from '@/shell/snapshot'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COPYSHOT — one camera in the toolbar, and a menu of whatever is worth
@@ -34,10 +37,23 @@ import { Popover } from '@/design/primitives/Controls'
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CopyShotTarget {
-  /** Unique for as long as it is published. Doubles as the menu row key. */
+  /**
+   * Unique for as long as it is published. Doubles as the menu row key AND as
+   * the key the saved order is stored under, so it has to be stable across
+   * sessions — `board:gex-chart#2`, not an index.
+   */
   id: string
-  /** The menu row, and the title band printed into the PNG. */
+  /** One emoji, matching the card's own (see CardDef.icon in board/catalog). */
+  icon?: string
+  /** The menu row, and the name that leads the PNG's caption. */
   label: string
+  /**
+   * Caption tail for a surface that has no `data-capture-meta` of its own —
+   * a page whose registration knows the ticker the DOM does not spell out. A
+   * board card leaves this alone: the card publishes its own, and the attribute
+   * wins where both exist.
+   */
+  meta?: string
   /** Menu heading. See GROUP_ORDER. */
   group?: string
   /** Download name stem, used only when the clipboard write is refused. */
@@ -47,8 +63,21 @@ export interface CopyShotTarget {
    * ref: a board card is re-created on every drag and a popped-out overlay is
    * portalled in and out, so a ref captured at publish time is stale about as
    * often as it is right.
+   *
+   * Optional only because a target may supply `capture` instead.
    */
-  resolve: () => HTMLElement | null
+  resolve?: () => HTMLElement | null
+  /**
+   * Take the whole shot yourself, for a target that has no element on screen to
+   * point at.
+   *
+   * The Economic Calendar template is the case: it is COMPOSED on demand — data
+   * fetched, a 1280×720 poster built, mounted off-screen, photographed, torn
+   * down — so there is nothing for `resolve` to return until the moment the row
+   * is clicked. The menu, the icon, the ordering and the button's own feedback
+   * are all unchanged; only the middle is different.
+   */
+  capture?: () => Promise<ShotResult>
 }
 
 /** The stable empty list. See the note about memoising, above. */
@@ -64,6 +93,43 @@ const DEFAULT_GROUP = 'This page'
 const rankOf = (g: string) => {
   const i = GROUP_ORDER.indexOf(g)
   return i === -1 ? GROUP_ORDER.length : i
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE ORDER OF THE MENU, saved per browser.
+//
+// The rows arrive in the order the page published them — reading order down the
+// board — which is a sane default and not what anybody wants after a week: you
+// take the same two shots twenty times a day and they are at positions 4 and 9.
+// So the rows are draggable, the same way the rail's icons are (see Shell.tsx
+// and `cb-v3-rail-order`), and the arrangement is remembered.
+//
+// Stored as a flat list of TARGET IDS across every group. A row whose id is not
+// in the list sorts after the ones that are, keeping its published order — so a
+// card added to the board tomorrow appears at the bottom of its group rather
+// than in an arbitrary place, and nothing has to be migrated when the catalog
+// grows. Dragging is confined to a group: "Whole board" belongs above the cards
+// and dropping a page's surface into the middle of the board's list would only
+// ever be a mis-drop.
+// ─────────────────────────────────────────────────────────────────────────────
+const ORDER_KEY = 'cb-v3-copyshot-order'
+
+function loadOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(ORDER_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : null
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function saveOrder(ids: string[]): void {
+  try {
+    localStorage.setItem(ORDER_KEY, JSON.stringify(ids))
+  } catch {
+    /* best-effort, exactly like the rail's */
+  }
 }
 
 interface CopyShotApi {
@@ -160,7 +226,13 @@ function useShot() {
     if (timer.current) clearTimeout(timer.current)
     setState('working')
     try {
-      const el = target.resolve()
+      // A target that composes its own picture. See CopyShotTarget.capture.
+      if (target.capture) {
+        setState(await target.capture())
+        timer.current = setTimeout(() => setState('idle'), 2200)
+        return
+      }
+      const el = target.resolve?.() ?? null
       if (!el) throw new Error(`nothing on screen for "${target.label}"`)
       // The engine arrives with the first click, not with the app. This module
       // is in the ENTRY chunk (the toolbar mounts it on every route) and the
@@ -169,6 +241,7 @@ function useShot() {
       const { captureAndCopy } = await import('@/shell/snapshot')
       const result = await captureAndCopy(el, {
         title: target.label,
+        meta: target.meta,
         filename: `${slug(target.file ?? target.label)}.png`,
       })
       setState(result)
@@ -189,12 +262,18 @@ export function CopyShotMenu() {
   const api = useContext(Ctx)
   const { state, take } = useShot()
   const [open, setOpen] = useState(false)
+  const [order, setOrder] = useState<string[]>(() => loadOrder())
+  const [dragging, setDragging] = useState<string | null>(null)
+  const dragId = useRef<string | null>(null)
 
   const targets = api?.targets ?? NO_TARGETS
   const close = useCallback(() => setOpen(false), [])
 
-  // Grouped for rendering, in the order the provider already sorted them into.
+  // Grouped for rendering, each group in the saved order. `rank` is Infinity for
+  // an id nobody has dragged yet, so those keep the order the page published
+  // them in and sit after the ones that were arranged.
   const groups = useMemo(() => {
+    const rank = new Map(order.map((id, i) => [id, i]))
     const out: Array<{ name: string; rows: CopyShotTarget[] }> = []
     for (const t of targets) {
       const name = t.group ?? DEFAULT_GROUP
@@ -202,8 +281,43 @@ export function CopyShotMenu() {
       if (last && last.name === name) last.rows.push(t)
       else out.push({ name, rows: [t] })
     }
+    for (const g of out) {
+      g.rows = g.rows
+        .map((t, i) => ({ t, i, r: rank.get(t.id) ?? Infinity }))
+        .sort((a, b) => a.r - b.r || a.i - b.i)
+        .map((x) => x.t)
+    }
     return out
-  }, [targets])
+  }, [targets, order])
+
+  /**
+   * Commit a drop. The saved list is rewritten from the group's rows AFTER the
+   * move, with every other group's saved ids carried through untouched — so
+   * arranging the board's list cannot disturb an arrangement made on another
+   * page whose rows are not even mounted right now.
+   */
+  const dropOn = useCallback(
+    (groupName: string, targetId: string) => {
+      const src = dragId.current
+      setDragging(null)
+      dragId.current = null
+      if (!src || src === targetId) return
+      const group = groups.find((g) => g.name === groupName)
+      if (!group) return
+      const ids = group.rows.map((r) => r.id)
+      const from = ids.indexOf(src)
+      const to = ids.indexOf(targetId)
+      if (from < 0 || to < 0) return
+      ids.splice(to, 0, ...ids.splice(from, 1))
+      setOrder((prev) => {
+        const mine = new Set(ids)
+        const next = [...prev.filter((id) => !mine.has(id)), ...ids]
+        saveOrder(next)
+        return next
+      })
+    },
+    [groups],
+  )
 
   if (!isOwner) return null
 
@@ -254,9 +368,38 @@ export function CopyShotMenu() {
                   key={t.id}
                   type="button"
                   onClick={() => pick(t)}
-                  title={`Copy a PNG of ${t.label}`}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm text-fg hover:bg-raised"
+                  title={`Copy a PNG of ${t.label} — drag to reorder`}
+                  draggable
+                  onDragStart={(e) => {
+                    dragId.current = t.id
+                    setDragging(t.id)
+                    e.dataTransfer.effectAllowed = 'move'
+                    try {
+                      e.dataTransfer.setData('text/plain', t.id)
+                    } catch {
+                      /* ignore — some browsers refuse a custom type here */
+                    }
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    dropOn(g.name, t.id)
+                  }}
+                  onDragEnd={() => {
+                    setDragging(null)
+                    dragId.current = null
+                  }}
+                  className={[
+                    'flex w-full cursor-grab items-center gap-2 rounded-sm px-2 py-1 text-left text-sm text-fg hover:bg-raised',
+                    dragging === t.id ? 'opacity-40' : '',
+                  ].join(' ')}
                 >
+                  <span aria-hidden className="w-4 shrink-0 text-center leading-none">
+                    {t.icon}
+                  </span>
                   <span className="min-w-0 flex-1 truncate">{t.label}</span>
                 </button>
               ))}

@@ -726,7 +726,30 @@ function TickerPanel({
 
 // ── The card ─────────────────────────────────────────────────────────────────
 
-export function MultiGreekCard() {
+export interface MultiGreekCardProps {
+  /**
+   * ONE expiry column — the front one, which on SPX is 0DTE — and no ex-0DTE
+   * total. The Columns section of the cog is hidden with it, because a control
+   * that cannot move the thing it names is worse than no control.
+   *
+   * For the phone build (/v3/m/heat, src/mobile/pages/MHeat.tsx). The card's
+   * reason to exist is the ACROSS read — the same strike on several symbols at
+   * the same DTE — and at 390px three expiry columns per panel is three
+   * unreadable columns and no across read at all. One column plus the ＋ button
+   * is the same question asked in the width that is actually there.
+   *
+   * Deliberately NOT `useIsPhone()` inside this component: the board can be
+   * looked at on a narrow desktop window, and a card that silently dropped two
+   * columns when someone resized their browser would be a bug nobody could
+   * describe. The phone ROUTE asks for it; the width never does.
+   *
+   * It does not write to storage. A phone visit must not come back as a
+   * one-column board on the desktop next time.
+   */
+  singleColumn?: boolean
+}
+
+export function MultiGreekCard({ singleColumn = false }: MultiGreekCardProps = {}) {
   // Panel one. Read from the page rather than stored here, so the card opens on
   // whatever the board is already showing.
   const { symbol: pageSymbol, setSymbol: setPageSymbol } = usePageSymbol()
@@ -735,11 +758,15 @@ export function MultiGreekCard() {
   const [addDraft, setAddDraft] = useState('')
   // A blob written before the split stored 4 here; it clamps to 3, which is the
   // same number of expiry columns that setting ever actually drew.
-  const [colCount, setColCount] = useState(() => {
+  const [storedCols, setColCount] = useState(() => {
     const n = Number(readStored(COLS_KEY, String(MAX_EXP_COLS)))
     return Number.isFinite(n) ? Math.min(MAX_EXP_COLS, Math.max(1, Math.round(n))) : MAX_EXP_COLS
   })
-  const [showEx0, setShowEx0] = useState(() => readStored(EX0_STORE_KEY, '1') !== '0')
+  const [storedEx0, setShowEx0] = useState(() => readStored(EX0_STORE_KEY, '1') !== '0')
+  // What the ladders actually draw. `singleColumn` overrides the stored setting
+  // for this mount only — see the prop's note on why nothing is written back.
+  const colCount = singleColumn ? 1 : storedCols
+  const showEx0 = singleColumn ? false : storedEx0
   // OI-only was dropped as an option. A board that stored it falls back to
   // OI+VOL rather than sitting on a basis with no button — a selected value the
   // control cannot show is a control that lies about what is on screen.
@@ -852,7 +879,13 @@ export function MultiGreekCard() {
   const full = extras.length >= MAX_EXTRA_PANELS
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    <div
+      className="flex min-h-0 flex-1 flex-col gap-2"
+      // Every panel on the board, for the caption under a CopyShot. The expiry
+      // is per-column and stays in the column headers, which are content rather
+      // than the card chrome the shot drops. See shell/snapshot.ts.
+      data-capture-meta={tickers.join(' · ')}
+    >
       {/* The board's state is legible from the panels themselves — the tickers
           are in their own headers, the expiries in the column headers — so the
           only thing the toolbar needs to carry is the way in to the settings,
@@ -925,6 +958,10 @@ export function MultiGreekCard() {
         </button>
         <Popover open={cogOpen} onClose={() => setCogOpen(false)}>
           <div className="flex w-60 flex-col gap-2">
+            {/* Hidden on the phone route: the ladder is pinned to one column
+                there, so this section could only offer settings that do
+                nothing. See the singleColumn prop. */}
+            {!singleColumn && (
             <PanelSection title="Columns">
               <SegGroup
                 title="How many EXPIRY columns each panel draws, nearest first. Three is every expiry the chain route returns."
@@ -941,6 +978,7 @@ export function MultiGreekCard() {
                 />
               </div>
             </PanelSection>
+            )}
             <PanelSection title="Basis">
               <SegGroup
                 title="OI+VOL is open interest plus today's volume; VOL is today's volume alone"

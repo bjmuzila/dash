@@ -53,7 +53,7 @@ import {
   useRefreshButton,
 } from '../kit'
 import { ReplayDock } from '@/design/primitives/ReplayDock'
-import { TickerPicker, cleanSymbol } from '../TickerPicker'
+import { cleanSymbol } from '../TickerPicker'
 import { accumulateChainGreeks } from '../greeks'
 import { TlLadder } from './Ladder'
 import {
@@ -78,7 +78,7 @@ import {
   type TlReplayFrame,
   type TlReplaySession,
 } from './replay'
-import { useScannerTickers } from '@/data/useScannerTickers'
+import { usePageSymbol } from '@/data/symbol'
 import { LEVEL_COLORS, V2, V2W } from '@/design/theme'
 
 const LOOKUP_KEY = 'analytics.tickerLookup.recent'
@@ -280,18 +280,34 @@ function LevelChip({
 }
 
 export function TickerLookupCard({
-  initialSymbol = 'SPX',
   embedded = false,
   initialReplay = false,
 }: {
-  initialSymbol?: string
   embedded?: boolean
   initialReplay?: boolean
 } = {}) {
   const today = etDateISO()
-  const [sym, setSym] = useState(() => cleanSymbol(initialSymbol) || 'SPX')
+  // ── THE TICKER COMES FROM THE TOOLBAR ──────────────────────────────────────
+  // This card had its own dropdown, which made it the one surface where the
+  // symbol on screen could disagree with the symbol in the toolbar — and on the
+  // Replay hub, where the GEX-levels tab sits beside three other replays that
+  // all follow the board, that disagreement was the whole bug. The picker is
+  // gone; `usePageSymbol` is the single source, exactly as data/symbol.tsx says
+  // it should be ("no card carries its own ticker box any more").
+  //
+  // The quick row below is NOT a second source: its buttons set the board
+  // symbol, so pressing one moves the toolbar too.
+  const { symbol: pageSymbol, setSymbol: setPageSymbol } = usePageSymbol()
+  const sym = pageSymbol
   const [recent, setRecent] = useState<string[]>([])
   const [expiry, setExpiry] = useState<string | null>(null)
+
+  // A new ticker has a different expiry board, so the pinned expiry cannot
+  // survive the change. It used to be cleared inside `lookup`; the symbol can
+  // now move from the toolbar as well, which `lookup` never sees.
+  useEffect(() => {
+    setExpiry(null)
+  }, [sym])
 
   // Restored in an effect, not a useState initializer, so the first client
   // render agrees with the server's.
@@ -306,35 +322,28 @@ export function TickerLookupCard({
     }
   }, [])
 
-  const lookup = useCallback((raw: string) => {
-    const s = cleanSymbol(raw)
-    if (!s) return
-    setSym(s)
-    setExpiry(null) // a new ticker has a different expiry board
-    setRecent((prev) => {
-      const next = [s, ...prev.filter((x) => x !== s)].slice(0, 8)
-      try {
-        window.localStorage.setItem(LOOKUP_KEY, JSON.stringify(next))
-      } catch {
-        /* ignore */
-      }
-      return next
-    })
-  }, [])
+  const lookup = useCallback(
+    (raw: string) => {
+      const s = cleanSymbol(raw)
+      if (!s) return
+      // Sets the BOARD symbol, not a local one — see the note above.
+      setPageSymbol(s)
+      setRecent((prev) => {
+        const next = [s, ...prev.filter((x) => x !== s)].slice(0, 8)
+        try {
+          window.localStorage.setItem(LOOKUP_KEY, JSON.stringify(next))
+        } catch {
+          /* ignore */
+        }
+        return next
+      })
+    },
+    [setPageSymbol],
+  )
 
-  /** Drop a symbol from the recents the picker offers. The scanner universe is not editable from here. */
-  const forget = useCallback((raw: string) => {
-    const s = raw.trim().toUpperCase()
-    setRecent((prev) => {
-      const next = prev.filter((x) => x !== s)
-      try {
-        window.localStorage.setItem(LOOKUP_KEY, JSON.stringify(next))
-      } catch {
-        /* ignore */
-      }
-      return next
-    })
-  }, [])
+  // `forget` went with the picker: it removed a symbol from that dropdown's
+  // custom list, and there is no dropdown to remove one from. The recents still
+  // exist — they fill the quick row — they are just append-only now.
 
   // ── Replay state ───────────────────────────────────────────────────────────
   const [replayOn, setReplayOn] = useState(initialReplay)
@@ -474,8 +483,9 @@ export function TickerLookupCard({
   }, [replayPlaying, replaySpeed, replayTimeline.length])
 
   // ── Left pane feed ─────────────────────────────────────────────────────────
-  const { tickers: scannerTickers } = useScannerTickers()
-  const pickerOptions = [...new Set([...scannerTickers, ...QUICK, ...recent, sym])]
+  // The scanner universe was pulled ONLY to fill the picker's option list. With
+  // the picker gone the card no longer needs the whole universe in memory to
+  // show one ticker — the toolbar owns that search.
 
   const {
     data,
@@ -783,21 +793,12 @@ export function TickerLookupCard({
 
   return (
     <AnalysisCard span={!embedded} height="auto">
-      {/* Controls: ticker menu, one refresh for the whole card, the replay
-          toggle, and the mark. The identity line that used to sit up here moved
-          DOWN to rest directly on top of the ladders — see below. */}
+      {/* Controls: one refresh for the whole card, the replay toggle, and the
+          mark. NO TICKER MENU — the toolbar's search is the only place the
+          symbol is set. The identity line that used to sit up here moved DOWN
+          to rest directly on top of the ladders — see below. */}
       <Row style={{ flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: 8 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div style={{ minWidth: 132 }}>
-            <TickerPicker
-              value={sym}
-              options={pickerOptions}
-              custom={recent}
-              onSelect={lookup}
-              onAdd={lookup}
-              onRemove={forget}
-            />
-          </div>
           <button
             onClick={() => void refresh.trigger()}
             style={refresh.style}
@@ -829,7 +830,9 @@ export function TickerLookupCard({
         </span>
       </Row>
 
-      {/* Quick row + whatever was looked up last. */}
+      {/* Quick row + whatever was looked up last. These SET THE BOARD SYMBOL
+          (see `lookup`), so the toolbar moves with them — they are a shortcut
+          to the toolbar, not a second ticker control competing with it. */}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         {[...QUICK, ...recent.filter((r) => !QUICK.includes(r))].map((s) => (
           <button key={s} onClick={() => lookup(s)} style={s === sym ? btn : btnSecondary}>

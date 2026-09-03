@@ -46,7 +46,7 @@ folder is the feature family, not the page.
 
 ---
 
-## Total: 1,525 checklist rows
+## Total: 1,525 checklist rows (1,324 live — Part F's 201 were dropped 2026-09-03)
 
 | Part | Covers | Rows |
 |---|---|---|
@@ -55,7 +55,7 @@ folder is the feature family, not the page.
 | **C** | GEX Change Top (`?tab=gexchangetop`) — **the default tab**; cards, grade ladder, scorecard | 158 |
 | **D** | Pick Study (`?tab=pickstudy`) — **owner only**; buckets, splits, calibration | 127 |
 | **E** | Strike Query (`?tab=strike`) — top movers by strike, per-ticker or ALL | 118 |
-| **F** | TPO Structures (`?tab=tpo`) — letter profile canvas, AMT read, forecast | 201 |
+| ~~**F**~~ | ~~TPO Structures (`?tab=tpo`)~~ — **DROPPED FROM v3 2026-09-03.** Kept for the record and because rows F4–F13 / F191–F200 still spec `candles.ts` | ~~201~~ |
 | **G** | IB Stats (`?tab=ibstats`) — initial-balance statistics, probability engine | 308 |
 | **H** | Watch This (`?tab=watch`) — far-OTM CB levels + outcome tracking | 220 |
 
@@ -3010,6 +3010,28 @@ function ModalPortal({ children }: { children: ReactNode }) {
 
 **Part E row count: 118**
 # Part F — TPO Structures (`?tab=tpo`)
+
+> ## ⚠ PART F IS NO LONGER A BUILD TARGET
+>
+> **TPO Structures was dropped from v3 on 2026-09-03 (Brandon).** The tab has no
+> entry in `SCANNER_TABS`, no id in `ScannerTabId`, no mount in
+> `pages/Scanner.tsx`, and its six modules are tombstoned under
+> `cbedge-v3/src/pages/scanner/` awaiting `git rm`.
+>
+> This Part stays in the document for two reasons, not out of tidiness:
+>
+> 1. **Rows F4–F13 and F191–F200 are still live.** They spec the candle layer —
+>    `/api/snapshots/candles`, the four URL builders, the ET session grouping —
+>    which survived the removal as `pages/scanner/candles.ts` and is what IB
+>    Stats' live tape reads. Those rows are the spec for that module now.
+> 2. The rest is the record of what v2's tab did, which is what makes dropping it
+>    a decision rather than an omission. **v2's `/app/scanner?tab=tpo` is
+>    untouched and still live.**
+>
+> Everything else here — the letter profile, the AMT read, the structure
+> taxonomy, the k-NN forecast — describes v2 only. Do not build from it.
+
+
 
 **Scope.** The v2 scanner tab `id: "tpo"`, label `"TPO Structures"`, short
 `"TPO"`, icon `🏛️`, pill colour `LIGHT_BLUE` (`components/scanner/scannerNav.ts:61`).

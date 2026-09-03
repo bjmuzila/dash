@@ -172,6 +172,49 @@ refresh or a shared link — exactly the failure `components/mobile/mobileNav.ts
 warns about for the phone build. Deliberately not solved with a catch-all route:
 a catch-all would swallow `/v3/assets/*.js` and hand back HTML.
 
+## The phone build — `/v3/m/*`
+
+Six screens, and **not one of them is a phone-only implementation of anything**.
+Each is a HOME-BOARD CARD or a v3 page rendered full-bleed inside
+`src/mobile/MobileShell.tsx`:
+
+| Tab | What it actually is |
+|---|---|
+| `/m/gex` | `board/gexChart/GexChartCard` |
+| `/m/heat` | `board/multiGreek/MultiGreekCard` with `singleColumn` |
+| `/m/spx` | `board/gexCandles/GexCandlesCard` (carries the SPX/ES tape switch) |
+| `/m/chain` | `pages/OptionsChain` |
+| `/m/em` | `pages/Em` |
+| `/m/econ` | `board/econCalendar/EconCalendarCard` |
+
+That is the whole design. v2 shipped six bespoke phone pages under
+`components/mobile/` and they drifted from the desktop within a week, because
+two renderers for the same number is two places to fix it. Here a fix to a card
+is a fix to the phone. **Never add a mobile-only fetch, or a second component,
+for something a card already computes** — make the card handle the width
+instead, as `GexCandlesCard` does with `useIsPhone()`.
+
+- **Registry: `src/mobile/mobileNav.ts`** — the tab list, the desktop→mobile
+  redirect map, the "Desktop site" map. Adding a tab is TWO edits: that array
+  and a `<Route>` in `src/App.tsx`. Step 4 of "Adding a page" is already done
+  generically — `app/v3/m/[tab]/route.ts` in the v2 repo is ONE dynamic segment,
+  which is bounded and so cannot swallow `/v3/assets/*`.
+- **Shell:** `MobileShell` draws ONE header and the bottom tab bar. On a
+  card screen the header IS the `Card` header, so the card's own `<CardToolbar>`
+  lands in it and the phone never shows two stacked bars. `chrome="bare"` is for
+  a page that already has a toolbar. `fill` = no scroll (charts own their
+  gestures); the default scrolls.
+- **`src/shell/Shell.tsx` branches on the route**, dropping the rail and toolbar
+  on `/m/*` and keeping all three providers. One socket, one store, one auth
+  read across a long-press to the desktop and back.
+- **Redirect:** `MobileRedirect`, mounted once in `App.tsx`. Only routes in
+  `DESKTOP_TO_MOBILE` redirect; desktop browsers are never pushed off `/m/*`, so
+  the phone build can be opened on a laptop by typing the URL. Long-press any
+  tab for the session opt-out.
+- **`/v3` is no longer owner-gated.** `middleware.ts` lost its
+  `/^\/v3(\/.*)?$/` line on 2026-09-03; v3 is a normal paid route now. The note
+  under "Deploy" below is history.
+
 ## Adding a frame type
 
 1. Describe it in `src/contract/frames.ts` — transcribed from what
@@ -202,8 +245,8 @@ Then, before you push:
 npm run dev             # dev server on :5273, proxying to VITE_BACKEND_ORIGIN
 npm run build           # typecheck + theme + build + budget check (fails on either)
 npm run mock            # serve dist/ with synthetic data, no backend needed
-npm run check           # typecheck + theme + build + budgets + ws scope + perf
-npm run check:theme     # no colour literals, no Tailwind palette, no unknown var
+npm run check           # typecheck + theme + build + budgets + ws scope + perf
+npm run check:theme     # no colour literals, no Tailwind palette, no unknown var
 npm run theme:update    # re-record theme-baseline.json after cleaning a file up
 npm run check:ws        # proves topic derivation is correct
 npm run perf            # per-card redraw guard: idle quiet, offscreen silent,
@@ -241,6 +284,7 @@ Wired up, same shape as `app-vite`:
   before pushing.
 - Source maps are NOT emitted (see non-negotiable 8). The deploy would serve
   them publicly out of `public/v3`.
-- `middleware.ts` gates `/v3*` to owner-only, the same treatment `/home3` gets.
-  Remove that pattern when v3 ships.
+- `middleware.ts` USED to gate `/v3*` to owner-only, the same treatment `/home3`
+  gets. That pattern came out on 2026-09-03 with the phone build; `/v3*` is now
+  a normal paid route.
 - Live at `cbedge.net/v3/` after `push.ps1` → GitHub → VPS pull + rebuild.
