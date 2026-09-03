@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-09-03 - Build fix: a backtick inside the schema template literal
+
+The VPS Docker build died in `next build` with `Expected ',', got 'users'` at
+`lib/db.ts:1141`. Nothing was wrong with the SQL - the schema is one big
+template literal, and a comment inside it had been written with markdown-style
+backticks:
+
+    -- block: it joins `users`, which is created further down.
+
+The first backtick CLOSED the template literal, so everything after it parsed as
+JavaScript. swc pointed at `users` because that is the first identifier it hit
+in what it now believed was expression position.
+
+Quoted the word instead ("users"). Verified the file parses clean with esbuild.
+
+Rule for this file: no backticks anywhere inside the schema string, not even in
+a comment. Use plain quotes when naming a table or column in prose.
+
+Files: `lib/db.ts`
+
 ## 2026-09-03 - v3 Traders Dashboard: sector wheel "up" is now the chart blue
 
 The S&P Sector Wheel painted every up move mint green (`--color-move-up:

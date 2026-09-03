@@ -1138,7 +1138,7 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_trial_history_user  ON trial_history(clerk_user_id);
     CREATE INDEX IF NOT EXISTS idx_trial_history_email ON trial_history(email);
     -- The one-time backfill that seeds this table runs at the BOTTOM of this
-    -- block: it joins `users`, which is created further down.
+    -- block: it joins "users", which is created further down.
 
 
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
