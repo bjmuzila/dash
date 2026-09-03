@@ -109,14 +109,32 @@
   --color-candle-down: #ff5b5b;
 
   /* ── GEX bubbles ──────────────────────────────────────────────────────
-     Sign sets the hue, wall rank swaps base → hot. Same four values v2's
-     EsChartCard draws with. Read as hex here and converted to rgba() at
-     draw time by rgba() in board/esCandles/bubbles.ts — canvas needs an
-     alpha channel per bubble, which a token cannot carry.                  */
+     Sign sets the hue: blue positive gamma, red negative. These two are the
+     PEERS' fill and the leader's ring and glow. Read as hex here and
+     converted to rgba() at draw time by rgba() in
+     board/gexCandles/bubbles.ts — canvas needs an alpha channel per bubble,
+     which a token cannot carry.                                            */
   --color-gex-pos: #29b6f6;
-  --color-gex-pos-hot: #c8f5ff;
   --color-gex-neg: #ff4757;
-  --color-gex-neg-hot: #ffcdd2;
+
+  /* ── GEX bubbles: THE LEADER ──────────────────────────────────────────
+     The biggest wall in a bucket is GOLD, not a pale version of its own
+     sign. It draws as a radial gradient — white core, --color-gex-lead-hi
+     through the middle, --color-gex-lead at the rim — with the sign colour
+     as a ring around it and as its glow.
+
+     Gold because gold already means "the wall" everywhere else on this
+     card: it is the CB tag on the rail and the amber half of the GEX bars
+     (--color-gexbar-neg, the same #ffb300). One hue for one idea.
+
+     It replaced a pale tint of the sign colour (--color-gex-pos-hot /
+     -neg-hot, #c8f5ff / #ffcdd2, deleted 2026-09-03). Those were nearly
+     white and nearly indistinguishable from each other at 3px, so at small
+     sizes the leader read as "a white dot" and the sign had to come from
+     the ring anyway. Now the ring is the only thing carrying it and the
+     core is free to say something else.                                    */
+  --color-gex-lead: #ffb300;
+  --color-gex-lead-hi: #ffd76a;
 
   /* ── GEX Chart bars ───────────────────────────────────────────────────
      A SECOND positive/negative pair, and deliberately not the four above.

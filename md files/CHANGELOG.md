@@ -1,73 +1,117 @@
 # Changelog
 
-## 2026-09-03 - v3 home: no "Terminal" header, board controls in the toolbar, real brand art
+## 2026-09-03 - Bubble colours go through the theme check (pre-commit unblock)
 
-Four changes to the v3 shell and home board (`cbedge-v3/`).
+`push.ps1` was blocked by `check-theme.mjs`: `src/board/gexCandles/bubbles.ts`
+was over its baseline (6 allowed, 8 found). The gold-leader work had added two
+more `rgba()` literals — the white gradient stop and one more sign fill — on top
+of the six the local `rgba()` helper and its call sites already carried.
 
-### The word "Terminal" is gone
-`BoardPage` passed `title="Terminal"` to `Page`, which drew a header row across
-the top of the board. The home page does not need to announce itself to the
-person who navigated to it, and the row cost a band of vertical space on the one
-page that is meant to be full-bleed. `Page` draws no header when it gets neither
-`title` nor `actions`, so dropping both removes the row outright.
+Fixed by removing the notation, not by raising the baseline (non-negotiable #1):
 
-### Edit layout / Save layout / + Add card moved into the toolbar
-New `src/shell/ToolbarSlot.tsx` - a DOM portal, not lifted state:
+- The local `rgba()` helper is now `shade()`, which returns `#rrggbbaa` — the
+  same output shape as `tokenHexAlpha()` in `src/design/theme.ts`, accepted by
+  every canvas fill, stroke, shadow and gradient stop. It still takes the
+  palette's channels rather than re-reading a token, because it runs inside the
+  chart's rAF for every mark on screen.
+- The gradient's innermost stop was a hardcoded `rgba(255,255,255,a)`. It is now
+  `palette.highlight`, a new `BubblePalette` field read from `--color-fg` in
+  `chart.ts` — so a light theme moves the specular highlight with everything
+  else instead of leaving a white dot on a pale core.
+- `bubbles.ts` is at **zero** colour literals and has been dropped from
+  `theme-baseline.json` entirely, so it can never regress. `chart.ts` is
+  unchanged at its baseline of 9 (the new palette line adds no literal — it
+  falls back to the already-resolved `muted` string).
 
-- `ToolbarSlotProvider` sits in `Shell` beside `CopyShotProvider`, above both
-  the toolbar and the page, for the same reason that one does.
-- `ToolbarSlotHost` is rendered once by the toolbar, right of the flex spacer.
-- `ToolbarSlot` is rendered by a page; its children appear in the toolbar.
+No visual change: `#rrggbbaa` and `rgba()` paint identically, and `--color-fg`
+is `#ffffff` in the dark theme.
 
-The board's edit mode, dirty flag, status line and add-card menu all stay inside
-`BoardPage` where the layout lives - the toolbar never learns what a card is.
-**"Only on the home page" needs no condition anywhere:** the slot draws whatever
-the mounted route puts in it, and every other route puts nothing.
+Files: `cbedge-v3/src/board/gexCandles/bubbles.ts`,
+`cbedge-v3/src/board/gexCandles/chart.ts`, `cbedge-v3/theme-baseline.json`.
 
-### The rail head is the real badge
-`Shell`'s `Logo()` was a drawn accent square with the letters `CB` in it - a
-placeholder from before the artwork existed. It renders `<CbMark />` now, the one
-square form of the brand (`shell/Brand.tsx`), sized on one axis since the asset
-is square by construction.
+## 2026-09-03 - GEX Candles: the leader is GOLD, and the chart opens on today's session
 
-### The toolbar shows the wordmark
-`<span>CB Edge</span>` set in the UI font became `<CbWordmark className="h-6 w-auto" />` -
-the horizontal lockup, which is the form drawn for a wide slot.
+Two changes, both to the same card.
 
-**Files:** `cbedge-v3/src/shell/ToolbarSlot.tsx` (new),
-`cbedge-v3/src/shell/Shell.tsx`, `cbedge-v3/src/board/BoardPage.tsx`.
+### 1. The bucket leader draws gold
 
-## 2026-09-03 - GEX Candles: the oblong/rank change is 1m ONLY
+The biggest wall in a bucket used to be a pale tint of its own sign colour
+(`--color-gex-pos-hot` `#c8f5ff` / `--color-gex-neg-hot` `#ffcdd2`) pushed
+further toward white by `BUBBLES.topTint`. Both tints are near-white and, at the
+3-4px a mark actually draws at, near-identical to each other — so the core said
+"this is the leader" but never said which way, and the white ring around it was
+carrying the sign on its own.
 
-Follow-up to the entry below. 5m and coarser were right before it and are back
-to exactly what they were.
+The core is now a radial gradient in GOLD: white at the highlight,
+`--color-gex-lead-hi` `#ffd76a` through the middle, `--color-gex-lead` `#ffb300`
+at the rim. Gold because gold already means "the wall" on this card — it is the
+CB tag on the rail and the amber half of the GEX bars (`--color-gexbar-neg`, the
+same `#ffb300`). One hue, one idea, and the eye finds the day's biggest wall
+without reading anything.
 
-`maxAspect` and `rankMix` were globals, so the vertical budget and the rank
-blend reached every rung. They are now fields on the RUNG PROFILE
-(`BUBBLES.profiles`), and only 1m carries live values:
+**The ring is the sign now**, not white: the saturated `--color-gex-pos` /
+`-neg` at 0.95 alpha, with the glow underneath in the same colour. That is the
+only thing carrying positive-vs-negative on the leader, so it is the full-
+strength colour rather than a tint.
 
-    1:  { …, aspect: 2.4, rankMix: 0.4 }
-    5:  { …, aspect: 1,   rankMix: 0   }
-    15: { …, aspect: 1,   rankMix: 0   }
-    30: { …, aspect: 1,   rankMix: 0   }
-    60: { …, aspect: 1,   rankMix: 0   }
+**Peers are unchanged** — flat, saturated blue or red. Gold on EVERY mark with a
+sign ring was mocked up and rejected on the small end: rows 2-4 draw at 2-4px,
+and a gold fill plus a sub-pixel ring is one olive smudge with no sign left in
+it. (Same failure, from the other direction, as filling everything with the pale
+tint — tried 2026-08-31, reverted the same day. Both are recorded in the Colour
+block of BUBBLES so nobody walks back into them.)
 
-`aspect: 1` collapses `capYPx` onto `capPx`, `floorYPx` onto `floorPx` and
-`topCapYPx` onto `topCapPx` — same character-for-character expression — so
-`rx === ry` and `ctx.ellipse` draws the circle `ctx.arc` used to. `rankMix: 0`
-drops the rank term and `t` is the plain `ratio ** sizeCurve` it always was.
+The gradient is built in the MARK'S OWN space — y scaled by `ry/rx`, a circle
+drawn, the transform undone — so it stays concentric with an oblong 1m mark
+instead of banding across it, and the path survives `restore()` so the ring
+still strokes at a uniform width.
 
-Checked at a 3px/min zoom: 5m draws 13.0 / 6.0 / 4.8 / 4.2 px, round, which is
-the pre-change picture; 1m draws 10.6x25.3 / 5.2x11.4 / 4.3x8.5 / 3.6x6.2, which
-is the ladder it was missing.
+Tokens: `--color-gex-pos-hot` / `--color-gex-neg-hot` and `BUBBLES.topTint` are
+deleted; `--color-gex-lead` / `--color-gex-lead-hi` added. `BubblePalette` is
+`{pos, neg, lead, leadHi}`.
 
-1m is the only rung where the horizontal spacing genuinely runs out — at a
-session view it leaves ~3.4px, a circle spends that on both axes, and all four
-rows land on `minPx`. Everywhere else the profile cap binds first, which is why
-this belongs in the profile and not in a global.
+### 2. The chart opens on today's 09:30-16:00
 
-Files: `cbedge-v3/src/board/gexCandles/settings.ts`,
-`cbedge-v3/src/board/gexCandles/bubbles.ts`.
+"The chart keeps opening up small" — a fresh card showed a thin cluster of
+candles jammed against the right edge with the rest of the pane empty.
+
+`frameRecent()` measured its window BACKWARD from the newest bar:
+`from = barCount - n`, 390 minutes' worth, plus 3% of slack. That is "the last
+390 minutes of trading", which on a morning is most of yesterday afternoon with
+today squeezed into the last inch. It now frames the SESSION instead — one RTH
+session wide, positioned with today's 09:30 on the left edge and 16:00 on the
+right, so the day fills the pane at every hour and the whitespace on the right
+is the part of the session that has not happened yet.
+
+Early in the day that would put one candle against the left edge with six blank
+hours beside it, so the left edge is the earlier of the two anchors:
+
+    from = min(sessionStartIdx, newestIdx - span/2)
+
+At 09:35 the second term wins and the live candle sits in the MIDDLE of the pane
+with yesterday's tail behind it for context. As the day fills, that term rises
+until it passes 09:30 a little after midday and the window pins to the session.
+It slides continuously — the two expressions are equal at the crossover, so
+there is no jump.
+
+`sessionStartIndex()` walks back from the newest bar over `barTimes` (bounded by
+one session, not a scan of the five-day pull) to the first bar of the newest ET
+day at or after 09:30, so a weekend or holiday frames that day's session rather
+than nothing.
+
+**And the frame is verified properly now.** `ensureLatestVisible()` only asked
+whether the newest bar was on screen — which is TRUE of the broken view, since
+the crushed cluster is at the right edge, so a card that mounted in a hidden
+board tab (clientWidth 0, range applied against a scale with no width) kept its
+bad frame for life. It now also re-frames when the range is more than 1.6x a
+session wide or the pane is under 40% data, and checks a third time at 600ms for
+a tab that lays out late. It still runs only on a symbol/interval/session
+change, never on the 30s poll, so it cannot fight a zoom the user chose.
+
+Files: `cbedge-v3/src/design/tokens.css`,
+`cbedge-v3/src/board/gexCandles/bubbles.ts`,
+`cbedge-v3/src/board/gexCandles/chart.ts`,
+`cbedge-v3/src/board/gexCandles/settings.ts`.
 
 
 ## 2026-09-03 - v3: Level Log lands with the wall-migration chart (`cbedge-v3/src/pages/LevelLog.tsx`, `pages/levelLog/*`, `app/v3/level-log/route.ts`)
@@ -106,6 +150,12 @@ Four things did NOT come across, each on purpose:
 - **The watermark.** v2 stamped `/cb-edge-logo.png` over the popout's plot so it
   rode into the PNG; v3's snapshot bakes its own titled band.
 - **`stepRun`'s `reverse` param** — v2 carried it and never passed it true.
+- **A ticker box.** The page started with a `TickerPicker` in its card toolbar;
+  it came out the same day (Brandon). The page reads `usePageSymbol()` — the one
+  symbol the APP toolbar sets — for the reason `src/data/symbol.tsx` states: a
+  second picker for the same thing is a second way to end up looking at two
+  symbols at once and not notice. `?ticker=` went with it; only `?date=` is
+  this page's own query param now.
 
 Still v2-only, in the parity doc's order: the ticker rail (E), the log card head
 (F), the capture rail and chips (G), the churn strip (J), the timeline (L), the

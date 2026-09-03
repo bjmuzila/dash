@@ -9,9 +9,10 @@
 // See BUBBLES in settings.ts for the seven rules this implements and the numbers
 // behind them. The short version: one bubble per bucket, last print wins; four
 // strikes with one forced on each side of spot; radius by sqrt of |gex| over the
-// window max; peers carry the sign colour and the bucket's biggest gets a boost,
-// a WHITE core and a white ring; same-bucket neighbours shrink and then jitter
-// rather than overlap; nothing is ever spliced.
+// window max; peers carry the sign colour flat and the bucket's biggest gets a
+// boost, a GOLD gradient core and a ring in its own sign colour; same-bucket
+// neighbours shrink and then jitter rather than overlap; nothing is ever
+// spliced.
 //
 // ── WHY IT IS STAMPED AND NOT DRAWN ──────────────────────────────────────────
 //
@@ -186,35 +187,48 @@ export function buildBubbleModel(columns: GexColumn[], opts: BuildOpts): BubbleS
 // ── Drawing ──────────────────────────────────────────────────────────────────
 
 /**
- * ── ONE WHITE MARK PER BUCKET; EVERYTHING ELSE IS THE SIGN ───────────────────
+ * ── ONE GOLD MARK PER BUCKET; EVERYTHING ELSE IS THE SIGN ────────────────────
  *
  * `pos` / `neg` are the SATURATED sign colours (`--color-gex-pos` `#29b6f6`,
  * `--color-gex-neg` `#ff4757`) and they are the PEERS' fill. Blue is positive
  * gamma, red is negative, and that is the first thing the ladder has to say.
- * They are also the leader's glow.
+ * They are also the leader's RING and its glow — which is where the leader's
+ * own sign comes from, since its core is not a sign colour at all.
  *
- * `posHot` / `negHot` are the pale tints (`--color-gex-pos-hot` / `-neg-hot`)
- * and they are the LEADER's fill and nothing else's — pushed further toward
- * white by `BUBBLES.topTint`. One white mark in a column of blue and red is
- * legible at a glance in a way that a slightly larger dot of the same colour is
- * not, which is the whole job of marking the biggest wall.
+ * `lead` / `leadHi` (`--color-gex-lead` `#ffb300`, `--color-gex-lead-hi`
+ * `#ffd76a`) are the leader's core, painted as a radial gradient: white at the
+ * highlight, `leadHi` through the middle, `lead` at the rim.
  *
- * Briefly, on 2026-08-31, every mark was filled with the pale tint. It made a
- * quieter chart and it cost the sign: at the small end the tints desaturate
- * toward the background and a pale pink 2px dot is not distinguishable from a
- * pale blue one. Do not go back to it.
+ * ── Why gold, and why only the leader ───────────────────────────────────────
+ * Gold already means "the wall" everywhere else on this card — the CB tag on
+ * the rail, the amber half of the GEX bars — so one hue carries one idea, and
+ * a glance finds the biggest wall without reading anything.
+ *
+ * Only the leader, because gold on EVERY mark was tried on the mock sheet and
+ * fails at the small end: rows 2-4 draw at 2-4px, and a gold fill with a 0.7px
+ * sign ring is an olive smudge at that size — the sign is simply gone. Peers
+ * keep a flat, saturated sign colour for the same reason they always have.
+ *
+ * (Before 2026-09-03 the leader was a pale tint of its own sign,
+ * `--color-gex-pos-hot` / `-neg-hot`. Both tints were near-white and
+ * near-identical to each other at 3px, so the core said "leader" but never said
+ * which way — the ring was already doing that work alone. Do not go back to it,
+ * and do not fill the peers with a tint either: that was tried on 2026-08-31
+ * and cost the sign across the whole ladder.)
  */
 export interface BubblePalette {
   pos: [number, number, number]
-  posHot: [number, number, number]
   neg: [number, number, number]
-  negHot: [number, number, number]
-}
-
-/** Toward white. 0 = the colour untouched, 1 = pure white. */
-function toWhite(c: [number, number, number], t: number): [number, number, number] {
-  const k = clamp(t, 0, 1)
-  return [c[0] + (255 - c[0]) * k, c[1] + (255 - c[1]) * k, c[2] + (255 - c[2]) * k]
+  /** The leader's gradient rim. */
+  lead: [number, number, number]
+  /** …and its mid-stop, between the white highlight and the rim. */
+  leadHi: [number, number, number]
+  /**
+   * The gradient's innermost stop — the specular highlight on the leader's
+   * core. A token (`--color-fg`), not a hardcoded white, so a light theme can
+   * move it with everything else.
+   */
+  highlight: [number, number, number]
 }
 
 export interface BubbleGeometry {
@@ -265,8 +279,24 @@ export interface BubbleGeometry {
   plotHeight: number
 }
 
-function rgba(c: [number, number, number], a: number): string {
-  return `rgba(${c[0]},${c[1]},${c[2]},${a})`
+const hexByte = (v: number): string =>
+  Math.max(0, Math.min(255, Math.round(v)))
+    .toString(16)
+    .padStart(2, '0')
+
+/**
+ * A palette triple at an alpha, as `#rrggbbaa`.
+ *
+ * Hex and not a functional colour notation on purpose: `rgba()` / `hsla()` are
+ * banned from src/ by scripts/check-theme.mjs (non-negotiable #1 in AGENTS.md),
+ * and the 8-digit hex form is accepted by every canvas fill, stroke, shadow and
+ * gradient stop. Same reasoning — and the same output — as tokenHexAlpha() in
+ * src/design/theme.ts; this one takes the channels the palette already carries
+ * rather than re-reading a token per mark, because it runs inside the chart's
+ * rAF for every bubble on screen.
+ */
+function shade(c: [number, number, number], a: number): string {
+  return `#${hexByte(c[0])}${hexByte(c[1])}${hexByte(c[2])}${hexByte(Math.max(0, Math.min(1, a)) * 255)}`
 }
 
 // ── WHERE A BUCKET GOES, AND WHY IT IS NO LONGER SEARCHED FOR ────────────────
@@ -708,47 +738,65 @@ export function drawBubbles(
     for (const { mark: m, y, rx, ry, dx } of placeBucket(snap, geo, size)) {
       if (y < -20 || y > ph + 20) continue
       const positive = m.value >= 0
-      // The SATURATED sign colour: the PEERS' fill, and the leader's glow.
+      // The SATURATED sign colour: the PEERS' fill, and the leader's ring+glow.
       const base = positive ? palette.pos : palette.neg
-      // The pale tint. The LEADER only — see the branch below.
-      const hot = positive ? palette.posHot : palette.negHot
       const alpha = (m.isTop ? 1 : minOpacity + m.ratio * (1 - minOpacity)) * age
       const cx = x + dx
 
       if (m.isTop) {
-        // ── THE ONE WHITE MARK ────────────────────────────────────────────────
-        // The leader is the brightest thing in its bucket, and brightest means
-        // WHITE: the pale tint pushed further toward white by `topTint`, so it
-        // separates from a ladder of saturated blue and red at a glance rather
-        // than being a slightly bigger dot of the same colour. It keeps enough
-        // cast to still read as positive or negative up close.
+        // ── THE ONE GOLD MARK ─────────────────────────────────────────────────
+        // The leader is the biggest wall in its bucket and it says so in gold —
+        // the same hue as the CB tag on the rail and the amber half of the GEX
+        // bars. A radial gradient rather than a flat fill: white highlight,
+        // `leadHi` through the middle, `lead` at the rim. The highlight is what
+        // keeps a 4px mark reading as a lit sphere instead of a mustard dot, and
+        // the rim is what keeps a 20px one from being a flat disc.
         //
-        // The glow underneath is the saturated sign colour, held to `glowAlpha`
-        // and faded with age so it stays a halo AROUND the mark. At the old 0.95
-        // it bled THROUGH a core the age fade had made translucent, which is how
-        // the negative leader came to look like a red dot with a white outline.
+        // The gradient is built in the mark's OWN space. Painting it in canvas
+        // coordinates makes it circular while the mark is an oval, so at 1m the
+        // rim colour lands at the top and bottom of a tall mark and never
+        // reaches its sides. Scaling y by ry/rx, drawing a circle, then undoing
+        // the transform gives an ellipse whose gradient is concentric with it —
+        // and the path survives restore(), so the ring below still strokes at a
+        // uniform width instead of being squashed with it.
+        ctx.save()
+        ctx.translate(cx, y)
+        ctx.scale(1, ry / Math.max(0.001, rx))
         ctx.beginPath()
-        ctx.fillStyle = rgba(toWhite(hot, BUBBLES.topTint), alpha)
-        ctx.shadowColor = rgba(base, BUBBLES.glowAlpha * age)
-        // The blur is measured off the WIDTH. The room it has to spread into is
-        // the gap to the next bucket, which is the same bound `rx` already
-        // carries; sizing it off the taller axis would put the halo back across
-        // that gap, which is what fused the leader's row into a sausage.
+        ctx.arc(0, 0, rx, 0, Math.PI * 2)
+        const grad = ctx.createRadialGradient(-rx * 0.24, -rx * 0.3, rx * 0.05, 0, 0, rx)
+        grad.addColorStop(0, shade(palette.highlight, alpha))
+        grad.addColorStop(0.5, shade(palette.leadHi, alpha))
+        grad.addColorStop(1, shade(palette.lead, alpha))
+        ctx.fillStyle = grad
+        // The glow is the SIGN colour, held to `glowAlpha` and faded with age so
+        // it stays a halo AROUND the mark. Measured off the WIDTH: the room it
+        // has to spread into is the gap to the next bucket, which is the bound
+        // `rx` already carries. Sizing it off the taller axis would put the halo
+        // back across that gap, which is what fused the leader's row into a
+        // sausage.
+        ctx.shadowColor = shade(base, BUBBLES.glowAlpha * age)
         ctx.shadowBlur = Math.min(size.glowPx, rx * BUBBLES.glowFactor)
-        ctx.ellipse(cx, y, rx, ry, 0, 0, Math.PI * 2)
         ctx.fill()
         ctx.shadowBlur = 0
         ctx.shadowColor = 'transparent'
-        ctx.beginPath()
+        ctx.restore()
+        // ── AND THE RING IS THE SIGN ──────────────────────────────────────────
+        // It used to be white, on a core that already carried a cast of its own
+        // sign. The core is gold now and carries none, so this ring is the only
+        // thing saying whether the biggest wall is positive or negative gamma —
+        // which is why it is the saturated colour at near-full alpha and not a
+        // tint.
         ctx.lineWidth = size.ringPx
-        ctx.strokeStyle = `rgba(255,255,255,${0.85 * age})`
-        ctx.ellipse(cx, y, rx, ry, 0, 0, Math.PI * 2)
+        ctx.strokeStyle = shade(base, 0.95 * age)
         ctx.stroke()
       } else {
         // The peers are the SIGN, at full strength. Blue is positive gamma and
         // red is negative, and that is the first thing the ladder has to say.
+        // Flat, and NOT gold with a sign ring: rows 2-4 draw at 2-4px and at
+        // that size a fill plus a sub-pixel ring is one olive smudge.
         ctx.beginPath()
-        ctx.fillStyle = rgba(base, alpha)
+        ctx.fillStyle = shade(base, alpha)
         ctx.ellipse(cx, y, rx, ry, 0, 0, Math.PI * 2)
         ctx.fill()
       }

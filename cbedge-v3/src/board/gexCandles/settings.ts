@@ -166,9 +166,10 @@ export const DEFAULT_SETTINGS: ChartSettings = {
  *   grow with net GEX          r = floor + sqrt(|gex| / windowMax) x (cap-floor)
  *   peers carry the sign       saturated blue for positive gamma, red for
  *                              negative — the ladder's first statement
- *   the top strike stands out  the bucket's largest is the one WHITE mark, plus
- *                              the size boost, a white ring and a glow in the
- *                              sign colour
+ *   the top strike stands out  the bucket's largest is the one GOLD mark — a
+ *                              white-cored gold gradient — plus the size boost,
+ *                              and a ring and glow in its own sign colour,
+ *                              which is where its sign comes from
  *   old dots survive           never below minPx, and age only fades opacity a
  *                              little
  *   no overlap if possible     same-bucket neighbours shrink toward the floor,
@@ -420,26 +421,23 @@ export const BUBBLES = {
 
   // ── Colour ───────────────────────────────────────────────────────────────
   //
-  // PEERS CARRY THE SIGN, the LEADER IS WHITE. Peers are filled with the
-  // saturated `--color-gex-pos` / `-neg`; the pale `-hot` tokens belong to the
-  // leader alone, pushed further toward white by `topTint` below. See
-  // BubblePalette in bubbles.ts, including why filling everything with the pale
-  // tint was tried on 2026-08-31 and reverted the same day.
-  /**
-   * How much whiter the LEADER's core is than its own hot tint, 0..1 to white.
-   *
-   * The leader is the one mark that is not the sign colour, so this is what
-   * makes "brightest" read as WHITE rather than as a paler dot of the same hue.
-   * It is not the only signal — the size boost, the white ring and the glow are
-   * all still there — but it is the one that works at a glance, and at a glance
-   * is how the biggest wall gets found.
-   *
-   * 0.45 rather than 1.0 because the two hot tints are not equally light
-   * (`#c8f5ff` is nearly white already, `#ffcdd2` is not) and a mark taken all
-   * the way to white loses its sign entirely up close. This lands both sides
-   * near-white with just enough cast left to tell them apart.
-   */
-  topTint: 0.45,
+  // PEERS CARRY THE SIGN, the LEADER IS GOLD. Peers are filled flat with the
+  // saturated `--color-gex-pos` / `-neg`; the bucket's biggest wall is a gold
+  // gradient (`--color-gex-lead` / `-hi`) with the sign as its RING and glow.
+  // Gold because gold already means "the wall" on this card — the CB tag on the
+  // rail, the amber half of the GEX bars.
+  //
+  // Two things were tried and are not to be repeated, both for the same reason
+  // — the small end, where rows 2-4 draw at 2-4px:
+  //   · gold on EVERY mark with a sign ring (mocked 2026-09-03) — a fill plus a
+  //     sub-pixel ring is one olive smudge and the sign is gone;
+  //   · the pale sign tints on every mark (2026-08-31, reverted same day) — the
+  //     tints desaturate toward the background and a pale pink 2px dot is not
+  //     distinguishable from a pale blue one.
+  // The leader's own pale tint (`--color-gex-pos-hot` / `-neg-hot`, and the
+  // `topTint` that pushed it whiter) went with the gold change: both tints were
+  // near-white and near-identical to each other, so the core said "leader" but
+  // never said which way, and the ring was already carrying the sign alone.
   /** The weakest mark fades to 1 - fade. */
   fade: 0.45,
   /** The oldest bucket keeps this much of its opacity. Age reads, faintly. */

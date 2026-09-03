@@ -23,6 +23,13 @@
 //     act. Here the range is always on screen, so it opens on TODAY: up to
 //     thirteen requests must not be the cost of landing on the page.
 //
+// THE TICKER IS THE TOOLBAR'S. This page carries no ticker box of its own — it
+// reads `usePageSymbol()`, the one symbol the app toolbar sets, for exactly the
+// reason src/data/symbol.tsx gives: a second picker for the same thing is a
+// second way to end up looking at two symbols at once and not notice. Only the
+// DATE lives in the query string, so /v3/level-log?date=2026-09-02 still shares
+// a session — which is why app/v3/level-log/route.ts has to answer it.
+//
 // REST-only. No socket, no canvas, no polling — the log is change-only and the
 // page fetches on entry and on an explicit refresh, so an open tab never
 // hammers the recorder. Non-negotiables 2, 4, 5 and 6 have nothing to bite on.
@@ -33,8 +40,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Card, CardToolbar } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
 import { Page } from '@/design/primitives/Page'
-import { TickerPicker } from '@/design/primitives/TickerPicker'
-import { PAGE_TICKER_RE } from '@/data/symbol'
+import { usePageSymbol } from '@/data/symbol'
 import { MIG_H, WallMigrationChart } from '@/pages/levelLog/WallMigrationChart'
 import {
   type ExpScope,
@@ -87,11 +93,12 @@ const RANGE_OPTIONS: Array<{ label: string; value: '1' | '5'; title: string }> =
 ]
 
 export default function LevelLog() {
-  // The ticker and the date live in the query string, so /v3/level-log?ticker=
-  // SPX&date=2026-09-02 is a shareable link — which is also why
-  // app/v3/level-log/route.ts has to answer the hard refresh.
+  // The ticker follows the app toolbar; only the date is this page's own, and
+  // it lives in the query string so /v3/level-log?date=2026-09-02 is a
+  // shareable link — which is also why app/v3/level-log/route.ts has to answer
+  // the hard refresh.
+  const { symbol } = usePageSymbol()
   const [params, setParams] = useSearchParams()
-  const symbol = (params.get('ticker') || 'SPX').trim().toUpperCase()
   const date = (params.get('date') || '').trim() || todayETStr()
 
   const [view, setView] = useState<LogView>('all')
@@ -111,10 +118,10 @@ export default function LevelLog() {
     basis,
   )
 
-  const setParam = (key: string, value: string) => {
-    const next = new URLSearchParams(params)
-    next.set(key, value)
-    setParams(next, { replace: true })
+  const setDate = (next: string) => {
+    const q = new URLSearchParams(params)
+    q.set('date', next || todayETStr())
+    setParams(q, { replace: true })
   }
 
   return (
@@ -135,17 +142,11 @@ export default function LevelLog() {
         }
       >
         <CardToolbar>
-          <TickerPicker
-            activeTicker={symbol}
-            onSelect={(t) => setParam('ticker', t)}
-            allowCustom={PAGE_TICKER_RE}
-            title="Which root's recorded levels to draw"
-          />
           <input
             type="date"
             value={date}
             max={todayETStr()}
-            onChange={(e) => setParam('date', e.target.value || todayETStr())}
+            onChange={(e) => setDate(e.target.value)}
             title="Session date, ET"
             className="tabular rounded-sm border border-line bg-surface2 px-1.5 py-0.5 font-mono text-2xs text-fg"
           />

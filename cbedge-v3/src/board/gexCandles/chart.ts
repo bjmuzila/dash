@@ -20,7 +20,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Coordinate, IChartApi, ISeriesApi, UTCTimestamp } from 'lightweight-charts'
-import type { Bar } from './candles'
+import { etDateKey, etMinutesOfDay, RTH_OPEN_MIN, type Bar } from './candles'
 import { drawBubbles, type BubbleSnapshot, type BubblePalette } from './bubbles'
 import { BUBBLES } from './settings'
 
@@ -143,14 +143,18 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   const muted = cssVar(container, '--color-muted', '#ffffff')
   const up = cssVar(container, '--color-candle-up', '#30d158')
   const down = cssVar(container, '--color-candle-down', '#ff5b5b')
-  // `pos` / `neg` are the SATURATED sign colours and fill the PEERS; the `-hot`
-  // pair are the pale tints and belong to the bucket's leader alone, taken
-  // further toward white in drawBubbles. See BubblePalette in bubbles.ts.
+  // `pos` / `neg` are the SATURATED sign colours: the PEERS' fill, and the
+  // leader's ring and glow. `lead` / `leadHi` are the GOLD the bucket's leader
+  // fills with — the same hue as the CB tag and the GEX bars, because gold
+  // means "the wall" on this card. See BubblePalette in bubbles.ts.
   const palette: BubblePalette = {
     pos: hexToRgb(cssVar(container, '--color-gex-pos', '#29b6f6'), [41, 182, 246]),
-    posHot: hexToRgb(cssVar(container, '--color-gex-pos-hot', '#c8f5ff'), [200, 245, 255]),
     neg: hexToRgb(cssVar(container, '--color-gex-neg', '#ff4757'), [255, 71, 87]),
-    negHot: hexToRgb(cssVar(container, '--color-gex-neg-hot', '#ffcdd2'), [255, 205, 210]),
+    lead: hexToRgb(cssVar(container, '--color-gex-lead', '#ffb300'), [255, 179, 0]),
+    leadHi: hexToRgb(cssVar(container, '--color-gex-lead-hi', '#ffd76a'), [255, 215, 106]),
+    // The gradient's innermost stop. Read from a token rather than written as a
+    // literal white so a light theme moves it with everything else.
+    highlight: hexToRgb(cssVar(container, '--color-fg', muted), [255, 255, 255]),
   }
 
   const chart: IChartApi = createChart(container, {
@@ -401,26 +405,70 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   }
 
   /**
-   * Frame the most recent SESSION, not the whole series.
+   * ── THE PANE IS TODAY'S SESSION, 09:30 TO 16:00 ─────────────────────────────
    *
-   * `fitContent()` was what a reframe did, and it fits EVERYTHING — the candles
-   * route pulls five days (`HISTORY_DAYS`), so at 1m that is ~1,950 bars in
-   * ~900px: half a pixel each, a solid wall, and the bubble layer strided down
-   * to almost nothing because it sizes and strides off the room per bucket.
-   * Switch ticker or interval and that was the first thing you saw.
+   * The window is always ONE RTH SESSION WIDE — 390 minutes of bars — and it is
+   * positioned so that today's 09:30 sits on the left edge and 16:00 on the
+   * right. The day therefore fills the pane at every hour: at 15:30 the candles
+   * reach the right-hand side, and earlier in the day the remaining whitespace
+   * is the part of the session that has not happened yet, which is the correct
+   * amount of room to leave rather than a gap to be closed.
    *
-   * A session's worth is the honest default. It is also the window the GEX
-   * history actually covers (GEX_HISTORY_MINUTES, 12h), so the bubbles fill the
-   * pane they are drawn in instead of being crushed against the right edge.
+   * ── …and early in the day the live candle is CENTRED ────────────────────────
+   * Anchoring the left edge at 09:30 from the first bar of the day would open
+   * the chart on one candle jammed against the left with six blank hours beside
+   * it. So the left edge is the EARLIER of "today's open" and "half a session
+   * back from the newest bar":
    *
-   * 390 minutes is the RTH session; at coarser intervals that is few enough
-   * bars to be worth a floor, so a 1h chart still opens on several days rather
-   * than seven candles.
+   *     from = min(sessionStartIdx, newestIdx - span/2)
+   *
+   * At 09:35 that second term wins and the live candle sits in the middle of
+   * the pane with yesterday's tail behind it for context. As the day fills, the
+   * term rises until it passes 09:30 (a little after midday) and the window
+   * pins to the session for the rest of the day. It slides continuously — there
+   * is no jump at the crossover, because the two expressions are equal there.
+   *
+   * ── What this replaced ──────────────────────────────────────────────────────
+   * `from = barCount - n` — a window measured BACKWARD from the newest bar,
+   * with 3% of slack past it. Two problems. It ignored the session, so the
+   * pane was always "the last 390 minutes of trading" and on a fresh morning
+   * that is most of yesterday afternoon with today squeezed into the last
+   * inch — which is what "the chart keeps opening up small" was. And before it,
+   * `fitContent()` fitted the whole five-day pull (`HISTORY_DAYS`): ~1,950 bars
+   * at 1m in ~900px, half a pixel each, with the bubble layer strided down to
+   * nothing because it sizes and strides off the room per bucket.
+   *
+   * The floor of 30 bars is for the coarse intervals: 390 minutes is six bars
+   * at 1h, so a 1h chart opens on several days rather than on six candles.
    */
+  function sessionSpanBars(): number {
+    return Math.max(30, Math.round(390 / Math.max(1, intervalMs / 60_000)))
+  }
+
+  /**
+   * Index of the first bar in the NEWEST session present — today's 09:30, or
+   * the open of whatever the last bar's ET day is on a weekend or a holiday.
+   *
+   * Walks back from the end rather than scanning: the answer is always within
+   * one session of the newest bar, and `barTimes` can hold five days of them.
+   * Returns -1 when there is no such bar (a series that ends before the open).
+   */
+  function sessionStartIndex(): number {
+    const n = barTimes.length
+    if (!n) return -1
+    const day = etDateKey(barTimes[n - 1]!)
+    let idx = -1
+    for (let i = n - 1; i >= 0; i--) {
+      const t = barTimes[i]!
+      if (etDateKey(t) !== day) break
+      if (etMinutesOfDay(t) < RTH_OPEN_MIN) break
+      idx = i
+    }
+    return idx
+  }
+
   function frameRecent() {
-    const perSession = Math.max(30, Math.round(390 / Math.max(1, intervalMs / 60_000)))
-    const n = Math.min(barCount, perSession)
-    if (n < 2) {
+    if (barCount < 2) {
       try {
         ts.fitContent()
       } catch {
@@ -428,9 +476,16 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       }
       return
     }
+    const span = sessionSpanBars()
+    const newest = barCount - 1
+    const open = sessionStartIndex()
+    // No RTH bar for the newest day (pre-open, or an ETH-only stretch): fall
+    // back to a session's width ending at the newest bar, which is what this
+    // did before and is still right when there is no session to frame.
+    const anchor = open >= 0 ? open : Math.max(0, newest - span + 1)
+    const from = Math.min(anchor, newest - span / 2)
     try {
-      // A little room past the newest bar, the way every chart leaves it.
-      ts.setVisibleLogicalRange({ from: barCount - n, to: barCount + Math.max(2, Math.round(n * 0.03)) })
+      ts.setVisibleLogicalRange({ from, to: from + span })
     } catch {
       try {
         ts.fitContent()
@@ -451,11 +506,28 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
    * the pane on candles from earlier in the week with the newest one off the
    * right edge. Switch timeframe, lose the live candle — that was the report.
    *
-   * So the frame is CHECKED after the chart has had its frame, and once more
-   * after a layout pass, and re-applied if the newest bar is not on screen.
-   * Idempotent: a view that is already right is left exactly as it is.
+   * So the frame is CHECKED after the chart has had its frame, and again after
+   * a layout pass, and re-applied if it did not take. Idempotent: a view that is
+   * already right is left exactly as it is.
+   *
+   * ── "THE NEWEST BAR IS ON SCREEN" IS NOT ENOUGH ─────────────────────────────
+   * That was the whole test, and it passed on the exact view people were
+   * complaining about: a card that mounts in a hidden board tab (clientWidth 0)
+   * gets its range applied against a scale that has no width, and what comes
+   * back once it is shown is a pane of whitespace with the whole session
+   * crushed into the last inch on the right. The newest bar IS visible there,
+   * so the check was satisfied and the bad frame stayed for the life of the
+   * card. It is now also wrong if the pane is mostly empty, or if the zoom is
+   * nothing like a session wide.
+   *
+   * Three checks, not two, and the last is 600ms out: a tab that becomes
+   * visible can lay out well after the 150ms one.
+   *
+   * This runs ONLY from the reframe branch of setBars — a symbol, interval or
+   * session change — never on the 30s poll, so it can never fight a zoom the
+   * user chose.
    */
-  let ensureTimer: ReturnType<typeof setTimeout> | null = null
+  let ensureTimers: Array<ReturnType<typeof setTimeout>> = []
   function ensureLatestVisible() {
     const check = () => {
       if (barCount <= 0) return
@@ -465,12 +537,21 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       } catch {
         return
       }
+      if (!r) {
+        frameRecent()
+        return
+      }
       // `barCount - 1` is the newest bar's index; `to` is the right edge.
-      if (!r || r.to < barCount - 1 || r.from > barCount - 1) frameRecent()
+      const lost = r.to < barCount - 1 || r.from > barCount - 1
+      // Far wider than a session, or mostly whitespace: the frame did not take.
+      const span = sessionSpanBars()
+      const tooWide = r.to - r.from > span * 1.6
+      const tooEmpty = visibleDataFraction() < 0.4
+      if (lost || tooWide || tooEmpty) frameRecent()
     }
     requestAnimationFrame(check)
-    if (ensureTimer) clearTimeout(ensureTimer)
-    ensureTimer = setTimeout(check, 150)
+    for (const t of ensureTimers) clearTimeout(t)
+    ensureTimers = [setTimeout(check, 150), setTimeout(check, 600)]
   }
 
   /** Newest bar back at the right edge, keeping the user's bar spacing. */
@@ -979,7 +1060,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       }
     },
     destroy() {
-      if (ensureTimer) clearTimeout(ensureTimer)
+      for (const t of ensureTimers) clearTimeout(t)
+      ensureTimers = []
       railSink = null
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
       ro.disconnect()
