@@ -258,7 +258,7 @@ export default function MobileHeatmap() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <MChipRow items={WINDOWS} activeId={win} onSelect={setWin} />
             </div>
-            <ExpiryBadge expiry={g.expiry} isZeroDte={g.isZeroDte} />
+            <ExpiryBadge expiry={g.expiry} isZeroDte={g.isZeroDte} dte={g.dte} />
           </div>
         </div>
       }

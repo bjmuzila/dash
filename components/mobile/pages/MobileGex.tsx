@@ -77,7 +77,7 @@ export default function MobileGex() {
             <div style={{ width: 150 }}>
               <MSegmented options={MODES} value={dataMode} onChange={setDataMode} />
             </div>
-            <ExpiryBadge expiry={g.expiry} isZeroDte={g.isZeroDte} />
+            <ExpiryBadge expiry={g.expiry} isZeroDte={g.isZeroDte} dte={g.dte} />
             <span style={{ fontSize: TYPE.micro, color: M_COLOR.faint, lineHeight: 1.25, marginLeft: "auto" }}>
               drag to pan
             </span>

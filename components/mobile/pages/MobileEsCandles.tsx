@@ -1095,7 +1095,7 @@ export default function MobileEsCandles() {
               </span>
             )}
             <span style={{ flex: 1 }} />
-            <ExpiryBadge expiry={g.expiry} isZeroDte={g.isZeroDte} />
+            <ExpiryBadge expiry={g.expiry} isZeroDte={g.isZeroDte} dte={g.dte} />
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div style={{ width: 130, flexShrink: 0 }}>

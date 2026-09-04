@@ -517,7 +517,7 @@ export default function MobilePrep() {
         <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
           <MSegmented options={VIEWS} value={view} onChange={pick} />
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <ExpiryBadge expiry={g.expiry} isZeroDte={g.isZeroDte} />
+            <ExpiryBadge expiry={g.expiry} isZeroDte={g.isZeroDte} dte={g.dte} />
             <span style={{ fontSize: TYPE.micro, color: M_COLOR.faint, marginLeft: "auto" }}>
               {isPost ? etDate : etMin < RTH_OPEN_MIN
                 ? `open in ${Math.floor((RTH_OPEN_MIN - etMin) / 60)}h ${String((RTH_OPEN_MIN - etMin) % 60).padStart(2, "0")}m`

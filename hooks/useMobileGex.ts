@@ -38,19 +38,80 @@ const FALLBACK_AFTER_MS = 6_000;
 const FALLBACK_POLL_MS = 8_000;
 
 /**
- * The phone build is 0DTE-only.
+ * The phone build has no expiry picker: every mobile GEX surface shows the
+ * FRONT expiry of the session you are currently trading, and nothing else.
+ * This replaced a chip row plus a sessionStorage remembered-selection — on a
+ * phone the expiry you want is essentially always the front one, and the
+ * picker cost a row of vertical space on the two most space-constrained pages
+ * in the app.
  *
- * Every mobile GEX surface shows today's SPX expiry and nothing else — there
- * is no expiry picker. This replaced a chip row plus a sessionStorage
- * remembered-selection: on a phone the expiry you want is essentially always
- * 0DTE, and the picker cost a row of vertical space on the two most
- * space-constrained pages in the app.
+ * WHICH DAY IS "THE SESSION"
+ * --------------------------
+ * Not the calendar day. The CME/globex session opens at 18:00 ET, so from 6pm
+ * Eastern onward the book everyone is trading is TOMORROW's — an SPX heatmap
+ * still pinned to today's already-expired 0DTE at 7pm is showing a dead chain.
+ * `sessionDateEt()` therefore returns today's ET date before 18:00 ET and the
+ * next calendar date from 18:00 ET on.
  *
- * `todayEt()` is the ET calendar date, not the device's — a trader in London
- * must get New York's 0DTE.
+ * That target date is then resolved against the listed expirations by
+ * `pickExpiry()`: the first listed expiry ON or AFTER it, falling back to the
+ * last listed one. So Friday 6pm rolls to Saturday, finds no Saturday series,
+ * and lands on Monday — the closest expiry, which is the right answer on
+ * weekends, holidays, and any symbol without a daily series.
+ *
+ * All of it is ET, not the device's clock — a trader in London must get New
+ * York's session.
  */
+const ROLL_HOUR_ET = 18;
+
+function etDate(d: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(d);
+}
+
+function etHour(d: Date = new Date()): number {
+  const h = Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      hourCycle: "h23",
+    }).format(d),
+  );
+  // Some ICU builds render midnight as "24" under h23.
+  return Number.isFinite(h) ? h % 24 : 0;
+}
+
+/** The real ET calendar date. Used for the DTE label, never for pinning. */
 function todayEt(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  return etDate();
+}
+
+function addDaysYmd(ymd: string, n: number): string {
+  const d = new Date(ymd + "T12:00:00Z");
+  if (Number.isNaN(d.getTime())) return ymd;
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Today in ET before 6pm; tomorrow from 6pm ET on. */
+function sessionDateEt(): string {
+  const today = etDate();
+  return etHour() >= ROLL_HOUR_ET ? addDaysYmd(today, 1) : today;
+}
+
+/** First listed expiry on or after `target`; the last listed one if none is. */
+function pickExpiry(list: string[], target: string): string {
+  const sorted = Array.from(new Set(list.filter(Boolean))).sort();
+  if (!sorted.length) return "";
+  return sorted.find((e) => e >= target) ?? sorted[sorted.length - 1];
+}
+
+/** Whole calendar days from today (ET) to `expiry`. */
+function dteFrom(expiry: string): number | null {
+  if (!expiry) return null;
+  const a = Date.parse(todayEt() + "T00:00:00Z");
+  const b = Date.parse(expiry + "T00:00:00Z");
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return Math.round((b - a) / 86_400_000);
 }
 
 export type GexDataMode = "oi-vol" | "vol-only";
@@ -63,14 +124,20 @@ export type MobileGexState = {
   callWall: number | null;
   putWall: number | null;
   totalNetGex: number | null;
-  /** The expiry on screen. Always today's when the market lists one. */
+  /** The expiry on screen: the session's front expiry (see sessionDateEt). */
   expiry: string;
   /**
-   * False when today has no listed expiry (weekend, holiday, or a symbol with
-   * no daily series) and the feed's front expiry is being shown instead — so a
-   * page can say "FRONT" rather than lying with a "0DTE" badge.
+   * True only when the expiry on screen really is today's ET date. It goes
+   * false the moment the 6pm roll moves the view to tomorrow's book, and on
+   * weekends/holidays where no daily series is listed — so a page can label the
+   * chip "1DTE"/"3DTE" rather than lying with "0DTE".
    */
   isZeroDte: boolean;
+  /**
+   * Whole calendar days from today (ET) to the expiry on screen — 0 during the
+   * day session, 1 after the 6pm roll on a weekday, 3 after Friday's roll.
+   */
+  dte: number | null;
   /** Front ES future last, from the feed's `aux` frame. 0 when unknown. */
   esFut: number;
   /**
@@ -126,6 +193,8 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
   const lastFrameAtRef = useRef(0);
   // Expiry the USER picked. Held in a ref so the socket effect never re-subscribes.
   const wantExpiryRef = useRef("");
+  // Expiry the session roll resolved to. Read inside frame handlers, so a ref.
+  const desiredExpiryRef = useRef("");
   const hasDataRef = useRef(false);
   const [hasData, setHasData] = useState(false);
 
@@ -149,9 +218,11 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
     if (es > 0) setEsFut(es);
     if (Array.isArray(p.expirations)) setExpirations(p.expirations as string[]);
     if (typeof p.expiry === "string" && p.expiry) {
-      // The server's current expiry. Only shown when today isn't listed — the
-      // pin effect below overrides it with 0DTE whenever 0DTE exists.
-      setExpiryState((prev) => (prev && prev === todayEt() ? prev : p.expiry as string));
+      // The server's current expiry, used only until the pin effect below has
+      // resolved a target for this session. Once it has, that target wins: a
+      // frame landing between the roll and the server's SET_EXPIRY ack would
+      // otherwise flash yesterday's book back onto the screen.
+      setExpiryState(desiredExpiryRef.current || (p.expiry as string));
     }
     const ts = num(p.updatedAt);
     setUpdatedAt(ts > 0 ? ts : Date.now());
@@ -212,7 +283,7 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
         case "EXPIRATIONS":
           if (Array.isArray(data.expirations)) setExpirations(data.expirations as string[]);
           if (typeof data.expiry === "string" && data.expiry && !wantExpiryRef.current) {
-            setExpiryState(data.expiry);
+            setExpiryState(desiredExpiryRef.current || data.expiry);
           }
           break;
         default:
@@ -296,7 +367,38 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
   }, [enabled, applyPayload]);
 
   /**
-   * Pin the feed to today's expiry as soon as the expirations list arrives.
+   * The session clock.
+   *
+   * The roll has to happen on a PHONE THAT IS ALREADY OPEN — that is the whole
+   * failure mode: the app is left running through the close, 6pm passes, and
+   * the heatmap sits on an expired chain because nothing recomputed the date.
+   * A 30s tick is far below the resolution anyone would notice and costs one
+   * `Intl.format` per tick; visibilitychange/focus cover the case where the
+   * phone was asleep across the boundary and timers were throttled.
+   */
+  const [sessionDate, setSessionDate] = useState(sessionDateEt);
+  useEffect(() => {
+    const tick = () =>
+      setSessionDate((prev) => {
+        const next = sessionDateEt();
+        return next === prev ? prev : next;
+      });
+    const id = setInterval(tick, 30_000);
+    const onWake = () => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") tick();
+    };
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onWake);
+    if (typeof window !== "undefined") window.addEventListener("focus", onWake);
+    return () => {
+      clearInterval(id);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onWake);
+      if (typeof window !== "undefined") window.removeEventListener("focus", onWake);
+    };
+  }, []);
+
+  /**
+   * Pin the feed to the session's front expiry as soon as the expirations list
+   * arrives, and re-pin whenever the session rolls.
    *
    * The server tracks the chosen expiry PER CONNECTION, so this re-asserts on
    * every (re)connect too — including the reconnects the socket now performs
@@ -306,13 +408,14 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
   const pinnedRef = useRef("");
   useEffect(() => {
     if (!expirations.length) return;
-    const today = todayEt();
-    if (!expirations.includes(today)) return; // no 0DTE listed — keep the front
-    setExpiryState(today);
-    if (pinnedRef.current === today && connected) return;
-    pinnedRef.current = today;
-    sendGex({ type: "SET_EXPIRY", expiry: today });
-  }, [expirations, connected]);
+    const target = pickExpiry(expirations, sessionDate);
+    if (!target) return;
+    desiredExpiryRef.current = target;
+    setExpiryState(target);
+    if (pinnedRef.current === target && connected) return;
+    pinnedRef.current = target;
+    sendGex({ type: "SET_EXPIRY", expiry: target });
+  }, [expirations, connected, sessionDate]);
 
   // findGEXFlip is a pure client computation; prefer it over the server value
   // because it is derived from the exact rows on screen. Still exposed even
@@ -344,6 +447,7 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
     totalNetGex,
     expiry,
     isZeroDte: expiry === todayEt(),
+    dte: dteFrom(expiry),
     profile,
     connected,
     hasData,

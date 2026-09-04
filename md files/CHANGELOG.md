@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-09-04 - Mobile: expirations roll to the next session at 6pm ET
+
+The phone GEX heatmap was still showing 9/3 on 9/4. `useMobileGex` pinned the
+feed to `todayEt()` and only when that exact date appeared in the expirations
+list - so it never advanced past the day it was mounted, and on a weekend or
+holiday it silently fell back to whatever front expiry the server happened to
+be on.
+
+Now the pin follows the SESSION, not the calendar day:
+
+- `sessionDateEt()` - today's ET date before 18:00 ET, the next date from 18:00
+  ET on. Globex opens at 6pm, so from then the live book is tomorrow's; a
+  heatmap sitting on an already-expired 0DTE at 7pm is a dead chain.
+- `pickExpiry()` - resolves that target to the first LISTED expiry on or after
+  it, falling back to the last listed one. Friday 6pm rolls to Saturday, finds
+  no Saturday series, lands on Monday. Same path covers holidays and any symbol
+  without a daily series, replacing the old "not listed -> give up" branch.
+- A 30s session clock plus visibilitychange/focus re-checks. This is the actual
+  failure mode - the phone is left open through the close, 6pm passes, and
+  nothing recomputes the date. Now it re-pins in place, no reload.
+- Frames that land between the roll and the server's `SET_EXPIRY` ack no longer
+  flash the old book back: `desiredExpiryRef` wins over the payload's expiry.
+
+The badge tells the truth about it. `ExpiryBadge` takes a new `dte` and renders
+`0DTE` / `1DTE` / `3DTE`; only 0DTE stays orange, since that is the one decaying
+today. Applies to all four surfaces on the shared hook - heatmap, GEX chart, ES
+candles, prep.
+
+Touched: `hooks/useMobileGex.ts`, `components/mobile/ExpiryBadge.tsx`, and the
+`ExpiryBadge` call in `MobileHeatmap` / `MobileGex` / `MobilePrep` /
+`MobileEsCandles`. No proxy, server or desktop code.
+
+
 ## 2026-09-03 - Fix: stray backticks broke the owner-vite Docker build
 
 The VPS deploy died in the `owners` target with
