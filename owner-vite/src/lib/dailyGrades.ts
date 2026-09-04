@@ -3,7 +3,7 @@
 //
 // THE SHAPE IS THE CONTRACT. A sealed board is one row per ticker:
 //
-//   { apex, cap, flip, floor, spot }
+//   { apex, cap, flip, floor, spot, …, scorecard }
 //
 //   floor — 20th percentile of the cumulative PUT gamma ladder
 //   cap   — 80th percentile of the cumulative CALL gamma ladder
@@ -20,6 +20,15 @@
 //
 // Any of the four levels may be null (not every board has a flip, and a name
 // that hasn't been graded yet has none at all). Everything below is null-safe.
+//
+// AND THE SEALED READ, since v2: every board also carries a `scorecard` — the
+// gamma regime, each wall's quality and overnight stability, the expected move,
+// and ONE published call for the session (fade the first test, expect the break,
+// or stand down). It is computed once at 09:26 and frozen; nothing on this page
+// recomputes any of it, because a call that can move after the open is not a
+// call. A board sealed before v2 simply has `scorecard: null` and every consumer
+// here treats that as "not scored" rather than as zeros. The math is server-side
+// in server-v2/daily-grades-scorecard.js and that file's header is the rubric.
 //
 // THE ROSTER IS THE WATCHLIST, NOT THE PAYLOAD. The page grades the scanner
 // watchlist — the same universe the ΔGEX Board runs over, served by
@@ -40,12 +49,97 @@
 // at their sealed values and every delta, bar and flag recomputes off spot.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Which way dealer hedging pressure runs — see the scorecard block below. */
+export type DgGammaRegime = "positive" | "negative" | "transition" | "unknown";
+/** The one call the seal publishes per ticker. */
+export type DgCall = "fade_first_test" | "expect_break" | "low_conviction" | "none";
+/** What a level did between yesterday's seal and this one. */
+export type DgStability = "held" | "firming" | "chasing" | "drift" | null;
+
+/**
+ * One wall, scored at seal time. Every field is 0..1 except the price and the
+ * two percentages, and `quality` is the weighted blend of the six that decides
+ * how much this level's outcome is allowed to move the grade.
+ */
+export type DgWallScore = {
+  level: number | null;
+  gex: number | null;
+  dist_pct: number | null;
+  /** Standout bar against its ladder. */
+  size: number | null;
+  /** Isolated peak (1) vs smeared across neighbours (0). */
+  conc: number | null;
+  /** Distance quality — best in the 0.3–1.0% band. */
+  dist: number | null;
+  /** Sits inside the expected-move band. */
+  em: number | null;
+  /** Round-number / index-increment confluence. */
+  conf: number | null;
+  /** Overnight stability as a score. */
+  stab: number | null;
+  stability: DgStability;
+  drift_pct: number | null;
+  shift: "up" | "down" | "flat" | null;
+  quality: number | null;
+};
+
+/**
+ * THE PREMARKET SCORECARD, computed once at 09:26 and frozen into the seal.
+ *
+ * Regime first, because net GEX sign and spot vs the flip decide how every level
+ * under them is expected to behave: in positive gamma dealers hedge AGAINST the
+ * move and walls absorb, in negative gamma hedging is pro-cyclical and breaks
+ * accelerate, and sitting on the flip is its own answer — chop. Then wall
+ * quality, then overnight stability, then one expected-reaction call. The grader
+ * scores each level against the table its own regime implies and weights it by
+ * `quality`, so a wall nobody could have traded barely counts either way.
+ *
+ * The math lives in server-v2/daily-grades-scorecard.js. Nothing here recomputes
+ * it — a scorecard that could move after the open would not be a sealed call.
+ */
+export type DgScorecard = {
+  /** Rubric version. 2 is the structured scorecard; a seal with none is v1. */
+  v: number;
+  regime: DgGammaRegime;
+  regime_conf: number | null;
+  /** Whether the net-GEX sign and the flip side agreed. */
+  regime_agree: boolean | null;
+  net_gex: number | null;
+  flip_dist_pct: number | null;
+  /** Expected move for the session, percent of spot. REALIZED, not implied. */
+  em_pct: number | null;
+  walls: { cap: DgWallScore | null; floor: DgWallScore | null };
+  apex: DgWallScore | null;
+  flip: { level: number | null; quality: number | null } | null;
+  call: DgCall;
+  call_side: "cap" | "floor" | null;
+  call_conf: number | null;
+  /** The sentence the premarket routine ends on. */
+  note: string | null;
+  /** What the MAP was worth before the session touched it, 0–100. */
+  setup: number | null;
+  setup_grade: string | null;
+};
+
 export type DgBoard = {
   apex: number | null;
   cap: number | null;
   flip: number | null;
   floor: number | null;
   spot: number | null;
+  /** v2 additions. All optional — a v1 seal simply has none of them. */
+  net_gex?: number | null;
+  em_pct?: number | null;
+  /** The TRUE peaks from the scanner sweep, alongside (not instead of) the
+   *  percentile cap/floor. Two readings of the same board; the page shows both. */
+  call_wall?: number | null;
+  put_wall?: number | null;
+  call_wall_gex?: number | null;
+  put_wall_gex?: number | null;
+  cb_gex?: number | null;
+  /** The seal the overnight-stability read compared against. */
+  prev_session?: string | null;
+  scorecard?: DgScorecard | null;
 };
 
 export type DgPayload = {
@@ -65,6 +159,16 @@ export type DgRegime = "above" | "below" | "none";
 export type DgFlagKind = "near" | "breach" | "inverted" | "ungraded" | "offroster";
 export type DgFlag = { kind: DgFlagKind; label: string };
 
+/**
+ * A row on the Levels board.
+ *
+ * `regime` here is the FLIP SIDE — where spot sits relative to the gamma flip —
+ * and it is deliberately not the same field as `scorecard.regime`, which is the
+ * full gamma-regime read (sign AND side, with "transition" for the cases where
+ * those two disagree or price is sitting on the flip). Both are on screen; a row
+ * whose flip side says "above" while the scorecard says "transition" is exactly
+ * the disagreement worth seeing.
+ */
 export type DgRow = DgBoard & {
   ticker: string;
   /** Percent move from spot to each level. Positive = the level sits above spot. */
@@ -95,6 +199,19 @@ export type DgSummary = {
   noFlip: number;
   near: number;
   breach: number;
+  // ── v2 ────────────────────────────────────────────────────────────────────
+  /** Gamma regime across the roster — the FIRST thing a premarket read wants. */
+  posGamma: number;
+  negGamma: number;
+  chopGamma: number;
+  /** How the board is calling the session. */
+  fades: number;
+  breaks: number;
+  standDowns: number;
+  /** Walls that moved with price overnight — the weakest fades on the board. */
+  chasing: number;
+  /** Mean seal-time setup score across the scored names. */
+  setup: number | null;
 };
 
 // ── the graded half ──────────────────────────────────────────────────────────
@@ -104,12 +221,32 @@ export type DgSummary = {
 // them here would only hide where they came from. Everything is nullable: a row
 // exists for every sealed ticker, graded or not.
 
-/** Per-level outcome strings the recorder writes. */
+/**
+ * Per-level outcome strings the recorder writes.
+ *
+ * The wall vocabulary is THREE tables, one per regime, because the same event
+ * means different things under different hedging pressure: a wall reached and
+ * rejected is `tagged_held` in positive gamma (the model working), `absorbed` in
+ * negative gamma (a real level, wrong mechanism) and `chop_held` on the flip.
+ * The names stay distinct so the record says which table scored it.
+ */
 export type DgOutcome =
+  // walls, positive gamma — and the v1 fallback for a seal with no scorecard
   | "tagged_held" | "untested_held" | "tagged_broke" | "gapped_through"
+  // walls, negative gamma
+  | "broke_accelerated" | "gapped_ran" | "absorbed" | "broke_reverted" | "untested_quiet"
+  // walls, sitting on the flip
+  | "chop_held" | "chop_broke" | "chop_gapped"
+  // flip
   | "held_clean" | "held_after_test" | "flipped"
+  // CB
   | "pinned" | "close" | "near" | "loose" | "far"
-  | "contained" | "one_side_out" | "both_out";
+  // range
+  | "contained" | "one_side_out" | "both_out"
+  // the regime read itself
+  | "regime_held" | "regime_partial" | "regime_failed"
+  // the published call
+  | "call_hit" | "call_partial" | "call_untested" | "call_missed";
 
 export type DgStatus = "graded" | "no_candles" | "no_levels";
 
@@ -145,6 +282,26 @@ export type DgGradeRow = {
   crossed_flip: boolean | null;
   status: DgStatus;
   graded_at: string | null;
+  // ── v2 ────────────────────────────────────────────────────────────────────
+  // Nullable throughout: a row graded before the scorecard existed carries none
+  // of it, and the page renders those cells as "—" rather than as a zero.
+  /** The whole seal-time read, as it was frozen. A regrade re-scores off THIS. */
+  scorecard: DgScorecard | null;
+  regime: DgGammaRegime | null;
+  regime_conf: number | null;
+  regime_outcome: DgOutcome | null;
+  regime_pts: number | null;
+  reaction_call: DgCall | null;
+  reaction_outcome: DgOutcome | null;
+  reaction_pts: number | null;
+  /** What the map was worth before the session, 0–100, and its letter. */
+  setup_score: number | null;
+  setup_grade: string | null;
+  em_pct: number | null;
+  cap_quality: number | null;
+  floor_quality: number | null;
+  /** Which rubric scored this row — 1 or 2. */
+  rubric: number | null;
 };
 
 export type DgDay = {
@@ -169,6 +326,16 @@ export type DgDay = {
   apex_pinned: number | null;
   range_contained: number | null;
   graded_at: string | null;
+  // ── v2 ────────────────────────────────────────────────────────────────────
+  /** Mean seal-time setup score across the names that HAVE one. */
+  setup_score: number | null;
+  /** How many tickers behaved the way their regime said they would. */
+  regime_held: number | null;
+  /** How many published calls actually happened. */
+  reaction_hit: number | null;
+  pos_regime: number | null;
+  neg_regime: number | null;
+  chop_regime: number | null;
 };
 
 /** A level is "near" once spot is within this much of it, in percent. */
@@ -224,6 +391,10 @@ export function deriveRow(
   if (nearNames.length) flags.push({ kind: "near", label: `at ${nearNames.join("/")}` });
 
   return {
+    // Spread the board first so every v2 field it carries — the scorecard, the
+    // true walls, the expected move — reaches the row instead of being dropped
+    // by a hand-written field list that predates them.
+    ...b,
     ticker,
     apex, cap, flip, floor, spot,
     dFloor, dCap, dFlip, dApex,
@@ -270,6 +441,10 @@ export function deriveRows(
 }
 
 export function summarize(rows: DgRow[]): DgSummary {
+  const sc = (r: DgRow) => r.scorecard ?? null;
+  const setups = rows
+    .map((r) => sc(r)?.setup)
+    .filter((v): v is number => typeof v === "number" && isFinite(v));
   return {
     total: rows.length,
     graded: rows.filter((r) => !r.ungraded).length,
@@ -279,6 +454,21 @@ export function summarize(rows: DgRow[]): DgSummary {
     noFlip: rows.filter((r) => r.regime === "none" && !r.ungraded).length,
     near: rows.filter((r) => r.near).length,
     breach: rows.filter((r) => r.breach).length,
+    posGamma: rows.filter((r) => sc(r)?.regime === "positive").length,
+    negGamma: rows.filter((r) => sc(r)?.regime === "negative").length,
+    chopGamma: rows.filter((r) => sc(r)?.regime === "transition").length,
+    fades: rows.filter((r) => sc(r)?.call === "fade_first_test").length,
+    breaks: rows.filter((r) => sc(r)?.call === "expect_break").length,
+    standDowns: rows.filter((r) => sc(r)?.call === "low_conviction").length,
+    chasing: rows.filter((r) => {
+      const s = sc(r);
+      return s?.walls?.cap?.stability === "chasing" || s?.walls?.floor?.stability === "chasing";
+    }).length,
+    // Mean over the names that HAVE a setup score. A v1 board has none, and an
+    // unscored map is not a zero-quality map.
+    setup: setups.length
+      ? Number((setups.reduce((a, b) => a + b, 0) / setups.length).toFixed(1))
+      : null,
   };
 }
 
@@ -317,6 +507,29 @@ export function fmtPct(v: number | null): string {
   return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
 }
 
+/** A 0..1 quality as a percent with no decimals: 0.82 → "82". */
+export function fmtQuality(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "—";
+  return String(Math.round(v * 100));
+}
+
+/** Net GEX, abbreviated and signed: 4.2e9 → "+4.2B". */
+export function fmtGex(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "—";
+  const a = Math.abs(v);
+  const [d, unit] = a >= 1e12 ? [a / 1e12, "T"]
+    : a >= 1e9 ? [a / 1e9, "B"]
+      : a >= 1e6 ? [a / 1e6, "M"]
+        : a >= 1e3 ? [a / 1e3, "K"] : [a, ""];
+  return `${v < 0 ? "−" : "+"}${d.toFixed(d >= 100 ? 0 : 1)}${unit}`;
+}
+
+/** Unsigned percent, 2dp — for the expected move and other magnitudes. */
+export function fmtPctAbs(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "—";
+  return `${Math.abs(v).toFixed(2)}%`;
+}
+
 /** "Aug 25, 2026, 5:12:01 AM ET" for the seal stamp. */
 export function fmtSealed(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -350,6 +563,10 @@ export function parsePayload(raw: unknown): DgPayload {
     if (!v || typeof v !== "object") continue;
     const b = v as Record<string, unknown>;
     boards[t.toUpperCase()] = {
+      // Carry the whole board through, then coerce the five levels the contract
+      // says are numeric. A pasted v2 board keeps its scorecard; a v1 one simply
+      // has nothing extra to keep.
+      ...(b as object),
       apex: numOrNull(b.apex),
       cap: numOrNull(b.cap),
       flip: numOrNull(b.flip),

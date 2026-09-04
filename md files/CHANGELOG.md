@@ -1,5 +1,149 @@
 # Changelog
 
+## 2026-09-04 - Daily Grades: the rubric is a structured scorecard now (v2)
+
+`/owner/daily-grades` graded every level out of the same table every day, and
+that table only ever asked one question: did price close back on the side the
+seal left it on? That is wrong in a specific, knowable way. GEX is a map of
+modeled dealer HEDGING PRESSURE, and the direction of that pressure flips with
+the gamma regime. A call wall in positive gamma is where dealers sell into
+strength - it absorbs, and a hold is the model working. The SAME wall in
+negative gamma is where hedging turns pro-cyclical - a break with follow-through
+is the model working and a hold is the model being right about the level for the
+wrong reason. Scoring both out of one table rewarded and punished the board for
+the wrong things, and the old rubric could not tell the two apart at all.
+
+The rework orders the grade the way a premarket read is actually ordered:
+regime first, then wall quality, then overnight stability, then one published
+call, then - after the close - a grade of that call.
+
+### New: `server-v2/daily-grades-scorecard.js`
+
+All the new math, pure - no I/O, no clock, no database, same shape as
+`daily-grades-levels.js` beside it. Its header is the rubric.
+
+- **Regime** (`readRegime`) from the net-GEX sign AND which side of the flip
+  spot is on. Both have to agree for a confident read; when they disagree, or
+  when spot is sitting within 0.25% of the flip, the answer is `transition` -
+  chop, low conviction - not a coin flip between the other two.
+- **Wall quality** (`wallQuality`), six sub-scores per wall, 0-1: how standout
+  the bar is against the MEDIAN strike on its side of the ladder, whether the
+  peak is isolated or smeared across its neighbours, distance (0.3-1.0% is where
+  a level is relevant but not already reached), expected-move alignment, and
+  round-number confluence at an increment that scales with the price.
+- **Overnight stability** (`stabilityFor`) against the previous seal:
+  `held` / `firming` / `chasing` / `drift`. A wall that held its strike is the
+  strongest lean; one that migrated WITH price overnight is a weaker fade and a
+  more credible breakout - and that alone flips a positive-gamma fade call into
+  a break call.
+- **The call** (`reactionCall`): one of `fade_first_test`, `expect_break`,
+  `low_conviction`, plus the one-sentence note the premarket routine ends on.
+- **Regime-conditioned outcome tables** (`gradeWall`), three of them:
+  - +GEX: tagged.held 25 - untested 15 - tagged.broke 5 - gapped 0 (unchanged,
+    and this is also the fallback for any board with no scorecard)
+  - -GEX: broke.accelerated 25 - gapped.ran 22 - absorbed 16 - broke.reverted 10
+    - never reached 8
+  - transition: chop.held 22 - chop.broke 8 - chop.gapped 4
+- **`gradeRegime`** - did the day behave the way the regime said? +GEX wants a
+  contained two-sided session, -GEX wants extension and a directional close, the
+  flip wants chop. Held 25 / partial 14 / failed 4.
+- **`gradeReaction`** - did the published CALL happen? A break call needs the
+  close through AND roughly a quarter of the expected move beyond the level, so
+  a one-tick poke through is a `call_partial`, not a hit.
+
+### `server-v2/daily-grades-recorder.js`
+
+- `buildSeal` now computes a scorecard per ticker and freezes it into the seal.
+  It also finally reads `total_net_gex`, `call_wall`, `put_wall`,
+  `call_wall_gex`, `put_wall_gex` and `cb_gex` off `scanner_snapshots` - columns
+  the sweep has always written and this recorder had never asked for. cap/floor
+  stay the percentile levels they were; the true walls ride alongside.
+- **Expected move**: `emBySymbol` - the MEDIAN true range of each name's last 20
+  graded sessions, out of `daily_grades` itself. No new feed, no new table, and
+  it is labelled honestly everywhere as REALIZED, not an implied straddle move.
+  A name with fewer than 5 sessions on file gets null and every consumer treats
+  that as "no opinion" rather than substituting a guess. Swapping in an implied
+  EM later means changing that one function.
+- **Quality is a weight.** Each component's points-available are scaled by that
+  level's seal-time quality, floored at 0.25 and capped at 1. A wall 3% away and
+  smeared over four strikes barely counts in either direction - which is the
+  correction for the statistic that makes published wall-hold rates look better
+  than they are: distant walls hold nearly always, and counting those holds at
+  full weight inflates the record.
+- `gradeTicker` is now seven components (regime, cap, floor, flip, CB, range,
+  call), each 25 before its weight; score is weighted points over weighted
+  points-available. Still pure, still a function of (sealed, ohlc) only.
+- **Nothing in the back catalogue moved.** A seal with no scorecard grades on
+  the v1 path - positive-gamma tables, unit weights, no regime and no call
+  component - so an old session regrades to exactly the numbers it had. The
+  selftest asserts this.
+- `normalizeSeal` was rebuilding each board from just the five levels and
+  silently dropping everything else on it. Fixed - it spreads the board and then
+  coerces the five - or the entire premarket read would have been thrown away on
+  its way into the table.
+- `regradeSession` reads the stored `scorecard` back, so a rubric change is
+  still a pure re-score over stored facts.
+- Schema, additive and forward-only: `daily_grades` gains `scorecard` (jsonb),
+  `regime`, `regime_conf`, `regime_outcome`, `regime_pts`, `reaction_call`,
+  `reaction_outcome`, `reaction_pts`, `setup_score`, `setup_grade`, `em_pct`,
+  `cap_quality`, `floor_quality`, `rubric`; `daily_grade_days` gains
+  `setup_score`, `regime_held`, `reaction_hit`, `pos_regime`, `neg_regime`,
+  `chop_regime`. Points columns widen INTEGER -> DOUBLE PRECISION once, guarded
+  by an information_schema check so a restart is not a table rewrite.
+- The day roll-up's held/tested counts are SETS now, not string equality: the
+  same event is named `tagged_held`, `absorbed` or `chop_held` depending on
+  which regime table scored it, and the count is about what price did.
+
+### `setup_score` is separate from `score`, on purpose
+
+`setup_score` is what the MAP was worth at 09:26, before the session touched it.
+`score` is what the session did to it. A good map can have a bad day and the
+record should be able to say which happened - one number cannot.
+
+### New: `server-v2/daily-grades-scorecard.selftest.js`
+
+47 assertions, no DB, no network. `node server-v2/daily-grades-scorecard.selftest.js`.
+The ones that matter most are the pairs: the same wall break scoring 25 in
+negative gamma and 5 in positive gamma, the same quiet day paying less in -GEX
+than in +GEX, a far smeared wall failing to move the grade either way, and a v1
+seal still landing on a whole multiple of 25.
+
+### `owner-vite` - the page
+
+- `src/lib/dailyGrades.ts`: `DgScorecard`, `DgWallScore`, `DgGammaRegime`,
+  `DgCall`, `DgStability`; the new outcome strings; the v2 columns on
+  `DgGradeRow` and `DgDay`; regime/call/setup counts on `summarize()`;
+  `fmtQuality` / `fmtGex` / `fmtPctAbs`. `deriveRow` and `parsePayload` spread
+  the board instead of rebuilding it from five fields, for the same reason
+  `normalizeSeal` had to.
+- `src/pages/DailyGrades.tsx`:
+  - LEVELS: a regime strip above the structure tiles (+GEX / -GEX / on-the-flip,
+    mean setup, fade / break / stand-down counts, walls chasing price), and
+    Regime, Setup, Call, Floor q, Cap q, EM and Net GEX columns. Regime sits to
+    the LEFT of the levels it governs. Wall quality draws as a fill bar - it is
+    a weight, so a short bar is a level that cannot move the grade - with all
+    six sub-scores and the overnight read on hover. The call's sealed sentence
+    is the tooltip on its pill.
+  - A second row of filters for the READ (+GEX, -GEX, on the flip, fade calls,
+    break calls, wall chasing), visually divided from the price filters.
+  - GRADES: Regime, Setup, Regime call and The call columns, a regime split
+    strip, and setup / regime-held / calls-hit tiles.
+  - SESSIONS: Setup, Regime held, Calls hit and Regime split columns, mean setup
+    tile.
+  - The per-ticker history modal carries Regime, Setup and both new verdicts -
+    without the regime column that table is unreadable across sessions, since
+    the same verdict word means different things under each.
+  - Points render to 1dp now that they are weighted.
+  - Every scorecard column is behind a `scored` / `gradedScored` / `daysScored`
+    switch: a v1 board or the bundled sample hides them rather than drawing
+    eighteen columns of dashes and reading as a failed load.
+  - `-GEX` outcome pills are coloured against their names on purpose:
+    `broke.ran` is green because under pro-cyclical hedging that IS the model
+    working, and painting it red would teach the eye the wrong lesson.
+
+No proxy files touched. `server-with-proxy.js` needed no change - all four
+routes pass whole rows through, so the new columns flow out on their own.
+
 ## 2026-09-04 - v3 toolbar: the Notes dock (and the owner's Quick Probe) is reachable
 
 `shell/NotesDock.tsx`, `shell/NotesPanelContext.tsx`, `shell/notes.tsx` and

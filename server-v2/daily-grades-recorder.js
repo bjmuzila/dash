@@ -31,29 +31,70 @@
  *    it that way: `gradeTicker()` below is a pure function of (sealed, ohlc) and
  *    must stay one.
  *
- * WHAT "CORRECT" MEANS. Each level is scored on two questions, because either
- * alone is misleading. RESPECT: did price close back on the side the seal left
- * it on? REACH: did price actually get to the level at all? A cap that price
- * never came within a mile of was not "respected" — it was untested, and it
- * scores lower than one that got tagged and rejected. A cap that got tagged and
- * broken scores lower still. That ordering is the rubric.
+ * WHAT "CORRECT" MEANS — THE STRUCTURED SCORECARD (v2)
+ * ----------------------------------------------------
+ * The rubric is ordered the way a premarket read is ordered, and the whole of it
+ * lives in daily-grades-scorecard.js (pure math, no I/O — read its header for
+ * the reasoning). The short version:
  *
- *   cap    (call-gamma p80)          tagged+held 25 · untested 15 · tagged+broke 5 · gapped through 0
- *   floor  (put-gamma p20)           same four, mirrored
- *   flip   (gamma flip)              held clean 25 · held after a test 18 · flipped 5
- *   apex   (CB)                      magnet: |close − apex| as % of close, 25/21/15/8/0
- *   range  (floor→cap band)          contained 25 · one side out 12 · both out 0
+ *   1. REGIME FIRST. Net GEX sign and spot vs the gamma flip decide how every
+ *      level below is expected to behave. Positive gamma: dealers hedge against
+ *      the move, walls absorb, fades are the higher-probability play. Negative
+ *      gamma: hedging is pro-cyclical, breaks accelerate. Sitting ON the flip is
+ *      its own answer — chop, low conviction — not a coin flip between the two.
+ *      A big call wall in negative gamma is NOT the same trade as the same wall
+ *      in strong positive gamma, and until v2 this file scored them identically.
+ *   2. WALL QUALITY, at seal time: how standout the bar is against its ladder,
+ *      whether the peak is isolated or smeared across neighbours, distance from
+ *      spot (0.3–1.0% is where a level is relevant but not already reached),
+ *      alignment with the expected-move band, and round-number confluence.
+ *   3. OVERNIGHT STABILITY. The premarket value is in the CHANGE, not the print.
+ *      A wall that held its strike is a stronger lean; one that CHASED price
+ *      overnight is a weaker fade and a more credible breakout level.
+ *   4. THE CALL. Those three produce one sentence per ticker — fade the first
+ *      test, expect the break, or stand down — stored with the seal.
+ *   5. THE GRADE. After the close each level is scored against the table its own
+ *      regime implies, and the CALL is scored on whether the reaction it named
+ *      actually happened.
  *
- * A ticker's score is points / points-available × 100, so a name with no flip is
- * not punished for the missing component. Letter bands are the house bands from
- * _lib-pick-grade.cjs — A+ 85 / A 72 / B 58 / C 44 / D 28 / F — deliberately, so
- * a grade means the same thing on both boards. `max_pts = 0` (nothing gradable)
- * stores as status `no_levels` and NULL grade rather than an F: an F is a claim
- * about the board, and there was no board.
+ *   regime   (did the day behave like the regime said)      25
+ *   cap      (call side)     +GEX: tagged+held 25 · untested 15 · broke 5 · gapped 0
+ *                            −GEX: broke+accelerated 25 · gapped ran 22 · absorbed 16
+ *                                  · broke+reverted 10 · never reached 8
+ *                            flip: chop held 22 · chop broke 8 · chop gapped 4
+ *   floor    (put side)      the same three tables, mirrored
+ *   flip     (gamma flip)    held clean 25 · held after a test 18 · flipped 5
+ *   apex     (CB)            magnet: |close − apex| as % of close, 25/21/15/8/0
+ *   range    (floor→cap)     contained 25 · one side out 12 · both out 0
+ *   reaction (the call)      hit 25 · partial 13 · untested 12/9 · missed 4–6
+ *
+ * QUALITY IS A WEIGHT. Each component's points-available are scaled by that
+ * component's seal-time quality (floored at 0.25, capped at 1). A wall 3% away,
+ * smeared over four strikes and outside the expected move, barely counts in
+ * EITHER direction — which is the correction for the statistic that makes
+ * published wall-hold rates look better than they are. Distant walls hold almost
+ * always; counting those holds at full weight inflates the record.
+ *
+ * A ticker's score is weighted points / weighted points-available × 100, so a
+ * name with no flip is not punished for a component it never had. Letter bands
+ * are the house bands from _lib-pick-grade.cjs — A+ 85 / A 72 / B 58 / C 44 /
+ * D 28 / F — deliberately, so a grade means the same thing on both boards.
+ * `max_pts = 0` (nothing gradable) stores as status `no_levels` and NULL grade
+ * rather than an F: an F is a claim about the board, and there was no board.
+ *
+ * THE SETUP SCORE IS SEPARATE FROM THE GRADE, on purpose. `setup_score` is what
+ * the MAP was worth before the session touched it; `score` is what the session
+ * did to it. A good map can have a bad day, and the record should be able to
+ * tell those two apart rather than blaming the structure for the tape.
  *
  * The day row is the straight SUM of every graded ticker's points over the sum
  * of their points-available — NOT the mean of the per-ticker percentages, which
  * would let a one-level ticker swing the session as hard as a four-level one.
+ *
+ * OLD SESSIONS STILL REGRADE TO THEIR OLD NUMBERS. A seal with no scorecard on
+ * it (anything sealed before v2) grades on the v1 path: positive-gamma wall
+ * table, unit weights, no regime and no reaction component. Nothing in the back
+ * catalogue moves because the rubric moved.
  *
  * Cadence: checks every 5m; seals once at/after 09:26 ET, grades once at/after
  *          16:20 ET, trading days only.
@@ -70,6 +111,7 @@
 // ── config ───────────────────────────────────────────────────────────────────
 
 const { floorCeiling } = require('./daily-grades-levels');
+const SC = require('./daily-grades-scorecard');
 
 /** Seal time. Just after eod-strike-gex-recorder's 09:25 ET settled-OI re-stamp. */
 const SEAL_HOUR = Number(process.env.DAILY_GRADES_SEAL_HOUR ?? 9);
@@ -87,6 +129,21 @@ const CONCURRENCY = Math.max(1, Number(process.env.DAILY_GRADES_CONCURRENCY || 4
 const CANDLE_TIMEOUT_MS = Number(process.env.DAILY_GRADES_CANDLE_TIMEOUT_MS || 20_000);
 /** Fewest 1m bars that count as a real session. A half-day is ~210. */
 const MIN_BARS = Number(process.env.DAILY_GRADES_MIN_BARS || 60);
+
+/**
+ * How many past sessions the expected-move read averages over.
+ *
+ * THE EM HERE IS REALIZED, NOT IMPLIED. It is the median true range of the last
+ * N graded sessions out of `daily_grades` — a table this recorder already fills,
+ * for exactly this roster, so it costs no new feed and no new table. It is used
+ * only as a SCALE: "is this level somewhere today can plausibly reach", and
+ * "did the session move more or less than it usually does". If an ATM-straddle
+ * implied move ever lands in the database, feed it into `emBySymbol` and nothing
+ * downstream changes — that function is the one seam.
+ */
+const EM_LOOKBACK = Number(process.env.DAILY_GRADES_EM_LOOKBACK || 20);
+/** Fewest past sessions before a realized EM is worth quoting at all. */
+const EM_MIN_SESSIONS = Number(process.env.DAILY_GRADES_EM_MIN_SESSIONS || 5);
 
 /** Index roots dxLink carries under a `$` prefix. Extend via env, CSV of A:B. */
 const STREAMER_OVERRIDES = (() => {
@@ -246,6 +303,40 @@ async function ensureSchema() {
   await p.query(`CREATE INDEX IF NOT EXISTS idx_daily_grades_symbol ON daily_grades(symbol)`);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_daily_grades_grade ON daily_grades(grade)`);
 
+  // ── v2: the structured scorecard ───────────────────────────────────────────
+  //
+  // Additive and forward-only. Every one of these is nullable, so a row written
+  // by v1 stays exactly as it was and reads back as "no scorecard", which is the
+  // state gradeTicker() falls back on. `scorecard` carries the WHOLE seal-time
+  // read as JSONB so a regrade is still a pure re-score over stored facts — the
+  // rubric can move again without needing the ladder back.
+  for (const [col, type] of [
+    ['scorecard', 'JSONB'],
+    ['regime', 'TEXT'],
+    ['regime_conf', 'DOUBLE PRECISION'],
+    ['regime_outcome', 'TEXT'],
+    ['regime_pts', 'DOUBLE PRECISION'],
+    ['reaction_call', 'TEXT'],
+    ['reaction_outcome', 'TEXT'],
+    ['reaction_pts', 'DOUBLE PRECISION'],
+    ['setup_score', 'DOUBLE PRECISION'],
+    ['setup_grade', 'TEXT'],
+    ['em_pct', 'DOUBLE PRECISION'],
+    ['cap_quality', 'DOUBLE PRECISION'],
+    ['floor_quality', 'DOUBLE PRECISION'],
+    ['rubric', 'INTEGER'],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await p.query(`ALTER TABLE daily_grades ADD COLUMN IF NOT EXISTS ${col} ${type}`);
+  }
+
+  // Points are now WEIGHTED by seal-time quality, so they are no longer whole
+  // numbers. Widening in place keeps every stored row; the cast is exact for the
+  // integers already there. Guarded so a restart is not a table rewrite.
+  await widenToDouble(p, 'daily_grades', [
+    'cap_pts', 'floor_pts', 'flip_pts', 'apex_pts', 'range_pts', 'pts', 'max_pts',
+  ]);
+
   await p.query(`
     CREATE TABLE IF NOT EXISTS daily_grade_days (
       date             DATE PRIMARY KEY,
@@ -273,15 +364,55 @@ async function ensureSchema() {
     )
   `);
 
+  for (const [col, type] of [
+    ['setup_score', 'DOUBLE PRECISION'],
+    ['regime_held', 'INTEGER'],
+    ['reaction_hit', 'INTEGER'],
+    ['pos_regime', 'INTEGER'],
+    ['neg_regime', 'INTEGER'],
+    ['chop_regime', 'INTEGER'],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await p.query(`ALTER TABLE daily_grade_days ADD COLUMN IF NOT EXISTS ${col} ${type}`);
+  }
+  await widenToDouble(p, 'daily_grade_days', ['pts', 'max_pts']);
+
   _schemaReady = true;
   return true;
+}
+
+/**
+ * Widen INTEGER columns to DOUBLE PRECISION, only the ones that still need it.
+ * ALTER ... TYPE rewrites the table, so this asks information_schema first and
+ * does nothing on every restart after the first.
+ */
+async function widenToDouble(p, table, cols) {
+  const { rows } = await p.query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_name = $1 AND column_name = ANY($2) AND data_type <> 'double precision'`,
+    [table, cols],
+  );
+  for (const r of rows) {
+    // eslint-disable-next-line no-await-in-loop
+    await p.query(`ALTER TABLE ${table} ALTER COLUMN ${r.column_name} TYPE DOUBLE PRECISION`);
+    console.log(`[daily-grades] widened ${table}.${r.column_name} to double precision`);
+  }
 }
 
 // ── the seal ─────────────────────────────────────────────────────────────────
 
 const num = (v) => (v == null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
 
-/** Coerce a posted payload into { date, boards, note, sealedAt }. Throws on junk. */
+/**
+ * Coerce a posted payload into { date, boards, note, sealedAt }. Throws on junk.
+ *
+ * The five levels are coerced to numbers-or-null because the board's contract is
+ * that they are numeric; EVERYTHING ELSE on a board is carried through
+ * untouched. That matters as of v2: the scorecard, the walls, the expected move
+ * and the ladder diagnostics all ride on the board, and a normaliser that
+ * rebuilt only the five levels would silently drop the entire premarket read on
+ * its way into the table.
+ */
 function normalizeSeal(payload) {
   if (!payload || typeof payload !== 'object') throw new Error('payload must be an object');
   const boardsIn = payload.boards;
@@ -290,6 +421,7 @@ function normalizeSeal(payload) {
   for (const [t, v] of Object.entries(boardsIn)) {
     if (!v || typeof v !== 'object') continue;
     boards[String(t).toUpperCase()] = {
+      ...v,
       apex: num(v.apex), cap: num(v.cap), flip: num(v.flip),
       floor: num(v.floor), spot: num(v.spot),
     };
@@ -367,7 +499,14 @@ async function latestLadderDate(p, onOrBefore) {
   return rows[0]?.d || null;
 }
 
-/** symbol → { strikes[], call[], put[] } for one session, strikes ascending. */
+/**
+ * symbol → { strikes[], call[], put[], callMass, putMass } for one session,
+ * strikes ascending.
+ *
+ * The two legs are stored abs because the level math and the wall-quality math
+ * both want magnitudes; the SIGNED net is carried separately as callMass −
+ * putMass, and is the fallback regime read for a symbol with no scanner sweep.
+ */
 async function ladderBySymbol(p, ladderDate) {
   const { rows } = await p.query(
     `SELECT symbol, strike, oi_call_gex, oi_put_gex
@@ -380,22 +519,34 @@ async function ladderBySymbol(p, ladderDate) {
   for (const r of rows) {
     const sym = String(r.symbol).toUpperCase().replace(/^\$/, '');
     let e = out.get(sym);
-    if (!e) { e = { strikes: [], call: [], put: [] }; out.set(sym, e); }
+    if (!e) { e = { strikes: [], call: [], put: [], callMass: 0, putMass: 0 }; out.set(sym, e); }
+    const c = Math.abs(Number(r.oi_call_gex) || 0);
+    const pu = Math.abs(Number(r.oi_put_gex) || 0);
     e.strikes.push(Number(r.strike));
-    e.call.push(Math.abs(Number(r.oi_call_gex) || 0));
-    e.put.push(Math.abs(Number(r.oi_put_gex) || 0));
+    e.call.push(c);
+    e.put.push(pu);
+    e.callMass += c;
+    e.putMass += pu;
   }
   return out;
 }
 
 /**
- * symbol → { spot, cb, flip } from the newest scanner sweep within the lookback.
+ * symbol → the newest scanner sweep within the lookback.
+ *
  * Pre-open the newest sweep is yesterday's 16:00 row, which is the right value
  * to seal with: it is the last thing the board actually was.
+ *
+ * v2 also reads `total_net_gex` (the regime's first input) and the true
+ * `call_wall` / `put_wall` with the gamma sitting AT each — columns the sweep
+ * has always written and this recorder had never asked for. cap/floor stay the
+ * percentile levels they have always been; the walls ride alongside so the
+ * scorecard can score the peak the read is actually about.
  */
 async function scannerLevels(p, onOrBefore) {
   const { rows } = await p.query(
-    `SELECT DISTINCT ON (symbol) symbol, ts, spot, cb, gex_flip
+    `SELECT DISTINCT ON (symbol) symbol, ts, spot, cb, gex_flip,
+            total_net_gex, call_wall, put_wall, call_wall_gex, put_wall_gex, cb_gex
        FROM scanner_snapshots
       WHERE date <= $1 AND date > to_char($1::date - $2::int, 'YYYY-MM-DD')
       ORDER BY symbol, ts DESC`,
@@ -405,9 +556,69 @@ async function scannerLevels(p, onOrBefore) {
   for (const r of rows) {
     out.set(String(r.symbol).toUpperCase().replace(/^\$/, ''), {
       spot: num(r.spot), cb: num(r.cb), flip: num(r.gex_flip),
+      netGex: num(r.total_net_gex),
+      callWall: num(r.call_wall), putWall: num(r.put_wall),
+      callWallGex: num(r.call_wall_gex), putWallGex: num(r.put_wall_gex),
+      cbGex: num(r.cb_gex),
     });
   }
   return out;
+}
+
+/**
+ * symbol → expected move for the session, as a percent of spot.
+ *
+ * The MEDIAN true range of the last EM_LOOKBACK graded sessions, read out of
+ * `daily_grades` — the table this recorder fills, for this roster. Median rather
+ * than mean because one CPI day should not become the whole month's expectation.
+ *
+ * A symbol with fewer than EM_MIN_SESSIONS on file gets null, and every consumer
+ * treats a null EM as "no opinion" rather than substituting a guess: the
+ * EM-alignment sub-score goes neutral and the components that need a scale fall
+ * back to a fixed percentage at reduced weight. That is the honest failure mode
+ * for a fresh database.
+ *
+ * THIS IS A REALIZED READ, NOT AN IMPLIED ONE, and nothing downstream pretends
+ * otherwise. Swapping in an ATM-straddle EM means changing this function and
+ * nothing else.
+ */
+async function emBySymbol(p, onOrBefore) {
+  const { rows } = await p.query(
+    `SELECT symbol,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY (h - l) / NULLIF(o, 0) * 100) AS em_pct,
+            count(*) AS n
+       FROM (
+         SELECT symbol, o, h, l,
+                row_number() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+           FROM daily_grades
+          WHERE date < $1::date AND o IS NOT NULL AND h IS NOT NULL
+            AND l IS NOT NULL AND o > 0
+       ) s
+      WHERE rn <= $2::int
+      GROUP BY symbol`,
+    [onOrBefore, EM_LOOKBACK],
+  );
+  const out = new Map();
+  for (const r of rows) {
+    if (Number(r.n) < EM_MIN_SESSIONS) continue;
+    const v = num(r.em_pct);
+    if (v != null && v > 0) out.set(String(r.symbol).toUpperCase(), v);
+  }
+  return out;
+}
+
+/**
+ * The previous session's sealed boards, for the overnight-stability read.
+ * Strictly before `session` and newest-first, so a long weekend or a missed seal
+ * compares against the last board that actually existed rather than nothing.
+ */
+async function prevBoards(p, session) {
+  const { rows } = await p.query(
+    `SELECT date, boards FROM daily_grade_seals WHERE date < $1::date ORDER BY date DESC LIMIT 1`,
+    [session],
+  );
+  if (!rows.length) return { date: null, boards: {} };
+  return { date: etDateStr(new Date(rows[0].date)), boards: rows[0].boards || {} };
 }
 
 /** Live spots for the roster, best-effort. Falls back to the scanner spot. */
@@ -445,9 +656,14 @@ async function buildSeal(date, { force = false } = {}) {
   const ladderDate = await latestLadderDate(p, session);
   if (!ladderDate) return { ok: false, error: 'no OI ladder on file' };
 
-  const [ladders, levels] = await Promise.all([
+  const [ladders, levels, ems, prev] = await Promise.all([
     ladderBySymbol(p, ladderDate),
     scannerLevels(p, session),
+    emBySymbol(p, session).catch((e) => {
+      console.warn('[daily-grades] expected move unavailable:', e.message);
+      return new Map();
+    }),
+    prevBoards(p, session).catch(() => ({ date: null, boards: {} })),
   ]);
   if (!ladders.size) return { ok: false, error: `ladder ${ladderDate} is empty` };
 
@@ -456,18 +672,56 @@ async function buildSeal(date, { force = false } = {}) {
 
   const boards = {};
   let withLevels = 0;
+  let withScorecard = 0;
+  const regimeCount = { positive: 0, negative: 0, transition: 0, unknown: 0 };
   for (const sym of symbols) {
     const lad = ladders.get(sym);
     const lv = levels.get(sym) || {};
     const fc = lad ? floorCeiling(lad.strikes, lad.call, lad.put) : null;
     if (fc) withLevels++;
+
+    const spot = spots.get(sym) ?? lv.spot ?? null;
+    const flip = lv.flip ?? null;
+    const apex = lv.cb ?? null;
+    const cap = fc ? fc.cap : null;
+    const floor = fc ? fc.floor : null;
+    // The scanner's chain total is the primary regime input; the ladder's own
+    // signed mass is the fallback for a name the sweep missed. They answer the
+    // same question off different inputs, so either alone is usable.
+    const netGex = lv.netGex ?? (lad ? lad.callMass - lad.putMass : null);
+    const emPct = ems.get(sym) ?? null;
+
+    // ── the premarket scorecard ──────────────────────────────────────────────
+    // Regime, wall quality, overnight stability and the call, all of it computed
+    // ONCE here and frozen into the seal. The grader never recomputes any of it:
+    // a scorecard that could move after the open is not a sealed call, and the
+    // whole point of grading is that the claim was made in advance.
+    let scorecard = null;
+    try {
+      scorecard = SC.buildScorecard({
+        spot, flip, netGex,
+        capLevel: cap, floorLevel: floor, apexLevel: apex,
+        strikes: lad ? lad.strikes : [],
+        callGex: lad ? lad.call : [],
+        putGex: lad ? lad.put : [],
+        emPct,
+        prev: prev.boards[sym] || null,
+      });
+      if (scorecard) {
+        withScorecard++;
+        regimeCount[scorecard.regime] = (regimeCount[scorecard.regime] || 0) + 1;
+      }
+    } catch (e) {
+      console.warn(`[daily-grades] scorecard ${sym}:`, e.message);
+    }
+
     boards[sym] = {
       // The five the board renders.
-      floor: fc ? fc.floor : null,
-      cap: fc ? fc.cap : null,
-      apex: lv.cb ?? null,
-      flip: lv.flip ?? null,
-      spot: spots.get(sym) ?? lv.spot ?? null,
+      floor,
+      cap,
+      apex,
+      flip,
+      spot,
       // The rest of what the math saw, carried so a disagreement between the
       // two methods is inspectable instead of thrown away.
       ceiling_emp: fc ? fc.ceilingEmp : null,
@@ -479,6 +733,19 @@ async function buildSeal(date, { force = false } = {}) {
       mu_put: fc ? fc.muPut : null,
       sd_put: fc ? fc.sdPut : null,
       strikes: fc ? fc.strikes : 0,
+      // v2 — the structured read. `call_wall` / `put_wall` are the TRUE peaks
+      // from the sweep, kept next to (not instead of) the percentile cap/floor:
+      // they are two different readings of the same board and the page shows
+      // both rather than quietly swapping one for the other.
+      net_gex: netGex,
+      em_pct: emPct,
+      call_wall: lv.callWall ?? null,
+      put_wall: lv.putWall ?? null,
+      call_wall_gex: lv.callWallGex ?? null,
+      put_wall_gex: lv.putWallGex ?? null,
+      cb_gex: lv.cbGex ?? null,
+      prev_session: prev.date,
+      scorecard,
     };
   }
 
@@ -486,63 +753,94 @@ async function buildSeal(date, { force = false } = {}) {
     boards,
     sealed_for_session: session,
     sealed_at: new Date().toISOString(),
-    note: `Daily grades. floor/cap = empirical percentile of the ${ladderDate} settled-OI `
-      + 'gamma ladder; CB and flip from the last scanner sweep. Sealed before the open '
-      + 'and graded after the close.',
+    note: `Daily grades v${SC.SCORECARD_VERSION}. floor/cap = empirical percentile of the `
+      + `${ladderDate} settled-OI gamma ladder; CB, flip, net GEX and the call/put walls from `
+      + 'the last scanner sweep. Each ticker carries a premarket scorecard — regime first, then '
+      + 'wall quality, overnight stability against '
+      + (prev.date ? `the ${prev.date} seal` : 'no prior seal')
+      + ', and one expected-reaction call. Expected move is the median true range of the last '
+      + `${EM_LOOKBACK} graded sessions (realized, not implied). Sealed before the open and `
+      + 'graded after the close against the table its own regime implies.',
   }, { source: 'engine', force });
 
   console.log(
     `[daily-grades] sealed ${session} — ${symbols.length} tickers, `
-    + `${withLevels} with floor/cap from the ${ladderDate} ladder`
+    + `${withLevels} with floor/cap from the ${ladderDate} ladder, ${withScorecard} scored `
+    + `(+GEX ${regimeCount.positive} · −GEX ${regimeCount.negative} · flip ${regimeCount.transition})`
     + (r.locked ? ' (LOCKED: session already open, levels untouched)' : ''),
   );
-  return { ...r, ladderDate, tickers: symbols.length, withLevels };
+  return { ...r, ladderDate, tickers: symbols.length, withLevels, withScorecard, regimes: regimeCount };
 }
 
 // ── the rubric (PURE — no I/O, no clock) ─────────────────────────────────────
 
-const GRADE_BANDS = (pts) =>
-  pts >= 85 ? 'A+' : pts >= 72 ? 'A' : pts >= 58 ? 'B' : pts >= 44 ? 'C' : pts >= 28 ? 'D' : 'F';
-
-/** cap and floor share this shape; `side` is which side of the level the seal left price on. */
-function gradeWall(level, side, o, h, l, c) {
-  if (level == null) return null;
-  const inside = side === 'below' ? (v) => v <= level : (v) => v >= level;
-  const reached = side === 'below' ? h >= level : l <= level;
-  const openedThrough = !inside(o);
-  const closedInside = inside(c);
-
-  if (openedThrough && !closedInside) return { outcome: 'gapped_through', pts: 0, reached };
-  if (reached && closedInside) return { outcome: 'tagged_held', pts: 25, reached };
-  if (!reached && closedInside) return { outcome: 'untested_held', pts: 15, reached };
-  return { outcome: 'tagged_broke', pts: 5, reached };
-}
+const GRADE_BANDS = SC.GRADE_BANDS;
 
 /**
  * Score one ticker. Pure function of the sealed board and the realized session —
  * every caller (the nightly run, the regrade route, a backtest) gets the same
  * answer from the same two inputs. Do not reach for a clock or a fetch in here.
+ *
+ * `sealed.scorecard` is the seal-time read (regime, wall quality, the call). It
+ * decides WHICH table each level is scored against and HOW MUCH each component
+ * weighs. A seal without one grades on the v1 path — positive-gamma tables, unit
+ * weights, no regime and no reaction component — so the back catalogue regrades
+ * to exactly the numbers it already had.
  */
 function gradeTicker(sealed, ohlc) {
   const { floor = null, cap = null, apex = null, flip = null, spot = null } = sealed || {};
+  const sc = sealed?.scorecard || null;
+  const regime = sc?.regime || 'unknown';
   const o = num(ohlc?.o), h = num(ohlc?.h), l = num(ohlc?.l), c = num(ohlc?.c);
 
   const empty = {
     parts: {}, pts: null, maxPts: 0, score: null, grade: null,
     reachedCap: null, reachedFloor: null, reachedApex: null, crossedFlip: null,
-    status: 'no_levels',
+    status: 'no_levels', scorecard: sc, regime: sc ? regime : null,
   };
   if (floor == null && cap == null && apex == null && flip == null) return empty;
   if (o == null || h == null || l == null || c == null) return { ...empty, status: 'no_candles' };
 
+  const emPct = num(sc?.em_pct);
+  // The follow-through test wants POINTS, not percent — a break is only a break
+  // once it has travelled a real distance past the level.
+  const emAbs = emPct != null && spot != null ? (emPct / 100) * spot : null;
+
   const parts = {};
+  const weights = {};
+  /**
+   * Component weight. With NO scorecard this is flatly 1 for every component —
+   * that is what makes a v1 session regrade to the exact number it already had.
+   * Weighting only ever applies to a board that was actually scored at seal.
+   */
+  const w = (q) => (sc ? SC.weightOf(q) : 1);
 
-  // cap — strongest POSITIVE gex. The seal's own spot decides which side it was on.
-  parts.cap = gradeWall(cap, cap != null && spot != null && spot > cap ? 'above' : 'below', o, h, l, c);
-  // floor — strongest NEGATIVE gex, mirrored.
-  parts.floor = gradeWall(floor, floor != null && spot != null && spot < floor ? 'below' : 'above', o, h, l, c);
+  // 1. REGIME. The component the old rubric had no place for, and the one that
+  //    says whether the map was being followed at all that morning.
+  const reg = SC.gradeRegime(regime, { o, h, l, c }, emPct);
+  if (reg) {
+    parts.regime = reg;
+    weights.regime = w(0.5 + 0.5 * (sc?.regime_conf ?? 0));
+  }
 
-  // flip — did the sealed regime survive, and did it survive untested?
+  // 2. cap / floor, each against the table its own regime implies, each weighted
+  //    by the wall's seal-time quality. A level nobody could have traded barely
+  //    counts in either direction.
+  parts.cap = SC.gradeWall(
+    cap, cap != null && spot != null && spot > cap ? 'above' : 'below',
+    regime, { o, h, l, c }, emAbs,
+  );
+  if (parts.cap) weights.cap = w(sc?.walls?.cap?.quality);
+
+  parts.floor = SC.gradeWall(
+    floor, floor != null && spot != null && spot < floor ? 'below' : 'above',
+    regime, { o, h, l, c }, emAbs,
+  );
+  if (parts.floor) weights.floor = w(sc?.walls?.floor?.quality);
+
+  // 3. flip — did the sealed regime survive, and did it survive untested? The
+  //    outcome table is regime-independent (the flip IS the regime boundary),
+  //    but a flip price was never going to argue with carries less weight.
   let crossedFlip = null;
   if (flip != null && spot != null) {
     const sealedAbove = spot > flip;
@@ -553,9 +851,11 @@ function gradeTicker(sealed, ohlc) {
       : crossedFlip
         ? { outcome: 'held_after_test', pts: 18 }
         : { outcome: 'held_clean', pts: 25 };
+    weights.flip = w(sc?.flip?.quality ?? (0.4 + 0.6 * (sc?.regime_conf ?? 0.5)));
   }
 
-  // apex (CB) — a magnet, so it is scored on where the close LANDED, not on a side.
+  // 4. apex (CB) — a magnet, so it is scored on where the close LANDED, not on a
+  //    side. Weighted by how isolated and how reachable that strike was.
   let reachedApex = null;
   if (apex != null && c > 0) {
     reachedApex = l <= apex && h >= apex;
@@ -563,32 +863,46 @@ function gradeTicker(sealed, ohlc) {
     const pts = distPct <= 0.25 ? 25 : distPct <= 0.5 ? 21 : distPct <= 1 ? 15 : distPct <= 2 ? 8 : 0;
     const outcome = distPct <= 0.25 ? 'pinned' : distPct <= 0.5 ? 'close' : distPct <= 1 ? 'near' : distPct <= 2 ? 'loose' : 'far';
     parts.apex = { outcome, pts, distPct: Number(distPct.toFixed(4)) };
+    weights.apex = w(sc?.apex?.quality);
   }
 
-  // range — did the floor→cap band contain the session? Only meaningful when the
-  // band is the right way round; floor above cap is a legitimate board, not a
-  // range, and it scores nothing rather than scoring backwards.
+  // 5. range — did the floor→cap band contain the session? Only meaningful when
+  //    the band is the right way round; floor above cap is a legitimate board,
+  //    not a range, and it scores nothing rather than scoring backwards.
   if (floor != null && cap != null && cap > floor) {
     const outs = (h > cap ? 1 : 0) + (l < floor ? 1 : 0);
     parts.range = outs === 0
       ? { outcome: 'contained', pts: 25 }
       : outs === 1 ? { outcome: 'one_side_out', pts: 12 } : { outcome: 'both_out', pts: 0 };
+    const qs = [sc?.walls?.cap?.quality, sc?.walls?.floor?.quality].filter((v) => typeof v === 'number');
+    weights.range = w(qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : undefined);
+  }
+
+  // 6. reaction — did the CALL happen? This is what makes the board answerable
+  //    for the sentence it published, not only for the levels underneath it.
+  const rx = SC.gradeReaction(sc, { o, h, l, c }, emAbs, emPct);
+  if (rx) {
+    parts.reaction = rx;
+    weights.reaction = w(0.5 + 0.5 * (sc?.call_conf ?? 0));
   }
 
   let pts = 0;
   let maxPts = 0;
-  for (const v of Object.values(parts)) {
+  for (const [k, v] of Object.entries(parts)) {
     if (!v) continue;
-    pts += v.pts;
-    maxPts += 25;
+    const wt = weights[k] ?? 1;
+    pts += v.pts * wt;
+    maxPts += SC.COMPONENT_PTS * wt;
+    v.weight = Number(wt.toFixed(3));
   }
   if (!maxPts) return { ...empty, status: 'no_levels' };
 
   const score = Number(((pts / maxPts) * 100).toFixed(2));
   return {
     parts,
-    pts,
-    maxPts,
+    weights,
+    pts: Number(pts.toFixed(2)),
+    maxPts: Number(maxPts.toFixed(2)),
     score,
     grade: GRADE_BANDS(score),
     reachedCap: parts.cap ? parts.cap.reached : null,
@@ -596,6 +910,8 @@ function gradeTicker(sealed, ohlc) {
     reachedApex,
     crossedFlip,
     status: 'graded',
+    scorecard: sc,
+    regime: sc ? regime : null,
   };
 }
 
@@ -675,6 +991,10 @@ async function mapPool(items, worker) {
 
 async function upsertGrade(date, symbol, sealed, ohlc, g, source) {
   const p = getPool();
+  const sc = sealed?.scorecard || null;
+  // RAW points per component, before the weight — the weight is recoverable from
+  // the scorecard and a raw 25 is what the rubric table actually says. Storing
+  // the weighted number here would make two rubric changes indistinguishable.
   await p.query(
     `INSERT INTO daily_grades (
        date, symbol, sealed_spot, floor_lvl, cap_lvl, apex_lvl, flip_lvl,
@@ -683,7 +1003,11 @@ async function upsertGrade(date, symbol, sealed, ohlc, g, source) {
        cap_pts, floor_pts, flip_pts, apex_pts, range_pts,
        pts, max_pts, score, grade,
        reached_cap, reached_floor, reached_apex, crossed_flip,
-       status, source, graded_at
+       status, source,
+       scorecard, regime, regime_conf, regime_outcome, regime_pts,
+       reaction_call, reaction_outcome, reaction_pts,
+       setup_score, setup_grade, em_pct, cap_quality, floor_quality, rubric,
+       graded_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,
        $8,$9,$10,$11,$12,
@@ -691,7 +1015,11 @@ async function upsertGrade(date, symbol, sealed, ohlc, g, source) {
        $18,$19,$20,$21,$22,
        $23,$24,$25,$26,
        $27,$28,$29,$30,
-       $31,$32, now()
+       $31,$32,
+       $33::jsonb,$34,$35,$36,$37,
+       $38,$39,$40,
+       $41,$42,$43,$44,$45,$46,
+       now()
      )
      ON CONFLICT (date, symbol) DO UPDATE SET
        sealed_spot = EXCLUDED.sealed_spot, floor_lvl = EXCLUDED.floor_lvl,
@@ -705,7 +1033,16 @@ async function upsertGrade(date, symbol, sealed, ohlc, g, source) {
        pts = EXCLUDED.pts, max_pts = EXCLUDED.max_pts, score = EXCLUDED.score, grade = EXCLUDED.grade,
        reached_cap = EXCLUDED.reached_cap, reached_floor = EXCLUDED.reached_floor,
        reached_apex = EXCLUDED.reached_apex, crossed_flip = EXCLUDED.crossed_flip,
-       status = EXCLUDED.status, source = EXCLUDED.source, graded_at = now()`,
+       status = EXCLUDED.status, source = EXCLUDED.source,
+       scorecard = EXCLUDED.scorecard, regime = EXCLUDED.regime,
+       regime_conf = EXCLUDED.regime_conf, regime_outcome = EXCLUDED.regime_outcome,
+       regime_pts = EXCLUDED.regime_pts,
+       reaction_call = EXCLUDED.reaction_call, reaction_outcome = EXCLUDED.reaction_outcome,
+       reaction_pts = EXCLUDED.reaction_pts,
+       setup_score = EXCLUDED.setup_score, setup_grade = EXCLUDED.setup_grade,
+       em_pct = EXCLUDED.em_pct, cap_quality = EXCLUDED.cap_quality,
+       floor_quality = EXCLUDED.floor_quality, rubric = EXCLUDED.rubric,
+       graded_at = now()`,
     [
       date, symbol, sealed.spot ?? null, sealed.floor ?? null, sealed.cap ?? null,
       sealed.apex ?? null, sealed.flip ?? null,
@@ -717,6 +1054,13 @@ async function upsertGrade(date, symbol, sealed, ohlc, g, source) {
       g.pts, g.maxPts, g.score, g.grade,
       g.reachedCap, g.reachedFloor, g.reachedApex, g.crossedFlip,
       g.status, source,
+      sc ? JSON.stringify(sc) : null,
+      sc?.regime ?? null, sc?.regime_conf ?? null,
+      g.parts.regime?.outcome ?? null, g.parts.regime?.pts ?? null,
+      sc?.call ?? null, g.parts.reaction?.outcome ?? null, g.parts.reaction?.pts ?? null,
+      sc?.setup ?? null, sc?.setup_grade ?? null, sc?.em_pct ?? null,
+      sc?.walls?.cap?.quality ?? null, sc?.walls?.floor?.quality ?? null,
+      sc?.v ?? 1,
     ],
   );
 }
@@ -726,11 +1070,35 @@ async function upsertGrade(date, symbol, sealed, ohlc, g, source) {
  * points-available — not averaged over per-ticker percentages, which would give
  * a one-level ticker the same weight as a four-level one.
  */
+/**
+ * The v2 outcome vocabulary, grouped by what the count is asking.
+ *
+ * TESTED and HELD have to be sets, not string equality, because the same event
+ * has a different NAME in each regime — a wall that was reached and rejected is
+ * `tagged_held` in positive gamma, `absorbed` in negative gamma and `chop_held`
+ * on the flip. The counts are about what price DID, so they collapse the three
+ * vocabularies back into one question. `held` here means "closed back inside",
+ * which is deliberately NOT the same as "scored well": in negative gamma a hold
+ * scores below a break, and the day row shows both numbers so the difference is
+ * visible rather than averaged away.
+ */
+const WALL_TESTED = new Set([
+  'tagged_held', 'tagged_broke',                       // positive
+  'absorbed', 'broke_accelerated', 'broke_reverted',   // negative
+  'chop_held', 'chop_broke',                           // transition
+]);
+const WALL_HELD = new Set([
+  'tagged_held', 'untested_held',
+  'absorbed', 'untested_quiet',
+  'chop_held',
+]);
+
 async function rollUpDay(date) {
   const p = getPool();
   const { rows } = await p.query(
-    `SELECT symbol, pts, max_pts, grade, status,
-            cap_outcome, floor_outcome, flip_outcome, apex_outcome, range_outcome
+    `SELECT symbol, pts, max_pts, grade, status, regime, setup_score,
+            cap_outcome, floor_outcome, flip_outcome, apex_outcome, range_outcome,
+            regime_outcome, reaction_outcome
        FROM daily_grades WHERE date = $1`,
     [date],
   );
@@ -742,13 +1110,20 @@ async function rollUpDay(date) {
   const score = maxPts ? Number(((pts / maxPts) * 100).toFixed(2)) : null;
   const count = (fn) => graded.filter(fn).length;
 
+  // Mean over the names that HAVE a setup score. A v1 row has none and must not
+  // be read as a zero-quality map — it is a map nobody scored.
+  const setups = graded.map((r) => Number(r.setup_score)).filter((v) => Number.isFinite(v));
+  const setupScore = setups.length
+    ? Number((setups.reduce((a, b) => a + b, 0) / setups.length).toFixed(2))
+    : null;
+
   const day = {
     date,
     tickers: rows.length,
     graded: graded.length,
     ungraded: rows.length - graded.length,
-    pts,
-    maxPts,
+    pts: Number(pts.toFixed(2)),
+    maxPts: Number(maxPts.toFixed(2)),
     score,
     grade: score == null ? null : GRADE_BANDS(score),
     aPlus: count((r) => r.grade === 'A+'),
@@ -757,13 +1132,20 @@ async function rollUpDay(date) {
     c: count((r) => r.grade === 'C'),
     d: count((r) => r.grade === 'D'),
     f: count((r) => r.grade === 'F'),
-    capTested: count((r) => r.cap_outcome === 'tagged_held' || r.cap_outcome === 'tagged_broke'),
-    capHeld: count((r) => r.cap_outcome === 'tagged_held' || r.cap_outcome === 'untested_held'),
-    floorTested: count((r) => r.floor_outcome === 'tagged_held' || r.floor_outcome === 'tagged_broke'),
-    floorHeld: count((r) => r.floor_outcome === 'tagged_held' || r.floor_outcome === 'untested_held'),
+    capTested: count((r) => WALL_TESTED.has(r.cap_outcome)),
+    capHeld: count((r) => WALL_HELD.has(r.cap_outcome)),
+    floorTested: count((r) => WALL_TESTED.has(r.floor_outcome)),
+    floorHeld: count((r) => WALL_HELD.has(r.floor_outcome)),
     flipHeld: count((r) => r.flip_outcome === 'held_clean' || r.flip_outcome === 'held_after_test'),
     apexPinned: count((r) => r.apex_outcome === 'pinned' || r.apex_outcome === 'close'),
     rangeContained: count((r) => r.range_outcome === 'contained'),
+    // v2 — how the session treated the READ, not just the levels.
+    setupScore,
+    regimeHeld: count((r) => r.regime_outcome === 'regime_held'),
+    reactionHit: count((r) => r.reaction_outcome === 'call_hit'),
+    posRegime: count((r) => r.regime === 'positive'),
+    negRegime: count((r) => r.regime === 'negative'),
+    chopRegime: count((r) => r.regime === 'transition'),
   };
 
   await p.query(
@@ -771,8 +1153,10 @@ async function rollUpDay(date) {
        date, tickers, graded, ungraded, pts, max_pts, score, grade,
        a_plus, a, b, c, d, f,
        cap_tested, cap_held, floor_tested, floor_held, flip_held, apex_pinned, range_contained,
+       setup_score, regime_held, reaction_hit, pos_regime, neg_regime, chop_regime,
        graded_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now())
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
+               $22,$23,$24,$25,$26,$27, now())
      ON CONFLICT (date) DO UPDATE SET
        tickers = EXCLUDED.tickers, graded = EXCLUDED.graded, ungraded = EXCLUDED.ungraded,
        pts = EXCLUDED.pts, max_pts = EXCLUDED.max_pts, score = EXCLUDED.score, grade = EXCLUDED.grade,
@@ -781,12 +1165,18 @@ async function rollUpDay(date) {
        cap_tested = EXCLUDED.cap_tested, cap_held = EXCLUDED.cap_held,
        floor_tested = EXCLUDED.floor_tested, floor_held = EXCLUDED.floor_held,
        flip_held = EXCLUDED.flip_held, apex_pinned = EXCLUDED.apex_pinned,
-       range_contained = EXCLUDED.range_contained, graded_at = now()`,
+       range_contained = EXCLUDED.range_contained,
+       setup_score = EXCLUDED.setup_score, regime_held = EXCLUDED.regime_held,
+       reaction_hit = EXCLUDED.reaction_hit, pos_regime = EXCLUDED.pos_regime,
+       neg_regime = EXCLUDED.neg_regime, chop_regime = EXCLUDED.chop_regime,
+       graded_at = now()`,
     [
       day.date, day.tickers, day.graded, day.ungraded, day.pts, day.maxPts, day.score, day.grade,
       day.aPlus, day.a, day.b, day.c, day.d, day.f,
       day.capTested, day.capHeld, day.floorTested, day.floorHeld,
       day.flipHeld, day.apexPinned, day.rangeContained,
+      day.setupScore, day.regimeHeld, day.reactionHit,
+      day.posRegime, day.negRegime, day.chopRegime,
     ],
   );
   return day;
@@ -869,20 +1259,30 @@ async function gradeSession(base, dateArg, { force = false } = {}) {
  * Re-score a session from the O/H/L/C already on disk. No network. This is the
  * whole reason the raw session is stored next to the grade: a rubric change is
  * a regrade, and a regrade is instant and reproducible.
+ *
+ * The seal-time SCORECARD is stored on the row too, so a v2 regrade re-scores
+ * against the regime and the wall quality that were sealed that morning rather
+ * than against today's read of them. A row with no scorecard falls back to the
+ * seal (a v1 session backfilled by a later build may have one on the seal but
+ * not yet on the grade row) and, failing that, to the v1 path.
  */
 async function regradeSession(date) {
   if (!(await ensureSchema())) return null;
   const p = getPool();
   const { rows } = await p.query(
-    `SELECT symbol, sealed_spot, floor_lvl, cap_lvl, apex_lvl, flip_lvl, o, h, l, c, bars
+    `SELECT symbol, sealed_spot, floor_lvl, cap_lvl, apex_lvl, flip_lvl, o, h, l, c, bars, scorecard
        FROM daily_grades WHERE date = $1`,
     [date],
   );
   if (!rows.length) return null;
 
+  const seal = await getSeal(date);
+  const boards = seal?.boards || {};
+
   for (const r of rows) {
     const sealed = {
       spot: r.sealed_spot, floor: r.floor_lvl, cap: r.cap_lvl, apex: r.apex_lvl, flip: r.flip_lvl,
+      scorecard: r.scorecard || boards[r.symbol]?.scorecard || null,
     };
     const ohlc = r.o == null ? null : { o: r.o, h: r.h, l: r.l, c: r.c, bars: r.bars };
     await upsertGrade(date, r.symbol, sealed, ohlc, gradeTicker(sealed, ohlc), 'regrade');
@@ -1080,4 +1480,11 @@ module.exports = {
   rollUpDay,
   ensureSchema,
   getPool,
+  // v2 — the scorecard's own seams, exposed for the selftest and for anything
+  // that wants to re-derive a premarket read without going through a seal.
+  scorecard: SC,
+  emBySymbol,
+  prevBoards,
+  WALL_TESTED,
+  WALL_HELD,
 };
