@@ -9,7 +9,7 @@ import { usePageSymbol } from '@/data/symbol'
 import { useAuth } from '@/data/auth'
 import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
-import { SegGroup, Chip, Popover, PanelSection, Dropdown, Slider } from './controls'
+import { SegGroup, Chip, Popover, PanelSection, Dropdown, Slider, SymbolPicker } from './controls'
 import { chainTicker, symbolDef } from './symbols'
 
 /** What `spxOnly` pins the card to. The one root with both a cash tape and a future. */
@@ -56,10 +56,20 @@ import { mountEsChart, type EsChartHandle } from './chart'
 // forming-bar countdown top-right and the jump-to-current-candle button
 // bottom-right.
 //
-// NOT the watchlist dropdown. The board has ONE ticker and the toolbar search
-// sets it — see src/data/symbol.tsx. A per-card picker is a second place to
-// change the same thing and a way to end up reading two symbols side by side
-// without noticing.
+// NOT the watchlist dropdown — ON THE FIRST COPY. The board has ONE ticker and
+// the toolbar search sets it (see src/data/symbol.tsx); a picker on that card
+// would be a second place to change the same thing.
+//
+// EVERY COPY AFTER THE FIRST GETS ONE (2026-09-04). The whole point of adding a
+// second GEX Candles card is to watch a second ticker — two cards locked to the
+// board symbol draw the same chart twice. So `gex-candles` (instance 1) still
+// follows the board, and `gex-candles#2`, `#3`, … chart `settings.symbol` and
+// carry the SymbolPicker in their toolbar. `settings.symbol` was already in the
+// stored blob, unread since the picker was removed; this is what reads it again.
+//
+// Settings are keyed by INSTANCE id, so a copy's symbol, expiry, interval and
+// bubble settings are its own. Instance 1's key is the bare `gex-candles` it
+// always was, so no saved board changes meaning.
 //
 // What deliberately did NOT: the gamma HEATMAP, EMAs, Bollinger, RSI, volume,
 // the profile/TPO overlays, the multi-chart dock and the screenshot pipeline.
@@ -396,7 +406,19 @@ export function GexCandlesCard({
    * opens this card on a desktop and must find it as it left it.
    */
   spxOnly = false,
-}: { replay?: boolean; spxOnly?: boolean } = {}) {
+  /**
+   * The board INSTANCE id this card was placed under — `gex-candles` for the
+   * first copy, `gex-candles#2`, `#3`, … for the rest (see catalog.tsx).
+   *
+   * Two things ride on it, and both are why it is threaded through at all:
+   * settings are stored per instance, and every instance after the first gets
+   * its own symbol picker instead of following the board ticker.
+   *
+   * Defaults to the bare card id so the Replay hub and the phone build — which
+   * mount this card outside the board — behave exactly as they did.
+   */
+  instanceId = CARD_ID,
+}: { replay?: boolean; spxOnly?: boolean; instanceId?: string } = {}) {
   // ── Phone layout ───────────────────────────────────────────────────────────
   // One card, three differences, all of them about the hand rather than the
   // screen size:
@@ -414,7 +436,15 @@ export function GexCandlesCard({
   // key — is the same card. This is deliberately not a second component: a
   // phone fork of a 700-line chart card is a second thing to fix every time.
   const phone = useIsPhone()
-  const [settings, setSettings] = useState<ChartSettings>(() => loadSettings(CARD_ID))
+  /**
+   * Storage key for this card's settings, and the test for "am I a copy".
+   *
+   * `spxOnly` (the phone build) is deliberately NOT a copy however it was
+   * mounted: it pins SPX and its only symbol control is the SPX/ES switch.
+   */
+  const cardKey = instanceId || CARD_ID
+  const isCopy = !spxOnly && cardKey !== CARD_ID
+  const [settings, setSettings] = useState<ChartSettings>(() => loadSettings(cardKey))
   // The rail is a saved setting, and a phone must not REWRITE it — the same
   // browser profile opens this card on a desktop. Suppressed for the render,
   // the stored value untouched.
@@ -461,20 +491,26 @@ export function GexCandlesCard({
    */
   const [replayDay, setReplayDay] = useState('')
 
-  const patch = useCallback((p: Partial<ChartSettings>) => {
-    setSettings((prev) => {
-      const next = { ...prev, ...p }
-      saveSettings(CARD_ID, next)
-      return next
-    })
-  }, [])
+  const patch = useCallback(
+    (p: Partial<ChartSettings>) => {
+      setSettings((prev) => {
+        const next = { ...prev, ...p }
+        saveSettings(cardKey, next)
+        return next
+      })
+    },
+    [cardKey],
+  )
 
-  // THE PAGE SYMBOL, not a per-card one. The searchable dropdown that used to
-  // live in this toolbar is gone: the board has one ticker and the toolbar
-  // search is where it is set. `settings.symbol` stays in the stored blob so an
-  // older saved setting is not destroyed, but nothing reads it any more.
+  // THE PAGE SYMBOL on the first copy; a PER-CARD one on every copy after it.
+  //
+  // Instance 1 follows the board and has no picker — the toolbar search is the
+  // one place its ticker is set. A second card exists to hold a second ticker,
+  // so it reads `settings.symbol` (per-instance storage) and gets the picker
+  // below. `usePageSymbol` is still called on both: hooks are unconditional,
+  // and a copy simply ignores what it returns.
   const { symbol: boardSymbol } = usePageSymbol()
-  const symbol = spxOnly ? SPX_ONLY_SYMBOL : boardSymbol
+  const symbol = spxOnly ? SPX_ONLY_SYMBOL : isCopy ? settings.symbol : boardSymbol
   const def = useMemo(() => symbolDef(symbol), [symbol])
 
   // ── THE OWNER'S CHART KEEPS RUNNING IN A BACKGROUND TAB ────────────────────
@@ -1021,6 +1057,15 @@ export function GexCandlesCard({
       onChange={(v) => patch({ interval: Number(v) as Interval })}
     />
   )
+  // COPIES ONLY — see isCopy. The first card follows the board ticker and the
+  // toolbar search sets that, so a picker there would be a second control over
+  // one value. Null (not hidden) on instance 1 so the header keeps no empty
+  // slot. Writes `settings.symbol`, which is per-instance storage; a pinned
+  // expiry from the old ticker is dropped by the guard on `expiry` below, the
+  // same way a board-level symbol change already drops one.
+  const symbolPicker = isCopy ? (
+    <SymbolPicker active={symbol} onSelect={(s) => patch({ symbol: s, expiry: '' })} />
+  ) : null
   // SPX-only — see esCapable. Null (not hidden) elsewhere so the header row
   // does not keep an empty slot on AMZN.
   const tapePicker = esCapable ? (
@@ -1095,6 +1140,10 @@ export function GexCandlesCard({
             burying it behind ⚙ made the phone build's candle screen answer a
             different question from the board's. Two segments, and it is the
             width of the word "ES". */}
+        {/* First on the row, and on a phone too: on a copy this is what the
+            card IS. Everything to its right is a setting on the chart; this is
+            the chart's subject. */}
+        {symbolPicker}
         {tapePicker}
         {!phone && expiryPicker}
         {!phone && intervalPicker}

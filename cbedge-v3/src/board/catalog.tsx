@@ -75,7 +75,13 @@ export interface CardDef {
   Title?: ComponentType
   /** Default footprint in grid units when first added to a board. */
   defaultSize: { w: number; h: number }
-  render: () => ReactNode
+  /**
+   * `instanceId` is the id of the grid item being drawn — `gex-candles` for the
+   * first copy of a card, `gex-candles#2` for the next (see INSTANCE IDS
+   * below). Most cards ignore it; a card that keeps per-copy state or lets each
+   * copy hold a different subject keys that state on it.
+   */
+  render: (instanceId: string) => ReactNode
 }
 
 // ── Quick Links — fully local: user-editable, persisted per browser. ─────────
@@ -173,9 +179,12 @@ export const CARD_CATALOG: CardDef[] = [
     icon: '🕯️',
     label: 'GEX Candles',
     defaultSize: { w: 8, h: 12 },
-    render: () => (
+    // The instance id is threaded in so the SECOND and later copies can hold
+    // their own ticker (and their own settings) instead of all following the
+    // board symbol — two copies of one chart is not why anyone adds a second.
+    render: (instanceId) => (
       <Deferred>
-        <GexCandlesCard />
+        <GexCandlesCard instanceId={instanceId} />
       </Deferred>
     ),
   },

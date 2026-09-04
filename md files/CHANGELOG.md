@@ -1,56 +1,34 @@
 # Changelog
 
-## 2026-09-04 - Level Log: a ticker CARD RAIL above the log, saved per browser (owner: Postgres)
+## 2026-09-04 - GEX Candles copies get their own ticker (`cbedge-v3/src/board/...`)
 
-`/v3/level-log` now opens with a strip of small ticker cards above the Level Log
-card. Each card is that symbol's day summary off `/proxy/walls?date=` - spot, the
-levels currently in view (PUT / CALL / CORE, in price order), the session delta
-off the 09:29 baseline, and the change count - and clicking one sets the PAGE
-SYMBOL, so the log underneath is always the log of the card that is lit. This is
-parity Part E (v2's ticker rail), rebuilt as cards instead of a 620px table.
+Adding a second GEX Candles card drew the same chart twice: every copy followed
+the one board ticker, which is the only thing a copy could be for.
 
-- New `cbedge-v3/src/pages/levelLog/railStore.ts` - the rail list and its two
-  storage tiers, plus `useWallUniverse()` (ONE `/proxy/walls` day-summary read
-  feeds every card, fired from the same render as the chart's own fetch, so no
-  waterfall).
-- New `cbedge-v3/src/pages/levelLog/TickerRail.tsx` - the strip. Every tile is a
-  real `Card` (flush, non-expandable). The select target and the remove control
-  are siblings, not nested buttons.
-- `cbedge-v3/src/pages/LevelLog.tsx` - renders the rail above the log card and
-  passes it the same date / view / scope / basis / refresh nonce.
+Now the board's INSTANCE id is threaded into the card. `CardDef.render` takes it
+(`catalog.tsx`), `BoardPage` passes the grid item's id, and `GexCandlesCard`
+takes an `instanceId` prop:
 
-Behaviour:
-- SPX, SPY and QQQ are PINNED: no x, and `normalizeRail()` forces them back to
-  the front of any list that arrives without them (client and server both).
-- Any other card can be x'd off; `+ Add` is the app's own `TickerPicker`, so a
-  starred symbol here is starred in the toolbar too. Off-universe symbols are
-  accepted (`allowCustom`), same as the toolbar. Rail caps at 24 cards.
-- `Reset` puts the default rail back: SPX SPY QQQ AAPL AMZN GOOGL META MSFT NVDA
-  TSLA. (The brief's tenth symbol was typed "spcx", which is not a listed root -
-  read as the missing mega-cap and shipped as AAPL. One x and one + changes it,
-  and the change saves.)
+- Instance 1 (`gex-candles`) is unchanged - follows the board symbol, no picker.
+- Every copy after it (`gex-candles#2`, `#3`, ...) charts its own
+  `settings.symbol` and shows the searchable `SymbolPicker` first in its
+  toolbar. `settings.symbol` was already in the stored blob and unread since the
+  picker was removed; this reads it again.
+- Settings are now keyed by instance id, so a copy's symbol, expiry, interval
+  and bubble settings are its own. Instance 1's storage key is the bare
+  `gex-candles` it always was, so no saved board or setting changes meaning.
+- Changing a copy's symbol clears its pinned expiry.
+- `spxOnly` (phone build) and the Replay hub mount the card with no instance id,
+  so they behave exactly as before.
 
-Storage - two tiers, and localStorage is never the loser:
-- Everyone: `localStorage['cb-v3-level-log-rail']`, written on every edit. The
-  rail paints from it on the first frame, no round trip.
-- OWNER: also `/api/level-log-tickers` (Postgres), so the rail follows the
-  account between machines. The GET returns `{ stored, tickers }`; `stored:false`
-  (no row) leaves the browser's list alone, which is what keeps "no saved rail"
-  distinct from "a deliberately emptied rail". A 401, a dead DB or an offline
-  box all fall back to the local copy silently. POST is debounced 400ms.
+## 2026-09-04 - Gauge Rail: finer LED segments, in the v3 card this time (`cbedge-v3/src/board/gaugeRail/GaugeRailCard.tsx`)
 
-Server (`server-v2/api-router.js`, in the `if (libDb)` block, beside the other
-per-user prefs routes):
-- New `/api/level-log-tickers`, GET + POST, `auth: 'subscriber'`, keyed on the
-  authed userId. Symbols are validated and the three pinned re-forced in both
-  directions; 24 max.
-- Table `level_log_ticker_prefs (clerk_user_id, tickers jsonb, updated_at)` is
-  created lazily by the route via `libDb.queryAll` rather than added to
-  `lib/db.ts`'s ensureSchema - so `_lib-db.cjs` needs NO esbuild rebuild. Same
-  precedent as the mvc `?lite=1` read in the same file.
-
-No proxy code changed. No `/proxy/*` handler, auth gate or recorder was touched -
-the rail only READS the existing `/proxy/walls` day summary.
+The earlier segment change landed in v2's `components/dashboard/HomeGaugeRail.tsx`,
+which is not what the /v3 board draws - the live Gauge Rail card is
+`cbedge-v3/src/board/gaugeRail/GaugeRailCard.tsx`. Applied the same change there:
+`SEGMENTS` 20 -> 30, `METER_GAP` 2.2 -> 1.5, segment `rx` 2 -> 1 and the glow 3px
+-> 2px so the ~2.15px bars stay rectangular. A full-scale reading now reads as a
+meter instead of a solid slab.
 
 
 ## 2026-09-04 - Home gauge rail: finer LED segments (`components/dashboard/HomeGaugeRail.tsx`)

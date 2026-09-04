@@ -392,7 +392,10 @@ export default function BoardPage() {
                 }
                 fill
               >
-                {def.render()}
+                {/* The INSTANCE id, not the catalog id: a card that keeps
+                    per-copy state — GEX Candles keeps a ticker — keys it on
+                    this. Cards that do not care simply ignore the argument. */}
+                {def.render(id)}
               </Card>
             )
           }}

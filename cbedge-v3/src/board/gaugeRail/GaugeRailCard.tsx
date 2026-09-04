@@ -74,8 +74,15 @@ const DEADBAND_FRACTION = 0.01
 const BUCKET_MS = 15_000
 /** How many points of history to keep. A full RTH session at BUCKET_MS. */
 const MAX_POINTS = 1500
-/** Segments per meter. */
-const SEGMENTS = 20
+/**
+ * Segments per meter.
+ *
+ * 30, not the original 20 (2026-09-04): at 20 the bars are wide enough that a
+ * near-full-scale reading reads as one solid slab rather than a meter. Thinner
+ * LEDs keep the segmented look at both ends of the range, and give the fill
+ * enough resolution that a few percent of scale is a visible step.
+ */
+const SEGMENTS = 30
 
 /** Stable keys for the per-tile ring buffers. Also the on-screen labels. */
 const LABELS = {
@@ -257,7 +264,7 @@ function useDelta15m(values: Record<string, number | null>): Record<string, numb
 const METER_W = 118
 const METER_H = 30
 const METER_PAD = 5
-const METER_GAP = 2.2
+const METER_GAP = 1.5
 const SEG_H = 22
 const SEG_Y = 4
 
@@ -292,9 +299,10 @@ function SegMeter({
         y={SEG_Y}
         width={segW}
         height={SEG_H}
-        rx={2}
+        // 1, not 2: at ~2.15px wide a 2px radius rounds a bar into a pill.
+        rx={1}
         fill={on ? color : off}
-        style={on ? { filter: `drop-shadow(0 0 3px ${glow})` } : undefined}
+        style={on ? { filter: `drop-shadow(0 0 2px ${glow})` } : undefined}
       />,
     )
   }
