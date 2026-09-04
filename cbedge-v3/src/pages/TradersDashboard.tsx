@@ -160,6 +160,9 @@ const ALL_PAGES: { label: string; href: string }[] = [
   { label: 'ICT', href: '/ict' },
   { label: 'Test Lab', href: '/test' },
   { label: 'Journal', href: '/trading' },
+  // Not a dashboard page — the v2 door (src/pages/Legacy.tsx). Worth a Quick
+  // Link slot for anyone whose day still runs through a page v3 has not ported.
+  { label: 'v2 Legacy', href: '/legacy' },
 ]
 
 // Which of the above actually have a <Route> in App.tsx today. The rest are
@@ -178,6 +181,7 @@ const LIVE_ROUTES = new Set([
   '/em',
   '/scanner',
   '/level-log',
+  '/legacy',
   '/trading',
   '/test',
 ])

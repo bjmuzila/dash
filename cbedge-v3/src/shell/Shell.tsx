@@ -82,6 +82,12 @@ export const NAV: NavItem[] = [
   // ticker AND a date, and warming SPX-on-today would be wrong for anyone whose
   // last link named something else.
   { to: '/level-log', label: 'Level Log', icon: '🧱' },
+  // Last in the rail on purpose — it is the way OUT of v3, not a place to work.
+  // Lists the v2 pages that have no v3 route and links to each one at /app/*.
+  // It is the honest version of the dimmed "coming soon" icons that came out of
+  // this list on 2026-08-30: those said a page was coming, this says where the
+  // page actually is today. Shrinks as v3 fills in; delete it when it is empty.
+  { to: '/legacy', label: 'v2 Legacy', icon: '🗄️' },
 ]
 
 // The rail head. It was a drawn accent square with the letters "CB" in it —

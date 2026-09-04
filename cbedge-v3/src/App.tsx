@@ -64,6 +64,13 @@ const EconomicCalendar = lazy(() => import('@/pages/EconomicCalendar'))
 // — which is why app/v3/level-log/route.ts had to be added with it.
 const LevelLog = lazy(() => import('@/pages/LevelLog'))
 
+// /legacy — the v2 door. One page listing every v2 destination v3 has no route
+// for, each one a real <a href="/app/…"> out of the SPA. v2 and v3 run side by
+// side with no cutover day, which means a surface that only exists in v2 is
+// invisible from inside v3 unless something says where it went. Static list, no
+// fetch, no socket. Delete an entry there the day its v3 route lands.
+const Legacy = lazy(() => import('@/pages/Legacy'))
+
 // ── THE PHONE BUILD — /v3/m/* ────────────────────────────────────────────────
 // Six screens, registered in src/mobile/mobileNav.ts, each one a HOME-BOARD CARD
 // or a v3 page rendered full-bleed inside MobileShell. There is no phone-only
@@ -120,6 +127,7 @@ export default function App() {
             <Route path="/scanner" element={<Scanner />} />
             <Route path="/economic-calendar" element={<EconomicCalendar />} />
             <Route path="/level-log" element={<LevelLog />} />
+            <Route path="/legacy" element={<Legacy />} />
 
             {/* ── The phone build ────────────────────────────────────────────
                 Adding a tab is TWO edits: MOBILE_TABS in

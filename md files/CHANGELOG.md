@@ -1,150 +1,49 @@
 # Changelog
 
-## 2026-09-04 - Universal refresh button, the mobile GEX-bubble first-paint bug, and the v2→v3 phone crossing
+## 2026-09-04 - v3: `/v3/legacy`, the v2 door (`cbedge-v3/src/pages/Legacy.tsx`, `app/v3/legacy/route.ts`)
 
-### 1. One refresh button, in the universal toolbar (`lib/refreshBus.ts`, `components/shared/GlobalRefreshButton.tsx`, `GlobalToolbar.tsx`, 7 hooks)
+v2 and v3 run side by side with no cutover day, which left a gap nothing
+answered: a page that exists only in v2 is invisible from inside v3. The rail
+cannot carry it (an icon that leaves the SPA is not a rail item) and `App.tsx`'s
+no-catch-all rule means a link to an unbuilt v3 route lands on NotFound.
 
-`hooks/useRefreshButton.ts` was NOT the mechanism and is not dead either: it is
-the idle → refreshing → success/error → idle STATE MACHINE (with the re-entrancy
-lock and the 1.8s settle) that page-level refresh buttons already use, and it has
-no registry and no idea what to re-fetch. So it is reused as-is for the button's
-state and the missing half — the bus — is new.
+New page `/v3/legacy` lists every v2 destination v3 has no route for, each one a
+plain `<a href="/app/...">` out of the SPA — `NavLink`/`to` would route inside
+`basename="/v3"` and produce `/v3/app/...`. Static list, no fetch, no socket, no
+canvas.
 
-`lib/refreshBus.ts` is a module-scoped registry of re-fetch functions. Each data
-hook registers its own while it is MOUNTED (`useRefreshSource`), which gives the
-routing property for free: pressing refresh re-pulls exactly what the current
-route reads, with no route table to keep in sync and no page-level wiring when a
-page is added. `refreshAll()` runs them in parallel with `allSettled`, so one
-failing panel does not stop the others, and rejects with the failed labels so the
-button can show a failure rather than a green tick over stale numbers.
+Three groups, cross-checked line by line against `app-vite/src/App.tsx` (v2) and
+`cbedge-v3/src/App.tsx` (v3):
 
-Registered so far: `useMobileGex`, `useMobileChain`, `useEmLookup`,
-`useEconCalendar`, `useEsCandles`, `useEtfCandles`, `useGexBubbleHistory`.
+- **Not in v3 (11)** — Multi Greek, Board, ES Candles, ICT, Test Lab, Journal,
+  Levels, Strike History, Confidence Score, Fails, Guide.
+- **Ported in part** — Level Log. v3 has the wall-migration chart and the range
+  switch; the ticker rail, log card, capture rail, churn strip and timeline are
+  still v2 only. It is here so "v3 has it" never reads as "v3 has all of it".
+- **Phone build** — `/m/chain` (removed from the v3 tab bar 2026-09-03, the day
+  after it landed) and `/m/prep`, neither of which has a v3 counterpart.
 
-Two of those needed more than a one-liner:
+Every entry carries the reason as well as the link, because half of them are not
+waiting on anything: Board is not being ported (v3 Home IS a card board), and
+Test Lab / Journal were built in v3 and retired 2026-08-30. This is the honest
+version of the dimmed "coming soon" icons that came out of the rail that day —
+those said a page was coming, this says where the page actually is today.
 
-- **`useEsCandles`** registers `loadFromDb`, NOT its exported `refresh`. That
-  `refresh` is a deliberate no-op once live bars exist (it exists to fill an
-  EMPTY chart without disturbing a running one), and "nothing happened" is the
-  one outcome a refresh button must not have. `loadFromDb` merges by slotKey and
-  never wipes, so re-pulling over a live map is safe.
-- **`useMobileGex`** is socket-backed, and a refresh must NOT be a socket
-  reconnect: dropping `/ws/gex` re-opens it for every consumer in the tab and
-  clears `gexSocket`'s replay cache. It instead re-asserts the pinned expiry
-  (the server tracks it per connection, and an unnoticed reconnect resetting it
-  to the front month is exactly what makes a page look stuck) and pulls
-  `/api/gex` once — the same REST shape the silent-socket fallback uses.
+All four edits from `cbedge-v3/AGENTS.md`, plus the fifth this repo keeps in
+step:
 
-The button is mounted once in `GlobalToolbar`, which `LayoutShell` renders on
-every route, so desktop and the `/m/*` phone build are both covered from one
-place. It sits left of the ET clock, i.e. in the same position on every route.
-Feedback is three states: the glyph spins and the button is disabled while in
-flight, then a green ring + glow on success or red on error for the hook's
-settle, transitioned rather than blinked. Colors are `HOME_THEME` /
-`REFRESH_GREEN` on desktop and the `mobileTheme` aliases of the same three
-values on `/m/*`; geometry is the toolbar's own 42px round-button box, floored at
-`TAP.min - 8` on the phone. No hex is written in either new file.
+1. `cbedge-v3/src/pages/Legacy.tsx` — the page.
+2. `cbedge-v3/src/App.tsx` — `lazy()` import + `<Route path="/legacy">`.
+3. `cbedge-v3/src/shell/Shell.tsx` — NAV entry, last in the rail on purpose: it
+   is the way OUT of v3, not a place to work.
+4. `app/v3/legacy/route.ts` — `serveSpaShell("v3")`. Without it the page works
+   in-app and 404s on a hard refresh, and this one WILL be bookmarked.
+5. `cbedge-v3/src/pages/TradersDashboard.tsx` — ALL_PAGES + LIVE_ROUTES, the
+   three lists that move together.
 
-### 2. Mobile ES chart — GEX bubbles now paint on the first frame (`components/mobile/pages/MobileEsCandles.tsx`, `hooks/useGexBubbleHistory.ts`)
-
-**The suspicion was the wrong way round.** The draw IS keyed on the history
-arriving — the effect's deps already carry `bubbleCols`. The bug is that it is
-keyed on ONLY that, and fires exactly once per data change.
-
-That single paint routinely lands too early. The route is lazy-loaded into a flex
-column that is 0-high for the first frames (the chart-init effect has an rAF pump
-for exactly that), the chart is created at the collapsed size, and
-lightweight-charts cannot answer `priceToCoordinate` / `timeToCoordinate` until it
-has laid out with data. So `drawBubbles` returned quietly on one of its readiness
-guards and nothing was scheduled to try again. After that the only things that
-repainted were the rAF driver's change key (a pan, a pinch, an autoscale) and a
-re-run of the data effect (a settings toggle, or the next 60s poll) — which is
-precisely "they only show up after I move the chart or change a setting". The
-desktop chart has had a `subscribeVisibleLogicalRangeChange` **and** a 5s backstop
-repaint for this since long before the phone page existed; the phone page had
-neither.
-
-Fixed on both sides:
-
-- `drawBubbles` now RETURNS whether marks actually landed (counted, not
-  inferred — every bucket can be off-screen at this pan and the caller has to
-  tell that from a real paint). `schedulePaint` retries on animation frames
-  until one lands or `PAINT_RETRY_MS` (4s) is up, and the data effect calls
-  `drawBubbles()` synchronously first, so the retry never arms in the normal
-  case.
-- Added the desktop's two backstops: a `ResizeObserver` on the canvas's own box,
-  and a 5s interval skipped while the tab is hidden plus a `visibilitychange`
-  repaint. The rAF driver's change key now also includes the canvas box — a
-  resize does not move the price probe if autoscale lands on the same range.
-- `barDayKeys` is now identity-stable (join → split). It was a fresh array on
-  every spot tick (~1/s via the live tip), which made `bubbleMinutes` recompute
-  at that rate; its VALUE moves every minute, and it is a dep of
-  `useGexBubbleHistory`'s effect — so that effect tore down and rebuilt once a
-  minute, cancelling any load in flight as it went.
-- `useGexBubbleHistory` quantises `minutes` UP to a 30-minute step internally
-  (`MINUTES_QUANTUM`), so a caller's per-minute recomputation can no longer
-  restart the effect at all. It only ever asks for more reach, never less.
-- Every path in that hook that returns without a `setCols` — HTTP failure, the
-  documented 200-with-`error` case, a malformed body, a throw — now arms a 6s
-  retry (up to 5) WHILE THE TRAIL IS STILL EMPTY. Not setting `cols` on a blip
-  is right once something is drawn; before that it meant a blank chart for a
-  full poll period, which is the other half of "randomly".
-
-**Socket topics on that page: audited, no gap.** The page reads the feed only
-through `useMobileGex`, whose handler branches on `snapshot`, `gex` /
-`GEX_UPDATE`, `spot`, `aux`, `status` / `EXPIRATIONS`. `MOBILE_GEX_TOPICS` lists
-`gex, spot, aux, status`, which is complete: `snapshot` is the connect snapshot
-(scoped by `scopeSnapshot`, never filtered out), and `GEX_UPDATE` / `EXPIRATIONS`
-ride `gex` / `status`. The SPX bars come from `useEtfCandles` over HTTP, not the
-socket, and the bubble trail is an HTTP route — so no candle topic is needed and
-none was missing.
-
-### 3. Every v2 phone page now crosses to v3 (`components/mobile/mobileNav.ts`, `MobileRedirect.tsx`)
-
-v3 has had its own phone build since 2026-08 and is no longer owner-gated
-(`middleware.ts` dropped that pattern when it shipped), so a phone on `/m/*` is
-there because of a stale link, a home-screen shortcut or a bookmark. Added
-`MOBILE_TO_V3` and `v3TargetFor`, and `MobileRedirect` now crosses before its own
-desktop→mobile hop.
-
-The map is not a mechanical id-for-id rename, because v3's tab set is
-deliberately different and two of v2's seven screens have no v3 phone tab ON
-PURPOSE:
-
-| v2            | v3                   | why |
-|---------------|----------------------|-----|
-| `/m/gex`      | `/v3/m/gex`          | same screen |
-| `/m/heatmap`  | `/v3/m/heat`         | closest tab, not the same page — v2's Heat is the GEX heatmap, v3's is the Multi Greek ladder, and v3 has no phone GEX heatmap to send them to |
-| `/m/es`       | `/v3/m/spx`          | same screen, renamed |
-| `/m/chain`    | `/v3/options-chain`  | v3 REMOVED its phone chain tab 2026-09-03; routing to a tab that does not exist would land on v3's NotFound, so this goes to the desktop chain, which v3 kept |
-| `/m/em`       | `/v3/m/em`           | same screen |
-| `/m/prep`     | `/v3/premarket`      | no phone Prep tab in v3; the desktop route exists |
-| `/m/econ`     | `/v3/m/econ`         | same screen |
-
-Three details that are load-bearing:
-
-- It is a REAL navigation (`window.location.replace`), not `router.replace`.
-  `/app/*` and `/v3/*` are two separately built Vite apps behind two different
-  Next handlers, and this router's basename is `/app` — a push to `/v3/m/gex`
-  would resolve to `/app/v3/m/gex`, hit the SPA catch-all and land on
-  `/traders-dashboard`. `replace` so the stale URL leaves the history stack.
-- `v3TargetFor` resolves a v2 DESKTOP path through `DESKTOP_TO_MOBILE` itself,
-  so a phone landing on `/es-candles` goes straight to `/v3/m/spx` instead of
-  rendering v2's `/m/es` for a frame on the way.
-- Gated on the same phone test as everything else, so a laptop on `/app/m/es`
-  still gets v2's page — now the only way to look at the v2 phone build.
-  `?v2=1` (sticky for the session, `STAY_V2_KEY`) opts out on a phone too.
-
-**Audit result: no gaps in v2's own registry.** All seven `/m/*` ids
-(`gex, heatmap, es, chain, em, prep, econ`) have a `MOBILE_TABS` or explicitly-kept
-route entry, a `lazy()` `<Route>` in `app-vite/src/App.tsx`, AND an
-`app/app/m/<id>/route.ts` calling `serveSpaShell("app")` — checked file by file,
-so a hard refresh on any of them serves the shell rather than 404ing.
-`DESKTOP_TO_MOBILE` was left as-is: its nine entries are correct, and the routes
-absent from it (Scanner, Flow, ICT, Levels, Board, …) are absent because there is
-no phone build of them in either version.
-
-No proxy file or proxy behaviour was touched.
+The page shrinks as v3 fills in: an entry comes out the day its v3 route lands,
+and the page comes out when it is empty. An entry that sends someone to v2 for
+something v3 now does is worse than no entry at all.
 
 
 ## 2026-09-03 - v3: Level Log lands with the wall-migration chart (`cbedge-v3/src/pages/LevelLog.tsx`, `pages/levelLog/*`, `app/v3/level-log/route.ts`)
@@ -202,6 +101,44 @@ in `generated/` for hand-editing, and a static file needs no route, no `lazy()`
 and no `app/v3/<name>/route.ts`. The href is root-absolute and `window.open`
 bypasses the router, so the `/v3` basename does not apply; the file is served
 from the v2 app's `public/` at the site root either way.
+
+And **the date picker is on-theme now** (`cbedge-v3/src/design/tokens.css`).
+`color-scheme: dark` already handed the browser the dark calendar POPUP; what it
+never touches is the little calendar GLYPH webkit paints inside the field, which
+renders in the platform's near-black and on a `#07080b` input is a smudge you
+have to know is there. v2 fixed this in `app/globals.css` by writing the accent
+hex into an inline SVG data URI; here the SVG is a MASK instead, so the ink is
+`var(--color-accent)` and follows the palette rather than freezing a hex into a
+URL nobody would grep. Also themed: hover/focus opacity on the indicator, and
+the `::-webkit-datetime-edit-*` spans, so the `mm/dd/yyyy` separators stop
+rendering at the UA's weight beside our own labels. It sits app-wide in
+tokens.css next to the scrollbar block, for the same reason — it is native
+chrome, and the next date input should not have to remember.
+
+Two more on the same page:
+
+**Live on today, one minute at a time.** The price line IS a 1-minute tape, so a
+minute is the cadence the data itself has — faster asks the proxy for a bar that
+does not exist (it caches ~60s anyway), slower leaves the spot line short of the
+clock on a page whose whole subject is where price went while the levels held.
+v2 polls not at all, and the reason it gives ("so an open tab never hammers the
+recorder") survives everywhere it still applies, so the new `useMinuteTick` is
+gated three ways: the selected date has to BE today ET, the tab has to be
+visible, and it only runs in the single-session view — the week view would spend
+up to thirteen requests a minute to move one of five slices. A tab left on a past
+session costs nothing. Returning to a hidden tab ticks immediately rather than
+waiting out the remainder of an interval, and the "loading…" pip now shows only
+when there is nothing on screen, so the minute tick does not blink at you.
+
+**The snapshot button is wired.** The page publishes to `useCopyShotTargets`, so
+the ONE camera in the toolbar picks it up — no second snapshot button, which is
+the v3 rule and the reason v2's `SnapLogButton` did not come across. The target
+is the CARD, not the plot: a PNG of the lines alone is a picture of some lines
+with no idea what they are of, and the card carries the ticker, date, variant and
+legend. It resolves through `[data-card-instance]` at click time rather than a
+ref, so the shot still finds the card while it is expanded and living outside its
+tile. File name is v2's:
+`{sym}-wall-migration-{view}-{scope}-{basis}-{date}[-5d]`.
 
 Still v2-only, in the parity doc's order: the ticker rail (E), the log card head
 (F), the capture rail and chips (G), the churn strip (J), the timeline (L), the

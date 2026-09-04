@@ -419,6 +419,76 @@
   background: transparent;
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+   NATIVE FORM CHROME — the date picker, app-wide, once.
+
+   `color-scheme: dark` above already hands the browser the dark popup: the
+   calendar panel a date input opens, the <select> menu, autofill. What it does
+   NOT do is recolour the little CALENDAR GLYPH webkit paints inside the field.
+   That indicator is drawn in the platform's own near-black, which on a bg-this-
+   dark input is a smudge you have to know is there — the one control on the
+   board you cannot see the affordance for.
+
+   v2 solved this in `app/globals.css` ("Dark dropdowns everywhere") by swapping
+   in an inline SVG with the accent colour written into the data URI. Same idea
+   here, one difference: the SVG is a MASK, not a background image, so the ink
+   comes from `--color-accent` and follows the palette instead of freezing a hex
+   into a URL nobody would think to grep. The stroke colour inside the mask is
+   irrelevant — a mask reads alpha only.
+
+   Lives here rather than on the one page that has a date input today, for the
+   same reason the scrollbars do: it is native chrome, and the next date input
+   should not have to remember.
+   ──────────────────────────────────────────────────────────────────────── */
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'],
+input[type='month'],
+input[type='week'] {
+  color-scheme: dark;
+}
+
+input[type='date']::-webkit-calendar-picker-indicator,
+input[type='time']::-webkit-calendar-picker-indicator,
+input[type='datetime-local']::-webkit-calendar-picker-indicator,
+input[type='month']::-webkit-calendar-picker-indicator,
+input[type='week']::-webkit-calendar-picker-indicator {
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 120ms ease-out;
+  background-color: var(--color-accent);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4' width='18' height='18' rx='2'/><line x1='16' y1='2' x2='16' y2='6'/><line x1='8' y1='2' x2='8' y2='6'/><line x1='3' y1='10' x2='21' y2='10'/></svg>")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='4' width='18' height='18' rx='2'/><line x1='16' y1='2' x2='16' y2='6'/><line x1='8' y1='2' x2='8' y2='6'/><line x1='3' y1='10' x2='21' y2='10'/></svg>")
+    center / contain no-repeat;
+}
+
+input[type='date']:hover::-webkit-calendar-picker-indicator,
+input[type='date']:focus::-webkit-calendar-picker-indicator {
+  opacity: 1;
+}
+
+/* The field's own text. Webkit splits a date input into month/day/year spans;
+   left alone the SEPARATORS and the placeholder letters render in the UA's
+   colour, not ours, so a field reading "mm/dd/yyyy" sits at a different weight
+   from every other label beside it. */
+input[type='date']::-webkit-datetime-edit-text,
+input[type='date']::-webkit-datetime-edit-month-field,
+input[type='date']::-webkit-datetime-edit-day-field,
+input[type='date']::-webkit-datetime-edit-year-field {
+  color: inherit;
+}
+
+input[type='date']::-webkit-datetime-edit-month-field:focus,
+input[type='date']::-webkit-datetime-edit-day-field:focus,
+input[type='date']::-webkit-datetime-edit-year-field:focus {
+  background: color-mix(in srgb, var(--color-accent) 28%, transparent);
+  border-radius: 3px;
+  outline: none;
+}
+
 /* Numbers must not jitter as they tick. Any element showing a live figure
    should carry .tabular (or font-mono). */
 .tabular {

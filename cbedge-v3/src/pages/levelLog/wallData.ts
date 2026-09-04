@@ -7,12 +7,10 @@
 // card, the capture rail, the churn strip, the timeline and buildLogText are
 // still to come — see the parity doc, which is the checklist.
 //
-// THREE THINGS ARE DELIBERATELY NOT api.ts's `query()`:
-//   The level log is CHANGE-ONLY and the page has no polling — it fetches on
-//   entry and on an explicit refresh, "so an open tab never hammers the
-//   recorder" (v2 header comment). `cache: 'no-store'` + a nonce is what that
-//   contract looks like; a 30s stale window would make the refresh button
-//   sometimes do nothing, which is worse than an extra request nobody made.
+// NOT api.ts's `query()`: the reads are `cache: 'no-store'` + a nonce. A 30s
+// stale window would make the refresh button — and the one-minute live tick
+// below — sometimes do nothing, which is worse than an extra request nobody
+// asked for.
 //
 // NO WATERFALL (non-negotiable 3): for the single session the log and the tape
 // are fired TOGETHER — the date is known at entry, so there is nothing to wait
@@ -21,6 +19,24 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from 'react'
+
+/**
+ * THE LIVE CADENCE — one minute, and only where a minute means something.
+ *
+ * The price line IS `/proxy/candles-intraday` at `interval=1m`, so a minute is
+ * the granularity of the underlying data: polling faster asks the proxy for a
+ * bar that does not exist yet (it caches ~60s anyway), and polling slower leaves
+ * the spot line short of the clock on a page whose whole subject is where price
+ * went while the levels held.
+ *
+ * Gated three ways by `useMinuteTick` and its caller, because v2's page has no
+ * poll at all and the reason it gives — "so an open tab never hammers the
+ * recorder" — is still right for every case except the live one: the session
+ * has to BE today (a past date cannot change), the tab has to be visible, and
+ * it is the single-session view only. The week view would cost up to thirteen
+ * requests a minute to move one of five slices.
+ */
+export const LIVE_POLL_MS = 60_000
 
 // ── The wire, as /proxy/walls serves it ──────────────────────────────────────
 
@@ -284,6 +300,48 @@ async function fetchTape(symbol: string, date: string): Promise<SpotSample[]> {
   } catch {
     return []
   }
+}
+
+/**
+ * A counter that steps once a minute while `enabled` AND the tab is visible.
+ * Feed it into `useWallDays`'s `nonce` to make the page live.
+ *
+ * Coming BACK to a hidden tab steps it immediately rather than waiting out the
+ * remainder of an interval — the first thing someone does on returning is read
+ * the number, and a stale one for up to a minute is the whole failure this is
+ * meant to fix. Browsers throttle hidden-tab timers anyway, so leaving the
+ * interval running would not be a substitute.
+ */
+export function useMinuteTick(enabled: boolean): number {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (!enabled || typeof document === 'undefined') return
+    let id: number | undefined
+    const stop = () => {
+      if (id !== undefined) {
+        window.clearInterval(id)
+        id = undefined
+      }
+    }
+    const start = () => {
+      if (id === undefined) id = window.setInterval(() => setTick((n) => n + 1), LIVE_POLL_MS)
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        setTick((n) => n + 1)
+        start()
+      } else {
+        stop()
+      }
+    }
+    if (document.visibilityState === 'visible') start()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [enabled])
+  return tick
 }
 
 export type WallDays = { days: DaySlice[]; loading: boolean }

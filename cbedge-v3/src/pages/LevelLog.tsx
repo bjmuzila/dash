@@ -45,12 +45,26 @@
 // not apply to it — which is exactly what we want, since the file is served from
 // the v2 app's `public/` at the site root.
 //
-// REST-only. No socket, no canvas, no polling — the log is change-only and the
-// page fetches on entry and on an explicit refresh, so an open tab never
-// hammers the recorder. Non-negotiables 2, 4, 5 and 6 have nothing to bite on.
+// LIVE ON TODAY, ONE MINUTE AT A TIME. The price line is a 1-minute tape, so a
+// minute is the cadence the data itself has. v2 polls not at all — "so an open
+// tab never hammers the recorder" — and that reasoning survives everywhere it
+// still applies: the tick runs ONLY when the selected date is today ET, only
+// while the tab is visible, and only in the single-session view (the week view
+// would spend up to thirteen requests a minute to move one of five slices). A
+// past session cannot change, so a tab left on one costs nothing at all.
+//
+// SNAPSHOT is the toolbar camera's, not a button of this page's own. The page
+// publishes the CARD — not the plot — to `useCopyShotTargets`, because a PNG of
+// the lines alone is a picture of some lines with no idea what they are of; the
+// card carries the ticker, the date, the variant and the legend. It resolves
+// through `[data-card-instance]` at click time rather than a ref, so the shot
+// still finds the card while it is expanded and living outside its tile.
+//
+// REST-only: no socket, no canvas. Non-negotiables 2, 4, 5 and 6 have nothing
+// to bite on.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Card, CardToolbar } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
@@ -64,9 +78,11 @@ import {
   type LogView,
   VIEW_SCOPE,
   todayETStr,
+  useMinuteTick,
   useWallDays,
   variantTag,
 } from '@/pages/levelLog/wallData'
+import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 
 /** How many sessions the week view asks for. v2's number. */
 const WEEK_SESSIONS = 5
@@ -78,6 +94,14 @@ const WEEK_SESSIONS = 5
  * chart and a chart that sized to the body have no fixed point between them.
  */
 const CARD_H = MIG_H + 132
+
+/**
+ * The card's DOM identity — `data-card-instance` on the Card, and what the
+ * snapshot target resolves through. A constant because the two have to agree,
+ * and an expanded card is portalled out of its tile, so a query is the only
+ * lookup that still finds it.
+ */
+const CARD_ID = 'level-log-wall-migration'
 
 const VIEW_OPTIONS: Array<{ label: string; value: LogView; title: string }> = [
   { label: 'Walls', value: 'walls', title: 'Call wall + put wall only' },
@@ -125,14 +149,44 @@ export default function LevelLog() {
   // requests are `no-store`, so a bump is a genuine re-read of the recorder.
   const [nonce, setNonce] = useState(0)
 
+  // Live only where a minute can change the answer — see the header note.
+  const isToday = date === todayETStr()
+  const live = isToday && range === '1'
+  const tick = useMinuteTick(live)
+
   const { days, loading } = useWallDays(
     symbol,
     date,
     range === '5' ? WEEK_SESSIONS : 1,
-    nonce,
+    nonce + tick,
     scope,
     basis,
   )
+
+  /**
+   * The toolbar camera's row for this page. Published only once a session has
+   * actually landed, so the menu never offers a shot of the empty state, and
+   * named the way v2's SnapLogButton named its file.
+   */
+  const shotTargets = useMemo<CopyShotTarget[]>(
+    () =>
+      days.length
+        ? [
+            {
+              id: 'level-log:wall-migration',
+              icon: '🧱',
+              label: 'Wall migration',
+              group: 'This page',
+              meta: `${symbol} · ${range === '5' ? `5 sessions to ${date}` : date} · ${variantTag(scope, basis)}`,
+              file: `${symbol.toLowerCase()}-wall-migration-${view}-${scope}-${basis}-${date}${range === '5' ? '-5d' : ''}`,
+              resolve: () =>
+                document.querySelector<HTMLElement>(`[data-card-instance="${CARD_ID}"]`),
+            },
+          ]
+        : NO_TARGETS,
+    [days.length, symbol, date, range, scope, basis, view],
+  )
+  useCopyShotTargets(shotTargets)
 
   /**
    * v2's CoreMigrationButton, same query contract. `noopener` so the new tab
@@ -153,7 +207,7 @@ export default function LevelLog() {
     <Page>
       <Card
         title="Level Log"
-        expandId="level-log-wall-migration"
+        expandId={CARD_ID}
         style={{ height: CARD_H }}
         actions={
           <button
@@ -209,7 +263,16 @@ export default function LevelLog() {
             {variantTag(scope, basis)} · {VIEW_SCOPE[view]} view · 09:29 open + every 15m to 16:00
             ET, change-only
           </span>
-          {loading ? <span className="text-2xs text-faint">loading…</span> : null}
+          {live ? (
+            <span className="text-2xs text-muted" title="Re-reads the recorder and the 1-minute tape every minute while this tab is open">
+              live · 1m
+            </span>
+          ) : null}
+          {/* Only while there is nothing on screen. A pip that blinks on every
+              minute tick is noise about a refresh nobody asked to watch. */}
+          {loading && !days.length ? (
+            <span className="text-2xs text-faint">loading…</span>
+          ) : null}
         </div>
 
         {days.length ? (
