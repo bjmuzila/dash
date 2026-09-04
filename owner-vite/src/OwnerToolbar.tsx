@@ -88,7 +88,14 @@ export default function OwnerToolbar() {
         {clock} ET
       </span>
 
-      <a href="https://cbedge.net/home" style={pill({ color: OWNER_THEME.text, border: `1px solid ${OWNER_THEME.border}`, background: "rgba(255,255,255,0.04)" })}>
+      {/* Dashboard → V3 (2026-09-04). This was /home, the v2 SPA's landing
+          board. v2 and v3 run side by side with no cutover day, so nothing
+          forces the choice — but the owner's own door should open on the app
+          being built, not the one being replaced. /v3 is the v3 board (its
+          BrowserRouter's basename), and anything v3 has not ported yet is one
+          click away inside it at /v3/legacy. No trailing slash: Next runs with
+          trailingSlash:false and would 308 /v3/ → /v3. */}
+      <a href="https://cbedge.net/v3" style={pill({ color: OWNER_THEME.text, border: `1px solid ${OWNER_THEME.border}`, background: "rgba(255,255,255,0.04)" })}>
         Dashboard ↗
       </a>
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-04 - Owner site: the Dashboard button opens v3 (`owner-vite/src/OwnerToolbar.tsx`)
+
+`owner.cbedge.net`'s toolbar had one link out to the product and it pointed at
+`https://cbedge.net/home` — the v2 SPA's landing board. It points at
+`https://cbedge.net/v3` now.
+
+v2 and v3 run side by side with no cutover day, so nothing forces this choice;
+it is made deliberately. The owner's own door should open on the app being
+built, not the one being replaced, and `/v3/legacy` (added earlier today) means
+anything v3 has not ported is one click away from inside v3 rather than a reason
+to start in v2.
+
+`/v3` with no trailing slash — it is the v3 BrowserRouter's basename, `next.config.js`
+does not set `trailingSlash`, and the default would 308 `/v3/` → `/v3`.
+
+The only link changed. Sign-out still lands on `https://cbedge.net/`
+(the marketing home, not a dashboard), and nothing else in `owner-vite` links to
+an `/app/*` route.
+
 ## 2026-09-04 - v3: `/v3/legacy`, the v2 door (`cbedge-v3/src/pages/Legacy.tsx`, `app/v3/legacy/route.ts`)
 
 v2 and v3 run side by side with no cutover day, which left a gap nothing
