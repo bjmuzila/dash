@@ -64,9 +64,16 @@ import {
 /**
  * Mini plot height. Tall enough that a level holding through a 30-point range is
  * visibly flat against a line that is not, short enough that five cards and the
- * log card share a screen. The big chart's 250 is the same drawing at 4×.
+ * log card share a screen. The big chart's 250 is the same drawing at 2×.
+ *
+ * DOUBLED from 62 (2026-09-04), and the two halves of that change belong
+ * together: at 62px a 1-minute tape put a minute on a third of a pixel, which is
+ * why the rail deliberately drew the log's own sparse spot captures instead (see
+ * fetchRailDay in railStore.ts). At 124px a minute is worth drawing, so the rail
+ * now pairs each log with the real tape and this height is what makes that
+ * readable rather than a thicker smudge.
  */
-const MINI_H = 62
+const MINI_H = 124
 
 /** Price order, filtered by the view switch. Parity E11. */
 const LEVEL_ORDER: WallLevel[] = ['put_wall', 'call_wall', 'cb']

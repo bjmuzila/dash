@@ -42,6 +42,43 @@ import { useEffect, useRef, useState } from 'react'
 //    scripts/perf-check.mjs is what says so out loud.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TvAttribution — the TradingView credit, in the card's CHROME.
+//
+// lightweight-charts draws its own mark inside the pane, bottom left. That put
+// it over the candles and over the GEX bubble layer, and it came out in every
+// CopyShot of the card. So the library's is switched off at the mount
+// (`layout.attributionLogo: false`) and this goes in the card header instead,
+// where the rest of the card's chrome lives.
+//
+// THE CREDIT IS NOT OPTIONAL. It is a condition of the library's licence, so
+// moving it is fine and removing it is not: any card that turns the built-in
+// mark off has to render this. A word, not a redrawn logo — the requirement is
+// a visible, working link to tradingview.com, and reproducing someone else's
+// wordmark by hand in SVG is a different kind of liberty.
+//
+// Deliberately quiet: it is a credit, not a control, and it must not read as
+// one of the card's buttons.
+// ─────────────────────────────────────────────────────────────────────────────
+export function TvAttribution({ className = '' }: { className?: string }) {
+  return (
+    <a
+      href="https://www.tradingview.com/"
+      target="_blank"
+      rel="noopener noreferrer"
+      title="Charts by TradingView — lightweight-charts"
+      className={[
+        'shrink-0 text-3xs font-semibold tracking-wide text-faint opacity-40 transition-opacity hover:opacity-90',
+        className,
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
+      TradingView
+    </a>
+  )
+}
+
 export interface ChartHandle {
   el: HTMLDivElement
   width: number

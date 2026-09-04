@@ -106,13 +106,15 @@ export interface ChartSettings {
    */
   levelLabels: boolean
   /**
-   * Which expiry the bubbles draw. '' follows the NEAREST, which is the
-   * default and the eventual permanent behaviour; a value pins it, which is
-   * what the toolbar dropdown is for.
+   * DEAD (2026-09-04). The expiry pin, from when the card carried a dropdown to
+   * set one. The dropdown is gone and the card draws the NEAREST expiration
+   * always, so nothing reads this and nothing writes it.
    *
-   * A pinned expiry that is not in the current symbol's list is ignored rather
-   * than erroring — that is what happens on every symbol change, since SPX's
-   * dates are not AMZN's.
+   * Kept in the type and in `coerce` so an existing saved blob still parses
+   * without a version bump. Deleting the key would be fine too; leaving it is
+   * cheaper than migrating every stored card. Do not start honouring it again
+   * without also bringing back a control to clear it — a pin with no UI is a
+   * card stuck on a stale expiration.
    */
   expiry: string
   /**

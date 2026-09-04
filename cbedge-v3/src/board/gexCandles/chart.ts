@@ -223,6 +223,19 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       background: { type: ColorType.Solid, color: 'transparent' },
       textColor: muted,
       fontSize: 11,
+      // ── THE ATTRIBUTION LEAVES THE PLOT ──────────────────────────────────
+      // lightweight-charts draws its TradingView mark INSIDE the pane, bottom
+      // left — over the candles, over the bubble layer, and in every CopyShot
+      // of the card. The attribution itself is not the problem; where it sits
+      // is. Turned off here and re-rendered in the CARD HEADER instead, by
+      // <TvAttribution> (design/primitives/ChartFrame.tsx), which the candles
+      // card puts in its toolbar row.
+      //
+      // It must stay SOMEWHERE and visible — that is the library's licence, not
+      // a style choice. Moving it is fine; dropping it is not. Do not delete
+      // this line without deleting the header link too, or the chart quietly
+      // ends up with no attribution at all.
+      attributionLogo: false,
     },
     // No grid. The bubble layer is the thing being read against price, and a
     // ruled background competes with it — a horizontal line through a column of

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChartFrame, type ChartHandle } from '@/design/primitives/ChartFrame'
+import { ChartFrame, TvAttribution, type ChartHandle } from '@/design/primitives/ChartFrame'
 import { CardToolbar } from '@/design/primitives/Card'
 import { ReplayDock } from '@/design/primitives/ReplayDock'
 import { T } from '@/design/theme'
@@ -9,7 +9,7 @@ import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
 import { useAuth } from '@/data/auth'
 import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
-import { SegGroup, SegMenu, Chip, Popover, PanelSection, Dropdown, Slider } from './controls'
+import { SegGroup, SegMenu, Chip, Popover, PanelSection, Slider } from './controls'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
 import { chainTicker, normalizeSymbol, symbolDef } from './symbols'
 
@@ -109,7 +109,8 @@ import { mountEsChart, type EsChartHandle } from './chart'
 //             /api/snapshots/candles?lite=1 on the same 30s poll, and the
 //             socket's esCandles / es1mCandles frame for the forming bar
 //   basis     /proxy/es-spx-basis — ES only; see ./basis.ts
-//   expiry    /api/expirations — the dropdown's list, and the default
+//   expiry    /api/expirations — read for its FIRST entry only; the card has
+//             no expiry picker and draws the nearest expiration
 //   bubbles   /api/snapshots/option-strike-gex-history?mode=heatmap
 //
 // The bubble request depends on the expiry, which is the one genuine dependency
@@ -129,7 +130,7 @@ import { mountEsChart, type EsChartHandle } from './chart'
 //   2. The expiry. This card used to pass `anyExpiry=1`, which merged EVERY
 //      recorded expiry's ladder into each column and made the server walk all
 //      of them for the whole window on every poll. It now asks for the one
-//      expiry the dropdown names.
+//      nearest expiry.
 //
 // Every SYMBOL here charts against its own strikes, so a bubble goes at the
 // strike price and there is no basis fetch — except on ES. ES is v2's original
@@ -217,13 +218,9 @@ const ET_DATE = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 })
 
-/** `0DTE` / `3DTE` for a YYYY-MM-DD expiry, counted from today ET. */
-function dteLabel(expiry: string): string {
-  const a = Date.parse(`${ET_DATE.format(new Date())}T12:00:00Z`)
-  const b = Date.parse(`${expiry}T12:00:00Z`)
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return expiry
-  return `${Math.max(0, Math.round((b - a) / 86_400_000))}DTE`
-}
+// `dteLabel` lived here — it labelled the rows of the expiry dropdown (`0DTE`,
+// `3DTE`). The dropdown is gone (the card follows the nearest expiration and
+// nothing else), and it had no other caller.
 
 /**
  * ── THE WEEKEND ─────────────────────────────────────────────────────────────
@@ -645,9 +642,19 @@ export function GexCandlesCard({
         .filter((e): e is string => Boolean(e)),
     [expiryQ.data],
   )
-  // A pinned expiry wins, then the weekend's last traded session, then the
-  // nearest tradeable one. `expiries.includes` still guards the pin, so a symbol
-  // change cannot leave the card on a date that symbol does not trade.
+  // ── THE EXPIRY IS NOT A CHOICE ─────────────────────────────────────────────
+  // There is no expiry picker on this card (2026-09-04). It draws the NEAREST
+  // expiration, always — the weekend's last traded session on Sat/Sun, and
+  // otherwise the first date the list comes back with, which on a trading day
+  // is 0DTE.
+  //
+  // The dropdown that used to pin one is gone from the header and from the
+  // phone sheet, and `settings.expiry` is no longer read here. It is kept in
+  // the settings type and in storage only so an existing saved blob still
+  // parses; nothing writes a pin any more and nothing honours one. That matters
+  // for anyone who HAD pinned a date: with the control removed, a pin that was
+  // still honoured would be a card stuck on a stale expiration with no way to
+  // get it back.
   const weekendExpiry = useMemo(() => etWeekendSessionDay(), [])
 
   // ── DON'T WAIT ON /api/expirations TO ASK FOR THE HISTORY ──────────────────
@@ -670,9 +677,7 @@ export function GexCandlesCard({
   const provisionalExpiry =
     !expiries.length && !weekendExpiry ? ET_DATE.format(new Date()) : ''
 
-  const expiry = settings.expiry && expiries.includes(settings.expiry)
-    ? settings.expiry
-    : weekendExpiry || expiries[0] || provisionalExpiry
+  const expiry = weekendExpiry || expiries[0] || provisionalExpiry
   // Either layer keeps this alive: the rail reads the newest column of the same
   // history the bubbles are drawn from, so turning the bubbles off with the
   // rail on must not take the request — and its data — away with them.
@@ -898,16 +903,6 @@ export function GexCandlesCard({
   // the session, the rail says where it stands right now. No extra request.
   const railModel = useMemo(() => buildRail(columns, settings.gexMetric), [columns, settings.gexMetric])
 
-  // On a weekend the default is a date the list does not carry, so it is added
-  // at the top — a dropdown whose current value is not one of its own options
-  // renders as empty, which reads as broken.
-  const expiryOptions = useMemo(() => {
-    const opts = expiries.map((e) => ({ value: e, label: dteLabel(e), sub: e.slice(5) }))
-    if (weekendExpiry && !expiries.includes(weekendExpiry)) {
-      opts.unshift({ value: weekendExpiry, label: 'Fri', sub: weekendExpiry.slice(5) })
-    }
-    return opts
-  }, [expiries, weekendExpiry])
 
   // ── Chart ──────────────────────────────────────────────────────────────────
   const { onMount, apply } = useEsChart(setLatestOffscreen, setBubblesOutOfRange, setBucketMs)
@@ -1055,15 +1050,8 @@ export function GexCandlesCard({
   // Built once and placed by the branch below: the desktop spreads them across
   // the header, the phone stacks the same elements in the sheet. One instance
   // each, so there is no chance of the two rows drifting apart.
-  const expiryPicker = (
-    <Dropdown
-      title="Which expiry the GEX bubbles are drawn from. Defaults to the nearest; pinning one keeps it until the symbol changes"
-      value={expiry}
-      options={expiryOptions}
-      onChange={(v) => patch({ expiry: v })}
-      empty="expiry"
-    />
-  )
+  // No expiry picker. The card draws the nearest expiration and only that —
+  // see the block on `weekendExpiry` above for why the pin went away with it.
   // ── THE HEADER IS FOLDED; THE PHONE SHEET IS NOT ───────────────────────────
   // Each of the three segmented controls below is built TWICE from one set of
   // options and one handler: open (SegGroup) for the phone sheet, folded
@@ -1104,9 +1092,9 @@ export function GexCandlesCard({
   // COPIES ONLY — see isCopy. The first card follows the board ticker and the
   // toolbar search sets that, so a picker there would be a second control over
   // one value. Null (not hidden) on instance 1 so the header keeps no empty
-  // slot. Writes `settings.symbol`, which is per-instance storage; a pinned
-  // expiry from the old ticker is dropped by the guard on `expiry` below, the
-  // same way a board-level symbol change already drops one.
+  // slot. Writes `settings.symbol`, which is per-instance storage. Nothing to
+  // do about the expiry on a symbol change any more — the card follows the new
+  // ticker's nearest expiration by construction, because there is no pin.
   //
   // THE APP TOOLBAR'S PICKER, not this card's own. `TickerPicker` is the same
   // primitive the toolbar mounts, so a copy opens the same scanner universe and
@@ -1122,7 +1110,7 @@ export function GexCandlesCard({
   const symbolPicker = isCopy ? (
     <TickerPicker
       activeTicker={symbol}
-      onSelect={(t) => patch({ symbol: normalizeSymbol(t), expiry: '' })}
+      onSelect={(t) => patch({ symbol: normalizeSymbol(t) })}
       allowCustom={PAGE_TICKER_RE}
       title="This card's symbol. Copies of the GEX Candles card each hold their own ticker — the first one follows the board. Starred tickers are the same list the toolbar uses."
     />
@@ -1204,6 +1192,13 @@ export function GexCandlesCard({
           right under that header, so the board showed two bars stacked and the
           chart lost the height of both. */}
       <CardToolbar>
+        {/* ── The TradingView credit, in the header ────────────────────────
+            First in the row, so on a `justify-end` toolbar it sits at the LEFT
+            edge of the control cluster — beside the card's name, away from the
+            buttons, and off the chart entirely. The library's own in-pane mark
+            is switched off at the mount; see `attributionLogo` in chart.ts.
+            One of the two has to be drawn — this is the one. */}
+        <TvAttribution className="mr-1" />
         {/* Only where replay was offered — the board never passes the prop, so
             this button does not exist there and the toolbar is unchanged. */}
         {replay && (
@@ -1236,7 +1231,6 @@ export function GexCandlesCard({
             nothing for it to crowd, and it is the width of the word "ES" — the
             fold would cost a tap and save nothing. */}
         {phone ? tapePicker : tapeMenu}
-        {!phone && expiryPicker}
         {!phone && intervalMenu}
         {!phone && !spxOnly && sessionMenu}
         <div className="relative shrink-0">
@@ -1262,7 +1256,8 @@ export function GexCandlesCard({
                   same handlers — only the placement differs. */}
               {/* No "Candles" section here any more — the tape switch lives in
                   the header on every width. See the note on CardToolbar. */}
-              {phone && <PanelSection title="Expiry">{expiryPicker}</PanelSection>}
+              {/* No Expiry section either — the card follows the nearest
+                  expiration on every width; there is nothing to pick. */}
               {phone && <PanelSection title="Interval">{intervalPicker}</PanelSection>}
               {/* No Session section when the tape decides it — see spxOnly. */}
               {phone && !spxOnly && <PanelSection title="Session">{sessionPicker}</PanelSection>}

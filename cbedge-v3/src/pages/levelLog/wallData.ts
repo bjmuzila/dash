@@ -273,8 +273,14 @@ async function fetchLog(
  * outside dxFeed's ~7-day 1m window, or a dead request all resolve to [], and
  * the chart falls back to the recorded captures and says so in its caption.
  * Nothing is interpolated to cover a gap.
+ *
+ * EXPORTED for railStore.ts, which pairs it with each mini card's log exactly as
+ * useWallDays does for the big one. One implementation on purpose: the ET window
+ * this reads, the `mins` origin it emits and the best-effort empty return are all
+ * things the two surfaces have to agree on, and the version that drifts is the
+ * one nobody is looking at.
  */
-async function fetchTape(symbol: string, date: string): Promise<SpotSample[]> {
+export async function fetchTape(symbol: string, date: string): Promise<SpotSample[]> {
   const from = etMsOn(date, 9, 30)
   const to = etMsOn(date, 16, 0)
   if (!Number.isFinite(from) || !Number.isFinite(to)) return []

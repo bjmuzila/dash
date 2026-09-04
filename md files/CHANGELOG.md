@@ -1,129 +1,76 @@
 # Changelog
 
-## 2026-09-04 - gexCandles chart.ts: drop the hex fallbacks, unblock the pre-commit theme check (`cbedge-v3/src/board/gexCandles/chart.ts`)
+## 2026-09-04 - CORE migration: option D labeling, and the screenshot is no longer dimmer than the screen
 
-`check-theme` failed the commit: 13 violations against a baseline of 9. The four
-new ones came in with the CORE/CW/PW level layer (`levelInk` + `appInk`) earlier
-today.
+### The PNG was half-weight, not dark
 
-Every one of them was the third argument to `cssVar()` - a hex fallback behind a
-token that tokens.css already declares. All 13 tokens are on `:root`, so those
-fallbacks could only ever fire if the stylesheet failed to load, at which point
-the app is unstyled and the right GEX-bubble blue is not the problem. What they
-DID do is keep a second copy of the palette that nothing syncs, which is the
-drift Non-negotiable #1 exists to stop.
+The exported screenshot always looked murkier than the live chart. It was not a
+colour or an opacity - every stroke on this plot carries
+`vector-effect: non-scaling-stroke`, which pins a stroke's width to OUTPUT
+pixels rather than user units. The export renders the cloned SVG at S=2, so a
+3.4px CORE bar stayed 3.4 device px inside a picture twice the size: half the
+relative thickness it has on screen, and a half-weight line over #05060A reads
+as dim.
 
-So `cssVar(el, name, fallback)` becomes `cssVar(el, name)`. An empty read is now
-a real bug rather than a supported mode, so it warns once per mount naming the
-missing token. Nothing throws in the meantime: canvas ignores an invalid
-`fillStyle`/`strokeStyle` assignment and lightweight-charts falls back to its own
-default. `hexToRgb` keeps its `[r,g,b]` fallback - the bubble layer needs three
-numbers to build a per-mark alpha with and cannot use an empty string at all, and
-a numeric triple is arithmetic, not a colour literal.
+- The clone now multiplies every `stroke-width` by S before serializing. One
+  loop, no model change, and the PNG matches the screen at any scale factor.
 
-chart.ts goes 13 -> 1. The survivor is `fontSize: 11` in the lightweight-charts
-layout options (rule 4, typography), which was already inside the baseline and
-wants a JS-side type-scale export that does not exist yet - untouched here.
+### Labeling - option D (week bands), no high/low tags
 
-The baseline is not raised. It now has slack in it, so run `npm run theme:update`
-to re-record; the check prints the same reminder. A file that reaches zero is
-dropped from the baseline permanently, which is the state chart.ts should be
-aiming for.
+Four treatments were mocked up in
+`generated/2026-09-04-core-migration-labeling.html`; D is what shipped, minus
+its high/low callouts.
 
+- Every other trading week gets a faint tint (0.028 white - the weakest mark on
+  the plot, so the price line crosses it without a fight) and the week is NAMED
+  inside its own band: `WK 6/8`. A quarter is 63 identical slices and a month
+  name every ~21 of them never answered "which week is this".
+- The bottom rail is now one stamp per WEEK, centred under its band - the date
+  on top, the month name under it only where the month turns over. It was a
+  stamp per month (three labels across a quarter); a stamp per session is
+  unreadable at 63.
+- Week names are HTML positioned over the plot, not `<text>` inside it: the SVG
+  is squashed to a 0-100 viewBox and would squash the glyphs with it. They are
+  inset by the plot's own 18px gutters so a % there is the same % as the SVG's.
+- The screenshot draws both - the week names onto the canvas, and the rail rows
+  in DOM ORDER, so the week stamp (date over month) and the short-range day
+  stamp (weekday over date) each come out the way the page draws them.
+- Ranges of 10 sessions or fewer keep the per-session weekday rail and get no
+  bands: at that width every session is already legible.
 
-## 2026-09-04 - GEX Change Top: "Strict gate" toggle - judge the tighter live gate against picks that are already graded (`components/scanner/GexChangeTop.tsx`)
-
-A view filter, not a capture threshold. Nothing about what the recorder files
-changes. The button shows only the picks that clear the *tighter* live gate -
-`|dGEX| >= $500k`, `|% vs open| >= 50%`, `|z| >= 2` - applied to rows that were
-captured under the looser one (`$200k` / `30%`). Everything it needs is already
-stored on `gex_change_top`, so it works retroactively on every date recorded and
-costs no refetch.
-
-The point is to stop arguing about thresholds in the abstract. Toggle it and the
-Scorecard's avg peak, `>=+25/50/100%` counts, closed-green and the whole grade
-distribution recompute on survivors only - that IS the tighter gate's record.
-Filtering the cards without filtering the averages would have told you nothing,
-so it does both, plus the "Proj vs actual" section.
-
-`|z| >= 2` quietly does the sample-count job too, so there is no separate control
-for it. The scan computes z with `stddev_pop` over the strike's own samples in
-the window, and the largest `|z|` a sample of size n can produce under a
-population sd is `sqrt(n-1)`. So `|z| >= 2` is unsatisfiable below `n = 5`: it
-demands the move be unusual and, for free, that there were enough observations
-for "unusual" to mean anything. A separate `n >= 6` control would be the same
-filter twice, and the weaker half of it.
-
-Not enforced, and it cannot be from the client: a floor on the `pct_open`
-DENOMINATOR. At 09:47 the open baseline is a handful of contracts, so
-"+300% vs open" is a rounding error wearing a percentage sign. `gex_open` is a
-real column on `strike_growth` but is not carried onto `gex_change_top`, so
-existing rows cannot be checked against it. The recorder's 10:00 warm-up is what
-stands in for it; storing `gex_open` at capture would make the gate complete for
-rows recorded from then on.
-
-Details: nulls fail (an unverifiable row is not a passing row). Slots left empty
-by the filter are dropped rather than rendered as a bare header. The empty state
-distinguishes "the gate hid all N" from "nothing was recorded", or the toggle
-reads as a broken fetch. `flippable` follows the visible cards, so "Flip all"
-does not fetch history for hidden ones. Card subtitle and the Scorecard pick-count
-line both say when the gate is on. Off by default - the default view stays the
-honest record of what the recorder actually filed.
+No proxy code changed.
 
 
-## 2026-09-04 - GEX Change Top live triggers: a crossing is now an edge, not a membership test (`server-v2/gex-change-top-recorder.js`)
+## 2026-09-04 - GEX Candles: the expiry is no longer a choice (`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`, `settings.ts`)
 
-32 live triggers fired in 46 minutes on 2026-09-04 - 80% of `LIVE_MAX_PER_DAY`
-spent in 12% of the session, after which the scanner is dark for the rest of the
-day. Two structural causes, both fixed here. Thresholds, the leaderboard capture,
-scoring, probing and every read endpoint are untouched.
+The expiration dropdown is gone from the card - from the desktop header and
+from the phone sheet. The card draws the NEAREST expiration, always: the
+weekend's last traded session on Sat/Sun, otherwise the first date
+`/api/expirations` returns, which on a trading day is 0DTE.
 
-**"New" meant "not captured yet today", which is a membership test.** A crossing
-is an edge, and an edge needs the previous scan's qualifying set to be an edge
-against. Nothing qualifies at all until ~09:45 (the 15-minute lookback has no
-history before then), so on the first scan that produces candidates the entire
-morning's backlog is trivially "new" and fires as if each name had just crossed.
-`runLive()` now keeps `_livePrevQualified` and fires only on
-`qualified now AND NOT qualified on the previous scan AND NOT seen today`. That
-set is null on the first scan of a session and after a restart, and a null
-previous set can only SEED - it never fires, because with nothing to compare
-against every candidate looks like an edge, which is the bug. It is deliberately
-NOT rebuilt from the DB in `loadLiveState()`: the DB knows what was captured, not
-what was qualifying one minute ago.
+`settings.expiry` is no longer read. It stays in the settings type and in
+`coerce` so an existing saved blob still parses without a version bump, and both
+files carry a note saying not to start honouring it again without bringing back
+a control to clear it - a pin with no UI is a card stuck on a stale expiration
+with no way out. `dteLabel` and the `Dropdown` import went with the control;
+neither had another caller.
 
-The set is built from a wider query than the probe list - new
-`GEX_CHANGE_TOP_LIVE_SCAN_LIMIT` (default 100, vs the leaderboard's 20). At the
-narrow limit a strike that merely slid out of the top 20 on score and back in
-would read as not-qualified then qualified, i.e. a fabricated crossing.
-`DISTINCT ON (symbol)` already caps the result at one row per ticker, so 100 is
-effectively the whole qualifying set.
 
-**No triggers before 10:00 ET** (`GEX_CHANGE_TOP_LIVE_START`, default `10:00`;
-set `09:30` to disable). Two independent reasons, both structural: the 15-minute
-change window has no history to compare against until ~09:45, and `pct_open` is a
-ratio against the OPEN, so at 09:47 its denominator is a handful of contracts and
-`|% vs open| >= 30` is arithmetic noise rather than a filter.
+## 2026-09-04 - TradingView credit moved off the chart into the card header (`cbedge-v3/src/board/gexCandles/chart.ts`, `cbedge-v3/src/design/primitives/ChartFrame.tsx`, `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`)
 
-**The scan runs during warm-up and after the daily cap.** Both of those suppress
-firing, not observation - skipping the query would let `_livePrevQualified` go
-stale, and a stale previous set turns the next eligible scan back into a backlog
-flush. Cost is one query per `LIVE_SEC`. The daily-cap check moved below the scan
-for the same reason.
+lightweight-charts draws its TradingView mark INSIDE the pane, bottom left -
+over the candles, over the GEX bubble layer, and in every CopyShot of the card.
 
-Write-error rollback also removes the failed strikes from `_livePrevQualified`,
-not just `_liveSeen` - otherwise the retry would see them as "was qualifying last
-scan" and never fire again.
+- `layout.attributionLogo: false` at the mount turns the in-pane mark off.
+- New `TvAttribution` in `design/primitives/ChartFrame.tsx`: a quiet
+  `TradingView` link, rendered by the candles card as the FIRST item in its
+  `CardToolbar`, so on the `justify-end` toolbar it lands at the left edge of
+  the control cluster - in the card's header strip, beside the name, off the
+  chart.
 
-**Known, not fixed here.** The live path still writes `rank = i + 1` where `i` is
-position within a batch of at most `LIVE_MAX_PER_SCAN`, so every live pick is
-rank 1-3 by construction and ranks 4+ are purely leaderboard captures -
-`BUCKETS.rank` in the Pick Study is measuring provenance, not ordering. And there
-is no `live` key in `BUCKETS`, so the study cannot separate the two sources at
-all; while triggers clustered pre-10:00, `slot` and provenance were nearly
-collinear, and any `slot=pre-10:00` term `fitRule()` armed would really have been
-"live triggers are bad". This change should decouple them going forward, but the
-existing labelled rows carry the confound. Also unchanged: the file header claims
-very strong is `|dGEX| >= $500k` while `MIN_DOLLAR` defaults to `200_000`.
+The credit is a condition of the library's licence, so it moves, it does not
+go away: a card that switches the built-in mark off has to render
+`TvAttribution`. Both files say so.
 
 
 ## 2026-09-04 - GEX Candles: folded toolbar, CORE/CW/PW on the pane, matching card sizes (`cbedge-v3/src/board/gexCandles/*`, `cbedge-v3/src/design/primitives/{Controls,Board}.tsx`, `cbedge-v3/src/board/catalog.tsx`)

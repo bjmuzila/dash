@@ -29,6 +29,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIsOwner } from '@/data/auth'
+import { fetchTape } from '@/pages/levelLog/wallData'
 import type {
   DaySlice,
   ExpScope,
@@ -353,18 +354,35 @@ export function useWallUniverse(
  * comment on the endpoint spells out why: every symbol's full day would be a
  * several-thousand-row response) — so this is N small requests, run in waves.
  *
- * NO TAPE. `useWallDays` pairs each log with `/proxy/candles-intraday` for the
- * 1-minute price line; doing that here would DOUBLE the request count for a
- * 62px plot where a minute is a third of a pixel. So `price` is left empty and
- * WallMigrationChart falls back to the log's own spot captures — which is its
- * documented behaviour for a day whose tape did not arrive, not a special case
- * invented for these cards.
+ * THE TAPE, as of 2026-09-04. This used to be skipped: pairing each log with
+ * `/proxy/candles-intraday` doubles the request count, and at MINI_H = 62 a
+ * minute was a third of a pixel, so the cards fell back to the log's own spot
+ * captures. That trade stopped making sense when the cards doubled to 124px —
+ * a minute is now worth drawing, and the log's spot column is change-only, which
+ * means the white line was a dozen-odd points reading as price moving in
+ * half-hour steps. On a page whose whole subject is whether a level HELD while
+ * price TRAVELLED, a stepped price line is the one thing that must not be
+ * approximated.
+ *
+ * It buys a second thing worth having. WallMigrationChart takes its x extent
+ * from the TAPE, falling back to the last log write — so a ticker whose walls
+ * stopped rolling at 10:00 used to draw a half-hour card. With the tape in hand
+ * every card now draws the full session, and five cards side by side finally
+ * share one x axis.
+ *
+ * `fetchTape` is imported from wallData rather than re-implemented, so the ET
+ * window, the `mins` origin and the best-effort empty return cannot drift from
+ * the big chart's. Still best-effort: no bars for that symbol, a date outside
+ * dxFeed's 1m window or a dead request all resolve to [], and the chart falls
+ * back to the recorded captures exactly as before.
  *
  * Waves of `CONC`, because the alternative shapes are both wrong: all at once
  * is 24 parallel proxy reads off one page load, and one at a time is a rail
- * that fills in over several seconds.
+ * that fills in over several seconds. HALVED from 6 with the tape added — each
+ * symbol is now two requests, so a wave of 4 puts the same 8 reads in flight
+ * that a wave of 6 used to.
  */
-const RAIL_FETCH_CONC = 6
+const RAIL_FETCH_CONC = 4
 
 export interface RailDays {
   /** symbol → the one-day slice its card draws. Absent = nothing recorded. */
@@ -382,16 +400,22 @@ async function fetchRailDay(
   basis: GexBasis,
 ): Promise<DaySlice[] | null> {
   try {
-    const r = await fetch(
-      `/proxy/walls?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(symbol)}&scope=${scope}&basis=${basis}`,
-      { cache: 'no-store', credentials: 'same-origin' },
-    )
+    // Both together: the tape is independent of the log, so serialising them
+    // would make the rail take twice as long to fill for no benefit. A tape
+    // failure is not a card failure — it resolves [] and the chart falls back.
+    const [r, price] = await Promise.all([
+      fetch(
+        `/proxy/walls?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(symbol)}&scope=${scope}&basis=${basis}`,
+        { cache: 'no-store', credentials: 'same-origin' },
+      ),
+      fetchTape(symbol, date),
+    ])
     const j = await r.json()
     if (!j?.ok) return null
     const log: WallLogRow[] = Array.isArray(j.log) ? j.log : []
     const events: WallEventRow[] = Array.isArray(j.events) ? j.events : []
     if (!log.length && !events.length) return null
-    return [{ date, log, events, price: [] }]
+    return [{ date, log, events, price }]
   } catch {
     return null
   }

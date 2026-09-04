@@ -60,6 +60,12 @@
   .lg.off { opacity: .4; } .lg.off .sw { background: transparent; }
   .lg .v { font-family: var(--mono); color: var(--text); }
   .plot { position: relative; padding: 8px 18px 0; flex: 1 1 auto; min-height: 200px; }
+  /* Week-band names, drawn as HTML over the plot rather than <text> inside it:
+     the SVG is squashed to a 0-100 viewBox, which would squash the glyphs too.
+     Inset by the plot's own 18px gutters so a % here is the same % as the svg's. */
+  .wklab { position: absolute; left: 18px; right: 18px; top: 10px; height: 12px; pointer-events: none; }
+  .wklab span { position: absolute; top: 0; text-align: center; font-size: 9px; font-weight: 800;
+    letter-spacing: .1em; color: rgba(255,255,255,0.30); white-space: nowrap; }
   svg { width: 100%; height: 100%; display: block; }
   .rail { position: relative; height: 30px; margin: 4px 18px 10px; color: var(--muted); flex: 0 0 auto; }
   .rail span { position: absolute; top: 0; white-space: nowrap; padding-left: 4px; }
@@ -128,6 +134,7 @@
   const fmt = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
   const monName = (d) => new Date(Date.parse(d + 'T12:00:00Z')).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }).toUpperCase();
   const md = (d) => { const [, m, dd] = d.split('-'); return `${+m}/${+dd}`; };
+  const dow = (d) => new Date(Date.parse(d + 'T12:00:00Z')).getUTCDay();
   /** ET minutes-since-midnight of a timestamp, or null. */
   const HM = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit' });
   const etMins = (ts) => { const t = new Date(ts); if (!Number.isFinite(t.getTime())) return null;
@@ -278,7 +285,7 @@
     $('coreOnly').classList.toggle('on', !st.walls); $('wallsOn').classList.toggle('on', st.walls);
     document.querySelectorAll('[data-range]').forEach((b) => b.classList.toggle('on', +b.dataset.range === st.range));
     const plot = $('plot'); const tip = $('tip'); const legend = $('legend'); const rail = $('rail');
-    plot.querySelectorAll('svg, .empty, .gl').forEach((n) => n.remove()); legend.innerHTML = ''; rail.innerHTML = '';
+    plot.querySelectorAll('svg, .empty, .gl, .wklab').forEach((n) => n.remove()); legend.innerHTML = ''; rail.innerHTML = '';
     const m = st.days.length ? model(st.days, st.walls) : null;
     const nTape = m ? m.segs.reduce((n, s) => n + (s.dense ? s.spotPts.length : 0), 0) : 0;
     $('meta').textContent = m ? `${m.segs.length} sessions · ${m.segs[0].date} → ${m.segs[m.segs.length - 1].date} · ${$('scope').value === 'agg' ? 'Non-0DTE' : '0DTE'} · ${$('basis').value === 'vol' ? 'Vol' : 'OI+Vol'}${nTape ? ` · ${nTape.toLocaleString()} × 5m spot` : ''}` : '—';
@@ -300,8 +307,25 @@
     const stepY = niceStep((hi - lo) / 5);
     const gridLabels = [];
     for (let k = Math.ceil(lo / stepY); k * stepY < hi; k++) { const v = Math.round(k * stepY * 100) / 100; line(0, 100, y(v), y(v), 'rgba(255,255,255,0.06)'); gridLabels.push({ v, y: y(v) }); }
-    // session / month dividers
+    // ── WEEK BANDS ────────────────────────────────────────────────────────
+    // A quarter of sessions is 63 identical slices, and a month name every ~21
+    // of them is not enough to answer "which week is this". So every other
+    // trading week gets a faint tint and the week is NAMED inside its own band.
+    // The tint is the weakest mark on the plot (0.028) on purpose — it has to
+    // survive being crossed by the price line without competing with it.
     const monthEdge = segs.map((s, i) => i === 0 || s.date.slice(0, 7) !== segs[i - 1].date.slice(0, 7));
+    const weekEdge = segs.map((s, i) => i === 0 || dow(s.date) <= dow(segs[i - 1].date));
+    const weeks = [];
+    for (let i = 0; i < N; i++) {
+      if (!weekEdge[i]) continue;
+      let j = i + 1; while (j < N && !weekEdge[j]) j++;
+      weeks.push({ i, j, a: i * segW, b: j * segW, date: segs[i].date, month: monthEdge[i] || i === 0 });
+    }
+    if (N > 10) {
+      weeks.forEach((w, k) => { if (k % 2) return;
+        svg.appendChild(el('rect', { x: w.a, y: 0, width: w.b - w.a, height: H, fill: 'rgba(255,255,255,0.028)' })); });
+    }
+    // session / month dividers, over the bands
     for (let i = 1; i < N; i++) line(i * segW, i * segW, 0, H, `rgba(255,255,255,${N > 10 ? (monthEdge[i] ? 0.28 : 0.06) : 0.22})`);
 
     const poly = (pts, color, w, extra = {}) => svg.appendChild(el('polyline', { points: pts, fill: 'none', stroke: color, 'stroke-width': w, 'vector-effect': 'non-scaling-stroke', 'stroke-linejoin': 'round', ...extra }));
@@ -377,6 +401,18 @@
       poly(d, HEX.spot, w, { 'stroke-opacity': 1 });
     }
     plot.appendChild(svg);
+    // week names, one per band, only where the band is wide enough to hold one
+    if (N > 10) {
+      const wl = document.createElement('div'); wl.className = 'wklab';
+      for (const w of weeks) {
+        if (w.b - w.a < 3.4) continue;
+        const s2 = document.createElement('span');
+        s2.style.left = `${w.a}%`; s2.style.width = `${w.b - w.a}%`;
+        s2.textContent = `WK ${md(w.date)}`;
+        wl.appendChild(s2);
+      }
+      plot.appendChild(wl);
+    }
     // grid labels
     for (const g of gridLabels) { const s = document.createElement('span'); s.className = 'gl'; s.textContent = fmt(g.v);
       s.style.cssText = `position:absolute;left:22px;top:${g.y + 8 - 7}px;font:10px var(--mono);color:rgba(255,255,255,0.45);pointer-events:none`; plot.appendChild(s); }
@@ -393,8 +429,16 @@
     }
     // date rail
     if (N > 10) {
-      segs.forEach((seg, i) => { if (!monthEdge[i]) return; const s = document.createElement('span'); s.style.left = `${i * segW}%`;
-        s.innerHTML = `<b>${monName(seg.date)}</b><i>${md(seg.date)}</i>`; rail.appendChild(s); });
+      // One stamp per WEEK, centred under its band — the date on top, the month
+      // name under it only where the month actually turns over. A stamp per
+      // session is unreadable at 63 and a stamp per month is three labels.
+      for (const w of weeks) {
+        if (w.b - w.a < 3.4) continue;
+        const s = document.createElement('span');
+        s.style.left = `${w.a}%`; s.style.width = `${w.b - w.a}%`; s.style.textAlign = 'center'; s.style.paddingLeft = '0';
+        s.innerHTML = `<i>${md(w.date)}</i><b>${w.month ? monName(w.date) : ''}</b>`;
+        rail.appendChild(s);
+      }
     } else {
       segs.forEach((seg, i) => { const s = document.createElement('span'); s.style.left = `${i * segW}%`; s.style.width = `${segW}%`; s.style.textAlign = 'center';
         s.innerHTML = `<b>${new Date(Date.parse(seg.date + 'T12:00:00Z')).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}</b><i>${md(seg.date)}</i>`; rail.appendChild(s); });
@@ -436,6 +480,17 @@
     const blobOf = (async () => {
     const S = 2, rect = svg.getBoundingClientRect(); const W = Math.round(rect.width * S), Hh = Math.round(rect.height * S);
     const clone = svg.cloneNode(true); clone.setAttribute('width', W); clone.setAttribute('height', Hh);
+    // WHY THE PNG CAME OUT DARKER THAN THE SCREEN. Every stroke here carries
+    // `vector-effect: non-scaling-stroke`, which pins its width to OUTPUT pixels
+    // rather than user units. Rendering the clone at S× therefore keeps a 3.4px
+    // CORE bar at 3.4 device px inside a picture twice the size — half the
+    // relative thickness it has on screen, and a half-thickness line over a
+    // near-black plate reads as dim. Scaling every width by S restores parity;
+    // it is the whole fix.
+    clone.querySelectorAll('[stroke-width]').forEach((n) => {
+      const w0 = parseFloat(n.getAttribute('stroke-width'));
+      if (Number.isFinite(w0)) n.setAttribute('stroke-width', w0 * S);
+    });
     const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }));
     const img = new Image();
     await new Promise((ok, bad) => { img.onload = ok; img.onerror = bad; img.src = url; });
@@ -458,14 +513,30 @@
     // plot + its y labels
     g.drawImage(img, PADX, HEAD + LEG, W, Hh);
     for (const gl of $('plot').querySelectorAll('.gl')) { const top = parseFloat(gl.style.top); g.fillStyle = 'rgba(255,255,255,0.45)'; g.font = `${10 * S}px ui-monospace, Menlo, Consolas, monospace`; g.fillText(gl.textContent, PADX + 4 * S, HEAD + LEG + (top - 8 + 7) * S); }
-    // rail
+    // week names over the plot (HTML on the page, so they are not in the SVG)
+    for (const sp of $('plot').querySelectorAll('.wklab span')) {
+      const left = parseFloat(sp.style.left) / 100 * W + PADX;
+      const wdt = parseFloat(sp.style.width) / 100 * W;
+      g.textAlign = 'center'; g.fillStyle = 'rgba(255,255,255,0.30)'; g.font = `800 ${9 * S}px Inter, Arial`;
+      g.fillText(sp.textContent, left + wdt / 2, HEAD + LEG + 11 * S);
+    }
+    g.textAlign = 'left';
+    // rail — rows in DOM order, so the week stamp (date over month) and the
+    // day stamp (weekday over date) both come out the way the page draws them.
     const railTop = HEAD + LEG + Hh + 12 * S;
     for (const sp of $('rail').querySelectorAll('span')) {
       const left = parseFloat(sp.style.left) / 100 * W + PADX; const wdt = sp.style.width ? parseFloat(sp.style.width) / 100 * W : 0;
-      const b = sp.querySelector('b').textContent, i2 = sp.querySelector('i').textContent;
       g.textAlign = wdt ? 'center' : 'left'; const tx = wdt ? left + wdt / 2 : left + 4 * S;
-      g.fillStyle = '#fff'; g.font = `800 ${10 * S}px Inter, Arial`; g.fillText(b, tx, railTop);
-      g.fillStyle = 'rgba(255,255,255,0.62)'; g.font = `${10 * S}px ui-monospace, Menlo, Consolas, monospace`; g.fillText(i2, tx, railTop + 12 * S);
+      let row = 0;
+      for (const ch of sp.children) {
+        const t = ch.textContent;
+        if (t) {
+          if (ch.tagName === 'B') { g.fillStyle = '#fff'; g.font = `800 ${10 * S}px Inter, Arial`; }
+          else { g.fillStyle = 'rgba(255,255,255,0.62)'; g.font = `${10 * S}px ui-monospace, Menlo, Consolas, monospace`; }
+          g.fillText(t, tx, railTop + row * 12 * S);
+        }
+        row++;
+      }
     }
     g.textAlign = 'left';
     URL.revokeObjectURL(url);
