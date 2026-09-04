@@ -2,7 +2,7 @@
   "_README": "Violations that already existed when check-theme.mjs was added. The build fails when a file goes ABOVE its number here. Clean a file up and run `npm run theme:update` to pull its number down; a file at zero is removed and can never regress. Never raise a number to make a build pass.",
   "files": {
     "src/board/chart-render.ts": 8,
-    "src/board/gexCandles/chart.ts": 9,
+    "src/board/gexCandles/chart.ts": 1,
     "src/board/gexChart/gexChartRender.ts": 1,
     "src/design/primitives/Dock.tsx": 4,
     "src/pages/OptionsChain.tsx": 15,

@@ -66,6 +66,39 @@ type Metric = "mark" | "net_gex";
  */
 const ENTRY_FLOOR = 0.5;
 
+/* ── THE STRICT GATE ──────────────────────────────────────────────────────────
+ * A VIEW filter, not a capture threshold. The recorder still files everything
+ * that clears its own floor (|Δ| ≥ $200k, |% vs open| ≥ 30%); this hides the
+ * rows that would NOT have survived a tighter live gate, so the tighter gate can
+ * be judged against picks that were already graded instead of argued about in
+ * the abstract. Toggle it, read the scorecard, and the averages say whether
+ * tightening the recorder is worth doing.
+ *
+ * Everything here is read off the stored row — no refetch, and it works on every
+ * date already recorded.
+ *
+ * ON |z| ≥ 2 DOING TWO JOBS. The scan computes z with stddev_pop over the
+ * strike's own samples in the window, and for a population sd the largest |z| a
+ * sample of size n can produce is √(n−1). So |z| ≥ 2 is unsatisfiable below
+ * n = 5: the filter demands the move be unusual AND, as a free consequence,
+ * that there were enough observations for "unusual" to mean anything. That is
+ * why there is no separate sample-count control — it would be the same filter
+ * twice, and the weaker half of it.
+ *
+ * NOT ENFORCED HERE: a floor on the pct_open DENOMINATOR. At 09:47 the open
+ * baseline is a handful of contracts, so "+300% vs open" is a rounding error
+ * wearing a percentage sign. gex_open is a real column on strike_growth but is
+ * not carried onto gex_change_top, so it cannot be checked client-side on rows
+ * already recorded. The recorder's 10:00 warm-up is what stands in for it.
+ */
+const STRICT = { chg: 500_000, pctOpen: 50, z: 2 } as const;
+
+/** Null fails: an unverifiable row is not a passing row. */
+const passesStrict = (r: Row): boolean =>
+  r.latest_chg != null && Math.abs(r.latest_chg) >= STRICT.chg &&
+  r.pct_open != null && Math.abs(r.pct_open) >= STRICT.pctOpen &&
+  r.z_score != null && Math.abs(r.z_score) >= STRICT.z;
+
 /** One row of the EOD scorecard — /proxy/gex-change-top-results. */
 type ResultRow = {
   watch_id: number; symbol: string; expiry: string; strike: number; side: string | null;
@@ -561,6 +594,37 @@ export default function GexChangeTop() {
     return n;
   }, [slots, cheapIds]);
 
+  // ── The strict gate (see STRICT at the top of this file) ────────────────────
+  // Off by default: the default view is the honest record of what the recorder
+  // actually filed. On, the page shows only the picks that would have survived
+  // the tighter live gate — cards AND scorecard, because a gate you judge on the
+  // cards but not the averages tells you nothing.
+  const [strict, setStrict] = useState(false);
+
+  /** Slots with failing rows removed, and slots left empty by that dropped. */
+  const viewSlots = useMemo(() => {
+    if (!strict) return slots;
+    return slots
+      .map((hb) => ({ ...hb, rows: hb.rows.filter(passesStrict) }))
+      .filter((hb) => hb.rows.length > 0);
+  }, [slots, strict]);
+
+  /** watch_ids that pass — the join key back to the scorecard rows. A pick that
+   *  was never auto-probed has no watch_id and so cannot be matched; it is
+   *  simply absent from the scorecard either way. */
+  const strictOkIds = useMemo(() => {
+    const s = new Set<number>();
+    for (const hb of slots) for (const r of hb.rows) if (r.watch_id != null && passesStrict(r)) s.add(r.watch_id);
+    return s;
+  }, [slots]);
+
+  /** How many cards the gate is currently hiding (or would hide). */
+  const strictHidden = useMemo(() => {
+    let total = 0, pass = 0;
+    for (const hb of slots) for (const r of hb.rows) { total += 1; if (passesStrict(r)) pass += 1; }
+    return total - pass;
+  }, [slots]);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadResults(date || undefined); }, [loadResults, date]);
   // 60s, not 5 min. The recorder's trigger scan files a crossing within a minute
@@ -625,15 +689,17 @@ export default function GexChangeTop() {
 
   // Every card on the page that CAN be flipped (i.e. was auto-probed), as
   // [cid, watch_id]. Drives "Flip all" and the while-open refresh below.
+  // viewSlots, not slots: "Flip all" must not fetch history for cards the strict
+  // gate is hiding, and its disabled state should follow what is on screen.
   const flippable = useMemo(() => {
     const out: { cid: string; wid: number }[] = [];
-    for (const hb of slots) {
+    for (const hb of viewSlots) {
       for (const r of hb.rows) {
         if (r.watch_id != null) out.push({ cid: `${r.symbol}-${r.strike}-${hb.slot}`, wid: r.watch_id });
       }
     }
     return out;
-  }, [slots]);
+  }, [viewSlots]);
 
   // Watch ids currently face-down. De-duped: the same contract can appear in
   // several hourly slots and they share one fetch.
@@ -792,7 +858,10 @@ export default function GexChangeTop() {
 
   // Scorecard summary — same floor as the cards above, then count picks that
   // offered real exits.
-  const filteredResults = results.filter((r) => r.entry != null && (scoreCheap || r.entry > ENTRY_FLOOR));
+  const filteredResults = results.filter((r) =>
+    r.entry != null
+    && (scoreCheap || r.entry > ENTRY_FLOOR)
+    && (!strict || strictOkIds.has(r.watch_id)));
   const withPeak = filteredResults.filter((r) => r.max_pct != null);
   const hit = (n: number) => withPeak.filter((r) => (r.max_pct as number) >= n).length;
   const avgPeak = withPeak.length ? withPeak.reduce((a, r) => a + (r.max_pct as number), 0) / withPeak.length : null;
@@ -814,7 +883,12 @@ export default function GexChangeTop() {
     <Card
       variant="budget"
       title={<span style={{ fontSize: 17 }}>GEX Change · Hourly Top 5</span>}
-      subtitle={`★ Very strong picks (|Δ| ≥ $200k & |% vs open| ≥ 30%), ranked by score · captured every 30 min during RTH${loading ? " · refreshing…" : ""}`}
+      subtitle={
+        (strict
+          ? `Strict gate · |Δ| ≥ $${(STRICT.chg / 1000).toFixed(0)}k & |% vs open| ≥ ${STRICT.pctOpen}% & |z| ≥ ${STRICT.z}`
+          : "★ Very strong picks (|Δ| ≥ $200k & |% vs open| ≥ 30%)")
+        + `, ranked by score · captured every 30 min during RTH${loading ? " · refreshing…" : ""}`
+      }
     >
       <div data-noshot="1" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
         <input
@@ -831,6 +905,27 @@ export default function GexChangeTop() {
           style={{ ...homeButtonStyle, padding: "6px 12px", fontSize: 13 }}
         >
           Refresh
+        </button>
+        {/* The strict gate. A view filter over what is already recorded — it
+            changes nothing about what the recorder captures, so the comparison
+            it enables is against picks that carry real grades. */}
+        <button
+          onClick={() => { setStrict((s) => !s); setFlipped({}); }}
+          title={
+            `Show only the picks that clear |Δ GEX| ≥ $${(STRICT.chg / 1000).toFixed(0)}k, `
+            + `|% vs open| ≥ ${STRICT.pctOpen}% and |z| ≥ ${STRICT.z} — the tighter live gate, applied to what was already captured. `
+            + `Filters the cards AND the scorecard, so the averages below are the tighter gate's actual record. `
+            + `Changes nothing about what the recorder files.`
+            + (strictHidden > 0 ? `\n\n${strictHidden} of the picks on this date do not clear it.` : "")
+          }
+          style={{
+            ...homeButtonStyle, padding: "6px 12px", fontSize: 13,
+            borderColor: strict ? tint(HOME_THEME.cyan, 0.5) : HOME_THEME.border,
+            color: strict ? HOME_THEME.cyan : HOME_THEME.text,
+            background: strict ? tint(HOME_THEME.cyan, 0.12) : homeButtonStyle.background,
+          }}
+        >
+          {strict ? `Strict gate · on (−${strictHidden})` : `Strict gate${strictHidden > 0 ? ` (−${strictHidden})` : ""}`}
         </button>
         <button
           onClick={flipAll}
@@ -878,7 +973,7 @@ export default function GexChangeTop() {
           {filteredResults.length > 0 && (
             <span style={{ fontSize: 12, color: HOME_THEME.text }}>
               {filteredResults.length} pick{filteredResults.length === 1 ? "" : "s"}{" "}
-              ({scoreCheap ? "all entries" : `entry > $${ENTRY_FLOOR.toFixed(2)}`}) · avg peak{" "}
+              ({scoreCheap ? "all entries" : `entry > $${ENTRY_FLOOR.toFixed(2)}`}{strict ? " · strict gate" : ""}) · avg peak{" "}
               <b style={{ color: avgPeak != null && avgPeak >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{fmtPct(avgPeak)}</b>
               {" · "}≥+25% <b style={{ color: HOME_THEME.text }}>{hit(25)}</b>
               {" · "}≥+50% <b style={{ color: HOME_THEME.text }}>{hit(50)}</b>
@@ -1011,13 +1106,19 @@ export default function GexChangeTop() {
 
       {err && <div style={{ color: HOME_THEME.red, fontSize: 13, padding: "8px 0" }}>Error: {err}</div>}
 
-      {!err && slots.length === 0 && (
+      {!err && viewSlots.length === 0 && (
         <div style={{ color: HOME_THEME.text, fontSize: 14, padding: "16px 4px" }}>
-          {loading ? "Loading…" : "No very-strong picks recorded yet for this date. The recorder files a strike the minute it crosses into ★ Very strong, and captures the top 5 every 30 min during RTH."}
+          {loading
+            ? "Loading…"
+            : slots.length > 0
+              // Distinguish "nothing was recorded" from "the gate hid it all" —
+              // otherwise the strict toggle reads as a broken fetch.
+              ? `The strict gate hid all ${strictHidden} pick${strictHidden === 1 ? "" : "s"} on this date. Nothing recorded here cleared |Δ| ≥ $${(STRICT.chg / 1000).toFixed(0)}k, |% vs open| ≥ ${STRICT.pctOpen}% and |z| ≥ ${STRICT.z} together.`
+              : "No very-strong picks recorded yet for this date. The recorder files a strike the minute it crosses into ★ Very strong, and captures the top 5 every 30 min during RTH."}
         </div>
       )}
 
-      {slots.map((hb) => (
+      {viewSlots.map((hb) => (
         <div key={hb.slot} style={{ marginBottom: 22 }}>
           <div data-noshot="1" style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
             <span style={{ color: hb.live ? HOME_THEME.cyan : HOME_THEME.orange, fontWeight: 800, fontSize: 15 }}>{slotLabel(hb.slot)}</span>
@@ -1382,7 +1483,7 @@ export default function GexChangeTop() {
           <span style={{ color: HOME_THEME.red }}>F</span> is automatic when a pick never traded green,
           whatever the rest of the row says.
         </span>
-        {slots.some((hb) => hb.rows.some((r) => r.proj_grade)) && (
+        {viewSlots.some((hb) => hb.rows.some((r) => r.proj_grade)) && (
           <span>
             A dashed <b>proj</b> pill is what the projection rule predicted at capture — see the Pick Study tab
             for whether those predictions are holding up.

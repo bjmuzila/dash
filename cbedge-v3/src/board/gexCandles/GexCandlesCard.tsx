@@ -5,12 +5,13 @@ import { ReplayDock } from '@/design/primitives/ReplayDock'
 import { T } from '@/design/theme'
 import { useIsPhone } from '@/design/useIsPhone'
 import { useQuery } from '@/data/api'
-import { usePageSymbol } from '@/data/symbol'
+import { PAGE_TICKER_RE, usePageSymbol } from '@/data/symbol'
 import { useAuth } from '@/data/auth'
 import { watchFrame } from '@/data/hooks'
 import type { SpotFrame } from '@/contract/frames'
-import { SegGroup, Chip, Popover, PanelSection, Dropdown, Slider, SymbolPicker } from './controls'
-import { chainTicker, symbolDef } from './symbols'
+import { SegGroup, SegMenu, Chip, Popover, PanelSection, Dropdown, Slider } from './controls'
+import { TickerPicker } from '@/design/primitives/TickerPicker'
+import { chainTicker, normalizeSymbol, symbolDef } from './symbols'
 
 /** What `spxOnly` pins the card to. The one root with both a cash tape and a future. */
 const SPX_ONLY_SYMBOL = 'SPX'
@@ -64,7 +65,8 @@ import { mountEsChart, type EsChartHandle } from './chart'
 // second GEX Candles card is to watch a second ticker — two cards locked to the
 // board symbol draw the same chart twice. So `gex-candles` (instance 1) still
 // follows the board, and `gex-candles#2`, `#3`, … chart `settings.symbol` and
-// carry the SymbolPicker in their toolbar. `settings.symbol` was already in the
+// carry the app toolbar's own TickerPicker — same universe, same stars — in
+// their toolbar. `settings.symbol` was already in the
 // stored blob, unread since the picker was removed; this is what reads it again.
 //
 // Settings are keyed by INSTANCE id, so a copy's symbol, expiry, interval and
@@ -702,8 +704,12 @@ export function GexCandlesCard({
   }, [replayOn, weekendExpiry])
   // Held in a variable rather than inlined, because the NULL case has to be
   // readable downstream — see `allColumns`.
+  // The LEVEL TAGS keep it alive too, and they are the cheapest reason to: they
+  // read the same newest column the rail does, so a card with the bubbles and
+  // the rail both off but CORE/CW/PW on still needs this request. Without it
+  // that combination silently drew nothing.
   const gexUrl =
-    (settings.bubblesOn || railOn) && expiry
+    (settings.bubblesOn || railOn || settings.levelLabels) && expiry
       ? gexHistoryUrl(def.gexSymbol, expiry, historyMinutes, BUBBLE_LADDER_REQUEST)
       : null
   const gexQ = useQuery<unknown>(
@@ -938,6 +944,16 @@ export function GexCandlesCard({
 
   useEffect(() => apply((h) => h.setSnapshots(snapshots)), [snapshots, apply])
 
+  // ── CORE / CW / PW on the pane ─────────────────────────────────────────────
+  // `railModel.levels`, not a second calculation: the tags on the chart and the
+  // tags on the rail are the same three strikes off the same newest column, so
+  // they cannot disagree — and on ES they are already through the basis, because
+  // `columns` is shifted upstream of both consumers.
+  useEffect(
+    () => apply((h) => h.setLevels(settings.levelLabels ? railModel.levels : null)),
+    [settings.levelLabels, railModel, apply],
+  )
+
   // ── The live price ─────────────────────────────────────────────────────────
   // The candle feed only ever hands over CLOSED bars, so between polls the last
   // candle would sit still. The socket's `spot` frame is the live print, and
@@ -1048,13 +1064,41 @@ export function GexCandlesCard({
       empty="expiry"
     />
   )
+  // ── THE HEADER IS FOLDED; THE PHONE SHEET IS NOT ───────────────────────────
+  // Each of the three segmented controls below is built TWICE from one set of
+  // options and one handler: open (SegGroup) for the phone sheet, folded
+  // (SegMenu — the current value, with the full group one click under it) for
+  // the desktop header.
+  //
+  // Why fold. Spelled out, the header read SPX|ES · 0DTE · 1m|5m|15m|30m|1h ·
+  // RTH|ETH · ⚙ Layers — eleven buttons, ten of them saying what the chart is
+  // NOT set to. Two candle cards side by side on a 12-column board is the
+  // normal arrangement here, and at that width the row wrapped and the ⚙ fell
+  // off the end. Folded, the same row is the width of the words "SPX 0DTE 5m
+  // ETH ⚙", which fits on a quarter-width card.
+  //
+  // Nothing is hidden: the options are one click away, in the identical control
+  // they used to be shown in. In the sheet there is room and nothing to gain
+  // from a second tap, so it stays open.
+  const intervalOptions = INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))
+  const onInterval = (v: string) => patch({ interval: Number(v) as Interval })
+  const intervalTitle = 'Bar interval'
   const intervalPicker = (
     <SegGroup
       size={ctlSize}
-      title="Bar interval"
-      options={INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
+      title={intervalTitle}
+      options={intervalOptions}
       value={String(settings.interval)}
-      onChange={(v) => patch({ interval: Number(v) as Interval })}
+      onChange={onInterval}
+    />
+  )
+  const intervalMenu = (
+    <SegMenu
+      size={ctlSize}
+      title={intervalTitle}
+      options={intervalOptions}
+      value={String(settings.interval)}
+      onChange={onInterval}
     />
   )
   // COPIES ONLY — see isCopy. The first card follows the board ticker and the
@@ -1063,33 +1107,76 @@ export function GexCandlesCard({
   // slot. Writes `settings.symbol`, which is per-instance storage; a pinned
   // expiry from the old ticker is dropped by the guard on `expiry` below, the
   // same way a board-level symbol change already drops one.
+  //
+  // THE APP TOOLBAR'S PICKER, not this card's own. `TickerPicker` is the same
+  // primitive the toolbar mounts, so a copy opens the same scanner universe and
+  // — the point — the SAME STARS: favourites live in one browser-wide list
+  // (`cb-v3-fav-tickers`), so a ticker starred in the toolbar is already at the
+  // top here, and starring one here puts it at the top of the toolbar. The
+  // card's local `SymbolPicker` kept a second favourites list under v2's key,
+  // which is two lists for one habit.
+  //
+  // `allowCustom={PAGE_TICKER_RE}` matches the toolbar too: the universe is the
+  // server's watchlist, not everything the app can price, so a valid symbol off
+  // that list is still offered as a "USE" row.
   const symbolPicker = isCopy ? (
-    <SymbolPicker active={symbol} onSelect={(s) => patch({ symbol: s, expiry: '' })} />
+    <TickerPicker
+      activeTicker={symbol}
+      onSelect={(t) => patch({ symbol: normalizeSymbol(t), expiry: '' })}
+      allowCustom={PAGE_TICKER_RE}
+      title="This card's symbol. Copies of the GEX Candles card each hold their own ticker — the first one follows the board. Starred tickers are the same list the toolbar uses."
+    />
   ) : null
   // SPX-only — see esCapable. Null (not hidden) elsewhere so the header row
   // does not keep an empty slot on AMZN.
+  const tapeOptions: Array<{ label: string; value: 'spx' | 'es' }> = [
+    { label: 'SPX', value: 'spx' },
+    { label: 'ES', value: 'es' },
+  ]
+  const tapeTitle =
+    'Which tape the candles come from. SPX is the cash index (09:30–16:00 ET only). ES is the front-month future — it trades nearly around the clock, so this is the one that has an overnight — with the same SPX gamma drawn over it, every strike shifted by the ES−SPX basis'
+  const onTape = (v: 'spx' | 'es') => patch({ esCandles: v === 'es' })
   const tapePicker = esCapable ? (
     <SegGroup
       size={ctlSize}
-      title="Which tape the candles come from. SPX is the cash index (09:30–16:00 ET only). ES is the front-month future — it trades nearly around the clock, so this is the one that has an overnight — with the same SPX gamma drawn over it, every strike shifted by the ES−SPX basis"
-      options={[
-        { label: 'SPX', value: 'spx' },
-        { label: 'ES', value: 'es' },
-      ]}
+      title={tapeTitle}
+      options={tapeOptions}
       value={useEs ? 'es' : 'spx'}
-      onChange={(v) => patch({ esCandles: v === 'es' })}
+      onChange={onTape}
     />
   ) : null
+  const tapeMenu = esCapable ? (
+    <SegMenu
+      size={ctlSize}
+      title={tapeTitle}
+      options={tapeOptions}
+      value={useEs ? 'es' : 'spx'}
+      onChange={onTape}
+    />
+  ) : null
+  const sessionOptions: Array<{ label: string; value: 'rth' | 'eth' }> = [
+    { label: 'RTH', value: 'rth' },
+    { label: 'ETH', value: 'eth' },
+  ]
+  const sessionTitle =
+    'Session — RTH is the New York cash session (9:30am–4:00pm ET); ETH adds the overnight'
+  const onSession = (v: 'rth' | 'eth') => patch({ session: v })
   const sessionPicker = (
     <SegGroup
       size={ctlSize}
-      title="Session — RTH is the New York cash session (9:30am–4:00pm ET); ETH adds the overnight"
-      options={[
-        { label: 'RTH', value: 'rth' },
-        { label: 'ETH', value: 'eth' },
-      ]}
+      title={sessionTitle}
+      options={sessionOptions}
       value={session}
-      onChange={(v) => patch({ session: v })}
+      onChange={onSession}
+    />
+  )
+  const sessionMenu = (
+    <SegMenu
+      size={ctlSize}
+      title={sessionTitle}
+      options={sessionOptions}
+      value={session}
+      onChange={onSession}
     />
   )
 
@@ -1144,10 +1231,14 @@ export function GexCandlesCard({
             card IS. Everything to its right is a setting on the chart; this is
             the chart's subject. */}
         {symbolPicker}
-        {tapePicker}
+        {/* Open on a phone, folded on the desktop. The phone header carries
+            ONLY this control (everything else is in the sheet), so there is
+            nothing for it to crowd, and it is the width of the word "ES" — the
+            fold would cost a tap and save nothing. */}
+        {phone ? tapePicker : tapeMenu}
         {!phone && expiryPicker}
-        {!phone && intervalPicker}
-        {!phone && !spxOnly && sessionPicker}
+        {!phone && intervalMenu}
+        {!phone && !spxOnly && sessionMenu}
         <div className="relative shrink-0">
           <button
             type="button"
@@ -1197,6 +1288,17 @@ export function GexCandlesCard({
                       title="The strike ladder down the right-hand side. Every row sits at the same height as its strike on the chart — it reads the chart's own price scale, so it stays level through a pan, a zoom and an autoscale"
                     />
                   )}
+                  {/* Independent of both the bubbles and the rail — see
+                      `levelLabels` in settings.ts. Three tags on the pane cost
+                      no width, which is what makes them the layer that stays on
+                      when a card gets narrow enough to lose the rail. */}
+                  <Chip
+                    size={ctlSize}
+                    label="Levels"
+                    on={settings.levelLabels}
+                    onClick={() => patch({ levelLabels: !settings.levelLabels })}
+                    title="CORE, CW and PW drawn on the chart itself — a dashed line at each with its name at the left edge. Same three levels the rail tags: CORE is the biggest gamma strike on the ladder, CW the call wall above spot, PW the put wall below"
+                  />
                   <Chip
                     size={ctlSize}
                     label="Countdown"

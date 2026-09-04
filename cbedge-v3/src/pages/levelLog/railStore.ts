@@ -29,7 +29,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIsOwner } from '@/data/auth'
-import type { ExpScope, GexBasis, WallLevel } from '@/pages/levelLog/wallData'
+import type {
+  DaySlice,
+  ExpScope,
+  GexBasis,
+  WallEventRow,
+  WallLevel,
+  WallLogRow,
+} from '@/pages/levelLog/wallData'
 
 /** Always on the rail, never removable. Order is deliberate: index, ETF, tech. */
 export const RAIL_PINNED: readonly string[] = ['SPX', 'SPY', 'QQQ']
@@ -330,6 +337,107 @@ export function useWallUniverse(
       alive = false
     }
   }, [date, nonce, scope, basis])
+
+  return state
+}
+
+// ── The mini charts ──────────────────────────────────────────────────────────
+
+/**
+ * THE SESSION BEHIND EACH CARD.
+ *
+ * The day summary above gives every card its numbers in one request, but a card
+ * that draws the actual chart needs the same thing the log card needs: that
+ * symbol's change-only level log for the day. There is no universe-wide form of
+ * that read — `/proxy/walls` serves a log ONE symbol at a time by design (the
+ * comment on the endpoint spells out why: every symbol's full day would be a
+ * several-thousand-row response) — so this is N small requests, run in waves.
+ *
+ * NO TAPE. `useWallDays` pairs each log with `/proxy/candles-intraday` for the
+ * 1-minute price line; doing that here would DOUBLE the request count for a
+ * 62px plot where a minute is a third of a pixel. So `price` is left empty and
+ * WallMigrationChart falls back to the log's own spot captures — which is its
+ * documented behaviour for a day whose tape did not arrive, not a special case
+ * invented for these cards.
+ *
+ * Waves of `CONC`, because the alternative shapes are both wrong: all at once
+ * is 24 parallel proxy reads off one page load, and one at a time is a rail
+ * that fills in over several seconds.
+ */
+const RAIL_FETCH_CONC = 6
+
+export interface RailDays {
+  /** symbol → the one-day slice its card draws. Absent = nothing recorded. */
+  days: Map<string, DaySlice[]>
+  loading: boolean
+  loaded: boolean
+}
+
+const NO_RAIL_DAYS: RailDays = { days: new Map(), loading: false, loaded: false }
+
+async function fetchRailDay(
+  symbol: string,
+  date: string,
+  scope: ExpScope,
+  basis: GexBasis,
+): Promise<DaySlice[] | null> {
+  try {
+    const r = await fetch(
+      `/proxy/walls?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(symbol)}&scope=${scope}&basis=${basis}`,
+      { cache: 'no-store', credentials: 'same-origin' },
+    )
+    const j = await r.json()
+    if (!j?.ok) return null
+    const log: WallLogRow[] = Array.isArray(j.log) ? j.log : []
+    const events: WallEventRow[] = Array.isArray(j.events) ? j.events : []
+    if (!log.length && !events.length) return null
+    return [{ date, log, events, price: [] }]
+  } catch {
+    return null
+  }
+}
+
+export function useRailDays(
+  symbols: string[],
+  date: string,
+  nonce: number,
+  scope: ExpScope,
+  basis: GexBasis,
+): RailDays {
+  const [state, setState] = useState<RailDays>(NO_RAIL_DAYS)
+  // The list is rebuilt on every render by `normalizeRail`, so its identity is
+  // never stable — the JOINED string is what actually changed.
+  const key = symbols.join(',')
+
+  useEffect(() => {
+    const list = key ? key.split(',') : []
+    if (!list.length || !date) {
+      setState(NO_RAIL_DAYS)
+      return
+    }
+    let alive = true
+    setState((prev) => ({ days: prev.days, loading: true, loaded: prev.loaded }))
+    ;(async () => {
+      const out = new Map<string, DaySlice[]>()
+      for (let i = 0; i < list.length; i += RAIL_FETCH_CONC) {
+        const wave = list.slice(i, i + RAIL_FETCH_CONC)
+        const got = await Promise.all(wave.map((s) => fetchRailDay(s, date, scope, basis)))
+        if (!alive) return
+        wave.forEach((s, k) => {
+          const d = got[k]
+          if (d) out.set(s, d)
+        })
+        // Painted per wave rather than at the end: the first five cards are the
+        // ones on screen, and holding them back until the twenty-fourth lands
+        // is a blank rail for no reason.
+        setState({ days: new Map(out), loading: i + RAIL_FETCH_CONC < list.length, loaded: true })
+      }
+      if (alive) setState({ days: out, loading: false, loaded: true })
+    })()
+    return () => {
+      alive = false
+    }
+  }, [key, date, nonce, scope, basis])
 
   return state
 }

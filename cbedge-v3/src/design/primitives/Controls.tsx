@@ -134,6 +134,73 @@ export function SegGroup<T extends string>({
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SegMenu — a SegGroup that only shows the option you are on.
+//
+// The candles card's header carried four segmented groups spelled out in full:
+// SPX|ES, 1m|5m|15m|30m|1h, RTH|ETH. Eleven buttons, ten of which say what the
+// chart is NOT set to — and on a board with two candle cards side by side that
+// row is wider than the card, so it wraps or clips and the ⚙ falls off the end.
+//
+// This is the same control with the same options and the same handler, folded
+// down to its current value. Click it and the full group drops under the
+// button, so nothing is hidden — it is one click deeper, in exchange for a
+// header that is the width of the word "5m".
+//
+// A SegGroup, not a list, inside the panel: it is the identical control the
+// header used to show, so the muscle memory (and the disabled/activeColor
+// behaviour above) survives the fold.
+// ─────────────────────────────────────────────────────────────────────────────
+export function SegMenu<T extends string>({
+  options,
+  value,
+  onChange,
+  title,
+  size = 'sm',
+  align = 'right',
+}: {
+  size?: ControlSize
+  options: Array<{ label: string; value: T; title?: string; disabled?: boolean; activeColor?: string }>
+  value: T
+  onChange: (v: T) => void
+  title?: string
+  align?: 'left' | 'right'
+}) {
+  const [open, setOpen] = useState(false)
+  const current = options.find((o) => o.value === value)
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={title}
+        className={[
+          CHIP_SIZE[size],
+          'flex items-center gap-1 rounded-sm border border-line font-semibold tracking-wide text-muted hover:bg-raised hover:text-fg',
+        ].join(' ')}
+      >
+        {current?.label ?? '—'}
+        <span className="text-3xs opacity-50">▾</span>
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)} align={align}>
+        {/* w-max: the group sizes to its options rather than to the trigger,
+            which is the width of ONE of them. */}
+        <div className="w-max">
+          <SegGroup
+            size={size}
+            options={options}
+            value={value}
+            onChange={(v) => {
+              onChange(v)
+              setOpen(false)
+            }}
+          />
+        </div>
+      </Popover>
+    </div>
+  )
+}
+
 export function Chip({
   label,
   on,

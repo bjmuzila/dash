@@ -128,6 +128,41 @@ const SHADOW_N = Math.max(0, Number(process.env.GEX_CHANGE_TOP_SHADOW_N ?? 5));
 // basis is the mark at the crossing. Re-qualifying five minutes later is the
 // same event, not a new one.
 //
+// WHAT "NEW" MEANS (fixed 2026-09-04) ─────────────────────────────────────────
+// It used to mean "not captured yet today", and that is not a crossing — it is
+// a MEMBERSHIP test. Every strike that qualifies on the first scan of the day
+// is trivially "new", so the first scan that can produce candidates at all
+// (~09:45, once the 15-minute lookback has history to compare against) fires the
+// entire morning's backlog as if each name had just crossed. Observed
+// 2026-09-04: 32 triggers in 46 minutes — 80% of LIVE_MAX_PER_DAY spent in 12%
+// of the session, after which the scanner is dark for the rest of the day.
+//
+// A crossing is an EDGE, so it needs the previous scan's qualifying set to be
+// an edge against:
+//
+//   fire  ⟺  qualified now  ∧  ¬qualified on the previous scan  ∧  ¬seen today
+//
+// _livePrevQualified holds that set. It is null on the first scan of a session
+// (and after a restart), and a null previous set can only SEED — it never fires,
+// because with nothing to compare against every candidate looks like an edge,
+// which is the exact bug. The set advances on every scan whether or not anything
+// fires, so it stays honest through the warm-up window and through the daily cap.
+//
+// It is built from a WIDER query than the probe list (LIVE_SCAN_LIMIT, default
+// 100 vs the leaderboard's 20). With the narrow limit a strike that merely slid
+// out of the top 20 on score and back in would read as ¬qualified → qualified,
+// i.e. a fabricated crossing. DISTINCT ON (symbol) already caps the result at
+// one row per ticker, so 100 is effectively "the whole qualifying set".
+//
+// WARM-UP (LIVE_START, default 10:00 ET) ──────────────────────────────────────
+// No trigger fires before LIVE_START. Two independent reasons, both structural:
+// the 15-minute change window has no history to compare against until ~09:45, and
+// pct_open is a ratio against the OPEN, so at 09:47 its denominator is a handful
+// of contracts and |% vs open| >= 30 is arithmetic noise rather than a filter.
+// The scan still RUNS during warm-up and still advances _livePrevQualified — so
+// the set is warm at LIVE_START and the first eligible minute fires real
+// crossings instead of another backlog flush.
+//
 // The interval leaderboard is untouched and still runs — the two write to the
 // same table and the same probe pipeline, and a strike first seen live keeps its
 // live slot as first_slot in the scorecard (MIN(slot) is lexicographic on
@@ -141,6 +176,13 @@ const LIVE_ON           = String(process.env.GEX_CHANGE_TOP_LIVE || '1') !== '0'
 const LIVE_SEC          = Math.max(20, Number(process.env.GEX_CHANGE_TOP_LIVE_SEC || 60));
 const LIVE_MAX_PER_SCAN = Math.max(1, Number(process.env.GEX_CHANGE_TOP_LIVE_MAX_PER_SCAN || 3));
 const LIVE_MAX_PER_DAY  = Math.max(1, Number(process.env.GEX_CHANGE_TOP_LIVE_MAX_PER_DAY || 40));
+// Earliest ET minute a live trigger may fire. Set to '09:30' to disable the
+// warm-up entirely (not advised — see the WARM-UP note above).
+const LIVE_START        = String(process.env.GEX_CHANGE_TOP_LIVE_START || '10:00');
+// How deep the live scan reads the qualifying set. This is NOT a probe budget —
+// it only sizes the ¬qualified→qualified comparison, so it must be wide enough
+// that score-rank churn near the cutoff cannot masquerade as a crossing.
+const LIVE_SCAN_LIMIT   = Math.max(20, Number(process.env.GEX_CHANGE_TOP_LIVE_SCAN_LIMIT || 100));
 const W_ABS = 0.6, W_PCT = 0.4;                                              // score blend weights
 // Auto-probe every captured pick into the /api/watch pipeline (see header).
 const AUTO_PROBE  = String(process.env.GEX_CHANGE_TOP_AUTOPROBE || '1') !== '0';
@@ -189,6 +231,22 @@ function isRTH() {
   if (MARKET_HOLIDAYS.has(etDateStr())) return false;
   const mins = hour * 60 + minute;
   return mins >= 9 * 60 + 30 && mins < 16 * 60;
+}
+
+/** LIVE_START ("HH:MM") as minutes past ET midnight; 09:30 if it is unparseable. */
+const LIVE_START_MIN = (() => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(LIVE_START);
+  if (!m) {
+    console.warn(`[gex-change-top] GEX_CHANGE_TOP_LIVE_START="${LIVE_START}" is not HH:MM — falling back to 09:30 (no warm-up)`);
+    return 9 * 60 + 30;
+  }
+  return Number(m[1]) * 60 + Number(m[2]);
+})();
+
+/** Past the warm-up? Scans still run before this; they just cannot fire. */
+function liveWindowOpen(d = new Date()) {
+  const { hour, minute } = etParts(d);
+  return hour * 60 + minute >= LIVE_START_MIN;
 }
 
 // ── Schema ────────────────────────────────────────────────────────────────────
@@ -693,6 +751,12 @@ let _liveDay = null;          // ET date the sets below describe
 let _liveSeen = new Set();    // every (symbol, expiry, strike) already captured today
 let _liveCount = 0;           // live triggers written today (the LIVE_MAX_PER_DAY budget)
 let _liveBusy = false;        // a scan is in flight — probes are slow, ticks are not
+// The PREVIOUS scan's qualifying set — the thing a crossing is an edge against.
+// null means "no previous scan this session": the next scan seeds it and fires
+// nothing. Deliberately NOT rebuilt from the DB in loadLiveState(): the DB knows
+// what was captured, not what was qualifying one minute ago, and inventing that
+// set after a restart would re-introduce the membership test this replaced.
+let _livePrevQualified = null;
 
 function noteSeen(symbol, expiry, strike) { _liveSeen.add(pickKey(symbol, expiry, strike)); }
 
@@ -710,6 +774,9 @@ async function loadLiveState(p, date) {
   _liveSeen = seen;
   _liveCount = live;
   _liveDay = date;
+  // New day (or a restart mid-day): there is no previous scan, so the next one
+  // seeds and stays silent. See the note on _livePrevQualified.
+  _livePrevQualified = null;
 }
 
 async function runLive({ force = false } = {}) {
@@ -726,20 +793,39 @@ async function runLive({ force = false } = {}) {
   try {
     const date = etDateStr();
     if (_liveDay !== date) await loadLiveState(p, date);
-    if (_liveCount >= LIVE_MAX_PER_DAY) return { ok: true, triggered: 0, capped: 'daily' };
 
+    // The scan runs FIRST and unconditionally, before the warm-up gate and before
+    // the daily cap. Both of those suppress FIRING, not observation: skipping the
+    // query would let _livePrevQualified go stale, and a stale previous set is
+    // what turns the next eligible scan back into a backlog flush.
     let candidates;
     try {
       ({ rows: candidates } = await p.query(
         SCAN_SQL,
-        [date, EXCLUDE, MIN_DOLLAR, MIN_PCT, MIN_OTM, DIR, Math.max(TOP_N, TOP_N * CANDIDATE_MULT)],
+        [date, EXCLUDE, MIN_DOLLAR, MIN_PCT, MIN_OTM, DIR, LIVE_SCAN_LIMIT],
       ));
     } catch (e) {
       console.warn('[gex-change-top] live scan error:', e.message);
       return { skipped: 'scan error', error: e.message };
     }
 
-    const fresh = candidates.filter((r) => !_liveSeen.has(pickKey(r.symbol, r.expiry, r.strike)));
+    // Advance the edge detector on every scan, whatever happens below.
+    const prevQualified = _livePrevQualified;
+    _livePrevQualified = new Set(candidates.map((r) => pickKey(r.symbol, r.expiry, r.strike)));
+
+    if (prevQualified == null) {
+      console.log(`[gex-change-top] LIVE seeded ${_livePrevQualified.size} qualifying strike(s) — no triggers on the first scan of the session`);
+      return { ok: true, triggered: 0, seeded: _livePrevQualified.size };
+    }
+    if (!liveWindowOpen()) return { ok: true, triggered: 0, skipped: `warm-up until ${LIVE_START} ET`, watching: _livePrevQualified.size };
+    if (_liveCount >= LIVE_MAX_PER_DAY) return { ok: true, triggered: 0, capped: 'daily' };
+
+    // A CROSSING: qualifying now, not qualifying on the previous scan, and not
+    // already captured today by either the live scan or the interval leaderboard.
+    const fresh = candidates.filter((r) => {
+      const k = pickKey(r.symbol, r.expiry, r.strike);
+      return !prevQualified.has(k) && !_liveSeen.has(k);
+    });
     if (!fresh.length) return { ok: true, triggered: 0 };
 
     const room = Math.min(LIVE_MAX_PER_SCAN, LIVE_MAX_PER_DAY - _liveCount);
@@ -801,7 +887,13 @@ async function runLive({ force = false } = {}) {
       console.warn('[gex-change-top] live write error:', e.message);
       // The strikes were marked seen before the write; un-mark them so the next
       // scan can retry rather than silently dropping the trigger for the day.
-      for (const t of taken) _liveSeen.delete(pickKey(t.row.symbol, t.row.expiry, t.row.strike));
+      // They must also come OUT of the freshly-advanced qualifying set, or the
+      // retry would see them as "was qualifying last scan" and never fire again.
+      for (const t of taken) {
+        const k = pickKey(t.row.symbol, t.row.expiry, t.row.strike);
+        _liveSeen.delete(k);
+        _livePrevQualified.delete(k);
+      }
       return { skipped: 'write error', error: e.message };
     } finally {
       client.release();

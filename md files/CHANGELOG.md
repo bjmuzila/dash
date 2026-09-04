@@ -1,5 +1,273 @@
 # Changelog
 
+## 2026-09-04 - gexCandles chart.ts: drop the hex fallbacks, unblock the pre-commit theme check (`cbedge-v3/src/board/gexCandles/chart.ts`)
+
+`check-theme` failed the commit: 13 violations against a baseline of 9. The four
+new ones came in with the CORE/CW/PW level layer (`levelInk` + `appInk`) earlier
+today.
+
+Every one of them was the third argument to `cssVar()` - a hex fallback behind a
+token that tokens.css already declares. All 13 tokens are on `:root`, so those
+fallbacks could only ever fire if the stylesheet failed to load, at which point
+the app is unstyled and the right GEX-bubble blue is not the problem. What they
+DID do is keep a second copy of the palette that nothing syncs, which is the
+drift Non-negotiable #1 exists to stop.
+
+So `cssVar(el, name, fallback)` becomes `cssVar(el, name)`. An empty read is now
+a real bug rather than a supported mode, so it warns once per mount naming the
+missing token. Nothing throws in the meantime: canvas ignores an invalid
+`fillStyle`/`strokeStyle` assignment and lightweight-charts falls back to its own
+default. `hexToRgb` keeps its `[r,g,b]` fallback - the bubble layer needs three
+numbers to build a per-mark alpha with and cannot use an empty string at all, and
+a numeric triple is arithmetic, not a colour literal.
+
+chart.ts goes 13 -> 1. The survivor is `fontSize: 11` in the lightweight-charts
+layout options (rule 4, typography), which was already inside the baseline and
+wants a JS-side type-scale export that does not exist yet - untouched here.
+
+The baseline is not raised. It now has slack in it, so run `npm run theme:update`
+to re-record; the check prints the same reminder. A file that reaches zero is
+dropped from the baseline permanently, which is the state chart.ts should be
+aiming for.
+
+
+## 2026-09-04 - GEX Change Top: "Strict gate" toggle - judge the tighter live gate against picks that are already graded (`components/scanner/GexChangeTop.tsx`)
+
+A view filter, not a capture threshold. Nothing about what the recorder files
+changes. The button shows only the picks that clear the *tighter* live gate -
+`|dGEX| >= $500k`, `|% vs open| >= 50%`, `|z| >= 2` - applied to rows that were
+captured under the looser one (`$200k` / `30%`). Everything it needs is already
+stored on `gex_change_top`, so it works retroactively on every date recorded and
+costs no refetch.
+
+The point is to stop arguing about thresholds in the abstract. Toggle it and the
+Scorecard's avg peak, `>=+25/50/100%` counts, closed-green and the whole grade
+distribution recompute on survivors only - that IS the tighter gate's record.
+Filtering the cards without filtering the averages would have told you nothing,
+so it does both, plus the "Proj vs actual" section.
+
+`|z| >= 2` quietly does the sample-count job too, so there is no separate control
+for it. The scan computes z with `stddev_pop` over the strike's own samples in
+the window, and the largest `|z|` a sample of size n can produce under a
+population sd is `sqrt(n-1)`. So `|z| >= 2` is unsatisfiable below `n = 5`: it
+demands the move be unusual and, for free, that there were enough observations
+for "unusual" to mean anything. A separate `n >= 6` control would be the same
+filter twice, and the weaker half of it.
+
+Not enforced, and it cannot be from the client: a floor on the `pct_open`
+DENOMINATOR. At 09:47 the open baseline is a handful of contracts, so
+"+300% vs open" is a rounding error wearing a percentage sign. `gex_open` is a
+real column on `strike_growth` but is not carried onto `gex_change_top`, so
+existing rows cannot be checked against it. The recorder's 10:00 warm-up is what
+stands in for it; storing `gex_open` at capture would make the gate complete for
+rows recorded from then on.
+
+Details: nulls fail (an unverifiable row is not a passing row). Slots left empty
+by the filter are dropped rather than rendered as a bare header. The empty state
+distinguishes "the gate hid all N" from "nothing was recorded", or the toggle
+reads as a broken fetch. `flippable` follows the visible cards, so "Flip all"
+does not fetch history for hidden ones. Card subtitle and the Scorecard pick-count
+line both say when the gate is on. Off by default - the default view stays the
+honest record of what the recorder actually filed.
+
+
+## 2026-09-04 - GEX Change Top live triggers: a crossing is now an edge, not a membership test (`server-v2/gex-change-top-recorder.js`)
+
+32 live triggers fired in 46 minutes on 2026-09-04 - 80% of `LIVE_MAX_PER_DAY`
+spent in 12% of the session, after which the scanner is dark for the rest of the
+day. Two structural causes, both fixed here. Thresholds, the leaderboard capture,
+scoring, probing and every read endpoint are untouched.
+
+**"New" meant "not captured yet today", which is a membership test.** A crossing
+is an edge, and an edge needs the previous scan's qualifying set to be an edge
+against. Nothing qualifies at all until ~09:45 (the 15-minute lookback has no
+history before then), so on the first scan that produces candidates the entire
+morning's backlog is trivially "new" and fires as if each name had just crossed.
+`runLive()` now keeps `_livePrevQualified` and fires only on
+`qualified now AND NOT qualified on the previous scan AND NOT seen today`. That
+set is null on the first scan of a session and after a restart, and a null
+previous set can only SEED - it never fires, because with nothing to compare
+against every candidate looks like an edge, which is the bug. It is deliberately
+NOT rebuilt from the DB in `loadLiveState()`: the DB knows what was captured, not
+what was qualifying one minute ago.
+
+The set is built from a wider query than the probe list - new
+`GEX_CHANGE_TOP_LIVE_SCAN_LIMIT` (default 100, vs the leaderboard's 20). At the
+narrow limit a strike that merely slid out of the top 20 on score and back in
+would read as not-qualified then qualified, i.e. a fabricated crossing.
+`DISTINCT ON (symbol)` already caps the result at one row per ticker, so 100 is
+effectively the whole qualifying set.
+
+**No triggers before 10:00 ET** (`GEX_CHANGE_TOP_LIVE_START`, default `10:00`;
+set `09:30` to disable). Two independent reasons, both structural: the 15-minute
+change window has no history to compare against until ~09:45, and `pct_open` is a
+ratio against the OPEN, so at 09:47 its denominator is a handful of contracts and
+`|% vs open| >= 30` is arithmetic noise rather than a filter.
+
+**The scan runs during warm-up and after the daily cap.** Both of those suppress
+firing, not observation - skipping the query would let `_livePrevQualified` go
+stale, and a stale previous set turns the next eligible scan back into a backlog
+flush. Cost is one query per `LIVE_SEC`. The daily-cap check moved below the scan
+for the same reason.
+
+Write-error rollback also removes the failed strikes from `_livePrevQualified`,
+not just `_liveSeen` - otherwise the retry would see them as "was qualifying last
+scan" and never fire again.
+
+**Known, not fixed here.** The live path still writes `rank = i + 1` where `i` is
+position within a batch of at most `LIVE_MAX_PER_SCAN`, so every live pick is
+rank 1-3 by construction and ranks 4+ are purely leaderboard captures -
+`BUCKETS.rank` in the Pick Study is measuring provenance, not ordering. And there
+is no `live` key in `BUCKETS`, so the study cannot separate the two sources at
+all; while triggers clustered pre-10:00, `slot` and provenance were nearly
+collinear, and any `slot=pre-10:00` term `fitRule()` armed would really have been
+"live triggers are bad". This change should decouple them going forward, but the
+existing labelled rows carry the confound. Also unchanged: the file header claims
+very strong is `|dGEX| >= $500k` while `MIN_DOLLAR` defaults to `200_000`.
+
+
+## 2026-09-04 - GEX Candles: folded toolbar, CORE/CW/PW on the pane, matching card sizes (`cbedge-v3/src/board/gexCandles/*`, `cbedge-v3/src/design/primitives/{Controls,Board}.tsx`, `cbedge-v3/src/board/catalog.tsx`)
+
+Three changes to the GEX Candles card and the board under it.
+
+**The header folds.** Spelled out it read SPX|ES · 0DTE · 1m|5m|15m|30m|1h ·
+RTH|ETH · Layers - eleven buttons, ten of them saying what the chart is NOT set
+to, and wider than the card the moment two candle cards sit side by side. New
+`SegMenu` primitive: the same SegGroup, folded to its current value, with the
+full group one click under it. Tape, interval and session use it on the desktop
+header; the phone sheet keeps the groups open (there is room, and a second tap
+buys nothing), and the phone header keeps the SPX/ES switch open because it is
+the only control up there.
+
+**CORE / CW / PW on the chart.** New `levelLabels` setting (Layers > "Levels",
+on by default) draws a dashed line at each named level with its name at the left
+edge, from `railModel.levels` - the same three strikes the rail tags, off the
+same newest column, already basis-shifted on ES. Drawn above the bubble
+early-return in `chart.ts`, so it survives the bubbles being off; `setLevels()`
+bumps the frame version so a toggle repaints. The GEX history request now stays
+alive for this layer too, so bubbles-off + rail-off + levels-on is not silently
+blank.
+
+**Two cards side by side can be made the same size.** Resizing now SNAPS onto a
+neighbour's exact width or height within one grid unit (`design/primitives/
+Board.tsx`) - neighbours only, meaning cards whose row band overlaps, so a busy
+board does not go sticky. And a second copy of a card is created at the size of
+the newest existing copy rather than at the catalog default, so a pair starts
+matched instead of needing to be dragged into a match.
+
+
+## 2026-09-04 - Ticker switch: the chart kept the OLD symbol's price for ~30s (`cbedge-v3/src/board/gexCandles/chart.ts`)
+
+Switching the board ticker (SPX -> SOXL) left GEX Candles drawing the SPX price:
+the pane autoscaled 0-9000, every real candle flattened onto the floor, and the
+last-value label read the old symbol until the next candle poll ~30s later.
+
+Cause: `synth` - the forming bar the chart INVENTS from the live price between
+polls - survived the symbol change. `setBars` hands the invented bar back when
+it sits exactly one interval ahead of the newest closed bar, which is precisely
+where the new symbol's tape lands for a moment after a switch. So an SPX-priced
+candle was appended to the SOXL series, and it stayed until a poll advanced
+`live` past it.
+
+Fix: drop `synth` whenever `setBars` is called with `reframe` set. That flag
+already means the card's CONTEXT changed - new symbol, interval, session or
+replay - so an invented bar from the previous context has nothing to say. A
+plain poll is unaffected and still hands the forming bar back, which is the
+whole reason it is held separately from `live`.
+
+
+## 2026-09-04 - CORE migration brighter + clipboard-first screenshot; rail cards draw the real chart
+
+### `public/core-migration.html` - the plot is lit now
+
+The white price line and the gold CORE bars were reading as grey and ochre. Both
+were drawn under full opacity over a near-black plate, and at 63 sessions across
+a session's bar is 3px wide - a few pixels of anything below 100% is grey.
+
+- Price line: full opacity (was 0.8), 1.35px dense / 1.7px sparse (was 1 / 1.3),
+  over a soft 3.2x-wide halo of itself at 0.13 so a thin line does not vanish
+  into the gridlines.
+- CORE bars: full opacity (was 0.95), 3.4px (was 3.2), over an 8px halo at 0.16.
+  Non-CORE bars 0.92 (was 0.85). The hand-off verticals between two stays are
+  0.55 for CORE / 0.34 for the walls (was a flat 0.28), so the level's path is
+  followable without shouting over the shelves.
+- No model change: same runs, same geometry, one extra halo `<line>` per heavy
+  run.
+
+### `public/core-migration.html` - the Screenshot button actually copies
+
+It always tried the clipboard and always downloaded, and the copy half kept
+losing silently. Cause: `navigator.clipboard.write` only runs while the click's
+user activation is still live, and the old code awaited an SVG serialize, an
+`<img>` decode, a canvas draw and a `toBlob` first - by then Chrome had dropped
+the activation and the `catch {}` swallowed it.
+
+- The canvas work is now one promise and the PROMISE is handed to
+  `ClipboardItem` (which accepts one), so the write starts inside the gesture
+  and finishes when the blob does.
+- Clipboard is the ACTION; the file download is now the FALLBACK, only when the
+  clipboard is refused (Firefox, insecure origin, background tab).
+- The button reports what happened - `checkmark copied` / `saved (clipboard
+  blocked)` / `failed` - instead of claiming both. The blob promise cannot
+  reject, so the button always comes back from "capturing".
+
+### Rail cards now draw the actual chart, five to a row
+
+- `cbedge-v3/src/pages/levelLog/WallMigrationChart.tsx` - new `compact` prop:
+  plot only, no head, no legend, no clock rail. A prop rather than a second
+  mini-chart module on purpose - the forward fill, the CORE-sign role rule and
+  the y range are what must never drift between the big chart and the small one.
+  Vertical padding is now `min(8, height * 0.08)`, so a 62px plot does not spend
+  a quarter of itself on margin.
+- `cbedge-v3/src/pages/levelLog/railStore.ts` - new `useRailDays()`: each rail
+  symbol's change-only level log for the date, fetched in waves of 6 and painted
+  per wave so the first row of cards is not held back by the last. NO tape read
+  (that would double the request count for a 62px plot), so `price` is empty and
+  the chart falls back to the log's own spot captures - its documented behaviour
+  for a day whose tape did not arrive, not a special case.
+- `cbedge-v3/src/pages/levelLog/TickerRail.tsx` - layout is a GRID, 5 columns on
+  a monitor (3 on md, 2 below) instead of a horizontal scroller: a chart you have
+  to scroll sideways to reach is a chart nobody looks at. Each card is head
+  (symbol, spot, change count) / mini chart / levels row with the session delta.
+  `+ Add` and `Reset` moved up into the rail header, since the grid has no end to
+  hang a control off.
+
+No proxy code changed. `/proxy/walls` is only read - the same per-symbol log the
+Level Log card has always requested, now once per card.
+
+
+## 2026-09-04 - GEX Candles copies use the app toolbar's ticker picker (`cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx`)
+
+The picker added to GEX Candles copies was the card's own `SymbolPicker`, which
+keeps its own favourites under v2's `es-candles-fav-symbols-v1` key - a second
+star list for one habit, and a different universe from the toolbar's.
+
+Swapped it for `TickerPicker`, the same primitive the app toolbar mounts:
+
+- Same scanner universe, fetched on first open.
+- Same stars. Favourites are the one browser-wide `cb-v3-fav-tickers` list, so a
+  ticker starred in the toolbar is already on top inside the card and vice versa.
+- `allowCustom={PAGE_TICKER_RE}`, as the toolbar passes, so a valid symbol off
+  the server watchlist is still offered as a "USE" row.
+- Selection still runs through `normalizeSymbol` (ES -> SPX, NQ -> NDX) and still
+  clears the copy's pinned expiry.
+
+`SymbolPicker` is left in `gexCandles/controls.tsx`, now unused by this card.
+
+
+## 2026-09-04 - AGENTS.md: v3 is the default edit target, v2 is ask-first (`AGENTS.md`)
+
+AGENTS.md never mentioned `cbedge-v3/`, so a request that matched a v2 filename
+sent the edit to v2 - which is how the gauge rail change landed in
+`components/dashboard/HomeGaugeRail.tsx` and never showed on the board.
+
+Added a "DEFAULT TARGET: v3" section at the top: assume every dashboard request
+means `cbedge-v3/` unless stated otherwise, do not touch `app/`, `app-vite/` or
+`components/dashboard/` for a dashboard change without asking first, plus a
+lookalike table (gauge rail, candles, options chain, scanner, flow, phone build)
+mapping each v2 file to its v3 counterpart.
+
+
 ## 2026-09-04 - GEX Candles copies get their own ticker (`cbedge-v3/src/board/...`)
 
 Adding a second GEX Candles card drew the same chart twice: every copy followed

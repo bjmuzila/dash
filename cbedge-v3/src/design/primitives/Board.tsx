@@ -98,6 +98,46 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v))
 }
 
+// ── MATCHING A NEIGHBOUR'S SIZE ──────────────────────────────────────────────
+//
+// "Two GEX Candles side by side should be the same size, and I can't make them
+// the same size with edit layout." Both halves of that were true. A resize is a
+// pointer drag quantised to whole grid units, so landing on a neighbour's exact
+// w AND h means getting two independent rounded numbers right by eye, on a
+// control with no readout and no ruler — at which point one card is 5 rows and
+// the other 6 and the pair looks broken for a reason you cannot see.
+//
+// So the drag SNAPS to the sizes its neighbours already are. Within one grid
+// unit of a neighbour's width or height, it takes that exact value. Equal is
+// the thing being aimed at, so equal is what the last unit of travel does.
+//
+// NEIGHBOURS, not every card on the board. A card two rows down is not what
+// this card is being lined up with, and snapping to it would make every size on
+// a busy board sticky for no reason. A neighbour is a card whose ROW BAND
+// overlaps this one's — the cards actually sitting beside it, which is the
+// arrangement the complaint is about.
+/** How near, in grid units, a drag has to come before it snaps onto a match. */
+const MATCH_SNAP = 1
+
+function snapToMatch(v: number, targets: number[], lo: number, hi: number): number {
+  let best = v
+  let bestD = MATCH_SNAP + 1
+  for (const t of targets) {
+    if (t < lo || t > hi) continue
+    const d = Math.abs(t - v)
+    if (d <= MATCH_SNAP && d < bestD) {
+      bestD = d
+      best = t
+    }
+  }
+  return best
+}
+
+/** Cards whose row band overlaps `it` — the ones sitting beside it. */
+function rowNeighbours(items: BoardItem[], it: BoardItem): BoardItem[] {
+  return items.filter((o) => o.id !== it.id && o.y < it.y + it.h && it.y < o.y + o.h)
+}
+
 export function Board({
   layout,
   onLayoutChange,
@@ -216,8 +256,22 @@ export function Board({
         if (g.kind === 'move') {
           return { ...it, x: clamp(g.origX + dxCols, 0, cols - it.w), y: Math.max(0, g.origY + dyRows) }
         }
-        const w = clamp(g.origW + dxCols, minW, cols - it.x)
-        const h = Math.max(minH, g.origH + dyRows)
+        // Snap onto a neighbour's exact size in the last grid unit of travel —
+        // see MATCH_SNAP. The raw drag value is computed first and clamped
+        // first, so a snap can never carry the card past a bound.
+        const peers = rowNeighbours(base, it)
+        const w = snapToMatch(
+          clamp(g.origW + dxCols, minW, cols - it.x),
+          peers.map((p) => p.w),
+          minW,
+          cols - it.x,
+        )
+        const h = snapToMatch(
+          Math.max(minH, g.origH + dyRows),
+          peers.map((p) => p.h),
+          minH,
+          Number.POSITIVE_INFINITY,
+        )
         return { ...it, w, h }
       })
       setDraft(compactBoard(next, g.id))

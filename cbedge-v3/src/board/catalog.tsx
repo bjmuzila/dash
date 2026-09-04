@@ -350,7 +350,19 @@ export function newInstanceId(cardId: string, takenIds: Iterable<string>): strin
  */
 export function placeNewCard(cardId: string, existing: BoardItem[]): BoardItem {
   const def = CARD_BY_ID.get(cardId)
-  const { w, h } = def?.defaultSize ?? { w: 4, h: 6 }
+  // ── A SECOND COPY IS THE SIZE OF THE FIRST ─────────────────────────────────
+  // The catalog's `defaultSize` is the right answer for the first one and the
+  // wrong one for every copy after it: the card on the board has been resized
+  // to fit this user's arrangement, and a second GEX Candles that arrives at the
+  // factory size has to be dragged back to match before the pair can be read as
+  // a pair. Two of the same card are almost always wanted side by side and the
+  // same size — see the snap in design/primitives/Board.tsx, which is the other
+  // half of this — so the newest existing copy's size is the better default.
+  //
+  // The LAST one placed, not the first: if there are already three and they were
+  // resized over time, the most recent is the size currently being worked to.
+  const sibling = [...existing].reverse().find((i) => cardTypeOf(i.id) === cardId)
+  const { w, h } = sibling ?? def?.defaultSize ?? { w: 4, h: 6 }
   const y = existing.reduce((m, i) => Math.max(m, i.y + i.h), 0)
   return { id: newInstanceId(cardId, existing.map((i) => i.id)), x: 0, y, w, h }
 }

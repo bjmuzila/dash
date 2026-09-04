@@ -85,7 +85,7 @@
       <button class="chip on" id="coreOnly" style="--c: var(--core)">Core only</button>
       <button class="chip" id="wallsOn" style="--c: var(--orange)">+ Walls</button>
       <span style="margin-left:auto; display:flex; gap:8px">
-        <button class="chip" id="png" title="Copy a screenshot of the chart to the clipboard (and download it)">📷 Screenshot</button>
+        <button class="chip" id="png" title="Copy a screenshot of the chart to the clipboard — saves a file only if the clipboard is blocked">📷 Screenshot</button>
         <button class="chip" id="reload">↻ Reload</button>
       </span>
     </div>
@@ -327,16 +327,29 @@
      * over the shelves. `prev` carries the previous run of the same series on
      * the same day so the join is drawn once, at the slot the level moved.
      */
-    const BAR_W = { heavy: 3.2, light: 2.4 };
+    const BAR_W = { heavy: 3.4, light: 2.4 };
+    /**
+     * BRIGHTNESS. The bars used to top out at 0.95 alpha over a near-black plate
+     * and read as dim ochre rather than gold — at 63 sessions a CORE bar is a few
+     * pixels wide, and a few pixels of anything below full opacity is grey. So
+     * the CORE now draws at FULL opacity over a soft wide halo of itself, which
+     * is what makes a 3px bar read as lit rather than merely present. The halo is
+     * one extra <line> per run, same geometry, no model change.
+     */
+    const HALO = { w: 8, alpha: 0.16 };
     const band = (i, run, color, heavy, prev) => {
       const L = segs[i].L;
       const x1 = x(i, run.a), x2 = run.b + 1 <= L ? x(i, run.b + 1) : x(i, L) + (segW / L) * 0.6;
       if (prev && prev.v !== run.v) {
-        svg.appendChild(el('line', { x1, x2: x1, y1: y(prev.v), y2: y(run.v), stroke: color, 'stroke-width': 1,
-          'stroke-opacity': 0.28, 'vector-effect': 'non-scaling-stroke' }));
+        svg.appendChild(el('line', { x1, x2: x1, y1: y(prev.v), y2: y(run.v), stroke: color, 'stroke-width': heavy ? 1.3 : 1,
+          'stroke-opacity': heavy ? 0.55 : 0.34, 'vector-effect': 'non-scaling-stroke' }));
+      }
+      if (heavy) {
+        svg.appendChild(el('line', { x1, x2, y1: y(run.v), y2: y(run.v), stroke: color, 'stroke-width': HALO.w,
+          'stroke-opacity': HALO.alpha, 'stroke-linecap': 'butt', 'vector-effect': 'non-scaling-stroke' }));
       }
       svg.appendChild(el('line', { x1, x2, y1: y(run.v), y2: y(run.v), stroke: color, 'stroke-width': heavy ? BAR_W.heavy : BAR_W.light,
-        'stroke-opacity': heavy ? 0.95 : 0.85, 'stroke-linecap': 'butt', 'vector-effect': 'non-scaling-stroke' }));
+        'stroke-opacity': heavy ? 1 : 0.92, 'stroke-linecap': 'butt', 'vector-effect': 'non-scaling-stroke' }));
     };
     const roled = st.walls && segs.some((s) => s.roles);
     if (roled && !off.has('cb')) {
@@ -352,7 +365,17 @@
     } else {
       for (const lt of LEVELS) { if (off.has(lt)) continue; for (let i = 0; i < N; i++) runsOf(segs[i].series[lt], segs[i].L).forEach((run, k, arr) => band(i, run, HEX[lt], lt === 'cb', k ? arr[k - 1] : null)); }
     }
-    if (!off.has('spot')) for (let i = 0; i < N; i++) { const d = segs[i].spotPts.map((p) => `${x(i, p.s)},${y(p.v)}`).join(' '); if (d) poly(d, HEX.spot, segs[i].dense ? 1 : 1.3, { 'stroke-opacity': 0.8 }); }
+    // THE PRICE LINE, LIT. A 1px white line at 0.8 alpha over #05060A is grey,
+    // and grey is what the whole chart is read against. Full opacity, a hair
+    // thicker, over its own soft halo — the halo is what stops a thin line
+    // disappearing into the gridlines at 63 sessions across.
+    if (!off.has('spot')) for (let i = 0; i < N; i++) {
+      const d = segs[i].spotPts.map((p) => `${x(i, p.s)},${y(p.v)}`).join(' ');
+      if (!d) continue;
+      const w = segs[i].dense ? 1.35 : 1.7;
+      poly(d, HEX.spot, w * 3.2, { 'stroke-opacity': 0.13 });
+      poly(d, HEX.spot, w, { 'stroke-opacity': 1 });
+    }
     plot.appendChild(svg);
     // grid labels
     for (const g of gridLabels) { const s = document.createElement('span'); s.className = 'gl'; s.textContent = fmt(g.v);
@@ -395,11 +418,22 @@
 
   // ── Screenshot — the chart with its head, legend and date rail, composed on
   //    a canvas (no html2canvas: the site CSP allows no third-party scripts).
-  //    Copied to the clipboard AND downloaded, so it can go straight into a
-  //    Discord/X post or be kept. ────────────────────────────────────────────
+  //
+  //    THE CLIPBOARD IS THE POINT, the download is the fallback. It used to do
+  //    both unconditionally, and the copy half kept losing: `navigator.clipboard
+  //    .write` is only allowed while the click's user activation is still live,
+  //    and by the time the SVG had been serialized, decoded into an <img>, drawn
+  //    and toBlob'd, several awaits had gone by and Chrome had dropped it. So the
+  //    write is now handed the PROMISE of the blob — ClipboardItem accepts one,
+  //    and passing it starts the write inside the gesture while the canvas work
+  //    finishes behind it. Only if that throws (Firefox, an insecure origin, a
+  //    background tab) does it fall back to saving a file, and the button says
+  //    which of the two actually happened rather than claiming both.
+  // ─────────────────────────────────────────────────────────────────────────
   $('png').onclick = async () => {
     const svg = $('plot').querySelector('svg'); if (!svg) return;
     const btn = $('png'); const was = btn.textContent; btn.textContent = '… capturing';
+    const blobOf = (async () => {
     const S = 2, rect = svg.getBoundingClientRect(); const W = Math.round(rect.width * S), Hh = Math.round(rect.height * S);
     const clone = svg.cloneNode(true); clone.setAttribute('width', W); clone.setAttribute('height', Hh);
     const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }));
@@ -435,12 +469,29 @@
     }
     g.textAlign = 'left';
     URL.revokeObjectURL(url);
+    return await new Promise((ok) => c.toBlob(ok, 'image/png'));
+    // Never rejects: the clipboard write below is HANDED this promise, and an
+    // unhandled rejection inside a ClipboardItem is a console error nobody sees
+    // plus a button that never comes back from "… capturing".
+    })().catch(() => null);
+
     const name = `${SYMBOL().toLowerCase()}-core-migration-${$('end').value}-${st.range}s.png`;
-    const blob = await new Promise((ok) => c.toBlob(ok, 'image/png'));
     let copied = false;
-    try { if (navigator.clipboard && window.ClipboardItem) { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); copied = true; } } catch {}
-    const a = document.createElement('a'); a.download = name; a.href = URL.createObjectURL(blob); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    btn.textContent = copied ? '✓ copied + saved' : '✓ saved'; setTimeout(() => { btn.textContent = was; }, 1800);
+    try {
+      if (navigator.clipboard && window.ClipboardItem) {
+        // The PROMISE, not the resolved blob — that is what keeps this inside
+        // the click's user activation. See the note above.
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blobOf })]);
+        copied = true;
+      }
+    } catch { copied = false; }
+    const blob = await blobOf;
+    if (!copied && blob) {
+      const a = document.createElement('a'); a.download = name; a.href = URL.createObjectURL(blob); a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
+    btn.textContent = copied ? '✓ copied' : blob ? '✓ saved (clipboard blocked)' : '✕ failed';
+    setTimeout(() => { btn.textContent = was; }, 1800);
   };
 
   // ── wiring ───────────────────────────────────────────────────────────────

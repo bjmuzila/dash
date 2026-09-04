@@ -25,7 +25,7 @@ import {
 // What is left is the pieces only this card uses.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export { SegGroup, Chip, Popover, PanelSection } from '@/design/primitives/Controls'
+export { SegGroup, SegMenu, Chip, Popover, PanelSection } from '@/design/primitives/Controls'
 
 export function Slider({
   label,

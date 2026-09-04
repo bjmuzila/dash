@@ -4,6 +4,29 @@ This repo has **three** UIs layered on top of each other. Two are dead. Editing
 the wrong one is the #1 recurring mistake here: the change "works" in the file
 but nothing shows on the live site. Read the map below first.
 
+## DEFAULT TARGET: v3 (`cbedge-v3/`)
+
+**Assume every dashboard request means v3 unless it says otherwise.** The v3 SPA
+in `cbedge-v3/` is where the work is happening — the board (`src/board/`), its
+cards, the pages under `src/pages/` and the phone build under `src/mobile/`.
+
+**v2 — the `app/` + `app-vite/` dashboard described in the next section — is
+ASK-FIRST.** Do not edit anything under `app/`, `app-vite/` or
+`components/dashboard/` for a dashboard change without asking Brandon first. Both
+versions still run, and many surfaces exist in both under nearly the same name,
+so a request that matches a v2 filename is not evidence it meant v2:
+
+| Looks like | v2 (ask first) | v3 (default) |
+|---|---|---|
+| Gauge rail | `components/dashboard/HomeGaugeRail.tsx` | `cbedge-v3/src/board/gaugeRail/GaugeRailCard.tsx` |
+| Candles chart | `components/dashboard/es-candles/EsChartCard.tsx` | `cbedge-v3/src/board/gexCandles/GexCandlesCard.tsx` |
+| Options chain | `app/options-chain/page.tsx` | `cbedge-v3/src/pages/OptionsChain.tsx` |
+| Scanner | `app/scanner/page.tsx` | `cbedge-v3/src/pages/Scanner.tsx` |
+| Flow | `app/flow/page.tsx` | `cbedge-v3/src/pages/Flow.tsx` |
+| Phone build | `components/mobile/` (`/app/m/*`) | `cbedge-v3/src/mobile/` (`/v3/m/*`) |
+
+If a screenshot or description could be either, the v3 file is the one to open.
+
 ## The live site (edit THIS)
 
 - **Customer dashboard = React pages at `app/<name>/page.tsx`.** They are

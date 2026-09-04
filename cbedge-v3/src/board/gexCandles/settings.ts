@@ -94,6 +94,18 @@ export interface ChartSettings {
   /** The strike ladder down the right-hand side, pinned to the price axis. */
   railOn: boolean
   /**
+   * CORE / CW / PW tags ON THE CHART — a dashed line at each named level with
+   * its name at the left edge, drawn from the same rail model the ladder is
+   * built from, so the three cannot disagree about where a level is.
+   *
+   * Separate from `railOn` deliberately. The rail is the WHOLE ladder in a
+   * column beside the chart; this is the three levels that matter, on the price
+   * pane where the candles are. Wanting the second without the first is the
+   * common case on a narrow card — the rail costs 96px of chart width and these
+   * cost nothing.
+   */
+  levelLabels: boolean
+  /**
    * Which expiry the bubbles draw. '' follows the NEAREST, which is the
    * default and the eventual permanent behaviour; a value pins it, which is
    * what the toolbar dropdown is for.
@@ -145,6 +157,10 @@ export const DEFAULT_SETTINGS: ChartSettings = {
   // On by default: the rail is the numbers behind the bubbles, and a bubble
   // layer with no way to read the figure it is drawn from is half a feature.
   railOn: true,
+  // On by default, and cheap: three tags on the pane are the fastest read of
+  // where the session's magnet and its two walls are, and unlike the rail they
+  // take no width from the chart.
+  levelLabels: true,
   expiry: '',
   bubbleBucket: BUBBLE_BUCKET_DEFAULT,
   bubbleScale: 1,
@@ -572,6 +588,7 @@ function coerce(raw: unknown): ChartSettings {
     gexMetric: p.gexMetric === 'vol' ? 'vol' : 'voloi',
     countdown: p.countdown !== false,
     railOn: p.railOn !== false,
+    levelLabels: p.levelLabels !== false,
     expiry: typeof p.expiry === 'string' ? p.expiry : '',
     bubbleBucket: isBubbleBucket(p.bubbleBucket) ? p.bubbleBucket : DEFAULT_SETTINGS.bubbleBucket,
     bubbleScale: clampScale(p.bubbleScale),

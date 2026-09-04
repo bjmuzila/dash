@@ -8,9 +8,9 @@
 // Colours are read out of tokens.css at mount time with getComputedStyle. The
 // "no colour literals in src/" rule applies here as much as anywhere; it is
 // just enforced at runtime instead of by Tailwind, because a charting library
-// takes colour STRINGS, not classNames. Fallbacks in cssVar() exist only for
-// the case where the stylesheet has not applied yet — they are not a second
-// palette and must never diverge from tokens.css.
+// takes colour STRINGS, not classNames. cssVar() carries NO literal fallback —
+// tokens.css is the only palette, and a second one written inline here is the
+// drift the rule exists to stop. See the note on cssVar below.
 //
 // NO BASIS CONVERSION. Every symbol v3 charts is charted against its own
 // strikes, so a GEX bubble is drawn at the strike price directly. The whole
@@ -24,9 +24,29 @@ import { etDateKey, etMinutesOfDay, RTH_OPEN_MIN, type Bar } from './candles'
 import { drawBubbles, type BubbleSnapshot, type BubblePalette } from './bubbles'
 import { BUBBLES } from './settings'
 
-function cssVar(el: HTMLElement, name: string, fallback: string): string {
+/**
+ * Read one design token off the mounted element.
+ *
+ * NO LITERAL FALLBACK, deliberately. Every token read here is declared on
+ * `:root` in src/design/tokens.css, so a hex second argument could only ever
+ * fire if the stylesheet failed to load — at which point the whole app is
+ * unstyled and a correct GEX-bubble blue is not the problem. What the fallbacks
+ * DID do is duplicate the palette in a second place that nothing keeps in sync:
+ * a theme edit moved the token and left thirteen stale hexes behind it, which is
+ * exactly the drift Non-negotiable #1 exists to prevent (cbedge-v3/AGENTS.md).
+ *
+ * An empty return is therefore a real bug, not a supported mode, so it warns.
+ * Canvas ignores an invalid `fillStyle`/`strokeStyle` assignment and
+ * lightweight-charts falls back to its own default, so nothing throws while the
+ * warning is on screen. `hexToRgb` below keeps its numeric fallback because the
+ * bubble layer needs three numbers to build a per-mark alpha with and cannot use
+ * an empty string at all — an [r,g,b] triple is not a colour literal, it is the
+ * arithmetic the canvas API takes.
+ */
+function cssVar(el: HTMLElement, name: string): string {
   const v = getComputedStyle(el).getPropertyValue(name).trim()
-  return v || fallback
+  if (!v) console.warn(`[gexCandles] design token ${name} resolved empty — declare it in src/design/tokens.css`)
+  return v
 }
 
 /** '#rrggbb' → [r,g,b]. Canvas needs a per-mark alpha, which a token cannot carry. */
@@ -35,6 +55,26 @@ function hexToRgb(hex: string, fallback: [number, number, number]): [number, num
   if (!digits) return fallback
   const n = parseInt(digits, 16)
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+/**
+ * The three named levels, ON the price pane.
+ *
+ * Prices in the CHART's own space — the caller shifts them through the ES−SPX
+ * basis first when the tape is futures, exactly as it does for the bubbles, so
+ * this layer never has to know which tape it is drawing over.
+ *
+ * null for a level the ladder does not currently have one of (no strike above
+ * spot with positive gamma, an empty history). A missing level draws nothing;
+ * it never draws at 0.
+ */
+export interface ChartLevels {
+  /** Core — the biggest |GEX| strike on the ladder. Tagged CORE. */
+  cb: number | null
+  /** Call wall — biggest +GEX above spot, core excluded. */
+  cw: number | null
+  /** Put wall — most −GEX below spot, core excluded. */
+  pw: number | null
 }
 
 export interface ChartDrawOpts {
@@ -107,6 +147,15 @@ export interface EsChartHandle {
   setIntervalMs: (ms: number) => void
   setSnapshots: (snaps: BubbleSnapshot[]) => void
   setDrawOpts: (opts: ChartDrawOpts) => void
+  /**
+   * The CORE / CW / PW tags on the pane. `null` clears the layer.
+   *
+   * Drawn ABOVE the bubble early-return, so it survives the bubbles being
+   * switched off — the levels are a different question from the ladder's
+   * history, and a card with bubbles off is exactly the card that still wants
+   * to know where the walls are.
+   */
+  setLevels: (levels: ChartLevels | null) => void
   /** Register (or clear, with null) the per-frame price mapping for the rail. */
   setRailSink: (sink: RailSink | null) => void
   /** Re-frame on the newest bar, keeping the user's zoom. */
@@ -139,23 +188,35 @@ export interface MountOpts {
 export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts): Promise<EsChartHandle> {
   const { createChart, CandlestickSeries, ColorType, CrosshairMode } = await import('lightweight-charts')
 
-  const line = cssVar(container, '--color-line', '#23272e')
-  const muted = cssVar(container, '--color-muted', '#ffffff')
-  const up = cssVar(container, '--color-candle-up', '#30d158')
-  const down = cssVar(container, '--color-candle-down', '#ff5b5b')
+  const line = cssVar(container, '--color-line')
+  const muted = cssVar(container, '--color-muted')
+  const up = cssVar(container, '--color-candle-up')
+  const down = cssVar(container, '--color-candle-down')
   // `pos` / `neg` are the SATURATED sign colours: the PEERS' fill, and the
   // leader's ring and glow. `lead` / `leadHi` are the GOLD the bucket's leader
   // fills with — the same hue as the CB tag and the GEX bars, because gold
   // means "the wall" on this card. See BubblePalette in bubbles.ts.
   const palette: BubblePalette = {
-    pos: hexToRgb(cssVar(container, '--color-gex-pos', '#29b6f6'), [41, 182, 246]),
-    neg: hexToRgb(cssVar(container, '--color-gex-neg', '#ff4757'), [255, 71, 87]),
-    lead: hexToRgb(cssVar(container, '--color-gex-lead', '#ffb300'), [255, 179, 0]),
-    leadHi: hexToRgb(cssVar(container, '--color-gex-lead-hi', '#ffd76a'), [255, 215, 106]),
+    pos: hexToRgb(cssVar(container, '--color-gex-pos'), [41, 182, 246]),
+    neg: hexToRgb(cssVar(container, '--color-gex-neg'), [255, 71, 87]),
+    lead: hexToRgb(cssVar(container, '--color-gex-lead'), [255, 179, 0]),
+    leadHi: hexToRgb(cssVar(container, '--color-gex-lead-hi'), [255, 215, 106]),
     // The gradient's innermost stop. Read from a token rather than written as a
     // literal white so a light theme moves it with everything else.
-    highlight: hexToRgb(cssVar(container, '--color-fg', muted), [255, 255, 255]),
+    highlight: hexToRgb(cssVar(container, '--color-fg'), [255, 255, 255]),
   }
+
+  // The three level tokens, read once with everything else. The SAME variables
+  // the GEX rail's tags and the Multi Greek badges use — a level is one colour
+  // across the app or it is a colour scheme nobody can learn.
+  const levelInk: Record<keyof ChartLevels, string> = {
+    cb: cssVar(container, '--color-level-cb'),
+    cw: cssVar(container, '--color-level-cw'),
+    pw: cssVar(container, '--color-level-pw'),
+  }
+  // Ink for the text INSIDE a tag: the page ground, so the tag reads as a
+  // filled label rather than as coloured text on a chart.
+  const appInk = cssVar(container, '--color-app')
 
   const chart: IChartApi = createChart(container, {
     layout: {
@@ -244,6 +305,8 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
   let barCount = 0
   let drawOpts: ChartDrawOpts = { on: true, bucketMin: null, bubbleScale: 1 }
   let railSink: RailSink | null = null
+  /** CORE / CW / PW on the pane. null = the layer is off or has nothing yet. */
+  let levels: ChartLevels | null = null
   let raf = 0
   // The forming bar, kept here so a live tick can extend it without going back
   // through React.
@@ -808,6 +871,60 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     if (!ctx) return
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
+
+    // ── CORE / CW / PW, on the pane ───────────────────────────────────────────
+    // ABOVE the bubble early-return, for the same reason the rail sink is: this
+    // is its own layer with its own switch, and the card that has turned the
+    // bubbles off is exactly the one that still wants the three levels.
+    //
+    // A dashed hairline across the plot with the name at the left edge. Left,
+    // not right: the price scale is on the right and the rail after it, so a
+    // tag over there would sit on the axis labels and beside a rail row saying
+    // the same thing. The line is dashed and thin on purpose — it has to be
+    // findable without competing with a candle body for the eye.
+    if (levels) {
+      ctx.save()
+      ctx.font = '700 9px ui-sans-serif, system-ui, sans-serif'
+      ctx.textBaseline = 'middle'
+      // The plot only. Below plotH is the time axis, where a level line would
+      // be drawing across the clock.
+      ctx.beginPath()
+      ctx.rect(0, 0, plotW, plotH)
+      ctx.clip()
+      for (const [key, label] of [
+        ['cb', 'CORE'],
+        ['cw', 'CW'],
+        ['pw', 'PW'],
+      ] as Array<[keyof ChartLevels, string]>) {
+        const price = levels[key]
+        if (price == null || !(price > 0)) continue
+        const yRaw = yOfPrice(price)
+        if (yRaw == null) continue
+        // Half-pixel, so a 1px line is one crisp row rather than two grey ones.
+        const y = Math.round(yRaw) + 0.5
+        if (y < 0 || y > plotH) continue
+        const ink = levelInk[key]
+
+        ctx.strokeStyle = ink
+        ctx.globalAlpha = 0.55
+        ctx.lineWidth = 1
+        ctx.setLineDash([3, 4])
+        ctx.beginPath()
+        ctx.moveTo(0, y)
+        ctx.lineTo(plotW, y)
+        ctx.stroke()
+
+        ctx.setLineDash([])
+        ctx.globalAlpha = 1
+        const tw = ctx.measureText(label).width
+        ctx.fillStyle = ink
+        ctx.fillRect(2, y - 6, tw + 6, 12)
+        ctx.fillStyle = appInk
+        ctx.fillText(label, 5, y + 0.5)
+      }
+      ctx.restore()
+    }
+
     if (!drawOpts.on || !snaps.length) {
       // Off, or nothing loaded yet. Neither is "out of range" — the note exists
       // to explain an EMPTY layer that has data, not a layer that is switched
@@ -897,6 +1014,25 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
       // bars through it would draw one ticker's candles under another ticker's
       // heading, which is worse than a blank pane for a few hundred ms.
       if (!bars.length && barCount > 0 && !reframe) return
+
+      // ── A REFRAME MEANS THE PREVIOUS CONTEXT IS GONE ───────────────────────
+      // `synth` is a forming bar this chart INVENTED from the live price of the
+      // symbol that was on screen a moment ago. It has to die with that symbol.
+      //
+      // Carried across a switch it gets handed straight back below: the new
+      // tape's newest CLOSED bar can easily sit exactly one interval behind the
+      // invented one (the ETF route publishes a symbol's bar a beat later than
+      // the socket's SPX print), which is precisely the `synth.openMs ===
+      // live.openMs + intervalMs` case — so an SPX-priced candle is appended to
+      // a SOXL series. The pane then autoscales 0–9000, every real candle
+      // flattens onto the floor, and the last-value label reads the OLD
+      // symbol's price until the 30s candle poll finally advances `live` past
+      // it and clears the invention. "Switch SPX -> SOXL, chart stays on the
+      // SPX price for half a minute" was exactly this.
+      //
+      // Only on `reframe`. A plain poll must still hand the invented bar back —
+      // that is the whole reason it is held separately from `live`.
+      if (reframe) synth = null
 
       const prevCount = barCount
       barCount = bars.length
@@ -1046,6 +1182,14 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     },
     setRailSink(sink) {
       railSink = sink
+      version++
+    },
+    setLevels(next) {
+      levels = next
+      // `version` is in the frame signature, so this is what makes the layer
+      // repaint on a toggle or a new ladder. Without it the frame is identical
+      // to the last one and the draw loop skips it — the tags would appear
+      // whenever something ELSE happened to move the chart.
       version++
     },
     scrollToNow() {

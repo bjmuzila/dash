@@ -130,6 +130,20 @@ export interface WallMigrationChartProps {
    * the page stage.
    */
   fill?: boolean
+  /**
+   * PLOT ONLY — no head, no legend, no clock rail, no toggles.
+   *
+   * This is what the ticker rail's cards draw: the same model, the same steps,
+   * the same forward fill, at 60-odd pixels inside a 200px tile. It is a prop on
+   * THIS component rather than a second mini-chart module for one reason — the
+   * model in the memo above (the forward fill, the CORE-sign role rule, the
+   * shared y range) is the part that must never drift, and a "just a sparkline"
+   * copy of it is exactly how two charts of the same data start disagreeing.
+   *
+   * The legend is what the compact card gives up, so the card's own header has
+   * to carry the symbol and the numbers — see levelLog/TickerRail.tsx.
+   */
+  compact?: boolean
   /** An escape hatch for a host that wants its own full-size control. */
   onExpand?: () => void
 }
@@ -139,6 +153,7 @@ export function WallMigrationChart({
   view,
   height = MIG_H,
   fill = false,
+  compact = false,
   onExpand,
 }: WallMigrationChartProps) {
   /**
@@ -402,7 +417,13 @@ export function WallMigrationChart({
     const span = seg ? Math.max(1, seg.lastSlot) : 1
     return i * segW + (s / span) * segW
   }
-  const y = (v: number) => MIG_PAD + (1 - (v - lo) / (hi - lo)) * (height - MIG_PAD * 2)
+  /**
+   * 8px of breathing room at 250, proportionally less on the rail's 62px tiles —
+   * a fixed 8 top and bottom there would spend a quarter of the plot on margin
+   * and flatten the very thing the mini chart is for.
+   */
+  const plotPad = Math.min(MIG_PAD, height * 0.08)
+  const y = (v: number) => plotPad + (1 - (v - lo) / (hi - lo)) * (height - plotPad * 2)
 
   /**
    * Step, not slope — a level holds its strike until it rolls. Walks one DAY's
@@ -592,6 +613,7 @@ export function WallMigrationChart({
 
   return (
     <div className={fill ? 'flex min-h-0 flex-1 flex-col' : 'flex flex-col'}>
+      {compact ? null : (
       <div className="mb-1.5 flex flex-wrap items-baseline gap-3">
         <span className="text-xs font-extrabold uppercase tracking-widest text-fg">
           Wall migration
@@ -613,14 +635,17 @@ export function WallMigrationChart({
           </button>
         ) : null}
       </div>
+      )}
 
       {/* Its own legend, under the head and above the plot. The card title says
           nothing about these series — which is exactly how a CORE line reads as
           an unexplained squiggle. */}
+      {compact ? null : (
       <div className="mb-1.5 flex flex-wrap items-center gap-3.5">
         {drawn.map((lt) => legendChip(lt, LEVEL_COLOR[lt], LEVEL_LABEL[lt], wallStrike(lastOf(lt))))}
         {lastSpot != null ? legendChip('spot', T.text, 'spot', wallNum(lastSpot)) : null}
       </div>
+      )}
 
       {/* preserveAspectRatio="none" — the x axis is slots, the y axis is price,
           and the two have no business sharing a scale. Every stroke carries
@@ -695,7 +720,7 @@ export function WallMigrationChart({
 
       {/* One clock rail for a single session; one date stamp per slice for a
           week, because 09:29/12:45/16:00 repeated five times says nothing. */}
-      {N === 1 ? (
+      {compact ? null : N === 1 ? (
         <div className="tabular mt-1 flex justify-between font-mono text-2xs text-muted" aria-hidden>
           <span>{slotClock(0)}</span>
           <span>{slotClock(Math.round(last.lastSlot / 2))}</span>
