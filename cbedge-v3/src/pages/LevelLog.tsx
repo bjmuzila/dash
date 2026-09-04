@@ -96,12 +96,17 @@ import { NO_TARGETS, type CopyShotTarget, useCopyShotTargets } from '@/shell/Cop
 const WEEK_SESSIONS = 5
 
 /**
- * Card height: the plot at its designed 250 plus the header, the toolbar row,
- * the variant line, the legend and the axis stamps. Explicit rather than
- * content-sized because the chart FILLS its body — a body that sized to the
- * chart and a chart that sized to the body have no fixed point between them.
+ * The card's FLOOR, not its height. The plot at its designed 250 plus the
+ * header, the toolbar row, the variant line, the legend and the axis stamps.
+ *
+ * The card used to be pinned to exactly this, which left the bottom two thirds
+ * of the page empty below it — on a 1440p monitor the chart this page exists
+ * for got 250px and the wallpaper got 700. It now FILLS what the rail leaves,
+ * and this number is only what it may not shrink below when the viewport is
+ * short (or the rail is three rows deep), at which point the column scrolls
+ * instead of squeezing the plot into a strip.
  */
-const CARD_H = MIG_H + 132
+const CARD_MIN_H = MIG_H + 132
 
 /**
  * The card's DOM identity — `data-card-instance` on the Card, and what the
@@ -212,102 +217,113 @@ export default function LevelLog() {
   }
 
   return (
-    <Page>
-      {/* Above the log, and driving it: the card whose symbol is lit is the
-          session drawn underneath. Same date and same variant switches, so the
-          rail's numbers and the chart's are one reading of one recorder. */}
-      <TickerRail
-        date={date}
-        view={view}
-        scope={scope}
-        basis={basis}
-        nonce={nonce + tick}
-        symbol={symbol}
-        onPick={setSymbol}
-      />
+    /**
+     * `fill` — the page owns the viewport and the log card takes what the rail
+     * leaves, rather than both sitting at the top of a mostly empty scroll
+     * page. The column supplies its own gutter, which is what Page's fill
+     * variant expects of a route (see Replay.tsx, same shape), and it keeps
+     * `overflow-y-auto` so a short window scrolls instead of crushing the plot
+     * below CARD_MIN_H.
+     */
+    <Page fill>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        {/* Above the log, and driving it: the card whose symbol is lit is the
+            session drawn underneath. Same date and same variant switches, so the
+            rail's numbers and the chart's are one reading of one recorder. */}
+        <TickerRail
+          date={date}
+          view={view}
+          scope={scope}
+          basis={basis}
+          nonce={nonce + tick}
+          symbol={symbol}
+          onPick={setSymbol}
+        />
 
-      <Card
-        title="Level Log"
-        expandId={CARD_ID}
-        style={{ height: CARD_H }}
-        actions={
-          <button
-            type="button"
-            onClick={() => setNonce((n) => n + 1)}
-            title="Re-read the recorder for this date"
-            className="rounded-sm px-1 text-xs text-faint transition-colors hover:bg-raised hover:text-fg"
-          >
-            <span aria-hidden>↻</span>
-          </button>
-        }
-      >
-        <CardToolbar>
-          <input
-            type="date"
-            value={date}
-            max={todayETStr()}
-            onChange={(e) => setDate(e.target.value)}
-            title="Session date, ET"
-            className="tabular rounded-sm border border-line bg-surface2 px-1.5 py-0.5 font-mono text-2xs text-fg"
-          />
-          <SegGroup options={VIEW_OPTIONS} value={view} onChange={setView} title="Which levels" />
-          <SegGroup
-            options={SCOPE_OPTIONS}
-            value={scope}
-            onChange={setScope}
-            title="Which contracts"
-          />
-          <SegGroup options={BASIS_OPTIONS} value={basis} onChange={setBasis} title="Which GEX" />
-          <SegGroup
-            options={RANGE_OPTIONS}
-            value={range}
-            onChange={setRange}
-            title="One session, or the last five recorded ones"
-          />
-          <button
-            type="button"
-            onClick={openCoreMigration}
-            title={`Open ${symbol}'s CORE migration — the last 63 recorded sessions — in a new tab`}
-            className="shrink-0 rounded-sm border px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide transition-opacity hover:opacity-80"
-            style={{
-              borderColor: LEVEL_COLORS.cb,
-              color: LEVEL_COLORS.cb,
-              background: alpha(LEVEL_COLORS.cb, 0.12),
-            }}
-          >
-            <span aria-hidden>⤢</span> CORE migration
-          </button>
-        </CardToolbar>
+        <Card
+          title="Level Log"
+          expandId={CARD_ID}
+          fill
+          style={{ minHeight: CARD_MIN_H }}
+          actions={
+            <button
+              type="button"
+              onClick={() => setNonce((n) => n + 1)}
+              title="Re-read the recorder for this date"
+              className="rounded-sm px-1 text-xs text-faint transition-colors hover:bg-raised hover:text-fg"
+            >
+              <span aria-hidden>↻</span>
+            </button>
+          }
+        >
+          <CardToolbar>
+            <input
+              type="date"
+              value={date}
+              max={todayETStr()}
+              onChange={(e) => setDate(e.target.value)}
+              title="Session date, ET"
+              className="tabular rounded-sm border border-line bg-surface2 px-1.5 py-0.5 font-mono text-2xs text-fg"
+            />
+            <SegGroup options={VIEW_OPTIONS} value={view} onChange={setView} title="Which levels" />
+            <SegGroup
+              options={SCOPE_OPTIONS}
+              value={scope}
+              onChange={setScope}
+              title="Which contracts"
+            />
+            <SegGroup options={BASIS_OPTIONS} value={basis} onChange={setBasis} title="Which GEX" />
+            <SegGroup
+              options={RANGE_OPTIONS}
+              value={range}
+              onChange={setRange}
+              title="One session, or the last five recorded ones"
+            />
+            <button
+              type="button"
+              onClick={openCoreMigration}
+              title={`Open ${symbol}'s CORE migration — the last 63 recorded sessions — in a new tab`}
+              className="shrink-0 rounded-sm border px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide transition-opacity hover:opacity-80"
+              style={{
+                borderColor: LEVEL_COLORS.cb,
+                color: LEVEL_COLORS.cb,
+                background: alpha(LEVEL_COLORS.cb, 0.12),
+              }}
+            >
+              <span aria-hidden>⤢</span> CORE migration
+            </button>
+          </CardToolbar>
 
-        <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
-          <span className="tabular font-mono text-2xs text-muted">
-            {variantTag(scope, basis)} · {VIEW_SCOPE[view]} view · 09:29 open + every 15m to 16:00
-            ET, change-only
-          </span>
-          {live ? (
-            <span className="text-2xs text-muted" title="Re-reads the recorder and the 1-minute tape every minute while this tab is open">
-              live · 1m
+          <div className="mb-1.5 flex flex-wrap items-baseline gap-2">
+            <span className="tabular font-mono text-2xs text-muted">
+              {variantTag(scope, basis)} · {VIEW_SCOPE[view]} view · 09:29 open + every 15m to 16:00
+              ET, change-only
             </span>
-          ) : null}
-          {/* Only while there is nothing on screen. A pip that blinks on every
-              minute tick is noise about a refresh nobody asked to watch. */}
-          {loading && !days.length ? (
-            <span className="text-2xs text-faint">loading…</span>
-          ) : null}
-        </div>
-
-        {days.length ? (
-          <WallMigrationChart days={days} view={view} fill />
-        ) : (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm text-muted">
-            {loading
-              ? 'Loading sessions…'
-              : range === '5'
-                ? `No recorded sessions for ${symbol} in the ${WEEK_SESSIONS} weekdays ending ${date} on ${variantTag(scope, basis)}.`
-                : `No recorded levels for ${symbol} on ${date} — ${variantTag(scope, basis)}.`}
+            {live ? (
+              <span className="text-2xs text-muted" title="Re-reads the recorder and the 1-minute tape every minute while this tab is open">
+                live · 1m
+              </span>
+            ) : null}
+            {/* Only while there is nothing on screen. A pip that blinks on every
+                minute tick is noise about a refresh nobody asked to watch. */}
+            {loading && !days.length ? (
+              <span className="text-2xs text-faint">loading…</span>
+            ) : null}
           </div>
-        )}
-      </Card>
+
+          {days.length ? (
+            <WallMigrationChart days={days} view={view} fill />
+          ) : (
+            <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm text-muted">
+              {loading
+                ? 'Loading sessions…'
+                : range === '5'
+                  ? `No recorded sessions for ${symbol} in the ${WEEK_SESSIONS} weekdays ending ${date} on ${variantTag(scope, basis)}.`
+                  : `No recorded levels for ${symbol} on ${date} — ${variantTag(scope, basis)}.`}
+            </div>
+          )}
+        </Card>
+      </div>
     </Page>
   )
 }

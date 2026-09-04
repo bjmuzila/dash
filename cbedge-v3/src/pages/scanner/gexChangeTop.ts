@@ -325,6 +325,172 @@ export type Metric = 'mark' | 'net_gex'
  */
 export const ENTRY_FLOOR = 0.5
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE GATE — v3-only, no v2 counterpart
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// VIEW filters, not capture thresholds. The recorder files everything that
+// clears ITS floor (|Δ| ≥ $200k, |% vs open| ≥ 30%); these hide the rows that
+// would not have survived a tighter live gate, so a tighter gate can be judged
+// against picks that already carry grades instead of argued about in the
+// abstract. Everything is read off the stored row — no refetch, and it works on
+// every date already recorded.
+//
+// THREE INDEPENDENT SWITCHES, not one button. This first shipped as a single
+// all-three-at-once toggle and on its first real date it removed 53 of 54 picks.
+// A 98% rejection rate is not a strict filter, it is a broken one — and one
+// number cannot say WHICH condition did it, so the only thing to do with the
+// result was guess. Each switch now carries the count it ALONE rejects.
+//
+// WHY |z| IS OFF BY DEFAULT, and why including it was the mistake. z is
+// (latest_chg − mean_chg) / sd_chg over that strike's OWN recent deltas, so it
+// measures ACCELERATION, not size. A strike that builds steadily all morning has
+// latest ≈ mean and therefore z ≈ 0 BY CONSTRUCTION — and steady accumulation is
+// the exact pattern this scanner exists to find. |z| ≥ 2 is not a stricter
+// version of the magnitude filters; it selects a different phenomenon (a sudden
+// burst) and throws the builds away. It stays available because "show me only
+// the bursts" is a real question, just not part of "is this pick big enough".
+//
+// NOT AVAILABLE HERE: a floor on the pct_open DENOMINATOR. At 09:47 the open
+// baseline is a handful of contracts, so "+300% vs open" is a rounding error
+// wearing a percentage sign. `gex_open` is a real column on `strike_growth` but
+// is not carried onto `gex_change_top`, so it cannot be checked client-side on
+// rows already recorded. The recorder's 10:00 warm-up stands in for it.
+
+export const GATE = { chg: 500_000, pctOpen: 50, z: 2 } as const
+
+/** Which switches are on. `z` defaults off — see the note above. */
+export interface GateOn {
+  chg: boolean
+  pct: boolean
+  z: boolean
+}
+
+export const GATE_DEFAULT: GateOn = { chg: true, pct: true, z: false }
+
+/**
+ * The three conditions, each standing alone. Null fails: an unverifiable row is
+ * not a passing row.
+ *
+ * One row-per-condition table rather than three loose predicates, so the labels,
+ * the per-condition counts and the combined test below cannot drift apart — the
+ * whole point of the redesign is that the number on a switch is the number that
+ * switch actually costs.
+ *
+ * NOTE this is the first consumer of `Row.z_score` on this tab; §FIELDS ON THE
+ * WIRE WITH NO SURFACE says it is rendered nowhere, which is still true — it is
+ * READ here, not displayed.
+ */
+export const GATE_TESTS: {
+  key: keyof GateOn
+  label: string
+  of: (r: Pick<Row, 'latest_chg' | 'pct_open' | 'z_score'>) => boolean
+}[] = [
+  {
+    key: 'chg',
+    label: `|Δ| ≥ $${(GATE.chg / 1000).toFixed(0)}k`,
+    of: (r) => r.latest_chg != null && Math.abs(r.latest_chg) >= GATE.chg,
+  },
+  {
+    key: 'pct',
+    label: `|% vs open| ≥ ${GATE.pctOpen}%`,
+    of: (r) => r.pct_open != null && Math.abs(r.pct_open) >= GATE.pctOpen,
+  },
+  {
+    key: 'z',
+    label: `|z| ≥ ${GATE.z}`,
+    of: (r) => r.z_score != null && Math.abs(r.z_score) >= GATE.z,
+  },
+]
+
+/** Any switch on at all? Nothing on means the gate is inert and hides nothing. */
+export function gateActive(on: GateOn): boolean {
+  return GATE_TESTS.some((t) => on[t.key])
+}
+
+/** A row passes when every ENABLED condition passes. */
+export function passesGate(
+  r: Pick<Row, 'latest_chg' | 'pct_open' | 'z_score'>,
+  on: GateOn,
+): boolean {
+  return GATE_TESTS.every((t) => !on[t.key] || t.of(r))
+}
+
+/** The label for whichever switches are on, for the subtitle and the summary line. */
+export function gateLabel(on: GateOn, join = ' & '): string {
+  return GATE_TESTS.filter((t) => on[t.key])
+    .map((t) => t.label)
+    .join(join)
+}
+
+/** Slots with failing rows removed, and slots left empty by that dropped. */
+export function filterSlotsByGate(
+  slots: readonly SlotBucket[],
+  on: GateOn,
+): SlotBucket[] {
+  if (!gateActive(on)) return slots as SlotBucket[]
+  return slots
+    .map((hb) => ({ ...hb, rows: hb.rows.filter((r) => passesGate(r, on)) }))
+    .filter((hb) => hb.rows.length > 0)
+}
+
+/**
+ * `watch_id`s that pass — the join key back to the scorecard rows. A pick that
+ * was never auto-probed has no `watch_id` and cannot be matched; it is absent
+ * from the scorecard either way.
+ */
+export function gateOkIdsFrom(slots: readonly SlotBucket[], on: GateOn): Set<number> {
+  const s = new Set<number>()
+  for (const hb of slots) {
+    for (const r of hb.rows) if (r.watch_id != null && passesGate(r, on)) s.add(r.watch_id)
+  }
+  return s
+}
+
+export interface GateCounts {
+  /** Per condition, how many picks IT ALONE rejects with the others ignored. */
+  alone: Record<keyof GateOn, number>
+  /** Cards on screen before the gate. */
+  total: number
+  /** Cards the ACTIVE combination hides. */
+  hidden: number
+}
+
+/**
+ * The diagnostic the single-button version could not give.
+ *
+ * `alone` is measured with the other switches ignored on purpose, so the three
+ * numbers are comparable TO EACH OTHER — which is the question being asked ("is
+ * it the dollar floor or the z that is killing everything?"). They will not sum
+ * to `hidden`: a pick failing two conditions is counted by both.
+ */
+export function gateCounts(slots: readonly SlotBucket[], on: GateOn): GateCounts {
+  const alone = { chg: 0, pct: 0, z: 0 } as Record<keyof GateOn, number>
+  const active = gateActive(on)
+  let total = 0
+  let pass = 0
+  for (const hb of slots) {
+    for (const r of hb.rows) {
+      total += 1
+      if (passesGate(r, on)) pass += 1
+      for (const t of GATE_TESTS) if (!t.of(r)) alone[t.key] += 1
+    }
+  }
+  return { alone, total, hidden: active ? total - pass : 0 }
+}
+
+/** The count that rides on each switch's label. */
+export function gateSwitchTitle(
+  key: keyof GateOn,
+  label: string,
+  cost: number,
+  total: number,
+): string {
+  const base = `${label} — on its own this drops ${cost} of ${total} pick${total === 1 ? '' : 's'} on this date.`
+  if (key !== 'z') return base
+  return `${base}\n\nOFF BY DEFAULT. z is (latest − mean) / sd over this strike's own recent deltas, so it measures ACCELERATION, not size — a strike that builds steadily has z near zero by construction, and steady building is what this scanner is for. Use it to ask "show me only the bursts", not as a size filter.`
+}
+
 /**
  * C13 — 60 SECONDS, not five minutes, and deliberately so: the recorder's
  * trigger scan files a crossing within a minute of it happening, and a 5-minute
@@ -913,9 +1079,22 @@ export function slotHeaderColor(live: boolean | undefined): string {
  * STRICT `>`, so an entry of exactly $0.50 is excluded — the exact complement of
  * `cheapIdsFrom`'s `<=` below, which is what keeps the badge on the cards and
  * the absence from the table describing the same set.
+ *
+ * `gateOkIds` is the v3-only gate (see THE GATE above), passed as the set of
+ * `watch_id`s whose CARD passed. Omitted or null means no gate is active and
+ * every row survives it — that is the v2-identical path.
  */
-export function filterResults(results: readonly ResultRow[], scoreCheap: boolean): ResultRow[] {
-  return results.filter((r) => r.entry != null && (scoreCheap || r.entry > ENTRY_FLOOR))
+export function filterResults(
+  results: readonly ResultRow[],
+  scoreCheap: boolean,
+  gateOkIds?: ReadonlySet<number> | null,
+): ResultRow[] {
+  return results.filter(
+    (r) =>
+      r.entry != null &&
+      (scoreCheap || r.entry > ENTRY_FLOOR) &&
+      (!gateOkIds || gateOkIds.has(r.watch_id)),
+  )
 }
 
 /**
@@ -1002,8 +1181,9 @@ export interface ScorecardSummary {
 export function scorecardSummary(
   results: readonly ResultRow[],
   scoreCheap: boolean,
+  gateOkIds?: ReadonlySet<number> | null,
 ): ScorecardSummary {
-  const filtered = filterResults(results, scoreCheap)
+  const filtered = filterResults(results, scoreCheap, gateOkIds)
   const withPeak = filtered.filter((r) => r.max_pct != null)
   const hit = (n: number): number => withPeak.filter((r) => (r.max_pct as number) >= n).length
   const avgPeak = withPeak.length
@@ -1572,8 +1752,11 @@ export function picksLabel(n: number): string {
 }
 
 /** C57 — the filter basis, in parentheses after the pick count. */
-export function scorecardBasisLabel(scoreCheap: boolean): string {
-  return scoreCheap ? 'all entries' : `entry > $${ENTRY_FLOOR.toFixed(2)}`
+export function scorecardBasisLabel(scoreCheap: boolean, gateOn?: GateOn): string {
+  const base = scoreCheap ? 'all entries' : `entry > $${ENTRY_FLOOR.toFixed(2)}`
+  // The gate's conditions are appended, not substituted: the entry floor still
+  // applies underneath them and the line has to say so.
+  return gateOn && gateActive(gateOn) ? `${base} · ${gateLabel(gateOn)}` : base
 }
 
 /** C58–C62 — the summary line's five labels, in render order. */
@@ -1725,6 +1908,21 @@ export const NO_SLOTS_COPY =
 /** C89 — which no-slots copy applies. */
 export function noSlotsCopy(loading: boolean): string {
   return loading ? LOADING_LABEL : NO_SLOTS_COPY
+}
+
+/**
+ * The empty state when the GATE emptied the board, as opposed to nothing having
+ * been recorded. Without the distinction the switches read as a broken fetch.
+ *
+ * It names the active conditions on purpose: at this point the answer is almost
+ * always "one of these is too tight", and the line should say which are on so
+ * the next click is obvious.
+ */
+export function gateHidAllCopy(total: number, on: GateOn): string {
+  return (
+    `The gate hid all ${total} pick${total === 1 ? '' : 's'} on this date. ` +
+    `Nothing recorded here cleared ${gateLabel(on, ' and ')} together — switch one off to see which.`
+  )
 }
 
 /**

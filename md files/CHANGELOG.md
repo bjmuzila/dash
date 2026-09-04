@@ -1,5 +1,104 @@
 # Changelog
 
+## 2026-09-04 - GEX Change Top gate: three independent switches, each showing what IT costs (`cbedge-v3/src/pages/scanner/{gexChangeTop.ts,GexChangeTopTab.tsx}`, `components/scanner/GexChangeTop.tsx`)
+
+The single "Strict gate" button shipped earlier today removed **53 of 54 picks**
+on its first real date. A 98% rejection rate is not a strict filter, it is a
+broken one - and one number cannot say WHICH of its three conditions did it, so
+the only thing to do with the result was guess. Replaced with three independent
+switches, each carrying the count IT ALONE rejects.
+
+**`|z| >= 2` was the mistake, and it is now off by default.** z is
+`(latest_chg - mean_chg) / sd_chg` over that strike's OWN recent deltas, so it
+measures ACCELERATION, not size. A strike that builds steadily all morning has
+`latest ~ mean` and therefore `z ~ 0` **by construction** - and steady
+accumulation is the exact pattern this scanner exists to find. So `|z| >= 2` is
+not a stricter version of the magnitude filters; it selects a different
+phenomenon (a sudden burst) and throws the builds away. It stays available
+because "show me only the bursts" is a real question worth asking on its own, it
+is just not part of "is this pick big enough". This also retires the earlier
+claim that `|z| >= 2` was doing the sample-count job for free - true
+(`max|z| = sqrt(n-1)` under `stddev_pop`, so it implies `n >= 5`), and irrelevant,
+because the filter should not have been in the size gate at all.
+
+The other two are magnitude filters and do match the intent: `|dGEX| >= $500k`
+and `|% vs open| >= 50%`, both above the recorder's own `$200k` / `30%` floor.
+Both default ON.
+
+**The per-condition count is the point.** Each switch's number is measured with
+the other two IGNORED, so the three are comparable to each other - which is the
+question actually being asked ("is it the dollar floor or the z that is killing
+everything?"). They deliberately do not sum to the combined total, because a pick
+failing two conditions is counted by both; the combined `-N of M` sits at the end
+of the row. The empty state names the conditions that are on and says to switch
+one off, so an emptied board reads as a too-tight gate rather than a broken
+fetch.
+
+Still view filters, not capture thresholds: nothing here changes what the
+recorder files, everything is read off the stored row, and it works retroactively
+on every date recorded. Each switch filters the cards AND the scorecard, so avg
+peak, the hit counts, closed-green and the grade distribution are that
+combination's actual record.
+
+v3 puts the logic in `gexChangeTop.ts` as pure functions (`GATE_TESTS`,
+`passesGate`, `filterSlotsByGate`, `gateOkIdsFrom`, `gateCounts`, `gateLabel`,
+`gateHidAllCopy`) with `GexChangeTopTab.tsx` only wiring them, so the labels, the
+counts and the predicate cannot drift apart - the whole point of the redesign is
+that the number on a switch is the number that switch actually costs.
+`filterResults` and `scorecardSummary` take an optional `gateOkIds`; omitted, the
+path is byte-identical to before. `Row.z_score` is now READ on this tab for the
+first time (it is still rendered nowhere, so SS-FIELDS ON THE WIRE WITH NO SURFACE
+still holds). `cheapCards` and `flippableCards` follow the visible slots, so the
+cheap-entry count describes cards on screen and "Flip all" does not fetch history
+for hidden ones.
+
+BOTH UIs, deliberately: `/app/scanner` (app-vite) and `/v3/scanner` (cbedge-v3)
+each have their own GEX Change Top implementation, and the first version of this
+went into app-vite only, which is why it could not be found on the v3 page.
+
+### Also shipped today - full entries lost to concurrent edits on this file
+
+Re-listed in one line each because CHANGELOG.md has been overwritten twice today
+by a session working from a stale copy of it. The CODE for all four is in place
+and verified.
+
+- **Live triggers: a crossing is an edge, not a membership test**
+  (`server-v2/gex-change-top-recorder.js`) - 32 triggers fired in 46 minutes;
+  "new" meant "not captured yet today", so the first scan with candidates flushed
+  the whole morning's backlog. Now fires only on
+  `qualified now AND NOT qualified last scan AND NOT seen today`, seeded from a
+  wider query (`GEX_CHANGE_TOP_LIVE_SCAN_LIMIT`, default 100), with no triggers
+  before 10:00 ET (`GEX_CHANGE_TOP_LIVE_START`).
+- **"Strict gate" toggle** (`components/scanner/GexChangeTop.tsx`) - superseded
+  by the three switches above, same day.
+- **gexCandles chart.ts: hex fallbacks dropped** - `cssVar(el, name, fallback)`
+  became `cssVar(el, name)`; 13 theme violations to 1, `theme-baseline.json`
+  lowered to match. Applied twice; the first was overwritten.
+- **Level Log rail: cards at double height drawing the real 1m tape**
+  (`cbedge-v3/src/pages/levelLog/*`) - `MINI_H` 62 to 124, `fetchTape` exported
+  from wallData and paired with each card's log, `RAIL_FETCH_CONC` 6 to 4.
+
+
+## 2026-09-04 - Level Log: the log card fills the page
+
+`app/v3/level-log` pinned the Level Log card to exactly `MIG_H + 132` (382px),
+so on anything taller than a laptop the rail and the card sat at the top and the
+bottom two thirds of the window was empty - the chart the page exists for got
+250px of plot and the wallpaper got the rest.
+
+- `cbedge-v3/src/pages/LevelLog.tsx` - `<Page fill>` with the route supplying
+  its own gutter column (`flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto
+  p-4`), the same shape Replay.tsx uses. The card is now `fill` and the fixed
+  `height` became `minHeight`.
+- `CARD_H` renamed `CARD_MIN_H`: it is a FLOOR now, not a height. When the
+  window is short - or the ticker rail runs to three rows - the column scrolls
+  rather than squeezing the plot into a strip.
+- The chart was already `fill`, so it stretches with the card; nothing about the
+  model, the fetch or the snapshot target changed.
+
+No proxy code changed.
+
+
 ## 2026-09-04 - CORE migration: option D labeling, and the screenshot is no longer dimmer than the screen
 
 ### The PNG was half-weight, not dark

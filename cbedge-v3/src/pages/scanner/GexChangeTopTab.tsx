@@ -78,6 +78,7 @@ import { Table } from '@/design/primitives/Table'
 import { T, V2, V2W, alpha } from '@/design/theme'
 import { EM_DASH } from '@/pages/scanner/format'
 import type {
+  GateOn,
   GradeInfo,
   Metric,
   PickPoint,
@@ -134,6 +135,8 @@ import {
   TOOLBAR_HINT,
   UNDER_FLOOR_BADGE,
   VERY_STRONG_LABEL,
+  GATE_DEFAULT,
+  GATE_TESTS,
   Y_TICK_FRACTIONS,
   anyProjected,
   avgPeakColor,
@@ -150,6 +153,7 @@ import {
   deltaColor,
   derivePickCard,
   feedErrorLabel,
+  filterSlotsByGate,
   flaggedLabel,
   flipAllLabel,
   flippableCards,
@@ -169,6 +173,11 @@ import {
   fmtSpot,
   fmtStrike,
   gradeFor,
+  gateActive,
+  gateCounts,
+  gateHidAllCopy,
+  gateOkIdsFrom,
+  gateSwitchTitle,
   gradePillTitle,
   indexResults,
   nearestIndexToTs,
@@ -418,6 +427,9 @@ export default function GexChangeTopTab() {
   // Feeding it back into the URL would rebuild that waterfall.
   const [pickedDate, setPickedDate] = useState('')
   const [scoreCheap, setScoreCheap] = useState(false)
+  // THE GATE (v3-only, no v2 counterpart — see gexChangeTop.ts). Three
+  // independent view filters over what the recorder already captured.
+  const [gateOn, setGateOn] = useState<GateOn>(GATE_DEFAULT)
   const [showResults, setShowResults] = useState(true)
   // C136 — ONE metric for the whole tab, not one per card. Switching it on any
   // open card switches every open card at once. Persists to nothing.
@@ -456,10 +468,35 @@ export default function GexChangeTopTab() {
   // C47 — the picker shows the resolved day once the feed echoes one back.
   const displayDate = pickedDate || feedDate
 
-  const summary = useMemo(() => scorecardSummary(results, scoreCheap), [results, scoreCheap])
+  // THE GATE, applied once here and read everywhere below.
+  //
+  // `viewSlots` is what the board renders; `okIds` is the same decision carried
+  // across to the scorecard by `watch_id`, because a gate judged on the cards
+  // but not on the averages tells you nothing. `counts` is the per-condition
+  // diagnostic that rides on each switch.
+  const gateIsOn = gateActive(gateOn)
+  const viewSlots = useMemo(() => filterSlotsByGate(slots, gateOn), [slots, gateOn])
+  const okIds = useMemo(
+    () => (gateIsOn ? gateOkIdsFrom(slots, gateOn) : null),
+    [slots, gateOn, gateIsOn],
+  )
+  const counts = useMemo(() => gateCounts(slots, gateOn), [slots, gateOn])
+  const toggleGate = useCallback((key: keyof GateOn) => {
+    setGateOn((g) => ({ ...g, [key]: !g[key] }))
+  }, [])
+
+  const summary = useMemo(
+    () => scorecardSummary(results, scoreCheap, okIds),
+    [results, scoreCheap, okIds],
+  )
   const index: ScorecardIndex = useMemo(() => indexResults(results), [results])
-  const cheapCards = useMemo(() => countCheapCards(slots, index.cheapIds), [slots, index])
-  const flippable = useMemo(() => flippableCards(slots), [slots])
+  // viewSlots, not slots: the cheap-entry toggle counts CARDS ON SCREEN, and
+  // "Flip all" must not fetch history for cards the gate is hiding.
+  const cheapCards = useMemo(
+    () => countCheapCards(viewSlots, index.cheapIds),
+    [viewSlots, index],
+  )
+  const flippable = useMemo(() => flippableCards(viewSlots), [viewSlots])
   const allFlipped = flippable.length > 0 && flippable.every((f) => flipped.has(f.cid))
 
   const toggleFlip = useCallback((cid: string) => {
@@ -522,6 +559,10 @@ export default function GexChangeTopTab() {
           onFlipAll={flipAll}
           flippableCount={flippable.length}
           allFlipped={allFlipped}
+          gateOn={gateOn}
+          gateIsOn={gateIsOn}
+          counts={counts}
+          onGate={toggleGate}
         />
       }
     >
@@ -546,6 +587,7 @@ export default function GexChangeTopTab() {
         scoreCheap={scoreCheap}
         onScoreCheap={() => setScoreCheap((s) => !s)}
         cheapCards={cheapCards}
+        gateOn={gateOn}
         showResults={showResults}
         onShowResults={() => setShowResults((s) => !s)}
       />
@@ -558,15 +600,21 @@ export default function GexChangeTopTab() {
         </div>
       )}
 
-      {/* C89 — first paint and the no-slots state, in one node. */}
-      {!topV.error && slots.length === 0 && (
+      {/* C89 — first paint and the no-slots state, in one node. The gate adds a
+          third case: rows WERE recorded and the switches hid every one of them.
+          Without saying so the switches read as a broken fetch. */}
+      {!topV.error && viewSlots.length === 0 && (
         <div className="px-1 py-4 text-sm" style={{ color: T.text }}>
-          {noSlotsCopy(top.loading)}
+          {top.loading
+            ? noSlotsCopy(true)
+            : slots.length > 0
+              ? gateHidAllCopy(counts.total, gateOn)
+              : noSlotsCopy(false)}
         </div>
       )}
 
       {/* C90 — server array order. There is no comparator on this tab. */}
-      {slots.map((hb) => (
+      {viewSlots.map((hb) => (
         <SlotSection
           key={hb.slot}
           bucket={hb}
@@ -604,6 +652,10 @@ function ToolbarRow({
   onFlipAll,
   flippableCount,
   allFlipped,
+  gateOn,
+  gateIsOn,
+  counts,
+  onGate,
 }: {
   date: string
   onDateChange: (v: string) => void
@@ -611,6 +663,10 @@ function ToolbarRow({
   onFlipAll: () => void
   flippableCount: number
   allFlipped: boolean
+  gateOn: GateOn
+  gateIsOn: boolean
+  counts: ReturnType<typeof gateCounts>
+  onGate: (key: keyof GateOn) => void
 }) {
   return (
     <>
@@ -635,6 +691,47 @@ function ToolbarRow({
         color={allFlipped ? V2.cyan : undefined}
         borderColor={allFlipped ? alpha(V2.cyan, 0.5) : undefined}
       />
+      {/* THE GATE — three independent switches, no v2 counterpart. Each carries
+          the count IT ALONE rejects, measured with the other two ignored, so the
+          binding condition is on screen rather than inferred. That is the whole
+          reason this is three controls and not one: the single all-three button
+          it replaced removed 53 of 54 picks and could not say which test did it. */}
+      <span
+        className="flex shrink-0 items-center gap-1.5 rounded-sm border px-1.5 py-0.5"
+        style={{ borderColor: gateIsOn ? alpha(V2.cyan, 0.35) : V2W.border }}
+      >
+        <span
+          className="text-3xs font-semibold uppercase tracking-wide"
+          style={{ color: T.text }}
+          title={
+            'View filters over the picks already recorded — they change nothing about what the recorder captures. ' +
+            'Each switch filters the cards AND the scorecard, so the averages are that combination’s actual record. ' +
+            'The count on a switch is how many of this date’s picks IT ALONE rejects, with the others ignored; ' +
+            'they will not sum to the total, because a pick can fail more than one.'
+          }
+        >
+          Gate
+        </span>
+        {GATE_TESTS.map((t) => (
+          <ToolButton
+            key={t.key}
+            label={`${t.label} −${counts.alone[t.key]}`}
+            onClick={() => onGate(t.key)}
+            title={gateSwitchTitle(t.key, t.label, counts.alone[t.key], counts.total)}
+            color={gateOn[t.key] ? V2.cyan : undefined}
+            borderColor={gateOn[t.key] ? alpha(V2.cyan, 0.5) : undefined}
+          />
+        ))}
+        {gateIsOn && (
+          <span
+            className="tabular shrink-0 text-3xs"
+            style={{ color: T.text }}
+            title="Picks hidden by the switches that are currently on, together."
+          >
+            −{counts.hidden} of {counts.total}
+          </span>
+        )}
+      </span>
       {/* C50 — the hint. In v2 it named the whole tile as the control; here the
           control is the "▸ price line" button on each card (C123), which is the
           same affordance and the same words. */}
@@ -657,6 +754,7 @@ function Scorecard({
   scoreCheap,
   onScoreCheap,
   cheapCards,
+  gateOn,
   showResults,
   onShowResults,
 }: {
@@ -667,6 +765,8 @@ function Scorecard({
   scoreCheap: boolean
   onScoreCheap: () => void
   cheapCards: number
+  /** Named in the basis line so the averages always say what they were computed over. */
+  gateOn: GateOn
   showResults: boolean
   onShowResults: () => void
 }) {
@@ -688,7 +788,7 @@ function Scorecard({
             `withPeak`; "closed green" is over `filtered`. */}
         {summary.count > 0 && (
           <span className="text-xs" style={{ color: T.text }}>
-            {picksLabel(summary.count)} ({scorecardBasisLabel(scoreCheap)}) ·{' '}
+            {picksLabel(summary.count)} ({scorecardBasisLabel(scoreCheap, gateOn)}) ·{' '}
             {SUMMARY_LABELS.avgPeak}{' '}
             {/* C58 — NULL IS PAINTED DOWN here, and prints an em dash. */}
             <b style={{ color: avgPeakColor(summary.avgPeak) }}>{fmtPctSigned(summary.avgPeak)}</b>

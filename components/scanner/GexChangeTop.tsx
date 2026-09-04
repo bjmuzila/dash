@@ -66,38 +66,80 @@ type Metric = "mark" | "net_gex";
  */
 const ENTRY_FLOOR = 0.5;
 
-/* ── THE STRICT GATE ──────────────────────────────────────────────────────────
- * A VIEW filter, not a capture threshold. The recorder still files everything
- * that clears its own floor (|Δ| ≥ $200k, |% vs open| ≥ 30%); this hides the
- * rows that would NOT have survived a tighter live gate, so the tighter gate can
- * be judged against picks that were already graded instead of argued about in
- * the abstract. Toggle it, read the scorecard, and the averages say whether
- * tightening the recorder is worth doing.
+/* ── THE GATE ─────────────────────────────────────────────────────────────────
+ * VIEW filters, not capture thresholds. The recorder still files everything that
+ * clears its own floor (|Δ| ≥ $200k, |% vs open| ≥ 30%); these hide the rows that
+ * would NOT have survived a tighter live gate, so a tighter gate can be judged
+ * against picks that already carry grades instead of argued about in the
+ * abstract. Everything is read off the stored row — no refetch, and it works on
+ * every date already recorded.
  *
- * Everything here is read off the stored row — no refetch, and it works on every
- * date already recorded.
+ * THREE INDEPENDENT SWITCHES, not one button. The first version of this shipped
+ * as a single all-three-at-once toggle and on its first real date it removed 53
+ * of 54 picks. A 98% rejection rate is not a strict filter, it is a broken one —
+ * and worse, one number cannot say WHICH condition did it, so the only thing to
+ * do with the result was guess. Each switch now carries the count IT ALONE
+ * rejects, measured independently of the others, so the binding constraint is on
+ * screen instead of inferred.
  *
- * ON |z| ≥ 2 DOING TWO JOBS. The scan computes z with stddev_pop over the
- * strike's own samples in the window, and for a population sd the largest |z| a
- * sample of size n can produce is √(n−1). So |z| ≥ 2 is unsatisfiable below
- * n = 5: the filter demands the move be unusual AND, as a free consequence,
- * that there were enough observations for "unusual" to mean anything. That is
- * why there is no separate sample-count control — it would be the same filter
- * twice, and the weaker half of it.
+ * WHY |z| IS OFF BY DEFAULT, and why it was the mistake. z is
+ * (latest_chg − mean_chg) / sd_chg over that strike's OWN recent deltas, so it
+ * measures ACCELERATION, not size. A strike that builds steadily all morning has
+ * latest ≈ mean and therefore z ≈ 0 BY CONSTRUCTION — and steady accumulation is
+ * the exact pattern this scanner exists to find. So |z| ≥ 2 is not a stricter
+ * version of the magnitude filters, it selects a different phenomenon (a sudden
+ * burst) and throws away the builds. It stays available because "show me only
+ * the bursts" is a real question worth asking on its own; it is just not part of
+ * "is this pick big enough".
  *
- * NOT ENFORCED HERE: a floor on the pct_open DENOMINATOR. At 09:47 the open
+ * The other two ARE magnitude filters and do match the intent: a dollar floor
+ * and a percent floor, both above what the recorder already enforces.
+ *
+ * NOT AVAILABLE HERE: a floor on the pct_open DENOMINATOR. At 09:47 the open
  * baseline is a handful of contracts, so "+300% vs open" is a rounding error
  * wearing a percentage sign. gex_open is a real column on strike_growth but is
  * not carried onto gex_change_top, so it cannot be checked client-side on rows
  * already recorded. The recorder's 10:00 warm-up is what stands in for it.
  */
-const STRICT = { chg: 500_000, pctOpen: 50, z: 2 } as const;
+const GATE = { chg: 500_000, pctOpen: 50, z: 2 } as const;
 
-/** Null fails: an unverifiable row is not a passing row. */
-const passesStrict = (r: Row): boolean =>
-  r.latest_chg != null && Math.abs(r.latest_chg) >= STRICT.chg &&
-  r.pct_open != null && Math.abs(r.pct_open) >= STRICT.pctOpen &&
-  r.z_score != null && Math.abs(r.z_score) >= STRICT.z;
+/** Which switches are on. `z` defaults off — see the note above. */
+type GateOn = { chg: boolean; pct: boolean; z: boolean };
+const GATE_DEFAULT: GateOn = { chg: true, pct: true, z: false };
+
+/**
+ * The three conditions, each standing alone. Null fails: an unverifiable row is
+ * not a passing row.
+ *
+ * Kept as one row-per-condition table rather than three loose functions so the
+ * labels, the per-condition counts and the combined predicate below cannot get
+ * out of step with each other — the whole point of the redesign is that the
+ * number on a switch is the number that switch actually costs.
+ */
+const GATE_TESTS: { key: keyof GateOn; label: string; of: (r: Row) => boolean }[] = [
+  {
+    key: "chg",
+    label: `|Δ| ≥ $${(GATE.chg / 1000).toFixed(0)}k`,
+    of: (r) => r.latest_chg != null && Math.abs(r.latest_chg) >= GATE.chg,
+  },
+  {
+    key: "pct",
+    label: `|% vs open| ≥ ${GATE.pctOpen}%`,
+    of: (r) => r.pct_open != null && Math.abs(r.pct_open) >= GATE.pctOpen,
+  },
+  {
+    key: "z",
+    label: `|z| ≥ ${GATE.z}`,
+    of: (r) => r.z_score != null && Math.abs(r.z_score) >= GATE.z,
+  },
+];
+
+/** Any switch on at all? Nothing on means the gate is inert and hides nothing. */
+const gateActive = (on: GateOn): boolean => GATE_TESTS.some((t) => on[t.key]);
+
+/** A row passes when every ENABLED condition passes. */
+const passesGate = (r: Row, on: GateOn): boolean =>
+  GATE_TESTS.every((t) => !on[t.key] || t.of(r));
 
 /** One row of the EOD scorecard — /proxy/gex-change-top-results. */
 type ResultRow = {
@@ -594,36 +636,63 @@ export default function GexChangeTop() {
     return n;
   }, [slots, cheapIds]);
 
-  // ── The strict gate (see STRICT at the top of this file) ────────────────────
-  // Off by default: the default view is the honest record of what the recorder
-  // actually filed. On, the page shows only the picks that would have survived
-  // the tighter live gate — cards AND scorecard, because a gate you judge on the
-  // cards but not the averages tells you nothing.
-  const [strict, setStrict] = useState(false);
+  // ── The gate (see GATE at the top of this file) ─────────────────────────────
+  // The default view is the honest record of what the recorder actually filed,
+  // narrowed by whichever switches are on. Filtering applies to the cards AND
+  // the scorecard, because a gate you judge on the cards but not the averages
+  // tells you nothing.
+  const [gateOn, setGateOn] = useState<GateOn>(GATE_DEFAULT);
+  const active = gateActive(gateOn);
+
+  // No need to clear `flipped` here: `flippable` follows viewSlots and
+  // `openWatchIds` is derived from it, so a card the gate hides drops out of the
+  // history poll on its own and comes back still flipped if the switch goes off.
+  const toggleGate = useCallback((key: keyof GateOn) => {
+    setGateOn((g) => ({ ...g, [key]: !g[key] }));
+  }, []);
 
   /** Slots with failing rows removed, and slots left empty by that dropped. */
   const viewSlots = useMemo(() => {
-    if (!strict) return slots;
+    if (!active) return slots;
     return slots
-      .map((hb) => ({ ...hb, rows: hb.rows.filter(passesStrict) }))
+      .map((hb) => ({ ...hb, rows: hb.rows.filter((r) => passesGate(r, gateOn)) }))
       .filter((hb) => hb.rows.length > 0);
-  }, [slots, strict]);
+  }, [slots, gateOn, active]);
 
   /** watch_ids that pass — the join key back to the scorecard rows. A pick that
    *  was never auto-probed has no watch_id and so cannot be matched; it is
    *  simply absent from the scorecard either way. */
-  const strictOkIds = useMemo(() => {
+  const gateOkIds = useMemo(() => {
     const s = new Set<number>();
-    for (const hb of slots) for (const r of hb.rows) if (r.watch_id != null && passesStrict(r)) s.add(r.watch_id);
+    for (const hb of slots) {
+      for (const r of hb.rows) if (r.watch_id != null && passesGate(r, gateOn)) s.add(r.watch_id);
+    }
     return s;
-  }, [slots]);
+  }, [slots, gateOn]);
 
-  /** How many cards the gate is currently hiding (or would hide). */
-  const strictHidden = useMemo(() => {
+  /**
+   * Per-condition reject counts, and the combined one.
+   *
+   * `alone` is the diagnostic the single-button version could not give: how many
+   * of the day's picks THIS condition rejects on its own, with the other two
+   * ignored. Measured independently on purpose — the counts will not sum to
+   * `hidden`, because a pick that fails two conditions is counted by both, and
+   * that is what makes them comparable to each other rather than an accounting
+   * of the combination.
+   */
+  const gateCounts = useMemo(() => {
+    const alone: Record<string, number> = {};
+    for (const t of GATE_TESTS) alone[t.key] = 0;
     let total = 0, pass = 0;
-    for (const hb of slots) for (const r of hb.rows) { total += 1; if (passesStrict(r)) pass += 1; }
-    return total - pass;
-  }, [slots]);
+    for (const hb of slots) {
+      for (const r of hb.rows) {
+        total += 1;
+        if (passesGate(r, gateOn)) pass += 1;
+        for (const t of GATE_TESTS) if (!t.of(r)) alone[t.key] += 1;
+      }
+    }
+    return { alone, total, hidden: active ? total - pass : 0 };
+  }, [slots, gateOn, active]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadResults(date || undefined); }, [loadResults, date]);
@@ -689,7 +758,7 @@ export default function GexChangeTop() {
 
   // Every card on the page that CAN be flipped (i.e. was auto-probed), as
   // [cid, watch_id]. Drives "Flip all" and the while-open refresh below.
-  // viewSlots, not slots: "Flip all" must not fetch history for cards the strict
+  // viewSlots, not slots: "Flip all" must not fetch history for cards the
   // gate is hiding, and its disabled state should follow what is on screen.
   const flippable = useMemo(() => {
     const out: { cid: string; wid: number }[] = [];
@@ -861,7 +930,7 @@ export default function GexChangeTop() {
   const filteredResults = results.filter((r) =>
     r.entry != null
     && (scoreCheap || r.entry > ENTRY_FLOOR)
-    && (!strict || strictOkIds.has(r.watch_id)));
+    && (!active || gateOkIds.has(r.watch_id)));
   const withPeak = filteredResults.filter((r) => r.max_pct != null);
   const hit = (n: number) => withPeak.filter((r) => (r.max_pct as number) >= n).length;
   const avgPeak = withPeak.length ? withPeak.reduce((a, r) => a + (r.max_pct as number), 0) / withPeak.length : null;
@@ -884,8 +953,8 @@ export default function GexChangeTop() {
       variant="budget"
       title={<span style={{ fontSize: 17 }}>GEX Change · Hourly Top 5</span>}
       subtitle={
-        (strict
-          ? `Strict gate · |Δ| ≥ $${(STRICT.chg / 1000).toFixed(0)}k & |% vs open| ≥ ${STRICT.pctOpen}% & |z| ≥ ${STRICT.z}`
+        (active
+          ? `Gate · ${GATE_TESTS.filter((t) => gateOn[t.key]).map((t) => t.label).join(" & ")}`
           : "★ Very strong picks (|Δ| ≥ $200k & |% vs open| ≥ 30%)")
         + `, ranked by score · captured every 30 min during RTH${loading ? " · refreshing…" : ""}`
       }
@@ -906,27 +975,69 @@ export default function GexChangeTop() {
         >
           Refresh
         </button>
-        {/* The strict gate. A view filter over what is already recorded — it
-            changes nothing about what the recorder captures, so the comparison
-            it enables is against picks that carry real grades. */}
-        <button
-          onClick={() => { setStrict((s) => !s); setFlipped({}); }}
-          title={
-            `Show only the picks that clear |Δ GEX| ≥ $${(STRICT.chg / 1000).toFixed(0)}k, `
-            + `|% vs open| ≥ ${STRICT.pctOpen}% and |z| ≥ ${STRICT.z} — the tighter live gate, applied to what was already captured. `
-            + `Filters the cards AND the scorecard, so the averages below are the tighter gate's actual record. `
-            + `Changes nothing about what the recorder files.`
-            + (strictHidden > 0 ? `\n\n${strictHidden} of the picks on this date do not clear it.` : "")
-          }
+        {/* THE GATE — three independent switches over what is already recorded.
+            Nothing here changes what the recorder captures, so the comparison
+            each one enables is against picks that already carry real grades.
+
+            Each switch's own reject count rides on its label. That number is
+            measured with the OTHER two ignored, so it answers "what does this
+            condition cost me" — the question the single all-three button could
+            not answer when it removed 53 of 54 picks. */}
+        <span
+          data-noshot="1"
           style={{
-            ...homeButtonStyle, padding: "6px 12px", fontSize: 13,
-            borderColor: strict ? tint(HOME_THEME.cyan, 0.5) : HOME_THEME.border,
-            color: strict ? HOME_THEME.cyan : HOME_THEME.text,
-            background: strict ? tint(HOME_THEME.cyan, 0.12) : homeButtonStyle.background,
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "3px 8px", borderRadius: 6,
+            border: `1px solid ${active ? tint(HOME_THEME.cyan, 0.35) : HOME_THEME.border}`,
           }}
         >
-          {strict ? `Strict gate · on (−${strictHidden})` : `Strict gate${strictHidden > 0 ? ` (−${strictHidden})` : ""}`}
-        </button>
+          <span
+            style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.text }}
+            title={
+              "View filters over the picks already recorded — they change nothing about what the recorder captures. "
+              + "Each switch filters the cards AND the scorecard, so the averages below are that combination's actual record. "
+              + "The count on a switch is how many of this date's picks IT ALONE rejects, with the others ignored; "
+              + "they will not sum to the total, because a pick can fail more than one."
+            }
+          >
+            Gate
+          </span>
+          {GATE_TESTS.map((t) => {
+            const on = gateOn[t.key];
+            const cost = gateCounts.alone[t.key] ?? 0;
+            return (
+              <button
+                key={t.key}
+                onClick={() => toggleGate(t.key)}
+                aria-pressed={on}
+                title={
+                  `${t.label} — on its own this drops ${cost} of ${gateCounts.total} pick${gateCounts.total === 1 ? "" : "s"} on this date.`
+                  + (t.key === "z"
+                    ? "\n\nOFF BY DEFAULT. z is (latest − mean) / sd over this strike's own recent deltas, so it measures ACCELERATION, not size — a strike that builds steadily has z near zero by construction, and steady building is what this scanner is for. Use it to ask \"show me only the bursts\", not as a size filter."
+                    : "")
+                }
+                style={{
+                  ...homeButtonStyle, padding: "3px 8px", fontSize: 11,
+                  borderColor: on ? tint(HOME_THEME.cyan, 0.5) : HOME_THEME.border,
+                  color: on ? HOME_THEME.cyan : HOME_THEME.text,
+                  background: on ? tint(HOME_THEME.cyan, 0.12) : homeButtonStyle.background,
+                }}
+              >
+                {t.label}
+                <span style={{ marginLeft: 5, color: HOME_THEME.text, fontSize: 10 }}>−{cost}</span>
+              </button>
+            );
+          })}
+          {active && (
+            <span
+              className="tabular"
+              style={{ fontSize: 10, color: HOME_THEME.text }}
+              title="Picks hidden by the switches that are currently on, together."
+            >
+              −{gateCounts.hidden} of {gateCounts.total}
+            </span>
+          )}
+        </span>
         <button
           onClick={flipAll}
           disabled={!flippable.length}
@@ -973,7 +1084,8 @@ export default function GexChangeTop() {
           {filteredResults.length > 0 && (
             <span style={{ fontSize: 12, color: HOME_THEME.text }}>
               {filteredResults.length} pick{filteredResults.length === 1 ? "" : "s"}{" "}
-              ({scoreCheap ? "all entries" : `entry > $${ENTRY_FLOOR.toFixed(2)}`}{strict ? " · strict gate" : ""}) · avg peak{" "}
+              ({scoreCheap ? "all entries" : `entry > $${ENTRY_FLOOR.toFixed(2)}`}
+              {active ? ` · ${GATE_TESTS.filter((t) => gateOn[t.key]).map((t) => t.label).join(" & ")}` : ""}) · avg peak{" "}
               <b style={{ color: avgPeak != null && avgPeak >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{fmtPct(avgPeak)}</b>
               {" · "}≥+25% <b style={{ color: HOME_THEME.text }}>{hit(25)}</b>
               {" · "}≥+50% <b style={{ color: HOME_THEME.text }}>{hit(50)}</b>
@@ -1112,8 +1224,10 @@ export default function GexChangeTop() {
             ? "Loading…"
             : slots.length > 0
               // Distinguish "nothing was recorded" from "the gate hid it all" —
-              // otherwise the strict toggle reads as a broken fetch.
-              ? `The strict gate hid all ${strictHidden} pick${strictHidden === 1 ? "" : "s"} on this date. Nothing recorded here cleared |Δ| ≥ $${(STRICT.chg / 1000).toFixed(0)}k, |% vs open| ≥ ${STRICT.pctOpen}% and |z| ≥ ${STRICT.z} together.`
+              // otherwise the switches read as a broken fetch. Naming the active
+              // conditions matters here: at this point the answer is usually
+              // "one of these is too tight", and the line should say which are on.
+              ? `The gate hid all ${gateCounts.total} pick${gateCounts.total === 1 ? "" : "s"} on this date. Nothing recorded here cleared ${GATE_TESTS.filter((t) => gateOn[t.key]).map((t) => t.label).join(" and ")} together — switch one off to see which.`
               : "No very-strong picks recorded yet for this date. The recorder files a strike the minute it crosses into ★ Very strong, and captures the top 5 every 30 min during RTH."}
         </div>
       )}
