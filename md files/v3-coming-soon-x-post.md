@@ -19,7 +19,7 @@ same account. nothing for you to do.
 
 cbedge.net
 
-CB Edge - "Your Unfair Edge in the Markets"
+CB Edge - Your edge. Their loss.
 
 ---
 

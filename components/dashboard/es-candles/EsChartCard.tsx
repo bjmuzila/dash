@@ -202,6 +202,40 @@ const HISTORY_SESSIONS = 5;
  */
 const HISTORY_FETCH_DAYS = 9;
 
+/**
+ * Is this record a bar, or wreckage?
+ *
+ * ONE bad row is enough to destroy the whole chart. lightweight-charts
+ * autoscales to what it is handed, so a single record carrying a zeroed open
+ * takes the price axis from a 60-point session range to 0-9,000: two days of
+ * candles collapse into a hairline at the top and the bad bar draws as a green
+ * spike down to zero.
+ *
+ * Seen intermittently on a symbol switch into SPX. The bars come back over HTTP
+ * from the cash recorder (useEtfCandles), and the newest row can be read while
+ * it is still being written — a real close on a zeroed open/low. The next poll
+ * carries the finished row, which is exactly why it looked random and why a
+ * manual refresh "fixed" it.
+ *
+ * Dropped rather than repaired: a bar we cannot trust is not a bar, and every
+ * layer downstream reads these numbers — the ES/SPX basis model, the volume and
+ * TPO profiles, the EMAs and Bollinger bands, the candle band the heatmap fades
+ * against. Guessing an open would put a fabricated print into all of them.
+ *
+ * Numeric STRINGS pass (`Number(v)`, not `typeof v === "number"`): the candle
+ * routes hand back whatever the driver produced, and a "7740.25" is a real
+ * price, not wreckage. Volume is deliberately not checked — a bar with no
+ * contracts in it is legitimate.
+ */
+const barPx = (v: unknown): number | null => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+const isSaneBar = (c: EsCandleRecord): boolean => {
+  const o = barPx(c?.open), h = barPx(c?.high), l = barPx(c?.low), cl = barPx(c?.close);
+  return o != null && h != null && l != null && cl != null && h >= l;
+};
+
 export interface EsChartCardProps {
   /**
    * Persistence namespace: 0 | 1 | 2 for the page's three cards, "embed" for the
@@ -645,10 +679,14 @@ function EsChartCard({
   // resolution available, not hourly bars.
   const rows5 = useMemo(() => {
     const map = new Map<string, EsCandleRecord>();
-    for (const c of historical) if (c.slotKey) map.set(c.slotKey, c);
+    // `isSaneBar` on BOTH sides — see its comment. It sits here rather than in
+    // the two hooks because this is the one place every source is already
+    // funnelled through, and because "live wins" would otherwise let a
+    // half-written live copy overwrite a good recorded bar on the same slot.
+    for (const c of historical) if (c.slotKey && isSaneBar(c)) map.set(c.slotKey, c);
     // ETF rows have no second live stream to merge — `historical` already IS the
     // recorded series, refreshed on the hook's interval.
-    if (isEs) for (const c of liveRows) if (c.slotKey) map.set(c.slotKey, c); // live wins
+    if (isEs) for (const c of liveRows) if (c.slotKey && isSaneBar(c)) map.set(c.slotKey, c); // live wins
     const all = [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
     // ── Trim by SESSION, not by wall clock ──────────────────────────────────
     // A `Date.now() - 48h` cutoff is a different amount of history depending on

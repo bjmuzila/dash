@@ -30,6 +30,13 @@
 // DATE lives in the query string, so /v3/level-log?date=2026-09-02 still shares
 // a session — which is why app/v3/level-log/route.ts has to answer it.
 //
+// THE RAIL SETS THAT SAME SYMBOL. The card strip above the log (Part E, as
+// cards — see levelLog/TickerRail.tsx) is a SELECTOR, not a second picker: a
+// card writes the page symbol the toolbar owns, so the two always agree and the
+// log below is always the log of the card that is lit. Which cards are on the
+// rail is per browser, and the owner's copy also lives in Postgres — the
+// two-tier note is in levelLog/railStore.ts.
+//
 // CORE MIGRATION opens `public/core-migration.html` — v2's standalone long-range
 // chart (the selected ticker's CORE across the last 63 recorded sessions, walls
 // on a toggle) — in its own tab, primed with WHATEVER THIS PAGE IS ON: the
@@ -71,6 +78,7 @@ import { SegGroup } from '@/design/primitives/Controls'
 import { Page } from '@/design/primitives/Page'
 import { LEVEL_COLORS, alpha } from '@/design/theme'
 import { usePageSymbol } from '@/data/symbol'
+import { TickerRail } from '@/pages/levelLog/TickerRail'
 import { MIG_H, WallMigrationChart } from '@/pages/levelLog/WallMigrationChart'
 import {
   type ExpScope,
@@ -137,7 +145,7 @@ export default function LevelLog() {
   // it lives in the query string so /v3/level-log?date=2026-09-02 is a
   // shareable link — which is also why app/v3/level-log/route.ts has to answer
   // the hard refresh.
-  const { symbol } = usePageSymbol()
+  const { symbol, setSymbol } = usePageSymbol()
   const [params, setParams] = useSearchParams()
   const date = (params.get('date') || '').trim() || todayETStr()
 
@@ -205,6 +213,19 @@ export default function LevelLog() {
 
   return (
     <Page>
+      {/* Above the log, and driving it: the card whose symbol is lit is the
+          session drawn underneath. Same date and same variant switches, so the
+          rail's numbers and the chart's are one reading of one recorder. */}
+      <TickerRail
+        date={date}
+        view={view}
+        scope={scope}
+        basis={basis}
+        nonce={nonce + tick}
+        symbol={symbol}
+        onPick={setSymbol}
+      />
+
       <Card
         title="Level Log"
         expandId={CARD_ID}

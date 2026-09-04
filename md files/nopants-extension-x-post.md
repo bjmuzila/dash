@@ -15,7 +15,7 @@ CODE: NOPANTS
 
 when these are gone, they're gone. cbedge.net
 
-CB Edge - "Your Unfair Edge in the Markets"
+CB Edge - Your edge. Their loss.
 
 ---
 
@@ -27,7 +27,7 @@ CB Edge - "Your Unfair Edge in the Markets"
 
 cbedge.net
 
-CB Edge - "Your Unfair Edge in the Markets"
+CB Edge - Your edge. Their loss.
 
 ---
 
@@ -39,7 +39,7 @@ adding 3 more spots since so many of you asked. same $300/yr, same code NOPANTS.
 
 cbedge.net
 
-CB Edge - "Your Unfair Edge in the Markets"
+CB Edge - Your edge. Their loss.
 
 ---
 

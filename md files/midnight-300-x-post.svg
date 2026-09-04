@@ -1,7 +1,7 @@
 <svg viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg" role="img">
 <title>CB Edge — final call, 2 spots at $300/yr, ends at midnight, code EDGE</title>
 <desc>CB Edge dashboard-theme promo graphic: 2 spots left for full annual access at $300 with code EDGE, offer ends tonight at midnight.</desc>
-<defs>
+<defs><linearGradient id="cbRed" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="512" y2="0"><stop offset="0" stop-color="#8f0f0f"/><stop offset="1" stop-color="#ff6b6b"/></linearGradient><linearGradient id="cbGreen" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="512" y2="0"><stop offset="0" stop-color="#6ff08d"/><stop offset="1" stop-color="#0a7d31"/></linearGradient>
   <radialGradient id="glowL" cx="12%" cy="45%" r="62%">
     <stop offset="0%" stop-color="#219EBC" stop-opacity="0.12"/>
     <stop offset="100%" stop-color="#219EBC" stop-opacity="0"/>
@@ -48,9 +48,10 @@
 <rect x="0" y="0" width="1200" height="4" fill="url(#accentBar)"/>
 
 <!-- header -->
-<text x="60" y="70" class="brand" font-size="38">CB Edge</text>
-<text x="60" y="100" class="tag" font-size="18">Real edge · real orderflow — live GEX, key levels &amp; options flow</text>
-<rect x="60" y="116" width="120" height="3" rx="1.5" fill="#219EBC"/>
+<g transform="translate(60 26) scale(0.121094)"><rect x="45.06" y="45.06" width="421.89" height="421.89" rx="52.22" fill="none" stroke="#fff" stroke-width="13.31"/><rect x="76.26" y="196.81" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="196.81" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="250.78" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="250.78" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="304.74" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="304.74" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="358.71" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="358.71" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="412.67" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="412.67" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="250.34" y="188.11" width="4.79" height="255.9" rx="2.39" fill="#fff"/></g>
+<text x="138" y="68" class="brand" font-size="36" letter-spacing="1">CB EDGE</text>
+<text x="140" y="98" class="tag" font-size="18">Your edge. Their loss. — live GEX, key levels &amp; options flow</text>
+<rect x="140" y="114" width="120" height="3" rx="1.5" fill="#219EBC"/>
 
 <!-- badge -->
 <rect x="820" y="34" width="324" height="72" rx="20" fill="#ffffff" filter="url(#softGlow)" opacity="0.20"/>
@@ -105,6 +106,6 @@
 <rect x="560" y="496" width="580" height="66" rx="16" fill="url(#ctaBtn)"/>
 <text x="850" y="538" class="cta" font-size="22" text-anchor="middle">CLAIM 1 OF 2 SPOTS →</text>
 <text x="560" y="600" class="h" font-size="22">cbedge.net</text>
-<text x="560" y="628" class="tag" font-size="16">CB Edge — "Your Unfair Edge in the Markets"</text>
+<text x="560" y="628" class="tag" font-size="16">CB Edge — Your edge. Their loss.</text>
 <text x="1140" y="652" class="fine" font-size="13" text-anchor="end">suck my a** scott</text>
 </svg>

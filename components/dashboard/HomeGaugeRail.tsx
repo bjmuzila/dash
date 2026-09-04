@@ -150,7 +150,7 @@ function SegMeter({
   midT,
   color,
   kind,
-  n = 20,
+  n = 30,
 }: {
   t: number | null;
   midT: number;
@@ -158,7 +158,10 @@ function SegMeter({
   kind: "signed" | "pct";
   n?: number;
 }) {
-  const W = 118, H = 30, pad = 5, gap = 2.2;
+  // Finer segment count: at 20 wide bars a full-scale fill read as one solid
+  // slab rather than a meter. More, thinner LEDs keep the segmented look at
+  // both ends of the range and give the fill visible resolution.
+  const W = 118, H = 30, pad = 5, gap = 1.5;
   const segW = (W - pad * 2 - gap * (n - 1)) / n;
   const segH = 22, y = 4;
   const has = t != null && Number.isFinite(t);
@@ -177,9 +180,9 @@ function SegMeter({
         y={y}
         width={segW}
         height={segH}
-        rx={2}
+        rx={1}
         fill={on ? color : "rgba(255,255,255,0.07)"}
-        style={on ? { filter: `drop-shadow(0 0 3px ${color}cc)` } : undefined}
+        style={on ? { filter: `drop-shadow(0 0 2px ${color}cc)` } : undefined}
       />,
     );
   }

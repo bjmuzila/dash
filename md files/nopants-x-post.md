@@ -17,7 +17,7 @@ last time these were gone in minutes.
 
 cbedge.net
 
-CB Edge - "Your Unfair Edge in the Markets"
+CB Edge - Your edge. Their loss.
 
 ---
 
@@ -31,7 +31,7 @@ CODE: NOPANTS — today only.
 
 cbedge.net
 
-CB Edge - "Your Unfair Edge in the Markets"
+CB Edge - Your edge. Their loss.
 
 ---
 
@@ -43,7 +43,7 @@ both my kids started school full time — this is the celebration.
 
 they went in minutes last time. cbedge.net
 
-CB Edge - "Your Unfair Edge in the Markets"
+CB Edge - Your edge. Their loss.
 
 ---
 

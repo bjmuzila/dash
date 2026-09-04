@@ -1,7 +1,7 @@
 <svg viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg" role="img">
 <title>CB Edge feature overview graphic for X post</title>
 <desc>Dark trading-dashboard style graphic listing CB Edge's eight core features: GEX Dashboard, CB Key Levels, ES Candles, Signals Engine, Options Flow, EM Tracker, Greeks, and Scanner.</desc>
-<defs>
+<defs><linearGradient id="cbRed" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="512" y2="0"><stop offset="0" stop-color="#8f0f0f"/><stop offset="1" stop-color="#ff6b6b"/></linearGradient><linearGradient id="cbGreen" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="512" y2="0"><stop offset="0" stop-color="#6ff08d"/><stop offset="1" stop-color="#0a7d31"/></linearGradient>
 <style>
   .bg { fill: #0a0f1a; }
   .card { fill: #121a2b; stroke: #1f2b42; stroke-width: 1.5; }
@@ -23,11 +23,12 @@
 </g>
 
 <!-- Header -->
-<text x="60" y="70" class="title" font-size="40">CB Edge</text>
-<text x="60" y="102" class="tag" font-size="20">Live SPX / ES gamma exposure, key levels &amp; options flow</text>
+<g transform="translate(60 26) scale(0.125000)"><rect x="45.06" y="45.06" width="421.89" height="421.89" rx="52.22" fill="none" stroke="#fff" stroke-width="13.31"/><rect x="76.26" y="196.81" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="196.81" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="250.78" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="250.78" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="304.74" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="304.74" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="358.71" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="358.71" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="412.67" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="412.67" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="250.34" y="188.11" width="4.79" height="255.9" rx="2.39" fill="#fff"/></g>
+<text x="140" y="72" class="title" font-size="38" letter-spacing="1">CB EDGE</text>
+<text x="142" y="102" class="tag" font-size="19">Your edge. Their loss.</text>
 
 <!-- green accent bar -->
-<rect x="60" y="118" width="140" height="4" fill="#4ade80"/>
+<rect x="142" y="118" width="140" height="4" fill="#4ade80"/>
 
 <!-- 4x2 grid of feature cards -->
 <!-- Row 1 -->

@@ -1,7 +1,7 @@
 <svg viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>CB Edge pricing announcement, dashboard card style</title>
   <desc>CB Edge is $45 a month (code MONTH) or $500 a year (code YEAR), versus others charging $99, $199, or $699. Headline enlarged.</desc>
-  <defs>
+  <defs><linearGradient id="cbRed" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="512" y2="0"><stop offset="0" stop-color="#8f0f0f"/><stop offset="1" stop-color="#ff6b6b"/></linearGradient><linearGradient id="cbGreen" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="512" y2="0"><stop offset="0" stop-color="#6ff08d"/><stop offset="1" stop-color="#0a7d31"/></linearGradient>
     <radialGradient id="bgglow1" cx="15%" cy="30%" r="60%">
       <stop offset="0%" stop-color="#219EBC" stop-opacity="0.10"/>
       <stop offset="100%" stop-color="#219EBC" stop-opacity="0"/>
@@ -10,13 +10,6 @@
       <stop offset="0%" stop-color="#126783" stop-opacity="0.12"/>
       <stop offset="100%" stop-color="#126783" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#f4f6f8"/>
-      <stop offset="45%" stop-color="#aeb8c2"/>
-      <stop offset="55%" stop-color="#8a94a0"/>
-      <stop offset="100%" stop-color="#e7eaee"/>
-    </linearGradient>
-
     <radialGradient id="glossRed" cx="50%" cy="0%" r="65%">
       <stop offset="0%" stop-color="#EF4444" stop-opacity="0.12"/>
       <stop offset="60%" stop-color="#EF4444" stop-opacity="0"/>
@@ -35,8 +28,9 @@
   <rect width="1200" height="675" fill="url(#bgglow1)"/>
   <rect width="1200" height="675" fill="url(#bgglow2)"/>
 
-  <text x="1120" y="52" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="28" font-style="italic" font-weight="800" fill="url(#chrome)">CB Edge</text>
-  <text x="1120" y="72" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="11" letter-spacing="1" fill="#FFFFFF" opacity="0.5">&#8220;Real Edge &#8226; Real Orderflow&#8221;</text>
+  <g transform="translate(918 24) scale(0.117188)"><rect x="45.06" y="45.06" width="421.89" height="421.89" rx="52.22" fill="none" stroke="#fff" stroke-width="13.31"/><rect x="76.26" y="196.81" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="196.81" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="250.78" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="250.78" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="304.74" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="304.74" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="358.71" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="358.71" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="76.26" y="412.67" width="156.24" height="26.98" rx="2.7" fill="url(#cbRed)"/><rect x="272.54" y="412.67" width="161.89" height="26.98" rx="2.7" fill="url(#cbGreen)"/><rect x="250.34" y="188.11" width="4.79" height="255.9" rx="2.39" fill="#fff"/></g>
+  <text x="1120" y="56" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="26" letter-spacing="1" font-weight="800" fill="#FFFFFF">CB EDGE</text>
+  <text x="1120" y="78" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="12" letter-spacing="1" fill="#FFFFFF" opacity="0.6">Your edge. Their loss.</text>
 
   <rect x="80" y="94" width="56" height="3" fill="#FB8501"/>
   <text x="80" y="164" font-family="Arial, Helvetica, sans-serif" font-size="44" fill="#FFFFFF" font-weight="800">What&#8217;s the right price</text>

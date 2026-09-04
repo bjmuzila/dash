@@ -1,5 +1,130 @@
 # Changelog
 
+## 2026-09-04 - Level Log: a ticker CARD RAIL above the log, saved per browser (owner: Postgres)
+
+`/v3/level-log` now opens with a strip of small ticker cards above the Level Log
+card. Each card is that symbol's day summary off `/proxy/walls?date=` - spot, the
+levels currently in view (PUT / CALL / CORE, in price order), the session delta
+off the 09:29 baseline, and the change count - and clicking one sets the PAGE
+SYMBOL, so the log underneath is always the log of the card that is lit. This is
+parity Part E (v2's ticker rail), rebuilt as cards instead of a 620px table.
+
+- New `cbedge-v3/src/pages/levelLog/railStore.ts` - the rail list and its two
+  storage tiers, plus `useWallUniverse()` (ONE `/proxy/walls` day-summary read
+  feeds every card, fired from the same render as the chart's own fetch, so no
+  waterfall).
+- New `cbedge-v3/src/pages/levelLog/TickerRail.tsx` - the strip. Every tile is a
+  real `Card` (flush, non-expandable). The select target and the remove control
+  are siblings, not nested buttons.
+- `cbedge-v3/src/pages/LevelLog.tsx` - renders the rail above the log card and
+  passes it the same date / view / scope / basis / refresh nonce.
+
+Behaviour:
+- SPX, SPY and QQQ are PINNED: no x, and `normalizeRail()` forces them back to
+  the front of any list that arrives without them (client and server both).
+- Any other card can be x'd off; `+ Add` is the app's own `TickerPicker`, so a
+  starred symbol here is starred in the toolbar too. Off-universe symbols are
+  accepted (`allowCustom`), same as the toolbar. Rail caps at 24 cards.
+- `Reset` puts the default rail back: SPX SPY QQQ AAPL AMZN GOOGL META MSFT NVDA
+  TSLA. (The brief's tenth symbol was typed "spcx", which is not a listed root -
+  read as the missing mega-cap and shipped as AAPL. One x and one + changes it,
+  and the change saves.)
+
+Storage - two tiers, and localStorage is never the loser:
+- Everyone: `localStorage['cb-v3-level-log-rail']`, written on every edit. The
+  rail paints from it on the first frame, no round trip.
+- OWNER: also `/api/level-log-tickers` (Postgres), so the rail follows the
+  account between machines. The GET returns `{ stored, tickers }`; `stored:false`
+  (no row) leaves the browser's list alone, which is what keeps "no saved rail"
+  distinct from "a deliberately emptied rail". A 401, a dead DB or an offline
+  box all fall back to the local copy silently. POST is debounced 400ms.
+
+Server (`server-v2/api-router.js`, in the `if (libDb)` block, beside the other
+per-user prefs routes):
+- New `/api/level-log-tickers`, GET + POST, `auth: 'subscriber'`, keyed on the
+  authed userId. Symbols are validated and the three pinned re-forced in both
+  directions; 24 max.
+- Table `level_log_ticker_prefs (clerk_user_id, tickers jsonb, updated_at)` is
+  created lazily by the route via `libDb.queryAll` rather than added to
+  `lib/db.ts`'s ensureSchema - so `_lib-db.cjs` needs NO esbuild rebuild. Same
+  precedent as the mvc `?lite=1` read in the same file.
+
+No proxy code changed. No `/proxy/*` handler, auth gate or recorder was touched -
+the rail only READS the existing `/proxy/walls` day summary.
+
+
+## 2026-09-04 - Home gauge rail: finer LED segments (`components/dashboard/HomeGaugeRail.tsx`)
+
+The six meters on the /home gauge rail drew 20 wide segments, so a reading near
+full scale filled as one solid slab and stopped reading as a segmented meter.
+
+Bumped `SegMeter` to 30 segments with a tighter 1.5px gap (segment width ~2.15px
+inside the same 118px meter), and trimmed the corner radius to 1px plus a 2px
+glow so the thinner bars stay rectangular rather than turning into pills. No
+change to scales, normalization, or data wiring - purely how the fill is drawn.
+
+
+## 2026-09-04 - A zeroed bar can no longer flatten the chart (`components/dashboard/es-candles/EsChartCard.tsx`)
+
+Switching to SPX occasionally drew the price axis 0-9,000 with two days of
+candles squashed into a hairline and one green spike running down to zero. A
+refresh cleared it.
+
+Cause: SPX bars come over HTTP from the cash recorder (`useEtfCandles`, 60s
+poll), and the newest row can be read while it is still being written - a real
+close on a zeroed open/low. lightweight-charts autoscales to what it is handed,
+so that single record set the range for the whole series. The next poll carried
+the finished row, which is why it looked random and why refreshing "fixed" it.
+
+- New `barPx` / `isSaneBar` beside `HISTORY_FETCH_DAYS`: a record is a bar only
+  if open/high/low/close all parse to finite POSITIVE numbers and high >= low.
+  Numeric strings pass (`Number(v)`); volume is not checked - a bar with no
+  contracts in it is legitimate.
+- `rows5` filters both sources through it. It lives there rather than in the two
+  hooks because that merge is the one place every source is funnelled through -
+  and because "live wins" would otherwise let a half-written live copy overwrite
+  a good recorded bar on the same slot.
+
+Dropped, not repaired: every layer downstream reads these numbers - the ES/SPX
+basis model, the volume and TPO profiles, the EMAs and Bollinger bands, the
+candle band the heatmap fades against - so a fabricated open would propagate
+into all of them.
+
+## 2026-09-04 - The archived X-post graphics move to v3 branding (`md files/`)
+
+Follow-on to the OG card. All seven promo/feature graphics still led with the
+plain-text "CB Edge" wordmark and one of three retired taglines. Each now opens
+with the v3 lockup and reads "Your edge. Their loss."
+
+The badge is inlined per file as a plain `<g>` - the ladder geometry copied
+verbatim out of `public/cbedge-mark.svg` (outer 421.89 rounded rect, five
+red/green bar pairs, centre divider) driving the same `cbRed` / `cbGreen`
+gradients. It is NOT a `<symbol>` + `<use>`: those gradients are
+`gradientUnits="userSpaceOnUse"` and renderers disagree about how that resolves
+through a use-element. The traced "CB EDGE" lettering from the mark file is left
+out on purpose - it is ~14KB of path data - so each poster sets the wordmark in
+its own type stack, which is what the `cbedge3.0.png` lockup does anyway.
+
+- `cbedge_x_post.svg`, `cbedge_x_post_v3.svg` - badge + `CB EDGE`; the
+  "Live SPX / ES gamma exposure..." descriptor becomes the tagline. Accent bar
+  shifted to x=140 to sit under the type rather than the badge.
+- `cbedge_x_post_v2.svg` - badge sits OUTSIDE the `skewX(-6)` group or it shears
+  with the neon type; the glitch wordmark moved to x=150. Its frame stays white
+  (brand) rather than picking up the poster's neon green. Kicker is now
+  "YOUR EDGE. THEIR LOSS."
+- `cb-edge-pricing-post.svg` - dropped the `chrome` linearGradient and the
+  italic chrome wordmark it fed. That was the old logo. Badge + right-aligned
+  `CB EDGE` in its place.
+- `nopants-x-post.svg`, `nopants-extension-x-post.svg`, `midnight-300-x-post.svg` -
+  header lockup, tagline now "Your edge. Their loss. - live GEX, key levels &
+  options flow", and the footer sign-off drops "Your Unfair Edge in the Markets".
+- Their `.png` siblings re-rendered at the same 1200x675 through headless
+  chromium.
+- `cbedge-x-posts.md`, `v3-coming-soon-x-post.md` and the three promo `.md`
+  copy files - same sign-off swap (30 occurrences).
+
+Contact sheet of all seven: `generated/2026-09-04-x-posts-v3-rebrand.png`.
+
 ## 2026-09-04 - Social share card carries the v3 logo (`app/opengraph-image.tsx`)
 
 Every link to cbedge.net still unfurled with the old chrome "CB Edge - Real Edge,

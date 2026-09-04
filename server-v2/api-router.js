@@ -4289,6 +4289,100 @@ if (libDb) {
     },
   });
 
+  // /api/level-log-tickers — the /v3/level-log ticker CARD RAIL, per user.
+  //
+  // The rail is stored per BROWSER in localStorage for everyone; this route is
+  // the second copy, so a rail follows an account between machines. Today only
+  // the owner's client calls it (cbedge-v3/src/pages/levelLog/railStore.ts) —
+  // it is registered at 'subscriber' rather than 'owner' because the row is
+  // keyed on the authed userId and is per-user by construction, so opening it
+  // to everyone later is a client change and not a server one.
+  //
+  //   GET            → { stored: boolean, tickers: string[] }
+  //                    stored:false = no row for this user; the client keeps
+  //                    whatever its browser already had. That distinction is
+  //                    the whole contract: an empty list is a DELIBERATE rail
+  //                    (everything but the pinned three removed) and must not
+  //                    read the same as "never saved".
+  //   POST {tickers} → { ok: true, stored: true, tickers }
+  //
+  // SPX / SPY / QQQ are forced back to the front of every list on the way in
+  // and on the way out — the rail pins them and a client that drops them is a
+  // stale client, not a new preference.
+  //
+  // The table is created lazily HERE rather than in lib/db.ts's ensureSchema so
+  // _lib-db.cjs needs no rebuild — the same reasoning as the mvc `?lite=1` read
+  // further down. Everything else goes through libDb.queryAll, which is the
+  // bundle's own pooled query with `?` → `$n` rewriting.
+  const LEVEL_LOG_PINNED = ['SPX', 'SPY', 'QQQ'];
+  const LEVEL_LOG_MAX = 24;                       // matches RAIL_MAX client-side
+  const LEVEL_LOG_SYM_RE = /^[A-Z][A-Z.]{0,5}$/;  // matches RAIL_TICKER_RE
+
+  // One CREATE per process, memoised on the PROMISE so two concurrent first
+  // requests do not both issue it. Cleared on failure so a transient DB error
+  // does not poison every later request with a resolved-but-wrong cache.
+  let levelLogSchema = null;
+  function ensureLevelLogSchema() {
+    if (!levelLogSchema) {
+      levelLogSchema = libDb.queryAll(
+        `CREATE TABLE IF NOT EXISTS level_log_ticker_prefs (
+           clerk_user_id TEXT PRIMARY KEY,
+           tickers       JSONB NOT NULL DEFAULT '[]'::jsonb,
+           updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+         )`,
+        [],
+      ).catch((e) => { levelLogSchema = null; throw e; });
+    }
+    return levelLogSchema;
+  }
+
+  function cleanLevelLogTickers(v) {
+    const seen = new Set();
+    const out = [];
+    for (const p of LEVEL_LOG_PINNED) { seen.add(p); out.push(p); }
+    for (const raw of (Array.isArray(v) ? v : [])) {
+      const s = String(raw ?? '').trim().toUpperCase().slice(0, 12);
+      if (!s || seen.has(s) || !LEVEL_LOG_SYM_RE.test(s)) continue;
+      seen.add(s); out.push(s);
+      if (out.length >= LEVEL_LOG_MAX) break;
+    }
+    return out;
+  }
+
+  register('/api/level-log-tickers', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (!userId) return send(res, 401, { error: 'Unauthorized' });
+      try {
+        await ensureLevelLogSchema();
+        if (req.method === 'POST') {
+          const body = await readJson(req);
+          const tickers = cleanLevelLogTickers(body?.tickers);
+          await libDb.queryAll(
+            `INSERT INTO level_log_ticker_prefs (clerk_user_id, tickers, updated_at)
+             VALUES (?, ?::jsonb, CURRENT_TIMESTAMP)
+             ON CONFLICT (clerk_user_id) DO UPDATE SET
+               tickers = EXCLUDED.tickers, updated_at = CURRENT_TIMESTAMP`,
+            [userId, JSON.stringify(tickers)],
+          );
+          return send(res, 200, { ok: true, stored: true, tickers });
+        }
+        const rows = await libDb.queryAll(
+          'SELECT tickers FROM level_log_ticker_prefs WHERE clerk_user_id = ?',
+          [userId],
+        );
+        const raw = rows?.[0]?.tickers;
+        if (raw == null) return send(res, 200, { stored: false, tickers: [] });
+        const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return send(res, 200, { stored: true, tickers: cleanLevelLogTickers(arr) },
+          { 'Cache-Control': 'private, max-age=15' });
+      } catch (err) {
+        return send(res, 500, { error: 'Level-log rail failed', detail: String(err) });
+      }
+    },
+  });
+
   // /api/dashboard-layout — saved card layouts ("templates") for a dashboard
   // page's drag/resize grid, per user PER PAGE.
   //

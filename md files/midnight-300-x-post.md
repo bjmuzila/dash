@@ -15,7 +15,7 @@ CODE: EDGE
 
 cbedge.net
 
-CB Edge - "Your Unfair Edge in the Markets"
+CB Edge - Your edge. Their loss.
 
 ---
 
@@ -27,7 +27,7 @@ midnight. that's the whole offer.
 
 cbedge.net
 
-CB Edge - "Your Unfair Edge in the Markets"
+CB Edge - Your edge. Their loss.
 
 ---
 
@@ -39,7 +39,7 @@ $1,000/yr → $300/yr with code EDGE.
 
 cbedge.net
 
-CB Edge - "Your Unfair Edge in the Markets"
+CB Edge - Your edge. Their loss.
 
 ---
 
