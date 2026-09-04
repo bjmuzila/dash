@@ -598,10 +598,11 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
     // the WHOLE ladder — not just the visible window, so panning away from it
     // hides the badge instead of quietly relabelling whatever is on screen.
     //
-    // The name follows the basis, because it is a different claim on each:
-    // "CB" is v2's Core Bullseye on the standing book, "CB·Vol" is the day's
-    // volume alone, "CB·Flow" is the dealer's own inventory.
-    const core = coreStrike(model.rows, model.basis, flowActive)
+    // Always the day's VOLUME alone — the core no longer follows the basis, so
+    // the badge stays on the strike today's traded gamma built while the bars
+    // underneath it change. The "·Vol" tag says which claim it is making; the
+    // CB tile above the chart reads the same definition.
+    const core = coreStrike(model.rows)
     const coreIdx = core == null ? -1 : data.findIndex((r) => r.strike === core)
     const coreRow = coreIdx >= 0 ? data[coreIdx] : undefined
     if (coreRow) {
@@ -610,7 +611,7 @@ export function mountGexChart(container: HTMLElement): GexChartHandle {
       const col = cv >= 0 ? p.pos : p.neg
       ctx.save()
       ctx.font = 'bold 10px ui-monospace, monospace'
-      const tag = flowActive ? 'CB·Flow' : model.basis === 'vol-only' ? 'CB·Vol' : 'CB'
+      const tag = 'CB·Vol'
       const lbl = `${tag} ${coreRow.strike.toLocaleString('en-US')}`
       const bw = ctx.measureText(lbl).width + 10
       const bh = 15

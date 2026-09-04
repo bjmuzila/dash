@@ -142,7 +142,24 @@ export function dexSupported(rows: GexRow[], basis: GexBasis): boolean {
   return false
 }
 
-// ── Derived levels, all on the active basis ──────────────────────────────────
+// ── Derived levels ───────────────────────────────────────────────────────────
+//
+// Most of these follow the ACTIVE basis. The CORE and the WALLS deliberately do
+// not: they are pinned to VOLUME ONLY (`netVolGEX`) whatever the chart is
+// drawing, because the level that matters intraday is the one today's traded
+// contracts built, not the standing book behind it. See `volNetOf`.
+
+/**
+ * A row's net gamma on the DAY'S VOLUME ALONE — `netVolGEX`, never the book,
+ * never flow. The one accessor the core and the walls read.
+ *
+ * Consequence worth knowing: before there is any volume on the tape (premarket,
+ * a dead ticker) every row is 0, so the core and both walls come back `null`
+ * and their tiles show "—" rather than a stale open-interest level.
+ */
+export function volNetOf(r: GexRow): number {
+  return netGexOf(r, 'vol-only', false)
+}
 
 /** Sum of the net bars — the number in the card header. */
 export function totalNet(rows: GexRow[], basis: GexBasis, flowActive: boolean): number {
@@ -153,17 +170,23 @@ export function totalNet(rows: GexRow[], basis: GexBasis, flowActive: boolean): 
 
 /**
  * The CORE (v2 calls it CB, Core Bullseye): the strike carrying the biggest
- * |net| on the WHOLE ladder.
+ * |net| on the WHOLE ladder — on VOLUME ONLY.
  *
  * Whole-board, not the near-spot window Key Levels uses for its magnet. This is
- * the level v2's chart badges and its CB tile both mark, and the two surfaces
+ * the level the chart badge and the CB tile both mark, and the two surfaces
  * matching matters more here than the two definitions being reconciled.
+ *
+ * ⚠ Takes no basis. The core is volume-only by design, so it does NOT move when
+ * the chart is switched to OI+VOL or FLOW — the bars change under it and the
+ * badge stays where the day's traded gamma is. That is intended, not a
+ * regression of the "cards can never disagree with the chart" rule: the badge
+ * and the tile still read this one definition.
  */
-export function coreStrike(rows: GexRow[], basis: GexBasis, flowActive: boolean): number | null {
+export function coreStrike(rows: GexRow[]): number | null {
   let best: number | null = null
   let bestAbs = 0
   for (const r of rows) {
-    const a = Math.abs(netGexOf(r, basis, flowActive))
+    const a = Math.abs(volNetOf(r))
     if (a > bestAbs) {
       bestAbs = a
       best = r.strike
@@ -172,20 +195,18 @@ export function coreStrike(rows: GexRow[], basis: GexBasis, flowActive: boolean)
   return best
 }
 
-/** Largest positive net strictly above spot / most negative strictly below. */
-export function wallsOf(
-  rows: GexRow[],
-  spot: number,
-  basis: GexBasis,
-  flowActive: boolean,
-): { call: number | null; put: number | null } {
+/**
+ * Largest positive net strictly above spot / most negative strictly below —
+ * on VOLUME ONLY, for the same reason the core is. Takes no basis.
+ */
+export function wallsOf(rows: GexRow[], spot: number): { call: number | null; put: number | null } {
   let call: number | null = null
   let put: number | null = null
   let callV = 0
   let putV = 0
   if (!(spot > 0)) return { call, put }
   for (const r of rows) {
-    const v = netGexOf(r, basis, flowActive)
+    const v = volNetOf(r)
     if (r.strike > spot && v > callV) {
       callV = v
       call = r.strike
@@ -205,7 +226,7 @@ export function wallsOf(
  *
  * The same rule as chainGex.findGexFlip — "first crossing wins", the server's
  * own — but on the ACTIVE basis rather than always OI+VOL, so the flip tile
- * moves with the basis switch the way the walls do.
+ * moves with the basis switch. Unlike the core and the walls, which do not.
  */
 export function flipOf(rows: GexRow[], basis: GexBasis, flowActive: boolean): number | null {
   const sorted = [...rows].sort((a, b) => a.strike - b.strike)

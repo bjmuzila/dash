@@ -13,15 +13,22 @@ import { coreStrike, flipOf, fmtGexShort, posGexPct, totalNet, wallsOf } from '.
 //   +GEX % · Bull/Bear
 //
 // ── They read the CHART'S numbers, not their own ─────────────────────────────
-// Eight of the ten are derived from the same rows the bars are drawn from, on
-// the same basis, through the same accessors in values.ts. That is the whole
-// point of the row sitting directly above the chart: v2's comment on this block
-// says it out loud — "the cards can never disagree with the chart beneath
-// them" — and the only way to keep that true is to have one definition of each
-// level, not two.
+// They are derived from the same rows the bars are drawn from, through the same
+// accessors in values.ts. That is the whole point of the row sitting directly
+// above the chart: v2's comment on this block says it out loud — "the cards can
+// never disagree with the chart beneath them" — and the only way to keep that
+// true is to have one definition of each level, not two.
 //
-// So switching the chart to VOL moves the walls, the core and the flip with it.
-// A tile that did NOT move would be the bug.
+// Net GEX, Flip and +GEX % follow the ACTIVE basis, so switching the chart to
+// VOL moves them with it. A tile that did NOT move would be the bug.
+//
+// ── The three pinned to VOLUME ONLY ──────────────────────────────────────────
+//   Call Wall · Put Wall · CB   always `netVolGEX`, whatever basis the chart is
+//   on. The level worth marking intraday is the one today's traded contracts
+//   built, not the standing book behind it, so these deliberately do NOT move
+//   with the basis switch — the chart's own CB badge reads the same definition
+//   and is labelled "CB·Vol" for it. See coreStrike / wallsOf in values.ts.
+//   With no volume on the tape yet they read "—" rather than an OI level.
 //
 // ── The two that come from somewhere else ────────────────────────────────────
 //   ±1σ (EM)   this week's estimated-move band, /api/em-tracker — the same
@@ -116,8 +123,8 @@ export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsPr
 
   const tiles = useMemo<Tile[]>(() => {
     const total = rows.length ? totalNet(rows, basis, flowActive) : null
-    const walls = wallsOf(rows, spot, basis, flowActive)
-    const core = coreStrike(rows, basis, flowActive)
+    const walls = wallsOf(rows, spot)
+    const core = coreStrike(rows)
     const flip = flipOf(rows, basis, flowActive)
     const maxPain = computeMaxPain(rows)
     const pct = rows.length ? posGexPct(rows, basis, flowActive) : null
@@ -137,14 +144,14 @@ export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsPr
         label: 'Call Wall',
         value: px(walls.call),
         colour: '--color-level-cw',
-        title: 'Largest positive net gamma strictly above spot',
+        title: 'Largest positive net gamma strictly above spot. Volume only — it does not move with the basis switch',
       },
       {
         key: 'putWall',
         label: 'Put Wall',
         value: px(walls.put),
         colour: '--color-level-pw',
-        title: 'Most negative net gamma strictly below spot',
+        title: 'Most negative net gamma strictly below spot. Volume only — it does not move with the basis switch',
       },
       {
         key: 'flip',
@@ -158,7 +165,7 @@ export function StatCards({ rows, spot, symbol, basis, flowActive }: StatCardsPr
         label: 'CB',
         value: px(core),
         colour: '--color-level-cb',
-        title: 'Core Bullseye — the strike carrying the biggest absolute net gamma on the whole ladder. The badge on the chart marks the same strike',
+        title: 'Core Bullseye — the strike carrying the biggest absolute net gamma on the whole ladder, on the day’s volume alone. The badge on the chart marks the same strike',
       },
       {
         key: 'maxPain',

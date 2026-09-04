@@ -128,6 +128,24 @@ export const BUBBLES = {
    * than fusing into one continuous bar.
    */
   topOfSpacing: 0.34,
+  /**
+   * …and never taller than the STRIKE ROW the mark sits in.
+   *
+   * `capOfSpacing` / `topOfSpacing` only ever measured the HORIZONTAL room a
+   * bucket owns. On a wide time zoom with a tight price axis — the open, a
+   * handful of bars on screen, 100 points of range — that room is generous
+   * while the rows are 10px apart, so a mark was free to grow two or three
+   * strikes tall and the column fused into one blob before the pairwise fit
+   * ever ran (the fit only shrinks what already overlaps, so it lands on a
+   * column of touching marks rather than a legible ladder).
+   *
+   * These bound the same radii against the vertical distance between adjacent
+   * strikes: at `capOfRow` two neighbouring peers at full size take 0.8 of a
+   * row and still leave a gap. Only ever shrinks, like the spacing bounds.
+   */
+  capOfRow: 0.4,
+  /** The leader's share of its row — larger, for the same reason as topOfSpacing. */
+  topOfRow: 0.5,
   /** Absolute floor. Old dots never shrink past this, whatever the fit does. */
   minPx: 1.2,
 

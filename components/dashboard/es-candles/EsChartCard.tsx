@@ -323,6 +323,13 @@ interface BubbleMark {
 const BUBBLE_PREP_INIT = null as null | {
   sig: string;
   bucketMs: number;
+  /**
+   * The board's strike pitch in POINTS — the smallest positive gap between two
+   * strikes that actually drew. The size law needs it to bound a mark against
+   * the row it sits in; cached here because it moves with the board, not with
+   * the viewport.
+   */
+  stepK: number;
   /** Bucket start times, ascending. The draw strides over this. */
   order: number[];
   marksAt: Map<number, BubbleMark[]>;
@@ -4567,7 +4574,23 @@ function EsChartCard({
                   };
                 }));
             }
-            prep = { sig: prepSig, bucketMs, order: [...marksAt.keys()].sort((a, b) => a - b), marksAt };
+            // The vertical pitch of the ladder, in points. Smallest positive
+            // difference across everything drawn, so a board carrying a mixed
+            // 5 / 25 ladder is bounded by its tightest rung rather than by its
+            // average one.
+            const strikeSet = new Set<number>();
+            for (const ms of marksAt.values()) for (const m of ms) strikeSet.add(m.strike);
+            const sortedK = [...strikeSet].sort((a, b) => a - b);
+            let stepK = Infinity;
+            for (let i = 1; i < sortedK.length; i++) {
+              const d = sortedK[i]! - sortedK[i - 1]!;
+              if (d > 0 && d < stepK) stepK = d;
+            }
+            prep = {
+              sig: prepSig, bucketMs,
+              stepK: Number.isFinite(stepK) ? stepK : 5,
+              order: [...marksAt.keys()].sort((a, b) => a - b), marksAt,
+            };
             bubblePrepRef.current = prep;
           }
 
@@ -4610,14 +4633,36 @@ function EsChartCard({
               // topBoost — what this used to do — let one dot per bucket set
               // the size of every other dot in it.
               const spacing = pxPerDot * stride;
+              // ── The VERTICAL bound ────────────────────────────────────────
+              // Everything above measures the room a bucket owns ACROSS the
+              // chart. At the open — a few bars on screen, a tight price range
+              // — that room is generous while the strike rows are ~10px apart,
+              // and the marks grew taller than the ladder they are drawn on.
+              // So the same radii are also held to the row: one strike step,
+              // converted through the live price scale.
+              const rowPx = (() => {
+                const k = prep!.marksAt.get(last)?.[0]?.strike;
+                if (k == null) return 0;
+                const b0 = basisAt(last);
+                const y1 = series.priceToCoordinate(k + b0);
+                const y2 = series.priceToCoordinate(k + prep!.stepK + b0);
+                return y1 != null && y2 != null ? Math.abs(y2 - y1) : 0;
+              })();
+              const rowCap = rowPx > 0 ? BUBBLES.capOfRow * rowPx : Infinity;
+              const rowTop = rowPx > 0 ? BUBBLES.topOfRow * rowPx : Infinity;
               const room = spacing > 0 ? BUBBLES.capOfSpacing * spacing : pr.capPx;
-              const capPx = Math.max(BUBBLES.minPx, Math.min(pr.capPx, room));
+              const capPx = Math.max(BUBBLES.minPx, Math.min(pr.capPx, room, rowCap));
               const topRoom = spacing > 0 ? BUBBLES.topOfSpacing * spacing : pr.capPx * pr.topBoost;
-              const topCapPx = Math.max(capPx, Math.min(pr.capPx * pr.topBoost, topRoom));
+              const topCapPx = Math.max(capPx, Math.min(pr.capPx * pr.topBoost, topRoom, rowTop));
               // The glow gets what is left over, which is often nothing. Blur is
               // not free real estate: a 7px halo painted across a 2px gap is
-              // what turned the leader's row into one continuous sausage.
-              const spare = spacing > 0 ? spacing / 2 - topCapPx : BUBBLES.glowMaxPx;
+              // what turned the leader's row into one continuous sausage. It is
+              // bounded by BOTH gaps now — the horizontal one to its neighbour
+              // in time, the vertical one to the strike above.
+              const spare = Math.min(
+                spacing > 0 ? spacing / 2 - topCapPx : BUBBLES.glowMaxPx,
+                rowPx > 0 ? rowPx / 2 - topCapPx : BUBBLES.glowMaxPx,
+              );
               return {
                 capPx,
                 floorPx: Math.max(BUBBLES.minPx, Math.min(pr.floorPx, capPx * BUBBLES.floorOfCap)),

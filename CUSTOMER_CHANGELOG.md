@@ -4,6 +4,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Thursday 9/3/2026
 
+* **Board (v3 preview):** new Gauge Rail card — five live gauges for net gamma, net delta, call share of volume gamma, gamma speed and the 15-minute change.
+
 * **GEX Candles (v3 preview):** the GEX bubbles now line up with the candles they belong to, the 1-minute view shows the top four strikes at four clearly different sizes, the biggest wall in each column is gold, and the chart opens on the full 9:30-4:00 session instead of a squeezed sliver.
 
 * **Economic Calendar (v3 preview):** the calendar and the earnings week board now have their own full page — impact filters, a market-cap filter, search, and a link that opens straight to the earnings tab.

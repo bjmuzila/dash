@@ -7,16 +7,16 @@ import MarketingPageTracker from "@/components/analytics/MarketingPageTracker";
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://cbedge.net"),
   title: "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels",
-  description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
+  description: "Your edge. Their loss. Real-time SPX GEX & options flow dashboard.",
   openGraph: {
     siteName: "CB Edge",
     title: "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels",
-    description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
+    description: "Your edge. Their loss. Real-time SPX GEX & options flow dashboard.",
   },
   twitter: {
     card: "summary_large_image",
     title: "CB Edge — Real-Time SPX GEX, Options Flow & Key Levels",
-    description: "Real Edge — Real Orderflow. Real-time SPX GEX & options flow dashboard.",
+    description: "Your edge. Their loss. Real-time SPX GEX & options flow dashboard.",
   },
   verification: {
     google: "QcoYk0isEwvk7zC8sMlcBCFqZpI24vvukYjBRmTGmd0",

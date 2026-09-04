@@ -1,5 +1,81 @@
 # Changelog
 
+## 2026-09-04 - Social share card carries the v3 logo (`app/opengraph-image.tsx`)
+
+Every link to cbedge.net still unfurled with the old chrome "CB Edge - Real Edge,
+Real Orderflow" wordmark baked into the OG image. It now carries the v3 lockup.
+
+- `app/opengraph-image.tsx` - reads `public/cbedge3.0.png` (ladder badge + CB EDGE
+  wordmark + "Your edge. Their loss.") instead of `public/cb-edge-logo.png`. The
+  new file is a tight 2064x609 crop, so the img is 400x118 with the old wordmark's
+  negative margins (-60 left / -54 top / -50 bottom) dropped; the left column's
+  vertical budget is unchanged, verified against a 1200x630 render.
+- `app/opengraph-image.tsx` - deleted the unused `logoSvg` / `logoDataUri` pair,
+  a teal placeholder mark nothing referenced.
+- `app/layout.tsx` - og/twitter/meta description moved off the old tagline to
+  "Your edge. Their loss. Real-time SPX GEX & options flow dashboard."
+- `md files/cbedge-everything-included.svg` - the one social graphic still
+  `<image href>`-ing `public/cb-edge-logo.png` now points at `public/cbedge3.0.png`
+  (300x89 at x=56, y=26).
+
+The card is rendered on-demand (`dynamic = "force-dynamic"`), so it refreshes on
+deploy without a rebuild - but platforms cache unfurls, so old links may need a
+manual re-scrape (X Card Validator / Facebook Sharing Debugger).
+
+Preview: `generated/2026-09-04-og-card-v3-logo.png`
+
+Not touched: the past one-off X-post SVGs in `md files/` (`cbedge_x_post*.svg`,
+`nopants-*`, `midnight-300-*`, `cb-edge-pricing-post.svg`) still read "Real edge -
+real orderflow" in body copy. They are already-published artwork, not live assets.
+
+## 2026-09-04 - GEX bubbles are bounded by the strike row, not just the bucket (`components/dashboard/es-candles/`)
+
+On Auto, with a few bars on screen and a tight price range - the open - the
+bubbles grew taller than the ladder they are drawn on and the column fused into
+one blob. The size law only ever measured HORIZONTAL room: `capOfSpacing` /
+`topOfSpacing` bound a mark against the pixels its bucket owns across the chart,
+which at that zoom is generous while the strike rows are ~10px apart. The
+pairwise fit did not save it either - it only shrinks marks that ALREADY
+overlap, so it lands on a column of touching dots rather than a legible ladder.
+
+- `slotStore.ts` - two new bounds in `BUBBLES`: `capOfRow` (0.4) for the peers,
+  `topOfRow` (0.5) for the bucket's leader. Fractions of one strike step, so two
+  neighbouring peers at full size take 0.8 of a row and still leave a gap. Like
+  the spacing bounds, they only ever shrink.
+- `EsChartCard.tsx` - the bubble prep now caches `stepK`, the board's strike
+  pitch in points (smallest positive gap that actually drew, so a mixed 5/25
+  ladder is bounded by its tightest rung). The draw converts one step through
+  the live price scale into `rowPx` and folds `rowCap` / `rowTop` into the
+  existing `capPx` / `topCapPx` minimums. The glow's leftover room is now the
+  min of both gaps - horizontal to the next bucket, vertical to the strike above
+  - so the halo cannot bridge two rows.
+
+The mark still means |net GEX| and nothing else: the bound scales the whole
+ladder at once, so the ratio between the wall and the fifth strike is unchanged.
+Zoomed in on price, the rows are far apart and the old spacing bounds still
+govern - this only bites where it was needed.
+
+
+## 2026-09-04 - v3 GEX chart: CB and the walls are volume-only (`cbedge-v3/src/board/gexChart/`)
+
+The Core Bullseye and the Call/Put Wall tiles followed the chart's basis, so on
+OI+VOL they marked the strike the standing book built. They now read
+`netVolGEX` alone - the day's traded contracts - whatever basis the bars are
+drawn on.
+
+- `values.ts` - new `volNetOf(row)` accessor (`netGexOf(row, 'vol-only', false)`).
+  `coreStrike(rows)` and `wallsOf(rows, spot)` lost their `basis` / `flowActive`
+  arguments and read it; every other level is unchanged.
+- `StatCards.tsx` - CB, Call Wall and Put Wall call the new signatures; their
+  tooltips say "volume only". Net GEX, Flip and +GEX % still follow the basis.
+- `gexChartRender.ts` - the chart's core badge reads the same definition, so it
+  and the CB tile still cannot disagree. Its tag is now always `CB.Vol` instead
+  of switching between `CB` / `CB.Vol` / `CB.Flow`.
+
+Consequence: with no volume on the tape yet (premarket, a thin ticker) all three
+show a dash rather than a stale open-interest level, and none of them move when
+the basis switch is toggled. Max Pain is still open-interest-only, as before.
+
 ## 2026-09-04 - Owner site: the Dashboard button opens v3 (`owner-vite/src/OwnerToolbar.tsx`)
 
 `owner.cbedge.net`'s toolbar had one link out to the product and it pointed at

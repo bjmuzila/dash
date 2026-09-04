@@ -2,9 +2,13 @@ import { ImageResponse } from "next/og";
 import { readFileSync } from "fs";
 import { join } from "path";
 
-// Real chrome CB Edge logo, inlined so it bakes into the generated PNG.
+// CB Edge v3 logo lockup (ladder badge + CB EDGE wordmark + "Your edge. Their
+// loss."), inlined so it bakes into the generated PNG. Satori cannot fetch, so
+// the file has to be read off disk here. Transparent PNG, tight crop —
+// 2064x609, aspect 3.389 — so it needs no negative margins the way the old
+// chrome wordmark did.
 const cbLogoDataUri = `data:image/png;base64,${readFileSync(
-  join(process.cwd(), "public", "cb-edge-logo.png")
+  join(process.cwd(), "public", "cbedge3.0.png")
 ).toString("base64")}`;
 
 export const runtime = "nodejs";
@@ -66,16 +70,6 @@ const chartSvg = `
 
 const chartDataUri = `data:image/svg+xml;base64,${Buffer.from(chartSvg).toString("base64")}`;
 
-// Small logo mark as inline SVG data URI.
-const logoSvg = `
-<svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg">
-  <defs><linearGradient id="lb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8ECae6"/><stop offset="1" stop-color="#219EBC"/></linearGradient></defs>
-  <rect width="56" height="56" rx="14" fill="url(#lb)"/>
-  <path d="M14 40 L24 28 L31 34 L42 18" fill="none" stroke="#05060A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M36 18 H42 V24" fill="none" stroke="#05060A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>`;
-const logoDataUri = `data:image/svg+xml;base64,${Buffer.from(logoSvg).toString("base64")}`;
-
 export default function OpengraphImage() {
 
   return new ImageResponse(
@@ -106,7 +100,7 @@ export default function OpengraphImage() {
           <div style={{ display: "flex", flexDirection: "column", width: 500 }}>
             <div style={{ display: "flex", alignItems: "center" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={cbLogoDataUri} width={392} height={214} alt="CB Edge" style={{ marginLeft: -60, marginTop: -54, marginBottom: -50 }} />
+              <img src={cbLogoDataUri} width={400} height={118} alt="CB Edge" style={{ marginTop: -6, marginBottom: -2 }} />
             </div>
 
             <div

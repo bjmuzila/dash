@@ -17,7 +17,7 @@
 <circle cx="1120" cy="60" r="180" fill="#22d3ee" opacity="0.05"/>
 <circle cx="60" cy="680" r="220" fill="#22d3ee" opacity="0.04"/>
 
-<image href="public/cb-edge-logo.png" x="52" y="12" width="220" height="122" preserveAspectRatio="xMidYMid meet"/>
+<image href="public/cbedge3.0.png" x="56" y="26" width="300" height="89" preserveAspectRatio="xMidYMid meet"/>
 
 <text x="1140" y="66" text-anchor="end" font-family="Arial, sans-serif" font-size="15" font-weight="600" fill="#5eead4" letter-spacing="2">LIVE OPTIONS FLOW &amp; GEX</text>
 
