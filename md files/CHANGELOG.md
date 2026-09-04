@@ -1,329 +1,150 @@
 # Changelog
 
-## 2026-09-04 - Mobile: expirations roll to the next session at 6pm ET
-
-The phone GEX heatmap was still showing 9/3 on 9/4. `useMobileGex` pinned the
-feed to `todayEt()` and only when that exact date appeared in the expirations
-list - so it never advanced past the day it was mounted, and on a weekend or
-holiday it silently fell back to whatever front expiry the server happened to
-be on.
-
-Now the pin follows the SESSION, not the calendar day:
-
-- `sessionDateEt()` - today's ET date before 18:00 ET, the next date from 18:00
-  ET on. Globex opens at 6pm, so from then the live book is tomorrow's; a
-  heatmap sitting on an already-expired 0DTE at 7pm is a dead chain.
-- `pickExpiry()` - resolves that target to the first LISTED expiry on or after
-  it, falling back to the last listed one. Friday 6pm rolls to Saturday, finds
-  no Saturday series, lands on Monday. Same path covers holidays and any symbol
-  without a daily series, replacing the old "not listed -> give up" branch.
-- A 30s session clock plus visibilitychange/focus re-checks. This is the actual
-  failure mode - the phone is left open through the close, 6pm passes, and
-  nothing recomputes the date. Now it re-pins in place, no reload.
-- Frames that land between the roll and the server's `SET_EXPIRY` ack no longer
-  flash the old book back: `desiredExpiryRef` wins over the payload's expiry.
-
-The badge tells the truth about it. `ExpiryBadge` takes a new `dte` and renders
-`0DTE` / `1DTE` / `3DTE`; only 0DTE stays orange, since that is the one decaying
-today. Applies to all four surfaces on the shared hook - heatmap, GEX chart, ES
-candles, prep.
-
-Touched: `hooks/useMobileGex.ts`, `components/mobile/ExpiryBadge.tsx`, and the
-`ExpiryBadge` call in `MobileHeatmap` / `MobileGex` / `MobilePrep` /
-`MobileEsCandles`. No proxy, server or desktop code.
-
-
-## 2026-09-03 - Fix: stray backticks broke the owner-vite Docker build
-
-The VPS deploy died in the `owners` target with
-`studioHtml.ts:1487: Expected ";" but found "alerts"`, pointing at what looks
-like an ordinary block comment.
-
-It is not a comment. The whole file is ONE String.raw template literal opened on
-line 12 and closed on line 2021 - so the two backticks around `alerts` in the
-Auto-buy template's header note CLOSED the template early, and everything after
-them parsed as loose JavaScript. That is why the error names an identifier
-sitting inside a /* */ block.
-
-Fixed by quoting the word instead. The file now holds exactly two backticks, the
-pair that opens and closes the template, and esbuild parses it clean.
-
-Worth remembering: inside `studioHtml.ts` a backtick is never punctuation. Use
-single quotes in comments and prose there.
-
-Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
-
-## 2026-09-03 - v3 board: Gauge Rail card (v2's home strip, minus IB Direction)
-
-v2's home-page segmented-LED strip, added to the v3 board as a card. Five tiles
-across one row: Gamma (Net GEX), Delta (DEX), Gamma % 0DTE (Vol), Net GEX Rate /
-min and 0DTE GEX D 15m, each a tick meter with the value under it and a
-15-minute change line under that.
-
-The sixth tile - IB Direction - is deliberately not here. It was also the only
-one on the rail that had nothing to do with the option book (it came off the ES
-candle feed through its own hook), so dropping it makes this a single-source
-card: every number comes from ONE gex frame plus that frame's own history.
-
-Where the numbers come from is the one real difference from v2. v2 reads the
-socket's `totals` blob (totalGEXOiVol / totalDeltaOiVol); v3's wire contract
-does not describe that blob, so the card sums the ROWS through the same
-accessors the GEX Chart card uses - netGexOf/dexOf on the OI+VOL basis. That is
-the identical definition server-v2's greeks-ts-writer.js records with, so the
-rail cannot disagree with the GEX Chart's Net GEX tile sitting next to it, and
-the recorded series is a valid seed for it.
-
-Seeded from `/api/snapshots/greeks` (today, $B, one request, no poll). Without
-it the rate tile and the 15-minute tile would read "--" for the first fifteen
-minutes after the card is added, which is most of the time anyone spends looking
-at a board. The per-tile 15-minute change LINE is still a one-minute ring buffer
-and still draws nothing until it reaches back a full fifteen minutes - never
-value minus prevValue.
-
-The snapshot selector deliberately ignores the frame's `updatedAt` when deciding
-whether anything changed, so the card re-renders on movement rather than on
-every socket push.
-
-Default footprint w 12 / h 5 - the strip shape, full board width.
-
-Touched: `cbedge-v3/src/board/gaugeRail/GaugeRailCard.tsx` (new),
-`cbedge-v3/src/board/catalog.tsx`. No proxy, server or v2 dashboard code.
-
-## 2026-09-03 - Post Studio: "Auto buy - core level" template
-
-The daily "the core got tagged and the bot took it" post, as a template. Same
-two-column shape as the alert-result card, different story: this one is about
-the LEVEL doing the work, so the headline is the tag and the numbers underneath
-are what the fill turned into.
-
-Left side is all rendered type - contract, percent to the peak, an entry / peak /
-per-contract row, three bullets, the disclaimer - and every number carries a `k:`
-key, so Auto-fill can read them off the screenshots and Save-as-template keeps
-the layout.
-
-Right side is the two slots, cut to the aspect the exports actually come out at
-so a paste lands flush with nothing to zoom or pan:
-
-- auto-buy table strip - 1122x148 (7.58:1) -> 660x87
-- contract price card - 900x544 (1.65:1) -> 660x399
-
-Listed in the Template dropdown as "Auto buy - core level", right under the alert
-result card.
-
-Verified in a headless run: the template loads with no console or page errors and
-both real screenshots seat flush in their slots at 1:1.
-
-Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
-
-## 2026-09-03 - Post Studio: logo back on the left, 20% smaller
-
-Reverting the top-right move from earlier today. The logo sits at the 80px left
-margin again on all sixteen built-in templates and the eight V3 cards, at 80% of
-its old size (e.g. 340x112 -> 272x90) - it was carrying more weight than a logo
-needs to.
-
-Because the logo is out of the top-right again, every right-column layout that
-had been compressed to make room for it is restored to its original geometry:
-feature's three staggered shots, promo's dashboard slot, win's two screenshots,
-updates' feature shot and trial strip, levels' and signal's full-height ladders,
-explain's three callout boxes, earnings' stat row and bottom strip, and the
-alerts / emweek two-slot columns. grid's headline is back to its full 1040 width.
-
-Kept from that pass: promo's yearly price ("$1000 $500/yr") stays at 38px in a
-slightly wider box. At 46px it wrapped and overlapped "code YEAR" - that was a
-pre-existing bug, not something the logo move caused.
-
-Verified in a headless run: all 24 templates render with no console or page
-errors and nothing runs off the canvas.
-
-Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
-
-## 2026-09-03 - Post Studio: alt+drag a side to crop, and the logo moves right
-
-**Cropping.** A pasted screenshot almost never matches the slot it lands in, and
-the fix was always the same: pull one border in until the dead space is gone.
-Every layer now has a grab bar on each side. Plain drag moves that border and
-resizes the box, with the usual snapping. **Alt+drag a side of an image crops
-it** - the border comes in and the picture underneath does not move.
-
-The mechanism: once a layer is cropped its `<img>` stops being 100%/100% of the
-box and takes a FROZEN pixel size (`data-cw`/`data-ch`) plus a negative margin
-(`data-ml`/`data-mt`). The layer already clips, so trimming the right edge is
-just a narrower box, and trimming the left edge is a narrower box plus an equal
-negative margin. Nothing rescales, which is the whole point. Those four numbers
-live on the element, so they round-trip through undo, presets and Save-as-
-template for free. A corner resize scales the crop with the box; the zoom slider
-drops it rather than half-applying both; "Reset crop" in the image inspector puts
-the slot back.
-
-The PNG export had to learn it too. `exportImagesAsBackgrounds()` re-fits each
-image to its box because html2canvas ignores `object-fit`; against a cropped
-layer that would have re-fitted to the TRIMMED box and undone the crop. It now
-resolves the fit against the frozen size and places the background in pixels,
-offset by the margins.
-
-**Fixed while in there:** dropping the first image into an empty slot ran
-`d.innerHTML='<img>'`, which wiped the placeholder AND every handle next to it.
-The corner grip was rebuilt, the four new side grips were not - so a freshly
-pasted screenshot was the one thing you could not crop. `setImg()` now restores
-both.
-
-**The logo is top-right on every template.** Right-aligned at the same 80px
-margin the rest of the layout uses, on all sixteen built-ins and the eight V3
-cards. Where that put it on top of a right-hand screenshot slot, the right column
-was compressed to start below it rather than shifted until its tail fell off the
-canvas - feature, promo, win, updates, alerts and emweek each got their column
-re-fitted by hand. On the V3 cards the text block now runs the full left side.
-
-Also fixed a pre-existing wrap: promo's yearly price ("$1000 $500/yr") was too
-wide for its box at 46px and overlapped "code YEAR". 38px, slightly wider box.
-
-Verified in a headless run: all 24 templates render with no console or page
-errors, a wide screenshot in a tall slot trims correctly from the top and bottom
-edges with the picture pinned, and undo/redo leaves exactly five handles on the
-layer rather than duplicating them.
-
-Touched: `owner-vite/src/pages/studioHtml.ts`. No proxy, server or dashboard code.
-
-## 2026-09-03 - Phone build, second pass: the v3 toolbar, one tab out, three cards narrowed
-
-Six changes, and the thread through all of them is the same: a phone screen should be the v3 card with the desktop-only controls taken OFF, not a different thing that happens to show the same numbers.
-
-**1. `/m/*` keeps the toolbar and drops the rail.** `Shell.tsx` used to remove both. The rail is 64px of a 390px screen spent on a nav the bottom tab bar already is; the toolbar is the brand, the ET clock, the camera and the account menu, and there is no reason a phone should not have them. It is the SAME component, not a phone copy — a copy is a second thing to change every time.
-
-**2. The toolbar's ticker controls are hidden on `/m/*`** (`Toolbar({ mobile })`). After the changes below, no phone screen reads the board symbol: the GEX chart, the Multi Greek ladder and the candles are each pinned to SPX. A picker that moves a value nothing visible follows is exactly the control-that-lies this toolbar was rebuilt to stop being. `MobileShell` dropped its own duplicate SPX chip + picker for the same reason — one place decides, not two. Delete the guard the day a phone screen follows a ticker again.
-
-**3. GEX chart — `GexChartCard({ simple })`.** SPX only, and OI+VOL / VOL only. What goes and why:
-
-- **FLOW** is a third basis answering a different question; the two left are the two anyone switches between.
-- **C/P** doubles the bar count in a plot ~380px wide. The split is a desktop read.
-- **DEX** is a second series on a second scale over that same plot.
-- **CARDS** is ten tiles sharing the width of a phone — three characters each, and the chart loses the height they take.
-
-The basis options list is now built ABOVE the JSX as a typed array rather than inline: a conditional spread inside a JSX array widens the option type to `string`, which loses `GexBasis` on the way into `onChange`.
-
-**4. Heat — `MultiGreekCard({ pinnedFirst: 'SPX' })`.** Panel one is SPX and its ticker is a `<span>`, not a click-to-type button. On the board, panel one IS the page symbol and typing in it moves everything, which is honest when five other cards read that value; here nothing does, so a typeable panel one would have been the last surviving way to move a number with no visible consequence. `TickerPanel` gained `editable` for it. ＋ is unchanged — still 1-4 panels, still the thing that ADDS rather than replaces.
-
-**5. Candles — `GexCandlesCard({ spxOnly })`.** Two things that are the same thing. The card stops following the board's ticker and charts SPX, which is what makes the SPX/ES switch the only symbol control on the screen (the switch is `esCapable`, true only on SPX). And SESSION STOPS BEING A SETTING: ES trades nearly around the clock so it is ETH, SPX cash does not exist outside 09:30-16:00 ET so RTH on it is not a filter but the whole tape. An SPX chart on "ETH" and the same chart on "RTH" are the same picture, and a button that changes nothing teaches you it does nothing. `session` is derived and the picker is hidden rather than shown-but-inert.
-
-All three props leave the STORED settings alone. The same browser profile opens these cards on a desktop and must find its basis, split, DEX, cards and session exactly as it left them — the rule `railOn` already followed.
-
-**6. The Options Chain tab is gone.** Out of `MOBILE_TABS`, out of `App.tsx`, out of `DESKTOP_TO_MOBILE` and `MOBILE_TO_DESKTOP`. The v3 chain is a strike ladder with up to a dozen numeric columns read ACROSS; at 390px that is a horizontal scroll over a table you cannot see two columns of at once, which is not the page, it is a picture of the page. `/v3/options-chain` is untouched and it goes back when there is a phone DESIGN for it. `MChain.tsx` could not be deleted (the device's Linux workspace would not start, so no `rm`) and is a comment-plus-`export {}` tombstone that compiles, pending `git rm`.
-
-**Not built.** Three large cards were edited without a typecheck available. `npm run check` in `cbedge-v3/` before pushing.
-
-## 2026-09-03 - Bubble colours go through the theme check (pre-commit unblock)
-
-`push.ps1` was blocked by `check-theme.mjs`: `src/board/gexCandles/bubbles.ts`
-was over its baseline (6 allowed, 8 found). The gold-leader work had added two
-more `rgba()` literals — the white gradient stop and one more sign fill — on top
-of the six the local `rgba()` helper and its call sites already carried.
-
-Fixed by removing the notation, not by raising the baseline (non-negotiable #1):
-
-- The local `rgba()` helper is now `shade()`, which returns `#rrggbbaa` — the
-  same output shape as `tokenHexAlpha()` in `src/design/theme.ts`, accepted by
-  every canvas fill, stroke, shadow and gradient stop. It still takes the
-  palette's channels rather than re-reading a token, because it runs inside the
-  chart's rAF for every mark on screen.
-- The gradient's innermost stop was a hardcoded `rgba(255,255,255,a)`. It is now
-  `palette.highlight`, a new `BubblePalette` field read from `--color-fg` in
-  `chart.ts` — so a light theme moves the specular highlight with everything
-  else instead of leaving a white dot on a pale core.
-- `bubbles.ts` is at **zero** colour literals and has been dropped from
-  `theme-baseline.json` entirely, so it can never regress. `chart.ts` is
-  unchanged at its baseline of 9 (the new palette line adds no literal — it
-  falls back to the already-resolved `muted` string).
-
-No visual change: `#rrggbbaa` and `rgba()` paint identically, and `--color-fg`
-is `#ffffff` in the dark theme.
-
-Files: `cbedge-v3/src/board/gexCandles/bubbles.ts`,
-`cbedge-v3/src/board/gexCandles/chart.ts`, `cbedge-v3/theme-baseline.json`.
-
-## 2026-09-03 - GEX Candles: the leader is GOLD, and the chart opens on today's session
-
-Two changes, both to the same card.
-
-### 1. The bucket leader draws gold
-
-The biggest wall in a bucket used to be a pale tint of its own sign colour
-(`--color-gex-pos-hot` `#c8f5ff` / `--color-gex-neg-hot` `#ffcdd2`) pushed
-further toward white by `BUBBLES.topTint`. Both tints are near-white and, at the
-3-4px a mark actually draws at, near-identical to each other — so the core said
-"this is the leader" but never said which way, and the white ring around it was
-carrying the sign on its own.
-
-The core is now a radial gradient in GOLD: white at the highlight,
-`--color-gex-lead-hi` `#ffd76a` through the middle, `--color-gex-lead` `#ffb300`
-at the rim. Gold because gold already means "the wall" on this card — it is the
-CB tag on the rail and the amber half of the GEX bars (`--color-gexbar-neg`, the
-same `#ffb300`). One hue, one idea, and the eye finds the day's biggest wall
-without reading anything.
-
-**The ring is the sign now**, not white: the saturated `--color-gex-pos` /
-`-neg` at 0.95 alpha, with the glow underneath in the same colour. That is the
-only thing carrying positive-vs-negative on the leader, so it is the full-
-strength colour rather than a tint.
-
-**Peers are unchanged** — flat, saturated blue or red. Gold on EVERY mark with a
-sign ring was mocked up and rejected on the small end: rows 2-4 draw at 2-4px,
-and a gold fill plus a sub-pixel ring is one olive smudge with no sign left in
-it. (Same failure, from the other direction, as filling everything with the pale
-tint — tried 2026-08-31, reverted the same day. Both are recorded in the Colour
-block of BUBBLES so nobody walks back into them.)
-
-The gradient is built in the MARK'S OWN space — y scaled by `ry/rx`, a circle
-drawn, the transform undone — so it stays concentric with an oblong 1m mark
-instead of banding across it, and the path survives `restore()` so the ring
-still strokes at a uniform width.
-
-Tokens: `--color-gex-pos-hot` / `--color-gex-neg-hot` and `BUBBLES.topTint` are
-deleted; `--color-gex-lead` / `--color-gex-lead-hi` added. `BubblePalette` is
-`{pos, neg, lead, leadHi}`.
-
-### 2. The chart opens on today's 09:30-16:00
-
-"The chart keeps opening up small" — a fresh card showed a thin cluster of
-candles jammed against the right edge with the rest of the pane empty.
-
-`frameRecent()` measured its window BACKWARD from the newest bar:
-`from = barCount - n`, 390 minutes' worth, plus 3% of slack. That is "the last
-390 minutes of trading", which on a morning is most of yesterday afternoon with
-today squeezed into the last inch. It now frames the SESSION instead — one RTH
-session wide, positioned with today's 09:30 on the left edge and 16:00 on the
-right, so the day fills the pane at every hour and the whitespace on the right
-is the part of the session that has not happened yet.
-
-Early in the day that would put one candle against the left edge with six blank
-hours beside it, so the left edge is the earlier of the two anchors:
-
-    from = min(sessionStartIdx, newestIdx - span/2)
-
-At 09:35 the second term wins and the live candle sits in the MIDDLE of the pane
-with yesterday's tail behind it for context. As the day fills, that term rises
-until it passes 09:30 a little after midday and the window pins to the session.
-It slides continuously — the two expressions are equal at the crossover, so
-there is no jump.
-
-`sessionStartIndex()` walks back from the newest bar over `barTimes` (bounded by
-one session, not a scan of the five-day pull) to the first bar of the newest ET
-day at or after 09:30, so a weekend or holiday frames that day's session rather
-than nothing.
-
-**And the frame is verified properly now.** `ensureLatestVisible()` only asked
-whether the newest bar was on screen — which is TRUE of the broken view, since
-the crushed cluster is at the right edge, so a card that mounted in a hidden
-board tab (clientWidth 0, range applied against a scale with no width) kept its
-bad frame for life. It now also re-frames when the range is more than 1.6x a
-session wide or the pane is under 40% data, and checks a third time at 600ms for
-a tab that lays out late. It still runs only on a symbol/interval/session
-change, never on the 30s poll, so it cannot fight a zoom the user chose.
-
-Files: `cbedge-v3/src/design/tokens.css`,
-`cbedge-v3/src/board/gexCandles/bubbles.ts`,
-`cbedge-v3/src/board/gexCandles/chart.ts`,
-`cbedge-v3/src/board/gexCandles/settings.ts`.
+## 2026-09-04 - Universal refresh button, the mobile GEX-bubble first-paint bug, and the v2→v3 phone crossing
+
+### 1. One refresh button, in the universal toolbar (`lib/refreshBus.ts`, `components/shared/GlobalRefreshButton.tsx`, `GlobalToolbar.tsx`, 7 hooks)
+
+`hooks/useRefreshButton.ts` was NOT the mechanism and is not dead either: it is
+the idle → refreshing → success/error → idle STATE MACHINE (with the re-entrancy
+lock and the 1.8s settle) that page-level refresh buttons already use, and it has
+no registry and no idea what to re-fetch. So it is reused as-is for the button's
+state and the missing half — the bus — is new.
+
+`lib/refreshBus.ts` is a module-scoped registry of re-fetch functions. Each data
+hook registers its own while it is MOUNTED (`useRefreshSource`), which gives the
+routing property for free: pressing refresh re-pulls exactly what the current
+route reads, with no route table to keep in sync and no page-level wiring when a
+page is added. `refreshAll()` runs them in parallel with `allSettled`, so one
+failing panel does not stop the others, and rejects with the failed labels so the
+button can show a failure rather than a green tick over stale numbers.
+
+Registered so far: `useMobileGex`, `useMobileChain`, `useEmLookup`,
+`useEconCalendar`, `useEsCandles`, `useEtfCandles`, `useGexBubbleHistory`.
+
+Two of those needed more than a one-liner:
+
+- **`useEsCandles`** registers `loadFromDb`, NOT its exported `refresh`. That
+  `refresh` is a deliberate no-op once live bars exist (it exists to fill an
+  EMPTY chart without disturbing a running one), and "nothing happened" is the
+  one outcome a refresh button must not have. `loadFromDb` merges by slotKey and
+  never wipes, so re-pulling over a live map is safe.
+- **`useMobileGex`** is socket-backed, and a refresh must NOT be a socket
+  reconnect: dropping `/ws/gex` re-opens it for every consumer in the tab and
+  clears `gexSocket`'s replay cache. It instead re-asserts the pinned expiry
+  (the server tracks it per connection, and an unnoticed reconnect resetting it
+  to the front month is exactly what makes a page look stuck) and pulls
+  `/api/gex` once — the same REST shape the silent-socket fallback uses.
+
+The button is mounted once in `GlobalToolbar`, which `LayoutShell` renders on
+every route, so desktop and the `/m/*` phone build are both covered from one
+place. It sits left of the ET clock, i.e. in the same position on every route.
+Feedback is three states: the glyph spins and the button is disabled while in
+flight, then a green ring + glow on success or red on error for the hook's
+settle, transitioned rather than blinked. Colors are `HOME_THEME` /
+`REFRESH_GREEN` on desktop and the `mobileTheme` aliases of the same three
+values on `/m/*`; geometry is the toolbar's own 42px round-button box, floored at
+`TAP.min - 8` on the phone. No hex is written in either new file.
+
+### 2. Mobile ES chart — GEX bubbles now paint on the first frame (`components/mobile/pages/MobileEsCandles.tsx`, `hooks/useGexBubbleHistory.ts`)
+
+**The suspicion was the wrong way round.** The draw IS keyed on the history
+arriving — the effect's deps already carry `bubbleCols`. The bug is that it is
+keyed on ONLY that, and fires exactly once per data change.
+
+That single paint routinely lands too early. The route is lazy-loaded into a flex
+column that is 0-high for the first frames (the chart-init effect has an rAF pump
+for exactly that), the chart is created at the collapsed size, and
+lightweight-charts cannot answer `priceToCoordinate` / `timeToCoordinate` until it
+has laid out with data. So `drawBubbles` returned quietly on one of its readiness
+guards and nothing was scheduled to try again. After that the only things that
+repainted were the rAF driver's change key (a pan, a pinch, an autoscale) and a
+re-run of the data effect (a settings toggle, or the next 60s poll) — which is
+precisely "they only show up after I move the chart or change a setting". The
+desktop chart has had a `subscribeVisibleLogicalRangeChange` **and** a 5s backstop
+repaint for this since long before the phone page existed; the phone page had
+neither.
+
+Fixed on both sides:
+
+- `drawBubbles` now RETURNS whether marks actually landed (counted, not
+  inferred — every bucket can be off-screen at this pan and the caller has to
+  tell that from a real paint). `schedulePaint` retries on animation frames
+  until one lands or `PAINT_RETRY_MS` (4s) is up, and the data effect calls
+  `drawBubbles()` synchronously first, so the retry never arms in the normal
+  case.
+- Added the desktop's two backstops: a `ResizeObserver` on the canvas's own box,
+  and a 5s interval skipped while the tab is hidden plus a `visibilitychange`
+  repaint. The rAF driver's change key now also includes the canvas box — a
+  resize does not move the price probe if autoscale lands on the same range.
+- `barDayKeys` is now identity-stable (join → split). It was a fresh array on
+  every spot tick (~1/s via the live tip), which made `bubbleMinutes` recompute
+  at that rate; its VALUE moves every minute, and it is a dep of
+  `useGexBubbleHistory`'s effect — so that effect tore down and rebuilt once a
+  minute, cancelling any load in flight as it went.
+- `useGexBubbleHistory` quantises `minutes` UP to a 30-minute step internally
+  (`MINUTES_QUANTUM`), so a caller's per-minute recomputation can no longer
+  restart the effect at all. It only ever asks for more reach, never less.
+- Every path in that hook that returns without a `setCols` — HTTP failure, the
+  documented 200-with-`error` case, a malformed body, a throw — now arms a 6s
+  retry (up to 5) WHILE THE TRAIL IS STILL EMPTY. Not setting `cols` on a blip
+  is right once something is drawn; before that it meant a blank chart for a
+  full poll period, which is the other half of "randomly".
+
+**Socket topics on that page: audited, no gap.** The page reads the feed only
+through `useMobileGex`, whose handler branches on `snapshot`, `gex` /
+`GEX_UPDATE`, `spot`, `aux`, `status` / `EXPIRATIONS`. `MOBILE_GEX_TOPICS` lists
+`gex, spot, aux, status`, which is complete: `snapshot` is the connect snapshot
+(scoped by `scopeSnapshot`, never filtered out), and `GEX_UPDATE` / `EXPIRATIONS`
+ride `gex` / `status`. The SPX bars come from `useEtfCandles` over HTTP, not the
+socket, and the bubble trail is an HTTP route — so no candle topic is needed and
+none was missing.
+
+### 3. Every v2 phone page now crosses to v3 (`components/mobile/mobileNav.ts`, `MobileRedirect.tsx`)
+
+v3 has had its own phone build since 2026-08 and is no longer owner-gated
+(`middleware.ts` dropped that pattern when it shipped), so a phone on `/m/*` is
+there because of a stale link, a home-screen shortcut or a bookmark. Added
+`MOBILE_TO_V3` and `v3TargetFor`, and `MobileRedirect` now crosses before its own
+desktop→mobile hop.
+
+The map is not a mechanical id-for-id rename, because v3's tab set is
+deliberately different and two of v2's seven screens have no v3 phone tab ON
+PURPOSE:
+
+| v2            | v3                   | why |
+|---------------|----------------------|-----|
+| `/m/gex`      | `/v3/m/gex`          | same screen |
+| `/m/heatmap`  | `/v3/m/heat`         | closest tab, not the same page — v2's Heat is the GEX heatmap, v3's is the Multi Greek ladder, and v3 has no phone GEX heatmap to send them to |
+| `/m/es`       | `/v3/m/spx`          | same screen, renamed |
+| `/m/chain`    | `/v3/options-chain`  | v3 REMOVED its phone chain tab 2026-09-03; routing to a tab that does not exist would land on v3's NotFound, so this goes to the desktop chain, which v3 kept |
+| `/m/em`       | `/v3/m/em`           | same screen |
+| `/m/prep`     | `/v3/premarket`      | no phone Prep tab in v3; the desktop route exists |
+| `/m/econ`     | `/v3/m/econ`         | same screen |
+
+Three details that are load-bearing:
+
+- It is a REAL navigation (`window.location.replace`), not `router.replace`.
+  `/app/*` and `/v3/*` are two separately built Vite apps behind two different
+  Next handlers, and this router's basename is `/app` — a push to `/v3/m/gex`
+  would resolve to `/app/v3/m/gex`, hit the SPA catch-all and land on
+  `/traders-dashboard`. `replace` so the stale URL leaves the history stack.
+- `v3TargetFor` resolves a v2 DESKTOP path through `DESKTOP_TO_MOBILE` itself,
+  so a phone landing on `/es-candles` goes straight to `/v3/m/spx` instead of
+  rendering v2's `/m/es` for a frame on the way.
+- Gated on the same phone test as everything else, so a laptop on `/app/m/es`
+  still gets v2's page — now the only way to look at the v2 phone build.
+  `?v2=1` (sticky for the session, `STAY_V2_KEY`) opts out on a phone too.
+
+**Audit result: no gaps in v2's own registry.** All seven `/m/*` ids
+(`gex, heatmap, es, chain, em, prep, econ`) have a `MOBILE_TABS` or explicitly-kept
+route entry, a `lazy()` `<Route>` in `app-vite/src/App.tsx`, AND an
+`app/app/m/<id>/route.ts` calling `serveSpaShell("app")` — checked file by file,
+so a hard refresh on any of them serves the shell rather than 404ing.
+`DESKTOP_TO_MOBILE` was left as-is: its nine entries are correct, and the routes
+absent from it (Scanner, Flow, ICT, Levels, Board, …) are absent because there is
+no phone build of them in either version.
+
+No proxy file or proxy behaviour was touched.
 
 
 ## 2026-09-03 - v3: Level Log lands with the wall-migration chart (`cbedge-v3/src/pages/LevelLog.tsx`, `pages/levelLog/*`, `app/v3/level-log/route.ts`)
@@ -368,6 +189,19 @@ Four things did NOT come across, each on purpose:
   second picker for the same thing is a second way to end up looking at two
   symbols at once and not notice. `?ticker=` went with it; only `?date=` is
   this page's own query param now.
+
+Also across the same day: **the CORE MIGRATION button**, v2's newest addition to
+that page. It opens `public/core-migration.html` — the standalone long-range
+chart, the ticker's CORE across the last 63 recorded sessions with walls on a
+toggle — in its own tab, primed with what the v3 page is on (toolbar symbol,
+selected date as the range end, both variant switches). Nothing is copied
+across: that page reads its own data through `/api/walls-range`, falling back to
+`/proxy/walls` a session at a time, so a tab left open can just be reloaded. It
+stays a plain static file rather than becoming a v3 route — same HTML that lives
+in `generated/` for hand-editing, and a static file needs no route, no `lazy()`
+and no `app/v3/<name>/route.ts`. The href is root-absolute and `window.open`
+bypasses the router, so the `/v3` basename does not apply; the file is served
+from the v2 app's `public/` at the site root either way.
 
 Still v2-only, in the parity doc's order: the ticker rail (E), the log card head
 (F), the capture rail and chips (G), the churn strip (J), the timeline (L), the

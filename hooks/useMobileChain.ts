@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { dedupeFetch } from "@/lib/dedupeFetch";
 import { parseExpiration, type GreekCell } from "@/lib/calculations/optionChain";
 import { etDateKey, etToday, isSessionLive, isSpxFeedLive } from "@/lib/marketSession";
+import { useRefreshSource } from "@/lib/refreshBus";
 
 /**
  * useMobileChain — one expiry of the option chain, for the phone chain page.
@@ -177,6 +178,11 @@ export function useMobileChain(initialTicker = "SPX"): MobileChainState {
     }, POLL_MS);
     return () => clearInterval(id);
   }, [load]);
+
+  // Toolbar refresh. `force` skips MIN_INTERVAL_MS — a deliberate press is
+  // exactly the case that guard was not written for — but `inFlightRef` still
+  // collapses a double-tap into one request.
+  useRefreshSource(() => load(true), "useMobileChain");
 
   const atm = useMemo(() => {
     if (!strikes.length) return 0;

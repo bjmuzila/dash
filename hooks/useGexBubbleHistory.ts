@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { dedupeFetch } from "@/lib/dedupeFetch";
+import { useRefreshSource } from "@/lib/refreshBus";
 import { etDayKey } from "@/components/dashboard/es-candles/chartMath";
 
 /**
@@ -45,6 +46,42 @@ const REFRESH_MS = 60_000;
 const REFRESH_MS_WIDE = 120_000;
 /** Reach above which the slower cadence kicks in — about a session and a half. */
 const WIDE_MINUTES = 700;
+
+/**
+ * Retry cadence for a load that came back with NOTHING TO DRAW.
+ *
+ * Every failure path below returns without calling `setCols`, which is the
+ * right call — a blip must not wipe a trail that is already on screen — but it
+ * left a FIRST load that failed with no trail at all until the next poll, i.e.
+ * a blank chart for a full minute or two. On a phone that is most of the time
+ * anyone is looking at it, and it is the larger half of "the bubbles only show
+ * up sometimes": the route answers HTTP 200 with an `error` key when it threw
+ * (note 1 in the header), so a cold cache on the server is a silent minute of
+ * nothing.
+ *
+ * So while `cols` is still EMPTY, an unproductive load retries on this much
+ * shorter clock, up to RETRY_MAX times. Once anything has been drawn the retry
+ * stops arming and the normal poll takes over — a later failure is then exactly
+ * as harmless as it always was.
+ */
+const RETRY_MS = 6_000;
+const RETRY_MAX = 5;
+
+/**
+ * Granularity of the `minutes` window, in minutes.
+ *
+ * `minutes` is a dependency of the effect below, and callers compute it as
+ * "now minus the oldest bar day", which means its VALUE CHANGES EVERY MINUTE —
+ * so the effect tore itself down and rebuilt once a minute, cancelling any
+ * in-flight load as it went (`cancelled` is checked after the parse, before
+ * `setCols`). A load that took longer than the time left in the minute could
+ * therefore be discarded, re-issued, and discarded again.
+ *
+ * Rounding UP to a 30-minute step makes the value stable for half an hour at a
+ * time. It only ever asks for MORE reach than requested, never less, so no
+ * caller loses a column to it.
+ */
+const MINUTES_QUANTUM = 30;
 
 export type BubbleColumn = {
   /** Minute-floored timestamp, ms. */
@@ -91,32 +128,66 @@ export function useGexBubbleHistory({
   const barDaysRef = useRef<string[]>(barDayKeys);
   barDaysRef.current = barDayKeys;
 
+  // Rounded UP, and only here — the caller keeps computing the honest reach.
+  // See MINUTES_QUANTUM.
+  const windowMinutes = Math.ceil(minutes / MINUTES_QUANTUM) * MINUTES_QUANTUM;
+
+  // Whether anything has ever been drawn. Read by the retry arm below, and a
+  // ref rather than `cols.length` so the effect does not re-run on its own
+  // result.
+  const hasDrawnRef = useRef(false);
+  // The live load, published for the toolbar's refresh button.
+  const loadRef = useRef<() => Promise<void>>(async () => {});
+  useRefreshSource(() => loadRef.current(), "useGexBubbleHistory");
+
   useEffect(() => {
     if (!enabled || !expiry) {
+      hasDrawnRef.current = false;
       setCols([]);
       return;
     }
     let cancelled = false;
+    let retries = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    /**
+     * Arm the short retry, but only while there is still nothing on screen.
+     * `unproductive` is every path that returned without a `setCols` — an HTTP
+     * failure, the 200-with-`error` case, a malformed body, or a throw.
+     */
+    const armRetry = () => {
+      if (cancelled || hasDrawnRef.current) return;
+      if (retries >= RETRY_MAX) return;
+      retries += 1;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void load();
+      }, RETRY_MS);
+    };
 
     const load = async () => {
       try {
         const res = await dedupeFetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}` +
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${windowMinutes}` +
             `&expiry=${encodeURIComponent(expiry)}&anyExpiry=1&symbol=${encodeURIComponent("$SPX")}&top=${top}`,
           { cache: "no-store" },
           20_000,
         );
         if (!res.ok) {
           console.warn("[bubbles] HTTP", res.status, "— trail will be empty");
+          armRetry();
           return;
         }
         const json = await res.json();
         if (json?.error) {
           console.warn("[bubbles] server returned an error — trail will be empty:", json.error);
+          armRetry();
           return;
         }
         if (!Array.isArray(json?.columns)) {
           console.warn("[bubbles] response has no `columns` array — keys:", Object.keys(json ?? {}));
+          armRetry();
           return;
         }
         if (cancelled) return;
@@ -124,6 +195,7 @@ export function useGexBubbleHistory({
         const raw = (json.columns as RawCol[]).filter((c) => Array.isArray(c.cells) && c.cells.length);
         if (!raw.length) {
           setCols([]);
+          armRetry();
           return;
         }
         const newestFirst = [...raw].sort((a, b) => b.slotTs - a.slotTs);
@@ -147,6 +219,7 @@ export function useGexBubbleHistory({
         const targets = new Set((picked.length ? picked : traded).slice(0, want));
         if (!targets.size) {
           setCols([]);
+          armRetry();
           return;
         }
 
@@ -163,20 +236,29 @@ export function useGexBubbleHistory({
           if (!cells.length) continue;
           byMinute.set(ts, { ts, cells, spot: Number(col.spot ?? 0) });
         }
-        setCols([...byMinute.values()].sort((a, b) => a.ts - b.ts));
+        const next = [...byMinute.values()].sort((a, b) => a.ts - b.ts);
+        if (next.length) hasDrawnRef.current = true;
+        else armRetry();
+        setCols(next);
       } catch {
         /* offline — keep whatever trail is already drawn */
+        armRetry();
       }
     };
 
+    loadRef.current = load;
     void load();
-    const id = setInterval(load, minutes > WIDE_MINUTES ? REFRESH_MS_WIDE : REFRESH_MS);
+    const id = setInterval(load, windowMinutes > WIDE_MINUTES ? REFRESH_MS_WIDE : REFRESH_MS);
     return () => {
       cancelled = true;
       clearInterval(id);
+      if (retryTimer) clearTimeout(retryTimer);
     };
     // barDaysKey (not the array) so a re-render with an equal list is inert.
-  }, [enabled, expiry, minutes, top, days, barDaysKey]);
+    // windowMinutes, not `minutes`: the quantised value is the one the request
+    // and the cadence are built from, and it is the whole point that a caller's
+    // per-minute recomputation of `minutes` no longer restarts this effect.
+  }, [enabled, expiry, windowMinutes, top, days, barDaysKey]);
 
   return cols;
 }

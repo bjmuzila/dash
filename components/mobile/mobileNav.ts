@@ -89,6 +89,91 @@ export const MOBILE_TO_DESKTOP: Record<string, string> = {
   "/m/econ": "/economic-calendar",
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE CROSSING TO v3
+//
+// The phone build below is v2's. v3 ships its own — six screens under /v3/m/*,
+// registered in cbedge-v3/src/mobile/mobileNav.ts — and v3 is no longer
+// owner-gated (middleware.ts dropped that pattern the day the phone build
+// shipped; it is a normal paid route now). So a phone has no reason to land on
+// a v2 screen, and when it does it is because a stale link, a home-screen
+// shortcut or a bookmark pointed it here.
+//
+// Everything under /m/* therefore redirects to its v3 counterpart. The map is
+// NOT a mechanical id-for-id rename — v3's tab set is deliberately different,
+// and two of v2's screens have no phone equivalent there ON PURPOSE:
+//
+//   heatmap → /v3/m/heat is the closest tab, not the same page. v2's Heat is
+//             the GEX heatmap; v3's is the Multi Greek ladder. It is the tab a
+//             phone user reaching for "the heat screen" wants, and there is no
+//             GEX-heatmap phone page in v3 to send them to instead.
+//   chain   → v3 REMOVED its phone chain tab (2026-09-03, the day after it
+//             landed — see cbedge-v3/src/mobile/mobileNav.ts). Sending a phone
+//             to a tab that does not exist would land on v3's NotFound, so this
+//             goes to the DESKTOP chain, which v3 kept and which is the page.
+//   prep    → same shape: no phone Prep tab in v3, but /v3/premarket exists.
+//
+// A cross-SPA hop, so it is a real navigation (window.location), not a router
+// push: /app/* and /v3/* are two separately built Vite apps behind two
+// different Next handlers. See MobileRedirect.tsx.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const V3_ROOT = "/v3";
+
+/** v2 phone route → where a phone should actually be. Keys are v2 `/m/*` paths. */
+export const MOBILE_TO_V3: Record<string, string> = {
+  "/m": "/v3/m/gex",
+  "/m/gex": "/v3/m/gex",
+  "/m/heatmap": "/v3/m/heat",
+  "/m/es": "/v3/m/spx",
+  "/m/chain": "/v3/options-chain",
+  "/m/em": "/v3/m/em",
+  "/m/prep": "/v3/premarket",
+  "/m/econ": "/v3/m/econ",
+};
+
+/**
+ * Session opt-out for the crossing, so the v2 phone pages stay reachable while
+ * they still exist — for a bug report against v2, or to compare the two.
+ *
+ * Set by `?v2=1` on any /m/* URL and remembered for the tab. Deliberately NOT
+ * folded into FORCE_DESKTOP_KEY: that flag means "give me the full desktop
+ * layout", and it is answered by the redirect below by leaving you on the
+ * desktop route — it must not also mean "keep me on the old phone build".
+ */
+export const STAY_V2_KEY = "cb-stay-v2-v1";
+
+export function isStayV2(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (new URLSearchParams(window.location.search).get("v2") === "1") {
+      window.sessionStorage.setItem(STAY_V2_KEY, "1");
+      return true;
+    }
+    return window.sessionStorage.getItem(STAY_V2_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The v3 URL for a v2 path, or null if there isn't one.
+ *
+ * Takes EITHER a v2 phone path ("/m/es", "/app/m/es") or a v2 desktop path
+ * ("/es-candles"), resolving the desktop one through DESKTOP_TO_MOBILE first —
+ * so a phone on a desktop route crosses in ONE navigation instead of bouncing
+ * through the v2 phone page it is being moved off.
+ *
+ * Returns an ABSOLUTE path including the /v3 basename, because the caller is
+ * leaving this SPA and `basename` no longer applies.
+ */
+export function v3TargetFor(pathname: string | null | undefined): string | null {
+  const p = normalizeMobilePath(pathname);
+  const viaMobile = isMobilePath(p) ? p : DESKTOP_TO_MOBILE[p];
+  if (!viaMobile) return null;
+  return MOBILE_TO_V3[viaMobile] ?? null;
+}
+
 /** Strip the Vite SPA's /app basename so "/app/m/gex" matches "/m/gex". */
 export function normalizeMobilePath(pathname: string | null | undefined): string {
   if (!pathname) return "/";

@@ -30,6 +30,21 @@
 // DATE lives in the query string, so /v3/level-log?date=2026-09-02 still shares
 // a session — which is why app/v3/level-log/route.ts has to answer it.
 //
+// CORE MIGRATION opens `public/core-migration.html` — v2's standalone long-range
+// chart (the selected ticker's CORE across the last 63 recorded sessions, walls
+// on a toggle) — in its own tab, primed with WHATEVER THIS PAGE IS ON: the
+// toolbar's symbol, the selected date as the range's end, and both variant
+// switches. Nothing is copied across; that page reads its own data (one
+// `/api/walls-range`, falling back to `/proxy/walls` a session at a time), so a
+// tab left open can simply be reloaded.
+//
+// It stays a plain static file rather than becoming a v3 route: it is the same
+// HTML that lives in `generated/` for hand-editing, and a static file needs no
+// route, no `lazy()` import and no `app/v3/<name>/route.ts`. The href is
+// root-absolute and `window.open` bypasses the router, so the /v3 basename does
+// not apply to it — which is exactly what we want, since the file is served from
+// the v2 app's `public/` at the site root.
+//
 // REST-only. No socket, no canvas, no polling — the log is change-only and the
 // page fetches on entry and on an explicit refresh, so an open tab never
 // hammers the recorder. Non-negotiables 2, 4, 5 and 6 have nothing to bite on.
@@ -40,6 +55,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Card, CardToolbar } from '@/design/primitives/Card'
 import { SegGroup } from '@/design/primitives/Controls'
 import { Page } from '@/design/primitives/Page'
+import { LEVEL_COLORS, alpha } from '@/design/theme'
 import { usePageSymbol } from '@/data/symbol'
 import { MIG_H, WallMigrationChart } from '@/pages/levelLog/WallMigrationChart'
 import {
@@ -118,6 +134,15 @@ export default function LevelLog() {
     basis,
   )
 
+  /**
+   * v2's CoreMigrationButton, same query contract. `noopener` so the new tab
+   * cannot reach back through `window.opener`.
+   */
+  const openCoreMigration = () => {
+    const q = new URLSearchParams({ symbol, end: date, scope, basis })
+    window.open(`/core-migration.html?${q.toString()}`, '_blank', 'noopener')
+  }
+
   const setDate = (next: string) => {
     const q = new URLSearchParams(params)
     q.set('date', next || todayETStr())
@@ -164,6 +189,19 @@ export default function LevelLog() {
             onChange={setRange}
             title="One session, or the last five recorded ones"
           />
+          <button
+            type="button"
+            onClick={openCoreMigration}
+            title={`Open ${symbol}'s CORE migration — the last 63 recorded sessions — in a new tab`}
+            className="shrink-0 rounded-sm border px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide transition-opacity hover:opacity-80"
+            style={{
+              borderColor: LEVEL_COLORS.cb,
+              color: LEVEL_COLORS.cb,
+              background: alpha(LEVEL_COLORS.cb, 0.12),
+            }}
+          >
+            <span aria-hidden>⤢</span> CORE migration
+          </button>
         </CardToolbar>
 
         <div className="mb-1.5 flex flex-wrap items-baseline gap-2">

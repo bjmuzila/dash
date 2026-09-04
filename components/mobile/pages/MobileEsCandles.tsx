@@ -232,6 +232,16 @@ const BUBBLE_MINUTES_MAX = 5760;
 /** Reach before the chart has bars to measure from - the hook's own default. */
 const BUBBLE_MINUTES_MIN = 420;
 
+/**
+ * How long `schedulePaint` keeps retrying a bubble paint that has not landed.
+ *
+ * Long enough to cover a cold lazy-chunk load plus the chart's own layout on a
+ * slow phone, short enough that a genuinely empty trail (no columns for any day
+ * the chart is showing) stops costing frames. It re-arms on every data change,
+ * so this is a per-attempt budget, not a total.
+ */
+const PAINT_RETRY_MS = 4_000;
+
 const BUBBLE_SCALE_MIN = 0.4;
 const BUBBLE_SCALE_MAX = 3;
 const BUBBLE_SCALE_STEP = 0.1;
@@ -435,11 +445,24 @@ export default function MobileEsCandles() {
   // this to pick the days the trail can be drawn on (see the hook's header).
   // Taken from the DRAWN bars: a bubble with no bar under it is dropped by the
   // renderer anyway.
-  const barDayKeys = useMemo(() => {
+  //
+  // IDENTITY-STABLE, and that is the point of the two-step. `chartCandles` gets
+  // a new array on every spot tick (the live tip, ~1/s), so the obvious
+  // one-memo version handed out a new `barDayKeys` array at that rate even
+  // though the day list changes once a session. `bubbleMinutes` memoises on it,
+  // so it recomputed at the same rate — and its VALUE moves every minute, which
+  // re-ran useGexBubbleHistory's effect and cancelled whatever load was in
+  // flight. Joining to a string and splitting back gives a value that only
+  // changes when the days do.
+  const barDayKeysCsv = useMemo(() => {
     const set = new Set<string>();
     for (const r of chartCandles) set.add(etDayKey(r.timestamp));
-    return [...set];
+    return [...set].join(",");
   }, [chartCandles]);
+  const barDayKeys = useMemo(
+    () => (barDayKeysCsv ? barDayKeysCsv.split(",") : []),
+    [barDayKeysCsv],
+  );
 
   /**
    * Minutes of history to ask for — the reach that makes BUBBLE_DAYS real.
@@ -794,7 +817,11 @@ export default function MobileEsCandles() {
 
   const railDrawRef = useRef<() => void>(() => {});
   const chainDrawRef = useRef<() => void>(() => {});
-  const bubbleDrawRef = useRef<() => void>(() => {});
+  // Returns whether marks actually landed — see drawBubbles / schedulePaint.
+  const bubbleDrawRef = useRef<() => boolean>(() => false);
+  // Declared here rather than beside the bubble block below because the repaint
+  // driver (next) reads its box.
+  const bubbleCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   /**
    * Repaint driver for everything canvas-based.
@@ -816,7 +843,15 @@ export default function MobileEsCandles() {
       if (s2 && chart) {
         const probe = s2.priceToCoordinate(6000);
         const range = chart.timeScale().getVisibleLogicalRange();
-        const key = `${probe}|${range?.from ?? ""}|${range?.to ?? ""}`;
+        // The canvas BOX is part of the key, not just the mapping. The phone
+        // page mounts lazily into a flex column that is 0-high for the first
+        // frames (there is an rAF pump in the chart-init effect for exactly
+        // that), and a layer that first painted at a collapsed size has to
+        // repaint when the box resolves — a resize does not move `probe` if
+        // autoscale lands on the same range.
+        const host = bubbleCanvasRef.current?.parentElement;
+        const box = host ? `${host.clientWidth}x${host.clientHeight}` : "";
+        const key = `${probe}|${range?.from ?? ""}|${range?.to ?? ""}|${box}`;
         if (key !== lastKey) {
           lastKey = key;
           railDrawRef.current?.();
@@ -831,7 +866,6 @@ export default function MobileEsCandles() {
   }, [panelOn, showBubbles]);
 
   // ── bubbles ────────────────────────────────────────────────────────────────
-  const bubbleCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const bubbleDataRef = useRef({
     cols: bubbleCols,
     rows: chartCandles,
@@ -848,16 +882,30 @@ export default function MobileEsCandles() {
     intervalMinutes: interval === "1" ? 1 : 5,
   };
 
-  const drawBubbles = useCallback(() => {
+  /**
+   * Paint the trail. Returns TRUE only if marks actually landed on the canvas.
+   *
+   * The return value is the whole fix for "the bubbles only show up after I pan
+   * the chart". Every `return` below is a NOT-READY-YET, not an error: the host
+   * is still 0-high, the price scale has not resolved a coordinate, the columns
+   * that came back fall outside the bars the chart is holding. The layer used to
+   * be painted exactly once per data change, so a first paint that hit any of
+   * those left a blank canvas with nothing scheduled to try again — and the only
+   * things that did try again were a pan (which moves the repaint driver's key)
+   * or a settings toggle (which re-runs the effect). Hence "randomly", and hence
+   * the fix: the caller retries while this keeps saying false. See
+   * `schedulePaint`.
+   */
+  const drawBubbles = useCallback((): boolean => {
     const cv = bubbleCanvasRef.current;
     const chart = chartRef.current;
     const series = seriesRef.current;
-    if (!cv || !chart || !series) return;
+    if (!cv || !chart || !series) return false;
     const host = cv.parentElement;
-    if (!host) return;
+    if (!host) return false;
     const w = host.clientWidth;
     const h = host.clientHeight;
-    if (w < 4 || h < 4) return;
+    if (w < 4 || h < 4) return false;
     const dpr = window.devicePixelRatio || 1;
     if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
       cv.width = Math.round(w * dpr);
@@ -866,12 +914,12 @@ export default function MobileEsCandles() {
       cv.style.height = `${h}px`;
     }
     const ctx = cv.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return false;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
     const { cols, rows, scale, intervalMinutes } = bubbleDataRef.current;
-    if (!cols.length || !rows.length) return;
+    if (!cols.length || !rows.length) return false;
 
     /**
      * x for an arbitrary ms timestamp.
@@ -916,7 +964,7 @@ export default function MobileEsCandles() {
       const prev = byBar.get(bar);
       if (!prev || col.ts >= prev.ts) byBar.set(bar, { ts: col.ts, cells: col.cells, spot: col.spot });
     }
-    if (!byBar.size) return;
+    if (!byBar.size) return false;
 
     // Four strikes a bucket, one forced each side of that bucket's own spot —
     // the desktop's rule, from the same BUBBLES constants (see lib/gexBubbleModel).
@@ -925,7 +973,7 @@ export default function MobileEsCandles() {
       const chosen = pickBubbleStrikes(col.cells, col.spot || null);
       if (chosen.length) picked.set(bar, chosen);
     }
-    if (!picked.size) return;
+    if (!picked.size) return false;
 
     // ONE denominator for every mark on screen, taken over the strikes actually
     // DRAWN. Per bucket it would renormalise every quiet minute back up to full
@@ -934,7 +982,7 @@ export default function MobileEsCandles() {
     for (const chosen of picked.values()) {
       for (const c of chosen) windowMax = Math.max(windowMax, Math.abs(c.net));
     }
-    if (!windowMax) return;
+    if (!windowMax) return false;
 
     // Bar spacing at this zoom, measured off the last two bars.
     let spacing = 12;
@@ -967,6 +1015,12 @@ export default function MobileEsCandles() {
     const posRgb = M_COLOR.pos;
     const negRgb = M_COLOR.neg;
 
+    // Counted, not inferred. Everything above can succeed and still put nothing
+    // on screen — every bucket off-screen at this pan, or every strike outside
+    // the price range — and the caller's retry has to be able to tell that from
+    // a real paint.
+    let drew = 0;
+
     for (let i = 0; i < bars.length; i += stride) {
       const bar = bars[i]!;
       const cx0 = xOfBar(bar);
@@ -984,6 +1038,7 @@ export default function MobileEsCandles() {
       }
       if (!placed.length) continue;
       fitBubbleRows(placed);
+      drew += placed.length;
 
       for (const { m, y, r, dx } of placed) {
         const positive = m.value >= 0;
@@ -1014,12 +1069,97 @@ export default function MobileEsCandles() {
         }
       }
     }
+
+    return drew > 0;
   }, [priceToY]);
+
+  /**
+   * Ask for a paint, and keep asking until one lands.
+   *
+   * THE BUG THIS EXISTS FOR. The trail was painted from one effect keyed on the
+   * data, and nothing else. That effect fires at the right MOMENT — the instant
+   * `bubbleCols` arrives — and on this page that moment is routinely too early:
+   * the route is lazy-loaded into a flex column that is 0-high for the first
+   * frames, the chart is created at that collapsed size and resized by an rAF
+   * pump, and lightweight-charts cannot answer `priceToCoordinate` /
+   * `timeToCoordinate` until it has laid out with data. So the one paint the
+   * layer was going to get was spent on a canvas that could not draw, and
+   * `drawBubbles` returned quietly.
+   *
+   * After that, the ONLY things that repainted it were the rAF driver's change
+   * key (a pan, a pinch, an autoscale — i.e. moving the chart) and a re-run of
+   * the data effect (a settings toggle, or the next 60s poll). Which is exactly
+   * the reported symptom: bubbles that show up "randomly", after you pan or
+   * change a setting.
+   *
+   * A retry, not a longer delay: readiness here is a race against layout,
+   * network and the chart's own internals, and no single timeout is right for
+   * all three. Retrying on animation frames costs one function call per frame
+   * for at most PAINT_RETRY_MS and stops dead the moment a paint lands.
+   */
+  const paintRafRef = useRef(0);
+  const paintUntilRef = useRef(0);
+
+  const schedulePaint = useCallback(() => {
+    paintUntilRef.current = Date.now() + PAINT_RETRY_MS;
+    if (paintRafRef.current) return;
+    const attempt = () => {
+      paintRafRef.current = 0;
+      const painted = bubbleDrawRef.current?.() ?? false;
+      if (painted || Date.now() > paintUntilRef.current) return;
+      paintRafRef.current = requestAnimationFrame(attempt);
+    };
+    paintRafRef.current = requestAnimationFrame(attempt);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (paintRafRef.current) cancelAnimationFrame(paintRafRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     bubbleDrawRef.current = drawBubbles;
-    drawBubbles();
-  }, [drawBubbles, bubbleCols, chartCandles, bubbleScale, interval]);
+    // Synchronously first — when the chart IS ready (every case after the first
+    // paint) this is the only call that happens and the retry never arms.
+    if (!drawBubbles()) schedulePaint();
+  }, [drawBubbles, schedulePaint, bubbleCols, chartCandles, bubbleScale, interval]);
+
+  /**
+   * Two backstops, both lifted from the desktop chart, which has had them since
+   * long before this page existed:
+   *
+   *   - a ResizeObserver on the canvas's own box. The rAF driver's key now
+   *     includes that box, but the observer fires on the frame the box changes
+   *     instead of whenever the driver next samples, which is what makes a
+   *     rotate or a keyboard dismissal repaint immediately.
+   *   - a low-rate interval, skipped while the tab is hidden and re-armed on
+   *     visibilitychange. 5s, like the desktop's: it is a safety net for a
+   *     readiness case nobody predicted, not a render loop, and it costs one
+   *     canvas clear when nothing has changed.
+   */
+  useEffect(() => {
+    if (!showBubbles) return;
+    const host = bubbleCanvasRef.current?.parentElement;
+    const ro = host ? new ResizeObserver(() => schedulePaint()) : null;
+    if (host && ro) ro.observe(host);
+
+    const onVisible = () => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") schedulePaint();
+    };
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      schedulePaint();
+    }, 5_000);
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      ro?.disconnect();
+      clearInterval(id);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [showBubbles, schedulePaint]);
 
   // ── SPX level lines, drawn where they are ──────────────────────────────────
   const levels = useMemo(() => {

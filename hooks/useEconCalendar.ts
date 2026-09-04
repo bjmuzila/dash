@@ -9,6 +9,7 @@ import {
   type EarnBucket,
   type EarnRow,
 } from "@/lib/econCalendar";
+import { useRefreshSource } from "@/lib/refreshBus";
 
 /**
  * useEconCalendar — the calendar feed, fetched once and shaped for rendering.
@@ -125,6 +126,11 @@ export function useEconCalendar(
   useEffect(() => {
     void reload().finally(() => setLoading(false));
   }, [reload]);
+
+  // Toolbar refresh. This feed does not poll (see the header), so the button
+  // is the ONLY way to re-pull it inside a session — which is most of why the
+  // button exists on the calendar page at all.
+  useRefreshSource(reload, "useEconCalendar");
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), CLOCK_MS);

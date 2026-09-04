@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { sendGex, subscribeGex, type GexMessage } from "@/lib/gexSocket";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { useRefreshSource } from "@/lib/refreshBus";
 import { computeGEXProfile, findGEXFlip, type ChainRow, type GEXProfile } from "@/lib/calculations/calculations";
 
 /**
@@ -416,6 +417,50 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
     pinnedRef.current = target;
     sendGex({ type: "SET_EXPIRY", expiry: target });
   }, [expirations, connected, sessionDate]);
+
+  /**
+   * Toolbar refresh.
+   *
+   * NOT a socket reconnect. Dropping /ws/gex would re-open it for every
+   * consumer in the tab and clear gexSocket's replay cache — see the
+   * "what does not belong here" note in lib/refreshBus.ts. Instead this does
+   * the two things a user pressing refresh actually wants:
+   *
+   *   1. re-assert the pinned expiry, because the server tracks it per
+   *      connection and a reconnect we did not notice resets it to the front
+   *      month — which is exactly the state that makes a page look stuck; and
+   *   2. pull /api/gex once, the same REST shape the silent-socket fallback
+   *      uses, so the numbers move even when the feed is the thing that is
+   *      wedged.
+   *
+   * The REST result is applied unconditionally here (the fallback poll's
+   * "don't stomp a live frame" guard is deliberately NOT copied): a deliberate
+   * press is a request for the freshest read there is, and both legs are the
+   * same publisher.
+   */
+  const refreshNow = useCallback(async () => {
+    if (!enabled) return;
+    if (desiredExpiryRef.current) {
+      sendGex({ type: "SET_EXPIRY", expiry: desiredExpiryRef.current });
+    }
+    const r = await fetch("/api/gex", { cache: "no-store" });
+    if (!r.ok) throw new Error(`/api/gex HTTP ${r.status}`);
+    const d = (await r.json()) as Record<string, unknown>;
+    applyPayload({
+      gexRows: d.chain,
+      spot: d.spotPrice,
+      prevClose: d.prevClose,
+      gexFlip: d.gexFlip,
+      callWall: d.callWall,
+      putWall: d.putWall,
+      totalNetGex: d.totalNetGex,
+      expirations: d.expirations,
+      expiry: d.expiration,
+      updatedAt: d.updatedAt,
+    });
+  }, [enabled, applyPayload]);
+
+  useRefreshSource(refreshNow, "useMobileGex");
 
   // findGEXFlip is a pure client computation; prefer it over the server value
   // because it is derived from the exact rows on screen. Still exposed even

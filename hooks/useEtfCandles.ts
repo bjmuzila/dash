@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EsCandleRecord } from "@/lib/snapdb";
+import { useRefreshSource } from "@/lib/refreshBus";
 
 /**
  * 60s, was 30.
@@ -123,6 +124,11 @@ export function useEtfCandles(
       clearInterval(id);
     };
   }, [sym, load]);
+
+  // The toolbar's refresh button re-pulls this while the hook is mounted.
+  // `load` already carries a monotonic seq token, so a manual press racing the
+  // 60s poll cannot land the loser's bars.
+  useRefreshSource(load, "useEtfCandles");
 
   const sorted = useMemo(
     () => [...rows].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey)),

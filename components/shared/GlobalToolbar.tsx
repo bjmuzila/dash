@@ -13,6 +13,7 @@ import ToolbarTicker from "./ToolbarTicker";
 import NavMenu from "./NavMenu";
 import BzilaAlerts from "./BzilaAlerts";
 import SectionSubStrip from "./SectionSubStrip";
+import GlobalRefreshButton from "./GlobalRefreshButton";
 import { sectionForHref, sectionForPath } from "./sectionNav";
 import { isMobilePath } from "@/components/mobile/mobileNav";
 
@@ -824,6 +825,24 @@ export default function GlobalToolbar() {
           </div>
 
           {!isMobile && <span style={{ width: 1, height: 24, background: HOME_THEME.border, flexShrink: 0, zIndex: 1 }} />}
+
+          {/* ── Refresh — the ONE refresh control in the app ──
+              Here rather than on each page because this toolbar is the only
+              chrome every route shares: LayoutShell mounts it for the desktop
+              dashboard AND for the phone build (/m/*), so one mount covers
+              both surfaces and there is a single place to change the behaviour.
+
+              It re-pulls whatever the CURRENT route reads — the data hooks
+              register their own re-fetch with lib/refreshBus while they are
+              mounted, so nothing here is route-aware and a new page is covered
+              the moment its hooks call useRefreshSource. See that file's
+              header for why this is not simply a remount.
+
+              Left of the clock deliberately: the right-hand cluster (ticker →
+              refresh → clock → notes → avatar) is in the same order on every
+              route, and refresh belongs next to the freshness read-out rather
+              than at the end of a re-orderable nav strip. ── */}
+          <GlobalRefreshButton compact={isMobile} mobile={isMobileRoute} />
 
           {/* ── ET clock ── */}
           <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", flexShrink: 0 }}>

@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
+import { useRefreshSource } from "@/lib/refreshBus";
 
 // BOTH candle topics, always. The 1m/5m choice is read from `intervalRef`
 // inside the handler specifically so switching aggregation does NOT tear down
@@ -453,6 +454,14 @@ export function useEsCandles(
     for (const c of sessionMapRef.current.values()) if (c.timestamp >= cutoff) map.set(c.slotKey, c);
     return [...map.values()].sort((a, b) => a.timestamp - b.timestamp || a.slotKey.localeCompare(b.slotKey));
   }, [historical, sessionTick]);
+
+  // Toolbar refresh. `loadFromDb`, NOT `refresh`: the exported `refresh` is a
+  // no-op once live bars exist (by design — it exists to fill an EMPTY chart
+  // without disturbing a running one), and "nothing happened" is the one
+  // outcome a refresh button must not have. loadFromDb merges by slotKey and
+  // never wipes, so re-pulling over a live map is safe, and its seq token
+  // drops a press that lands after an interval switch.
+  useRefreshSource(() => loadFromDb().catch(() => {}), "useEsCandles");
 
   return { candles, sessionCandles, historical, connected, refresh };
 }

@@ -355,6 +355,12 @@ interface SizeProfile {
   rankMix: number
   /** Blur allowed under the leader, bounded by the room left beside it. */
   glowPx: number
+  /**
+   * The CEILING on the leader's ring width, not the width itself — the drawn
+   * ring is `ringOfRadius` of the mark's half-width, clamped into
+   * [`ringMinPx`, this]. A fixed width does not survive a zoom: see the ring
+   * block in drawBubbles.
+   */
   ringPx: number
 }
 
@@ -787,7 +793,34 @@ export function drawBubbles(
         // thing saying whether the biggest wall is positive or negative gamma —
         // which is why it is the saturated colour at near-full alpha and not a
         // tint.
-        ctx.lineWidth = size.ringPx
+        //
+        // ── IT IS A PROPORTION OF THE MARK, NOT A FIXED WIDTH ────────────────
+        // `ringPx` used to be the width outright, and it is per RUNG — so it did
+        // not move when the ZOOM did. Zoomed in, a 1.4px ring on a 40px mark is
+        // the fine gold-coin edge this layer was tuned for. Zoomed out, the same
+        // 1.4px sits on a 5px mark: the ring is now a third of the diameter, the
+        // gold core is a speck inside it, and the whole trail reads as a row of
+        // red and blue beads. The mark shrank and the border did not.
+        //
+        // So the width is `ringOfRadius` of the mark's own half-width, and
+        // `ringPx` becomes the CEILING on it — which means the zoomed-in look is
+        // untouched (past ~8px of radius the ceiling binds and the number is the
+        // one it always was) and every zoom below that scales down with the mark.
+        // `ringMinPx` keeps it a visible line rather than letting it vanish.
+        const ring = clamp(rx * BUBBLES.ringOfRadius, BUBBLES.ringMinPx, size.ringPx)
+        // ── AND IT IS DRAWN INSIDE THE MARK ──────────────────────────────────
+        // A stroke straddles its path, half in and half out, so stroking the
+        // fill's own outline both ate the outer ring of gold AND grew the mark
+        // by half the width. Inset by half the ring and the mark keeps the exact
+        // radius the size law gave it, with the border sitting inside the edge.
+        ctx.beginPath()
+        ctx.ellipse(
+          cx, y,
+          Math.max(0.3, rx - ring / 2),
+          Math.max(0.3, ry - ring / 2),
+          0, 0, Math.PI * 2,
+        )
+        ctx.lineWidth = ring
         ctx.strokeStyle = shade(base, 0.95 * age)
         ctx.stroke()
       } else {

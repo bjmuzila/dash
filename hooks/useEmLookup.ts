@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useRefreshSource } from "@/lib/refreshBus";
 import { trackTickerClick } from "@/lib/trackTicker";
 
 /**
@@ -241,6 +242,14 @@ export function useEmLookup(): EmLookupState {
       setLoading(false);
     }
   }, []);
+
+  // Toolbar refresh — re-run the CURRENT lookup, if there is one. This hook is
+  // driven by a symbol box rather than a poll, so with nothing looked up yet
+  // there is nothing to refresh and the source resolves immediately instead of
+  // guessing a ticker.
+  const tickerRef = useRef(ticker);
+  tickerRef.current = ticker;
+  useRefreshSource(() => (tickerRef.current ? lookup(tickerRef.current) : undefined), "useEmLookup");
 
   return { ticker, data, loading, error, emStats, winRate, recentRec, lookup };
 }

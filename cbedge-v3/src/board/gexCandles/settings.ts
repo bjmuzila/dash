@@ -438,12 +438,42 @@ export const BUBBLES = {
   // `topTint` that pushed it whiter) went with the gold change: both tints were
   // near-white and near-identical to each other, so the core said "leader" but
   // never said which way, and the ring was already carrying the sign alone.
+  /**
+   * ── THE LEADER'S RING IS A PROPORTION OF ITS MARK ────────────────────────
+   *
+   * The ring width drawn is `ringOfRadius` x the mark's own half-width, clamped
+   * into [`ringMinPx`, the rung's `ringPx`]. `ringPx` in `profiles` is therefore
+   * the CEILING, not the width.
+   *
+   * It used to be the width outright — and `profiles` is keyed by RUNG, so it
+   * did not move when the ZOOM did. Zoomed in, 1.4px on a 40px mark is the fine
+   * gold-coin edge this was tuned for. Zoomed out, that same 1.4px sits on a 5px
+   * mark, the border is a third of the diameter, the gold core is a speck, and
+   * the trail reads as a row of red and blue beads instead of gold walls. The
+   * mark shrank; the border did not.
+   *
+   * 0.13 is that tuned ratio read back off the zoomed-in case, so the look
+   * people liked is exactly the look at any radius past ~8-11px (where the
+   * ceiling takes over and the number is the one it always was). Everything
+   * below scales down with the mark.
+   *
+   * `ringMinPx` is the bottom: under about a third of a pixel a stroke stops
+   * being a line and becomes a grey blur along the edge, and the sign — which on
+   * the leader lives ONLY in this ring — goes with it.
+   *
+   * The ring is also drawn INSET by half its width, so it sits inside the mark's
+   * edge instead of straddling it. Straddling both ate the outer band of gold
+   * and grew the mark past the radius the size law gave it.
+   */
+  ringOfRadius: 0.13,
+  ringMinPx: 0.45,
   /** The weakest mark fades to 1 - fade. */
   fade: 0.45,
   /** The oldest bucket keeps this much of its opacity. Age reads, faintly. */
   ageKeep: 0.75,
   /**
-   * The glow under the top mark. Its ring width is per-rung, in `profiles`.
+   * The glow under the top mark. Its ring CEILING is per-rung, in `profiles`;
+   * the width actually drawn scales with the mark — see `ringOfRadius` above.
    *
    * `glowFactor` and `glowMaxPx` are CEILINGS, not amounts: the blur actually
    * drawn is also held to the room left beside the mark once its own radius is
