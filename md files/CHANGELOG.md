@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-09-04 - v3 toolbar: the Notes dock (and the owner's Quick Probe) is reachable
+
+`shell/NotesDock.tsx`, `shell/NotesPanelContext.tsx`, `shell/notes.tsx` and
+`shell/QuickProbe.tsx` were all ported into v3 weeks ago and then had NOTHING
+mounting them - no provider, no button - so the panel, the note store and the
+owner Quick Probe inside it were dead code you could not reach from any page.
+
+- `cbedge-v3/src/shell/Shell.tsx`
+  - New `NotesButton` in the universal toolbar, between the camera and the
+    account menu. Pencil glyph, lit while the panel is open. Signed-in and
+    desktop only - the same test the dock itself uses, so the button and the
+    thing it opens appear and disappear together.
+  - `NotesPanelProvider` wraps the frame (inside ToolbarSlotProvider): the
+    button is in the toolbar and the dock is a sibling of the page column, so
+    the open flag has to sit above both. Its storage key is v2's, so a dock
+    left open in /app/* is open in /v3/*.
+  - The dock mounts as a flex SIBLING of the page column, like the rail on the
+    other side: opening it narrows the page instead of covering it, and an
+    expanded card can no longer sit on top of it.
+
+Two deliberate budget choices, since Shell.tsx is the ENTRY chunk (budgets.json
+caps it at 37KB brotli with 15% slack):
+
+- `NotesDock` is `lazy()` and mounted only once the panel has been opened, so
+  the note editor + Quick Probe chunk is fetched on the first click of the
+  pencil and never on a session that does not use it. It stays mounted after
+  that, which keeps the width transition and a half-typed probe alive across a
+  close and reopen.
+- The button carries NO note count and draws its pencil inline. Both would have
+  meant importing `shell/notes.tsx` (useNotes / PencilIcon live beside
+  NotesBody), pulling ~15KB of note editor into the entry chunk to render one
+  number. The panel's own header already carries the count.
+
+The Quick Probe is unchanged: drawn only for the owner, and its write
+(`POST /api/watch`) is `auth: 'owner'` server-side, so the button being visible
+to any signed-in user grants nothing.
+
+No proxy code changed.
+
+
 ## 2026-09-04 - GEX Change Top gate: three independent switches, each showing what IT costs (`cbedge-v3/src/pages/scanner/{gexChangeTop.ts,GexChangeTopTab.tsx}`, `components/scanner/GexChangeTop.tsx`)
 
 The single "Strict gate" button shipped earlier today removed **53 of 54 picks**

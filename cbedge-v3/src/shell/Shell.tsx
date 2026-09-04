@@ -1,19 +1,31 @@
 import type { DragEvent as ReactDragEvent, ReactNode } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { preload } from '@/data/api'
 import { isMobilePath } from '@/mobile/mobileNav'
-import { AuthProvider } from '@/data/auth'
+import { AuthProvider, useAuth } from '@/data/auth'
 import { PAGE_TICKER_RE, PageSymbolProvider, SOCKET_SYMBOL, isSocketSymbol, usePageSymbol } from '@/data/symbol'
 import { Chip } from '@/design/primitives/Controls'
 import { ExpandStageHost } from '@/design/primitives/Expand'
 import { ReplayDockHost } from '@/design/primitives/ReplayDock'
 import { TickerPicker } from '@/design/primitives/TickerPicker'
+import { useIsPhone } from '@/design/useIsPhone'
 import { CbMark, CbWordmark } from '@/shell/Brand'
 import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
+import { NotesPanelProvider, useNotesPanel } from '@/shell/NotesPanelContext'
 import { ToolbarSlotHost, ToolbarSlotProvider } from '@/shell/ToolbarSlot'
 import { UserMenu } from '@/shell/UserMenu'
 import { UpdateToast } from '@/shell/UpdateToast'
+
+/**
+ * The notes dock, its note store and the owner's Quick Probe are ~30KB of source
+ * that only matters once someone opens the panel, and this file is the ENTRY
+ * chunk — budgets.json caps it at 37KB brotli with 15% slack, so a static import
+ * here would spend the headroom of the whole app on a drawer most sessions never
+ * open. lazy() puts the three of them in their own chunk, fetched on the first
+ * click of ✎ and cached from then on.
+ */
+const NotesDock = lazy(() => import('@/shell/NotesDock'))
 
 // The persistent frame: mounts once and never unmounts, so the socket, the
 // store and any dock state survive navigation. Routes render inside it.
@@ -249,6 +261,94 @@ function EtClock() {
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ✎ NOTES — the toolbar's handle on the right-hand dock.
+//
+// The dock (shell/NotesDock.tsx) and its open/closed state
+// (shell/NotesPanelContext.tsx) were ported weeks ago and then had NOTHING
+// mounting them: no provider, no button, so the panel and the Quick Probe
+// inside it were unreachable in v3. This button is the missing half.
+//
+// WHAT IS IN THE PANEL. The notes list for everyone signed in, and — for the
+// owner only — the QUICK PROBE card at the top of it: ticker / expiry / strike /
+// C-or-P straight onto the owner probe list, no navigation (shell/QuickProbe.tsx
+// has the endpoint contract). The probe is drawn owner-only and the write is
+// gated owner-only server side, so this one button is safe to show to any
+// signed-in user; they simply get notes and no probe.
+//
+// NO NOTE COUNT ON THE BUTTON, and that is a budget decision rather than a
+// design one: the count would mean a `useNotes` instance here, and useNotes
+// lives in shell/notes.tsx alongside NotesBody — pulling ~15KB of note editor
+// into the ENTRY chunk to render one number. The panel is one click away and
+// carries its own count in its header.
+//
+// The pencil is drawn inline for the same reason: importing PencilIcon would
+// drag the same module in behind it.
+//
+// DESKTOP ONLY, on the same test the dock uses — a 320px drawer on a 390px
+// phone is the screen with a margin, and a button that opens nothing is worse
+// than no button.
+// ─────────────────────────────────────────────────────────────────────────────
+function NotesButton() {
+  const { isSignedIn } = useAuth()
+  const { open, togglePanel } = useNotesPanel()
+  const isPhone = useIsPhone()
+
+  if (!isSignedIn || isPhone) return null
+
+  return (
+    <button
+      type="button"
+      onClick={togglePanel}
+      aria-pressed={open}
+      aria-label="Notes"
+      title={
+        open
+          ? 'Close the notes panel'
+          : 'Notes — jot, clip and keep; the Quick Probe lives at the top of it'
+      }
+      className={[
+        'flex shrink-0 items-center rounded-sm border border-line px-2 py-1 leading-none transition-colors',
+        open ? 'bg-raised text-fg' : 'text-muted hover:text-fg',
+      ].join(' ')}
+    >
+      <svg
+        aria-hidden
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </svg>
+    </button>
+  )
+}
+
+/**
+ * Mounts the dock the first time it is opened and leaves it mounted. `everOpen`
+ * rather than `open` so closing it does not unmount the panel and throw away the
+ * Quick Probe's half-typed contract.
+ */
+function NotesDockSlot() {
+  const { open } = useNotesPanel()
+  const [everOpen, setEverOpen] = useState(false)
+  useEffect(() => {
+    if (open) setEverOpen(true)
+  }, [open])
+  if (!everOpen) return null
+  return (
+    <Suspense fallback={null}>
+      <NotesDock />
+    </Suspense>
+  )
+}
+
 function Toolbar({ mobile = false }: { mobile?: boolean }) {
   // THE ticker control for the whole board. Every card that can follow a symbol
   // follows this one, which is why no card carries its own dropdown — see
@@ -331,6 +431,10 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
           nothing at all until some surface on the current page has published
           itself as worth photographing — see shell/CopyShot.tsx. */}
       <CopyShotMenu />
+      {/* ── ✎ ──────────────────────────────────────────────────────────────────
+          Opens the notes dock on the right, which is also where the owner's
+          Quick Probe lives. See NotesButton above. */}
+      <NotesButton />
       {/* The account dropdown — same rows as v2's UserMenu, on v3 tokens. The
           Owner entry inside is owner-gated (chrome only; middleware.ts is the
           real gate). See shell/UserMenu.tsx. */}
@@ -364,11 +468,17 @@ export function Shell({ children }: { children: ReactNode }) {
   //     published by the page, so the registry has to sit above both.
   //   ToolbarSlotProvider — same shape, same reason: the slot is IN the toolbar
   //     and its contents come FROM the page, so it has to be above both.
+  //   NotesPanelProvider — the ✎ button that toggles the dock is in the toolbar
+  //     and the dock itself is a sibling of the page column, so the open/closed
+  //     flag has to sit above the two of them. (It also persists per browser
+  //     under v2's OWN storage key, so a dock left open in /app/* is open here —
+  //     same person, same browser, same panel. See NotesPanelContext.tsx.)
   return (
     <AuthProvider>
       <PageSymbolProvider>
         <CopyShotProvider>
           <ToolbarSlotProvider>
+          <NotesPanelProvider>
           {/* "New version — Update". Fixed-position, so it is a sibling of the
               layout rather than part of it, and mounted once for both branches.
               See data/appVersion.ts for why an open phone tab needs telling. */}
@@ -409,8 +519,27 @@ export function Shell({ children }: { children: ReactNode }) {
                 <ExpandStageHost>{children}</ExpandStageHost>
               </ReplayDockHost>
             </div>
+            {/* ── THE NOTES DOCK ───────────────────────────────────────────────
+                A flex SIBLING of the page column, exactly like the rail on the
+                other side: open it and the page gets narrower, it does not get
+                covered. Closed it is 0px wide and draws nothing at all.
+
+                Outside the page column on purpose — inside it, the dock would
+                be underneath the toolbar and an expanded card would cover it,
+                and "open my notes while looking at this card" is most of what
+                it is for. It renders null for a signed-out visitor and on a
+                phone, so both branches of this layout stay honest.
+
+                MOUNTED ONLY ONCE OPENED. lazy() means the chunk is not fetched
+                until this renders, and the dock is 0px wide while closed — so
+                gating on `open` costs nothing visible and keeps the fetch on
+                the click that needs it. It stays mounted after that, which is
+                what keeps the width transition (and the probe's typed-in
+                fields) alive across a close and reopen. */}
+            <NotesDockSlot />
           </div>
           )}
+          </NotesPanelProvider>
           </ToolbarSlotProvider>
         </CopyShotProvider>
       </PageSymbolProvider>
