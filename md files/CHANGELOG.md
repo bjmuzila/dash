@@ -1,5 +1,202 @@
 # Changelog
 
+## 2026-09-05 - Trial bans: switch the free trial off for an email or an IP from the Sales page, and tell them why (`lib/db.ts`, `lib/trialEligibility.ts`, `lib/trialGuard.ts`, `lib/trialBanNotice.ts`, `lib/emails/trial-banned.ts`, `app/api/stripe/checkout/route.ts`, `app/api/admin/trial-bans/route.ts`, `owner-vite/src/pages/Sales.tsx`)
+
+The two automatic gates were already in place and they are fair: `trial_history`
+gives every EMAIL one trial, `trial_cards` gives every CARD one. Neither can say
+"this person has now arrived on their seventh address and I am done" - that is a
+decision, and there was nowhere to record it. This adds that, as a third axis.
+
+**A ban gates the TRIAL ONLY.** A banned email can still sign up, sign in and
+subscribe; checkout simply never sends `trial_period_days` for them, so billing
+starts on day one. Blocking the purchase to punish trial farming would cost
+money to make a point.
+
+**New: `trial_bans`** (`lib/db.ts`). `kind` is `email` or `ip`. Emails are keyed
+through the existing `trialEmailKey()`, so a ban survives `+tags` and Gmail dots
+- a ban a plus sign defeats is not a ban. IPs are matched exactly, never as a
+CIDR range: a range ban catches a whole office or a carrier NAT. `lifted_at`
+stamps rather than deletes (same posture as `comp_access.revoked_at`) and the
+unique index is PARTIAL on it, so an address can be banned, lifted, and banned
+again with both decisions still on the record. `hit_count` / `last_hit_*` is the
+audit trail of refused attempts; `notified_*` is the latch on the email below.
+
+**New: `trial_checkout_ips`.** One row per `(ip, email)` that opened a
+trial-eligible checkout, written best-effort by the checkout route from
+`CF-Connecting-IP`. This is what makes the IP half of the feature usable at all
+- without it the owner would have to go and find an address in Cloudflare logs
+before they could ban one. `getTrialIpClusters()` groups it by address and
+orders by DISTINCT emails, which is the actual farming signal: one address and
+one email is a customer, one address and nine emails is a person with a
+spreadsheet.
+
+**Enforcement, in both places a trial can start.**
+`decideTrialEligibility()` now checks bans FIRST - ahead of the
+`TRIAL_NEW_EMAIL_ONLY` kill switch on purpose, so flipping that dial for a
+promo week cannot silently hand the trial back to exactly the accounts it was
+taken from. New reasons `email-banned` / `ip-banned` ride into the subscription
+metadata as `trial_decision` like the others. `enforceTrialGuard()` re-checks the
+email ban in the webhook (axis 0), which covers a trial that arrived from the
+Stripe dashboard or the API, and a ban issued while a trial was already running.
+Ban lookups that ERROR are swallowed and skipped - a Postgres blip must not fail
+every checkout - but a ban that is FOUND is final.
+
+**The email** (`lib/emails/trial-banned.ts`, sent via `lib/trialBanNotice.ts`).
+"The free trial has already been used more than once from this account; it is a
+one-time offer, so it is no longer available" - with the pricing link right
+there, because a trial farmer who gives up and pays is a win. Sent by
+`sendAuthEmail()`, not `sendTransactional()`: it is an account-policy notice
+about an action they just took, so no unsubscribe footer and no List-Unsubscribe
+headers (declaring it bulk would pool it with the promo blasts). It is NOT sent
+for the ordinary one-trial-per-email rule - that case is a returning customer
+buying the plan, and telling them they had used the trial "numerous times" would
+be both wrong and insulting. Only a deliberate ban reaches it.
+
+The automatic send is latched by a conditional UPDATE on `notified_at`, so two
+simultaneous checkouts cannot both win it and someone refreshing the pricing page
+six times gets one email, not six. The panel's Send/Resend button is the
+deliberate second send.
+
+**New endpoint `/api/admin/trial-bans`** - owner-only, fails closed on
+`OWNER_USER_ID`, and deliberately NOT wired to the `INTERNAL_API_TOKEN` bypass:
+nothing automated should be issuing bans. GET returns the bans, the repeat-trial
+attempts and the IP clusters in one parallel read; POST bans (optionally mailing
+them); PUT sends/resends the notice; DELETE lifts.
+
+**Sales page: "Trial abuse & bans"**, directly under Trial Conversion - that
+panel is where a run of `lapsed` rows on the same person shows up, and this is
+what you do about it. Three lists in the order you use them: repeat attempts
+(each row has a one-click "Ban + notify"), shared checkout IPs (one-click "Ban
+IP"), then the active bans with hit counts, notice state, Resend and Lift.
+Lifted bans stay as collapsed history. The ban reason is an INTERNAL note by
+default and only reaches the customer if the "quote reason" box is ticked -
+"serial abuser, 6 addresses" is not a sentence to forward to them.
+
+## 2026-09-05 - Post-Market recap: the intraday ladder asks for the expiry the SESSION was recorded under, and a past date no longer kills the ticker picker (`server-v2/api-router.js`, `server-v2/_lib-db.cjs`, `components/pages/premarket/postMarketData.ts`, `components/pages/premarket/PostMarketTab.tsx`, `components/pages/Premarket.tsx`)
+
+Two bugs reported together from /premarket on a Saturday, reading Friday's
+Post-Market tab: "No per-minute ladder recorded for today", and a symbol picker
+that would not move off SPX. They were separate faults with one shared cause -
+the page treating a PAST session as if the live board's idea of "now" applied
+to it.
+
+**The ladder was being asked for the wrong expiry, and the empty answer was
+reported as a broken recorder.** `useIntradayLadder` queries
+`option_strike_gex_history` by `(date, expiry, symbol)`, and the `expiry` it had
+to hand is whatever the LIVE feed calls front. Those two agree only while the
+session is running:
+
+- On a FROZEN past session, `premarket-freeze-recorder` captures the post slot
+  at 16:05-16:25 ET - after the front expiry has already rolled off that day's
+  0DTE. Friday's capture therefore carries MONDAY's expiry, so Friday's ladder
+  was queried under a board that was never recorded, and matched zero rows.
+- On a WEEKEND the hook already walks Saturday back to Friday, but the expiry
+  stayed next week's, producing the same empty result.
+
+Both came back as `state: "empty"` and printed "No per-minute ladder recorded for
+today" - blaming the recorder for a session it had recorded perfectly.
+
+The fix is a resolution step, not a merge. `getGexHistoryExpiriesForDate(date,
+symbol)` in `_lib-db.cjs` returns the expiries the recorder actually wrote for
+that session, ordered by row count. The heatmap branch of
+`/api/snapshots/option-strike-gex-history` accepts `expiryFallback=1` (date mode
+only, `minutes=0`, never with `anyExpiry`): when the requested expiry matches
+nothing for that date it resolves the session's own front expiry and re-runs the
+SAME single-expiry query. This is deliberately NOT `anyExpiry=1`, which merges
+every expiry into one slot bucket and is ~100x wrong for this tab - see
+`useIntradayLadder`'s header. The response now carries `expiry`,
+`requestedExpiry` and `expiryFallback`, and the fallback flag is part of the
+30s heatmap cache key.
+
+`useIntradayLadder` sends the flag and returns `expiryUsed`. `PostMarketTab`
+prints THAT expiry in the section-1 badge and the footbar, so the tab can no
+longer label a board with an expiry it did not read. The "empty" message now
+names the date and expiry it asked for and mentions the ~2-session retention
+floor, so a genuinely pruned date reads as pruned instead of as breakage.
+
+**A past date no longer disables the whole ticker picker.** Stepping onto a past
+session used to snap `sym` back to SPX and disable every non-SPX option, which
+is why the picker was dead while reading Friday's recap. The freeze itself is
+still SPX-only - it captures the one symbol the socket carries - but
+`HistoricalRecap` has taken a `symbol` prop since 2026-08-27 and reads that
+symbol's own recorded stores. So `frozen` now additionally requires
+`sym === "SPX"`, which drops a non-SPX past date into the existing `recapOnly`
+path and renders that symbol's recorded recap instead of refusing the click.
+Nothing renders an SPX board under another name.
+
+REPLAY still snaps to SPX and still disables the other options: those frames are
+a recorded SPX capture being stepped through and a chain poll has no per-minute
+stored form, so an NVDA label over them would be a lie rather than a smaller
+truth.
+## 2026-09-05 - Pick Study: un-confound rank, name the scan that filed each pick, and record the two facts the row was throwing away (`server-v2/_lib-pick-grade.cjs`, `server-v2/gex-change-top-recorder.js`)
+
+The two things flagged as "known, not fixed here" on 2026-09-04, plus the
+denominator the gate could not check. No UI change: the Pick Study's feature list
+is server-driven (`StudyResp.features`), so the three new buckets appear in the
+dropdown on their own.
+
+**`rank` is now null for a live trigger, and that is a fix, not missing data.**
+The live scan writes `rank = i + 1` where `i` is the position inside ONE batch of
+at most `LIVE_MAX_PER_SCAN` (3). So every live pick was rank 1-3 by construction
+and ranks 4+ could only be leaderboard captures - which made
+`BUCKETS.rank` measure PROVENANCE, not ordering. "Rank 1 beats rank 5" would have
+been reading "live triggers beat late leaderboard slots", and `fitRule` would
+have armed a rank term on it.
+
+Done in `pickFeatures`, NOT in the recorder's INSERT. The column is real data the
+cards render, and nulling it in the database to fix a study problem would have
+been a UI regression bought with a schema migration.
+
+**`live` is a feature now.** Without it the study could not separate the two
+sources at all, and while triggers clustered before 10:00 `slot` and provenance
+were nearly collinear - any `slot=pre-10:00` term the fit armed would really have
+been "live triggers are bad" wearing a clock. The bucket's own note says to read
+it before believing anything in the slot table.
+
+**`n_samples` and `gex_open` are recorded at capture.** Both were already
+computed by `SCAN_SQL` and simply not selected out of it.
+
+- `n_samples` - how many 15-minute deltas the strike had in the window. The scan
+  only ever used it as `n >= 2`, and 2 is exactly the value that makes
+  `stddev_pop` meaningless: with two samples `|z|` is 1 whatever the data did. So
+  the z column has been quietly implying a confidence the sample could not
+  support, and now the study can ask.
+- `gex_open` - the DENOMINATOR `pct_open` is a ratio against. At 09:47 the open
+  baseline can be a handful of contracts, which makes "+300% vs open" a rounding
+  error wearing a percentage sign. This is the filter the client-side gate could
+  NOT enforce (it is not on the row), and it cannot be written or judged without
+  the column. Recorded, gating nothing.
+
+Nullable, no default, no backfill: rows captured before today genuinely do not
+have these, and inventing a value would make the first bucket table a fiction.
+Legacy rows fall out of both new bucket tables instead.
+
+Verified: a leaderboard pick keeps `rank`, a live trigger reports null and drops
+out of the rank table, legacy rows land in neither new bucket, the projection is
+still inert, and `fitRule` still refuses a 10-pick sample.
+
+
+## 2026-09-05 - v3 GEX candles: CORE / CW / PW are tags, not lines (`cbedge-v3/src/board/gexCandles/`)
+
+The three level markers each drew a dashed hairline across the plot with a name
+chip at the left edge. Three more horizontals on a pane already carrying
+candles, bubbles and a heatmap - and none of them said anything the chip does
+not, since the chip sits AT the level and the height IS the line.
+
+What the line carried and the chip did not was the NUMBER: you could see where
+the wall was but had to read it off the price scale to know what it was.
+
+- `chart.ts` - the stroke is gone. The chip reads `CORE 7745.25` now, formatted
+  with the same 2dp the price scale uses so the tag and the axis cannot look
+  like two different numbers.
+- `GexCandlesCard.tsx` - the Levels chip tooltip no longer promises a dashed
+  line.
+
+Unchanged: which levels draw, their colours (still the shared
+`--color-level-*` tokens the rail and the Multi Greek badges read), the left
+edge placement, the plot-only clip, and the fact that the layer survives the
+bubbles being switched off.
+
 ## 2026-09-04 - Daily Grades: the rubric is a structured scorecard now (v2)
 
 `/owner/daily-grades` graded every level out of the same table every day, and

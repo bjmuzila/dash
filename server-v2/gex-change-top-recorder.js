@@ -323,6 +323,26 @@ async function _ensureSchemaOnce(p) {
     // to FALSE backfills every pre-live row correctly: they were all interval
     // captures.
     await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS live BOOLEAN NOT NULL DEFAULT FALSE');
+    // TWO CAPTURE-TIME FACTS THE ROW WAS THROWING AWAY (2026-09-05). Both are
+    // already computed by SCAN_SQL and were simply not selected out of it.
+    //
+    // n_samples — how many 15-minute deltas the strike had in the window. The
+    //   scan only ever used it as `n >= 2`, and 2 is the value that makes
+    //   stddev_pop meaningless: with two samples |z| is exactly 1 whatever the
+    //   data did. Recording it is what lets the study ask whether a thin-sample
+    //   pick is worth anything, instead of the z column quietly implying it is.
+    // gex_open — the DENOMINATOR pct_open is a ratio against. At 09:47 the open
+    //   baseline can be a handful of contracts, so "+300% vs open" is a rounding
+    //   error wearing a percentage sign, and there was no way to tell from a
+    //   stored row which kind it was. A denominator floor is the obvious next
+    //   filter and it cannot be written, or judged, without this.
+    //
+    // Nullable with no default and no backfill: rows captured before today
+    // genuinely do not have these, and inventing a value would make the study's
+    // first bucket table a fiction. Both gate NOTHING at capture — they are
+    // recorded so the question can be answered before a threshold is chosen.
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS n_samples SMALLINT');
+    await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS gex_open DOUBLE PRECISION');
     await p.query(`CREATE INDEX IF NOT EXISTS idx_gct_watch ON gex_change_top(watch_id)`);
     // Frozen end-of-day scorecard — one row per pick per day. Survives the
     // pruning of auto-probed contracts (and their snapshots) at expiry.
@@ -526,7 +546,7 @@ async function pruneExpiredProbes(pool) {
 // occupy more than one of the top-N slots.
 const SCAN_SQL = `
   WITH changes AS (
-    SELECT sg.symbol, sg.expiry, sg.strike, sg.ts, sg.spot, sg.delta_pct,
+    SELECT sg.symbol, sg.expiry, sg.strike, sg.ts, sg.spot, sg.delta_pct, sg.gex_open,
            (sg.gex_now - b.gex_now) AS chg
     FROM strike_growth sg
     JOIN LATERAL (
@@ -544,11 +564,16 @@ const SCAN_SQL = `
            avg(chg) AS mean_chg, stddev_pop(chg) AS sd_chg, count(*) AS n,
            (array_agg(chg       ORDER BY ts DESC))[1] AS latest_chg,
            (array_agg(spot      ORDER BY ts DESC))[1] AS spot,
-           (array_agg(delta_pct ORDER BY ts DESC))[1] AS pct_open
+           (array_agg(delta_pct ORDER BY ts DESC))[1] AS pct_open,
+           -- The DENOMINATOR pct_open is a ratio against, carried through so the
+           -- study can ask whether "+300% vs open" off a handful of contracts is
+           -- worth anything. Purely recorded; it gates nothing here.
+           (array_agg(gex_open  ORDER BY ts DESC))[1] AS gex_open
     FROM changes GROUP BY symbol, expiry, strike
   ),
   scored AS (
     SELECT s.symbol, s.expiry, s.strike, s.latest_chg, s.pct_open, s.spot,
+           s.n, s.gex_open,
            CASE WHEN s.sd_chg > 0 THEN (s.latest_chg - s.mean_chg) / s.sd_chg ELSE 0.0 END AS z_score,
            CASE WHEN s.spot > 0 THEN ABS(s.strike - s.spot) / s.spot ELSE 0.0 END AS otm_dist
     FROM stats s
@@ -556,7 +581,7 @@ const SCAN_SQL = `
   ),
   -- Filter down to "very strong" candidates FIRST ...
   qualified AS (
-    SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score
+    SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score, n, gex_open
     FROM scored
     WHERE ABS(latest_chg) >= $3
       AND pct_open IS NOT NULL AND ABS(pct_open) >= $4
@@ -568,18 +593,18 @@ const SCAN_SQL = `
   ),
   -- ... THEN normalize/score over just that qualifying set.
   ranked AS (
-    SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score,
+    SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score, n, gex_open,
            (${W_ABS} * COALESCE(ABS(latest_chg) / NULLIF(MAX(ABS(latest_chg)) OVER (), 0), 0)
           + ${W_PCT} * COALESCE(ABS(pct_open)  / NULLIF(MAX(ABS(pct_open))  OVER (), 0), 0)) * 100 AS score
     FROM qualified
   ),
   -- Max ONE row per ticker: keep only its best-scored strike.
   deduped AS (
-    SELECT DISTINCT ON (symbol) symbol, expiry, strike, latest_chg, pct_open, spot, z_score, score
+    SELECT DISTINCT ON (symbol) symbol, expiry, strike, latest_chg, pct_open, spot, z_score, score, n, gex_open
     FROM ranked
     ORDER BY symbol, score DESC NULLS LAST
   )
-  SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score, score
+  SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score, score, n, gex_open
   FROM deduped
   ORDER BY score DESC NULLS LAST
   LIMIT $7`;
@@ -686,24 +711,26 @@ async function runOnce({ force = false } = {}) {
       let proj = null;
       try {
         proj = PG.projectPick(PG.pickFeatures(
-          { ...r, date, slot, rank: item.rank },
+          { ...r, date, slot, rank: item.rank, live: false, n_samples: r.n, gex_open: r.gex_open },
           { entry: null },
         ));
       } catch (e) { console.warn('[gex-change-top] projection failed:', e.message); }
       await client.query(
         `INSERT INTO gex_change_top
-           (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, proj_grade, proj_pts)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+           (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, proj_grade, proj_pts, n_samples, gex_open)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
          ON CONFLICT (date, slot, symbol, expiry, strike) DO UPDATE SET
            rank = EXCLUDED.rank, ts = EXCLUDED.ts, spot = EXCLUDED.spot,
            latest_chg = EXCLUDED.latest_chg, pct_open = EXCLUDED.pct_open,
            z_score = EXCLUDED.z_score, score = EXCLUDED.score,
            selected = EXCLUDED.selected,
            proj_grade = EXCLUDED.proj_grade, proj_pts = EXCLUDED.proj_pts,
+           n_samples = EXCLUDED.n_samples, gex_open = EXCLUDED.gex_open,
            watch_id = COALESCE(EXCLUDED.watch_id, gex_change_top.watch_id)`,
         [date, slot, now, item.rank, r.symbol, r.expiry, r.strike, r.spot,
          r.latest_chg, r.pct_open, r.z_score, r.score, WINDOW_MIN, item.watchId ?? null,
-         item.selected, proj ? proj.grade : null, proj ? proj.pts : null],
+         item.selected, proj ? proj.grade : null, proj ? proj.pts : null,
+         r.n ?? null, r.gex_open ?? null],
       );
       if (item.selected) written++;
     }
@@ -864,21 +891,29 @@ async function runLive({ force = false } = {}) {
         const rank = i + 1;
         let proj = null;
         try {
-          proj = PG.projectPick(PG.pickFeatures({ ...r, date, slot, rank }, { entry: null }));
+          // live: true — pickFeatures nulls `rank` for a trigger, because rank
+          // here is a position inside a batch of at most LIVE_MAX_PER_SCAN and
+          // not a position among the day's ranked candidates. See the note there.
+          proj = PG.projectPick(PG.pickFeatures(
+            { ...r, date, slot, rank, live: true, n_samples: r.n, gex_open: r.gex_open },
+            { entry: null },
+          ));
         } catch (e) { console.warn('[gex-change-top] live projection failed:', e.message); }
         await client.query(
           `INSERT INTO gex_change_top
-             (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, live, proj_grade, proj_pts)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE,TRUE,$15,$16)
+             (date, slot, ts, rank, symbol, expiry, strike, spot, latest_chg, pct_open, z_score, score, window_min, watch_id, selected, live, proj_grade, proj_pts, n_samples, gex_open)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE,TRUE,$15,$16,$17,$18)
            ON CONFLICT (date, slot, symbol, expiry, strike) DO UPDATE SET
              rank = EXCLUDED.rank, ts = EXCLUDED.ts, spot = EXCLUDED.spot,
              latest_chg = EXCLUDED.latest_chg, pct_open = EXCLUDED.pct_open,
              z_score = EXCLUDED.z_score, score = EXCLUDED.score,
              proj_grade = EXCLUDED.proj_grade, proj_pts = EXCLUDED.proj_pts,
+             n_samples = EXCLUDED.n_samples, gex_open = EXCLUDED.gex_open,
              watch_id = COALESCE(EXCLUDED.watch_id, gex_change_top.watch_id)`,
           [date, slot, now, rank, r.symbol, r.expiry, r.strike, r.spot,
            r.latest_chg, r.pct_open, r.z_score, r.score, WINDOW_MIN, taken[i].watchId ?? null,
-           proj ? proj.grade : null, proj ? proj.pts : null],
+           proj ? proj.grade : null, proj ? proj.pts : null,
+           r.n ?? null, r.gex_open ?? null],
         );
       }
       await client.query('COMMIT');
@@ -1268,7 +1303,14 @@ async function studyRows({ days = 60, cohort = 'selected' } = {}) {
             r.entry, r.max_pct, r.min_pct, r.close_pct, r.sustained_pct,
             r.grade, r.grade_pts, COALESCE(r.selected, TRUE) AS selected,
             t.slot, t.rank, t.score, t.spot, t.latest_chg, t.pct_open, t.z_score,
-            t.proj_grade, t.proj_pts
+            t.proj_grade, t.proj_pts,
+            -- Provenance, and the two capture-time facts added 2026-09-05.
+            -- COALESCE on live only: the column is NOT NULL DEFAULT FALSE, so a
+            -- null can only mean an older row, and that row WAS a leaderboard
+            -- capture — reading it as "unknown scan" would put it in no bucket.
+            -- n_samples/gex_open stay null on purpose for rows captured before
+            -- they existed; see the ALTER TABLE note above.
+            COALESCE(t.live, FALSE) AS live, t.n_samples, t.gex_open
        FROM gex_change_top_results r
        JOIN LATERAL (
          SELECT g.* FROM gex_change_top g

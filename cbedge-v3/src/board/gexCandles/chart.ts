@@ -890,11 +890,18 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
     // is its own layer with its own switch, and the card that has turned the
     // bubbles off is exactly the one that still wants the three levels.
     //
-    // A dashed hairline across the plot with the name at the left edge. Left,
-    // not right: the price scale is on the right and the rail after it, so a
-    // tag over there would sit on the axis labels and beside a rail row saying
-    // the same thing. The line is dashed and thin on purpose — it has to be
-    // findable without competing with a candle body for the eye.
+    // A TAG ONLY — no line. Left edge, not right: the price scale is on the
+    // right and the rail after it, so a tag over there would sit on the axis
+    // labels and beside a rail row saying the same thing.
+    //
+    // The dashed hairline that used to run with each tag is gone. Three of them
+    // across a pane already carrying candles, bubbles and a heatmap was three
+    // more horizontals competing with the price action, and none of them said
+    // anything the tag does not: the tag sits AT the level, so the height is
+    // the line. What the line did carry, and the tag did not, was the number —
+    // you could see where the wall was but not what it was without reading it
+    // off the axis. So the price rides in the tag now, formatted exactly as the
+    // price scale formats it (2dp), and the line is not needed to connect them.
     if (levels) {
       ctx.save()
       ctx.font = '700 9px ui-sans-serif, system-ui, sans-serif'
@@ -918,22 +925,14 @@ export async function mountEsChart(container: HTMLElement, mountOpts: MountOpts)
         if (y < 0 || y > plotH) continue
         const ink = levelInk[key]
 
-        ctx.strokeStyle = ink
-        ctx.globalAlpha = 0.55
-        ctx.lineWidth = 1
-        ctx.setLineDash([3, 4])
-        ctx.beginPath()
-        ctx.moveTo(0, y)
-        ctx.lineTo(plotW, y)
-        ctx.stroke()
-
-        ctx.setLineDash([])
-        ctx.globalAlpha = 1
-        const tw = ctx.measureText(label).width
+        // `${name} ${price}` in one chip. Same 2dp the price scale uses, so the
+        // tag and the axis cannot read as two different numbers.
+        const text = `${label} ${price.toFixed(2)}`
+        const tw = ctx.measureText(text).width
         ctx.fillStyle = ink
         ctx.fillRect(2, y - 6, tw + 6, 12)
         ctx.fillStyle = appInk
-        ctx.fillText(label, 5, y + 0.5)
+        ctx.fillText(text, 5, y + 0.5)
       }
       ctx.restore()
     }

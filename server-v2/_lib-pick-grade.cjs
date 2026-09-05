@@ -114,6 +114,7 @@ function pickFeatures(row, res) {
   const otmPct = spot > 0 && Number.isFinite(strike) ? (Math.abs(strike - spot) / spot) * 100 : null;
   const side = spot > 0 && strike < spot ? 'P' : 'C';
   const entry = res && Number.isFinite(Number(res.entry)) ? Number(res.entry) : null;
+  const live = !!row.live;
   return {
     symbol: row.symbol,
     dte,
@@ -122,7 +123,30 @@ function pickFeatures(row, res) {
     slot: row.slot,
     slotMin: slotMinutes(row.slot),
     entry,
-    rank: row.rank == null ? null : Number(row.rank),
+    // RANK IS NULL ON A LIVE TRIGGER, and that is a fix, not missing data.
+    //
+    // The live scan writes rank = i + 1 where i is the position within ONE
+    // batch of at most LIVE_MAX_PER_SCAN (3). So every live pick is rank 1-3 by
+    // construction and ranks 4+ can only be leaderboard captures. Fed into the
+    // rank bucket that makes the table measure PROVENANCE — "rank 1 beats rank
+    // 5" would really be reading "live triggers beat late leaderboard slots" —
+    // and `fitRule` would happily arm a rank term on it.
+    //
+    // A live trigger has no rank in the sense this feature means (position among
+    // the day's ranked candidates), so it reports null and drops out of the rank
+    // table entirely. Provenance gets its own feature below, where it can be
+    // read on purpose instead of by accident. Nulled HERE rather than in the
+    // recorder's INSERT because the column is real data the cards render.
+    rank: live || row.rank == null ? null : Number(row.rank),
+    // Which scan wrote this pick. Without it the study cannot separate the two
+    // sources at all, and while triggers clustered before 10:00 `slot` and
+    // provenance were nearly collinear — any slot=pre-10:00 term the fit armed
+    // would really have been "live triggers are bad".
+    live,
+    // Samples behind the z-score, and the OPEN GEX the pct_open ratio is against.
+    // Both null on rows captured before the recorder stored them (2026-09-05).
+    nSamples: row.n_samples == null ? null : Number(row.n_samples),
+    gexOpenAbs: row.gex_open == null ? null : Math.abs(Number(row.gex_open)),
     score: row.score == null ? null : Number(row.score),
     pctOpenAbs: row.pct_open == null ? null : Math.abs(Number(row.pct_open)),
     zAbs: row.z_score == null ? null : Math.abs(Number(row.z_score)),
@@ -180,9 +204,29 @@ const BUCKETS = {
   },
   rank: {
     label: 'Rank within the slot',
-    note: 'Does being rank 1 actually beat being rank 5? Cheap sanity check on the ordering.',
+    note: 'Does being rank 1 actually beat being rank 5? Cheap sanity check on the ordering. LEADERBOARD CAPTURES ONLY — a live trigger has no rank in this sense (see pickFeatures) and is not in this table at all.',
     order: ['1', '2', '3', '4', '5', '6+'],
     of: (f) => (f.rank == null ? null : f.rank >= 6 ? '6+' : String(f.rank)),
+  },
+  live: {
+    label: 'Which scan filed it',
+    note: 'The trigger scan files a strike the minute it crosses; the leaderboard photographs the top 5 every 30 min. Read this BEFORE believing anything in the slot table — while triggers clustered before 10:00 the two were nearly collinear, and a "pre-10:00 is bad" finding may just be this one wearing a clock.',
+    order: ['live trigger', 'leaderboard'],
+    of: (f) => (f.live == null ? null : f.live ? 'live trigger' : 'leaderboard'),
+  },
+  nsamp: {
+    label: 'Samples behind the z-score',
+    note: 'How many 15-minute deltas the strike had in the window when it was flagged. n = 2 makes stddev_pop meaningless and pins |z| at exactly 1, so a thin-sample pick is one whose z says nothing. Null on rows captured before 2026-09-05.',
+    order: ['2', '3-5', '6-11', '12+'],
+    of: (f) => (f.nSamples == null ? null
+      : f.nSamples <= 2 ? '2' : f.nSamples <= 5 ? '3-5' : f.nSamples <= 11 ? '6-11' : '12+'),
+  },
+  gexopen: {
+    label: 'Open GEX the % is measured against',
+    note: 'pct_open is a RATIO, and this is its denominator. At 09:47 the open baseline can be a handful of contracts, which makes "+300% vs open" a rounding error wearing a percentage sign. If the small buckets underperform, the fix is a denominator floor in the recorder. Null on rows captured before 2026-09-05.',
+    order: ['<50k', '50-250k', '250k-1M', '1M+'],
+    of: (f) => (f.gexOpenAbs == null ? null
+      : f.gexOpenAbs < 50e3 ? '<50k' : f.gexOpenAbs < 250e3 ? '50-250k' : f.gexOpenAbs < 1e6 ? '250k-1M' : '1M+'),
   },
   pctopen: {
     label: '|% vs open| at capture',

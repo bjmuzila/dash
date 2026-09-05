@@ -112,6 +112,7 @@ __export(db_exports, {
   getNqCandles: () => getNqCandles,
   // hand-added with the option_strike_gex_history symbol patch below
   normGexSymbol: () => normGexSymbol,
+  getGexHistoryExpiriesForDate: () => getGexHistoryExpiriesForDate,
   getOptionStrikeGexSlots: () => getOptionStrikeGexSlots,
   getOptionStrikeGexSlotsWindow: () => getOptionStrikeGexSlotsWindow,
   getOptionStrikeGexSlotsWindowAny: () => getOptionStrikeGexSlotsWindowAny,
@@ -4461,6 +4462,44 @@ async function getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp, symbol
     rolling_net_gex: Number(row.rolling_net_gex ?? 0),
     points: Number(row.points ?? 0)
   }));
+}
+/**
+ * WHICH EXPIRIES THE PER-MINUTE RECORDER ACTUALLY WROTE FOR ONE SESSION.
+ *
+ * The recap side of /premarket asks for a session's ladder by (date, expiry),
+ * and the expiry it has to hand is whatever the LIVE feed calls "front" right
+ * now. Those two agree only while the session is running. They come apart in
+ * two ordinary cases, and in both the ladder query matched zero rows and the
+ * Post-Market tab announced "No per-minute ladder recorded for today":
+ *
+ *   · A FROZEN PAST SESSION. premarket-freeze-recorder captures the post slot
+ *     at 16:05-16:25 ET, by which time the front expiry has already rolled off
+ *     that day's 0DTE. So Friday's freeze carries MONDAY's expiry, and asking
+ *     for Friday's ladder under it is asking for a board that was never
+ *     recorded.
+ *   · A WEEKEND. useIntradayLadder walks Saturday back to Friday, but the
+ *     expiry still comes from the live chain, which by then is next week's.
+ *
+ * The answer is not to merge expiries (that is what anyExpiry=1 does, and it is
+ * ~100x wrong here — see useIntradayLadder's header). It is to ask the session
+ * which single expiry IT was recorded under. Ordered by row count so the
+ * session's own front board wins over any incidental second expiry, then by
+ * expiry so the tie-break is stable and prefers the nearer one.
+ */
+async function getGexHistoryExpiriesForDate(date, symbol) {
+  const pool = await getDb();
+  const result = await pool.query(
+    `SELECT expiry, COUNT(*)::int AS row_count
+       FROM option_strike_gex_history
+      WHERE date = $1
+        AND symbol = $2
+      GROUP BY expiry
+      ORDER BY row_count DESC, expiry ASC`,
+    [date, normGexSymbol(symbol)]
+  );
+  return result.rows
+    .map((row) => ({ expiry: String(row.expiry ?? ''), rows: Number(row.row_count ?? 0) }))
+    .filter((r) => r.expiry && r.rows > 0);
 }
 async function getOptionStrikeGexSlots(date, expiry, symbol) {
   const pool = await getDb();

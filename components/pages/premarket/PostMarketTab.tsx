@@ -550,7 +550,24 @@ export default function PostMarketTab(p: PostMarketProps) {
   // the hook then fell back to a rolling 480-minute window anchored to the wall
   // clock — so opening the recap at 20:00 silently threw away the morning and
   // the panel blamed the recorder for it.
-  const { cols: allCols, state: histState } = useIntradayLadder(true, expiry, etDate, sym);
+  //
+  // ── AND THE EXPIRY IS NEGOTIATED, NOT ASSUMED (2026-09-05) ────────────────
+  // `expiry` is the LIVE board's front expiry. On a FROZEN past session that is
+  // the wrong expiry by construction: the freeze's post slot is captured
+  // 16:05-16:25 ET, after the front has rolled off that day's 0DTE, so Friday's
+  // capture carries Monday's expiry. On a weekend the hook walks the date back
+  // to Friday while the expiry stays next week's. Either way the query matched
+  // nothing and this tab printed "No per-minute ladder recorded for today" —
+  // blaming the recorder for a board it had recorded perfectly.
+  //
+  // The hook now asks the route to fall back to the expiry the session was
+  // ACTUALLY recorded under, and hands it back as `ladderExpiry`. Every line on
+  // this tab that names an expiry names that one, so the tab can never again
+  // label a board with an expiry it did not read.
+  const { cols: allCols, state: histState, expiryUsed: ladderExpiry } =
+    useIntradayLadder(true, expiry, etDate, sym);
+  /** The expiry to PRINT — what the ladder was read from, else what was asked. */
+  const shownExpiry = ladderExpiry || expiry;
   const { next, state: nextState } = useNextExpiryStructure(!frozen, expiry, spot, sym);
   // `etMin` cuts the wall log at the minute on screen for the same reason it
   // cuts the ladder below — see that comment.
@@ -1459,7 +1476,7 @@ export default function PostMarketTab(p: PostMarketProps) {
       ? `Nothing recorded yet at ${etClockOf(etMin)} ET — the per-minute ladder starts at the 09:30 open. Scrub forward and the build bars fill in from there.`
       : histState === "ok" ? null
       : histState === "loading" ? "Loading today's recorded ladder…"
-        : histState === "empty" ? "No per-minute ladder recorded for today — the build-time bars, the wall path and the written-vs-traded read all need it. Everything else below is live."
+        : histState === "empty" ? `No per-minute ladder recorded for ${etDate} under ${expiry || "this expiry"} — the build-time bars, the wall path and the written-vs-traded read all need it. Retention keeps about two sessions, so an older date legitimately has nothing. Everything else below is live.`
           : "The intraday recorder did not answer, so section 3 and the wall path have nothing to read. Everything above and below them is live.";
 
   return (
@@ -1470,7 +1487,7 @@ export default function PostMarketTab(p: PostMarketProps) {
         <div className="sechead">
           <h3><span className="secn">1</span>Day Snapshot</h3>
           <span className="tiny right">
-            {path.pts.length ? `per-minute ${sym} recorder` : "no recorded path"} · {expiry || "—"}
+            {path.pts.length ? `per-minute ${sym} recorder` : "no recorded path"} · {shownExpiry || "—"}
           </span>
         </div>
 
@@ -2157,7 +2174,7 @@ export default function PostMarketTab(p: PostMarketProps) {
 
       <div className="footbar">
         <span className="l">
-          {frozen ? "Frozen recap for " : "Recap for "}{etDate} · {expiry || "—"} · {sym} {fmtPx(closePx, pxDp)}
+          {frozen ? "Frozen recap for " : "Recap for "}{etDate} · {shownExpiry || "—"} · {sym} {fmtPx(closePx, pxDp)}
           {em != null ? ` · EM ±${nf(em, pxDp)}` : ""}
         </span>
         <span className="l">

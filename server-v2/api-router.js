@@ -6421,14 +6421,48 @@ if (libDb) {
             const topN = Math.max(0, Math.min(500, Number(sp.get('top') ?? 0)));
             // top is part of the cache key or a bubbles-only request would serve
             // its truncated columns to a heatmap request for the next 30s.
-            const cacheKey = `${symbol}|${winMin}|${anyExpiry ? 'any' : expiry}|${anyExpiry ? '' : date}|t${topN}`;
+            /**
+             * ?expiryFallback=1 — "if this DATE has nothing under that expiry,
+             * use the expiry the session was actually recorded under."
+             *
+             * Opt-in, and only meaningful in date mode (minutes=0). The recap
+             * side of /premarket asks for a past session's ladder using the
+             * expiry it has to hand, which is the LIVE front expiry — and that
+             * is the wrong one for every frozen session (the 16:05 freeze has
+             * already rolled off that day's 0DTE) and for every weekend (the
+             * date walks back to Friday, the expiry does not). Both used to
+             * come back empty and be reported as "nothing was recorded".
+             *
+             * This resolves ONE expiry — the session's own, by row count — and
+             * re-runs the same query with it. It never merges expiries; that is
+             * anyExpiry, and it is a different (and here, wrong) question.
+             */
+            const expiryFallback = sp.get('expiryFallback') === '1' && winMin === 0 && !anyExpiry;
+            const cacheKey = `${symbol}|${winMin}|${anyExpiry ? 'any' : expiry}|${anyExpiry ? '' : date}|t${topN}|f${expiryFallback ? 1 : 0}`;
             const cached = heatmapCache.get(cacheKey);
             if (cached && Date.now() - cached.at < HEATMAP_TTL_MS) { send(res, 200, cached.payload); return; }
-            const slots = winMin > 0
+            let slots = winMin > 0
               ? anyExpiry
                 ? await libDb.getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000, symbol)
                 : await libDb.getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry, symbol)
               : await libDb.getOptionStrikeGexSlots(date, expiry, symbol);
+            // The expiry this response is OF. Shipped on the payload either way
+            // so a caller can label what it actually got rather than assume it
+            // got what it asked for.
+            let usedExpiry = expiry;
+            let didFallback = false;
+            if (expiryFallback && !slots.length) {
+              const recorded = await libDb.getGexHistoryExpiriesForDate(date, symbol);
+              const pick = recorded.find((r) => r.expiry !== expiry);
+              if (pick) {
+                const retry = await libDb.getOptionStrikeGexSlots(date, pick.expiry, symbol);
+                if (retry.length) {
+                  slots = retry;
+                  usedExpiry = pick.expiry;
+                  didFallback = true;
+                }
+              }
+            }
             const bySlot = new Map();
             const spotBySlot = new Map();
             for (const r of slots) {
@@ -6498,7 +6532,12 @@ if (libDb) {
                 : cells;
               return { slotTs, cells: out, max, top3, spot, flip, flipVol };
             });
-            const payload = { mode: 'heatmap', symbol, columns };
+            const payload = {
+              mode: 'heatmap', symbol, columns,
+              expiry: usedExpiry,
+              requestedExpiry: expiry,
+              expiryFallback: didFallback,
+            };
             heatmapCache.set(cacheKey, { at: Date.now(), payload });
             send(res, 200, payload);
             return;

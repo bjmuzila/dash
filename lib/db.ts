@@ -1140,6 +1140,77 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- The one-time backfill that seeds this table runs at the BOTTOM of this
     -- block: it joins "users", which is created further down.
 
+    -- Owner-issued TRIAL BANS. The manual override on top of the two automatic
+    -- axes above (trial_history = one per email, trial_cards = one per card).
+    --
+    -- WHY A THIRD TABLE: the automatic gates are per-identity and they are
+    -- fair — one trial each, no judgement. They cannot express "this person has
+    -- now been through six addresses and I am done", which is a decision only
+    -- the owner makes. A ban is that decision, written down, with a reason and
+    -- a date, and liftable.
+    --
+    -- SCOPE IS THE TRIAL, NOT THE ACCOUNT. A banned email can still sign up,
+    -- sign in, and BUY — checkout just never carries trial_period_days for
+    -- them. Banning someone out of a purchase would cost money to make a point.
+    --
+    -- kind='email' -> value_key is trialEmailKey(value): +tag dropped, Gmail
+    --   dots stripped, so brand+9@gmail.com cannot walk around a ban on
+    --   b.rand@gmail.com.
+    -- kind='ip'    -> value_key is the trimmed, lowercased address exactly as
+    --   Cloudflare reports it (CF-Connecting-IP). No CIDR: a range ban would
+    --   catch a whole office or carrier NAT, and this is a scalpel.
+    --
+    -- lifted_at NULL = live. Lifting stamps rather than deletes, so the history
+    -- of who was banned and why survives an un-ban (same posture as
+    -- comp_access.revoked_at). The unique index is PARTIAL on that, so one
+    -- address can be banned, lifted and banned again.
+    --
+    -- hit_* is the audit trail of blocked attempts; notified_* records the
+    -- "you can't use the trial any more" mail so it goes out once, not once per
+    -- refresh of the pricing page.
+    CREATE TABLE IF NOT EXISTS trial_bans (
+      id                  SERIAL PRIMARY KEY,
+      kind                TEXT NOT NULL,
+      value               TEXT NOT NULL,
+      value_key           TEXT NOT NULL,
+      reason              TEXT,
+      created_by          TEXT,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      lifted_at           TIMESTAMPTZ,
+      lifted_by           TEXT,
+      hit_count           INTEGER NOT NULL DEFAULT 0,
+      last_hit_at         TIMESTAMPTZ,
+      last_hit_email      TEXT,
+      notified_at         TIMESTAMPTZ,
+      notify_count        INTEGER NOT NULL DEFAULT 0,
+      last_notified_email TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_trial_bans_live
+      ON trial_bans(kind, value_key) WHERE lifted_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_trial_bans_created ON trial_bans(created_at DESC);
+
+    -- Which IP each trial checkout was started from, per email.
+    --
+    -- Exists so the IP half of the ban list is ACTIONABLE. Without it the owner
+    -- would have to go and find an address in Cloudflare logs before they could
+    -- ban one; with it, the panel can show "these five emails all opened
+    -- checkout from 203.0.113.9" and offer a one-click ban on the address they
+    -- share. Written best-effort by app/api/stripe/checkout — a failure here
+    -- must never cost a checkout.
+    --
+    -- One row per (ip, email) pair, so attempts counts return visits and a
+    -- COUNT(DISTINCT email_key) per ip is the farming signal.
+    CREATE TABLE IF NOT EXISTS trial_checkout_ips (
+      ip            TEXT NOT NULL,
+      email_key     TEXT NOT NULL,
+      email         TEXT,
+      attempts      INTEGER NOT NULL DEFAULT 1,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (ip, email_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trial_checkout_ips_last ON trial_checkout_ips(last_seen_at DESC);
+
 
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
     -- tasks are JSON arrays the page owns; zip drives the weather card.
@@ -2864,6 +2935,254 @@ export async function getTrialHistoryReuses(limit = 200): Promise<TrialHistoryRe
       ORDER BY last_attempt_at DESC NULLS LAST
       LIMIT ?`,
     [limit]
+  );
+}
+
+// ── Trial bans (owner-issued) ────────────────────────────────────────────────
+// See the trial_bans DDL above. This is the manual override: trial_history and
+// trial_cards each hand out exactly one trial per identity, which is the fair
+// default; a ban is the owner deciding a particular email or IP does not get
+// one at all any more. It gates the TRIAL ONLY — a banned address can still
+// sign up, sign in and subscribe. The API surface is app/api/admin/trial-bans.
+
+export type TrialBanKind = "email" | "ip";
+
+export interface TrialBanRecord {
+  id: number;
+  kind: TrialBanKind;
+  /** The address as the owner typed it — shown in the panel. */
+  value: string;
+  /** What matching actually compares. See trialBanKey(). */
+  value_key: string;
+  reason: string | null;
+  created_by: string | null;
+  created_at: string;
+  lifted_at: string | null;
+  lifted_by: string | null;
+  /** Blocked trial attempts seen against this ban. */
+  hit_count: number;
+  last_hit_at: string | null;
+  last_hit_email: string | null;
+  /** When the "no more trials" notice was last mailed, if ever. */
+  notified_at: string | null;
+  notify_count: number;
+  last_notified_email: string | null;
+}
+
+/**
+ * Canonical form a ban is matched on.
+ *
+ * Emails go through trialEmailKey(), so a ban survives +tags and Gmail dots —
+ * the same normalisation trial_history uses, deliberately: a ban that a plus
+ * sign defeats is not a ban. IPs are only trimmed and lowercased (lowercase
+ * matters for IPv6 hex), never widened to a range.
+ */
+export function trialBanKey(kind: TrialBanKind, value: string): string {
+  const raw = (value || "").trim();
+  return kind === "email" ? trialEmailKey(raw) : raw.toLowerCase();
+}
+
+/** Every ban, live first, newest first. Lifted rows are history, not noise —
+ *  the panel shows them collapsed so an un-ban is visible after the fact. */
+export async function listTrialBans(): Promise<TrialBanRecord[]> {
+  return queryAll<TrialBanRecord>(
+    `SELECT * FROM trial_bans
+      ORDER BY (lifted_at IS NULL) DESC, created_at DESC
+      LIMIT 500`
+  );
+}
+
+/**
+ * Ban an email or IP from the free trial.
+ *
+ * Upsert on the partial unique index, so re-banning an address that is already
+ * banned refreshes the reason instead of erroring — and re-banning one that was
+ * LIFTED inserts a fresh row (the old row keeps lifted_at, so the history of
+ * both decisions survives).
+ */
+export async function addTrialBan(r: {
+  kind: TrialBanKind;
+  value: string;
+  reason?: string | null;
+  createdBy?: string | null;
+}): Promise<TrialBanRecord | undefined> {
+  const value = (r.value || "").trim();
+  const key = trialBanKey(r.kind, value);
+  if (!key) return undefined;
+  const res = await pgQuery(
+    `INSERT INTO trial_bans (kind, value, value_key, reason, created_by)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (kind, value_key) WHERE lifted_at IS NULL
+       DO UPDATE SET reason     = COALESCE(EXCLUDED.reason, trial_bans.reason),
+                     created_by = COALESCE(EXCLUDED.created_by, trial_bans.created_by)
+     RETURNING *`,
+    [r.kind, value, key, r.reason ?? null, r.createdBy ?? null]
+  );
+  return res.rows[0] as TrialBanRecord | undefined;
+}
+
+/** Lift a ban. Stamps rather than deletes — the row stays as history. */
+export async function liftTrialBan(id: number, liftedBy?: string | null): Promise<{ lifted: boolean }> {
+  const res = await pgQuery(
+    `UPDATE trial_bans SET lifted_at = NOW(), lifted_by = $2
+      WHERE id = $1 AND lifted_at IS NULL`,
+    [id, liftedBy ?? null]
+  );
+  return { lifted: (res.rowCount ?? 0) > 0 };
+}
+
+export async function getTrialBanById(id: number): Promise<TrialBanRecord | undefined> {
+  return queryOne<TrialBanRecord>(`SELECT * FROM trial_bans WHERE id = ?`, [id]);
+}
+
+/**
+ * Is this email banned from the trial?
+ *
+ * Matches the canonical key AND the plain lowercased address, for the same
+ * reason findTrialHistory does: a ban typed as "Brand.X@gmail.com" is stored
+ * canonically, but a row hand-inserted or imported some other way may not be.
+ */
+export async function findTrialBanForEmail(
+  email: string | null | undefined
+): Promise<TrialBanRecord | undefined> {
+  const canonical = trialBanKey("email", email || "");
+  if (!canonical) return undefined;
+  const loose = (email || "").trim().toLowerCase();
+  return queryOne<TrialBanRecord>(
+    `SELECT * FROM trial_bans
+      WHERE kind = 'email' AND lifted_at IS NULL
+        AND (value_key = ? OR value_key = ?)
+      ORDER BY created_at ASC
+      LIMIT 1`,
+    [canonical, loose]
+  );
+}
+
+/** Is this IP banned from the trial? Exact address only — never a range. */
+export async function findTrialBanForIp(ip: string | null | undefined): Promise<TrialBanRecord | undefined> {
+  const key = trialBanKey("ip", ip || "");
+  if (!key) return undefined;
+  return queryOne<TrialBanRecord>(
+    `SELECT * FROM trial_bans
+      WHERE kind = 'ip' AND lifted_at IS NULL AND value_key = ?
+      ORDER BY created_at ASC
+      LIMIT 1`,
+    [key]
+  );
+}
+
+/** Count one refused attempt against a ban, and record who tried. */
+export async function markTrialBanHit(id: number, email: string | null): Promise<void> {
+  await pgQuery(
+    `UPDATE trial_bans
+        SET hit_count      = hit_count + 1,
+            last_hit_at    = NOW(),
+            last_hit_email = COALESCE($2, last_hit_email)
+      WHERE id = $1`,
+    [id, email ?? null]
+  );
+}
+
+/**
+ * Claim the "no more trials for you" notice for this ban.
+ *
+ * CONDITIONAL UPDATE, not a plain stamp: returns true only when notified_at was
+ * still NULL. Two checkout attempts landing at once would otherwise both decide
+ * to send, and the one thing worse than not telling someone is telling them
+ * five times. The admin panel's resend button calls markTrialBanNotifiedForce()
+ * instead, which is the deliberate second send.
+ */
+export async function claimTrialBanNotice(id: number, email: string | null): Promise<boolean> {
+  const res = await pgQuery(
+    `UPDATE trial_bans
+        SET notified_at         = NOW(),
+            notify_count        = notify_count + 1,
+            last_notified_email = COALESCE($2, last_notified_email)
+      WHERE id = $1 AND notified_at IS NULL`,
+    [id, email ?? null]
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** Unconditional stamp, for the panel's manual "send / resend notice" button. */
+export async function markTrialBanNotifiedForce(id: number, email: string | null): Promise<void> {
+  await pgQuery(
+    `UPDATE trial_bans
+        SET notified_at         = NOW(),
+            notify_count        = notify_count + 1,
+            last_notified_email = COALESCE($2, last_notified_email)
+      WHERE id = $1`,
+    [id, email ?? null]
+  );
+}
+
+// ── Trial checkout IPs ───────────────────────────────────────────────────────
+
+export interface TrialCheckoutIpRow {
+  ip: string;
+  email_key: string;
+  email: string | null;
+  attempts: number;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+/** One (ip, email) pair per checkout that could have carried a trial. */
+export async function recordTrialCheckoutIp(r: {
+  ip: string;
+  email: string | null | undefined;
+}): Promise<void> {
+  const ip = (r.ip || "").trim().toLowerCase();
+  const key = trialEmailKey(r.email);
+  if (!ip || !key) return;
+  await pgQuery(
+    `INSERT INTO trial_checkout_ips (ip, email_key, email)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (ip, email_key) DO UPDATE
+       SET attempts     = trial_checkout_ips.attempts + 1,
+           last_seen_at = NOW(),
+           email        = COALESCE(EXCLUDED.email, trial_checkout_ips.email)`,
+    [ip, key, (r.email || "").trim() || null]
+  );
+}
+
+export interface TrialIpCluster {
+  ip: string;
+  /** Distinct emails that have opened a trial checkout from this address. */
+  emails: number;
+  attempts: number;
+  last_seen_at: string;
+  /** The addresses themselves, newest first, so the panel can show them. */
+  sample_emails: string[];
+  /** True when a live ban already covers this IP. */
+  banned: boolean;
+}
+
+/**
+ * IPs ordered by how many DIFFERENT emails have started a trial checkout from
+ * them. That count is the farming signal: one address and one email is a
+ * customer, one address and nine emails is a person with a spreadsheet.
+ *
+ * minEmails defaults to 2 — a single-email IP tells the owner nothing and would
+ * bury the list under every honest customer.
+ */
+export async function getTrialIpClusters(minEmails = 2, limit = 100): Promise<TrialIpCluster[]> {
+  return queryAll<TrialIpCluster>(
+    `SELECT t.ip,
+            COUNT(DISTINCT t.email_key)::int          AS emails,
+            SUM(t.attempts)::int                      AS attempts,
+            MAX(t.last_seen_at)                       AS last_seen_at,
+            (ARRAY_AGG(COALESCE(t.email, t.email_key) ORDER BY t.last_seen_at DESC))[1:8] AS sample_emails,
+            EXISTS (
+              SELECT 1 FROM trial_bans b
+               WHERE b.kind = 'ip' AND b.lifted_at IS NULL AND b.value_key = t.ip
+            )                                         AS banned
+       FROM trial_checkout_ips t
+      GROUP BY t.ip
+     HAVING COUNT(DISTINCT t.email_key) >= ?::int
+      ORDER BY COUNT(DISTINCT t.email_key) DESC, MAX(t.last_seen_at) DESC
+      LIMIT ?`,
+    [minEmails, limit]
   );
 }
 

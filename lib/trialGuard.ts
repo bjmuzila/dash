@@ -1,6 +1,12 @@
 // Repeat-free-trial guard.
 //
-// TWO AXES, and they do different jobs.
+// THREE AXES, and they do different jobs.
+//
+// AXIS 0 — AN OWNER BAN. lib/db.ts -> trial_bans, managed from the Sales page.
+// Not a rule, a decision: this email (or the IP it checks out from) does not get
+// the free trial any more, however many fresh addresses it arrives on.
+// Enforced at checkout (lib/trialEligibility.ts) and again here, and it is the
+// only axis that emails the person to say so (lib/trialBanNotice.ts).
 //
 // AXIS 1 — ONE TRIAL PER EMAIL / CUSTOMER. Decided BEFORE the Checkout session
 // exists, in lib/trialEligibility.ts: an email that has already had a trial is
@@ -55,8 +61,11 @@ import {
   findTrialHistory,
   recordTrialHistory,
   markTrialHistoryAttempt,
+  findTrialBanForEmail,
+  markTrialBanHit,
   getUserById,
 } from "@/lib/db";
+import { sendTrialBanNoticeOnce } from "@/lib/trialBanNotice";
 
 const truthy = (v: string | undefined) => /^(1|true|yes|on)$/i.test((v || "").trim());
 const falsy = (v: string | undefined) => /^(0|false|no|off)$/i.test((v || "").trim());
@@ -207,7 +216,7 @@ async function alertOwner(text: string): Promise<void> {
   }
 }
 
-export type TrialGuardVia = "fingerprint" | "name" | "email";
+export type TrialGuardVia = "fingerprint" | "name" | "email" | "ban";
 
 export type TrialGuardResult =
   | { action: "skipped"; reason: string }
@@ -241,7 +250,34 @@ export async function enforceTrialGuard(
     if (sub.metadata?.trial_guard) return { action: "skipped", reason: "already-judged" };
     if (!clerkUserId) return { action: "skipped", reason: "no-user" };
 
-    // ── 0. Email / customer: one trial per address ───────────────────────────
+    // ── 0a. OWNER BAN on the email ───────────────────────────────────────────
+    // Checkout already refuses the trial for a banned address, so in the normal
+    // flow this finds nothing. It is here for the paths checkout does not own —
+    // a subscription started in the Stripe dashboard or over the API — and
+    // because a ban issued WHILE a trial was in flight should still take effect
+    // on the next event rather than running to term.
+    //
+    // The notice mail is latched on the ban row, so if checkout already sent it
+    // this is a no-op; if the trial arrived some other way, this is what tells
+    // them.
+    const bannedEmail = await userEmail(clerkUserId);
+    if (bannedEmail) {
+      const ban = await findTrialBanForEmail(bannedEmail);
+      if (ban) {
+        await markTrialBanHit(ban.id, bannedEmail);
+        await revoke(stripe, sub, "ban", null);
+        await sendTrialBanNoticeOnce({ to: bannedEmail, ban });
+        await alertOwner(
+          `\u26d4 Repeat trial blocked (owner ban #${ban.id})\n` +
+          `email: ${bannedEmail}\n` +
+          `ban on ${ban.kind} "${ban.value}"${ban.reason ? ` — ${ban.reason}` : ""}\n` +
+          `subscription ${sub.id} — trial ended, action=${guardAction()}`
+        );
+        return { action: "blocked", fingerprint: null, via: "ban", firstUserId: null };
+      }
+    }
+
+    // ── 0b. Email / customer: one trial per address ──────────────────────────
     // Checkout already withholds trial_period_days from an email that has
     // trialed, so in the normal flow this finds nothing and costs one indexed
     // lookup. It earns its place on the paths checkout does not own — a
@@ -250,7 +286,7 @@ export async function enforceTrialGuard(
     //
     // A row pointing at THIS subscription is our own claim coming back on a
     // redelivered event, not a second trial: latch and leave.
-    const email = await userEmail(clerkUserId);
+    const email = bannedEmail;
     if (email) {
       const prior = await findTrialHistory(email);
       if (prior) {

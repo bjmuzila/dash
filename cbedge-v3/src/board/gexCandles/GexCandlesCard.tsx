@@ -1292,7 +1292,7 @@ export function GexCandlesCard({
                     label="Levels"
                     on={settings.levelLabels}
                     onClick={() => patch({ levelLabels: !settings.levelLabels })}
-                    title="CORE, CW and PW drawn on the chart itself — a dashed line at each with its name at the left edge. Same three levels the rail tags: CORE is the biggest gamma strike on the ladder, CW the call wall above spot, PW the put wall below"
+                    title="CORE, CW and PW drawn on the chart itself — a tag at the left edge of each, name and price, no line. Same three levels the rail tags: CORE is the biggest gamma strike on the ladder, CW the call wall above spot, PW the put wall below"
                   />
                   <Chip
                     size={ctlSize}

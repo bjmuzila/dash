@@ -1328,6 +1328,481 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
   );
 }
 
+// ─── Trial abuse & bans ────────────────────────────────────────────────────────
+// The manual override on top of the two automatic gates. lib/trialEligibility
+// already gives every email exactly one trial and lib/trialGuard gives every
+// CARD one — fair, and blind. This panel is where the owner says "this
+// particular address is done", for the person who is on their seventh Gmail.
+//
+// A ban gates the TRIAL ONLY. Banned people can still sign in and still
+// subscribe; checkout just starts billing immediately. Nothing here locks
+// anyone out of paying.
+//
+// Three lists, in the order you actually use them:
+//   1. Repeat attempts — emails that came back for a second trial and were
+//      refused. This is the evidence; each row bans in one click.
+//   2. Shared IPs — addresses that more than one email has opened a trial
+//      checkout from. This is what catches the same person on new addresses.
+//   3. Live bans — what is currently in force, with the notice state and a
+//      lift button. Lifted bans stay visible (collapsed) as history.
+
+interface TrialBanRow {
+  id: number;
+  kind: "email" | "ip";
+  value: string;
+  value_key: string;
+  reason: string | null;
+  created_by: string | null;
+  created_at: string;
+  lifted_at: string | null;
+  lifted_by: string | null;
+  hit_count: number;
+  last_hit_at: string | null;
+  last_hit_email: string | null;
+  notified_at: string | null;
+  notify_count: number;
+  last_notified_email: string | null;
+}
+
+interface TrialReuseRow {
+  email_key: string;
+  email: string | null;
+  clerk_user_id: string | null;
+  blocked_attempts: number;
+  last_attempt_at: string | null;
+  first_trial_at: string | null;
+}
+
+interface TrialIpClusterRow {
+  ip: string;
+  emails: number;
+  attempts: number;
+  last_seen_at: string;
+  sample_emails: string[];
+  banned: boolean;
+}
+
+const BAN_TABLE_COLS = "1.6fr 70px 1.4fr 70px 110px 150px";
+const REUSE_TABLE_COLS = "1.8fr 110px 90px 130px 80px";
+const IPCLUSTER_TABLE_COLS = "1.1fr 80px 80px 2fr 80px";
+
+const banInputStyle: CSSProperties = {
+  padding: "6px 10px",
+  fontSize: 14,
+  background: "rgba(0,0,0,0.35)",
+  border: `1px solid ${T.border}`,
+  borderRadius: 6,
+  color: T.text,
+  outline: "none",
+};
+
+function TrialAbusePanel() {
+  const [bans, setBans] = useState<TrialBanRow[] | null>(null);
+  const [reuses, setReuses] = useState<TrialReuseRow[]>([]);
+  const [ipClusters, setIpClusters] = useState<TrialIpClusterRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [showLifted, setShowLifted] = useState(false);
+
+  const [kind, setKind] = useState<"email" | "ip">("email");
+  const [value, setValue] = useState("");
+  const [reason, setReason] = useState("");
+  // Default ON for an email ban: the whole point of the feature Brandon asked
+  // for is that they are TOLD. Flipping to an IP ban turns it off, because an
+  // IP has no inbox and the checkbox would silently do nothing.
+  const [notify, setNotify] = useState(true);
+  const [includeReason, setIncludeReason] = useState(false);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/trial-bans", { cache: "no-store" });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setBans((j.bans as TrialBanRow[]) ?? []);
+      setReuses((j.reuses as TrialReuseRow[]) ?? []);
+      setIpClusters((j.ipClusters as TrialIpClusterRow[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+      setBans([]);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const ban = useCallback(async (
+    k: "email" | "ip",
+    v: string,
+    why: string | null,
+    sendNotice: boolean,
+    withReason: boolean,
+  ) => {
+    if (!v.trim()) return;
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const res = await fetch("/api/admin/trial-bans", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: k,
+          value: v.trim(),
+          reason: why?.trim() || null,
+          notify: sendNotice,
+          includeReason: withReason,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setNote(
+        j?.noticeSent
+          ? `Banned ${v.trim()} and emailed them.`
+          : j?.noticeError
+            ? `Banned ${v.trim()} — notice not sent (${j.noticeError}).`
+            : `Banned ${v.trim()}.`
+      );
+      setValue("");
+      setReason("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ban failed");
+    } finally {
+      setBusy(false);
+    }
+  }, [load]);
+
+  const lift = async (id: number) => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const res = await fetch(`/api/admin/trial-bans?id=${id}`, { method: "DELETE" });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setNote("Ban lifted — the trial is available to them again.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Lift failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sendNotice = async (row: TrialBanRow) => {
+    // An IP ban has no inbox of its own. Fall back to the last address that hit
+    // it, and ask outright if there isn't one — better a prompt than a 400.
+    let to = row.kind === "email" ? row.value : (row.last_hit_email ?? "");
+    if (!to) {
+      const typed = window.prompt(`Email the "trial no longer available" notice to which address?`);
+      if (!typed) return;
+      to = typed.trim();
+    }
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const res = await fetch("/api/admin/trial-bans", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: row.id, email: to }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.detail || j?.error || `HTTP ${res.status}`);
+      setNote(`Notice sent to ${to}.`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Notice failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const live = (bans ?? []).filter(b => !b.lifted_at);
+  const lifted = (bans ?? []).filter(b => b.lifted_at);
+  const bannedEmailKeys = new Set(live.filter(b => b.kind === "email").map(b => b.value_key));
+  const openReuses = reuses.filter(r => !bannedEmailKeys.has(r.email_key));
+  const totalHits = live.reduce((a, b) => a + (b.hit_count ?? 0), 0);
+
+  return (
+    // flexShrink: 0 — see ExpensesPanel. Same long scrolling flex column, same
+    // collapse-to-a-hairline failure without it.
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: T.orange }}>Trial abuse &amp; bans</span>
+        <span
+          title="Emails and IPs the free trial is switched off for. They can still sign in and still subscribe — checkout just bills them from day one."
+          style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.red}15`, border: `1px solid ${T.red}44`, color: T.red, fontWeight: 700 }}
+        >
+          {live.length} banned
+        </span>
+        {totalHits > 0 && (
+          <span title="Trial checkouts refused by a ban since it was issued" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.gold}15`, border: `1px solid ${T.gold}44`, color: T.gold }}>
+            {totalHits} blocked {totalHits === 1 ? "attempt" : "attempts"}
+          </span>
+        )}
+        {openReuses.length > 0 && (
+          <span title="Emails that came back for a second trial and were refused by the automatic one-per-email rule. Not banned — these are the candidates." style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}44`, color: T.cyan }}>
+            {openReuses.length} repeat {openReuses.length === 1 ? "attempt" : "attempts"}
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", fontSize: 13, color: T.textSecondary }}>
+          a ban blocks the trial only — never the purchase
+        </span>
+      </div>
+
+      {/* Add a ban */}
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <select
+          value={kind}
+          onChange={(e) => {
+            const k = e.target.value as "email" | "ip";
+            setKind(k);
+            // An IP has no inbox — see the notify state above.
+            if (k === "ip") setNotify(false);
+          }}
+          style={{ ...banInputStyle, padding: "6px 8px" }}
+        >
+          <option value="email">Email</option>
+          <option value="ip">IP</option>
+        </select>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") ban(kind, value, reason, notify, includeReason); }}
+          placeholder={kind === "email" ? "someone@example.com" : "203.0.113.9"}
+          style={{ ...banInputStyle, flex: "1 1 220px", fontFamily: kind === "ip" ? "var(--font-mono)" : undefined }}
+        />
+        <input
+          type="text"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") ban(kind, value, reason, notify, includeReason); }}
+          placeholder="reason (internal)…"
+          style={{ ...banInputStyle, flex: "1 1 200px" }}
+        />
+        <label
+          title={kind === "ip"
+            ? "An IP has no inbox. Ban it, then use “Send notice” on the row to mail a specific person."
+            : "Sends the “the free trial is no longer available on this account” email as soon as the ban is saved."}
+          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: kind === "ip" ? T.muted : T.textSecondary, opacity: kind === "ip" ? 0.5 : 1, whiteSpace: "nowrap" }}
+        >
+          <input type="checkbox" checked={notify} disabled={kind === "ip"} onChange={(e) => setNotify(e.target.checked)} />
+          email them
+        </label>
+        <label
+          title="Include the reason above in the email they receive. Off by default — an internal note is not something to forward to the person it's about."
+          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: T.textSecondary, opacity: notify && reason.trim() ? 1 : 0.5, whiteSpace: "nowrap" }}
+        >
+          <input type="checkbox" checked={includeReason} disabled={!notify || !reason.trim()} onChange={(e) => setIncludeReason(e.target.checked)} />
+          quote reason
+        </label>
+        <button
+          onClick={() => ban(kind, value, reason, notify, includeReason)}
+          disabled={busy || !value.trim()}
+          style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 14, opacity: busy || !value.trim() ? 0.5 : 1 }}
+        >
+          Ban trial
+        </button>
+      </div>
+
+      {(error || note) && (
+        <div style={{ padding: "8px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, color: error ? T.red : T.green }}>
+          {error ?? note}
+        </div>
+      )}
+
+      {/* 1 — repeat attempts, the candidates */}
+      {openReuses.length > 0 && (
+        <>
+          <div style={{ padding: "8px 16px 4px 16px", fontSize: 14, fontWeight: 700, color: T.cyan }}>
+            Repeat trial attempts
+            <span style={{ fontWeight: 400, color: T.textSecondary, marginLeft: 8 }}>
+              already refused automatically — ban to make it permanent and tell them
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: REUSE_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted }}>
+            <span>Email</span>
+            <span>First trial</span>
+            <span>Attempts</span>
+            <span>Last try</span>
+            <span style={{ textAlign: "right" }}>Action</span>
+          </div>
+          <div style={{ maxHeight: 220, overflowY: "auto" }}>
+            {openReuses.map((r) => (
+              <div
+                key={r.email_key}
+                style={{ display: "grid", gridTemplateColumns: REUSE_TABLE_COLS, gap: 8, padding: "9px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: 14, alignItems: "center" }}
+              >
+                <span title={r.email ?? r.email_key} style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {r.email ?? r.email_key}
+                </span>
+                <span style={{ color: T.textSecondary }}>{r.first_trial_at ? new Date(r.first_trial_at).toLocaleDateString() : "—"}</span>
+                <span style={{ color: r.blocked_attempts >= 3 ? T.red : T.gold, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
+                  {r.blocked_attempts}
+                </span>
+                <span style={{ color: T.textSecondary }}>{r.last_attempt_at ? new Date(r.last_attempt_at).toLocaleDateString() : "—"}</span>
+                <span style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    onClick={() => ban("email", r.email ?? r.email_key, `${r.blocked_attempts} repeat trial attempts`, true, false)}
+                    disabled={busy}
+                    title={`Ban ${r.email ?? r.email_key} from the free trial and email them to say so. They can still subscribe.`}
+                    style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 13, whiteSpace: "nowrap", color: T.red, border: `1px solid ${T.red}66`, opacity: busy ? 0.5 : 1 }}
+                  >
+                    Ban + notify
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* 2 — one address, many emails */}
+      {ipClusters.length > 0 && (
+        <>
+          <div style={{ padding: "10px 16px 4px 16px", fontSize: 14, fontWeight: 700, color: T.gold, borderTop: `1px solid ${T.border}` }}>
+            Shared checkout IPs
+            <span style={{ fontWeight: 400, color: T.textSecondary, marginLeft: 8 }}>
+              one address, more than one email — this is what catches the same person on a new address
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: IPCLUSTER_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted }}>
+            <span>IP</span>
+            <span>Emails</span>
+            <span>Checkouts</span>
+            <span>Addresses</span>
+            <span style={{ textAlign: "right" }}>Action</span>
+          </div>
+          <div style={{ maxHeight: 220, overflowY: "auto" }}>
+            {ipClusters.map((c) => (
+              <div
+                key={c.ip}
+                style={{ display: "grid", gridTemplateColumns: IPCLUSTER_TABLE_COLS, gap: 8, padding: "9px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: 14, alignItems: "center" }}
+              >
+                <span style={{ color: T.text, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.ip}</span>
+                <span style={{ color: c.emails >= 3 ? T.red : T.gold, fontWeight: 700, fontFamily: "var(--font-mono)" }}>{c.emails}</span>
+                <span style={{ color: T.textSecondary, fontFamily: "var(--font-mono)" }}>{c.attempts}</span>
+                <span title={c.sample_emails.join(", ")} style={{ color: T.textSecondary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {c.sample_emails.join(", ")}
+                </span>
+                <span style={{ display: "flex", justifyContent: "flex-end" }}>
+                  {c.banned ? (
+                    <span style={{ fontSize: 13, color: T.red }}>banned</span>
+                  ) : (
+                    <button
+                      onClick={() => ban("ip", c.ip, `${c.emails} emails trialled from this IP`, false, false)}
+                      disabled={busy}
+                      title={`Block the free trial for checkouts from ${c.ip}. Purchases are unaffected — use this when the same person keeps arriving on new addresses.`}
+                      style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 13, whiteSpace: "nowrap", color: T.gold, border: `1px solid ${T.gold}66`, opacity: busy ? 0.5 : 1 }}
+                    >
+                      Ban IP
+                    </button>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* 3 — what is actually in force */}
+      <div style={{ padding: "10px 16px 4px 16px", fontSize: 14, fontWeight: 700, color: T.red, borderTop: `1px solid ${T.border}` }}>
+        Active bans
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: BAN_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted }}>
+        <span>Value</span>
+        <span>Kind</span>
+        <span>Reason</span>
+        <span>Blocked</span>
+        <span>Notified</span>
+        <span style={{ textAlign: "right" }}>Actions</span>
+      </div>
+      <div style={{ maxHeight: 260, overflowY: "auto" }}>
+        {bans === null ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>Loading…</div>
+        ) : live.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>
+            Nobody is banned. The automatic one-trial-per-email and one-trial-per-card rules are still doing their job on their own.
+          </div>
+        ) : (
+          live.map((b) => (
+            <div
+              key={b.id}
+              style={{ display: "grid", gridTemplateColumns: BAN_TABLE_COLS, gap: 8, padding: "9px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: 14, alignItems: "center" }}
+            >
+              <span title={`${b.value} · banned ${new Date(b.created_at).toLocaleString()}${b.created_by ? ` by ${b.created_by}` : ""}`} style={{ color: T.text, fontFamily: b.kind === "ip" ? "var(--font-mono)" : undefined, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {b.value}
+              </span>
+              <span style={{ color: b.kind === "ip" ? T.gold : T.cyan, fontSize: 13 }}>{b.kind}</span>
+              <span title={b.reason ?? ""} style={{ color: T.textSecondary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {b.reason ?? "—"}
+              </span>
+              <span
+                title={b.last_hit_at ? `Last refused ${new Date(b.last_hit_at).toLocaleString()}${b.last_hit_email ? ` (${b.last_hit_email})` : ""}` : "No refused attempts yet"}
+                style={{ color: b.hit_count > 0 ? T.gold : T.textSecondary, fontFamily: "var(--font-mono)", fontWeight: b.hit_count > 0 ? 700 : 400 }}
+              >
+                {b.hit_count}
+              </span>
+              <span
+                title={b.notified_at ? `Notice sent ${new Date(b.notified_at).toLocaleString()}${b.last_notified_email ? ` to ${b.last_notified_email}` : ""}${b.notify_count > 1 ? ` · ${b.notify_count} times` : ""}` : "They have not been told yet"}
+                style={{ color: b.notified_at ? T.green : T.muted, fontSize: 13 }}
+              >
+                {b.notified_at ? `✓ ${new Date(b.notified_at).toLocaleDateString()}` : "not sent"}
+              </span>
+              <span style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                <button
+                  onClick={() => sendNotice(b)}
+                  disabled={busy}
+                  title="Email the “the free trial is no longer available on this account” notice. Safe to click again — this is the deliberate re-send."
+                  style={{ ...homeSecondaryButtonStyle, padding: "3px 8px", fontSize: 13, whiteSpace: "nowrap", opacity: busy ? 0.5 : 1 }}
+                >
+                  {b.notified_at ? "Resend" : "Send notice"}
+                </button>
+                <button
+                  onClick={() => lift(b.id)}
+                  disabled={busy}
+                  title="Lift the ban — the free trial becomes available to them again (subject to the ordinary one-per-email rule)."
+                  style={{ ...homeSecondaryButtonStyle, padding: "3px 8px", fontSize: 13, whiteSpace: "nowrap", color: T.green, border: `1px solid ${T.green}66`, opacity: busy ? 0.5 : 1 }}
+                >
+                  Lift
+                </button>
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+
+      {lifted.length > 0 && (
+        <div style={{ borderTop: `1px solid ${T.border}` }}>
+          <button
+            onClick={() => setShowLifted(v => !v)}
+            style={{ ...homeSecondaryButtonStyle, margin: "8px 16px", padding: "3px 10px", fontSize: 13 }}
+          >
+            {showLifted ? "Hide" : "Show"} {lifted.length} lifted {lifted.length === 1 ? "ban" : "bans"}
+          </button>
+          {showLifted && (
+            <div style={{ maxHeight: 180, overflowY: "auto", paddingBottom: 8 }}>
+              {lifted.map((b) => (
+                <div key={b.id} style={{ display: "flex", gap: 10, padding: "6px 16px", fontSize: 13, color: T.textSecondary, alignItems: "center" }}>
+                  <span style={{ color: T.muted, fontFamily: b.kind === "ip" ? "var(--font-mono)" : undefined }}>{b.value}</span>
+                  <span style={{ opacity: 0.7 }}>{b.kind}</span>
+                  <span style={{ opacity: 0.7 }}>{b.reason ?? "—"}</span>
+                  <span style={{ marginLeft: "auto", opacity: 0.7 }}>
+                    lifted {new Date(b.lifted_at as string).toLocaleDateString()}{b.lifted_by ? ` by ${b.lifted_by}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function Sales() {
@@ -1690,6 +2165,13 @@ export default function Sales() {
               trials={data.trials}
               subs={data.trialSubscriptions ?? []}
             />
+
+            {/* Trial bans — directly under the conversion funnel, because that
+                panel is where a run of "lapsed" rows on the same person shows
+                up and this is what you do about it. Self-fetching on its own
+                endpoint: the ban list has nothing to do with Stripe and folding
+                it into stripe-summary would make the whole page wait on it. */}
+            <TrialAbusePanel />
 
             {/* Active Subscriptions + Cancellations — above Expenses.
                 `alignItems: stretch` (grid's default, stated here so it doesn't

@@ -819,6 +819,24 @@ export function useSessionEsBars(date: string) {
  * watchlist on its hot lane, so there is a real answer for every symbol the
  * picker offers.
  */
+/**
+ * ── THE EXPIRY IS ASKED FOR, NOT ASSUMED (2026-09-05) ───────────────────────
+ * `expiry` here is whatever the page's LIVE board calls front, and that is the
+ * expiry the recorder wrote ONLY while the session is running. Two everyday
+ * cases break it, and both reported themselves as "nothing was recorded":
+ *
+ *   · A FROZEN PAST SESSION. The freeze's post slot is captured 16:05-16:25 ET,
+ *     after the front expiry has rolled off that day's 0DTE — so Friday's
+ *     capture carries Monday's expiry and Friday's ladder came back empty.
+ *   · A WEEKEND. `target` below walks Saturday back to Friday; the expiry stays
+ *     next week's, so the same query matched nothing.
+ *
+ * `expiryFallback=1` tells the route: if this DATE has no rows under that
+ * expiry, resolve the single expiry the session was actually recorded under and
+ * answer with that. It is not `anyExpiry` — nothing is merged — and the
+ * response names the expiry it used, which is returned here as `expiryUsed` so
+ * the tab can label the board it is really showing.
+ */
 export function useIntradayLadder(
   enabled: boolean,
   expiry: string,
@@ -827,6 +845,8 @@ export function useIntradayLadder(
 ) {
   const [cols, setCols] = useState<Col[]>([]);
   const [state, setState] = useState<HistState>("loading");
+  /** The expiry the response is OF — the requested one unless the route fell back. */
+  const [expiryUsed, setExpiryUsed] = useState<string>(expiry);
 
   /**
    * The session actually requested. Weekend dates walk back to the previous
@@ -847,7 +867,7 @@ export function useIntradayLadder(
         const res = await dedupeFetch(
           `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=0` +
             `&date=${encodeURIComponent(target)}&expiry=${encodeURIComponent(expiry)}` +
-            `&symbol=${encodeURIComponent(symbol)}`,
+            `&symbol=${encodeURIComponent(symbol)}&expiryFallback=1`,
           { cache: "no-store" },
           20_000,
         );
@@ -856,8 +876,10 @@ export function useIntradayLadder(
         // The route answers 200 even when it threw — `res.ok` proves nothing.
         if (json?.error || !Array.isArray(json?.columns)) { if (!cancelled) setState("error"); return; }
 
+        const served = typeof json.expiry === "string" && json.expiry ? json.expiry : expiry;
+
         const raw = (json.columns as RawCol[]).filter((c) => Array.isArray(c.cells) && c.cells.length);
-        if (!raw.length) { if (!cancelled) { setCols([]); setState("empty"); } return; }
+        if (!raw.length) { if (!cancelled) { setCols([]); setExpiryUsed(expiry); setState("empty"); } return; }
 
         const day = raw
           .filter((c) => etDay(c.slotTs) === target)
@@ -884,6 +906,7 @@ export function useIntradayLadder(
 
         if (cancelled) return;
         setCols(day);
+        setExpiryUsed(day.length ? served : expiry);
         setState(day.length ? "ok" : "empty");
       } catch {
         if (!cancelled) setState("error");
@@ -899,7 +922,7 @@ export function useIntradayLadder(
     return () => { cancelled = true; clearInterval(id); };
   }, [enabled, expiry, target, symbol]);
 
-  return { cols, state };
+  return { cols, state, expiryUsed, sessionDate: target };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
