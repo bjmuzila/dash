@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { BRAND_MARK_SRC } from "@/lib/brand";
 
 export default function Navbar() {
   return (
@@ -10,8 +11,12 @@ export default function Navbar() {
       style={{ borderColor: "var(--border)", background: "var(--surface)" }}
     >
       <Link href="/home" className="flex items-center gap-2">
+        {/* The square MARK, not the lockup: this box is 32x32, and a
+            3.39:1 wordmark in a square frame is squashed to an unreadable
+            smear. BRAND_MARK_SRC carries its own dark tile, so it also works
+            against this header's --surface variable. See lib/brand.ts. */}
         <Image
-          src="/cb-edge-logo.png"
+          src={BRAND_MARK_SRC}
           alt="CB Edge"
           width={32}
           height={32}

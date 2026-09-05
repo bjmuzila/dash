@@ -16,6 +16,7 @@ import SectionSubStrip from "./SectionSubStrip";
 import GlobalRefreshButton from "./GlobalRefreshButton";
 import { sectionForHref, sectionForPath } from "./sectionNav";
 import { isMobilePath } from "@/components/mobile/mobileNav";
+import { BRAND_LOGO_SRC } from "@/lib/brand";
 
 /**
  * GlobalToolbar — thin app-wide toolbar mounted above page content on every
@@ -115,11 +116,17 @@ function LogoTrigger({
   const logo = (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src="/cb-edge-logo.png"
+      src={BRAND_LOGO_SRC}
       alt="CB Edge"
       style={{
         height: h,
+        // The 3.0 lockup is ~3.39:1 where the old wordmark was ~1.83:1, so at
+        // the same bar height it renders nearly twice as wide. maxWidth caps
+        // that; objectFit lets it letterbox inside the box instead of
+        // stretching when it does hit the cap.
         width: "auto",
+        maxWidth: 180,
+        objectFit: "contain",
         display: "block",
         cursor: "pointer",
         transform: hover ? "translateY(-1px)" : "none",

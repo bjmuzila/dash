@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
+import { BRAND_LOGO_SRC } from "@/lib/brand";
 
 // Shared chrome for the public legal pages (/terms, /risk-disclosure,
 // /privacy, /disclaimer). These render full-bleed (no dashboard sidebar) via
@@ -75,7 +76,7 @@ export default function LegalShell({
         >
           <Link href="/" style={{ display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 34, width: "auto", display: "block" }} />
+            <img src={BRAND_LOGO_SRC} alt="CB Edge" style={{ height: 34, width: "auto", maxWidth: 140, objectFit: "contain", display: "block" }} />
           </Link>
           <Link
             href="/"

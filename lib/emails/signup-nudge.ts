@@ -1,25 +1,23 @@
-// Trial win-back email — "your trial ended; here's your first month at $30".
+// "You made an account and never came back" — the discounted nudge.
 //
-// Sent by app/api/stripe/webhook when a free trial reaches a dead status
-// without a dollar ever being collected (see lib/winback.ts for every reason it
-// decides NOT to send — abusers, banned addresses, and anyone who has actually
-// paid us are all excluded before this template is ever built).
+// The sibling of lib/emails/trial-winback.ts, and deliberately a different
+// letter. A lapsed trialer has SEEN the product and decided; this person has
+// only ever seen the sign-up form, so the job here is to show them what is
+// behind it, not to re-argue a decision they never made. Same offer, different
+// argument.
 //
-// The offer is one month at the offer price, then the normal monthly price —
-// that is a Stripe coupon with duration:"once", so "returns to normal pricing"
-// is Stripe's own behaviour and not a job anyone has to remember to run.
+// Sent by the nightly sweep (app/api/internal/lifecycle-emails) to accounts
+// with no subscription, no trial, and no other offer — see
+// getSignupNoPurchaseCandidates() for everyone it excludes.
 //
-// SENT VIA sendTransactional(), NOT sendAuthEmail(): this is a promotional
-// lifecycle nudge and the recipient is entitled to stop receiving them, so it
-// carries the unsubscribe footer, the one-click List-Unsubscribe headers and
-// UTM tagging. That is the opposite call from lib/emails/trial-banned.ts, which
-// is an account-policy notice about something they just did. See
-// lib/emails/send.ts for why the two must not share a sender.
+// sendTransactional(), like the win-back: this is promotional, so it carries
+// the unsubscribe footer and the one-click List-Unsubscribe headers. It is the
+// email the sign-up page's "adds you to our email list" line is warning about,
+// and that line and this footer are the two halves of the same promise.
 //
-// THE CODE IS INFORMATIONAL. The promotion code is minted restricted to their
-// Stripe customer and pre-applied by the checkout route, so the discount lands
-// whether or not they ever click this email. Printing it just lets a human see
-// what they were given — never make the copy imply they must type it.
+// ONE PER PERSON, EVER — the trial_winback primary key. If they later start a
+// trial and lapse, they do NOT also get the win-back; they already had their
+// discount.
 //
 // Brand palette mirrors components/shared/homeTheme.ts:
 //   bg #05060A · panel #0D1119 · cyan #219EBC · accent text #8ECAE6 · gold #FFB703
@@ -29,9 +27,9 @@ import { brandLogoUrl } from "@/lib/brand";
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
 const LOGO_URL = brandLogoUrl(SITE_URL);
 
-export const TRIAL_WINBACK_SUBJECT = "Your trial ended — take a full month for $30";
+export const SIGNUP_NUDGE_SUBJECT = "You never did take a look — here's your first month for $30";
 
-export interface TrialWinbackOpts {
+export interface SignupNudgeOpts {
   /** First-month price, in cents. */
   offerCents: number;
   /** Normal monthly price, in cents — what it renews at. */
@@ -40,8 +38,6 @@ export interface TrialWinbackOpts {
   code: string;
   /** ISO date the offer stops working. */
   expiresAt: string;
-  /** Optional first name. Our users table doesn't capture one; kept for later. */
-  firstName?: string | null;
 }
 
 function money(cents: number): string {
@@ -54,19 +50,25 @@ function fmtExpiry(iso: string): string {
   return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 }
 
-export function trialWinbackText(o: TrialWinbackOpts): string {
-  // Blank strings are real blank lines; optional blocks are spreads. See the
-  // note in trial-banned.ts — filtering empties out collapses every paragraph
-  // break in the plain-text part.
+/** What they'd actually open it for, in the order a trader would care. */
+const WHAT_IT_DOES: [string, string][] = [
+  ["Where the market is pinned", "Live SPX gamma exposure, the flip level and the call/put walls — updated all session, not a nightly PDF."],
+  ["What today's range should be", "Estimated moves and the daily levels, published before the open and graded after the close."],
+  ["What the flow is doing", "Net premium, the options tape and the scanner, on the same live feed as everything else."],
+  ["On the phone too", "The whole thing is built for a phone screen, not shrunk down to one."],
+];
+
+export function signupNudgeText(o: SignupNudgeOpts): string {
   const offer = money(o.offerCents);
   const list = money(o.listCents);
-  const until = fmtExpiry(o.expiresAt);
   const saved = money(o.listCents - o.offerCents);
+  const until = fmtExpiry(o.expiresAt);
 
   return [
-    `Your trial ended — take a full month for ${offer}`,
+    `You made a CB Edge account — here's your first month for ${offer}`,
     "",
-    "Two days is not long enough to judge a tool you'd be trading with, so here is a real one:",
+    "You signed up and never got as far as looking around. Fair enough — here is a",
+    "reason to, at a price that makes it an easy call:",
     "",
     `  Your first month: ${offer} (normally ${list} — you save ${saved})`,
     `  After that: ${list}/month, cancel any time`,
@@ -79,17 +81,14 @@ export function trialWinbackText(o: TrialWinbackOpts): string {
     ...(until ? [`The offer runs out on ${until}.`] : []),
     `Your code, for the record: ${o.code}`,
     "",
-    "What a month actually gets you:",
-    "  - Live GEX, dealer gamma and the walls that move price, all session",
-    "  - Estimated moves and the daily levels, published before the open",
-    "  - The options chain, flow and scanner, on the same live feed",
-    "  - Everything on the phone build too",
+    "What you'd actually be opening every morning:",
+    ...WHAT_IT_DOES.map(([t, b]) => `  - ${t} — ${b}`),
     "",
     "— CB Edge",
   ].join("\n");
 }
 
-export function trialWinbackEmail(o: TrialWinbackOpts): string {
+export function signupNudgeEmail(o: SignupNudgeOpts): string {
   const offer = escapeHtml(money(o.offerCents));
   const list = escapeHtml(money(o.listCents));
   const saved = escapeHtml(money(o.listCents - o.offerCents));
@@ -102,10 +101,10 @@ export function trialWinbackEmail(o: TrialWinbackOpts): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>${escapeHtml(TRIAL_WINBACK_SUBJECT)}</title>
+<title>${escapeHtml(SIGNUP_NUDGE_SUBJECT)}</title>
 </head>
 <body style="margin:0;padding:0;background:#05060A;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Two days wasn't long enough. Take a full month for ${offer}, then ${list}/mo — cancel any time.</div>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">You made an account and never looked around. First month ${offer}, then ${list}/mo — cancel any time.</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#05060A;">
     <tr>
       <td align="center" style="padding:32px 16px;">
@@ -120,14 +119,14 @@ export function trialWinbackEmail(o: TrialWinbackOpts): string {
 
           <tr>
             <td align="center" style="padding:22px 32px 4px 32px;">
-              <div style="font:800 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">Two days wasn't long enough</div>
+              <div style="font:800 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">You never did take a look</div>
             </td>
           </tr>
 
           <tr>
             <td style="padding:14px 32px 4px 32px;">
               <p style="margin:0 0 14px 0;font:400 14px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">
-                Your free trial has ended. Two sessions is not enough time to judge a tool you'd actually be trading with — so here is a real one, at a price that makes it easy to say yes to.
+                You made a CB Edge account and never got as far as looking around. Fair enough — here's a reason to, at a price that makes it an easy call.
               </p>
             </td>
           </tr>
@@ -169,7 +168,7 @@ export function trialWinbackEmail(o: TrialWinbackOpts): string {
               <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                 <tr>
                   <td align="center" style="border-radius:10px;background:#219EBC;">
-                    <a href="${SITE_URL}/pricing" style="display:inline-block;padding:13px 30px;font:700 14px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#05060A;text-decoration:none;border-radius:10px;">Claim ${offer} for a month &rarr;</a>
+                    <a href="${SITE_URL}/pricing" style="display:inline-block;padding:13px 30px;font:700 14px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#05060A;text-decoration:none;border-radius:10px;">Get a month for ${offer} &rarr;</a>
                   </td>
                 </tr>
               </table>
@@ -184,24 +183,19 @@ export function trialWinbackEmail(o: TrialWinbackOpts): string {
             </td>
           </tr>
 
-          <!-- What a month gets you -->
+          <!-- What it actually does — this reader has never seen the product -->
           <tr>
             <td style="padding:0 32px 8px 32px;">
-              <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:16px;font:700 13px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">What a month actually gets you</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
-                ${[
-                  "Live GEX, dealer gamma and the walls that move price — all session",
-                  "Estimated moves and the daily levels, published before the open",
-                  "The options chain, flow and the scanner, on the same live feed",
-                  "The phone build, so it's all there when you're not at the desk",
-                ]
-                  .map(
-                    (line) => `<tr>
-                  <td width="18" valign="top" style="padding:0 0 8px 0;font:700 13px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#219EBC;">&bull;</td>
-                  <td style="padding:0 0 8px 0;font:400 13px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">${escapeHtml(line)}</td>
+              <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:16px;font:700 13px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">What you'd be opening every morning</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;">
+                ${WHAT_IT_DOES.map(
+                  ([title, body]) => `<tr>
+                  <td style="padding:0 0 12px 0;">
+                    <div style="font:700 13px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8ECAE6;">${escapeHtml(title)}</div>
+                    <div style="padding-top:3px;font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">${escapeHtml(body)}</div>
+                  </td>
                 </tr>`
-                  )
-                  .join("\n                ")}
+                ).join("\n                ")}
               </table>
             </td>
           </tr>
@@ -209,7 +203,7 @@ export function trialWinbackEmail(o: TrialWinbackOpts): string {
           <tr>
             <td style="padding:8px 32px 28px 32px;">
               <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:16px;font:400 13px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;">
-                Not for you? No hard feelings — the trial cost you nothing and this email is the last you'll hear about it.
+                You're getting this because you made an account at cbedge.net. If it isn't for you, the unsubscribe link below stops these for good.
               </div>
             </td>
           </tr>

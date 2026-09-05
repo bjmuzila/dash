@@ -73,7 +73,10 @@ export default function OwnerToolbar() {
       />
 
       <Link to="/owner" style={{ display: "flex", alignItems: "center", gap: 8, textDecoration: "none" }}>
-        <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 22, width: "auto" }} />
+        {/* Literal path, not lib/brand.ts: owner-vite is a separate Vite app with
+          no "@/" alias into the Next lib/. If the brand asset ever changes, this
+          is the one call site that has to be updated by hand. */}
+        <img src="/cbedge3.0.png" alt="CB Edge" style={{ height: 22, width: "auto", maxWidth: 92, objectFit: "contain" }} />
         <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.16em", color: CY, textTransform: "uppercase" }}>
           Owner
         </span>

@@ -12,6 +12,7 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { BRAND_LOGO_SRC } from "@/lib/brand";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
 
@@ -154,9 +155,9 @@ export default function PublicNav({
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 className="pnav-logo"
-                src="/cb-edge-logo.png"
+                src={BRAND_LOGO_SRC}
                 alt={APP_NAME}
-                style={{ height: 52, width: "auto", display: "block", objectFit: "contain" }}
+                style={{ height: 52, width: "auto", maxWidth: 210, display: "block", objectFit: "contain" }}
               />
             </Link>
 

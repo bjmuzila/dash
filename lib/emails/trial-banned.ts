@@ -23,8 +23,10 @@
 // Brand palette mirrors components/shared/homeTheme.ts:
 //   bg #05060A · panel #0D1119 · cyan #219EBC · accent text #8ECAE6
 
+import { brandLogoUrl } from "@/lib/brand";
+
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
-const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
+const LOGO_URL = brandLogoUrl(SITE_URL);
 const PRICING_URL = `${SITE_URL}/pricing`;
 const SUPPORT_EMAIL = (process.env.SUPPORT_EMAIL || "hello@cbedge.net").trim();
 
@@ -99,7 +101,7 @@ export function trialBannedEmail(opts: TrialBannedOpts = {}): string {
 
           <tr>
             <td align="center" style="padding:28px 24px 0 24px;">
-              <img src="${LOGO_URL}" alt="CB Edge" width="220" style="display:block;width:220px;max-width:80%;height:auto;border:0;">
+              <img src="${LOGO_URL}" alt="CB Edge" width="300" style="display:block;width:300px;max-width:88%;height:auto;border:0;">
             </td>
           </tr>
 

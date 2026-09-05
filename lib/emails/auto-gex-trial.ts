@@ -18,9 +18,10 @@
 // gain-blue #38BDF8 · loss-red #EF4444
 
 import { unsubscribeUrl, UNSUB_URL_PLACEHOLDER } from "@/lib/unsubscribe";
+import { brandLogoUrl } from "@/lib/brand";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
-const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
+const LOGO_URL = brandLogoUrl(SITE_URL);
 const PRICING_URL = `${SITE_URL}/pricing`;
 const CHART_SHOT_URL = `${SITE_URL}/717.png`;
 

@@ -5,9 +5,10 @@
 // Brand palette: bg #05060A · panel #0D1119 · cyan #219EBC · accent #8ECAE6
 
 import { unsubscribeUrl, UNSUB_URL_PLACEHOLDER } from "@/lib/unsubscribe";
+import { brandLogoUrl } from "@/lib/brand";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
-const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
+const LOGO_URL = brandLogoUrl(SITE_URL);
 const FLOW_URL = `${SITE_URL}/app/flow`;
 
 export interface FlowDialedInOpts {
@@ -84,7 +85,7 @@ export function flowDialedInEmail(opts: FlowDialedInOpts = {}): string {
           <!-- logo -->
           <tr>
             <td align="center" style="padding:28px 24px 0 24px;">
-              <img src="${LOGO_URL}" alt="CB Edge" width="220" style="display:block;width:220px;max-width:70%;height:auto;border:0;">
+              <img src="${LOGO_URL}" alt="CB Edge" width="260" style="display:block;width:260px;max-width:70%;height:auto;border:0;">
             </td>
           </tr>
 

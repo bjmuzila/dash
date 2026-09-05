@@ -305,6 +305,17 @@ export default async function PricingPage({
           <Link href="/privacy" style={inlineLink}>Privacy Policy</Link>. CB Edge is a market-analytics
           tool and not financial advice.
         </div>
+
+        {/* Email-list disclosure. Same sentence as the sign-up form
+            (components/auth/AuthForm.tsx) — both places an address is handed
+            over have to say it, because the lifecycle emails it drives
+            (app/api/internal/lifecycle-emails) send themselves. Deliberately
+            the smallest, last thing on the page: it is a disclosure, not a
+            pitch, and it should not compete with the plan cards. */}
+        <div style={{ marginTop: 14, fontSize: 12, color: "rgba(255,255,255,0.42)", lineHeight: 1.6 }}>
+          Signing up adds your email to the CB Edge list — occasional product updates and
+          offers. Unsubscribe in one click from any of them.
+        </div>
       </main>
     </div>
   );

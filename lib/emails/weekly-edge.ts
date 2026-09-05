@@ -26,9 +26,10 @@
 // green #00E676 · amber #FFB300 · red #FF4757.
 
 import { unsubscribeUrl, UNSUB_URL_PLACEHOLDER } from "@/lib/unsubscribe";
+import { brandLogoUrl } from "@/lib/brand";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
-const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
+const LOGO_URL = brandLogoUrl(SITE_URL);
 const PRICING_URL = `${SITE_URL}/pricing`;
 /** Affiliate portal. Its own subdomain/container — NOT a route under SITE_URL. */
 const AFFILIATE_URL = "https://affiliate.cbedge.net";
@@ -622,7 +623,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
             <td style="padding:26px 28px 4px 28px;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
                 <td align="left" valign="middle">
-                  <img src="${LOGO_URL}" alt="CB Edge" width="150" style="display:block;width:150px;max-width:60%;height:auto;border:0;">
+                  <img src="${LOGO_URL}" alt="CB Edge" width="260" style="display:block;width:260px;max-width:60%;height:auto;border:0;">
                 </td>
                 <td align="right" valign="middle">
                   <span style="display:inline-block;font:700 10px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:#9fb3c8;border:1px solid rgba(255,255,255,0.14);border-radius:20px;padding:6px 12px;">${escapeHtml(o.issueLabel)}</span>

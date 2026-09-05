@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { BRAND_LOGO_SRC } from "@/lib/brand";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LaserEtchIntro — landing-page opener (replaces the static hero image).
 // Sequence: silver laser etches the chart line (fire/spark/ember trail) →
 // line fades while the laser glides down → laser traces the "CB Edge" letter
-// outlines → outline crossfades into the real /cb-edge-logo.png → everything
+// outlines → outline crossfades into the real brand lockup → everything
 // fades to black → the whole section collapses out of the layout.
 // Click anywhere (or reduced-motion preference) skips straight to collapse.
 // NOTE: all colors in here are effect/scene colors (laser, fire, chrome),
@@ -163,7 +164,11 @@ export default function LaserEtchIntro() {
       letterPaths.push(ord);
       logoTotalPts = ord.length;
     };
-    logoImg.src = "/cb-edge-logo.png";
+    // NOTE: the etch animation traces whatever this resolves to. The 3.0
+    // lockup is a different shape (≈3.39:1 vs ≈1.83:1) and carries a tagline,
+    // so the traced outline is wider and busier than the one this was first
+    // tuned against. Worth an eyeball on the landing page after a deploy.
+    logoImg.src = BRAND_LOGO_SRC;
 
     // ── persistent etched-outline layer ──
     const layer = document.createElement("canvas");

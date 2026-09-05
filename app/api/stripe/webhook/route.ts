@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
-import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, getUserById, recordSubscriptionCancellation, claimTrialWinback, fillTrialWinback, markTrialWinbackRedeemed, PAID_STATUSES } from "@/lib/db";
+import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, getUserById, recordSubscriptionCancellation, markTrialWinbackRedeemed, PAID_STATUSES } from "@/lib/db";
 import { enforceTrialGuard } from "@/lib/trialGuard";
 import { lookupUser, sendTransactional } from "@/lib/emails/send";
 import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
-import { trialWinbackEmail, trialWinbackText, TRIAL_WINBACK_SUBJECT } from "@/lib/emails/trial-winback";
-import { shouldOfferWinback, mintWinbackOffer } from "@/lib/winback";
+import { shouldOfferWinback } from "@/lib/winback";
+import { sendLifecycleOffer } from "@/lib/lifecycleOffers";
 import { syncDiscordRoleForUser } from "@/lib/discord";
 
 // NOTE: this used to also mirror paid status into a separate Supabase Postgres
@@ -272,22 +272,18 @@ async function maybeSendWelcome(clerkUserId: string): Promise<void> {
 /**
  * The trial ended and they never paid — offer them a month at $30.
  *
- * Called for every subscription event; lib/winback.ts decides whether this
- * particular one qualifies, and says no to abusers, banned addresses,
- * unsubscribes, anything still live, and anyone who has ever actually paid us.
+ * This is the REAL-TIME half of the trial-lapsed campaign. The nightly sweep
+ * (app/api/internal/lifecycle-emails) runs the identical decision over anyone
+ * this never saw: a lapse from before the feature shipped, a webhook Stripe
+ * gave up retrying, an hour the container was down. Both call the same
+ * sendLifecycleOffer(), and its claim-first ordering is what makes them safe to
+ * overlap — whichever gets there first wins, the other no-ops.
  *
- * ORDER MATTERS. claimTrialWinback() is a conditional INSERT and is what
- * decides the winner: Stripe redelivers events and a cancelled trial produces
- * several, so the claim happens BEFORE the Stripe objects are minted or the
- * mail is built. Everything after it runs exactly once.
+ * shouldOfferWinback() owns every reason to say no (abusers, banned addresses,
+ * unsubscribes, anything still live, anyone who has ever actually paid).
  *
- * A mint or send failure is recorded on the row and NOT retried. The row stays
- * claimed on purpose — the alternative is a promotional email that tries again
- * on every redelivery, which is how a win-back becomes a spam complaint. The
- * failure is visible in trial_winback.send_error if it ever needs doing by hand.
- *
- * Never throws: the caller runs it inside the webhook, and no promotional email
- * is worth 500-ing a subscription state change over.
+ * Never throws: no promotional email is worth 500-ing a subscription state
+ * change over.
  */
 async function maybeSendWinback(
   sub: Stripe.Subscription,
@@ -299,60 +295,17 @@ async function maybeSendWinback(
     const email = clerkUserId ? (await getUserById(clerkUserId))?.email ?? null : null;
 
     const skip = await shouldOfferWinback({ stripe, sub, email, customerId });
-    if (skip || !email) return;
+    if (skip || !email || !clerkUserId) return;
 
-    // The latch. Loser of the race returns here and does nothing.
-    const claimed = await claimTrialWinback({
+    await sendLifecycleOffer({
+      stripe,
+      kind: "trial-lapsed",
+      source: "webhook",
       email,
-      clerk_user_id: clerkUserId,
-      stripe_customer_id: customerId,
-      lapsed_subscription_id: sub.id,
+      clerkUserId,
+      customerId,
+      lapsedSubscriptionId: sub.id,
     });
-    if (!claimed) return;
-
-    const offer = await mintWinbackOffer(stripe, customerId);
-    if (!offer) {
-      await fillTrialWinback({ email, send_error: "could not mint offer" });
-      return;
-    }
-
-    const res = await sendTransactional({
-      to: email,
-      subject: TRIAL_WINBACK_SUBJECT,
-      campaign: "trial-winback",
-      html: trialWinbackEmail({
-        offerCents: offer.offerCents,
-        listCents: offer.listCents,
-        code: offer.code,
-        expiresAt: offer.expiresAt,
-      }),
-      text: trialWinbackText({
-        offerCents: offer.offerCents,
-        listCents: offer.listCents,
-        code: offer.code,
-        expiresAt: offer.expiresAt,
-      }),
-    });
-
-    // The offer row is written whether or not the mail landed — the discount is
-    // attached to the ACCOUNT and checkout pre-applies it, so someone who never
-    // sees the email still gets the price if they come back to /pricing.
-    await fillTrialWinback({
-      email,
-      promo_code: offer.code,
-      promotion_code_id: offer.promotionCodeId,
-      coupon_id: offer.couponId,
-      offer_cents: offer.offerCents,
-      list_cents: offer.listCents,
-      expires_at: offer.expiresAt,
-      sent_at: new Date().toISOString(),
-      send_error: res.ok ? null : (res.reason || "send failed"),
-    });
-
-    console.log(
-      `[stripe/webhook] win-back offer ${offer.code} for ${email} ` +
-      `(${offer.offerCents}c first month, list ${offer.listCents}c) — mail ${res.ok ? "sent" : "FAILED"}`
-    );
   } catch (err) {
     console.error("[stripe/webhook] win-back error:", err);
   }

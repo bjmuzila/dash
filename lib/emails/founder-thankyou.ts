@@ -8,9 +8,10 @@
 //   bg #05060A · panel #0D1119 · cyan #219EBC · accent text #8ECAE6
 
 import { unsubscribeUrl, UNSUB_URL_PLACEHOLDER } from "@/lib/unsubscribe";
+import { brandLogoUrl } from "@/lib/brand";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
-const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
+const LOGO_URL = brandLogoUrl(SITE_URL);
 const SIGN_IN_URL = `${SITE_URL}/home`;
 /** Bzila Hangout Discord — invite unlocks the CB Edge section for members. */
 const DISCORD_URL = "https://discord.gg/723HGdhRbh";

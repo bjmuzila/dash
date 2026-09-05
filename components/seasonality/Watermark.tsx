@@ -13,8 +13,9 @@
 // oversight — if reposting ever becomes a real problem, the fix is to move it
 // back to center, not to make it darker.
 //
-// `/cb-edge-logo.png` is a chrome wordmark on a genuinely transparent background
-// (alpha 0 at the corners — checked, not assumed). `pointerEvents: none` keeps it
+// The 3.0 lockup (lib/brand.ts) is white artwork on a genuinely transparent
+// background, so it only reads on the dark card underneath — which is the only
+// place this is ever mounted. `pointerEvents: none` keeps it
 // out of every hover target underneath; `aria-hidden` keeps it out of the
 // accessibility tree, because it is branding, not content.
 //
@@ -27,6 +28,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Card } from "@/components/shared/PageCard";
 import { SEA } from "./seaTheme";
+import { BRAND_LOGO_SRC } from "@/lib/brand";
 
 /** Sits in the card's top-right corner, above the content. */
 export function Watermark({ inset = 14 }: { inset?: number }) {
@@ -44,7 +46,7 @@ export function Watermark({ inset = 14 }: { inset?: number }) {
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src="/cb-edge-logo.png"
+        src={BRAND_LOGO_SRC}
         alt=""
         style={{ width: 104, height: "auto", opacity: 0.34, userSelect: "none", display: "block" }}
       />

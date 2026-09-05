@@ -392,9 +392,25 @@ export default function AuthForm({
       {notice && <div style={{ color: T.green, fontSize: 12, marginTop: 12 }}>{notice}</div>}
 
       {isSignup ? (
-        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginTop: 20, textAlign: "center" }}>
-          Already have an account? <Link href={`/sign-in?next=${encodeURIComponent(next)}`} style={{ color: T.cyan }}>Sign in</Link>
-        </div>
+        <>
+          {/* Disclosure, not decoration. Creating an account puts the address on
+              the CB Edge email list, and the lifecycle emails that list drives
+              (app/api/internal/lifecycle-emails) go out automatically — so this
+              has to be said at the point the address is handed over, not only in
+              the privacy policy. Small and last, per the layout, but present on
+              the form itself. Every one of those emails carries a one-click
+              unsubscribe; this line and that footer are the two halves of the
+              same promise. */}
+          <div style={{ fontSize: 11, lineHeight: 1.6, color: "rgba(255,255,255,0.42)", marginTop: 18, textAlign: "center" }}>
+            Creating an account adds your email to the CB Edge list — occasional product
+            updates and offers. Unsubscribe in one click from any of them. See our{" "}
+            <Link href="/privacy" style={{ color: "rgba(255,255,255,0.62)" }}>Privacy Policy</Link>.
+          </div>
+
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginTop: 16, textAlign: "center" }}>
+            Already have an account? <Link href={`/sign-in?next=${encodeURIComponent(next)}`} style={{ color: T.cyan }}>Sign in</Link>
+          </div>
+        </>
       ) : (
         <>
           {/* Sign-in only: a wrong password is a dead end without these two.

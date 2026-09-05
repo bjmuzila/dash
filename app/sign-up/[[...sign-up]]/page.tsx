@@ -1,4 +1,5 @@
 import AuthForm from "@/components/auth/AuthForm";
+import { BRAND_LOGO_SRC } from "@/lib/brand";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,7 @@ export default async function SignUpPage({
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-        <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 128, width: "auto" }} />
+        <img src={BRAND_LOGO_SRC} alt="CB Edge" style={{ width: 300, maxWidth: "80%", height: "auto" }} />
         <AuthForm mode="signup" next={next} />
       </div>
     </div>

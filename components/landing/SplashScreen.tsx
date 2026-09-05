@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { BRAND_LOGO_SRC } from "@/lib/brand";
 
 const APP_NAME = (process.env.NEXT_PUBLIC_APP_NAME || "CB Edge").toUpperCase();
 
@@ -149,7 +150,7 @@ export default function SplashScreen() {
       <Fireworks />
 
       <img
-        src="/cb-edge-logo.png"
+        src={BRAND_LOGO_SRC}
         alt={APP_NAME}
         className="cb-anim"
         style={{

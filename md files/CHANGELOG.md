@@ -1,26 +1,116 @@
 # Changelog
 
-## 2026-09-05 - The same Post-Market ladder / ticker-picker fix, applied to v3 (`cbedge-v3/src/pages/Premarket.tsx`, `cbedge-v3/src/pages/premarket/PostMarketTab.tsx`, `cbedge-v3/src/pages/premarket/postMarketData.ts`)
+## 2026-09-05 - The 3.0 logo, everywhere, from one file (`lib/brand.ts` + 32 email templates + 10 UI call sites)
 
-The report was against **v3** (`/v3/premarket`), not v2. Same two faults, same
-code shape - v3's premarket tree is a clean-slate copy of v2's and had inherited
-both - so the same three client edits are now in `cbedge-v3/src/pages/`:
+`public/cbedge3.0.png` shipped in August and the site was still drawing the old
+silver "Real Edge - Real Orderflow" wordmark, because the path was hard-coded in
+29 email templates and ten components. Nobody was wrong; there was just nowhere
+to change it. **`lib/brand.ts` is that place now** - `BRAND_LOGO_SRC`,
+`BRAND_MARK_SRC`, `brandLogoUrl(siteUrl)` for email bodies (which need an
+absolute URL), plus the aspect ratio as a constant so a layout can do the maths
+instead of guessing. The next rebrand is one edit.
 
-- `useIntradayLadder` sends `expiryFallback=1` and returns `expiryUsed`.
-- `PostMarketTab` prints `shownExpiry` (what the ladder was read from) in the
-  section-1 badge and the footbar, and its "empty" message names the date and
-  expiry it asked for plus the ~2-session retention floor.
-- `Premarket` no longer snaps a past date back to SPX or disables the other
-  tickers; `frozen` requires `sym === "SPX"`, so a non-SPX past session renders
-  `HistoricalRecap` for that symbol. Replay still snaps.
+**Two properties of the new asset that every call site had to account for**, both
+written into that file's header so the next person does not rediscover them:
 
-No backend change beyond the previous entry's - v3 talks to the same
-`server-v2/`, so `expiryFallback=1` was already live for it. No new colour
-literals and no new type sizes, so `check:theme` is untouched by this diff.
+1. **It is white on transparent.** Invisible on a light or unset background. It
+   is only ever mounted on a surface that paints itself dark - the app is
+   #05060A/#0D1119 throughout and every email template paints its own panel.
+2. **It is ~3.39:1 where the old wordmark was ~1.83:1**, so AT THE SAME HEIGHT IT
+   RENDERS ~1.85x WIDER. Every height-driven call site in a fixed-width bar got a
+   `maxWidth` and `objectFit: "contain"`, so it letterboxes instead of
+   overflowing the bar or stretching.
 
-The v2 copies under `components/pages/` keep their fix as well: v2 is still
-served at `/app/*` and carries the identical bug, so reverting them would only
-re-break the older surface.
+**Emails (32).** All now `const LOGO_URL = brandLogoUrl(SITE_URL)`. Headers
+narrower than 260px were bumped to 260 - at the new aspect the old 180px setting
+rendered the tagline too small to read - and the already-wide ones were left
+alone rather than restyling headers wholesale.
+
+**UI (10).** GlobalToolbar (cap 180), TopBar (cap 170), PublicNav (cap 210),
+LegalShell (cap 140), OwnerToolbar (cap 92, and it keeps a LITERAL path -
+owner-vite is a separate Vite app with no `@/` alias into the Next `lib/`, so it
+is the one site that must be updated by hand). SplashScreen and the seasonality
+Watermark were already width-driven and needed no sizing change.
+
+Two that are not a straight swap:
+
+- **`app/sign-up` was height-driven at 128px.** At 3.39:1 that is 434px wide -
+  straight through the auth card. Now width 300 / height auto.
+- **`components/shared/Navbar.tsx` renders a 32x32 SQUARE box**, where a 3.39:1
+  wordmark is squashed to an unreadable smear. That one takes `BRAND_MARK_SRC`
+  (`cbedge-mark-512.png`) - still the 3.0 mark, correct for a square frame, and
+  it carries its own dark tile so it works against that header's `--surface`.
+
+**Worth an eyeball after deploy:** `components/landing/LaserEtchIntro.tsx` traces
+the logo into a canvas for the landing intro animation. It now traces a wider
+shape with a tagline in it, against geometry that was tuned to the old mark. A
+note to that effect is in the file.
+
+`app/opengraph-image.tsx` already used the 3.0 asset and was left alone.
+
+## 2026-09-05 - Lifecycle emails: a nightly sweep that catches lapsed trials the webhook missed, plus a discounted nudge for sign-ups who never bought - and the list disclosure that has to go with them (`lib/db.ts`, `lib/lifecycleOffers.ts`, `lib/emails/signup-nudge.ts`, `app/api/internal/lifecycle-emails/route.ts`, `server-v2/lifecycle-email-scheduler.js`, `app/api/stripe/webhook/route.ts`, `components/auth/AuthForm.tsx`, `app/pricing/page.tsx`)
+
+The win-back that shipped earlier today is webhook-driven, which means it only
+ever reaches a lapse Stripe successfully told us about while the container was
+up. This adds the catch-up, a second campaign that has no event to fire on at
+all, and the disclosure both of them oblige.
+
+**Two campaigns, one offer, one code path.** `lib/lifecycleOffers.ts` is now the
+single claim -> customer -> mint -> send -> record path, and both the webhook and
+the sweep call it:
+
+- `trial-lapsed` - took the free trial, never became a customer. Real-time on
+  the webhook; the sweep re-runs the identical decision over anyone it never
+  saw (a lapse from before the feature shipped, a webhook Stripe gave up
+  retrying, an hour the box was down).
+- `signup-no-purchase` - made an account, never bought, never even trialled.
+  Sweep only: "never came back" is the ABSENCE of an event, so there is nothing
+  for a webhook to fire on.
+
+Both get the same thing - one month at $30, then $45 - because the coupon is
+`duration: "once"`. **ONE OFFER PER PERSON ACROSS BOTH**, on the `trial_winback`
+primary key: someone who takes the nudge and later lapses a trial does not also
+collect the win-back. The claim being a conditional INSERT is also what makes
+the nightly sweep safe to overlap the real-time webhook - whichever gets there
+first wins and the other no-ops, which is why this needed no locking.
+
+**A dormant sign-up may have no Stripe customer at all**, so `lifecycleOffers`
+creates one (same `app_user_id` metadata shape as checkout) and links it. The
+promotion code is bound to that customer, and checkout later reuses the same
+customer, so the restricted code still matches.
+
+**`/api/internal/lifecycle-emails`** - `ownerOrInternal`, so the scheduler
+reaches it over loopback with `INTERNAL_API_TOKEN` and the owner can POST it by
+hand. GET is a DRY RUN: exactly who would be mailed tonight, the live settings,
+and the recent offer log. Safety rails, because this is the one endpoint that can
+mail a lot of people at once: the candidate SQL excludes owners, comped
+accounts, the unsubscribe list, banned addresses and anyone with an offer;
+every lapsed-trial candidate is re-verified AGAINST STRIPE rather than our
+status column (a discount mailed to a paying customer is the expensive
+mistake); there is a hard per-run cap (25); sign-ups older than 60 days are out
+of scope so day one cannot blast the whole back catalogue; and sends are serial,
+lapsed trials first, so a tight budget is spent on the warmer half.
+
+**`server-v2/lifecycle-email-scheduler.js`** holds no logic - it POSTs the route
+daily at ~10:00 ET, in the shape every other server-v2 generator uses. 10:00 and
+not overnight because a promo email should land in a working-hours inbox, and
+weekends included because this audience is not office-hours traffic.
+NOT YET WIRED IN: it needs one line in `server-with-proxy.js` after
+`server.listen()`, and that file is proxy code, so the line is being confirmed
+before it goes in.
+
+**The disclosure.** Two automatic campaigns now mail people who only ever handed
+over an address, so the sign-up form (`AuthForm`, sign-up mode) and the pricing
+page both say so, small and last: "adds your email to the CB Edge list -
+occasional product updates and offers. Unsubscribe in one click." Said at the
+point the address is handed over, not only in the privacy policy - that line and
+the one-click List-Unsubscribe footer on every one of these emails are the two
+halves of the same promise.
+
+Env: `LIFECYCLE_MAX_PER_RUN` (25), `WINBACK_SWEEP_MIN_AGE_DAYS` (1 - a fresh
+lapse belongs to the webhook), `SIGNUP_NUDGE_MIN_AGE_DAYS` (3),
+`SIGNUP_NUDGE_MAX_AGE_DAYS` (60), `LIFECYCLE_EMAIL_HOUR_ET` (10),
+`LIFECYCLE_EMAILS_DISABLED`, and the shared `WINBACK_ENABLED` master switch.
 
 ## 2026-09-05 - Trial win-back: a lapsed trial automatically gets one month at $30, then normal pricing (`lib/db.ts`, `lib/winback.ts`, `lib/emails/trial-winback.ts`, `app/api/stripe/webhook/route.ts`, `app/api/stripe/checkout/route.ts`)
 

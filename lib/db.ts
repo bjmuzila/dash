@@ -1254,6 +1254,12 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       redeemed_subscription_id TEXT,
       created_at               TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    -- Which campaign minted the offer ('trial-lapsed' | 'signup-no-purchase')
+    -- and which side of the system sent it ('webhook' | 'sweep'). The PRIMARY
+    -- KEY is still the email, so these describe the ONE offer a person gets —
+    -- they are not a second axis to hand out a second discount on.
+    ALTER TABLE trial_winback ADD COLUMN IF NOT EXISTS kind   TEXT;
+    ALTER TABLE trial_winback ADD COLUMN IF NOT EXISTS source TEXT;
     CREATE INDEX IF NOT EXISTS idx_trial_winback_user ON trial_winback(clerk_user_id);
     CREATE INDEX IF NOT EXISTS idx_trial_winback_promo ON trial_winback(promotion_code_id);
     CREATE INDEX IF NOT EXISTS idx_trial_winback_created ON trial_winback(created_at DESC);
@@ -3238,8 +3244,14 @@ export async function getTrialIpClusters(minEmails = 2, limit = 100): Promise<Tr
 // trial ends without ever collecting money; read by app/api/stripe/checkout,
 // which pre-applies the offer so the customer never has to type the code.
 
+export type LifecycleOfferKind = "trial-lapsed" | "signup-no-purchase";
+
 export interface TrialWinbackRecord {
   email_key: string;
+  /** Which campaign earned it. Null on rows written before this column. */
+  kind: LifecycleOfferKind | string | null;
+  /** 'webhook' (real-time) or 'sweep' (the nightly catch-up). */
+  source: string | null;
   email: string | null;
   clerk_user_id: string | null;
   stripe_customer_id: string | null;
@@ -3268,6 +3280,8 @@ export interface TrialWinbackRecord {
  */
 export async function claimTrialWinback(r: {
   email: string;
+  kind?: LifecycleOfferKind | null;
+  source?: string | null;
   clerk_user_id?: string | null;
   stripe_customer_id?: string | null;
   lapsed_subscription_id?: string | null;
@@ -3276,12 +3290,14 @@ export async function claimTrialWinback(r: {
   if (!key) return false;
   const res = await pgQuery(
     `INSERT INTO trial_winback
-       (email_key, email, clerk_user_id, stripe_customer_id, lapsed_subscription_id)
-     VALUES ($1,$2,$3,$4,$5)
+       (email_key, email, kind, source, clerk_user_id, stripe_customer_id, lapsed_subscription_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT (email_key) DO NOTHING`,
     [
       key,
       r.email,
+      r.kind ?? null,
+      r.source ?? null,
       r.clerk_user_id ?? null,
       r.stripe_customer_id ?? null,
       r.lapsed_subscription_id ?? null,
@@ -3384,6 +3400,134 @@ export async function isEmailUnsubscribed(email: string | null | undefined): Pro
     [e]
   );
   return Boolean(row);
+}
+
+// ── Lifecycle-email candidates (the nightly sweep) ───────────────────────────
+// The webhook catches a trial the moment it lapses. These two queries are the
+// CATCH-UP: everyone the real-time path never saw — a lapse from before this
+// shipped, a webhook Stripe gave up retrying, an hour the container was down —
+// plus the campaign that has no real-time trigger at all, because "signed up
+// and never came back" is the absence of an event.
+//
+// Both exclude, in SQL rather than in the sweeper, everyone who must never be
+// mailed an offer: owners, comped accounts, the global unsubscribe list, banned
+// addresses, and anyone who already has an offer row. Doing it here means the
+// sweeper cannot forget one of them, and the caps it applies are caps on a list
+// that is already safe.
+
+export interface LifecycleCandidate {
+  clerk_user_id: string;
+  email: string;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  status: string | null;
+  /** When they trialed / when they signed up, depending on the query. */
+  since: string | null;
+}
+
+/**
+ * Trials that ended without becoming customers.
+ *
+ * A trial_history row is the proof they got one; a subscriptions row with an id
+ * but a non-paying status is the proof it is over. "Never paid" is NOT decided
+ * here — the sweeper asks Stripe, because our status column can lag and a
+ * discount mailed to a paying customer is the expensive mistake.
+ *
+ * minAgeDays keeps the sweep off a trial that lapsed twenty minutes ago: the
+ * webhook owns that one, and both firing would be a duplicate offer racing its
+ * own latch.
+ */
+export async function getLapsedTrialCandidates(
+  minAgeDays = 1,
+  limit = 50,
+): Promise<LifecycleCandidate[]> {
+  return queryAll<LifecycleCandidate>(
+    `SELECT u.id                     AS clerk_user_id,
+            u.email                  AS email,
+            s.stripe_customer_id     AS stripe_customer_id,
+            s.stripe_subscription_id AS stripe_subscription_id,
+            s.status                 AS status,
+            th.first_trial_at        AS since
+       FROM trial_history th
+       JOIN users u          ON u.id = th.clerk_user_id
+       JOIN subscriptions s  ON s.clerk_user_id = u.id
+       LEFT JOIN trial_winback w    ON w.email_key = th.email_key
+       LEFT JOIN comp_access ca     ON ca.email = lower(u.email) AND ca.revoked_at IS NULL
+       LEFT JOIN email_unsubscribes eu ON eu.email = lower(u.email)
+       LEFT JOIN trial_bans b       ON b.kind = 'email' AND b.lifted_at IS NULL
+                                   AND b.value_key = th.email_key
+      WHERE w.email_key IS NULL
+        AND ca.email IS NULL
+        AND eu.email IS NULL
+        AND b.id IS NULL
+        AND u.is_owner = FALSE
+        AND s.stripe_subscription_id IS NOT NULL
+        AND COALESCE(s.status, 'none') NOT IN ('active', 'trialing')
+        AND th.first_trial_at < NOW() - make_interval(days => ?::int)
+      ORDER BY th.first_trial_at DESC
+      LIMIT ?`,
+    [minAgeDays, limit]
+  );
+}
+
+/**
+ * Accounts that signed up and never bought anything.
+ *
+ * No subscription id (they never completed a checkout) and no trial_history row
+ * (they never even started the free trial) — so this is genuinely "gave us an
+ * email address and went quiet", not a lapsed trial wearing a different hat.
+ *
+ * password_hash IS NOT NULL excludes the passwordless rows comp grants
+ * provision: those people were invited, not acquired, and "you signed up but
+ * never subscribed" is a strange thing to tell someone who was handed free
+ * access.
+ *
+ * maxAgeDays is a blast radius, and it matters most on the FIRST run: without
+ * it, day one of this feature mails the entire back catalogue of everyone who
+ * ever made an account. The nightly cadence then keeps the window rolling.
+ */
+export async function getSignupNoPurchaseCandidates(
+  minAgeDays = 3,
+  maxAgeDays = 60,
+  limit = 50,
+): Promise<LifecycleCandidate[]> {
+  return queryAll<LifecycleCandidate>(
+    `SELECT u.id                 AS clerk_user_id,
+            u.email              AS email,
+            s.stripe_customer_id AS stripe_customer_id,
+            NULL::text           AS stripe_subscription_id,
+            NULL::text           AS status,
+            u.created_at         AS since
+       FROM users u
+       LEFT JOIN subscriptions s    ON s.clerk_user_id = u.id
+       LEFT JOIN trial_history th   ON th.clerk_user_id = u.id
+       LEFT JOIN trial_winback w    ON w.clerk_user_id = u.id
+       LEFT JOIN comp_access ca     ON ca.email = lower(u.email) AND ca.revoked_at IS NULL
+       LEFT JOIN email_unsubscribes eu ON eu.email = lower(u.email)
+       LEFT JOIN trial_bans b       ON b.kind = 'email' AND b.lifted_at IS NULL
+                                   AND b.value_key = lower(u.email)
+      WHERE s.stripe_subscription_id IS NULL
+        AND th.email_key IS NULL
+        AND w.email_key IS NULL
+        AND ca.email IS NULL
+        AND eu.email IS NULL
+        AND b.id IS NULL
+        AND u.is_owner = FALSE
+        AND u.password_hash IS NOT NULL
+        AND u.created_at < NOW() - make_interval(days => ?::int)
+        AND u.created_at > NOW() - make_interval(days => ?::int)
+      ORDER BY u.created_at DESC
+      LIMIT ?`,
+    [minAgeDays, maxAgeDays, limit]
+  );
+}
+
+/** Recent lifecycle offers, newest first — the audit trail behind the sweep. */
+export async function listTrialWinbacks(limit = 200): Promise<TrialWinbackRecord[]> {
+  return queryAll<TrialWinbackRecord>(
+    `SELECT * FROM trial_winback ORDER BY created_at DESC LIMIT ?`,
+    [limit]
+  );
 }
 
 /**
