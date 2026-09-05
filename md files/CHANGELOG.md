@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-09-05 - The same Post-Market ladder / ticker-picker fix, applied to v3 (`cbedge-v3/src/pages/Premarket.tsx`, `cbedge-v3/src/pages/premarket/PostMarketTab.tsx`, `cbedge-v3/src/pages/premarket/postMarketData.ts`)
+
+The report was against **v3** (`/v3/premarket`), not v2. Same two faults, same
+code shape - v3's premarket tree is a clean-slate copy of v2's and had inherited
+both - so the same three client edits are now in `cbedge-v3/src/pages/`:
+
+- `useIntradayLadder` sends `expiryFallback=1` and returns `expiryUsed`.
+- `PostMarketTab` prints `shownExpiry` (what the ladder was read from) in the
+  section-1 badge and the footbar, and its "empty" message names the date and
+  expiry it asked for plus the ~2-session retention floor.
+- `Premarket` no longer snaps a past date back to SPX or disables the other
+  tickers; `frozen` requires `sym === "SPX"`, so a non-SPX past session renders
+  `HistoricalRecap` for that symbol. Replay still snaps.
+
+No backend change beyond the previous entry's - v3 talks to the same
+`server-v2/`, so `expiryFallback=1` was already live for it. No new colour
+literals and no new type sizes, so `check:theme` is untouched by this diff.
+
+The v2 copies under `components/pages/` keep their fix as well: v2 is still
+served at `/app/*` and carries the identical bug, so reverting them would only
+re-break the older surface.
+
 ## 2026-09-05 - Trial win-back: a lapsed trial automatically gets one month at $30, then normal pricing (`lib/db.ts`, `lib/winback.ts`, `lib/emails/trial-winback.ts`, `app/api/stripe/webhook/route.ts`, `app/api/stripe/checkout/route.ts`)
 
 The other half of the trial work landed earlier today: bans, for people who

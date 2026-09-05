@@ -1171,13 +1171,28 @@ export default function Premarket() {
     setSessionDate(v);
     try { sessionStorage.setItem(DATE_KEY, v); } catch { /* nothing to do */ }
   }, []);
-  // Frozen sessions are SPX only (the freeze captures the one symbol the socket
-  // carries), so stepping back onto a past date from any chain-poll board lands
-  // on SPX rather than on a disabled option with the wrong page behind it. The
-  // sessionStorage choice is left alone: it is what today comes back to.
-  useEffect(() => {
-    if (sessionDate !== etDate && sym !== "SPX") setSym("SPX");
-  }, [sessionDate, etDate, sym]);
+  // ── A PAST DATE NO LONGER LOCKS THE PICKER TO SPX (2026-09-05) ─────────────
+  //
+  // This used to snap the symbol back to SPX the moment you stepped onto a past
+  // date, AND disable every non-SPX option while you were there — so on a
+  // Saturday, reading Friday's Post-Market recap, the ticker picker was simply
+  // dead. The reasoning was sound for the FROZEN path and wrong for the page:
+  // the freeze captures only the symbol the socket carries, so there is no
+  // frozen NVDA chain for last Tuesday — but `HistoricalRecap` takes a `symbol`
+  // prop and reads that symbol's OWN recorded stores (settled per-day levels,
+  // its wall log, its per-minute ladder). Those go back for every MAIN name.
+  //
+  // So a non-SPX past date now falls through to the recorded recap instead of
+  // being refused: `frozen` below requires SPX, which makes `recapOnly` true,
+  // which renders HistoricalRecap for that symbol. Nothing renders an SPX board
+  // under another name — the frozen chain path is still SPX-only, it just is
+  // not the only path any more.
+  //
+  // REPLAY is different and still snaps — its frames ARE a recorded SPX capture
+  // being stepped through, and there is no per-minute stored form of a chain
+  // poll, so a replay under an NVDA label would be a lie rather than a smaller
+  // truth. That snap already lives with the replay state below; it is the only
+  // one left.
   const isHistorical = sessionDate !== etDate;
 
   // ── DATA SOURCE: live, or a frozen past session ────────────────────────────
@@ -1211,8 +1226,17 @@ export default function Premarket() {
   // A session that only captured one slot still opens that one — better a
   // Post-Market tab on a day the morning was missed than neither.
   const frozenGex = tab === "post" ? (frozenPost ?? frozenPre) : (frozenPre ?? frozenPost);
-  /** True when the chosen date has a capture the page can actually render. */
-  const frozen = isHistorical && !!frozenGex;
+  /**
+   * True when the chosen date has a capture the page can actually render.
+   *
+   * SPX-only by construction: premarket-freeze-recorder captures the one symbol
+   * the socket carries, so there is no frozen chain for any other name. On a
+   * past date under another symbol this stays false, which sends the page down
+   * the `recapOnly` path — that symbol's own recorded stores via
+   * HistoricalRecap — instead of the old behaviour of yanking the picker back
+   * to SPX. See the snap-back note above.
+   */
+  const frozen = isHistorical && sym === "SPX" && !!frozenGex;
 
   // ── REPLAY: the whole page stepped through a recorded session ──────────────
   //
@@ -2292,23 +2316,29 @@ export default function Premarket() {
               session picker's `.dsel` shell for exactly that reason, so the two
               one-of-many controls in this head look like one another.
 
-              SPX only on a frozen session: the freeze captures the one symbol
-              the socket carries, and a chain poll has no per-date form — there
-              is no stored NVDA chain for last Tuesday to render. Disabling the
-              options beats rendering an SPX page under an NVDA label. */}
+              SPX only while REPLAY is on: those frames are a recorded SPX
+              capture being stepped through and a chain poll has no per-minute
+              stored form, so an NVDA label over them would be a lie.
+
+              A frozen PAST DATE no longer disables anything (2026-09-05). The
+              freeze itself is still SPX-only, but every MAIN name has its own
+              recorded stores, so picking one on a past date drops the page to
+              HistoricalRecap for that symbol instead of refusing the click. The
+              picker being dead on any past session is what made this look
+              broken from the Post-Market tab. */}
           <span className="dsel">
             <select
               value={sym}
               onChange={(e) => pickSym(e.target.value)}
-              title={replay
+              title={replayOn
                 ? "Replayed sessions are SPX only"
-                : frozen
-                  ? "Frozen sessions are SPX only"
+                : isHistorical
+                  ? "Which symbol to show. SPX opens the frozen board for this session; every other MAIN name opens its recorded recap."
                   : "Which symbol to show. SPX is the live-socket board; every other MAIN name is a one-minute chain poll."}
               aria-label="Symbol"
             >
               {SYMBOLS.map((s2) => (
-                <option key={s2} value={s2} disabled={(frozen || replayOn) && s2 !== "SPX"}>
+                <option key={s2} value={s2} disabled={replayOn && s2 !== "SPX"}>
                   {s2}
                 </option>
               ))}
