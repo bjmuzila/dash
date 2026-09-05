@@ -1,66 +1,161 @@
 # Changelog
 
-## 2026-09-05 - Owner To-Do: status pills, "Main", and lists you can add (`owner-vite/src/pages/Todo.tsx`)
+## 2026-09-05 - Analytics: one CB Edge 3.0 card header, old logo gone, no grey type (`components/pages/Analytics.tsx`)
 
-The drag-and-drop "Checklist Update" board is gone. It was a second copy of the
-same items grouped by status, which meant every gesture had to be mirrored back
-into the checklist it came from; the status now lives on the item itself as a
-pill you click to cycle `Starting -> In Progress -> Completed`. The checkbox
-stays and tracks the pill (Completed ticks it, unticking sends the item back to
-Starting), so the done/total counter in the header is unchanged.
+Three changes to the Analytics page, all in the same file.
 
-`All Todo` is retired as a status name. Anything still stored under it - or
-under `Todo` / `To Do` - is coerced to `Starting` on read, so existing rows come
-back on the new pill without a migration.
+- **The old `cb-edge-logo.png` in the Ticker Lookup toolbar is removed.** It sat
+  at the top right of the page next to the Replay button. The brand is now on
+  every card instead of once on the page, so the toolbar is controls only.
+- **Every card opens with the same header** - new `CardHeader` component: the
+  CB Edge 3.0 mark (`/cbedge3.0.png`, 22px), the card name, then the identity
+  trio **ticker - expiration - timestamp**. A screenshot of a single card now
+  carries what it is, what it is on and when it was taken without cropping the
+  page header in with it. Missing parts print an em dash rather than collapsing,
+  so the trio sits in the same place across all ten cards. Applied to Multi
+  Greek, Estimated Move, Premarket, Econ Calendar, Confidence Score, Net Greeks,
+  Initial Balance, Ticker Levels, Ticker Lookup and Strategy Builder.
+  - The clock format is factored out as `fmtEtClock()`, shared by the header and
+    the existing `UpdatedStamp` footer, so the two can't drift.
+  - `useNowStamp()` (1-minute tick) stamps the Econ Calendar card, which has no
+    fetch of its own to timestamp.
+  - The `More ->` links on Estimated Move / Confidence Score ride the header's
+    `extra` slot; their old inline date spans are gone (the date is in the trio).
+- **No grey type left on the page.** `HOME_THEME.muted` is already `#FFFFFF`, so
+  the grey was coming entirely from `opacity` on the text spans. Every STATIC
+  text opacity (0.45-0.92) is dropped - labels, stamps, captions, notes, the
+  ladder identity line, the /ES gap line, the Strategy Builder summary. The
+  conditional ones are kept on purpose: they encode data state (`d15 == null`,
+  `unrecorded`, `chg == null`) and the disabled replay transport buttons.
 
-The four fixed boxes are now an ordered, editable list of lists:
+## 2026-09-05 - Newsletter is gone; owner.cbedge.net gets a Media Dump instead (`owner-vite/src/pages/MediaDump.tsx`, `app/api/media-dump/*`)
 
-- Defaults are **Main - Family - List 1 - List 2**. The underlying list KEYS are
-  unchanged (`work` / `family` / `ideas` / `weekly`) so existing items keep
-  their home; only the display titles moved. A stored title still equal to its
-  old default (`Work`, `Ideas`, `Weekly Goals`) was never renamed by hand, so it
-  follows the new default - a title you did rename is left alone.
-- An "Add a list" card sits as the last cell of the grid. New lists get a
-  generated key (`l1`, `l2`, ...); the name you type is only the title, so
-  renaming a list never orphans its items.
-- A list header's `x` arms itself ("SURE?") before it deletes the list and its
-  items - no browser confirm dialog.
+The Newsletter page was an idea log shaped around a weekly letter: entries
+bucketed into Monday-anchored weeks, screenshots hanging off a parent "idea",
+and a "Copy week" export to draft from. The letter isn't happening. The only
+part of it that ever earned its keep was "keep this picture with a note on it",
+so the week and the parent idea are gone and the ITEM is now the unit.
 
-List ORDER rides in the titles map under a reserved `__order` key, because
-`/api/owner/todo` returns titles as an unordered map (`SELECT * FROM
-owner_todo_list` has no ORDER BY) and object key order out of Postgres is not
-something to bet the layout on. No server or schema change: the route already
-takes an arbitrary `listKey` per item and an arbitrary `{key: title}` map.
+**Media Dump** (`/owner/media-dump`) - paste a screenshot with Ctrl+V anywhere on
+the page, drop a file on it, or pick one; give it a caption; it stays there.
+Later, search the words you captioned it with and copy the link to mention it.
 
+- **Storage is Postgres**, not localStorage - `media_dump_items` (caption, note,
+  `tags TEXT[]`, kind, mime, filename, `bytes BYTEA`, byte_size, pinned, day).
+  Created on first request by `ensureTables`, same pattern the newsletter tables
+  used, so there is no migration step.
+- **Bytes never enter the list JSON.** `GET /api/media-dump` returns rows without
+  the payload; each card's `<img>` pulls its own from
+  `/api/media-dump/file?id=N`, which is owner-gated, same-origin (so the session
+  cookie rides along) and cached `private, immutable` because a row's bytes are
+  never rewritten - a caption edit doesn't touch them. `?download=1` flips the
+  disposition to `attachment` for the card's Save button; the page cannot hand
+  the bytes over itself.
+- **Paste is window-level, not box-level.** A screenshot in the clipboard is the
+  whole point of the page, so it must not require clicking into a field first.
+  The listener only claims the event when the clipboard carries a FILE, so a
+  plain text paste into an input still works normally.
+- **Images are downscaled client-side** (1800px longest edge, JPEG q0.8) before
+  upload so a 4K screenshot isn't 6MB. Non-images (PDF, CSV) pass through
+  untouched - there is nothing to scale and re-encoding would destroy them.
+  Server cap is 12MB per file, 24 per batch.
+- One POST carries a whole drop with its captions, so pasting six screenshots is
+  one round trip, not six.
+- Search (caption / note / filename, `ILIKE`), a tag rail counted off
+  `UNNEST(tags)`, pinning (pinned rows sort first), inline caption + tag + note
+  editing, a keyboard-walkable lightbox, and Link / MD copy buttons for
+  mentioning an item somewhere else.
 
-## 2026-09-05 - An empty ladder now says WHICH empty it is (`server-v2/api-router.js`, both copies of `premarket/postMarketData.ts` + `premarket/PostMarketTab.tsx`)
+**Wiring:** `owner-vite/src/lib/nav.ts` (Content group: Newsletter link replaced
+with Media Dump) and `owner-vite/src/pages/registry.ts` (`MediaDump` lazy route,
+`Newsletter` dropped - so `Newsletter.tsx` is no longer bundled). The href
+changed to `/owner/media-dump` on purpose: the old bookmark 404s rather than
+silently opening a different page. `owner-vite/nginx.conf`'s
+`client_max_body_size` comment updated - it still said "Newsletter idea
+screenshots".
 
-The fix shipped earlier today came back with the page still saying "No
-per-minute ladder recorded for 2026-09-04 under 2026-09-08" - which is the NEW
-wording, so the client had the fallback and the answer was still empty. Three
-different faults produce that, and the sentence could not tell them apart:
+**Left to delete by hand** (this session had no shell on the box):
+`owner-vite/src/pages/Newsletter.tsx`, `app/api/newsletter-ideas/route.ts`,
+`app/api/newsletter-ideas/shot/route.ts`. All three are unreferenced now. The
+`newsletter_ideas` / `newsletter_idea_shots` tables are untouched, so anything
+captured in them is still recoverable before those files go.
 
-1. The API answering the request is an older build than the page. `server-v2`
-   is a separate process from the Vite dev server, so a frontend rebuild picks
-   up the client half of a change while the route keeps ignoring
-   `expiryFallback=1` as an unknown query param. This is the common case and it
-   looks exactly like a data problem.
-2. The recorder holds the date under some expiry, and the fallback still could
-   not read it.
-3. The recorder has nothing for that date at all - a genuine "not recorded".
+## 2026-09-05 - Traders Dashboard's Economic Calendar button is a real link (`cbedge-v3/src/pages/TradersDashboard.tsx`)
 
-The heatmap route now ships `recordedExpiries` (the expiries the recorder
-actually wrote for that date/symbol) whenever the date-mode answer is empty. The
-query runs only on that path, so the ordinary response is unchanged.
+The header button had been a `ComingSoonPill` - an inert dimmed span - because
+when the v3 dashboard was ported there was no `/economic-calendar` route to
+point it at, and App.tsx's no-catch-all rule means a link to an unregistered
+route renders NotFound rather than quietly falling through. That route landed
+since (`<Route path="/economic-calendar">` in `cbedge-v3/src/App.tsx`, plus
+`app/v3/economic-calendar/route.ts` serving the SPA shell so a hard refresh or a
+shared link resolves), so the pill was lying about a page that exists.
 
-The hook reads `requestedExpiry`'s PRESENCE as the version check - only a build
-that understands the fallback ever sends that key - and returns
-`diag: { fallbackAware, recordedExpiries }`. `PostMarketTab` composes the empty
-note from it and names the actual case, so "your server is behind your client"
-can never again be reported as "the recorder did not run".
+- `ComingSoonPill` is gone, replaced by a reusable **`HeaderLink`** - the same
+  markup and hover behaviour as the Premarket Prep button, parameterised on the
+  accent colour. The resting fill is an inline gradient, so hover is still done
+  with mouse handlers: a `:hover` class cannot beat an inline style.
+- Premarket Prep keeps its orange; Economic Calendar takes `T.cyan`, so the two
+  header buttons read as siblings without pretending to be the same
+  destination.
+- It is a router `<Link to="/economic-calendar">`, not an `<a>` - v3's own page,
+  not v2's `/app/economic-calendar`. No full reload, no chunk re-download.
+- **Quick Links picker:** added `Economic Calendar` to `ALL_PAGES` and
+  `/economic-calendar` to `LIVE_ROUTES`, so it can be pinned as a tile instead
+  of only living in the header. Also added `/replay` to `LIVE_ROUTES` - it has
+  been routed in App.tsx for a while but was still rendering dimmed in the
+  picker, the same stale-list bug in miniature.
 
-Applied to both v2 (`components/pages/premarket/`) and v3
-(`cbedge-v3/src/pages/premarket/`).
+Header note #5 in the file was rewritten to match; it still said the button was
+inert.
+
+## 2026-09-05 - The $30 offer now shows in the app, as a toolbar dropdown (`components/shared/OfferPill.tsx`, `app/api/offers/active/route.ts`, `components/shared/GlobalToolbar.tsx`)
+
+The lifecycle offer was only ever announced by email, so anyone whose mail
+bounced, got filtered, or simply went unread never learned about a discount that
+was already sitting on their account. That was a silent loss. The app can just
+say it.
+
+**A PILL, NOT A MODAL - and that is the whole design.** The offer is attached to
+the ACCOUNT: `lifecycleOffers` mints a customer-restricted promotion code and
+`/api/stripe/checkout` pre-applies it, so there is nothing the user has to do to
+receive the price. A modal would interrupt somebody reading a chart to tell them
+something that is already true. The pill sits in the right-hand toolbar cluster,
+says the offer exists, and waits.
+
+**No dismiss button, on purpose.** Outside click, Esc, or ignoring it all close
+the panel, and none of them can lose the offer - the pill stays in the toolbar
+until the offer is redeemed or expires, at which point the API stops returning it
+and the component disappears on its own. There is no state anyone can get into
+where a live offer has been permanently dismissed.
+
+It **auto-opens once per code per browser** (localStorage, try/caught for Safari
+private mode), because a pill nobody notices converts nobody; after that first
+drop it is closed until clicked. The flag is a convenience, not state that
+matters - cleared storage or a second device just means one more auto-open.
+
+**`/api/offers/active`** is scoped to the caller and nothing else: the user id
+comes from the session, never the request, so no shape of query returns someone
+else's offer. Signed-out, no offer, and its own internal failures all answer
+`{ offer: null }` with a 200 - this runs on every page load behind a piece of
+decoration, and a DB blip should cost the pill, not the toolbar.
+`findActiveTrialWinback` already filters to sent/unredeemed/unexpired, so the
+rules live in one place.
+
+Two details worth keeping:
+
+- **The CTA is a real `<a>`, not `next/link`.** Inside the customer dashboard
+  `next/link` is shimmed to react-router, and `/pricing` is Next-rendered with no
+  SPA route - a client-side push would fall through the catch-all to
+  `/traders-dashboard`. Same trap `V3Pill` documents.
+- **Colours are derived from `homeTheme`,** not a second set of hex literals: a
+  small `hexA()` helper builds the tints off `T.orange`. The panel uses `T.panel`
+  rather than `panelBgStrong`, which is translucent and unreadable floating over
+  a live chart. The local dimmed-white constants are the same workaround
+  `app/pricing/page.tsx` uses, because HOME_THEME flattens `muted` and `text` to
+  the same pure white.
+
+Costs one fetch on mount and zero pixels for everyone without an offer, which is
+almost everyone.
 
 ## 2026-09-05 - The 3.0 logo, everywhere, from one file (`lib/brand.ts` + 32 email templates + 10 UI call sites)
 

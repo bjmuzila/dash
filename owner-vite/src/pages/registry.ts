@@ -25,7 +25,9 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   EstimatedMove: lazy(() => import("./EstimatedMove")),
   Changelog: lazy(() => import("./Changelog")),
   SocialMedia: lazy(() => import("./SocialMedia")),
-  Newsletter: lazy(() => import("./Newsletter")),
+  // Newsletter was removed — the weekly-letter idea log became Media Dump, a
+  // flat captioned pile of screenshots/files with no week and no parent idea.
+  MediaDump: lazy(() => import("./MediaDump")),
   Emails: lazy(() => import("./Emails")),
   Feedback: lazy(() => import("./Feedback")),
   PostStudio: lazy(() => import("./PostStudio")),

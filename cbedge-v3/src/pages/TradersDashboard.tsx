@@ -35,9 +35,9 @@ import type { WheelPayload } from './tradersDashboard/wheelMath'
 //     note beside PREFS_URL for the two ways a local mirror breaks "per user".
 //  4. NO SNAPSHOT BUTTON. v2's CopySnapButton needs a DOM-to-canvas renderer
 //     v3 does not ship. Still open.
-//  5. The Economic Calendar header button is inert — v3 has no /economic-calendar
-//     route yet, and App.tsx's no-catch-all rule means a live link would 404.
-//     Premarket Prep IS routed, so that one is a real link.
+//  5. Both header buttons are real links. The Economic Calendar one was inert
+//     until /economic-calendar landed in App.tsx (and app/v3/economic-calendar/
+//     route.ts for the hard refresh); it is now a <Link> like Premarket Prep.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // The wheel is the heaviest thing on the page and it sits third in the right
@@ -151,6 +151,7 @@ const ALL_PAGES: { label: string; href: string }[] = [
   { label: 'Board', href: '/board' },
   { label: 'Options Chain', href: '/options-chain' },
   { label: 'Est. Moves', href: '/em' },
+  { label: 'Economic Calendar', href: '/economic-calendar' },
   { label: 'Analysis', href: '/analytics' },
   { label: 'Replay', href: '/replay' },
   { label: 'Flow', href: '/flow' },
@@ -179,6 +180,8 @@ const LIVE_ROUTES = new Set([
   '/analytics',
   '/flow',
   '/em',
+  '/economic-calendar',
+  '/replay',
   '/scanner',
   '/level-log',
   '/legacy',
@@ -309,16 +312,41 @@ const HEADER_BTN =
 /** v2's resting fill for the Premarket Prep button. */
 const PREMARKET_BG = `linear-gradient(180deg, ${alpha(T.orange, 0.2)}, ${alpha(T.orange, 0.06)})`
 
-function ComingSoonPill({ icon, label }: { icon: string; label: string }) {
+/**
+ * Header link, styled like the Premarket Prep button but in an arbitrary accent.
+ * The resting background is a gradient set inline — v2 had it that way and a
+ * :hover class cannot beat an inline style, hence the mouse handlers.
+ */
+function HeaderLink({
+  to,
+  icon,
+  label,
+  accent,
+}: {
+  to: string
+  icon: string
+  label: string
+  accent: string
+}) {
+  const resting = `linear-gradient(180deg, ${alpha(accent, 0.2)}, ${alpha(accent, 0.06)})`
   return (
-    <span
-      title={`${label} — coming soon`}
-      className={`${HEADER_BTN} cursor-not-allowed border-line text-faint opacity-50`}
+    <Link
+      to={to}
+      className={HEADER_BTN}
+      style={{ borderColor: alpha(accent, 0.55), background: resting, color: T.text }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = accent
+        e.currentTarget.style.background = alpha(accent, 0.28)
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = alpha(accent, 0.55)
+        e.currentTarget.style.background = resting
+      }}
     >
       <span aria-hidden>{icon}</span>
-      {label}
-      <span>→</span>
-    </span>
+      <span>{label}</span>
+      <span style={{ color: accent }}>→</span>
+    </Link>
   )
 }
 
@@ -1069,7 +1097,10 @@ export default function TradersDashboardPage() {
             <span>Premarket Prep</span>
             <span style={{ color: T.orange }}>→</span>
           </Link>
-          <ComingSoonPill icon="🗓" label="Economic Calendar" />
+          {/* Live since /economic-calendar landed in App.tsx — v3's own page,
+              not v2's /app/economic-calendar. Same route the Quick Links
+              picker now offers. */}
+          <HeaderLink to="/economic-calendar" icon="🗓" label="Economic Calendar" accent={T.cyan} />
           <WeatherWidget
             zipInput={zipInput}
             onZipInput={setZipInput}

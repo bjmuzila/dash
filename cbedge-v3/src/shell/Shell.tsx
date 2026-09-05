@@ -13,6 +13,7 @@ import { useIsPhone } from '@/design/useIsPhone'
 import { CbMark, CbWordmark } from '@/shell/Brand'
 import { CopyShotMenu, CopyShotProvider } from '@/shell/CopyShot'
 import { NotesPanelProvider, useNotesPanel } from '@/shell/NotesPanelContext'
+import { OfferPill } from '@/shell/OfferPill'
 import { ToolbarSlotHost, ToolbarSlotProvider } from '@/shell/ToolbarSlot'
 import { UserMenu } from '@/shell/UserMenu'
 import { UpdateToast } from '@/shell/UpdateToast'
@@ -425,6 +426,18 @@ function Toolbar({ mobile = false }: { mobile?: boolean }) {
           />
         </>
       )}
+      {/* ── The live offer ($30 first month) ───────────────────────────────────
+          Draws NOTHING unless this account has an unredeemed, unexpired
+          lifecycle offer, and does not even ask for signed-out or currently
+          paying accounts — which is nearly everyone.
+
+          A dropdown rather than a modal on purpose: the offer is attached to
+          the account and /api/stripe/checkout pre-applies it, so there is
+          nothing the user has to do. Blocking the board to announce a price
+          they already have is an interruption dressed up as a favour. It is
+          also the only surface that reaches the people whose offer email
+          bounced or got filtered. See shell/OfferPill.tsx. */}
+      <OfferPill />
       <EtClock />
       {/* ── 📸 ─────────────────────────────────────────────────────────────────
           The one camera in the app. Draws nothing for anyone but the owner, and

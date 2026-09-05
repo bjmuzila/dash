@@ -10,8 +10,8 @@ import { OWNER_THEME, OWNER_LIGHT_BLUE } from "./theme";
  * every page here is owner-only, and every page has a backend — so "Owner"
  * meant "unsorted". The second pass split by job, but left Business straddling
  * two unrelated jobs: READING numbers (who's paying, who visited) and SENDING
- * things to people (emails, the newsletter, alerts). Those never get opened in
- * the same sitting, and the second half is the same job as Content.
+ * things to people (emails, alerts). Those never get opened in the same
+ * sitting, and the second half is the same job as Content.
  *
  * So the test for a new page is "what am I DOING when I open this?", and it has
  * exactly one answer:
@@ -24,9 +24,9 @@ import { OWNER_THEME, OWNER_LIGHT_BLUE } from "./theme";
  *
  * If a page seems to fit two, it belongs in the one matching why you'd go
  * looking for it, not what it's built on. Bzila Alerts is the worked example:
- * it's a broadcast, so it sits with Emails and Newsletter under Content — not
- * under System because it happens to be a cron job, and not under Info because
- * it happens to know who the customers are.
+ * it's a broadcast, so it sits with Emails under Content — not under System
+ * because it happens to be a cron job, and not under Info because it happens to
+ * know who the customers are.
  *
  * Business and System merged: with the broadcast pages gone to Content and the
  * reporting pages gone to Info, "Business" had nothing left, and Dev + Database
@@ -68,14 +68,18 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     links: [
       // Customer support tickets — the other end of /feedback on cbedge.net.
       // Content rather than Info: you open this to ANSWER someone, which is the
-      // same job as Emails and Newsletter, not to read a number.
+      // same job as Emails, not to read a number.
       { label: "Feedback", href: "/owner/feedback", glyph: "⚑", key: "Feedback" },
       { label: "Social Media", href: "/social-media", glyph: "🗨︎", key: "SocialMedia" },
       { label: "Post Studio", href: "/owner/post-studio", glyph: "✎", key: "PostStudio" },
       { label: "Changelog", href: "/changelog", glyph: "↻", key: "Changelog" },
       { label: "Affiliates", href: "/owner/affiliates", glyph: "⇉", key: "Affiliates" },
       { label: "Emails", href: "/owner/admin/emails", glyph: "✉", key: "Emails" },
-      { label: "Newsletter", href: "/owner/newsletter", glyph: "🗞︎", key: "Newsletter" },
+      // Was "Newsletter" (/owner/newsletter) — the weekly-letter idea log. The
+      // letter is gone; what survived is the shoebox: paste a screenshot, give
+      // it a caption, find it again when you want to mention it. New href, so
+      // the old bookmark 404s deliberately rather than opening a different page.
+      { label: "Media Dump", href: "/owner/media-dump", glyph: "🖼︎", key: "MediaDump" },
       { label: "Bzila Alerts", href: "/owner/dev/bzila-alerts", glyph: "🔔", key: "BzilaAlerts" },
     ],
   },

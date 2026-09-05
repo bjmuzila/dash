@@ -22,7 +22,7 @@ const T = HOME_THEME;
 
 function Label({ children }: { children: ReactNode }) {
   return (
-    <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted, opacity: 0.7 }}>
+    <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: T.muted }}>
       {children}
     </span>
   );
@@ -107,17 +107,79 @@ function useLiveData<R>(url: string | null, refreshMs = 120_000) {
   return { data, loading, error, lastUpdated, reload: load };
 }
 
+// "3:42:18 PM ET" — one clock format for the whole page (card headers + footers).
+function fmtEtClock(at: number | null | undefined): string {
+  if (at == null) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
+  }).format(at) + " ET";
+}
+
 // "updated 3:42:18 PM ET" footer — stamped at each card's last successful fetch.
 function UpdatedStamp({ at }: { at: number | null }) {
-  const text = at == null
-    ? "—"
-    : new Intl.DateTimeFormat("en-US", {
-        timeZone: "America/New_York", hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
-      }).format(at) + " ET";
   return (
-    <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.55, marginTop: "auto", paddingTop: 6, textAlign: "right" }}>
-      updated {text}
+    <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.text, marginTop: "auto", paddingTop: 6, textAlign: "right" }}>
+      updated {fmtEtClock(at)}
     </span>
+  );
+}
+
+// Wall clock for cards with no fetch of their own to stamp (the calendar).
+// Ticks once a minute — a second-by-second re-render buys nothing here.
+function useNowStamp(): number {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  return now ?? 0;
+}
+
+// ── Card header ─────────────────────────────────────────────────────────────
+// EVERY card on this page opens with the same line: the CB Edge 3.0 mark, the
+// card's name, then the identity trio — ticker · expiration · timestamp. A
+// screenshot of any single card therefore carries what it is, what it is on,
+// and when it was taken, without the reader having to crop the page header in
+// with it. Missing parts print an em dash rather than collapsing, so the trio
+// always sits in the same place across all ten cards.
+const CB_LOGO_SRC = "/cbedge3.0.png";
+
+function CardHeader({ title, ticker, expiry, at, extra }: {
+  title: ReactNode;
+  ticker?: string | null;
+  expiry?: string | null;
+  /** ms of the card's last successful fetch; null → "—". */
+  at?: number | null;
+  /** Anything that belongs on the right of the stamp (a "More →" link). */
+  extra?: ReactNode;
+}) {
+  return (
+    <Row style={{ flexWrap: "wrap", rowGap: 6, alignItems: "center" }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        {/* crossOrigin so html2canvas exports bake the mark in rather than
+            tainting the canvas — same handling the page footer uses. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={CB_LOGO_SRC}
+          alt="CB Edge"
+          crossOrigin="anonymous"
+          style={{ height: 22, width: "auto", display: "block", flexShrink: 0, borderRadius: 4 }}
+        />
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
+          {title}
+        </span>
+      </span>
+      <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <span style={{
+          fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
+          letterSpacing: "0.06em", textTransform: "uppercase", color: T.text,
+        }}>
+          {[ticker || "—", expiry || "—", fmtEtClock(at)].join(" · ")}
+        </span>
+        {extra}
+      </span>
+    </Row>
   );
 }
 
@@ -158,7 +220,7 @@ function Placeholder({ children, minHeight = 70 }: { children: ReactNode; minHei
       style={{
         minHeight, borderRadius: 10, border: `1px dashed ${T.border}`,
         color: T.muted, fontSize: 12, fontStyle: "italic", textAlign: "center",
-        padding: "8px 12px", opacity: 0.8,
+        padding: "8px 12px",
       }}
     >
       {children}
@@ -263,10 +325,7 @@ function MultiGreekCard() {
 
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
-      <Row>
-        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Multi Greek</span>
-        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>peak strike</span>
-      </Row>
+      <CardHeader title="Multi Greek" ticker={tk} expiry="all exp" at={lastUpdated} />
       <PillSelect value={tk} options={["SPX", "QQQ", "SPY"] as const} onChange={setTk} />
       {loading || error || !hasAny ? (
         <CardState loading={loading} error={error} empty={`No live chain for ${tk}.`} />
@@ -278,7 +337,7 @@ function MultiGreekCard() {
               <div key={k} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 3 }}>
                 <Label>{k} · peak strike</Label>
                 <Value color={pk ? signColor(pk.value) : T.muted} size={20}>{pk ? pk.strike.toLocaleString() : "—"}</Value>
-                <span style={{ fontSize: 17, color: pk ? signColor(pk.value) : T.muted, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
+                <span style={{ fontSize: 17, color: pk ? signColor(pk.value) : T.muted, fontFamily: "var(--font-mono)" }}>
                   {pk ? fmtBig(pk.value) : "—"}
                 </span>
               </div>
@@ -344,10 +403,12 @@ function EstimatedMoveCard() {
 
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, height: 480, overflowY: "auto" }}>
-      <Row>
-        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Estimated Move</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>weekly</span>
+      <CardHeader
+        title="Estimated Move"
+        ticker={tk}
+        expiry="weekly"
+        at={lastUpdated}
+        extra={(
           <Link
             href="/em"
             style={{
@@ -358,8 +419,8 @@ function EstimatedMoveCard() {
           >
             More →
           </Link>
-        </div>
-      </Row>
+        )}
+      />
       <PillSelect value={tk} options={EM_TICKERS} onChange={setTk} />
       {lvLoading || lvError || !ready ? (
         <CardState loading={lvLoading} error={lvError} empty={`No published EM for ${tk}.`} />
@@ -468,10 +529,7 @@ function PremarketCard() {
 
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
-      <Row>
-        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Premarket</span>
-        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{isStale ? nextDate : sumDate ?? ""}</span>
-      </Row>
+      <CardHeader title="Premarket" ticker="/ES" expiry={isStale ? nextDate : sumDate} at={lastUpdated} />
       {loading || error || bullets.length === 0 || isStale ? (
         <CardState loading={loading} error={error ?? data?.error ?? null} empty={emptyMsg} />
       ) : (
@@ -484,7 +542,7 @@ function PremarketCard() {
       {gapPts != null && (
         <>
           <div style={divider} />
-          <span style={{ fontSize: 14, color: T.muted, opacity: 0.8, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 14, color: T.muted, fontFamily: "var(--font-mono)" }}>
             /ES gap: <span style={{ color: up ? POS_GREEN : T.red }}>{up ? "+" : ""}{gapPts.toFixed(2)} pts</span>
             {g?.prior_close ? ` (${((gapPts / g.prior_close) * 100).toFixed(2)}%)` : ""}
           </span>
@@ -500,8 +558,15 @@ function PremarketCard() {
 // It includes: colored left-border event rows, A:/F:/P: data, day separators,
 // stale-event fading, filter dropdown, and the earnings logo strip at the bottom.
 function EconCalendarCard() {
+  // No fetch of its own to stamp — the panel owns its data — so the header
+  // carries the wall clock, which is what "when did I screenshot this" means
+  // for a calendar anyway.
+  const now = useNowStamp();
   return (
     <Card variant="budget" padding={0} style={{ display: "flex", flexDirection: "column", overflow: "hidden", height: 480 }}>
+      <div style={{ padding: "16px 16px 10px", flexShrink: 0 }}>
+        <CardHeader title="Econ Calendar" ticker="US" expiry="today" at={now || null} />
+      </div>
       <EconCalendarPanel todayOnly hideToolbar />
     </Card>
   );
@@ -652,15 +717,17 @@ function ConfidenceCard() {
 
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
-      <Row>
-        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
-          Confidence Score
-          <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>BETA</span>
-        </span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {forDate && (
-            <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>{forDate}</span>
-          )}
+      <CardHeader
+        title={(
+          <>
+            Confidence Score
+            <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, verticalAlign: "middle" }}>BETA</span>
+          </>
+        )}
+        ticker="SPX"
+        expiry={forDate}
+        at={lastUpdated}
+        extra={(
           <Link
             href="/confidence-score"
             style={{
@@ -671,8 +738,8 @@ function ConfidenceCard() {
           >
             More →
           </Link>
-        </div>
-      </Row>
+        )}
+      />
       {loading || error || score == null ? (
         <CardState loading={loading} error={error} empty="Waiting for today's first CB snapshot." />
       ) : (
@@ -680,7 +747,7 @@ function ConfidenceCard() {
           <Row>
             <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
               <Value color={bandColor} size={34}>{score}</Value>
-              <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>/100</span>
+              <span style={{ fontSize: 14, color: T.muted }}>/100</span>
             </div>
             <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.1em", color: bandColor }}>{band}</span>
           </Row>
@@ -869,12 +936,17 @@ function GreeksCard() {
 
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
-      <Row>
-        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Net Greeks</span>
-        <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
-          {!isSpx ? "live chain" : usingFallback ? `last session · ${staleDate ?? ""}` : "now · Δ15m · Δ30m"}
-        </span>
-      </Row>
+      <CardHeader
+        title="Net Greeks"
+        ticker={tk}
+        expiry={usingFallback ? `last session · ${staleDate ?? ""}` : "all exp"}
+        at={isSpx ? lastUpdated : chainAt}
+        extra={(
+          <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.text }}>
+            {!isSpx ? "live chain" : usingFallback ? "recorded" : "now · Δ15m · Δ30m"}
+          </span>
+        )}
+      />
       <PillSelect value={tk} options={NG_TICKERS} onChange={setTk} />
       {showLoading || showError || !cur ? (
         <CardState loading={showLoading} error={showError} empty={isSpx ? "No greeks series yet." : `No live chain for ${tk}.`} />
@@ -1017,10 +1089,7 @@ function IbCard() {
 
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
-      <Row>
-        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Initial Balance</span>
-        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>ES</span>
-      </Row>
+      <CardHeader title="Initial Balance" ticker="ES" expiry={today} at={lastUpdated} />
 
       {/* Countdown bar (9:30–10:30 ET IB window). */}
       <div style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: cd.phase === "forming" ? T.orange : cd.phase === "done" ? POS_GREEN : T.muted }}>
@@ -1275,7 +1344,7 @@ function TickerLevelsPicker({
         }}
       >
         <span>{value}</span>
-        <span style={{ fontSize: 10, opacity: 0.7, color: T.muted }}>▾</span>
+        <span style={{ fontSize: 10, color: T.muted }}>▾</span>
       </button>
       {open && rect && createPortal(
         <div ref={menuRef} style={{
@@ -1358,7 +1427,7 @@ function TickerLevelsPicker({
                     <span
                       onClick={(e) => { e.stopPropagation(); onRemove(row.t); }}
                       title={`Remove ${row.t}`}
-                      style={{ cursor: "pointer", fontSize: 12, lineHeight: 1, color: T.muted, opacity: 0.7 }}
+                      style={{ cursor: "pointer", fontSize: 12, lineHeight: 1, color: T.muted}}
                     >
                       ×
                     </span>
@@ -1515,15 +1584,12 @@ function TickerLevelsCard() {
 
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, height: 480, overflowY: "auto" }}>
-      <Row>
-        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Ticker Levels</span>
-        <span
-          style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.7 }}
-          title={row.expiry ? `Levels computed on the ${row.expiry} chain` : "No expiry recorded for this symbol"}
-        >
-          {expiryLabel(row.expiry, today)}
-        </span>
-      </Row>
+      <CardHeader
+        title="Ticker Levels"
+        ticker={tk}
+        expiry={expiryLabel(row.expiry, today)}
+        at={lastUpdated}
+      />
 
       <TickerLevelsPicker
         value={tk}
@@ -1571,7 +1637,7 @@ function TickerLevelsCard() {
           </div>
 
           {notes.length ? (
-            <span style={{ fontSize: 11, color: coreWaiting ? T.orange : T.muted, opacity: coreWaiting ? 0.75 : 0.5, fontFamily: "var(--font-mono)" }}>
+            <span style={{ fontSize: 11, color: coreWaiting ? T.orange : T.muted, fontFamily: "var(--font-mono)" }}>
               {notes.join(" · ")}
             </span>
           ) : null}
@@ -2820,9 +2886,19 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
 
   return (
     <Card variant="budget" padding={16} style={{ gridColumn: embedded ? undefined : "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* Controls: ticker menu, one refresh for the whole card, the replay
-          toggle, and the mark. The identity line that used to sit up here
-          moved DOWN to rest directly on top of the ladders — see below. */}
+      {/* Same header every card on this page carries: mark, name, then
+          ticker · expiration · timestamp. The fuller identity line still sits
+          DOWN on top of the ladders (spot, gamma sign, replay clock) because
+          that is the line a ladder screenshot has to contain. */}
+      <CardHeader
+        title="Ticker Lookup"
+        ticker={sym}
+        expiry={viewActiveExpiry ? tlExpiryChip(viewActiveExpiry, replayOn && replayDate ? replayDate : today) : null}
+        at={replayOn ? null : lastUpdated}
+      />
+      {/* Controls: ticker menu, one refresh for the whole card, and the replay
+          toggle. The identity line that used to sit up here moved DOWN to rest
+          directly on top of the ladders — see below. */}
       <Row style={{ flexWrap: "wrap", justifyContent: "flex-end", rowGap: 8 }}>
         {/* Ticker menu + one refresh for the whole card. The picker is the same
             component the Ticker Levels card uses — the searchable, star-to-
@@ -2854,16 +2930,9 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
               fontWeight: 800,
             }}
           >⏱ Replay</button>
-          {/* Brand, on the toolbar with the rest of the controls.
-              `crossOrigin` so html2canvas exports bake it in rather than
-              tainting the canvas — same handling the footer uses. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/cb-edge-logo.png"
-            alt="CB Edge"
-            crossOrigin="anonymous"
-            style={{ height: 28, width: "auto", display: "block", flexShrink: 0, opacity: 0.95, marginLeft: 2 }}
-          />
+          {/* The old cb-edge-logo.png that used to sit here is gone. The brand
+              now rides the CardHeader above (and on every other card), so the
+              toolbar is controls only. */}
         </span>
       </Row>
 
@@ -2943,7 +3012,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
             style={{ flex: 1, minWidth: 180, height: 3, accentColor: T.orange }}
           />
 
-          <span style={{ fontSize: 10, fontWeight: 700, opacity: 0.6 }}>Speed</span>
+          <span style={{ fontSize: 10, fontWeight: 700 }}>Speed</span>
           {TL_REPLAY_SPEEDS.map((sp) => (
             <button
               key={sp}
@@ -2957,14 +3026,14 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
           <span style={{ fontFamily: "var(--font-mono)", fontWeight: 900 }}>
             {replayClock != null ? `${fmtTlReplayClock(replayClock)} ET` : "--:--"}
           </span>
-          <span style={{ opacity: 0.55 }}>
+          <span>
             {replayTimeline.length ? `${Math.min(replayIdx, replayTimeline.length - 1) + 1} / ${replayTimeline.length}` : ""}
           </span>
 
           {replayLoading && <span style={{ color: T.cyan, fontWeight: 700 }}>loading…</span>}
           {!!replayErr && <span style={{ color: T.red, fontWeight: 700 }}>{replayErr}</span>}
           {!replayLoading && !replayErr && replayTimeline.length > 0 && (
-            <span style={{ opacity: 0.55 }}>
+            <span>
               · recorded walls only · sweeps held to the minute · ± Move, ATM IV and Δ 1D off while rewound
             </span>
           )}
@@ -2999,7 +3068,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                 Ticker Lookup
               </span>
               <span style={{ fontSize: 22, fontWeight: 800, color: T.text }}>${sym}</span>
-              <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>GEX levels</span>
+              <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.text }}>GEX levels</span>
 
                   {/* Rewound, this is the spot RECORDED at that sweep — the live
                       quote would put today's price on a past session's ladder. */}
@@ -3019,7 +3088,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                       the expiry pills — off today it would label the wrong one. */}
                   <span style={{
                     fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
-                    letterSpacing: "0.06em", textTransform: "uppercase", color: T.text, opacity: 0.78,
+                    letterSpacing: "0.06em", textTransform: "uppercase", color: T.text,
                   }}>
                     {[
                       sym,
@@ -3085,7 +3154,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                   Both are priced off live marks, so they read "—" while rewound
                   rather than putting today's premium on a past session's
                   ladder. */}
-              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>
+              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text }}>
                 {`± Move ${atm.move == null ? "—" : `±${atm.move.toFixed(2)}`} · ATM IV ${atm.iv == null ? "—" : `${(atm.iv * 100).toFixed(1)}%`}`}
               </span>
               {/* The ONLY thing that scrolls in this pane. minHeight:0 is what
@@ -3120,7 +3189,6 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
               <span style={{
                 fontSize: 11, fontFamily: "var(--font-mono)",
                 color: replayOn || boardIsFull ? T.text : T.orange,
-                opacity: replayOn || boardIsFull ? 0.6 : 0.85,
               }}>
                 {boardLabel}
               </span>
@@ -3132,7 +3200,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                   close. It has nothing to say about an intraday clock, so both
                   the column and this caption are off while rewound. */}
               {!replayOn && (
-                <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>
+                <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text }}>
                   {chgBaseline
                     ? `Δ 1D vs close ${chgBaseline}`
                     : chgOk
@@ -3185,7 +3253,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
             {rightLevels.flip != null && `Gamma flip ${rightLevels.flip.toLocaleString("en-US", { maximumFractionDigits: 2 })} — pinning above, trending below.`}
           </div>
 
-          <span style={{ fontSize: 11, color: T.text, opacity: 0.45, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 11, color: T.text, fontFamily: "var(--font-mono)" }}>
             {replayOn
               ? `OI+Vol basis · recorded strike_growth sweeps${replayDate ? ` for ${replayDate}` : ""} · walls only, not the whole ladder · educational only, not investment advice`
               : "OI+Vol basis · left pane shares Multi Greek's formula · right pane is the server full-board sweep · educational only, not investment advice"}
@@ -3238,7 +3306,7 @@ function withSpx(v?: string | number | null): ReactNode {
   return (
     <>
       {s}
-      <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, opacity: 0.65, marginLeft: 4, letterSpacing: "0.06em" }}>SPX</span>
+      <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, marginLeft: 4, letterSpacing: "0.06em" }}>SPX</span>
     </>
   );
 }
@@ -3289,17 +3357,17 @@ function StrategyBuilderCard() {
 
   return (
     <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
-      <Row>
-        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
-          Strategy Builder
-          <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, opacity: 0.85, verticalAlign: "middle" }}>NOT FINANCIAL ADVICE</span>
-        </span>
-        {planDate && active && (
-          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: isStale ? T.orange : T.muted, opacity: 0.7 }}>
-            {isStale ? `last · ${planDate}` : planDate}
-          </span>
+      <CardHeader
+        title={(
+          <>
+            Strategy Builder
+            <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: T.orange, verticalAlign: "middle" }}>NOT FINANCIAL ADVICE</span>
+          </>
         )}
-      </Row>
+        ticker="SPX"
+        expiry={planDate && active ? (isStale ? `last · ${planDate}` : planDate) : null}
+        at={lastUpdated}
+      />
       {!active ? (
         <Placeholder>Available 9:00 AM – 4:00 PM ET on weekdays.</Placeholder>
       ) : loading || error || !ready ? (
@@ -3325,7 +3393,7 @@ function StrategyBuilderCard() {
           </div>
 
           {plan!.summary && (
-            <p style={{ fontSize: 14, lineHeight: 1.65, color: T.text, margin: 0, opacity: 0.92 }}>{plan!.summary}</p>
+            <p style={{ fontSize: 14, lineHeight: 1.65, color: T.text, margin: 0 }}>{plan!.summary}</p>
           )}
 
           <div style={divider} />
@@ -3336,7 +3404,7 @@ function StrategyBuilderCard() {
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <SectionTitle color={T.cyan}>Key levels</SectionTitle>
               {(plan!.levels?.length ?? 0) === 0 ? (
-                <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>—</span>
+                <span style={{ fontSize: 14, color: T.muted }}>—</span>
               ) : (
                 plan!.levels!.map((lv, i) => (
                   <div key={i} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6, display: "flex", flexDirection: "column", gap: 2 }}>
@@ -3344,10 +3412,10 @@ function StrategyBuilderCard() {
                       <span style={{ fontSize: 14, fontWeight: 700, color: T.cyan }}>{lv.label ?? "—"}</span>
                       {lv.price != null && String(lv.price) !== "" && (
                         <>
-                          <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>—</span>
+                          <span style={{ fontSize: 14, color: T.muted }}>—</span>
                           <span style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: T.text }}>
                             {String(lv.price)}
-                            <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, opacity: 0.65, marginLeft: 4, letterSpacing: "0.06em" }}>SPX</span>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: T.muted, marginLeft: 4, letterSpacing: "0.06em" }}>SPX</span>
                           </span>
                         </>
                       )}
@@ -3378,12 +3446,12 @@ function StrategyBuilderCard() {
                   )}
                 </div>
               ) : (
-                <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>—</span>
+                <span style={{ fontSize: 14, color: T.muted }}>—</span>
               )}
 
               <SectionTitle color={T.green}>Confirmation triggers</SectionTitle>
               {(plan!.triggers?.length ?? 0) === 0 ? (
-                <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>—</span>
+                <span style={{ fontSize: 14, color: T.muted }}>—</span>
               ) : (
                 <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 5 }}>
                   {plan!.triggers!.map((t, i) => (

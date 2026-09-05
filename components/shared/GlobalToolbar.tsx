@@ -14,6 +14,7 @@ import NavMenu from "./NavMenu";
 import BzilaAlerts from "./BzilaAlerts";
 import SectionSubStrip from "./SectionSubStrip";
 import GlobalRefreshButton from "./GlobalRefreshButton";
+import OfferPill from "./OfferPill";
 import { sectionForHref, sectionForPath } from "./sectionNav";
 import { isMobilePath } from "@/components/mobile/mobileNav";
 import { BRAND_LOGO_SRC } from "@/lib/brand";
@@ -823,6 +824,23 @@ export default function GlobalToolbar() {
               where the pill is already down to the ticker, the clock and the
               avatar — v3's own phone build is reached from /v3 once you are
               across. Icon-only when the viewport is narrow. ── */}
+          {/* ── Live offer ($30 first month) ──
+              Renders NOTHING unless this account has an unredeemed, unexpired
+              lifecycle offer (app/api/offers/active), which is almost nobody —
+              so on a normal load this costs one fetch and no pixels.
+
+              Deliberately a pill in the shared toolbar rather than a modal: the
+              offer is already attached to the account and checkout pre-applies
+              it, so there is nothing the user MUST do. Interrupting someone
+              mid-chart to tell them a price they were getting anyway is the
+              wrong trade. It also reaches everyone whose offer email bounced or
+              got filtered.
+
+              First in the right-hand cluster so it lands in the same place on
+              every route, and left of V3 so the crossing stays where regular
+              users have learned it is. ── */}
+          {isSignedIn && <OfferPill compact={isMobile} />}
+
           {!isMobileRoute && <V3Pill compact={isMobile} />}
 
           {/* ── Live ticker (ESU / NQU + dropdown) — now sits just left of the
