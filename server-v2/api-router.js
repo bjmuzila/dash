@@ -6441,36 +6441,47 @@ if (libDb) {
             const cacheKey = `${symbol}|${winMin}|${anyExpiry ? 'any' : expiry}|${anyExpiry ? '' : date}|t${topN}|f${expiryFallback ? 1 : 0}`;
             const cached = heatmapCache.get(cacheKey);
             if (cached && Date.now() - cached.at < HEATMAP_TTL_MS) { send(res, 200, cached.payload); return; }
-            let slots = winMin > 0
-              ? anyExpiry
-                ? await libDb.getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000, symbol)
-                : await libDb.getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry, symbol)
-              : await libDb.getOptionStrikeGexSlots(date, expiry, symbol);
-            // The expiry this response is OF. Shipped on the payload either way
-            // so a caller can label what it actually got rather than assume it
-            // got what it asked for.
+            // ── WHICH EXPIRY THIS DATE IS ACTUALLY READ UNDER ──────────────
+            //
+            // Resolved BEFORE the slots query, not after an empty one. The
+            // first cut of this fell back only when the requested expiry
+            // returned ZERO rows, and that test is wrong on the one symbol it
+            // was written for: SPX's front expiry rolls AT THE CLOSE, so
+            // 16:05-16:25 ET is spent recording the NEXT expiry under the day
+            // that just ended. (2026-09-04, 2026-09-08) is therefore a real,
+            // populated board — ~130KB — consisting entirely of post-close
+            // columns. Row-count says "found it", the recap's 09:30-16:00
+            // window then drops every column, and the tab reports the session
+            // as unrecorded. Every other ticker looked fine because its front
+            // expiry is a weekly that does not roll at 16:00.
+            //
+            // So the test is CASH-SESSION coverage (`rthRows`), and the pick is
+            // the expiry with the most of it. One extra aggregate on the
+            // date path, inside the same 30s cache entry, and the slots query
+            // still runs exactly once.
             let usedExpiry = expiry;
             let didFallback = false;
-            // What the recorder DOES hold for this date, shipped when the answer
-            // is empty. Without it "nothing came back" is indistinguishable from
-            // "the recorder never ran", and the caller has to guess which of the
-            // two it is looking at — which is the bug this whole fallback exists
-            // to stop repeating. The query only runs on the empty path, so it
-            // costs nothing on the ordinary one.
+            // What the recorder holds for this date either way — so an empty
+            // answer can say WHICH empty it is instead of leaving the caller to
+            // guess between "wrong expiry" and "recorder never ran".
             let recordedExpiries = [];
-            if (expiryFallback && !slots.length) {
+            if (expiryFallback) {
               const recorded = await libDb.getGexHistoryExpiriesForDate(date, symbol);
               recordedExpiries = recorded.map((r) => r.expiry);
-              const pick = recorded.find((r) => r.expiry !== expiry);
-              if (pick) {
-                const retry = await libDb.getOptionStrikeGexSlots(date, pick.expiry, symbol);
-                if (retry.length) {
-                  slots = retry;
+              const asked = recorded.find((r) => r.expiry === expiry);
+              if (!asked || asked.rthRows === 0) {
+                const pick = recorded.find((r) => r.rthRows > 0);
+                if (pick) {
                   usedExpiry = pick.expiry;
-                  didFallback = true;
+                  didFallback = pick.expiry !== expiry;
                 }
               }
             }
+            const slots = winMin > 0
+              ? anyExpiry
+                ? await libDb.getOptionStrikeGexSlotsWindowAny(Date.now() - winMin * 60 * 1000, symbol)
+                : await libDb.getOptionStrikeGexSlotsWindow(Date.now() - winMin * 60 * 1000, expiry, symbol)
+              : await libDb.getOptionStrikeGexSlots(date, usedExpiry, symbol);
             const bySlot = new Map();
             const spotBySlot = new Map();
             for (const r of slots) {
@@ -8730,6 +8741,22 @@ if (libDb) {
   // Events are deliberately NOT included — the chart's long-range read is where
   // the level sat. The price line is the 5-minute scanner spot (see below),
   // not the dxFeed 1-minute tape, which only reaches back 7 days.
+  //
+  // ── MANY SYMBOLS, ONE ROUND TRIP (2026-09-05) ──────────────────────────────
+  //   GET /api/walls-range?symbols=SPX,SPY,QQQ,…&days=1[&end=][&scope=&basis=]
+  //   → { ok, symbols, scope, basis, end, bySymbol: { SPX: [ …days ], … } }
+  //
+  // Feeds the Level Log's TICKER CARD RAIL, which draws the same chart at 124px
+  // for up to 24 symbols at once. Per symbol that was a log read plus a 1-minute
+  // candle read — 48 requests off one page load for a strip of thumbnails. The
+  // work here is the same two queries either way (both are already `= ANY`
+  // shaped underneath), so the whole rail costs ONE request and one 5-minute
+  // series per card instead of forty-eight.
+  //
+  // `symbol=` is untouched and still returns the exact `days: […]` body it
+  // always did — the multi form is a DIFFERENT key (`bySymbol`) rather than a
+  // reshaped one, so a client that has not been updated cannot half-read it and
+  // a client that HAS can tell an old server apart by the key being absent.
   register('/api/walls-range', {
     auth: 'subscriber', methods: ['GET'],
     async handler(req, res) {
@@ -8737,7 +8764,24 @@ if (libDb) {
         const walls = require('./walls-recorder');
         const variants = require('./scanner-variants');
         const u = new URL(req.url || '/', 'http://localhost');
-        const symbol = String(u.searchParams.get('symbol') || 'SPX').trim().toUpperCase();
+        // Same shape the board's ticker box accepts, plus room for a long root.
+        const SYM_RE = /^[A-Z][A-Z.]{0,11}$/;
+        const cleanSym = (v) => {
+          const s = String(v ?? '').trim().toUpperCase();
+          return SYM_RE.test(s) ? s : null;
+        };
+        // Capped at the rail's own ceiling (RAIL_MAX = 24) plus a little slack.
+        // The cap is on the REQUEST, not the response: a client asking for 500
+        // symbols is a bug or an attempt, and either way one query should not be
+        // asked to carry it.
+        const MAX_SYMBOLS = 30;
+        const listRaw = String(u.searchParams.get('symbols') || '');
+        const many = listRaw
+          ? [...new Set(listRaw.split(',').map(cleanSym).filter(Boolean))].slice(0, MAX_SYMBOLS)
+          : null;
+        const symbol = cleanSym(u.searchParams.get('symbol')) || 'SPX';
+        const multi = !!(many && many.length);
+        const symbols = multi ? many : [symbol];
         const days = Math.max(1, Math.min(260, Number(u.searchParams.get('days')) || 63));
         const endRaw = String(u.searchParams.get('end') || '');
         const end = /^\d{4}-\d{2}-\d{2}$/.test(endRaw) ? endRaw : etDateStr();
@@ -8748,31 +8792,42 @@ if (libDb) {
           send(res, 503, { ok: false, error: 'no DB' }, { 'Cache-Control': NO_STORE });
           return;
         }
-        // The newest `days` session dates this symbol wrote under this variant,
-        // then every level row on those dates. `date` is a DATE column, so it
-        // is rendered to text in SQL rather than letting pg hand back a JS Date
+        // The newest `days` session dates EACH symbol wrote under this variant,
+        // then every level row on those dates. ROW_NUMBER partitioned by symbol
+        // rather than a bare LIMIT, so "the last 5 sessions" is decided per
+        // symbol — a ticker that entered the universe on Wednesday gets its own
+        // three days, not the index's five. `date` is a DATE column, so it is
+        // rendered to text in SQL rather than letting pg hand back a JS Date
         // that would shift a day west of Greenwich.
         const { rows } = await pool.query(
           `WITH d AS (
-             SELECT DISTINCT date FROM walls_log
-              WHERE symbol = $1 AND date <= $2::date
-                AND expiry_scope = $3 AND basis = $4
-              ORDER BY date DESC LIMIT $5)
-           SELECT to_char(w.date, 'YYYY-MM-DD') AS date,
+             SELECT symbol, date,
+                    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+               FROM (SELECT DISTINCT symbol, date FROM walls_log
+                      WHERE symbol = ANY($1::text[]) AND date <= $2::date
+                        AND expiry_scope = $3 AND basis = $4) u)
+           SELECT w.symbol,
+                  to_char(w.date, 'YYYY-MM-DD') AS date,
                   w.slot, w.ts, w.level_type, w.strike, w.prev_strike, w.delta,
                   w.spot, w.reason, w.level_gex
              FROM walls_log w
-             JOIN d ON d.date = w.date
-            WHERE w.symbol = $1 AND w.expiry_scope = $3 AND w.basis = $4
-            ORDER BY w.date ASC, w.slot ASC, w.level_type ASC`,
-          [symbol, end, variant.scope, variant.basis, days],
+             JOIN d ON d.symbol = w.symbol AND d.date = w.date AND d.rn <= $5
+            WHERE w.symbol = ANY($1::text[]) AND w.expiry_scope = $3 AND w.basis = $4
+            ORDER BY w.symbol ASC, w.date ASC, w.slot ASC, w.level_type ASC`,
+          [symbols, end, variant.scope, variant.basis, days],
         );
-        const byDate = new Map();
+        // sym → (date → day). One map per symbol; the single-symbol response
+        // reads the one entry back out below, so both shapes share every line
+        // of assembly above and below this point.
+        const bySym = new Map(symbols.map((s) => [s, new Map()]));
         for (const r of rows) {
-          const { date, ...rest } = r;
+          const { symbol: sym, date, ...rest } = r;
+          const byDate = bySym.get(sym);
+          if (!byDate) continue;
           if (!byDate.has(date)) byDate.set(date, { date, log: [], spot: [] });
           byDate.get(date).log.push({ ...rest, at: walls.slotLabel(rest.slot) });
         }
+        const byDate = bySym.get(symbol) ?? new Map();
 
         // THE PRICE LINE — the 5-minute spot from scanner_snapshots, the same
         // sweep the walls were sampled from (walls-recorder reads its slots off
@@ -8783,20 +8838,26 @@ if (libDb) {
         // can put each sample on the same fractional-slot x the levels use.
         // scanner_snapshots.date is TEXT (walls_log.date is DATE) — hence the
         // text[] here and the to_char above.
-        const dates = [...byDate.keys()];
+        //
+        // One query for every symbol in the request. The date list is the UNION
+        // across them, which over-selects slightly when two symbols have
+        // different session sets; the per-symbol `byDate.get()` below throws
+        // those rows away, and one query that reads a few extra rows beats N
+        // queries that each read exactly the right ones.
+        const dates = [...new Set([...bySym.values()].flatMap((m) => [...m.keys()]))];
         if (dates.length) {
           try {
             const { rows: px } = await pool.query(
-              `SELECT date, ts, spot FROM scanner_snapshots
-                WHERE symbol = $1 AND date = ANY($2::text[]) AND spot > 0
+              `SELECT symbol, date, ts, spot FROM scanner_snapshots
+                WHERE symbol = ANY($1::text[]) AND date = ANY($2::text[]) AND spot > 0
                 ORDER BY ts ASC`,
-              [symbol, dates],
+              [symbols, dates],
             );
             const hm = new Intl.DateTimeFormat('en-US', {
               timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit',
             });
             for (const r of px) {
-              const day = byDate.get(r.date);
+              const day = bySym.get(r.symbol)?.get(r.date);
               if (!day) continue;
               const parts = hm.formatToParts(new Date(r.ts));
               const h = Number(parts.find((x) => x.type === 'hour')?.value);
@@ -8812,6 +8873,14 @@ if (libDb) {
           }
         }
 
+        if (multi) {
+          const out = {};
+          for (const s of symbols) out[s] = [...(bySym.get(s)?.values() ?? [])];
+          send(res, 200, {
+            ok: true, symbols, scope: variant.scope, basis: variant.basis, end, bySymbol: out,
+          }, { 'Cache-Control': NO_STORE });
+          return;
+        }
         send(res, 200, {
           ok: true, symbol, scope: variant.scope, basis: variant.basis, end,
           days: [...byDate.values()],

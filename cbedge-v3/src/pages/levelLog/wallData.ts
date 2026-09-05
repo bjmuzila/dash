@@ -239,6 +239,87 @@ function lastWeekdays(end: string, n: number): string[] {
 
 type RawDay = { date: string; log: WallLogRow[]; events: WallEventRow[] }
 
+// ── /api/walls-range — many sessions, one request ────────────────────────────
+
+/**
+ * ONE READ FOR A RANGE, and the price line that comes with it.
+ *
+ * The week view used to be `count + 3` log requests to find which days exist,
+ * then one 1-minute candle request per day that did — thirteen round trips for
+ * five slices. And the tape half kept coming back empty: dxFeed's 1m window is
+ * about seven days and `/proxy/candles-intraday` is best-effort, so four of the
+ * five sessions routinely fell through to the log's own spot column. That
+ * column is CHANGE-ONLY — a dozen points a day — which is what drew price as a
+ * staircase beside levels that are genuinely steps, on the one chart whose
+ * subject is telling those two apart.
+ *
+ * `/api/walls-range` answers both halves in one query: the newest N sessions
+ * this symbol actually recorded, each carrying `scanner_snapshots.spot` at 5
+ * minutes — the same sweep the walls themselves were sampled from, so it needs
+ * no dxFeed window and cannot be missing for a day the levels exist on. ~78
+ * points a session against a dozen.
+ *
+ * WHAT IT COSTS: 5 minutes instead of 1, and no `events`. Both are right for
+ * this view — five sessions across one card is ~380px per session, where a
+ * minute is a third of a pixel; and the events layer is a per-session reading
+ * (Part L's timeline, the reaction badges), not something the week view draws.
+ * TODAY still takes the 1-minute path below, where a minute IS worth a pixel
+ * and the tape is live.
+ *
+ * Returns null on anything unexpected — an older server, a 401, no rows — and
+ * the caller falls back to the per-session path, which still works.
+ */
+export function rangeDayToSlice(raw: unknown, expectDate?: string): DaySlice | null {
+  if (!raw || typeof raw !== 'object') return null
+  const d = raw as { date?: unknown; log?: unknown; spot?: unknown }
+  const date = String(d.date ?? '')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  // `days=1` returns the newest session ON OR BEFORE `end`, so a date with no
+  // recorded session comes back as the PREVIOUS one. A caller that asked about
+  // a specific day says so, and gets nothing rather than yesterday under
+  // today's heading.
+  if (expectDate && date !== expectDate) return null
+  const log: WallLogRow[] = Array.isArray(d.log) ? (d.log as WallLogRow[]) : []
+  const price: SpotSample[] = []
+  if (Array.isArray(d.spot)) {
+    for (const p of d.spot) {
+      if (!Array.isArray(p)) continue
+      const mins = Number(p[0])
+      const px = Number(p[1])
+      if (!Number.isFinite(mins) || !(px > 0)) continue
+      price.push({ mins, px })
+    }
+    price.sort((a, b) => a.mins - b.mins)
+  }
+  if (!log.length && !price.length) return null
+  // No events on this endpoint — see the note above. An empty array, not a
+  // missing key, so every consumer keeps reading `day.events` unconditionally.
+  return { date, log, events: [], price }
+}
+
+/** The range read for ONE symbol. null = unavailable; fall back. */
+async function fetchWallsRange(
+  symbol: string,
+  endDate: string,
+  count: number,
+  scope: ExpScope,
+  basis: GexBasis,
+): Promise<DaySlice[] | null> {
+  try {
+    const r = await fetch(
+      `/api/walls-range?symbol=${encodeURIComponent(symbol)}&days=${count}&end=${encodeURIComponent(endDate)}${variantQuery(scope, basis)}`,
+      { cache: 'no-store', credentials: 'same-origin' },
+    )
+    if (!r.ok) return null
+    const j = await r.json()
+    if (!j?.ok || !Array.isArray(j.days)) return null
+    const out = j.days.map((d: unknown) => rangeDayToSlice(d)).filter((d: DaySlice | null): d is DaySlice => d != null)
+    return out.length ? out : null
+  } catch {
+    return null
+  }
+}
+
 /** One day's change-only level log. Resolves null for a day with no rows. */
 async function fetchLog(
   symbol: string,
@@ -393,6 +474,17 @@ export function useWallDays(
         ])
         if (!alive) return
         setState({ days: day ? [{ ...day, price: tape }] : [], loading: false })
+        return
+      }
+
+      // ONE REQUEST FIRST. /api/walls-range returns the sessions that exist AND
+      // a real 5-minute price line for each — see fetchWallsRange. The old
+      // thirteen-request path below is now the fallback for a server that does
+      // not have the route, and it is kept working rather than deleted.
+      const ranged = await fetchWallsRange(symbol, endDate, count, scope, basis)
+      if (!alive) return
+      if (ranged) {
+        setState({ days: ranged, loading: false })
         return
       }
 

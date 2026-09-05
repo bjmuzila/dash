@@ -29,7 +29,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIsOwner } from '@/data/auth'
-import { fetchTape } from '@/pages/levelLog/wallData'
+import { fetchTape, rangeDayToSlice } from '@/pages/levelLog/wallData'
 import type {
   DaySlice,
   ExpScope,
@@ -393,6 +393,59 @@ export interface RailDays {
 
 const NO_RAIL_DAYS: RailDays = { days: new Map(), loading: false, loaded: false }
 
+/**
+ * THE WHOLE RAIL IN ONE REQUEST.
+ *
+ * `/api/walls-range?symbols=…&days=1` returns every listed symbol's log for the
+ * date AND a 5-minute price line for each — the same `scanner_snapshots.spot`
+ * sweep the walls themselves were sampled from. The per-symbol path below is
+ * two requests each (log + 1-minute candles), so a ten-card rail was twenty
+ * round trips and a twenty-four-card rail was forty-eight; this is one.
+ *
+ * 5-minute rather than 1-minute is the trade, and at MINI_H it is not a trade
+ * at all: a card is a couple of hundred pixels wide for a 390-minute session,
+ * so a 1-minute tape was drawing five points per pixel. What it buys back is
+ * the line EXISTING — dxFeed's 1m window is ~7 days and `/proxy/candles-
+ * intraday` is best-effort per symbol, so on any past date most cards were
+ * falling through to the log's dozen change-only spot stamps anyway.
+ *
+ * Returns null when the route is absent or answers in the single-symbol shape
+ * (an older server), and the caller falls back to the per-symbol waves.
+ */
+async function fetchRailRange(
+  symbols: string[],
+  date: string,
+  scope: ExpScope,
+  basis: GexBasis,
+): Promise<Map<string, DaySlice[]> | null> {
+  try {
+    const r = await fetch(
+      `/api/walls-range?symbols=${encodeURIComponent(symbols.join(','))}&days=1&end=${encodeURIComponent(date)}&scope=${scope}&basis=${basis}`,
+      { cache: 'no-store', credentials: 'same-origin' },
+    )
+    if (!r.ok) return null
+    const j = await r.json()
+    // `bySymbol` is the multi-symbol key and nothing else returns it, so its
+    // absence IS the "this server does not support it" signal.
+    if (!j?.ok || !j.bySymbol || typeof j.bySymbol !== 'object') return null
+    const out = new Map<string, DaySlice[]>()
+    for (const sym of symbols) {
+      const rows = (j.bySymbol as Record<string, unknown>)[sym]
+      if (!Array.isArray(rows)) continue
+      // `expectDate` — days=1 hands back the newest session on or BEFORE the
+      // date asked for, and a card must say "no session recorded" rather than
+      // draw yesterday under today's heading.
+      const slice = rows
+        .map((d) => rangeDayToSlice(d, date))
+        .filter((d): d is DaySlice => d != null)
+      if (slice.length) out.set(sym, slice)
+    }
+    return out
+  } catch {
+    return null
+  }
+}
+
 async function fetchRailDay(
   symbol: string,
   date: string,
@@ -442,6 +495,16 @@ export function useRailDays(
     let alive = true
     setState((prev) => ({ days: prev.days, loading: true, loaded: prev.loaded }))
     ;(async () => {
+      // ONE REQUEST FIRST — the whole rail, logs and price lines together.
+      // See fetchRailRange. Everything below is the fallback for a server that
+      // does not have the multi-symbol form, kept working rather than deleted.
+      const ranged = await fetchRailRange(list, date, scope, basis)
+      if (!alive) return
+      if (ranged) {
+        setState({ days: ranged, loading: false, loaded: true })
+        return
+      }
+
       const out = new Map<string, DaySlice[]>()
       for (let i = 0; i < list.length; i += RAIL_FETCH_CONC) {
         const wave = list.slice(i, i + RAIL_FETCH_CONC)

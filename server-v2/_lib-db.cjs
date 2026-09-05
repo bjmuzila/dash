@@ -4482,23 +4482,45 @@ async function getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp, symbol
  *
  * The answer is not to merge expiries (that is what anyExpiry=1 does, and it is
  * ~100x wrong here — see useIntradayLadder's header). It is to ask the session
- * which single expiry IT was recorded under. Ordered by row count so the
- * session's own front board wins over any incidental second expiry, then by
- * expiry so the tie-break is stable and prefers the nearer one.
+ * which single expiry IT was recorded under.
+ *
+ * ── AND "RECORDED" MEANS RECORDED DURING THE CASH SESSION ──────────────────
+ * `rthRows` is the count inside 09:30-16:00 ET, and it is what the caller ranks
+ * on — because a bare row count says the wrong thing on exactly the symbol this
+ * was written for. On SPX the front expiry rolls AT THE CLOSE, so the recorder
+ * spends 16:05-16:25 writing the NEXT expiry under the day that just ended:
+ * (2026-09-04, 2026-09-08) is a real, populated board — ~130KB of it — made
+ * entirely of post-close columns. A "does this expiry have rows" test passes on
+ * it, hands back twenty minutes of after-hours ladder, and the recap's own RTH
+ * window then drops every column and reports the session as unrecorded. Which
+ * is why this looked broken on SPX alone: every other name's front expiry is a
+ * weekly that does not roll at 16:00, so its rows were inside RTH already.
+ *
+ * Ordered by RTH rows, then total rows, then expiry, so the tie-break is stable
+ * and prefers the nearer board.
  */
 async function getGexHistoryExpiriesForDate(date, symbol) {
   const pool = await getDb();
   const result = await pool.query(
-    `SELECT expiry, COUNT(*)::int AS row_count
+    `SELECT expiry,
+            COUNT(*)::int AS row_count,
+            COUNT(*) FILTER (
+              WHERE (to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York')::time
+                    BETWEEN TIME '09:30' AND TIME '16:00'
+            )::int AS rth_rows
        FROM option_strike_gex_history
       WHERE date = $1
         AND symbol = $2
       GROUP BY expiry
-      ORDER BY row_count DESC, expiry ASC`,
+      ORDER BY rth_rows DESC, row_count DESC, expiry ASC`,
     [date, normGexSymbol(symbol)]
   );
   return result.rows
-    .map((row) => ({ expiry: String(row.expiry ?? ''), rows: Number(row.row_count ?? 0) }))
+    .map((row) => ({
+      expiry: String(row.expiry ?? ''),
+      rows: Number(row.row_count ?? 0),
+      rthRows: Number(row.rth_rows ?? 0),
+    }))
     .filter((r) => r.expiry && r.rows > 0);
 }
 async function getOptionStrikeGexSlots(date, expiry, symbol) {

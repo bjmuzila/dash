@@ -1236,7 +1236,7 @@ export default function PostMarketTab(p: PostMarketProps) {
       return `${asked}. The API answering this is an older build than the page: it does not accept the expiry fallback, so it never tried the expiry this session was actually recorded under. ${needs}`;
     }
     if (ladderDiag.recordedExpiries.length) {
-      return `${asked}, and the rows this date DOES hold (${ladderDiag.recordedExpiries.join(", ")}) could not be read either. ${needs}`;
+      return `${asked}. The recorder holds this date under ${ladderDiag.recordedExpiries.join(", ")}, but none of those boards covers the 09:30-16:00 window this recap reads. ${needs}`;
     }
     return `${asked}, and the recorder holds no rows at all for that date. Retention keeps about two sessions, so an older date legitimately has nothing. ${needs}`;
   })();

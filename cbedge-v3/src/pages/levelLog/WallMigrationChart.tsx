@@ -565,9 +565,32 @@ export function WallMigrationChart({
   /** x of the last written slot on the LIVE day, only when it runs past it. */
   const heldFrom = last.lastWrite < last.lastSlot ? x(N - 1, last.lastWrite) : null
 
-  const totalMins = segs.reduce((n, seg) => n + (seg.dense ? seg.spotDrawn.length : 0), 0)
+  const totalPts = segs.reduce((n, seg) => n + (seg.dense ? seg.spotDrawn.length : 0), 0)
   const totalCaps = segs.reduce((n, seg) => n + seg.spotPts.length, 0)
   const anyDense = segs.some((seg) => seg.dense)
+
+  /**
+   * HOW OFTEN THE TAPE SAMPLES, in minutes, read off the data rather than
+   * assumed. The caption used to print the point count as "N min of price",
+   * which was true only while every tape was the dxFeed 1-minute one. The week
+   * view now takes its price from /api/walls-range — `scanner_snapshots.spot`
+   * at 5 minutes — so a 78-point session would have read as 78 minutes of a
+   * 390-minute day.
+   *
+   * `s` is a FRACTIONAL SLOT and slots 1…26 are 15 minutes apart, so a gap in
+   * slots × 15 is the gap in minutes. Measured across the middle of the first
+   * dense day, past the 09:29→09:45 slot 0 seam, which is its own 16-minute
+   * scale and would otherwise be the number that got measured.
+   */
+  const cadenceMin = (() => {
+    const pts = segs.find((s) => s.dense)?.spotDrawn
+    if (!pts || pts.length < 4) return null
+    const a = pts[Math.floor(pts.length / 2)]
+    const b = pts[Math.floor(pts.length / 2) + 1]
+    if (!a || !b) return null
+    const m = Math.round((b.s - a.s) * 15)
+    return m >= 1 && m <= 60 ? m : null
+  })()
 
   /**
    * A small square swatch, the level in sentence case, and the strike it
@@ -621,7 +644,9 @@ export function WallMigrationChart({
         <span className="tabular font-mono text-xs text-muted">
           {N > 1 ? `${N} sessions · ` : ''}recorded levels ·{' '}
           {anyDense
-            ? `${totalMins} min of price`
+            ? cadenceMin
+              ? `${totalPts.toLocaleString()} × ${cadenceMin}m price`
+              : `${totalPts.toLocaleString()} price points`
             : `${totalCaps} spot capture${totalCaps === 1 ? '' : 's'}`}
         </span>
         {onExpand ? (

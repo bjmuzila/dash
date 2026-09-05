@@ -1,5 +1,105 @@
 # Changelog
 
+## 2026-09-05 - The expiry fallback tests CASH-SESSION coverage, not row count - which is why SPX alone was broken (`server-v2/_lib-db.cjs`, `server-v2/api-router.js`, both copies of `premarket/PostMarketTab.tsx`)
+
+With the backend deployed the recap STILL said nothing was recorded for
+2026-09-04 - and the network tab said the request came back with **134 kB**. So
+rows existed, the fallback never fired, and the client threw every column away.
+
+**SPX's front expiry rolls at the close.** From 16:05-16:25 ET the recorder is
+writing the NEXT expiry under the day that just ended, so
+`(2026-09-04, 2026-09-08)` is a real, populated board made ENTIRELY of
+post-close columns. The fallback's test was `!slots.length` - row count - which
+that board passes. The route handed back twenty minutes of after-hours ladder,
+`useIntradayLadder`'s own 09:30-16:00 window dropped all of it, and the tab
+reported the session as unrecorded.
+
+That also explains the shape of the report - "I see this on every other page but
+not on the SPX page". Every other MAIN name's front expiry is a weekly that does
+not roll at 16:00, so its rows were inside RTH already and the first query was
+right by luck.
+
+`getGexHistoryExpiriesForDate` now also returns `rthRows` - the count inside
+09:30-16:00 ET, computed in SQL - and orders on it. The route resolves the
+expiry BEFORE the slots query rather than after an empty one: it keeps the
+requested expiry only when that expiry actually covers the cash session, else
+takes the one with the most RTH coverage. The slots query still runs exactly
+once on the date path; the extra aggregate sits inside the same 30s cache entry.
+
+The empty note's middle branch now says what that case really is - the recorder
+holds the date, but none of its boards covers the window the recap reads.
+
+## 2026-09-05 - Level Log: one request per range, and a price line that is actually there
+
+The 5-session view and the ticker rail were both drawing price from whatever
+scraps arrived. The week view fired `count + 3` log reads to discover which days
+existed, then one dxFeed 1-minute candle read per day - and the tape half kept
+coming back empty, because dxFeed's 1m window is ~7 days and
+`/proxy/candles-intraday` is best-effort. Four of five sessions routinely fell
+through to `walls_log.spot`, which is CHANGE-ONLY: a dozen points a day, drawn
+as a staircase, on the one chart whose whole job is telling a level that HOLDS
+from price that TRAVELS.
+
+### Server - `/api/walls-range` now answers for many symbols at once
+
+`server-v2/api-router.js`
+
+- New optional `symbols=SPX,SPY,QQQ,...` (max 30) beside the existing
+  `symbol=`. Returns `bySymbol: { SYM: [...days] }`.
+- `symbol=` is untouched and still returns the identical `days: [...]` body -
+  the multi form is a DIFFERENT key rather than a reshaped one, so an old
+  client cannot half-read it and a new client can detect an old server by
+  `bySymbol` being absent.
+- The date window is now `ROW_NUMBER() OVER (PARTITION BY symbol ...)` instead
+  of a bare LIMIT, so "the last N sessions" is decided PER SYMBOL: a ticker
+  that entered the universe on Wednesday gets its own three days rather than
+  the index's five.
+- Both queries (levels, and the 5-minute `scanner_snapshots.spot`) were already
+  `= ANY` shaped underneath, so the whole rail costs the same two queries one
+  symbol used to.
+
+### Client
+
+- `cbedge-v3/src/pages/levelLog/wallData.ts` - new `fetchWallsRange()` +
+  `rangeDayToSlice()`. The 5-session view is now ONE request carrying both the
+  sessions that exist and a real 5-minute line for each. The thirteen-request
+  path is kept as the fallback for a server without the route.
+- `cbedge-v3/src/pages/levelLog/railStore.ts` - new `fetchRailRange()`: the
+  WHOLE rail in one request. It was two per symbol (log + 1m candles), so ten
+  cards were twenty round trips and a full rail was forty-eight. The per-symbol
+  waves remain as the fallback.
+- `days=1` returns the newest session on or BEFORE the date asked for, so
+  `rangeDayToSlice` takes an `expectDate`: a card says "no session recorded"
+  rather than drawing yesterday under today's heading.
+
+### What it costs, and why that is the right trade
+
+- 5-minute instead of 1-minute on the week view and the rail. Five sessions
+  across one card is ~380px per session and a rail card is a couple of hundred
+  pixels for a 390-minute day - a 1-minute tape was drawing several points per
+  pixel. What it buys back is the line EXISTING on every session instead of
+  one, because this series comes from the same sweep the walls do and cannot be
+  missing for a day the levels exist on.
+- No `events` on the range endpoint. The events layer is a per-session reading
+  (the timeline, the reaction badges), not something the week view or a 124px
+  card draws. `events: []` is always present, so every consumer keeps reading
+  `day.events` unconditionally.
+- TODAY is unchanged: the single-session view still takes the dxFeed 1-minute
+  tape, where a minute is worth a pixel and the data is live.
+
+### Caption
+
+`WallMigrationChart` printed the point count as "N min of price", which was only
+true while every tape was 1-minute - a 78-point 5-minute session would have read
+as 78 minutes of a 390-minute day. It now measures the cadence off the data
+(fractional-slot gap x 15, sampled mid-session to avoid the 09:29 seam) and
+prints e.g. `390 x 5m price` / `186 x 1m price`, falling back to "N price
+points" when it cannot tell.
+
+No proxy code changed - `/proxy/*` handlers, the auth gate and the recorders are
+untouched; this is one api-router route plus client reads.
+
+
 ## 2026-09-05 - Analytics: one CB Edge 3.0 card header, old logo gone, no grey type (`components/pages/Analytics.tsx`)
 
 Three changes to the Analytics page, all in the same file.
