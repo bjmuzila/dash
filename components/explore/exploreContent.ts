@@ -26,6 +26,50 @@
 
 export type TeaserStat = { label: string; value: string; tone?: "cyan" | "green" | "red" | "purple" };
 
+/**
+ * A REAL screen, transcribed as words and numbers.
+ *
+ * `teaserStats` is four scalars in a 2x2 — enough to say "there are numbers
+ * here", not enough to say what the page IS. For the two scanner pages that
+ * gap is the whole problem: nobody knows what a "GEX change scanner" puts on
+ * screen, and four tiles do not tell them.
+ *
+ * So these entries carry the actual boards: every column header, in order, and
+ * a handful of real rows off them. Deliberately a TABLE and not a screenshot —
+ * a screenshot of a dashboard is unreadable on a phone, goes stale the day the
+ * layout moves, is invisible to search, and cannot be read by a screen reader.
+ * A table is all four of those things fixed, and it is honest in the one way
+ * that matters: a reader can see the exact columns they will get.
+ *
+ * RULES for adding one:
+ *   • Transcribe. Every column name must be the one actually rendered, in the
+ *     order it is rendered. If a header changes on the page, change it here.
+ *   • Rows are a real session, and they include the losers if the board has
+ *     losers. `footnote` is where you say what the reader is NOT being shown —
+ *     a page whose pitch is "we publish the misses" cannot quietly ship five
+ *     A+ rows and leave it at that.
+ *   • Numbers are strings. They are transcribed, never computed and never
+ *     re-formatted; a value here is a quotation.
+ */
+export type ExploreExample = {
+  /** Heading over the block. Name the screen, not the feature. */
+  title: string;
+  /** One line saying what the reader is looking at. */
+  note?: string;
+  /** The board's own header strip, as key/value pairs. */
+  summary?: { k: string; v: string }[];
+  /** Column headers, in the order the page renders them. */
+  columns: string[];
+  /** Rows, same order and arity as `columns`. */
+  rows: string[][];
+  /** 0-based column indexes rendered right-aligned in the mono face. */
+  numeric?: number[];
+  /** 0-based column indexes rendered as a status/grade chip. */
+  pills?: number[];
+  /** What this board is NOT showing. Required whenever the rows are a slice. */
+  footnote?: string;
+};
+
 export type ExploreEntry = {
   slug: string;
   /** Short title used on the landing card + page header. */
@@ -40,6 +84,8 @@ export type ExploreEntry = {
   teaserStats: TeaserStat[];
   /** Label for the preview block. */
   teaserLabel: string;
+  /** Real boards from the page, transcribed. See ExploreExample. */
+  examples?: ExploreExample[];
 };
 
 export const EXPLORE: Record<string, ExploreEntry> = {
@@ -155,10 +201,60 @@ export const EXPLORE: Record<string, ExploreEntry> = {
     ],
     teaserLabel: "Sample ranked board",
     teaserStats: [
-      { label: "Top change", value: "NVDA 185C", tone: "cyan" },
-      { label: "Δ Gamma", value: "+$412M", tone: "green" },
-      { label: "Cards ranked", value: "65", tone: "purple" },
-      { label: "Scorecard", value: "Live · peak so far", tone: "cyan" },
+      { label: "Picks graded", value: "35", tone: "cyan" },
+      { label: "Avg peak", value: "+66%", tone: "green" },
+      { label: "Closed green", value: "19 of 35", tone: "cyan" },
+      { label: "Never green", value: "3 (9%)", tone: "red" },
+    ],
+    examples: [
+      {
+        title: "The scorecard — end of day, final",
+        note: "Every pick the scanner flagged that session, graded A+ through F, in one table. This is the top of a real board.",
+        summary: [
+          { k: "Picks", v: "35" },
+          { k: "Filter", v: "entry > $0.50 · |Δ| ≥ $500K · |% vs open| ≥ 50%" },
+          { k: "Avg peak", v: "+66%" },
+          { k: "≥ +25%", v: "17" },
+          { k: "≥ +50%", v: "13" },
+          { k: "≥ +100%", v: "9" },
+          { k: "Closed green", v: "19" },
+          { k: "Grades", v: "A+ 8 · A 5 · B 4 · C 6 · D 5 · F 7" },
+          { k: "Avg score", v: "57 / 100" },
+          { k: "Never green", v: "3 (9%)" },
+        ],
+        columns: ["Grade", "Symbol", "Contract", "Flagged", "Entry", "Peak", "Peak at", "Peak %", "$/ct", "Close", "Close %", "Low %"],
+        numeric: [4, 5, 7, 8, 9, 10, 11],
+        pills: [0],
+        rows: [
+          ["A+", "DELL", "530C 2026-09-04", "10:48 AM", "2.13", "10.75", "12:03 PM", "+406%", "+$863", "2.68", "+26%", "−8%"],
+          ["A+", "AVGO", "370C 2026-09-11", "10:48 AM", "1.21", "4.22", "3:26 PM", "+249%", "+$301", "3.45", "+185%", "+0%"],
+          ["A+", "SNDK", "1,595C 2026-09-04", "10:45 AM", "5.70", "18.10", "2:54 PM", "+218%", "+$1240", "10.20", "+79%", "−1%"],
+          ["A+", "MU", "980C 2026-09-04", "10:44 AM", "1.66", "4.95", "11:03 AM", "+198%", "+$329", "4.70", "+183%", "+0%"],
+          ["A+", "NBIS", "215C 2026-09-04", "10:50 AM", "1.03", "2.69", "3:30 PM", "+160%", "+$166", "2.15", "+108%", "+0%"],
+        ],
+        footnote:
+          "These are the first five rows of thirty-five. The same table carries the C, D and F rows and the three that never went green — the header counts them out loud (avg 57/100, never green 3) precisely so a top-of-board screenshot cannot be mistaken for the whole board. Low % is the worst drawdown before the peak, which is the column that decides whether a +400% print was tradeable.",
+      },
+      {
+        title: "One pick, opened",
+        note: "Click any row and it opens its own card: the fill, the high, the time of both, and the intraday line between them.",
+        columns: ["Field", "What the card shows"],
+        rows: [
+          ["Contract", "DELL 530C · expires 2026-09-04"],
+          ["Flagged", "Sep 3 · 10:48 AM ET"],
+          ["Grade", "A+"],
+          ["Peak", "▲ 405.9%"],
+          ["In", "2.13 at 10:48 AM"],
+          ["High", "10.75 at 12:03 PM"],
+          ["Per contract", "+$863"],
+          ["Now", "2.68 · +26%"],
+          ["Chart", "1D intraday line, 10:48 AM → 3:59 PM, range 1.24 → 11.45"],
+          ["Chart toggle", "Price (mark) · or Net GEX for the same window"],
+          ["Basis", "price (mark) · RTH only"],
+        ],
+        footnote:
+          "The line is the contract's own mark through the cash session, so the entry, the peak and everything the position did in between are one picture rather than three numbers in a row.",
+      },
     ],
   },
   "watch-scanner": {
@@ -179,10 +275,44 @@ export const EXPLORE: Record<string, ExploreEntry> = {
     ],
     teaserLabel: "Sample watch list",
     teaserStats: [
-      { label: "Flagged today", value: "12", tone: "cyan" },
-      { label: "Furthest OTM flag", value: "+9.4%", tone: "purple" },
-      { label: "Resolved (7d)", value: "31", tone: "cyan" },
-      { label: "Still open", value: "8", tone: "green" },
+      { label: "Opened that day", value: "3", tone: "cyan" },
+      { label: "Touched", value: "1", tone: "green" },
+      { label: "Expired", value: "0", tone: "purple" },
+      { label: "Typical OTM at flag", value: "15–19%", tone: "cyan" },
+    ],
+    examples: [
+      {
+        title: "Opened — flagged for the first time on this date",
+        note: "A real day off the results-by-day view: 2026-09-02, three opened, one touched, none expired.",
+        summary: [
+          { k: "Date", v: "2026-09-02" },
+          { k: "Opened", v: "3" },
+          { k: "Touched", v: "1" },
+          { k: "Expired", v: "0" },
+        ],
+        columns: ["Symbol", "Strike", "Expiry", "Flagged", "Flagged spot", "OTM at flag", "Closest", "Status"],
+        numeric: [1, 4, 5, 6],
+        pills: [7],
+        rows: [
+          ["RGTI", "$17", "2026-09-18", "2026-09-02", "$14.65", "16%", "9.1%", "OPEN"],
+          ["OPEN", "$3.5", "2026-09-04", "2026-09-02", "$3.04", "15%", "7.1%", "OPEN"],
+          ["CRCL", "$100", "2026-09-18", "2026-09-02", "$86.36", "16%", "0.0%", "TOUCHED 2026-09-03"],
+        ],
+        footnote:
+          "OTM at flag is how far away the strike was the moment it was flagged — these are 15–16% out, which is the whole point. Closest is how near spot has come since; 0.0% means it got there. CRCL was flagged on the 2nd at 16% out and touched $100 the next day.",
+      },
+      {
+        title: "Touched — spot reached the flagged strike on this date",
+        note: "The same day, read the other way: what resolved today, including flags opened weeks earlier.",
+        columns: ["Symbol", "Strike", "Expiry", "Flagged", "Flagged spot", "OTM at flag", "Closest", "Status"],
+        numeric: [1, 4, 5, 6],
+        pills: [7],
+        rows: [
+          ["FRMI", "$4.5", "2026-09-11", "2026-08-24", "$5.57", "19%", "0.0%", "TOUCHED 2026-09-02"],
+        ],
+        footnote:
+          "Flagged 2026-08-24, nine days before it resolved. A flag stays on the board until it touches or its expiry passes — the ones that never get there stay in the count instead of being quietly dropped.",
+      },
     ],
   },
   "estimated-moves": {

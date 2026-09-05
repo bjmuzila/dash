@@ -51,6 +51,7 @@
 import { useMemo, useState } from 'react'
 import { ES_CANDLE_UP, LEVEL_COLORS, T, alpha } from '@/design/theme'
 import {
+  DENSE_MIN_SAMPLES,
   type DaySlice,
   type LogView,
   VIEW_LEVELS,
@@ -354,7 +355,7 @@ export function WallMigrationChart({
        * missing its tape does not downgrade the other four.
        */
       const tape = tapeAll.filter((p) => p.s <= lastSlot)
-      const dense = tape.length >= 20
+      const dense = tape.length >= DENSE_MIN_SAMPLES
       const spotDrawn = dense ? tape : spotPts.map((p) => ({ s: p.s, v: p.v }))
 
       if (!series.size && !spotDrawn.length) continue

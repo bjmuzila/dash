@@ -297,6 +297,17 @@ export function rangeDayToSlice(raw: unknown, expectDate?: string): DaySlice | n
   return { date, log, events: [], price }
 }
 
+/**
+ * How many price samples a day needs before the chart calls it a TAPE rather
+ * than a handful of captures. Below this the line is drawn from the log's own
+ * change-only spot column and reads as price moving in half-hour steps, so it
+ * is also the threshold at which the single-session view goes looking for a
+ * better series (see useWallDays).
+ *
+ * Lives here rather than in the chart because two files now test against it.
+ */
+export const DENSE_MIN_SAMPLES = 20
+
 /** The range read for ONE symbol. null = unavailable; fall back. */
 async function fetchWallsRange(
   symbol: string,
@@ -473,7 +484,38 @@ export function useWallDays(
           fetchTape(symbol, endDate),
         ])
         if (!alive) return
-        setState({ days: day ? [{ ...day, price: tape }] : [], loading: false })
+
+        /**
+         * WHEN THE 1-MINUTE TAPE DOES NOT COME.
+         *
+         * `/proxy/candles-intraday` is a short-lived dxLink candle
+         * subscription, and it is reliable for SPX and thin-to-empty for plenty
+         * of single names — AAPL on 2026-09-05 came back with nothing while its
+         * rail card, which reads the 5-minute series, drew a full session. The
+         * old behaviour then fell all the way through to `walls_log.spot`: 14
+         * change-only captures drawn as a staircase, on the big card, for a
+         * symbol whose thumbnail two inches above it looked correct.
+         *
+         * So a thin tape now asks /api/walls-range for the SAME 5-minute
+         * `scanner_snapshots.spot` series the rail and the week view use. It
+         * cannot be missing for a day the levels exist on, because it is the
+         * sweep the levels were sampled from.
+         *
+         * SEQUENTIAL ON PURPOSE, and not a waterfall in the sense
+         * non-negotiable 3 means: this is not something the view needs at
+         * entry, it is what it needs when the first answer was empty. Firing it
+         * unconditionally would put a third request on every SPX load — the
+         * case that already works — to save a round trip in the case that does
+         * not.
+         */
+        let price = tape
+        if (tape.length < DENSE_MIN_SAMPLES) {
+          const ranged = await fetchWallsRange(symbol, endDate, 1, scope, basis)
+          if (!alive) return
+          const same = ranged?.find((d) => d.date === endDate)
+          if (same && same.price.length > price.length) price = same.price
+        }
+        setState({ days: day ? [{ ...day, price }] : [], loading: false })
         return
       }
 

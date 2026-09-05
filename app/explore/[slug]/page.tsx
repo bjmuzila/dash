@@ -8,7 +8,7 @@ import {
   V3_TEXT,
   v3Chip,
 } from "@/components/landing/v3Theme";
-import { EXPLORE, EXPLORE_SLUGS, type TeaserStat } from "@/components/explore/exploreContent";
+import { EXPLORE, EXPLORE_SLUGS, type ExploreExample, type TeaserStat } from "@/components/explore/exploreContent";
 import PublicNav from "@/components/landing/PublicNav";
 import NetDriftExample from "@/components/explore/NetDriftExample";
 import Confidence7dTracker from "@/components/explore/Confidence7dTracker";
@@ -156,6 +156,11 @@ export default async function ExplorePage({
           </section>
         </div>
 
+        {/* THE REAL BOARDS, transcribed. Only the two scanner pages carry these
+            today — see ExploreExample in exploreContent.ts for why they are
+            tables and not screenshots. */}
+        {entry.examples?.map((ex) => <ExampleBoard key={ex.title} ex={ex} />)}
+
         {/* Delayed-LIVE real-data view (gex, estimated-moves, initial-balance).
             flow + confidence-score render their own richer live blocks below. */}
         <DelayedLiveView slug={slug} />
@@ -214,8 +219,166 @@ export default async function ExplorePage({
   );
 }
 
+/* ── the transcribed board ────────────────────────────────────────────────── */
+
+/**
+ * Grades and statuses are the two columns that carry meaning in COLOUR on the
+ * real screen, so they carry it here too. Everything else is white — see the v3
+ * THEME note above.
+ *
+ * Matched on the leading token, not on equality: the watch board's status cell
+ * is "TOUCHED 2026-09-03", a value with a date glued to it.
+ */
+function pillTone(v: string): string {
+  const t = v.trim().toUpperCase();
+  if (t.startsWith("A")) return V3.up;
+  if (t.startsWith("B") || t.startsWith("C")) return V3.warn;
+  if (t.startsWith("D") || t.startsWith("F")) return V3.down;
+  if (t.startsWith("TOUCHED")) return V3.up;
+  if (t.startsWith("OPEN")) return V3.levelCw;
+  if (t.startsWith("EXPIRED")) return V3.flat;
+  return V3.fg;
+}
+
+function ExampleBoard({ ex }: { ex: ExploreExample }) {
+  const numeric = new Set(ex.numeric ?? []);
+  const pills = new Set(ex.pills ?? []);
+  return (
+    <section style={boardCard}>
+      <div style={boardHead}>
+        <span style={{ fontSize: V3_TEXT.base, fontWeight: 600, color: V3.fg }}>{ex.title}</span>
+        <span style={previewTag}>From the live page</span>
+      </div>
+
+      {ex.note && (
+        <p style={{ margin: 0, padding: "12px 14px 0", color: V3.fg, fontSize: V3_TEXT.body, lineHeight: 1.6 }}>
+          {ex.note}
+        </p>
+      )}
+
+      {/* The board's own header strip. Wraps rather than scrolls — these are
+          short pairs and a scrolling summary hides the count that matters. */}
+      {ex.summary && (
+        <div style={summaryStrip}>
+          {ex.summary.map((kv) => (
+            <span key={kv.k} style={summaryChip}>
+              <span style={{ fontFamily: V3_MONO, fontSize: V3_TEXT.xs, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                {kv.k}
+              </span>
+              <b style={{ fontWeight: 700 }}>{kv.v}</b>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Twelve columns do not fit a phone and never will. The table scrolls
+          inside its own box so the PAGE never scrolls sideways. */}
+      <div style={{ overflowX: "auto", padding: "12px 14px 0" }}>
+        <table style={boardTable}>
+          <thead>
+            <tr>
+              {ex.columns.map((c, i) => (
+                <th key={c} style={{ ...boardTh, textAlign: numeric.has(i) ? "right" : "left" }}>{c}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {ex.rows.map((row, ri) => (
+              <tr key={ri}>
+                {row.map((cell, ci) => (
+                  <td
+                    key={ci}
+                    style={{
+                      ...boardTd,
+                      textAlign: numeric.has(ci) ? "right" : "left",
+                      fontFamily: numeric.has(ci) ? V3_MONO : undefined,
+                      fontWeight: ci === 0 && !pills.has(0) ? 700 : undefined,
+                      whiteSpace: numeric.has(ci) || ci === 0 ? "nowrap" : undefined,
+                    }}
+                  >
+                    {pills.has(ci) ? <span style={v3Chip(pillTone(cell))}>{cell}</span> : cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {ex.footnote && (
+        <p style={{ margin: 0, padding: "12px 14px 14px", color: V3.fg, fontSize: V3_TEXT.base, lineHeight: 1.6 }}>
+          {ex.footnote}
+        </p>
+      )}
+    </section>
+  );
+}
+
 /* ── styles ───────────────────────────────────────────────────────────── */
 /* Colours: V3 only. No literal may appear below — see the header note. */
+
+const boardCard: React.CSSProperties = {
+  marginTop: "clamp(20px,3.4vw,32px)",
+  background: V3.surface,
+  border: `1px solid ${V3.line}`,
+  borderRadius: V3_RADIUS.md,
+  overflow: "hidden",
+};
+
+const boardHead: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  flexWrap: "wrap",
+  padding: "10px 14px",
+  borderBottom: `1px solid ${V3.line}`,
+  background: V3.surface2,
+};
+
+const summaryStrip: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+  padding: "12px 14px 0",
+};
+
+const summaryChip: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "baseline",
+  gap: 7,
+  padding: "5px 10px",
+  borderRadius: V3_RADIUS.sm,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface2,
+  color: V3.fg,
+  fontSize: V3_TEXT.base,
+};
+
+const boardTable: React.CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontSize: V3_TEXT.base,
+};
+
+const boardTh: React.CSSProperties = {
+  fontFamily: V3_MONO,
+  fontSize: V3_TEXT.xs,
+  fontWeight: 700,
+  letterSpacing: "0.1em",
+  textTransform: "uppercase",
+  color: V3.fg,
+  padding: "8px 10px",
+  borderBottom: `1px solid ${V3.line}`,
+  whiteSpace: "nowrap",
+};
+
+const boardTd: React.CSSProperties = {
+  padding: "9px 10px",
+  borderBottom: `1px solid ${V3.line}`,
+  color: V3.fg,
+  verticalAlign: "top",
+};
 
 const demoBlock: React.CSSProperties = {
   marginBottom: 28,

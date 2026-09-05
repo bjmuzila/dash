@@ -615,8 +615,31 @@ async function handleProxyRest(req, res) {
     const fromTime = Number.isFinite(fromMsRaw) && fromMsRaw > floor
       ? fromMsRaw
       : Date.now() - daysBack * 86_400_000;
-    fetchIntradayCandles(symbol, interval, fromTime)
-      .then((candles) => sendJson(res, 200, { symbol, interval, candles }))
+    // ── WHY THE EXPLICIT TIMEOUTS (2026-09-05) ──────────────────────────────
+    // This was the ONE caller of fetchIntradayCandles running on the module
+    // defaults (800ms quiet / 7000ms hard). Every other one already raises
+    // them and says why in a comment: the option-history pull uses 900/9000
+    // "because a thin far-OTM contract dribbles its snapshot out slowly", and
+    // /api/snapshots/etf-candles uses 1200/20000.
+    //
+    // The cap RESOLVES rather than throwing, so a ~390-bar session that had not
+    // finished replaying in seven seconds came back partial or empty and read
+    // as "this symbol did not trade". SPX is the fastest thing on the feed and
+    // always beat the cap; single names did not — which is how the Level Log
+    // drew a full 1-minute line for SPX and fell back to fourteen change-only
+    // spot captures for AAPL on the same afternoon.
+    //
+    // 15s is the ceiling, not the cost: a symbol that answers in 400ms still
+    // answers in 400ms, because the quiet gap is what ends a healthy pull. The
+    // client fires this in parallel with its log read and draws without it, so
+    // a slow symbol delays one line, not a page.
+    fetchIntradayCandles(symbol, interval, fromTime, { quietMs: 1200, hardMs: 15_000 })
+      // `truncated` is set when the cap ended the pull — see candle-history's
+      // markTruncated. Reported so a short line can be told from a quiet one
+      // without reading the server log.
+      .then((candles) => sendJson(res, 200, {
+        symbol, interval, candles, truncated: !!candles.truncated,
+      }))
       .catch((e) => sendJson(res, 502, { error: 'candles-intraday failed', detail: String(e?.message || e), symbol }));
     return true;
   }

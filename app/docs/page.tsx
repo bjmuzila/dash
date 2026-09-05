@@ -608,55 +608,6 @@ function EsCandlesExample() {
   );
 }
 
-/** ICT page: candles with a Fair Value Gap box, a bullish Order Block, a swept
- *  liquidity level (BSL) and a CHOCH structure-break tag. */
-function IctExample() {
-  const W = 560, H = 220, padL = 8, padR = 8, padT = 14, padB = 16;
-  const innerW = W - padL - padR, innerH = H - padT - padB;
-  const candles = [
-    { o: 60, c: 52, h: 64, l: 48 }, { o: 52, c: 58, h: 62, l: 50 },
-    { o: 58, c: 46, h: 60, l: 42 }, { o: 46, c: 40, h: 48, l: 34 }, // OB = last down candle
-    { o: 40, c: 64, h: 66, l: 39 }, // displacement up (leaves FVG)
-    { o: 64, c: 78, h: 82, l: 62 },
-    { o: 78, c: 74, h: 84, l: 71 }, { o: 74, c: 88, h: 92, l: 72 }, // sweeps BSL
-    { o: 88, c: 80, h: 90, l: 76 }, { o: 80, c: 70, h: 83, l: 66 }, // CHOCH down
-    { o: 70, c: 74, h: 77, l: 66 }, { o: 74, c: 68, h: 78, l: 64 },
-  ];
-  const vMin = 30, vMax = 98;
-  const yOf = (v: number) => padT + innerH - ((v - vMin) / (vMax - vMin)) * innerH;
-  const bw = innerW / candles.length;
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="Example ICT chart with FVG, order block, liquidity sweep and CHOCH">
-      {/* BSL liquidity line (swept) */}
-      <line x1={padL} y1={yOf(84)} x2={padL + innerW} y2={yOf(84)} stroke={C.green} strokeWidth="1" strokeDasharray="3 2" opacity="0.8" />
-      <text x={padL + 2} y={yOf(84) - 3} fontSize="7.5" fill={C.green} fontWeight="700">BSL (equal highs)</text>
-      {/* FVG box between candle 3 high and candle 5 low region */}
-      <rect x={padL + 3.5 * bw} y={yOf(64)} width={bw * 3} height={yOf(48) - yOf(64)} fill="rgba(33,158,188,0.16)" stroke={C.cyan} strokeWidth="0.7" strokeDasharray="2 2" />
-      <text x={padL + 3.6 * bw} y={yOf(64) + 9} fontSize="7" fill={C.cyan} fontWeight="800">FVG</text>
-      {/* Order block on candle 4 */}
-      <rect x={padL + 3 * bw - 1} y={yOf(48)} width={bw} height={yOf(34) - yOf(48)} fill="rgba(142,202,230,0.18)" stroke={C.green} strokeWidth="0.8" />
-      <text x={padL + 3 * bw - 1} y={yOf(34) + 8} fontSize="6.5" fill={C.green} fontWeight="800">OB</text>
-      {/* CHOCH tag */}
-      <line x1={padL + 8.5 * bw} y1={yOf(76)} x2={padL + 9.7 * bw} y2={yOf(76)} stroke={C.orange} strokeWidth="1" />
-      <rect x={padL + 8.6 * bw} y={yOf(76) - 14} width="40" height="12" rx="2" fill="rgba(251,133,1,0.16)" stroke={C.orange} strokeWidth="0.7" />
-      <text x={padL + 8.6 * bw + 20} y={yOf(76) - 5} textAnchor="middle" fontSize="7.5" fontWeight="800" fill={C.orange}>CHOCH</text>
-      {/* candles */}
-      {candles.map((cd, i) => {
-        const up = cd.c >= cd.o;
-        const col = up ? "#26a69a" : "#ef5350";
-        const x = padL + i * bw + bw / 2;
-        const bodyW = bw * 0.5;
-        return (
-          <g key={i}>
-            <line x1={x} y1={yOf(cd.h)} x2={x} y2={yOf(cd.l)} stroke={col} strokeWidth="1" />
-            <rect x={x - bodyW / 2} y={yOf(Math.max(cd.o, cd.c))} width={bodyW} height={Math.max(1, Math.abs(yOf(cd.o) - yOf(cd.c)))} fill={col} />
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
 /** Options Chain page: calls on the left, strikes in the center, puts on the
  *  right, ATM row highlighted. Mirrors the by-strike layout. */
 function OptionsChainExample() {
@@ -1586,7 +1537,7 @@ const ARTICLES: Article[] = [
         <H2>The layers</H2>
         <Card>
           <LegendRow color={C.posBar} name="5-minute candles">
-            Live ES OHLC candles, the same feed the ICT page uses, so the tape is right where the levels are.
+            Live ES OHLC candles off the same session feed the rest of the dashboard reads, so the tape is right where the levels are.
           </LegendRow>
           <LegendRow color={C.heatNeg} name="GEX heatmap overlay">
             Each 5-minute slot paints a column of gamma-by-strike behind the candles — you watch walls build and bleed in real
@@ -1634,70 +1585,6 @@ const ARTICLES: Article[] = [
     ),
   },
   {
-    id: "ict-page",
-    title: "ICT",
-    group: "Pages",
-    blurb: "Live ICT concept detection on the 5-minute ES feed, plus a glossary of every concept.",
-    status: "complete",
-    body: () => (
-      <>
-        <Lead>
-          The ICT page runs Inner Circle Trader concepts live over the 5-minute ES feed and lists what it finds beside a
-          glossary of every concept. If you trade ICT, it&rsquo;s an automated second set of eyes; if you&rsquo;re learning it,
-          the live reads sit right next to their definitions.
-        </Lead>
-
-        <Figure caption={<>The detector marks structure as it forms: a <strong style={{ color: C.cyan }}>Fair Value Gap</strong>, the <strong style={{ color: C.green }}>order block</strong> and swept <strong style={{ color: C.green }}>BSL</strong> liquidity, and a <strong style={{ color: C.orange }}>CHOCH</strong> when character changes.</>}>
-          <IctExample />
-        </Figure>
-
-        <H2>Live detection</H2>
-        <P>
-          A candlestick chart is overlaid with the ICT primitives the page computes in real time — so the structure is marked
-          on the chart as it forms, and a side panel lists the current reads.
-        </P>
-        <Card>
-          <LegendRow color={C.cyan} name="Fair Value Gaps & Order Blocks">
-            Three-candle imbalances and the last opposing candle before an impulse — the re-entry / defense zones price tends
-            to return to.
-          </LegendRow>
-          <LegendRow color={C.green} name="Liquidity pools (BSL / SSL)">
-            Resting liquidity above highs and below lows that price often sweeps before reversing.
-          </LegendRow>
-          <LegendRow color={C.orange} name="Structure events (BOS / CHOCH / MSS)">
-            Breaks of structure, changes of character, and market-structure shifts that flag continuation vs reversal.
-          </LegendRow>
-          <LegendRow color={C.purple} name="Kill zones & premium/discount">
-            Session kill zones, Silver Bullet / macro windows, and the premium/discount + OTE dealing range.
-          </LegendRow>
-        </Card>
-
-        <H2>How the pieces fit a setup</H2>
-        <P>
-          The concepts aren&rsquo;t independent signals — they chain into a sequence. A textbook ICT setup reads in order:
-        </P>
-        <Steps
-          items={[
-            <>Price sweeps a <Term>liquidity pool</Term> (BSL / SSL) — stops are taken above a high or below a low.</>,
-            <>A <Term>displacement</Term> leg leaves a <Term>Fair Value Gap</Term> and breaks structure (<Term>CHOCH / MSS</Term>).</>,
-            <>Price retraces into the <Term>order block</Term> or FVG within the <Term>OTE</Term> (62–79%) band.</>,
-            <>The real move delivers toward the opposing liquidity — ideally inside a <Term>kill zone</Term>.</>,
-          ]}
-        />
-
-        <H2>The glossary</H2>
-        <P>
-          Every concept the page detects is defined alongside the live signals, so a read you don&rsquo;t recognize is one
-          click from its explanation.
-        </P>
-        <Callout kind="warn" title="A tool, not a trigger">
-          The page marks where ICT structure exists — it doesn&rsquo;t place trades. Use the live reads to frame your own
-          entries within your plan.
-        </Callout>
-      </>
-    ),
-  },
-  {
     id: "journal-page",
     title: "Journal",
     group: "Pages",
@@ -1719,7 +1606,7 @@ const ARTICLES: Article[] = [
           </LegendRow>
         </Card>
         <Callout kind="tip" title="Tie it back to the levels">
-          Note which GEX levels or ICT reads were in play on each trade — over time the journal shows you which of the
+          Note which GEX levels were in play on each trade — over time the journal shows you which of the
           dashboard&rsquo;s signals you actually trade well.
         </Callout>
       </>

@@ -7,15 +7,15 @@ import { V3, V3_MONO, V3_RADIUS, V3_TEXT, v3CardStyle, v3Chip } from "@/componen
 // The free live level tile.
 //
 // This is the whole argument of the landing page in one component: a cold
-// visitor sees a REAL gamma flip, computed off the live chain, before there is
-// an account, a card or an email.
+// visitor sees REAL levels — Core, the flip and both walls — computed off the
+// live chain, before there is an account, a card or an email.
 //
 // Rules this component exists to enforce:
 //
-//   1. NEVER render a partial tile. If /api/public-levels can't give us a flip,
-//      the panel drops to a quiet "resumes next session" state rather than
-//      printing three of four numbers. A page whose pitch is "these are real"
-//      cannot show a level with a dash next to it.
+//   1. NEVER render a partial tile. If /api/public-levels can't give us the
+//      headline level, the panel drops to a quiet "resumes next session" state
+//      rather than printing three of four numbers. A page whose pitch is "these
+//      are real" cannot show a level with a dash next to it.
 //   2. NEVER widen it. The endpoint deliberately serves SPX / front expiry /
 //      four scalars — no ladder, no rate of change, no history. Those are the
 //      product. If a future version of this panel wants a strike ladder, that is
@@ -24,6 +24,14 @@ import { V3, V3_MONO, V3_RADIUS, V3_TEXT, v3CardStyle, v3Chip } from "@/componen
 //   3. The refresh cadence here (15s) matches the server cache TTL exactly. A
 //      faster poll buys nothing but load; a slower one makes the "15s" label a
 //      lie.
+//   4. THE HEADLINE IS **CORE**, not the gamma flip (Brandon, 2026-09-05). Core
+//      is the largest |net GEX| strike on the board — the magnet, the level the
+//      rest of the app leads with, and the one a visitor who has never heard of
+//      dealer gamma can act on without a second concept. The flip is still on
+//      the tile, one row down with the walls, because the page's own copy is
+//      about it; it is simply no longer the number in 48px type.
+//      The API field is still `coreBullseye` — renaming a wire field to move a
+//      label is how a public endpoint breaks for no reason.
 //
 // ── 2026-09-05: "it isn't updating", and the stamp said a time that looked live
 //
@@ -147,38 +155,42 @@ export default function LiveLevelPanel() {
     };
   }, [pull]);
 
-  // The flip is the headline. Without it there is no panel — see rule 1.
-  const hasFlip = !!d?.ok && d.gammaFlip != null;
-  const spotAbove = d?.spot != null && d?.gammaFlip != null ? d.spot - d.gammaFlip : null;
-  const fresh = hasFlip && now - Number(d!.asOf) <= FRESH_MS;
-  const stamp = hasFlip ? etStamp(Number(d!.asOf)) : "";
+  // Core is the headline. Without it there is no panel — see rules 1 and 4.
+  const hasCore = !!d?.ok && d.coreBullseye != null;
+  // Distance is measured to the HEADLINE level, so it moves with rule 4.
+  const spotVsCore = d?.spot != null && d?.coreBullseye != null ? d.spot - d.coreBullseye : null;
+  const fresh = hasCore && now - Number(d!.asOf) <= FRESH_MS;
+  const stamp = hasCore ? etStamp(Number(d!.asOf)) : "";
 
   return (
     <div style={wrap} className="live-level">
       <div style={head}>
-        <span style={topLabel}>SPX · Gamma Flip</span>
+        <span style={topLabel}>SPX · Core</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <span style={v3Chip(V3.up)}>FREE · NO ACCOUNT</span>
           <span style={fresh ? liveDot : staleTag}>
             {fresh && <i style={dot} />}
-            {hasFlip ? (fresh ? "15s" : "STALE") : "IDLE"}
+            {hasCore ? (fresh ? "15s" : "STALE") : "IDLE"}
           </span>
         </span>
       </div>
 
       <div style={body}>
-        {hasFlip ? (
+        {hasCore ? (
           <>
-            <div style={bigNo}>{fmt(d!.gammaFlip)}</div>
+            {/* Core, in 48px type. See rule 4. "Core", not "Core Bullseye" —
+                the rails, the Multi Greek badges and the Key Levels tiles all
+                say Core, and this was the last surface using the long name. */}
+            <div style={bigNo}>{fmt(d!.coreBullseye)}</div>
             <div style={bigNoSub}>
               {d!.spot != null ? (
                 <>
                   Spot <b style={{ fontFamily: V3_MONO, color: V3.fg, fontWeight: 700 }}>{fmt(d!.spot)}</b>
-                  {spotAbove != null && (
+                  {spotVsCore != null && (
                     <>
                       {" · "}
-                      <span style={{ color: spotAbove >= 0 ? V3.up : V3.down, fontWeight: 700 }}>
-                        {spotAbove >= 0 ? "+" : "−"}{fmt(Math.abs(spotAbove))} {spotAbove >= 0 ? "above" : "below"} flip
+                      <span style={{ color: spotVsCore >= 0 ? V3.up : V3.down, fontWeight: 700 }}>
+                        {spotVsCore >= 0 ? "+" : "−"}{fmt(Math.abs(spotVsCore))} {spotVsCore >= 0 ? "above" : "below"} Core
                       </span>
                     </>
                   )}
@@ -190,13 +202,11 @@ export default function LiveLevelPanel() {
             </div>
 
             <div style={{ marginTop: 16 }}>
+              {/* The flip drops to a row. It is still the level the page's copy
+                  is about, so it leads the list. */}
+              <LevelRow label="Gamma flip" value={fmt(d!.gammaFlip)} color={V3.violet} />
               <LevelRow label="Call wall" value={fmt(d!.callWall)} color={V3.levelCw} />
               <LevelRow label="Put wall" value={fmt(d!.putWall)} color={V3.levelPw} />
-              {/* "Core", not "Core Bullseye" (Brandon, 2026-09-05). The app's
-                  own rails, the Multi Greek badges and the Key Levels tiles all
-                  say Core; the landing page was the last surface still using
-                  the long name for the same level. */}
-              <LevelRow label="Core" value={fmt(d!.coreBullseye)} color={V3.levelCb} />
               {d!.netGexB != null && (
                 <LevelRow
                   label="Net GEX"
@@ -313,7 +323,9 @@ const bigNo: React.CSSProperties = {
   fontWeight: 700,
   letterSpacing: "-0.03em",
   lineHeight: 1,
-  color: V3.levelCw,
+  // The headline takes CORE's own colour (--color-level-cb), the same yellow
+  // the rails and the Multi Greek badges tag that strike with.
+  color: V3.levelCb,
 };
 
 const bigNoSub: React.CSSProperties = {

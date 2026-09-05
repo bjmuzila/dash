@@ -1,5 +1,168 @@
 # Changelog
 
+## 2026-09-05 - The 1-minute tape: it was the timeouts, not the symbol
+
+Why SPX drew a 1-minute line and AAPL fell back to 14 change-only captures.
+`/proxy/candles-intraday` was the ONE caller of `fetchIntradayCandles` running
+on the module defaults (800ms quiet / 7000ms hard). Every other caller already
+raises them and says why: the option-history pull uses 900/9000 "because a thin
+far-OTM contract dribbles its snapshot out slowly", `/api/snapshots/etf-candles`
+uses 1200/20000.
+
+The cap RESOLVES rather than throwing, so a ~390-bar session that had not
+finished replaying in seven seconds came back partial or empty and was
+indistinguishable from "this symbol did not trade". SPX is the fastest thing on
+the feed and always beat it; single names did not.
+
+### `server-v2/server-with-proxy.js` - the `/proxy/candles-intraday` route
+
+- Now passes `{ quietMs: 1200, hardMs: 15_000 }`. 15s is the CEILING, not the
+  cost: a symbol that answers in 400ms still answers in 400ms, because the quiet
+  gap is what ends a healthy pull. The client fires this in parallel with its log
+  read and draws without it, so a slow symbol delays one line, not a page.
+- The response carries `truncated` so a short line can be told from a quiet one
+  without reading the server log.
+
+### `server-v2/candle-history.js`
+
+- `fromTime` is now part of the cache key (`symbol|interval|fromTime`). It was
+  `symbol|interval`, so two windows shared an entry - which is the bug every
+  other caller was already dodging by passing `cache: false` with a comment
+  about it. Those opt-outs still work; they just no longer have to.
+- AN EMPTY OR TRUNCATED RESULT IS NEVER CACHED. It used to store whatever came
+  back, `[]` included, so one pull that hit the cap pinned the symbol to empty
+  for the full 60s TTL - and the Level Log's live tick re-reads every 60s, so it
+  could land on the poisoned entry repeatedly while the feed was healthy.
+- `finish()` now knows whether the HARD timer ended it. When it did, it logs
+  `[candles] <SYM> <iv> hit the <n>ms cap with <n> bars - partial` and marks the
+  result with a non-enumerable `truncated: true` - so `Array.isArray`, `.length`
+  and `JSON.stringify` behave exactly as before for every existing caller. The
+  multi-symbol path logs the same thing per ROSTER (the cap ends one shared
+  subscription, so it is not a per-symbol fact).
+
+Verified against a stubbed dxLink client: a capped pull flags truncated and is
+not cached; the next call goes back to the feed rather than serving the empty;
+a different `fromTime` gets its own entry; the same one is served from cache.
+
+The client-side 5-minute fallback added earlier today stays - it is the safety
+net for a symbol dxLink genuinely has no 1m bars for, and it now fires far less
+often.
+
+
+## 2026-09-05 - Level Log: a thin 1m tape no longer drops the big card to 14 captures
+
+AAPL on the rail drew a full session; AAPL on the Level Log card below it read
+`14 spot captures` and a staircase. Same symbol, same date, two inches apart.
+
+Cause: the single-session view's price line is `/proxy/candles-intraday`, a
+short-lived dxLink candle subscription. It is reliable for SPX and comes back
+thin or empty for plenty of single names. When it did, the chart fell all the
+way through to `walls_log.spot` - the change-only column, a dozen-odd points a
+day - while the rail card beside it was reading the 5-minute
+`scanner_snapshots.spot` series, which cannot be missing for a day the levels
+exist on because it is the sweep the levels were sampled from.
+
+- `cbedge-v3/src/pages/levelLog/wallData.ts` - a tape under
+  `DENSE_MIN_SAMPLES` now asks `/api/walls-range?days=1` for that same 5-minute
+  series before giving up, and uses it when it is better than what came back.
+  SPX is untouched: its 1-minute tape passes the test and the second request is
+  never made.
+- The extra read is deliberately SEQUENTIAL and conditional. Firing it up front
+  would put a third request on every load of the case that already works to
+  save a round trip in the case that does not; non-negotiable 3 is about what a
+  route needs AT ENTRY, and this is what it needs when the first answer came
+  back empty.
+- `DENSE_MIN_SAMPLES` (20) moved into wallData and is now imported by
+  `WallMigrationChart` - two files test against it, so it is one number.
+
+Not fixed here: WHY dxLink returns no 1-minute candles for AAPL. That is inside
+`/proxy/candles-intraday` -> `candle-history.js`, and proxy behaviour is not
+changed without asking first.
+
+
+## 2026-09-05 (b) - Core is the headline on the free SPX tile, the two scanner explore pages carry their real boards, and ICT leaves /docs (`components/landing/LiveLevelPanel.tsx`, `components/explore/exploreContent.ts`, `app/explore/[slug]/page.tsx`, `app/docs/page.tsx`)
+
+### 1. The free tile leads with CORE, not the flip
+
+`LiveLevelPanel`'s 48px number is now **Core** - the largest |net GEX| strike on
+the board, the magnet the rest of the app leads with - and it takes Core's own
+colour (`--color-level-cb`, the same yellow the rails and the Multi Greek badges
+tag that strike with). The header reads `SPX · Core`.
+
+The flip is not gone; it dropped to the first row of the level list, above the
+two walls, because the page's own hero copy is still about it. Three things moved
+with the headline and had to:
+
+- **The render gate.** Rule 1 ("never render a partial tile") was keyed on
+  `gammaFlip != null`. It is keyed on `coreBullseye != null` now, or the tile
+  could paint a headline with nothing in it.
+- **The distance line.** `Spot 5,993 · +8 above flip` is now `+8 above Core`. It
+  measures to whatever the headline is; leaving it on the flip would put two
+  different reference levels one line apart.
+- **The STALE / IDLE chip**, same reason.
+
+The wire field stays `coreBullseye`. Renaming a public endpoint's field to move
+a label is how an endpoint breaks for no reason, and `/api/public-levels` is
+ungated - anything could be reading it.
+
+### 2. /explore/top-change-scanner and /explore/watch-scanner show the actual screen
+
+Four scalars in a 2x2 is enough to say "there are numbers here" and not enough to
+say what a page IS - and for these two that gap is the whole problem, because
+nobody arrives already knowing what a "GEX change scanner" puts on screen.
+
+New optional `examples: ExploreExample[]` on an explore entry: the board's own
+header strip as key/value chips, **every column header in the order the page
+renders them**, and real rows off a real session. Rendered by a new
+`ExampleBoard` in `app/explore/[slug]/page.tsx`.
+
+**Deliberately a table, not a screenshot.** A screenshot of a twelve-column
+dashboard is unreadable on a phone, goes stale the day the layout moves, is
+invisible to search, and cannot be read by a screen reader. A table fixes all
+four, and it is honest in the way that matters here: the reader sees the exact
+columns they are buying.
+
+Four boards ship:
+
+| Page | Board |
+|---|---|
+| Top Change | The end-of-day scorecard - 12 columns, 5 real A+ rows, the full grade histogram in the header strip |
+| Top Change | One pick opened - the fill, the high, the times, `$/ct`, and the 1D line between them |
+| Watch | `Opened` for 2026-09-02 - 3 rows, `OTM at flag` 15-16% |
+| Watch | `Touched` for the same day - the FRMI flag from 2026-08-24 resolving nine days later |
+
+Two details worth keeping:
+
+- **`footnote` is not optional in spirit.** The scorecard rows are the top five
+  of thirty-five and every one of them is an A+; the footnote says so, and points
+  at the header counts (`avg 57/100`, `never green 3 (9%)`) that carry the C, D
+  and F rows. A page whose whole pitch is "we publish the misses" cannot ship a
+  top-of-board slice and leave it at that.
+- **Grades and statuses keep their colour**, because those two columns carry
+  meaning in colour on the real screen. `pillTone()` matches on the LEADING
+  token, not on equality - the watch board's status cell is
+  `TOUCHED 2026-09-03`, a value with a date glued to it. Everything else on the
+  page is white, per the v3 theme note.
+
+The table scrolls inside its own `overflow-x` box. Twelve columns do not fit a
+phone and never will; the PAGE must not scroll sideways.
+
+Both pages' `teaserStats` were re-cut off the same real sessions, so the 2x2 and
+the board below it can no longer tell different stories.
+
+### 3. ICT is out of /docs
+
+Removed: the `ict-page` section entry (~3.4 kB) and the `IctExample` SVG that
+only it rendered (~3.1 kB). Two stray mentions in sections that stay were
+reworded rather than left dangling - the ES Candles page's "the same feed the ICT
+page uses" now says "the same session feed the rest of the dashboard reads", and
+the Journal page's "which GEX levels or ICT reads were in play" drops the second
+half. `grep -c ICT app/docs/page.tsx` is zero.
+
+The nav and the group index are derived from the sections array, so nothing else
+needed touching - and that is the point of the derivation. This follows
+`/explore/ict` coming out earlier today; the app page itself is untouched.
+
 ## 2026-09-05 - The public site moves to the v3 theme, ICT and TPO come off /explore, and the free SPX tile stops looking live when it isn't (`components/landing/*`, `components/explore/*`, `app/explore/[slug]/page.tsx`)
 
 Six things, all of them on the pages a signed-out visitor sees.

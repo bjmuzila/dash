@@ -21,34 +21,70 @@ const QUIET_MS = 800;   // resolve this long after the last candle event arrives
 const HARD_MS = 7000;   // absolute cap so a silent feed can't hang the request
 const CACHE_TTL_MS = 60_000;
 
-// symbol|interval → { at, rows }   and   symbol|interval → Promise (in-flight dedupe)
+// symbol|interval|fromTime → { at, rows }   and the same key → Promise (in-flight dedupe)
+//
+// THE WINDOW IS IN THE KEY (2026-09-05). It used to be `symbol|interval` alone,
+// which meant two requests for the same symbol at the same interval over
+// DIFFERENT windows shared an entry — a one-session pull answered with a
+// five-day one, or the reverse. Every caller but /proxy/candles-intraday had
+// already worked around it by passing `cache: false` and saying so in a
+// comment; two of those comments exist verbatim in api-router.js and
+// server-with-proxy.js. Putting the window in the key is the fix those
+// workarounds were standing in for.
 const _cache = new Map();
 const _inflight = new Map();
 
 /**
+ * Mark a truncated result WITHOUT changing the return type.
+ *
+ * `finish()` fires on the hard timer as well as on the quiet gap, and it
+ * RESOLVES either way — a snapshot that was still arriving when the cap hit
+ * comes back partial, or empty, and is indistinguishable from "this symbol did
+ * not trade". That is exactly how a slow single name looked identical to no
+ * data at all for as long as this file has existed.
+ *
+ * Non-enumerable so `Array.isArray`, `.length`, `JSON.stringify` and every
+ * existing caller behave exactly as before; a caller that wants to know can read
+ * `rows.truncated`.
+ */
+function markTruncated(rows) {
+  try {
+    Object.defineProperty(rows, 'truncated', { value: true, enumerable: false, configurable: true });
+  } catch { /* frozen array — the rows still matter more than the flag */ }
+  return rows;
+}
+
+/**
  * Fetch intraday candles for `symbol` (e.g. "SPY") at `interval` (e.g. "1m"),
  * starting from `fromTime` (epoch ms). Returns [{ time, open, high, low, close,
- * volume }] oldest-first. Cached ~60s per symbol+interval.
+ * volume }] oldest-first. Cached ~60s per symbol+interval+fromTime.
+ *
+ * An EMPTY or TRUNCATED result is never cached — see the note at the `_cache.set`
+ * below — and a truncated one carries a non-enumerable `truncated: true`.
  *
  * @param {object} [opts]
  * @param {number} [opts.quietMs] Settle window after the last candle event.
  * @param {number} [opts.hardMs]  Absolute cap on the whole request.
- * @param {boolean} [opts.cache]  Default true. Pass false for a MULTI-DAY pull:
- *   the cache key is `symbol|interval` and does NOT include `fromTime`, so a
- *   cached one-session response would otherwise be handed straight back to a
- *   five-session request (and, worse, a big backfill would overwrite the cache
- *   the live path is about to read). Bypasses the in-flight dedupe for the same
- *   reason.
+ * @param {boolean} [opts.cache]  Default true. `fromTime` IS part of the cache
+ *   key (2026-09-05), so windows no longer collide and a multi-day pull no
+ *   longer has to opt out to stay correct. Pass false when a result should not
+ *   be reusable at all — a backfill sweep, or anything that must see the feed
+ *   rather than a 60-second-old answer. It also bypasses the in-flight dedupe.
  *
  * The defaults are tuned for the live path — a single session, ~390 bars, on a
- * request a browser is waiting on. A multi-day replay is several thousand bars
- * and will be TRUNCATED at HARD_MS, so callers doing that must raise both.
+ * request a browser is waiting on — and they are TIGHT. A single name replays
+ * its snapshot more slowly than SPX does, and `finish` RESOLVES at the cap
+ * rather than throwing, so a caller that wants a whole session from a symbol
+ * that is not the most liquid thing on the feed should raise both rather than
+ * accept a silent partial. /proxy/candles-intraday passes 1200 / 15000 for
+ * exactly that reason.
  */
 async function fetchIntradayCandles(symbol, interval, fromTime, opts = {}) {
   const sym = String(symbol || '').trim().toUpperCase();
   const iv = String(interval || '1m').trim();
   if (!sym) throw new Error('symbol required');
-  const key = `${sym}|${iv}`;
+  const fromKey = Number.isFinite(Number(fromTime)) ? Math.round(Number(fromTime)) : 0;
+  const key = `${sym}|${iv}|${fromKey}`;
   const quietMs = Number(opts.quietMs) > 0 ? Number(opts.quietMs) : QUIET_MS;
   const hardMs = Number(opts.hardMs) > 0 ? Number(opts.hardMs) : HARD_MS;
   const useCache = opts.cache !== false;
@@ -73,13 +109,20 @@ async function fetchIntradayCandles(symbol, interval, fromTime, opts = {}) {
       const bars = new Map(); // barTime(ms) → { time, open, high, low, close, volume }
       let done = false, quietTimer = null, subscribed = false;
 
-      const finish = () => {
+      // `capped` — did the HARD timer end this, rather than the feed going
+      // quiet? See markTruncated: the two paths used to be indistinguishable.
+      const finish = (capped = false) => {
         if (done) return;
         done = true;
         if (quietTimer) clearTimeout(quietTimer);
         clearTimeout(hardTimer);
         try { client.close(); } catch { /* noop */ }
-        resolve([...bars.values()].filter((b) => b.close > 0).sort((a, b) => a.time - b.time));
+        const out = [...bars.values()].filter((b) => b.close > 0).sort((a, b) => a.time - b.time);
+        if (capped) {
+          console.warn(`[candles] ${sym} ${iv} hit the ${hardMs}ms cap with ${out.length} bars — partial`);
+          markTruncated(out);
+        }
+        resolve(out);
       };
 
       const client = new DxLinkClient({
@@ -111,12 +154,16 @@ async function fetchIntradayCandles(symbol, interval, fromTime, opts = {}) {
         },
       });
 
-      const hardTimer = setTimeout(finish, hardMs);
+      const hardTimer = setTimeout(() => finish(true), hardMs);
       try { client.connect(); } catch { finish(); }
     });
-    // A bypassed (multi-day) pull must not seed the cache the live single-session
-    // path reads — same key, wildly different window.
-    if (useCache) _cache.set(key, { at: Date.now(), rows });
+    // NEVER CACHE A NON-ANSWER. This used to store whatever came back, empty
+    // included, so ONE pull that hit the cap pinned the symbol to [] for the
+    // full 60s TTL — and the Level Log's live tick re-reads every 60s, so it
+    // could land on the poisoned entry again and again while the feed was
+    // perfectly healthy. An empty or truncated result is a failure to answer,
+    // not an answer, and the next request should go and ask.
+    if (useCache && rows.length && !rows.truncated) _cache.set(key, { at: Date.now(), rows });
     return rows;
   })();
 
@@ -185,12 +232,16 @@ async function fetchIntradayCandlesMulti(symbols, interval, fromTime, opts = {})
   await new Promise((resolve) => {
     let done = false, quietTimer = null, subscribed = false;
 
-    const finish = () => {
+    const finish = (capped = false) => {
       if (done) return;
       done = true;
       if (quietTimer) clearTimeout(quietTimer);
       clearTimeout(hardTimer);
       try { client.close(); } catch { /* noop */ }
+      // Truncation here is per-ROSTER, not per-symbol — the cap ends the one
+      // shared subscription — so it is logged rather than flagged on a Map the
+      // caller reads symbol by symbol.
+      if (capped) console.warn(`[candles] multi ${iv} hit the ${hardMs}ms cap across ${list.length} symbols — partial`);
       resolve();
     };
 
@@ -228,7 +279,7 @@ async function fetchIntradayCandlesMulti(symbols, interval, fromTime, opts = {})
       },
     });
 
-    const hardTimer = setTimeout(finish, hardMs);
+    const hardTimer = setTimeout(() => finish(true), hardMs);
     try { client.connect(); } catch { finish(); }
   });
 
