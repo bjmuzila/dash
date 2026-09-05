@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { HOME_THEME as T, REFRESH_GREEN, SOFT_RED } from "@/components/shared/homeTheme";
+import { V3, V3_MONO, V3_RADIUS, V3_TEXT, v3a } from "@/components/landing/v3Theme";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The graded ledger — the ROWS behind the percentages in ReceiptsStrip.
@@ -23,6 +23,11 @@ import { HOME_THEME as T, REFRESH_GREEN, SOFT_RED } from "@/components/shared/ho
 //      halves of the same section will contradict each other.
 //   3. Empty renders nothing. An empty ledger with a "no data" row reads as
 //      broken; an absent section reads as an absent section.
+//
+// 2026-09-05: v3 surfaces. Every `opacity` on a text style is gone — the column
+// heads and the body cells were both dimmed white, which is grey with extra
+// steps. A table head is distinguished by its plate (surface2) and its type,
+// not by fading it out.
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface LedgerRow {
@@ -60,7 +65,7 @@ export default function GradedLedger() {
   return (
     <div style={wrap} className="graded-ledger">
       <div style={head}>
-        <b style={{ fontSize: 13, fontWeight: 700 }}>
+        <b style={{ fontSize: V3_TEXT.base, fontWeight: 600, color: V3.fg }}>
           The last {rows.length} graded sessions — unfiltered
         </b>
         <span style={headMeta}>
@@ -82,8 +87,8 @@ export default function GradedLedger() {
           <tbody>
             {rows.map((r) => (
               <tr key={`${r.date}-${r.level}`}>
-                <td style={{ ...td, ...mono, color: T.text, whiteSpace: "nowrap" }}>{fmtDate(r.date)}</td>
-                <td style={{ ...td, ...mono, color: T.text }}>{r.level.toLocaleString("en-US")}</td>
+                <td style={{ ...td, ...mono, whiteSpace: "nowrap" }}>{fmtDate(r.date)}</td>
+                <td style={{ ...td, ...mono }}>{r.level.toLocaleString("en-US")}</td>
                 <td style={td}>{r.type}</td>
                 <td style={td}>{r.what}</td>
                 <td style={{ ...td, textAlign: "right" }}>
@@ -100,19 +105,11 @@ export default function GradedLedger() {
 
 /* ── styles ───────────────────────────────────────────────────────────── */
 
-const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-// REFRESH_GREEN, not HOME_THEME.green — the latter is the palette's light blue.
-const GREEN = REFRESH_GREEN;
-function hexA(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
-}
-
 const wrap: React.CSSProperties = {
-  border: `1px solid ${T.border}`,
-  borderRadius: 14,
+  border: `1px solid ${V3.line}`,
+  borderRadius: V3_RADIUS.md,
   overflow: "hidden",
-  background: "rgba(13,17,25,0.35)",
+  background: V3.surface,
 };
 
 const head: React.CSSProperties = {
@@ -121,16 +118,15 @@ const head: React.CSSProperties = {
   alignItems: "center",
   gap: 12,
   flexWrap: "wrap",
-  padding: "12px 16px",
-  background: "rgba(13,17,25,0.8)",
-  borderBottom: `1px solid ${T.border}`,
+  padding: "10px 14px",
+  background: V3.surface2,
+  borderBottom: `1px solid ${V3.line}`,
 };
 
 const headMeta: React.CSSProperties = {
-  fontFamily: MONO,
-  fontSize: 10,
-  color: T.muted,
-  opacity: 0.6,
+  fontFamily: V3_MONO,
+  fontSize: V3_TEXT.xs,
+  color: V3.fg,
   letterSpacing: "0.1em",
   textTransform: "uppercase",
   whiteSpace: "nowrap",
@@ -139,55 +135,53 @@ const headMeta: React.CSSProperties = {
 const table: React.CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
-  fontSize: 12.5,
+  fontSize: V3_TEXT.base,
   minWidth: 620,
 };
 
 const th: React.CSSProperties = {
-  fontFamily: MONO,
-  fontSize: 9.5,
+  fontFamily: V3_MONO,
+  fontSize: V3_TEXT.xs,
   fontWeight: 700,
   letterSpacing: "0.12em",
   textTransform: "uppercase",
-  color: T.muted,
-  opacity: 0.55,
+  color: V3.fg,
   textAlign: "left",
-  padding: "9px 16px",
-  borderBottom: "1px solid rgba(255,255,255,0.06)",
-  background: "rgba(255,255,255,0.015)",
+  padding: "8px 14px",
+  borderBottom: `1px solid ${V3.line}`,
+  background: V3.surface2,
   whiteSpace: "nowrap",
 };
 
 const td: React.CSSProperties = {
-  padding: "10px 16px",
-  borderBottom: "1px solid rgba(255,255,255,0.04)",
-  color: T.muted,
-  opacity: 0.9,
+  padding: "9px 14px",
+  borderBottom: `1px solid ${V3.line}`,
+  color: V3.fg,
   verticalAlign: "top",
 };
 
-const mono: React.CSSProperties = { fontFamily: MONO, opacity: 1 };
+const mono: React.CSSProperties = { fontFamily: V3_MONO };
 
 const chipBase: React.CSSProperties = {
   display: "inline-block",
-  fontFamily: MONO,
-  fontSize: 9.5,
-  fontWeight: 800,
+  fontFamily: V3_MONO,
+  fontSize: V3_TEXT.xs,
+  fontWeight: 700,
   padding: "3px 8px",
-  borderRadius: 5,
+  borderRadius: V3_RADIUS.sm,
   letterSpacing: "0.08em",
 };
 
 const chipHit: React.CSSProperties = {
   ...chipBase,
-  background: hexA(GREEN, 0.14),
-  color: GREEN,
-  border: `1px solid ${hexA(GREEN, 0.3)}`,
+  background: v3a(V3.refresh, 0.14),
+  color: V3.refresh,
+  border: `1px solid ${v3a(V3.refresh, 0.35)}`,
 };
 
 const chipMiss: React.CSSProperties = {
   ...chipBase,
-  background: hexA(T.red, 0.13),
-  color: SOFT_RED,
-  border: `1px solid ${hexA(T.red, 0.3)}`,
+  background: v3a(V3.red, 0.13),
+  color: V3.down,
+  border: `1px solid ${v3a(V3.red, 0.35)}`,
 };

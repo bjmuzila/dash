@@ -1,5 +1,136 @@
 # Changelog
 
+## 2026-09-05 - The public site moves to the v3 theme, ICT and TPO come off /explore, and the free SPX tile stops looking live when it isn't (`components/landing/*`, `components/explore/*`, `app/explore/[slug]/page.tsx`)
+
+Six things, all of them on the pages a signed-out visitor sees.
+
+### 1. A v3 theme the Next tree can actually reach - `components/landing/v3Theme.ts` (new)
+
+`cbedge-v3` is a clean-slate app with its own `package.json` and no `@/app/...`
+alias in either direction (its AGENTS.md, "What this is"), so the landing page
+and `/explore/*` **cannot** import `@/design/theme` or read `tokens.css`. There
+is no module path, and adding one would break the single rule that app exists to
+enforce.
+
+So the new file is a **transcription** of `cbedge-v3/src/design/tokens.css`, not
+a second palette - every entry names the token it came from, and it carries the
+type scale (9/10/11/13/15/18/24/32) and the shape scale (4/8/12) too. If a token
+moves there, move it here. Nothing else in the public tree may type a colour, and
+the old per-file `cyanA()` / `blueA()` / `hexA()` helpers built over hardcoded
+rgb triples are gone from every file below.
+
+What "v3 theme" means concretely on these pages:
+
+- **Flat, not glass.** v3's `Card` is `rounded-md border border-line bg-surface`
+  - an 8px radius, an OPAQUE `#0f1117` plate, an OPAQUE `#23272e` hairline. The
+  four translucent 20px-radius backdrop-blurred panels are gone, along with the
+  blurred screenshot behind them, the radial cyan `cardGlow`, and every
+  `box-shadow` bloom. A bloom-lit hero was the single loudest thing on that page
+  still saying "v2".
+- **The surface ladder is the only depth.** `bg` -> `surface` -> `surface2` ->
+  `raised`. A nested block steps up the ladder; it never gets a wash of the
+  accent. Hover steps up too, instead of lifting and glowing.
+- **One accent: `#219ebc`.** v3 keeps it as `--color-v2-cyan` and paints every
+  card title with it, so this is not a departure - it is the token that already
+  means CB Edge on a v3 surface. v3's own `--color-accent` (`#5b8cff`) is a UI
+  blue for controls and would read as a different company on a marketing page.
+  Orange stays on the Tradeify strip alone, because that is the one link that
+  leaves the site.
+
+### 2. All the grey text is white
+
+The tokens are unambiguous - `--color-fg`, `--color-muted` and `--color-faint`
+all resolve to `#ffffff` (tokens.css, "Text": *"All white per Brandon
+2026-08-27 - the grey secondary/faint tones read too dim"*).
+
+The public pages had already set `HOME_THEME.muted` to white **and then dimmed it
+again** with `opacity: 0.55 … 0.9` on nearly every paragraph, label, table cell
+and footnote. That is the same grey arriving by a different door, and it is why
+the pages still looked washed out after the token change. Roughly thirty text
+`opacity` declarations are removed across `LandingClient`, `LiveLevelPanel`,
+`PublicNav`, `ReceiptsStrip`, `GradedLedger`, `DelayedLiveView`,
+`NetDriftExample` and `explore/[slug]`. **There is no text opacity left in the
+public tree.** Do not reintroduce one to de-emphasise a line - drop the line
+instead. (Graphic opacity inside the Net Drift SVG - the area fills, the dashed
+marker - is untouched; those are marks, not type.)
+
+### 3. "Core bullseye" is now "Core"
+
+`LiveLevelPanel`'s level list was the last customer-facing surface still using
+the long name. The rails, the Multi Greek badges and the Key Levels tiles all say
+Core. The API field stays `coreBullseye` - renaming a wire field to fix a label
+is how a public endpoint breaks for no reason.
+
+### 4. The free SPX tile shows a DATE, and admits when it is stale
+
+"Not updating" and "not showing the right data" were three separate things, each
+one enough on its own to make the tile look dead:
+
+- **The stamp was a bare clock.** `as of 14:32 ET` on a Saturday reads as
+  "updated a minute ago" whichever session the numbers are from. It now prints
+  the weekday and date with the time, so a weekend, a holiday or a feed that
+  stopped mid-session is legible at a glance instead of looking like live data
+  that happens to be wrong.
+- **A background tab freezes `setInterval`.** A page left open and come back to
+  shows whatever it had when it was last visible, for as long as the browser
+  feels like it - not 15s. There is now a `visibilitychange` + `focus` listener
+  that pulls immediately on the way back, which is the moment somebody is
+  actually looking.
+- **`/api/public-levels` answers `Cache-Control: public, max-age=15`.**
+  `cache: "no-store"` covers the browser's own HTTP cache and nothing in front of
+  it; an edge layer can serve the same body for longer than the TTL. The request
+  URL now carries a cache-buster, which no intermediary can collapse. The route's
+  own 15s module cache is what actually protects `/proxy/gex`, so this costs the
+  origin nothing.
+
+And the chip flips from a green `15s` to an amber `STALE` once `asOf` is older
+than four poll windows. One missed request is a blip; four in a row is a feed
+that has stopped, and the tile should not keep claiming to be live over frozen
+numbers.
+
+**No proxy or backend file was touched.** `/proxy/gex` and
+`server-v2/api-router.js` are unchanged; all four fixes are in the client.
+
+### 5. /explore/ict and /explore/tpo are removed
+
+Both entries come out of `EXPLORE` in `components/explore/exploreContent.ts`,
+which is what deletes the pages: the route calls `notFound()` for a slug that map
+does not carry, and the "Your trial unlocks all of these" chip row is derived
+from `EXPLORE_SLUGS`, so nothing is left pointing at either one.
+
+TPO in particular **had** to go. `cbedge-v3/src/pages/scanner/scannerNav.ts`
+dropped the TPO Structures tab on 2026-09-03 and tombstoned its modules, so the
+marketing page was selling a screen the app no longer has - the one mistake a
+site whose whole argument is "we publish what is actually true" cannot make.
+
+Also removed with them: the `IctGlossary` section and its `ICT_CONCEPTS` import
+(`components/explore/ictGlossary.ts` is now unreferenced), the `TpoLive` block in
+`DelayedLiveView` (the last customer-facing read of `tpo_profiles`), and the
+"ICT" / "TPO" name-drops in the landing value strip and the explore CTA copy.
+
+### 6. Three pages take their place, all of them things v3 actually ships
+
+| Slug | Screen |
+|---|---|
+| `premarket` | `cbedge-v3/src/pages/Premarket.tsx` |
+| `top-change-scanner` | the scanner's `gexchangetop` tab |
+| `watch-scanner` | the scanner's `watch` tab (Watch This / Far CB) |
+
+The copy is written off those files' own headers rather than invented - Premarket
+Prep's three questions ("what regime am I in, where are the walls, what happened
+overnight") are that page's own docblock; the Top Change page's RTH-only history
+filter and its "live - peak so far" scorecard are `gexChangeTopData.ts` notes 3
+and 5; the Watch page's poll-pauses-on-a-hidden-tab line is that file's one
+deliberate departure from v2.
+
+None of the three has a delayed-live DB block yet, so `DelayedLiveView` correctly
+falls through to `null` for them. **Do not fake one with a static number** -
+avoiding exactly that is what the component is for.
+
+The feature grid is seven cards now, so it moved from `repeat(3, 1fr)` to
+`auto-fill` - a hard three-column rule left one card alone on a third row at
+every width.
+
 ## 2026-09-05 - The expiry fallback tests CASH-SESSION coverage, not row count - which is why SPX alone was broken (`server-v2/_lib-db.cjs`, `server-v2/api-router.js`, both copies of `premarket/PostMarketTab.tsx`)
 
 With the backend deployed the recap STILL said nothing was recorded for

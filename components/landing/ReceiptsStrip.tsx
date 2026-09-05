@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { V3, V3_MONO, V3_RADIUS, V3_TEXT } from "@/components/landing/v3Theme";
 
 // Graded-performance strip — the "receipts".
 //
@@ -20,11 +20,16 @@ import { HOME_THEME as T } from "@/components/shared/homeTheme";
 // sample somewhere visible. If you add a stat, put the sample in its sublabel —
 // never ship a naked percentage, and never reintroduce the chip for one card
 // only (a lone n= on the weakest stat reads as an alibi). The API still
-// computes and gates on n; see app/api/public-stats/route.ts.
+// computes and gates on n; see /api/public-stats in server-v2/api-router.js.
 //
 // /api/public-stats already withholds anything under its MIN_N floor, so this
 // renders whatever it's handed. If that leaves nothing, the strip renders
 // nothing — an empty receipts strip is better than a padded one.
+//
+// 2026-09-05: v3 surfaces + white text. The footnote's `opacity: .75` is gone
+// with every other text opacity on the public pages — see the v3 THEME note in
+// LandingClient.tsx. Fine print is fine print because of where it sits and how
+// big it is, not because it has been faded toward the background.
 
 interface PublicStat {
   key: string;
@@ -97,20 +102,20 @@ export default function ReceiptsStrip() {
 /* ── styles ───────────────────────────────────────────────────────────── */
 
 const wrap: React.CSSProperties = {
-  marginTop: 22,
-  padding: "16px 14px 12px",
-  borderRadius: 14,
-  background: "rgba(33,158,188,0.05)",
-  border: "1px solid rgba(33,158,188,0.22)",
+  marginTop: 20,
+  padding: "14px 14px 12px",
+  borderRadius: V3_RADIUS.md,
+  background: V3.surface2,
+  border: `1px solid ${V3.line}`,
 };
 
 const heading: React.CSSProperties = {
-  fontSize: 10,
-  fontWeight: 800,
+  fontSize: V3_TEXT.xs,
+  fontWeight: 700,
   letterSpacing: "0.14em",
   textTransform: "uppercase",
-  color: T.cyan,
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  color: V3.cyan,
+  fontFamily: V3_MONO,
   marginBottom: 12,
   textAlign: "center",
 };
@@ -127,9 +132,9 @@ const grid: React.CSSProperties = {
 
 const cell: React.CSSProperties = {
   padding: "10px 12px",
-  borderRadius: 10,
-  background: "rgba(5,6,10,0.45)",
-  border: "1px solid rgba(255,255,255,0.06)",
+  borderRadius: V3_RADIUS.sm,
+  background: V3.surface,
+  border: `1px solid ${V3.line}`,
   textAlign: "left",
 };
 
@@ -141,35 +146,34 @@ const pctRow: React.CSSProperties = {
 };
 
 const pctVal: React.CSSProperties = {
-  fontSize: 24,
-  fontWeight: 800,
-  color: T.green,
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  fontSize: V3_TEXT.xl,
+  fontWeight: 700,
+  color: V3.refresh,
+  fontFamily: V3_MONO,
   lineHeight: 1,
 };
 
 // nVal removed with the n= chip. Sample size now reads in the sublabel — see
-// the header comment. Every other font size in this file is unchanged.
+// the header comment.
 
 const labelStyle: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: V3_TEXT.base,
   fontWeight: 700,
-  color: T.text,
-  lineHeight: 1.3,
+  color: V3.fg,
+  lineHeight: 1.35,
   marginBottom: 2,
 };
 
 const subStyle: React.CSSProperties = {
-  fontSize: 10,
-  color: T.muted,
-  lineHeight: 1.35,
+  fontSize: V3_TEXT.xs,
+  color: V3.fg,
+  lineHeight: 1.4,
 };
 
 const footnote: React.CSSProperties = {
   marginTop: 10,
-  fontSize: 10,
-  color: T.muted,
-  opacity: 0.75,
+  fontSize: V3_TEXT.xs,
+  color: V3.fg,
   textAlign: "center",
-  lineHeight: 1.4,
+  lineHeight: 1.45,
 };

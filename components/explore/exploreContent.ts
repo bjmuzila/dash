@@ -1,6 +1,28 @@
 // Shared content for the public /explore/[slug] feature pages. Each entry maps a
 // landing-card feature to a full marketing page (sell copy + static teaser).
 // Keep slugs in sync with the landing page card links (LandingClient.tsx).
+//
+// ── 2026-09-05: ICT AND TPO REMOVED, THREE PAGES ADDED (Brandon) ─────────────
+//
+// `ict` and `tpo` are gone from this map, which is what deletes the pages: the
+// route calls notFound() for a slug this object does not carry, and the "Your
+// trial unlocks all of these" chip row is derived from EXPLORE_SLUGS, so there
+// is nothing left pointing at either one.
+//
+// TPO in particular had to go: cbedge-v3/src/pages/scanner/scannerNav.ts dropped
+// the TPO Structures tab on 2026-09-03 and tombstoned its modules, so this page
+// was selling a screen the app no longer has. That is the one mistake a site
+// whose entire argument is "we publish what is actually true" cannot make.
+//
+// The three replacing them are all things v3 ships today:
+//   premarket            → cbedge-v3/src/pages/Premarket.tsx
+//   top-change-scanner   → the scanner's `gexchangetop` tab
+//   watch-scanner        → the scanner's `watch` tab (Watch This / Far CB)
+//
+// If you add another, the rules for the copy are the same as for everything
+// else on the public site: describe what the screen actually computes, and put
+// no number in `teaserStats` that is not obviously a shape rather than a claim.
+// The graded claims live in ReceiptsStrip, where they come out of the DB.
 
 export type TeaserStat = { label: string; value: string; tone?: "cyan" | "green" | "red" | "purple" };
 
@@ -88,28 +110,79 @@ export const EXPLORE: Record<string, ExploreEntry> = {
       { label: "Prints ≥ $50K", value: "1,847", tone: "purple" },
     ],
   },
-  ict: {
-    slug: "ict",
-    title: "ICT — Inner Circle Trader",
-    tagline: "Live ICT detection on ES & NQ — FVGs, order blocks, liquidity and structure, called as they form.",
+  premarket: {
+    slug: "premarket",
+    title: "Premarket Prep",
+    tagline: "What regime am I in, where are the walls, what happened overnight — answered before the bell.",
     body: [
-      "Every Inner Circle Trader concept, detected live on the same 5-minute ES and NQ session feed the desk runs on. Fair Value Gaps, order blocks, buy/sell-side liquidity pools, market-structure shifts (BOS / CHOCH / MSS), the premium/discount dealing range and the OTE band are computed continuously and drawn straight on the chart — no manual mark-ups.",
-      "Kill zones, the Silver Bullet window and ICT macros are time-boxed on the chart, a daily-bias read tells you the draw on liquidity, and a live signal panel surfaces inducement, turtle soup, Judas swings, breakers, CISD and the 2022 model as they trigger. A full glossary of every concept sits below — hover any level on the live page for the same definition in context.",
+      "Premarket Prep is the page you open at 8:00, not 9:31. It answers the three questions that decide how you trade the open: which gamma regime you are walking into, where the levels that matter sit, and what the overnight session already did to them. Everything on it is computed off the same live chain the GEX chart reads, so the board and your prep can never disagree.",
+      "The walls come with their own history: each key level carries where it sat at the prior close, so a wall that migrated 40 points overnight says so instead of looking like it was always there. Alongside them are the gamma profile and its distribution curve, the expected-range track, max pain, the 0DTE magnet, DEX and vanna totals, and the overnight ES high, low and prior RTH close.",
+      "It runs on every name in the picker — SPX plus the whole watchlist — with the same panels, computed from that ticker's own chain rather than a reduced board. When the bell rings you already know the map; and when the session is over, the Post-Market tab recaps what the day did with it.",
     ],
     highlights: [
-      "Live FVG / IFVG, order blocks & breaker blocks",
-      "Buy/sell-side liquidity, equal highs/lows & sweeps",
-      "Structure shifts: BOS, CHOCH & MSS with displacement",
-      "Kill zones, Silver Bullet, macros & Power of 3",
-      "Premium/discount range, equilibrium & OTE band",
-      "Daily bias + draw-on-liquidity, ES & NQ",
+      "Regime strip + level rail: the gamma read before the open",
+      "Key level tiles with prior-close migration — walls that moved say so",
+      "Gamma profile, distribution curve and expected-range track",
+      "Max pain, the 0DTE magnet, DEX and vanna totals",
+      "Overnight ES high / low and the prior RTH close",
+      "Today's catalysts — economic calendar plus the earnings week",
+      "Every ticker on the picker, not just SPX — and a Post-Market recap",
     ],
-    teaserLabel: "Sample live read",
+    teaserLabel: "Sample premarket board",
     teaserStats: [
-      { label: "Daily Bias", value: "Bullish", tone: "green" },
-      { label: "Active Window", value: "Silver Bullet", tone: "cyan" },
-      { label: "Structure", value: "MSS ↑", tone: "purple" },
-      { label: "Liquidity", value: "SSL swept", tone: "red" },
+      { label: "Regime", value: "Positive gamma", tone: "green" },
+      { label: "Gamma Flip", value: "5,985", tone: "cyan" },
+      { label: "Overnight range", value: "5,962–6,014", tone: "purple" },
+      { label: "Expected range", value: "±38", tone: "cyan" },
+    ],
+  },
+  "top-change-scanner": {
+    slug: "top-change-scanner",
+    title: "Top Change Scanner",
+    tagline: "The biggest dealer-gamma changes on the board, ranked at the open and graded at the close.",
+    body: [
+      "A big gamma wall that has been sitting at a strike for a week is information everyone already has. A wall that appeared this morning is not. The Top Change scanner ranks the option board by how much gamma exposure actually MOVED — the strikes and contracts where dealer positioning changed most since the prior session — and puts the leaders on cards you can read in one pass.",
+      "Every card is then tracked, not just published. Snapshots accrue through the cash session and each card can be flipped to its own intraday history, so you watch a change either build on itself or fade. The chart is filtered to regular trading hours on purpose: snapshots are recorded around the clock, but a chart that mixes an illiquid 3am print into the day's shape is a chart that lies about the day.",
+      "At the close the scorecard freezes and each pick is graded. Until then it says so — \"live · peak so far\" — rather than presenting a mid-session number as a final one.",
+    ],
+    highlights: [
+      "Ranked by CHANGE in dealer gamma, not by static size",
+      "One card per leader, readable in a single pass",
+      "Per-card intraday history — watch a change build or fade",
+      "Cash-session only: overnight prints never distort the shape",
+      "A scorecard that freezes at the close and grades every pick",
+      "Says \"live · peak so far\" until it is final — no dressed-up mid-day number",
+    ],
+    teaserLabel: "Sample ranked board",
+    teaserStats: [
+      { label: "Top change", value: "NVDA 185C", tone: "cyan" },
+      { label: "Δ Gamma", value: "+$412M", tone: "green" },
+      { label: "Cards ranked", value: "65", tone: "purple" },
+      { label: "Scorecard", value: "Live · peak so far", tone: "cyan" },
+    ],
+  },
+  "watch-scanner": {
+    slug: "watch-scanner",
+    title: "Watch Scanner",
+    tagline: "Far out-of-the-money contracts quietly building size — flagged as they build, then scored.",
+    body: [
+      "Somebody paying up for a contract nowhere near the money is making a statement, and it usually shows up long before the move does. The Watch scanner sweeps the far chain on a rolling poll and flags the contracts where size is accumulating — the ones that are becoming a real position rather than a single lottery print.",
+      "Flagged contracts go on a watch list you can open row by row: what was there when it was flagged, what it has done since, and where it sits now. Outcomes refresh on their own poll while the tab is in front of you and stop when it isn't, so a window you left open in another tab is not quietly hammering the scanner all afternoon.",
+      "And it keeps its own receipts. Every flag is scored and grouped by day, so the list you are looking at today sits directly under the record of how the last ones turned out — including the ones that went nowhere.",
+    ],
+    highlights: [
+      "Rolling sweep of the far chain — size building where it shouldn't be",
+      "A watch list of flagged contracts, not a raw print firehose",
+      "Row-level detail: what was flagged, and what it has done since",
+      "Outcomes graded and grouped by day — the misses stay on the table",
+      "Polls pause on a hidden tab; nothing runs when nobody is looking",
+    ],
+    teaserLabel: "Sample watch list",
+    teaserStats: [
+      { label: "Flagged today", value: "12", tone: "cyan" },
+      { label: "Furthest OTM flag", value: "+9.4%", tone: "purple" },
+      { label: "Resolved (7d)", value: "31", tone: "cyan" },
+      { label: "Still open", value: "8", tone: "green" },
     ],
   },
   "estimated-moves": {
@@ -156,30 +229,6 @@ export const EXPLORE: Record<string, ExploreEntry> = {
       { label: "First Break", value: "Upside 10:12", tone: "green" },
       { label: "Single-break rate", value: "58%", tone: "cyan" },
       { label: "1.0× ext hit", value: "41%", tone: "cyan" },
-    ],
-  },
-  tpo: {
-    slug: "tpo",
-    title: "TPO & Market Structure",
-    tagline: "Market Profile, built live — plus a full-day profile forecast from the open.",
-    body: [
-      "Market Profile shows you where the market actually spent its time, not just where it closed. Point of Control, the value area (VAH/VAL) and single prints are built continuously from the live ES session, so you watch acceptance, rejection and unfinished business form in real time — the structure the desk trades around.",
-      "The edge is the forecast. Once the Initial Balance completes, a k-NN model matches today's shape against years of recorded sessions and projects the full-day profile — predicted POC and value area versus what's realized so far, with a confidence read on how tight the analog set is. You get the day's map at 10:30, not at the close.",
-    ],
-    highlights: [
-      "Live POC, VAH / VAL & value area as the session prints",
-      "Single prints & poor highs/lows — unfinished business flagged",
-      "Full-day profile forecast from the Initial Balance (k-NN)",
-      "Predicted vs realized POC & value area on one axis",
-      "Model confidence from analog tightness",
-      "Balance / imbalance structure read on ES",
-    ],
-    teaserLabel: "Sample forecast",
-    teaserStats: [
-      { label: "POC", value: "5,972", tone: "cyan" },
-      { label: "Value Area", value: "5,948–5,996", tone: "green" },
-      { label: "Predicted POC", value: "5,978", tone: "purple" },
-      { label: "Forecast conf.", value: "71%", tone: "green" },
     ],
   },
 };

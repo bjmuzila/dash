@@ -9,6 +9,7 @@
 // Numbers are illustrative and labelled as such. Do NOT wire this to live data.
 
 import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { V3, V3_RADIUS } from "@/components/landing/v3Theme";
 
 const BULLISH = "#22c55e";
 const BEARISH = T.red;
@@ -55,7 +56,7 @@ export default function NetDriftExample() {
           <div style={{ fontSize: 17, fontWeight: 800 }}>
             Net Drift (Premium) — <span style={{ color: T.cyan }}>SPX</span>
           </div>
-          <div style={{ fontSize: 14, color: T.text, opacity: 0.7, marginTop: 2 }}>
+          <div style={{ fontSize: 15, color: T.text, marginTop: 2 }}>
             Cumulative net premium, 0DTE, OTM only, prints ≥ $50K
           </div>
         </div>
@@ -139,7 +140,7 @@ export default function NetDriftExample() {
         ))}
       </svg>
 
-      <p style={{ fontSize: 14, color: T.text, opacity: 0.75, margin: "14px 0 0", lineHeight: 1.55 }}>
+      <p style={{ fontSize: 15, color: T.text, margin: "14px 0 0", lineHeight: 1.6 }}>
         Green is cumulative net <strong>call</strong> premium, red is net <strong>put</strong> premium — both signed by
         side, so a bought call adds and a sold call subtracts. The bars are per-minute gross premium. On the live page this
         spans the real 9:30–4:00 session and moves with every filter you set.
@@ -153,9 +154,11 @@ export default function NetDriftExample() {
 const wrap: React.CSSProperties = {
   marginTop: "clamp(28px,5vw,44px)",
   padding: "clamp(16px,3vw,24px)",
-  borderRadius: 18,
-  border: `1px solid ${T.border}`,
-  background: `radial-gradient(circle at 50% 0%, rgba(33,158,188,0.08) 0%, transparent 60%), ${T.panelBg}`,
+  // v3 (2026-09-05): flat plate, opaque hairline. No radial bloom, no glass —
+  // see components/landing/v3Theme.ts.
+  borderRadius: V3_RADIUS.md,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface,
 };
 
 const head: React.CSSProperties = {

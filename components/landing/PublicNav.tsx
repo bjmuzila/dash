@@ -2,22 +2,23 @@
 
 // Shared public-site toolbar (landing, /explore/*, /pricing).
 //
-// STYLE = the universal dashboard toolbar (components/shared/GlobalToolbar.tsx):
-// a floating rounded pill inside a blue→teal gradient-border frame, near-opaque
-// dark fill, deep drop shadow, and a cursor-follow cyan highlight clipped to the
-// pill. Only the CONTENTS differ — public nav links + trial CTA instead of the
-// app's hamburger/clock/dock buttons. If GlobalToolbar's look changes, mirror it
-// here; do not invent a second toolbar language.
+// STYLE = v3 (2026-09-05). It used to mirror v2's GlobalToolbar: a floating
+// rounded pill inside a blue→teal gradient-border frame, near-opaque dark fill,
+// deep drop shadow and a cursor-follow cyan highlight clipped to the pill. v3's
+// chrome is flat — an opaque #0f1117 band, one #23272e hairline underneath, and
+// controls that are 8px-radius plates rather than 999px pills. The gradient
+// border, the bloom and the cursor highlight are all gone, and none of them
+// should come back one at a time.
+//
+// Colours come from components/landing/v3Theme.ts and nowhere else. This file
+// used to declare its own `cyanA()` / `blueA()` helpers over hardcoded rgb
+// triples; that is exactly the drift v3's token rule exists to stop.
 
-import { useRef, useState } from "react";
 import Link from "next/link";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { V3, V3_RADIUS, V3_TEXT, v3a } from "@/components/landing/v3Theme";
 import { BRAND_LOGO_SRC } from "@/lib/brand";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
-
-function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
-function blueA(a: number) { return `rgba(18,103,131,${a})`; }
 
 export const PUBLIC_NAV = [
   { label: "Overview", href: "/#overview" },
@@ -26,15 +27,16 @@ export const PUBLIC_NAV = [
 ];
 
 /**
- * Total height the toolbar occupies (band padding + pill + gradient border).
- * The bar is ALWAYS fixed so it doesn't shift by a pixel when you navigate
- * between /, /explore/* and /pricing — every page that mounts PublicNav must
- * reserve exactly this much space at the top of its content.
+ * Total height the toolbar occupies. The bar is ALWAYS in flow (sticky) so it
+ * doesn't shift by a pixel when you navigate between /, /explore/* and
+ * /pricing. Pages must NOT add manual top padding to compensate; the band does
+ * it. Shorter than the old 95px because the pill and its gradient frame are
+ * gone — a v3 toolbar is a band, not a floating capsule.
  */
-export const PUBLIC_NAV_HEIGHT = 95;
+export const PUBLIC_NAV_HEIGHT = 64;
 
 export default function PublicNav({
-  /** Which pill reads as current. */
+  /** Which link reads as current. */
   active,
   /** Replaces the default trial + login buttons (e.g. /pricing passes UserMenu). */
   right,
@@ -42,184 +44,85 @@ export default function PublicNav({
   active?: string;
   right?: React.ReactNode;
 }) {
-  // Cursor-follow highlight, same as GlobalToolbar.
-  const pillRef = useRef<HTMLDivElement | null>(null);
-  const [glow, setGlow] = useState<{ x: number; y: number } | null>(null);
-  const onMove = (e: React.MouseEvent) => {
-    const r = pillRef.current?.getBoundingClientRect();
-    if (r) setGlow({ x: e.clientX - r.left, y: e.clientY - r.top });
-  };
-
   return (
     <>
       <style>{`
-        .pnav-link { transition: background .14s, border-color .14s, color .14s, box-shadow .14s, transform .14s; }
-        .pnav-link:hover {
-          background: ${cyanA(0.14)};
-          border-color: ${cyanA(0.55)};
-          color: ${T.cyan};
-          transform: translateY(-1px);
-          box-shadow: 0 4px 12px -2px ${cyanA(0.45)};
-        }
-        .pnav-cta { transition: transform .14s, box-shadow .14s, border-color .14s; }
-        .pnav-cta:hover { transform: translateY(-1px); box-shadow: 0 8px 22px -4px ${cyanA(0.65)}; }
-        .pnav-ghost { transition: background .14s, border-color .14s, transform .14s; }
-        .pnav-ghost:hover { background: ${cyanA(0.14)}; border-color: ${cyanA(0.55)}; transform: translateY(-1px); }
-        @keyframes pnavPulse {
-          0%,100% { box-shadow: 0 0 0 0 ${cyanA(0.45)}; }
-          50% { box-shadow: 0 0 0 9px rgba(33,158,188,0); }
-        }
-        .pnav-pulse { animation: pnavPulse 2.4s ease-out infinite; }
-        @media (prefers-reduced-motion: reduce) { .pnav-pulse { animation: none; } }
+        /* v3 hover: step UP the surface ladder, take the accent on the edge.
+           No transform, no glow — v3 chrome does not move under the cursor. */
+        .pnav-link { transition: background .14s, border-color .14s, color .14s; }
+        .pnav-link:hover { background: ${V3.raised}; border-color: ${V3.cyan}; color: ${V3.fg}; }
+        .pnav-cta { transition: background .14s; }
+        .pnav-cta:hover { background: ${v3a(V3.cyan, 0.85)}; }
+        .pnav-ghost { transition: background .14s, border-color .14s; }
+        .pnav-ghost:hover { background: ${V3.raised}; border-color: ${V3.cyan}; }
         @media (max-width: 960px) { .pnav-links { display: none !important; } }
-        /* Phones: the right cluster (CTA + LOGIN) plus the full-size logo is
-           wider than the viewport and pushes the buttons past the pill edge.
-           Shrink both so the bar fits ~360px. */
+        /* Phones: the right cluster plus a full-size logo is wider than the
+           viewport. Shrink both so the bar fits ~360px. */
         @media (max-width: 520px) {
-          .pnav-logo { height: 36px !important; }
-          .pnav-cta, .pnav-ghost {
-            height: 34px;
-            padding: 0 11px;
-            font-size: 12px;
-            letter-spacing: 0.04em;
-          }
+          .pnav-logo { height: 30px !important; }
+          .pnav-cta, .pnav-ghost { height: 30px; padding: 0 10px; font-size: ${V3_TEXT.sm}px; }
         }
       `}</style>
 
-      {/* Outer band. STICKY, not fixed: it occupies its own height in normal flow
-          (so page content can never slide under it — that bug cost us three
-          rounds of paddingTop math) while still pinning to the top on scroll.
-          Same pixel position on every public page. Pages must NOT add manual top
-          padding to compensate; the band does it. */}
-      <div
-        style={{
-          position: "sticky",
-          top: 0,
-          display: "flex",
-          justifyContent: "center",
-          flexShrink: 0,
-          height: PUBLIC_NAV_HEIGHT,
-          padding: "10px clamp(12px, 2vw, 20px)",
-          boxSizing: "border-box",
-          zIndex: 50,
-        }}
-      >
-        {/* Gradient-border frame (blue → teal) */}
-        <div
-          style={{
-            width: "100%",
-            borderRadius: 999,
-            padding: 1.5,
-            background: `linear-gradient(110deg, ${cyanA(0.55)}, ${blueA(0.4)} 35%, ${cyanA(0.15)} 60%, ${cyanA(0.55)})`,
-            boxShadow: `0 14px 34px -14px rgba(0,0,0,0.8), 0 0 18px -6px ${cyanA(0.4)}`,
-          }}
-        >
-          <div
-            ref={pillRef}
-            onMouseMove={onMove}
-            onMouseLeave={() => setGlow(null)}
-            style={{
-              position: "relative",
-              display: "flex",
-              alignItems: "center",
-              gap: "clamp(8px, 1.2vw, 16px)",
-              height: 72,
-              padding: "0 16px",
-              borderRadius: 998,
-              background: "rgba(10,13,20,0.96)",
-              backdropFilter: "blur(16px)",
-              WebkitBackdropFilter: "blur(16px)",
-              boxSizing: "border-box",
-            }}
-          >
-            {/* cursor-follow cyan highlight (clipped to the pill) */}
-            <span
-              aria-hidden
-              style={{ position: "absolute", inset: 0, borderRadius: 998, overflow: "hidden", pointerEvents: "none", zIndex: 0 }}
-            >
-              <span
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  opacity: glow ? 1 : 0,
-                  transition: "opacity 0.25s",
-                  background: glow
-                    ? `radial-gradient(170px circle at ${glow.x}px ${glow.y}px, ${cyanA(0.2)}, transparent 70%)`
-                    : "none",
-                }}
-              />
-            </span>
+      <div style={band}>
+        <div style={inner}>
+          {/* Logo */}
+          <Link href="/" style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              className="pnav-logo"
+              src={BRAND_LOGO_SRC}
+              alt={APP_NAME}
+              style={{ height: 38, width: "auto", maxWidth: 180, display: "block", objectFit: "contain" }}
+            />
+          </Link>
 
-            {/* Logo */}
-            <Link href="/" style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", flexShrink: 0 }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                className="pnav-logo"
-                src={BRAND_LOGO_SRC}
-                alt={APP_NAME}
-                style={{ height: 52, width: "auto", maxWidth: 210, display: "block", objectFit: "contain" }}
-              />
-            </Link>
+          {/* Center nav — absolutely centered on the BAND, not on the leftover
+              space between the logo and the right cluster. Otherwise the links
+              slide whenever the right cluster changes width (e.g. /pricing
+              swaps the trial CTA for a UserMenu). */}
+          <nav className="pnav-links" style={navRow}>
+            {PUBLIC_NAV.map((n) => {
+              const on = active === n.label;
+              return (
+                <Link
+                  key={n.label}
+                  href={n.href}
+                  className="pnav-link"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    height: 32,
+                    padding: "0 14px",
+                    borderRadius: V3_RADIUS.md,
+                    fontSize: V3_TEXT.base,
+                    fontWeight: 600,
+                    letterSpacing: "0.03em",
+                    textDecoration: "none",
+                    whiteSpace: "nowrap",
+                    border: `1px solid ${on ? V3.cyan : "transparent"}`,
+                    background: on ? V3.surface2 : "transparent",
+                    color: V3.fg,
+                  }}
+                >
+                  {n.label}
+                </Link>
+              );
+            })}
+          </nav>
 
-            {/* Center nav — absolutely centered on the PILL, not on the leftover
-                space between the logo and the right cluster. Otherwise the pills
-                slide whenever the right cluster changes width (e.g. /pricing
-                swaps the trial CTA for a UserMenu). */}
-            <nav
-              className="pnav-links"
-              style={{
-                position: "absolute",
-                left: "50%",
-                top: "50%",
-                transform: "translate(-50%, -50%)",
-                zIndex: 1,
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}
-            >
-              {PUBLIC_NAV.map((n) => {
-                const on = active === n.label;
-                return (
-                  <Link
-                    key={n.label}
-                    href={n.href}
-                    className="pnav-link"
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      height: 38,
-                      padding: "0 18px",
-                      borderRadius: 999,
-                      fontSize: 14,
-                      fontWeight: 700,
-                      letterSpacing: "0.04em",
-                      textDecoration: "none",
-                      whiteSpace: "nowrap",
-                      border: `1px solid ${on ? cyanA(0.45) : "transparent"}`,
-                      background: on ? cyanA(0.12) : "rgba(255,255,255,0.04)",
-                      color: on ? T.cyan : T.text,
-                    }}
-                  >
-                    {n.label}
-                  </Link>
-                );
-              })}
-            </nav>
-
-            {/* Right cluster — pinned to the right edge of the pill. */}
-            <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
-              {right ?? (
-                <>
-                  <Link href="/pricing?from=nav&trial=1" className="pnav-cta pnav-pulse" style={ctaBtn}>
-                    START FREE TRIAL <span style={{ opacity: 0.8 }}>›</span>
-                  </Link>
-                  <Link href="/sign-in" className="pnav-ghost" style={ghostBtn}>
-                    LOGIN
-                  </Link>
-                </>
-              )}
-            </div>
+          {/* Right cluster — pinned to the right edge of the band. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
+            {right ?? (
+              <>
+                <Link href="/pricing?from=nav&trial=1" className="pnav-cta" style={ctaBtn}>
+                  START FREE TRIAL <span aria-hidden>›</span>
+                </Link>
+                <Link href="/sign-in" className="pnav-ghost" style={ghostBtn}>
+                  LOGIN
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -229,35 +132,68 @@ export default function PublicNav({
 
 /* ── styles ─────────────────────────────────────────────────────────────── */
 
+const band: React.CSSProperties = {
+  position: "sticky",
+  top: 0,
+  flexShrink: 0,
+  height: PUBLIC_NAV_HEIGHT,
+  boxSizing: "border-box",
+  zIndex: 50,
+  // v3 paints the toolbar band in --color-bg, the same tone as the canvas, and
+  // separates it with a hairline rather than a shadow.
+  background: V3.bg,
+  borderBottom: `1px solid ${V3.line}`,
+};
+
+const inner: React.CSSProperties = {
+  position: "relative",
+  display: "flex",
+  alignItems: "center",
+  gap: "clamp(8px, 1.2vw, 16px)",
+  height: "100%",
+  padding: "0 clamp(12px, 2vw, 20px)",
+  boxSizing: "border-box",
+};
+
+const navRow: React.CSSProperties = {
+  position: "absolute",
+  left: "50%",
+  top: "50%",
+  transform: "translate(-50%, -50%)",
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+};
+
 const ctaBtn: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  gap: 7,
-  height: 38,
-  padding: "0 18px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 900,
+  gap: 6,
+  height: 34,
+  padding: "0 16px",
+  borderRadius: V3_RADIUS.md,
+  fontSize: V3_TEXT.sm,
+  fontWeight: 700,
   letterSpacing: "0.07em",
-  color: "#fff",
+  color: V3.fg,
   textDecoration: "none",
   whiteSpace: "nowrap",
-  background: `linear-gradient(180deg, ${cyanA(0.85)}, ${blueA(0.9)})`,
-  border: `1px solid ${cyanA(0.6)}`,
+  background: V3.cyan,
+  border: `1px solid ${V3.cyan}`,
 };
 
 const ghostBtn: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  height: 38,
-  padding: "0 16px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 800,
+  height: 34,
+  padding: "0 14px",
+  borderRadius: V3_RADIUS.md,
+  fontSize: V3_TEXT.sm,
+  fontWeight: 700,
   letterSpacing: "0.07em",
-  color: T.text,
+  color: V3.fg,
   textDecoration: "none",
   whiteSpace: "nowrap",
-  background: "rgba(255,255,255,0.04)",
-  border: `1px solid ${cyanA(0.3)}`,
+  background: V3.surface,
+  border: `1px solid ${V3.line}`,
 };

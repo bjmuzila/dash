@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { HOME_THEME as T, LEVEL_COLORS, REFRESH_GREEN } from "@/components/shared/homeTheme";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { V3, V3_MONO, V3_RADIUS, V3_TEXT, v3CardStyle, v3Chip } from "@/components/landing/v3Theme";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The free live level tile.
 //
-// This is the whole argument of the new landing page in one component: a cold
+// This is the whole argument of the landing page in one component: a cold
 // visitor sees a REAL gamma flip, computed off the live chain, before there is
-// an account, a card or an email. The old fold sold the brand (a 210px logo and
-// a sentence every GEX competitor also writes); this sells the thing itself.
+// an account, a card or an email.
 //
 // Rules this component exists to enforce:
 //
@@ -25,9 +24,42 @@ import { HOME_THEME as T, LEVEL_COLORS, REFRESH_GREEN } from "@/components/share
 //   3. The refresh cadence here (15s) matches the server cache TTL exactly. A
 //      faster poll buys nothing but load; a slower one makes the "15s" label a
 //      lie.
+//
+// ── 2026-09-05: "it isn't updating", and the stamp said a time that looked live
+//
+// Three things were true at once and each one on its own is enough to make a
+// visitor call this panel dead:
+//
+//   a. THE STAMP SHOWED ONLY A CLOCK. `as of 14:32 ET` on a Saturday reads as
+//      "updated a minute ago" whichever session the numbers are actually from.
+//      It now prints the DATE with the time, so a weekend, a holiday or a feed
+//      that stopped mid-session is legible at a glance instead of looking like
+//      live data that happens to be wrong.
+//   b. A BACKGROUND TAB FREEZES THE POLL. `setInterval` is throttled hard in a
+//      hidden tab, so a page left open and come back to shows whatever it had
+//      when it was last visible — for as long as the browser feels like it,
+//      not 15s. There is now a `visibilitychange` + `focus` listener that pulls
+//      immediately on the way back, which is the moment somebody is actually
+//      looking.
+//   c. THE RESPONSE IS `Cache-Control: public, max-age=15`. `cache: "no-store"`
+//      covers the browser's own HTTP cache and nothing in front of it; an
+//      edge/CDN layer in front of the origin can and will hand every visitor
+//      the same 15s-old body for longer than that. The URL now carries a
+//      cache-buster, which no intermediary can collapse.
+//
+// And the panel now says when it is STALE rather than showing a live-green
+// "15s" over frozen numbers — see FRESH_MS.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const POLL_MS = 15_000;
+
+/**
+ * How old the server's `asOf` may get before the tile stops claiming to be
+ * live. Four poll windows: one missed request is a blip, four in a row is a
+ * feed that has stopped. The chip flips to STALE and the stamp is the only
+ * thing that stays interesting.
+ */
+const FRESH_MS = 4 * POLL_MS;
 
 interface PublicLevels {
   ok: boolean;
@@ -45,110 +77,164 @@ interface PublicLevels {
 const fmt = (v: number | null, digits = 0) =>
   v == null ? null : v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
-function etClock(ms: number): string {
+/**
+ * DATE **and** time, in ET. The date is not decoration — it is the only thing
+ * on the tile that can tell a visitor these numbers are from Friday. See note
+ * (a) in the header.
+ */
+function etStamp(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "";
   try {
-    return new Date(ms).toLocaleTimeString("en-US", {
-      timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
-    });
-  } catch { return ""; }
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(ms));
+  } catch {
+    return "";
+  }
 }
 
 export default function LiveLevelPanel() {
   const [d, setD] = useState<PublicLevels | null>(null);
-  // null = first load in flight, false = we asked and there is nothing to show.
+  // false = first load still in flight; true = we asked and have an answer.
   const [ready, setReady] = useState(false);
+  // Re-renders on the poll tick so the STALE check below is evaluated against
+  // wall-clock now, not against whenever the last successful body arrived.
+  const [now, setNow] = useState(() => Date.now());
+  const live = useRef(true);
+
+  const pull = useCallback(async () => {
+    try {
+      // Cache-buster: see note (c). The route's own 15s module cache is what
+      // actually protects /proxy/gex, so this costs the origin nothing.
+      const r = await fetch(`/api/public-levels?t=${Date.now()}`, { cache: "no-store" });
+      const j = r.ok ? ((await r.json()) as PublicLevels) : null;
+      if (!live.current) return;
+      setD(j);
+      setReady(true);
+      setNow(Date.now());
+    } catch {
+      if (!live.current) return;
+      setD(null);
+      setReady(true);
+      setNow(Date.now());
+    }
+  }, []);
 
   useEffect(() => {
-    let live = true;
-    const pull = async () => {
-      try {
-        const r = await fetch("/api/public-levels", { cache: "no-store" });
-        const j = r.ok ? ((await r.json()) as PublicLevels) : null;
-        if (live) { setD(j); setReady(true); }
-      } catch {
-        if (live) { setD(null); setReady(true); }
-      }
-    };
+    live.current = true;
     void pull();
     const t = setInterval(() => { void pull(); }, POLL_MS);
-    return () => { live = false; clearInterval(t); };
-  }, []);
+
+    // A hidden tab throttles the interval to a crawl — note (b). Pull the
+    // moment the page is looked at again rather than up to a minute later.
+    const wake = () => {
+      if (document.visibilityState === "visible") void pull();
+    };
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", wake);
+
+    return () => {
+      live.current = false;
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", wake);
+    };
+  }, [pull]);
 
   // The flip is the headline. Without it there is no panel — see rule 1.
   const hasFlip = !!d?.ok && d.gammaFlip != null;
   const spotAbove = d?.spot != null && d?.gammaFlip != null ? d.spot - d.gammaFlip : null;
+  const fresh = hasFlip && now - Number(d!.asOf) <= FRESH_MS;
+  const stamp = hasFlip ? etStamp(Number(d!.asOf)) : "";
 
   return (
     <div style={wrap} className="live-level">
-      <span style={freeTag}>FREE · NO ACCOUNT</span>
-
-      <div style={topRow}>
+      <div style={head}>
         <span style={topLabel}>SPX · Gamma Flip</span>
-        <span style={liveDot}>
-          <i style={dot} />
-          {hasFlip ? "15s" : "IDLE"}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span style={v3Chip(V3.up)}>FREE · NO ACCOUNT</span>
+          <span style={fresh ? liveDot : staleTag}>
+            {fresh && <i style={dot} />}
+            {hasFlip ? (fresh ? "15s" : "STALE") : "IDLE"}
+          </span>
         </span>
       </div>
 
-      {hasFlip ? (
-        <>
-          <div style={bigNo}>{fmt(d!.gammaFlip)}</div>
-          <div style={bigNoSub}>
-            {d!.spot != null ? (
-              <>
-                Spot <b style={{ fontFamily: MONO, color: T.text, fontWeight: 700 }}>{fmt(d!.spot)}</b>
-                {spotAbove != null && (
-                  <>
-                    {" · "}
-                    <span style={{ color: spotAbove >= 0 ? GREEN : T.red, fontWeight: 700 }}>
-                      {spotAbove >= 0 ? "+" : "−"}{fmt(Math.abs(spotAbove))} {spotAbove >= 0 ? "above" : "below"} flip
-                    </span>
-                  </>
-                )}
-                {d!.regime && ` · ${d!.regime} gamma regime`}
-              </>
-            ) : (
-              "Front expiry, open interest + volume"
-            )}
-          </div>
+      <div style={body}>
+        {hasFlip ? (
+          <>
+            <div style={bigNo}>{fmt(d!.gammaFlip)}</div>
+            <div style={bigNoSub}>
+              {d!.spot != null ? (
+                <>
+                  Spot <b style={{ fontFamily: V3_MONO, color: V3.fg, fontWeight: 700 }}>{fmt(d!.spot)}</b>
+                  {spotAbove != null && (
+                    <>
+                      {" · "}
+                      <span style={{ color: spotAbove >= 0 ? V3.up : V3.down, fontWeight: 700 }}>
+                        {spotAbove >= 0 ? "+" : "−"}{fmt(Math.abs(spotAbove))} {spotAbove >= 0 ? "above" : "below"} flip
+                      </span>
+                    </>
+                  )}
+                  {d!.regime && ` · ${d!.regime} gamma regime`}
+                </>
+              ) : (
+                "Front expiry, open interest + volume"
+              )}
+            </div>
 
-          <div style={{ marginTop: 16 }}>
-            <LevelRow label="Call wall" value={fmt(d!.callWall)} color={LEVEL_COLORS.cw} />
-            <LevelRow label="Put wall" value={fmt(d!.putWall)} color={LEVEL_COLORS.pw} />
-            <LevelRow label="Core bullseye" value={fmt(d!.coreBullseye)} color={LEVEL_COLORS.cb} />
-            {d!.netGexB != null && (
-              <LevelRow
-                label="Net GEX"
-                value={`${d!.netGexB >= 0 ? "+" : "−"}${Math.abs(d!.netGexB).toFixed(2)}B`}
-                color="rgba(255,255,255,0.3)"
-              />
-            )}
-          </div>
+            <div style={{ marginTop: 16 }}>
+              <LevelRow label="Call wall" value={fmt(d!.callWall)} color={V3.levelCw} />
+              <LevelRow label="Put wall" value={fmt(d!.putWall)} color={V3.levelPw} />
+              {/* "Core", not "Core Bullseye" (Brandon, 2026-09-05). The app's
+                  own rails, the Multi Greek badges and the Key Levels tiles all
+                  say Core; the landing page was the last surface still using
+                  the long name for the same level. */}
+              <LevelRow label="Core" value={fmt(d!.coreBullseye)} color={V3.levelCb} />
+              {d!.netGexB != null && (
+                <LevelRow
+                  label="Net GEX"
+                  value={`${d!.netGexB >= 0 ? "+" : "−"}${Math.abs(d!.netGexB).toFixed(2)}B`}
+                  color={V3.fg}
+                />
+              )}
+            </div>
 
-          <div style={stamp}>
-            Front expiry · open interest + volume · as of {etClock(d!.asOf)} ET
+            <div style={stampRow}>
+              <span>Front expiry · open interest + volume</span>
+              {/* DATE and time. The whole point of note (a). */}
+              <span style={{ fontFamily: V3_MONO, color: fresh ? V3.fg : V3.warn }}>
+                {stamp ? `${stamp} ET` : "—"}
+              </span>
+            </div>
+          </>
+        ) : (
+          // Honest empty state. Weekends, holidays and any feed interruption
+          // land here. It says WHEN it comes back rather than pretending to be
+          // loading forever, and it never shows a number it doesn't have.
+          <div style={idleBox}>
+            <div style={idleTitle}>{ready ? "Levels resume at the next session" : "Loading live levels…"}</div>
+            <div style={idleBody}>
+              {ready
+                ? "The SPX chain is only live during market hours. This tile fills itself the moment the session opens — no account needed then either."
+                : "Reading the live SPX chain."}
+            </div>
           </div>
-        </>
-      ) : (
-        // Honest empty state. Weekends, holidays and any feed interruption land
-        // here. It says WHEN it comes back rather than pretending to be loading
-        // forever, and it never shows a number it doesn't have.
-        <div style={idleBox}>
-          <div style={idleTitle}>{ready ? "Levels resume at the next session" : "Loading live levels…"}</div>
-          <div style={idleBody}>
-            {ready
-              ? "The SPX chain is only live during market hours. This tile fills itself the moment the session opens — no account needed then either."
-              : "Reading the live SPX chain."}
-          </div>
+        )}
+
+        <div style={locked}>
+          <span aria-hidden style={{ color: V3.cyan, fontSize: V3_TEXT.base, lineHeight: 1 }}>🔒</span>
+          <span style={lockedText}>
+            <b style={{ color: V3.fg, fontWeight: 700 }}>Rate of change, strike history, flow and alerts</b>
+            {" — inside the trial. This panel stays free either way."}
+          </span>
         </div>
-      )}
-
-      <div style={locked}>
-        <span aria-hidden style={{ color: T.cyan, fontSize: 13, lineHeight: 1 }}>🔒</span>
-        <span style={lockedText}>
-          <b style={{ color: T.text, fontWeight: 700 }}>Rate of change, strike history, flow and alerts</b>
-          {" — inside the trial. This panel stays free either way."}
-        </span>
       </div>
     </div>
   );
@@ -169,123 +255,142 @@ function LevelRow({ label, value, color }: { label: string; value: string | null
 }
 
 /* ── styles ───────────────────────────────────────────────────────────── */
-
-const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-// The app's one "up / success" green, from the theme. HOME_THEME.green is a
-// LIGHT BLUE (#8ECAE6) — the status palette's accent, not a green — so reaching
-// for it here would print the wrong colour. See the REFRESH_GREEN comment in
-// homeTheme.ts.
-const GREEN = REFRESH_GREEN;
-
-function hexA(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
-}
-const cyanA = (a: number) => hexA(T.cyan, a);
-const greenA = (a: number) => hexA(REFRESH_GREEN, a);
+/* v3 surfaces only — see components/landing/v3Theme.ts. No blur, no glow, no
+   text opacity: every string on this tile is #ffffff or a level colour. */
 
 const wrap: React.CSSProperties = {
-  position: "relative",
-  background: "rgba(13,17,25,0.62)",
-  border: `1px solid ${cyanA(0.26)}`,
-  borderRadius: 18,
-  padding: 20,
-  backdropFilter: "blur(20px)",
-  WebkitBackdropFilter: "blur(20px)",
-  boxShadow: "0 30px 70px -25px rgba(0,0,0,0.85)",
+  ...v3CardStyle,
+  overflow: "hidden",
 };
 
-const freeTag: React.CSSProperties = {
-  position: "absolute",
-  top: -11,
-  right: 18,
-  fontFamily: MONO,
-  fontSize: 9,
-  fontWeight: 800,
-  letterSpacing: "0.14em",
-  padding: "4px 10px",
-  borderRadius: 999,
-  background: greenA(0.16),
-  color: GREEN,
-  border: `1px solid ${greenA(0.45)}`,
-  whiteSpace: "nowrap",
+const head: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  flexWrap: "wrap",
+  padding: "10px 14px",
+  borderBottom: `1px solid ${V3.line}`,
+  background: V3.surface2,
 };
 
-const topRow: React.CSSProperties = {
-  display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16,
-};
+const body: React.CSSProperties = { padding: 16 };
 
 const topLabel: React.CSSProperties = {
-  fontFamily: MONO, fontSize: 10, fontWeight: 800, letterSpacing: "0.14em",
-  textTransform: "uppercase", color: T.muted, opacity: 0.55,
+  fontFamily: V3_MONO,
+  fontSize: V3_TEXT.xs,
+  fontWeight: 700,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: V3.fg,
 };
 
 const liveDot: React.CSSProperties = {
-  display: "inline-flex", alignItems: "center", gap: 7, fontFamily: MONO,
-  fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: GREEN,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 7,
+  fontFamily: V3_MONO,
+  fontSize: V3_TEXT.xs,
+  fontWeight: 700,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: V3.refresh,
 };
 
+const staleTag: React.CSSProperties = { ...liveDot, color: V3.warn };
+
 const dot: React.CSSProperties = {
-  width: 7, height: 7, borderRadius: "50%", background: GREEN,
-  boxShadow: `0 0 10px ${GREEN}`, display: "inline-block",
+  width: 6,
+  height: 6,
+  borderRadius: 999,
+  background: V3.refresh,
+  display: "inline-block",
 };
 
 const bigNo: React.CSSProperties = {
-  fontFamily: MONO,
-  fontSize: "clamp(38px, 5vw, 54px)",
-  fontWeight: 800,
+  fontFamily: V3_MONO,
+  fontSize: "clamp(32px, 4.6vw, 48px)",
+  fontWeight: 700,
   letterSpacing: "-0.03em",
   lineHeight: 1,
-  color: T.cyan,
-  textShadow: `0 0 34px ${cyanA(0.45)}`,
+  color: V3.levelCw,
 };
 
 const bigNoSub: React.CSSProperties = {
-  fontSize: 12, color: T.muted, opacity: 0.85, marginTop: 6, lineHeight: 1.45,
+  fontSize: V3_TEXT.base,
+  color: V3.fg,
+  marginTop: 8,
+  lineHeight: 1.5,
 };
 
 const levelRow: React.CSSProperties = {
-  display: "flex", justifyContent: "space-between", alignItems: "baseline",
-  padding: "9px 0", borderBottom: "1px solid rgba(255,255,255,0.05)", fontSize: 13,
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "baseline",
+  padding: "9px 0",
+  borderBottom: `1px solid ${V3.line}`,
+  fontSize: V3_TEXT.base,
 };
 
 const levelKey: React.CSSProperties = {
-  color: T.muted, opacity: 0.85, display: "flex", alignItems: "center", gap: 8,
+  color: V3.fg,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
 };
 
 const swatch: React.CSSProperties = {
-  width: 9, height: 9, borderRadius: 2, display: "inline-block", flexShrink: 0,
+  width: 8,
+  height: 8,
+  borderRadius: V3_RADIUS.sm / 2,
+  display: "inline-block",
+  flexShrink: 0,
 };
 
-const levelVal: React.CSSProperties = { fontFamily: MONO, fontWeight: 700, fontSize: 14 };
+const levelVal: React.CSSProperties = { fontFamily: V3_MONO, fontWeight: 700, fontSize: V3_TEXT.body };
 
-const stamp: React.CSSProperties = {
-  marginTop: 12, fontSize: 10, fontFamily: MONO, color: T.muted, opacity: 0.5, letterSpacing: "0.04em",
+const stampRow: React.CSSProperties = {
+  marginTop: 12,
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "baseline",
+  gap: 10,
+  flexWrap: "wrap",
+  fontSize: V3_TEXT.xs,
+  color: V3.fg,
+  letterSpacing: "0.04em",
 };
 
-const idleBox: React.CSSProperties = {
-  padding: "22px 4px 18px",
-};
+const idleBox: React.CSSProperties = { padding: "18px 0 14px" };
 
 const idleTitle: React.CSSProperties = {
-  fontSize: 17, fontWeight: 700, letterSpacing: "-0.01em", marginBottom: 8,
+  fontSize: V3_TEXT.lg,
+  fontWeight: 600,
+  letterSpacing: "-0.01em",
+  marginBottom: 8,
+  color: V3.fg,
 };
 
 const idleBody: React.CSSProperties = {
-  fontSize: 12.5, color: T.muted, opacity: 0.8, lineHeight: 1.5, maxWidth: "42ch",
+  fontSize: V3_TEXT.base,
+  color: V3.fg,
+  lineHeight: 1.55,
+  maxWidth: "42ch",
 };
 
 const locked: React.CSSProperties = {
   marginTop: 14,
-  padding: "11px 13px",
-  borderRadius: 10,
-  border: `1px dashed ${cyanA(0.35)}`,
-  background: cyanA(0.05),
+  padding: "11px 12px",
+  borderRadius: V3_RADIUS.sm,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface2,
   display: "flex",
   alignItems: "center",
   gap: 11,
 };
 
 const lockedText: React.CSSProperties = {
-  fontSize: 11.5, color: T.muted, opacity: 0.9, lineHeight: 1.45,
+  fontSize: V3_TEXT.base,
+  color: V3.fg,
+  lineHeight: 1.5,
 };

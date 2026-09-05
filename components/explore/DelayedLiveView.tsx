@@ -1,8 +1,7 @@
 import { unstable_cache } from "next/cache";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { V3, V3_RADIUS, V3_TEXT, v3a } from "@/components/landing/v3Theme";
 import {
   getDb,
-  queryAll,
   getIbDailyResults,
   getLatestHomeStaticSnapshot,
   type IbDailyResultRow,
@@ -24,11 +23,28 @@ import {
 // missing/empty table shows a "populates at end of day" line, never a 500 on a
 // marketing page. flow + confidence-score already have their own dedicated
 // live components (NetDriftExample / Confidence7dTracker) and are skipped here.
+//
+// ── 2026-09-05 ───────────────────────────────────────────────────────────────
+// • The TPO block is gone with the /explore/tpo page — the scanner dropped that
+//   tab on 2026-09-03 and this was the last thing querying `tpo_profiles` for a
+//   customer-facing surface.
+// • v3 surfaces and white text, same as the rest of the public tree. The
+//   `opacity: .75 / .8 / .85` on three text styles is removed rather than
+//   tuned: see the v3 THEME note in components/landing/LandingClient.tsx.
+// • The three NEW explore pages (premarket, top-change-scanner, watch-scanner)
+//   have no delayed-live block yet and correctly fall through to `null`. Each
+//   would need its own recorder table read here; do not fake one with a static
+//   number, which is precisely what this component exists to avoid.
 
 const CACHE_S = 900;
 
 type Tone = "cyan" | "green" | "red" | "purple";
-const toneColor: Record<Tone, string> = { cyan: T.cyan, green: T.green, red: T.red, purple: T.purple };
+const toneColor: Record<Tone, string> = {
+  cyan: V3.levelCw,
+  green: V3.up,
+  red: V3.down,
+  purple: V3.violet,
+};
 
 const fmt = (n: number | null | undefined, d = 0) =>
   n == null || !Number.isFinite(n) ? "—" : Number(n).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d });
@@ -48,28 +64,30 @@ function Frame({ label, freshness, children }: { label: string; freshness?: stri
   return (
     <section style={frameCard}>
       <div style={frameHead}>
-        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.muted }}>
+        <span style={{ fontSize: V3_TEXT.xs, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: V3.fg }}>
           {label}
         </span>
         <span style={liveTag}>
           <span style={liveDot} /> Live · delayed
         </span>
       </div>
-      {children}
-      <p style={{ color: T.muted, fontSize: 12, margin: "14px 0 0", lineHeight: 1.4, opacity: 0.75 }}>
-        Real data, shown on a delay{freshness ? ` · ${freshness}` : ""}. Full live, tick-by-tick, is inside the dashboard for members.
-      </p>
+      <div style={{ padding: "clamp(14px,2.4vw,20px)" }}>
+        {children}
+        <p style={{ color: V3.fg, fontSize: V3_TEXT.base, margin: "14px 0 0", lineHeight: 1.5 }}>
+          Real data, shown on a delay{freshness ? ` · ${freshness}` : ""}. Full live, tick-by-tick, is inside the dashboard for members.
+        </p>
+      </div>
     </section>
   );
 }
 
 function StatGrid({ stats }: { stats: { label: string; value: string; tone?: Tone }[] }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
       {stats.map((s) => (
         <div key={s.label} style={statCell}>
-          <div style={{ color: T.muted, fontSize: 12, marginBottom: 6, opacity: 0.8 }}>{s.label}</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: s.tone ? toneColor[s.tone] : T.text }}>{s.value}</div>
+          <div style={{ color: V3.fg, fontSize: V3_TEXT.base, marginBottom: 6 }}>{s.label}</div>
+          <div style={{ fontSize: V3_TEXT.xl, fontWeight: 700, color: s.tone ? toneColor[s.tone] : V3.fg }}>{s.value}</div>
         </div>
       ))}
     </div>
@@ -79,7 +97,7 @@ function StatGrid({ stats }: { stats: { label: string; value: string; tone?: Ton
 function EmptyBlock({ label, note }: { label: string; note: string }) {
   return (
     <Frame label={label}>
-      <p style={{ color: T.muted, fontSize: 14, lineHeight: 1.6, margin: 0 }}>{note}</p>
+      <p style={{ color: V3.fg, fontSize: V3_TEXT.body, lineHeight: 1.6, margin: 0 }}>{note}</p>
     </Frame>
   );
 }
@@ -153,7 +171,7 @@ async function EmLive() {
         { label: "Distinct weeks", value: fmt(Number(rr.weeks ?? 0)), tone: "purple" },
         { label: "Tickers tracked", value: fmt(Number(rr.tickers ?? 0)), tone: "cyan" },
       ]} />
-      <p style={{ color: T.muted, fontSize: 12, margin: "12px 0 0", lineHeight: 1.5, opacity: 0.85 }}>
+      <p style={{ color: V3.fg, fontSize: V3_TEXT.base, margin: "12px 0 0", lineHeight: 1.55 }}>
         A 1-SD weekly band should contain price near 68% of the time — this is calibration, every graded week including the misses.
       </p>
     </Frame>
@@ -197,51 +215,16 @@ async function IbLive() {
   );
 }
 
-/* ── TPO: latest completed Market Profile (tpo_profiles) ────────────────────── */
-
-interface TpoRow { date: string; poc: number | null; vah: number | null; val: number | null; }
-
-const tpoRow = unstable_cache(
-  async (): Promise<TpoRow | null> => {
-    try {
-      const rows = await queryAll<TpoRow>(
-        `SELECT date, poc, vah, val FROM tpo_profiles WHERE symbol = ? ORDER BY date DESC LIMIT 1`,
-        ["ESU"]
-      );
-      return rows[0] ?? null;
-    } catch { return null; }
-  },
-  ["explore-delayed-tpo"],
-  { revalidate: CACHE_S, tags: ["explore-delayed"] }
-);
-
-async function TpoLive() {
-  const r = await tpoRow();
-  if (!r) {
-    return <EmptyBlock label="TPO · ES Market Profile" note="Completed Market Profiles populate here at the end of each session." />;
-  }
-  const va = r.vah != null && r.val != null ? `${fmt(r.val)}–${fmt(r.vah)}` : "—";
-  return (
-    <Frame label={`TPO · ES Market Profile · ${r.date}`}>
-      <StatGrid stats={[
-        { label: "Point of Control", value: fmt(r.poc), tone: "cyan" },
-        { label: "Value Area High", value: fmt(r.vah), tone: "green" },
-        { label: "Value Area Low", value: fmt(r.val), tone: "red" },
-        { label: "Value Area", value: va, tone: "purple" },
-      ]} />
-    </Frame>
-  );
-}
-
 /* ── router ─────────────────────────────────────────────────────────────────── */
 
 export default async function DelayedLiveView({ slug }: { slug: string }) {
   // flow + confidence-score render their own richer live components on the page.
+  // premarket / top-change-scanner / watch-scanner have no delayed block yet —
+  // see the 2026-09-05 note at the top before adding one.
   switch (slug) {
     case "gex": return <GexLive />;
     case "estimated-moves": return <EmLive />;
     case "initial-balance": return <IbLive />;
-    case "tpo": return <TpoLive />;
     default: return null;
   }
 }
@@ -250,23 +233,24 @@ export default async function DelayedLiveView({ slug }: { slug: string }) {
 
 const frameCard: React.CSSProperties = {
   marginTop: "clamp(24px,4vw,40px)",
-  background: "linear-gradient(180deg, rgba(33,158,188,0.05), rgba(255,255,255,0.02))",
-  border: "1px solid rgba(33,158,188,0.18)",
-  borderRadius: 16,
-  padding: "clamp(16px,3vw,24px)",
+  background: V3.surface,
+  border: `1px solid ${V3.line}`,
+  borderRadius: V3_RADIUS.md,
+  overflow: "hidden",
 };
 const frameHead: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 16,
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap",
+  padding: "10px 14px", borderBottom: `1px solid ${V3.line}`, background: V3.surface2,
 };
 const liveTag: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: 7,
-  fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase",
-  color: T.green, border: "1px solid rgba(142,202,230,0.35)", background: "rgba(142,202,230,0.08)",
-  borderRadius: 999, padding: "3px 9px",
+  fontSize: V3_TEXT.xs, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+  color: V3.refresh, border: `1px solid ${v3a(V3.refresh, 0.35)}`, background: v3a(V3.refresh, 0.1),
+  borderRadius: V3_RADIUS.sm, padding: "3px 9px",
 };
 const liveDot: React.CSSProperties = {
-  width: 6, height: 6, borderRadius: 999, background: T.green, boxShadow: `0 0 8px ${T.green}`,
+  width: 6, height: 6, borderRadius: 999, background: V3.refresh,
 };
 const statCell: React.CSSProperties = {
-  background: "rgba(0,0,0,0.3)", border: `1px solid ${T.border}`, borderRadius: 10, padding: 14,
+  background: V3.surface2, border: `1px solid ${V3.line}`, borderRadius: V3_RADIUS.sm, padding: 14,
 };

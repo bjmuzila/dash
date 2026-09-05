@@ -1,8 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import {
+  V3,
+  V3_MONO,
+  V3_RADIUS,
+  V3_SANS,
+  V3_TEXT,
+  v3Chip,
+} from "@/components/landing/v3Theme";
 import { EXPLORE, EXPLORE_SLUGS, type TeaserStat } from "@/components/explore/exploreContent";
-import { ICT_CONCEPTS } from "@/components/explore/ictGlossary";
 import PublicNav from "@/components/landing/PublicNav";
 import NetDriftExample from "@/components/explore/NetDriftExample";
 import Confidence7dTracker from "@/components/explore/Confidence7dTracker";
@@ -12,7 +18,24 @@ import DelayedLiveView from "@/components/explore/DelayedLiveView";
 // Sells the feature with copy + a frozen static teaser + a delayed-LIVE real
 // data view, then drives to /pricing?from=<slug> (the single conversion hub).
 // Signed-out friendly.
-
+//
+// ── 2026-09-05 ───────────────────────────────────────────────────────────────
+// • v3 THEME. Surfaces, radii and type come from components/landing/v3Theme.ts,
+//   which transcribes cbedge-v3/src/design/tokens.css (the Next tree cannot
+//   import from that app — see that file's header). Flat #0f1117 plates with
+//   #23272e hairlines; no gradients, no cyan bloom. Every colour literal this
+//   file used to type inline ("rgba(33,158,188,0.3)", "#2CB6D6", "#04121a") is
+//   gone; do not add another.
+// • WHITE TEXT. v3's --color-fg / --color-muted / --color-faint are all
+//   #ffffff. Body copy that used to render in T.muted now renders in V3.fg and
+//   nothing on the page carries a text `opacity`.
+// • THE ICT GLOSSARY IS GONE, with the /explore/ict page. `ICT_CONCEPTS` and
+//   the IctGlossary component it fed were the only readers of
+//   components/explore/ictGlossary.ts, which is now unreferenced. /explore/tpo
+//   went the same way — the scanner dropped that tab on 2026-09-03, so the page
+//   was selling a screen that no longer exists. Both slugs now 404 through the
+//   notFound() below, which is the correct answer for a page that was removed.
+//
 // Render at REQUEST time — do not prerender. The Docker build stage has no
 // .env.local (secrets are mounted at runtime), so DATABASE_URL is undefined
 // during `next build`: every delayed-live query throws and the "populates at
@@ -24,10 +47,10 @@ import DelayedLiveView from "@/components/explore/DelayedLiveView";
 export const dynamic = "force-dynamic";
 
 const toneColor: Record<NonNullable<TeaserStat["tone"]>, string> = {
-  cyan: T.cyan,
-  green: T.green,
-  red: T.red,
-  purple: T.purple,
+  cyan: V3.levelCw,
+  green: V3.up,
+  red: V3.down,
+  purple: V3.violet,
 };
 
 export default async function ExplorePage({
@@ -48,13 +71,12 @@ export default async function ExplorePage({
         flex: 1,
         minHeight: 0,
         overflowY: "auto",
-        background: T.bg,
-        backgroundImage: T.shellGlow,
-        color: T.text,
-        fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
+        background: V3.bg,
+        color: V3.fg,
+        fontFamily: V3_SANS,
       }}
     >
-      {/* Shared public toolbar — fixed, same spot on every public page. */}
+      {/* Shared public toolbar — same band on every public page. */}
       <PublicNav active="Features" />
 
       <main
@@ -62,18 +84,18 @@ export default async function ExplorePage({
           maxWidth: 920,
           margin: "0 auto",
           // PublicNav is sticky and reserves its own height — no compensation here.
-          paddingTop: "clamp(28px,5vw,64px)",
+          paddingTop: "clamp(28px,5vw,56px)",
           paddingLeft: "clamp(16px,4vw,40px)",
           paddingRight: "clamp(16px,4vw,40px)",
           paddingBottom: 80,
         }}
       >
-        <div style={badge}>{entry.title}</div>
+        <span style={v3Chip(V3.cyan)}>{entry.title}</span>
 
-        <h1 style={{ fontSize: "clamp(30px,5vw,46px)", fontWeight: 800, margin: "16px 0 10px", lineHeight: 1.1 }}>
+        <h1 style={{ fontSize: "clamp(28px,4.6vw,42px)", fontWeight: 800, margin: "16px 0 10px", lineHeight: 1.1, letterSpacing: "-0.03em" }}>
           {entry.title}
         </h1>
-        <p style={{ color: T.cyan, fontSize: "clamp(15px,2.5vw,19px)", fontWeight: 600, margin: "0 0 24px" }}>
+        <p style={{ color: V3.cyan, fontSize: "clamp(15px,2.4vw,18px)", fontWeight: 600, margin: "0 0 24px" }}>
           {entry.tagline}
         </p>
 
@@ -84,25 +106,25 @@ export default async function ExplorePage({
               START MY 2-DAY FREE TRIAL ›
             </Link>
           </div>
-          <p style={{ margin: "12px 0 0", fontSize: 14, color: T.muted, opacity: 0.75 }}>
+          <p style={{ margin: "12px 0 0", fontSize: V3_TEXT.body, color: V3.fg }}>
             Two days of the full live dashboard — every ticker, every tool. Cancel anytime.
           </p>
         </div>
 
-        <div style={{ display: "grid", gap: "clamp(24px,4vw,48px)", gridTemplateColumns: "minmax(0,1fr)" }}>
+        <div style={{ display: "grid", gap: "clamp(20px,3.4vw,36px)", gridTemplateColumns: "minmax(0,1fr)" }}>
           {/* Body + highlights */}
           <section>
             {entry.body.map((p, i) => (
-              <p key={i} style={{ color: T.muted, fontSize: 17, lineHeight: 1.65, margin: "0 0 16px" }}>
+              <p key={i} style={{ color: V3.fg, fontSize: 16, lineHeight: 1.7, margin: "0 0 16px" }}>
                 {p}
               </p>
             ))}
 
             <ul style={{ listStyle: "none", padding: 0, margin: "20px 0 0", display: "grid", gap: 10 }}>
               {entry.highlights.map((h) => (
-                <li key={h} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 14 }}>
-                  <span style={{ color: T.cyan, fontWeight: 800, lineHeight: 1.5 }}>✓</span>
-                  <span style={{ color: T.text }}>{h}</span>
+                <li key={h} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: V3_TEXT.body }}>
+                  <span style={{ color: V3.cyan, fontWeight: 800, lineHeight: 1.5 }}>✓</span>
+                  <span style={{ color: V3.fg }}>{h}</span>
                 </li>
               ))}
             </ul>
@@ -111,28 +133,30 @@ export default async function ExplorePage({
           {/* Static teaser preview */}
           <section style={teaserCard}>
             <div style={teaserHead}>
-              <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: T.muted }}>
+              <span style={{ fontSize: V3_TEXT.xs, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: V3.fg }}>
                 {entry.teaserLabel}
               </span>
               <span style={previewTag}>Preview · sample data</span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              {entry.teaserStats.map((s) => (
-                <div key={s.label} style={statCell}>
-                  <div style={{ color: T.muted, fontSize: 12, marginBottom: 6 }}>{s.label}</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: s.tone ? toneColor[s.tone] : T.text }}>
-                    {s.value}
+            <div style={{ padding: "clamp(14px,2.4vw,20px)" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {entry.teaserStats.map((s) => (
+                  <div key={s.label} style={statCell}>
+                    <div style={{ color: V3.fg, fontSize: V3_TEXT.base, marginBottom: 6 }}>{s.label}</div>
+                    <div style={{ fontSize: V3_TEXT.xl, fontWeight: 700, color: s.tone ? toneColor[s.tone] : V3.fg }}>
+                      {s.value}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
+              <p style={{ color: V3.fg, fontSize: V3_TEXT.base, margin: "14px 0 0", lineHeight: 1.5 }}>
+                Illustrative sample. Live data is available inside the dashboard for members.
+              </p>
             </div>
-            <p style={{ color: T.muted, fontSize: 12, margin: "14px 0 0", lineHeight: 1.4 }}>
-              Illustrative sample. Live data is available inside the dashboard for members.
-            </p>
           </section>
         </div>
 
-        {/* Delayed-LIVE real-data view (gex, estimated-moves, initial-balance, tpo).
+        {/* Delayed-LIVE real-data view (gex, estimated-moves, initial-balance).
             flow + confidence-score render their own richer live blocks below. */}
         <DelayedLiveView slug={slug} />
 
@@ -142,31 +166,29 @@ export default async function ExplorePage({
         {/* Real last-7-session CB accuracy tracker (confidence-score only) */}
         {slug === "confidence-score" && <Confidence7dTracker />}
 
-        {/* Auto-charted & auto-graded concept list (ict only) */}
-        {slug === "ict" && <IctGlossary />}
-
         {/* Join Now CTA → single pricing hub. Call to arms: stakes, one action,
             risk reversal — no second competing button. */}
         <div style={ctaBlock}>
           <div style={ctaKicker}>2-DAY FREE TRIAL · NO CHARGE UP FRONT</div>
-          <h2 style={{ fontSize: "clamp(24px,4.5vw,34px)", fontWeight: 900, margin: "0 0 10px", lineHeight: 1.1 }}>
+          <h2 style={{ fontSize: "clamp(22px,4vw,32px)", fontWeight: 800, margin: "0 0 10px", lineHeight: 1.15, letterSpacing: "-0.03em" }}>
             Stop trading blind. See it live for two days.
           </h2>
-          <p style={{ color: T.muted, fontSize: 15, margin: "0 0 22px", maxWidth: 560, lineHeight: 1.6 }}>
+          <p style={{ color: V3.fg, fontSize: V3_TEXT.body, margin: "0 0 22px", maxWidth: 560, lineHeight: 1.65 }}>
             The preview above is real — just delayed. Your trial unlocks the live, tick-by-tick {entry.title.toLowerCase()}
-            {" "}<strong style={{ color: T.text }}>plus the entire dashboard</strong>: GEX, flow, ICT, estimated moves, IB stats and TPO. Full access, nothing held back.
+            {" "}<strong style={{ color: V3.fg }}>plus the entire dashboard</strong>: GEX, flow, premarket prep, estimated moves,
+            IB stats and both scanners. Full access, nothing held back.
           </p>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <Link href={`/pricing?from=${entry.slug}&trial=1`} style={joinBtn}>
               Start my 2-day free trial ›
             </Link>
-            <span style={{ color: T.muted, fontSize: 13, opacity: 0.8 }}>Cancel anytime · no charge up front</span>
+            <span style={{ color: V3.fg, fontSize: V3_TEXT.base }}>Cancel anytime · no charge up front</span>
           </div>
         </div>
 
         {/* Other features — framed as "all of this is in your trial", not a passive menu */}
-        <div style={{ marginTop: 56, borderTop: `1px solid ${T.border}`, paddingTop: 28 }}>
-          <div style={{ fontSize: 14, color: T.text, marginBottom: 14, fontWeight: 800, letterSpacing: "0.04em" }}>
+        <div style={{ marginTop: 48, borderTop: `1px solid ${V3.line}`, paddingTop: 26 }}>
+          <div style={{ fontSize: V3_TEXT.body, color: V3.fg, marginBottom: 14, fontWeight: 700, letterSpacing: "0.04em" }}>
             Your trial unlocks all of these — live
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -192,84 +214,37 @@ export default async function ExplorePage({
   );
 }
 
-/* ── ICT glossary (all the info from the live /ict page) ──────────────────── */
-
-function IctGlossary() {
-  const liveCount = ICT_CONCEPTS.filter((c) => c.live).length;
-  return (
-    <section style={{ marginTop: "clamp(36px,6vw,56px)" }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
-        <h2 style={{ fontSize: "clamp(20px,3.5vw,28px)", fontWeight: 800, margin: 0 }}>
-          Auto-charted &amp; auto-graded concepts
-        </h2>
-        <span style={{ fontSize: 14, color: T.text }}>{liveCount} of {ICT_CONCEPTS.length} auto-charted</span>
-      </div>
-      <p style={{ color: T.text, fontSize: 14, lineHeight: 1.6, margin: "0 0 22px", maxWidth: 700 }}>
-        You draw nothing. Every concept below is detected and <strong>auto-charted</strong> on the live ES &amp; NQ 5-minute
-        feed as it forms, then <strong>auto-graded</strong> once the session resolves it — so each setup carries its own
-        outcome instead of a hindsight mark-up. An{" "}
-        <span style={{ color: T.green, fontWeight: 700 }}>Auto</span> tag means it&apos;s charted and graded for you in real time.
-      </p>
-      <div style={glossaryGrid}>
-        {ICT_CONCEPTS.map((c) => (
-          <div key={c.id} style={glossaryCard}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 14, fontWeight: 800, color: T.text }}>{c.name}</span>
-              {c.live && <span style={liveChip}>Auto</span>}
-            </div>
-            <p style={{ color: T.text, fontSize: 14, lineHeight: 1.55, margin: 0 }}>{c.body}</p>
-            <a href={c.href} target="_blank" rel="noopener noreferrer" style={glossaryLink}>Learn more ↗</a>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 /* ── styles ───────────────────────────────────────────────────────────── */
-
-const badge: React.CSSProperties = {
-  display: "inline-block",
-  fontSize: 12,
-  fontWeight: 700,
-  letterSpacing: "0.12em",
-  textTransform: "uppercase",
-  color: T.cyan,
-  border: "1px solid rgba(33,158,188,0.3)",
-  background: "rgba(33,158,188,0.08)",
-  padding: "5px 12px",
-  borderRadius: 999,
-};
+/* Colours: V3 only. No literal may appear below — see the header note. */
 
 const demoBlock: React.CSSProperties = {
-  marginBottom: 32,
-  padding: "20px 22px",
-  borderRadius: 16,
-  border: "1px solid rgba(33,158,188,0.3)",
-  background: "linear-gradient(180deg, rgba(33,158,188,0.10), rgba(33,158,188,0.03))",
+  marginBottom: 28,
+  padding: "18px 20px",
+  borderRadius: V3_RADIUS.md,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface,
 };
 
 const demoBtn: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 8,
-  padding: "14px 24px",
-  borderRadius: 10,
-  fontSize: 14,
-  fontWeight: 900,
-  letterSpacing: "0.04em",
-  color: "#fff",
+  padding: "13px 22px",
+  borderRadius: V3_RADIUS.md,
+  fontSize: V3_TEXT.base,
+  fontWeight: 700,
+  letterSpacing: "0.05em",
+  color: V3.fg,
   textDecoration: "none",
-  background: "linear-gradient(180deg, #2CB6D6, #1A7D9B)",
-  border: "1px solid rgba(140,222,244,0.55)",
-  boxShadow: "0 12px 32px rgba(33,158,188,0.32)",
+  background: V3.cyan,
+  border: `1px solid ${V3.cyan}`,
 };
 
 const teaserCard: React.CSSProperties = {
-  background: "linear-gradient(180deg, rgba(33,158,188,0.04), rgba(255,255,255,0.02))",
-  border: "1px solid rgba(33,158,188,0.12)",
-  borderRadius: 16,
-  padding: "clamp(16px,3vw,24px)",
+  background: V3.surface,
+  border: `1px solid ${V3.line}`,
+  borderRadius: V3_RADIUS.md,
+  overflow: "hidden",
 };
 
 const teaserHead: React.CSSProperties = {
@@ -278,67 +253,69 @@ const teaserHead: React.CSSProperties = {
   justifyContent: "space-between",
   gap: 10,
   flexWrap: "wrap",
-  marginBottom: 16,
+  padding: "10px 14px",
+  borderBottom: `1px solid ${V3.line}`,
+  background: V3.surface2,
 };
 
 const previewTag: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: V3_TEXT.xs,
   fontWeight: 700,
   letterSpacing: "0.08em",
   textTransform: "uppercase",
-  color: T.muted,
-  border: `1px solid ${T.border}`,
-  borderRadius: 999,
+  color: V3.fg,
+  border: `1px solid ${V3.line}`,
+  borderRadius: V3_RADIUS.sm,
   padding: "3px 9px",
 };
 
 const statCell: React.CSSProperties = {
-  background: "rgba(0,0,0,0.3)",
-  border: `1px solid ${T.border}`,
-  borderRadius: 10,
+  background: V3.surface2,
+  border: `1px solid ${V3.line}`,
+  borderRadius: V3_RADIUS.sm,
   padding: 14,
 };
 
 const ctaBlock: React.CSSProperties = {
-  marginTop: "clamp(36px,6vw,64px)",
-  background: "linear-gradient(180deg, rgba(13,17,25,0.78), rgba(7,9,14,0.86))",
-  border: "1px solid rgba(33,158,188,0.14)",
-  borderRadius: 20,
-  padding: "clamp(24px,4vw,40px)",
+  marginTop: "clamp(32px,5vw,56px)",
+  background: V3.surface,
+  border: `1px solid ${V3.line}`,
+  borderRadius: V3_RADIUS.md,
+  padding: "clamp(22px,3.6vw,36px)",
 };
 
 const ctaKicker: React.CSSProperties = {
   display: "inline-block",
-  fontSize: 11,
-  fontWeight: 800,
+  fontSize: V3_TEXT.xs,
+  fontWeight: 700,
   letterSpacing: "0.12em",
-  color: T.cyan,
+  color: V3.cyan,
   marginBottom: 14,
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  fontFamily: V3_MONO,
 };
 
 const joinBtn: React.CSSProperties = {
   display: "inline-block",
-  padding: "14px 28px",
-  borderRadius: 10,
-  border: "none",
-  background: `linear-gradient(180deg, ${T.cyan}, #00b8c4)`,
-  color: "#04121a",
-  fontSize: 14,
-  fontWeight: 800,
+  padding: "13px 26px",
+  borderRadius: V3_RADIUS.md,
+  border: `1px solid ${V3.cyan}`,
+  background: V3.cyan,
+  color: V3.fg,
+  fontSize: V3_TEXT.base,
+  fontWeight: 700,
   textDecoration: "none",
   cursor: "pointer",
 };
 
 const otherLink: React.CSSProperties = {
   display: "inline-block",
-  padding: "9px 16px",
-  borderRadius: 10,
-  border: `1px solid ${T.border}`,
-  background: "rgba(255,255,255,0.03)",
-  color: T.text,
-  fontSize: 14,
-  fontWeight: 700,
+  padding: "8px 14px",
+  borderRadius: V3_RADIUS.md,
+  border: `1px solid ${V3.line}`,
+  background: V3.surface2,
+  color: V3.fg,
+  fontSize: V3_TEXT.base,
+  fontWeight: 600,
   textDecoration: "none",
 };
 
@@ -349,51 +326,16 @@ const legalFooter: React.CSSProperties = {
   gap: 8,
   flexWrap: "wrap",
   padding: "20px 16px calc(20px + env(safe-area-inset-bottom, 0px))",
-  fontSize: 12,
-  color: T.muted,
-  borderTop: `1px solid ${T.border}`,
+  fontSize: V3_TEXT.base,
+  color: V3.fg,
+  borderTop: `1px solid ${V3.line}`,
 };
 
 const legalLink: React.CSSProperties = {
-  color: T.muted,
+  color: V3.fg,
   textDecoration: "none",
   fontWeight: 600,
   letterSpacing: "0.02em",
 };
 
-const legalDot: React.CSSProperties = { color: "rgba(139,148,167,0.5)" };
-
-const glossaryGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 300px), 1fr))",
-  gap: 12,
-  alignItems: "start",
-};
-
-const glossaryCard: React.CSSProperties = {
-  background: "linear-gradient(180deg, rgba(33,158,188,0.04), rgba(255,255,255,0.02))",
-  border: `1px solid ${T.border}`,
-  borderRadius: 14,
-  padding: 16,
-};
-
-const liveChip: React.CSSProperties = {
-  fontSize: 10,
-  fontWeight: 800,
-  letterSpacing: "0.1em",
-  textTransform: "uppercase",
-  color: T.green,
-  border: "1px solid rgba(48,209,88,0.3)",
-  background: "rgba(48,209,88,0.08)",
-  borderRadius: 999,
-  padding: "2px 7px",
-};
-
-const glossaryLink: React.CSSProperties = {
-  display: "inline-block",
-  marginTop: 10,
-  fontSize: 12,
-  fontWeight: 700,
-  color: T.cyan,
-  textDecoration: "none",
-};
+const legalDot: React.CSSProperties = { color: V3.fg };
