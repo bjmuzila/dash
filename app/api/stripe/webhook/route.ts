@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
-import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, getUserById, recordSubscriptionCancellation, PAID_STATUSES } from "@/lib/db";
+import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, getUserById, recordSubscriptionCancellation, claimTrialWinback, fillTrialWinback, markTrialWinbackRedeemed, PAID_STATUSES } from "@/lib/db";
 import { enforceTrialGuard } from "@/lib/trialGuard";
 import { lookupUser, sendTransactional } from "@/lib/emails/send";
 import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
+import { trialWinbackEmail, trialWinbackText, TRIAL_WINBACK_SUBJECT } from "@/lib/emails/trial-winback";
+import { shouldOfferWinback, mintWinbackOffer } from "@/lib/winback";
 import { syncDiscordRoleForUser } from "@/lib/discord";
 
 // NOTE: this used to also mirror paid status into a separate Supabase Postgres
@@ -239,6 +241,13 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
   } catch (err) {
     console.error("[stripe/webhook] discord role sync error:", err);
   }
+
+  // ── Trial win-back ────────────────────────────────────────────────────────
+  // LAST, and after the guard's early return above, so a farmed trial that was
+  // just revoked can never reach it. Fires when a trial subscription ends dead
+  // with nothing ever collected: one month at $30, normal price after that.
+  // Self-latching and never throws — see maybeSendWinback.
+  await maybeSendWinback(sub, clerkUserId, customerId);
 }
 
 // Send the founder thank-you exactly once per paid user. claimWelcomeEmail
@@ -258,6 +267,95 @@ async function maybeSendWelcome(clerkUserId: string): Promise<void> {
     html: founderThankYouEmail({ firstName: user.firstName, email: user.email }),
     text: founderThankYouText({ firstName: user.firstName, email: user.email }),
   });
+}
+
+/**
+ * The trial ended and they never paid — offer them a month at $30.
+ *
+ * Called for every subscription event; lib/winback.ts decides whether this
+ * particular one qualifies, and says no to abusers, banned addresses,
+ * unsubscribes, anything still live, and anyone who has ever actually paid us.
+ *
+ * ORDER MATTERS. claimTrialWinback() is a conditional INSERT and is what
+ * decides the winner: Stripe redelivers events and a cancelled trial produces
+ * several, so the claim happens BEFORE the Stripe objects are minted or the
+ * mail is built. Everything after it runs exactly once.
+ *
+ * A mint or send failure is recorded on the row and NOT retried. The row stays
+ * claimed on purpose — the alternative is a promotional email that tries again
+ * on every redelivery, which is how a win-back becomes a spam complaint. The
+ * failure is visible in trial_winback.send_error if it ever needs doing by hand.
+ *
+ * Never throws: the caller runs it inside the webhook, and no promotional email
+ * is worth 500-ing a subscription state change over.
+ */
+async function maybeSendWinback(
+  sub: Stripe.Subscription,
+  clerkUserId: string | null,
+  customerId: string,
+): Promise<void> {
+  try {
+    const stripe = getStripe();
+    const email = clerkUserId ? (await getUserById(clerkUserId))?.email ?? null : null;
+
+    const skip = await shouldOfferWinback({ stripe, sub, email, customerId });
+    if (skip || !email) return;
+
+    // The latch. Loser of the race returns here and does nothing.
+    const claimed = await claimTrialWinback({
+      email,
+      clerk_user_id: clerkUserId,
+      stripe_customer_id: customerId,
+      lapsed_subscription_id: sub.id,
+    });
+    if (!claimed) return;
+
+    const offer = await mintWinbackOffer(stripe, customerId);
+    if (!offer) {
+      await fillTrialWinback({ email, send_error: "could not mint offer" });
+      return;
+    }
+
+    const res = await sendTransactional({
+      to: email,
+      subject: TRIAL_WINBACK_SUBJECT,
+      campaign: "trial-winback",
+      html: trialWinbackEmail({
+        offerCents: offer.offerCents,
+        listCents: offer.listCents,
+        code: offer.code,
+        expiresAt: offer.expiresAt,
+      }),
+      text: trialWinbackText({
+        offerCents: offer.offerCents,
+        listCents: offer.listCents,
+        code: offer.code,
+        expiresAt: offer.expiresAt,
+      }),
+    });
+
+    // The offer row is written whether or not the mail landed — the discount is
+    // attached to the ACCOUNT and checkout pre-applies it, so someone who never
+    // sees the email still gets the price if they come back to /pricing.
+    await fillTrialWinback({
+      email,
+      promo_code: offer.code,
+      promotion_code_id: offer.promotionCodeId,
+      coupon_id: offer.couponId,
+      offer_cents: offer.offerCents,
+      list_cents: offer.listCents,
+      expires_at: offer.expiresAt,
+      sent_at: new Date().toISOString(),
+      send_error: res.ok ? null : (res.reason || "send failed"),
+    });
+
+    console.log(
+      `[stripe/webhook] win-back offer ${offer.code} for ${email} ` +
+      `(${offer.offerCents}c first month, list ${offer.listCents}c) — mail ${res.ok ? "sent" : "FAILED"}`
+    );
+  } catch (err) {
+    console.error("[stripe/webhook] win-back error:", err);
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -307,6 +405,18 @@ export async function POST(req: NextRequest) {
             const d = (full as unknown as { discounts?: Array<{ promotion_code?: unknown }> }).discounts?.[0];
             promotionCodeId = idOf(d?.promotion_code);
           } catch { /* no discount on the session — cookie path still applies */ }
+
+          // If that discount was a win-back offer, the offer is now spent.
+          // Stripe's max_redemptions:1 already stops a second use; this is so
+          // OUR side stops pre-applying it at the next checkout and the Sales
+          // data can tell an offer that converted from one that went stale.
+          if (promotionCodeId) {
+            try {
+              await markTrialWinbackRedeemed(promotionCodeId, sub.id);
+            } catch (err) {
+              console.error("[stripe/webhook] win-back redemption stamp failed:", err);
+            }
+          }
 
           const code = session.metadata?.affiliate_code || sub.metadata?.affiliate_code || null;
           if (code || promotionCodeId) {

@@ -1211,6 +1211,53 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_trial_checkout_ips_last ON trial_checkout_ips(last_seen_at DESC);
 
+    -- TRIAL WIN-BACK. One row per person who took the free trial and did not
+    -- turn into a paying customer, holding the "first month at $30, normal
+    -- price after that" offer we mailed them.
+    --
+    -- PRIMARY KEY IS THE EMAIL KEY, and that is the whole latch: ONE win-back
+    -- offer per human, ever. Not per subscription, not per trial. Otherwise
+    -- someone who trials and lapses on a schedule collects a discount every
+    -- time, which is a worse deal than the trial they were already abusing.
+    -- Same canonical key as trial_history (trialEmailKey), so +tags and Gmail
+    -- dots do not mint a second offer either.
+    --
+    -- WHY A ROW AT ALL, when Stripe already holds the promotion code: the row is
+    -- the claim. It is INSERTed before the mail is built (ON CONFLICT DO NOTHING
+    -- decides the winner), so two webhook deliveries of the same lapse cannot
+    -- both send. send_error records a mail that failed AFTER the claim was won —
+    -- visible, and deliberately not retried, for the same reason the ban notice
+    -- is not: a retry loop on a promotional email is a spam complaint.
+    --
+    -- expires_at mirrors the Stripe promotion code's own expiry. Kept locally so
+    -- checkout can refuse a stale offer without a Stripe round-trip, and so the
+    -- email can print a date.
+    CREATE TABLE IF NOT EXISTS trial_winback (
+      email_key                TEXT PRIMARY KEY,
+      email                    TEXT,
+      clerk_user_id            TEXT,
+      stripe_customer_id       TEXT,
+      /* The trial subscription that lapsed and triggered the offer. */
+      lapsed_subscription_id   TEXT,
+      promo_code               TEXT,
+      promotion_code_id        TEXT,
+      coupon_id                TEXT,
+      /* What the first month costs with the offer, and the list price it came
+         off — both stored so an old row still explains itself after a price
+         change. */
+      offer_cents              INTEGER,
+      list_cents               INTEGER,
+      expires_at               TIMESTAMPTZ,
+      sent_at                  TIMESTAMPTZ,
+      send_error               TEXT,
+      redeemed_at              TIMESTAMPTZ,
+      redeemed_subscription_id TEXT,
+      created_at               TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_trial_winback_user ON trial_winback(clerk_user_id);
+    CREATE INDEX IF NOT EXISTS idx_trial_winback_promo ON trial_winback(promotion_code_id);
+    CREATE INDEX IF NOT EXISTS idx_trial_winback_created ON trial_winback(created_at DESC);
+
 
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
     -- tasks are JSON arrays the page owns; zip drives the weather card.
@@ -3184,6 +3231,159 @@ export async function getTrialIpClusters(minEmails = 2, limit = 100): Promise<Tr
       LIMIT ?`,
     [minEmails, limit]
   );
+}
+
+// ── Trial win-back offers ────────────────────────────────────────────────────
+// See the trial_winback DDL above. Written by app/api/stripe/webhook when a
+// trial ends without ever collecting money; read by app/api/stripe/checkout,
+// which pre-applies the offer so the customer never has to type the code.
+
+export interface TrialWinbackRecord {
+  email_key: string;
+  email: string | null;
+  clerk_user_id: string | null;
+  stripe_customer_id: string | null;
+  lapsed_subscription_id: string | null;
+  promo_code: string | null;
+  promotion_code_id: string | null;
+  coupon_id: string | null;
+  offer_cents: number | null;
+  list_cents: number | null;
+  expires_at: string | null;
+  sent_at: string | null;
+  send_error: string | null;
+  redeemed_at: string | null;
+  redeemed_subscription_id: string | null;
+  created_at: string;
+}
+
+/**
+ * Claim the one win-back offer for this email.
+ *
+ * Returns true ONLY for the caller that inserted the row. Stripe redelivers
+ * events freely and a cancelled trial produces more than one of them, so this
+ * conditional insert — not a "have we sent it?" read followed by a write — is
+ * what guarantees exactly one offer and exactly one email. The winner then
+ * fills the row in with fillTrialWinback() once the Stripe objects exist.
+ */
+export async function claimTrialWinback(r: {
+  email: string;
+  clerk_user_id?: string | null;
+  stripe_customer_id?: string | null;
+  lapsed_subscription_id?: string | null;
+}): Promise<boolean> {
+  const key = trialEmailKey(r.email);
+  if (!key) return false;
+  const res = await pgQuery(
+    `INSERT INTO trial_winback
+       (email_key, email, clerk_user_id, stripe_customer_id, lapsed_subscription_id)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (email_key) DO NOTHING`,
+    [
+      key,
+      r.email,
+      r.clerk_user_id ?? null,
+      r.stripe_customer_id ?? null,
+      r.lapsed_subscription_id ?? null,
+    ]
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** Fill in the minted offer + the send outcome on a claimed row. */
+export async function fillTrialWinback(r: {
+  email: string;
+  promo_code?: string | null;
+  promotion_code_id?: string | null;
+  coupon_id?: string | null;
+  offer_cents?: number | null;
+  list_cents?: number | null;
+  expires_at?: string | null;
+  sent_at?: string | null;
+  send_error?: string | null;
+}): Promise<void> {
+  const key = trialEmailKey(r.email);
+  if (!key) return;
+  await pgQuery(
+    `UPDATE trial_winback
+        SET promo_code        = COALESCE($2, promo_code),
+            promotion_code_id = COALESCE($3, promotion_code_id),
+            coupon_id         = COALESCE($4, coupon_id),
+            offer_cents       = COALESCE($5, offer_cents),
+            list_cents        = COALESCE($6, list_cents),
+            expires_at        = COALESCE($7::timestamptz, expires_at),
+            sent_at           = COALESCE($8::timestamptz, sent_at),
+            send_error        = $9
+      WHERE email_key = $1`,
+    [
+      key,
+      r.promo_code ?? null,
+      r.promotion_code_id ?? null,
+      r.coupon_id ?? null,
+      r.offer_cents ?? null,
+      r.list_cents ?? null,
+      r.expires_at ?? null,
+      r.sent_at ?? null,
+      r.send_error ?? null,
+    ]
+  );
+}
+
+/**
+ * The live offer for a user, if any — sent, not yet redeemed, not yet expired.
+ *
+ * This is what checkout asks before it builds the session, which is why the
+ * offer works with no code typed and no query string surviving the sign-in
+ * detour: the discount belongs to the ACCOUNT, and the code in the email is
+ * only there so a human can see what they were given.
+ */
+export async function findActiveTrialWinback(
+  clerkUserId: string
+): Promise<TrialWinbackRecord | undefined> {
+  return queryOne<TrialWinbackRecord>(
+    `SELECT * FROM trial_winback
+      WHERE clerk_user_id = ?
+        AND promotion_code_id IS NOT NULL
+        AND sent_at IS NOT NULL
+        AND redeemed_at IS NULL
+        AND (expires_at IS NULL OR expires_at > NOW())
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [clerkUserId]
+  );
+}
+
+export async function getTrialWinback(email: string): Promise<TrialWinbackRecord | undefined> {
+  const key = trialEmailKey(email);
+  if (!key) return undefined;
+  return queryOne<TrialWinbackRecord>(`SELECT * FROM trial_winback WHERE email_key = ?`, [key]);
+}
+
+/** Stamp an offer as used, keyed on the Stripe promotion code that was redeemed. */
+export async function markTrialWinbackRedeemed(
+  promotionCodeId: string,
+  subscriptionId: string | null
+): Promise<void> {
+  if (!promotionCodeId) return;
+  await pgQuery(
+    `UPDATE trial_winback
+        SET redeemed_at              = COALESCE(redeemed_at, NOW()),
+            redeemed_subscription_id = COALESCE(redeemed_subscription_id, $2)
+      WHERE promotion_code_id = $1`,
+    [promotionCodeId, subscriptionId ?? null]
+  );
+}
+
+/** Is this address on the global suppression list? One indexed read, unlike
+ *  getUnsubscribedSet() which pulls the whole table for a broadcast. */
+export async function isEmailUnsubscribed(email: string | null | undefined): Promise<boolean> {
+  const e = (email || "").trim().toLowerCase();
+  if (!e) return false;
+  const row = await queryOne<{ email: string }>(
+    `SELECT email FROM email_unsubscribes WHERE email = ? LIMIT 1`,
+    [e]
+  );
+  return Boolean(row);
 }
 
 /**

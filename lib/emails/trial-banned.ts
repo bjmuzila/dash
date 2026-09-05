@@ -34,8 +34,15 @@ export interface TrialBannedOpts {
   /** How many times the trial has already been started/claimed, when known.
    *  Omitted or < 2 falls back to wording that doesn't quote a number. */
   attempts?: number | null;
-  /** Owner's note. Shown ONLY if it was written for the customer to read —
-   *  the admin panel asks explicitly before including it. */
+  /**
+   * Owner's note, printed VERBATIM to the recipient.
+   *
+   * Only ever populated when the admin panel's "quote reason" box is ticked,
+   * because the reason field is an INTERNAL note by default and most of them
+   * read like one ("serial abuser, 6 addresses"). Tick that box only for a
+   * sentence written for the customer to read, in whole words — whatever is in
+   * here lands in their inbox exactly as typed, over the CB Edge name.
+   */
   note?: string | null;
 }
 
@@ -47,6 +54,10 @@ function usageLine(attempts: number | null | undefined): string {
 }
 
 export function trialBannedText(opts: TrialBannedOpts = {}): string {
+  // Blank strings here are real blank lines. An optional block is a SPREAD, not
+  // a "" the array is filtered for afterwards — filtering empties out is how the
+  // first version of this silently collapsed every paragraph break in the
+  // plain-text part, which is the half spam filters read most closely.
   return [
     "About the free trial on your CB Edge account",
     "",
@@ -59,13 +70,11 @@ export function trialBannedText(opts: TrialBannedOpts = {}): string {
     "",
     PRICING_URL,
     "",
-    opts.note ? `Note: ${opts.note}\n` : "",
+    ...(opts.note ? [`Note: ${opts.note}`, ""] : []),
     `If you think this is a mistake, reply to this email or write to ${SUPPORT_EMAIL} and we'll take a look.`,
     "",
     "— CB Edge",
-  ]
-    .filter((l) => l !== "")
-    .join("\n");
+  ].join("\n");
 }
 
 export function trialBannedEmail(opts: TrialBannedOpts = {}): string {

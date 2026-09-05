@@ -4,7 +4,7 @@ import { getStripe, getPriceIdForPlan, type Plan } from "@/lib/stripe";
 import { getSubscription, linkStripeCustomer } from "@/lib/db";
 import { PROMO_COOKIE, promoByCode } from "@/lib/promoLinks";
 import { decideTrialEligibility } from "@/lib/trialEligibility";
-import { markTrialBanHit, recordTrialCheckoutIp } from "@/lib/db";
+import { markTrialBanHit, recordTrialCheckoutIp, findActiveTrialWinback } from "@/lib/db";
 import { sendTrialBanNoticeOnce } from "@/lib/trialBanNotice";
 
 export const dynamic = "force-dynamic";
@@ -185,6 +185,35 @@ export async function POST(req: NextRequest) {
         else console.warn(`[stripe/checkout] promo "${promoCode}" not an active Stripe promotion code — falling back to manual entry`);
       } catch (err) {
         console.error("[stripe/checkout] promo lookup failed:", err);
+      }
+    }
+
+    // ── Pre-apply a TRIAL WIN-BACK offer (MONTHLY only) ──────────────────────
+    // Someone who took the free trial and didn't convert was mailed "first
+    // month at $30, normal price after" (lib/winback.ts). The promotion code is
+    // minted restricted to THIS Stripe customer, so pre-applying it here is the
+    // whole redemption path: the customer types nothing, and the offer survives
+    // them losing the email, the query string, and the cookie.
+    //
+    // Yearly is untouched — the offer is a discount on one monthly invoice, and
+    // the coupon is pinned to the monthly product anyway.
+    //
+    // Deliberately does NOT override an explicit promo above: if a code somehow
+    // resolved for this checkout, honour that one rather than silently swapping
+    // in a different discount. Any failure here just means no discount — never
+    // a blocked purchase.
+    if (!discounts && plan === "monthly") {
+      try {
+        const winback = await findActiveTrialWinback(userId);
+        if (winback?.promotion_code_id) {
+          discounts = [{ promotion_code: winback.promotion_code_id }];
+          console.log(
+            `[stripe/checkout] win-back ${winback.promo_code} applied for user ${userId} ` +
+            `(first month ${winback.offer_cents}c)`
+          );
+        }
+      } catch (err) {
+        console.error("[stripe/checkout] win-back lookup failed (no discount):", err);
       }
     }
 

@@ -1,5 +1,66 @@
 # Changelog
 
+## 2026-09-05 - Trial win-back: a lapsed trial automatically gets one month at $30, then normal pricing (`lib/db.ts`, `lib/winback.ts`, `lib/emails/trial-winback.ts`, `app/api/stripe/webhook/route.ts`, `app/api/stripe/checkout/route.ts`)
+
+The other half of the trial work landed earlier today: bans, for people who
+abuse it. This is for the ordinary case - somebody took the two days, didn't
+buy, and is now gone with no reason to come back.
+
+**The offer is a Stripe coupon with `duration: "once"`**, so "returns to normal
+pricing after that" is Stripe's own behaviour, not a job anyone has to remember
+to run. The coupon is minted per PRICE POINT and its id encodes both amounts
+(`cbedge-winback-3000-of-4500-usd`), so a price change makes a new coupon
+instead of silently reusing one whose `amount_off` no longer lands on $30.
+`applies_to.products` pins it to the monthly product - without that, a $15-off
+coupon would also come off the $1,000 annual plan.
+
+**They don't have to claim it.** The promotion code is minted `customer`-
+restricted, `max_redemptions: 1`, with an expiry, and stored on the account's
+`trial_winback` row; `/api/stripe/checkout` pre-applies it on the monthly plan
+before it builds the session. So the discount lands if they never open the
+email, if the query string is lost in the sign-in detour, or if they just wander
+back to /pricing a week later. That is the opposite design from `lib/promoLinks`
+(BDAY), which needs a query param and a 30-day cookie precisely because its
+audience is anonymous traffic - a win-back recipient always has an account.
+Sharing the code does nothing, which is the other half of the customer
+restriction. It does NOT override an explicitly resolved promo code, and it
+never touches yearly.
+
+**Trigger:** a subscription with a `trial_start` reaches `canceled` /
+`incomplete_expired` with no paid invoice above $0 ever collected FROM THE
+CUSTOMER (not just that subscription - someone who paid last year and trialled a
+second time is a returning customer, not a lost sale). `shouldOfferWinback()`
+also says no to: a trial the guard killed for card/email farming, anything on
+the ban list, anything on the global unsubscribe suppression list, and anything
+still live. The two Stripe round-trips are last. Every one of those lookups
+fails CLOSED - skipping a win-back costs one email; mailing a discount to a
+paying customer or a farmer costs the discount and the point.
+
+**New `trial_winback`, keyed on the canonical email key** - ONE offer per human,
+ever, not per subscription. Somebody who lapses a trial every quarter does not
+collect a discount every quarter, and `trialEmailKey` means `+tags` and Gmail
+dots don't mint a second one either. `claimTrialWinback()` is a conditional
+INSERT and is what decides the winner: Stripe redelivers events and a cancelled
+trial produces several, so the claim happens before anything is minted or built.
+A mint/send failure is recorded in `send_error` and deliberately NOT retried -
+a promotional email that retries on every redelivery is a spam complaint. The
+row is written even when the mail fails, because the discount is attached to the
+account regardless.
+
+**Redemption** is stamped from the `checkout.session.completed` branch that
+already resolves the session's promotion code, so our side stops pre-applying a
+spent offer (Stripe's `max_redemptions` was already stopping the second use).
+
+**The email** (`lib/emails/trial-winback.ts`) leads with "two days wasn't long
+enough", shows the price block, and says the offer is already on the account
+with nothing to type. `sendTransactional()`, not `sendAuthEmail()` - it IS
+marketing and the recipient is entitled to stop receiving it, so it carries the
+unsubscribe footer and the one-click headers. That is the opposite call from
+`trial-banned.ts`, which is a policy notice about something they just did.
+
+Env: `WINBACK_ENABLED` (kill switch, default on), `WINBACK_FIRST_MONTH_CENTS`
+(default 3000), `WINBACK_OFFER_DAYS` (default 14, clamped 1-90).
+
 ## 2026-09-05 - Trial bans: switch the free trial off for an email or an IP from the Sales page, and tell them why (`lib/db.ts`, `lib/trialEligibility.ts`, `lib/trialGuard.ts`, `lib/trialBanNotice.ts`, `lib/emails/trial-banned.ts`, `app/api/stripe/checkout/route.ts`, `app/api/admin/trial-bans/route.ts`, `owner-vite/src/pages/Sales.tsx`)
 
 The two automatic gates were already in place and they are fair: `trial_history`
