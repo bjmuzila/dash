@@ -1,30 +1,30 @@
 /**
- * Personal · Todo — four checklists + one drag-and-drop Checklist Update board.
+ * Personal · Todo — a grid of checklists, each item carrying its own status.
  *
- * ONE page, one source of truth. Every checklist item carries its own board
- * `status`, so the three Checklist Update columns are a VIEW of the checklists
- * rather than a second list that has to be kept in sync:
+ * ONE page, one source of truth. Every item has a `status` pill that cycles
+ * Starting → In Progress → Completed, edited in place on the item itself.
+ * (The old drag-and-drop "Checklist Update" board was removed — the pill does
+ * the same job without a second copy of the list to keep in sync.)
  *
- *   checklists  → WORK · FAMILY · IDEAS · WEEKLY GOALS
- *   board       → All Todo · In Progress · Completed   (grouped by item.status)
+ * The lists themselves are DATA, not four hardcoded boxes: the defaults are
+ * Main · Family · List 1 · List 2, and "Add a list" appends more. The list
+ * order is carried in the titles map under the reserved `__order` key, because
+ * the API returns titles as an unordered map and object key order out of
+ * Postgres is not guaranteed.
  *
- * A new checklist item is born in "All Todo". Dragging its card between columns
- * writes back to the item it came from, and Completed ⇔ the checkbox — tick the
- * box and the card lands in Completed, drag it out and the box clears.
+ * The underlying list KEYS are unchanged from the four-pillar version
+ * (work/family/ideas/weekly) so existing rows keep their home; only the
+ * display titles moved to Main / Family / List 1 / List 2, and a stored title
+ * still equal to its old default is renamed on load.
  *
  * Storage is POSTGRES, via /api/owner/todo (owner_todo_item + owner_todo_list).
- * It was localStorage-only, which meant the board existed on exactly one
- * browser on one machine and vanished with a cleared cache. localStorage is
- * still written, but only as an offline cache and as the one-time migration
- * source for a board that predates the table — the database is the truth.
+ * localStorage is written too, but only as an offline cache and as the
+ * one-time migration source for a board that predates the table — the
+ * database is the truth.
  *
  * The whole document is saved on a debounce rather than a request per gesture:
  * every mutation here rewrites one object, so per-gesture calls would race each
  * other over the same ordering.
- *
- * The v1 keys (hub_checklists / hub_pillar_titles / hub_tasks) are left
- * untouched on purpose — the old five-pillar shape doesn't map onto these four
- * lists, so the old data is preserved rather than half-migrated.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -47,7 +47,7 @@ const HOME_THEME = {
   ...HOME_THEME_BASE,
   muted: "#FFFFFF",
   cyan: LIGHT_BLUE,  // single accent (light blue)
-  purple: "#126783", // Ideas → deep teal
+  purple: "#126783", // deep teal
   green: "#8ECAE6",  // light blue (Completed)
   orange: "#FB8501", // orange
 };
@@ -57,7 +57,7 @@ const budgetRadial = HOME_THEME_BASE.panelBg;
 
 // ── Types & defaults ──────────────────────────────────────────────────────────
 
-type Status = "All Todo" | "In Progress" | "Completed";
+type Status = "Starting" | "In Progress" | "Completed";
 
 interface CheckItem {
   id: string;
@@ -69,24 +69,52 @@ interface CheckItem {
 type Checklists = Record<string, CheckItem[]>;
 type PillarTitles = Record<string, string>;
 
-const BOXES = [
-  { key: "work", color: HOME_THEME.cyan },
-  { key: "family", color: HOME_THEME.orange },
-  { key: "ideas", color: HOME_THEME.purple },
-  { key: "weekly", color: HOME_THEME.green },
-];
+/** Reserved titles key holding the list order (the API returns titles unordered). */
+const ORDER_KEY = "__order";
+
+const DEFAULT_ORDER = ["work", "family", "ideas", "weekly"];
 
 const DEFAULT_TITLES: PillarTitles = {
+  work: "Main", family: "Family", ideas: "List 1", weekly: "List 2",
+};
+
+/** Titles from the four-pillar version. A stored title still equal to one of
+ *  these was never renamed by hand, so it follows the new default. */
+const LEGACY_TITLES: PillarTitles = {
   work: "Work", family: "Family", ideas: "Ideas", weekly: "Weekly Goals",
 };
 
-const DEFAULT_CHECKLISTS: Checklists = { work: [], family: [], ideas: [], weekly: [] };
+/** One color per list slot, cycled — lists are unbounded now. */
+const PALETTE = [
+  HOME_THEME.cyan,
+  HOME_THEME.orange,
+  HOME_THEME.purple,
+  HOME_THEME.green,
+  "#F472B6",
+  "#A3E635",
+  "#FBBF24",
+  "#60A5FA",
+];
+const listColor = (idx: number) => PALETTE[idx % PALETTE.length];
 
-const STATUSES: Status[] = ["All Todo", "In Progress", "Completed"];
+const STATUSES: Status[] = ["Starting", "In Progress", "Completed"];
 const STATUS_COLORS: Record<Status, string> = {
-  "All Todo": HOME_THEME.cyan,
+  Starting: HOME_THEME.cyan,
   "In Progress": HOME_THEME.orange,
   Completed: HOME_THEME.green,
+};
+/** Pre-pill statuses that no longer exist. */
+const STATUS_ALIASES: Record<string, Status> = {
+  "All Todo": "Starting",
+  Todo: "Starting",
+  "To Do": "Starting",
+};
+const nextStatus = (s: Status): Status => STATUSES[(STATUSES.indexOf(s) + 1) % STATUSES.length];
+const coerceStatus = (raw: unknown, checked: boolean): Status => {
+  const s = String(raw ?? "");
+  if (STATUSES.includes(s as Status)) return s as Status;
+  if (STATUS_ALIASES[s]) return STATUS_ALIASES[s];
+  return checked ? "Completed" : "Starting";
 };
 
 const LS_LISTS = "hub_checklists_v2";
@@ -107,23 +135,20 @@ function loadLS<T>(key: string, fallback: T): T {
 
 /**
  * Anything read back from localStorage predates the current shape by definition
- * — items written before `status` existed, or a list key that no longer exists.
- * Normalize on read so the board never has to defend against a missing status.
+ * — items written before `status` existed, or under a status that no longer
+ * exists. Normalize on read so the page never has to defend against it.
  */
 function normalizeLists(raw: unknown): Checklists {
-  const out: Checklists = { work: [], family: [], ideas: [], weekly: [] };
+  const out: Checklists = {};
   if (!raw || typeof raw !== "object") return out;
-  for (const box of BOXES) {
-    const list = (raw as Record<string, unknown>)[box.key];
-    if (!Array.isArray(list)) continue;
-    out[box.key] = list
+  for (const [key, list] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key || key === ORDER_KEY || !Array.isArray(list)) continue;
+    out[key] = list
       .filter((i) => i && typeof i === "object")
       .map((i) => {
         const it = i as Partial<CheckItem>;
         const checked = !!it.checked;
-        const status: Status = STATUSES.includes(it.status as Status)
-          ? (it.status as Status)
-          : (checked ? "Completed" : "All Todo");
+        const status = coerceStatus(it.status, checked);
         return {
           id: String(it.id ?? "c_" + Math.random().toString(36).slice(2)),
           text: String(it.text ?? ""),
@@ -134,6 +159,15 @@ function normalizeLists(raw: unknown): Checklists {
       .filter((i) => i.text.trim().length > 0);
   }
   return out;
+}
+
+/** A fresh list key that collides with nothing already in use. */
+function newListKey(taken: string[]): string {
+  for (let n = 1; n < 999; n++) {
+    const k = "l" + n;
+    if (!taken.includes(k)) return k;
+  }
+  return "l_" + Date.now().toString(36);
 }
 
 // ── Shared styles (HOME_THEME-based) ───────────────────────────────────────────
@@ -159,6 +193,30 @@ function SectionTitle({ text, accent }: { text: string; accent: string }) {
   );
 }
 
+/** The status pill: one click advances Starting → In Progress → Completed. */
+function StatusPill({ status, onCycle }: { status: Status; onCycle: () => void }) {
+  const col = STATUS_COLORS[status];
+  return (
+    <button
+      type="button"
+      className="status-pill"
+      onClick={onCycle}
+      title="Click to change status"
+      style={{
+        fontSize: 10, fontWeight: 800, letterSpacing: ".07em", textTransform: "uppercase",
+        whiteSpace: "nowrap", padding: "2px 9px", borderRadius: 999, cursor: "pointer",
+        color: col,
+        background: rgba(col, 0.13),
+        border: `1px solid ${rgba(col, 0.45)}`,
+        display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0,
+      }}
+    >
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: col, boxShadow: `0 0 6px ${rgba(col, 0.8)}` }} />
+      {status}
+    </button>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -166,17 +224,43 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 /** The board as the API carries it: flat, ordered, list tagged per item. */
 type WireItem = { id: string; listKey: string; text: string; checked: boolean; status: Status };
 
-function flatten(lists: Checklists): WireItem[] {
-  return BOXES.flatMap((b) =>
-    (lists[b.key] ?? []).map((i) => ({ id: i.id, listKey: b.key, text: i.text, checked: i.checked, status: i.status })),
+function flatten(order: string[], lists: Checklists): WireItem[] {
+  return order.flatMap((key) =>
+    (lists[key] ?? []).map((i) => ({ id: i.id, listKey: key, text: i.text, checked: i.checked, status: i.status })),
   );
 }
-function unflatten(items: WireItem[]): Checklists {
-  const out: Checklists = { work: [], family: [], ideas: [], weekly: [] };
+function unflatten(order: string[], items: WireItem[]): Checklists {
+  const out: Checklists = {};
+  for (const k of order) out[k] = [];
   for (const i of items) {
     if (!out[i.listKey]) continue;
-    const status: Status = STATUSES.includes(i.status) ? i.status : i.checked ? "Completed" : "All Todo";
+    const status = coerceStatus(i.status, !!i.checked);
     out[i.listKey].push({ id: i.id, text: String(i.text ?? ""), checked: status === "Completed" ? true : !!i.checked, status });
+  }
+  return out;
+}
+
+/** Order comes off the reserved titles key; anything unlisted is appended. */
+function readOrder(titles: PillarTitles, extraKeys: string[]): string[] {
+  const raw = String(titles[ORDER_KEY] ?? "");
+  const fromRaw = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const known = fromRaw.length ? fromRaw : DEFAULT_ORDER.slice();
+  const seen = new Set(known);
+  for (const k of Object.keys(titles)) if (k !== ORDER_KEY && !seen.has(k)) { known.push(k); seen.add(k); }
+  for (const k of extraKeys) if (k !== ORDER_KEY && !seen.has(k)) { known.push(k); seen.add(k); }
+  return known;
+}
+
+/** Titles the page displays: stored value, unless it is empty or still the
+ *  old four-pillar default, in which case the new default wins. */
+function mergeTitles(stored: PillarTitles): PillarTitles {
+  const out: PillarTitles = { ...DEFAULT_TITLES };
+  for (const [k, v] of Object.entries(stored || {})) {
+    if (k === ORDER_KEY) continue;
+    const t = String(v ?? "").trim();
+    if (!t) continue;
+    if (LEGACY_TITLES[k] && t === LEGACY_TITLES[k] && DEFAULT_TITLES[k]) continue; // never renamed by hand
+    out[k] = t;
   }
   return out;
 }
@@ -184,16 +268,17 @@ function unflatten(items: WireItem[]): Checklists {
 export default function Todo() {
   const [hydrated, setHydrated] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
-  const [checklists, setChecklists] = useState<Checklists>(DEFAULT_CHECKLISTS);
+  const [order, setOrder] = useState<string[]>(DEFAULT_ORDER);
+  const [checklists, setChecklists] = useState<Checklists>(() => {
+    const o: Checklists = {}; for (const k of DEFAULT_ORDER) o[k] = []; return o;
+  });
   const [titles, setTitles] = useState<PillarTitles>(DEFAULT_TITLES);
   const [showCreate, setShowCreate] = useState(false);
   const [cTitle, setCTitle] = useState("");
-  const [cBox, setCBox] = useState("work");
-
-  // Drag state: which item is in flight, and which column it is hovering.
-  const dragId = useRef<string | null>(null);
-  const [dragging, setDragging] = useState<string | null>(null);
-  const [overCol, setOverCol] = useState<Status | null>(null);
+  const [cBox, setCBox] = useState(DEFAULT_ORDER[0]);
+  const [newListName, setNewListName] = useState("");
+  /** A list header × arms itself before it deletes — no browser confirm dialog. */
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
 
   const inlineRefs = useRef<Record<string, HTMLInputElement | null>>({});
   /** The last body successfully written, so an unchanged board never re-posts. */
@@ -216,30 +301,37 @@ export default function Todo() {
     let dead = false;
     (async () => {
       const cachedLists = normalizeLists(loadLS<unknown>(LS_LISTS, null));
-      const cachedTitles = { ...DEFAULT_TITLES, ...loadLS<PillarTitles>(LS_TITLES, {}) };
+      const cachedTitlesRaw = loadLS<PillarTitles>(LS_TITLES, {});
       try {
         const res = await fetch("/api/owner/todo", { cache: "no-store" });
         if (!res.ok) throw new Error(String(res.status));
         const data = await res.json();
         if (dead) return;
         const items: WireItem[] = Array.isArray(data?.items) ? data.items : [];
-        const serverTitles = data?.titles && typeof data.titles === "object" ? data.titles : {};
-        const cachedCount = BOXES.reduce((n, b) => n + (cachedLists[b.key]?.length ?? 0), 0);
+        const serverTitles: PillarTitles =
+          data?.titles && typeof data.titles === "object" ? data.titles : {};
+        const cachedCount = Object.values(cachedLists).reduce((n, l) => n + l.length, 0);
         if (items.length === 0 && cachedCount > 0) {
           // Adopt the local board and let the save effect below write it up.
-          setChecklists(cachedLists);
-          setTitles(cachedTitles);
+          const ord = readOrder(cachedTitlesRaw, Object.keys(cachedLists));
+          setOrder(ord);
+          setChecklists(withKeys(ord, cachedLists));
+          setTitles(mergeTitles(cachedTitlesRaw));
           setMigrating(true);
         } else {
-          setChecklists(unflatten(items));
-          setTitles({ ...DEFAULT_TITLES, ...serverTitles });
+          const ord = readOrder(serverTitles, items.map((i) => i.listKey));
+          setOrder(ord);
+          setChecklists(unflatten(ord, items));
+          setTitles(mergeTitles(serverTitles));
         }
       } catch {
         // Offline or the endpoint is down. Show the cache and DON'T save over
         // the database with it — saving is gated on a load having succeeded.
         if (dead) return;
-        setChecklists(cachedLists);
-        setTitles(cachedTitles);
+        const ord = readOrder(cachedTitlesRaw, Object.keys(cachedLists));
+        setOrder(ord);
+        setChecklists(withKeys(ord, cachedLists));
+        setTitles(mergeTitles(cachedTitlesRaw));
         setLoadFailed(true);
       } finally {
         if (!dead) setHydrated(true);
@@ -257,12 +349,13 @@ export default function Todo() {
     if (!hydrated || loadFailed) return;
     // localStorage stays current regardless — it is the offline cache, and it
     // costs nothing to keep it honest.
+    const wireTitles: PillarTitles = { ...titles, [ORDER_KEY]: order.join(",") };
     try {
       localStorage.setItem(LS_LISTS, JSON.stringify(checklists));
-      localStorage.setItem(LS_TITLES, JSON.stringify(titles));
+      localStorage.setItem(LS_TITLES, JSON.stringify(wireTitles));
     } catch { /* private mode — the database is still the truth */ }
 
-    const body = JSON.stringify({ items: flatten(checklists), titles });
+    const body = JSON.stringify({ items: flatten(order, checklists), titles: wireTitles });
     if (body === lastSaved.current) return;
     const t = setTimeout(() => {
       setSaveState("saving");
@@ -276,7 +369,7 @@ export default function Todo() {
         .catch(() => setSaveState("error"));
     }, 600);
     return () => clearTimeout(t);
-  }, [hydrated, loadFailed, checklists, titles]);
+  }, [hydrated, loadFailed, checklists, titles, order]);
 
   // The browser's own guard, for the 600ms a change has not reached Postgres.
   useEffect(() => {
@@ -285,6 +378,11 @@ export default function Todo() {
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [saveState]);
+
+  // The create-modal's list picker must never point at a deleted list.
+  useEffect(() => {
+    if (order.length && !order.includes(cBox)) setCBox(order[0]);
+  }, [order, cBox]);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   /** Apply a patch to one item wherever it lives, without knowing its list. */
@@ -295,26 +393,22 @@ export default function Todo() {
       return next;
     });
 
-  /** Checkbox ⇔ Completed column. Unticking returns the card to All Todo. */
+  /** Checkbox ⇔ Completed. Unticking returns the item to Starting. */
   const toggleCheck = (id: string) =>
     patchItem(id, (i) => {
       const checked = !i.checked;
-      return { ...i, checked, status: checked ? "Completed" : "All Todo" };
+      return { ...i, checked, status: checked ? "Completed" : "Starting" };
     });
 
-  /** Drop target. Landing in Completed ticks the box; leaving it clears the box. */
-  const moveItem = (id: string, status: Status) =>
-    patchItem(id, (i) => (i.status === status ? i : { ...i, status, checked: status === "Completed" }));
+  /** The pill: advance the status, keeping the checkbox in step. */
+  const cycleStatus = (id: string) =>
+    patchItem(id, (i) => {
+      const status = nextStatus(i.status);
+      return { ...i, status, checked: status === "Completed" };
+    });
 
   const deleteItem = (key: string, id: string) =>
     setChecklists((c) => ({ ...c, [key]: (c[key] ?? []).filter((i) => i.id !== id) }));
-
-  const deleteAnywhere = (id: string) =>
-    setChecklists((c) => {
-      const next: Checklists = {};
-      for (const k of Object.keys(c)) next[k] = c[k].filter((i) => i.id !== id);
-      return next;
-    });
 
   const renameItem = (key: string, id: string, text: string) => {
     const v = text.trim();
@@ -327,11 +421,11 @@ export default function Todo() {
     if (v) setTitles((t) => ({ ...t, [key]: v }));
   };
 
-  /** Every new item starts life in the first Checklist Update column. */
+  /** Every new item starts life in the first status. */
   const addItem = (key: string, text: string) => {
     const v = text.trim();
     if (!v) return;
-    const item: CheckItem = { id: "c_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), text: v, checked: false, status: "All Todo" };
+    const item: CheckItem = { id: "c_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), text: v, checked: false, status: "Starting" };
     setChecklists((c) => ({ ...c, [key]: [...(c[key] ?? []), item] }));
   };
 
@@ -350,11 +444,28 @@ export default function Todo() {
     setCTitle(""); setShowCreate(false);
   };
 
+  /** Add a list. The key is generated; the typed name is only the title. */
+  const addList = () => {
+    const name = newListName.trim() || `List ${order.length + 1}`;
+    const key = newListKey(order);
+    setOrder((o) => [...o, key]);
+    setTitles((t) => ({ ...t, [key]: name.slice(0, 120) }));
+    setChecklists((c) => ({ ...c, [key]: [] }));
+    setNewListName("");
+  };
+
+  /** Remove a list and everything on it. Armed by a first click on the ×. */
+  const removeList = (key: string) => {
+    setOrder((o) => o.filter((k) => k !== key));
+    setTitles((t) => { const n = { ...t }; delete n[key]; return n; });
+    setChecklists((c) => { const n = { ...c }; delete n[key]; return n; });
+    setConfirmDel(null);
+  };
+
   // ── Derived ────────────────────────────────────────────────────────────────
-  /** Flat view of every item, tagged with the list it came from. */
   const allItems = useMemo(
-    () => BOXES.flatMap((b) => (checklists[b.key] ?? []).map((i) => ({ ...i, boxKey: b.key, boxColor: b.color }))),
-    [checklists],
+    () => order.flatMap((k) => checklists[k] ?? []),
+    [order, checklists],
   );
   const total = allItems.length;
   const checked = allItems.filter((i) => i.checked).length;
@@ -372,9 +483,9 @@ export default function Todo() {
       <style>{`
         .conf-hover{transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;}
         .conf-hover:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.35);border-color:${rgba(HOME_THEME.cyan, 0.35)};}
-        .cu-card{cursor:grab;}
-        .cu-card:active{cursor:grabbing;}
-        .cu-card.dragging{opacity:.4;}
+        .status-pill{transition:filter .12s ease, transform .12s ease;}
+        .status-pill:hover{filter:brightness(1.25);transform:translateY(-1px);}
+        .status-pill:active{transform:translateY(0);}
       `}</style>
 
       {/* Header */}
@@ -423,28 +534,44 @@ export default function Todo() {
 
       {/* Content */}
       <div style={{ ...homeContentStyle, overflow: "auto" }}>
-        {/* CHECKLISTS — four fixed lists */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <SectionTitle text="Checklists" accent={HOME_THEME.cyan} />
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 16 }}>
-            {BOXES.map((box) => {
-              const items = checklists[box.key] ?? [];
+            {order.map((key, idx) => {
+              const items = checklists[key] ?? [];
+              const color = listColor(idx);
+              const arming = confirmDel === key;
               return (
-                <div key={box.key} className="conf-hover" style={{
+                <div key={key} className="conf-hover" style={{
                   ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column",
                   background: budgetRadial,
                 }}>
                   <div style={{ fontSize: 17, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", color: HOME_THEME.text, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: box.color, boxShadow: `0 0 8px ${rgba(box.color, 0.7)}` }} />
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, boxShadow: `0 0 8px ${rgba(color, 0.7)}` }} />
                     <span
                       contentEditable suppressContentEditableWarning
-                      onBlur={(e) => renamePillar(box.key, e.currentTarget.innerText)}
+                      onBlur={(e) => renamePillar(key, e.currentTarget.innerText)}
                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
                       style={{ cursor: "pointer", outline: "none", flex: 1 }}
                     >
-                      {titles[box.key]}
+                      {titles[key] ?? key}
                     </span>
                     <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.muted, opacity: 0.7 }}>{items.length}</span>
+                    {order.length > 1 && (
+                      <button
+                        onClick={() => (arming ? removeList(key) : setConfirmDel(key))}
+                        onBlur={() => setConfirmDel((k) => (k === key ? null : k))}
+                        title={arming ? "Click again to delete this list and its items" : "Delete list"}
+                        style={{
+                          background: arming ? rgba(HOME_THEME.orange, 0.15) : "none",
+                          border: arming ? `1px solid ${rgba(HOME_THEME.orange, 0.5)}` : "1px solid transparent",
+                          color: arming ? HOME_THEME.orange : HOME_THEME.muted,
+                          cursor: "pointer", fontSize: arming ? 10 : 14, fontWeight: 800,
+                          lineHeight: 1, padding: arming ? "3px 7px" : "0 2px", borderRadius: 999,
+                          letterSpacing: arming ? ".06em" : undefined, opacity: arming ? 1 : 0.6,
+                        }}
+                      >{arming ? "SURE?" : "×"}</button>
+                    )}
                   </div>
                   <ul style={{ listStyle: "none", margin: "0 0 12px", padding: 0, flexGrow: 1 }}>
                     {items.length ? items.map((item) => (
@@ -452,16 +579,16 @@ export default function Todo() {
                         display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8,
                         fontSize: 14, color: HOME_THEME.text, lineHeight: 1.4, justifyContent: "space-between",
                       }}>
-                        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexGrow: 1 }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexGrow: 1, minWidth: 0 }}>
                           <input type="checkbox" checked={item.checked}
                             onChange={() => toggleCheck(item.id)}
                             style={{ marginTop: 2, flexShrink: 0, width: 13, height: 13, cursor: "pointer", accentColor: HOME_THEME.cyan }} />
                           <span
                             contentEditable suppressContentEditableWarning
-                            onBlur={(e) => renameItem(box.key, item.id, e.currentTarget.innerText)}
+                            onBlur={(e) => renameItem(key, item.id, e.currentTarget.innerText)}
                             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
                             style={{
-                              outline: "none", cursor: "pointer", flexGrow: 1,
+                              outline: "none", cursor: "pointer", flexGrow: 1, minWidth: 0,
                               textDecoration: item.checked ? "line-through" : "none",
                               color: item.checked ? HOME_THEME.muted : HOME_THEME.text,
                               opacity: item.checked ? 0.6 : 1,
@@ -470,14 +597,8 @@ export default function Todo() {
                             {item.text}
                           </span>
                         </div>
-                        <span style={{
-                          fontSize: 10, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
-                          whiteSpace: "nowrap", padding: "1px 6px", borderRadius: 4, marginTop: 1,
-                          color: STATUS_COLORS[item.status],
-                          background: rgba(STATUS_COLORS[item.status], 0.12),
-                          border: `1px solid ${rgba(STATUS_COLORS[item.status], 0.35)}`,
-                        }}>{item.status}</span>
-                        <button onClick={() => deleteItem(box.key, item.id)} style={{
+                        <StatusPill status={item.status} onCycle={() => cycleStatus(item.id)} />
+                        <button onClick={() => deleteItem(key, item.id)} style={{
                           background: "none", border: "none", color: HOME_THEME.muted, cursor: "pointer",
                           fontSize: 14, lineHeight: 1, padding: "0 2px",
                         }}>×</button>
@@ -488,96 +609,39 @@ export default function Todo() {
                   </ul>
                   <div style={{ display: "flex", gap: 6, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 10, marginTop: "auto" }}>
                     <input
-                      ref={(el) => { inlineRefs.current[box.key] = el; }}
+                      ref={(el) => { inlineRefs.current[key] = el; }}
                       type="text" placeholder="Add item..."
-                      onKeyDown={(e) => { if (e.key === "Enter") inlineAdd(box.key); }}
+                      onKeyDown={(e) => { if (e.key === "Enter") inlineAdd(key); }}
                       style={{ ...homeInputStyle, flex: 1, fontSize: 14, padding: "5px 8px" }}
                     />
                   </div>
                 </div>
               );
             })}
-          </div>
-        </div>
 
-        {/* CHECKLIST UPDATE — three drag-and-drop columns over the same items */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <SectionTitle text="Checklist Update" accent={HOME_THEME.cyan} />
-          <div style={{ display: "flex", gap: 16, minHeight: 400, paddingBottom: 4, flexWrap: "wrap" }}>
-            {STATUSES.map((status) => {
-              const cards = allItems.filter((t) => t.status === status);
-              const col = STATUS_COLORS[status];
-              const isOver = overCol === status;
-              return (
-                <div
-                  key={status}
-                  onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (overCol !== status) setOverCol(status); }}
-                  onDragLeave={(e) => { if (e.currentTarget === e.target) setOverCol(null); }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const id = e.dataTransfer.getData("text/plain") || dragId.current;
-                    if (id) moveItem(id, status);
-                    dragId.current = null; setDragging(null); setOverCol(null);
-                  }}
-                  style={{
-                    ...homePanelStyle, flex: 1, display: "flex", flexDirection: "column", minWidth: 260,
-                    background: budgetRadial,
-                    // Drop affordance rides on box-shadow, not borderColor — the panel's
-                    // `border` shorthand comes in from homePanelStyle and React warns when
-                    // a longhand is toggled against a shorthand between renders.
-                    boxShadow: isOver ? `inset 0 0 0 2px ${rgba(col, 0.55)}, 0 0 18px ${rgba(col, 0.18)}` : undefined,
-                    transition: "box-shadow .12s ease",
-                  }}
-                >
-                  <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-                    <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: col, boxShadow: `0 0 8px ${rgba(col, 0.7)}` }} />
-                    <span style={{ fontSize: 17, fontWeight: 800, flex: 1, textTransform: "uppercase", letterSpacing: ".1em", color: col }}>{status}</span>
-                    <span style={{ fontSize: 14, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, padding: "1px 8px", borderRadius: 4, fontWeight: 700, color: HOME_THEME.text }}>{cards.length}</span>
-                  </div>
-                  <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
-                    {cards.map((t) => (
-                      <div
-                        key={t.id}
-                        draggable
-                        onDragStart={(e) => {
-                          dragId.current = t.id; setDragging(t.id);
-                          e.dataTransfer.setData("text/plain", t.id);
-                          e.dataTransfer.effectAllowed = "move";
-                        }}
-                        onDragEnd={() => { dragId.current = null; setDragging(null); setOverCol(null); }}
-                        className={`conf-hover cu-card${dragging === t.id ? " dragging" : ""}`}
-                        style={{
-                          background: "rgba(255,255,255,0.02)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8,
-                          padding: 12,
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                          <span style={{
-                            fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase",
-                            color: t.boxColor, background: rgba(t.boxColor, 0.12),
-                            border: `1px solid ${rgba(t.boxColor, 0.35)}`, borderRadius: 4, padding: "1px 8px",
-                          }}>{titles[t.boxKey]}</span>
-                          <button
-                            onClick={() => deleteAnywhere(t.id)}
-                            style={{ background: "none", border: "none", color: HOME_THEME.muted, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}
-                          >×</button>
-                        </div>
-                        <div style={{
-                          fontSize: 14, color: HOME_THEME.text, fontWeight: 600, lineHeight: 1.4, margin: "8px 0 0",
-                          textDecoration: t.checked ? "line-through" : "none",
-                          opacity: t.checked ? 0.65 : 1,
-                        }}>{t.text}</div>
-                      </div>
-                    ))}
-                    {!cards.length && (
-                      <div style={{ color: HOME_THEME.muted, opacity: 0.5, fontSize: 14, fontStyle: "italic", padding: "8px 2px" }}>
-                        {status === "All Todo" ? "New checklist items land here" : "Drag a card here"}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {/* ADD A LIST — the grid's last cell, so new lists appear in place */}
+            <div style={{
+              ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column", gap: 10,
+              background: "transparent",
+              border: `1px dashed ${rgba(HOME_THEME.cyan, 0.35)}`,
+              justifyContent: "center", minHeight: 140,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", color: HOME_THEME.cyan, opacity: 0.9 }}>
+                Add a list
+              </div>
+              <input
+                type="text" value={newListName} placeholder="List name..."
+                onChange={(e) => setNewListName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addList(); } }}
+                style={{ ...homeInputStyle, width: "100%", fontSize: 14, padding: "5px 8px" }}
+              />
+              <button style={{ ...btnPrimary, justifyContent: "center" }} onClick={addList}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                  <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                New List
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -594,9 +658,9 @@ export default function Todo() {
               <div style={formGroup}><label style={formLabel}>Title</label>
                 <input style={formInput} value={cTitle} onChange={(e) => setCTitle(e.target.value)} placeholder="e.g. Review portfolio" required autoFocus /></div>
               <div style={formGroup}><label style={formLabel}>Checklist</label>
-                <ThemedSelect value={cBox} onChange={setCBox} options={BOXES.map((b) => ({ value: b.key, label: titles[b.key] }))} /></div>
+                <ThemedSelect value={cBox} onChange={setCBox} options={order.map((k) => ({ value: k, label: titles[k] ?? k }))} /></div>
               <div style={{ fontSize: 14, color: HOME_THEME.muted, opacity: 0.7 }}>
-                Lands in <b style={{ color: HOME_THEME.cyan }}>All Todo</b> on the Checklist Update board.
+                Starts at <b style={{ color: HOME_THEME.cyan }}>Starting</b> — click the pill to move it along.
               </div>
               <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
                 <button type="button" style={btnGhost} onClick={() => setShowCreate(false)}>Cancel</button>
@@ -608,4 +672,12 @@ export default function Todo() {
       )}
     </div>
   );
+}
+
+/** Guarantee every key in `order` exists on the map (an empty list is a list). */
+function withKeys(order: string[], lists: Checklists): Checklists {
+  const out: Checklists = {};
+  for (const k of order) out[k] = lists[k] ?? [];
+  for (const [k, v] of Object.entries(lists)) if (!(k in out)) out[k] = v;
+  return out;
 }

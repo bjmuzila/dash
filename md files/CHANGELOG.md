@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-09-05 - Owner To-Do: status pills, "Main", and lists you can add (`owner-vite/src/pages/Todo.tsx`)
+
+The drag-and-drop "Checklist Update" board is gone. It was a second copy of the
+same items grouped by status, which meant every gesture had to be mirrored back
+into the checklist it came from; the status now lives on the item itself as a
+pill you click to cycle `Starting -> In Progress -> Completed`. The checkbox
+stays and tracks the pill (Completed ticks it, unticking sends the item back to
+Starting), so the done/total counter in the header is unchanged.
+
+`All Todo` is retired as a status name. Anything still stored under it - or
+under `Todo` / `To Do` - is coerced to `Starting` on read, so existing rows come
+back on the new pill without a migration.
+
+The four fixed boxes are now an ordered, editable list of lists:
+
+- Defaults are **Main - Family - List 1 - List 2**. The underlying list KEYS are
+  unchanged (`work` / `family` / `ideas` / `weekly`) so existing items keep
+  their home; only the display titles moved. A stored title still equal to its
+  old default (`Work`, `Ideas`, `Weekly Goals`) was never renamed by hand, so it
+  follows the new default - a title you did rename is left alone.
+- An "Add a list" card sits as the last cell of the grid. New lists get a
+  generated key (`l1`, `l2`, ...); the name you type is only the title, so
+  renaming a list never orphans its items.
+- A list header's `x` arms itself ("SURE?") before it deletes the list and its
+  items - no browser confirm dialog.
+
+List ORDER rides in the titles map under a reserved `__order` key, because
+`/api/owner/todo` returns titles as an unordered map (`SELECT * FROM
+owner_todo_list` has no ORDER BY) and object key order out of Postgres is not
+something to bet the layout on. No server or schema change: the route already
+takes an arbitrary `listKey` per item and an arbitrary `{key: title}` map.
+
+
 ## 2026-09-05 - An empty ladder now says WHICH empty it is (`server-v2/api-router.js`, both copies of `premarket/postMarketData.ts` + `premarket/PostMarketTab.tsx`)
 
 The fix shipped earlier today came back with the page still saying "No
