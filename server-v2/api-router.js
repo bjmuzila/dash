@@ -6451,8 +6451,16 @@ if (libDb) {
             // got what it asked for.
             let usedExpiry = expiry;
             let didFallback = false;
+            // What the recorder DOES hold for this date, shipped when the answer
+            // is empty. Without it "nothing came back" is indistinguishable from
+            // "the recorder never ran", and the caller has to guess which of the
+            // two it is looking at — which is the bug this whole fallback exists
+            // to stop repeating. The query only runs on the empty path, so it
+            // costs nothing on the ordinary one.
+            let recordedExpiries = [];
             if (expiryFallback && !slots.length) {
               const recorded = await libDb.getGexHistoryExpiriesForDate(date, symbol);
+              recordedExpiries = recorded.map((r) => r.expiry);
               const pick = recorded.find((r) => r.expiry !== expiry);
               if (pick) {
                 const retry = await libDb.getOptionStrikeGexSlots(date, pick.expiry, symbol);
@@ -6537,6 +6545,7 @@ if (libDb) {
               expiry: usedExpiry,
               requestedExpiry: expiry,
               expiryFallback: didFallback,
+              recordedExpiries,
             };
             heatmapCache.set(cacheKey, { at: Date.now(), payload });
             send(res, 200, payload);

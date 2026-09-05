@@ -845,6 +845,21 @@ export function useIntradayLadder(
   const [state, setState] = useState<HistState>("loading");
   /** The expiry the response is OF — the requested one unless the route fell back. */
   const [expiryUsed, setExpiryUsed] = useState<string>(expiry);
+  /**
+   * WHY AN EMPTY ANSWER IS EMPTY. Three different faults used to print the same
+   * sentence, and the tab could not tell them apart:
+   *
+   *   · `fallbackAware: false` — the API answering this predates the
+   *     `expiryFallback` parameter, so it never even tried the expiry the
+   *     session was recorded under. The client can deploy ahead of the server;
+   *     this is what that looks like from here.
+   *   · `recordedExpiries` non-empty — the recorder DOES hold this date, under
+   *     those expiries, and the fallback still could not read one.
+   *   · both empty — the recorder genuinely has nothing for this date.
+   */
+  const [diag, setDiag] = useState<{ fallbackAware: boolean; recordedExpiries: string[] }>(
+    { fallbackAware: true, recordedExpiries: [] },
+  );
 
   /**
    * The session actually requested. Weekend dates walk back to the previous
@@ -875,6 +890,16 @@ export function useIntradayLadder(
         if (json?.error || !Array.isArray(json?.columns)) { if (!cancelled) setState("error"); return; }
 
         const served = typeof json.expiry === "string" && json.expiry ? json.expiry : expiry;
+        // `requestedExpiry` is only ever sent by a build that understands the
+        // fallback, so its presence IS the version check.
+        if (!cancelled) {
+          setDiag({
+            fallbackAware: typeof json.requestedExpiry === "string",
+            recordedExpiries: Array.isArray(json.recordedExpiries)
+              ? (json.recordedExpiries as unknown[]).map(String).filter(Boolean)
+              : [],
+          });
+        }
 
         const raw = (json.columns as RawCol[]).filter((c) => Array.isArray(c.cells) && c.cells.length);
         if (!raw.length) { if (!cancelled) { setCols([]); setExpiryUsed(expiry); setState("empty"); } return; }
@@ -920,7 +945,7 @@ export function useIntradayLadder(
     return () => { cancelled = true; clearInterval(id); };
   }, [enabled, expiry, target, symbol]);
 
-  return { cols, state, expiryUsed, sessionDate: target };
+  return { cols, state, expiryUsed, sessionDate: target, diag };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

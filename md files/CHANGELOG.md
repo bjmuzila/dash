@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-09-05 - An empty ladder now says WHICH empty it is (`server-v2/api-router.js`, both copies of `premarket/postMarketData.ts` + `premarket/PostMarketTab.tsx`)
+
+The fix shipped earlier today came back with the page still saying "No
+per-minute ladder recorded for 2026-09-04 under 2026-09-08" - which is the NEW
+wording, so the client had the fallback and the answer was still empty. Three
+different faults produce that, and the sentence could not tell them apart:
+
+1. The API answering the request is an older build than the page. `server-v2`
+   is a separate process from the Vite dev server, so a frontend rebuild picks
+   up the client half of a change while the route keeps ignoring
+   `expiryFallback=1` as an unknown query param. This is the common case and it
+   looks exactly like a data problem.
+2. The recorder holds the date under some expiry, and the fallback still could
+   not read it.
+3. The recorder has nothing for that date at all - a genuine "not recorded".
+
+The heatmap route now ships `recordedExpiries` (the expiries the recorder
+actually wrote for that date/symbol) whenever the date-mode answer is empty. The
+query runs only on that path, so the ordinary response is unchanged.
+
+The hook reads `requestedExpiry`'s PRESENCE as the version check - only a build
+that understands the fallback ever sends that key - and returns
+`diag: { fallbackAware, recordedExpiries }`. `PostMarketTab` composes the empty
+note from it and names the actual case, so "your server is behind your client"
+can never again be reported as "the recorder did not run".
+
+Applied to both v2 (`components/pages/premarket/`) and v3
+(`cbedge-v3/src/pages/premarket/`).
+
 ## 2026-09-05 - The 3.0 logo, everywhere, from one file (`lib/brand.ts` + 32 email templates + 10 UI call sites)
 
 `public/cbedge3.0.png` shipped in August and the site was still drawing the old

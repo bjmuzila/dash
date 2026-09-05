@@ -298,7 +298,7 @@ export default function PostMarketTab(p: PostMarketProps) {
   // ACTUALLY recorded under, and hands it back as `ladderExpiry`. Every line on
   // this tab that names an expiry names that one, so the tab can never again
   // label a board with an expiry it did not read.
-  const { cols: allCols, state: histState, expiryUsed: ladderExpiry } =
+  const { cols: allCols, state: histState, expiryUsed: ladderExpiry, diag: ladderDiag } =
     useIntradayLadder(true, expiry, etDate, sym);
   /** The expiry to PRINT — what the ladder was read from, else what was asked. */
   const shownExpiry = ladderExpiry || expiry;
@@ -1221,12 +1221,32 @@ export default function PostMarketTab(p: PostMarketProps) {
    */
   const beforeLadder = histState === "ok" && !cols.length && allCols.length > 0;
 
+  /**
+   * WHY THE LADDER IS EMPTY — the three cases named apart.
+   *
+   * One sentence used to cover all of them, which is how "the recorder did not
+   * run" and "this build's API is older than the client asking it" looked
+   * identical from the page. `diag` carries the distinction from the route.
+   */
+  const emptyLadderNote = (() => {
+    const asked = `No per-minute ladder recorded for ${etDate} under ${expiry || "this expiry"}`;
+    const needs =
+      "The build-time bars, the wall path and the written-vs-traded read all need it. Everything else below is live.";
+    if (!ladderDiag.fallbackAware) {
+      return `${asked}. The API answering this is an older build than the page: it does not accept the expiry fallback, so it never tried the expiry this session was actually recorded under. ${needs}`;
+    }
+    if (ladderDiag.recordedExpiries.length) {
+      return `${asked}, and the rows this date DOES hold (${ladderDiag.recordedExpiries.join(", ")}) could not be read either. ${needs}`;
+    }
+    return `${asked}, and the recorder holds no rows at all for that date. Retention keeps about two sessions, so an older date legitimately has nothing. ${needs}`;
+  })();
+
   const histNote =
     beforeLadder
       ? `Nothing recorded yet at ${etClockOf(etMin)} ET — the per-minute ladder starts at the 09:30 open. Scrub forward and the build bars fill in from there.`
       : histState === "ok" ? null
       : histState === "loading" ? "Loading today's recorded ladder…"
-        : histState === "empty" ? `No per-minute ladder recorded for ${etDate} under ${expiry || "this expiry"} — the build-time bars, the wall path and the written-vs-traded read all need it. Retention keeps about two sessions, so an older date legitimately has nothing. Everything else below is live.`
+        : histState === "empty" ? emptyLadderNote
           : "The intraday recorder did not answer, so section 3 and the wall path have nothing to read. Everything above and below them is live.";
 
   return (
