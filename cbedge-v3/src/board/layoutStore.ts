@@ -35,18 +35,21 @@ export const SYNCED_KEY = 'cb-v3-board-synced'
  * Free placement on/off. A PREFERENCE, not part of the layout: it changes how
  * gestures behave, and the wire contract for `dashboard_layouts` is an array of
  * {id,x,y,w,h} that this file does not get to extend. Per browser, like the rest
- * of the v3 card settings — a free layout saved to the account and reopened on a
- * machine that has never been switched to free mode comes back compacted, which
- * is a board the user can still read rather than one with cards on top of
- * each other.
+ * of the v3 card settings.
+ *
+ * DEFAULT ON — the key is opt-OUT ('0'), not opt-in. Free placement plus the
+ * magnet is what "drag a card where you want it" is supposed to feel like, and
+ * shipping it behind a switch meant the board still fought the first person who
+ * tried to move a card and never told them there was another mode. Auto-arrange
+ * is still one click away for anyone who wants the board tidied for them.
  */
 export const FREE_KEY = 'cb-v3-board-free'
 
 export function readFreeMode(): boolean {
   try {
-    return localStorage.getItem(FREE_KEY) === '1'
+    return localStorage.getItem(FREE_KEY) !== '0'
   } catch {
-    return false
+    return true
   }
 }
 
@@ -87,10 +90,10 @@ export interface ServerLayout {
  * layout" from "an empty one".
  *
  * `compact` defaults to the free-placement preference, and that default is the
- * point: this function is what every read path goes through, so leaving it hard
- * -coded to compactBoard would flatten a deliberately spaced board back to the
- * top-left on every reload — the arrangement would survive the gesture and die
- * on refresh, which is worse than never having saved it.
+ * point: this function is what every read path goes through, so leaving it
+ * hard-coded to compactBoard would flatten a deliberately spaced board back to
+ * the top-left on every reload — the arrangement would survive the gesture and
+ * die on refresh, which is worse than never having saved it.
  */
 export function sanitizeLayout(raw: unknown, compact = !readFreeMode()): BoardItem[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null

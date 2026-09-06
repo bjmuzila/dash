@@ -18,10 +18,13 @@ import { useIsPhone } from '@/design/useIsPhone'
 //   - CARDS NEVER OVERLAP. In the default (auto-arrange) mode they also compact
 //     toward the top-left ("snap close to the other cards") — every gesture
 //     re-runs compaction, so a saved layout can never come back as a stack.
-//   - free=true turns the GRAVITY off (not the collision rule). Cards then stay
-//     on the row they were dropped on and a deliberate gap stays a gap. See
-//     resolveBoard below for why that is a different function and not a flag
-//     threaded through compactBoard.
+//   - free=true (the board's default) turns the GRAVITY off, not the collision
+//     rule. Cards stay on the row they were dropped on, a deliberate gap stays
+//     a gap, and a card that has to move out of the way takes the SHORTEST way
+//     out rather than always dropping to the bottom. See resolveBoard.
+//   - In free mode a dragged card's edges are MAGNETIC: within MAGNET cells of
+//     a neighbour's edge it snaps flush to it, per axis, so cards placed by
+//     hand end up touching instead of one column apart. See magnetise.
 //   - GUIDED, NOT FORCED. The card follows the pointer; nothing is dragged out
 //     of the hand. What the board adds is a dashed LANDING SLOT drawn where the
 //     card will actually come to rest, plus column guides for the duration of
@@ -101,7 +104,57 @@ export function compactBoard(items: BoardItem[], pinnedId?: string | null): Boar
 // purpose: compactBoard is called from layoutStore's sanitizer and from every
 // add/remove path, and a boolean that silently changes what those do is exactly
 // how a saved free layout comes back compacted.
-export function resolveBoard(items: BoardItem[], pinnedId?: string | null): BoardItem[] {
+// ── STEPPING ASIDE ───────────────────────────────────────────────────────────
+//
+// The card that has to give way, and how far. compactBoard's answer is always
+// "down, past the thing you hit", which under gravity is fine because the board
+// re-floats afterwards. With gravity off it is not: a card nudged one column
+// into its neighbour would send that neighbour to the bottom of the board and
+// leave it there. "Kicking off the heatmap" is a card being moved much further
+// than the gesture asked for.
+//
+// So this SEARCHES instead of stepping. It offers, for every card already
+// placed, the four positions that clear it — below, right, left, above — keeps
+// the ones that are on the board AND collide with nothing, and takes whichever
+// is the shortest move from where the card actually was.
+//
+// A search, not a loop, and that is the point. The obvious version — "push, then
+// look again, then push again" — ping-pongs: pushed left out of A it lands in B,
+// pushed right out of B it lands back in A, and after the guard trips it gets
+// dumped at the bottom anyway, which is the behaviour this was meant to remove.
+// Testing every candidate against everything placed settles it in one pass and
+// cannot oscillate.
+//
+// The fallback (below everything) is reached only when the board genuinely has
+// no room in any row the card overlaps — a very wide card in a full band. It
+// always terminates.
+function stepAside(it: BoardItem, placed: BoardItem[], cols: number): BoardItem {
+  if (!placed.some((p) => boardCollides(it, p))) return it
+  const at = (x: number, y: number) => ({ ...it, x, y })
+  const cands: BoardItem[] = []
+  for (const p of placed) {
+    cands.push(at(it.x, p.y + p.h)) // below p
+    cands.push(at(p.x + p.w, it.y)) // right of p
+    cands.push(at(p.x - it.w, it.y)) // left of p
+    cands.push(at(it.x, p.y - it.h)) // above p
+  }
+  const cost = (c: BoardItem) => Math.abs(c.x - it.x) + Math.abs(c.y - it.y)
+  let best: BoardItem | null = null
+  for (const c of cands) {
+    if (c.x < 0 || c.y < 0 || c.x + c.w > cols) continue
+    if (placed.some((p) => boardCollides(c, p))) continue
+    if (!best || cost(c) < cost(best)) best = c
+  }
+  return (
+    best ?? {
+      ...it,
+      x: Math.min(it.x, Math.max(0, cols - it.w)),
+      y: placed.reduce((m, p) => Math.max(m, p.y + p.h), 0),
+    }
+  )
+}
+
+export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols = 12): BoardItem[] {
   const order = [...items].sort((a, b) => a.y - b.y || a.x - b.x)
   const ordered = pinnedId
     ? [...order.filter((i) => i.id === pinnedId), ...order.filter((i) => i.id !== pinnedId)]
@@ -114,19 +167,54 @@ export function resolveBoard(items: BoardItem[], pinnedId?: string | null): Boar
       placed.push(it)
       continue
     }
-    // Push DOWN out of a collision, never up into a gap. The guard is the same
-    // bound compactBoard uses: each pass clears at least one card, so the loop
-    // cannot outlast the number already placed.
-    for (let guard = 0; guard <= placed.length; guard++) {
-      const hit = placed.find((p) => boardCollides(it, p))
-      if (!hit) break
-      it.y = hit.y + hit.h
-    }
-    placed.push(it)
+    placed.push(stepAside(it, placed, cols))
   }
 
   const byId = new Map(placed.map((p) => [p.id, p]))
   return items.map((orig) => byId.get(orig.id) ?? orig)
+}
+
+// ── THE MAGNET ───────────────────────────────────────────────────────────────
+//
+// "Put it anywhere, but kind of auto merge them to be touching when placed."
+//
+// Free placement on its own gives the first half and makes the second half
+// harder: with gravity gone, nothing closes a one-cell gap any more, and a board
+// assembled by eye ends up with hairline seams between cards that all look like
+// mistakes. The grid is 12 columns wide, so a column is ~9% of the board — being
+// one out is very visible and impossible to correct by dragging, because one
+// column is also roughly the width of the pointer's own slop.
+//
+// The magnet is the answer to both. While a card is being dragged its edges are
+// attracted to the edges of every other card: come within MAGNET cells of a
+// neighbour's left edge, right edge, top or bottom and the card takes that exact
+// value. Each axis snaps independently, so a card can be flush against the card
+// to its left while still free-floating vertically.
+//
+// FOUR candidates per neighbour per axis, not two: a card can line up with a
+// neighbour by BUTTING INTO it (its right edge to the neighbour's left edge) or
+// by ALIGNING WITH it (both left edges on the same column). Both are things
+// people line up by hand, and offering only the first leaves columns that never
+// quite agree down the board.
+const MAGNET = 2
+
+/** Board edges count as neighbours — the outer frame is a line to align to. */
+function magnetX(it: BoardItem, others: BoardItem[], cols: number): number {
+  const hi = Math.max(0, cols - it.w)
+  const targets = [0, hi]
+  for (const o of others) targets.push(o.x, o.x + o.w, o.x - it.w, o.x + o.w - it.w)
+  return snapToMatch(it.x, targets, 0, hi, MAGNET)
+}
+
+function magnetY(it: BoardItem, others: BoardItem[]): number {
+  const targets = [0]
+  for (const o of others) targets.push(o.y, o.y + o.h, o.y - it.h, o.y + o.h - it.h)
+  return snapToMatch(it.y, targets, 0, Number.POSITIVE_INFINITY, MAGNET)
+}
+
+/** Snap a dragged card's position onto the nearest neighbouring edges. */
+export function magnetise(it: BoardItem, others: BoardItem[], cols: number): BoardItem {
+  return { ...it, x: magnetX(it, others, cols), y: magnetY(it, others) }
 }
 
 type Gesture =
@@ -177,13 +265,19 @@ function clamp(v: number, lo: number, hi: number) {
 /** How near, in grid units, a drag has to come before it snaps onto a match. */
 const MATCH_SNAP = 1
 
-function snapToMatch(v: number, targets: number[], lo: number, hi: number): number {
+/**
+ * Take the nearest of `targets` within `tol`, or leave `v` alone. Out-of-range
+ * targets are skipped rather than clamped, so a snap can never carry a card past
+ * a bound. Shared by the size match (tol = MATCH_SNAP) and the position magnet
+ * (tol = MAGNET) — one rounding rule, two radii.
+ */
+function snapToMatch(v: number, targets: number[], lo: number, hi: number, tol = MATCH_SNAP): number {
   let best = v
-  let bestD = MATCH_SNAP + 1
+  let bestD = tol + 1
   for (const t of targets) {
     if (t < lo || t > hi) continue
     const d = Math.abs(t - v)
-    if (d <= MATCH_SNAP && d < bestD) {
+    if (d <= tol && d < bestD) {
       bestD = d
       best = t
     }
@@ -267,7 +361,7 @@ export function Board({
   const preview =
     gesture && draft
       ? free
-        ? (resolveBoard(draft, gesture.id).find((i) => i.id === gesture.id) ?? null)
+        ? (resolveBoard(draft, gesture.id, cols).find((i) => i.id === gesture.id) ?? null)
         : (compactBoard(compactBoard(draft, gesture.id)).find((i) => i.id === gesture.id) ?? null)
       : null
   // Nothing to point at when the card is already sitting in its landing slot.
@@ -319,28 +413,57 @@ export function Board({
       const dyRows = Math.round((e.clientY - g.startY) / cell)
       const next = base.map((it) => {
         if (it.id !== g.id) return { ...it }
+        const others = base.filter((o) => o.id !== it.id)
         if (g.kind === 'move') {
-          return { ...it, x: clamp(g.origX + dxCols, 0, cols - it.w), y: Math.max(0, g.origY + dyRows) }
+          const raw = { ...it, x: clamp(g.origX + dxCols, 0, cols - it.w), y: Math.max(0, g.origY + dyRows) }
+          // The magnet is FREE MODE ONLY. Under gravity a card is going to be
+          // re-floated on release anyway, so attracting it to a neighbour's top
+          // edge on the way would be a snap the user can watch being undone.
+          return free ? magnetise(raw, others, cols) : raw
         }
         // Snap onto a neighbour's exact size in the last grid unit of travel —
         // see MATCH_SNAP. The raw drag value is computed first and clamped
         // first, so a snap can never carry the card past a bound.
         const peers = rowNeighbours(base, it)
-        const w = snapToMatch(
+        let w = snapToMatch(
           clamp(g.origW + dxCols, minW, cols - it.x),
           peers.map((p) => p.w),
           minW,
           cols - it.x,
         )
-        const h = snapToMatch(
+        let h = snapToMatch(
           Math.max(minH, g.origH + dyRows),
           peers.map((p) => p.h),
           minH,
           Number.POSITIVE_INFINITY,
         )
+        // ── RESIZING INTO A GAP ─────────────────────────────────────────────
+        // Matching a neighbour's SIZE (above) is not the same as filling the
+        // space beside it, and filling the space is what a resize in free mode
+        // is usually for: "make this chart reach the heatmap". So the magnet
+        // applies to the growing EDGE too — the card's right edge is attracted
+        // to every neighbour's left and right edge, its bottom edge to every
+        // top and bottom. Expressed as widths/heights because that is what the
+        // item stores: a target edge minus this card's own origin.
+        if (free) {
+          w = snapToMatch(
+            w,
+            [cols - it.x, ...others.flatMap((o) => [o.x - it.x, o.x + o.w - it.x])],
+            minW,
+            cols - it.x,
+            MAGNET,
+          )
+          h = snapToMatch(
+            h,
+            others.flatMap((o) => [o.y - it.y, o.y + o.h - it.y]),
+            minH,
+            Number.POSITIVE_INFINITY,
+            MAGNET,
+          )
+        }
         return { ...it, w, h }
       })
-      setDraft(free ? resolveBoard(next, g.id) : compactBoard(next, g.id))
+      setDraft(free ? resolveBoard(next, g.id, cols) : compactBoard(next, g.id))
     }
     const onUp = () => {
       const committed = draftRef.current
@@ -354,7 +477,7 @@ export function Board({
       // no float to run, so one resolve is the whole commit.
       onLayoutChange(
         free
-          ? resolveBoard(committed, g?.id ?? null)
+          ? resolveBoard(committed, g?.id ?? null, cols)
           : compactBoard(compactBoard(committed, g?.id ?? null)),
       )
     }

@@ -1,5 +1,277 @@
 # Changelog
 
+## 2026-09-06 (h) - Core Bullseye backtest, corrected: the history was in `walls_log` all along, not `option_strike_gex_history` (`backtest-core-level/`)
+
+Correction to (g), which concluded there were only 11 sessions of CB history.
+Wrong table. (g) read `option_strike_gex_history` — the raw per-strike tape, held
+to a 10-day rolling window by `scripts/db-prune.sql`. The CB itself has been
+recorded durably the whole time by `walls-recorder.js`, and **none of those tables
+are pruned**:
+
+| table | holds | pruned |
+|---|---|---|
+| `walls_log` | CB / call wall / put wall per 15m slot with `spot`; change-only, slot 0 pins the daily baseline; immutable once written | no |
+| `wall_events` | every CB touch and approach with a classified `reaction`, `excursion_pts`, `reclaim_min` | no |
+| `es_candles` | ES OHLC at `intervalMinutes = 1` | no (explicit do-not-prune) |
+
+And the band under test is already a named constant in the recorder:
+
+```js
+const CORE_TOUCH_PTS = 5;  // spot within 5 points of the CORE is an event, full stop
+```
+
+So the setup has been instrumented and classified for months. `wall_events` alone
+answers "what happens after a touch" with no backtest assumptions in it.
+
+### New in `backtest-core-level/`
+
+- `export-walls-core.sql` — pulls `walls_log`, `wall_events` and 1m `es_candles`.
+  Defaults to `0dte`/`oivol`, the only variant pair continuous across the full
+  history (the four-variant split landed 2026-08-27).
+- `analyze_touches.py` — reaction mix (reject / pin / consolidated vs break_5 /
+  break_lt5), excursion quantiles, reclaim time, touches per session. No entry,
+  stop or target in it, so there is nothing to curve-fit.
+- `build_from_walls.py` — merges the change-only level with the 1m ES path.
+  Carries the level forward within a date only, derives the ES-SPX basis per slot
+  from `spot - es_close` and interpolates it **within a date only** (the basis
+  jumps overnight on carry/dividends/roll), then translates the level into ES
+  space and emits one row per 1m bar with real high/low. P&L becomes actual ES
+  points at $5/pt and fills happen against 1m bars instead of 15m endpoints.
+  Verified round-trip: |ES − core_es| matches |SPX − core_spx| at every anchor.
+
+The 15-minute grid still bounds when a signal can appear; it no longer bounds how
+the trade is filled.
+
+**No production code changed.** New folder only — nothing writes to the DB, the
+export is read-only.
+
+
+## 2026-09-06 (g) - Core-level MES backtest: engine built, and the finding is that there is no data to run it on (`backtest-core-level/`)
+
+Tested: *when SPX comes within 5 points of the core level (largest |net GEX| strike),
+take 2 MES lots; dollar stop on the whole trade; 1R/2R/3R with a ratcheting stop.*
+
+### The headline is a data problem, not a strategy result
+
+`gex_strike_history.csv` (1.25M rows) collapses to **6,604 core-level snapshots over
+11 sessions** (2026-07-10 -> 2026-07-20). That is the entire core-level history that
+exists, and the VPS will not have more:
+
+- `option_strike_gex_history` is pruned to a **10-day rolling window** by
+  `scripts/db-prune.sql` (RTH only, front expiry only).
+- `gex_levels_history` looks like the long-history alternative but its PK is
+  `(date, symbol)` and the recorder upserts - **one row per day**, no intraday.
+- `preview_snapshots` (30 days) carries `gex_flip / call_wall / put_wall`, not the
+  max-|GEX| strike.
+
+So the core level has never been retained intraday beyond 10 days.
+
+### What the 11 sessions say (nothing, statistically)
+
+12.6% of snapshots sit within 5 pts of the core level; median distance 24.6 pts.
+The 60-cell sweep produces 7-17 trades per cell - best `momentum/2R/$100` at
++0.539 R (t=1.42), worst `long/fixed_3r/$50` at -0.459 R, **on the same 11 days**.
+That spread is parameter luck. The only pattern that repeats across the whole sweep
+rather than in one cell: `long` occupies almost the entire bottom of the table while
+`fade` and `momentum` cluster positive - consistent with the level being a pivot
+rather than a buy signal, but a hypothesis, not a finding.
+
+### Engine
+
+`core_level_backtest.py --selftest` is a validity check, not a smoke test: it injects
+a real mean-reversion pull and requires the engine to find it (+0.138 R, t=2.85),
+feeds it a pure random walk and requires it to find nothing (|t| < 3), inverts the
+pull and requires underperformance, and checks the $-risk -> points conversion and the
+stop-before-target fill rule. Entries fire on *crossing into* the band (not every
+snapshot inside it), one position at a time, max 3/day, 15-min cooldown, RTH only,
+flat 15:55, $1.24 RT/contract + 1 tick slippage per side.
+
+### To get a real answer
+
+`export-core-level.sql` adds a `core_level_history` table - one row per snapshot
+instead of one per strike, ~390 rows/session, a few hundred KB a year - with a
+backfill from what is left in the heavy table. Write to it from the strike recorder
+and leave it out of `db-prune.sql`. Alternatively rebuild history from ThetaData PRO
+chains, which is the only route to an answer this quarter.
+
+**No production code changed.** New folder only.
+
+
+## 2026-09-06 (f) - v3 board: free placement is now the DEFAULT, and dropped cards snap flush to their neighbours (`cbedge-v3/src/design/primitives/Board.tsx`, `board/BoardPage.tsx`, `board/layoutStore.ts`)
+
+Follow-up to (e), which shipped free placement behind a toggle and did not fix
+the problem:
+
+> "i still cant move it. make it able to put anywhere, but kind of auto merge
+> them to be touching when placed."
+
+Three things were wrong.
+
+### 1. It was behind a switch nobody was going to find
+
+`cb-v3-board-free` is now **opt-OUT** (`'0'`), not opt-in. Free placement is what
+"drag a card where you want it" is supposed to feel like; shipping it behind a
+button meant the board still fought the first person who tried to move a card and
+never mentioned there was another mode. **Auto-arrange is still one click away**
+in `Edit layout` for anyone who wants the board tidied for them.
+
+### 2. Nothing closed the seams — the magnet
+
+Free placement on its own gives half of what was asked and makes the other half
+harder: with gravity gone, nothing closes a one-cell gap, and a board assembled by
+eye ends up with hairline seams between cards that all look like mistakes. The
+grid is 12 columns, so **one column is ~9% of the board** — being one out is very
+visible and nearly impossible to correct by dragging, because one column is also
+about the width of the pointer's own slop.
+
+So a dragged card's edges are now **magnetic**. Within `MAGNET` (2 cells) of
+another card's edge it takes that exact value, per axis independently — flush
+against the card on its left while still free vertically. Four candidates per
+neighbour per axis, because a card lines up either by **butting into** a
+neighbour (its right edge to the neighbour's left) or by **aligning with** it
+(both left edges on one column), and people do both by hand.
+
+The same magnet applies to the growing edge on a **resize**, which is what a
+resize in free mode is usually for — "make this chart reach the panel next to
+it". That sits on top of the existing neighbour-*size* match (`MATCH_SNAP`, 1
+cell): one rounding rule, two radii.
+
+Board edges count as neighbours. The magnet is free-mode only — under gravity a
+card is re-floated on release anyway, so snapping it on the way would be a snap
+you watch being undone.
+
+### 3. A displaced card was still being thrown to the bottom
+
+`resolveBoard`'s first cut pushed every displaced card DOWN, inherited from
+`compactBoard` where it is harmless because the board re-floats after. With
+gravity off it is not harmless: nudge a card one column into its neighbour and
+that neighbour lands at the bottom of the board and **stays there**. "Kicking off
+the heatmap" is a card being moved much further than the gesture asked for.
+
+New `stepAside()` **searches** instead of stepping: for every card already placed
+it offers the four positions that clear it — below, right, left, above — keeps
+the ones that are on the board and collide with nothing, and takes the shortest
+move from where the card actually was.
+
+A search, not a loop, and that is the point. The obvious version (push, look
+again, push again) **ping-pongs**: pushed left out of A it lands in B, pushed
+right out of B it lands back in A, and once the guard trips it gets dumped at the
+bottom anyway — the exact behaviour this was meant to remove. That was measured,
+not theorised: nudging Multi Greek one column left sent GEX Candles 2 to row 9,
+Net Premium to row 18 and GEX Chart to row 26. Testing every candidate against
+everything placed settles it in one pass and cannot oscillate. The
+below-everything fallback is now reached only when a row band genuinely has no
+room, and always terminates.
+
+### Verified
+
+Extracted the placement functions and ran them against the board in the
+screenshot (two GEX Candles, Multi Greek, Net Premium, GEX Chart):
+
+```
+magnet, dropped 1 col short of flush     x 5 -> 4,  y 10 -> 9
+magnet, card dropped in open space       untouched (no long-range grab)
+Multi Greek nudged 1 col left            neighbour steps aside; no cascade to the bottom
+Net Premium widened 6 -> 8 cols          only GEX Chart moves; the whole top row untouched
+deliberate 2-row gap                     free keeps y=12 · auto-arrange pulls to y=9
+fully stacked corrupt blob               laid out side by side, no overlap
+
+fuzz, 3000 random boards   overlap 0 · out-of-bounds 0 · pinned card moved 0
+fuzz, 3000 random magnets  out-of-bounds 0
+```
+
+Pinned-card-moved 0 is the one that matters for feel: whatever the rest of the
+board does, the card under the pointer never gets taken out of your hand.
+
+## 2026-09-06 (e) - v3 board: free placement, so a card can be put where you want it and a gap stays a gap (`cbedge-v3/src/design/primitives/Board.tsx`, `board/BoardPage.tsx`, `board/layoutStore.ts`)
+
+### The complaint
+
+> "I can't move the chart to fill that space without kicking off the heatmap.
+> Need more ability to place cards where I want."
+
+That is **gravity**, not collision. `compactBoard` floated EVERY card to the
+first free row on every gesture, so the board had no such thing as an empty row:
+widen one card and the card beside it is pushed out of the row and then
+re-floated somewhere else entirely. Nothing was wrong with the arithmetic — the
+board was doing a thing that had never been asked for, and there was no way to
+turn it off.
+
+### `resolveBoard()` — compaction with the float removed
+
+New export beside `compactBoard` in `design/primitives/Board.tsx`. Same
+no-overlap rule, no gravity:
+
+- the pinned card sits exactly where the pointer left it;
+- a card that **overlaps** it drops to just below it — the minimum move that
+  restores the rule;
+- a card that overlaps nothing **is not touched**, so a hole in the board stays
+  a hole.
+
+A separate function rather than a `gravity` flag threaded through
+`compactBoard`: that function is called from the layout sanitizer and from every
+add/remove path, and a boolean that silently changes what those do is exactly
+how a saved free layout comes back compacted.
+
+| gesture | auto-arrange (before, still the default) | free placement |
+|---|---|---|
+| drop a card on row 14 with space above | floats up to row 11 | stays on row 14 |
+| widen a card into a gap | neighbour pushed out of the row and re-floated | only the card actually overlapped moves, down |
+| remove a card | board pulls up to close the hole | hole stays; nothing else moves |
+
+### The toggle
+
+`Edit layout` now carries an **Auto-arrange / Free placement** button, next to
+the gestures it governs (edit mode only — outside it there is no gesture for it
+to change).
+
+- Turning free **on** changes nothing on screen: the current arrangement is
+  already legal without gravity.
+- Turning it **off** compacts immediately, on the spot, rather than waiting for
+  the next drag — a board that tidies itself on a gesture you have not made yet
+  reads as a glitch.
+
+While a card is moving, free mode draws **row guides** as well as the column
+guides. Under gravity the row a card is dropped on is a suggestion (it floats),
+so drawing rows would have been a lie; with gravity off the row is the thing
+being chosen, and it is the only axis with no other visual cue.
+
+The **landing slot** correctly never appears in free mode: the release maths is
+`resolveBoard`, which leaves the pinned card where it is, so the preview always
+equals the pinned box. There is no jump to warn about when the card lands where
+the hand let go.
+
+### It survives a refresh
+
+`sanitizeLayout()` in `layoutStore.ts` used to end in an unconditional
+`compactBoard(kept)` — every read path goes through it, so a deliberately spaced
+board would have survived the gesture and died on refresh. It now takes a
+`compact` argument defaulting to the free-placement preference, and runs
+`resolveBoard` instead when free: an older or corrupt blob still gets the overlap
+rule enforced, just without the float.
+
+`cb-v3-board-free` is a **per-browser preference**, not part of the layout: the
+wire contract for `dashboard_layouts` is an array of `{id,x,y,w,h}` and this is a
+behaviour flag, not geometry. A free layout saved to the account and reopened on
+a machine never switched to free mode comes back compacted — a board you can
+still read, rather than one with cards on top of each other.
+
+### Verified
+
+Extracted the two placement functions and ran them against the arrangement in
+the screenshot (two GEX Candles, Multi Greek, Net Premium, GEX Chart with a
+deliberate two-row gap):
+
+```
+free keeps the gap:                       true
+compact eats the gap:                     netprem y 8 -> 6
+free resize (netprem 6w -> 8w):           only gexchart moves (y 8 -> 13); mg and both candles untouched
+auto resize (same gesture):               all five re-floated
+free drop at y=14:                        stays at y=14
+auto drop (same gesture):                 floats to y=11
+overlap after free resize / drop / a fully stacked corrupt blob:   none
+```
+
 ## 2026-09-06 (d) - The ledger is current. Three "misses" were data gaps, and the strip and the ledger were reading different rows (`server-v2/confidence-grader.js`, `server-v2/api-router.js`)
 
 ### The grader ran, and the table is now live

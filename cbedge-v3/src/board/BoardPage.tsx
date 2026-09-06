@@ -57,12 +57,19 @@ import {
 // out of the row and re-floated it somewhere else, so the gap could not be
 // filled without losing the neighbour.
 //
-// "Free placement" (edit mode) turns the gravity off and keeps the no-overlap
-// rule: a card stays on the row it is dropped on, only cards it actually
-// overlaps move, and an empty patch of board stays empty. Switching BACK to
-// auto-arrange compacts once, on the spot, so the two modes never disagree about
-// what is on screen. The flag is a per-browser preference, not part of the saved
-// layout — see FREE_KEY in layoutStore.ts.
+// "Free placement" — now the DEFAULT — turns the gravity off and keeps the
+// no-overlap rule: a card stays where it is dropped, only cards it actually
+// overlaps move, and they move by the shortest distance that clears rather than
+// being thrown to the bottom of the board. An empty patch of board stays empty.
+//
+// The other half is the MAGNET (design/primitives/Board.tsx): a dragged card's
+// edges are attracted to its neighbours' edges, so "put it anywhere" still ends
+// up with the cards touching instead of one column apart. Free placement without
+// it would just move the problem — gravity was at least closing the seams.
+//
+// Switching BACK to auto-arrange compacts once, on the spot, so the two modes
+// never disagree about what is on screen. The flag is a per-browser preference,
+// not part of the saved layout — see FREE_KEY in layoutStore.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_IDS = ['gex-candles', 'key-levels', 'quick-links']

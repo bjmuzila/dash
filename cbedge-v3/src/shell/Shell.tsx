@@ -80,6 +80,12 @@ export const NAV: NavItem[] = [
   // reads it back out of the api.ts cache, so the click lands on data that is
   // already home. See src/pages/em/emData.ts (LEVELS_STALE_MS).
   { to: '/em', label: 'Est. Moves', icon: '↔️', prefetch: ['/api/levels?ticker=SPX'] },
+  // Next to Est. Moves on purpose — both are pre-open prep, read once before the
+  // bell rather than watched. No prefetch: the page's three feeds go out through
+  // a raw fetch(…, { cache: 'no-store' }) in data/econCalendar.ts, not through
+  // api.ts, so a warmed api cache would never be read back — an unused request
+  // on every hover. Give it one the day that hook moves onto api.ts.
+  { to: '/economic-calendar', label: 'Econ Cal', icon: '📅' },
   { to: '/analytics', label: 'Analysis', icon: '📈', prefetch: ['/api/premarket-summary'] },
   // Prefetches the recorder's symbol list on hover — the first thing every one
   // of the four tabs needs, whichever one you land on.
