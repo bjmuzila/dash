@@ -42,6 +42,27 @@ export interface BoardItem {
   h: number
 }
 
+// ── THE GRID, AND WHY IT IS 24 WIDE ──────────────────────────────────────────
+//
+// It was 12 columns and 32px rows, and that is the real reason "put the cards
+// where I want" kept failing. Twelve columns means one column is 8% of the
+// board, and an edge can only ever land on one of thirteen places. Two charts
+// side by side next to a 5-wide panel is 3 + 3 + 5 = 11: there is a spare column
+// and NO arrangement spends it — make the charts equal and a hole is left, close
+// the hole and the charts are different widths. That is not a snapping bug, it
+// is the grid being too coarse to express the layout.
+//
+// At 24 columns the same board is 7 + 7 + 10 and it just works. Twice the
+// resolution on both axes, so an edge lands where the pointer is to within ~4%
+// of the board, which is close enough to read as free. The snap radii below are
+// in grid units and were doubled with it, so everything that used to snap within
+// "one column" still snaps within one column's WORTH of travel.
+//
+// Everything stored is in these units. layoutStore.ts migrates boards saved
+// under the old 12-column grid by doubling x/y/w/h once, per browser.
+export const BOARD_COLS = 24
+export const BOARD_ROW_H = 16
+
 /** Do two items share any cell? Touching edges don't count. */
 export function boardCollides(a: BoardItem, b: BoardItem): boolean {
   if (a.id === b.id) return false
@@ -154,7 +175,7 @@ function stepAside(it: BoardItem, placed: BoardItem[], cols: number): BoardItem 
   )
 }
 
-export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols = 12): BoardItem[] {
+export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols = BOARD_COLS): BoardItem[] {
   const order = [...items].sort((a, b) => a.y - b.y || a.x - b.x)
   const ordered = pinnedId
     ? [...order.filter((i) => i.id === pinnedId), ...order.filter((i) => i.id !== pinnedId)]
@@ -172,6 +193,99 @@ export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols 
 
   const byId = new Map(placed.map((p) => [p.id, p]))
   return items.map((orig) => byId.get(orig.id) ?? orig)
+}
+
+// ── CLOSING THE LEFTOVER SPACE ───────────────────────────────────────────────
+//
+// "Let it be free will on where the edges go, but try to limit the empty space."
+//
+// Those pull against each other and both are right. Gravity limited empty space
+// by taking the placement away from you. Free placement gives the placement back
+// and leaves the slivers: a two-column strip beside a chart, a margin down the
+// right edge, a band under a card that nothing will ever occupy. None of it is
+// where you PUT anything — it is what was left when you stopped dragging.
+//
+// So the tidying is decoupled from the placing. You choose the edges; on release
+// each card reaches into the dead space immediately beside and below it and
+// takes it. Nothing moves — only widths and heights change, and only into space
+// that is already empty — so the arrangement you made is exactly the arrangement
+// you keep.
+//
+// Bounded by `maxGap`, and that bound is the whole design. Unbounded, every card
+// would stretch to the far side of the board and the board would be a stretch of
+// cards. At a quarter of the width it swallows slivers, margins and the hole a
+// removed card leaves, and it leaves a DELIBERATE hole — a card set apart from
+// the rest — alone. That is the "best guess": a small space beside a card was an
+// accident, a large one was a decision.
+//
+// LEFT and UP are not filled, on purpose. A gap on a card's left is the same gap
+// as the one on its neighbour's right, and both cards growing into it is how you
+// get a fight; the neighbour's right-fill already closes it. The exceptions are
+// the board's own left edge (nothing to the left to close it) and, for width
+// only, the right edge.
+//
+// `pinnedId` is the card that was just dropped. It may GROW — filling the space
+// it was placed into is the point — but it is the one card that may not be
+// MOVED, so the left-edge pull skips it. Everything else about the release is
+// built on the card staying exactly where the hand let go, and a tidy-up that
+// slid it two columns sideways afterwards would undo that at the last moment.
+function fillGaps(items: BoardItem[], cols: number, maxGap: number, pinnedId?: string | null): BoardItem[] {
+  // ── RUN IT TO A FIXED POINT ────────────────────────────────────────────────
+  // Widening a card changes which cards are in its COLUMN band, and heightening
+  // one changes which are in its ROW band, so a single pass can leave a gap that
+  // only became fillable because of a fill earlier in the same pass. Left there,
+  // the second gesture on an untouched board would quietly move things — the
+  // board would look like it was still thinking about the last drag.
+  //
+  // Repeating until nothing changes makes settling IDEMPOTENT: settle(settle(x))
+  // === settle(x), which is the property that makes it safe to run on every
+  // release. It converges in one or two passes; the cap is a bound, not a plan.
+  let out = items.map((i) => ({ ...i }))
+  for (let pass = 0; pass < 4; pass++) {
+    const next = fillGapsOnce(out, cols, maxGap, pinnedId)
+    if (JSON.stringify(next) === JSON.stringify(out)) break
+    out = next
+  }
+  return out
+}
+
+function fillGapsOnce(items: BoardItem[], cols: number, maxGap: number, pinnedId?: string | null): BoardItem[] {
+  const out = items.map((i) => ({ ...i }))
+  const rowBand = (it: BoardItem) => out.filter((o) => o.id !== it.id && o.y < it.y + it.h && it.y < o.y + o.h)
+  const colBand = (it: BoardItem) => out.filter((o) => o.id !== it.id && o.x < it.x + it.w && it.x < o.x + o.w)
+
+  for (const it of out) {
+    const band = rowBand(it)
+    // Left: only the board edge, and only when nothing is over there.
+    if (it.id !== pinnedId && it.x > 0 && it.x <= maxGap && !band.some((o) => o.x < it.x)) {
+      it.w += it.x
+      it.x = 0
+    }
+    // Right: up to the nearest card in the same rows, else the board edge.
+    const wall = band.filter((o) => o.x >= it.x + it.w).reduce((m, o) => Math.min(m, o.x), cols)
+    const gap = wall - (it.x + it.w)
+    if (gap > 0 && gap <= maxGap) it.w += gap
+  }
+
+  for (const it of out) {
+    // Down: only toward a card that is actually there. The board has no bottom,
+    // so "the space below" is otherwise infinite and filling it is meaningless.
+    const below = colBand(it).filter((o) => o.y >= it.y + it.h)
+    if (!below.length) continue
+    const gap = below.reduce((m, o) => Math.min(m, o.y), Number.POSITIVE_INFINITY) - (it.y + it.h)
+    if (gap > 0 && gap <= maxGap) it.h += gap
+  }
+
+  return out
+}
+
+/**
+ * The release pass in free mode: settle collisions, then close the dead space.
+ * Exported because BoardPage runs it for add/remove too — a card removed from
+ * the middle of a board should leave its neighbours a little wider, not a hole.
+ */
+export function settleBoard(items: BoardItem[], pinnedId?: string | null, cols = BOARD_COLS): BoardItem[] {
+  return fillGaps(resolveBoard(items, pinnedId, cols), cols, Math.max(2, Math.round(cols / 4)), pinnedId)
 }
 
 // ── THE MAGNET ───────────────────────────────────────────────────────────────
@@ -196,7 +310,10 @@ export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols 
 // by ALIGNING WITH it (both left edges on the same column). Both are things
 // people line up by hand, and offering only the first leaves columns that never
 // quite agree down the board.
-const MAGNET = 2
+//
+// In grid units, so it doubled with BOARD_COLS: the pointer travel that snaps is
+// unchanged, it is the number of columns that travel covers that went up.
+const MAGNET = 4
 
 /** Board edges count as neighbours — the outer frame is a line to align to. */
 function magnetX(it: BoardItem, others: BoardItem[], cols: number): number {
@@ -263,7 +380,7 @@ function clamp(v: number, lo: number, hi: number) {
 // overlaps this one's — the cards actually sitting beside it, which is the
 // arrangement the complaint is about.
 /** How near, in grid units, a drag has to come before it snaps onto a match. */
-const MATCH_SNAP = 1
+const MATCH_SNAP = 2
 
 /**
  * Take the nearest of `targets` within `tol`, or leave `v` alone. Out-of-range
@@ -294,12 +411,12 @@ export function Board({
   layout,
   onLayoutChange,
   render,
-  cols = 12,
-  rowH = 32,
+  cols = BOARD_COLS,
+  rowH = BOARD_ROW_H,
   gutter = 8,
   locked = false,
-  minW = 2,
-  minH = 3,
+  minW = 4,
+  minH = 6,
   free = false,
 }: BoardProps) {
   const phone = useIsPhone()
@@ -328,7 +445,9 @@ export function Board({
   const active = draft ?? layout
   const byId = new Map(active.map((i) => [i.id, i]))
   const maxRows = active.reduce((m, i) => Math.max(m, i.y + i.h), 0)
-  const gridRows = Math.max(maxRows + 2, 6)
+  // Two spare rows of slack under the tallest card, in a unit half the size it
+  // used to be — hence 4, not 2. Same slack, finer grid.
+  const gridRows = Math.max(maxRows + 4, 12)
   const containerH = gridRows * rowH + (gridRows - 1) * gutter
 
   const pxBox = (it: BoardItem) => ({
@@ -473,11 +592,16 @@ export function Board({
       startRef.current = null
       if (!committed) return
       // Auto-arrange commits with a SECOND compaction: the first one holds the
-      // pinned card, the second lets it float like everything else. Free mode has
-      // no float to run, so one resolve is the whole commit.
+      // pinned card, the second lets it float like everything else.
+      //
+      // Free mode has no float to run — instead the commit is where the dead
+      // space gets closed. ON RELEASE ONLY, never during the drag: cards
+      // resizing themselves under a moving pointer is the board arguing with the
+      // hand, which is the thing all of this exists to stop. Let go and it
+      // tidies, in one animated step you can see happen.
       onLayoutChange(
         free
-          ? resolveBoard(committed, g?.id ?? null, cols)
+          ? settleBoard(committed, g?.id ?? null, cols)
           : compactBoard(compactBoard(committed, g?.id ?? null)),
       )
     }

@@ -73,7 +73,11 @@ export interface CardDef {
    * `label` is still required, and still what the "+ Add card" menu lists.
    */
   Title?: ComponentType
-  /** Default footprint in grid units when first added to a board. */
+  /**
+   * Default footprint in grid units when first added to a board.
+   * The grid is BOARD_COLS (24) wide with BOARD_ROW_H (16px) rows — these were
+   * all doubled when it went from 12/32, so the cards are the size they were.
+   */
   defaultSize: { w: number; h: number }
   /**
    * `instanceId` is the id of the grid item being drawn — `gex-candles` for the
@@ -178,7 +182,7 @@ export const CARD_CATALOG: CardDef[] = [
     id: 'gex-candles',
     icon: '🕯️',
     label: 'GEX Candles',
-    defaultSize: { w: 8, h: 12 },
+    defaultSize: { w: 16, h: 24 },
     // The instance id is threaded in so the SECOND and later copies can hold
     // their own ticker (and their own settings) instead of all following the
     // board symbol — two copies of one chart is not why anyone adds a second.
@@ -192,7 +196,7 @@ export const CARD_CATALOG: CardDef[] = [
     id: 'gex-chart',
     icon: '📊',
     label: 'GEX Chart',
-    defaultSize: { w: 6, h: 12 },
+    defaultSize: { w: 12, h: 24 },
     render: () => (
       <Deferred>
         <GexChartCard />
@@ -207,7 +211,7 @@ export const CARD_CATALOG: CardDef[] = [
     id: 'gauge-rail',
     icon: '🎚️',
     label: 'Gauge Rail',
-    defaultSize: { w: 12, h: 5 },
+    defaultSize: { w: 24, h: 10 },
     render: () => (
       <Deferred>
         <GaugeRailCard />
@@ -218,7 +222,7 @@ export const CARD_CATALOG: CardDef[] = [
     id: 'multi-greek',
     icon: '🧮',
     label: 'Multi Greek',
-    defaultSize: { w: 12, h: 14 },
+    defaultSize: { w: 24, h: 28 },
     render: () => (
       <Deferred>
         <MultiGreekCard />
@@ -229,7 +233,7 @@ export const CARD_CATALOG: CardDef[] = [
     id: 'net-premium',
     icon: '💵',
     label: 'Net Premium',
-    defaultSize: { w: 8, h: 12 },
+    defaultSize: { w: 16, h: 24 },
     render: () => (
       <Deferred>
         <NetPremiumCard />
@@ -240,20 +244,20 @@ export const CARD_CATALOG: CardDef[] = [
     id: 'flow-tape',
     icon: '🌊',
     label: 'Flow Tape',
-    defaultSize: { w: 12, h: 12 },
+    defaultSize: { w: 24, h: 24 },
     render: () => (
       <Deferred>
         <FlowTapeCard />
       </Deferred>
     ),
   },
-  { id: 'quick-links', icon: '🔗', label: 'Quick Links', defaultSize: { w: 3, h: 6 }, render: () => <QuickLinksCard /> },
+  { id: 'quick-links', icon: '🔗', label: 'Quick Links', defaultSize: { w: 6, h: 12 }, render: () => <QuickLinksCard /> },
   {
     id: 'key-levels',
     icon: '📏',
     label: 'Key Levels',
     Title: KeyLevelsHeading,
-    defaultSize: { w: 12, h: 6 },
+    defaultSize: { w: 24, h: 12 },
     render: () => (
       <Deferred>
         <KeyLevelsCard />
@@ -264,7 +268,7 @@ export const CARD_CATALOG: CardDef[] = [
     id: 'econ-calendar',
     icon: '🗓️',
     label: 'Economic Calendar & Earnings',
-    defaultSize: { w: 6, h: 12 },
+    defaultSize: { w: 12, h: 24 },
     render: () => (
       <Deferred>
         <EconCalendarCard />
@@ -362,7 +366,7 @@ export function placeNewCard(cardId: string, existing: BoardItem[]): BoardItem {
   // The LAST one placed, not the first: if there are already three and they were
   // resized over time, the most recent is the size currently being worked to.
   const sibling = [...existing].reverse().find((i) => cardTypeOf(i.id) === cardId)
-  const { w, h } = sibling ?? def?.defaultSize ?? { w: 4, h: 6 }
+  const { w, h } = sibling ?? def?.defaultSize ?? { w: 8, h: 12 }
   const y = existing.reduce((m, i) => Math.max(m, i.y + i.h), 0)
   return { id: newInstanceId(cardId, existing.map((i) => i.id)), x: 0, y, w, h }
 }

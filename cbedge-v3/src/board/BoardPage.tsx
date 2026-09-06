@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
-import { Board, compactBoard, resolveBoard, type BoardItem } from '@/design/primitives/Board'
+import { Board, compactBoard, resolveBoard, settleBoard, type BoardItem } from '@/design/primitives/Board'
 import { useAuth } from '@/data/auth'
 import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 import { ToolbarSlot } from '@/shell/ToolbarSlot'
@@ -108,9 +108,17 @@ export default function BoardPage() {
    * The board's placement rule, in one place. Every path that changes the layout
    * outside a gesture — add, remove, adopting the server copy — goes through it,
    * so none of them can quietly re-compact a free board.
+   *
+   * `tidy` says whether the dead space gets closed as well (settleBaord vs a
+   * bare resolve). ON for the user's own edits — adding or removing a card is a
+   * change to the arrangement and the board should come back looking finished.
+   * OFF when merely LOADING a saved board: opening the page is not an edit, and
+   * a layout that quietly rewrites itself on open would show "Unsaved layout"
+   * for a change the user never made.
    */
   const arrange = useCallback(
-    (items: BoardItem[]) => (free ? resolveBoard(items) : compactBoard(items)),
+    (items: BoardItem[], tidy = true) =>
+      free ? (tidy ? settleBoard(items) : resolveBoard(items)) : compactBoard(items),
     [free],
   )
   const arrangeRef = useRef(arrange)
@@ -165,7 +173,7 @@ export default function BoardPage() {
         setSynced(tpl.layout)
         writeSyncedLayout(tpl.layout)
         const localUnsaved = boot.local != null && !sameLayout(boot.local, boot.synced)
-        if (!localUnsaved) setLayoutState(arrangeRef.current(tpl.layout))
+        if (!localUnsaved) setLayoutState(arrangeRef.current(tpl.layout, false))
       })
       .catch((err: Error) => {
         if (!alive || err.name === 'AbortError') return

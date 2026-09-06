@@ -1,4 +1,4 @@
-import { compactBoard, resolveBoard, type BoardItem } from '@/design/primitives/Board'
+import { BOARD_COLS, compactBoard, resolveBoard, type BoardItem } from '@/design/primitives/Board'
 import { CARD_BY_ID, cardTypeOf, migrateCardId } from './catalog'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,6 +61,56 @@ export function writeFreeMode(on: boolean): void {
   }
 }
 
+// ── MIGRATING A BOARD ACROSS A GRID CHANGE ───────────────────────────────────
+//
+// The board went from 12 columns / 32px rows to 24 / 16 (see BOARD_COLS). Every
+// number in a stored layout is in grid units, so a board saved under the old
+// grid is HALF SIZE under the new one — every card shrinks to a quarter of its
+// area and the right half of the board empties. Doubling x/y/w/h reproduces the
+// old board exactly, because the new unit is exactly half the old one.
+//
+// Which layouts need it is recorded, not guessed. The tempting heuristic — "no
+// card reaches past column 12, so it must be an old board" — is also true of a
+// perfectly good new board whose cards all sit on the left, and it would double
+// that board on every reload until it stopped fitting. So: a key holding the
+// grid width the browser was last written under, read ONCE at module load.
+const GRID_KEY = 'cb-v3-board-grid'
+
+function storedGrid(): number {
+  try {
+    return Number(localStorage.getItem(GRID_KEY)) || 12
+  } catch {
+    return BOARD_COLS
+  }
+}
+
+/**
+ * Captured at import, before anything can read or write a layout — the flag has
+ * to answer "was this browser's data written under the old grid", and the answer
+ * stops being true the moment the key is updated below.
+ */
+const SCALE = BOARD_COLS / storedGrid()
+
+if (SCALE !== 1) {
+  try {
+    localStorage.setItem(GRID_KEY, String(BOARD_COLS))
+  } catch {
+    /* best-effort — SCALE still applies for this session */
+  }
+}
+
+/**
+ * Every read goes through this, so the SERVER copy is rescaled too. A board
+ * saved from an older build on another machine arrives in old units and would
+ * otherwise land as a quarter-size board; it is corrected on the first session
+ * after this build, and written back in new units the next time the user presses
+ * Save layout.
+ */
+function toCurrentGrid(i: BoardItem): BoardItem {
+  if (SCALE === 1) return i
+  return { id: i.id, x: i.x * SCALE, y: i.y * SCALE, w: i.w * SCALE, h: i.h * SCALE }
+}
+
 /** Route key in `dashboard_layouts`. Must match /^[a-z0-9][a-z0-9_-]{0,39}$/. */
 export const BOARD_PAGE = 'v3-home'
 /** v3's home board keeps ONE named template; the route allows up to 12. */
@@ -107,7 +157,15 @@ export function sanitizeLayout(raw: unknown, compact = !readFreeMode()): BoardIt
     const id = migrateCardId(item.id)
     if (!CARD_BY_ID.has(cardTypeOf(id)) || seen.has(id)) continue
     seen.add(id)
-    kept.push({ id, x: item.x as number, y: item.y as number, w: item.w as number, h: item.h as number })
+    kept.push(
+      toCurrentGrid({
+        id,
+        x: item.x as number,
+        y: item.y as number,
+        w: item.w as number,
+        h: item.h as number,
+      }),
+    )
   }
   if (!kept.length) return null
   // Free mode still needs the OVERLAP rule enforced on a blob that may be
