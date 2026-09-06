@@ -48,24 +48,19 @@ interface LegacyLink {
 // v2 pages were fixed multi-panel layouts. Linking to a path that redirects
 // would be worse than not listing it — the link would look like a door and
 // behave like a wall.
+//
+// ICT, JOURNAL, FAILS and GUIDE came out the same day, for a different reason:
+// they are RETIRED, not ported. There is no v3 version and there is not going to
+// be one, so /app/ict, /app/trading, /app/fails and /app/guide redirect to /v3
+// and their toolbar icons are gone from v2 as well. (The NEXT route at /guide is
+// untouched — only the SPA copy went.) A list of doors into a wing that is
+// closing has to lose an entry the day the room does.
 const NOT_IN_V3: LegacyLink[] = [
-  {
-    path: '/ict',
-    label: 'ICT',
-    icon: '🎯',
-    note: 'ICT concepts board. Never more than a dimmed icon in the v3 rail — the slot came out 2026-08-30.',
-  },
   {
     path: '/test',
     label: 'Test Lab',
     icon: '⚗️',
     note: 'Eleven bench tabs — Squeeze, Dealer Gamma, GEX Map, GEX Scanner, GEX%, Market Quality, Stat Prompter, Condition Rail, Flow Inventory, Prem Diff, Seasonality. Built in v3, then retired 2026-08-30.',
-  },
-  {
-    path: '/trading',
-    label: 'Journal',
-    icon: '📓',
-    note: 'The trade journal. Built in v3, then retired 2026-08-30.',
   },
   {
     path: '/levels',
@@ -84,18 +79,6 @@ const NOT_IN_V3: LegacyLink[] = [
     label: 'Confidence Score',
     icon: '📐',
     note: 'The confidence model, scored and broken out by component.',
-  },
-  {
-    path: '/fails',
-    label: 'Fails',
-    icon: '🚫',
-    note: 'Failed-level book — what broke, what held, and what it did next.',
-  },
-  {
-    path: '/guide',
-    label: 'Guide',
-    icon: '📖',
-    note: 'The site guide: GEX/DEX explainer plus the page directory. Reached from the account menu in v2.',
   },
 ]
 

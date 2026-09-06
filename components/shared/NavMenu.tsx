@@ -50,10 +50,12 @@ const GEX_ITEMS: NavItem[] = [
   { label: "Analysis", href: "/analytics" },
   { label: "ES Candles", href: "/es-candles" },
   { label: "Scanner", href: "/scanner" },
-  { label: "ICT", href: "/ict" },
   { label: "Test Lab", href: "/test" },
-  { label: "Journal", href: "/trading" },
   { label: "Order Flow", href: "/order-flow" },
+  // ICT (/ict) and Journal (/trading) came out 2026-09-06 — RETIRED with Fails
+  // and the Site Guide, and their paths now redirect to /v3 (lib/v3Routes.ts,
+  // the RETIRED block). A menu row whose only behaviour is to end up somewhere
+  // else is not a menu row. Same edit in GlobalToolbar's NAV_ITEMS.
 ];
 
 // Routes that exist in the nav but are not yet live — rendered as disabled labels.
@@ -72,7 +74,6 @@ const FREE_IN_DELAYED_MODE = new Set(["/home", "/mult-greek"]);
 const ROUTE_SYMBOL: Record<string, string> = {
   "/home": "⌂",
   "/es-candles": "⑊",
-  "/ict": "⌖",
   "/traders-dashboard": "⊞",
   "/docs": "☰",
   "/mult-greek": "∇",
@@ -83,7 +84,6 @@ const ROUTE_SYMBOL: Record<string, string> = {
   "/flow": "≈",
   "/scanner": "🔍︎",
   "/test": "⚗",
-  "/trading": "✎",
   "/order-flow": "⇅",
   "/owner": "✪",
 };

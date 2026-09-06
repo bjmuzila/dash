@@ -412,14 +412,14 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/flow",              label: "Flow",          emoji: "🌊" },
   { href: "/es-candles",        label: "ES Candles",    emoji: "🕯️" },
   { href: "/scanner",           label: "Scanner",       emoji: "🔍" },
-  { href: "/ict",               label: "ICT",           emoji: "🎯" },
   { href: "/test",              label: "Test Lab",      emoji: "⚗️" },
   // Owner (owner.cbedge.net) and What's New moved out of the toolbar into the
   // UserMenu avatar dropdown (see UserMenu.tsx) — kept out of NAV_ITEMS so they
   // no longer render as toolbar emojis.
-  // Journal is LIVE. The route is /trading (app/trading/page.tsx) — there is no
-  // /journal page; that href was a placeholder while the tile was coming-soon.
-  { href: "/trading",           label: "Journal",       emoji: "📓" },
+  // ICT (/ict) and JOURNAL (/trading) came out 2026-09-06 — RETIRED, along with
+  // Fails and the Site Guide (neither of which was in this strip). Both paths
+  // now redirect to /v3; see the RETIRED block in lib/v3Routes.ts. An icon whose
+  // only behaviour is to bounce you to another app is worse than no icon.
   // Order Flow removed from the toolbar (2026-08): it was a permanently dimmed
   // coming-soon tile taking a slot from live pages. Still listed in the
   // hamburger (NavMenu) so the route stays discoverable when it ships.

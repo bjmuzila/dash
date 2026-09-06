@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+// (next/link is gone with the Site Guide row — every remaining link in this menu
+// is a native <a> on purpose: inside the Vite SPA, basename="/app" would rewrite
+// a next/link href for a top-level Next page into /app/<page>.)
 import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME } from "./homeTheme";
 
@@ -293,26 +295,12 @@ export default function UserMenu() {
               resolves to /app/whats-new (no route → catch-all → Traders Dash), so
               a real navigation to the top-level Next page is required. Owner is an
               absolute external URL and is owner-gated. */}
-          {/* Site Guide is a REAL SPA route (app/guide/page.tsx + a <Route> in
-              app-vite/src/App.tsx), so next/link is right here where the links
-              below need a native <a>: inside the Vite SPA (basename="/app")
-              href="/guide" resolves to /app/guide, which is exactly the route.
-              On a Next-rendered page it hits the same component server-side. */}
-          <Link
-            href="/guide"
-            onClick={() => setOpen(false)}
-            style={{
-              display: "block",
-              padding: "8px 10px",
-              borderRadius: 6,
-              color: HOME_THEME.text,
-              fontSize: 14,
-              fontWeight: 500,
-              textDecoration: "none",
-            }}
-          >
-            Site Guide
-          </Link>
+          {/* SITE GUIDE removed 2026-09-06. It was a next/link to "/guide",
+              which inside the Vite SPA (basename="/app") resolved to /app/guide
+              — and /app/guide is retired now and redirects to /v3 (see the
+              RETIRED block in lib/v3Routes.ts), so the row would have been a
+              button that quietly took you somewhere else. The Next route at
+              /guide still renders if it is typed; nothing links to it. */}
 
           <a
             href="/whats-new"

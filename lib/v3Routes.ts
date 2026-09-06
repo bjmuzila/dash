@@ -93,6 +93,30 @@ export const PORTED: Record<string, string> = {
   "/scanner": "/scanner",
   "/economic-calendar": "/economic-calendar",
 
+  // ── RETIRED, not ported (2026-09-06) ───────────────────────────────────────
+  // These four have no v3 equivalent and are not getting one. They are in this
+  // table for the same reason a ported page is — so the path answers instead of
+  // dead-ending — but the destination is v3's home, because there is nowhere
+  // more specific to send someone.
+  //
+  //   /ict      the ICT concepts board. Never more than a dimmed "coming soon"
+  //             icon in v3's rail; the slot came out 2026-08-30.
+  //   /trading  the trade journal. Built in v3, then retired 2026-08-30.
+  //   /fails    the failed-level book. Never had a nav link anywhere except the
+  //             legacy list — it was a route and nothing else.
+  //   /guide    the site guide. The NEXT route at /guide (app/guide/page.tsx) is
+  //             untouched and still renders; only the SPA copy at /app/guide is
+  //             retired, and the account-menu link that pointed at it is gone.
+  //
+  // Their routes are still declared in app-vite/src/App.tsx and their page files
+  // are still on disk, unreachable behind this redirect — deleting them (route,
+  // lazy import, component, and app/app/<x>/route.ts) is a separate, one-way
+  // step and is the natural follow-up once nobody misses them.
+  "/ict": "/",
+  "/trading": "/",
+  "/fails": "/",
+  "/guide": "/",
+
   // ── Phone build ────────────────────────────────────────────────────────────
   // The ids differ between the builds, which is the whole reason this is a MAP
   // and not a prefix rule. v2's heatmap tab is v3's Heat tab; v2's ES-candles
@@ -127,16 +151,14 @@ export interface LegacyNavItem {
  * the same name; a card is not the page, and where the difference matters the
  * long version is on /v3/legacy.
  */
+// ICT, Journal, Fails and Guide came OUT of this list on 2026-09-06 — retired,
+// not ported; see the RETIRED block in PORTED above. Seven left.
 export const LEGACY_NAV: LegacyNavItem[] = [
   { path: "/levels", label: "Levels", icon: "📏" },
   { path: "/level-log", label: "Level Log", icon: "🧱", partial: true },
   { path: "/strike-history", label: "Strike History", icon: "🕘" },
   { path: "/confidence-score", label: "Confidence Score", icon: "📐" },
-  { path: "/fails", label: "Fails", icon: "🚫" },
-  { path: "/ict", label: "ICT", icon: "🎯" },
   { path: "/test", label: "Test Lab", icon: "⚗️" },
-  { path: "/trading", label: "Journal", icon: "📓" },
-  { path: "/guide", label: "Guide", icon: "📖" },
   { path: "/m/chain", label: "Option Chain (phone)", icon: "⛓️", phone: true },
   { path: "/m/prep", label: "Premarket Prep (phone)", icon: "🌅", phone: true },
 ];

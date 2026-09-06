@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-09-06 - ICT, Journal, Fails and the Site Guide are retired
+
+Four pages leave v2 for good. Not ported - RETIRED: there is no v3 version and
+there is not going to be one. `/app/ict`, `/app/trading`, `/app/fails` and
+`/app/guide` redirect to `/v3`, they are gone from the `/v3/legacy` list, and
+their icons are off v2's toolbar and hamburger.
+
+- **ICT** - the ICT concepts board. Never more than a dimmed "coming soon" icon
+  in v3's rail; that slot came out 2026-08-30.
+- **Journal** (`/trading`) - built in v3, then retired 2026-08-30.
+- **Fails** - the failed-level book. It had no nav link anywhere except the
+  legacy list; it was a route and nothing else.
+- **Site Guide** - the SPA copy only. The NEXT route at `/guide`
+  (`app/guide/page.tsx`) is untouched and still renders if it is typed; nothing
+  links to it any more.
+
+### `lib/v3Routes.ts`
+
+- A RETIRED block in `PORTED`, kept separate from the ported entries because the
+  reason is different: these map to `/` not because v3 has the page somewhere
+  else, but because there is nowhere more specific to send anyone.
+- `LEGACY_NAV` is down to seven: Levels, Level Log (partial), Strike History,
+  Confidence Score, Test Lab, and the two phone tabs.
+
+### `cbedge-v3/src/pages/Legacy.tsx`
+
+- The four entries removed. "Not in v3" is four now: Test Lab, Levels, Strike
+  History, Confidence Score. A list of doors into a wing that is closing has to
+  lose an entry the day the room does - a link that redirects looks like a door
+  and behaves like a wall.
+
+### `components/shared/GlobalToolbar.tsx` + `NavMenu.tsx`
+
+- ICT and Journal removed from `NAV_ITEMS` (the toolbar strip) and from
+  `GEX_ITEMS` (the hamburger), plus their `ROUTE_SYMBOL` glyphs. Fails and the
+  Guide were never in either list.
+- `check-routes.mjs` still passes: its toolbar rule fails on a nav item WITHOUT
+  a route, never on a route without a nav item.
+
+### `components/shared/UserMenu.tsx`
+
+- The "Site Guide" row is gone - it was the only link to `/guide`, and inside
+  the SPA it resolved to `/app/guide`, which now redirects. `next/link` went
+  with it; every remaining link in that menu is a native `<a>` on purpose.
+
+The four routes are still declared in `app-vite/src/App.tsx` and their page
+files are still on disk, unreachable behind the redirect. Deleting them (route,
+lazy import, component, and `app/app/<x>/route.ts`) is a one-way step and the
+natural follow-up once nobody misses them.
+
 ## 2026-09-06 - v2 pages wear v3's toolbar, and three more pages come off v2
 
 Two halves of the same move: finish the audit of what v2 still has that v3 does
