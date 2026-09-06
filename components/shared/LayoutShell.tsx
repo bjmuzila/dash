@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import GlobalToolbar from "./GlobalToolbar";
+import V3LegacyToolbar from "./V3LegacyToolbar";
 import PublicNav from "@/components/landing/PublicNav";
 import { useAuth } from "@/components/auth/AuthProvider";
 import OwnerSidebar, { isOwnerChromePath } from "./OwnerSidebar";
@@ -44,7 +45,24 @@ function VisitTracker() {
   return null;
 }
 
-function ShellInner({ children }: { children: React.ReactNode }) {
+/**
+ * Which top bar this shell wears.
+ *
+ *   "app"        GlobalToolbar — the full v2 toolbar. Every Next route that
+ *                renders through app/layout.tsx: the owner hub, /guide, /docs,
+ *                /whats-new, /feedback. Unchanged, and the default.
+ *
+ *   "v2-legacy"  V3LegacyToolbar — v3's palette, v3's nav, a Legacy menu and a
+ *                ← Back to v3 button. Passed by app-vite/src/App.tsx and by
+ *                nothing else: the Vite SPA at /app/* is the legacy wing now
+ *                (v3 is the dashboard — see lib/v3Routes.ts), and GlobalToolbar
+ *                there would be a strip of nav items that redirect out from
+ *                under the click. The docks and providers below stay mounted
+ *                either way; only the bar changes.
+ */
+export type ShellChrome = "app" | "v2-legacy";
+
+function ShellInner({ children, chrome }: { children: React.ReactNode; chrome: ShellChrome }) {
   // Report this route's load/unload to page_load_status. The hook re-runs on every
   // pathname change (pageKey is in its dep array), so client-side nav is tracked too.
   const pathname = usePathname();
@@ -68,9 +86,10 @@ function ShellInner({ children }: { children: React.ReactNode }) {
         backgroundImage: HOME_THEME.shellGlow,
       }}
     >
-      {/* Top toolbar spans the full window width. Navigation lives in its
-          hamburger dropdown (NavMenu) — there is no persistent sidebar. */}
-      <GlobalToolbar />
+      {/* Top toolbar spans the full window width. On "app" chrome navigation
+          lives in its hamburger dropdown (NavMenu) — there is no persistent
+          sidebar. On "v2-legacy" the bar is v3's, and its nav leaves for /v3. */}
+      {chrome === "v2-legacy" ? <V3LegacyToolbar /> : <GlobalToolbar />}
       <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0, position: "relative" }}>
         {showOwnerRail && (
           <Suspense fallback={null}>
@@ -90,7 +109,15 @@ function ShellInner({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function LayoutShell({ children }: { children: React.ReactNode }) {
+export default function LayoutShell({
+  children,
+  chrome = "app",
+}: {
+  children: React.ReactNode;
+  /** Which top bar to wear — see ShellChrome above. Defaults to the v2 toolbar,
+   *  so every existing call site (app/layout.tsx) is unchanged. */
+  chrome?: ShellChrome;
+}) {
   const pathname = usePathname();
   // Embed mode (?embed=1): render full-bleed with no global toolbar/nav/notes, so
   // a page can be iframed as a dashboard card and show only its own UI + content.
@@ -148,7 +175,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
     <MobileNavProvider>
       <NotesPanelProvider>
         <GexPanelProvider>
-          <ShellInner>{children}</ShellInner>
+          <ShellInner chrome={chrome}>{children}</ShellInner>
         </GexPanelProvider>
       </NotesPanelProvider>
     </MobileNavProvider>

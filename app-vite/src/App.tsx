@@ -85,7 +85,12 @@ export default function App() {
               the v2 toolbar and opening the v2 socket on its way out. Routes
               that are still v2-only pass straight through. */}
           <V3Redirect>
-            <LayoutShell>
+            {/* chrome="v2-legacy" — the SPA is the legacy wing now, so it wears
+                V3LegacyToolbar (v3 palette, v3 nav, a Legacy menu and ← Back to
+                v3) instead of GlobalToolbar, whose strip is mostly items that
+                redirect out from under the click. This is the ONLY call site
+                that passes it; every Next route keeps the v2 toolbar. */}
+            <LayoutShell chrome="v2-legacy">
               <Routes>
                 <Route path="/home" element={S(<Home />)} />
                 <Route path="/traders-dashboard" element={<TradersDashboard />} />

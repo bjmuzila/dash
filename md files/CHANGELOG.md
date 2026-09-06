@@ -1,5 +1,91 @@
 # Changelog
 
+## 2026-09-06 - v2 pages wear v3's toolbar, and three more pages come off v2
+
+Two halves of the same move: finish the audit of what v2 still has that v3 does
+not, then stop the pages that remain from pretending to be a live app.
+
+### The audit - what v3 actually covers
+
+Walked v3's routes (`cbedge-v3/src/App.tsx`), its rail (`src/shell/Shell.tsx`
+NAV) and its board catalog (`src/board/catalog.tsx`) against every route in
+`app-vite/src/App.tsx`. Three more can go, all to v3's ROOT, because each is a
+v3 CARD on the home board rather than a 1:1 route:
+
+- `/board` -> `/v3`. v3 Home IS a card board (drag/resize/add/remove, layout
+  saved per user). This one was never going to be ported; Legacy.tsx already
+  said so.
+- `/es-candles` -> `/v3` (the GEX Candles card).
+- `/mult-greek` -> `/v3` (the Multi Greek card, also the phone Heat tab).
+
+A card is single-symbol and lives on a board you arrange; the v2 pages were
+fixed multi-panel layouts. That is the trade and it was made knowingly.
+
+NOT redirected, and each for a reason: `/level-log` (v3 has the wall-migration
+chart and the range switch; the ticker rail, log card, capture rail, churn strip
+and timeline are still v2), `/levels`, `/strike-history`, `/confidence-score`,
+`/fails`, `/guide`, `/ict`, `/test`, `/trading` (the last three were built in v3
+and retired 2026-08-30), and the two phone tabs `/m/chain` and `/m/prep`.
+
+The NEXT `/mult-greek` route is untouched - different page, in `PAID_EXEMPT`,
+still renders `MultGreekClient` (delayed for unpaid). Only `/app/mult-greek`
+redirects. Redirecting the exempt one would loop an unpaid user.
+
+### `lib/v3Routes.ts`
+
+- Three entries added to `PORTED`, and the four root-mapped ones (`/home`,
+  `/board`, `/es-candles`, `/mult-greek`) are grouped with the reasoning.
+- `STAYS_IN_V2` was a comment block; it is now `LEGACY_NAV` - real data with a
+  label, an icon, a `phone` flag and a `partial` flag, rendered by the new
+  toolbar's menu. A page that is neither in `PORTED` nor in `LEGACY_NAV` is
+  unreachable, which is the correct failure rather than a silent orphan.
+- `V3_NAV` added: a MIRROR of v3's rail, minus `/legacy`. A copy on purpose -
+  v3 shares no code with v2 in either direction, and this file is in the v2
+  tree. Drift costs a stale link, not a build.
+
+### `components/shared/V3LegacyToolbar.tsx` - NEW
+
+The bar a v2 page wears. v3's palette, v3's nav (plain anchors - crossing to v3
+is a document navigation, not a route change), a Legacy dropdown off
+`LEGACY_NAV`, a `V2 LEGACY` marker, the ET clock, the real `UserMenu`, and the
+reason it exists: a `<- Back to v3` button, accent-outlined, second element in
+the bar.
+
+Replaced rather than appended-to. `GlobalToolbar`'s strip is fifteen nav items
+and twelve of them now redirect to v3 the moment they are clicked - a toolbar
+mostly made of doors that bounce you elsewhere says v2 is still the app.
+
+Deliberately DROPPED from it: the hamburger NavMenu, the live ToolbarTicker and
+quotes dropdown, the Bzila bell, the GEX and Notes dock handles, the section
+sub-strips. Each is a working surface, and working happens in v3 - which has its
+own ticker picker, notes dock and camera. The docks stay MOUNTED (LayoutShell is
+unchanged there), they just have no handle in this bar.
+
+Narrow screens are handled with a scoped `<style>` block, not a resize listener:
+everything but the nav row is `flex-shrink: 0`, so at 390px (the phone build
+mounts this bar too) the clock and the badge would push `<- Back to v3` off the
+edge - the one control that must never be unreachable.
+
+### `components/shared/v3Chrome.ts` - NEW
+
+v3's palette transcribed for the v2 tree, with the argument for why in the file:
+`homeTheme` IS the v2 look and this bar exists so a v2 page stops looking like
+v2; and the real tokens are Tailwind v4 custom properties in an app that must
+not be imported from here (that cross-build import is the exact failure
+`cbedge-v3/AGENTS.md`'s "two traps" section documents). Nothing else in v2 may
+import it.
+
+### `components/shared/LayoutShell.tsx`
+
+- New `chrome` prop, `"app"` (default, unchanged for every Next route) or
+  `"v2-legacy"`. Only `app-vite/src/App.tsx` passes the latter.
+
+### `cbedge-v3/src/pages/Legacy.tsx`
+
+- Multi Greek, Board and ES Candles removed. A link to a path that redirects
+  looks like a door and behaves like a wall. Eleven entries left, matching
+  `LEGACY_NAV` exactly.
+
 ## 2026-09-06 - /app/home retired: v3's Home IS the home board
 
 `/app/home` is v2's home board, and it was drawing a board v3 already draws -

@@ -41,25 +41,14 @@ interface LegacyLink {
 
 // ── Pages with NO v3 counterpart ─────────────────────────────────────────────
 // Cross-checked against app-vite/src/App.tsx (v2) and src/App.tsx (v3).
+// MULTI GREEK, BOARD and ES CANDLES came OUT of this list on 2026-09-06. All
+// three are v3 CARDS on the home board now, and /app/mult-greek, /app/board and
+// /app/es-candles redirect to /v3 (lib/v3Routes.ts, PORTED). The trade was made
+// knowingly: a card is single-symbol and lives on a board you arrange, where the
+// v2 pages were fixed multi-panel layouts. Linking to a path that redirects
+// would be worse than not listing it — the link would look like a door and
+// behave like a wall.
 const NOT_IN_V3: LegacyLink[] = [
-  {
-    path: '/mult-greek',
-    label: 'Multi Greek',
-    icon: '🧮',
-    note: 'Four tickers, every greek by strike. v3 has the Multi Greek CARD (board + phone Heat tab); the four-up page is v2 only.',
-  },
-  {
-    path: '/board',
-    label: 'Board',
-    icon: '🧩',
-    note: 'The near-black card board. Not being ported — v3 Home IS a card board.',
-  },
-  {
-    path: '/es-candles',
-    label: 'ES Candles',
-    icon: '🕯️',
-    note: 'ES futures candles with the GEX rail. The GEX Candles card covers most of it; the page does not exist in v3.',
-  },
   {
     path: '/ict',
     label: 'ICT',
