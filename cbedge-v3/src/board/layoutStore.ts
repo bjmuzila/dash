@@ -1,4 +1,4 @@
-import { compactBoard, type BoardItem } from '@/design/primitives/Board'
+import { compactBoard, resolveBoard, type BoardItem } from '@/design/primitives/Board'
 import { CARD_BY_ID, cardTypeOf, migrateCardId } from './catalog'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,6 +31,32 @@ import { CARD_BY_ID, cardTypeOf, migrateCardId } from './catalog'
 export const LAYOUT_KEY = 'cb-v3-board-layout'
 /** The layout as the server last saw it. Never written by a gesture. */
 export const SYNCED_KEY = 'cb-v3-board-synced'
+/**
+ * Free placement on/off. A PREFERENCE, not part of the layout: it changes how
+ * gestures behave, and the wire contract for `dashboard_layouts` is an array of
+ * {id,x,y,w,h} that this file does not get to extend. Per browser, like the rest
+ * of the v3 card settings — a free layout saved to the account and reopened on a
+ * machine that has never been switched to free mode comes back compacted, which
+ * is a board the user can still read rather than one with cards on top of
+ * each other.
+ */
+export const FREE_KEY = 'cb-v3-board-free'
+
+export function readFreeMode(): boolean {
+  try {
+    return localStorage.getItem(FREE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function writeFreeMode(on: boolean): void {
+  try {
+    localStorage.setItem(FREE_KEY, on ? '1' : '0')
+  } catch {
+    /* best-effort — the in-memory flag still works for this session */
+  }
+}
 
 /** Route key in `dashboard_layouts`. Must match /^[a-z0-9][a-z0-9_-]{0,39}$/. */
 export const BOARD_PAGE = 'v3-home'
@@ -59,8 +85,14 @@ export interface ServerLayout {
  *
  * Returns null when nothing usable survives, so the caller can tell "no saved
  * layout" from "an empty one".
+ *
+ * `compact` defaults to the free-placement preference, and that default is the
+ * point: this function is what every read path goes through, so leaving it hard
+ * -coded to compactBoard would flatten a deliberately spaced board back to the
+ * top-left on every reload — the arrangement would survive the gesture and die
+ * on refresh, which is worse than never having saved it.
  */
-export function sanitizeLayout(raw: unknown): BoardItem[] | null {
+export function sanitizeLayout(raw: unknown, compact = !readFreeMode()): BoardItem[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null
   const kept: BoardItem[] = []
   const seen = new Set<string>()
@@ -74,7 +106,11 @@ export function sanitizeLayout(raw: unknown): BoardItem[] | null {
     seen.add(id)
     kept.push({ id, x: item.x as number, y: item.y as number, w: item.w as number, h: item.h as number })
   }
-  return kept.length ? compactBoard(kept) : null
+  if (!kept.length) return null
+  // Free mode still needs the OVERLAP rule enforced on a blob that may be
+  // corrupt or written by an older build — resolveBoard is that rule without
+  // the gravity.
+  return compact ? compactBoard(kept) : resolveBoard(kept)
 }
 
 function readKey(key: string): BoardItem[] | null {

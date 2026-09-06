@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Page } from '@/design/primitives/Page'
 import { Card } from '@/design/primitives/Card'
-import { Board, compactBoard, type BoardItem } from '@/design/primitives/Board'
+import { Board, compactBoard, resolveBoard, type BoardItem } from '@/design/primitives/Board'
 import { useAuth } from '@/data/auth'
 import { type CopyShotTarget, useCopyShotTargets } from '@/shell/CopyShot'
 import { ToolbarSlot } from '@/shell/ToolbarSlot'
 import { CARD_CATALOG, CARD_BY_ID, cardTypeOf, placeNewCard } from './catalog'
 import {
   fetchServerLayout,
+  readFreeMode,
   readLocalLayout,
   readSyncedLayout,
   sameLayout,
   saveServerLayout,
+  writeFreeMode,
   writeLocalLayout,
   writeSyncedLayout,
 } from './layoutStore'
@@ -47,6 +49,20 @@ import {
 // storage key, which is a change to every card and not to this file. It is also
 // why "Save layout" saves the ARRANGEMENT and not the settings: the server would
 // be storing a per-type key it cannot attribute to a card.
+//
+// ── Auto-arrange vs Free placement ───────────────────────────────────────────
+// The board shipped with gravity: every gesture floats every card to the first
+// free row. That is right for a board you want tidied for you and wrong for one
+// you are composing — widening a chart to fill a gap pushed the card beside it
+// out of the row and re-floated it somewhere else, so the gap could not be
+// filled without losing the neighbour.
+//
+// "Free placement" (edit mode) turns the gravity off and keeps the no-overlap
+// rule: a card stays on the row it is dropped on, only cards it actually
+// overlaps move, and an empty patch of board stays empty. Switching BACK to
+// auto-arrange compacts once, on the spot, so the two modes never disagree about
+// what is on screen. The flag is a per-browser preference, not part of the saved
+// layout — see FREE_KEY in layoutStore.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_IDS = ['gex-candles', 'key-levels', 'quick-links']
@@ -71,6 +87,7 @@ export default function BoardPage() {
   const [layout, setLayoutState] = useState<BoardItem[]>(() => boot.local ?? defaultLayout())
   const [synced, setSynced] = useState<BoardItem[] | null>(() => boot.synced)
   const [locked, setLocked] = useState(true)
+  const [free, setFree] = useState(() => readFreeMode())
   const [menuOpen, setMenuOpen] = useState(false)
   const [flash, setFlash] = useState(false)
   const [remote, setRemote] = useState<Remote>('idle')
@@ -79,6 +96,33 @@ export default function BoardPage() {
   const menuRef = useRef<HTMLDivElement | null>(null)
   /** The board's scroll port. Its only child is the grid — see shotTargets. */
   const boardRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * The board's placement rule, in one place. Every path that changes the layout
+   * outside a gesture — add, remove, adopting the server copy — goes through it,
+   * so none of them can quietly re-compact a free board.
+   */
+  const arrange = useCallback(
+    (items: BoardItem[]) => (free ? resolveBoard(items) : compactBoard(items)),
+    [free],
+  )
+  const arrangeRef = useRef(arrange)
+  arrangeRef.current = arrange
+
+  /**
+   * Flip the mode. Turning free ON changes nothing on screen — the current
+   * arrangement is already legal without gravity. Turning it OFF compacts
+   * immediately rather than waiting for the next drag, because a board that
+   * tidies itself on a gesture the user has not made yet reads as a glitch.
+   */
+  const toggleFree = useCallback(() => {
+    setFree((prev) => {
+      const next = !prev
+      writeFreeMode(next)
+      if (!next) setLayoutState((items) => compactBoard(items))
+      return next
+    })
+  }, [])
 
   // Autosave — every layout change (drag, resize, add, remove) persists
   // immediately. There's nothing to debounce against: it's a local write, not
@@ -114,7 +158,7 @@ export default function BoardPage() {
         setSynced(tpl.layout)
         writeSyncedLayout(tpl.layout)
         const localUnsaved = boot.local != null && !sameLayout(boot.local, boot.synced)
-        if (!localUnsaved) setLayoutState(compactBoard(tpl.layout))
+        if (!localUnsaved) setLayoutState(arrangeRef.current(tpl.layout))
       })
       .catch((err: Error) => {
         if (!alive || err.name === 'AbortError') return
@@ -125,6 +169,9 @@ export default function BoardPage() {
       alive = false
       ac.abort()
     }
+    // NOT keyed on the placement mode: `arrange` is read through a ref so that
+    // flipping free placement does not re-run the fetch and hand the board back
+    // whatever the server holds mid-edit.
   }, [isSignedIn, boot])
 
   const dirty = !sameLayout(layout, synced)
@@ -245,11 +292,13 @@ export default function BoardPage() {
   useCopyShotTargets(shotTargets)
 
   const addCard = (id: string) => {
-    setLayoutState((prev) => compactBoard([...prev, placeNewCard(id, prev)]))
+    setLayoutState((prev) => arrange([...prev, placeNewCard(id, prev)]))
     setMenuOpen(false)
   }
+  // In free mode a removal leaves a HOLE rather than pulling the board up. That
+  // is the mode's whole promise: the cards the user did not touch do not move.
   const removeCard = (id: string) => {
-    setLayoutState((prev) => compactBoard(prev.filter((i) => i.id !== id)))
+    setLayoutState((prev) => arrange(prev.filter((i) => i.id !== id)))
   }
 
   // One status line, in priority order: what the network is doing, then what is
@@ -287,6 +336,27 @@ export default function BoardPage() {
           {/* Save layout belongs to edit mode: it is the counterpart of the
               gestures that made the board dirty, and out of edit mode there is
               nothing the user could have changed. */}
+          {/* The placement rule, next to the gestures it governs. Edit mode
+              only: out of edit mode there is no gesture for it to change, and a
+              permanent switch would just be a setting on a page that has none. */}
+          {!locked && (
+            <button
+              onClick={toggleFree}
+              title={
+                free
+                  ? 'Free placement — cards stay where you drop them and gaps are kept. Click for auto-arrange.'
+                  : 'Auto-arrange — cards float up to close gaps. Click for free placement.'
+              }
+              className={[
+                'rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
+                free
+                  ? 'border-accent bg-raised text-fg'
+                  : 'border-line bg-surface text-muted hover:bg-raised hover:text-fg',
+              ].join(' ')}
+            >
+              {free ? 'Free placement' : 'Auto-arrange'}
+            </button>
+          )}
           {!locked && (
             <button
               onClick={() => void saveLayout()}
@@ -354,6 +424,7 @@ export default function BoardPage() {
           layout={layout}
           onLayoutChange={setLayoutState}
           locked={locked}
+          free={free}
           render={(id) => {
             const def = CARD_BY_ID.get(cardTypeOf(id))
             if (!def) return null

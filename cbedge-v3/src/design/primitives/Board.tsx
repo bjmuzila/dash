@@ -15,9 +15,13 @@ import { useIsPhone } from '@/design/useIsPhone'
 //   - Fixed COLS-column grid. Each item is {id,x,y,w,h} in grid units.
 //   - Drag from the element carrying `data-board-handle`.
 //   - Resize from the handle this component renders in each tile's corner.
-//   - CARDS NEVER OVERLAP and always compact toward the top-left ("snap close
-//     to the other cards") — every gesture re-runs compaction, so a saved
-//     layout can never come back as a stack.
+//   - CARDS NEVER OVERLAP. In the default (auto-arrange) mode they also compact
+//     toward the top-left ("snap close to the other cards") — every gesture
+//     re-runs compaction, so a saved layout can never come back as a stack.
+//   - free=true turns the GRAVITY off (not the collision rule). Cards then stay
+//     on the row they were dropped on and a deliberate gap stays a gap. See
+//     resolveBoard below for why that is a different function and not a flag
+//     threaded through compactBoard.
 //   - GUIDED, NOT FORCED. The card follows the pointer; nothing is dragged out
 //     of the hand. What the board adds is a dashed LANDING SLOT drawn where the
 //     card will actually come to rest, plus column guides for the duration of
@@ -76,6 +80,55 @@ export function compactBoard(items: BoardItem[], pinnedId?: string | null): Boar
   return items.map((orig) => byId.get(orig.id) ?? orig)
 }
 
+// ── FREE PLACEMENT ───────────────────────────────────────────────────────────
+//
+// "I can't move the chart to fill that space without kicking off the heatmap."
+// That is gravity, not collision. compactBoard floats EVERY card up to the first
+// free row on every gesture, so the board has no such thing as an empty row: the
+// moment a card is widened, the card beside it is pushed out of the row and then
+// re-floated somewhere else entirely. Nothing is wrong with the arithmetic — the
+// board is simply doing a thing the user did not ask for.
+//
+// resolveBoard is compactBoard with the float removed and nothing else changed:
+//
+//   - the pinned card sits exactly where the pointer left it;
+//   - a card that OVERLAPS it drops to just below it — the minimum move that
+//     restores the no-overlap rule;
+//   - a card that overlaps nothing is not touched, so a hole in the board stays
+//     a hole and the arrangement is the user's.
+//
+// It is a separate function rather than a `gravity` flag inside compactBoard on
+// purpose: compactBoard is called from layoutStore's sanitizer and from every
+// add/remove path, and a boolean that silently changes what those do is exactly
+// how a saved free layout comes back compacted.
+export function resolveBoard(items: BoardItem[], pinnedId?: string | null): BoardItem[] {
+  const order = [...items].sort((a, b) => a.y - b.y || a.x - b.x)
+  const ordered = pinnedId
+    ? [...order.filter((i) => i.id === pinnedId), ...order.filter((i) => i.id !== pinnedId)]
+    : order
+
+  const placed: BoardItem[] = []
+  for (const src of ordered) {
+    const it: BoardItem = { ...src, x: Math.max(0, src.x), y: Math.max(0, src.y) }
+    if (pinnedId && it.id === pinnedId) {
+      placed.push(it)
+      continue
+    }
+    // Push DOWN out of a collision, never up into a gap. The guard is the same
+    // bound compactBoard uses: each pass clears at least one card, so the loop
+    // cannot outlast the number already placed.
+    for (let guard = 0; guard <= placed.length; guard++) {
+      const hit = placed.find((p) => boardCollides(it, p))
+      if (!hit) break
+      it.y = hit.y + hit.h
+    }
+    placed.push(it)
+  }
+
+  const byId = new Map(placed.map((p) => [p.id, p]))
+  return items.map((orig) => byId.get(orig.id) ?? orig)
+}
+
 type Gesture =
   | { kind: 'move'; id: string; startX: number; startY: number; origX: number; origY: number }
   | { kind: 'resize'; id: string; startX: number; startY: number; origW: number; origH: number }
@@ -92,6 +145,11 @@ export interface BoardProps {
   locked?: boolean
   minW?: number
   minH?: number
+  /**
+   * Free placement: keep cards on the row they were dropped on and let the board
+   * hold empty space. Collision is still enforced — see resolveBoard.
+   */
+  free?: boolean
 }
 
 function clamp(v: number, lo: number, hi: number) {
@@ -148,6 +206,7 @@ export function Board({
   locked = false,
   minW = 2,
   minH = 3,
+  free = false,
 }: BoardProps) {
   const phone = useIsPhone()
   const wrapRef = useRef<HTMLDivElement | null>(null)
@@ -200,9 +259,16 @@ export function Board({
   //
   // So the guidance is honest by construction: the outline cannot disagree with
   // where the card lands, because it is computed by the code that lands it.
+  //
+  // In FREE mode the release maths is resolveBoard, which leaves the pinned card
+  // exactly where it is — so the preview always equals the pinned box and the
+  // slot never draws. That is correct, not a missing feature: there is no jump
+  // to warn about when the card lands where the hand let go.
   const preview =
     gesture && draft
-      ? (compactBoard(compactBoard(draft, gesture.id)).find((i) => i.id === gesture.id) ?? null)
+      ? free
+        ? (resolveBoard(draft, gesture.id).find((i) => i.id === gesture.id) ?? null)
+        : (compactBoard(compactBoard(draft, gesture.id)).find((i) => i.id === gesture.id) ?? null)
       : null
   // Nothing to point at when the card is already sitting in its landing slot.
   const pinned = gesture ? (byId.get(gesture.id) ?? null) : null
@@ -274,7 +340,7 @@ export function Board({
         )
         return { ...it, w, h }
       })
-      setDraft(compactBoard(next, g.id))
+      setDraft(free ? resolveBoard(next, g.id) : compactBoard(next, g.id))
     }
     const onUp = () => {
       const committed = draftRef.current
@@ -282,7 +348,15 @@ export function Board({
       setGesture(null)
       setDraft(null)
       startRef.current = null
-      if (committed) onLayoutChange(compactBoard(compactBoard(committed, g?.id ?? null)))
+      if (!committed) return
+      // Auto-arrange commits with a SECOND compaction: the first one holds the
+      // pinned card, the second lets it float like everything else. Free mode has
+      // no float to run, so one resolve is the whole commit.
+      onLayoutChange(
+        free
+          ? resolveBoard(committed, g?.id ?? null)
+          : compactBoard(compactBoard(committed, g?.id ?? null)),
+      )
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -292,7 +366,7 @@ export function Board({
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
     }
-  }, [gesture, colW, cols, rowH, gutter, minW, minH, onLayoutChange])
+  }, [gesture, colW, cols, rowH, gutter, minW, minH, free, onLayoutChange])
 
   // ── Phone: one column, no grid ─────────────────────────────────────────────
   //
@@ -342,14 +416,24 @@ export function Board({
           is a ruler. It says what the card is snapping TO — the columns are
           otherwise invisible, so a card that jumps a column reads as the board
           being twitchy rather than as the card taking the next slot. */}
+      {/* FREE mode adds ROW guides to the column ones. Under gravity the row a
+          card is dropped on is a suggestion — it floats — so drawing rows would
+          be a lie. With gravity off the row is the thing being chosen, and it is
+          the only axis with no other visual cue at all. */}
       {!locked && gesture && colW > 0 && (
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0"
           style={{
             zIndex: 0,
-            backgroundImage: `repeating-linear-gradient(to right, color-mix(in srgb, var(--color-accent) 14%, transparent) 0 1px, transparent 1px ${colW}px)`,
-            backgroundSize: `${colW}px 100%`,
+            backgroundImage: [
+              `repeating-linear-gradient(to right, color-mix(in srgb, var(--color-accent) 14%, transparent) 0 1px, transparent 1px ${colW}px)`,
+              ...(free
+                ? [
+                    `repeating-linear-gradient(to bottom, color-mix(in srgb, var(--color-accent) 9%, transparent) 0 1px, transparent 1px ${rowH + gutter}px)`,
+                  ]
+                : []),
+            ].join(', '),
           }}
         />
       )}
