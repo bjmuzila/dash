@@ -1,5 +1,148 @@
 # Changelog
 
+## 2026-09-06 (d) - The ledger is current. Three "misses" were data gaps, and the strip and the ledger were reading different rows (`server-v2/confidence-grader.js`, `server-v2/api-router.js`)
+
+### The grader ran, and the table is now live
+
+```
+[confidence-grader] done — graded 73 of 73 sessions.
+  window 2026-05-26 → 2026-09-04 · 62 touched · 11 never reached
+```
+
+`confidence_log` runs to **2026-09-04**. The six-week-old ledger is gone.
+
+Worth recording exactly how wrong the first diagnosis was, because the shape of
+the mistake matters more than the mistake:
+
+| what was checked | what was concluded | what was true |
+|---|---|---|
+| `gradedDays: 73` | "it graded everything, so mvc_snapshots must end in July" | `mvc_snapshots` runs **2026-05-26 → 2026-09-04**, and 73 IS every session in it |
+
+**A count is not a date.** `mvc_snapshots` was never broken and the collector
+never stopped — it simply started on 2026-05-26, and 73 trading days later it is
+Sep 4. That is why `newestGraded` / `oldestGraded` / `gradedRows` now ship in the
+calibration response: this endpoint published a number for six weeks that nobody
+could date, and the fix for that is a date, not more care.
+
+### Three sessions were being published as misses when we had no level
+
+The run graded 73 sessions and the diagnostic came back
+`cl_graded 73 · cl_publishable 70`. Three rows carry `level = 0`.
+
+`pickLevel()` returns 0 when a snapshot has no `strikeOIVol`, no `strikeVolOnly`
+and no `spxPrice` — a data gap. `classifyDay(0, spx)` then returns `miss` **with
+certainty**, because SPX is never within 8 points of zero. So three sessions
+where we do not know what the level was were recorded as sessions where price
+failed to reach it.
+
+`/api/public-ledger` filtered them out (`AND level > 0`). `cbReach()` — the
+**"CB levels reached intraday"** percentage printed on the landing page — did
+not. So the published number was being dragged down by three fabricated misses,
+on the one page whose entire argument is that the number is honest. On the
+current data that is 62/73 = **84.9%** published where the truthful figure is
+62/70 = **88.6%**.
+
+Two changes, belt and braces:
+
+- **The grader skips a session with no usable level**, and DELETEs any stale row
+  a previous run wrote for it — scoped to the dates that pass examined, never a
+  blanket `DELETE WHERE level <= 0`. It reports them by date rather than folding
+  them into the skip count. "We have no data" and "price never got there" are
+  different claims and only one of them belongs in a published table.
+- **`cbReach()` gains `AND level > 0`**, so it reads the same rows the ledger
+  does. The ledger's own header comment has always claimed this
+  ("so the strip and the ledger can never tell different stories") and it was
+  not true.
+
+### And one that would have gone unnoticed
+
+The SQL inside `cbReach()` is a JS template literal. The first version of that
+comment used backticks around `level > 0` and `miss` — which terminate the
+string. `node --check` caught it; nothing else would have until the route was
+called. No backticks in that block, ever.
+
+## 2026-09-06 (c) - The hold calibration table was scoring P(pivot) against P(pivot OR chop) (`server-v2/api-router.js`)
+
+The 2026-09-06 regrade (73 sessions) made a four-month-old bug impossible to miss:
+
+```
+reject: predicted 49%  actual 88%  n=58   brier 0.265
+break:  predicted 31%  actual 16%  n=25   brier 0.120
+```
+
+0.265 is the ONLY number this endpoint produces that fails the
+"Brier < 0.25 beats a coin flip" line printed in its own `note`.
+
+It is not the model. `actual` in that table is `held`, and **held = pivot OR
+chop** - the response says exactly that, in `heldRule`, three lines further
+down. The PREDICTED side was `r.pivot` alone. So the table scored P(pivot)
+against the outcome P(pivot ∨ chop), and was structurally guaranteed to read as
+wildly under-confident however good the model was. Every "the model badly
+under-rates walls holding" read off this panel since it shipped was an artifact.
+
+`scoreConfidence` normalises the trio (`pivot + chop + break = 100`), so:
+
+```
+P(hold) = pivot + chop = 100 − break
+```
+
+which makes the hold table the exact **complement** of the break table, and its
+Brier necessarily **identical** to break's - for `p_hold = 1 − p_break` and
+`a_hold = 1 − a_break`, `(p−a)²` is the same number. That is now the invariant
+to check: **if those two Briers ever disagree again, the pairing has drifted
+again.**
+
+Applying it to the numbers above turns the hold table from nonsense into the
+best-calibrated block on the endpoint:
+
+| bucket | n | predicted | actual |
+|---|---|---|---|
+| 40–60% | 5 | 58% | 100% |
+| 60–80% | 25 | 69% | 84% |
+| 80–100% | 32 | 91% | 91% |
+
+Brier 0.265 → 0.120. The model was never under-rating holds; the table was
+reading the wrong column.
+
+Both tables stay. They carry the same information, and a reader asking "does a
+wall hold?" should not have to do the subtraction themselves. `holdRule` is
+added to the response so the relationship is stated rather than inferred.
+
+### Also: the panel can now see its own age
+
+`newestGraded` / `oldestGraded` join the response, for the same reason
+`/api/public-ledger` got `newestDate` earlier today. A calibration panel that
+cannot see how old its own data is will show six-week-old numbers as current and
+nobody looking at it will know - which is precisely how this endpoint sat on
+2026-07-28 data from late July until somebody happened to check the date on the
+landing page.
+
+### What the regrade actually says (73 sessions, through 2026-07-28)
+
+- **Reach is UNDER-predicted.** 60–80% bucket: predicted 71%, actual 91%, n=66.
+  Overall 62 of 73 sessions reached the CB - 85% against a `STUDY.reach` anchor
+  of 75%. The 40–60% bucket disagrees (predicted 50%, actual 17%) but n=6.
+- **Break is well calibrated at the bottom and over-predicted at the top.**
+  0–20%: predicted 9%, actual 9%, n=32 - dead on. 40–60%: predicted 42%,
+  actual 0%, n=5.
+- **`netWallBias` is the real receipt: 82% directional accuracy over n=62.**
+  That is the number worth publishing, and it is not currently on the landing
+  page's receipts strip.
+
+### The ledger is still dated 2026-07-28, and the grader is not why
+
+**WRONG — SUPERSEDED BY THE (d) ENTRY ABOVE. Kept so the mistake is on the
+record rather than quietly edited out.**
+
+This section asserted that `mvc_snapshots` had no rows after 2026-07-28 and that
+the MVC collector had died. Neither was true. `mvc_snapshots` runs
+**2026-05-26 → 2026-09-04**, the collector never stopped, and 73 IS every
+session in that table.
+
+The whole thing was inferred from one number — `gradedDays: 73` — read as "it
+graded everything there was, so the data must end in July". **A count is not a
+date.** See the (d) entry for what was actually wrong.
+
 ## 2026-09-06 (b) - The confidence log had no grader. It has one now (`server-v2/confidence-grader.js` NEW, `server-v2/api-router.js`)
 
 ### The actual cause of the six-week-old ledger

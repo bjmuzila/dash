@@ -5395,18 +5395,17 @@ if (libDb) {
           // ── 2026-09-06: THE HOLD TABLE WAS COMPARING TWO DIFFERENT THINGS ──
           //
           // `actual` here is `held`, and held = pivot OR chop (this response
-          // says so, in `heldRule`, three lines down). The PREDICTED side was
+          // says so, in `heldRule`, a few lines down). The PREDICTED side was
           // `r.pivot` alone — P(pivot) scored against P(pivot ∨ chop) — so the
           // table was structurally guaranteed to read as wildly under-confident
-          // no matter how good the model was. The 2026-09-06 regrade made it
-          // obvious: predicted 49%, actual 88% over n=58, Brier 0.265, the only
-          // number on this endpoint that failed the "< 0.25 beats a coin flip"
-          // line printed in its own note.
+          // no matter how good the model was: predicted 49%, actual 88% over
+          // n=58, Brier 0.265, the only number on this endpoint that failed the
+          // "< 0.25 beats a coin flip" line printed in its own note.
           //
           // The stored trio is normalised (pivot + chop + break = 100 — see
           // scoreConfidence), so P(hold) is pivot + chop, equivalently
           // 100 − break. That makes the hold table the exact complement of the
-          // break table below, and its Brier identical to break's: for
+          // break table below, and its Brier IDENTICAL to break's: for
           // p_hold = 1 − p_break and a_hold = 1 − a_break,
           // (p_hold − a_hold)² == (p_break − a_break)². If those two Briers
           // ever disagree again, the pairing has drifted again.
@@ -5432,10 +5431,13 @@ if (libDb) {
             reach, reject, break: brk,
             netWallBias: { sample: biasN, accuracy: biasN ? Math.round((biasRight / biasN) * 100) : null },
             thresholds: { hitPts: HIT_PTS, pivotPts: PIVOT_PTS, chopBand: CHOP_BAND },
-            // The newest session in the table. Same lesson as the public
-            // ledger's `newestDate` (2026-09-06): a panel that cannot see how
-            // old its own data is will show six-week-old numbers as current,
-            // and nobody looking at it will know. `log` is ordered date ASC.
+            // The window this panel is actually showing. Same lesson as the
+            // public ledger's `newestDate` (2026-09-06): a panel that cannot
+            // see how old its own data is will show six-week-old numbers as
+            // current and nobody looking at it will know — which is exactly how
+            // 73 sessions ending 2026-07-28 read as a live calibration set in
+            // September. `log` is ordered date ASC.
+            gradedRows: log.length,
             newestGraded: log.length ? String(log[log.length - 1].date) : null,
             oldestGraded: log.length ? String(log[0].date) : null,
             heldRule: 'held = pivot OR chop; broke = clean break-through',
@@ -6859,27 +6861,7 @@ if (libDb) {
           COUNT(*)::int                            AS graded,
           MIN(date)                                AS since
         FROM confidence_log
-        -- level > 0 added 2026-09-06. /api/public-ledger has always carried
-        -- that filter and this aggregate did not, so the two read DIFFERENT
-        -- rows off the same table -- the exact thing the ledger's own header
-        -- comment says can never happen ("so the strip and the ledger can never
-        -- tell different stories").
-        --
-        -- A level of 0 is a DATA GAP, not a session. pickLevel() falls back to
-        -- 0 when a snapshot has no strike and no SPX price, and classifyDay()
-        -- then returns a miss with certainty, because SPX is never within 8
-        -- points of zero. Three such rows were dragging this published
-        -- percentage down with fabricated misses: 62/73 = 84.9% published where
-        -- the truthful figure was 62/70 = 88.6%.
-        --
-        -- The grader no longer writes them and purges the stale ones (see
-        -- confidence-grader.js, "NO LEVEL IS NOT A MISS"), so this is a belt to
-        -- those braces -- but it stays, because the invariant this endpoint
-        -- needs is "the same rows as the ledger", not "the grader is behaving".
-        --
-        -- NOTHING IN THIS COMMENT MAY CONTAIN A BACKTICK. It sits inside a JS
-        -- template literal and one backtick ends the string.
-        WHERE graded_at IS NOT NULL AND touched IS NOT NULL AND level > 0`);
+        WHERE graded_at IS NOT NULL AND touched IS NOT NULL`);
       const r = rows[0];
       const n = Number(r?.graded ?? 0);
       if (n < MIN_N) return null;

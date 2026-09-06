@@ -58,6 +58,27 @@
 // has a UNIQUE date, so every run of this rewrites the same rows with the same
 // verdicts. Re-running is a no-op you can do any time; a rubric change is a
 // re-run, not a migration. `--days` bounds how far back it looks.
+//
+// ── "NO LEVEL" IS NOT A MISS (2026-09-06) ────────────────────────────────────
+//
+// The first production run graded 73 of 73 sessions and 3 of the rows came out
+// with `level = 0`.
+//
+// `pickLevel()` falls back to 0 when a snapshot carries no `strikeOIVol`, no
+// `strikeVolOnly` and no `spxPrice` — a data gap, not a market event. And
+// `classifyDay(0, spx)` is then guaranteed to return `miss`, because SPX is
+// never within 8 points of zero. So three sessions where we simply do not know
+// what the level was got permanently recorded as "price never reached it".
+//
+// The public ledger already filtered them out (`WHERE ... AND level > 0`) but
+// `cbReach()` — the "CB levels reached intraday" percentage on the landing
+// page — did not, so the published number was being dragged down by three
+// fabricated misses. That is the worst possible direction for the error to run
+// on a page whose entire argument is that the number is honest.
+//
+// A session with no usable level is now SKIPPED, and any stale row it already
+// wrote is DELETED. "We have no data" and "price never got there" are different
+// claims and only one of them belongs in a table that gets published.
 // ─────────────────────────────────────────────────────────────────────────────
 
 let libDb = null;
@@ -151,6 +172,8 @@ async function gradeConfidenceLog(opts = {}) {
   );
 
   let graded = 0, skipped = 0, touchedN = 0, missedN = 0;
+  /** Sessions with snapshots but no usable level — see "NO LEVEL IS NOT A MISS". */
+  const unusable = [];
   let newest = null, oldest = null;
 
   for (let i = 0; i < days.length; i++) {
@@ -166,6 +189,14 @@ async function gradeConfidenceLog(opts = {}) {
 
     const last = rows[rows.length - 1];
     const cur = pickLevel(last);
+
+    // NO LEVEL IS NOT A MISS. pickLevel() returns 0 when the snapshot carries
+    // none of strikeOIVol / strikeVolOnly / spxPrice, and classifyDay(0, spx)
+    // would then return 'miss' with certainty — SPX is never within HIT_PTS of
+    // zero. Recording that as a session where price failed to reach the level
+    // is a fabricated miss on a published number. Skip it, and clean up below.
+    if (!(cur.level > 0)) { unusable.push(date); skipped++; continue; }
+
     const spx = rows.map((r) => num(r.spxPrice)).filter((v) => v != null && v > 1000);
     const refPrice = cur.spx || spx[spx.length - 1] || cur.level || 0;
     const intradayRange = spx.length > 1 ? (Math.max(...spx) - Math.min(...spx)) / 2 : 0;
@@ -195,7 +226,25 @@ async function gradeConfidenceLog(opts = {}) {
     if (typeof opts.onProgress === 'function') opts.onProgress(date, i + 1, days.length);
   }
 
-  return { graded, scanned: days.length, skipped, newest, oldest, touched: touchedN, missed: missedN };
+  // Delete anything a previous run wrote for a session we have just decided is
+  // ungradeable. Scoped to the dates THIS pass examined — never a blanket
+  // `DELETE ... WHERE level <= 0`, which would reach rows outside the window
+  // the caller asked about.
+  let purged = 0;
+  if (unusable.length && typeof libDb.pgQuery === 'function') {
+    const ph = unusable.map((_, i) => `$${i + 1}`).join(',');
+    const r = await libDb.pgQuery(
+      `DELETE FROM confidence_log WHERE date IN (${ph}) RETURNING date`,
+      unusable,
+    );
+    purged = r?.rowCount ?? (r?.rows?.length ?? 0);
+  }
+
+  return {
+    graded, scanned: days.length, skipped, newest, oldest,
+    touched: touchedN, missed: missedN,
+    unusable: unusable.slice(), purged,
+  };
 }
 
 /* ── the clock ───────────────────────────────────────────────────────────────
@@ -238,7 +287,7 @@ function startConfidenceGrader() {
       if (lastRun === today) return;
       lastRun = today;
       const r = await gradeConfidenceLog();
-      console.log(`[confidence-grader] graded ${r.graded}/${r.scanned} sessions (${r.touched} touched, ${r.missed} missed), newest ${r.newest}`);
+      console.log(`[confidence-grader] graded ${r.graded}/${r.scanned} sessions (${r.touched} touched, ${r.missed} missed), newest ${r.newest}${r.unusable.length ? ` · ${r.unusable.length} with no usable level` : ''}`);
     } catch (e) {
       // Never throw out of the interval — a grader that kills the process is
       // worse than a grader that misses a night.
@@ -290,9 +339,13 @@ if (require.main === module) {
     .then((r) => {
       console.log(
         `[confidence-grader] done — graded ${r.graded} of ${r.scanned} sessions` +
-        `${r.skipped ? `, skipped ${r.skipped} with no snapshots` : ''}.`,
+        `${r.skipped ? `, skipped ${r.skipped}` : ''}.`,
       );
       console.log(`  window ${r.oldest} → ${r.newest} · ${r.touched} touched · ${r.missed} never reached`);
+      if (r.unusable.length) {
+        console.log(`  no usable level (NOT counted as misses): ${r.unusable.join(', ')}`);
+        if (r.purged) console.log(`  purged ${r.purged} stale row(s) those dates had written earlier`);
+      }
       process.exit(0);
     })
     .catch((e) => {
