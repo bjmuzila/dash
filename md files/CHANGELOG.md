@@ -1,5 +1,99 @@
 # Changelog
 
+## 2026-09-06 - /app/home retired: v3's Home IS the home board
+
+`/app/home` is v2's home board, and it was drawing a board v3 already draws -
+while holding open `/ws/gex` plus five polls of its own (snapshot 60s, strike
+history 30s, flow history 30s, levels 5m, and two extra chain fetches for the
+SPY/QQQ heatmap columns), with child panels carrying feeds on top of that.
+
+Disconnecting it by gating every one of those would have left a 141KB page that
+still has to be kept alive. Retiring it is the same result with nothing left to
+maintain: the page never mounts, so there is nothing to gate.
+
+### `lib/v3Routes.ts`
+
+- `"/home": "/"` added to `PORTED` - v2's home board maps to v3's ROOT, because
+  v3's Home is a card board. `/app/home` now 307s to `/v3`, and the in-SPA click
+  is caught by `V3Redirect` from the same entry.
+- New `v3Href(path, search)`. The root is the one case that needed a helper:
+  `"/v3" + "/"` is `/v3/`, which Next answers with a redirect to `/v3` - a
+  second hop on the one route every signed-in customer now lands on. Both
+  callers go through it so neither has to know.
+
+### `app/home/page.tsx` - the OTHER /home
+
+- The Next `/home` (in middleware's `PAID_EXEMPT`, where the paywall sends
+  people) forwarded paid users to `/app/home`. Now it goes straight to `/v3`.
+  Forwarding to `/app/home` would still land in the right place, but it would
+  spend a hop and flash the v2 shell to do it.
+- Unpaid users still go to `/pricing`, unchanged - that is the loop guard, since
+  middleware sends non-paid users TO `/home` and `/v3` is paid-gated.
+- The two `/home` routes stay separate on purpose. `next.config.js` excludes
+  `/home` from its SPA aliases for the same reason.
+
+`app/app/home/route.ts` (the shell handler with the inline snapshot seed) is
+left in place: `app-vite/src/App.tsx` still declares the `/home` route, and
+check-routes.mjs requires a handler for every declared route. Both go together
+whenever the v2 page itself is deleted.
+
+## 2026-09-06 - v3 is the dashboard; v2 is what v3 has not built yet
+
+Signed-in users land on v3, and every v2 route v3 fully answers now redirects
+into it. What survives at `/app/*` is exactly the set of surfaces v3 does NOT
+have - which is exactly what `/v3/legacy` links to. Those links stay for now;
+whether a page keeps its link is a decision to make off visit counts, not
+architecture.
+
+### `lib/v3Routes.ts` - NEW, the one table
+
+- `PORTED` maps a v2 path to its v3 path: `traders-dashboard`, `analytics`,
+  `options-chain`, `premarket`, `flow`, `em`, `replay`, `scanner`,
+  `economic-calendar`, plus the phone tabs `m/gex`, `m/heatmap -> m/heat`,
+  `m/es -> m/spx`, `m/em`, `m/econ`. The phone ids DIFFER between the builds,
+  which is why this is a map and not a prefix rule.
+- `/level-log` is deliberately NOT in it: v3 has the wall-migration chart and
+  the range switch, the ticker rail / log card / capture rail / churn strip /
+  timeline are still v2 only. It stays on the Legacy page under "Ported in part".
+- `STAYS_IN_V2` documents the other half (mult-greek, levels, board, es-candles,
+  ict, test, trading, confidence-score, fails, strike-history, guide, level-log,
+  m/chain, m/prep) so both halves of the decision sit in one file.
+- Porting a page is now TWO edits: add it to `PORTED`, delete its entry from
+  `cbedge-v3/src/pages/Legacy.tsx`.
+
+### `middleware.ts` - the document request
+
+- Redirects `/app/<ported>` to `/v3/<ported>`, 307, query string carried
+  untouched (so `?tab=ibstats` survives). Placed AFTER the paid gate so an
+  unpaid user hitting a v2 route still reaches `/home` in one hop.
+- This covers bookmarks, pasted links, hard refreshes, and the bare
+  `/scanner`-style aliases in `next.config.js` - `redirects()` runs before
+  middleware, so those chain through `/app/*` into v3 on their own.
+- 307 and never 308/301 on purpose: the table shrinks as pages are ported, and a
+  permanent redirect would be pinned in every customer's browser forever.
+
+### `app-vite/src/V3Redirect.tsx` - NEW, the in-SPA click
+
+- Middleware only sees document requests. Once inside v2, React Router
+  navigates on the client and no server hop happens, so the toolbar could walk
+  a user straight back into a ported page. This closes it from the same table.
+- It WRAPS `LayoutShell` rather than sitting beside it, so a ported route
+  renders nothing and leaves - instead of mounting a live-feed page, opening the
+  v2 socket and painting a chart that is discarded one frame later.
+- Leaves via `window.location.replace`: v3 is a separate bundle with its own
+  socket and store, so crossing over is a document navigation. `replace` keeps
+  Back from bouncing forwards into v3 again.
+- The v2 catch-all (`* -> /traders-dashboard`) now lands in v3 for free.
+
+### `app/page.tsx` - the signed-in landing spot
+
+- Was `/traders-dashboard` (v2's board via the next.config alias), now `/v3`.
+  That route redirects into v3 anyway, so the old target was one wasted hop and
+  a v2 shell flashing on the way past. Phones still go straight to `/v3/m/gex`.
+- Unpaid users are NOT special-cased here: `/v3` is a normal paid route, so
+  middleware's paid gate catches them one hop later and sends them to `/home`
+  where the delayed-data dashboard lives. One copy of the paywall, not two.
+
 ## 2026-09-05 - The 1-minute tape: it was the timeouts, not the symbol
 
 Why SPX drew a 1-minute line and AAPL fell back to 14 change-only captures.

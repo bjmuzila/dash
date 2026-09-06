@@ -4,6 +4,10 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from '@/components/auth/AuthProvider'
 import LayoutShell from '@/components/shared/LayoutShell'
 import MobileRedirect from '@/components/mobile/MobileRedirect'
+// The client half of the v2 -> v3 move. Wraps LayoutShell so a route v3 already
+// owns leaves for /v3 WITHOUT mounting the v2 page (and its socket) first. The
+// table it reads is lib/v3Routes.ts, shared with middleware.ts.
+import V3Redirect from './V3Redirect'
 // Existing Next client pages, compiled directly via the '@' alias + next/* shims.
 import TradersDashboard from '@/components/pages/TradersDashboard'
 import Analytics from '@/components/pages/Analytics'
@@ -76,44 +80,50 @@ export default function App() {
             URL bar, so the bottom tab bar sat ~80px below the fold. */}
         <div className="cb-app-viewport" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <MobileRedirect />
-          <LayoutShell>
-            <Routes>
-              <Route path="/home" element={S(<Home />)} />
-              <Route path="/traders-dashboard" element={<TradersDashboard />} />
-              <Route path="/analytics" element={<Analytics />} />
-              <Route path="/options-chain" element={S(<OptionsChain />)} />
-              <Route path="/mult-greek" element={S(<MultGreek />)} />
-              <Route path="/levels" element={S(<Levels />)} />
-              <Route path="/em" element={S(<Em />)} />
-              <Route path="/flow" element={S(<Flow />)} />
-              <Route path="/premarket" element={S(<Premarket />)} />
-              <Route path="/board" element={S(<Board />)} />
-              <Route path="/es-candles" element={S(<EsCandles />)} />
-              <Route path="/scanner" element={S(<Scanner />)} />
-              <Route path="/level-log" element={S(<LevelLog />)} />
-              <Route path="/strike-history" element={S(<StrikeHistory />)} />
-              <Route path="/replay" element={S(<Replay />)} />
-              <Route path="/ict" element={S(<Ict />)} />
-              <Route path="/test" element={S(<TestLab />)} />
-              <Route path="/trading" element={S(<Trading />)} />
-              <Route path="/confidence-score" element={S(<Confidence />)} />
-              <Route path="/fails" element={S(<Fails />)} />
-              <Route path="/economic-calendar" element={S(<EconCalendar />)} />
-              <Route path="/guide" element={S(<Guide />)} />
+          {/* V3Redirect wraps the shell rather than sitting beside it: a ported
+              route renders NOTHING here and leaves for /v3, instead of painting
+              the v2 toolbar and opening the v2 socket on its way out. Routes
+              that are still v2-only pass straight through. */}
+          <V3Redirect>
+            <LayoutShell>
+              <Routes>
+                <Route path="/home" element={S(<Home />)} />
+                <Route path="/traders-dashboard" element={<TradersDashboard />} />
+                <Route path="/analytics" element={<Analytics />} />
+                <Route path="/options-chain" element={S(<OptionsChain />)} />
+                <Route path="/mult-greek" element={S(<MultGreek />)} />
+                <Route path="/levels" element={S(<Levels />)} />
+                <Route path="/em" element={S(<Em />)} />
+                <Route path="/flow" element={S(<Flow />)} />
+                <Route path="/premarket" element={S(<Premarket />)} />
+                <Route path="/board" element={S(<Board />)} />
+                <Route path="/es-candles" element={S(<EsCandles />)} />
+                <Route path="/scanner" element={S(<Scanner />)} />
+                <Route path="/level-log" element={S(<LevelLog />)} />
+                <Route path="/strike-history" element={S(<StrikeHistory />)} />
+                <Route path="/replay" element={S(<Replay />)} />
+                <Route path="/ict" element={S(<Ict />)} />
+                <Route path="/test" element={S(<TestLab />)} />
+                <Route path="/trading" element={S(<Trading />)} />
+                <Route path="/confidence-score" element={S(<Confidence />)} />
+                <Route path="/fails" element={S(<Fails />)} />
+                <Route path="/economic-calendar" element={S(<EconCalendar />)} />
+                <Route path="/guide" element={S(<Guide />)} />
 
-              {/* Phone build. Kept as explicit routes rather than a nested
-                  layout so each one code-splits on its own. */}
-              <Route path="/m" element={<Navigate to="/m/gex" replace />} />
-              <Route path="/m/gex" element={S(<MGex />)} />
-              <Route path="/m/heatmap" element={S(<MHeatmap />)} />
-              <Route path="/m/es" element={S(<MEs />)} />
-              <Route path="/m/chain" element={S(<MChain />)} />
-              <Route path="/m/em" element={S(<MEm />)} />
-              <Route path="/m/prep" element={S(<MPrep />)} />
-              <Route path="/m/econ" element={S(<MEcon />)} />
-              <Route path="*" element={<Navigate to="/traders-dashboard" replace />} />
-            </Routes>
-          </LayoutShell>
+                {/* Phone build. Kept as explicit routes rather than a nested
+                    layout so each one code-splits on its own. */}
+                <Route path="/m" element={<Navigate to="/m/gex" replace />} />
+                <Route path="/m/gex" element={S(<MGex />)} />
+                <Route path="/m/heatmap" element={S(<MHeatmap />)} />
+                <Route path="/m/es" element={S(<MEs />)} />
+                <Route path="/m/chain" element={S(<MChain />)} />
+                <Route path="/m/em" element={S(<MEm />)} />
+                <Route path="/m/prep" element={S(<MPrep />)} />
+                <Route path="/m/econ" element={S(<MEcon />)} />
+                <Route path="*" element={<Navigate to="/traders-dashboard" replace />} />
+              </Routes>
+            </LayoutShell>
+          </V3Redirect>
         </div>
       </AuthProvider>
     </BrowserRouter>

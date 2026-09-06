@@ -8,6 +8,7 @@ import {
 } from "@/lib/shortLinks";
 import { lookupShortLink } from "@/lib/shortLinkRegistry";
 import { PROMO_SLUG_LIST } from "@/lib/promoLinks";
+import { v3TargetForAppPath } from "@/lib/v3Routes";
 
 /**
  * The one-segment short links (`/x`, `/youtube`, …), built from the SAME list
@@ -310,6 +311,30 @@ export async function middleware(req: NextRequest) {
     url.pathname = "/home";
     url.search = "";
     return NextResponse.redirect(url);
+  }
+
+  // ── v2 → v3 ────────────────────────────────────────────────────────────────
+  // v3 is THE dashboard. A v2 route that v3 fully answers redirects into v3, so
+  // /app/* survives only as the surfaces v3 has not built — which is exactly
+  // what /v3/legacy links to. Table + rationale: lib/v3Routes.ts.
+  //
+  // AFTER the paid gate on purpose: an unpaid user hitting /app/scanner should
+  // land on /home in ONE hop, not bounce through /v3/scanner to get there.
+  //
+  // This catches the DOCUMENT request — a bookmark, a pasted link, a hard
+  // refresh, and the bare /scanner-style aliases in next.config.js (redirects()
+  // runs before middleware, so /scanner -> /app/scanner -> here). An in-SPA
+  // click never reaches the server, so app-vite/src/V3Redirect.tsx does the same
+  // job on the client from the same table.
+  //
+  // 307, never 308 — see the note at the top of lib/v3Routes.ts. url.search is
+  // carried untouched, which is what keeps /app/scanner?tab=ibstats and
+  // /app/level-log?ticker=SPX shareable across the move.
+  const v3Target = v3TargetForAppPath(path);
+  if (v3Target) {
+    const url = req.nextUrl.clone();
+    url.pathname = v3Target;
+    return NextResponse.redirect(url, 307);
   }
 
   // bfcache hardening: authed PAGES must not be restored from the browser

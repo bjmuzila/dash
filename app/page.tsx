@@ -24,12 +24,22 @@ export const dynamic = "force-dynamic";
  */
 const PHONE_UA = /iPhone|iPod|Android.*Mobile|Windows Phone|IEMobile|BlackBerry|Opera Mini/i;
 
-// Public landing page. Signed-in users skip straight to the dashboard — and on
-// a phone that dashboard is the v3 phone build (2026-09-03).
+// Public landing page. Signed-in users skip straight to the dashboard, and as of
+// 2026-09-06 that dashboard is v3 on BOTH form factors — the desktop board at
+// `/v3`, the phone build at `/v3/m/gex`. It used to be `/traders-dashboard`,
+// which is v2's board via next.config.js's alias; that route now redirects into
+// v3 anyway (lib/v3Routes.ts), so sending people there was one wasted hop and a
+// v2 shell flashing on the way past.
 //
-// Straight to `/v3/m/gex` rather than `/v3`: the SPA's own MobileRedirect would
-// get there anyway, but only after the desktop board had mounted, which is a
-// frame of the wrong layout and a board's worth of chunks nobody asked for.
+// Straight to `/v3/m/gex` rather than `/v3` on a phone: the SPA's own
+// MobileRedirect would get there anyway, but only after the desktop board had
+// mounted, which is a frame of the wrong layout and a board's worth of chunks
+// nobody asked for.
+//
+// UNPAID signed-in users are not special-cased here. `/v3` is a normal paid
+// route, so middleware.ts's paid gate catches them one hop later and sends them
+// to `/home`, which is where the delayed-data dashboard lives. Repeating that
+// rule here would be a second copy of the paywall to keep in sync.
 //
 // Signed-OUT phone visitors still get LandingClient. That page is the sales
 // page; sending a prospect into an app they have not bought is not a shortcut.
@@ -37,7 +47,7 @@ export default async function RootPage() {
   const userId = await getServerUserId();
   if (userId) {
     const ua = (await headers()).get("user-agent") ?? "";
-    redirect(PHONE_UA.test(ua) ? "/v3/m/gex" : "/traders-dashboard");
+    redirect(PHONE_UA.test(ua) ? "/v3/m/gex" : "/v3");
   }
   return <LandingClient />;
 }
