@@ -1,5 +1,82 @@
 # Changelog
 
+## 2026-09-06 (h) - v3 board: a card in the way gets SMALLER, it does not get evicted (`cbedge-v3/src/design/primitives/Board.tsx`)
+
+> "When moving the bottom GEX Candles into the empty space, I want the ones
+> around it to get smaller to fit it in. Instead the things on the right go down
+> a row. I don't want that."
+
+Every version of this board so far had exactly one answer to a collision:
+**somebody moves.** Gravity moved them to the top-left, then `stepAside` moved
+them the shortest distance — better, still the wrong first idea. Dropping a card
+into a space that is nearly big enough is a request to **share the row**, not to
+evict whoever is in it. And eviction is destructive in a way shrinking is not:
+the evicted card leaves the area you were looking at and takes its row with it.
+Shrinking costs a neighbour some width. Moving costs you your layout.
+
+### `squeezeAside()` — asked to give something up, before being asked to leave
+
+Now the first thing tried. The neighbour is trimmed on the side the collision is
+actually on, with its **opposite edge nailed down** — pull the right edge back to
+the newcomer's left, or move the left edge in to the newcomer's right while the
+right edge stays put. Either reads as the card being squeezed from that side;
+neither reads as the card moving, because the edge you were not pushing on does
+not move. Four candidates (left/right/top/bottom), cheapest first — the smallest
+concession that resolves the overlap.
+
+**Two floors**, and they are what keep this from being worse than moving:
+
+- `BOARD_MIN_W` / `BOARD_MIN_H`, below which a card is not a card;
+- **half of what the card currently is.** Past that it is not making room, it is
+  being crushed, and going to the next row is the kinder outcome.
+
+Below either floor `squeezeAside` returns null and the caller falls through to
+`stepAside`. Moving is still there — it is just no longer the first idea.
+
+### Interior gaps now close completely, and are split
+
+The squeeze has to be **reversible** or the board only ever ratchets tighter. A
+gap *between* two cards on the same rows is never deliberate — nothing can be in
+it, because putting something there means dragging it there, and if you do, both
+sides squeeze to let it in. So it closes however wide it is, and the two flanking
+cards **split it evenly**: the left one grows right, the right one grows left.
+
+Splitting is the whole point. Drag a card back out from between two neighbours it
+had squeezed and they take back what they gave up, evenly — instead of the left
+one swallowing the hole and the row ending up lopsided every time a card is moved
+through it. Growing left moves a card's origin, so the pinned card is exempt (its
+neighbour closes the gap alone), and the slide is clamped to the room that card
+actually has on **its** rows, which need not be the rows the gap is on.
+
+Gaps at the board's own **edges** stay bounded by `maxGap` — there is no card on
+the far side, so space at the end of a row can be deliberate, and a lone card
+should not be stretched across the board.
+
+### Verified
+
+His case — GEX Candles 1 + Multi Greek filling the top row, GEX Candles 2 dragged
+up into it at column 6:
+
+```
+before   candles1 x0 w13 | mg x13 w11        candles2 parked on the row below
+after    candles1 x0 w6  | candles2 x6 w11 | mg x17 w7
+
+  candles1 shrank, did not move      13 -> 6 wide, still at x0 y0
+  multi greek shrank, same row       11 -> 7 wide
+  candles2 sits exactly where dropped x6 y0
+  nothing pushed to a new row
+drag candles2 back out              candles1 and mg regrow to 12 / 12 — even split
+```
+
+```
+a card dropped onto a tall card's top edge   the tall card is trimmed from the top, stays put
+a card dropped into an exact-fit hole        nothing changes at all
+a neighbour that would have to more than halve   moves instead of being crushed
+
+fuzz 8000 settles   overlap 0 · out-of-bounds 0 · below-min-size 0 · pinned card moved 0
+fuzz 4000 settles   settle(settle(x)) === settle(x) in 4000 of 4000
+```
+
 ## 2026-09-06 (g) - v3 board: the grid was too coarse to express the layout. 24 columns, and the leftover space closes itself (`cbedge-v3/src/design/primitives/Board.tsx`, `board/layoutStore.ts`, `board/catalog.tsx`, `board/BoardPage.tsx`)
 
 Third pass. (e) turned gravity off, (f) added the magnet, and neither fixed it:

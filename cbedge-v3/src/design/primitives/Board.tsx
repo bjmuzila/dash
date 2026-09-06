@@ -19,9 +19,10 @@ import { useIsPhone } from '@/design/useIsPhone'
 //     toward the top-left ("snap close to the other cards") — every gesture
 //     re-runs compaction, so a saved layout can never come back as a stack.
 //   - free=true (the board's default) turns the GRAVITY off, not the collision
-//     rule. Cards stay on the row they were dropped on, a deliberate gap stays
-//     a gap, and a card that has to move out of the way takes the SHORTEST way
-//     out rather than always dropping to the bottom. See resolveBoard.
+//     rule. Cards stay on the row they were dropped on and a deliberate gap
+//     stays a gap. A card in the way is first asked to GIVE UP SOME WIDTH OR
+//     HEIGHT and stay where it is (squeezeAside); only if it cannot does it move
+//     at all, and then by the shortest route (stepAside).
 //   - In free mode a dragged card's edges are MAGNETIC: within MAGNET cells of
 //     a neighbour's edge it snaps flush to it, per axis, so cards placed by
 //     hand end up touching instead of one column apart. See magnetise.
@@ -62,6 +63,9 @@ export interface BoardItem {
 // under the old 12-column grid by doubling x/y/w/h once, per browser.
 export const BOARD_COLS = 24
 export const BOARD_ROW_H = 16
+/** Smallest a card may be, in grid units. The squeeze below stops here. */
+export const BOARD_MIN_W = 4
+export const BOARD_MIN_H = 6
 
 /** Do two items share any cell? Touching edges don't count. */
 export function boardCollides(a: BoardItem, b: BoardItem): boolean {
@@ -125,6 +129,74 @@ export function compactBoard(items: BoardItem[], pinnedId?: string | null): Boar
 // purpose: compactBoard is called from layoutStore's sanitizer and from every
 // add/remove path, and a boolean that silently changes what those do is exactly
 // how a saved free layout comes back compacted.
+// ── MAKING ROOM ──────────────────────────────────────────────────────────────
+//
+// "When moving the bottom GEX Candles into the empty space, I want the ones
+// around it to get smaller to fit it in. Instead the things on the right go down
+// a row. I don't want that."
+//
+// Every version of this board so far has had exactly one answer to a collision:
+// somebody MOVES. That is the wrong first answer. Dropping a card into a space
+// that is nearly big enough is a request to share the row, not to evict whoever
+// is in it — and eviction is destructive in a way shrinking is not, because the
+// evicted card leaves the screen area you were looking at and takes its row with
+// it. Shrinking costs a neighbour some width. Moving costs you your layout.
+//
+// So the neighbour is asked to give something up first. The card is trimmed on
+// the side the collision is actually on, keeping its OPPOSITE edge nailed down —
+// trim the right edge back to the newcomer's left, or move the left edge in to
+// the newcomer's right while the right edge stays put. Either reads as the card
+// being squeezed from that side, which is what was asked for; neither reads as
+// the card moving, because the edge you were not pushing on does not move.
+//
+// Four candidates (left, right, top, bottom), cheapest first, same rule as
+// stepAside: the smallest concession that resolves the overlap.
+//
+// TWO FLOORS, and they are what keeps this from being worse than moving:
+//   - BOARD_MIN_W / BOARD_MIN_H, below which a card is not a card any more;
+//   - half of what the card currently is. Past that it is not making room, it is
+//     being crushed, and being sent to the next row is the kinder outcome. This
+//     is the line between "the ones around it get smaller" and "the ones around
+//     it get destroyed".
+//
+// Returns null when no legal squeeze exists, and the caller falls through to
+// stepAside — moving is still there, it is just no longer the first idea.
+function squeezeAside(it: BoardItem, placed: BoardItem[]): BoardItem | null {
+  if (!placed.some((p) => boardCollides(it, p))) return it
+  const floorW = Math.max(BOARD_MIN_W, Math.floor(it.w / 2))
+  const floorH = Math.max(BOARD_MIN_H, Math.floor(it.h / 2))
+  const cur: BoardItem = { ...it }
+
+  // One trim per pass; a second neighbour may need a second. Bounded by the
+  // number of cards that could possibly be hit.
+  for (let guard = 0; guard <= placed.length; guard++) {
+    const hit = placed.find((p) => boardCollides(cur, p))
+    if (!hit) return cur
+
+    const right = hit.x - cur.x // keep my left edge, pull my right edge in
+    const leftX = hit.x + hit.w // keep my right edge, push my left edge in
+    const leftW = cur.x + cur.w - leftX
+    const bottom = hit.y - cur.y // keep my top, raise my bottom
+    const topY = hit.y + hit.h // keep my bottom, lower my top
+    const topH = cur.y + cur.h - topY
+
+    const cands: { cost: number; box: BoardItem }[] = []
+    if (right >= floorW) cands.push({ cost: cur.w - right, box: { ...cur, w: right } })
+    if (leftW >= floorW) cands.push({ cost: cur.w - leftW, box: { ...cur, x: leftX, w: leftW } })
+    if (bottom >= floorH) cands.push({ cost: cur.h - bottom, box: { ...cur, h: bottom } })
+    if (topH >= floorH) cands.push({ cost: cur.h - topH, box: { ...cur, y: topY, h: topH } })
+    if (!cands.length) return null
+
+    const best = cands.reduce((a, b) => (b.cost < a.cost ? b : a))
+    cur.x = best.box.x
+    cur.y = best.box.y
+    cur.w = best.box.w
+    cur.h = best.box.h
+  }
+
+  return placed.some((p) => boardCollides(cur, p)) ? null : cur
+}
+
 // ── STEPPING ASIDE ───────────────────────────────────────────────────────────
 //
 // The card that has to give way, and how far. compactBoard's answer is always
@@ -188,7 +260,10 @@ export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols 
       placed.push(it)
       continue
     }
-    placed.push(stepAside(it, placed, cols))
+    // MAKE ROOM before MOVING OUT — see squeezeAside. A card that can give up
+    // some width or height and stay put does that; only a card that cannot goes
+    // looking for somewhere else to be.
+    placed.push(squeezeAside(it, placed) ?? stepAside(it, placed, cols))
   }
 
   const byId = new Map(placed.map((p) => [p.id, p]))
@@ -224,6 +299,12 @@ export function resolveBoard(items: BoardItem[], pinnedId?: string | null, cols 
 // the board's own left edge (nothing to the left to close it) and, for width
 // only, the right edge.
 //
+// This is also what UNDOES a squeeze. A neighbour trimmed to make room for a
+// card gets that width back the moment the card is dragged away again — the
+// space it was holding becomes an adjacent gap, and closing adjacent gaps is
+// exactly what this does. The board gives room and takes it back symmetrically,
+// with no memory of who was originally how wide.
+//
 // `pinnedId` is the card that was just dropped. It may GROW — filling the space
 // it was placed into is the point — but it is the one card that may not be
 // MOVED, so the left-edge pull skips it. Everything else about the release is
@@ -254,17 +335,50 @@ function fillGapsOnce(items: BoardItem[], cols: number, maxGap: number, pinnedId
   const rowBand = (it: BoardItem) => out.filter((o) => o.id !== it.id && o.y < it.y + it.h && it.y < o.y + o.h)
   const colBand = (it: BoardItem) => out.filter((o) => o.id !== it.id && o.x < it.x + it.w && it.x < o.x + o.w)
 
-  for (const it of out) {
+  // ── INTERIOR GAPS CLOSE COMPLETELY, AND ARE SHARED ─────────────────────────
+  //
+  // A gap BETWEEN two cards on the same rows is never deliberate. Nothing can be
+  // in it — you would have to drag a card there, and if you did, both sides would
+  // squeeze to let it in. So it closes however wide it is, and the two cards
+  // flanking it split it: the left one grows right, the right one grows LEFT.
+  //
+  // Splitting is what makes the squeeze reversible. Drag a card out from between
+  // two neighbours it had squeezed and they take back what they gave up, evenly,
+  // instead of the left one swallowing the whole hole and the row ending up
+  // lopsided every time a card is moved through it.
+  //
+  // Growing left MOVES a card's origin, so the pinned card is exempt: it takes
+  // no share and its neighbour closes the gap alone. The slide is also clamped
+  // to the room that card actually has on ITS rows, which need not be the same
+  // rows as the gap.
+  //
+  // Gaps at the board's own EDGES are different and stay bounded by maxGap —
+  // there is no card on the far side, so space at the end of a row can be
+  // deliberate, and a lone card should not be stretched across the board.
+  for (const it of [...out].sort((a, b) => a.y - b.y || a.x - b.x)) {
     const band = rowBand(it)
-    // Left: only the board edge, and only when nothing is over there.
+    // Left edge of the board.
     if (it.id !== pinnedId && it.x > 0 && it.x <= maxGap && !band.some((o) => o.x < it.x)) {
       it.w += it.x
       it.x = 0
     }
-    // Right: up to the nearest card in the same rows, else the board edge.
-    const wall = band.filter((o) => o.x >= it.x + it.w).reduce((m, o) => Math.min(m, o.x), cols)
-    const gap = wall - (it.x + it.w)
-    if (gap > 0 && gap <= maxGap) it.w += gap
+    const rights = band.filter((o) => o.x >= it.x + it.w)
+    if (!rights.length) {
+      // Right edge of the board.
+      const gap = cols - (it.x + it.w)
+      if (gap > 0 && gap <= maxGap) it.w += gap
+      continue
+    }
+    const n = rights.reduce((a, b) => (b.x < a.x ? b : a))
+    const gap = n.x - (it.x + it.w)
+    if (gap <= 0) continue
+    const nWall = rowBand(n)
+      .filter((o) => o.x + o.w <= n.x)
+      .reduce((m, o) => Math.max(m, o.x + o.w), 0)
+    const share = n.id === pinnedId ? 0 : Math.min(Math.floor(gap / 2), n.x - nWall)
+    it.w += gap - share
+    n.x -= share
+    n.w += share
   }
 
   for (const it of out) {
@@ -415,8 +529,8 @@ export function Board({
   rowH = BOARD_ROW_H,
   gutter = 8,
   locked = false,
-  minW = 4,
-  minH = 6,
+  minW = BOARD_MIN_W,
+  minH = BOARD_MIN_H,
   free = false,
 }: BoardProps) {
   const phone = useIsPhone()
