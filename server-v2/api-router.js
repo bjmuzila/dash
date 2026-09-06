@@ -5338,39 +5338,27 @@ if (libDb) {
     register('/api/confidence/calibration', {
       auth: 'subscriber', methods: ['GET'],
       async handler(req, res) {
-        const HIT_PTS = 8, PIVOT_PTS = 10, CHOP_BAND = 15, MAX_DAYS = 250;
-        const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+        // THE GRADING RUBRIC LIVES IN ./confidence-grader.js (2026-09-06).
+        //
+        // HIT_PTS / PIVOT_PTS / CHOP_BAND / MAX_DAYS, pickLevel() and
+        // classifyDay() used to be declared right here, and this handler's
+        // `?refresh=1` branch was the ONLY thing that had ever written to
+        // `confidence_log` — which is why the public ledger went six weeks
+        // stale: the table was graded exactly as often as somebody opened this
+        // panel with that query string on the URL.
+        //
+        // They moved to a module so a CLI and a nightly clock can call the same
+        // code. Do NOT re-declare them here: a second copy of classifyDay() is
+        // how this panel and /api/public-ledger start telling different stories
+        // about the same session, and the whole feature is sold on them
+        // agreeing.
+        //
+        // The thresholds are still REPORTED in this response (`thresholds`
+        // below) — a calibration table that does not state the rubric it was
+        // graded under is unreadable — so they are read back off the module
+        // rather than restated here. One source, two readers.
+        const { HIT_PTS, PIVOT_PTS, CHOP_BAND } = require('./confidence-grader');
         const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-        const pickLevel = (r) => {
-          const level = num(r.strikeOIVol) ?? num(r.strikeVolOnly) ?? num(r.spxPrice) ?? 0;
-          const strikeGex = num(r.mvcValueOIVol) ?? num(r.mvcValueVolOnly) ?? num(r.totalNetGEX_OI) ?? 0;
-          const netTotal = num(r.totalNetGEX_OI) ?? num(r.totalNetGEX_Vol) ?? 0;
-          const netDex = num(r.totalNetDEX_OI) ?? num(r.totalNetDEX_Vol) ?? num(r.netDEXStrike) ?? 0;
-          const storedAbs = num(r.totalAbsNetGEX);
-          const totalAbsNetGEX = storedAbs != null && storedAbs > Math.abs(strikeGex) * 1.0001 ? storedAbs : Math.abs(netTotal);
-          return {
-            level, netGex: strikeGex, netDex,
-            spx: (() => { const v = num(r.spxPrice); return v != null && v > 1000 ? v : level; })(),
-            totalAbsNetGEX, gexFlip: num(r.gexFlip),
-          };
-        };
-        const classifyDay = (level, spx) => {
-          if (!spx.length || !Number.isFinite(level)) return { outcome: 'miss', touched: false };
-          let ti = -1;
-          for (let i = 0; i < spx.length; i++) { if (Math.abs(spx[i] - level) <= HIT_PTS) { ti = i; break; } }
-          if (ti === -1) return { outcome: 'miss', touched: false };
-          const fromBelow = spx[ti] <= level;
-          let maxAway = 0, maxBand = 0;
-          for (let i = ti; i < spx.length; i++) {
-            const d = spx[i] - level;
-            maxBand = Math.max(maxBand, Math.abs(d));
-            maxAway = Math.max(maxAway, fromBelow ? level - spx[i] : spx[i] - level);
-          }
-          let outcome = 'hit';
-          if (maxAway >= PIVOT_PTS) outcome = 'pivot';
-          else if (maxBand <= CHOP_BAND) outcome = 'chop';
-          return { outcome, touched: true };
-        };
         const brier = (p, actual) => (p - actual) ** 2;
         const bucketOf = (p) => (p < 0.2 ? '0–20%' : p < 0.4 ? '20–40%' : p < 0.6 ? '40–60%' : p < 0.8 ? '60–80%' : '80–100%');
         const reliability = (pairs) => {
@@ -5391,35 +5379,14 @@ if (libDb) {
           return { rows, sample: pairs.length, brier: pairs.length ? Math.round((brierSum / pairs.length) * 1000) / 1000 : null };
         };
         try {
-          const refresh = new URL(req.url || '/', 'http://localhost').searchParams.get('refresh') === '1';
+          const u = new URL(req.url || '/', 'http://localhost');
+          const refresh = u.searchParams.get('refresh') === '1';
+          // ?days=N bounds the pass. Omitted = the grader's own MAX_DAYS (250).
+          // Useful after an outage: `?refresh=1&days=60` regrades the gap
+          // without walking two years of snapshots on a page request.
+          const refreshDays = Number(u.searchParams.get('days')) || undefined;
           if (refresh) {
-            const days = await libDb.queryAll(`SELECT DISTINCT date FROM mvc_snapshots WHERE date < ? ORDER BY date DESC LIMIT ?`, [todayET(), MAX_DAYS]);
-            for (const { date } of days) {
-              const rows = await libDb.queryAll(`SELECT * FROM mvc_snapshots WHERE date = ? ORDER BY timestamp ASC LIMIT 2000`, [date]);
-              if (!rows.length) continue;
-              const last = rows[rows.length - 1];
-              const cur = pickLevel(last);
-              const spx = rows.map((r) => num(r.spxPrice)).filter((v) => v != null && v > 1000);
-              const refPrice = cur.spx || spx[spx.length - 1] || cur.level || 0;
-              const intradayRange = spx.length > 1 ? (Math.max(...spx) - Math.min(...spx)) / 2 : 0;
-              const proxScale = Math.max(intradayRange, refPrice * 0.003);
-              const emSize = Math.max(intradayRange > 0 ? intradayRange : refPrice * 0.004, refPrice * 0.006);
-              const ctx = {
-                level: cur.level, price: cur.spx, emSize, intradayRange: proxScale,
-                totalAbsNetGEX: cur.totalAbsNetGEX, netGexAtLevel: cur.netGex, netDexAtLevel: cur.netDex,
-                gexFlip: cur.gexFlip, sessionProgress: 1,
-              };
-              const score = libConf.scoreConfidence(ctx, null);
-              const { outcome, touched } = classifyDay(cur.level, spx);
-              const held = touched ? (outcome === 'pivot' || outcome === 'chop' ? 1 : 0) : null;
-              const broke = touched ? (outcome === 'hit' ? 1 : 0) : null;
-              await libDb.upsertConfidenceLog({
-                date, level: cur.level, regime: score.factors.gammaRegime,
-                reach: score.hit, pivot: score.pivot, chop: score.chop, break: score.break,
-                netWallBias: score.netWallBias, scored_at: Date.now(),
-                touched: touched ? 1 : 0, actual_outcome: outcome, held, broke, graded_at: Date.now(),
-              });
-            }
+            await require('./confidence-grader').gradeConfidenceLog({ days: refreshDays });
           }
           const log = await libDb.getGradedConfidenceLog();
           const reachPairs = log.filter((r) => r.touched != null).map((r) => ({ p: clamp(r.reach / 100, 0, 1), actual: r.touched }));
@@ -6819,7 +6786,9 @@ if (libDb) {
   {
     const PS_TTL_MS = 86_400_000;
     let psCache = null; // { at, payload }
-    const MIN_N = 30, MIN_PERIODS = 30, MIN_EM_WEEKS = 4, MIN_EM_TICKERS = 30;
+    // MIN_PERIODS went with the ICT stat below — it was that helper's session
+    // floor and nothing else read it.
+    const MIN_N = 30, MIN_EM_WEEKS = 4, MIN_EM_TICKERS = 30;
     const emZones = async () => {
       const pool = await libDb.getDb();
       const { rows } = await pool.query(`
@@ -6839,24 +6808,19 @@ if (libDb) {
         pct: Math.round((Number(r.hits) / n) * 1000) / 10, n, since: r?.since ?? null,
       };
     };
-    const ictSetups = async () => {
-      const pool = await libDb.getDb();
-      const { rows } = await pool.query(`
-        SELECT
-          COUNT(*) FILTER (WHERE outcome = 'win')::int             AS wins,
-          COUNT(*) FILTER (WHERE outcome IN ('win','loss'))::int   AS graded,
-          COUNT(DISTINCT date) FILTER (WHERE outcome IN ('win','loss'))::int AS sessions,
-          MIN(date) FILTER (WHERE outcome IN ('win','loss'))       AS since
-        FROM ict_setups`);
-      const r = rows[0];
-      const n = Number(r?.graded ?? 0);
-      if (n < MIN_N || Number(r?.sessions ?? 0) < MIN_PERIODS) return null;
-      return {
-        key: 'ict', label: 'ICT setups resolved in-direction',
-        sublabel: `Auto-graded on follow-through, ${Number(r.sessions ?? 0)} sessions — chop excluded`,
-        pct: Math.round((Number(r.wins) / n) * 1000) / 10, n, since: r?.since ?? null,
-      };
-    };
+    // THE ICT STAT WAS REMOVED HERE ON 2026-09-06 (Brandon).
+    //
+    // It published "ICT setups resolved in-direction" onto the landing page's
+    // receipts strip — a graded claim about a feature the public site no longer
+    // sells: the /explore/ict page came out on 2026-09-05 and the ICT section
+    // left /docs the same day. A stat card is a claim, and a claim pointing at a
+    // page a visitor cannot open is the same mistake the TPO explore page was.
+    //
+    // The `ict_setups` table and its recorder (server-v2/ict-setup-tracker.js)
+    // are untouched; nothing is dropped and the app page still runs. This route
+    // simply stops PUBLISHING off it. To sell ICT again, restore the helper and
+    // add it back to the settle list below — the strip is data-driven and needs
+    // no other change on either side.
     const cbReach = async () => {
       const pool = await libDb.getDb();
       const { rows } = await pool.query(`
@@ -6890,7 +6854,7 @@ if (libDb) {
     //
     // ES only. NQ writes its own row per date and the two correlate hard, so
     // pooling them would near-double n without adding independent evidence —
-    // the same reasoning as the MIN_PERIODS floor on the other stats.
+    // the same reasoning as the per-period floors on the other stats.
     const ibBias = async () => {
       const pool = await libDb.getDb();
       const { rows } = await pool.query(`
@@ -6914,7 +6878,7 @@ if (libDb) {
       async handler(req, res) {
         if (psCache && Date.now() - psCache.at < PS_TTL_MS) { send(res, 200, psCache.payload); return; }
         try {
-          const settled = await Promise.allSettled([emZones(), ictSetups(), cbReach(), ibBias()]);
+          const settled = await Promise.allSettled([emZones(), cbReach(), ibBias()]);
           const stats = settled.map((s) => (s.status === 'fulfilled' ? s.value : null)).filter((s) => s != null).sort((a, b) => b.n - a.n);
           const payload = { stats, computedAt: new Date().toISOString() };
           psCache = { at: Date.now(), payload };
@@ -7068,6 +7032,34 @@ if (libDb) {
     let ledgerCache = null; // { at, payload }
     const MAX_ROWS = 8;
 
+    // ── 2026-09-06: THE LEDGER NOW SHIPS ITS OWN AGE ─────────────────────────
+    //
+    // Reported as "the last 8 graded sessions are a month old", and they were:
+    // on 2026-09-06 the newest row carrying a `graded_at` was 2026-07-28. The
+    // rows are real and this query is right — `confidence_log` simply has not
+    // had a row graded since. That is a RECORDER problem, not a route problem,
+    // and this route must not paper over it.
+    //
+    // What it CAN stop doing is handing the client a stale slice with no way to
+    // know it is stale. The landing page rendered a bare "The last 8 graded
+    // sessions — unfiltered · auto-graded daily" over July rows in September,
+    // and nothing in the payload would have let it say otherwise. So:
+    //
+    //   newestDate / oldestDate  the real window, so the header can print it
+    //   ageDays                  whole days from the newest graded row to now
+    //   stale                    ageDays > STALE_DAYS — "auto-graded daily" is
+    //                            then a false claim and the client drops it
+    //
+    // The rows still ship either way. Withholding them would hide the outage
+    // from the one person who can fix it, and the honest move on a page that
+    // sells its receipts is to DATE them, not to bury them.
+    const STALE_DAYS = 10;
+    const dayDiff = (iso) => {
+      const t = Date.parse(`${String(iso).slice(0, 10)}T00:00:00Z`);
+      if (!Number.isFinite(t)) return null;
+      return Math.floor((Date.now() - t) / 86_400_000);
+    };
+
     register('/api/public-ledger', {
       auth: 'public', methods: ['GET'],
       async handler(req, res) {
@@ -7099,7 +7091,10 @@ if (libDb) {
             return {
               date: String(r.date),
               level: Math.round(Number(r.level) || 0),
-              type: 'Core Bullseye',
+              // 'Core', not 'Core Bullseye' (Brandon, 2026-09-05) — the rails, the
+              // Multi Greek badges, the Key Levels tiles and the free landing tile
+              // all say Core, and this column was the last long form left.
+              type: 'Core',
               what,
               // HIT tracks the published claim exactly: cbReach() grades
               // "CB levels reached intraday", so reached = hit. Grading it any
@@ -7109,13 +7104,27 @@ if (libDb) {
               outcome: r.actual_outcome ?? null,
             };
           });
-          const payload = { rows: out, computedAt: new Date().toISOString() };
+          // Rows come back newest-first, so out[0] is the newest graded session.
+          const newestDate = out.length ? out[0].date : null;
+          const oldestDate = out.length ? out[out.length - 1].date : null;
+          const ageDays = newestDate ? dayDiff(newestDate) : null;
+          const payload = {
+            rows: out,
+            newestDate,
+            oldestDate,
+            ageDays,
+            stale: ageDays != null && ageDays > STALE_DAYS,
+            computedAt: new Date().toISOString(),
+          };
           ledgerCache = { at: Date.now(), payload };
           send(res, 200, payload, { 'Cache-Control': 'public, max-age=1800' });
         } catch {
           // Empty ledger renders nothing. Same rule as the receipts strip:
           // better a missing section than a padded one.
-          send(res, 200, { rows: [], computedAt: new Date().toISOString() });
+          send(res, 200, {
+            rows: [], newestDate: null, oldestDate: null, ageDays: null, stale: false,
+            computedAt: new Date().toISOString(),
+          });
         }
       },
     });

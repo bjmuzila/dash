@@ -1,5 +1,24 @@
 # Changelog
 
+## Sunday 9/6/2026 — Level Log (v3): ticker card rail, full-height log card, and a price line that actually arrives
+
+Built the `/v3/level-log` ticker card rail (`cbedge-v3/src/pages/levelLog/railStore.ts` +
+`TickerRail.tsx`, five-per-row mini charts through a new `compact` prop on
+`WallMigrationChart.tsx`, the rail list saved per browser and — for the owner — in Postgres
+via a new `/api/level-log-tickers` in `server-v2/api-router.js`), made the log card fill the
+page (`cbedge-v3/src/pages/LevelLog.tsx`), and mounted the previously unreachable Notes dock
+and owner Quick Probe in the universal toolbar (`cbedge-v3/src/shell/Shell.tsx`, lazy-loaded
+to protect the entry budget).
+
+Fixed the missing 1-minute tape by raising the timeouts `/proxy/candles-intraday` passes and
+by never caching an empty or truncated pull (`server-v2/server-with-proxy.js`,
+`server-v2/candle-history.js`), added multi-symbol `symbols=` support to `/api/walls-range` so
+the whole rail and the 5-session view each cost one request, and rebuilt
+`public/core-migration.html` with week bands, brighter strokes and a clipboard-first
+screenshot (`generated/2026-09-04-core-migration-labeling.html` holds the four labeling
+options that choice came from).
+
+
 ## Thursday 9/3/2026 — Fix: stray backticks in a comment broke the owner-vite Docker build (`owner-vite/src/pages/studioHtml.ts`)
 
 The VPS deploy died in the `owners` target with `studioHtml.ts:1487: Expected ";" but found "alerts"`, pointing at what reads as an ordinary `/* */` block comment. It is not a comment: the whole file is ONE `String.raw` template literal, opened line 12 and closed line 2021, so the two backticks around the word `alerts` in the Auto-buy template's header note CLOSED the template early and everything after them parsed as loose JavaScript — which is why the error names an identifier sitting inside a comment. Fixed by quoting the word instead; the file now holds exactly two backticks, the pair that opens and closes the template, and esbuild parses it clean. Rule for that file: a backtick is never punctuation there — use single quotes in comments and prose.

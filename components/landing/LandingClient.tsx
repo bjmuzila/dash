@@ -109,7 +109,7 @@ const STRIP = [
   { n: "15s", l: "Chain-to-screen latency", s: "Direct feed, no polling delay" },
   { n: "ES + NQ", l: "Futures structure, graded", s: "Initial Balance on both roots" },
   { n: "Daily", l: "Auto-graded scoreboard", s: "Hits and misses, published" },
-  { n: "$45", l: "Per month, everything", s: "No tiers, no per-symbol upsell" },
+  { n: "$50", l: "Per month, everything", s: "No tiers, no codes, no upsell" },
 ];
 
 export default function LandingClient() {

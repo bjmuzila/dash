@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { cookies } from "next/headers";
 import { getServerUserId } from "@/lib/supabase/server";
 import { getAccess } from "@/lib/subscription";
 import { getSubscription } from "@/lib/db";
@@ -9,7 +8,6 @@ import UserMenu from "@/components/shared/UserMenu";
 import PublicNav from "@/components/landing/PublicNav";
 import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTheme";
 import { EXPLORE } from "@/components/explore/exploreContent";
-import { PROMO_COOKIE, promoByCode } from "@/lib/promoLinks";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +15,10 @@ export const dynamic = "force-dynamic";
 // here with ?from=<slug>. Signed-out visitors see the platform recap + plan and a
 // Clerk sign-up CTA. Signed-in users without a subscription see Stripe checkout;
 // subscribed users get a "go to dashboard" button.
+//
+// PRICING IS FLAT AND TRANSPARENT: $50/mo, $500/yr. No coupon box, no promo
+// pre-fill, and no inflated "original" price struck through to manufacture a
+// sale — the number shown is the number charged. Don't reintroduce a list price.
 const PLATFORM_RECAP = [
   "Real-time SPX gamma exposure (GEX), gamma flip & call/put walls",
   "Confidence Score — every key level graded 0–100 for Hit / Pivot / Chop",
@@ -35,22 +37,15 @@ const PLATFORM_UPCOMING = [
 export default async function PricingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; promo?: string }>;
+  searchParams: Promise<{ from?: string }>;
 }) {
-  const { from, promo: promoParam } = await searchParams;
+  const { from } = await searchParams;
   const userId = await getServerUserId();
   const access = userId ? await getAccess() : { ok: false, reason: "unauthenticated" as const };
   const sub = userId ? await getSubscription(userId) : undefined;
   const hasBilling = !!sub?.stripe_customer_id;
 
   const fromEntry = from && from in EXPLORE ? EXPLORE[from] : null;
-
-  // Promo deal link (/bday → lib/promoLinks.ts). The query param is how the
-  // redirect lands here; the cookie is how the deal survives the sign-up
-  // detour and a later direct visit. Only codes in the table light this up.
-  const cookieStore = await cookies();
-  const promoEntry =
-    promoByCode(promoParam) ?? promoByCode(cookieStore.get(PROMO_COOKIE)?.value);
 
   return (
     <div
@@ -98,26 +93,6 @@ export default async function PricingPage({
           <div style={badge}>Continuing from · {fromEntry.title}</div>
         )}
 
-        {promoEntry && !access.ok && (
-          <div
-            style={{
-              margin: "14px 0 4px",
-              padding: "14px 18px",
-              borderRadius: 12,
-              border: `1px solid ${T.orange}55`,
-              background:
-                "linear-gradient(180deg, rgba(251,133,1,0.14) 0%, rgba(251,133,1,0.05) 100%)",
-            }}
-          >
-            <div style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.02em", color: T.orange }}>
-              {promoEntry.label}
-            </div>
-            <div style={{ marginTop: 4, fontSize: 14, color: "rgba(255,255,255,0.82)", lineHeight: 1.5 }}>
-              {promoEntry.blurb}
-            </div>
-          </div>
-        )}
-
         <h1 style={{ fontSize: "clamp(29px,5vw,43px)", fontWeight: 800, margin: "14px 0 10px", lineHeight: 1.1 }}>
           {access.ok ? (
             "You're subscribed"
@@ -128,7 +103,7 @@ export default async function PricingPage({
         <p style={{ color: DIM, fontSize: 17, margin: "0 0 12px", maxWidth: 620, lineHeight: 1.5 }}>
           {access.ok
             ? "Your subscription is active — you have full access to the dashboard."
-            : "One subscription unlocks the entire platform. Live dealer positioning, scored levels, and estimated moves — the moment they move."}
+            : "One subscription unlocks the entire platform. Live dealer positioning, scored levels, and estimated moves — the moment they move. One price, no tiers, no add-ons."}
         </p>
 
         {userId && !access.ok && (
@@ -192,11 +167,13 @@ export default async function PricingPage({
             <div style={{ ...sectionLabel, color: T.cyan }}>Membership</div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 12, margin: "4px 0 14px" }}>
-              <PlanPrice label="Monthly" original={120} price={45} period="/mo" />
+              <PlanPrice label="Monthly" price={50} period="/mo" />
 
               {/* Yearly is the plan we want people on — it gets the loud treatment:
                   accent border, "best value" ribbon, bigger figure and the savings
-                  math spelled out against 12x the monthly price. */}
+                  math spelled out against 12x the monthly price. The comparison is
+                  against our OWN monthly price ($600/yr), which is a real number a
+                  buyer can check — not a struck-through list price nobody pays. */}
               <div
                 style={{
                   position: "relative",
@@ -224,61 +201,35 @@ export default async function PricingPage({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  Best value · Save $140
+                  Best value · 2 months free
                 </div>
 
-                <PlanPrice label="Yearly" original={1000} price={400} period="/yr" highlight />
+                <PlanPrice label="Yearly" price={500} period="/yr" highlight />
 
                 <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: T.cyan, lineHeight: 1.45 }}>
-                  60% off · works out to $33/mo — under 12 months of monthly billing.
+                  Works out to $41.67/mo — $100 less than paying monthly for a year.
                 </div>
               </div>
             </div>
 
-            {promoEntry ? (
-              // A /bday-style deal link is active: the code is pre-applied by
-              // /api/stripe/checkout, so tell them that instead of asking them
-              // to type one.
-              <div
-                style={{
-                  marginBottom: 18,
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  background: "rgba(251,133,1,0.08)",
-                  border: `1px solid ${T.orange}44`,
-                  textAlign: "center",
-                }}
-              >
-                <span style={{ fontSize: 14, color: DIM }}>Code </span>
-                <span style={{ fontSize: 15, fontWeight: 900, color: T.orange, letterSpacing: "0.06em" }}>
-                  {promoEntry.code}
-                </span>
-                <span style={{ fontSize: 14, color: DIM }}> is applied automatically at checkout</span>
-                <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: T.orange, letterSpacing: "0.04em" }}>
-                  {promoEntry.code} = $400 for the year
-                </div>
-              </div>
-            ) : (
-              <div
-                style={{
-                  marginBottom: 18,
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  background: "rgba(33,158,188,0.08)",
-                  border: "1px solid rgba(33,158,188,0.25)",
-                  textAlign: "center",
-                }}
-              >
-                <span style={{ fontSize: 14, color: DIM }}>Enter code </span>
-                <span style={{ fontSize: 14, fontWeight: 800, color: T.cyan, letterSpacing: "0.06em" }}>MONTH</span>
-                <span style={{ fontSize: 14, color: DIM }}> or </span>
-                <span style={{ fontSize: 15, fontWeight: 900, color: T.cyan, letterSpacing: "0.06em" }}>EDGE3</span>
-                <span style={{ fontSize: 14, color: DIM }}> at checkout to lock in this price</span>
-                <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: T.cyan, letterSpacing: "0.04em" }}>
-                  EDGE3 = $400 for the year
-                </div>
-              </div>
-            )}
+            {/* No coupon box. The price on the card is the price at checkout —
+                nothing to type, nothing to hunt for. */}
+            <div
+              style={{
+                marginBottom: 18,
+                padding: "10px 14px",
+                borderRadius: 10,
+                background: "rgba(33,158,188,0.08)",
+                border: "1px solid rgba(33,158,188,0.25)",
+                textAlign: "center",
+                fontSize: 14,
+                color: DIM,
+                lineHeight: 1.5,
+              }}
+            >
+              <b style={{ color: T.cyan, fontWeight: 800 }}>No codes, no sales.</b>{" "}
+              The price you see is the price you pay.
+            </div>
 
             <p style={{ color: DIM, fontSize: 14, margin: "0 0 22px", lineHeight: 1.5 }}>
               Everything on the platform. Cancel anytime from your billing portal.
@@ -288,9 +239,8 @@ export default async function PricingPage({
               <PricingActions
                 hasAccess={access.ok}
                 hasBilling={hasBilling}
-                monthlyLabel="Subscribe monthly — $45/mo"
-                yearlyLabel="Subscribe yearly — $400/yr · best value"
-                promo={promoEntry?.code ?? null}
+                monthlyLabel="Subscribe monthly — $50/mo"
+                yearlyLabel="Subscribe yearly — $500/yr · best value"
               />
             ) : (
               <BetaGate />
@@ -323,15 +273,17 @@ export default async function PricingPage({
 
 // `highlight` is the promoted plan: white bold label, larger figure and a solid
 // accent so the yearly row reads as the obvious pick next to monthly.
+//
+// There is deliberately NO `original` / struck-through price. We don't inflate a
+// list price to make the real one look like a discount — one number, and it's
+// the one Stripe charges.
 function PlanPrice({
   label,
-  original,
   price,
   period,
   highlight = false,
 }: {
   label: string;
-  original: number;
   price: number;
   period: string;
   highlight?: boolean;
@@ -348,15 +300,6 @@ function PlanPrice({
         }}
       >
         {label}
-      </span>
-      <span
-        style={{
-          fontSize: 14,
-          color: highlight ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.4)",
-          textDecoration: "line-through",
-        }}
-      >
-        ${original}
       </span>
       <span
         style={{

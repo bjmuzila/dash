@@ -2,23 +2,36 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Sunday 9/6/2026
+
+* **Level Log (v3):** new ticker cards with mini charts above the log — click one to load it. The chart now fills the page, and its price line works for every ticker, not just SPX.
+
+* **CORE Migration (v3):** brighter price line and CORE levels, week bands so you can tell which week you are looking at, and Screenshot now copies straight to your clipboard.
+
+* **Toolbar (v3):** the Notes panel is back — click the pencil to open it on any page.
+
+## Friday 9/4/2026
+
+* **v3:** v3 is now 100% live. V2 pages will be fazed out throught the next week.
+
+
 ## Thursday 9/3/2026
 
-* **Board (v3 preview):** new Gauge Rail card — five live gauges for net gamma, net delta, call share of volume gamma, gamma speed and the 15-minute change.
+* **Board (v3):** new Gauge Rail card — five live gauges for net gamma, net delta, call share of volume gamma, gamma speed and the 15-minute change.
 
-* **GEX Candles (v3 preview):** the GEX bubbles now line up with the candles they belong to, the 1-minute view shows the top four strikes at four clearly different sizes, the biggest wall in each column is gold, and the chart opens on the full 9:30-4:00 session instead of a squeezed sliver.
+* **GEX Candles (v3):** the GEX bubbles now line up with the candles they belong to, the 1-minute view shows the top four strikes at four clearly different sizes, the biggest wall in each column is gold, and the chart opens on the full 9:30-4:00 session instead of a squeezed sliver.
 
-* **Economic Calendar (v3 preview):** the calendar and the earnings week board now have their own full page — impact filters, a market-cap filter, search, and a link that opens straight to the earnings tab.
+* **Economic Calendar (v3):** the calendar and the earnings week board now have their own full page — impact filters, a market-cap filter, search, and a link that opens straight to the earnings tab.
 
-* **Phone (v3 preview):** the dashboard now has a real phone version — GEX, Heat, SPX Candles, Estimated Moves and Calendar, with the usual top bar and a bottom tab bar. Opening cbedge.net on a phone goes straight there. The options chain is desktop-only for now.
+* **Phone (v3):** the dashboard now has a real phone version — GEX, Heat, SPX Candles, Estimated Moves and Calendar, with the usual top bar and a bottom tab bar. Opening cbedge.net on a phone goes straight there. The options chain is desktop-only for now.
 
-* **SPX Candles (phone, v3 preview):** the SPX / ES switch now sits in the header instead of buried in the settings sheet, and the session follows it — ES shows the overnight, SPX shows the cash day.
+* **SPX Candles (phone, v3):** the SPX / ES switch now sits in the header instead of buried in the settings sheet, and the session follows it — ES shows the overnight, SPX shows the cash day.
 
-* **Heat (phone, v3 preview):** the Multi Greek ladder, showing today's expiration only. The first panel is always SPX; add up to three more tickers beside it.
+* **Heat (phone, v3):** the Multi Greek ladder, showing today's expiration only. The first panel is always SPX; add up to three more tickers beside it.
 
-* **GEX (phone, v3 preview):** trimmed to what reads on a phone — SPX, with an OI+Vol / Vol switch. No flow basis, call/put split, DEX line or stat tiles.
+* **GEX (phone, v3):** trimmed to what reads on a phone — SPX, with an OI+Vol / Vol switch. No flow basis, call/put split, DEX line or stat tiles.
 
-* **v3 preview:** now open to every subscriber, not just the owner account.
+* **v3:** now open to every subscriber, not just the owner account.
 
 * **Updates:** a "New version available" prompt now appears when an update ships. One tap to take it — no refreshing or clearing anything.
 

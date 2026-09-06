@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerUser } from "@/lib/supabase/server";
 import { getStripe, getPriceIdForPlan, type Plan } from "@/lib/stripe";
 import { getSubscription, linkStripeCustomer } from "@/lib/db";
-import { PROMO_COOKIE, promoByCode } from "@/lib/promoLinks";
 import { decideTrialEligibility } from "@/lib/trialEligibility";
 import { markTrialBanHit, recordTrialCheckoutIp, findActiveTrialWinback } from "@/lib/db";
 import { sendTrialBanNoticeOnce } from "@/lib/trialBanNotice";
@@ -55,31 +54,16 @@ function clientIp(req: NextRequest): string | null {
  * the time a renewal is billed, and a renewal that cannot name its affiliate is
  * a commission that silently stops after month one.
  *
- * A code typed at checkout as a Stripe promotion code still wins over this —
- * see the webhook, which prefers the redeemed promotion code. Someone who typed
- * a friend's code should credit that friend, not whoever's link they clicked
- * three weeks ago.
+ * The webhook still prefers a redeemed Stripe promotion code over this cookie
+ * when a session carries one. With the public code box gone, the only session
+ * that can carry one is a per-customer win-back, so in practice this cookie is
+ * now the attribution for every affiliate-sourced purchase.
  */
 function affiliateCode(req: NextRequest): string | null {
   const raw = req.cookies.get("cbe_ref")?.value;
   if (!raw) return null;
   const code = raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
   return code.length >= 4 ? code : null;
-}
-
-/**
- * Promo code from a /bday-style deal link (lib/promoLinks.ts). Two carriers,
- * body first: the pricing page forwards ?promo= explicitly, and the redirect's
- * 30-day cbe_promo cookie covers the sign-up detour where the query is lost.
- * Only codes in the PROMO_LINKS table are honored — this is a pre-fill for
- * OUR advertised deals, not a general "apply any string as a discount" input.
- */
-function promoCodeFromRequest(req: NextRequest, body: { promo?: unknown }): string | null {
-  const raw =
-    typeof body?.promo === "string" && body.promo.trim()
-      ? body.promo
-      : req.cookies.get(PROMO_COOKIE)?.value ?? null;
-  return promoByCode(raw)?.code ?? null;
 }
 
 // POST /api/stripe/checkout → creates a Stripe Checkout session for the signed-in
@@ -166,27 +150,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Pre-apply the advertised promo (YEARLY only) ─────────────────────────
-    // The /bday deal is $600 off the ANNUAL plan; pre-applying an amount-off
-    // coupon to a $45 monthly invoice would be nonsense, so monthly keeps the
-    // type-it-yourself box. Stripe forbids `discounts` together with
-    // `allow_promotion_codes`, which is why the session flips between them
-    // below instead of always sending both. If the code doesn't resolve to an
-    // ACTIVE Stripe promotion code (not created yet, expired, exhausted), fall
-    // back to allow_promotion_codes so checkout still works and the buyer can
-    // type it — never block the purchase over a broken pre-fill.
+    // ── NO PUBLIC COUPONS ────────────────────────────────────────────────────
+    // Pricing is flat and transparent: $50/mo, $500/yr, and the number on the
+    // pricing card is the number Stripe charges. There is no advertised promo
+    // to pre-apply and no code box at checkout (`allow_promotion_codes` is NOT
+    // sent below) — don't reintroduce either. The one discount that can still
+    // land on a session is the personal win-back offer directly below, which is
+    // minted per-customer and never typed by the buyer.
     let discounts: { promotion_code: string }[] | null = null;
-    const promoCode = plan === "yearly" ? promoCodeFromRequest(req, body) : null;
-    if (promoCode) {
-      try {
-        const found = await stripe.promotionCodes.list({ code: promoCode, active: true, limit: 1 });
-        const pc = found.data[0];
-        if (pc) discounts = [{ promotion_code: pc.id }];
-        else console.warn(`[stripe/checkout] promo "${promoCode}" not an active Stripe promotion code — falling back to manual entry`);
-      } catch (err) {
-        console.error("[stripe/checkout] promo lookup failed:", err);
-      }
-    }
 
     // ── Pre-apply a TRIAL WIN-BACK offer (MONTHLY only) ──────────────────────
     // Someone who took the free trial and didn't convert was mailed "first
@@ -198,10 +169,8 @@ export async function POST(req: NextRequest) {
     // Yearly is untouched — the offer is a discount on one monthly invoice, and
     // the coupon is pinned to the monthly product anyway.
     //
-    // Deliberately does NOT override an explicit promo above: if a code somehow
-    // resolved for this checkout, honour that one rather than silently swapping
-    // in a different discount. Any failure here just means no discount — never
-    // a blocked purchase.
+    // This is now the ONLY path that can discount a session. Any failure here
+    // just means no discount — never a blocked purchase.
     if (!discounts && plan === "monthly") {
       try {
         const winback = await findActiveTrialWinback(userId);
@@ -247,8 +216,11 @@ export async function POST(req: NextRequest) {
         ...(trial.eligible ? { trial_period_days: 2 } : {}),
       },
       payment_method_collection: "always",
-      // Mutually exclusive on Stripe's side — see the promo block above.
-      ...(discounts ? { discounts } : { allow_promotion_codes: true }),
+      // No `allow_promotion_codes`: the price is flat, so Checkout shows no
+      // "add promotion code" box. `discounts` is only ever the per-customer
+      // win-back offer above (the two fields are mutually exclusive on Stripe's
+      // side anyway, so this must stay an either/or).
+      ...(discounts ? { discounts } : {}),
       success_url: `${origin}/checkout/success`,
       cancel_url: `${origin}/pricing?checkout=cancelled`,
     });

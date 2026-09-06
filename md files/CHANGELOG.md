@@ -1,5 +1,232 @@
 # Changelog
 
+## 2026-09-06 (b) - The confidence log had no grader. It has one now (`server-v2/confidence-grader.js` NEW, `server-v2/api-router.js`)
+
+### The actual cause of the six-week-old ledger
+
+Nothing was broken. **Nothing was ever scheduled.**
+
+The only thing that had ever written a row to `confidence_log` was the
+`?refresh=1` branch of `GET /api/confidence/calibration` - a subscriber-gated
+page request. The table was therefore graded exactly as often as a human
+happened to open the calibration panel with that query string on the URL, and
+**2026-07-28 is simply the last day somebody did**.
+
+Every other recorder in `server-v2/` is started on a clock from
+`server-with-proxy.js` - `startIbResultsRecorder(PORT)`, `startWallsReach()`,
+`startTpoProfilesRecorder()`, twenty-odd others. This one was a side effect of a
+page view. That is the bug; the stale ledger was the symptom.
+
+### `server-v2/confidence-grader.js` - one implementation, three callers
+
+The grading loop moves out of the route handler whole - the rubric constants,
+`pickLevel()` and `classifyDay()` with it - and gains two callers it never had:
+
+| Caller | What it is |
+|---|---|
+| `gradeConfidenceLog({ days })` | the function; the calibration route now calls it |
+| `node server-v2/confidence-grader.js [--days N]` | a CLI, to grade on demand on the VPS |
+| `startConfidenceGrader()` | the nightly clock, 16:45 ET weekdays |
+
+**Lifted verbatim, deliberately.** `HIT_PTS 8 / PIVOT_PTS 10 / CHOP_BAND 15 /
+MAX_DAYS 250` and the classification are byte-for-byte what the route ran. A
+"cleanup" in this port would silently regrade two years of sessions and
+invalidate the calibration curves fitted on them.
+
+The rubric, written down where it can be read:
+
+- **level** - the LAST MVC snapshot's strike for that session (the day's CB)
+- **touched** - price came within 8 SPX points of it at any point
+- **pivot** - it got there, then travelled 10+ points back the way it came
+- **chop** - it got there and never left a 15-point band
+- **hit** - it got there and went through. *`outcome === 'hit'` is the BREAK
+  case, not the good case* - a naming trap kept because the column and three
+  readers depend on it. `touched` is what "reached" means, and `touched` is what
+  `/api/public-ledger` publishes as HIT.
+- **held** = touched && (pivot|chop) · **broke** = touched && hit
+
+`maxAway` is measured from the FIRST touch and only in the direction price
+arrived from, which is what separates a pivot from any large excursion.
+
+Two properties worth stating because they make it safe to run:
+
+- **Idempotent.** `upsertConfidenceLog` is `ON CONFLICT (date) DO UPDATE` over a
+  UNIQUE date. Every pass rewrites the same rows with the same verdicts; a
+  rubric change is a re-run, not a migration.
+- **Only finished sessions.** `date < today ET`. A session still printing has no
+  final excursion, and writing mid-day would publish a "miss" for a level price
+  reaches at 15:40.
+
+A date with snapshots missing is **skipped, never written as a miss**. "We have
+no data" and "price never got there" are different claims and the public ledger
+publishes the second one.
+
+### The route stops owning the rubric
+
+`/api/confidence/calibration` keeps its reliability tables and its response
+shape. The `?refresh=1` branch is now one line into the module, and it gained
+`&days=N` to bound a pass - useful after an outage, so regrading a six-week gap
+does not walk two years of snapshots inside a page request.
+
+The three thresholds are still reported in `thresholds` (a calibration table
+that does not state the rubric it was graded under is unreadable), read back off
+the module rather than restated. **Do not re-declare `classifyDay()` in that
+handler** - a second copy is how the calibration panel and the public ledger
+start telling different stories about the same session, and this feature is sold
+entirely on them agreeing.
+
+### The clock is NOT wired up yet
+
+`startConfidenceGrader()` exists and is tested but nothing calls it. Turning it
+on is one line in `server-with-proxy.js` beside the other recorders:
+
+```js
+require('./confidence-grader').startConfidenceGrader();
+```
+
+16:45 ET weekdays - after ib-results (16:30) and alongside walls-reach (16:45),
+well past the 16:00 print so the session's last MVC snapshot is in. It ticks
+every 5 minutes and fires once per ET day, so it survives a restart mid-window
+and cannot double-fire. That file is the proxy server, so it is a deliberate,
+separate change and is being held for sign-off.
+
+Until it goes in, either of these grades the table:
+
+```
+docker compose exec <service> node server-v2/confidence-grader.js --days 60
+```
+
+or, signed in, open `/api/confidence/calibration?refresh=1&days=60` - no deploy
+needed for that one.
+
+## 2026-09-06 - Flat, transparent pricing: $50/mo and $500/yr, and the coupon machinery comes off the buy page (`app/pricing/page.tsx`, `app/api/stripe/checkout/route.ts`, `components/pricing/PricingActions.tsx`, `components/landing/LandingClient.tsx`)
+
+### 1. One price, and it's the one we charge
+
+Monthly is **$50/mo**, yearly is **$500/yr**. The struck-through "original" price
+is gone from both rows — `PlanPrice` no longer takes an `original` prop at all,
+because a $120 monthly and a $1,000 annual list price nobody has ever paid is a
+fake discount, and the whole point of this change is that the number on the card
+is the number Stripe bills.
+
+The yearly row keeps its accent treatment and ribbon, but the ribbon now says
+**"Best value · 2 months free"** and the savings line reads "Works out to
+$41.67/mo — $100 less than paying monthly for a year." That comparison is against
+our OWN monthly price ($50 x 12 = $600), which is a real number a buyer can check,
+rather than an invented list price.
+
+### 2. No coupon box, anywhere
+
+- The `EDGE3` / `MONTH` "enter code at checkout to lock in this price" panel is
+  deleted, replaced by a plain "No codes, no sales. The price you see is the price
+  you pay."
+- The `/bday`-style promo banner is deleted from the pricing page, along with the
+  `?promo=` query param, the `cbe_promo` cookie read, and the
+  `PROMO_COOKIE`/`promoByCode` import. `searchParams` is back to just `{ from }`.
+- `PricingActions` loses its `promo` prop; the checkout POST body is now just
+  `{ plan }`.
+- `/api/stripe/checkout` loses `promoCodeFromRequest()` and the whole yearly
+  promo pre-apply block, and **no longer sends `allow_promotion_codes: true`** —
+  so Stripe Checkout renders no "add promotion code" field.
+
+`lib/promoLinks.ts` and the `/bday` redirect are left in place but are now inert:
+nothing reads the cookie or the query param. Delete them separately if you want
+the route gone.
+
+### 3. What still discounts a session
+
+Exactly one thing: the **per-customer trial win-back** (`lib/winback.ts`), whose
+promotion code is minted restricted to a single Stripe customer and pre-applied
+server-side. It was deliberately NOT removed — people were already emailed that
+offer, and it is never typed by a buyer, so it doesn't reintroduce a public code.
+`discounts` is now spread as `...(discounts ? { discounts } : {})` instead of
+falling back to `allow_promotion_codes`.
+
+The affiliate-cookie comment was corrected to match: with the public code box
+gone, `cbe_ref` is in practice the attribution for every affiliate purchase.
+
+### 4. Landing strip
+
+The value strip's fourth tile goes `$45` → **`$50`**, subtitle "No tiers, no
+codes, no upsell". The 2-day free trial is untouched.
+
+### ⚠️ Stripe side is NOT done by this change
+
+The displayed prices come from this page; the charged prices come from
+`STRIPE_PRICE_ID_MONTHLY` / `STRIPE_PRICE_ID_YEARLY`. **Create the new $50 and
+$500 prices in Stripe and repoint those env vars**, or the site will advertise
+$50/$500 and bill $45/$400. Existing subscribers stay on their current price
+until migrated.
+
+
+
+## 2026-09-06 - The ICT stat comes off the receipts strip, and the graded ledger can no longer go quietly stale (`server-v2/api-router.js`, `components/landing/GradedLedger.tsx`)
+
+### 1. "ICT setups resolved in-direction" is no longer published
+
+`ictSetups()` is deleted from `/api/public-stats`. It was one of four cards on
+the landing page's receipts strip, publishing a graded win rate for a feature the
+public site stopped selling yesterday: `/explore/ict` came out of the EXPLORE map
+and the ICT section came out of `/docs`, both on 2026-09-05. A stat card is a
+CLAIM, and a claim about a page a visitor cannot open is the same mistake the TPO
+explore page was.
+
+Nothing is dropped and nothing else changes:
+
+- `ict_setups` and `server-v2/ict-setup-tracker.js` are untouched. The table keeps
+  filling; the app page keeps running. The route simply stops reading it.
+- `ReceiptsStrip` is data-driven — it renders whatever `/api/public-stats` hands
+  back — so the card disappears with no client change at all. The strip is a
+  fixed 2-up grid, so it now reads as an even 3-card row on the landing page's
+  4-up override and a 2+1 on narrow.
+- `MIN_PERIODS` left with the helper; it was that stat's session floor and nothing
+  else read it. The IB docblock that cited it by name now says "the per-period
+  floors".
+
+**`/api/public-stats` caches for 24h in-process, so the card survives until the
+backend restarts.** A deploy does that.
+
+### 2. The ledger prints its own date window — and stops claiming "daily" when it isn't
+
+Reported as "the last 8 graded sessions are a month old". They were: on
+2026-09-06 the newest row in `confidence_log` carrying a `graded_at` was
+**2026-07-28**, forty days back. The route's query is right and the rows are
+real — the table has simply not had a row graded since late July.
+
+**That part is a recorder problem and is NOT fixed here.** What IS fixed is that
+nothing on either side could tell. The header read:
+
+> The last 8 graded sessions — unfiltered · 8 hit · 0 miss · auto-graded daily
+
+with no date in it anywhere. Every row said Jul, so the only reader who would
+notice was one who already knew what today was — and "auto-graded daily" over a
+six-week-old board is the exact species of claim this section exists to accuse
+other people of making.
+
+`/api/public-ledger` now returns `newestDate`, `oldestDate`, `ageDays` and
+`stale` (`ageDays > STALE_DAYS`, 10) alongside the rows, and `GradedLedger`:
+
+- **prints the window in the header in every state** — "Jul 17 – Jul 28" next to
+  the hit/miss count, fresh or not. A dated table cannot go quietly stale again;
+  the worst it can do is look old, which is the correct thing for an old table to
+  look like.
+- **drops "auto-graded daily" when it is false**, printing "last graded Jul 28"
+  in the warn colour instead.
+- **renders nothing past `HIDE_DAYS` (60)**. At that point it is not a slow
+  scoreboard, it is an abandoned one, and it has no business on the page that
+  sells the scoreboard. Deliberately far beyond the route's 10-day staleness
+  mark: in between, the table still shows and simply tells the truth about its
+  age. Today's data is 40 days old, so it renders, dated and flagged.
+
+The rows ship in both states on purpose. Withholding them would hide the outage
+from the one person who can fix it.
+
+Two smaller things fell out of it: the `type` column now reads **Core** rather
+than "Core Bullseye" (the rails, the Multi Greek badges, the Key Levels tiles and
+the free landing tile all say Core — this column was the last long form left),
+and the header meta line wraps instead of `nowrap`, because it carries a date
+range now and that is wider than a phone.
+
 ## 2026-09-06 - ICT, Journal, Fails and the Site Guide are retired
 
 Four pages leave v2 for good. Not ported - RETIRED: there is no v3 version and

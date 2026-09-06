@@ -8,20 +8,20 @@ import { HOME_THEME as T } from "@/components/shared/homeTheme";
 // the chosen { plan } and redirect to the returned Stripe Checkout URL.
 // Manage billing → POST /api/stripe/portal. Both routes return { url }.
 //
-// monthlyLabel / yearlyLabel let the page show real prices (e.g. "$120 / mo").
+// monthlyLabel / yearlyLabel let the page show real prices (e.g. "$50/mo").
+//
+// No promo plumbing: pricing is flat ($50/mo, $500/yr) and checkout takes no
+// codes, so the request body is just the chosen plan.
 export default function PricingActions({
   hasAccess,
   hasBilling,
   monthlyLabel = "Subscribe monthly",
   yearlyLabel = "Subscribe yearly",
-  promo,
 }: {
   hasAccess: boolean;
   hasBilling: boolean;
   monthlyLabel?: string;
   yearlyLabel?: string;
-  /** Promo code from a /bday-style link — forwarded so checkout pre-applies it. */
-  promo?: string | null;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState<"monthly" | "yearly" | "portal" | null>(null);
@@ -34,7 +34,7 @@ export default function PricingActions({
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(promo ? { plan, promo } : { plan }),
+        body: JSON.stringify({ plan }),
       });
       const data = await res.json();
       if (!res.ok || !data?.url) {
