@@ -1,5 +1,5 @@
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { useIsPhone } from '@/design/useIsPhone'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -505,14 +505,77 @@ export function Board({
   gestureRef.current = gesture
   draftRef.current = draft
 
+  // ── MEASURING THE BOARD, AND WHY IT IS THIS DEFENSIVE ──────────────────────
+  //
+  // Every tile is absolutely positioned from `colW`, so ONE number decides the
+  // whole board's geometry. If it is measured wrong, nothing looks broken in an
+  // obvious way — the board just comes up as a scale model of itself, every card
+  // proportionally correct inside a container half the width it should be, with
+  // the text in each card wrapped into a column. That is the bug this replaces:
+  // a board rendering at ~640px inside a ~1290px pane, on load, intermittently.
+  //
+  // The old version measured ONCE in an effect and then trusted a ResizeObserver
+  // to correct it. Both halves can fail:
+  //
+  //   - the first read happens before the shell's flex layout has settled, so
+  //     the number is a transient width, not the real one;
+  //   - the RO is the only thing that can fix that, and an RO can stop
+  //     delivering. Its callback here changes the board's HEIGHT, which can add
+  //     or remove the scroll port's scrollbar, which changes the width, which
+  //     calls the callback: the classic "ResizeObserver loop completed with
+  //     undelivered notifications". After that the width is frozen at whatever
+  //     it was, forever, and only a manual window resize brings it back.
+  //
+  // So: never trust a single source.
+  //
+  //   1. `measure` is idempotent — it only sets state when the value actually
+  //      changed, which is what makes everything below safe to over-call.
+  //   2. It runs after EVERY commit (useLayoutEffect with no deps). This is the
+  //      safety net: a wrong width cannot survive a re-render, so the board
+  //      self-heals on the next state change even if every listener has failed.
+  //   3. The observer watches the wrapper AND its parent (the scroll port), and
+  //      is joined by window resize, tab visibility, and fonts-ready — the four
+  //      ways this container changes size without the wrapper itself being
+  //      re-laid-out first.
+  //   4. Every callback goes through a rAF. That is the documented fix for the
+  //      delivery loop above: the re-measure lands on the next frame instead of
+  //      inside the notification that triggered it.
+  //
+  // getBoundingClientRect over clientWidth: it is the box the tiles are actually
+  // positioned in, and it is subpixel, so a fractional layout does not round the
+  // board a pixel narrower on every pass.
+  const measure = useCallback(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const w = el.getBoundingClientRect().width
+    if (w > 0) setWidth((prev) => (Math.abs(prev - w) > 0.5 ? w : prev))
+  }, [])
+
+  useLayoutEffect(measure)
+
   useEffect(() => {
     const el = wrapRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth))
+    let raf = 0
+    const schedule = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(measure)
+    }
+    const ro = new ResizeObserver(schedule)
     ro.observe(el)
-    setWidth(el.clientWidth)
-    return () => ro.disconnect()
-  }, [])
+    if (el.parentElement) ro.observe(el.parentElement)
+    window.addEventListener('resize', schedule)
+    document.addEventListener('visibilitychange', schedule)
+    // Web fonts land after first paint and reflow the shell around the board.
+    document.fonts?.ready.then(schedule).catch(() => {})
+    schedule()
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+      window.removeEventListener('resize', schedule)
+      document.removeEventListener('visibilitychange', schedule)
+    }
+  }, [measure])
 
   const colW = cols > 0 && width > 0 ? (width + gutter) / cols : 0
   const active = draft ?? layout

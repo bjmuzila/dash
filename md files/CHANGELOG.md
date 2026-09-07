@@ -1,456 +1,303 @@
 # Changelog
 
-## 2026-09-07 (h) - v3: the seasonality port stops carrying v2's palette (`cbedge-v3/`)
+## 2026-09-07 - v3 board: the "opens as a scale model of itself" render bug (`cbedge-v3/src/design/primitives/Board.tsx`)
 
-`push.ps1` aborted at the pre-commit hook: `check-theme` counted 153 violations
-across the five files (f) added, and every one of them was the same mistake —
-the port brought v2's COLOUR VALUES across as well as its structure. None of
-these files were in `theme-baseline.json`, so the floor for all five is zero and
-the commit could not go through. The Docker deploy runs `npm run check:theme`
-too (Dockerfile, deliberately), so this would have cost /v3 the deploy as well.
+> "Not the first time I've seen this. Opening up the site and it renders like
+> this."
 
-Nothing about how the pages look changes. Every value below is the same colour
-it was; it is now read out of `design/tokens.css` instead of typed twice.
+### Reading the screenshot
 
-### `pages/seasonality/homeTheme.ts` — a copy of v2's palette → a name bridge
+Every tile is absolutely positioned from ONE number, `colW`, so the whole board's
+geometry rides on a single measurement. Measured against the screenshot:
 
-Was 53 literals: v2's whole shared theme, hexes and all, including the card
-system, dock theme, level colours and refresh button that this folder never
-imported. A dead copy of a palette is the thing that drifts first.
-
-Now every value is `V2.*` / `V2W.*` / `T.*` from `design/theme.ts` — which is v2
-value-for-value, so the render is unchanged — under the v2 names the ported
-components already spell (`HOME_THEME.cyan`, `.border`, `.green` …). Trimmed to
-what `src/pages/seasonality` actually uses: `HOME_THEME`,
-`classicCardStyle`/`classicCardAccentStyle`, and a re-export of
-`ES_CANDLE_UP`/`ES_CANDLE_DOWN`. Nothing outside the folder imported the rest.
-
-### `pages/seasonality/seaTheme.ts` — 8 literals → v3's own surface ladder
-
-The six surface steps were already v3's, value for value:
-
-    app #020304 → var(--color-app)        card   #0f1117 → var(--color-surface)
-    rail #040507 → var(--color-rail)      card2  #14171d → var(--color-surface2)
-    shell #07080b → var(--color-bg)       cardHi #191b22 → var(--color-raised)
-
-`line` / `lineSoft` become `alpha(T.text, .14/.07)`. The file survives as a NAME
-layer — `SEA.card2` says "a tile inside a card" where `var(--color-surface2)`
-says only which step it is.
-
-### `tokens.css` — six new tokens
-
-`--color-sea-overlay-1..4` (the compare-year lines), `--color-sea-heat-base`
-(the neutral a heat cell starts from) and `--color-sea-on-accent` (ink on a
-solid cyan fill). Deliberately not `--color-series-*`: that ramp is tuned for
-categorical bars on a surface plate, not 1.8px lines over near-black with two
-hues already spoken for. `overlay-1` is also the almanac's third bar hue (FOMC
-before/during/after) — same series, one token.
-
-### The hex-suffix alphas are gone
-
-`${HOME_THEME.cyan}33` only works while the value is a hex string. Ten of those
-across the two pages, all now `alpha()`, at the same alphas: 33 → .2, 0D → .05,
-1F → .12, 2E → .18, 66 → .4.
-
-### SVG paint moves from attribute to `style` (42 elements)
-
-THE ONE THING TO KNOW BEFORE EDITING THESE CHARTS. An SVG PRESENTATION ATTRIBUTE
-does not resolve `var()` or `color-mix()` — `stroke="var(--color-fg)"` is parsed
-as a `<paint>`, fails, and the shape renders with NOTHING painted and no warning
-anywhere. Both pages draw hand-rolled SVG, so every `fill=` / `stroke=` carrying
-a theme value is now `style={{ fill: … }}` / `style={{ stroke: … }}`. Only the
-keywords (`fill="none"`, `fill="transparent"`) stay as attributes.
-
-`mixHex()` went with them: it parsed two hex strings by hand, which stops being
-possible the moment both ends are tokens. It is `heatFill()` now, one
-`color-mix()`, same linear sRGB blend. Nothing here paints a canvas — if that
-ever changes, resolve through `tokenHex()` rather than typing a hex back in.
-
-### Type scale — 55 sizes onto the eight steps
-
-The port carried its own ladder: 8.5, 9.5, 10.5, 11.5, 12, 12.5, 13.5, 14, 22.
-Rounded to the nearest step, ties down (12 → `--text-xs` 11, 14 → `--text-sm`
-13), so relative sizes hold. React style objects take `var(--text-…)`; SVG
-`fontSize={}` attributes are numbers and were left alone — `check-theme` only
-flags the `fontSize:` form, and an attribute cannot take a custom property.
-
-### Result
-
-    check-theme  ✓  all five files at zero, baseline untouched
-    tsc          —  no new errors (one fewer, actually: mixHex's index access)
-
-
-## 2026-09-07 (g) - Landing: the almanac strip moves up under the hero (`components/landing/LandingClient.tsx`)
-
-The free S&P 500 Seasonality Almanac link sat at the BOTTOM of section 3
-(PRODUCT), under the feature grid — four screens down, past where most first
-visits stop. It is the one thing on the page a stranger can open and use in full
-with no account, so it now has its own section (1b) directly after the hero,
-ahead of the graded-record section.
-
-Same markup, same copy, same `freeTool` treatment; it is still deliberately NOT
-a cell in the feature grid, because that grid is paid product and this is a
-giveaway. `freeTool.marginTop` 10 → 0: it used to need clearance from the grid
-above it and is now the only thing in its section, where the section padding is
-the whole gap.
-
-
-## 2026-09-07 (f) - v3: the Almanac lands on the rail, subscriber-only (`cbedge-v3/`)
-
-Brandon: "add the almanac tab for subscribers to the left universal toolbar on
-v3." Ported v2's `/explore/seasonality` into v3 as a real route rather than a
-rail icon that leaves the SPA — `pages/Legacy.tsx` already says an icon that
-leaves the SPA is not a rail item, and that rule is the reason the rail can be
-trusted.
-
-### What moved
-
-`components/seasonality/*` → `cbedge-v3/src/pages/seasonality/` (10 files:
-SeasonalityView, SeasonalityAlmanac, seasonalityData, eventDates, calendar,
-sections, seaTheme, useLiveYear, Watermark, plus a local copy of v2's
-homeTheme). v3 shares no code with v2 in either direction (cbedge-v3/AGENTS.md),
-so the three v2 imports were replaced, not aliased:
-
-- `@/components/shared/homeTheme` → `./homeTheme`, a copy. The seasonality pages
-  carry their own palette (`seaTheme`) on purpose and it is deliberately NOT
-  promoted into `design/tokens.css` — it would restyle every route as a side
-  effect.
-- `@/components/shared/PageCard` → a private `Card` inside `Watermark.tsx`.
-  SeaCard overrides the fill, the edge and the shadow anyway; what survived the
-  override was a padded box with a title row, so that is what it is now.
-- `@/lib/brand` → the same `/cbedge3.0.png` string. Same origin, same asset.
-
-`"use client"` stripped from the three files that had it (rollup ignores module
-directives and warns on every build).
-
-### The four edits, plus two
-
-1. `src/App.tsx` — `/seasonality`, lazy() like every other route.
-2. `src/shell/Shell.tsx` — NAV entry (📜 Almanac) with a new `paidOnly` flag.
-3. `src/pages/Seasonality.tsx` — the page: the view in its own scroll container
-   on SEA.app, or a plan pitch for a free account.
-4. `app/v3/seasonality/route.ts` — `serveSpaShell("v3")`. The page addresses its
-   sections in the hash, and a hash link IS a hard refresh for whoever opens it
-   cold, so this one earns its keep the first time a section gets shared.
-
-Plus `ALL_PAGES` / `LIVE_ROUTES` in `pages/TradersDashboard.tsx` — the three
-lists that Shell.tsx's header says move together.
-
-`lib/v3Routes.ts` (V3_NAV, the mirror v2 pages wear) was deliberately NOT
-touched: that bar carries no auth read, so a paid-only entry there would
-advertise a page half its readers cannot open. It already omits Econ Cal.
-
-### The gate
-
-`paidOnly` hides the rail icon, `pages/Seasonality.tsx` repeats the check so a
-typed URL does not walk around it, and both are CHROME — the same rule
-`data/auth.tsx` states. Nothing here is a security boundary: the almanac's
-numbers ship in the chunk and the free page serves most of them to anyone. The
-filter runs AFTER the saved rail order is applied, so a lapsed subscription that
-comes back finds the icon where it was left.
-
-### Budgets — a new `data` kind rather than a raised `route`
-
-The almanac carries ~283KB of precomputed source. Folded into the route chunk it
-would have meant raising `route` from 59.1kb to ~130kb, which stops enforcing
-anything for the twelve pages that carry no data table at all.
-
-`vite.config.ts` splits `seasonalityData.ts` + `eventDates.ts` into a
-`data-seasonality` manualChunk; `scripts/check-budgets.mjs` classifies any
-`data-*` chunk as kind `data` (and excludes it from `totalInitial`, since it is
-lazy like a route); `budgets.json` gets `"data": 78000`. That 78000 is a FIRST
-number taken from the brotli weight of the sources before the chunk had ever
-been built — run `npm run budgets:ratchet` after the first real build and let it
-pull down to reality.
-
-
-## 2026-09-07 (e) - Seasonality almanac: HBars panel titles centered (`components/seasonality/SeasonalityAlmanac.tsx`)
-
-The two bar-panel headings ("Day of the keynote" / "Week after") sat flush left
-at the start of each panel, which read as if they labeled the row-label column.
-`panelHead` now centers the title over its own panel width; the lo/hi axis
-numbers under it still sit at the panel edges.
-
-
-## 2026-09-07 (d) - Seasonality almanac: "Up on the day" renamed to "Closed green" (`components/seasonality/SeasonalityAlmanac.tsx`)
-
-The Apple keynote "By event type" table's hit-rate column read "Up on the day",
-which was easy to confuse with the neighboring "Day of" average. Renamed the
-header to "Closed green". Display-only change — the value is still
-`hitRate(rows.map(r => r.day))`, the share of that event type's keynotes where
-AAPL's close beat the prior close.
-
-
-## 2026-09-07 (c) - Core Bullseye: reversal confirmation is the filter that moves the needle (`backtest-core-level/`)
-
-Brandon: "within 5 points is still a hold — look for a reversal signal in the
-candlesticks, then take it." Added `--confirm reversal` (+ `--confirm-window`):
-the touch only ARMS; entry waits for the first 1-min bar closing beyond the
-PREVIOUS bar's extreme in the trade's direction, or stands down after N bars.
-
-Note the semantics: it confirms whichever direction the rule wants, so on
-`reject` it is a reversal off the level, and on `fade` it is continuation
-through it.
-
-### The hold rate was never the problem
-
-`wall_events` CORE touches, held (reject/pin/consolidated) vs broke:
-
-```
-all 25 sessions   60.1% held / 13.8% broke
-first 12          58.5% / 22.0%
-last 8            57.3% / 12.0%
-last 5            57.4% / 16.7%
-```
-
-Stable, including the past week. The level does hold ~60% of the time; that was
-never the missing piece.
-
-### Confirmation helps, materially
-
-Best cells, 31 sessions, 1-min fills:
-
-| setup | cell | n | win | avg R | PF | t |
-|---|---|---|---|---|---|---|
-| **band + confirm, core BELOW price, SHORT the breakdown** | `fade/scale_be/$100` | 67 | 65.7% | **+0.238** | 1.78 | **1.99** |
-| new-core + confirm, core ABOVE, SHORT the rejection | `reject/ratchet/$150` | 37 | 56.8% | +0.183 | 1.62 | 1.23 |
-| new-core, core ABOVE, SHORT, no confirm (prior best) | `reject/fixed_3r/$50` | 55 | 40.0% | +0.257 | 1.38 | 1.07 |
-
-Confirmation lifts win rate 40% → 57% and PF 1.38 → 1.62 on the same setup.
-
-### Robustness
-
-```
-A  band+confirm / core below / short the breakdown   n=67, 31 sessions, $23.81/trade
-   profitable sessions 23/31 · drop best 3 → $13.28 · bootstrap CI [$3.19, $46.34] · P(>0)=0.99
-
-B  new-core+confirm / core above / short the rejection  n=37, 23 sessions, $27.38/trade
-   profitable sessions 16/23 · drop best 3 → $6.70  · bootstrap CI [-$18.70, $75.32] · P(>0)=0.88
-```
-
-A is the first cell in this study whose bootstrap CI clears zero. **But it is the
-winner of roughly 360 cells** (2 triggers x 3 sides x 60), so the multiple-
-comparison discount is severe, and it is the OPPOSITE trade to the hold thesis:
-price falls into a core below it, breaks the prior bar's low, and you sell the
-failure. There is still no confirmed long variant on either side.
-
-Read: the confirmation bar is doing the work, not the directional thesis.
-
-
-## 2026-09-07 (b) - Core Bullseye: the first-touch-of-a-NEW-core rule, and the direction convention was backwards (`backtest-core-level/`)
-
-Follow-up to (a). Brandon's rule is narrower than what (a) tested: signal only on
-the FIRST tag of a newly-migrated core — the red dots on the Wall Migration chart
-— not every re-entry into the 5-pt band.
-
-### Engine
-
-Three additions to `core_level_backtest.py`, self-test still passing:
-
-- `--trigger new_core` — first tag after the core moves to a different strike.
-- `--trigger new_core_approach` — same, but only when price was OUTSIDE the band
-  at the moment of migration, so price actually travelled to the level.
-- `--side from_above|from_below` — split by which side price approached from.
-- **`--direction reject`** — trade AWAY from the level. The original `fade`
-  traded TOWARD it (magnet); the data says price tagging the core from below is
-  rejected downward, so the convention was backwards.
-
-Verified against the chart: 2026-09-04 yields 5 first-touch events, matching the
-dots.
-
-### Most red dots are the level moving to price
-
-12.2 core migrations/session, 6.6 first touches, but only **2.6 where price
-actually travelled to the level**. On 2026-09-04, 1 of 5. A core migrating onto
-price is the gamma peak being redrawn where price already is, not a level being
-defended — worth surfacing on the chart itself.
-
-### The two sides are not symmetric
-
-`new_core_approach`, best cell per side:
-
-| side | build | cell | n | avg R | PF | t |
-|---|---|---|---|---|---|---|
-| core ABOVE, rally into it, SHORT | 1-min | `reject/fixed_3r/$50` | 55 | **+0.257** | 1.38 | 1.07 |
-| core ABOVE, rally into it, SHORT | capture | `reject/fixed_3r/$50` | 65 | +0.206 | 1.30 | 0.95 |
-| core BELOW, fall into it (as described) | 1-min | `fade/fixed_2r/$100` | 20 | +0.123 | 1.26 | 0.45 |
-| core BELOW, fall into it (as described) | capture | `fade/fixed_3r/$250` | 30 | +0.082 | 1.29 | 0.51 |
-
-The long-the-bounce trade as described does not reach the top four on either
-build. Such edge as exists is on the short side.
-
-### Why it is worth revisiting, and why it is not a green light
-
-Same direction on both builds, and **1-minute fills IMPROVE it** (+0.257 vs
-+0.206) — the only configuration in this whole exercise that moves that way;
-everywhere else finer fills cost ~0.10 R. Mechanism is coherent: the largest
-gamma strike above price is resistance.
-
-But 55 trades over 23 sessions, net $706:
-
-```
-profitable sessions        13 / 23
-drop best 3 sessions       $12.84 -> $2.04 /trade
-session bootstrap 95% CI   [-$8.86, +$37.62]   P(>0) = 0.87
-```
-
-t = 1.07. A lead, not a finding. `es_candles` 1m starts 2026-07-09 so the overlap
-widens a session a day — re-run in a couple of months and see whether it holds
-with n over 150.
-
-**No production code changed.** `backtest-core-level/` only.
-
-
-## 2026-09-07 (a) - Core Bullseye MES backtest, answered: the touch predicts volatility, not direction (`backtest-core-level/`)
-
-Ran the strategy — 2 MES lots when SPX comes within 5 pts of the CB, dollar stop,
-1R/2R/3R with a ratcheting stop — against the real history. **No tradeable edge.**
-
-### Data
-
-`mvc_snapshots` 62 usable sessions (2026-06-01 → 2026-09-04, ~4-5 min captures);
-`es_candles` 1m overlaps on 31 of them (from 2026-07-09); `wall_events` 25.
-
-`esPrice` in `mvc_snapshots` was DISCARDED and is worth fixing: on ~half the rows
-it is a verbatim copy of `spxPrice` (basis 0.00), and on 28 of 69 sessions it
-swings >15 pts intraday, once by 106. Deriving the basis properly (mvc `spx` vs
-the ES bar close at the same minute) gives sane session medians — −47.9 in July
-decaying to −6.2 by September — but still a 5.8 pt p5–p95 spread WITHIN a
-session, which is capture-synchronisation noise. On a 5-pt band that would swamp
-the signal, so everything runs in SPX points at $5/pt instead.
-
-### The finding
-
-`wall_events` alone is encouraging: 138 classified touches, **60.1% held**
-(reject/pin/consolidated) vs 13.8% broke. That is why `fade` beats `momentum` and
-`long` throughout the sweep.
-
-But measuring the 60 minutes after each of 3,244 touches in the fade direction:
-
-```
-              p25   median    p75    p90
-MFE (fav)     2.5      5.8    9.8   17.5
-MAE (adv)     2.8      5.8   11.2   18.5
-```
-
-Identical. Terminal 60-min move: median +0.50 pts, mean −0.10, 52.3% positive.
-At every stop size the adverse side is reached at least as often as the
-favourable one. Price moves plenty after a touch — the sign is a coin flip.
-
-60-cell sweep, both builds: best is +0.147 R at t=1.02 (62 sessions, capture
-resolution) and +0.058 R at t=0.58 (31 sessions, 1-min fills). Nothing near t=2.
-
-### Coarse fills flatter results — quantified
-
-Same 31 sessions, same signals, only fill resolution differs: 1-minute fills cost
-**−0.102 R per trade on average**, worse in 43 of 60 cells, best cell +0.122 →
-+0.058. Apply that haircut to any future backtest run on capture-resolution data.
-
-### New in `backtest-core-level/`
-
-`FINDINGS.md` (the write-up), `build_from_mvc.py` (MVC + ES 1m → snapshots, all
-in SPX space), `export-mvc-core.sql`, `analyze_touches.py`, both results sets,
-and `generated/2026-09-07-cb-touch-excursion-symmetry.png`.
-
-**No production code changed.** New folder only; the export is read-only.
-
-
-## 2026-09-06 (h) - Core Bullseye backtest, corrected: the history was in `walls_log` all along, not `option_strike_gex_history` (`backtest-core-level/`)
-
-Correction to (g), which concluded there were only 11 sessions of CB history.
-Wrong table. (g) read `option_strike_gex_history` — the raw per-strike tape, held
-to a 10-day rolling window by `scripts/db-prune.sql`. The CB itself has been
-recorded durably the whole time by `walls-recorder.js`, and **none of those tables
-are pruned**:
-
-| table | holds | pruned |
+| card | rendered | `w` × colW − gutter |
 |---|---|---|
-| `walls_log` | CB / call wall / put wall per 15m slot with `spot`; change-only, slot 0 pins the daily baseline; immutable once written | no |
-| `wall_events` | every CB touch and approach with a classified `reaction`, `excursion_pts`, `reclaim_min` | no |
-| `es_candles` | ES OHLC at `intervalMinutes = 1` | no (explicit do-not-prune) |
+| Key Levels | 640px | 48 → 640 |
+| GEX Candles 1 | 207px | 16 → 208 |
+| Multi Greek | 263px | 20 → 262 |
+| Net Premium | 150px | 12 → 154 |
 
-And the band under test is already a named constant in the recorder:
+Every card is **proportionally correct** for `colW ≈ 13.5`, i.e. a board 640px
+wide — inside a pane about 1290px wide. Nothing about the layout was wrong. The
+board came up as a **scale model of itself**, which is why it reads as "the cards
+are all squished and the text is wrapping into columns" rather than as an obvious
+geometry failure.
 
-```js
-const CORE_TOUCH_PTS = 5;  // spot within 5 points of the CORE is an event, full stop
+### Why the width got stuck
+
+The measurement was a single read in an effect, with a ResizeObserver expected to
+correct it. Both halves can fail:
+
+- the first read happens before the shell's flex layout has settled, so the
+  number is a transient width and not the real one;
+- the RO is then the only thing that can fix it — and this RO can **stop
+  delivering**. Its callback changes the board's HEIGHT, which adds or removes
+  the scroll port's scrollbar, which changes the width, which calls the callback.
+  That is the classic *"ResizeObserver loop completed with undelivered
+  notifications"*. Once the browser drops the loop the width is frozen at
+  whatever it happened to be — forever, until a manual window resize. Which
+  matches the symptom exactly: intermittent, on load, and it fixes itself if you
+  touch the window.
+
+### Never trust a single source
+
+1. **`measure` is idempotent** — it only sets state when the value actually
+   changed. That is what makes everything below safe to over-call.
+2. **It runs after every commit** (`useLayoutEffect` with no deps). This is the
+   safety net that makes the bug unable to persist: a wrong width cannot survive
+   a re-render, so the board self-heals on the next state change even if every
+   listener has failed. (No loop — an unchanged value returns `prev` and React
+   bails out of the render.)
+3. **Four signals, not one**: the observer watches the wrapper *and its parent*
+   (the scroll port), joined by `window resize`, `visibilitychange`, and
+   `document.fonts.ready` — the ways this container changes size without the
+   wrapper itself being re-laid-out first. Web fonts in particular land after
+   first paint and reflow the shell around the board.
+4. **Every callback goes through a `requestAnimationFrame`** — the documented fix
+   for the delivery loop above, landing the re-measure on the next frame instead
+   of inside the notification that triggered it.
+
+`getBoundingClientRect().width` replaces `clientWidth`: it is the box the tiles
+are actually positioned in, and it is subpixel, so a fractional layout no longer
+rounds the board a pixel narrower on each pass.
+
+## 2026-09-06 (i) - v3 board: settings picked in a sandbox instead of guessed. 48 columns, no position magnet (`cbedge-v3/src/design/primitives/Board.tsx`, `board/catalog.tsx`, `board/layoutStore.ts`, `generated/2026-09-06-board-lab.html`)
+
+Rounds (e) through (h) were four attempts to tune a drag-and-drop feel from
+static screenshots, without ever watching the thing run. That does not work, and
+the report after each one was the same: *"it's just not working like I want it
+to."*
+
+### `generated/2026-09-06-board-lab.html`
+
+A standalone page carrying the REAL engine — `compactBoard`, `resolveBoard`,
+`squeezeAside`, `stepAside`, `fillGaps`, the magnet, the same pointer maths —
+driven against fake cards. No rebuild, no live data, no backend. Every rule is a
+toggle, the magnet radius and the column count are controls, and **every gesture
+is logged as a before → after per card with the reason**:
+
+```
+Multi Greek   13x19@22,0 → 7x19@17,0 · shrank in place
+GEX Candles 2 11x18@9,18 → 11x18@6,0  · you dragged this
 ```
 
-So the setup has been instrumented and classified for months. `wall_events` alone
-answers "what happens after a touch" with no backtest assumptions in it.
+Two minutes of dragging in that page settled what four rounds of screenshots
+could not. **The settings that came back:**
 
-### New in `backtest-core-level/`
+| | |
+|---|---|
+| mode | free placement |
+| position magnet | **off** |
+| squeeze | on |
+| close gaps | on |
+| grid | **48 columns** |
 
-- `export-walls-core.sql` — pulls `walls_log`, `wall_events` and 1m `es_candles`.
-  Defaults to `0dte`/`oivol`, the only variant pair continuous across the full
-  history (the four-variant split landed 2026-08-27).
-- `analyze_touches.py` — reaction mix (reject / pin / consolidated vs break_5 /
-  break_lt5), excursion quantiles, reclaim time, touches per session. No entry,
-  stop or target in it, so there is nothing to curve-fit.
-- `build_from_walls.py` — merges the change-only level with the 1m ES path.
-  Carries the level forward within a date only, derives the ES-SPX basis per slot
-  from `spot - es_close` and interpolates it **within a date only** (the basis
-  jumps overnight on carry/dividends/roll), then translates the level into ES
-  space and emits one row per 1m bar with real high/low. P&L becomes actual ES
-  points at $5/pt and fills happen against 1m bars instead of 15m endpoints.
-  Verified round-trip: |ES − core_es| matches |SPX − core_spx| at every anchor.
+### What changed in the app
 
-The 15-minute grid still bounds when a signal can appear; it no longer bounds how
-the trade is filled.
+**`BOARD_COLS` 24 → 48, `BOARD_ROW_H` 16 → 8.** 24 fixed the specific board that
+prompted it and still felt like slots. At 48 an edge lands within ~2% of the
+board of wherever the pointer is, and the grid stops being something you can
+feel — which is the whole point.
 
-**No production code changed.** New folder only — nothing writes to the DB, the
-export is read-only.
+**The position magnet is deleted.** `MAGNET`, `magnetX`, `magnetY`, `magnetise`
+and both call sites are gone. It was introduced to close gaps too small to close
+by hand; at 48 columns there is no such gap, so all it did was override a
+placement that had just been made. The gesture now does no position snapping at
+all — a card goes exactly where the pointer puts it, and the leftover space is
+closed on RELEASE by `fillGaps`, where tidying cannot fight the hand.
 
+**The neighbour-SIZE match stays** (`MATCH_SNAP`). It is not the magnet: "make
+these two cards the same size" is a value you are aiming at, not one the board
+picked for you.
 
-## 2026-09-06 (g) - Core-level MES backtest: engine built, and the finding is that there is no data to run it on (`backtest-core-level/`)
+`catalog.tsx`'s nine `defaultSize` entries doubled again (12/32 → 24/16 → 48/8),
+and `layoutStore.ts`'s `cb-v3-board-grid` migration is unchanged in shape — the
+scale factor is just 2 from a 24-column board and 4 from a 12-column one.
 
-Tested: *when SPX comes within 5 points of the core level (largest |net GEX| strike),
-take 2 MES lots; dollar stop on the whole trade; 1R/2R/3R with a ratcheting stop.*
+### Verified
 
-### The headline is a data problem, not a strategy result
+The lab engine and the shipped engine were run head to head on the same 6000
+random boards:
 
-`gex_strike_history.csv` (1.25M rows) collapses to **6,604 core-level snapshots over
-11 sessions** (2026-07-10 -> 2026-07-20). That is the entire core-level history that
-exists, and the VPS will not have more:
+```
+app settleBoard === lab settle          6000 / 6000 identical, 0 mismatches
+overlap · out-of-bounds · below-min      0 · 0 · 0
+pinned card moved                        0
+settle(settle(x)) === settle(x)          6000 / 6000, pinned and unpinned
+```
 
-- `option_strike_gex_history` is pruned to a **10-day rolling window** by
-  `scripts/db-prune.sql` (RTH only, front expiry only).
-- `gex_levels_history` looks like the long-history alternative but its PK is
-  `(date, symbol)` and the recorder upserts - **one row per day**, no intraday.
-- `preview_snapshots` (30 days) carries `gex_flip / call_wall / put_wall`, not the
-  max-|GEX| strike.
+Zero mismatches is the point of the exercise: **what shipped is exactly what was
+approved in the sandbox**, not an interpretation of it. The lab page is kept in
+`generated/` (git-ignored) for the next time this needs tuning — change a rule
+there first, confirm parity, then port.
 
-So the core level has never been retained intraday beyond 10 days.
+## 2026-09-06 (h) - v3 board: a card in the way gets SMALLER, it does not get evicted (`cbedge-v3/src/design/primitives/Board.tsx`)
 
-### What the 11 sessions say (nothing, statistically)
+> "When moving the bottom GEX Candles into the empty space, I want the ones
+> around it to get smaller to fit it in. Instead the things on the right go down
+> a row. I don't want that."
 
-12.6% of snapshots sit within 5 pts of the core level; median distance 24.6 pts.
-The 60-cell sweep produces 7-17 trades per cell - best `momentum/2R/$100` at
-+0.539 R (t=1.42), worst `long/fixed_3r/$50` at -0.459 R, **on the same 11 days**.
-That spread is parameter luck. The only pattern that repeats across the whole sweep
-rather than in one cell: `long` occupies almost the entire bottom of the table while
-`fade` and `momentum` cluster positive - consistent with the level being a pivot
-rather than a buy signal, but a hypothesis, not a finding.
+Every version of this board so far had exactly one answer to a collision:
+**somebody moves.** Gravity moved them to the top-left, then `stepAside` moved
+them the shortest distance — better, still the wrong first idea. Dropping a card
+into a space that is nearly big enough is a request to **share the row**, not to
+evict whoever is in it. And eviction is destructive in a way shrinking is not:
+the evicted card leaves the area you were looking at and takes its row with it.
+Shrinking costs a neighbour some width. Moving costs you your layout.
 
-### Engine
+### `squeezeAside()` — asked to give something up, before being asked to leave
 
-`core_level_backtest.py --selftest` is a validity check, not a smoke test: it injects
-a real mean-reversion pull and requires the engine to find it (+0.138 R, t=2.85),
-feeds it a pure random walk and requires it to find nothing (|t| < 3), inverts the
-pull and requires underperformance, and checks the $-risk -> points conversion and the
-stop-before-target fill rule. Entries fire on *crossing into* the band (not every
-snapshot inside it), one position at a time, max 3/day, 15-min cooldown, RTH only,
-flat 15:55, $1.24 RT/contract + 1 tick slippage per side.
+Now the first thing tried. The neighbour is trimmed on the side the collision is
+actually on, with its **opposite edge nailed down** — pull the right edge back to
+the newcomer's left, or move the left edge in to the newcomer's right while the
+right edge stays put. Either reads as the card being squeezed from that side;
+neither reads as the card moving, because the edge you were not pushing on does
+not move. Four candidates (left/right/top/bottom), cheapest first — the smallest
+concession that resolves the overlap.
 
-### To get a real answer
+**Two floors**, and they are what keep this from being worse than moving:
 
-`export-core-level.sql` adds a `core_level_history` table - one row per snapshot
-instead of one per strike, ~390 rows/session, a few hundred KB a year - with a
-backfill from what is left in the heavy table. Write to it from the strike recorder
-and leave it out of `db-prune.sql`. Alternatively rebuild history from ThetaData PRO
-chains, which is the only route to an answer this quarter.
+- `BOARD_MIN_W` / `BOARD_MIN_H`, below which a card is not a card;
+- **half of what the card currently is.** Past that it is not making room, it is
+  being crushed, and going to the next row is the kinder outcome.
 
-**No production code changed.** New folder only.
+Below either floor `squeezeAside` returns null and the caller falls through to
+`stepAside`. Moving is still there — it is just no longer the first idea.
 
+### Interior gaps now close completely, and are split
+
+The squeeze has to be **reversible** or the board only ever ratchets tighter. A
+gap *between* two cards on the same rows is never deliberate — nothing can be in
+it, because putting something there means dragging it there, and if you do, both
+sides squeeze to let it in. So it closes however wide it is, and the two flanking
+cards **split it evenly**: the left one grows right, the right one grows left.
+
+Splitting is the whole point. Drag a card back out from between two neighbours it
+had squeezed and they take back what they gave up, evenly — instead of the left
+one swallowing the hole and the row ending up lopsided every time a card is moved
+through it. Growing left moves a card's origin, so the pinned card is exempt (its
+neighbour closes the gap alone), and the slide is clamped to the room that card
+actually has on **its** rows, which need not be the rows the gap is on.
+
+Gaps at the board's own **edges** stay bounded by `maxGap` — there is no card on
+the far side, so space at the end of a row can be deliberate, and a lone card
+should not be stretched across the board.
+
+### Verified
+
+His case — GEX Candles 1 + Multi Greek filling the top row, GEX Candles 2 dragged
+up into it at column 6:
+
+```
+before   candles1 x0 w13 | mg x13 w11        candles2 parked on the row below
+after    candles1 x0 w6  | candles2 x6 w11 | mg x17 w7
+
+  candles1 shrank, did not move      13 -> 6 wide, still at x0 y0
+  multi greek shrank, same row       11 -> 7 wide
+  candles2 sits exactly where dropped x6 y0
+  nothing pushed to a new row
+drag candles2 back out              candles1 and mg regrow to 12 / 12 — even split
+```
+
+```
+a card dropped onto a tall card's top edge   the tall card is trimmed from the top, stays put
+a card dropped into an exact-fit hole        nothing changes at all
+a neighbour that would have to more than halve   moves instead of being crushed
+
+fuzz 8000 settles   overlap 0 · out-of-bounds 0 · below-min-size 0 · pinned card moved 0
+fuzz 4000 settles   settle(settle(x)) === settle(x) in 4000 of 4000
+```
+
+## 2026-09-06 (g) - v3 board: the grid was too coarse to express the layout. 24 columns, and the leftover space closes itself (`cbedge-v3/src/design/primitives/Board.tsx`, `board/layoutStore.ts`, `board/catalog.tsx`, `board/BoardPage.tsx`)
+
+Third pass. (e) turned gravity off, (f) added the magnet, and neither fixed it:
+
+> "I want those gex candles boxes the same size, but I'm only able to move one
+> box to fill that space, since it's forcing me to. Let it be free will on where
+> the edges go, but try to limit the empty space."
+
+### The grid was the bug, not the snapping
+
+The board was **12 columns**. One column is 8% of the width, and an edge can only
+ever land on one of thirteen places. Two charts beside a 10-wide panel is
+`3 + 3 + 5 = 11` — there is a spare column and **no arrangement spends it**:
+
+- make the two charts equal → a hole is left;
+- close the hole → the charts are different widths;
+- move a chart to close it → the hole moves to the other side.
+
+That is exactly the report. It was never a snapping bug; the grid could not
+express the layout being asked for. Free placement and the magnet were both
+working perfectly on a ruler with no marks between the inches.
+
+**`BOARD_COLS` 12 → 24, `BOARD_ROW_H` 32 → 16.** The same board is now
+`7 + 7 + 10 = 24`: two equal charts, flush, nothing left over. An edge lands
+within ~4% of the board of wherever the pointer is, which is close enough to
+read as free. `minW`/`minH` and the two snap radii (`MATCH_SNAP` 1→2, `MAGNET`
+2→4) are in grid units and doubled with it, so the pointer travel that snaps is
+unchanged — only the number of columns that travel covers went up.
+
+**Migration is recorded, not guessed.** Every stored number is in grid units, so
+an old board is half-size under the new grid. `cb-v3-board-grid` holds the grid
+width a browser was last written under; read ONCE at module load, and while it
+disagrees every read — local *and* the account's server copy — has x/y/w/h
+doubled. The tempting heuristic ("nothing reaches past column 12, so it's old")
+is also true of a good new board whose cards sit on the left, and would double
+that board on every reload until it stopped fitting. `catalog.tsx`'s nine
+`defaultSize` entries were doubled to match, so a newly added card is the size it
+always was.
+
+### "Limit the empty space" — settling, on release
+
+Free placement gives the placement back and leaves the slivers: a two-column
+strip beside a chart, a margin down the right edge, a band under a card. None of
+it is where anything was *put* — it is what was left when the drag stopped.
+
+So tidying is decoupled from placing. `fillGaps` runs on release: each card
+reaches into the dead space immediately right of and below it and takes it.
+**Nothing moves — only widths and heights change, and only into space that is
+already empty** — so the arrangement made is the arrangement kept.
+
+- Bounded at **a quarter of the board width**. Unbounded, every card stretches to
+  the far side and the board becomes a stretch of cards. At `cols/4` it swallows
+  slivers and margins and leaves a *deliberate* hole alone. That is the best
+  guess being asked for: a small space beside a card was an accident, a large one
+  was a decision.
+- **Left and up are not filled.** A gap on a card's left is the same gap as the
+  one on its neighbour's right, and both growing into it is a fight; the
+  neighbour's right-fill already closes it. The exceptions are the board's own
+  left and right edges.
+- **The pinned card may grow but never move.** Filling the space it was dropped
+  into is the point; sliding it two columns sideways afterwards would undo, at
+  the last moment, the one thing the whole rewrite is built on.
+- **On release only**, never during the drag — cards resizing under a moving
+  pointer is the board arguing with the hand.
+- **On the user's own edits only.** Add and remove settle; merely *loading* a
+  saved board does not, because opening the page is not an edit and a layout that
+  rewrites itself on open would show "Unsaved layout" for a change nobody made.
+
+`fillGaps` runs **to a fixed point** (≤4 passes, converges in one or two).
+Widening a card changes its column band and heightening one changes its row band,
+so a single pass leaves gaps that only became fillable during that same pass —
+and the *next* gesture on an untouched board would then quietly move things, as
+if the board were still thinking about the last drag. Repeating until stable
+makes settling idempotent, which is the property that makes it safe to run on
+every release.
+
+### Verified
+
+Ran the placement functions against the board in the screenshot, migrated from
+its old 12-column form:
+
+```
+2-col hole between the GEX Candles        closed on release (candles1 6 -> 8 wide)
+7 + 7 + 10 = 24                           accepted as-is; impossible at 12 cols
+deliberate 9-col hole                     left alone
+old 12-col board, doubled                 fits 24 exactly, no overlap
+
+fuzz 6000 settles   overlap 0 · out-of-bounds 0 · pinned card moved 0
+fuzz 3000 settles   settle(settle(x)) === settle(x) in 3000 of 3000
+```
 
 ## 2026-09-06 (f) - v3 board: free placement is now the DEFAULT, and dropped cards snap flush to their neighbours (`cbedge-v3/src/design/primitives/Board.tsx`, `board/BoardPage.tsx`, `board/layoutStore.ts`)
 

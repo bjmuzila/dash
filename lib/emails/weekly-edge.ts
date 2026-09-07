@@ -178,6 +178,9 @@ export interface WeeklyEdgeOpts {
   autoBuyRows?: AutoBuyRow[];
   autoBuyNote?: string;
   ctaUrl?: string;
+  /** Headline pricing. No promo code — the price IS the price. */
+  priceMonthly?: string;
+  priceAnnual?: string;
   /** Set false to drop the affiliate-program band entirely. */
   showAffiliate?: boolean;
   affiliateHeadline?: string;
@@ -282,7 +285,7 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "confRows" | "resultsNote" | "estMoveNote" | "showScannerProof" |
   "gexScannerRows" | "gexScannerLabel" | "gexScannerNote" |
   "showWallChart" | "wallChartUrl" | "wallChartLabel" | "wallChartHeadline" | "wallChartNote" |
-  "showAutoBuy" | "autoBuyRows" | "autoBuyNote" | "ctaUrl" |
+  "showAutoBuy" | "autoBuyRows" | "autoBuyNote" | "ctaUrl" | "priceMonthly" | "priceAnnual" |
   "showAffiliate" | "affiliateHeadline" | "affiliateBody" | "affiliateUrl" | "affiliateBannerUrl" |
   "showTradeify" | "tradeifyHeadline" | "tradeifyBody" | "tradeifyUrl" | "tradeifyCode">>
   // scannerProof is Partial<> on the way in and complete on the way out, so it
@@ -351,6 +354,12 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     // string here to bring a caption back.
     autoBuyNote: opts.autoBuyNote ?? "",
     ctaUrl: opts.ctaUrl || PRICING_URL,
+    // NO PROMO CODE. Pricing is $50/mo or $500/yr flat — do not reintroduce
+    // EDGE3, a struck-through list price, or "instead of $1,000". That offer is
+    // retired; a letter still quoting it sends people to a checkout that
+    // disagrees with the email, which is the worst kind of copy bug.
+    priceMonthly: opts.priceMonthly || "$50",
+    priceAnnual: opts.priceAnnual || "$500",
     // `!== false` rather than `||` — the band is on by default, and passing
     // showAffiliate: false has to actually turn it off.
     showAffiliate: opts.showAffiliate !== false,
@@ -459,7 +468,7 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
         "",
       ];
     })() : []),
-    `Annual access is $400/yr instead of $1,000 with code EDGE3: ${o.ctaUrl}`,
+    `${o.priceMonthly}/month or ${o.priceAnnual}/year — no code needed: ${o.ctaUrl}`,
     "",
     ...(o.showAffiliate ? [
       "NEW — AFFILIATE PROGRAM",
@@ -799,12 +808,12 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(0,230,118,0.35);border-radius:16px;background:radial-gradient(circle at 50% 0%,rgba(0,230,118,0.14) 0%,transparent 70%),rgba(0,230,118,0.04);">
                 <tr>
                   <td align="center" style="padding:26px 20px;">
-                    <div style="font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.16em;text-transform:uppercase;color:#00E676;">Code EDGE3 · $400/yr instead of $1,000</div>
+                    <div style="font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.16em;text-transform:uppercase;color:#00E676;">${escapeHtml(o.priceMonthly)}/month &middot; ${escapeHtml(o.priceAnnual)}/year</div>
                     <div style="font:900 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:10px;">CPI Friday. FOMC the week after. <span style="color:#00E676;">Don't trade it blind.</span></div>
-                    <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">Live GEX levels, Core confidence scoring, the Core Wall auto buy and estimated-move tracking — full annual access for $400 with code <strong style="color:#ffffff;">EDGE3</strong>, instead of $1,000.</div>
+                    <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">Live GEX levels, Core confidence scoring, the Core Wall auto buy and estimated-move tracking. <strong style="color:#ffffff;">${escapeHtml(o.priceMonthly)} a month, or ${escapeHtml(o.priceAnnual)} a year.</strong> No code, no promo, nothing expiring at midnight.</div>
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;"><tr>
                       <td align="center" style="border-radius:12px;background:#00C853;">
-                        <a href="${cta}" style="display:inline-block;padding:14px 34px;font:800 15px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#04140A;text-decoration:none;border-radius:12px;">Get Annual Access →</a>
+                        <a href="${cta}" style="display:inline-block;padding:14px 34px;font:800 15px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#04140A;text-decoration:none;border-radius:12px;">Get Access →</a>
                       </td>
                     </tr></table>
                   </td>
