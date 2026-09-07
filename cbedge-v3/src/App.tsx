@@ -71,6 +71,20 @@ const LevelLog = lazy(() => import('@/pages/LevelLog'))
 // fetch, no socket. Delete an entry there the day its v3 route lands.
 const Legacy = lazy(() => import('@/pages/Legacy'))
 
+// /seasonality — THE ALMANAC. Ported from v2's /explore/seasonality 2026-09-07:
+// 98 years of SPX daily closes, plus the event studies built on the same record
+// (FOMC, Jackson Hole, opex, earnings, every Apple keynote since 2007). The
+// public page stays where it is; this is the in-app door, drawn for subscribers
+// only — shell/Shell.tsx hides the rail icon (NAV.paidOnly) and
+// pages/Seasonality.tsx repeats the check so a typed URL does not walk around it.
+//
+// It carries a ~283KB static data table, so vite.config.ts splits that table
+// into a chunk of its own named `data-seasonality-*`, which check-budgets.mjs
+// measures as kind `data` against its own line in budgets.json. The COMPONENT
+// half stays in the ordinary route chunk and is still measured against the
+// route budget — one table does not get to raise the ceiling for every page.
+const Seasonality = lazy(() => import('@/pages/Seasonality'))
+
 // ── THE PHONE BUILD — /v3/m/* ────────────────────────────────────────────────
 // Six screens, registered in src/mobile/mobileNav.ts, each one a HOME-BOARD CARD
 // or a v3 page rendered full-bleed inside MobileShell. There is no phone-only
@@ -127,6 +141,7 @@ export default function App() {
             <Route path="/scanner" element={<Scanner />} />
             <Route path="/economic-calendar" element={<EconomicCalendar />} />
             <Route path="/level-log" element={<LevelLog />} />
+            <Route path="/seasonality" element={<Seasonality />} />
             <Route path="/legacy" element={<Legacy />} />
 
             {/* ── The phone build ────────────────────────────────────────────

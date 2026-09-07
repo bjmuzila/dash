@@ -220,6 +220,34 @@
   --color-cal-forecast: #f59e0b;
   --color-cal-previous: #8a9ab8;
 
+  /* ── Seasonality (/v3/seasonality) ────────────────────────────────────
+     The overlay series on the year-vs-average chart, and the two greys the
+     almanac needs. FOUR overlay hues and not one more: with the seasonal
+     average and the live year already drawn, six lines is the ceiling at
+     which hues stay separable, and each overlay carries a dash pattern and
+     an end label as well as its colour.
+
+     NOT --color-series-1..6: that ramp is tuned for categorical bars on a
+     surface plate, and these are 1.8px lines over a near-black ground with
+     two fixed hues (v2-green, v2-orange) already spoken for. overlay-1 is
+     also the almanac's third bar hue, for the one chart that needs three
+     (FOMC: before / during / after) — same series, same value, one token.
+
+     heat-base is the neutral a heatmap cell starts from before it is mixed
+     toward the up/down hue, so a zero cell reads as "no signal" rather than
+     as a washed-out direction. It sits between --color-surface2 and
+     --color-raised on purpose: a hair lighter than the tile it is drawn on.
+
+     on-accent is ink ON a solid v2-cyan fill (the "Click to open" pill).
+     Solid, never a white at an opacity — a translucent label lets the fill
+     read through it and stops being legible.                                */
+  --color-sea-overlay-1: #8b6fe0;
+  --color-sea-overlay-2: #3fa06a;
+  --color-sea-overlay-3: #c95f8f;
+  --color-sea-overlay-4: #2b93c9;
+  --color-sea-heat-base: #1b2028;
+  --color-sea-on-accent: #04121a;
+
   /* ── v2 parity ────────────────────────────────────────────────────────
      The Analysis page (/v3/analytics) is a 1:1 port of v2's /app/analytics and
      carries a REQUIREMENT that it render v2's colours, not v3's dark-slate

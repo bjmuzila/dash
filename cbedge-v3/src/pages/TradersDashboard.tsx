@@ -161,6 +161,11 @@ const ALL_PAGES: { label: string; href: string }[] = [
   { label: 'ICT', href: '/ict' },
   { label: 'Test Lab', href: '/test' },
   { label: 'Journal', href: '/trading' },
+  // Subscriber-only in the rail (NAV.paidOnly in shell/Shell.tsx), but left in
+  // this picker for everyone on purpose: the page shows a plan pitch rather
+  // than a dead end, so a free account that saved the link before its trial
+  // ended lands on the offer instead of a broken tile.
+  { label: 'Almanac', href: '/seasonality' },
   // Not a dashboard page — the v2 door (src/pages/Legacy.tsx). Worth a Quick
   // Link slot for anyone whose day still runs through a page v3 has not ported.
   { label: 'v2 Legacy', href: '/legacy' },
@@ -184,6 +189,7 @@ const LIVE_ROUTES = new Set([
   '/replay',
   '/scanner',
   '/level-log',
+  '/seasonality',
   '/legacy',
   '/trading',
   '/test',

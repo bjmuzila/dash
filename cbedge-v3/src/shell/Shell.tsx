@@ -50,6 +50,14 @@ export interface NavItem {
    *  worse lie than an icon that plainly says "not yet"). Flip this to false
    *  the same day the route lands in App.tsx. */
   comingSoon?: boolean
+  /** Drawn only for a paying account. CHROME, not a gate — same rule as
+   *  data/auth.tsx: hiding an icon is one devtools poke from undone, so the
+   *  page behind it repeats the check (see pages/Seasonality.tsx) and anything
+   *  that must actually be paid-only is gated server-side. It also stays out of
+   *  the saved rail order for a free account, which is why the filter below
+   *  runs AFTER the order is applied rather than on NAV itself: a subscription
+   *  that lapses and comes back finds the icon where it was left. */
+  paidOnly?: boolean
 }
 
 // v3's rail. It started as a copy of v2's toolbar icon set so the rail was
@@ -101,6 +109,14 @@ export const NAV: NavItem[] = [
   // ticker AND a date, and warming SPX-on-today would be wrong for anyone whose
   // last link named something else.
   { to: '/level-log', label: 'Level Log', icon: '🧱' },
+  // The almanac — 98 years of SPX seasonality plus the event studies built on
+  // the same record (FOMC, Jackson Hole, opex, earnings, every Apple keynote
+  // since 2007). Ported from v2's /explore/seasonality 2026-09-07. That page
+  // stays public and stays where it is; this is the in-app door and it is drawn
+  // for subscribers only. No prefetch: the page's one runtime fetch
+  // (/api/public-seasonality) is fired by useLiveYear after mount and does not
+  // read the api.ts cache, so warming it on hover would be a wasted request.
+  { to: '/seasonality', label: 'Almanac', icon: '📜', paidOnly: true },
   // Last in the rail on purpose — it is the way OUT of v3, not a place to work.
   // Lists the v2 pages that have no v3 route and links to each one at /app/*.
   // It is the honest version of the dimmed "coming soon" icons that came out of
@@ -139,6 +155,7 @@ function loadOrder(): string[] {
 }
 
 function Rail() {
+  const { isPaid } = useAuth()
   const [order, setOrder] = useState<string[]>(() => loadOrder())
   const dragId = useRef<string | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
@@ -165,7 +182,13 @@ function Rail() {
     persist(next)
   }
 
-  const items = order.map((to) => NAV.find((n) => n.to === to)).filter((n): n is NavItem => !!n)
+  // Order first, then the paid filter — see `paidOnly` on NavItem for why the
+  // two are not folded together. isPaid is false while /api/auth/me is in
+  // flight, so a subscriber's icon appears a beat late rather than a free
+  // account's rail flickering an icon it does not have.
+  const items = order
+    .map((to) => NAV.find((n) => n.to === to))
+    .filter((n): n is NavItem => !!n && (!n.paidOnly || isPaid))
 
   return (
     <nav className="flex w-16 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-line bg-rail py-3">

@@ -43,7 +43,7 @@ const WRITE_RATCHET = process.argv.includes('--ratchet')
  * The order matters: --ratchet rewrites that file key by key from this list, and
  * a reordered file turns a two-number diff into a whole-file diff.
  */
-const KINDS = ['entry', 'react', 'route', 'css', 'html']
+const KINDS = ['entry', 'react', 'route', 'data', 'css', 'html']
 
 const failures = []
 const slackNotes = []
@@ -99,6 +99,13 @@ function walk(dir) {
 function classify(name) {
   if (name.startsWith('index-') || name === 'index.html') return 'entry'
   if (name.startsWith('react-')) return 'react'
+  // A `data-*` chunk is a STATIC TABLE, not a page: a manualChunk in
+  // vite.config.ts, holding precomputed numbers that change when the data does
+  // and not when the UI does. It gets its own budget so one big table cannot
+  // force the ROUTE budget up — a route budget raised to fit a data file stops
+  // enforcing anything for the twelve pages that carry no data file at all.
+  // Same lazy() load path, same download, just measured on its own line.
+  if (name.startsWith('data-')) return 'data'
   return 'route'
 }
 
@@ -129,7 +136,9 @@ function bundles() {
     } else if (ext === '.js') {
       kind = classify(name)
       budget = budgets[kind]
-      if (kind !== 'route') initial += size
+      // `route` and `data` are both lazy() — nothing on first paint downloads
+      // them, so neither counts toward totalInitial.
+      if (kind !== 'route' && kind !== 'data') initial += size
     } else {
       continue
     }

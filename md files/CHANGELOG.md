@@ -1,5 +1,169 @@
 # Changelog
 
+## 2026-09-07 (h) - v3: the seasonality port stops carrying v2's palette (`cbedge-v3/`)
+
+`push.ps1` aborted at the pre-commit hook: `check-theme` counted 153 violations
+across the five files (f) added, and every one of them was the same mistake —
+the port brought v2's COLOUR VALUES across as well as its structure. None of
+these files were in `theme-baseline.json`, so the floor for all five is zero and
+the commit could not go through. The Docker deploy runs `npm run check:theme`
+too (Dockerfile, deliberately), so this would have cost /v3 the deploy as well.
+
+Nothing about how the pages look changes. Every value below is the same colour
+it was; it is now read out of `design/tokens.css` instead of typed twice.
+
+### `pages/seasonality/homeTheme.ts` — a copy of v2's palette → a name bridge
+
+Was 53 literals: v2's whole shared theme, hexes and all, including the card
+system, dock theme, level colours and refresh button that this folder never
+imported. A dead copy of a palette is the thing that drifts first.
+
+Now every value is `V2.*` / `V2W.*` / `T.*` from `design/theme.ts` — which is v2
+value-for-value, so the render is unchanged — under the v2 names the ported
+components already spell (`HOME_THEME.cyan`, `.border`, `.green` …). Trimmed to
+what `src/pages/seasonality` actually uses: `HOME_THEME`,
+`classicCardStyle`/`classicCardAccentStyle`, and a re-export of
+`ES_CANDLE_UP`/`ES_CANDLE_DOWN`. Nothing outside the folder imported the rest.
+
+### `pages/seasonality/seaTheme.ts` — 8 literals → v3's own surface ladder
+
+The six surface steps were already v3's, value for value:
+
+    app #020304 → var(--color-app)        card   #0f1117 → var(--color-surface)
+    rail #040507 → var(--color-rail)      card2  #14171d → var(--color-surface2)
+    shell #07080b → var(--color-bg)       cardHi #191b22 → var(--color-raised)
+
+`line` / `lineSoft` become `alpha(T.text, .14/.07)`. The file survives as a NAME
+layer — `SEA.card2` says "a tile inside a card" where `var(--color-surface2)`
+says only which step it is.
+
+### `tokens.css` — six new tokens
+
+`--color-sea-overlay-1..4` (the compare-year lines), `--color-sea-heat-base`
+(the neutral a heat cell starts from) and `--color-sea-on-accent` (ink on a
+solid cyan fill). Deliberately not `--color-series-*`: that ramp is tuned for
+categorical bars on a surface plate, not 1.8px lines over near-black with two
+hues already spoken for. `overlay-1` is also the almanac's third bar hue (FOMC
+before/during/after) — same series, one token.
+
+### The hex-suffix alphas are gone
+
+`${HOME_THEME.cyan}33` only works while the value is a hex string. Ten of those
+across the two pages, all now `alpha()`, at the same alphas: 33 → .2, 0D → .05,
+1F → .12, 2E → .18, 66 → .4.
+
+### SVG paint moves from attribute to `style` (42 elements)
+
+THE ONE THING TO KNOW BEFORE EDITING THESE CHARTS. An SVG PRESENTATION ATTRIBUTE
+does not resolve `var()` or `color-mix()` — `stroke="var(--color-fg)"` is parsed
+as a `<paint>`, fails, and the shape renders with NOTHING painted and no warning
+anywhere. Both pages draw hand-rolled SVG, so every `fill=` / `stroke=` carrying
+a theme value is now `style={{ fill: … }}` / `style={{ stroke: … }}`. Only the
+keywords (`fill="none"`, `fill="transparent"`) stay as attributes.
+
+`mixHex()` went with them: it parsed two hex strings by hand, which stops being
+possible the moment both ends are tokens. It is `heatFill()` now, one
+`color-mix()`, same linear sRGB blend. Nothing here paints a canvas — if that
+ever changes, resolve through `tokenHex()` rather than typing a hex back in.
+
+### Type scale — 55 sizes onto the eight steps
+
+The port carried its own ladder: 8.5, 9.5, 10.5, 11.5, 12, 12.5, 13.5, 14, 22.
+Rounded to the nearest step, ties down (12 → `--text-xs` 11, 14 → `--text-sm`
+13), so relative sizes hold. React style objects take `var(--text-…)`; SVG
+`fontSize={}` attributes are numbers and were left alone — `check-theme` only
+flags the `fontSize:` form, and an attribute cannot take a custom property.
+
+### Result
+
+    check-theme  ✓  all five files at zero, baseline untouched
+    tsc          —  no new errors (one fewer, actually: mixHex's index access)
+
+
+## 2026-09-07 (g) - Landing: the almanac strip moves up under the hero (`components/landing/LandingClient.tsx`)
+
+The free S&P 500 Seasonality Almanac link sat at the BOTTOM of section 3
+(PRODUCT), under the feature grid — four screens down, past where most first
+visits stop. It is the one thing on the page a stranger can open and use in full
+with no account, so it now has its own section (1b) directly after the hero,
+ahead of the graded-record section.
+
+Same markup, same copy, same `freeTool` treatment; it is still deliberately NOT
+a cell in the feature grid, because that grid is paid product and this is a
+giveaway. `freeTool.marginTop` 10 → 0: it used to need clearance from the grid
+above it and is now the only thing in its section, where the section padding is
+the whole gap.
+
+
+## 2026-09-07 (f) - v3: the Almanac lands on the rail, subscriber-only (`cbedge-v3/`)
+
+Brandon: "add the almanac tab for subscribers to the left universal toolbar on
+v3." Ported v2's `/explore/seasonality` into v3 as a real route rather than a
+rail icon that leaves the SPA — `pages/Legacy.tsx` already says an icon that
+leaves the SPA is not a rail item, and that rule is the reason the rail can be
+trusted.
+
+### What moved
+
+`components/seasonality/*` → `cbedge-v3/src/pages/seasonality/` (10 files:
+SeasonalityView, SeasonalityAlmanac, seasonalityData, eventDates, calendar,
+sections, seaTheme, useLiveYear, Watermark, plus a local copy of v2's
+homeTheme). v3 shares no code with v2 in either direction (cbedge-v3/AGENTS.md),
+so the three v2 imports were replaced, not aliased:
+
+- `@/components/shared/homeTheme` → `./homeTheme`, a copy. The seasonality pages
+  carry their own palette (`seaTheme`) on purpose and it is deliberately NOT
+  promoted into `design/tokens.css` — it would restyle every route as a side
+  effect.
+- `@/components/shared/PageCard` → a private `Card` inside `Watermark.tsx`.
+  SeaCard overrides the fill, the edge and the shadow anyway; what survived the
+  override was a padded box with a title row, so that is what it is now.
+- `@/lib/brand` → the same `/cbedge3.0.png` string. Same origin, same asset.
+
+`"use client"` stripped from the three files that had it (rollup ignores module
+directives and warns on every build).
+
+### The four edits, plus two
+
+1. `src/App.tsx` — `/seasonality`, lazy() like every other route.
+2. `src/shell/Shell.tsx` — NAV entry (📜 Almanac) with a new `paidOnly` flag.
+3. `src/pages/Seasonality.tsx` — the page: the view in its own scroll container
+   on SEA.app, or a plan pitch for a free account.
+4. `app/v3/seasonality/route.ts` — `serveSpaShell("v3")`. The page addresses its
+   sections in the hash, and a hash link IS a hard refresh for whoever opens it
+   cold, so this one earns its keep the first time a section gets shared.
+
+Plus `ALL_PAGES` / `LIVE_ROUTES` in `pages/TradersDashboard.tsx` — the three
+lists that Shell.tsx's header says move together.
+
+`lib/v3Routes.ts` (V3_NAV, the mirror v2 pages wear) was deliberately NOT
+touched: that bar carries no auth read, so a paid-only entry there would
+advertise a page half its readers cannot open. It already omits Econ Cal.
+
+### The gate
+
+`paidOnly` hides the rail icon, `pages/Seasonality.tsx` repeats the check so a
+typed URL does not walk around it, and both are CHROME — the same rule
+`data/auth.tsx` states. Nothing here is a security boundary: the almanac's
+numbers ship in the chunk and the free page serves most of them to anyone. The
+filter runs AFTER the saved rail order is applied, so a lapsed subscription that
+comes back finds the icon where it was left.
+
+### Budgets — a new `data` kind rather than a raised `route`
+
+The almanac carries ~283KB of precomputed source. Folded into the route chunk it
+would have meant raising `route` from 59.1kb to ~130kb, which stops enforcing
+anything for the twelve pages that carry no data table at all.
+
+`vite.config.ts` splits `seasonalityData.ts` + `eventDates.ts` into a
+`data-seasonality` manualChunk; `scripts/check-budgets.mjs` classifies any
+`data-*` chunk as kind `data` (and excludes it from `totalInitial`, since it is
+lazy like a route); `budgets.json` gets `"data": 78000`. That 78000 is a FIRST
+number taken from the brotli weight of the sources before the chunk had ever
+been built — run `npm run budgets:ratchet` after the first real build and let it
+pull down to reality.
+
+
 ## 2026-09-07 (e) - Seasonality almanac: HBars panel titles centered (`components/seasonality/SeasonalityAlmanac.tsx`)
 
 The two bar-panel headings ("Day of the keynote" / "Week after") sat flush left

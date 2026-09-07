@@ -94,6 +94,23 @@ export default defineConfig(({ mode }) => {
             ) {
               return 'react'
             }
+            // ── STATIC DATA TABLES ────────────────────────────────────────
+            // The almanac ships ~283KB of precomputed source: 98 years of
+            // encoded year curves, the monthly matrix, the event date tables.
+            // It is DATA, not code — it changes when the year does, not when
+            // the page does — and lumping it into the route chunk would mean
+            // either a route budget raised to fit it (which stops enforcing
+            // anything for every other page) or no budget on it at all.
+            //
+            // So it gets a chunk of its own, and check-budgets.mjs classifies
+            // any `data-*` chunk as kind `data` with its own line in
+            // budgets.json. Splitting it also means the table is cached across
+            // deploys that only touch the components.
+            //
+            // The name is matched by prefix on both sides — keep them in step.
+            if (/[\\/]src[\\/]pages[\\/]seasonality[\\/](seasonalityData|eventDates)\.ts$/.test(id)) {
+              return 'data-seasonality'
+            }
             return undefined
           },
         },

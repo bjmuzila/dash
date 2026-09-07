@@ -202,6 +202,32 @@ export default function LandingClient() {
           </div>
         </section>
 
+        {/* ═══ 1b · THE FREE TOOL — the almanac ═════════════════════════
+            MOVED UP 2026-09-07, from the bottom of the PRODUCT section. It sat
+            under the feature grid, four screens down, which is past the point
+            most first visits stop. It is the one thing on this page a stranger
+            can open and use in full without an account, so it belongs where a
+            stranger still is: straight after the hero.
+
+            Its own section, not a cell in the feature grid below — that grid is
+            paid product, this is a giveaway, and putting it in the row would
+            make it read as one more locked tile. */}
+        <section style={card}>
+          <div style={pad}>
+            <Link href="/explore/seasonality" style={freeTool} className="landing-feature">
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+                <span style={v3Chip(V3.cyan)}>Free · no account</span>
+                <span style={{ fontWeight: 700, fontSize: V3_TEXT.body, color: V3.fg }}>S&P 500 Seasonality Almanac</span>
+              </div>
+              <div style={{ color: V3.fg, fontSize: V3_TEXT.base, lineHeight: 1.5, marginTop: 6 }}>
+                Ninety-eight years of SPX, recomputed from the daily closes: month by month, turn of the
+                month, day of week, the two half-years, volatility by month. Yours in full, nothing to sign up for.
+              </div>
+              <div style={featureGo}>Open the almanac →</div>
+            </Link>
+          </div>
+        </section>
+
         {/* ═══ 2 · RECEIPTS — "is he full of it?" ═══════════════════════ */}
         <section id="record" style={card} className="landing-receipts">
           <div style={pad}>
@@ -257,21 +283,6 @@ export default function LandingClient() {
               ))}
             </div>
 
-            {/* Free tool. Deliberately NOT another cell in the grid above:
-                that grid is paid features and this is a giveaway, so it gets
-                its own full-width strip rather than sitting in the row
-                pretending to be part of the product. */}
-            <Link href="/explore/seasonality" style={freeTool} className="landing-feature">
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
-                <span style={v3Chip(V3.cyan)}>Free · no account</span>
-                <span style={{ fontWeight: 700, fontSize: V3_TEXT.body, color: V3.fg }}>S&P 500 Seasonality Almanac</span>
-              </div>
-              <div style={{ color: V3.fg, fontSize: V3_TEXT.base, lineHeight: 1.5, marginTop: 6 }}>
-                Ninety-eight years of SPX, recomputed from the daily closes: month by month, turn of the
-                month, day of week, the two half-years, volatility by month. Yours in full, nothing to sign up for.
-              </div>
-              <div style={featureGo}>Open the almanac →</div>
-            </Link>
           </div>
         </section>
 
@@ -480,9 +491,13 @@ const featureGo: React.CSSProperties = {
   marginTop: 8, fontSize: V3_TEXT.base, fontWeight: 700, color: V3.cyan, letterSpacing: "0.04em",
 };
 
+// The almanac strip. marginTop went to 0 when it moved out from under the
+// feature grid (2026-09-07) — it is the only thing in its own section now, so
+// the section's own padding is the whole gap and the extra 10 read as a
+// misaligned card.
 const freeTool: React.CSSProperties = {
   ...featureCell,
-  marginTop: 10,
+  marginTop: 0,
 };
 
 const trialLine: React.CSSProperties = {
