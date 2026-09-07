@@ -23,9 +23,9 @@ import { useIsPhone } from '@/design/useIsPhone'
 //     stays a gap. A card in the way is first asked to GIVE UP SOME WIDTH OR
 //     HEIGHT and stay where it is (squeezeAside); only if it cannot does it move
 //     at all, and then by the shortest route (stepAside).
-//   - In free mode a dragged card's edges are MAGNETIC: within MAGNET cells of
-//     a neighbour's edge it snaps flush to it, per axis, so cards placed by
-//     hand end up touching instead of one column apart. See magnetise.
+//   - NOTHING SNAPS THE POSITION. A card goes where the pointer puts it. The
+//     leftover space is closed on RELEASE instead (fillGaps), where tidying
+//     cannot fight the hand.
 //   - GUIDED, NOT FORCED. The card follows the pointer; nothing is dragged out
 //     of the hand. What the board adds is a dashed LANDING SLOT drawn where the
 //     card will actually come to rest, plus column guides for the duration of
@@ -43,26 +43,30 @@ export interface BoardItem {
   h: number
 }
 
-// ── THE GRID, AND WHY IT IS 24 WIDE ──────────────────────────────────────────
+// ── THE GRID, AND WHY IT IS 48 WIDE ──────────────────────────────────────────
 //
-// It was 12 columns and 32px rows, and that is the real reason "put the cards
-// where I want" kept failing. Twelve columns means one column is 8% of the
-// board, and an edge can only ever land on one of thirteen places. Two charts
-// side by side next to a 5-wide panel is 3 + 3 + 5 = 11: there is a spare column
-// and NO arrangement spends it — make the charts equal and a hole is left, close
-// the hole and the charts are different widths. That is not a snapping bug, it
-// is the grid being too coarse to express the layout.
+// It started at 12 columns and 32px rows, and that was the real reason "put the
+// cards where I want" kept failing. Twelve columns means one column is 8% of the
+// board and an edge can only land on one of thirteen places. Two charts beside a
+// 5-wide panel is 3 + 3 + 5 = 11: there is a spare column and NO arrangement
+// spends it — make the charts equal and a hole is left, close the hole and the
+// charts are different widths. Never a snapping bug; the grid was too coarse to
+// express the layout being asked for.
 //
-// At 24 columns the same board is 7 + 7 + 10 and it just works. Twice the
-// resolution on both axes, so an edge lands where the pointer is to within ~4%
-// of the board, which is close enough to read as free. The snap radii below are
-// in grid units and were doubled with it, so everything that used to snap within
-// "one column" still snaps within one column's WORTH of travel.
+// 24 fixed that particular board and still felt like slots. At 48 an edge lands
+// within ~2% of the board of wherever the pointer is, and at that resolution the
+// grid stops being something you can feel — which is the whole point, and also
+// why the position magnet that used to live in this file is gone: there is no
+// longer a gap so small you cannot close it by hand.
 //
-// Everything stored is in these units. layoutStore.ts migrates boards saved
-// under the old 12-column grid by doubling x/y/w/h once, per browser.
-export const BOARD_COLS = 24
-export const BOARD_ROW_H = 16
+// Chosen by driving the real engine in generated/2026-09-06-board-lab.html
+// against these presets, rather than guessed. 48 columns, 8px rows, no position
+// snapping, squeeze on, gap-closing on.
+//
+// Everything stored is in these units. layoutStore.ts rescales boards saved
+// under an older grid once, per browser — see cb-v3-board-grid.
+export const BOARD_COLS = 48
+export const BOARD_ROW_H = 8
 /** Smallest a card may be, in grid units. The squeeze below stops here. */
 export const BOARD_MIN_W = 4
 export const BOARD_MIN_H = 6
@@ -402,52 +406,6 @@ export function settleBoard(items: BoardItem[], pinnedId?: string | null, cols =
   return fillGaps(resolveBoard(items, pinnedId, cols), cols, Math.max(2, Math.round(cols / 4)), pinnedId)
 }
 
-// ── THE MAGNET ───────────────────────────────────────────────────────────────
-//
-// "Put it anywhere, but kind of auto merge them to be touching when placed."
-//
-// Free placement on its own gives the first half and makes the second half
-// harder: with gravity gone, nothing closes a one-cell gap any more, and a board
-// assembled by eye ends up with hairline seams between cards that all look like
-// mistakes. The grid is 12 columns wide, so a column is ~9% of the board — being
-// one out is very visible and impossible to correct by dragging, because one
-// column is also roughly the width of the pointer's own slop.
-//
-// The magnet is the answer to both. While a card is being dragged its edges are
-// attracted to the edges of every other card: come within MAGNET cells of a
-// neighbour's left edge, right edge, top or bottom and the card takes that exact
-// value. Each axis snaps independently, so a card can be flush against the card
-// to its left while still free-floating vertically.
-//
-// FOUR candidates per neighbour per axis, not two: a card can line up with a
-// neighbour by BUTTING INTO it (its right edge to the neighbour's left edge) or
-// by ALIGNING WITH it (both left edges on the same column). Both are things
-// people line up by hand, and offering only the first leaves columns that never
-// quite agree down the board.
-//
-// In grid units, so it doubled with BOARD_COLS: the pointer travel that snaps is
-// unchanged, it is the number of columns that travel covers that went up.
-const MAGNET = 4
-
-/** Board edges count as neighbours — the outer frame is a line to align to. */
-function magnetX(it: BoardItem, others: BoardItem[], cols: number): number {
-  const hi = Math.max(0, cols - it.w)
-  const targets = [0, hi]
-  for (const o of others) targets.push(o.x, o.x + o.w, o.x - it.w, o.x + o.w - it.w)
-  return snapToMatch(it.x, targets, 0, hi, MAGNET)
-}
-
-function magnetY(it: BoardItem, others: BoardItem[]): number {
-  const targets = [0]
-  for (const o of others) targets.push(o.y, o.y + o.h, o.y - it.h, o.y + o.h - it.h)
-  return snapToMatch(it.y, targets, 0, Number.POSITIVE_INFINITY, MAGNET)
-}
-
-/** Snap a dragged card's position onto the nearest neighbouring edges. */
-export function magnetise(it: BoardItem, others: BoardItem[], cols: number): BoardItem {
-  return { ...it, x: magnetX(it, others, cols), y: magnetY(it, others) }
-}
-
 type Gesture =
   | { kind: 'move'; id: string; startX: number; startY: number; origX: number; origY: number }
   | { kind: 'resize'; id: string; startX: number; startY: number; origW: number; origH: number }
@@ -499,8 +457,9 @@ const MATCH_SNAP = 2
 /**
  * Take the nearest of `targets` within `tol`, or leave `v` alone. Out-of-range
  * targets are skipped rather than clamped, so a snap can never carry a card past
- * a bound. Shared by the size match (tol = MATCH_SNAP) and the position magnet
- * (tol = MAGNET) — one rounding rule, two radii.
+ * a bound. Used for the neighbour-SIZE match on a resize — the one snap the
+ * board still does, because "make these two the same size" is a value you are
+ * aiming at, not one the board picked for you.
  */
 function snapToMatch(v: number, targets: number[], lo: number, hi: number, tol = MATCH_SNAP): number {
   let best = v
@@ -646,13 +605,15 @@ export function Board({
       const dyRows = Math.round((e.clientY - g.startY) / cell)
       const next = base.map((it) => {
         if (it.id !== g.id) return { ...it }
-        const others = base.filter((o) => o.id !== it.id)
         if (g.kind === 'move') {
-          const raw = { ...it, x: clamp(g.origX + dxCols, 0, cols - it.w), y: Math.max(0, g.origY + dyRows) }
-          // The magnet is FREE MODE ONLY. Under gravity a card is going to be
-          // re-floated on release anyway, so attracting it to a neighbour's top
-          // edge on the way would be a snap the user can watch being undone.
-          return free ? magnetise(raw, others, cols) : raw
+          // NO POSITION SNAPPING. A magnet that pulled a dragged card onto its
+          // neighbours' edges was tried and removed: at this grid resolution the
+          // card can already be put within ~2% of the board of wherever the
+          // pointer is, so the magnet was not closing a gap you could not close
+          // yourself — it was overriding a placement you had just made. Closing
+          // the leftover happens on RELEASE, where it cannot fight the hand
+          // (see fillGaps).
+          return { ...it, x: clamp(g.origX + dxCols, 0, cols - it.w), y: Math.max(0, g.origY + dyRows) }
         }
         // Snap onto a neighbour's exact size in the last grid unit of travel —
         // see MATCH_SNAP. The raw drag value is computed first and clamped
@@ -670,30 +631,11 @@ export function Board({
           minH,
           Number.POSITIVE_INFINITY,
         )
-        // ── RESIZING INTO A GAP ─────────────────────────────────────────────
-        // Matching a neighbour's SIZE (above) is not the same as filling the
-        // space beside it, and filling the space is what a resize in free mode
-        // is usually for: "make this chart reach the heatmap". So the magnet
-        // applies to the growing EDGE too — the card's right edge is attracted
-        // to every neighbour's left and right edge, its bottom edge to every
-        // top and bottom. Expressed as widths/heights because that is what the
-        // item stores: a target edge minus this card's own origin.
-        if (free) {
-          w = snapToMatch(
-            w,
-            [cols - it.x, ...others.flatMap((o) => [o.x - it.x, o.x + o.w - it.x])],
-            minW,
-            cols - it.x,
-            MAGNET,
-          )
-          h = snapToMatch(
-            h,
-            others.flatMap((o) => [o.y - it.y, o.y + o.h - it.y]),
-            minH,
-            Number.POSITIVE_INFINITY,
-            MAGNET,
-          )
-        }
+        // The neighbour-SIZE match above is kept — it is what makes two cards
+        // the same size on purpose, and it is a snap onto a value you are
+        // aiming at rather than one the board picked for you. There is no
+        // edge magnet: a resize lands where you drag it, and any sliver left
+        // over is closed on release.
         return { ...it, w, h }
       })
       setDraft(free ? resolveBoard(next, g.id, cols) : compactBoard(next, g.id))

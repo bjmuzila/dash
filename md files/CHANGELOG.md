@@ -1,172 +1,155 @@
 # Changelog
 
-## 2026-09-06 (h) - v3 board: a card in the way gets SMALLER, it does not get evicted (`cbedge-v3/src/design/primitives/Board.tsx`)
+## 2026-09-07 (a) - Core Bullseye MES backtest, answered: the touch predicts volatility, not direction (`backtest-core-level/`)
 
-> "When moving the bottom GEX Candles into the empty space, I want the ones
-> around it to get smaller to fit it in. Instead the things on the right go down
-> a row. I don't want that."
+Ran the strategy — 2 MES lots when SPX comes within 5 pts of the CB, dollar stop,
+1R/2R/3R with a ratcheting stop — against the real history. **No tradeable edge.**
 
-Every version of this board so far had exactly one answer to a collision:
-**somebody moves.** Gravity moved them to the top-left, then `stepAside` moved
-them the shortest distance — better, still the wrong first idea. Dropping a card
-into a space that is nearly big enough is a request to **share the row**, not to
-evict whoever is in it. And eviction is destructive in a way shrinking is not:
-the evicted card leaves the area you were looking at and takes its row with it.
-Shrinking costs a neighbour some width. Moving costs you your layout.
+### Data
 
-### `squeezeAside()` — asked to give something up, before being asked to leave
+`mvc_snapshots` 62 usable sessions (2026-06-01 → 2026-09-04, ~4-5 min captures);
+`es_candles` 1m overlaps on 31 of them (from 2026-07-09); `wall_events` 25.
 
-Now the first thing tried. The neighbour is trimmed on the side the collision is
-actually on, with its **opposite edge nailed down** — pull the right edge back to
-the newcomer's left, or move the left edge in to the newcomer's right while the
-right edge stays put. Either reads as the card being squeezed from that side;
-neither reads as the card moving, because the edge you were not pushing on does
-not move. Four candidates (left/right/top/bottom), cheapest first — the smallest
-concession that resolves the overlap.
+`esPrice` in `mvc_snapshots` was DISCARDED and is worth fixing: on ~half the rows
+it is a verbatim copy of `spxPrice` (basis 0.00), and on 28 of 69 sessions it
+swings >15 pts intraday, once by 106. Deriving the basis properly (mvc `spx` vs
+the ES bar close at the same minute) gives sane session medians — −47.9 in July
+decaying to −6.2 by September — but still a 5.8 pt p5–p95 spread WITHIN a
+session, which is capture-synchronisation noise. On a 5-pt band that would swamp
+the signal, so everything runs in SPX points at $5/pt instead.
 
-**Two floors**, and they are what keep this from being worse than moving:
+### The finding
 
-- `BOARD_MIN_W` / `BOARD_MIN_H`, below which a card is not a card;
-- **half of what the card currently is.** Past that it is not making room, it is
-  being crushed, and going to the next row is the kinder outcome.
+`wall_events` alone is encouraging: 138 classified touches, **60.1% held**
+(reject/pin/consolidated) vs 13.8% broke. That is why `fade` beats `momentum` and
+`long` throughout the sweep.
 
-Below either floor `squeezeAside` returns null and the caller falls through to
-`stepAside`. Moving is still there — it is just no longer the first idea.
-
-### Interior gaps now close completely, and are split
-
-The squeeze has to be **reversible** or the board only ever ratchets tighter. A
-gap *between* two cards on the same rows is never deliberate — nothing can be in
-it, because putting something there means dragging it there, and if you do, both
-sides squeeze to let it in. So it closes however wide it is, and the two flanking
-cards **split it evenly**: the left one grows right, the right one grows left.
-
-Splitting is the whole point. Drag a card back out from between two neighbours it
-had squeezed and they take back what they gave up, evenly — instead of the left
-one swallowing the hole and the row ending up lopsided every time a card is moved
-through it. Growing left moves a card's origin, so the pinned card is exempt (its
-neighbour closes the gap alone), and the slide is clamped to the room that card
-actually has on **its** rows, which need not be the rows the gap is on.
-
-Gaps at the board's own **edges** stay bounded by `maxGap` — there is no card on
-the far side, so space at the end of a row can be deliberate, and a lone card
-should not be stretched across the board.
-
-### Verified
-
-His case — GEX Candles 1 + Multi Greek filling the top row, GEX Candles 2 dragged
-up into it at column 6:
+But measuring the 60 minutes after each of 3,244 touches in the fade direction:
 
 ```
-before   candles1 x0 w13 | mg x13 w11        candles2 parked on the row below
-after    candles1 x0 w6  | candles2 x6 w11 | mg x17 w7
-
-  candles1 shrank, did not move      13 -> 6 wide, still at x0 y0
-  multi greek shrank, same row       11 -> 7 wide
-  candles2 sits exactly where dropped x6 y0
-  nothing pushed to a new row
-drag candles2 back out              candles1 and mg regrow to 12 / 12 — even split
+              p25   median    p75    p90
+MFE (fav)     2.5      5.8    9.8   17.5
+MAE (adv)     2.8      5.8   11.2   18.5
 ```
 
+Identical. Terminal 60-min move: median +0.50 pts, mean −0.10, 52.3% positive.
+At every stop size the adverse side is reached at least as often as the
+favourable one. Price moves plenty after a touch — the sign is a coin flip.
+
+60-cell sweep, both builds: best is +0.147 R at t=1.02 (62 sessions, capture
+resolution) and +0.058 R at t=0.58 (31 sessions, 1-min fills). Nothing near t=2.
+
+### Coarse fills flatter results — quantified
+
+Same 31 sessions, same signals, only fill resolution differs: 1-minute fills cost
+**−0.102 R per trade on average**, worse in 43 of 60 cells, best cell +0.122 →
++0.058. Apply that haircut to any future backtest run on capture-resolution data.
+
+### New in `backtest-core-level/`
+
+`FINDINGS.md` (the write-up), `build_from_mvc.py` (MVC + ES 1m → snapshots, all
+in SPX space), `export-mvc-core.sql`, `analyze_touches.py`, both results sets,
+and `generated/2026-09-07-cb-touch-excursion-symmetry.png`.
+
+**No production code changed.** New folder only; the export is read-only.
+
+
+## 2026-09-06 (h) - Core Bullseye backtest, corrected: the history was in `walls_log` all along, not `option_strike_gex_history` (`backtest-core-level/`)
+
+Correction to (g), which concluded there were only 11 sessions of CB history.
+Wrong table. (g) read `option_strike_gex_history` — the raw per-strike tape, held
+to a 10-day rolling window by `scripts/db-prune.sql`. The CB itself has been
+recorded durably the whole time by `walls-recorder.js`, and **none of those tables
+are pruned**:
+
+| table | holds | pruned |
+|---|---|---|
+| `walls_log` | CB / call wall / put wall per 15m slot with `spot`; change-only, slot 0 pins the daily baseline; immutable once written | no |
+| `wall_events` | every CB touch and approach with a classified `reaction`, `excursion_pts`, `reclaim_min` | no |
+| `es_candles` | ES OHLC at `intervalMinutes = 1` | no (explicit do-not-prune) |
+
+And the band under test is already a named constant in the recorder:
+
+```js
+const CORE_TOUCH_PTS = 5;  // spot within 5 points of the CORE is an event, full stop
 ```
-a card dropped onto a tall card's top edge   the tall card is trimmed from the top, stays put
-a card dropped into an exact-fit hole        nothing changes at all
-a neighbour that would have to more than halve   moves instead of being crushed
 
-fuzz 8000 settles   overlap 0 · out-of-bounds 0 · below-min-size 0 · pinned card moved 0
-fuzz 4000 settles   settle(settle(x)) === settle(x) in 4000 of 4000
-```
+So the setup has been instrumented and classified for months. `wall_events` alone
+answers "what happens after a touch" with no backtest assumptions in it.
 
-## 2026-09-06 (g) - v3 board: the grid was too coarse to express the layout. 24 columns, and the leftover space closes itself (`cbedge-v3/src/design/primitives/Board.tsx`, `board/layoutStore.ts`, `board/catalog.tsx`, `board/BoardPage.tsx`)
+### New in `backtest-core-level/`
 
-Third pass. (e) turned gravity off, (f) added the magnet, and neither fixed it:
+- `export-walls-core.sql` — pulls `walls_log`, `wall_events` and 1m `es_candles`.
+  Defaults to `0dte`/`oivol`, the only variant pair continuous across the full
+  history (the four-variant split landed 2026-08-27).
+- `analyze_touches.py` — reaction mix (reject / pin / consolidated vs break_5 /
+  break_lt5), excursion quantiles, reclaim time, touches per session. No entry,
+  stop or target in it, so there is nothing to curve-fit.
+- `build_from_walls.py` — merges the change-only level with the 1m ES path.
+  Carries the level forward within a date only, derives the ES-SPX basis per slot
+  from `spot - es_close` and interpolates it **within a date only** (the basis
+  jumps overnight on carry/dividends/roll), then translates the level into ES
+  space and emits one row per 1m bar with real high/low. P&L becomes actual ES
+  points at $5/pt and fills happen against 1m bars instead of 15m endpoints.
+  Verified round-trip: |ES − core_es| matches |SPX − core_spx| at every anchor.
 
-> "I want those gex candles boxes the same size, but I'm only able to move one
-> box to fill that space, since it's forcing me to. Let it be free will on where
-> the edges go, but try to limit the empty space."
+The 15-minute grid still bounds when a signal can appear; it no longer bounds how
+the trade is filled.
 
-### The grid was the bug, not the snapping
+**No production code changed.** New folder only — nothing writes to the DB, the
+export is read-only.
 
-The board was **12 columns**. One column is 8% of the width, and an edge can only
-ever land on one of thirteen places. Two charts beside a 10-wide panel is
-`3 + 3 + 5 = 11` — there is a spare column and **no arrangement spends it**:
 
-- make the two charts equal → a hole is left;
-- close the hole → the charts are different widths;
-- move a chart to close it → the hole moves to the other side.
+## 2026-09-06 (g) - Core-level MES backtest: engine built, and the finding is that there is no data to run it on (`backtest-core-level/`)
 
-That is exactly the report. It was never a snapping bug; the grid could not
-express the layout being asked for. Free placement and the magnet were both
-working perfectly on a ruler with no marks between the inches.
+Tested: *when SPX comes within 5 points of the core level (largest |net GEX| strike),
+take 2 MES lots; dollar stop on the whole trade; 1R/2R/3R with a ratcheting stop.*
 
-**`BOARD_COLS` 12 → 24, `BOARD_ROW_H` 32 → 16.** The same board is now
-`7 + 7 + 10 = 24`: two equal charts, flush, nothing left over. An edge lands
-within ~4% of the board of wherever the pointer is, which is close enough to
-read as free. `minW`/`minH` and the two snap radii (`MATCH_SNAP` 1→2, `MAGNET`
-2→4) are in grid units and doubled with it, so the pointer travel that snaps is
-unchanged — only the number of columns that travel covers went up.
+### The headline is a data problem, not a strategy result
 
-**Migration is recorded, not guessed.** Every stored number is in grid units, so
-an old board is half-size under the new grid. `cb-v3-board-grid` holds the grid
-width a browser was last written under; read ONCE at module load, and while it
-disagrees every read — local *and* the account's server copy — has x/y/w/h
-doubled. The tempting heuristic ("nothing reaches past column 12, so it's old")
-is also true of a good new board whose cards sit on the left, and would double
-that board on every reload until it stopped fitting. `catalog.tsx`'s nine
-`defaultSize` entries were doubled to match, so a newly added card is the size it
-always was.
+`gex_strike_history.csv` (1.25M rows) collapses to **6,604 core-level snapshots over
+11 sessions** (2026-07-10 -> 2026-07-20). That is the entire core-level history that
+exists, and the VPS will not have more:
 
-### "Limit the empty space" — settling, on release
+- `option_strike_gex_history` is pruned to a **10-day rolling window** by
+  `scripts/db-prune.sql` (RTH only, front expiry only).
+- `gex_levels_history` looks like the long-history alternative but its PK is
+  `(date, symbol)` and the recorder upserts - **one row per day**, no intraday.
+- `preview_snapshots` (30 days) carries `gex_flip / call_wall / put_wall`, not the
+  max-|GEX| strike.
 
-Free placement gives the placement back and leaves the slivers: a two-column
-strip beside a chart, a margin down the right edge, a band under a card. None of
-it is where anything was *put* — it is what was left when the drag stopped.
+So the core level has never been retained intraday beyond 10 days.
 
-So tidying is decoupled from placing. `fillGaps` runs on release: each card
-reaches into the dead space immediately right of and below it and takes it.
-**Nothing moves — only widths and heights change, and only into space that is
-already empty** — so the arrangement made is the arrangement kept.
+### What the 11 sessions say (nothing, statistically)
 
-- Bounded at **a quarter of the board width**. Unbounded, every card stretches to
-  the far side and the board becomes a stretch of cards. At `cols/4` it swallows
-  slivers and margins and leaves a *deliberate* hole alone. That is the best
-  guess being asked for: a small space beside a card was an accident, a large one
-  was a decision.
-- **Left and up are not filled.** A gap on a card's left is the same gap as the
-  one on its neighbour's right, and both growing into it is a fight; the
-  neighbour's right-fill already closes it. The exceptions are the board's own
-  left and right edges.
-- **The pinned card may grow but never move.** Filling the space it was dropped
-  into is the point; sliding it two columns sideways afterwards would undo, at
-  the last moment, the one thing the whole rewrite is built on.
-- **On release only**, never during the drag — cards resizing under a moving
-  pointer is the board arguing with the hand.
-- **On the user's own edits only.** Add and remove settle; merely *loading* a
-  saved board does not, because opening the page is not an edit and a layout that
-  rewrites itself on open would show "Unsaved layout" for a change nobody made.
+12.6% of snapshots sit within 5 pts of the core level; median distance 24.6 pts.
+The 60-cell sweep produces 7-17 trades per cell - best `momentum/2R/$100` at
++0.539 R (t=1.42), worst `long/fixed_3r/$50` at -0.459 R, **on the same 11 days**.
+That spread is parameter luck. The only pattern that repeats across the whole sweep
+rather than in one cell: `long` occupies almost the entire bottom of the table while
+`fade` and `momentum` cluster positive - consistent with the level being a pivot
+rather than a buy signal, but a hypothesis, not a finding.
 
-`fillGaps` runs **to a fixed point** (≤4 passes, converges in one or two).
-Widening a card changes its column band and heightening one changes its row band,
-so a single pass leaves gaps that only became fillable during that same pass —
-and the *next* gesture on an untouched board would then quietly move things, as
-if the board were still thinking about the last drag. Repeating until stable
-makes settling idempotent, which is the property that makes it safe to run on
-every release.
+### Engine
 
-### Verified
+`core_level_backtest.py --selftest` is a validity check, not a smoke test: it injects
+a real mean-reversion pull and requires the engine to find it (+0.138 R, t=2.85),
+feeds it a pure random walk and requires it to find nothing (|t| < 3), inverts the
+pull and requires underperformance, and checks the $-risk -> points conversion and the
+stop-before-target fill rule. Entries fire on *crossing into* the band (not every
+snapshot inside it), one position at a time, max 3/day, 15-min cooldown, RTH only,
+flat 15:55, $1.24 RT/contract + 1 tick slippage per side.
 
-Ran the placement functions against the board in the screenshot, migrated from
-its old 12-column form:
+### To get a real answer
 
-```
-2-col hole between the GEX Candles        closed on release (candles1 6 -> 8 wide)
-7 + 7 + 10 = 24                           accepted as-is; impossible at 12 cols
-deliberate 9-col hole                     left alone
-old 12-col board, doubled                 fits 24 exactly, no overlap
+`export-core-level.sql` adds a `core_level_history` table - one row per snapshot
+instead of one per strike, ~390 rows/session, a few hundred KB a year - with a
+backfill from what is left in the heavy table. Write to it from the strike recorder
+and leave it out of `db-prune.sql`. Alternatively rebuild history from ThetaData PRO
+chains, which is the only route to an answer this quarter.
 
-fuzz 6000 settles   overlap 0 · out-of-bounds 0 · pinned card moved 0
-fuzz 3000 settles   settle(settle(x)) === settle(x) in 3000 of 3000
-```
+**No production code changed.** New folder only.
+
 
 ## 2026-09-06 (f) - v3 board: free placement is now the DEFAULT, and dropped cards snap flush to their neighbours (`cbedge-v3/src/design/primitives/Board.tsx`, `board/BoardPage.tsx`, `board/layoutStore.ts`)
 

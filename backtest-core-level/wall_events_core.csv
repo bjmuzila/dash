@@ -1,0 +1,272 @@
+date,hit_ts,hit_slot,core,spot_at_hit,kind,reaction,excursion_pts,reclaim_min,note
+2026-08-03,2026-08-03 16:30:09.586+00,12,7590,7587.54,touch,break_lt5,5.45,,"pierced by 5.45, never reclaimed"
+2026-08-03,2026-08-03 17:45:19.976+00,17,7590,7597.03,approach,stalled,9.03,,"hovered near 7590, closest 9.03, no resolution"
+2026-08-03,2026-08-03 19:00:18.929+00,22,7590,7605.065,approach,stalled,10.365,,"hovered near 7590, closest 10.36, no resolution"
+2026-08-03,2026-08-03 20:03:25.829+00,26,7590,7600.365,approach,,,,
+2026-08-04,2026-08-04 14:00:29.853+00,2,7650,7653.46,touch,new_wall,35.31,,broke by 35.31 and the cb rolled with it
+2026-08-04,2026-08-04 15:18:24.636+00,7,7700,7696.89,touch,consolidated,13.415,,"broke by 13.41, then held a 4.43 range outside for 3 samples"
+2026-08-04,2026-08-04 16:30:16.943+00,12,7700,7715.82,approach,rolled_over,15.82,,"came within 15.82 without tagging, then rolled 21.88 away"
+2026-08-04,2026-08-04 19:00:09.49+00,22,7730,7745.04,approach,stalled,7.995,,"hovered near 7730, closest 7.99, no resolution"
+2026-08-04,2026-08-04 19:15:09.773+00,23,7770,7752.415,approach,rolled_over,15.245,,"came within 15.24 without tagging, then rolled 16.76 away"
+2026-08-05,2026-08-05 13:45:24.933+00,1,7800,7787.95,approach,rolled_over,13.65,,"came within 13.65 without tagging, then rolled 18.47 away"
+2026-08-05,2026-08-05 16:30:12.643+00,12,7740,7742.35,touch,break_lt5,4.68,5,"pierced by 4.68, reclaimed after 5m"
+2026-08-05,2026-08-05 17:45:23.778+00,17,7740,7742.19,touch,break_lt5,5.5,26,"pierced by 5.50, reclaimed after 26m"
+2026-08-05,2026-08-05 19:00:27.171+00,22,7740,7738.345,touch,pin,3.665,,sat inside the band for 12 samples
+2026-08-06,2026-08-06 13:29:25.535+00,0,7700,7720.995,approach,stalled,17.31,,"hovered near 7700, closest 17.31, no resolution"
+2026-08-06,2026-08-06 15:30:03.93+00,8,7700,7715.975,approach,reached,0.000217,,approached and eventually tagged 7700
+2026-08-06,2026-08-06 16:32:51.138+00,12,7700,7709.92,approach,reached,0.000473,,approached and eventually tagged 7700
+2026-08-06,2026-08-06 17:34:02.441+00,16,7700,7703.64,touch,consolidated,18.705,,"broke by 18.70, then held a 1.59 range outside for 3 samples"
+2026-08-06,2026-08-06 18:45:11.198+00,21,7700,7711.27,approach,stalled,8.18,,"hovered near 7700, closest 8.18, no resolution"
+2026-08-06,2026-08-06 20:00:11.484+00,26,7700,7708.34,approach,,,,
+2026-08-07,2026-08-07 14:30:10.704+00,4,7750,7751.57,touch,new_wall,10.48,,broke by 10.48 and the cb rolled with it
+2026-08-07,2026-08-07 15:30:20.102+00,8,7775,7760.48,approach,rolled_over,15.53,,"came within 15.53 without tagging, then rolled 19.59 away"
+2026-08-07,2026-08-07 16:45:23.696+00,13,7750,7749.72,touch,consolidated,6.79,,"broke by 6.79, then held a 1.44 range outside for 3 samples"
+2026-08-07,2026-08-07 18:00:17.578+00,18,7750,7746.91,touch,consolidated,15.48,,"broke by 15.48, then held a 3.02 range outside for 3 samples"
+2026-08-07,2026-08-07 18:45:01.298+00,21,7740,7736.66,touch,new_wall,14.87,,broke by 14.87 and the cb rolled with it
+2026-08-07,2026-08-07 19:15:28.131+00,23,7750,7752.83,touch,break_lt5,5.23,,"pierced by 5.23, never reclaimed"
+2026-08-10,2026-08-10 13:45:04.988+00,1,7775,7753.705,approach,stalled,5.355,,"hovered near 7775, closest 5.35, no resolution"
+2026-08-10,2026-08-10 14:47:55.336+00,5,7775,7772.97,touch,consolidated,18.77,,"broke by 18.77, then held a 4.34 range outside for 3 samples"
+2026-08-10,2026-08-10 16:00:02.251+00,10,7775,7765.045,approach,rolled_over,7.14,,"came within 7.14 without tagging, then rolled 16.81 away"
+2026-08-10,2026-08-10 17:15:15.801+00,15,7775,7753.33,approach,stalled,20.285,,"hovered near 7775, closest 20.28, no resolution"
+2026-08-10,2026-08-10 18:30:00.498+00,20,7750,7749.82,touch,new_wall,6.295,,broke by 6.29 and the cb rolled with it
+2026-08-10,2026-08-10 19:00:01.999+00,22,7775,7753.33,approach,stalled,18.705,,"hovered near 7775, closest 18.70, no resolution"
+2026-08-10,2026-08-10 19:15:11.524+00,23,7760,7756,approach,reached,0.000477,,approached and eventually tagged 7760
+2026-08-10,2026-08-10 20:00:24.536+00,26,7750,7749.67,touch,,,,
+2026-08-11,2026-08-11 13:45:25.011+00,1,7780,7757.72,approach,stalled,18.07,,"hovered below 7780, closest 18.07, no resolution"
+2026-08-11,2026-08-11 15:00:03.288+00,6,7780,7760.71,approach,rolled_over,19.34,,"came within 19.34 from below without tagging, then rolled 18.99 away"
+2026-08-11,2026-08-11 16:15:29.751+00,11,7725,7745.2,approach,reached,0.000379,,approached from above and eventually tagged 7725
+2026-08-11,2026-08-11 17:15:10.019+00,15,7715,7727.925,approach,stalled,13.255,,"hovered above 7715, closest 13.26, no resolution"
+2026-08-11,2026-08-11 17:45:05.886+00,17,7725,7734.72,approach,reached,0.000144,,approached from above and eventually tagged 7725
+2026-08-11,2026-08-11 18:30:55.334+00,20,7715,7719.78,touch,reject,-6.85,5,"tagged from above, never got below it"
+2026-08-11,2026-08-11 19:00:03.828+00,22,7725,7725.76,touch,pin,2.14,,sat inside the band for 7 samples
+2026-08-12,2026-08-12 14:50:51.286+00,5,7760,7746.18,approach,stalled,15.47,,"hovered below 7760, closest 15.47, no resolution"
+2026-08-12,2026-08-12 15:30:26.905+00,8,7740,7743.64,touch,pin,-0.74,,sat inside the band for 6 samples
+2026-08-12,2026-08-12 16:15:02.549+00,11,7760,7746.435,approach,stalled,5.37,,"hovered below 7760, closest 5.37, no resolution"
+2026-08-12,2026-08-12 17:30:16.908+00,16,7760,7752.195,approach,stalled,5.65,,"hovered below 7760, closest 5.65, no resolution"
+2026-08-12,2026-08-12 18:45:28.417+00,21,7760,7757.84,touch,pin,-1.81,,sat inside the band for 3 samples
+2026-08-12,2026-08-12 19:50:05.325+00,25,7755,7751.47,touch,reject,-6.23,,"tagged from below, never got above it"
+2026-08-12,2026-08-12 20:00:15.205+00,26,7745,7748.77,touch,,,,
+2026-08-13,2026-08-13 13:45:21.695+00,1,7800,7785.85,approach,reached,0.000346,,approached from below and eventually tagged 7800
+2026-08-13,2026-08-13 14:30:22.17+00,4,7820,7814.9,approach,rolled_over,5.52,,"came within 5.52 from below without tagging, then rolled 25.08 away"
+2026-08-13,2026-08-13 15:30:05.592+00,8,7810,7789.4,approach,stalled,23.79,,"hovered below 7810, closest 23.79, no resolution"
+2026-08-13,2026-08-13 15:46:31.258+00,9,7800,7782.71,approach,stalled,11.09,,"hovered below 7800, closest 11.09, no resolution"
+2026-08-13,2026-08-13 15:45:06.18+00,9,7780,7783.31,touch,pin,0.4,,sat inside the band for 8 samples
+2026-08-13,2026-08-13 17:30:03.37+00,16,7800,7795.47,touch,reject,-5.19,5,"tagged from below, never got above it"
+2026-08-13,2026-08-13 18:45:29.07+00,21,7800,7799.69,touch,break_lt5,5.86,,"pierced 5.86 above the level, never reclaimed"
+2026-08-13,2026-08-13 20:00:14.511+00,26,7800,7796.54,touch,,,,
+2026-08-14,2026-08-14 13:45:19.203+00,1,7810,7805.68,touch,reject,-1.125,3,tagged from below and faded 17.20 back
+2026-08-14,2026-08-14 15:00:00.115+00,6,7810,7791.85,approach,stalled,19.045,,"hovered below 7810, closest 19.05, no resolution"
+2026-08-14,2026-08-14 15:30:29.519+00,8,7780,7781.6,touch,pin,-0.8,,sat inside the band for 7 samples
+2026-08-14,2026-08-14 16:45:24.749+00,13,7780,7783.29,touch,pin,2.76,,sat inside the band for 12 samples
+2026-08-14,2026-08-14 18:00:28.342+00,18,7780,7779.485,touch,break_lt5,5.22,,"pierced 5.22 above the level, never reclaimed"
+2026-08-14,2026-08-14 19:15:08.124+00,23,7780,7782.26,touch,pin,-1.97,,sat inside the band for 9 samples
+2026-08-17,2026-08-17 13:45:18.589+00,1,7755,7776.03,approach,stalled,15.64,,"hovered above 7755, closest 15.64, no resolution"
+2026-08-17,2026-08-17 14:30:05.611+00,4,7770,7772.38,touch,pin,-0.27,,sat inside the band for 8 samples
+2026-08-17,2026-08-17 15:45:12.246+00,9,7770,7769.48,touch,break_lt5,6.08,,"pierced 6.08 above the level, never reclaimed"
+2026-08-17,2026-08-17 17:00:13.144+00,14,7770,7767.33,touch,reject,-2.34,5,tagged from below and faded 13.50 back
+2026-08-17,2026-08-17 17:30:13.321+00,16,7760,7755.76,touch,pin,-1.78,,sat inside the band for 6 samples
+2026-08-17,2026-08-17 18:00:13.546+00,18,7750,7755.49,approach,reached,0.000523,,approached from above and eventually tagged 7750
+2026-08-17,2026-08-17 18:30:10.705+00,20,7755,7757.87,touch,pin,2.05,,sat inside the band for 13 samples
+2026-08-17,2026-08-17 19:04:22.483+00,22,7750,7753.97,touch,pin,3.86,,sat inside the band for 9 samples
+2026-08-18,2026-08-18 14:15:11.121+00,3,7700,7698.725,touch,break_5,10.435,25,"pushed 10.44 above the level, reclaimed after 25m"
+2026-08-18,2026-08-18 15:30:08.439+00,8,7700,7697.03,touch,break_5,6.55,,"pushed 6.55 above the level, never reclaimed"
+2026-08-18,2026-08-18 17:30:26.141+00,16,7700,7702.425,touch,pin,4.25,,sat inside the band for 12 samples
+2026-08-18,2026-08-18 18:45:26.763+00,21,7700,7702.465,touch,pin,3.515,,sat inside the band for 12 samples
+2026-08-18,2026-08-18 20:00:27.591+00,26,7695,7693.81,touch,,,,
+2026-08-19,2026-08-19 13:45:16.134+00,1,7730,7721.18,approach,reached,0.000255,,approached from below and eventually tagged 7730
+2026-08-19,2026-08-19 14:45:27.095+00,5,7740,7731.975,approach,reached,0.000123,,approached from below and eventually tagged 7740
+2026-08-19,2026-08-19 15:00:10.771+00,6,7750,7735.3,approach,rolled_over,8.22,,"came within 8.22 from below without tagging, then rolled 18.99 away"
+2026-08-19,2026-08-19 16:00:28.183+00,10,7740,7722.79,approach,reached,0.000247,,approached from below and eventually tagged 7740
+2026-08-19,2026-08-19 16:15:04.497+00,11,7750,7736.01,approach,rolled_over,11.915,,"came within 11.91 from below without tagging, then rolled 21.56 away"
+2026-08-19,2026-08-19 17:00:01.367+00,14,7700,7717.76,approach,stalled,12.08,,"hovered above 7700, closest 12.08, no resolution"
+2026-08-19,2026-08-19 17:45:01.901+00,17,7710,7712.96,touch,pin,-0.55,,sat inside the band for 4 samples
+2026-08-19,2026-08-19 19:30:02.903+00,24,7715,7716.11,touch,consolidated,9.01,,"broke below by 9.01, then held a 2.28 range outside for 3 samples"
+2026-08-19,2026-08-19 19:45:03.006+00,25,7710,7710.59,touch,pin,4.01,,sat inside the band for 3 samples
+2026-08-19,2026-08-19 20:00:03.242+00,26,7705,7708.27,touch,,,,
+2026-08-20,2026-08-20 14:00:07.065+00,2,7710,7688.44,approach,stalled,17.21,,"hovered below 7710, closest 17.21, no resolution"
+2026-08-20,2026-08-20 14:15:06.598+00,3,7700,7682.53,approach,reached,0.000558,,approached from below and eventually tagged 7700
+2026-08-20,2026-08-20 15:30:07.364+00,8,7700,7681.98,approach,stalled,15.12,,"hovered below 7700, closest 15.12, no resolution"
+2026-08-20,2026-08-20 15:45:07.586+00,9,7670,7674.87,touch,reject,-1.88,3,tagged from above and faded 11.70 back
+2026-08-20,2026-08-20 16:45:08.233+00,13,7700,7683.58,approach,rolled_over,16.305,,"came within 16.31 from below without tagging, then rolled 21.11 away"
+2026-08-20,2026-08-20 17:30:08.324+00,16,7670,7667.73,touch,reject,-1.88,5,tagged from below and faded 15.01 back
+2026-08-20,2026-08-20 17:45:08.43+00,17,7660,7662.58,touch,consolidated,8.07,,"broke below by 8.07, then held a 1.90 range outside for 3 samples"
+2026-08-20,2026-08-20 18:15:10.191+00,19,7650,7653.115,touch,pin,-0.91,,sat inside the band for 5 samples
+2026-08-20,2026-08-20 19:20:01.192+00,23,7650,7651.52,touch,break_5,9.11,,"pushed 9.11 below the level, never reclaimed"
+2026-08-20,2026-08-20 20:00:11.23+00,26,7640,7640.89,touch,,,,
+2026-08-21,2026-08-21 13:29:22.417+00,0,7640,7641.16,touch,reject,-23.745,5,"tagged from above, never got below it"
+2026-08-21,2026-08-21 15:01:50.023+00,6,7680,7677.19,touch,new_wall,15.6,,broke above by 15.60 and the cb rolled with it
+2026-08-21,2026-08-21 15:45:23.3+00,9,7700,7690.635,approach,reached,0.000571,,approached from below and eventually tagged 7700
+2026-08-21,2026-08-21 17:00:24.175+00,14,7690,7681.875,approach,stalled,8.04,,"hovered below 7690, closest 8.04, no resolution"
+2026-08-21,2026-08-21 18:00:13.629+00,18,7665,7673.65,approach,stalled,5.03,,"hovered above 7665, closest 5.03, no resolution"
+2026-08-21,2026-08-21 18:30:25.886+00,20,7670,7672.11,touch,pin,-0.03,,sat inside the band for 5 samples
+2026-08-21,2026-08-21 19:00:22.577+00,22,7680,7680.67,touch,new_wall,6.74,,broke below by 6.74 and the cb rolled with it
+2026-08-21,2026-08-21 19:45:02.76+00,25,7685,7681.505,touch,reject,-1.24,5,"tagged from below, never got above it"
+2026-08-24,2026-08-24 13:45:03.644+00,1,7630,7642.12,approach,rolled_over,14.07,,"came within 14.07 from above without tagging, then rolled 14.78 away"
+2026-08-24,2026-08-24 14:45:03.304+00,5,7670,7658.855,approach,stalled,9.88,,"hovered below 7670, closest 9.88, no resolution"
+2026-08-24,2026-08-24 15:00:03.331+00,6,7660,7655.35,touch,pin,2.235,,sat inside the band for 6 samples
+2026-08-24,2026-08-24 15:15:03.467+00,7,7640,7647.73,approach,reached,0.000584,,approached from above and eventually tagged 7640
+2026-08-24,2026-08-24 16:30:13.114+00,12,7670,7666.64,touch,reject,-3.6,5,tagged from below and faded 14.08 back
+2026-08-24,2026-08-24 17:45:14.303+00,17,7650,7652.225,touch,reject,1.015,5,tagged from above and faded 19.06 back
+2026-08-24,2026-08-24 18:30:14.708+00,20,7670,7664.125,approach,reached,0.000255,,approached from below and eventually tagged 7670
+2026-08-24,2026-08-24 19:00:14.874+00,22,7665,7658.97,approach,reached,0.000641,,approached from below and eventually tagged 7665
+2026-08-24,2026-08-24 19:45:10.561+00,25,7650,7654.43,touch,pin,-3.655,,sat inside the band for 3 samples
+2026-08-25,2026-08-25 13:31:48.243+00,0,7700,7679.475,approach,rolled_over,15.735,,"came within 15.73 from below without tagging, then rolled 18.72 away"
+2026-08-25,2026-08-25 14:30:18.595+00,4,7650,7665.545,approach,stalled,10.715,,"hovered above 7650, closest 10.72, no resolution"
+2026-08-25,2026-08-25 15:45:06.648+00,9,7650,7667.79,approach,stalled,16.76,,"hovered above 7650, closest 16.76, no resolution"
+2026-08-25,2026-08-25 16:45:07.023+00,13,7680,7676.34,touch,reject,-4.45,5,"tagged from below, never got above it"
+2026-08-25,2026-08-25 17:45:22.029+00,17,7660,7666.85,approach,stalled,5.575,,"hovered above 7660, closest 5.57, no resolution"
+2026-08-25,2026-08-25 18:45:02.624+00,21,7675,7673.71,touch,pin,1.22,,sat inside the band for 6 samples
+2026-08-25,2026-08-25 20:00:03.12+00,26,7680,7678.25,touch,,,,
+2026-08-26,2026-08-26 13:29:01.554+00,0,7655,7675.985,approach,stalled,14.725,,"hovered above 7655, closest 14.73, no resolution"
+2026-08-26,2026-08-26 13:45:01.477+00,1,7690,7682.53,approach,reached,0.000379,,approached from below and eventually tagged 7690
+2026-08-26,2026-08-26 14:00:01.681+00,2,7700,7685.44,approach,stalled,12.915,,"hovered below 7700, closest 12.91, no resolution"
+2026-08-26,2026-08-26 14:30:01.862+00,4,7660,7669.725,approach,stalled,9.51,,"hovered above 7660, closest 9.51, no resolution"
+2026-08-26,2026-08-26 15:00:01.985+00,6,7685,7676.23,approach,reached,0.000362,,approached from below and eventually tagged 7685
+2026-08-26,2026-08-26 15:15:02.131+00,7,7690,7679.68,approach,stalled,10.16,,"hovered below 7690, closest 10.16, no resolution"
+2026-08-26,2026-08-26 16:45:02.781+00,13,7660,7657.79,touch,new_wall,15.07,,broke above by 15.07 and the cb rolled with it
+2026-08-26,2026-08-26 17:45:03.072+00,17,7680,7675.07,touch,pin,-3.175,,sat inside the band for 4 samples
+2026-08-26,2026-08-26 19:00:03.665+00,22,7680,7683.5,touch,reject,3.7,,"tagged from above, never got below it"
+2026-08-26,2026-08-26 19:15:03.773+00,23,7685,7686.79,touch,new_wall,8.7,,broke below by 8.70 and the cb rolled with it
+2026-08-26,2026-08-26 19:30:03.92+00,24,7690,7686.81,touch,reject,-2.09,5,tagged from below and faded 11.61 back
+2026-08-27,2026-08-27 14:00:26.769+00,2,7720,7699.725,approach,reached,1.8e-05,,approached from below and eventually tagged 7720
+2026-08-27,2026-08-27 14:16:20.996+00,3,7730,7709.23,approach,stalled,5.865,,"hovered below 7730, closest 5.86, no resolution"
+2026-08-27,2026-08-27 14:45:17.142+00,5,7730,7714.06,approach,reached,0.00025,,approached from below and eventually tagged 7730
+2026-08-27,2026-08-27 16:00:17.533+00,10,7730,7725.37,touch,new_wall,6.6,,broke above by 6.60 and the cb rolled with it
+2026-08-27,2026-08-27 16:00:17.533+00,10,7730,7725.37,touch,new_wall,6.6,,broke above by 6.60 and the cb rolled with it
+2026-08-27,2026-08-27 16:45:08.3+00,13,7750,7734.41,approach,stalled,8.76,,"hovered below 7750, closest 8.76, no resolution"
+2026-08-27,2026-08-27 17:00:08.448+00,14,7740,7736.345,touch,pin,1.24,,sat inside the band for 19 samples
+2026-08-27,2026-08-27 17:00:08.448+00,14,7735,7736.345,touch,pin,4.62,,sat inside the band for 20 samples
+2026-08-27,2026-08-27 17:15:08.538+00,15,7740,7739.49,touch,reject,-0.04,2,tagged from below and faded 19.40 back
+2026-08-27,2026-08-27 18:00:21.479+00,18,7750,7730.98,approach,rolled_over,18.98,,"came within 18.98 from below without tagging, then rolled 15.36 away"
+2026-08-27,2026-08-27 18:15:21.785+00,19,7730,7720.56,approach,stalled,7.92,,"hovered below 7730, closest 7.92, no resolution"
+2026-08-27,2026-08-27 18:15:21.785+00,19,7730,7720.56,approach,stalled,7.92,,"hovered below 7730, closest 7.92, no resolution"
+2026-08-27,2026-08-27 18:30:17.343+00,20,7700,7712.75,approach,stalled,12.9,,"hovered above 7700, closest 12.90, no resolution"
+2026-08-27,2026-08-27 18:30:17.343+00,20,7700,7712.75,approach,stalled,12.9,,"hovered above 7700, closest 12.90, no resolution"
+2026-08-27,2026-08-27 19:30:27.731+00,24,7710,7717.8,approach,stalled,9.955,,"hovered above 7710, closest 9.95, no resolution"
+2026-08-27,2026-08-27 19:30:27.731+00,24,7710,7717.8,approach,stalled,9.955,,"hovered above 7710, closest 9.95, no resolution"
+2026-08-27,2026-08-27 20:00:28.081+00,26,7730,7729.93,touch,,,,
+2026-08-27,2026-08-27 20:00:28.081+00,26,7750,7729.93,approach,,,,
+2026-08-27,2026-08-27 20:00:28.081+00,26,7750,7729.93,approach,,,,
+2026-08-27,2026-08-27 20:00:28.081+00,26,7730,7729.93,touch,,,,
+2026-08-28,2026-08-28 14:00:13.605+00,2,7750,7741.17,approach,reached,0.000403,,approached from below and eventually tagged 7750
+2026-08-28,2026-08-28 14:45:03.949+00,5,7750,7753.12,touch,new_wall,18.96,19,broke above by 18.96 and the cb rolled with it
+2026-08-28,2026-08-28 15:00:26.64+00,6,7770,7766.645,touch,reject,-1.04,3,tagged from below and faded 41.23 back
+2026-08-28,2026-08-28 15:00:26.64+00,6,7770,7766.645,touch,reject,-1.04,3,tagged from below and faded 41.23 back
+2026-08-28,2026-08-28 16:01:42.434+00,10,7700,7722.945,approach,stalled,16.375,,"hovered above 7700, closest 16.38, no resolution"
+2026-08-28,2026-08-28 16:30:22.273+00,12,7720,7716.375,touch,reject,2.78,9,tagged from below and faded 19.19 back
+2026-08-28,2026-08-28 16:30:22.273+00,12,7720,7716.375,touch,reject,2.78,9,tagged from below and faded 19.19 back
+2026-08-28,2026-08-28 16:45:26.42+00,13,7700,7717.8,approach,reached,0.000466,,approached from above and eventually tagged 7700
+2026-08-28,2026-08-28 17:00:26.528+00,14,7700,7716.89,approach,reached,0.000466,,approached from above and eventually tagged 7700
+2026-08-28,2026-08-28 17:15:26.855+00,15,7700,7716.89,approach,stalled,5.53,,"hovered above 7700, closest 5.53, no resolution"
+2026-08-28,2026-08-28 18:30:19.246+00,20,7700,7707.985,approach,reached,0.000136,,approached from above and eventually tagged 7700
+2026-08-28,2026-08-28 19:00:20.016+00,22,7700,7703.785,touch,reject,-6.555,9,"tagged from above, never got below it"
+2026-08-28,2026-08-28 19:00:20.016+00,22,7700,7703.785,touch,reject,-6.555,9,"tagged from above, never got below it"
+2026-08-28,2026-08-28 19:30:20.92+00,24,7730,7711.595,approach,stalled,15.98,,"hovered below 7730, closest 15.98, no resolution"
+2026-08-28,2026-08-28 19:30:20.92+00,24,7730,7711.595,approach,stalled,15.98,,"hovered below 7730, closest 15.98, no resolution"
+2026-08-28,2026-08-28 20:00:21.591+00,26,7710,7712.48,touch,,,,
+2026-08-28,2026-08-28 20:00:21.591+00,26,7710,7712.48,touch,,,,
+2026-08-31,2026-08-31 13:45:29.911+00,1,7680,7676.93,touch,reject,0.025,7,tagged from below and faded 14.70 back
+2026-08-31,2026-08-31 13:45:29.911+00,1,7680,7676.93,touch,reject,0.025,7,tagged from below and faded 14.70 back
+2026-08-31,2026-08-31 14:00:29.245+00,2,7700,7680.025,approach,stalled,20.615,,"hovered below 7700, closest 20.61, no resolution"
+2026-08-31,2026-08-31 14:15:11.847+00,3,7650,7672.94,approach,stalled,15.325,,"hovered above 7650, closest 15.32, no resolution"
+2026-08-31,2026-08-31 14:15:11.847+00,3,7650,7672.94,approach,stalled,15.325,,"hovered above 7650, closest 15.32, no resolution"
+2026-08-31,2026-08-31 14:15:11.847+00,3,7650,7672.94,approach,stalled,15.325,,"hovered above 7650, closest 15.32, no resolution"
+2026-08-31,2026-08-31 14:30:11.128+00,4,7650,7665.325,approach,stalled,16.805,,"hovered above 7650, closest 16.81, no resolution"
+2026-08-31,2026-08-31 15:00:23.42+00,6,7700,7679.385,approach,stalled,20.64,,"hovered below 7700, closest 20.64, no resolution"
+2026-08-31,2026-08-31 15:15:16.315+00,7,7700,7677.205,approach,stalled,20.68,,"hovered below 7700, closest 20.68, no resolution"
+2026-08-31,2026-08-31 15:15:16.315+00,7,7700,7677.205,approach,stalled,20.68,,"hovered below 7700, closest 20.68, no resolution"
+2026-08-31,2026-08-31 16:00:27.138+00,10,7670,7671.68,touch,pin,1.57,,sat inside the band for 3 samples
+2026-08-31,2026-08-31 16:00:27.138+00,10,7670,7671.68,touch,pin,1.57,,sat inside the band for 3 samples
+2026-08-31,2026-08-31 16:15:43.158+00,11,7650,7668.43,approach,stalled,21.1,,"hovered above 7650, closest 21.10, no resolution"
+2026-08-31,2026-08-31 16:45:01.847+00,13,7685,7674.88,approach,stalled,5.87,,"hovered below 7685, closest 5.87, no resolution"
+2026-08-31,2026-08-31 17:30:02.965+00,16,7700,7677.39,approach,stalled,15.15,,"hovered below 7700, closest 15.15, no resolution"
+2026-08-31,2026-08-31 17:30:02.965+00,16,7670,7672.44,touch,reject,-2.315,3,tagged from above and faded 12.54 back
+2026-08-31,2026-08-31 17:45:03.363+00,17,7650,7672.42,approach,stalled,21.365,,"hovered above 7650, closest 21.36, no resolution"
+2026-08-31,2026-08-31 18:00:03.535+00,18,7685,7684.85,touch,reject,-0.315,8,tagged from below and faded 14.32 back
+2026-08-31,2026-08-31 18:00:03.535+00,18,7700,7684.85,approach,stalled,15.315,,"hovered below 7700, closest 15.31, no resolution"
+2026-08-31,2026-08-31 18:00:03.535+00,18,7685,7684.85,touch,reject,-0.315,8,tagged from below and faded 14.32 back
+2026-08-31,2026-08-31 18:45:04.082+00,21,7670,7671.365,touch,reject,-0.37,3,tagged from above and faded 18.35 back
+2026-08-31,2026-08-31 18:45:04.082+00,21,7670,7672.58,touch,reject,-0.37,3,tagged from above and faded 18.35 back
+2026-08-31,2026-08-31 18:45:04.082+00,21,7700,7680.235,approach,stalled,11.28,,"hovered below 7700, closest 11.28, no resolution"
+2026-08-31,2026-08-31 19:15:04.215+00,23,7700,7678.68,approach,stalled,7.775,,"hovered below 7700, closest 7.77, no resolution"
+2026-08-31,2026-08-31 19:30:04.303+00,24,7685,7682.495,touch,new_wall,7.225,,broke above by 7.22 and the cb rolled with it
+2026-08-31,2026-08-31 19:30:04.303+00,24,7685,7681.3,touch,new_wall,7.225,,broke above by 7.22 and the cb rolled with it
+2026-08-31,2026-08-31 20:00:04.367+00,26,7690,7691.36,touch,,,,
+2026-08-31,2026-08-31 20:00:04.367+00,26,7690,7691.36,touch,,,,
+2026-08-31,2026-08-31 20:00:04.367+00,26,7700,7691.36,approach,,,,
+2026-09-01,2026-09-01 14:15:04.056+00,3,7660,7642.28,approach,reached,1.3e-05,,approached from below and eventually tagged 7660
+2026-09-01,2026-09-01 14:45:05.425+00,5,7680,7659.32,approach,stalled,20.1,,"hovered below 7680, closest 20.10, no resolution"
+2026-09-01,2026-09-01 14:45:05.425+00,5,7660,7659.32,touch,reject,-0.1,3,tagged from below and faded 16.48 back
+2026-09-01,2026-09-01 15:45:06.392+00,9,7660,7657.45,touch,reject,2.71,11,tagged from below and faded 26.90 back
+2026-09-01,2026-09-01 16:00:06.678+00,10,7660,7661.37,touch,consolidated,24.975,,"broke below by 24.98, then held a 2.56 range outside for 3 samples"
+2026-09-01,2026-09-01 17:30:03.054+00,16,7630,7631.875,touch,pin,2.59,,sat inside the band for 8 samples
+2026-09-01,2026-09-01 17:30:03.054+00,16,7630,7631.875,touch,pin,2.59,,sat inside the band for 8 samples
+2026-09-01,2026-09-01 18:45:04.958+00,21,7620,7619.02,touch,new_wall,10.625,,broke above by 10.63 and the cb rolled with it
+2026-09-01,2026-09-01 18:45:04.958+00,21,7620,7619.02,touch,new_wall,10.625,,broke above by 10.63 and the cb rolled with it
+2026-09-01,2026-09-01 19:00:05.242+00,22,7600,7617.78,approach,stalled,24.21,,"hovered above 7600, closest 24.21, no resolution"
+2026-09-01,2026-09-01 19:00:05.242+00,22,7600,7617.78,approach,stalled,24.21,,"hovered above 7600, closest 24.21, no resolution"
+2026-09-01,2026-09-01 19:30:05.723+00,24,7625,7629.12,touch,pin,-0.965,,sat inside the band for 4 samples
+2026-09-01,2026-09-01 19:30:05.723+00,24,7625,7629.12,touch,pin,-0.965,,sat inside the band for 4 samples
+2026-09-02,2026-09-02 13:45:16.542+00,1,7625,7636.355,approach,rolled_over,12.23,,"came within 12.23 from above without tagging, then rolled 41.63 away"
+2026-09-02,2026-09-02 14:00:05.242+00,2,7650,7642.895,approach,reached,0.000215,,approached from below and eventually tagged 7650
+2026-09-02,2026-09-02 14:00:05.242+00,2,7650,7642.895,approach,reached,0.000215,,approached from below and eventually tagged 7650
+2026-09-02,2026-09-02 14:15:05.311+00,3,7660,7656.47,touch,new_wall,18.86,,broke above by 18.86 and the cb rolled with it
+2026-09-02,2026-09-02 14:15:05.311+00,3,7660,7656.47,touch,new_wall,18.86,,broke above by 18.86 and the cb rolled with it
+2026-09-02,2026-09-02 14:30:05.576+00,4,7670,7671.75,touch,pin,0.365,,sat inside the band for 8 samples
+2026-09-02,2026-09-02 14:30:05.576+00,4,7675,7671.75,touch,pin,4.19,,sat inside the band for 8 samples
+2026-09-02,2026-09-02 14:48:09.275+00,5,7680,7678.21,touch,pin,-0.375,,sat inside the band for 7 samples
+2026-09-02,2026-09-02 14:45:06.188+00,5,7675,7678.86,touch,break_lt5,5.365,20,"pierced 5.37 below the level, reclaimed after 20m"
+2026-09-02,2026-09-02 15:15:18.085+00,7,7680,7670.41,approach,reached,4.9e-05,,approached from below and eventually tagged 7680
+2026-09-02,2026-09-02 15:30:18.135+00,8,7685,7679.19,approach,rolled_over,5.375,,"came within 5.38 from below without tagging, then rolled 14.94 away"
+2026-09-02,2026-09-02 15:30:18.135+00,8,7685,7679.19,approach,rolled_over,5.375,,"came within 5.38 from below without tagging, then rolled 14.94 away"
+2026-09-02,2026-09-02 16:00:18.351+00,10,7680,7674.685,approach,stalled,5.83,,"hovered below 7680, closest 5.83, no resolution"
+2026-09-02,2026-09-02 16:30:18.945+00,12,7680,7664.68,approach,stalled,9.73,,"hovered below 7680, closest 9.73, no resolution"
+2026-09-02,2026-09-02 17:15:26.549+00,15,7680,7663.69,approach,stalled,10.36,,"hovered below 7680, closest 10.36, no resolution"
+2026-09-02,2026-09-02 18:30:27.12+00,20,7675,7671.34,touch,pin,-4.46,,sat inside the band for 3 samples
+2026-09-02,2026-09-02 18:30:27.12+00,20,7675,7671.34,touch,pin,-4.46,,sat inside the band for 3 samples
+2026-09-02,2026-09-02 19:00:27.326+00,22,7660,7664.14,touch,reject,-4.03,8,"tagged from above, never got below it"
+2026-09-02,2026-09-02 19:45:27.639+00,25,7675,7669.82,approach,stalled,6.06,,"hovered below 7675, closest 6.06, no resolution"
+2026-09-02,2026-09-02 19:45:27.639+00,25,7675,7669.82,approach,stalled,6.06,,"hovered below 7675, closest 6.06, no resolution"
+2026-09-02,2026-09-02 20:00:27.885+00,26,7665,7666.33,touch,,,,
+2026-09-02,2026-09-02 20:00:27.885+00,26,7665,7666.33,touch,,,,
+2026-09-03,2026-09-03 13:33:18.93+00,0,7700,7700.89,touch,break_lt5,5.21,6,"pierced 5.21 below the level, reclaimed after 6m"
+2026-09-03,2026-09-03 13:33:18.93+00,0,7700,7700.89,touch,break_lt5,5.21,6,"pierced 5.21 below the level, reclaimed after 6m"
+2026-09-03,2026-09-03 13:45:28.332+00,1,7720,7713.41,approach,reached,0.000484,,approached from below and eventually tagged 7720
+2026-09-03,2026-09-03 13:45:28.332+00,1,7720,7713.41,approach,reached,0.000484,,approached from below and eventually tagged 7720
+2026-09-03,2026-09-03 14:30:04.559+00,4,7720,7703.15,approach,reached,0.000236,,approached from below and eventually tagged 7720
+2026-09-03,2026-09-03 15:00:06.388+00,6,7720,7705.265,approach,reached,0.000236,,approached from below and eventually tagged 7720
+2026-09-03,2026-09-03 15:00:06.388+00,6,7720,7705.265,approach,reached,0.000236,,approached from below and eventually tagged 7720
+2026-09-03,2026-09-03 15:30:06.566+00,8,7740,7737.06,touch,new_wall,8,,broke above by 8.00 and the cb rolled with it
+2026-09-03,2026-09-03 15:30:06.566+00,8,7740,7737.06,touch,new_wall,8,,broke above by 8.00 and the cb rolled with it
+2026-09-03,2026-09-03 16:00:29.752+00,10,7750,7747.05,touch,pin,-1.6,,sat inside the band for 4 samples
+2026-09-03,2026-09-03 16:00:29.752+00,10,7750,7747.05,touch,pin,-1.6,,sat inside the band for 4 samples
+2026-09-03,2026-09-03 16:00:29.752+00,10,7750,7747.05,touch,pin,-1.6,,sat inside the band for 4 samples
+2026-09-03,2026-09-03 17:45:07.271+00,17,7750,7747.805,touch,break_lt5,5.265,,"pierced 5.26 above the level, never reclaimed"
+2026-09-03,2026-09-03 17:45:07.271+00,17,7750,7747.805,touch,break_lt5,5.265,,"pierced 5.26 above the level, never reclaimed"
+2026-09-03,2026-09-03 18:00:07.318+00,18,7750,7747.79,touch,break_lt5,5.265,,"pierced 5.26 above the level, never reclaimed"
+2026-09-03,2026-09-03 18:45:09.404+00,21,7760,7751.83,approach,stalled,6.32,,"hovered below 7760, closest 6.32, no resolution"
+2026-09-03,2026-09-03 18:45:09.404+00,21,7755,7751.83,touch,pin,-1.32,,sat inside the band for 7 samples
+2026-09-03,2026-09-03 19:00:09.781+00,22,7750,7751.16,touch,break_lt5,5.2,,"pierced 5.20 below the level, never reclaimed"
+2026-09-03,2026-09-03 19:00:09.781+00,22,7750,7751.16,touch,break_lt5,5.2,,"pierced 5.20 below the level, never reclaimed"
+2026-09-03,2026-09-03 19:15:09.857+00,23,7755,7751.4,touch,pin,-3.81,,sat inside the band for 5 samples
+2026-09-03,2026-09-03 19:15:09.857+00,23,7750,7752.25,touch,break_lt5,5.2,,"pierced 5.20 below the level, never reclaimed"
+2026-09-04,2026-09-04 13:29:25.121+00,0,7755,7737.5,approach,rolled_over,12.24,,"came within 12.24 from below without tagging, then rolled 14.67 away"
+2026-09-04,2026-09-04 13:45:24.884+00,1,7750,7737.35,approach,rolled_over,10.065,,"came within 10.06 from below without tagging, then rolled 19.84 away"
+2026-09-04,2026-09-04 13:45:24.884+00,1,7750,7737.35,approach,rolled_over,10.065,,"came within 10.06 from below without tagging, then rolled 19.84 away"
+2026-09-04,2026-09-04 15:00:24.806+00,6,7700,7715.29,approach,stalled,8.45,,"hovered above 7700, closest 8.45, no resolution"
+2026-09-04,2026-09-04 15:00:24.806+00,6,7700,7715.29,approach,stalled,8.45,,"hovered above 7700, closest 8.45, no resolution"
+2026-09-04,2026-09-04 16:15:10.543+00,11,7700,7717.86,approach,stalled,19.41,,"hovered above 7700, closest 19.41, no resolution"
+2026-09-04,2026-09-04 16:15:10.543+00,11,7700,7722.37,approach,stalled,19.41,,"hovered above 7700, closest 19.41, no resolution"
+2026-09-04,2026-09-04 17:00:18.034+00,14,7750,7728.12,approach,stalled,26.54,,"hovered below 7750, closest 26.54, no resolution"
+2026-09-04,2026-09-04 17:00:18.034+00,14,7730,7726.62,touch,reject,-6.54,3,tagged from below and faded 14.97 back
+2026-09-04,2026-09-04 17:00:18.034+00,14,7730,7726.62,touch,reject,-6.54,3,tagged from below and faded 14.97 back
+2026-09-04,2026-09-04 17:15:25.84+00,15,7710,7719.44,approach,reached,5e-06,,approached from above and eventually tagged 7710
+2026-09-04,2026-09-04 17:15:25.84+00,15,7710,7719.41,approach,reached,5e-06,,approached from above and eventually tagged 7710
+2026-09-04,2026-09-04 17:45:26.139+00,17,7700,7710.31,approach,stalled,8.49,,"hovered above 7700, closest 8.49, no resolution"
+2026-09-04,2026-09-04 17:45:26.139+00,17,7700,7710.31,approach,stalled,8.49,,"hovered above 7700, closest 8.49, no resolution"
+2026-09-04,2026-09-04 18:30:26.359+00,20,7710,7713.765,touch,pin,-1.91,,sat inside the band for 6 samples
+2026-09-04,2026-09-04 18:30:26.359+00,20,7710,7713.765,touch,pin,-1.91,,sat inside the band for 6 samples
+2026-09-04,2026-09-04 19:45:27.015+00,25,7710,7715.06,approach,stalled,6.765,,"hovered above 7710, closest 6.77, no resolution"
+2026-09-04,2026-09-04 19:45:27.015+00,25,7710,7715.06,approach,stalled,6.765,,"hovered above 7710, closest 6.77, no resolution"
+2026-09-04,2026-09-04 20:00:27.4+00,26,7720,7717.865,touch,,,,
+2026-09-04,2026-09-04 20:00:27.4+00,26,7720,7717.865,touch,,,,

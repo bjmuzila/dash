@@ -31,12 +31,35 @@ So the setup has been instrumented and classified this whole time. `wall_events`
 is, on its own, a record of what happens after every touch — no backtest needed
 to read it.
 
+## Where the history actually is
+
+Confirmed on the VPS, 2026-09-06:
+
+| source | sessions | range | resolution |
+|---|---|---|---|
+| **`mvc_snapshots`** | **73** | 2026-05-26 -> 2026-09-04 | ~80-96 captures/session, 09:30-15:55 (~4-5 min) |
+| `walls_log` / `wall_events` | 25 | 2026-08-03 -> 2026-09-04 | 15-min slots, with classified touch reactions |
+| `option_strike_gex_history` | 11 | rolling | 1 min, per-strike — pruned to 10 days |
+
+`mvc_snapshots` is the primary source and it carries `spxPrice` **and** `esPrice`
+on the same row, so the ES-SPX basis is measured rather than modelled.
+5,159 of 5,232 rows have ES; 5,175 have a usable core.
+
+`walls_log` is the cross-check: shorter, but `wall_events` classifies every
+5-point touch as reject / pin / consolidated / break_5 / break_lt5 with no
+strategy assumptions in it.
+
+Base rate worth knowing before anything else: the grader reports **62 of 73
+sessions touched the CB**. The signal fires ~85% of days, so this was never a
+selectivity edge — whatever is there has to come from what price does *after*
+the touch.
+
 ## Order of operations
 
-**1. Export from the VPS** — `export-walls-core.sql` writes three CSVs to `/tmp/`:
+**1. Export from the VPS** — `export-mvc-core.sql` writes to `/root/cb-export/`:
 
 ```bash
-psql "$DATABASE_URL" -f export-walls-core.sql
+psql "$DATABASE_URL" -f export-mvc-core.sql
 ```
 
 **2. Read the level's actual behavior first**, before any strategy assumptions:
@@ -46,42 +69,45 @@ python analyze_touches.py wall_events_core.csv
 ```
 
 Counts how often a touch rejects, pins, consolidates or breaks, plus the
-excursion distribution. Nothing to curve-fit — no entry, stop or target in it.
-If the level mostly holds, fade is the variant to expect; if it mostly breaks,
-momentum is. This is the honest read, and it comes for free.
+excursion distribution. Nothing to curve-fit. If the level mostly holds, expect
+fade to be the variant; if it mostly breaks, momentum.
 
-**3. Then backtest:**
+**3. Merge and backtest:**
 
 ```bash
-python build_from_walls.py --walls walls_core.csv --es es_1m.csv -o snapshots_es.csv
+python build_from_mvc.py --mvc mvc_snapshots.csv --es es_1m.csv -o snapshots_es.csv
 python core_level_backtest.py --selftest
 python core_level_backtest.py --data snapshots_es.csv --sweep --out ./results
 ```
 
+`--core-col core_vol` runs the volume-only CB instead of the OI+volume default.
+Run them as separate samples; do not mix.
+
 ## Why the merge step exists
 
-The CB is an SPX strike; the trade is MES. `build_from_walls.py`:
+The CB is an SPX strike; the trade is MES. `build_from_mvc.py`:
 
-- carries the change-only `walls_log` level forward within each date (never
-  across the overnight gap),
-- derives the ES-SPX basis at each 15-min slot from `spot - es_close`, and
-  interpolates it **within a date only** — the basis jumps overnight on carry,
-  dividends and contract roll, so a bar is never handed yesterday's basis,
+- carries the CB forward from each capture, never across the overnight gap,
+- takes the basis as `spx - es` from each capture directly, interpolating
+  between captures **within a date only** — it jumps overnight on carry,
+  dividends and contract roll,
 - translates the level into ES space and emits one row per **1-minute ES bar**
   with real high/low.
 
-Result: P&L is actual ES points at $5/pt rather than SPX points assumed
-equivalent, and stops/targets fill against 1-minute bars instead of 15-minute
-endpoints. The 15-minute grid still limits *when a signal can appear*; it no
-longer limits how the trade is filled.
+P&L is then actual ES points at $5/pt, and stops fill against 1-minute bars
+instead of 4-minute capture endpoints. The ~4-5 minute capture cadence still
+bounds *when a signal can appear*; it no longer bounds how the trade is filled.
+Verified round-trip: |ES - core_es| matches |SPX - core_spx| at every capture.
 
 ## Files
 
 | file | |
 |---|---|
-| `export-walls-core.sql` | pull `walls_log` / `wall_events` / `es_candles` off the VPS |
+| `export-mvc-core.sql` | pull `mvc_snapshots` + `walls_log` / `wall_events` / `es_candles` off the VPS |
+| `build_from_mvc.py` | MVC captures + ES 1m -> `snapshots_es.csv` (ES space). **The main path** |
+| `export-walls-core.sql` | walls-only export, superseded by `export-mvc-core.sql` |
 | `analyze_touches.py` | what the level actually did, straight from `wall_events` |
-| `build_from_walls.py` | walls + ES 1m -> `snapshots_es.csv` (ES space) |
+| `build_from_walls.py` | walls + ES 1m -> snapshots. The 25-session cross-check path |
 | `core_level_backtest.py` | the backtester. `--selftest` validates the engine |
 | `build_core_snapshots.py` | the old path: per-strike CSV -> snapshots. Kept for the July export |
 | `export-core-level.sql` | the old 10-day export. Superseded by `export-walls-core.sql` |
@@ -121,10 +147,12 @@ out most of the time.
 
 ## Known limits
 
-- **Signal timing is on a 15-minute grid.** `walls_log` samples at 09:29 then
-  every 15 min, and each slot is only as fresh as the last scanner sweep (<=5m).
-  A touch that happens and reverses inside one slot is invisible.
+- **Signal timing is bounded by the capture cadence.** `mvc_snapshots` runs
+  ~4-5 min; `walls_log` 15 min. A touch that happens and reverses inside one
+  interval is invisible to the signal, even though the fill path is 1-minute.
 - **`walls_log` is change-only.** Slot 0 is the baseline; a missing slot means
   "unchanged", not "no data". `build_from_walls.py` carries forward accordingly.
+- **73 sessions is a starting sample, not a verdict.** A t-stat under 2 across
+  73 sessions is still luck. Prefer results that hold across neighbouring cells.
 - **Point-in-time integrity holds** — these were recorded live off
   `scanner_snapshots`, not recomputed after the fact.

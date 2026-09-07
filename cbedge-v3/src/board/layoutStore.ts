@@ -37,11 +37,11 @@ export const SYNCED_KEY = 'cb-v3-board-synced'
  * {id,x,y,w,h} that this file does not get to extend. Per browser, like the rest
  * of the v3 card settings.
  *
- * DEFAULT ON — the key is opt-OUT ('0'), not opt-in. Free placement plus the
- * magnet is what "drag a card where you want it" is supposed to feel like, and
- * shipping it behind a switch meant the board still fought the first person who
- * tried to move a card and never told them there was another mode. Auto-arrange
- * is still one click away for anyone who wants the board tidied for them.
+ * DEFAULT ON — the key is opt-OUT ('0'), not opt-in. "The card goes where I put
+ * it" is what dragging is supposed to mean, and shipping that behind a switch
+ * meant the board still fought the first person who tried to move a card and
+ * never told them there was another mode. Auto-arrange is still one click away
+ * for anyone who wants the board tidied for them.
  */
 export const FREE_KEY = 'cb-v3-board-free'
 
@@ -63,17 +63,19 @@ export function writeFreeMode(on: boolean): void {
 
 // ── MIGRATING A BOARD ACROSS A GRID CHANGE ───────────────────────────────────
 //
-// The board went from 12 columns / 32px rows to 24 / 16 (see BOARD_COLS). Every
-// number in a stored layout is in grid units, so a board saved under the old
-// grid is HALF SIZE under the new one — every card shrinks to a quarter of its
-// area and the right half of the board empties. Doubling x/y/w/h reproduces the
-// old board exactly, because the new unit is exactly half the old one.
+// The board has gone 12 columns / 32px rows -> 24 / 16 -> 48 / 8 (see
+// BOARD_COLS). Every number in a stored layout is in grid units, so a board
+// saved under an older grid is a FRACTION of its size under the new one — the
+// cards shrink and the right side of the board empties. Scaling x/y/w/h by
+// BOARD_COLS / (the grid it was written under) reproduces it exactly, because
+// each step halved the unit. The factor is 2 from 24, 4 from 12.
 //
 // Which layouts need it is recorded, not guessed. The tempting heuristic — "no
 // card reaches past column 12, so it must be an old board" — is also true of a
-// perfectly good new board whose cards all sit on the left, and it would double
+// perfectly good new board whose cards all sit on the left, and it would scale
 // that board on every reload until it stopped fitting. So: a key holding the
-// grid width the browser was last written under, read ONCE at module load.
+// grid width the browser was last written under, read ONCE at module load. A
+// browser that never saw the grid key at all is from the 12-column era.
 const GRID_KEY = 'cb-v3-board-grid'
 
 function storedGrid(): number {
@@ -102,7 +104,7 @@ if (SCALE !== 1) {
 /**
  * Every read goes through this, so the SERVER copy is rescaled too. A board
  * saved from an older build on another machine arrives in old units and would
- * otherwise land as a quarter-size board; it is corrected on the first session
+ * otherwise land as a fraction of its size; it is corrected on the first session
  * after this build, and written back in new units the next time the user presses
  * Save layout.
  */
