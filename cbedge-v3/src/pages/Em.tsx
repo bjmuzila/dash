@@ -149,13 +149,13 @@ export default function Em() {
             className="mx-auto -mb-4 block h-36 w-auto"
           />
           <h1 className="m-0 text-xl font-extrabold text-fg">Weekly Estimated Move &amp; Zones</h1>
-          <p className="mt-2 text-sm text-muted opacity-75">
+          <p className="mt-2 text-sm text-fg">
             Enter a ticker to see this week&apos;s estimated move and the buy / sell zones.
           </p>
         </header>
 
         {/* ── Search ───────────────────────────────────────────────────── */}
-        <Card>
+        <Card expandable={false}>
           <form
             className="mb-3 flex flex-wrap gap-2"
             onSubmit={(e) => {
@@ -215,7 +215,7 @@ export default function Em() {
 
         {/* ── Empty ────────────────────────────────────────────────────── */}
         {!snap && !error && !loading && (
-          <div className="py-10 text-center text-sm text-muted opacity-70">
+          <div className="py-10 text-center text-sm text-fg">
             Enter a ticker above to view its weekly levels.
           </div>
         )}
@@ -228,12 +228,12 @@ export default function Em() {
                 {data.label || data.ticker || ticker}
               </span>
               {data.exp_label && (
-                <span className="text-xs font-bold uppercase tracking-widest text-muted opacity-70">
+                <span className="text-xs font-bold uppercase tracking-widest text-fg">
                   Week of {data.exp_label}
                 </span>
               )}
               {data.updated_at && (
-                <span className="ml-auto text-xs text-muted opacity-70">
+                <span className="ml-auto text-xs text-fg">
                   Updated {fmtUpdated(data.updated_at)}
                 </span>
               )}
@@ -244,7 +244,7 @@ export default function Em() {
             <HistoricalAverages snap={snap} />
             <TrackRecord snap={snap} />
 
-            <p className="text-center text-xs leading-relaxed text-muted opacity-70">
+            <p className="text-center text-xs leading-relaxed text-fg">
               Levels are published weekly and are informational only — not financial advice.
             </p>
           </div>
@@ -259,7 +259,7 @@ export default function Em() {
 function EstimatedMove({ snap }: { snap: EmSnapshot }) {
   const { data, winRate } = snap
   return (
-    <Card title="Estimated Move">
+    <Card title={<span className="text-fg">Estimated Move</span>} expandable={false}>
       {/* v2 was a fixed repeat(4,1fr) at every width, rescued on narrow screens
           only by globals.css's GLOBAL GRID COLLAPSE — which v3 does not have.
           Two columns below 640px is the explicit replacement. */}
@@ -284,7 +284,7 @@ function HitRate({ winRate }: { winRate: NonNullable<EmSnapshot['winRate']> }) {
       <div className="mb-2 text-xl font-bold" style={{ color: hitRateColor(winPct) }}>
         {winPct}% Hit
       </div>
-      <div className="mb-1 flex justify-between text-2xs text-muted opacity-80">
+      <div className="mb-1 flex justify-between text-2xs text-fg">
         <span>Miss ({losses})</span>
         <span>{winPct}%</span>
         <span>Hit ({winRate.hits})</span>
@@ -329,13 +329,15 @@ function Zones({ data }: { data: EmSnapshot['data'] }) {
       {/* PIVOT. v2 fetches it, merges it, tests it in the zones fallback — and
           renders it nowhere; the styles for it are still in the file, wired to
           nothing. Brandon, 2026-08-31: keep it. The data was always on the
-          wire; now it is on the screen. */}
-      <div className="text-center text-xs font-bold uppercase tracking-widest text-muted opacity-70">
-        Pivot
-        <span className="ml-2 font-mono text-lg font-bold normal-case tracking-normal text-fg opacity-100">
-          {val(data.pivot)}
-        </span>
-      </div>
+          wire; now it is on the screen. 2026-09-07: it was a bare line floating
+          between the zone row and the averages — it is a Card like everything
+          else on the page now. */}
+      <Card title={<span className="text-fg">Pivot</span>} expandable={false}>
+        <div className="rounded-md border border-line px-2 py-3 text-center" style={PLATE}>
+          <div className={LABEL}>Weekly Pivot</div>
+          <div className="font-mono text-xl font-bold text-fg">{val(data.pivot)}</div>
+        </div>
+      </Card>
     </>
   )
 }
@@ -354,8 +356,12 @@ function ZoneCard({
   far: string
 }) {
   return (
-    <Card title={<span style={{ color }}>{title}</span>} style={{ borderColor: alpha(color, 0.25) }}>
-      <p className="m-0 mb-3.5 text-xs leading-relaxed text-muted opacity-75">{hint}</p>
+    <Card
+      title={<span style={{ color }}>{title}</span>}
+      style={{ borderColor: alpha(color, 0.25) }}
+      expandable={false}
+    >
+      <p className="m-0 mb-3.5 text-xs leading-relaxed text-fg">{hint}</p>
       <ZoneLine label="Near" value={near} color={color} />
       <ZoneLine label="Far" value={far} color={color} dim />
     </Card>
@@ -375,7 +381,7 @@ function ZoneLine({
 }) {
   return (
     <div className="flex items-baseline justify-between border-t border-line py-2.5">
-      <span className="text-xs font-bold uppercase tracking-widest text-muted opacity-70">{label}</span>
+      <span className="text-xs font-bold uppercase tracking-widest text-fg">{label}</span>
       <span
         className={['font-mono text-xl font-bold', dim ? 'opacity-70' : ''].join(' ')}
         style={{ color }}
@@ -398,7 +404,7 @@ function HistoricalAverages({ snap }: { snap: EmSnapshot }) {
       return (
         <div className="rounded-md border border-line px-2 py-3 text-center" style={PLATE}>
           <div className={LABEL}>{label}</div>
-          <div className="text-base text-muted opacity-70">--</div>
+          <div className="text-base text-fg">--</div>
         </div>
       )
     }
@@ -421,13 +427,13 @@ function HistoricalAverages({ snap }: { snap: EmSnapshot }) {
   }
 
   return (
-    <Card title="vs Historical EM Average">
+    <Card title={<span className="text-fg">vs Historical EM Average</span>} expandable={false}>
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
         {avgTile(emStats.recentAvg, 'vs 4-Wk Avg')}
         {avgTile(emStats.midAvg, 'vs 12-Wk Avg')}
       </div>
       {emStats.sampleSize > 0 && (
-        <div className="mt-2.5 text-2xs uppercase tracking-widest text-muted opacity-70">
+        <div className="mt-2.5 text-2xs uppercase tracking-widest text-fg">
           Based on {emStats.sampleSize} week{emStats.sampleSize !== 1 ? 's' : ''} of recorded data
         </div>
       )}
@@ -446,7 +452,7 @@ function TrackRecord({ snap }: { snap: EmSnapshot }) {
   const resultCol = isHit ? MOVE_UP : MOVE_DOWN
 
   return (
-    <Card title="Recent Track Record">
+    <Card title={<span className="text-fg">Recent Track Record</span>} expandable={false}>
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
         <div
           className="rounded-md border px-2 py-3 text-center"
@@ -468,7 +474,7 @@ function TrackRecord({ snap }: { snap: EmSnapshot }) {
           <div className="font-mono text-xl font-bold" style={{ color: pctCol }}>
             {pct}%
           </div>
-          <div className="mt-1 text-2xs tracking-wide text-muted opacity-70">
+          <div className="mt-1 text-2xs tracking-wide text-fg">
             {rec.last5Hits} / {rec.last5Total} hit
           </div>
         </div>
@@ -482,7 +488,9 @@ function TrackRecord({ snap }: { snap: EmSnapshot }) {
 /** v2's stat plate: a sunken well inside a card. */
 const PLATE: CSSProperties = { background: alpha(T.bg, 0.6) }
 
-const LABEL = 'mb-1.5 text-2xs font-bold uppercase tracking-widest text-muted opacity-70'
+// Labels were `text-muted opacity-70`. Brandon, 2026-09-07: "make gray font
+// white" — the plate labels, hints and stamps on this page are all text-fg now.
+const LABEL = 'mb-1.5 text-2xs font-bold uppercase tracking-widest text-fg'
 
 function Tile({ label, value, color }: { label: ReactNode; value: string; color: string }) {
   return (

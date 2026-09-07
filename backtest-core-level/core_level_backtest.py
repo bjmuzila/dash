@@ -73,7 +73,11 @@ class Config:
     contracts: int = 2                # 2 MES lots
     dpp: float = MES_DOLLARS_PER_POINT
     risk_dollars: float = 100.0       # stop = $ amount on the WHOLE trade
-    direction: str = "fade"           # fade | momentum | long
+    direction: str = "fade"           # fade | reject | momentum | long
+    trigger: str = "band"             # band | new_core | new_core_approach
+    side: str = "both"                # both | from_above | from_below
+    confirm: str = "none"             # none | reversal
+    confirm_window: int = 20          # bars to wait for the reversal bar
     exit_mode: str = "ratchet"        # fixed_1r | fixed_2r | fixed_3r | scale_be | ratchet
     rth_only: bool = True
     flat_at: dtime = dtime(15, 55)
@@ -93,7 +97,10 @@ class Config:
         return self.commission_rt_per_contract + slip
 
     def tag(self) -> str:
-        return f"{self.direction}/{self.exit_mode}/${self.risk_dollars:.0f}"
+        t = "" if self.trigger == "band" else f"{self.trigger}:"
+        sd = "" if self.side == "both" else f"[{self.side}]"
+        cf = "" if self.confirm == "none" else "+confirm"
+        return f"{t}{sd}{self.direction}{cf}/{self.exit_mode}/${self.risk_dollars:.0f}"
 
 
 # ----------------------------------------------------------------------------
@@ -319,6 +326,10 @@ def run(snaps, cfg):
     day_trades = 0
     last_exit_ts = None
     recent = []
+    prev_core = None
+    armed = False              # a NEW core level has appeared and not yet been touched
+    armed_outside = False      # price was OUTSIDE the band when that level appeared
+    pending = None             # {"side":int,"left":int,"core":float} waiting on a reversal bar
 
     for s in snaps:
         ts, px, core = s["ts"], s["spx"], s["core"]
@@ -330,6 +341,7 @@ def run(snaps, cfg):
                 pos = None
             day, day_trades, in_band_prev = d, 0, False
             recent = []
+            prev_core, armed, armed_outside, pending = None, False, False, None
         recent.append(px)
         if len(recent) > cfg.momentum_lookback + 1:
             recent.pop(0)
@@ -382,7 +394,44 @@ def run(snaps, cfg):
         # ---------------- entry ----------------
         dist = abs(px - core)
         in_band = dist <= cfg.band
-        if pos is None and in_band and not in_band_prev:
+
+        # A MIGRATION is the core moving to a different strike. It arms a single
+        # first-touch signal, which disarms the moment price tags the new level.
+        if prev_core is None or core != prev_core:
+            if prev_core is not None:
+                armed = True
+                armed_outside = dist > cfg.band
+            prev_core = core
+
+        if cfg.trigger == "band":
+            fire = in_band and not in_band_prev
+        else:
+            fire = armed and in_band
+            if cfg.trigger == "new_core_approach":
+                fire = fire and armed_outside
+        if in_band and armed:
+            armed = False       # consumed either way: first touch is first touch
+
+        # ── confirmation: the touch only ARMS; a reversal bar triggers ──────
+        if cfg.confirm == "reversal":
+            if fire and pos is None:
+                sd = _side_for(cfg, px, core, recent)
+                if sd:
+                    pending = {"side": sd, "left": cfg.confirm_window}
+                fire = False
+            elif pending is not None:
+                pending["left"] -= 1
+                if pending["left"] <= 0:
+                    pending = None
+                elif prev is not None:
+                    # a bar closing beyond the PREVIOUS bar's extreme, in the
+                    # direction the level is supposed to hold, is the signal
+                    ph = prev.get("high") if prev.get("high") is not None else prev["spx"]
+                    pl = prev.get("low") if prev.get("low") is not None else prev["spx"]
+                    if (pending["side"] > 0 and px > ph) or (pending["side"] < 0 and px < pl):
+                        fire = True
+
+        if pos is None and fire:
             ok = True
             if cfg.rth_only and not rth:
                 ok = False
@@ -392,12 +441,18 @@ def run(snaps, cfg):
                 ok = False
             if last_exit_ts and (ts - last_exit_ts) < timedelta(minutes=cfg.cooldown_min):
                 ok = False
-            side = _side_for(cfg, px, core, recent)
+            if cfg.side == "from_above" and px <= core:
+                ok = False          # want the core BELOW price (support test)
+            if cfg.side == "from_below" and px >= core:
+                ok = False          # want the core ABOVE price (resistance test)
+            side = pending["side"] if (cfg.confirm == "reversal" and pending) \
+                   else _side_for(cfg, px, core, recent)
             if side == 0:
                 ok = False
             if ok:
                 pos = Position(cfg, ts, px, side, core)
                 day_trades += 1
+                pending = None
         in_band_prev = in_band
         prev = s
 
@@ -410,10 +465,20 @@ def _side_for(cfg, px, core, recent):
     if cfg.direction == "long":
         return 1
     if cfg.direction == "fade":
+        # treat the level as a magnet: trade TOWARD it
         if px > core:
             return -1
         if px < core:
             return 1
+        return 0
+    if cfg.direction == "reject":
+        # treat the level as a barrier: trade AWAY from it. Price tagging the
+        # core from below is being rejected by resistance (short); tagging it
+        # from above is bouncing off support (long).
+        if px > core:
+            return 1
+        if px < core:
+            return -1
         return 0
     if cfg.direction == "momentum":
         if len(recent) < 2:
@@ -463,6 +528,9 @@ def stats(trades, cfg):
     sd = (sum((x - mean) ** 2 for x in nets) / n) ** 0.5 if n > 1 else 0.0
     return {
         "variant": cfg.tag(),
+        "trigger": cfg.trigger,
+        "side": cfg.side,
+        "confirm": cfg.confirm,
         "direction": cfg.direction,
         "exit_mode": cfg.exit_mode,
         "risk_$": cfg.risk_dollars,
@@ -612,12 +680,29 @@ def main():
     ap.add_argument("--band", type=float, default=5.0)
     ap.add_argument("--contracts", type=int, default=2)
     ap.add_argument("--risk", type=float, default=100.0, help="stop in $ on the whole trade")
-    ap.add_argument("--direction", default="fade", choices=["fade", "momentum", "long"])
+    ap.add_argument("--direction", default="fade",
+                    choices=["fade", "reject", "momentum", "long"])
+    ap.add_argument("--trigger", default="band",
+                    choices=["band", "new_core", "new_core_approach"],
+                    help="band = every crossing into the 5pt band (default); "
+                         "new_core = first touch of a NEWLY migrated core; "
+                         "new_core_approach = same, but only when price had to "
+                         "travel to it (level did not migrate onto price)")
     ap.add_argument("--exit-mode", default="ratchet",
                     choices=["fixed_1r", "fixed_2r", "fixed_3r", "scale_be", "ratchet"])
     ap.add_argument("--max-trades-per-day", type=int, default=3)
     ap.add_argument("--cooldown-min", type=int, default=15)
     ap.add_argument("--all-hours", action="store_true", help="disable the RTH filter")
+    ap.add_argument("--confirm", default="none", choices=["none", "reversal"],
+                    help="reversal = the touch only arms; enter on the first bar "
+                         "closing beyond the previous bar's extreme in the "
+                         "direction the level is supposed to hold")
+    ap.add_argument("--confirm-window", type=int, default=20,
+                    help="bars to wait for that reversal bar before standing down")
+    ap.add_argument("--side", default="both",
+                    choices=["both", "from_above", "from_below"],
+                    help="from_above = core BELOW price (price falls into it); "
+                         "from_below = core ABOVE price (price rallies into it)")
     ap.add_argument("--table", help="sqlite table name override")
     ap.add_argument("--col-ts"); ap.add_argument("--col-spx"); ap.add_argument("--col-core")
     ap.add_argument("--col-high"); ap.add_argument("--col-low")
@@ -644,16 +729,18 @@ def main():
 
     base = dict(band=args.band, contracts=args.contracts,
                 max_trades_per_day=args.max_trades_per_day,
-                cooldown_min=args.cooldown_min, rth_only=not args.all_hours)
+                cooldown_min=args.cooldown_min, rth_only=not args.all_hours,
+                trigger=args.trigger, side=args.side, confirm=args.confirm,
+                confirm_window=args.confirm_window)
 
     combos = []
     if args.sweep:
-        for d in ("fade", "momentum", "long"):
+        for d in ("fade", "reject", "momentum", "long"):
             for m in ("fixed_1r", "fixed_2r", "fixed_3r", "scale_be", "ratchet"):
                 for r in (50.0, 100.0, 150.0, 250.0):
                     combos.append(Config(direction=d, exit_mode=m, risk_dollars=r, **base))
     else:
-        for d in ("fade", "momentum", "long"):
+        for d in ("fade", "reject", "momentum", "long"):
             combos.append(Config(direction=d, exit_mode=args.exit_mode,
                                  risk_dollars=args.risk, **base))
 

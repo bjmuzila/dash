@@ -1,5 +1,142 @@
 # Changelog
 
+## 2026-09-07 (e) - Seasonality almanac: HBars panel titles centered (`components/seasonality/SeasonalityAlmanac.tsx`)
+
+The two bar-panel headings ("Day of the keynote" / "Week after") sat flush left
+at the start of each panel, which read as if they labeled the row-label column.
+`panelHead` now centers the title over its own panel width; the lo/hi axis
+numbers under it still sit at the panel edges.
+
+
+## 2026-09-07 (d) - Seasonality almanac: "Up on the day" renamed to "Closed green" (`components/seasonality/SeasonalityAlmanac.tsx`)
+
+The Apple keynote "By event type" table's hit-rate column read "Up on the day",
+which was easy to confuse with the neighboring "Day of" average. Renamed the
+header to "Closed green". Display-only change — the value is still
+`hitRate(rows.map(r => r.day))`, the share of that event type's keynotes where
+AAPL's close beat the prior close.
+
+
+## 2026-09-07 (c) - Core Bullseye: reversal confirmation is the filter that moves the needle (`backtest-core-level/`)
+
+Brandon: "within 5 points is still a hold — look for a reversal signal in the
+candlesticks, then take it." Added `--confirm reversal` (+ `--confirm-window`):
+the touch only ARMS; entry waits for the first 1-min bar closing beyond the
+PREVIOUS bar's extreme in the trade's direction, or stands down after N bars.
+
+Note the semantics: it confirms whichever direction the rule wants, so on
+`reject` it is a reversal off the level, and on `fade` it is continuation
+through it.
+
+### The hold rate was never the problem
+
+`wall_events` CORE touches, held (reject/pin/consolidated) vs broke:
+
+```
+all 25 sessions   60.1% held / 13.8% broke
+first 12          58.5% / 22.0%
+last 8            57.3% / 12.0%
+last 5            57.4% / 16.7%
+```
+
+Stable, including the past week. The level does hold ~60% of the time; that was
+never the missing piece.
+
+### Confirmation helps, materially
+
+Best cells, 31 sessions, 1-min fills:
+
+| setup | cell | n | win | avg R | PF | t |
+|---|---|---|---|---|---|---|
+| **band + confirm, core BELOW price, SHORT the breakdown** | `fade/scale_be/$100` | 67 | 65.7% | **+0.238** | 1.78 | **1.99** |
+| new-core + confirm, core ABOVE, SHORT the rejection | `reject/ratchet/$150` | 37 | 56.8% | +0.183 | 1.62 | 1.23 |
+| new-core, core ABOVE, SHORT, no confirm (prior best) | `reject/fixed_3r/$50` | 55 | 40.0% | +0.257 | 1.38 | 1.07 |
+
+Confirmation lifts win rate 40% → 57% and PF 1.38 → 1.62 on the same setup.
+
+### Robustness
+
+```
+A  band+confirm / core below / short the breakdown   n=67, 31 sessions, $23.81/trade
+   profitable sessions 23/31 · drop best 3 → $13.28 · bootstrap CI [$3.19, $46.34] · P(>0)=0.99
+
+B  new-core+confirm / core above / short the rejection  n=37, 23 sessions, $27.38/trade
+   profitable sessions 16/23 · drop best 3 → $6.70  · bootstrap CI [-$18.70, $75.32] · P(>0)=0.88
+```
+
+A is the first cell in this study whose bootstrap CI clears zero. **But it is the
+winner of roughly 360 cells** (2 triggers x 3 sides x 60), so the multiple-
+comparison discount is severe, and it is the OPPOSITE trade to the hold thesis:
+price falls into a core below it, breaks the prior bar's low, and you sell the
+failure. There is still no confirmed long variant on either side.
+
+Read: the confirmation bar is doing the work, not the directional thesis.
+
+
+## 2026-09-07 (b) - Core Bullseye: the first-touch-of-a-NEW-core rule, and the direction convention was backwards (`backtest-core-level/`)
+
+Follow-up to (a). Brandon's rule is narrower than what (a) tested: signal only on
+the FIRST tag of a newly-migrated core — the red dots on the Wall Migration chart
+— not every re-entry into the 5-pt band.
+
+### Engine
+
+Three additions to `core_level_backtest.py`, self-test still passing:
+
+- `--trigger new_core` — first tag after the core moves to a different strike.
+- `--trigger new_core_approach` — same, but only when price was OUTSIDE the band
+  at the moment of migration, so price actually travelled to the level.
+- `--side from_above|from_below` — split by which side price approached from.
+- **`--direction reject`** — trade AWAY from the level. The original `fade`
+  traded TOWARD it (magnet); the data says price tagging the core from below is
+  rejected downward, so the convention was backwards.
+
+Verified against the chart: 2026-09-04 yields 5 first-touch events, matching the
+dots.
+
+### Most red dots are the level moving to price
+
+12.2 core migrations/session, 6.6 first touches, but only **2.6 where price
+actually travelled to the level**. On 2026-09-04, 1 of 5. A core migrating onto
+price is the gamma peak being redrawn where price already is, not a level being
+defended — worth surfacing on the chart itself.
+
+### The two sides are not symmetric
+
+`new_core_approach`, best cell per side:
+
+| side | build | cell | n | avg R | PF | t |
+|---|---|---|---|---|---|---|
+| core ABOVE, rally into it, SHORT | 1-min | `reject/fixed_3r/$50` | 55 | **+0.257** | 1.38 | 1.07 |
+| core ABOVE, rally into it, SHORT | capture | `reject/fixed_3r/$50` | 65 | +0.206 | 1.30 | 0.95 |
+| core BELOW, fall into it (as described) | 1-min | `fade/fixed_2r/$100` | 20 | +0.123 | 1.26 | 0.45 |
+| core BELOW, fall into it (as described) | capture | `fade/fixed_3r/$250` | 30 | +0.082 | 1.29 | 0.51 |
+
+The long-the-bounce trade as described does not reach the top four on either
+build. Such edge as exists is on the short side.
+
+### Why it is worth revisiting, and why it is not a green light
+
+Same direction on both builds, and **1-minute fills IMPROVE it** (+0.257 vs
++0.206) — the only configuration in this whole exercise that moves that way;
+everywhere else finer fills cost ~0.10 R. Mechanism is coherent: the largest
+gamma strike above price is resistance.
+
+But 55 trades over 23 sessions, net $706:
+
+```
+profitable sessions        13 / 23
+drop best 3 sessions       $12.84 -> $2.04 /trade
+session bootstrap 95% CI   [-$8.86, +$37.62]   P(>0) = 0.87
+```
+
+t = 1.07. A lead, not a finding. `es_candles` 1m starts 2026-07-09 so the overlap
+widens a session a day — re-run in a couple of months and see whether it holds
+with n over 150.
+
+**No production code changed.** `backtest-core-level/` only.
+
+
 ## 2026-09-07 (a) - Core Bullseye MES backtest, answered: the touch predicts volatility, not direction (`backtest-core-level/`)
 
 Ran the strategy — 2 MES lots when SPX comes within 5 pts of the CB, dollar stop,

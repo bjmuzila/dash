@@ -657,7 +657,7 @@ function HBars({
 
   const panelHead = (title: string, d: { lo: number; hi: number }, fmt: (v: number) => string) => (
     <div style={{ width: panelW, minWidth: 0 }}>
-      <div style={{ ...capLabel, fontSize: 9.5, marginBottom: 2 }}>{title}</div>
+      <div style={{ ...capLabel, fontSize: 9.5, marginBottom: 2, textAlign: "center" }}>{title}</div>
       <div style={{ fontSize: 10, color: INK, opacity: 0.8, display: "flex", justifyContent: "space-between", fontVariantNumeric: "tabular-nums" }}>
         <span>{fmt(d.lo)}</span>
         <span>{fmt(d.hi)}</span>
@@ -2188,7 +2188,7 @@ export default function SeasonalityAlmanac({ active }: { active: SectionKey }) {
               }
             >
               <DataTable
-                head={["Event type", "n", "Week into", "Day of", "Up on the day", "Week after"]}
+                head={["Event type", "n", "Week into", "Day of", "Closed green", "Week after"]}
                 rows={appleByKind.map((k) => [
                   k.label,
                   k.n,
