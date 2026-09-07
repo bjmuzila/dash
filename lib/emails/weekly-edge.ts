@@ -95,13 +95,18 @@ export interface ScannerProof {
 }
 
 /**
- * One Core Wall auto-buy print: the contract the wall bought at a CB window,
- * what it cost, and its intraday high AFTER entry.
+ * One Core Wall auto-buy print.
  *
- * `peak` IS NOT AN EXIT. It is the highest the contract traded after the buy —
- * you would have had to sell there to get it. The copy under the table says so,
- * and it stays there; a peak column presented as realized P&L is the single
- * easiest way to make this letter dishonest.
+ * TWO DIFFERENT NUMBERS, AND THEY MUST NOT BE CONFLATED:
+ *  - `close` / `realizedPct` / `dollars` — the REAL result. Bought at the CB
+ *    window, held to the bell, sold at the close. This is what the dashboard's
+ *    P/L column reports and it is the number the letter leads with.
+ *  - `peak` / `peakPct` — the intraday high on the way. NOT an exit. Nobody
+ *    sells the high; it is context for how the trade travelled, nothing more.
+ *
+ * The table headers label both explicitly. Never present `peakPct` as the
+ * result, and never drop the labels to save a line — a peak shown as realized
+ * P&L is the single easiest way to make this letter dishonest.
  */
 /**
  * One GEX-scanner flag. `peak` is the contract's intraday high AFTER the flag,
@@ -128,14 +133,22 @@ export interface AutoBuyRow {
   date: string;
   /** CB window — "9:45", "10:30" or "12:00". */
   time: string;
-  /** Contract as the dashboard renders it, e.g. "7750C". */
+  /** Contract as the dashboard renders it, e.g. "7720C". */
   contract: string;
+  /** Fill price at the window. */
   entry: string;
+  /** THE ACTUAL EXIT — the dashboard's "sold"/CLOSE price at the bell. */
+  close: string;
+  /** Realized return from entry to close, e.g. "+808%". */
+  realizedPct: string;
+  /** Realized dollars per contract, e.g. "+$2,465". */
+  dollars: string;
+  /** Intraday high after entry — NOT an exit. */
   peak: string;
-  /** Time of that high, e.g. "11:01 AM". */
+  /** Time of that high, e.g. "2:02 PM". */
   peakAt: string;
-  /** Pre-computed so the template does no arithmetic, e.g. "+441%". */
-  gain: string;
+  /** Return at that high, e.g. "+1,069%". */
+  peakPct: string;
 }
 
 export interface WeeklyEdgeOpts {
@@ -176,6 +189,7 @@ export interface WeeklyEdgeOpts {
   /** Set false to drop the Core Wall auto-buy table. */
   showAutoBuy?: boolean;
   autoBuyRows?: AutoBuyRow[];
+  autoBuyLabel?: string;
   autoBuyNote?: string;
   ctaUrl?: string;
   /** Headline pricing. No promo code — the price IS the price. */
@@ -235,7 +249,10 @@ const DEFAULT_GEX_SCANNER_ROWS: GexScannerRow[] = [];
  * peaked above entry, and one (8/24 10:30, 7630P) never ticked up at all. The
  * note under the table states that split; do not print the winners without it.
  */
-const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [];
+const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [
+  { date: "09-03", time: "9:45", contract: "7720C", entry: "$8.35", close: "$27.70", realizedPct: "+232%", dollars: "+$1,935", peak: "$37.10", peakAt: "2:16 PM", peakPct: "+344%" },
+  { date: "09-03", time: "10:30", contract: "7720C", entry: "$3.05", close: "$27.70", realizedPct: "+808%", dollars: "+$2,465", peak: "$35.65", peakAt: "2:02 PM", peakPct: "+1,069%" },
+];
 
 
 /**
@@ -253,7 +270,13 @@ const DEFAULT_AUTO_BUY_ROWS: AutoBuyRow[] = [];
  * and 8/24 9:45 (9.7) both cleared ≤15, and only 8/28 9:45 (22.1) and 8/24
  * 10:30 (15.2) missed every threshold.
  */
-const DEFAULT_CONF_ROWS: ConfRow[] = [];
+const DEFAULT_CONF_ROWS: ConfRow[] = [
+  { date: "09-04", s945: "7750", c945: "6.1", hit945: false, s1030: "7750", c1030: "17.8", hit1030: false, s1200: "7700", c1200: "8.8", hit1200: false },
+  { date: "09-03", s945: "7720", c945: "0.2", hit945: true, s1030: "7720", c1030: "0.2", hit1030: true, s1200: "7750", c1200: "0.1", hit1200: true },
+  { date: "09-02", s945: "7660", c945: "0.3", hit945: true, s1030: "7675", c1030: "0.0", hit1030: true, s1200: "7680", c1200: "4.4", hit1200: true },
+  { date: "09-01", s945: "7625", c945: "0.1", hit945: true, s1030: "7660", c1030: "0.1", hit1030: true, s1200: "7660", c1200: "0.1", hit1200: true },
+  { date: "08-31", s945: "7650", c945: "10.9", hit945: false, s1030: "7650", c1030: "15.9", hit1030: false, s1200: "7670", c1200: "0.0", hit1200: true },
+];
 
 
 /**
@@ -285,7 +308,7 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "confRows" | "resultsNote" | "estMoveNote" | "showScannerProof" |
   "gexScannerRows" | "gexScannerLabel" | "gexScannerNote" |
   "showWallChart" | "wallChartUrl" | "wallChartLabel" | "wallChartHeadline" | "wallChartNote" |
-  "showAutoBuy" | "autoBuyRows" | "autoBuyNote" | "ctaUrl" | "priceMonthly" | "priceAnnual" |
+  "showAutoBuy" | "autoBuyRows" | "autoBuyLabel" | "autoBuyNote" | "ctaUrl" | "priceMonthly" | "priceAnnual" |
   "showAffiliate" | "affiliateHeadline" | "affiliateBody" | "affiliateUrl" | "affiliateBannerUrl" |
   "showTradeify" | "tradeifyHeadline" | "tradeifyBody" | "tradeifyUrl" | "tradeifyCode">>
   // scannerProof is Partial<> on the way in and complete on the way out, so it
@@ -310,18 +333,23 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
       "Last week this letter said crude had stopped being the thing that set overnight gap risk. That held for exactly one week. WTI added close to 10% to $91.48 and Brent went back to roughly $96 as US–Iran tensions re-escalated, unwinding the de-escalation trade the market had spent August leaning into. Worth saying plainly: the read was wrong, and five sessions was all it took to prove it.",
       "The part that reaches past the futures screen is diesel. US pump prices hit an all-time high of $5.85 a gallon on Friday, with wars in Iran and Ukraine squeezing global distillate supply. Diesel is what moves freight and heats houses, and it feeds into inflation with a lag — which puts it directly in front of Friday's CPI print and the Fed meeting behind it.",
     ],
-    coreBullseyePct: opts.coreBullseyePct || "—",
-    coreBullseyeSub: opts.coreBullseyeSub || "[fill before send]",
+    // 10 of 15 inside 5 points: 4/5 at 12:00, 3/5 at both 9:45 and 10:30. No
+    // clean window this week, so the tile is 80% and not 100% — say the real
+    // number rather than reaching for a threshold that flatters it.
+    coreBullseyePct: opts.coreBullseyePct || "80%",
+    coreBullseyeSub: opts.coreBullseyeSub || "&le;5 pts &middot; 12:00 CB &middot; 4 of 5 sessions",
     // A "loss" here is a BREACH — price left the estimated-move band. Do not
     // write the note as "failed to reach"; that is the opposite of what happens.
     // Low VIX narrows the band; what actually decides the week is whether the
     // RANGE stays inside it. Both prior weeks ran on a low VIX and scored 41.0%
     // then 82.4%, so vol alone explains neither.
-    estMovePct: opts.estMovePct || "—",
-    estMoveSub: opts.estMoveSub || "[fill before send]",
+    estMovePct: opts.estMovePct || "71.7%",
+    estMoveSub: opts.estMoveSub || "167-66 &middot; 233 of 404 tickers scored",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
-    resultsNote: opts.resultsNote || "[ADD CORE SUMMARY — hit rate per window, what a ✓ means, and the week's misses]",
-    estMoveNote: opts.estMoveNote || "[ADD ESTIMATED MOVE SUMMARY — win-loss, names scored, Core Board, and the range read behind it]",
+    resultsNote: opts.resultsNote ||
+      "A ✓ means the Core read landed within 5 points of where SPX actually printed. Across Aug 31 – Sep 4 that was 10 of 15 — 4 of 5 at 12:00, 3 of 5 at both 9:45 and 10:30. The shape matters more than the total: <strong style=\"color:#ffffff;\">Tuesday, Wednesday and Thursday went 9 for 9</strong> across all three windows, and every single miss landed on the two days that had something behind them — the month-end open on Monday and the jobs report on Friday. Widen the tolerance to 15 points and the week is 13 of 15.",
+    estMoveNote: opts.estMoveNote ||
+      "Estimated Move: <strong style=\"color:#ffffff;\">167 wins against 66 losses</strong> on 233 scored names, 71.7%. That is three very different weeks in a row — 41.0%, then 82.4%, now 71.7% — from a model that has not changed. A win is price staying inside the band, so the number is really a read on the range: when the tape covers more ground than implied vol says it should, breaches come earlier and the score falls. Printed here every week either way.",
     showScannerProof: opts.showScannerProof === true,
     scannerProof: { ...DEFAULT_SCANNER_PROOF, ...(opts.scannerProof || {}) },
     gexScannerRows: opts.gexScannerRows || DEFAULT_GEX_SCANNER_ROWS,
@@ -347,12 +375,13 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     wallChartNote: opts.wallChartNote ?? "",
     showAutoBuy: opts.showAutoBuy !== false,
     autoBuyRows: opts.autoBuyRows || DEFAULT_AUTO_BUY_ROWS,
-    // Empty by design — no paragraph under the table. The two things that
-    // paragraph used to carry are NOT optional, so they moved into the furniture
-    // instead of disappearing: "5 of 15" is in the eyebrow, and "peak = intraday
-    // high after entry, not an exit" is the PEAK column's own subhead. Pass a
-    // string here to bring a caption back.
-    autoBuyNote: opts.autoBuyNote ?? "",
+    autoBuyLabel: opts.autoBuyLabel || "Core Wall auto buy — Thursday Sep 3",
+    // This caption earns its place: it explains why two rows on the same
+    // contract show wildly different percentages, and it defines "sold" as the
+    // close. Without it the 808% looks like a different, better trade than the
+    // 232% — it is the same trade with a cheaper entry.
+    autoBuyNote: opts.autoBuyNote ??
+      "Both windows bought the same contract on Thursday. The 9:45 read paid $8.35; the 10:30 read got it at $3.05 after a dip to $1.80 — <strong style=\"color:#ffffff;\">same $27.70 close, so the later fill earned roughly four times the percentage on an identical trade.</strong> Realized is entry to the closing bell, which is a real exit. Peak is only the high it touched on the way, and nobody sells the high.",
     ctaUrl: opts.ctaUrl || PRICING_URL,
     // NO PROMO CODE. Pricing is $50/mo or $500/yr flat — do not reintroduce
     // EDGE3, a struck-through list price, or "instead of $1,000". That offer is
@@ -435,10 +464,10 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
       "",
     ] : []),
     ...(o.showAutoBuy && o.autoBuyRows.length ? [
-      "CORE WALL AUTO BUY — BEST 5 OF 15 LAST WEEK",
-      "  (peak = intraday high after entry, not an exit)",
+      strip(o.autoBuyLabel).toUpperCase(),
+      "  (realized = bought at the CB window, sold at the close. peak = intraday high, not an exit)",
       ...o.autoBuyRows.map((r) =>
-        `  ${r.date} ${r.time.padEnd(5)} ${r.contract.padEnd(6)} ${r.entry} -> ${r.peak}  ${r.gain}`
+        `  ${r.date} ${r.time.padEnd(5)} ${r.contract}  ${r.entry} -> ${r.close}  ${r.realizedPct} (${r.dollars}/ct)  · peak ${r.peak} ${r.peakPct} ${r.peakAt}`
       ),
       ...(o.autoBuyNote ? [strip(o.autoBuyNote)] : []),
       "",
@@ -703,24 +732,24 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                    reader should stop on. The PEAK column is an intraday high,
                    never an exit; the note below the table says so. -->
               ${o.showAutoBuy ? (o.autoBuyRows.length ? `
-              <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">Core Wall auto buy — best [N] of [M] last week</div>
+              <div style="font:800 10px/1 ${SANS};letter-spacing:0.12em;text-transform:uppercase;color:#6b7d8f;margin:20px 0 10px 0;">${escapeHtml(o.autoBuyLabel)}</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:2px solid #FFB300;border-radius:12px;background:#080B11;border-collapse:separate;box-shadow:0 0 0 1px rgba(255,179,0,0.18);">
                 <tr>
-                  <td style="padding:9px 10px 9px 14px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Date</td>
-                  <td style="padding:9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">CB</td>
-                  <td style="padding:9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Contract</td>
-                  <td align="right" style="padding:9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Entry &rarr; peak<br><span style="font-weight:400;letter-spacing:0.02em;text-transform:none;color:#6b7d8f;">intraday high, not an exit</span></td>
-                  <td align="right" style="padding:9px 14px 9px 10px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">At peak</td>
+                  <td style="padding:9px 8px 9px 14px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">CB</td>
+                  <td style="padding:9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Contract</td>
+                  <td align="right" style="padding:9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">In &rarr; sold<br><span style="font-weight:400;letter-spacing:0.02em;text-transform:none;color:#6b7d8f;">held to the close</span></td>
+                  <td align="right" style="padding:9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Realized</td>
+                  <td align="right" style="padding:9px 14px 9px 8px;font:700 9px/1 ${SANS};letter-spacing:0.06em;text-transform:uppercase;color:#9fb3c8;border-bottom:1px solid rgba(255,179,0,0.28);">Peak<br><span style="font-weight:400;letter-spacing:0.02em;text-transform:none;color:#6b7d8f;">not an exit</span></td>
                 </tr>
                 ${o.autoBuyRows.map((r, i) => {
                   const edge = i < o.autoBuyRows.length - 1 ? "border-bottom:1px solid rgba(255,255,255,0.06);" : "";
                   return `
                 <tr>
-                  <td style="padding:9px 10px 9px 14px;font:700 12px/1.4 ${SANS};color:#ffffff;white-space:nowrap;${edge}">${escapeHtml(r.date)}</td>
-                  <td style="padding:9px 10px;font:600 12px/1.4 ${SANS};color:#9fb3c8;white-space:nowrap;${edge}">${escapeHtml(r.time)}</td>
-                  <td style="padding:9px 10px;font:700 12px/1.4 ${SANS};color:#8ECAE6;white-space:nowrap;${edge}">${escapeHtml(r.contract)}</td>
-                  <td align="right" style="padding:9px 10px;font:600 12px/1.4 ${SANS};color:#d4dde6;white-space:nowrap;${edge}">${escapeHtml(r.entry)} <span style="color:#6b7d8f;">&rarr;</span> <span style="color:#ffffff;font-weight:700;">${escapeHtml(r.peak)}</span></td>
-                  <td align="right" style="padding:9px 14px 9px 10px;font:800 12px/1.4 ${SANS};color:#00E676;white-space:nowrap;${edge}">${escapeHtml(r.gain)}</td>
+                  <td style="padding:10px 8px 10px 14px;font:700 12px/1.4 ${SANS};color:#ffffff;white-space:nowrap;${edge}">${escapeHtml(r.time)}<br><span style="font-weight:400;font-size:10px;color:#6b7d8f;">${escapeHtml(r.date)}</span></td>
+                  <td style="padding:10px 8px;font:700 12px/1.4 ${SANS};color:#8ECAE6;white-space:nowrap;${edge}">${escapeHtml(r.contract)}</td>
+                  <td align="right" style="padding:10px 8px;font:600 12px/1.4 ${SANS};color:#d4dde6;white-space:nowrap;${edge}">${escapeHtml(r.entry)} <span style="color:#6b7d8f;">&rarr;</span> <span style="color:#ffffff;font-weight:700;">${escapeHtml(r.close)}</span></td>
+                  <td align="right" style="padding:10px 8px;font:800 13px/1.3 ${SANS};color:#00E676;white-space:nowrap;${edge}">${escapeHtml(r.realizedPct)}<br><span style="font-weight:600;font-size:10px;color:#9fb3c8;">${escapeHtml(r.dollars)}/ct</span></td>
+                  <td align="right" style="padding:10px 14px 10px 8px;font:600 12px/1.4 ${SANS};color:#9fb3c8;white-space:nowrap;${edge}">${escapeHtml(r.peak)}<br><span style="font-weight:400;font-size:10px;color:#6b7d8f;">${escapeHtml(r.peakPct)} &middot; ${escapeHtml(r.peakAt)}</span></td>
                 </tr>`;
                 }).join("")}
               </table>

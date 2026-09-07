@@ -74,41 +74,133 @@ export function writeFreeMode(on: boolean): void {
 // card reaches past column 12, so it must be an old board" — is also true of a
 // perfectly good new board whose cards all sit on the left, and it would scale
 // that board on every reload until it stopped fitting. So: a key holding the
-// grid width the browser was last written under, read ONCE at module load. A
-// browser that never saw the grid key at all is from the 12-column era.
+// grid width the browser was last written under.
+//
+// ── THE BUG THIS SHAPE FIXES (2026-09-07) ────────────────────────────────────
+// The first version only STAMPED the key at module load and scaled on read. The
+// stored blob was left in old units, on the assumption that the autosave would
+// rewrite it. It does not: BoardPage's autosave deliberately skips its first run
+// and only fires on an actual gesture. So opening the board and NOT dragging
+// anything left `cb-v3-board-layout` in old units with the key claiming the new
+// grid — and on the very next reload SCALE was 1, the old blob was taken at face
+// value, and every card came back at HALF SIZE crammed into the left half of the
+// board. Which is exactly what it looked like: not a broken layout, a correct
+// layout in the wrong units. It had shipped twice (12→24, then 24→48), which is
+// why it was "not the first time I've seen this".
+//
+// So the migration now REWRITES THE STORED DATA and only then stamps the key.
+// The data and the flag can never disagree, and the fix does not depend on the
+// user happening to drag something before their next reload.
 const GRID_KEY = 'cb-v3-board-grid'
 
 function storedGrid(): number {
   try {
-    return Number(localStorage.getItem(GRID_KEY)) || 12
+    // No stamp AND no board of any kind = a browser that has never opened this
+    // app. It has nothing in old units, so nothing to scale — anything it reads
+    // later (the account's copy) is already current. Without this check a fresh
+    // browser would be treated as a 12-column veteran and would QUADRUPLE the
+    // first server layout it loaded.
+    const stamp = localStorage.getItem(GRID_KEY)
+    if (stamp) return Number(stamp) || BOARD_COLS
+    const seen = localStorage.getItem(LAYOUT_KEY) ?? localStorage.getItem(SYNCED_KEY)
+    return seen ? 12 : BOARD_COLS
   } catch {
     return BOARD_COLS
   }
 }
 
-/**
- * Captured at import, before anything can read or write a layout — the flag has
- * to answer "was this browser's data written under the old grid", and the answer
- * stops being true the moment the key is updated below.
- */
+/** Multiply every stored number by this to get current grid units. */
 const SCALE = BOARD_COLS / storedGrid()
+
+/**
+ * Rewrite a stored blob in place, in the raw {id,x,y,w,h} shape it is kept in —
+ * deliberately NOT through sanitizeLayout, which would drop unknown cards and,
+ * worse, apply the scale a second time.
+ */
+function rescaleStored(key: string, scale: number): void {
+  const raw = localStorage.getItem(key)
+  if (!raw) return
+  const arr = JSON.parse(raw) as unknown
+  if (!Array.isArray(arr)) return
+  const out = arr
+    .filter((i): i is BoardItem => !!i && typeof i === 'object')
+    .map((i) => ({ id: i.id, x: i.x * scale, y: i.y * scale, w: i.w * scale, h: i.h * scale }))
+  localStorage.setItem(key, JSON.stringify(out))
+}
 
 if (SCALE !== 1) {
   try {
+    rescaleStored(LAYOUT_KEY, SCALE)
+    // The SYNCED copy is DROPPED rather than rescaled, and that is load-bearing.
+    // It records the layout as the SERVER last saw it, and the server's copy is
+    // still in old units — this build cannot change that without the user
+    // pressing Save. Rescaling it would make local === synced, which is
+    // BoardPage's signal that the account copy may safely replace what is on
+    // screen; the next load would then adopt the account's old-unit board and
+    // put every card back at half size. Removing it makes them differ, so the
+    // migrated local board wins and the header honestly says "Unsaved layout"
+    // until the account copy is brought up to date.
+    localStorage.removeItem(SYNCED_KEY)
     localStorage.setItem(GRID_KEY, String(BOARD_COLS))
   } catch {
-    /* best-effort — SCALE still applies for this session */
+    /* best-effort — the read-time scale below still rescues this session */
   }
 }
 
+// ── ONE-TIME REPAIR FOR BOARDS THE OLD MIGRATION ALREADY BROKE ───────────────
+//
+// The fix above stops it happening again, and does nothing for the browsers it
+// has already happened to: they carry a stamp saying 48 over a blob still in 24
+// units, so SCALE is 1 and the migration correctly declines to run. Their board
+// stays at half size forever. It needs repairing once, from the data itself.
+//
+// The evidence is unambiguous enough for one pass: the board's whole purpose is
+// to fill its width, and a layout in half-size units CANNOT have anything past
+// the halfway column, because it was authored on a grid only that wide. So a
+// stamped-current board whose rightmost edge does not reach the halfway mark was
+// written under the previous grid.
+//
+// The heuristic that was rejected earlier — "it fits in the left half, so it
+// must be old" — is exactly this one. What made it unsafe was running it on
+// every load, where a genuine left-half board would be doubled again and again.
+// Behind a one-shot key it runs once in a browser's life, and its worst case is
+// a deliberately left-half board becoming a full-width one, which still fits and
+// is still a board. That is a far better failure than the certain one it fixes.
+const REPAIR_KEY = 'cb-v3-board-grid-repair'
+
+function repairHalfSizeBoard(): void {
+  const raw = localStorage.getItem(LAYOUT_KEY)
+  if (!raw) return
+  const arr = JSON.parse(raw) as unknown
+  if (!Array.isArray(arr) || !arr.length) return
+  const items = arr.filter(
+    (i): i is BoardItem => !!i && typeof i === 'object' && typeof (i as BoardItem).x === 'number',
+  )
+  if (!items.length) return
+  const right = items.reduce((m, i) => Math.max(m, i.x + i.w), 0)
+  if (right > BOARD_COLS / 2) return // already in current units — leave it alone
+  rescaleStored(LAYOUT_KEY, 2)
+  // Same reasoning as the migration: the account's copy is still in old units,
+  // so the synced marker has to go or the next load adopts it over the repair.
+  localStorage.removeItem(SYNCED_KEY)
+}
+
+try {
+  if (!localStorage.getItem(REPAIR_KEY)) {
+    if (SCALE === 1) repairHalfSizeBoard()
+    localStorage.setItem(REPAIR_KEY, '1')
+  }
+} catch {
+  /* best-effort — a board that cannot be repaired can still be dragged back */
+}
+
 /**
- * Every read goes through this, so the SERVER copy is rescaled too. A board
- * saved from an older build on another machine arrives in old units and would
- * otherwise land as a fraction of its size; it is corrected on the first session
- * after this build, and written back in new units the next time the user presses
- * Save layout.
+ * The SERVER copy only. Local blobs were rewritten on disk above, so scaling
+ * them again here would double-apply; the account's copy is still in whatever
+ * units it was saved under, and is corrected on the way in until the user next
+ * presses Save layout.
  */
-function toCurrentGrid(i: BoardItem): BoardItem {
+function serverToCurrentGrid(i: BoardItem): BoardItem {
   if (SCALE === 1) return i
   return { id: i.id, x: i.x * SCALE, y: i.y * SCALE, w: i.w * SCALE, h: i.h * SCALE }
 }
@@ -146,8 +238,16 @@ export interface ServerLayout {
  * hard-coded to compactBoard would flatten a deliberately spaced board back to
  * the top-left on every reload — the arrangement would survive the gesture and
  * die on refresh, which is worse than never having saved it.
+ *
+ * `regrid` converts stored numbers into current grid units. It is the IDENTITY
+ * for local reads, because the migration above already rewrote those blobs on
+ * disk; only the server copy still arrives in whatever units it was saved under.
  */
-export function sanitizeLayout(raw: unknown, compact = !readFreeMode()): BoardItem[] | null {
+export function sanitizeLayout(
+  raw: unknown,
+  compact = !readFreeMode(),
+  regrid: (i: BoardItem) => BoardItem = (i) => i,
+): BoardItem[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null
   const kept: BoardItem[] = []
   const seen = new Set<string>()
@@ -160,7 +260,7 @@ export function sanitizeLayout(raw: unknown, compact = !readFreeMode()): BoardIt
     if (!CARD_BY_ID.has(cardTypeOf(id)) || seen.has(id)) continue
     seen.add(id)
     kept.push(
-      toCurrentGrid({
+      regrid({
         id,
         x: item.x as number,
         y: item.y as number,
@@ -236,7 +336,7 @@ export async function fetchServerLayout(signal?: AbortSignal): Promise<ServerLay
   const rows = templates.filter((t): t is Record<string, unknown> => !!t && typeof t === 'object')
   const pick = rows.find((t) => t.isDefault === true) ?? rows[0]
   if (!pick) return null
-  const layout = sanitizeLayout(pick.layout)
+  const layout = sanitizeLayout(pick.layout, undefined, serverToCurrentGrid)
   if (!layout) return null
   return {
     name: typeof pick.name === 'string' ? pick.name : BOARD_TEMPLATE,

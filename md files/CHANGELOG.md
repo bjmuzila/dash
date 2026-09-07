@@ -1,5 +1,86 @@
 # Changelog
 
+## 2026-09-07 (b) - v3 board: the half-size render was the grid migration, not the measurement. Fixed, plus a one-time repair (`cbedge-v3/src/board/layoutStore.ts`)
+
+The measurement hardening in the previous entry did not fix it, and that is what
+identified the real cause: if the PANE were 640px, a per-commit re-measure would
+have corrected it. It did not, so the pane was full width all along and every
+**card** was half size, crammed into the left half. Not a broken layout — a
+correct layout **in the wrong units**.
+
+### The hole in the grid migration
+
+`cb-v3-board-grid` records the grid a browser's stored layout was written under.
+The first version STAMPED the key at module load and rescaled on read, leaving
+the stored blob in old units on the assumption that the autosave would rewrite
+it. **It does not.** BoardPage's autosave deliberately skips its first run and
+only fires on an actual gesture:
+
+```ts
+useEffect(() => {
+  if (!savedOnceRef.current) { savedOnceRef.current = true; return }
+  writeLocalLayout(layout)
+```
+
+So: open the board, **don't drag anything**, close it. `cb-v3-board-layout` is
+still in 24 units while the key now claims 48. On the next load `SCALE` is 1, the
+old blob is taken at face value, and every card comes back at half size. Nothing
+about it is intermittent once you see it — it is "did you happen to move a card
+before your next reload".
+
+It had already shipped twice (12→24, then 24→48), which is the answer to *"not
+the first time I've seen this."*
+
+**The migration now rewrites the stored data and only then stamps the key**, so
+the data and the flag can never disagree, and the fix does not depend on the user
+touching anything. `cb-v3-board-synced` is **dropped** rather than rescaled — and
+that is load-bearing. It records the layout as the server last saw it, and the
+server's copy is still in old units; rescaling it would make local === synced,
+which is BoardPage's signal that the account copy may safely replace what is on
+screen, and the next load would adopt the old-unit board and undo the migration.
+Dropping it makes them differ, so the migrated board wins and the header honestly
+says "Unsaved layout" until the account copy is brought up to date.
+
+`storedGrid()` also now separates "no stamp because this is an OLD browser" from
+"no stamp because this browser has never opened the app" — the second has nothing
+in old units, and without the distinction a brand-new browser would be treated as
+a 12-column veteran and **quadruple** the first server layout it loaded.
+
+### One-time repair for browsers already broken
+
+The above stops it recurring and does nothing for browsers it has already
+happened to: they carry a stamp saying 48 over a blob in 24 units, so `SCALE` is
+1 and the migration correctly declines to run. Their board is half size forever.
+
+`repairHalfSizeBoard()` fixes those from the data itself. The board's whole
+purpose is to fill its width, and a layout in half-size units **cannot** have
+anything past the halfway column — it was authored on a grid only that wide. So a
+stamped-current board whose rightmost edge does not reach column 24 was written
+under the previous grid, and gets doubled.
+
+This is the same heuristic rejected earlier as unsafe. What made it unsafe was
+running it on **every** load, where a genuine left-half board would be doubled
+again and again. Behind a one-shot key (`cb-v3-board-grid-repair`) it runs once in
+a browser's life, and its worst case is a deliberately left-half board becoming a
+full-width one — which still fits and is still a board. A far better failure than
+the certain one it fixes.
+
+### Verified
+
+The real migration block was extracted from the compiled output and run against a
+fake `localStorage`, one module instance per simulated page load:
+
+```
+PASS  12-col build -> 48 build (first load)          board spans 48/48  grid=48  synced dropped
+PASS    ...then reload without touching it           48/48      <- the case that was broken
+PASS    ...and reload again                          48/48
+PASS  one-time repair of a 24-unit board stamped 48  24/48 -> 48/48
+PASS    ...stays fixed on reload                     48/48
+PASS  a correct 48-col board, repair already run     untouched
+PASS  a correct 48-col board, repair not yet run     untouched
+PASS  brand new browser, no layout                   nothing scaled
+```
+
 ## 2026-09-07 - v3 board: the "opens as a scale model of itself" render bug (`cbedge-v3/src/design/primitives/Board.tsx`)
 
 > "Not the first time I've seen this. Opening up the site and it renders like
